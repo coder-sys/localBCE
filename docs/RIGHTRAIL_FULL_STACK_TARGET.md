@@ -121,10 +121,11 @@ closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
 of a few hundred bytes against that checkpoint's `token_root`, not a
 separately signed token.
 
-Signing every token would cost ~45–90 TB over 7 years at New York's volume
-(12.6M tokens a week) and exhaust a shared HSM/KMS quota (AWS KMS default:
-1,000 requests/second per account). Batching needs hundreds to a few thousand
-HSM signatures a week.
+Signing every token individually would cost ~45–90 TB over 7 years of
+retention at New York's volume (12.6M tokens a week) and exhaust a shared
+HSM/KMS signing quota (a documented AWS KMS default is 1,000 requests/second
+per account). Batch signing needs hundreds to a few thousand HSM signatures a
+week; per-payment cost is a Merkle path and a hash comparison.
 
 Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
@@ -416,12 +417,16 @@ production activation is not granted by local build or test results.
 
 ## 15. Beyond the gate
 
-The gate sits inside the five-part product in `ARCHITECTURE.md` and changes no
-role in it: the owner stays the one financial writer (atomic, integer cents,
-explicit retry identity), connectors stay allow-listed, bounded and read-only by
-default, the official receiver and payment system keep money-movement authority,
-and Provider App stays separate. Cross-state reuse is limited to versioned,
-non-sensitive interface schemas and conformance vectors.
+The gate sits inside the same five-part product (`README.md`, `ARCHITECTURE.md`)
+and changes no role in it: Mirror is the exception queue and audit surface, and
+the owner stays the one financial writer (atomic, integer cents, explicit retry
+identity) — a UI, connector, verifier or shadow copy never becomes a second
+writer. Connectors stay allow-listed, bounded and read-only by default; the
+official receiver and payment system keep money-movement authority; Provider App
+remains a separate provider-side product that does not gate on the government
+service. Cross-state reuse stays limited to versioned, non-sensitive interface
+schemas and conformance vectors; no state's population, rates or findings cross
+to another state.
 
 Commercial terms are the founder's (Constitution VIII): ~$2M/year operations
 plus the marginal 10/7/5-basis-point covered-flow schedule with a 5-basis-point

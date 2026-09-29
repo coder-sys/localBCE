@@ -22,7 +22,7 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
 ```
 
 Evidence, evaluation, official determination, authorized action, dispatch,
-receiver acknowledgment, cash and reporting are separate records. An
+receiver acknowledgment, cash and reporting are separate records; an
 acknowledgment never marks cash. Dispatch and egress are disabled; nothing here
 moves money.
 
@@ -42,9 +42,8 @@ manifest, program funding receipts, decision package v2, the exported
 `RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). Owner and
 independent checker accept v8 stores/packages only; every other version
 (v2-v7, unknown) is rejected without mutation, owner open with
-`unsupported_store_version`. The v7 conversion path was removed 2026-09-25
-(decision C3; only synthetic data ever existed), so a v8 store converted from
-v7 (contains an `OPENING_BALANCE` event) now fails `history:event-kind`.
+`unsupported_store_version`; a store converted from v7 (contains an
+`OPENING_BALANCE` event) fails `history:event-kind`.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
@@ -54,7 +53,7 @@ result digest and the expected revision against current and historical
 state before the one atomic determination/action/outbox transition.
 
 Missing, stale, malformed or unauthorized input raises a typed error and
-changes nothing. The independent checker enforces actor roles against a
+changes nothing; the independent checker enforces actor roles against a
 digest-bound roster.
 
 Every outer write checks current funding projections against their immutable
@@ -131,20 +130,17 @@ new demo acknowledgments follow their action, even after a lost response.
 
 The HTTP adapter accepts exactly one length and content-type header, no
 transfer encoding, and at most 8,192 bytes within a five-second total body
-deadline before dispatch. Refusals flush their response, then drain at most
-8,193 unread bytes for 100 ms before closing; HEAD sends no body — this
-preserves ordinary Windows refusal responses without letting a slow sender
-hold the refusal path open.
+deadline. Refusals flush, then drain at most 8,193 unread bytes for 100 ms
+before closing; HEAD sends no body, so a slow sender cannot hold a refusal open.
 
 The staff server's Hospital H labels are fixture data; a second state also
 needs Lean changed (`STATUS.md`).
 
 ## Direct-state-owned clearance route (parked)
 
-Parked in `parked/state_clearance/` (see `parked/README.md`): it evaluates one
-canonical `BLSDRQ01` request through the State kernel (`lean/` StateKernel
-library, `rust/` process adapter). Only `CLEAR` or a valid `EXCEPTION_APPROVED`
-may advance economic state; `HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
+Parked in `parked/state_clearance/` (`parked/README.md`): the State `BLSDRQ01`
+route. Only `CLEAR` or a valid `EXCEPTION_APPROVED` may advance economic state;
+`HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
 
 ## Mirror Provider Trust Graph
 
@@ -156,21 +152,19 @@ creates a financial determination, clearance or action. Raw source bytes,
 identifiers, paths and error text never cross its boundary; failures use fixed
 codes. `tools/provider_trust_graph_view.py` is a loopback browser view over it.
 
-The source-intake connection takes a bounded captured envelope and independently
-supplied capture context (subject, credential, enrollment, locator, observation
-time and fetch time). All six values must match the independent source check
-before admission. Only the admitted graph reaches the existing read-model and
-export verification gates; the served projection keeps freshness and source
-truth unknown. Failed capture or context mismatch opens no server. This path
-has no writes, network fetch, cache or financial authority; retry recomputes the
-same verified projection.
+Source intake takes a bounded captured envelope and independently supplied
+capture context (subject, credential, enrollment, locator, observation and fetch
+time); all six values must match the independent source check before admission.
+Only the admitted graph reaches the read-model and export verification gates;
+the served projection keeps freshness and source truth unknown. A failed capture
+or context mismatch opens no server. No writes, network fetch, cache or
+financial authority; retry recomputes the same verified projection.
 Both CLIs accept `--source-envelope PATH --capture-context SUBJECT CREDENTIAL
-ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH`; the four
-identities are opaque 128-character hex values from the capture configuration,
-never parsed from the untrusted envelope. Comparison uses the same options with
-the `compare-` (browser) or `left-`/`right-` (read-model CLI) prefix. This is
-file intake for the fixed synthetic profile; no live fetch or financial-file
-adapter is implied.
+ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH` (comparison:
+the `compare-` or `left-`/`right-` prefix); the four identities are opaque
+128-character hex values from the capture configuration, never parsed from the
+untrusted envelope. This is file intake for the fixed synthetic profile; no
+live fetch or financial-file adapter is implied.
 
 ## Provider App
 
@@ -178,16 +172,6 @@ adapter is implied.
 fictional provider facts with `PASS` / `MISSING` / `HUMAN_CHECK` outcomes, an
 independent result checker and a Lean comparison path. See
 `provider_app/README.md`.
-
-## Rules that shape the code
-
-- Lean semantics run in the deployed path or not at all; a Lean failure never
- falls back to a second implementation. Runtime/Lean disagreement fails closed.
-- Money is integer cents; ordering, encodings and identities are canonical.
-- Every input, package, query and process has an explicit bound.
-- No PHI leaves the state boundary. Support uses approved fields and synthetic
- reproductions.
-- Heavy runs go through `native/guard/` only.
 
 ## Path to the payment gate
 
@@ -202,12 +186,11 @@ What exists today toward it:
  population, evidence, payment/reversal, offset authorization,
  acknowledgment, reporting, funding and evaluation recording.
 - The live correction codec (`BLFCMD02`/`BLFCRES3`) proves canonicity (P2)
- unconditionally, but round-trip (P1) and trailing-byte rejection (P3) only
- for admissible values; nothing yet proves every value Lean emits is
- admissible.
-- There is no batch decide API, independent witness, fenced primary/standby
- or Bypass outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing
- exist only as the gate-v1 codec and Lean model.
+ unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
+ admissible values; nothing yet proves every value Lean emits is admissible.
+- There is no batch decide API, independent witness, fenced standby or Bypass
+ outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
+ the gate-v1 codec and Lean model.
 - The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
  one Windows process per call) is disqualifying for gate throughput and needs a
  long-lived worker pool; no warm-worker benchmark has been run.

@@ -6,8 +6,8 @@ from pathlib import Path
 import re
 import tempfile
 
-from app.right_rail_financial_owner import FinancialOwner, _checker_authority
-from app.right_rail_financial_cash_file_independent import CashFileCheck, CashFileError
+from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialOwner, FinancialRevisionError, _checker_authority
+from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError
 
 
 MAX_FILE_BYTES = 1_048_576
@@ -39,10 +39,8 @@ def _integer(value, low, high):
 
 
 def _propose(source_bytes, baseline_bytes):
-    if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= 8 * 1024 * 1024:
-        raise CashFileError("cash_file_baseline")
-    if type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
-        raise CashFileError("cash_file_size")
+    if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= 8 * 1024 * 1024 or type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
+        raise CashFileError("cash_file_format")
     try:
         value = json.loads(source_bytes.decode("ascii"), object_pairs_hook=_object)
         canonical = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
@@ -63,7 +61,9 @@ def _propose(source_bytes, baseline_bytes):
     for key in ("source_id", "version", "receiver_system_id", "capture_id"):
         _identifier(source[key])
     _integer(source["captured_at_ms"], 0, 2**63 - 1)
-    _integer(value["row_count"], 1, 1000)
+    if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
+        raise CashFileError("cash_file_row_cap")
+    _integer(value["row_count"], 1, MAX_ROWS)
     _integer(value["total_cents"], 1, 2**63 - 1)
     rows = value["rows"]
     if type(rows) is not list or len(rows) != value["row_count"]:
@@ -103,7 +103,7 @@ def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
         "expected_scope": expected_scope, "expected_source": expected_source,
         "expected_authority": _checker_authority(trusted_authority),
         "expected_owner_id": expected_owner_id, "expected_mode": expected_mode,
-        "execution_baseline_bytes": None, "execution_owner_id": None,
+        "execution_owner_id": None,
     }
     checked = CashFileCheck(commands, context)
     return list(checked.commands), context
@@ -117,10 +117,16 @@ def preview_cash_file(commands, context, *, trusted_authority, clock=None):
                 package_bytes=context["baseline_bytes"], recovered_path=Path(directory) / "preview.sqlite",
                 trusted_authority=trusted_authority, restore_mode="TEST", clock=clock,
             )
-            preview_context = {**context, "execution_baseline_bytes": owner.export_continuity(),
-                               "execution_owner_id": owner.owner_id}
-            return owner.run_batch(commands, cash_file_context=preview_context)
-    except CashFileError:
-        raise
-    except Exception:
-        raise CashFileError("cash_file_preview_failed") from None
+            return owner.run_batch(commands, cash_file_context={**context, "execution_owner_id": owner.owner_id})
+    except Exception as error:
+        raise CashFileError(refusal(error)) from None
+
+
+def refusal(error):
+    """The fixed class of a refused cash file, never its input or error text (docs/CORE_REDESIGN.md "Cash-file refusals")."""
+    if type(error) is CashFileError and str(error) in REFUSALS:
+        return str(error)
+    for kind, code in ((FinancialBusyError, "cash_file_busy"), (FinancialRevisionError, "cash_file_stale"), (FinancialConflictError, "cash_file_conflict")):
+        if isinstance(error, kind):
+            return code
+    return "cash_file_failed"

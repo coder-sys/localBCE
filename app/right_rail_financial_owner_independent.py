@@ -8,7 +8,7 @@ database paths read-only.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 import hashlib
 import json
 import math
@@ -2567,8 +2567,9 @@ def _verify_evidence(
     connection: sqlite3.Connection,
     items: dict[str, sqlite3.Row],
     obligations: dict[str, sqlite3.Row],
+    only: Collection[str] | None = None,  # per-obligation mode: the evidence of these items, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = _bounded_rows(connection, "evidence")
+    rows = [row for row in _bounded_rows(connection, "evidence") if only is None or row["item_id"] in only]
     evidence: dict[str, sqlite3.Row] = {}
     obligation_items = {str(item["item_id"]) for item in obligations.values()}
     for row in rows:
@@ -2658,8 +2659,8 @@ def _verify_evidence(
             continue
         if supersedes is None:
             _fail("evidence:report-supersedes-required")
-        prior = evidence[str(supersedes)]
-        if prior["item_id"] != row["item_id"]:
+        prior = evidence.get(str(supersedes))
+        if prior is None or prior["item_id"] != row["item_id"]:
             _fail("evidence:report-supersedes-item")
         if prior["kind"] not in {"REPORT", "REPORT_CORRECTION"}:
             _fail("evidence:report-supersedes-kind")
@@ -2811,8 +2812,9 @@ def _verify_determinations(
     evaluations: dict[str, list[sqlite3.Row]],
     *,
     actors: Mapping[str, frozenset[str]] | None,
+    only: Collection[str] | None = None,  # per-obligation mode: these obligations' determinations, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = _bounded_rows(connection, "determinations")
+    rows = [row for row in _bounded_rows(connection, "determinations") if only is None or row["obligation_id"] in only]
     result: dict[str, sqlite3.Row] = {}
     evaluations_by_id = {
         str(evaluation["evaluation_id"]): evaluation
@@ -2916,9 +2918,10 @@ def _verify_actions(
     claims: dict[str, sqlite3.Row],
     determinations: dict[str, sqlite3.Row],
     payments: dict[str, sqlite3.Row],
+    only: Collection[str] | None = None,  # per-obligation mode: these obligations' actions, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = _bounded_rows(connection, "actions")
-    outbox_rows = _bounded_rows(connection, "action_outbox")
+    rows = [row for row in _bounded_rows(connection, "actions") if only is None or row["obligation_id"] in only]
+    outbox_rows = [row for row in _bounded_rows(connection, "action_outbox") if only is None or row["action_id"] in {action["action_id"] for action in rows}]
     outbox = {str(row["action_id"]): row for row in outbox_rows}
     acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
     registry = correction_engines()
@@ -2934,6 +2937,7 @@ def _verify_actions(
         decided[action_ref] = event_amount
     reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED'").fetchall())
     links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL").fetchall()
+    links = [link for link in links if only is None or link[0] in only]
     linked: dict[object, list[tuple[int, object, int]]] = {}  # correction action -> (paid at, reversed at, cents)
     for _obligation, paid_revision, payment_id, action_ref in links:
         if payment_id not in payments:
@@ -3587,11 +3591,9 @@ def _verify_exact_input(connection: sqlite3.Connection, obligation: Mapping[str,
             _fail(f"obligation:exact-input:{key}")
 
 
-def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: str, **expected: Any) -> dict[str, object]:
-    """Per-obligation mode, run before COMMIT: the current evaluation was computed
-    from exactly the obligation's rows as they are now, recomputes to its values,
-    and the obligation's projection equals it. Takes verify_database's expected_*
-    keywords; the whole-database mode stays the open and audit check."""
+def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids: str, **expected: Any) -> tuple[dict[str, object], ...]:
+    """Per-obligation mode, run before COMMIT with schema and meta checked once per call: each current evaluation was
+    computed from exactly its obligation's rows as they are now, recomputes, and the projection equals it (whole-store mode is the open check)."""
 
     keys = ("expected_config", "expected_scope", "expected_authority", "expected_mode", "expected_owner_id", "expected_continuity_epoch")
     if not isinstance(connection, sqlite3.Connection):
@@ -3599,31 +3601,52 @@ def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: 
     if not set(expected) <= set(keys):
         _fail("identity:expectation")
     identity = _identity(**{key: expected.get(key) for key in keys})
+    touched: dict[str, sqlite3.Row] = {}
 
-    def check() -> dict[str, object]:
+    def check() -> Iterable[dict[str, object]]:
         meta = _verify_meta(connection, identity, _verify_schema(connection))
-        obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
-        if obligation is None:
-            _fail("obligation:missing")
-        row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (obligation["current_evaluation_id"], obligation_id)).fetchone()
-        if row is None:
-            _fail("obligation:current-evaluation")
-        population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
-        populations = {} if population is None else {str(population["population_id"]): population}
-        pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
-        packs = {} if pack is None else {str(pack["pack_id"]): pack}
-        evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
-        _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
-        _verify_exact_input(connection, obligation, snapshot)
-        _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
-        for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
-            if obligation[key] != row[key]:
-                _fail(f"obligation:projection:{key}")
-        if obligation["updated_at_ms"] != row["evaluated_at_ms"]:
-            _fail("obligation:projection:updated_at_ms")
-        return {"obligation_id": obligation_id, "revision": int(row["revision"]), "evaluation_id": str(row["evaluation_id"]), "result_digest": bytes(row["result_digest"]).hex().upper()}
+        for obligation_id in obligation_ids:
+            obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
+            if obligation is None:
+                _fail("obligation:missing")
+            row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (obligation["current_evaluation_id"], obligation_id)).fetchone()
+            if row is None:
+                _fail("obligation:current-evaluation")
+            population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
+            populations = {} if population is None else {str(population["population_id"]): population}
+            pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
+            packs = {} if pack is None else {str(pack["pack_id"]): pack}
+            evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
+            _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
+            _verify_exact_input(connection, obligation, snapshot)
+            _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
+            for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
+                if obligation[key] != row[key]:
+                    _fail(f"obligation:projection:{key}")
+            if obligation["updated_at_ms"] != row["evaluated_at_ms"]:
+                _fail("obligation:projection:updated_at_ms")
+            touched[obligation_id] = obligation
+            yield {"obligation_id": obligation_id, "revision": int(row["revision"]), "evaluation_id": str(row["evaluation_id"]), "result_digest": bytes(row["result_digest"]).hex().upper()}
+        # The whole-store rules the checker runs on rows a write can add or change, once for the touched obligations: nothing is copied.
+        marks = json.dumps(sorted(touched))
+        items = {str(value["item_id"]): value for value in touched.values()}
+        evidence = _verify_evidence(connection, items, touched, only=items)
 
-    return _mapped(check)
+        def mine(table: str) -> Iterable[sqlite3.Row]:
+            return connection.execute(f"SELECT * FROM {table} WHERE obligation_id IN (SELECT value FROM json_each(?))", (marks,))
+
+        populations = {str(v["population_id"]): v for v in connection.execute("SELECT * FROM population_imports WHERE population_id IN (SELECT population_id FROM obligations WHERE obligation_id IN (SELECT value FROM json_each(?)))", (marks,))}
+        packs = {str(v["pack_id"]): v for v in connection.execute("SELECT * FROM control_packs")}
+        evaluations, claims = _group(mine("evaluations"), "obligation_id"), {str(v["claim_id"]): v for v in mine("claimed_adjustments")}
+        determinations = _verify_determinations(connection, meta, touched, populations, packs, claims, evidence, evaluations, actors=identity["actors"], only=touched)
+        _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
+        _verify_correction_followup_records(
+            connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
+            evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
+            actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
+        )
+
+    return _mapped(lambda: tuple(check()))
 
 
 def _verify_evaluation_history_events(

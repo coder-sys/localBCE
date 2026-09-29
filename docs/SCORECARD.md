@@ -52,34 +52,24 @@ this harness: "before" at 1c7ed3b (product code unchanged since e9b3727), and
 | Case H | hours unresolved / past due | unknown | 48 / 24 | 48 / 24 |
 | Accuracy | correction error, reconciliation error, double count (cents) | unknown | 0 / 0 / 0 | 0 / 0 / 0 |
 
-Note: the page now reloads the package automatically after the operator's own
-command. That costs one request per command, which is traded for a click. The
-hours come from the fixture's synthetic clock, which screen changes cannot move.
-Paying late does not erase the missed deadline: H stays 24 hours past due on
-record.
+Note: the page now reloads the package after the operator's own command: one
+request per command, traded for a click. The hours come from the fixture's
+synthetic clock, which screen changes cannot move. Paying late does not erase
+the missed deadline: H stays 24 hours past due on record.
 
-## Top friction found
-
-Fixed (the table above shows the effect): the director's weekly totals (now
-three cards on the overview), the analyst's buttons going dead after each
-command (the package now reloads after the operator's own successful command),
-and needed facts living only in raw JSON (the decision panel and overview now
-lead with plain facts). Still open:
+## Top friction still open (the other three of the first five were fixed)
 
 1. **Analyst and director, Monday.** 20 of 20 rows read "Case OPEN", 19 stay
  open at the end, but only H has a real problem: the fixture never records
  the other hospitals' $900,000, though plan §4 says they received it.
- Needs a fixture decision from the owner.
+ *Open:* fixture decision for the owner.
 2. **Replacement operator.** Restore to Continuity TEST is enabled only
  after H's shortfall is 0, so a replacement cannot take over unfinished
  work, which plan §14 expects. Needs an owner decision.
 
 ## Article XIII violations found
 
-Status after this change. The Mirror redesign owns the full interaction model.
-Fixed: XIII.1 answer first ("Needs attention now" on the overview), a failed or
-stale package read now shows its message in the command status (was a dead
-connection), and Refresh is disabled while a command runs (was a dead control).
+Only open ones remain (answer-first, dead-connection and dead-control items were fixed); the Mirror redesign owns the full interaction model.
 
 - **Illogical path.** The approver's reject-offset is enabled in every
  session (observed for analyst, director, auditor); the page has no roles

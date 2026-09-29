@@ -1,21 +1,26 @@
 """Receiver-file binding, atomicity, replay, preview and recovery attacks."""
 
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+import ast
 import copy
+import dataclasses
 import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
 from app import right_rail_financial_cash_file as cash
 from app import right_rail_financial_cash_file_independent as check
 from app import right_rail_financial_owner as owner
+from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_owner_independent import verify_database
 from tests import test_right_rail_financial_acceptance as fixtures
 from tests import rightrail_financial_expected_cases as expected
@@ -46,9 +51,9 @@ class ReceiverCashFileTests(unittest.TestCase):
                       "source": self.source, "row_count": 2, "total_cents": 300,
                       "rows": [self._row(1, 100, 0), self._row(2, 200, 1)]}
 
-    def _row(self, number, amount, revision):
-        return {"item_id": expected.H_ITEM_ID, "payment_id": f"file-payment-{number}",
-                "common_origin_id": f"file-origin-{number}", "evidence_id": f"file-evidence-{number}",
+    def _row(self, number, amount, revision, prefix="file"):
+        return {"item_id": expected.H_ITEM_ID, "payment_id": f"{prefix}-payment-{number}",
+                "common_origin_id": f"{prefix}-origin-{number}", "evidence_id": f"{prefix}-evidence-{number}",
                 "amount_cents": amount, "event_at_ms": expected.CASH_EVENT_MS,
                 "pays_action_id": None, "expected_revision": revision}
 
@@ -65,11 +70,15 @@ class ReceiverCashFileTests(unittest.TestCase):
         commands, context = self._prepare() if prepared is None else prepared
         return (self.store if store is None else store).run_batch(commands, cash_file_context=context)
 
-    def _unchanged(self, callback):
+    def _unchanged(self, callback, code=""):
         before = self.store.export_continuity()
-        with self.assertRaises((check.CashFileError, owner.FinancialError)):
+        with self.assertRaisesRegex((check.CashFileError, owner.FinancialError), code):
             callback()
         self.assertEqual(self.store.export_continuity(), before)
+
+    def _query(self, sql, *parameters):
+        with closing(sqlite3.connect(self.store.path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            return connection.execute(sql, parameters).fetchall()
 
     def test_preview_apply_retry_restart_and_reversal(self):
         prepared = self._prepare()
@@ -178,16 +187,87 @@ class ReceiverCashFileTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 self._unchanged(lambda: self._apply(self._prepare(value)))
 
-    def test_thousand_rows_and_maximum_grammar_values(self):
-        value = copy.deepcopy(self.value)
-        value["rows"] = [self._row(i, 1, i) for i in range(1000)]
-        value.update(row_count=1000, total_cents=1000)
-        commands, context = self._prepare(value)
-        self.assertEqual(len(check.CashFileCheck(commands, context).commands), 1000)
-        value.update(row_count=1, total_cents=2**63 - 1)
-        value["rows"] = [self._row(1, 2**63 - 1, 9999)]
-        value["rows"][0]["payment_id"] = "a" * 128
-        self.assertEqual(self._prepare(value)[0][0][1]["amount_cents"], 2**63 - 1)
+    def _file_of(self, items, count, prefix="file"):
+        revisions = dict(self._query("SELECT item_id,revision FROM obligations WHERE period_id=?", self.scope["period_id"]))
+        rows = []
+        for number in range(count):
+            item = items[number % len(items)]
+            rows.append({**self._row(number, 1, revisions[item], prefix), "item_id": item})
+            revisions[item] += 1
+        return {**self.value, "source": self.source, "rows": rows, "row_count": count, "total_cents": count}
+
+    def _wide_store(self, count=600):
+        """A new store with the largest state's `count` hospitals as obligations, at the cash event time."""
+        store = self.fixture._make_owner()
+        pack = self.fixture._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        ids = sorted([expected.H_ITEM_ID] + [f"item-{number:04d}" for number in range(1, count)])
+        manifest = self.fixture._population_manifest(member_ids=tuple(ids))
+        store.register_population_manifest(manifest)
+        items = tuple(owner.PopulationItem(population_id=expected.POPULATION_ONE_ID, item_id=item, display_label=f"Synthetic {item}", owed_cents=expected.OTHER_ITEM_CENTS,
+                                           due_at_ms=expected.H_DUE_AT_MS, currency="USD") for item in ids)
+        store.stage_population(population_id=expected.POPULATION_ONE_ID, manifest_id=manifest.manifest_id, pack_id=pack.pack_id,
+                               cutoff_ms=expected.CONTROL_PACK_V1.effective_start_ms, inclusion_rules=("included:synthetic",),
+                               expected_count=len(items), items=items, chunk_size=500)
+        store.validate_population(expected.POPULATION_ONE_ID)
+        store.publish_population(expected.POPULATION_ONE_ID)
+        self.fixture._advance_clock(store, expected.CASH_EVENT_MS)
+        self.store, self.baseline = store, store.export_continuity()
+        return ids
+
+    def _timed_apply(self, prepared):
+        """Apply; return the receipt and the seconds the outer write held the lock (connect, BEGIN IMMEDIATE .. COMMIT)."""
+        seconds, original = [], self.store._write
+        @contextmanager
+        def timed(**kwargs):
+            outer = getattr(self.store._batch, "connection", None) is None
+            start = time.perf_counter()
+            try:
+                with original(**kwargs) as connection:
+                    yield connection
+            finally:
+                if outer:
+                    seconds.append(time.perf_counter() - start)
+        with patch.object(self.store, "_write", timed):
+            receipt = self._apply(prepared)
+        return receipt, seconds[0]
+
+    def _grammar_file(self, count, per_item):
+        """The widest legal file: 128-character ids, the largest integers, every row linked to an action."""
+        wide = lambda kind, number: f"{kind}-{number:06d}".ljust(128, "x")
+        rows = [{"item_id": wide("item", number // per_item), "payment_id": wide("payment", number), "common_origin_id": wide("origin", number),
+                 "evidence_id": wide("evidence", number), "amount_cents": (2**63 - 1) // count, "event_at_ms": 2**63 - 1,
+                 "pays_action_id": wide("action", number), "expected_revision": 9999} for number in range(count)]
+        return {**self.value, "source": self.source, "rows": rows, "row_count": count, "total_cents": sum(row["amount_cents"] for row in rows)}
+
+    def test_row_caps_and_maximum_width_file(self):
+        self.source = {**self.source, "captured_at_ms": 2**63 - 1}
+        widest = self._grammar_file(check.MAX_ROWS, check.MAX_ITEM_ROWS)
+        self.assertLessEqual(len(canonical(widest)), cash.MAX_FILE_BYTES)  # size at the maximum: ~0.83 MB, under 1 MiB
+        commands, context = self._prepare(widest)
+        self.assertEqual(len(check.CashFileCheck(commands, context).commands), check.MAX_ROWS)
+        for count, per_item in ((check.MAX_ROWS + 1, 1), (2 * check.MAX_ITEM_ROWS, check.MAX_ITEM_ROWS + 1)):
+            value = self._grammar_file(count, per_item)
+            raw = canonical(value)
+            with self.subTest(rows=count, per_item=per_item):
+                with self.assertRaisesRegex(check.CashFileError, "^cash_file_row_cap$"):
+                    self._prepare(value)
+                with self.assertRaisesRegex(check.CashFileError, "^cash_file_row_cap$"):
+                    check.CashFileCheck(commands, {**context, "source_bytes": raw, "expected_source_sha256": sha(raw)})
+
+    def test_full_file_applies_within_writer_timeout(self):
+        # docs/CORE_REDESIGN.md "Cash-file capacity": one full (500-row) file on the largest state's 600 hospitals, spread
+        # (1-2 rows per item) or concentrated (6 per item). The bound is the 5 s writer busy timeout.
+        for concentrated in (False, True):
+            with self.subTest(concentrated=concentrated):
+                ids = self._wide_store()
+                prepared = self._prepare(self._file_of(ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)] if concentrated else ids, check.MAX_ROWS))
+                self.assertEqual(cash.preview_cash_file(*prepared, trusted_authority=self.fixture.authority,
+                                                        clock=self.store.clock)["recorded_count"], check.MAX_ROWS)
+                receipt, seconds = self._timed_apply(prepared)
+                print(f"CASH1A_LOCK concentrated={concentrated} seconds={seconds:.2f} store_bytes={self.store.path.stat().st_size}", flush=True)
+                self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
+                self.assertLess(seconds, 5.0)
 
     def test_concurrent_identical_files_commit_cash_once(self):
         prepared = self._prepare()
@@ -222,15 +302,139 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(reports(after), reports(before))
         self.assertEqual(self.store.obligation_detail(expected.H_ITEM_ID)["reporting_complete"], detail["reporting_complete"])
 
-    def test_alias_and_conflict_statuses_roll_back_whole_file(self):
-        self.store.record_payment_evidence(**self._prepare()[0][0][1])
-        baseline = self.store.export_continuity()
-        for amount in (100, 101):
-            value = copy.deepcopy(self.value)
-            value["rows"] = [self._row(3, 200, 1), {**self._row(4, amount, 2), "common_origin_id": "file-origin-1"}]
-            value["total_cents"] = 200 + amount
-            with self.subTest(amount=amount):
-                self._unchanged(lambda: self._apply(self._prepare(value, baseline)))
+    def test_overlapping_file_records_new_rows_and_labels_repeats(self):
+        self._apply()  # file A: file-payment-1 (100) and file-payment-2 (200) on H, revisions 0 -> 2
+        self.baseline = self.store.export_continuity()
+        self.source = {**self.source, "capture_id": "capture-2"}
+        repeat = {**self._row(4, 100, 3), "common_origin_id": "file-origin-1"}  # file B names payment 1 again under its own ids
+        self.value = {**self.value, "source": self.source, "total_cents": 150, "rows": [self._row(3, 50, 2), repeat]}
+        prepared = self._prepare()
+        receipt = self._apply(prepared)
+        self.assertEqual((receipt["recorded_count"], receipt["duplicate_count"], receipt["cash_delta_cents"], receipt["duplicate_cents"]), (1, 1, 50, 100))
+        aliases = self._query("SELECT before_revision,after_revision,payload_json FROM financial_events WHERE kind='PAYMENT_DUPLICATE_EVIDENCE'")
+        self.assertEqual([(before, after, {key: value for key, value in json.loads(payload).items() if key != "rows"}) for before, after, payload in aliases],
+                         [(3, 3, {"candidate_evidence_id": "file-evidence-4", "existing_payment_id": "file-payment-1", "common_origin_id": "file-origin-1"})])
+        self.assertEqual(self._query("SELECT local_ref FROM evidence WHERE evidence_id='file-evidence-4'"), [(prepared[0][1][1]["local_ref"],)])
+        verified = verify_database(self.store.path, expected_scope=self.scope, expected_authority=owner._checker_authority(self.fixture.authority))
+        self.assertEqual(receipt["cash_after_cents"], verified["totals"]["received_cash_cents"])
+        committed = self.store.export_continuity()
+        retry = self._apply(prepared)  # RETRY + ALIAS: nothing written (III.3)
+        self.assertEqual((retry["recorded_count"], retry["duplicate_count"], retry["cash_delta_cents"]), (0, 2, 0))
+        self.assertEqual(self.store.export_continuity(), committed)
+        self.store.record_payment_evidence(**self._row(5, 7, 3, "later"), source_id="fictional-receiver", source_version="v1", local_ref="later")
+        later = self.store.export_continuity()
+        retry = self._apply(prepared)  # stale baseline: repeats only, still exact
+        self.assertEqual((retry["duplicate_count"], retry["cash_delta_cents"]), (2, 0))
+        self.assertEqual(self.store.export_continuity(), later)
+
+    def test_conflicting_reused_and_stale_rows_refuse_with_their_class(self):
+        stale = self._prepare({**self.value, "row_count": 1, "total_cents": 7, "rows": [self._row(7, 7, 2)]})  # a new row reviewed before file A
+        self._apply()
+        self.baseline = self.store.export_continuity()
+        origin_1 = {"common_origin_id": "file-origin-1"}
+        cases = {"cash_file_conflict": ({**self._row(4, 101, 2), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),
+                 "cash_file_already_recorded": ({**self._row(1, 100, 0), "common_origin_id": "file-origin-9"}, {**self._row(4, 100, 2), "evidence_id": "file-evidence-1"})}
+        for code, rows in cases.items():
+            for row in rows:
+                value = {**self.value, "row_count": 1, "total_cents": row["amount_cents"], "rows": [row]}
+                with self.subTest(code=code, row=row):
+                    self._unchanged(lambda: self._apply(self._prepare(value)), f"^{code}$")
+        self._unchanged(lambda: self._apply(stale), "^cash_file_stale$")
+
+    def _file_b(self, rows, captured_at_ms=None):
+        self.baseline = self.store.export_continuity()
+        self.source = {**self.source, "capture_id": "capture-2", "captured_at_ms": captured_at_ms or self.source["captured_at_ms"]}
+        self.value = {**self.value, "source": self.source, "row_count": len(rows), "total_cents": sum(row["amount_cents"] for row in rows), "rows": rows}
+
+    def test_repeat_of_a_reversed_payment_is_duplicate_only_if_it_predates_the_reversal(self):
+        reversed_at = expected.CASH_EVENT_MS + 1_000
+        for label, at, duplicate in (("at the reversal", reversed_at, True), ("after the reversal", reversed_at + 4_000, False)):
+            for path in ("cash file", "owner command"):
+                with self.subTest(repeat=label, path=path):
+                    self.setUp()
+                    self._apply()
+                    self.fixture._advance_clock(self.store, reversed_at + 10_000)
+                    self.store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="file-payment-1", evidence_id="reversal-1", event_at_ms=reversed_at)
+                    revision = self.store.obligation_detail(expected.H_ITEM_ID)["revision"]
+                    row = {**self._row(4, 100, revision), "common_origin_id": "file-origin-1", "event_at_ms": at}  # file-payment-1's origin again, new ids
+                    if path == "cash file":
+                        self._file_b([row], at)
+                        if duplicate:
+                            receipt = self._apply()
+                            self.assertEqual((receipt["recorded_count"], receipt["duplicate_count"], receipt["cash_delta_cents"]), (0, 1, 0))
+                            verify_database(self.store.path, expected_scope=self.scope, expected_authority=owner._checker_authority(self.fixture.authority))
+                        else:
+                            self._unchanged(lambda: self._apply(), "^cash_file_conflict$")
+                    else:
+                        command = lambda: self.store.record_payment_evidence(**{key: value for key, value in row.items() if key != "pays_action_id"}, source_id="fictional-receiver", source_version="v1", local_ref="direct")
+                        if duplicate:
+                            self.assertEqual(command()["status"], "DUPLICATE")
+                        else:
+                            self._unchanged(command, "^payment_origin_reversed$")
+
+    def _refused_by(self, rule, callback):  # the refusal class is fixed, so the rule that fired is read from the checker itself
+        seen, real = [], independent.verify_obligation_connection
+
+        def spy(*args, **kwargs):
+            try:
+                return real(*args, **kwargs)
+            except independent.IndependentFinancialError as error:
+                seen.append(str(error))
+                raise
+        with patch.object(independent, "verify_obligation_connection", spy):
+            self._unchanged(callback, "^cash_file_failed$")
+        self.assertEqual(seen, [rule])
+
+    def test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit(self):
+        store = self.store = self.fixture._build_base_for_correction()  # S4: the owner forgets earlier linked payments and overpays a correction request by 1 cent
+        self.fixture._prepare_acknowledged(store)
+        self.baseline = store.export_continuity()
+        detail = store.obligation_detail(expected.H_ITEM_ID)
+        rows = [{**self._row(1, expected.CORRECTION_PAYMENT_CENTS - 1, detail["revision"]), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS}]
+        rows.append({**self._row(2, 2, detail["revision"] + 1), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS})
+        self.source = {**self.source, "captured_at_ms": expected.P2_EVENT_MS}
+        self.value.update(source=self.source, row_count=2, rows=rows, total_cents=expected.CORRECTION_PAYMENT_CENTS + 1)
+        self.fixture._advance_clock(store, expected.P2_EVENT_MS)
+        with patch.object(owner, "_correction_paid", lambda connection, obligation_id: []):
+            self._refused_by("payment:link", lambda: self._apply())
+        self.setUp()  # S5: an OVERLAP alias is stored with a wrong content digest
+        self._apply()
+        self._file_b([self._row(3, 50, 2), {**self._row(4, 100, 3), "common_origin_id": "file-origin-1"}])
+        original = owner.FinancialOwner._insert_evidence
+        def wrong_digest(instance, connection, evidence):
+            return original(instance, connection, dataclasses.replace(evidence, content_digest=b"" * 64) if evidence.evidence_id == "file-evidence-4" else evidence)
+        with patch.object(owner.FinancialOwner, "_insert_evidence", wrong_digest):
+            self._refused_by("evidence:content-digest", lambda: self._apply())
+
+    def test_every_whole_store_rule_runs_before_commit_or_is_excused(self):
+        """A rule only the open check runs turns a bad write into a store that will not open (lean-live M0 F1, cash 1a F1)."""
+        functions = {node.name: node for node in ast.walk(ast.parse(Path(independent.__file__).read_text(encoding="utf-8"))) if isinstance(node, ast.FunctionDef)}
+        names = lambda name: {node.id for node in ast.walk(functions[name]) if isinstance(node, ast.Name)}
+        reached, todo = set(), ["verify_obligation_connection"]  # the entry both pre-COMMIT paths (cash finish, correction) call
+        while todo:
+            if (current := todo.pop()) not in reached and current in functions:
+                reached.add(current)
+                todo += names(current)
+        untouched = "no cash-file or correction write changes these rows (finish proves it for the cash file)"
+        written = "cash file: finish chains every new event and compares each written row to its command"
+        current = "the touched current evaluation and projection are recomputed; finish proves the cash deltas"
+        excused = {**dict.fromkeys(("_verify_packs", "_verify_population_manifest_rows", "_verify_populations", "_verify_population_history", "_verify_program_funding", "_verify_adjustments", "_verify_current_snapshot", "_verify_restore_source_binding"), untouched),
+                   **dict.fromkeys(("_verify_events", "_verify_payments", "_verify_conflicts", "_verify_duplicate_evidence", "_verify_event_references", "_verify_commands", "_verify_replayed_rows", "_verify_history_tables"), written),
+                   **dict.fromkeys(("_verify_obligations", "_verify_evaluations", "_verify_evaluation_history_events", "_verify_projections"), current)}
+        unreached = {name for name in names("_verify_connection") if name.startswith("_verify_") and name not in reached}
+        self.assertEqual(sorted(unreached - set(excused)), [], "a whole-store rule that neither runs before commit nor has a written reason")
+        self.assertEqual(sorted(set(excused) - unreached), [], "an excused rule that is now reachable or gone: delete its line")
+
+    def test_refusals_are_fixed_classes(self):
+        for error, code in ((check.CashFileError("cash_file_stale"), "cash_file_stale"), (check.CashFileError("private-marker"), "cash_file_failed"),
+                            (owner.FinancialBusyError("private-marker"), "cash_file_busy"), (owner.FinancialRevisionError("private-marker"), "cash_file_stale"),
+                            (owner.FinancialConflictError("private-marker"), "cash_file_conflict"), (owner.FinancialIntegrityError("private-marker"), "cash_file_failed"),
+                            (OSError("private-path"), "cash_file_failed")):
+            with self.subTest(error=type(error).__name__):
+                self.assertEqual(cash.refusal(error), code)
+        for module in (cash, check):
+            with self.subTest(module=module.__name__):
+                self.assertLessEqual(set(re.findall(r'"(cash_file_[a-z_]+)"', Path(module.__file__).read_text())), check.REFUSALS)
 
     def test_final_verifier_failure_and_duplicate_sql_write_roll_back(self):
         prepared = self._prepare()
@@ -266,7 +470,7 @@ class ReceiverCashFileTests(unittest.TestCase):
 
     def test_preview_cleanup_failure_cannot_publish_success(self):
         with patch.object(cash.tempfile.TemporaryDirectory, "__exit__", side_effect=OSError("private-path")):
-            with self.assertRaisesRegex(check.CashFileError, "^cash_file_preview_failed$"):
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
                 cash.preview_cash_file(*self._prepare(), trusted_authority=self.fixture.authority, clock=self.store.clock)
         self.assertEqual(self.store.export_continuity(), self.baseline)
 
@@ -289,7 +493,8 @@ class ReceiverCashFileTests(unittest.TestCase):
         directory, _, args = self._cli_fixture()
         changes = [tuple(f"DROP TABLE {name}" for name in ("history_segments", "history_pending", "history_open")),
                    tuple(f'DROP TRIGGER "{name}"' for name in owner._HISTORY_APPEND_ONLY_TRIGGERS),
-                   tuple(f'DROP INDEX "{name}"' for name, _, _ in owner._PRIVATE_INDEX_SETS[2]) + ("PRAGMA user_version=0",)]
+                   tuple(f'DROP INDEX "{name}"' for name, _, _ in owner._PRIVATE_INDEX_SETS[2]) + ("PRAGMA user_version=0",),
+                   (f'DROP INDEX "{owner._PRIVATE_INDEX_SETS[2][-1][0]}"', "PRAGMA user_version=1")]  # L2: a v1 index set is never written
         for index, statements in enumerate(changes):
             path = directory / f"old-{index}.sqlite"
             path.write_bytes(self.store.path.read_bytes())
@@ -326,7 +531,7 @@ class ReceiverCashFileTests(unittest.TestCase):
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 code = cli.main(args + ["--apply"])
             if store.mode == "SHADOW":
-                self.assertEqual((code, stderr.getvalue()), (2, "ERROR:receiver_cash_file_refused\n"))
+                self.assertEqual((code, stderr.getvalue()), (2, "ERROR:receiver_cash_file_refused:cash_file_binding\n"))
                 self.assertEqual(store.export_continuity(), self.baseline)
                 with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                     self.assertEqual(cli.main(args), 0)
@@ -392,7 +597,7 @@ raise SystemExit(main(sys.argv[3:]))
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             self.assertEqual(cli.main(args + ["--file", str(directory / "private-marker")]), 2)
-        self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", "ERROR:receiver_cash_file_refused\n"))
+        self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", "ERROR:receiver_cash_file_refused:cash_file_input\n"))
         self.assertEqual({name: (directory / name).read_bytes() for name in files}, files)
 
 

@@ -433,13 +433,11 @@ Here the action amount is min(300000, 300000 − 0) = 300000.
 
 Found by reading the code; none has been run.
 
-**A. Money (escalate to rr-core, not changed here).**
-1. Lean's `outstandingCorrectionCents` (`Types.lean`) skips CANCELLED
-   `CORRECTION_PAYMENT_REQUEST` actions; Owner's `correction_action_binding`
-   (`app/right_rail_financial_owner.py` ~4549) sums every such row regardless
-   of status. Nothing sets CANCELLED today, so the paths cannot yet
-   disagree; once cancel lands, Owner would refuse Lean's larger amount
-   (fails closed).
+The Python semantic adapter currently refuses CANCELLED rows at load
+(`right_rail_financial_semantic_adapter.py` :1593, :1613-1614, :1624-1625), so the behaviour
+test for Lean skipping a CANCELLED request lands with the command that first writes CANCELLED.
+When cancel lands, the checker must count a cancellation only from the revision it happened at (as
+`paid_at` does for payments), not by current status; today it counts every request and refuses CANCELLED.
 
 **B. Result decoding** — Lean `decodeCorrectionTransitionResult` vs Python
 `decode_correction_transition_result`.
@@ -454,19 +452,20 @@ Found by reading the code; none has been run.
    BLFIN02's magic, not well-formedness (Owner compares it to its own
    re-encoding, `right_rail_financial_semantic_adapter.py` line 2130); skips
    resulting result's context/authority/pack agreement with resulting
-   input; skips the action-amount formula (Owner re-checks under A1); skips
+   input; skips the action-amount formula (the checker applies its own amount and requestable rule before COMMIT); skips
    `committedAtMs = max(decisionAt, ownerNow)`, the `evaluation:<obligation>:
    r<n>` form of inputEvaluationId, `evaluatedAt ≤ decisionAt`, the rejected
    claim in the resulting input, and supporting-evidence coverage of
    claimBefore's evidence; skips correctionPaid order/uniqueness/positivity
    (Owner compares the list for equality); skips revision bounds (≤10,000).
    Owner derives determination id, `evaluation:<obligation>:r<n>`, resulting
-   revision and mutation time itself and writes only those; requires the
-   action-amount rule; requires correctionPaid to equal its SQL-ordered
+   revision and mutation time itself and writes only those; requires
+   correctionPaid to equal its SQL-ordered
    list; `bind_resulting_state` requires the post-write snapshot
    re-encoding to equal the resulting BLFIN02 bytes, then binds the result
-   context; before COMMIT, `verify_obligation_connection` (line 4833)
-   recomputes the written evaluation from the exact rows. A replacement
+   context; before COMMIT, `verify_obligation_connection` (Owner :4874)
+   recomputes the written evaluation from the exact rows and applies the checker's action rules
+   to the obligation's correction actions, amount included. A replacement
    engine violating any of these is refused before anything commits.
 5. DUPLICATE/REJECTED: Python accepts explanation expectedRevision up to
    2^63-1; Lean caps at 10,000.

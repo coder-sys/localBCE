@@ -4716,6 +4716,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "AUTHORIZED"}),
             # Refused before the checker now: the post-state binding covers the result's evidence ids.
             ("post_state:result_evidence_ids", lambda r, m: {"evidence_ids": ()}),
+            # The action amount: one cent off, with a matching payload digest and wire. Only the checker's own rule refuses it.
+            ("action:payload-binding", None),
         )
         for index, (code, change) in enumerate(tampers):
             with self.subTest(index=index, code=code):
@@ -4736,6 +4738,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 def run(release: object, *, request: bytes, change: object = change) -> object:
                     execution = real_run(release, request=request)
                     mutation = declared["mutation"] = execution.result["mutation"]
+                    if change is None:
+                        action, deps = mutation["action"], mutation["dependencies"]
+                        action["amount_cents"] -= 1
+                        action["payload_digest"] = owner._digest(owner._ACTION_DOMAIN, owner._canonical({
+                            "action_id": action["action_id"], "amount_cents": action["amount_cents"], "claim_id": deps["claim_before"]["claim_id"],
+                            "currency": action["currency"], "determination_id": action["determination_id"], "dispatch": "SYNTHETIC_RECORD_ONLY",
+                            "input_evaluation_id": deps["input_evaluation_id"], "input_evaluation_result_digest": owner._hex(deps["input_evaluation_result_digest"]),
+                            "kind": "CORRECTION_PAYMENT_REQUEST", "obligation_id": action["obligation_id"], "revision": action["revision"],
+                        }))
+                        financial_engine._validate_correction_result_shape(execution.result)
+                        return execution
                     wrong = replace(mutation["resulting_result"], **change(mutation["resulting_result"], mutation))
                     mutation["resulting_result"] = wrong
                     mutation["resulting_result_wire"] = semantic.encode_blfres02_result(wrong)
@@ -4803,11 +4816,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.row_factory = sqlite3.Row
             obligation_ids = [str(row[0]) for row in connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id")]
             self.assertGreater(len(obligation_ids), 1)
-            for obligation_id in obligation_ids:
-                self.assertEqual(
-                    verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"],
-                    obligation_id,
-                )
+            self.assertEqual([row["obligation_id"] for row in verify_obligation_connection(connection, *obligation_ids, expected_config=store.config, expected_authority=self.authority)], obligation_ids)
             corrected = str(connection.execute("SELECT obligation_id FROM claimed_adjustments WHERE status='REJECTED'").fetchone()[0])
             current = "(SELECT current_evaluation_id FROM obligations WHERE obligation_id=:o)"
             tampers = (
@@ -5304,6 +5313,19 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^action:event-amount$"):
             verify_database(changed, expected_config=store.config, expected_authority=self.authority)
 
+    def test_a_determination_only_the_whole_store_rule_rejects_refuses_before_commit(self) -> None:
+        # The determination and follow-up rules run on the touched rows before COMMIT (cash 1a F1): a digest that
+        # matches the owner's own payload but not the row's fields used to commit and leave a store that will not open.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        before = store.export_continuity()
+        real = owner._determination_digest_payload
+        with patch.object(owner, "_determination_digest_payload", lambda **fields: {**real(**fields), "unbound": 1}):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^correction_verification:determination:digest$"):
+                self._reject(store, claim_id)
+        self.assertEqual(store.export_continuity(), before)
+
     def test_every_current_evaluation_saw_the_rows_as_they_are(self) -> None:
         # Final review of 75a5517, finding 5: publish opened the case after the first evaluation,
         # and only the per-obligation mode compared a current evaluation with the current rows.
@@ -5523,7 +5545,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.row_factory = sqlite3.Row
             connection.set_trace_callback(statements.append)
             obligation_id = str(connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id").fetchone()[0])
-            self.assertEqual(verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"], obligation_id)
+            self.assertEqual(verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)[0]["obligation_id"], obligation_id)
+            schema_reads = lambda ids: (statements.clear(), verify_obligation_connection(connection, *ids, expected_config=store.config, expected_authority=self.authority), sum("sqlite_master" in statement for statement in statements))[2]
+            self.assertEqual(schema_reads([obligation_id] * 3), schema_reads([obligation_id]))  # schema and meta once per call, not per obligation
             self.assertEqual(file_checks(), [])
             verify_database_connection(connection, expected_config=store.config, expected_authority=self.authority)
             self.assertEqual(file_checks(), ["PRAGMA integrity_check"])  # the trace does see the whole-store check
