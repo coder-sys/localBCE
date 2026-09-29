@@ -1,13 +1,15 @@
-"""Constitution III.3: an exact retry that carries the original expected_revision is DUPLICATE and writes
-nothing; a different payload at a stale revision still conflicts. Also: canonical JSON never hashes NaN or Infinity."""
+"""Constitution III.3: an exact retry is DUPLICATE and writes nothing, even after the owner clock moved; support,
+reversal and offset retries ignore expected_revision, payment retries need the original one; a different payload at a
+stale revision still conflicts. Also: canonical JSON and continuity packages never accept NaN or Infinity."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from app.right_rail_financial_owner import FinancialIntegrityError, FinancialRevisionError, _canonical
+from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialRevisionError, _canonical
 from tests.test_right_rail_financial_followthrough import RULES, _build_r_store, _history
 
 
@@ -28,8 +30,12 @@ class RetryOrderTests(unittest.TestCase):
                     original = store.obligation_detail(item)["revision"]
                     self.assertNotEqual(write(item, "a", original)["status"], "DUPLICATE")
                     self.assertGreater(store.obligation_detail(item)["revision"], original)
+                    store.clock.value += 60_000  # the owner clock moves before the retry (reversal takes its time from it)
                     before, detail = _history(store), store.obligation_detail(item)
                     self.assertEqual(write(item, "a", original)["status"], "DUPLICATE")
+                    if name != "payment":  # retry identity ignores expected_revision here, as for reporting and acknowledgment
+                        for revision in (None, original + 1, detail["revision"]):
+                            self.assertEqual(write(item, "a", revision)["status"], "DUPLICATE")
                     self.assertEqual((_history(store), store.obligation_detail(item)), (before, detail))
                     with self.assertRaisesRegex(FinancialRevisionError, "^obligation_revision_conflict$"):
                         write(item, "b", original)
@@ -39,6 +45,8 @@ class RetryOrderTests(unittest.TestCase):
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=value), self.assertRaisesRegex(FinancialIntegrityError, "^canonical_json$"):
                 _canonical({"amount": value})
+            with self.subTest(package=value), self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_canonical$"):
+                FinancialOwner.validate_continuity_package(b'{"amount":%s}' % json.dumps(value).encode())
 
 
 if __name__ == "__main__":
