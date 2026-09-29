@@ -2,8 +2,9 @@
 
 Each mutant weakens one conjunct of ``BlindLedger/Gate/Spec.lean``, rebuilds
 ``gate_vectors`` and must make the vectors FAIL; the spec is then restored
-byte for byte and must PASS.  Run only under the v4 guard:
-``python tools/gate_mutants.py <lean dir> <vectors file> <lake.exe>``.
+byte for byte and must PASS.  The optional ``start:stop`` slices the list,
+for batches.  Run only under the guard:
+``python tools/gate_mutants.py <lean dir> <vectors file> <lake.exe> [start:stop]``.
 """
 
 import hashlib
@@ -19,8 +20,13 @@ MUTANTS = [
     ("1 request: line member", "l.memberKey == memberKey && ", ""),
     ("1 request: line payee", " && l.payeeRef == payeeRef", ""),
     ("1 request: lines sum to amount", "  need (lines.isEmpty || ls.foldl (· + ·.cents) 0 == amountCents)\n", ""),
-    ("1 request: FFS_CLAIM has lines", "  need (flow != .FFS_CLAIM || !lines.isEmpty)\n", ""),
-    ("1 leaf: FFS_CLAIM has a lines root", "  need (flow != .FFS_CLAIM || linesRoot != zeroDigest)\n", ""),
+    ("1 line bytes 568", "def maxLineBytes : Nat := 569", "def maxLineBytes : Nat := 568"),
+    ("1 request: ruled flow has lines", "  need (!flow.ruled || !lines.isEmpty)\n", ""),
+    ("1 FFS_CYCLE unruled", "f == .FFS_CYCLE || ", ""),
+    ("1 FFS_CLAIM unruled", "f == .FFS_CLAIM || ", ""),
+    ("1 CAP_820 unruled", " || f == .CAP_820", ""),
+    ("1 leaf: ruled flow has a lines root", "then linesRoot != zeroDigest else", "then true else"),
+    ("1 leaf: unruled flow is HUMAN_REVIEW", "else outcome == .HUMAN_REVIEW", "else true"),
     ("1 leaf: reason codes ascending", "  need (ascending reasonCodes)\n", ""),
     ("1 leaf: decided <= issued", "need (decidedAt ≤ issuedAt && ", "need ("),
     ("1 leaf: issued <= expires", "issuedAt && issuedAt ≤ expiresAt && expiresAt", "issuedAt && expiresAt"),
@@ -40,7 +46,11 @@ MUTANTS = [
     ("4 fence", ": Bool := s.fence t.leaf.tenantId ≤ t.leaf.epoch", ": Bool := true"),
     ("5 not before issue", "t.leaf.issuedAt ≤ s.now + clockSkew && ", ""),
     ("5 not expired", " && s.now < t.leaf.expiresAt + clockSkew", ""),
-    ("5 decision age", " &&\n    s.now < t.leaf.decidedAt + maxDecisionAge + clockSkew", ""),
+    ("5 decision age", " &&\n    s.now < t.leaf.decidedAt + maxDecisionAge t.leaf.flow + clockSkew", ""),
+    ("5 decision age not per flow", "maxDecisionAge t.leaf.flow", "maxDecisionAge .FFS_CLAIM"),
+    ("5 FFS_CYCLE age -1 s", "| .FFS_CYCLE => 28 * 24 * 3600", "| .FFS_CYCLE => 28 * 24 * 3600 - 1"),
+    ("5 CAP_820 age +1 s", "| .CAP_820 => 62 * 24 * 3600", "| .CAP_820 => 62 * 24 * 3600 + 1"),
+    ("5 FFS_CLAIM age +1 s", "| _ => 14 * 24 * 3600", "| _ => 14 * 24 * 3600 + 1"),
     ("5 clockSkew 299", "def clockSkew : Nat := 300", "def clockSkew : Nat := 299"),
     ("5 clockSkew 301", "def clockSkew : Nat := 300", "def clockSkew : Nat := 301"),
     ("6 tenant", "l.tenantId == p.tenantId && ", ""),
@@ -80,11 +90,20 @@ MUTANTS = [
     ("install: shard count u32", " && e.shardCount < 2 ^ 32", ""),
     ("install: shard count fixed per tenant", "x.shardCount == e.shardCount && ", ""),
     ("install: one certificate per tenant and epoch", " && x.epoch != e.epoch", ""),
-    ("install: raises fence", ",\n              fence := raiseFence s.fence e.tenantId e.epoch }", " }"),
-    ("install: refused cert raises fence", "fence := raiseFence s.fence e.tenantId e.epoch }",
-     "fence := if fits s e then raiseFence s.fence e.tenantId e.epoch else s.fence }"),
-    ("install: installed cert raises fence", "fence := raiseFence s.fence e.tenantId e.epoch }",
-     "fence := if fits s e then s.fence else raiseFence s.fence e.tenantId e.epoch }"),
+    ("install: equivocation unrecorded", "(s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&\n"
+     "                x != e).map (·, e) ++ s.equivocations", "s.equivocations"),
+    ("install: same certificate is equivocation", " &&\n                x != e)", ")"),
+    ("install: equivocation across tenants", "fun x => x.tenantId == e.tenantId && x.epoch", "fun x => x.epoch"),
+    ("install: equivocation across epochs", "x.tenantId == e.tenantId && x.epoch == e.epoch &&\n",
+     "x.tenantId == e.tenantId &&\n"),
+    ("11 equivocation blocks release", " ||\n    s.equivocations.any fun q => q.1.tenantId == tenant && q.1.epoch == epoch", ""),
+    ("11 equivocation blocks every tenant", "q.1.tenantId == tenant && ", ""),
+    ("11 equivocation blocks every epoch", " && q.1.epoch == epoch", ""),
+    ("install: raises fence", "              fence := raiseFence s.fence e.tenantId e.epoch,\n", ""),
+    ("install: refused cert raises fence", "fence := raiseFence s.fence e.tenantId e.epoch,",
+     "fence := if fits s e then raiseFence s.fence e.tenantId e.epoch else s.fence,"),
+    ("install: installed cert raises fence", "fence := raiseFence s.fence e.tenantId e.epoch,",
+     "fence := if fits s e then s.fence else raiseFence s.fence e.tenantId e.epoch,"),
     ("store: cert tenant", "e.tenantId == x.checkpoint.tenantId && ", ""),
     ("store: cert epoch", "e.epoch == x.checkpoint.epoch &&", ""),
     ("store: signature", " &&\n        c.sigOk e.publicKey x.header x.signature", ""),
@@ -116,6 +135,8 @@ MUTANTS = [
     ("response: leaf lines root", "      need (t.leaf.linesRoot == linesRoot H r.lines)\n", ""),
     ("response: leaf flow", "      need (status == .PAYMENT_ALREADY_DECIDED || t.leaf.flow == r.flow)\n", ""),
     ("response: already-decided flow exemption", "status == .PAYMENT_ALREADY_DECIDED || ", ""),
+    ("response: cross-flow lines accepted", "      need (t.leaf.linesRoot == linesRoot H r.lines)\n",
+     "      need (status == .PAYMENT_ALREADY_DECIDED || t.leaf.linesRoot == linesRoot H r.lines)\n"),
     ("reissue: decision time kept", "issuedAt := old.issuedAt,", "issuedAt := old.issuedAt, decidedAt := old.decidedAt,"),
     ("reissue: latest revision only", "old.revision == latest &&\n    ", ""),
     ("reissue: same decision", "decide ({ new with epoch := old.epoch, seq := old.seq, issuedAt := old.issuedAt,\n"
@@ -124,6 +145,23 @@ MUTANTS = [
     ("reissue: seq only within the epoch", "old.epoch == new.epoch && ", ""),
     ("reissue: later seq", " && old.seq < new.seq", ""),
     ("reissue: within the epoch", " || old.epoch == new.epoch && old.seq < new.seq", ""),
+    ("redecide: latest revision only", "old.revision == latest && new.revision", "new.revision"),
+    ("redecide: next revision", "new.revision == latest + 1 && ", ""),
+    ("redecide: any later revision", "new.revision == latest + 1", "latest < new.revision"),
+    ("redecide: only an ALLOW", "old.outcome == .ALLOW &&\n    old.decidedAt", "\n    old.decidedAt"),
+    ("redecide: before its age", "old.decidedAt + maxDecisionAge old.flow + 2 * clockSkew ≤ new.decidedAt &&\n    ", ""),
+    ("redecide: one clock skew", "old.flow + 2 * clockSkew", "old.flow + clockSkew"),
+    ("redecide: age not per flow", "maxDecisionAge old.flow", "maxDecisionAge .FFS_CLAIM"),
+    ("redecide: tenant", "old.tenantId == new.tenantId && old.programId", "old.programId"),
+    ("redecide: program", "old.programId == new.programId && old.shardId", "old.shardId"),
+    ("redecide: shard", "old.shardId == new.shardId &&\n", "\n"),
+    ("redecide: flow", "old.flow == new.flow && old.paymentId", "old.paymentId"),
+    ("redecide: payment", "old.paymentId == new.paymentId && ", ""),
+    ("redecide: member key", "old.memberKey == new.memberKey &&\n", "\n"),
+    ("redecide: payee", "old.payeeRef == new.payeeRef && ", ""),
+    ("redecide: amount", "old.amountCents == new.amountCents && ", ""),
+    ("redecide: period", "old.period == new.period &&\n", "\n"),
+    ("redecide: lines root", " &&\n    old.linesRoot == new.linesRoot", ""),
 ]
 
 
@@ -137,14 +175,15 @@ def vectors(lean: Path, path: str, lake: str) -> str:
     return out[-1].split()[0] + (" first_lines=" + ",".join(first) if first else "")
 
 
-def main(lean_dir: str, path: str, lake: str) -> int:
+def main(lean_dir: str, path: str, lake: str, window: str = ":") -> int:
     lean = Path(lean_dir)
     spec = lean / "BlindLedger" / "Gate" / "Spec.lean"
     original = spec.read_bytes()
     text = original.decode("utf-8")
     killed = 0
+    run = MUTANTS[slice(*(int(x) if x else None for x in window.split(":")))]
     try:
-        for name, old, new in MUTANTS:
+        for name, old, new in run:
             if text.count(old) != 1:
                 print(f"MUTANT {name}: SCRIPT_ERROR occurrences={text.count(old)}")
                 continue
@@ -156,8 +195,8 @@ def main(lean_dir: str, path: str, lake: str) -> int:
         spec.write_bytes(original)
     restored = vectors(lean, path, lake)
     print(f"RESTORED sha256={hashlib.sha256(spec.read_bytes()).hexdigest()} {restored}")
-    print(f"MUTANTS total={len(MUTANTS)} killed={killed}")
-    return 0 if restored == "GATE_VECTORS=PASS" and killed == len(MUTANTS) else 1
+    print(f"MUTANTS total={len(run)} killed={killed}")
+    return 0 if restored == "GATE_VECTORS=PASS" and killed == len(run) else 1
 
 
 if __name__ == "__main__":

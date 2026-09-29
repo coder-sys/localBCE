@@ -18,8 +18,8 @@ open BlindLedger.Gate
     (recorded as a fork) or `reject`.  Accepted request, response and
     checkpoint lines, and tokens that decode, list the decoded fields they must
     yield; a response line
-    names the decoded request it answers, and a `reissue` line checks
-    `reissues` on the latest revision and two tokens.  The last line, `end N`, is the number
+    names the decoded request it answers, and a `reissue` (`redecide`) line
+    checks `reissues` (`redecides`) on the latest revision and two tokens.  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
     never a release path. -/
 
@@ -97,7 +97,7 @@ def renderToken (t : Token) : List String :=
 structure Ctx where
   state : PayerState :=
     { fence := fun _ => 0, now := 0, certs := [], checkpoints := [], grants := [], released := [],
-      forked := [], pins := [] }
+      forked := [], equivocations := [], pins := [] }
   chains : List (EpochCert × Bool) := []
   sigs : List (Bytes × Bytes × Bytes) := []
   payments : List (String × Payment) := []
@@ -179,10 +179,11 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   | "response" :: expect :: _ :: request :: bytes :: rest =>
     let r ← List.lookup request x.requests
     pure (x, some (← decoded expect renderResponse (decodeResponse sha3 r (← hex bytes)) rest))
-  | ["reissue", expect, _, latest, old, new] =>
+  | [kind, expect, _, latest, old, new] =>
+    let f ← [("reissue", reissues), ("redecide", redecides)].lookup kind
     let a ← decodeToken (← hex old)
     let b ← decodeToken (← hex new)
-    pure (x, some (reissues (← latest.toNat?) a.leaf b.leaf == (← verdict expect)))
+    pure (x, some (f (← latest.toNat?) a.leaf b.leaf == (← verdict expect)))
   | ["decision-id", _, tenant, program, payment, rev, out] =>
     pure (x, some (decisionId sha3 (ascii tenant) (ascii program) (ascii payment) (← rev.toNat?) ==
       (← hex out)))

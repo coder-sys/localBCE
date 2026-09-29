@@ -405,12 +405,12 @@ theorem verifyToken_after_send {c : Crypto} {s1 s2 s' : PayerState} {q p : Payme
   rw [ht, hs.keeps.2 _ _ hn2] at hn'
   rw [hr, ht, hkey, Option.some.inj hn']
 
-/-- A detected fork blocks its tenant and epoch on every shard: no token under
-    them is accepted while the fork is on record (check 11). -/
+/-- A detected fork or equivocation blocks its tenant and epoch on every
+    shard: no token under them is accepted while it is on record (check 11). -/
 theorem verifyToken_unforked {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes}
     {t : Token} (h : verifyToken c s p bytes = true) (hd : decodeToken bytes = some t) :
-    ∀ f ∈ s.forked, f.1.checkpoint.tenantId = t.leaf.tenantId →
-      f.1.checkpoint.epoch ≠ t.leaf.epoch := by
+    (∀ f ∈ s.forked, f.1.checkpoint.tenantId = t.leaf.tenantId → f.1.checkpoint.epoch ≠ t.leaf.epoch) ∧
+      ∀ q ∈ s.equivocations, q.1.tenantId = t.leaf.tenantId → q.1.epoch ≠ t.leaf.epoch := by
   obtain ⟨u, -, hu, -, -, -, -, -, -, -, -, -, hf, -⟩ := (verifyToken_iff c s p bytes).1 h
   obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
   simpa [unforked, blocked] using hf
@@ -443,6 +443,22 @@ theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
 /-- Frozen statement (LM1, open): no step removes a released payment. -/
 theorem Step.released_grows {c : Crypto} {s s' : PayerState} (h : Step c s s') :
     ∀ k ∈ s.released, k ∈ s'.released := by
+  sorry
+
+/-- Frozen statement (LM1, open): at most one release per payment over any
+    run: once a payment is released, no later state accepts a token for it. -/
+theorem Steps.at_most_once {c : Crypto} {s s' s'' : PayerState} {p p' : Payment} {bytes bytes' : Bytes}
+    {t t' : Token} (h : release c s p bytes = some s') (hs : Steps c s' s'')
+    (hd : decodeToken bytes = some t) (hd' : decodeToken bytes' = some t') (hk : payKey t' = payKey t) :
+    verifyToken c s'' p' bytes' = false := by
+  sorry
+
+/-- Open: a second chain-valid certificate for an installed one's tenant and
+    epoch is recorded with it and blocks that tenant and epoch. -/
+theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
+    (hc : c.certChainOk e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
+    (he : x.epoch = e.epoch) (hne : x ≠ e) :
+    (x, e) ∈ (installCert c s e).1.equivocations ∧ blocked (installCert c s e).1 e.tenantId e.epoch = true := by
   sorry
 
 /-- Frozen statement (LM1, open): every step sequence preserves `Coherent`. -/

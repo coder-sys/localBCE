@@ -205,9 +205,9 @@ What exists today toward it:
  unconditionally, but round-trip (P1) and trailing-byte rejection (P3) only
  for admissible values; nothing yet proves every value Lean emits is
  admissible.
-- There is no batch decide API, no ML-DSA-87 checkpoint signing, no
- Merkle-inclusion token, no independent witness, no member-key sharding, no
- fenced primary/standby, and no Bypass outcome.
+- There is no batch decide API, independent witness, fenced primary/standby
+ or Bypass outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing
+ exist only as the gate-v1 codec and Lean model.
 - The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
  one Windows process per call) is disqualifying for gate throughput and needs a
  long-lived worker pool; no warm-worker benchmark has been run.
@@ -215,9 +215,8 @@ What exists today toward it:
 
 The target document holds the authority ladder, gate points, batch signing,
 fail policy, sharding, proof boundary, evidence modes and post-quantum choices,
-and which are unresolved. The separate `gate-v1` branch has format, signature
-and Lean verification work not connected here to signed grant admission,
-durable payer state or the rules path.
+and which are unresolved. Gate-v1's formats and Lean payer checks are not
+connected to signed grant admission, durable payer state or the rules path.
 
 ## Rejected directions
 

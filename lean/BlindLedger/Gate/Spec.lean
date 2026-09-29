@@ -41,10 +41,6 @@ def memberKeyBytes : Nat := 32
 def clockSkew : Nat := 300
 /-- Seven days: the longest `expires_at - issued_at` a token may carry. -/
 def maxTokenLifetime : Nat := 7 * 24 * 3600
-/-- Fourteen days: FFS checkwrites run weekly or biweekly, so an ALLOW is paid
-    in the cycle it was decided for or the next; an older one missed both and
-    is decided again, under a new revision, on current data. -/
-def maxDecisionAge : Nat := 14 * 24 * 3600
 def zeroDigest : Bytes := List.replicate digestBytes 0
 
 def domain (name : String) : Bytes := ("RR/GATE/" ++ name ++ "/v1").toUTF8.toList ++ [0]
@@ -54,11 +50,22 @@ inductive WireOutcome | ALLOW | HOLD | HUMAN_REVIEW | BLOCK deriving DecidableEq
 inductive Authority | OBSERVE | HOLD | TRANSFER deriving DecidableEq, Repr
 /-- `PAYMENT_ALREADY_DECIDED`: a new command key, under any flow, for a payment
     that already has a decision; the existing decision comes back, re-issued
-    (`reissues`) if its token is fenced or expired.  Only a state official's
-    determination (a later format) changes a decision, never a re-decide. -/
+    (`reissues`) if its token is fenced or expired, or re-decided (`redecides`)
+    if it is an ALLOW past its age.  Otherwise only a state official's
+    determination (a later format) changes a decision. -/
 inductive Status | DECIDED | DUPLICATE | REJECTED | UNAVAILABLE | PAYMENT_ALREADY_DECIDED
   deriving DecidableEq, Repr
 inductive RejectCode | MALFORMED | COMMAND_KEY_CONFLICT deriving DecidableEq, Repr
+
+/-- How long an ALLOW stays payable: the run it was decided for and one missed
+    run.  FFS_CLAIM (and the unruled flows): 14 days, as FFS checkwrites run
+    weekly or biweekly.  FFS_CYCLE: 28 days, one biweekly cycle and one missed
+    run.  CAP_820: 62 days, one monthly capitation run (at most 31 days) and one
+    missed.  An older ALLOW is refused (check 5) and re-decided (`redecides`). -/
+def maxDecisionAge : WireFlow → Nat
+  | .FFS_CYCLE => 28 * 24 * 3600
+  | .CAP_820 => 62 * 24 * 3600
+  | _ => 14 * 24 * 3600
 
 /-! ## Canonical reader: fixed-width big-endian naturals, u16-length
     identifiers, raw 64-byte digests, one-byte tags, bounded counts. -/
@@ -152,6 +159,9 @@ def flows : List WireFlow := [.FFS_CYCLE, .FFS_CLAIM, .CAP_820, .SDP, .PLAN_PAY]
 def WireFlow.tag : WireFlow → UInt8
   | .FFS_CYCLE => 1 | .FFS_CLAIM => 2 | .CAP_820 => 3 | .SDP => 4 | .PLAN_PAY => 5
 
+/-- Flows the rules decide line by line (`BlindLedger.Gate.Rules.Flow`): each payment carries a
+    line.  SDP and PLAN_PAY have no rules; the gate sends them to HUMAN_REVIEW. -/
+def WireFlow.ruled (f : WireFlow) : Bool := f == .FFS_CYCLE || f == .FFS_CLAIM || f == .CAP_820
 
 /-- One decision per payment and revision.  Neither the command key nor the
     flow is part of it, so a resubmission under another key or flow finds the
@@ -300,12 +310,12 @@ def pRequest : P Request := do
   let period ← ident
   let lines ← many (blob 1 maxLineBytes) (← nat 2 0 maxLines)
   -- Each line is canonical and this payment's (flow, member, payee), the
-  -- lines sum to its amount, and a per-claim payment carries its lines.
+  -- lines sum to its amount, and a ruled flow's payment carries its lines.
   let ls := lines.filterMap (parse pLine maxLineBytes)
   need (ls.length == lines.length)
   need (ls.all fun l => l.flow == flow && l.memberKey == memberKey && l.payeeRef == payeeRef)
   need (lines.isEmpty || ls.foldl (· + ·.cents) 0 == amountCents)
-  need (flow != .FFS_CLAIM || !lines.isEmpty)
+  need (!flow.ruled || !lines.isEmpty)
   let evidenceRefs ← many digest (← nat 2 0 maxEvidenceRefs)
   need (ascending evidenceRefs)
   pure { tenantId, programId, flow, commandKey, paymentId, memberKey, payeeRef, amountCents, period,
@@ -433,7 +443,7 @@ def pLeaf : P Leaf := do
   let seq ← nat 8
   let issuedAt ← nat 8
   let expiresAt ← nat 8
-  need (flow != .FFS_CLAIM || linesRoot != zeroDigest)
+  need (if flow.ruled then linesRoot != zeroDigest else outcome == .HUMAN_REVIEW)
   need (ascending reasonCodes)
   need (decidedAt ≤ issuedAt && issuedAt ≤ expiresAt && expiresAt ≤ issuedAt + maxTokenLifetime)
   pure { tenantId, programId, shardId, flow, revision, paymentId, memberKey, payeeRef, amountCents, period,
@@ -461,12 +471,26 @@ def decodeToken : Bytes → Option Token := parse pToken maxTokenBytes
     included) equal except a
     later (epoch, seq), compared in that order since the seq counter restarts
     at each epoch, and a new lifetime.  Only the payment's `latest` revision
-    in the gate's store is re-issued.  It never decides again. -/
+    in the gate's store is re-issued.  It never decides again; `redecides` does. -/
 def reissues (latest : Nat) (old new : Leaf) : Bool :=
   old.revision == latest &&
     decide ({ new with epoch := old.epoch, seq := old.seq, issuedAt := old.issuedAt,
                        expiresAt := old.expiresAt } = old) &&
     (old.epoch < new.epoch || old.epoch == new.epoch && old.seq < new.seq)
+
+/-- Re-decision (M-A): the payment's `latest` revision is an ALLOW past its
+    age by both clock skews, so every payer refuses it (check 5); the gate
+    decides the same payment again, on current data, as revision `latest + 1`.
+    The rules read the lines it released as its own (`Rules.own`): they neither
+    hold it nor are released again.  A payer that released it refuses the new
+    token (check 10: the release key has no revision). -/
+def redecides (latest : Nat) (old new : Leaf) : Bool :=
+  old.revision == latest && new.revision == latest + 1 && old.outcome == .ALLOW &&
+    old.decidedAt + maxDecisionAge old.flow + 2 * clockSkew ≤ new.decidedAt &&
+    old.tenantId == new.tenantId && old.programId == new.programId && old.shardId == new.shardId &&
+    old.flow == new.flow && old.paymentId == new.paymentId && old.memberKey == new.memberKey &&
+    old.payeeRef == new.payeeRef && old.amountCents == new.amountCents && old.period == new.period &&
+    old.linesRoot == new.linesRoot
 
 /-! ## #2 DECIDE-RESPONSE/v1: outcome and reasons travel only inside the token -/
 
@@ -482,7 +506,8 @@ structure Response where
 /-- The requester's decoder: the response answers its own request, and a
     carried token is for the requested payment, member, payee, amount, period
     and lines.  `PAYMENT_ALREADY_DECIDED` carries the existing decision, whose
-    flow may differ from the request's. -/
+    flow may differ from the request's; a ruled flow's lines carry their flow,
+    so across flows they never match and the response fails closed. -/
 def pResponse (H : Bytes → Bytes) (r : Request) : P Response := do
   expect (domain "DECIDE-RESPONSE")
   let tenantId ← ident
@@ -525,7 +550,7 @@ structure EpochCert where
   publicKey : Bytes
   /-- The tenant's shard count (u32, at least 1), the same in all its certificates. -/
   shardCount : Nat
-  deriving BEq
+  deriving DecidableEq
 
 /-- Why the payer refuses to send a command.  `member_key_changed`: the
     payment's member key differs from the one pinned by its first send;
@@ -561,7 +586,8 @@ abbrev PayKey := Bytes × Bytes × Bytes
 /-- Payer-side state.  `fence` is per tenant; `certs` hold only chain-verified
     certificates; `grants` only active grants; `forked` holds each detected
     fork as (stored side, new side), both signed checkpoints as evidence;
-    `pins` is the sent set: each payment the payer sent a command for, with
+    `equivocations` each second chain-valid certificate for an installed
+    one's tenant and epoch, with it; `pins` is the sent set: each payment the payer sent a command for, with
     the member key its first send pinned. -/
 structure PayerState where
   fence : Bytes → Nat
@@ -571,6 +597,7 @@ structure PayerState where
   grants : List Grant
   released : List PayKey
   forked : List (Stored × Stored)
+  equivocations : List (EpochCert × EpochCert)
   pins : List (PayKey × Bytes)
 
 def raiseFence (fence : Bytes → Nat) (tenant : Bytes) (epoch : Nat) : Bytes → Nat :=
@@ -587,11 +614,15 @@ def fits (s : PayerState) (e : EpochCert) : Bool :=
 /-- Install an epoch certificate: the new state and whether it was installed.
     A valid chain raises the tenant's fence to its epoch (the model's
     `PayerLearnFence`) even when the certificate does not fit, so a refused
-    newer certificate fails closed until a fitting one arrives. -/
+    newer certificate fails closed until a fitting one arrives.  One that
+    differs from an installed certificate of its tenant and epoch is
+    equivocation: the pair is recorded, which blocks that tenant and epoch. -/
 def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : PayerState × Bool :=
   if c.certChainOk e then
     ({ s with certs := if fits s e then e :: s.certs else s.certs,
-              fence := raiseFence s.fence e.tenantId e.epoch }, fits s e)
+              fence := raiseFence s.fence e.tenantId e.epoch,
+              equivocations := (s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&
+                x != e).map (·, e) ++ s.equivocations }, fits s e)
   else (s, false)
 
 /-- The tenant's shard count, from its installed certificates (all equal). -/
@@ -611,10 +642,11 @@ def forks (a b : Stored) : Bool :=
     (a.checkpoint.seqFrom ≤ b.checkpoint.seqTo && b.checkpoint.seqFrom ≤ a.checkpoint.seqTo ||
       misLinked a b || misLinked b a)
 
-/-- A recorded fork blocks its tenant and epoch on every shard: a fork on one
-    shard means the epoch's key or writer cannot be trusted on any. -/
+/-- A recorded fork or equivocation blocks its tenant and epoch on every
+    shard: the epoch's key or writer cannot be trusted on any. -/
 def blocked (s : PayerState) (tenant : Bytes) (epoch : Nat) : Bool :=
-  s.forked.any fun f => f.1.checkpoint.tenantId == tenant && f.1.checkpoint.epoch == epoch
+  s.forked.any (fun f => f.1.checkpoint.tenantId == tenant && f.1.checkpoint.epoch == epoch) ||
+    s.equivocations.any fun q => q.1.tenantId == tenant && q.1.epoch == epoch
 
 /-- Store a signed checkpoint: one ML-DSA-87 verification per batch, under an
     installed certificate for the checkpoint's tenant and epoch (check 2).  A
@@ -678,11 +710,11 @@ def inBatch (c : Crypto) (cp : Checkpoint) (t : Token) : Bool :=
 /-- Check 4: epoch ≥ the tenant's fence. -/
 def aboveFence (s : PayerState) (t : Token) : Bool := s.fence t.leaf.tenantId ≤ t.leaf.epoch
 
-/-- Check 5: issued, not expired and decided less than `maxDecisionAge` ago,
-    each allowing `clockSkew` seconds. -/
+/-- Check 5: issued, not expired and decided less than its flow's
+    `maxDecisionAge` ago, each allowing `clockSkew` seconds. -/
 def unexpired (s : PayerState) (t : Token) : Bool :=
   t.leaf.issuedAt ≤ s.now + clockSkew && s.now < t.leaf.expiresAt + clockSkew &&
-    s.now < t.leaf.decidedAt + maxDecisionAge + clockSkew
+    s.now < t.leaf.decidedAt + maxDecisionAge t.leaf.flow + clockSkew
 
 /-- Check 6: the payment matches field for field and its lines hash to `lines_root`. -/
 def paymentMatches (c : Crypto) (p : Payment) (t : Token) : Bool :=
@@ -710,7 +742,7 @@ def granted (s : PayerState) (t : Token) : Bool :=
 /-- Check 10. -/
 def unreleased (s : PayerState) (t : Token) : Bool := !s.released.contains (payKey t)
 
-/-- Check 11: no fork was recorded for the token's tenant and epoch, on any shard. -/
+/-- Check 11: no fork or equivocation was recorded for the token's tenant and epoch. -/
 def unforked (s : PayerState) (t : Token) : Bool := !blocked s t.leaf.tenantId t.leaf.epoch
 
 /-- Check 12: a command was sent for the token's payment and the token

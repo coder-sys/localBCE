@@ -22,7 +22,9 @@ EXACT_KEY = "[if isCap l then 3 else 1, l.member, l.payee, l.date, l.proc, l.uni
 NEAR_KEY = "[2, l.member, l.rendering, l.date, l.proc]"
 CAP_KEY = "[0, l.member, l.date / 100]"
 KEYS = "[exactKey l, nearKey l, idKey l]"
-CLAIM = "if isCap l && notEnrolled c l then [exactKey l, idKey l] else keys l"
+CLAIM = "if isCap l && notEnrolled c l && !own c l then [exactKey l, idKey l] else keys l"
+SEEN0 = "((releasedSet c).filter fun x => !(own c x && b.contains x)).flatMap keys"
+ORDER = "canonical (b.filter (own c)) ++ canonical (b.filter fun x => !own c x)"
 R2 = "seen.contains (exactKey l) || seen.contains (nearKey l) || certain c 7 okSpan c.enrollment l && overlap c l"
 OVERLAP = "max first (max s.start t.start) ≤ min last (min s.stop t.stop)"
 REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID\n"
@@ -30,7 +32,7 @@ REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DAT
           "  | .STALE_UNRESOLVED | .MEMBER_DECEASED_UNVERIFIED | .MEMBER_NOT_ENROLLED_UNVERIFIED\n"
           "  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true")
 CHAINED = ("| some s => s.entries.length == s.count && validDate s.asOf && s.asOf ≤ today && prior.asOf ≤ s.asOf &&\n"
-           "      prior.entries.isPrefixOf s.entries")
+           "      prior.entries.all s.entries.contains")
 KEPT = "d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED"
 LOOSE_R = " ++ loose c.today c.releasedPrior c.released"
 LOOSE_U = " ++ loose c.today c.unresolvedPrior\n      c.unresolved"
@@ -109,7 +111,7 @@ MUTANTS = [
     ("unverified on missing snapshots", UNVERIFIED, "!usable c.today maxAge ok o && validDate l.date"),
     ("unverified on an invalid service date", UNVERIFIED, "o.isSome && !usable c.today maxAge ok o"),
     ("not-enrolled FFS lines claim nothing", CLAIM,
-     "if notEnrolled c l then (if isCap l then [exactKey l, idKey l] else []) else keys l"),
+     "if notEnrolled c l && !own c l then (if isCap l then [exactKey l, idKey l] else []) else keys l"),
     ("not-enrolled CAP_820 line claims the member-month", CLAIM, "keys l"),
     ("not-enrolled CAP_820 line claims no exact key", "then [exactKey l, idKey l] else", "then [idKey l] else"),
     ("CAP_820 line on an unusable enrollment claims no member-month", "if isCap l && notEnrolled c l",
@@ -117,20 +119,28 @@ MUTANTS = [
     ("held lines claim nothing", "decideAll c (claim c l ++ seen) ls",
      "decideAll c (if (decideLine c seen l).outcome == .ALLOW then claim c l ++ seen else seen) ls"),
     ("earlier lines unseen", "decideAll c (claim c l ++ seen) ls", "decideAll c seen ls"),
-    ("released set unread", "decideAll c ((releasedSet c).flatMap keys)", "decideAll c []"),
-    ("released near keys ignored", "(releasedSet c).flatMap keys",
-     "(releasedSet c).flatMap fun x => [exactKey x, idKey x]"),
-    ("released identities ignored", "(releasedSet c).flatMap keys",
-     "(releasedSet c).flatMap fun x => [exactKey x, nearKey x]"),
-    ("nothing released", "c.released (allowedLines ds)", "c.released []"),
-    ("held lines released", "c.released (allowedLines ds)", "c.released (ds.map (·.line))"),
+    ("released set unread", SEEN0, "[]"),
+    ("released near keys ignored", SEEN0, SEEN0.replace("flatMap keys", "flatMap fun x => [exactKey x, idKey x]")),
+    ("released identities ignored", SEEN0, SEEN0.replace("flatMap keys", "flatMap fun x => [exactKey x, nearKey x]")),
+    ("re-decided lines seen", SEEN0, "(releasedSet c).flatMap keys"),
+    ("released lines outside the batch unseen", " && b.contains x", ""),
+    ("re-decided lines not first", ORDER, "canonical b"),
+    ("re-decided capitation line claims no member-month", "notEnrolled c l && !own c l", "notEnrolled c l"),
+    ("re-decided lines unresolved", " && !own c d.line", ""),
+    ("nothing released", "c.released (releasedLines c ds)", "c.released []"),
+    ("held lines released", "c.released (releasedLines c ds)", "c.released (ds.map (·.line))"),
+    ("held payment's ALLOW lines released", " && payOutcome c ds l.pay == .ALLOW", ""),
+    ("re-decision released again", "!c.redo.contains l.pay && payOutcome", "payOutcome"),
+    ("payment HOLD ignored", "if ls.any (·.outcome == .HOLD) then .HOLD\n  else ", ""),
+    ("payment without a line ALLOW", "!ls.isEmpty && ", ""),
+    ("re-decision of an unreleased line ALLOW", "(!c.redo.contains p || own c d.line)", "true"),
     ("checkpoint drops the batch's additions", ADVANCE, "  view today prior o"),
     ("checkpoint advances only when chained", ADVANCE,
      ADVANCE.replace("  ⟨", "  if !chained today prior o then prior else ⟨")),
     ("checkpoint is the prior, not the view", ADVANCE, ADVANCE.replace("view today prior o", "prior")),
     ("unchained set read as is", "if chained today prior o then o.getD prior else prior", "o.getD prior"),
     ("set read ignored", "if chained today prior o then o.getD prior else prior", "prior"),
-    ("reviewed lines released", "(ds.filter (·.outcome == .ALLOW))", "(ds.filter (·.outcome != .HOLD))"),
+    ("reviewed payments ALLOW", "d.outcome == .ALLOW && (", "d.outcome != .HOLD && ("),
     ("service date validity off", "| .SERVICE_DATE_INVALID => !validDate l.date", "| .SERVICE_DATE_INVALID => false"),
     ("future service date off", "| .SERVICE_DATE_FUTURE => c.today < l.date", "| .SERVICE_DATE_FUTURE => false"),
     ("service date today is future", "c.today < l.date", "c.today ≤ l.date"),
@@ -182,7 +192,7 @@ MUTANTS = [
     ("set asOf validity unchecked", CHAINED, CHAINED.replace("validDate s.asOf && ", "")),
     ("set dated after today", CHAINED, CHAINED.replace("s.asOf ≤ today && ", "")),
     ("set dated before the checkpoint", CHAINED, CHAINED.replace("prior.asOf ≤ s.asOf &&\n      ", "")),
-    ("set need not extend the checkpoint", CHAINED, CHAINED.replace(" &&\n      prior.entries.isPrefixOf s.entries", "")),
+    ("set need not extend the checkpoint", CHAINED, CHAINED.replace(" &&\n      prior.entries.all s.entries.contains", "")),
     ("released set unchecked", "| .STALE_RELEASED => !chained c.today c.releasedPrior c.released",
      "| .STALE_RELEASED => false"),
     ("unresolved set unchecked", "| .STALE_UNRESOLVED => !chained c.today c.unresolvedPrior c.unresolved",
@@ -232,12 +242,12 @@ MUTANTS = [
     ("chained rows loose", LOOSE, ""),
     ("loose rows of the released set ignored", LOOSE_KEYS, "(" + LOOSE_KEYS.split(" ++ ")[1]),
     ("loose rows of the unresolved set ignored", LOOSE_KEYS, LOOSE_KEYS.split(" ++ ")[0] + ")"),
-    ("gate leaves nothing unresolved", "c.unresolved (unresolvedLines ds)", "c.unresolved []"),
+    ("gate leaves nothing unresolved", "c.unresolved (unresolvedLines c ds)", "c.unresolved []"),
     ("not-enrolled lines left out of the unresolved set", KEPT, KEPT + " && !d.reasons.contains .MEMBER_NOT_ENROLLED"),
     ("already decided lines unresolved", KEPT, "d.outcome != .ALLOW"),
     ("ALLOW lines unresolved", KEPT, "!d.reasons.contains .ALREADY_DECIDED"),
     ("arrival order", "batch.mergeSort lineLe", "batch"),
-    ("canonical order without identity", "l.cents, l.id]", "l.cents]"),
+    ("canonical order without identity", "l.cents, l.id, l.pay]", "l.cents]"),
 ]
 
 # The runner's commit, which carries each batch's additions and checkpoints to the next.

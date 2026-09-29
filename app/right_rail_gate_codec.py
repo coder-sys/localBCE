@@ -41,12 +41,14 @@ SHARD: Final = b"RR/GATE/SHARD/v1\x00"
 STATE: Final = b"RR/GATE/STATE/v1\x00"
 
 FLOWS: Final = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820", "SDP", "PLAN_PAY")
+RULED: Final = FLOWS[:3]  # decided line by line, so each payment carries a line; SDP and PLAN_PAY: HUMAN_REVIEW
 OUTCOMES: Final = ("ALLOW", "HOLD", "HUMAN_REVIEW", "BLOCK")
 AUTHORITIES: Final = ("OBSERVE", "HOLD", "TRANSFER")
 # PAYMENT_ALREADY_DECIDED: a new command key, under any flow, for a payment
 # that already has a decision; the existing decision is returned.  A fenced or
 # expired unreleased decision is re-issued (same leaf, current epoch, new seq
-# and lifetime; Lean ``reissues``), never re-decided.  Only a state official's
+# and lifetime; Lean ``reissues``); an ALLOW past its age is re-decided under
+# the next revision (Lean ``redecides``).  Otherwise only a state official's
 # determination (a later format) can change a decision.
 STATUSES: Final = ("DECIDED", "DUPLICATE", "REJECTED", "UNAVAILABLE", "PAYMENT_ALREADY_DECIDED")
 TOKEN_STATUSES: Final = ("DECIDED", "DUPLICATE", "PAYMENT_ALREADY_DECIDED")
@@ -64,7 +66,8 @@ MAX_REASON_CODES: Final = 32
 MAX_BATCH: Final = 1_000
 MAX_TOKEN_PATH: Final = 10  # ceil(log2(MAX_BATCH))
 MAX_TOKEN_LIFETIME: Final = 7 * 24 * 3600  # seconds from issued_at to expires_at
-MAX_DECISION_AGE: Final = 14 * 24 * 3600  # the payer refuses an older decided_at (Lean maxDecisionAge)
+# The payer refuses an older decided_at (Lean maxDecisionAge: the run decided for and one missed).
+MAX_DECISION_AGE: Final = {**dict.fromkeys(FLOWS, 14 * 86400), "FFS_CYCLE": 28 * 86400, "CAP_820": 62 * 86400}
 MAX_RETRY_AFTER_MS: Final = 3_600_000
 MAX_REQUEST_BYTES: Final = 8 * 1024 * 1024
 MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 3,900 bytes
@@ -236,7 +239,7 @@ def encode_decide_request(request: DecideRequest) -> bytes:
     w.ident(request.payee_ref, "payee_ref")
     w.int(request.amount_cents, 8, "amount_cents")
     w.ident(request.period, "period")
-    if type(request.lines) is not tuple or (request.flow == "FFS_CLAIM" and not request.lines):
+    if type(request.lines) is not tuple or (request.flow in RULED and not request.lines):
         _fail("lines")
     w.int(len(request.lines), 2, "lines", high=MAX_LINES)
     for line in request.lines:
@@ -366,9 +369,9 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
     w.int(leaf.amount_cents, 8, "amount_cents")
     w.ident(leaf.period, "period")
     w.digest(leaf.lines_root, "lines_root")
-    if leaf.flow == "FFS_CLAIM" and leaf.lines_root == ZERO_DIGEST:
-        _fail("lines_root")
     w.tag(OUTCOMES, leaf.outcome, "outcome")
+    if leaf.lines_root == ZERO_DIGEST if leaf.flow in RULED else leaf.outcome != "HUMAN_REVIEW":
+        _fail("lines_root")
     if type(leaf.reason_codes) is not tuple:
         _fail("reason_codes")
     w.int(len(leaf.reason_codes), 1, "reason_codes", high=MAX_REASON_CODES)

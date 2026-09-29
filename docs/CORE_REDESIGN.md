@@ -4,10 +4,9 @@ Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores
 
 Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to move to the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8), with v7 stores migrating all-or-nothing on owner open and v7 packages still verifiable, the founder answered "Yes, approve v8". The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`.
 
-History-completeness approval (2026-09-24, CONSTITUTION V.4): asked in session chat how v7 histories lacking full facts (payment item/time, evidence) become rebuildable, the founder chose "Opening balance": on conversion the owner writes one sealed opening-balance event holding every converted row, under a new, distinctly named digest domain, and thereafter every event records the full facts needed to rebuild all projections by apply(event). The alternative (rebuild from events plus side tables) was declined.
+History-completeness approval (2026-09-24, CONSTITUTION V.4): for v7 histories lacking full facts, the founder chose "Opening balance" (one sealed conversion event, then full-fact events), removed 2026-09-25 (C3, Migration step 6).
 
-Source: first-principles review of the financial core (owner, checker, successor,
-Mirror, Switch, engine path; ~25,100 Python lines).
+Source: a first-principles review of the financial core (2026-09-24).
 
 ## Verdict
 
@@ -191,26 +190,19 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 
 ## Gaps found (under-enforcement, not just size)
 
-- No command table: each handler invents its own retry/conflict rule (III.3).
 - `expected_revision` optional on 10 handlers; 5 default the actor to a synthetic identity.
-- `financial_events` has no append-only trigger; FKs enabled but none declared.
 - Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
 - Every staff read runs the full checker over the whole database (IX.3).
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
 - The successor verifies and views but cannot continue the work (VII.2).
+- Closed since: the command table (III.3), append-only events, declared FKs.
 
-## Target sizes
+## Target sizes (Python lines; current ceilings in `tests/test_bloat_budget.py`)
 
-| Component | Today | Target |
-|---|---|---|
-| Owner package | ~7,100-7,400 | ~3,000 |
-| Independent checker | 4,942 | ~1,800 (replay + compare; stays code-independent) |
-| Continuity successor | 2,330 | ~300-800 (replay + TEST writer that can continue) |
-| Mirror | 1,674 | ~500 |
-| Switch | 1,408 | ~500 (reuses replay) |
-| Engine + semantic adapter | 3,799 | ~1,300 |
-| Process runner | 1,844 | ~800 (uncertain) |
-| Staff server + CLI | 1,712 | ~1,100 |
+Owner ~3,000; independent checker ~1,800 (replay + compare, code-independent);
+Continuity successor ~300-800 (replay + a TEST writer that can continue);
+Mirror ~500; Switch ~500 (reuses replay); Engine + semantic adapter ~1,300;
+process runner ~800 (uncertain); staff server + CLI ~1,100.
 
 ## Migration (each step leaves a working system; one guarded run per step)
 
@@ -575,9 +567,8 @@ shown on the pack's face.
 
 ## Gate formats round 7 (2026-09-28, XI.2 record)
 
-Gate formats are not frozen (D1); round 7 changes them and reissues the golden
-vectors. The formats are specified once, in `docs/RIGHTRAIL_FULL_STACK_TARGET.md`
-§4-§5 (including the `RR/GATE` name registry); this record lists what changed.
+Formats are not frozen (D1) and are specified once, in target §4-§5 (with
+the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
 
 - **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound: one
   canonical line per entry, each with the request's flow, member key and payee,
@@ -592,8 +583,25 @@ vectors. The formats are specified once, in `docs/RIGHTRAIL_FULL_STACK_TARGET.md
 - **Payer:** a previous link to a non-adjacent checkpoint is a fork; one
   certificate per (tenant, epoch); a decision older than 14 days is refused.
 - **Codec:** `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses
-  a leaf routed to another shard. It stays stateless: the serialized,
-  persist-before-publish producer, the payer pin store and KEY-CERT are unbuilt
-  preconditions (target §4-§5).
+  a leaf routed to another shard. It stays stateless (unbuilt preconditions:
+  target §4-§5, STATUS).
 - **Test keys:** `TEST-ONLY-SEED` and `TEST-ONLY-MEMBER` follow the same NUL
   convention, so every synthetic key and signature changed.
+
+## Gate formats round 8 (2026-09-29, XI.2 record)
+
+The lead's round-7 review decisions, specified in target §4-§6; vectors and
+pins reissued. Felt effect: a biweekly or monthly payer's stale ALLOW is
+re-decided, not stranded in review, and no line is paid twice.
+
+- **Payer:** age per flow (`maxDecisionAge`); a second certificate for an
+  installed (tenant, epoch) is recorded (`equivocations`) and blocks it.
+- **Formats:** FFS_CYCLE and CAP_820 need lines too; SDP and PLAN_PAY leaves
+  are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
+- **Rules:** `redo`/`own` re-decision; only ALLOW payments' lines are released
+  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`.
+- **Theorems:** `verifyToken_unforked` adds equivocation;
+  `later_allow_clear(_many)` add `Classical.choice`. Stated, `sorry`:
+  `released_iff`, `one_payment_per_line`, `Steps.at_most_once`,
+  `installCert_equivocation`.
+- **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.

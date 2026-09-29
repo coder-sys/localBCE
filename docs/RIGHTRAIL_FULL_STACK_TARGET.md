@@ -86,20 +86,22 @@ twice. Response status: `DECIDED`, `DUPLICATE`, `REJECTED` (malformed input
 or a reused key with different bytes), or `UNAVAILABLE` (with a retry time;
 a full batch commits atomically or not at all). `outcome` is ALLOW, HOLD,
 HUMAN_REVIEW or BLOCK — the engine's existing `CLEAR`/non-`CLEAR`
-distinction, unchanged. An FFS_CLAIM request carries its claim lines, each
-repeating the request's flow, member key and payee and together summing to
-its amount, so the token's `lines_root` commits to exactly the lines the
-rules decided.
+distinction, unchanged. A ruled flow's request (FFS_CYCLE, FFS_CLAIM,
+CAP_820) carries at least one line, each repeating its flow, member key and
+payee, together summing to its amount, so `lines_root` commits to exactly the
+lines the rules decided; SDP and PLAN_PAY have no rules: HUMAN_REVIEW. An
+already-decided answer of another ruled flow fails closed (lines carry their
+flow).
 
 Before releasing money, the payer runs twelve checks against the token:
 canonical parse and domain; a stored checkpoint verified under its epoch
 certificate; that checkpoint's Merkle path; epoch at or above the payer's
-fence; not expired, and decided at most 14 days ago (the decision time is
-fixed across reissues; FFS checkwrites run weekly or biweekly, so an older
-ALLOW missed two cycles and is decided again); payment fields match exactly; the token comes from the
+fence; not expired, and decided within the run it was decided for plus one
+missed (fixed across reissues: FFS_CLAIM 14 days, as checkwrites run weekly or
+biweekly; FFS_CYCLE 28; CAP_820 62, monthly); payment fields match exactly; the token comes from the
 shard the member key routes to; outcome is ALLOW; `rule_version` and
 `engine_release` are on the payer's approved list; the payment has not
-already been released; no fork is recorded for the tenant and epoch; and
+already been released; no fork or equivocation is recorded for the tenant and epoch; and
 the payer sent a command for the payment and the member key is the one its
 first command pinned (a changed key is refused as `member_key_changed` until
 an official determination, not in v1). Unbuilt precondition of any payer
@@ -119,16 +121,18 @@ closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
 of a few hundred bytes against that checkpoint's `token_root`, not a
 separately signed token.
 
-Signing every token individually would cost ~45–90 TB over 7 years at New
-York's volume (12.6M tokens a week) and exhaust a shared HSM/KMS quota (an AWS
-KMS default is 1,000 requests/second per account). Batching cuts that to
-hundreds to a few thousand HSM signatures a week; per-payment cost is a
-Merkle path and a hash comparison.
+Signing every token would cost ~45–90 TB over 7 years at New York's volume
+(12.6M tokens a week) and exhaust a shared HSM/KMS quota (AWS KMS default:
+1,000 requests/second per account). Batching needs hundreds to a few thousand
+HSM signatures a week.
 
 Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
 projection roots, a never-zero state digest over the rules' released and
-unresolved pins, count, time), signed with the epoch's ML-DSA-87 key.
+unresolved pins, count, time), signed with the epoch's ML-DSA-87 key. Pins
+hash sorted fixed-width big-endian rows after a count. The rules extend the
+sets of the payment's shard's latest signed checkpoint; unbuilt: the runtime
+verifier that the priors hash to its `state_digest`.
 There is one sequence counter per (tenant, shard, epoch), shared by all of
 the tenant's programs and starting at 0 in each epoch: no two checkpoints in
 that scope share a sequence, whatever their program, each names the
@@ -142,7 +146,8 @@ publishing, with the required test that a crash between sign and persist
 never publishes the unpersisted checkpoint nor reuses its sequence with
 other bytes; the KEY-CERT that carries an epoch key signs every field, the
 tenant's shard count included, and a payer accepts one certificate per
-(tenant, epoch).
+(tenant, epoch); a second, different one is recorded as equivocation and
+blocks it.
 
 Every `RR/GATE` hash or signature input starts with its name, `/v1` and a
 NUL byte:
@@ -174,7 +179,9 @@ stays verifiable under hash-based assumptions alone.
 
 **States.** `PENDING -> ALLOWED | HELD | REVIEW | BLOCKED`, and
 `HELD | REVIEW | BLOCKED -> RELEASED | DENIED` only by a determination: a new
-decision revision with a new token. Holds are monotone — adding only adverse
+decision revision with a new token. An unreleased ALLOW past its age (§4) is
+re-decided on current data as the next revision, excluding its own released
+lines: a line is released at most once. Holds are monotone — adding only adverse
 facts never moves a decision toward ALLOW. Only named state officials,
 authenticated through the state IdP with phishing-resistant MFA, may release
 or deny: one releaser distinct from the raiser for HOLD/REVIEW, a releaser
@@ -251,7 +258,7 @@ person double-billed across FFS and managed care, or two plans) to an
 asynchronous, staleness-bounded reconciliation pass. Member-key sharding keeps
 that detection inside one shard. No Postgres migration and no
 multi-region work happen before a measured SQLite ceiling shows the need; a
-warm-worker throughput benchmark (branch `load-test`) is the first thing to
+warm-worker throughput benchmark is the first thing to
 measure, not the last (Constitution IX.3).
 
 ## 9. The proof boundary: prove the interpreter, version the rule data
@@ -279,15 +286,8 @@ maintenance unusable (an engineering red-team finding).
 evaluated by the interpreter (§10), not baked into a bespoke theorem, so it
 stays on the interpreter's proof, not a new one.
 
-Today, of 14 command types, Lean decides exactly one —
-`reject_offset_and_authorize_correction`; its codec (`BLFCMD02`/`BLFCRES3`)
-has codec laws (round-trip only for admissible values). The pinned binary's
-exact build source is recorded in its provenance; later combined source
-needs its own guarded rebuild. Closing the rest of the gap — proof hygiene,
-a reproducible rebuild, codec parity, then the live evaluator, then the
-remaining thirteen commands, then the signed token and checkpoint
-predicates, then a Lean checker — is `fv-plan.md`'s ordered roadmap; its
-first four steps remove most of the risk in the fewest weeks.
+Today Lean decides one of 14 command types (`ARCHITECTURE.md`); §13 orders
+the rest.
 
 ## 10. Evidence modes: the non-ZK path ships first
 
@@ -370,8 +370,8 @@ signature alone does not establish continuity with an unseen predecessor.
 An in-memory list of active grant identifiers does not establish state
 authority. Persisted fences, released/unresolved identities, rules, tokens
 and payer release must be connected and exercised through restart, retry
-and partial failure before an end-to-end gate claim. The existing format
-model assumes some of those inputs.
+and partial failure before an end-to-end gate claim; the format model
+assumes some of them (STATUS).
 
 Batch windows, worker counts and private-proof latency estimates remain
 targets until measured against the exact executed source and artifact. A
@@ -386,10 +386,7 @@ laws for the live command path; the existing `evaluate` proof made the live
 evaluator; the remaining thirteen command types ported in order of money
 impact. In parallel: the warm-worker throughput benchmark and the owner
 throughput harness (branch `load-test`), needed before any batch-sizing or
-worker-pool claim is more than a guess. Signed token, checkpoint and
-segment formats, the Lean checker, and the TLA+ failover model follow, with
-explicit change records and independent review for protected formats
-(Constitution V.4 and XI.2). `CAP-REL` as a plain Lean rule and the
+worker-pool claim is more than a guess. `CAP-REL` as a plain Lean rule and the
 X12/NCPDP tokenizer are scheduled with the adapter build, not ahead of it.
 `PRIVATE_ZK` continues in its separate prototype repository under
 Constitution IX.4; it produces evidence only and requires a third-party
