@@ -375,13 +375,13 @@ All-provider refund flows need sharding or Phase 2 below and are not claimed.
   `export-history --output --owner-id --mode` prints the manifest SHA-256. No stored
   format, digest or `local_ref` construction changes. Replacement control: the manifest
   and store binding above, and the tests in `tests/test_right_rail_financial_cash_file.py`.
-  Review fixes: B's segment fields bind to the live row; a preview also refuses a copy
-  whose deferred keys COMMIT would refuse; `export-history` replaces `manifest.json`
-  only with a later export of the same history; the preview copy sits in `<store>.cash-preview`, swept after an hour;
-  `--mode` is LIVE or TEST. Held: a `local_ref` version prefix (it changes how the ref is
-  built) cannot fit the 128-character identifier grammar with both hashes.
-  Scope: cash-file path and that command. Claims withdrawn: "B is the original reviewed Continuity bytes", "preview restores B into
-  isolated TEST storage", "preview never opens an owner" (it opens one on a private copy).
+  Review fixes: B's segment fields bind to the live row; a preview refuses a copy whose
+  deferred keys COMMIT would refuse; `export-history` replaces `manifest.json`
+  only with a later export of the same identity whose old last segment matches this store's at that index; the preview copy sits in `<store>.cash-preview`, swept hourly;
+  `--mode` is LIVE or TEST. Declined: a `local_ref` version prefix; the ref is bounded by the
+  128-char grammar and a prefix would change a stored format.
+  Scope: cash-file path and that command. Withdrawn: "B is the original reviewed Continuity bytes", "preview restores B into
+  isolated TEST storage", "preview never opens an owner" (it does, on a copy).
 - Visible changes: `--baseline` takes the manifest (a Continuity package is refused as
   `cash_file_format`) and preview needs `--database`; the CLI prints
   `ERROR:receiver_cash_file_refused:{code}` with nine fixed classes (below);
