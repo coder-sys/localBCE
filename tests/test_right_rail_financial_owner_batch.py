@@ -26,7 +26,8 @@ import itertools, os, sys
 from tests.test_right_rail_financial_owner_batch import _commands, _open, _Owner
 events = itertools.count(1)
 _Owner.fail_on = lambda self, payload: os._exit(75) if next(events) == 3 else None  # two commands written, none committed
-_open(sys.argv[1], _Owner).run_batch(_commands(12))
+(owner := _open(sys.argv[1], _Owner)).clock.value += 10**9  # a restarted owner's clock is past the history it reopens
+owner.run_batch(_commands(12))
 """
 
 
@@ -92,7 +93,7 @@ def _insert_copies(owner, table, n, *, stop_after_seal=False):
 
 
 def _support(evidence_id, origin="origin:batch"):
-    return ("record_support_evidence", {"item_id": "item:000001", "evidence_id": evidence_id, "common_origin_id": origin, "received_at_ms": 1_700_000_000_000})  # a retry repeats its receipt time
+    return ("record_support_evidence", {"item_id": "item:000001", "evidence_id": evidence_id, "common_origin_id": origin})
 
 
 class FinancialOwnerBatchTests(unittest.TestCase):

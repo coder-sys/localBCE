@@ -672,7 +672,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             local_ref="ref:support:01:late-v2",
             applicable_at_ms=SUPPORT_EVENT_MS,
             event_at_ms=SUPPORT_EVENT_MS + 1,
-            received_at_ms=SUPPORT_EVENT_MS + 1,
         )
         after_unrelated_change = owner.export_continuity()
         with self.assertRaises(FinancialRevisionError) as stale_snapshot:
@@ -792,7 +791,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                     local_ref="ref:staff-snapshot-interleave:item-01",
                     applicable_at_ms=1_767_312_000_000,
                     event_at_ms=1_767_312_000_001,
-                    received_at_ms=1_767_312_000_002,
                     expected_revision=int(before["revision"]),
                 )
             except BaseException as error:  # reported by the main thread below

@@ -22,6 +22,16 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 - **G2 dependency check** (`dep-check`): correction follow-up reopens only when a derived dependency key moves, named in `changed_dependencies` (XI.2 record in `docs/CORE_REDESIGN.md`). Acknowledgments, the correction's own requested payment and DUPLICATE confirmations do not reopen; new evidence does; an unexplained cancellation needs review. The checker refuses a forged DUPLICATE label (`duplicate-evidence:binding`). Guarded `g2dep-r3-a1-L2` (v6): run=184 passed=184, zero floor kills. On the merged line `int-g2-r2-a1-L1`: 176/177, the only failure the Markdown budget fixed by this merge.
 - **G4 support package v2** (XI.2 record in `docs/CORE_REDESIGN.md`): `CORPORATE-SUPPORT/v2` carries rule version (the pack the correction was decided under), adapter versions, `work_ref_count` (0 or 1, no ids) and a vector reproduction (pinned engine only); software version and Trust Graph profile are NONE (no bound source). A failed Continuity restore is the second consumer: its package rides the raised error and the staff `restore-test` 409, with `error_class` from the closed `CONTINUITY_ERROR_CODES` or UNCLASSIFIED. Mirror refuses any other shape, extra keys included; tests run the privacy scan on the follow-up and restore packages and require only its unapproved-schema notice. Guarded run: see the commit message.
+- **Line pack (B+)**, documentation-only CMS-64.9 pack: builds only from a store
+  that verify_database has fully verified (read-only), with the package as its
+  exact snapshot; quarters go by owner-clock received time, so a backdated
+  payment or reversal leaves a closed quarter's rows unchanged, and reads
+  only what was recorded before quarter end. The Owner reads its clock once
+  per command and refuses a future decision time (Lean needs the same guard);
+  a host clock stepping back stops every write (`event_commit_order`) until it
+  passes the last commit time, never reordering history; the checker binds
+  each evidence received time to its event's commit time and requires commit
+  times in order, for the database and the package. Guarded bplus-fix5d on `deferral-pack` 3656bf5: 221 run, 219 passed, 1 skipped, 1 failed (Markdown budget, fixed on this line). Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
 - **Lean build/proof/kit**: r77 freshly reproduced the pinned engine from a
  canonical 46-file source manifest, both fixed vectors matched. r68 built all
  six Lake targets (87 jobs); r69 passed 30 evaluator, 18 decision-package, 42

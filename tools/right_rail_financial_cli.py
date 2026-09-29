@@ -28,6 +28,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorError,
     MAX_PACKAGE_BYTES,
 )
+from app.right_rail_financial_line_pack import LINE_PACK_CONTRACT, MAX_LINE_MAP_BYTES, MAX_LINE_PACK_BYTES, build_line_pack
 from app.right_rail_financial_switch import (
     COHORT_APPROVAL_CONTRACT,
     CURRENT_OWNER_SCHEMA_VERSION,
@@ -163,6 +164,16 @@ def _parser() -> argparse.ArgumentParser:
     switch_compare.add_argument("--reference-spec", type=Path)
     switch_compare.add_argument("--candidate-spec", type=Path)
     switch_compare.add_argument("--report-output", type=Path, help="optional new canonical JSON report file")
+
+    line_pack = subparsers.add_parser("line-pack", help="write one documentation-only CMS-64.9 line pack from --database, verified read-only")
+    line_pack.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
+    line_pack.add_argument("--line-map", type=Path, required=True, help="line map JSON listed by the approved Control Pack")
+    line_pack.add_argument("--line", required=True)
+    line_pack.add_argument("--quarter", required=True, help="federal fiscal quarter, e.g. FFY2025Q4")
+    line_pack.add_argument("--reported-line-cents", type=int, required=True, help="the reported line amount: the coverage denominator")
+    line_pack.add_argument("--generated-at-ms", type=int, required=True)
+    line_pack.add_argument("--prior-pack", type=Path, help="the line pack this one supersedes")
+    line_pack.add_argument("--output", type=Path, required=True, help="new line-pack file; existing paths are never replaced")
 
     subparsers.add_parser("dispatch-outbox")
     return parser
@@ -573,6 +584,21 @@ def _run(args: argparse.Namespace) -> Any:
         return _switch_prepare(args)
     if args.command == "switch-compare":
         return _switch_compare(args)
+    if args.command == "line-pack":
+        pack = build_line_pack(
+            args.database,
+            _read_package(args.package),
+            trusted_authority=_trusted_authority(args),
+            expected_scope=_scope(args),
+            line_map_bytes=_read_package(args.line_map, MAX_LINE_MAP_BYTES),
+            line=args.line,
+            quarter=args.quarter,
+            reported_line_cents=args.reported_line_cents,
+            generated_at_ms=args.generated_at_ms,
+            prior_pack=None if args.prior_pack is None else _read_package(args.prior_pack, MAX_LINE_PACK_BYTES),
+        )
+        _write_new(args.output, pack)
+        return {"contract": LINE_PACK_CONTRACT, "line_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "line_pack_path": str(args.output)}
     owner = _owner(args)
     mirror = FinancialMirror(owner)
     command = args.command

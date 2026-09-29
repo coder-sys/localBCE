@@ -150,6 +150,7 @@ class FinancialMirrorTests(unittest.TestCase):
     def _prepare_action(self) -> dict[str, object]:
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        self.clock.value = 1_774_922_399_999  # recorded when decided: a later event never commits before this one
         return self.mirror.reject_offset_and_authorize_correction(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",
@@ -556,6 +557,7 @@ class FinancialMirrorTests(unittest.TestCase):
                 evaluation_id=receipt["evaluation_id"],
                 evaluation_result_digest=receipt["result_digest"],
             )
+        self.clock.value = 1_774_864_800_000  # recorded when decided
         result = self.mirror.authorize_offset(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",
@@ -581,6 +583,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        self.clock.value = 1_774_922_400_000  # recorded when decided
         first = self.mirror.authorize_offset(**request)
         self.assertEqual(first["status"], "AUTHORIZED")
         after_first = self.mirror.summary()
@@ -590,7 +593,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
 
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.authorize_offset(**{**request, "decision_at_ms": request["decision_at_ms"] + 1})
+            self.mirror.authorize_offset(**{**request, "decision_at_ms": request["decision_at_ms"] - 1})
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
             self.mirror.authorize_offset(**{**request, "evaluation_result_digest": "0" * 128})
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
@@ -607,6 +610,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        self.clock.value = 1_774_922_400_000  # recorded when decided
         first = self.mirror.reject_offset_and_authorize_correction(**request)
         self.assertEqual(first["status"], "CORRECTION_AUTHORIZED")
         after_first = self.mirror.summary()
@@ -616,7 +620,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
 
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.reject_offset_and_authorize_correction(**{**request, "decision_at_ms": request["decision_at_ms"] + 1})
+            self.mirror.reject_offset_and_authorize_correction(**{**request, "decision_at_ms": request["decision_at_ms"] - 1})
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
             self.mirror.reject_offset_and_authorize_correction(**{**request, "claim_id": "claim:changed:h"})
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])

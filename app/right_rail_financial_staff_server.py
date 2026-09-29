@@ -434,7 +434,6 @@ class StaffWorkflow:
                 local_ref=f"ref:support:{index:02d}",
                 applicable_at_ms=SUPPORT_EVENT_MS,
                 event_at_ms=SUPPORT_EVENT_MS,
-                received_at_ms=SUPPORT_EVENT_MS,
             )
             owner.record_payment_evidence(
                 item_id=item_id,

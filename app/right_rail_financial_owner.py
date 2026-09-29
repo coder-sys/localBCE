@@ -9,7 +9,7 @@ live directive, stores raw evidence, or claims production authority.
 from __future__ import annotations
 
 from contextlib import closing, contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import ctypes
 import hashlib
 import json
@@ -2369,6 +2369,7 @@ class FinancialOwner:
         batch = getattr(self._batch, "connection", None)
         began = batch is None
         with closing(self._connect(capture_triggers=True)) if began else nullcontext(batch) as connection:
+            outer_now, self._batch.now = getattr(self._batch, "now", None), -1  # this command's clock is unread (_now)
             try:
                 if began:
                     connection.execute("BEGIN IMMEDIATE")
@@ -2396,6 +2397,7 @@ class FinancialOwner:
                 _raise_if_busy(error)
                 raise
             finally:
+                self._batch.now = outer_now
                 if began:
                     self._batch.rows = None
 
@@ -2447,8 +2449,15 @@ class FinancialOwner:
                 raise
 
     def _now(self) -> int:
-        value = self.clock.now_ms()
-        return _time(value, "clock")
+        """The owner clock, read once per command: inside a ``_write`` every call returns its first reading,
+        so an evidence row's received_at_ms is its event's committed_at_ms (checker replay:evidence-received-at)."""
+        now = getattr(self._batch, "now", None)
+        if now is not None and now >= 0:
+            return now
+        value = _time(self.clock.now_ms(), "clock")
+        if now is not None:
+            self._batch.now = value
+        return value
 
     def _scope_period(self, period_id: str) -> None:
         _id(period_id, "period_id")
@@ -2510,6 +2519,8 @@ class FinancialOwner:
         if int(meta["sequence"]) >= _MAX_ROWS or after_revision > _MAX_ROWS:
             _fail(FinancialIntegrityError, "history_capacity")
         sequence = int(meta["sequence"]) + 1
+        if (last := connection.execute("SELECT committed_at_ms FROM financial_events WHERE event_sequence=?", (sequence - 1,)).fetchone()) and committed_at_ms < last[0]:
+            _fail(FinancialIntegrityError, "event_commit_order")  # checker history:commit-order: a clock behind its history writes nothing
         previous_head = bytes(meta["history_head"])
         header = b"".join(
             value.to_bytes(8, "big")
@@ -2686,9 +2697,9 @@ class FinancialOwner:
         return pack, calculation, adjustment
 
     def _insert_evidence(self, connection: sqlite3.Connection, evidence: EvidenceRecord) -> str:
-        existing = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (evidence.evidence_id,)).fetchone()
-        if existing is not None:
-            if bytes(existing[0]) == evidence.record_digest:
+        existing = connection.execute("SELECT record_digest,received_at_ms FROM evidence WHERE evidence_id=?", (evidence.evidence_id,)).fetchone()
+        if existing is not None:  # a retry restates the fact; its received time stays the first recording's
+            if evidence.event_at_ms <= existing[1] and bytes(existing[0]) == replace(evidence, received_at_ms=existing[1]).record_digest:
                 return "DUPLICATE"
             _fail(FinancialConflictError, "evidence_identity_conflict")
         connection.execute(
@@ -2728,7 +2739,6 @@ class FinancialOwner:
         kind: str,
         payload: Mapping[str, Any],
         now_ms: int,
-        committed_at_ms: int | None = None,
     ) -> dict[str, Any]:
         """Recompute one obligation and append its event, bound to the new evaluation."""
 
@@ -2741,7 +2751,7 @@ class FinancialOwner:
             before_revision=before,
             after_revision=after,
             payload={**payload, "evaluation_id": evaluation["evaluation_id"]},
-            committed_at_ms=now_ms if committed_at_ms is None else committed_at_ms,
+            committed_at_ms=now_ms,
         )
         return evaluation
 
@@ -3917,13 +3927,12 @@ class FinancialOwner:
         local_ref: str | None = None,
         applicable_at_ms: int = 1,
         event_at_ms: int = 1,
-        received_at_ms: int | None = None,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
+        """Received time is the owner clock, never the caller's; event_at_ms is when the document is dated."""
         self._assert_actionable()
-        received = self._now() if received_at_ms is None else received_at_ms
-        evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="SUPPORT", common_origin_id=common_origin_id, source_id=source_id, source_version=source_version, local_ref=local_ref or f"support:{evidence_id}", applicable_at_ms=applicable_at_ms, event_at_ms=event_at_ms, received_at_ms=received)
         with self._write() as connection:
+            evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="SUPPORT", common_origin_id=common_origin_id, source_id=source_id, source_version=source_version, local_ref=local_ref or f"support:{evidence_id}", applicable_at_ms=applicable_at_ms, event_at_ms=event_at_ms, received_at_ms=self._now())
             obligation = self._get_obligation_row(connection, item_id)
             self._check_revision(obligation, expected_revision)
             status = self._insert_evidence(connection, evidence)
@@ -4057,14 +4066,13 @@ class FinancialOwner:
                     recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
                     if pays_action_id not in (None, recorded_link):  # it may not change or add a link; an outside confirmation that omits it corroborates
                         _fail(FinancialConflictError, "payment_request_conflict")
-                    now_ms = self._now()
                     if evidence_status == "INSERTED":
-                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=now_ms)
+                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=self._now())
                     return {"status": "DUPLICATE", "payment_id": str(existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
                 conflict_id = f"conflict:{item_id}:{common_origin_id}:{evidence_id}"
                 if connection.execute("SELECT 1 FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone() is None:
                     connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(existing["payment_id"]), evidence_id, int(existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
-                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now(), committed_at_ms=self._now())
+                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now())
                 return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
             link = {}
             if pays_action_id is not None:
@@ -4129,8 +4137,9 @@ class FinancialOwner:
             _fail(FinancialInputError, "offset_amount_zero")
         _role(owner_role, "offset_owner_role")
         _time(deadline_ms, "offset_deadline")
-        evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="OFFSET_CLAIM", common_origin_id=claim_id, source_id="synthetic-offset-source", source_version="fixture-v1", local_ref=f"offset:{claim_id}", applicable_at_ms=self._now(), event_at_ms=self._now(), received_at_ms=self._now(), amount_cents=amount_cents)
         with self._write() as connection:
+            now_ms = self._now()
+            evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="OFFSET_CLAIM", common_origin_id=claim_id, source_id="synthetic-offset-source", source_version="fixture-v1", local_ref=f"offset:{claim_id}", applicable_at_ms=now_ms, event_at_ms=now_ms, received_at_ms=now_ms, amount_cents=amount_cents)
             obligation = self._get_obligation_row(connection, item_id)
             pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, str(obligation["obligation_id"]))
             if owner_role not in pack.authorized_roles:
@@ -4142,7 +4151,6 @@ class FinancialOwner:
             evidence_status = self._insert_evidence(connection, evidence)
             if evidence_status == "DUPLICATE":
                 _fail(FinancialConflictError, "offset_evidence_reused")
-            now_ms = self._now()
             connection.execute("INSERT INTO claimed_adjustments VALUES (?,?,?,?,?,?,?,?,?)", (claim_id, obligation["obligation_id"], evidence_id, amount_cents, owner_role, deadline_ms, "CLAIMED", now_ms, now_ms))
             self._ensure_case(connection, obligation_id=str(obligation["obligation_id"]), reason="UNSUPPORTED_OFFSET", owner=owner_role, due_at_ms=deadline_ms, status="OPEN", now_ms=now_ms)
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="OFFSET_CLAIMED", payload={"claim_id": claim_id, "evidence_id": evidence_id, "amount_cents": amount_cents}, now_ms=now_ms)
@@ -4909,8 +4917,9 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "offset_claim_missing")
         if decision_at_ms is None and decision_time_required:
             _fail(FinancialInputError, "decision_time_required")
-        decision_time = self._now() if decision_at_ms is None else decision_at_ms
-        _time(decision_time, "decision_time")
+        decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
+        if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
+            _fail(FinancialInputError, "decision_time_future")
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,
@@ -5337,7 +5346,6 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, "report_supersedes_required")
             _id(supersedes, "supersedes")
         requested_event_time = None if event_at_ms is None else _time(event_at_ms, "reporting_event")
-        received_at_ms = self._now()
         evidence_fields: dict[str, Any] = {
             "evidence_id": evidence_ref,
             "item_id": item_id,
@@ -5369,12 +5377,12 @@ class FinancialOwner:
                     _fail(FinancialConflictError, "evidence_identity_conflict")
                 return {"status": "DUPLICATE", "report_id": report_id, **self._projection_for_row(obligation)}
             self._check_revision(obligation, expected_revision)
-            event_time = received_at_ms if requested_event_time is None else requested_event_time
+            event_time = self._now() if requested_event_time is None else requested_event_time
             evidence = self._new_evidence(
                 **evidence_fields,
                 applicable_at_ms=event_time,
                 event_at_ms=event_time,
-                received_at_ms=received_at_ms,
+                received_at_ms=self._now(),
             )
             if correction:
                 prior = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (supersedes,)).fetchone()

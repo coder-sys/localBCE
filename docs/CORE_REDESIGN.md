@@ -408,3 +408,78 @@ each declared role/control/response, actual enabled state, message, destination
 and recovery; distinguish injected HTTP response rendering from actual owner
 refusal and crash tests. Isolate and close only the test browser. No old model
 pass is inherited as evidence for the corrected model or actual browser.
+
+## Line pack: CMS deferral response (2026-09-28, XI.2 record)
+
+Felt effect: when CMS defers a CMS-64.9 line, a state finance lead gets that
+line and quarter reconciled to the cent in minutes, not weeks. Coverage is
+shown on the pack's face.
+
+- **Predicate:** `app/right_rail_financial_line_pack.py` emits canonical
+  `RR/LINE-PACK/CMS-64.9/v1` JSON from a Continuity package that
+  `verify_database` binds row for row to a fully verified store opened
+  read-only (the package digest is public, so package checks alone prove
+  nothing), and a line map. Exactly one `line-map:sha256:<hex>` entry in an
+  approved Control Pack's `source_refs` binds the map, so the schema is
+  unchanged. Verification holds a read transaction that writers wait on (busy
+  timeout): run it on a quiet store or a copy.
+- **What each pack carries:**
+  - rows of payments matching the map's program/source predicate, paid in the
+    federal fiscal quarter (UTC boundaries), recorded before its end and not
+    reversed by a record before its end. "Recorded" is the evidence's
+    owner-clock `received_at_ms`, never a caller's date: the Owner reads its
+    clock once per command (a clock behind the history writes nothing), and
+    the checker requires it to equal the writing event's `committed_at_ms`,
+    commit times never to decrease, and it never to precede `event_at_ms`;
+  - `prior_quarter_adjustments`: each payment, reversal or amount conflict
+    (`CONFLICT`) of an earlier quarter's payment, listed once in the quarter
+    that recorded it, never netted;
+  - every field reads only what was recorded before quarter end, so a closed
+    quarter's pack changes only in `source`, `generated_at_ms` and
+    `supersedes`: the last evaluation before the end, the
+    Control Pack and population whose publish events committed before it, and
+    the manifest bound to that population unless superseded before it (the
+    Owner refuses to supersede a published roster and never changes a pack's
+    status);
+  - each row's evidence digest, evaluation receipt and rule version;
+  - a service-period split, the member-manifest digest and a provenance root;
+  - coverage as integer cents over the reported line.
+- **Invariant/failure:** the pack is documentation only and carries no
+  determination.
+  - A reversed payment, a row not decided under the bound pack, no single
+    unsuperseded published roster at quarter end, a map window short of the
+    quarter, an amount conflict recorded before quarter end, and a cents gap
+    in either direction are each listed in `unavailable`; any gap rules out
+    FULL.
+  - Five never-held items are always listed.
+  - A superseding pack must have the same line, quarter and store (genesis,
+    owner, mode, scope), a later time, and a head that is this history's
+    head at its sequence.
+- **Format:** stays `v1` though its fields changed after 17142e3; no pack
+  built before this record is kept as evidence.
+- **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
+- **Scope:** derived artifact, plus the clock binding above: support
+  evidence no longer takes a caller received time (a retry keeps the first
+  one), and a `decision_at_ms` after the owner clock is refused
+  (`decision_time_future`; Lean needs the same guard, a follow-up). When the
+  host clock steps back (NTP, a restored VM, skew between hosts sharing a
+  store), every write is refused (`event_commit_order`) until the clock passes
+  the last committed time: it fails closed, never reorders or rewrites the
+  history, and nothing is lost. No table, Lean, wire or digest changes. `signer` is null because no
+  PQ signing path exists.
+- **Proposed Lean (not written):**
+  - `line_pack_sum_eq_ledger`
+  - `line_pack_rule_version_bound`
+  - `line_pack_complete_or_declares_gap`
+  - `line_pack_deterministic`
+  - `line_pack_chronology_strict`
+  - `line_pack_documentation_only`
+- **Kill criteria:**
+  1. The synthetic pack does not reconcile to a synthetic 64.9 line to the cent.
+  2. Coverage is under about 50% on lines a state actually had deferred.
+  3. Reviewers mostly ask for allowability evidence the Ledger never holds.
+- **Follow-up:**
+  - The W0 growth breakdown needs units, rates and multiple periods, which the
+    Ledger does not hold.
+  - There is no per-claim service date, so the split uses the obligation
+    period.

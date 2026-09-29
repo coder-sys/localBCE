@@ -176,6 +176,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     @staticmethod
     def _authorize(store: FinancialOwner, claim_id: str) -> None:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialSemanticAdapterTests._advance_clock(store, expected.OFFSET_DECISION_MS)  # recorded when decided
         store.authorize_offset(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -189,6 +190,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     @staticmethod
     def _reject(store: FinancialOwner, claim_id: str) -> None:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        RightRailFinancialSemanticAdapterTests._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
@@ -548,6 +550,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         first_claim = self._record_claim(store)
         self._record_h_support(store)
         first_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
         store.reject_offset_and_authorize_correction(
             item_id=expected.H_ITEM_ID,
             claim_id=first_claim,
@@ -774,6 +777,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
 
         with self.assertRaisesRegex(
             owner.FinancialIntegrityError,
