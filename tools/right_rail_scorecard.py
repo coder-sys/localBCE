@@ -486,6 +486,8 @@ class _Journey:
     def truth(self) -> dict[str, Any]:
         """Ground truth straight from the Owner through the Mirror (not counted)."""
         return {"workspace": self.workflow.workspace(), "decision_package": self.workflow.decision_view()["decision_package"]}
+    def _open_rows(self, view: dict[str, Any]) -> int:
+        return _open_rows(view, int(self.truth()["workspace"]["summary"]["open_count"]))
     def _task(self, tag: str) -> "_Task":
         self.meter.tag = tag
         return _Task(self, tag)
@@ -494,10 +496,10 @@ class _Journey:
             task.open()
             task.answer(_director_facts(self.truth()))
             task.record("rows_to_add_by_hand", len(task.browser.last_view["tables"].get("population-rows", [])) if task.unanswered else 0)
-            task.record("rows_flagged_open", _open_rows(task.browser.last_view))
+            task.record("rows_flagged_open", self._open_rows(task.browser.last_view))
         with self._task("analyst.monday_reconciliation") as task:
             task.open()
-            task.record("rows_flagged_open", _open_rows(task.browser.view()))
+            task.record("rows_flagged_open", self._open_rows(task.browser.view()))
             task.answer(_analyst_facts(self.truth()))
         with self._task("approver.prepare_decision") as task:
             task.open()
@@ -579,9 +581,17 @@ class _Journey:
             "clock_note": "Synthetic demo clock; the fixture sets these times, so UI changes cannot move them.",
         }
 
-def _open_rows(view: dict[str, Any]) -> int:
+def _open_rows(view: dict[str, Any], expected: int) -> int:
+    """Rows with money still short, read from the Short column. The Owner's own open count must agree: a meter that cannot read, or disagrees with the ledger, fails the run instead of reporting a number."""
     rows = view["tables"].get("population-rows", [])
-    return sum(1 for cells in rows if (m := re.search(r"Case ([A-Z_]+)", " ".join(cells))) and m.group(1) != "RESOLVED")
+    try:
+        short = [int(re.sub(r"\D", "", cells[3])) for cells in rows]
+    except (IndexError, ValueError) as error:
+        raise RuntimeError("scorecard_short_column_unreadable") from error
+    count = sum(1 for cents in short if cents)
+    if not rows or count != expected:
+        raise RuntimeError(f"scorecard_open_rows_disagree:{count}!={expected}")
+    return count
 
 # Each task tag names the role it is performed as (Art. XIII.4: roles are
 # real, so the journey now opens each task's page as that role would).

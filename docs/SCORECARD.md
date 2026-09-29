@@ -34,7 +34,7 @@ this harness: "before" at 1c7ed3b (product code unchanged since e9b3727), and
 | Analyst, Monday | screens to answer status, owner, gap, next step | 4 (assumption) | 3 | **1** |
 | | clicks | unknown | 2 | **0** |
 | | facts only in raw JSON | unknown | 1 | **0** |
-| | rows shown as open | 20 (assumption) | 20 | 20 |
+| | rows shown as open | 20 (assumption) | 20 | 1 (rows with money still short; the meter read 0 until 2026-09-29) |
 | Analyst, correction | clicks | unknown | 6 | **4** |
 | | forced reopens | unknown | 2 | **0** |
 | | requests | unknown | 14 | 15 (see note) |

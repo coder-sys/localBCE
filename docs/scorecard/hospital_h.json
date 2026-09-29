@@ -323,7 +323,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 0
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -608,7 +608,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 0
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
