@@ -123,9 +123,8 @@ packager: it assembles, verifies, extracts, runs the end-to-end scenario and
 serves the workspace from a digest-bound offline archive. Its current
 release producer and kit inventory bind the current vectors, retired-pin
 registry and fresh guarded engine receipt. The kit checks canonical source
-paths and the exact v4 guard records with either LF or Windows CRLF line
-endings; raw log bytes remain digest-bound. Current exercised archives are
-recorded in provenance. Staff cash evidence names the correction request it
+paths and the exact v4 guard records under LF or CRLF line endings (raw log
+bytes stay digest-bound); exercised archives are in provenance. Staff cash evidence names the correction request it
 pays; acknowledgment alone never provides that credit. The synthetic staff
 clock advances to the explicit decision time before issuing the correction, so
 new demo acknowledgments follow their action, even after a lost response.
@@ -137,19 +136,15 @@ deadline before dispatch. Refusals flush their response, then drain at most
 preserves ordinary Windows refusal responses without letting a slow sender
 hold the refusal path open.
 
-Second-state reuse needs owner, checker and Lean changed together, because
-`Types.lean:controlPackRulesWellFormed` also pins the Hospital H test labels; a
-Python-only policy-table edit would disagree with the pinned engine. The staff
-server's H labels are fixture data.
+The staff server's Hospital H labels are fixture data; a second state also
+needs Lean changed (`STATUS.md`).
 
 ## Direct-state-owned clearance route (parked)
 
-Parked in `parked/state_clearance/`: `app/direct_state_owned_clearance_v1.py`
-evaluates one canonical `BLSDRQ01` request through the State kernel (`lean/`
-StateKernel library, `rust/` process adapter; `app/semantic_kernel_binding.py`)
-and commits through `app/transactional_database_boundary.py`. Only `CLEAR` or a
-valid `EXCEPTION_APPROVED` may advance economic state; `HOLD`, `HUMAN_REVIEW`
-and `BLOCK` cannot.
+Parked in `parked/state_clearance/` (see `parked/README.md`): it evaluates one
+canonical `BLSDRQ01` request through the State kernel (`lean/` StateKernel
+library, `rust/` process adapter). Only `CLEAR` or a valid `EXCEPTION_APPROVED`
+may advance economic state; `HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
 
 ## Mirror Provider Trust Graph
 

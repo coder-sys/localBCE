@@ -57,12 +57,7 @@ configuration runs `tests/` and excludes `parked/`.
 
 **Python dependencies** are installed offline only, into a fresh virtual
 environment, from a pre-provisioned wheelhouse; pip refuses any wheel whose
-SHA-256 differs from `requirements-dev.txt`:
-
-```powershell
-python -m pip install --no-index --find-links <wheelhouse> --require-hashes --only-binary=:all: --no-deps -r requirements-dev.txt
-```
-
+SHA-256 differs from `requirements-dev.txt` (its header has the command).
 Production has no Python package dependency (`requirements.txt` is empty);
 development adds only pytest and its five dependencies. Changing any of them
 means acquiring and reviewing new wheels, re-pinning their hashes and updating

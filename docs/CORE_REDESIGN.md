@@ -7,54 +7,50 @@ Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to
 History-completeness approval (2026-09-24, CONSTITUTION V.4): asked in session chat how v7 histories lacking full facts (payment item/time, evidence) become rebuildable, the founder chose "Opening balance": on conversion the owner writes one sealed opening-balance event holding every converted row, under a new, distinctly named digest domain, and thereafter every event records the full facts needed to rebuild all projections by apply(event). The alternative (rebuild from events plus side tables) was declined.
 
 Source: first-principles review of the financial core (owner, checker, successor,
-Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited inline.
+Mirror, Switch, engine path; ~25,100 Python lines).
 
 ## Verdict
 
 ### Current-source Lean reproduction (2026-09-26, XI.2 record)
 
 - Guard-log line endings: r78 refused the fresh r77 kit with
-  `engine_guard_log_policy_mismatch`. Its 99 CRLF records contain the exact
-  required v4 policy, but the kit's LF-only line anchors match zero policies.
-  Predicate/invariant: parse the actual guard evidence and retain exact fields,
-  counts, floors, exits, cleanup and mutex release; do not infer a pass from a
-  receipt alone. Disposition: replace only the three record-ending patterns
-  with LF-or-CRLF anchors. Replacement control: positive checks for both forms,
-  malformed-ending and adverse-record mutations, independent review and a new
-  complete kit run. Raw log bytes and their digest binding remain unchanged.
-  Scope/duration: this v4 text-log parser until a separately reviewed format
-  change. Claims withdrawn: r78 verifies no kit; no prior run is relabelled.
-- Canonical manifest correction: r75 refused the r67 kit with
+  `engine_guard_log_policy_mismatch`: its 99 CRLF records contain the exact
+  required v4 policy, but the kit's LF-only line anchors match none. Predicate:
+  parse the actual guard evidence and keep exact fields, counts, floors, exits,
+  cleanup and mutex release; no pass from a receipt alone. Disposition: replace
+  only the three record-ending patterns with LF-or-CRLF anchors; control:
+  positive checks for both forms, malformed-ending and adverse-record
+  mutations, independent review, a new complete kit run. Raw log bytes and their
+  digest binding are unchanged. Scope: this v4 text-log parser until a
+  separately reviewed format change. Withdrawn: r78 verifies no kit; no prior
+  run is relabelled.
+- Canonical manifest: r75 refused the r67 kit with
   `engine_source_manifest_not_canonical_or_current`. The producer sorted native
-  Windows paths before replacing backslashes, placing `CodecLawsCheck.lean`
-  before `CodecLaws/Correction.lean`; the existing kit requires ordinal ordering
-  of the portable slash paths. Retain that exact canonical-byte predicate and
-  all source identity checks. Normalize before sorting in the producer, compare
-  its actual manifest against independently constructed Python canonical bytes,
-  then create a new guarded release. Scope/duration: prospective manifests only;
-  r67 evidence remains unchanged and does not acquire a kit-compatibility claim.
+  Windows paths before replacing backslashes (`CodecLawsCheck.lean` before
+  `CodecLaws/Correction.lean`); the kit requires ordinal order of the portable
+  slash paths. Keep that predicate and all source identity checks; normalize
+  before sorting, compare the producer's manifest with independently built
+  Python canonical bytes, then make a new guarded release. Scope: prospective
+  manifests; r67 gains no kit-compatibility claim.
 - **Predicate:** an exact-source build claim binds the guarded producer receipt,
   all selected Lean/config bytes, toolchain, executable and both pinned vectors.
-- **Invariant / failure:** an older binary's historical build does not establish
-  reproducibility from a later combined source tree.
+  **Failure:** an older binary's build does not establish reproducibility from a
+  later combined source tree.
 - **Evidence:** r67 built the 46-file current source manifest at `61a24519` and
-  reproduced the existing 6,279,168-byte executable byte-for-byte; transition
-  and reuse outputs match both independent expected files. Guard exits are zero,
-  cleanup PASS, mutex released. r68 separately compiled all six Lake targets.
-- **Disposition:** extend provenance with this separately identified reproduction;
-  retain the historical origin, executable pin and retired-pin registry unchanged.
-- **Replacement control:** the source-manifest and receipt hashes, original raw
-  guard/child logs and exact comparisons remain inspectable. The producer's empty
-  stream/process-result repairs passed a binary I/O regression and independent
-  review; resource, toolchain, source-identity and expected-answer checks remain.
-- **Scope:** local synthetic build evidence only; no theorem statement, wire
-  format, decision rule, executable bytes or allowed axiom is changed.
-- **Duration:** this evidence applies only to the recorded source and artifacts;
-  later changes require their own verification.
+  reproduced the existing 6,279,168-byte executable byte-for-byte; transition and
+  reuse outputs match both independent expected files. Guard exits zero, cleanup
+  PASS, mutex released. r68 separately compiled all six Lake targets.
+- **Disposition:** extend provenance with this separately identified
+  reproduction; keep the historical origin, executable pin and retired-pin
+  registry. **Control:** source-manifest and receipt hashes, raw guard/child logs
+  and exact comparisons stay inspectable; the producer's empty stream/process
+  result repairs passed a binary I/O regression and independent review.
+- **Scope/duration:** local synthetic build evidence for the recorded source and
+  artifacts only; no theorem statement, wire format, decision rule, executable
+  bytes or allowed axiom changed; later changes need their own verification.
 - **Claims withdrawn:** no assurance for later source, whole-system qualification
-  or all-theorem axiom hygiene follows from reproducibility. Native diagnostic
-  axioms and 21 r68 linter warnings remain visible; the formal gate has its own
-  explicitly bounded declaration scope.
+  or all-theorem axiom hygiene follows. Native diagnostic axioms and 21 r68
+  linter warnings remain visible; the formal gate has its own bounded scope.
 
 ### Current-engine service-kit connection (2026-09-26, XI.2 record)
 
@@ -71,14 +67,13 @@ Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited 
   retain all comparisons, provenance, resource checks and exact inventory.
 - **Replacement control:** an independent reader derived the reuse baseline
   from the old immutable fixture, replacing its embedded accepted result and
-  removing only fields removed by ReuseCodec v2. Expected assessment bytes were
-  specified before engine execution; provenance records hashes and construction.
-  Guarded actual/expected comparison, fresh release build and extracted-kit
-  scenario remain required before a packaged-runtime claim.
-- **Scope:** only this synthetic current-engine release and its kit inventory;
-  no theorem, protocol semantics, guard, authority or cash rule is weakened.
-- **Duration:** these fixtures remain pinned until another explicit release
-  record replaces them; prior fixtures remain in Git history.
+  removing only fields removed by ReuseCodec v2; expected assessment bytes were
+  specified before engine execution (provenance records hashes and
+  construction). A guarded actual/expected comparison, fresh release build and
+  extracted-kit scenario remain required before a packaged-runtime claim.
+- **Scope/duration:** this synthetic current-engine release and its kit
+  inventory; no theorem, protocol semantics, guard, authority or cash rule is
+  weakened; fixtures stay pinned until another release record replaces them.
 - **Claims withdrawn:** old reuse-vector evidence does not verify v2. This
   unchanged-state baseline does not resolve paid-list/stale-shortfall reuse
   limitations and does not authorize using reuse to decide live commands.
@@ -167,17 +162,16 @@ the correction it pays; an acknowledgment still has zero cash effect.
   `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
   require that it reports nothing beyond its unapproved-schema notice; that is
   what is checked, not a proof that no package can leak.
-- **Raw evidence the old version is unsuitable:** v1 (commit `82a2087`) had no
-  rule, adapter or software version and no affected work, and its reproduction
-  `{scenario: SYNTHETIC_CORRECTION, real_data: false}` held nothing a
-  corporate-support engineer could rerun; the restore failure had no package.
-- **Disposition:** v1 replaced, not versioned alongside: it is derived, synthetic
-  and has no outside consumer. Deleted: the Owner's `_corporate_support` and
+- **Raw evidence:** v1 (`82a2087`) had no rule, adapter or software version and
+  no affected work; its reproduction `{scenario: SYNTHETIC_CORRECTION,
+  real_data: false}` held nothing a support engineer could rerun; a restore
+  failure had no package.
+- **Disposition:** v1 replaced, not versioned alongside (derived, synthetic, no
+  outside consumer). Deleted: the Owner's `_corporate_support` and
   `continuity_restore_support` builders, its `restore_test_continuity` wrapper
-  (callers use `restore_continuity(restore_mode="TEST")`) and Mirror's restore
-  re-check, which the Owner's package validation already made, and the Mirror's
-  own restore-mode check (the Owner refuses a bad mode first, before it creates
-  anything).
+  (callers use `restore_continuity(restore_mode="TEST")`), and Mirror's restore
+  re-check and restore-mode check (the Owner's package validation and mode
+  refusal already come first).
 - **Replacement control:** Mirror, staff-server and acceptance tests, run through
   the guard.
 - **Scope / follow-ups:** correction follow-up and restore failure only. A
@@ -198,9 +192,8 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 ## Gaps found (under-enforcement, not just size)
 
 - No command table: each handler invents its own retry/conflict rule (III.3).
-- `expected_revision` optional on 10 handlers; 5 default the actor to a
-  synthetic identity (III.3, I.2, XI.13).
-- `financial_events` has no append-only trigger; FKs enabled but none declared (III.4).
+- `expected_revision` optional on 10 handlers; 5 default the actor to a synthetic identity.
+- `financial_events` has no append-only trigger; FKs enabled but none declared.
 - Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
 - Every staff read runs the full checker over the whole database (IX.3).
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
@@ -239,8 +232,8 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 
 ## History segments (approved by the founder 2026-09-25)
 
-Replaces the per-write whole-history size admission, which refused every write after
-~900 commands. Kept: the 8 MiB package export, now refused at export, not at write.
+Replaces the per-write whole-history size admission (which refused every write after
+~900 commands); the 8 MiB package export stays, refused at export, not at write.
 
 Ceiling: 10,000 events, because Lean's `maxRows`/`maxRevision` (Types.lean) bound what the
 proof and checker accept. The owner refuses the 10,001st event, revision or row of any
@@ -279,11 +272,11 @@ domains, theorem statements, and `tests/test_right_rail_financial_constitution_i
 2. Invariant/failure: an invalid, future or too-old marker cannot claim freshness;
    logical capture ticks cannot silently become Unix time. Contradictory failure
    fields cannot authorize admission.
-3. Evidence before editing: profile lines 48-51 define ticks 7000/7010 and a
-   365-day limit; producer line 310 checks only `startswith(("1900", "197"))`;
-   verifier lines 351-356 repeat it, and lines 528-533 omit failure_code from
-   admission. Guarded r32 now passes all 72 source/consumer/budget checks; the
-   independent post-edit review also closed a numeric-to-string context bypass.
+3. Evidence: the profile defined ticks 7000/7010 and a 365-day limit, but the
+   producer and verifier checked only `startswith(("1900", "197"))` and
+   admission omitted failure_code. Guarded r32 passes all 72
+   source/consumer/budget checks; independent review also closed a
+   numeric-to-string context bypass.
 4. Disposition: replace the heuristic and refuse old profile bindings. Retain
    raw-envelope v2, logical capture fields, graph windows, bounds and nonclaims.
 5. Replacement: immutable profile clock `SYNTHETIC_LOGICAL_SECONDS_V1`, reference
@@ -302,9 +295,7 @@ domains, theorem statements, and `tests/test_right_rail_financial_constitution_i
    old bytes remain historical evidence and fail the new binding.
 8. Withdrawn claims: old tests and profile/envelope/graph/receipt identities do
    not establish the new rule. FRESH means marker age at synthetic capture time,
-   never current source truth. Independent post-edit review found no remaining
-   source-boundary blocker. Current combined-source regression evidence and
-   outstanding build requirements are recorded only in `STATUS.md`.
+   never current source truth.
 
 ## Receiver cash-file boundary (XI.2 design, 2026-09-26)
 
@@ -322,8 +313,7 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   `captured_at_ms`. Each row has exactly eight fields: `item_id`, `payment_id`,
   `common_origin_id`, `evidence_id`, `amount_cents`, `event_at_ms`,
   `pays_action_id`, `expected_revision`. The action link is explicitly null or
-  an ID. Earlier planning called this nine fields but listed only these eight;
-  eight is the intended exact set, with no implicit extra field.
+  an ID. Eight is the exact set; no implicit extra field.
 - Invariant/failure: untrusted input never skips a row, turns acknowledgment or
   reporting into cash, substitutes an ID with the same total, or commits a
   partial file. IDs/version use the owner's 128-character grammar. Cents are
@@ -360,15 +350,15 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   back the whole file. Publish the receipt only after COMMIT succeeds.
   Preview is the default: independently verify and restore B into isolated TEST
   storage, using that restore's snapshot as execution baseline while retaining
-  F and original B as retry identity. Preview never opens an incumbent writer.
+  F and original B as retry identity; it never opens an incumbent writer.
   Explicit apply uses the same checked boundary. Cleanup failures are visible.
-  CLI apply opens only an existing, current store with the reviewed mode/ID:
-  SQLite `mode=rw` prevents accidental creation; read-only setup checks refuse
-  missing segment/index/append-only metadata instead of migrating it before
-  the import transaction. A missing, empty or disappearing store is refused.
-- Scope: local synthetic receiver cash evidence only. Switch's existing owed
-  comparison schema is unchanged; this is separate cash reconciliation, with
-  no live transport, source authentication/truth, payment or activation claim.
+  CLI apply opens only an existing, current store with the reviewed mode/ID
+  (SQLite `mode=rw`; read-only setup checks refuse missing segment/index/
+  append-only metadata instead of migrating it); a missing, empty or
+  disappearing store is refused.
+- Scope: local synthetic receiver cash evidence only; Switch's owed
+  comparison schema is unchanged; no live transport, source authentication/truth,
+  payment or activation claim.
 - Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1` has exactly `contract`,
   `mode` (PREVIEW or APPLIED), `source_sha256`, `baseline_sha256`, `row_count`,
   `recorded_count`, `duplicate_count`, `file_total_cents`, `recorded_cents`,
@@ -377,14 +367,14 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   Amounts come from independently checked pre/post cash; duplicates add zero
   cash, including payments reversed after their original receipt. No intermediate
   owner projection or raw file/error data is exported in this result.
-- Duration: v1 is a new contract with no implicit legacy migration. Subsequent
-  changes require a new explicit compatibility decision and fresh evidence.
+- Duration: v1 has no implicit legacy migration; later changes need a new
+  compatibility decision and fresh evidence.
 - Claims withdrawn: this design is not implementation or verification. Required
-  evidence covers field/context/identity mutations, altered command order,
-  exact bounds, original-baseline retry and reversal, stale/concurrent/mixed
-  batches, alias/conflict rollback, action limits, crashes/lost responses,
-  no ACK/report effects, source preservation, privacy and cleanup, independent
-  verification, Continuity and existing consumers. Status records actual runs.
+  evidence covers field/context/identity mutations, altered command order, exact
+  bounds, original-baseline retry and reversal, stale/concurrent/mixed batches,
+  alias/conflict rollback, action limits, crashes/lost responses, no ACK/report
+  effects, source preservation, privacy and cleanup, independent verification,
+  Continuity and existing consumers.
 
 ## Browser conformance correction (2026-09-26)
 
@@ -409,8 +399,7 @@ pass is inherited as evidence for the corrected model or actual browser.
 
 ## Correction-v2 protected changes (2026-09-26; XI.2 record written 2026-09-28)
 
-Original record: STATUS at `d79aceb` (lines 123-127, 130); `b9aa6a2` removed it with no pointer.
-This record replaces it; facts are from `git show` of the commits named.
+This record replaces the one STATUS lost in `b9aa6a2` (last at `d79aceb`); facts are from `git show` of the commits named.
 
 Felt effect: a hospital short part of its claim is asked for exactly what is
 still unpaid, and no older engine record can ask for more.
@@ -451,8 +440,7 @@ still unpaid, and no older engine record can ask for more.
 - **Invariant / failure:** a correction never requests more than the unpaid
   shortfall (II, III.4). The old equality requested the whole claim.
 - **Evidence:** subtest `e911-whole-claim` (300,000 requested on 100,000 unpaid)
-  was flipped to refused on purpose; rr-review
-  round 3 (#1, #2, #4-#6, #8) and H1/M1/M3 found the rest.
+  was flipped to refused on purpose; rr-review round 3 and H1/M1/M3 found the rest.
 - **Disposition:** weaken (`=` to `≤`, for corrections only) and replace (exact
   amount theorem, wire formats, engine pin). The E911 and 88D8 engines stay only as
   history.
@@ -475,7 +463,7 @@ still unpaid, and no older engine record can ask for more.
 ## Gate decision rules: statement changes (2026-09-28, XI.2 record)
 
 Baseline trunk `6cccb84`; changes in `78eabc7` and `4bffc1e` (merged as
-gate-rules-2). No record existed. Felt effect: an analyst sees an unusable source
+gate-rules-2). Felt effect: an analyst sees an unusable source
 as a review item with the fact it still lists, never a hold or allow resting on
 unchecked rows, and a store that rolls back cannot earn ALLOW.
 
@@ -556,9 +544,8 @@ shown on the pack's face.
   - A superseding pack must have the same line, quarter and store (genesis,
     owner, mode, scope), a later time, and a head that is this history's
     head at its sequence.
-- **Format:** stays `v1` though its fields changed after 17142e3; no pack
-  built before this record is kept as evidence.
-- **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
+- **Format:** stays `v1` though its fields changed after 17142e3; no earlier
+  pack is kept as evidence. **Evidence:** `tests/test_right_rail_financial_line_pack.py`.
 - **Scope:** derived artifact, plus the clock binding above: support
   evidence no longer takes a caller received time (a retry keeps the first
   one), and a `decision_at_ms` after the owner clock is refused
@@ -589,22 +576,21 @@ shown on the pack's face.
 ## Gate formats round 7 (2026-09-28, XI.2 record)
 
 Gate formats are not frozen (D1); round 7 changes them and reissues the golden
-vectors. Every `RR/GATE` input now starts `NAME/v1` and a NUL (registry:
-`docs/RIGHTRAIL_FULL_STACK_TARGET.md` §5).
+vectors. The formats are specified once, in `docs/RIGHTRAIL_FULL_STACK_TARGET.md`
+§4-§5 (including the `RR/GATE` name registry); this record lists what changed.
 
 - **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound: one
   canonical line per entry, each with the request's flow, member key and payee,
   summing to the amount; an FFS_CLAIM request without lines is refused.
-- **TOKEN leaf:** new `decided_at` before `epoch`, with `decided_at <= issued_at`;
+- **TOKEN leaf:** new `decided_at` before `epoch`, `decided_at <= issued_at`,
   kept across reissues. An FFS_CLAIM leaf needs a nonzero `lines_root`.
 - **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
-  released pin ‖ unresolved pin), never zero. The encoder refuses a first
-  checkpoint with a previous digest and a later one without.
+  released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
+  digest, a later one must.
 - **Rules pins:** the domain is followed by a NUL, not a newline; every
   `rules_v1` and `demo_zz` pin was reissued.
 - **Payer:** a previous link to a non-adjacent checkpoint is a fork; one
-  certificate per (tenant, epoch); a decision older than 14 days (two FFS
-  checkwrite cycles) is refused.
+  certificate per (tenant, epoch); a decision older than 14 days is refused.
 - **Codec:** `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses
   a leaf routed to another shard. It stays stateless: the serialized,
   persist-before-publish producer, the payer pin store and KEY-CERT are unbuilt
