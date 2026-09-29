@@ -18,7 +18,6 @@ import math
 from pathlib import Path
 import shutil
 import sqlite3
-import stat
 import tempfile
 import threading
 from collections.abc import Mapping
@@ -29,8 +28,6 @@ from app import right_rail_financial_semantic_adapter as semantic
 
 
 MAX_ENGINE_JOB_MEMORY_CAP_BYTES: Final[int] = 2_000_000_000
-MAX_ENGINE_INPUT_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
-ENGINE_ARGUMENTS: Final[tuple[str, ...]] = ("--evaluate",)
 CORRECTION_TRANSITION_OPERATION: Final[str] = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARGUMENTS: Final[tuple[str, ...]] = ("--apply-correction-transition",)
 MAX_CORRECTION_TRANSITION_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
@@ -64,14 +61,6 @@ class FinancialEngineArtifactError(FinancialEngineError):
     pass
 
 
-class FinancialEngineTransactionError(FinancialEngineError):
-    pass
-
-
-class FinancialEngineSnapshotError(FinancialEngineError):
-    pass
-
-
 class FinancialEngineInputError(FinancialEngineError):
     pass
 
@@ -86,62 +75,6 @@ class FinancialEngineResultError(FinancialEngineError):
 
 class FinancialEngineTransitionUnavailable(FinancialEngineError):
     pass
-
-
-def _validate_release(release: Any, prefix: str, *, input_cap: int, output_cap: int) -> None:
-    """One validator for both release types; codes are ``{prefix}_<field>``."""
-
-    def require(condition: bool, field: str) -> None:
-        if not condition:
-            raise FinancialEngineConfigError(f"{prefix}_{field}")
-
-    require(isinstance(release.executable, Path) and release.executable.is_absolute(), "executable_path")
-    require(isinstance(release.workspace, Path) and release.workspace.is_absolute(), "workspace_path")
-    require(type(release.executable_size_bytes) is int and release.executable_size_bytes > 0, "executable_size")
-    require(
-        type(release.executable_sha256) is bytes and len(release.executable_sha256) == _SHA256_BYTES,
-        "executable_hash",
-    )
-    if prefix == "engine_correction":
-        for field in ("request_vector_sha256", "result_vector_sha256"):
-            value = getattr(release, field)
-            require(type(value) is bytes and len(value) == _SHA256_BYTES, field.replace("_sha256", "_hash"))
-    require(
-        type(release.timeout_seconds) is float
-        and math.isfinite(release.timeout_seconds)
-        and 0 < release.timeout_seconds <= 30.0,
-        "timeout",
-    )
-    require(type(release.input_max_bytes) is int and 0 < release.input_max_bytes <= input_cap, "input_limit")
-    require(type(release.output_max_bytes) is int and 0 < release.output_max_bytes <= output_cap, "output_limit")
-    require(
-        type(release.stderr_max_bytes) is int and 0 < release.stderr_max_bytes <= process.MAX_STDERR_BYTES,
-        "stderr_limit",
-    )
-    require(
-        type(release.job_memory_cap_bytes) is int
-        and 0 < release.job_memory_cap_bytes <= MAX_ENGINE_JOB_MEMORY_CAP_BYTES
-        and release.job_memory_cap_bytes <= process.ADMISSION_CAP_BYTES,
-        "memory_cap",
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class FinancialEngineRelease:
-    """Explicit immutable trust configuration for one Engine executable."""
-
-    executable: Path
-    executable_size_bytes: int
-    executable_sha256: bytes
-    timeout_seconds: float
-    input_max_bytes: int
-    output_max_bytes: int
-    stderr_max_bytes: int
-    workspace: Path
-    job_memory_cap_bytes: int
-
-    def __post_init__(self) -> None:
-        _validate_release(self, "engine", input_cap=MAX_ENGINE_INPUT_BYTES, output_cap=semantic.MAX_RESULT_BYTES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,34 +94,37 @@ class FinancialCorrectionTransitionRelease:
     job_memory_cap_bytes: int
 
     def __post_init__(self) -> None:
-        _validate_release(
-            self,
-            "engine_correction",
-            input_cap=MAX_CORRECTION_TRANSITION_BYTES,
-            output_cap=MAX_CORRECTION_TRANSITION_BYTES,
+        def require(condition: bool, field: str) -> None:
+            if not condition:
+                raise FinancialEngineConfigError(f"engine_correction_{field}")
+
+        require(isinstance(self.executable, Path) and self.executable.is_absolute(), "executable_path")
+        require(isinstance(self.workspace, Path) and self.workspace.is_absolute(), "workspace_path")
+        require(type(self.executable_size_bytes) is int and self.executable_size_bytes > 0, "executable_size")
+        require(
+            type(self.executable_sha256) is bytes and len(self.executable_sha256) == _SHA256_BYTES,
+            "executable_hash",
         )
-
-
-# Execution records are built only below from an already validated contained
-# result; the owner re-binds every field it relies on before committing.
-@dataclass(frozen=True, slots=True)
-class FinancialEngineExecution:
-    """Typed result and minimal exact bindings for one accepted invocation."""
-
-    result: semantic.DecodedLeanResult
-    snapshot_digest: bytes
-    input_size_bytes: int
-    input_sha256: bytes
-    output_size_bytes: int
-    output_sha256: bytes
-    executable_size_bytes: int
-    executable_sha256: bytes
-    exit_code: int
-    job_memory_cap_bytes: int
-    peak_job_commit_bytes: int
-    cap_enforced: bool
-    active_process_limit: int
-    child_process_count: int
+        for field in ("request_vector_sha256", "result_vector_sha256"):
+            value = getattr(self, field)
+            require(type(value) is bytes and len(value) == _SHA256_BYTES, field.replace("_sha256", "_hash"))
+        require(
+            type(self.timeout_seconds) is float and math.isfinite(self.timeout_seconds) and 0 < self.timeout_seconds <= 30.0,
+            "timeout",
+        )
+        for field, cap in (("input", MAX_CORRECTION_TRANSITION_BYTES), ("output", MAX_CORRECTION_TRANSITION_BYTES)):
+            value = getattr(self, f"{field}_max_bytes")
+            require(type(value) is int and 0 < value <= cap, f"{field}_limit")
+        require(
+            type(self.stderr_max_bytes) is int and 0 < self.stderr_max_bytes <= process.MAX_STDERR_BYTES,
+            "stderr_limit",
+        )
+        require(
+            type(self.job_memory_cap_bytes) is int
+            and 0 < self.job_memory_cap_bytes <= MAX_ENGINE_JOB_MEMORY_CAP_BYTES
+            and self.job_memory_cap_bytes <= process.ADMISSION_CAP_BYTES,
+            "memory_cap",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,35 +146,9 @@ class FinancialCorrectionTransitionExecution:
     child_process_count: int
 
 
-def _capture_artifact_identity(release: FinancialEngineRelease) -> None:
-    """Early path-level identity check for the evaluate lane only.
-
-    The contained runner re-verifies size and SHA-256 through the pinned,
-    write-denying handle it launches from, so this is not the pin; it only
-    lets the evaluate lane refuse a wrong artifact before building a snapshot.
-    """
-
-    try:
-        before = release.executable.stat()
-        if not stat.S_ISREG(before.st_mode) or before.st_size != release.executable_size_bytes:
-            raise FinancialEngineArtifactError("engine_artifact_identity")
-        digest = hashlib.sha256()
-        total = 0
-        with release.executable.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                total += len(chunk)
-                digest.update(chunk)
-    except FinancialEngineArtifactError:
-        raise
-    except (OSError, ValueError):
-        raise FinancialEngineArtifactError("engine_artifact_identity") from None
-    if total != release.executable_size_bytes or digest.digest() != release.executable_sha256:
-        raise FinancialEngineArtifactError("engine_artifact_identity")
-
-
 def _validate_contained_result(
     result: object,
-    release: FinancialEngineRelease | FinancialCorrectionTransitionRelease,
+    release: FinancialCorrectionTransitionRelease,
 ) -> process.ContainedVerifierResult:
     if type(result) is not process.ContainedVerifierResult:
         raise FinancialEngineContainmentError("engine_containment")
@@ -270,7 +180,7 @@ def _validate_contained_result(
 
 
 def _run_pinned(
-    release: FinancialEngineRelease | FinancialCorrectionTransitionRelease,
+    release: FinancialCorrectionTransitionRelease,
     arguments: tuple[str, ...],
     frame: bytes,
     *,
@@ -300,7 +210,7 @@ def _run_pinned(
 
 
 def _execution_fields(
-    release: FinancialEngineRelease | FinancialCorrectionTransitionRelease,
+    release: FinancialCorrectionTransitionRelease,
     frame: bytes,
     contained: process.ContainedVerifierResult,
 ) -> dict[str, Any]:
@@ -318,60 +228,6 @@ def _execution_fields(
         "active_process_limit": contained.active_process_limit,
         "child_process_count": contained.child_process_count,
     }
-
-
-def evaluate_financial_snapshot(
-    connection: sqlite3.Connection,
-    *,
-    release: FinancialEngineRelease,
-    obligation_id: str,
-    authority_context: semantic.TrustedAuthorityContext,
-    evaluation_time_ms: int,
-    expected_config: object,
-    expected_scope: object,
-    expected_mode: str,
-    expected_owner_id: str,
-    expected_continuity_epoch: int | None = None,
-    max_fact_rows: int = semantic.MAX_FACT_ROWS,
-) -> FinancialEngineExecution:
-    """Evaluate one owner snapshot (BLFIN02 -> BLFRES02).  Not on the owner's live path."""
-
-    if type(release) is not FinancialEngineRelease:
-        raise FinancialEngineConfigError("engine_release_type")
-    _capture_artifact_identity(release)
-    if type(connection) is not sqlite3.Connection or not connection.in_transaction:
-        raise FinancialEngineTransactionError("engine_transaction_required")
-    try:
-        snapshot = semantic.build_locked_semantic_snapshot(
-            connection,
-            obligation_id=obligation_id,
-            authority_context=authority_context,
-            evaluation_time_ms=evaluation_time_ms,
-            expected_config=expected_config,
-            expected_scope=expected_scope,
-            expected_mode=expected_mode,
-            expected_owner_id=expected_owner_id,
-            expected_continuity_epoch=expected_continuity_epoch,
-            max_fact_rows=max_fact_rows,
-        )
-    except semantic.SemanticAdapterError:
-        raise FinancialEngineSnapshotError("engine_snapshot") from None
-    try:
-        input_wire = semantic.encode_blfin02_input(snapshot)
-    except semantic.SemanticAdapterError:
-        raise FinancialEngineInputError("engine_input") from None
-    if not 0 < len(input_wire) <= release.input_max_bytes:
-        raise FinancialEngineInputError("engine_input_contract")
-    contained = _run_pinned(release, ENGINE_ARGUMENTS, input_wire, failure_code="engine_containment")
-    try:
-        result = semantic.decode_blfres02_result(contained.stdout, expected_snapshot=snapshot)
-    except semantic.SemanticAdapterError:
-        raise FinancialEngineResultError("engine_result") from None
-    return FinancialEngineExecution(
-        result=result,
-        snapshot_digest=snapshot.snapshot_digest,
-        **_execution_fields(release, input_wire, contained),
-    )
 
 
 def _transition_digest(value: object, label: str) -> bytes:
@@ -1428,9 +1284,9 @@ def run_correction_transition_v1(
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
 
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
-EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 5_707_264
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 5_707_776
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "956CB88F2CCEC6ABD9DCFC13D4CE1B64E6E17B0338971C5702EB2CFE2A143816"
+    "BE5EB80EB4BD43A97846A4FB6CAA54FAF4E1DB6629B43B9705D0657C7E8AE891"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0
@@ -1515,7 +1371,6 @@ def evaluate_live(
 
 
 __all__ = (
-    "ENGINE_ARGUMENTS",
     "CORRECTION_TRANSITION_OPERATION",
     "CORRECTION_TRANSITION_ARGUMENTS",
     "CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES",
@@ -1528,18 +1383,12 @@ __all__ = (
     "FinancialEngineContainmentError",
     "FinancialEngineConfigError",
     "FinancialEngineError",
-    "FinancialEngineExecution",
     "FinancialEngineInputError",
-    "FinancialEngineRelease",
     "FinancialEngineResultError",
-    "FinancialEngineSnapshotError",
-    "FinancialEngineTransactionError",
     "FinancialEngineTransitionUnavailable",
     "MAX_CORRECTION_TRANSITION_BYTES",
-    "MAX_ENGINE_INPUT_BYTES",
     "MAX_ENGINE_JOB_MEMORY_CAP_BYTES",
     "evaluate_live",
-    "evaluate_financial_snapshot",
     "encode_correction_transition_request",
     "load_correction_transition_release",
     "decode_correction_transition_result",

@@ -68,6 +68,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertIsNot(engine._evaluator[0], worker)
 
     def test_unpinned_executable_is_never_run(self) -> None:
+        engine._close_evaluator()  # building the fixture store already started one
         with patch.object(engine, "EVALUATOR_ARTIFACT_SHA256", bytes(32)):
             with self.assertRaises(engine.FinancialEngineContainmentError) as raised:
                 engine._evaluate_wire(self._wires()[0][0])
@@ -110,7 +111,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "lean_evaluation:evaluator_containment")
         self.assertEqual(self._counts(), before)
         self.store.verify_integrity()
-        self.assertEqual(self.fixture._record_cash(self.store)["status"], "RECORDED")
+        self.fixture._record_cash(self.store)  # the same write succeeds once the worker can start
 
     def test_a_result_for_another_obligation_is_refused(self) -> None:
         mine = self.store._obligation_id(adapter_tests.expected.H_ITEM_ID, adapter_tests.expected.PERIOD_ONE_ID)

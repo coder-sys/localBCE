@@ -288,20 +288,15 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         with patch.object(
             store,
             "_recompute_obligation",
-            side_effect=AssertionError("python_recompute_fallback"),
+            side_effect=AssertionError("separate_evaluation_during_transition"),
         ) as recompute, patch.object(
             store,
             "_apply_accepted_correction_transition",
             side_effect=AssertionError("apply_without_lean_acceptance"),
-        ) as apply_accepted, patch.object(
-            financial_engine,
-            "evaluate_financial_snapshot",
-            side_effect=AssertionError("evaluation_engine_fallback"),
-        ) as evaluation_engine:
+        ) as apply_accepted:
             yield
         recompute.assert_not_called()
         apply_accepted.assert_not_called()
-        evaluation_engine.assert_not_called()
 
     def _prepare_h_claim(self) -> tuple[FinancialOwner, str, dict[str, Any]]:
         store = self._build_base_for_correction()

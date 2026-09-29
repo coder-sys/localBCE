@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 import json
 import re
 import sqlite3
-from typing import Any, Callable, Final, Mapping
+from typing import Any, Final, Mapping
 
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
@@ -49,7 +49,6 @@ SEMANTIC_INPUT_SCHEMA: Final[str] = "RR/FINANCIAL/SEMANTIC-INPUT/v1"
 SEMANTIC_INPUT_VERSION: Final[int] = 1
 MAX_FACT_ROWS: Final[int] = 256
 MAX_SNAPSHOT_BYTES: Final[int] = 4 * 1024 * 1024
-MAX_RESULT_BYTES: Final[int] = 1 * 1024 * 1024
 MAX_JSON_COLUMN_BYTES: Final[int] = independent.MAX_JSON_BYTES
 _SNAPSHOT_DOMAIN: Final[bytes] = b"RR/FINANCIAL/SEMANTIC-INPUT/v1\x00"
 _HEX_DIGEST = re.compile(r"[0-9A-F]{128}\Z")
@@ -89,15 +88,6 @@ def _time(value: object, label: str) -> int:
 
 def _cents(value: object, label: str, *, positive: bool = False) -> int:
     if type(value) is not int or abs(value) > owner._MAX_CENTS or (positive and value <= 0):
-        _fail(SemanticAdapterIntegrityError, label)
-    return value
-
-
-def _add(left: int, right: int, label: str = "cents_overflow") -> int:
-    if type(left) is not int or type(right) is not int:
-        _fail(SemanticAdapterIntegrityError, label)
-    value = left + right
-    if value < -owner._MAX_CENTS or value > owner._MAX_CENTS:
         _fail(SemanticAdapterIntegrityError, label)
     return value
 
@@ -958,39 +948,7 @@ def _encode_blfres02_result(result: DecodedLeanResult) -> bytes:
     return writer.finish(label="result_size")
 
 
-def _completion_time_from_snapshot(data: Mapping[str, Any]) -> int | None:
-    obligation = _wire_mapping(data["obligation"], "obligation")
-    entries: list[tuple[int, int]] = []
-    for determination in data["determinations"]:
-        if determination["decision"] == "OFFSET_AUTHORIZED":
-            entries.append((determination["decided_at_ms"], determination["amount_cents"]))
-    for payment in data["payments"]:
-        if payment["active"] == 1:
-            entries.append((payment["event_at_ms"], payment["amount_cents"]))
-    total = 0
-    for at_ms, amount in sorted(entries, key=lambda value: (value[0], value[1])):
-        total = _add(total, amount)
-        if total >= obligation["owed_cents"]:
-            return at_ms
-    active_cash = 0
-    for payment in data["payments"]:
-        if payment["active"] == 1:
-            active_cash = _add(active_cash, payment["amount_cents"])
-    if _add(obligation["lawful_adjustment_cents"], active_cash) >= obligation["owed_cents"] and entries:
-        return max(value[0] for value in entries)
-    return None
-
-
-def _bind_result_context(result: DecodedLeanResult, data: Mapping[str, Any]) -> None:
-    """A snapshot result: its identity, the receipt's evidence ids, and the snapshot's completion."""
-    current = _wire_mapping(data["current_evaluation"], "current_evaluation")
-    receipt = _wire_mapping(current["receipt"], "current_receipt")
-    _bind_result_identity(result, data, tuple(receipt["evidence_ids"]))
-    if result.completion_at_ms != _completion_time_from_snapshot(data):
-        _fail(SemanticAdapterIntegrityError, "result_completion")
-
-
-def _bind_result_identity(result: DecodedLeanResult, data: Mapping[str, Any], evidence_ids: tuple[str, ...]) -> None:
+def _bind_result_identity(result: DecodedLeanResult, data: Mapping[str, Any]) -> None:
     """Everything a result must share with the input it evaluated; none of it is a decision."""
     scope = _wire_mapping(data["scope"], "scope")
     owner_body = _wire_mapping(data["owner"], "owner")
@@ -1024,55 +982,14 @@ def _bind_result_identity(result: DecodedLeanResult, data: Mapping[str, Any], ev
         _fail(SemanticAdapterCodecError, "result_time_binding")
     if result.rule_version != obligation["rule_version"] or result.rule_version != pack_fields["version"]:
         _fail(SemanticAdapterIntegrityError, "result_rule_version")
-    if result.evidence_ids != evidence_ids:
+    if result.evidence_ids != tuple(evidence["evidence_id"] for evidence in data["evidence"]):
         _fail(SemanticAdapterIntegrityError, "result_evidence_ids")
-
-
-def _validate_decoded_result(result: DecodedLeanResult, snapshot: LockedSemanticSnapshot) -> None:
-    data = snapshot.data
-    _bind_result_context(result, data)
-    obligation = _wire_mapping(data["obligation"], "obligation")
-    expected_values = {
-        "owed_cents": obligation["owed_cents"],
-        "claimed_adjustment_cents": obligation["claimed_adjustment_cents"],
-        "lawful_adjustment_cents": obligation["lawful_adjustment_cents"],
-        "received_cash_cents": obligation["received_cash_cents"],
-        "shortfall_cents": obligation["shortfall_cents"],
-        "overage_cents": obligation["overage_cents"],
-        "cash_satisfied": obligation["cash_satisfied"],
-        "amount_satisfied": obligation["amount_satisfied"],
-        "timely": obligation["timely"],
-        "reporting_complete": obligation["reporting_complete"],
-        "verification_status": obligation["verification_status"],
-        "case_status": obligation["case_status"],
-        "delivery_status": obligation["delivery_status"],
-    }
-    for field, expected_value in expected_values.items():
-        if getattr(result, field) != expected_value:
-            _fail(SemanticAdapterIntegrityError, f"result_{field}")
-
-
-def decode_blfres02_result(
-    payload: bytes,
-    *,
-    expected_snapshot: LockedSemanticSnapshot,
-) -> DecodedLeanResult:
-    """Decode, canonically re-encode, and bind one Engine BLFRES02 result."""
-
-    expected_snapshot = _require_validated_snapshot(expected_snapshot, "result_snapshot_type")
-    return _decode_blfres02(payload, lambda result: _validate_decoded_result(result, expected_snapshot))
 
 
 def decode_live_result(payload: bytes, data: Mapping[str, Any]) -> DecodedLeanResult:
     """Decode the worker's BLFRES02 answer to ``live_evaluation_input`` and bind it to that input."""
 
-    return _decode_blfres02(payload, lambda result: _bind_result_identity(
-        result, data, tuple(evidence["evidence_id"] for evidence in data["evidence"])
-    ))
-
-
-def _decode_blfres02(payload: bytes, bind: Callable[[DecodedLeanResult], None]) -> DecodedLeanResult:
-    reader = _WireReader(payload, max_bytes=MAX_RESULT_BYTES)
+    reader = _WireReader(payload, max_bytes=MAX_WIRE_BYTES)
     if reader.take(len(BLFRES02_MAGIC), "result_magic") != BLFRES02_MAGIC:
         _fail(SemanticAdapterCodecError, "result_magic")
     try:
@@ -1117,7 +1034,7 @@ def _decode_blfres02(payload: bytes, bind: Callable[[DecodedLeanResult], None]) 
             delivery_status=_read_tag(reader, _DELIVERY_STATUS_TAGS, "delivery_status"),
         )
         reader.finish()
-        bind(result)
+        _bind_result_identity(result, data)
         if _encode_blfres02_result(result) != payload:
             _fail(SemanticAdapterCodecError, "result_canonical")
         return result
@@ -2181,7 +2098,7 @@ def bind_resulting_state(
     )
     if encode_blfin02_input(post) != mutation["resulting_input_wire"]:
         _fail(SemanticAdapterIntegrityError, "resulting_input")
-    _bind_result_context(mutation["resulting_result"], post.data)
+    _bind_result_identity(mutation["resulting_result"], post.data)
 
 
 __all__ = [
@@ -2202,7 +2119,6 @@ __all__ = [
     "TrustedAuthorityContext",
     "bind_resulting_state",
     "build_locked_semantic_snapshot",
-    "decode_blfres02_result",
     "decode_live_result",
     "encode_blfin02_input",
     "encode_blfres02_result",

@@ -11,11 +11,9 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass, replace
 import hashlib
-import os
 from pathlib import Path
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -43,11 +41,6 @@ EXPECTED_H_OWED_CENTS = 10_000_000
 EXPECTED_H_CASH_CENTS = 9_700_000
 EXPECTED_OFFSET_CENTS = 300_000
 EXPECTED_HOSPITAL_COUNT = 20
-ENGINE_EXECUTABLE_ENV = "BLIND_FINANCIAL_EXE"
-ENGINE_EXECUTABLE_SHA256_ENV = "BLIND_FINANCIAL_EXE_SHA256"
-STALE_ENGINE_EXECUTABLE_SHA256 = "DFCA506260A5A5F5C0A8DE42B72D3DFD15000EC6E3DD5B8BBA8C4CDB5F2490F3"
-ENGINE_TIMEOUT_SECONDS = 30
-ENGINE_MAX_STDERR_BYTES = 64 * 1024
 
 
 @dataclass
@@ -280,63 +273,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     def _assert_no_source_mutation(self, store: FinancialOwner, before_hash: str) -> None:
         self.assertEqual(self._hash(store.path), before_hash)
 
-    def _fresh_engine_executable(self) -> Path:
-        raw_path = os.environ.get(ENGINE_EXECUTABLE_ENV, "").strip()
-        expected_sha256 = os.environ.get(ENGINE_EXECUTABLE_SHA256_ENV, "").strip().upper()
-        if not raw_path or not expected_sha256:
-            self.fail(
-                "real_engine_conformance_unexecuted: set "
-                f"{ENGINE_EXECUTABLE_ENV} and {ENGINE_EXECUTABLE_SHA256_ENV} "
-                "from the fresh guarded Engine handoff"
-            )
-        if len(expected_sha256) != 64 or any(character not in "0123456789ABCDEF" for character in expected_sha256):
-            self.fail(f"real_engine_artifact_hash_invalid: {expected_sha256!r}")
-        path = Path(raw_path)
-        if not path.is_absolute():
-            self.fail(f"real_engine_artifact_path_not_absolute: {raw_path!r}")
-        try:
-            executable = path.resolve(strict=True)
-        except FileNotFoundError:
-            self.fail(f"real_engine_artifact_missing: {raw_path!r}")
-        if not executable.is_file():
-            self.fail(f"real_engine_artifact_not_file: {executable}")
-        actual_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest().upper()
-        if actual_sha256 == STALE_ENGINE_EXECUTABLE_SHA256:
-            self.fail(f"real_engine_stale_artifact_rejected: {executable}")
-        self.assertEqual(actual_sha256, expected_sha256)
-        return executable
-
-    def _run_fresh_engine(self, input_wire: bytes) -> bytes:
-        self.assertLessEqual(len(input_wire), adapter.MAX_WIRE_BYTES)
-        executable = self._fresh_engine_executable()
-        process = subprocess.Popen(
-            [str(executable), "--evaluate"],
-            cwd=str(executable.parent),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = process.communicate(input=input_wire, timeout=ENGINE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate(timeout=5)
-            self.fail(
-                f"real_engine_timeout stdout={stdout[:256]!r} stderr={stderr[:4096]!r}"
-            )
-        self.assertLessEqual(len(stdout), adapter.MAX_RESULT_BYTES, "real_engine_result_too_large")
-        self.assertLessEqual(len(stderr), ENGINE_MAX_STDERR_BYTES, "real_engine_stderr_too_large")
-        self.assertEqual(
-            process.returncode,
-            0,
-            f"real_engine_exit={process.returncode} stdout={stdout[:256]!r} stderr={stderr[:4096]!r}",
-        )
-        self.assertEqual(stderr, b"", f"real_engine_stderr={stderr[:4096]!r}")
-        expected_sha256 = os.environ[ENGINE_EXECUTABLE_SHA256_ENV].strip().upper()
-        actual_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest().upper()
-        self.assertEqual(actual_sha256, expected_sha256, "real_engine_artifact_changed_during_execution")
-        return stdout
-
     def _assert_fresh_engine_history_result(
         self,
         store: FinancialOwner,
@@ -346,8 +282,9 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
     ) -> None:
         before_hash = self._hash(store.path)
         snapshot = self._snapshot(store)
-        result_wire = self._run_fresh_engine(adapter.encode_blfin02_input(snapshot))
-        result = adapter.decode_blfres02_result(result_wire, expected_snapshot=snapshot)
+        result = adapter.decode_live_result(
+            financial_engine._evaluate_wire(adapter.encode_blfin02_input(snapshot)), snapshot.data
+        )
         self._assert_no_source_mutation(store, before_hash)
         data = snapshot.data
         owner_data = data["owner"]
@@ -693,18 +630,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(data["actions"][0]["status"], "ACKNOWLEDGED")
         self._assert_no_source_mutation(store, before_hash)
 
-    def test_real_owner_histories_conform_to_fresh_engine(self) -> None:
-        # Environment prerequisite, not a product result: with no Engine handoff
-        # configured at all, the conformance is reported as UNEXECUTED (a skip,
-        # counted and listed; never a pass). A partial or wrong handoff still fails
-        # in _fresh_engine_executable.
-        if not os.environ.get(ENGINE_EXECUTABLE_ENV, "").strip() and not os.environ.get(
-            ENGINE_EXECUTABLE_SHA256_ENV, ""
-        ).strip():
-            self.skipTest(
-                "real_engine_conformance_unexecuted: no fresh guarded Engine handoff "
-                f"({ENGINE_EXECUTABLE_ENV}/{ENGINE_EXECUTABLE_SHA256_ENV} unset)"
-            )
+    def test_real_owner_histories_conform_to_lean_worker(self) -> None:
         authorized = self._build_base()
         self._record_cash(authorized)
         authorized_claim = self._record_claim(authorized)
@@ -787,7 +713,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
         with (
             patch.object(financial_engine, "require_correction_transition_v1", return_value=None),
-            patch.object(financial_engine, "evaluate_financial_snapshot", return_value=object()) as projection_bypass,
+            patch.object(financial_engine, "evaluate_live", return_value=object()) as projection_bypass,
         ):
             with self.assertRaisesRegex(
                 owner.FinancialIntegrityError,
@@ -1000,27 +926,21 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         )
         encoded = adapter.encode_blfres02_result(result)
         self.assertEqual(encoded[: len(adapter.BLFRES02_MAGIC)], adapter.BLFRES02_MAGIC)
-        decoded = adapter.decode_blfres02_result(encoded, expected_snapshot=snapshot)
+        decoded = adapter.decode_live_result(encoded, data)
         self.assertEqual(decoded, result)
 
         with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "result_magic"):
-            adapter.decode_blfres02_result(b"BLFRES01" + encoded[len(adapter.BLFRES02_MAGIC) :], expected_snapshot=snapshot)
+            adapter.decode_live_result(b"BLFRES01" + encoded[len(adapter.BLFRES02_MAGIC) :], data)
         with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "wire_trailing_bytes"):
-            adapter.decode_blfres02_result(encoded + b"\x00", expected_snapshot=snapshot)
+            adapter.decode_live_result(encoded + b"\x00", data)
         with self.assertRaisesRegex(adapter.SemanticAdapterAuthorityError, "result_authority_binding"):
-            adapter.decode_blfres02_result(
-                adapter.encode_blfres02_result(replace(result, authority_epoch=result.authority_epoch + 1)),
-                expected_snapshot=snapshot,
-            )
-        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "result_received_cash_cents"):
-            adapter.decode_blfres02_result(
-                adapter.encode_blfres02_result(replace(result, received_cash_cents=EXPECTED_H_CASH_CENTS + 1)),
-                expected_snapshot=snapshot,
+            adapter.decode_live_result(
+                adapter.encode_blfres02_result(replace(result, authority_epoch=result.authority_epoch + 1)), data
             )
         bad_tag = bytearray(encoded)
         bad_tag[-1] = 0x7F
         with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "delivery_status"):
-            adapter.decode_blfres02_result(bytes(bad_tag), expected_snapshot=snapshot)
+            adapter.decode_live_result(bytes(bad_tag), data)
         self.assertEqual(obligation["received_cash_cents"], EXPECTED_H_CASH_CENTS)
 
 

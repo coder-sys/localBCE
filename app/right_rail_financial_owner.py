@@ -2383,6 +2383,7 @@ class FinancialOwner:
                     connection.execute("BEGIN IMMEDIATE")
                     self._verify_funding_projection(connection)
                     self._batch.rows = self._committed_row_counts(connection)
+                    self._batch.evaluated = set()  # obligations Lean evaluated in this write
                 yield connection
                 if began:
                     self._verify_funding_projection(connection)
@@ -2394,6 +2395,8 @@ class FinancialOwner:
                     if _CHECK_ROW_CACHE and rows != _count_rows(connection):
                         raise AssertionError(f"row_count_cache: {rows} != {_count_rows(connection)}")
                     after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
+                    if self._batch.evaluated:
+                        self._verify_before_commit(connection, "evaluation", *sorted(self._batch.evaluated))
                     if before_commit is not None:
                         before_commit(connection)
                     connection.execute("COMMIT")
@@ -2408,6 +2411,16 @@ class FinancialOwner:
                 self._batch.now = outer_now
                 if began:
                     self._batch.rows = None
+
+    def _verify_before_commit(self, connection: sqlite3.Connection, label: str, *obligation_ids: str) -> None:
+        """The independent checker recomputes what Lean decided from the exact rows written, before COMMIT."""
+
+        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_obligation_connection
+
+        try:
+            verify_obligation_connection(connection, *obligation_ids, **self._checker_expectations())
+        except IndependentFinancialError as error:
+            _fail(FinancialIntegrityError, f"{label}_verification:{error}")
 
     def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]], *, cash_file_context=None):
         """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
@@ -2711,29 +2724,6 @@ class FinancialOwner:
         )
         return "INSERTED"
 
-    def _evidence_for(self, connection: sqlite3.Connection, item_id: str) -> tuple[str, ...]:
-        return tuple(str(row[0]) for row in connection.execute("SELECT evidence_id FROM evidence WHERE item_id=? ORDER BY evidence_id", (item_id,)))
-
-    def _case_status(self, connection: sqlite3.Connection, obligation_id: str) -> str:
-        row = connection.execute("SELECT status FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1", (obligation_id,)).fetchone()
-        return "OPEN" if row is None else str(row[0])
-
-    def _delivery_status(self, connection: sqlite3.Connection, obligation_id: str) -> str:
-        row = connection.execute("SELECT a.status FROM actions a WHERE a.obligation_id=? ORDER BY a.revision DESC,a.action_id DESC LIMIT 1", (obligation_id,)).fetchone()
-        return "NONE" if row is None else str(row[0])
-
-    def _completion_time(self, connection: sqlite3.Connection, obligation_id: str, owed_cents: int, lawful_cents: int) -> int | None:
-        entries: list[tuple[int, int]] = [(int(row[0]), int(row[1])) for row in connection.execute("SELECT decided_at_ms,amount_cents FROM determinations WHERE obligation_id=? AND decision='OFFSET_AUTHORIZED' ORDER BY decided_at_ms,determination_id", (obligation_id,))]
-        entries.extend((int(row[0]), int(row[1])) for row in connection.execute("SELECT event_at_ms,amount_cents FROM payments WHERE obligation_id=? AND active=1 ORDER BY event_at_ms,payment_id", (obligation_id,)))
-        total = 0
-        for at_ms, amount in sorted(entries, key=lambda value: (value[0], value[1])):
-            total = _add(total, amount)
-            if total >= owed_cents:
-                return at_ms
-        if lawful_cents + _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1", (obligation_id,))) >= owed_cents and entries:
-            return max(value[0] for value in entries)
-        return None
-
     def _recompute_and_record(
         self,
         connection: sqlite3.Connection,
@@ -2758,7 +2748,7 @@ class FinancialOwner:
         )
         return evaluation
 
-    def _recompute_obligation_lean(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
+    def _recompute_obligation(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
         """Lean ``evaluate`` decides; this only binds its declared result to the three writes (V.1)."""
 
         from app import right_rail_financial_engine as financial_engine
@@ -2775,6 +2765,7 @@ class FinancialOwner:
             )
         except (FinancialError, financial_engine.FinancialEngineError) as error:
             _fail(FinancialIntegrityError, f"lean_evaluation:{error}")
+        self._batch.evaluated.add(obligation_id)
         evaluation_id = f"evaluation:{obligation_id}:r{decided.after_revision}"
         result = {
             "evaluation_id": evaluation_id,
@@ -2809,89 +2800,6 @@ class FinancialOwner:
         if updated.rowcount != 1:
             _fail(FinancialRevisionError, "obligation_revision_conflict")
         return decided.before_revision, decided.after_revision, stored_evaluation
-
-    def _recompute_obligation(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
-        old = self._obligation_by_id(connection, obligation_id)
-        pack, calculation, adjustment = self._control_pack_for_obligation(connection, obligation_id)
-        if int(old["rule_version"]) != pack.version:
-            _fail(FinancialIntegrityError, "control_pack_rule_version")
-        if calculation != "PER_RECIPIENT":
-            _fail(FinancialIntegrityError, "control_pack_calculation")
-        cash = _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1", (obligation_id,)))
-        if adjustment != "AUTHORIZED_OFFSET":
-            _fail(FinancialIntegrityError, "control_pack_adjustment")
-        claimed = _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM claimed_adjustments WHERE obligation_id=? AND status IN ('CLAIMED','AUTHORIZED')", (obligation_id,)))
-        lawful = _sum_cents(int(row[0]) for row in connection.execute("SELECT amount_cents FROM claimed_adjustments WHERE obligation_id=? AND status='AUTHORIZED'", (obligation_id,)))
-        total = _add(cash, lawful)
-        owed = int(old["owed_cents"])
-        shortfall = max(owed - total, 0)
-        overage = max(total - owed, 0)
-        evidence_ids = self._evidence_for(connection, str(old["item_id"]))
-        future_evidence = connection.execute(
-            "SELECT 1 FROM evidence WHERE item_id=? AND received_at_ms>? LIMIT 1",
-            (old["item_id"], now_ms),
-        ).fetchone()
-        if future_evidence is not None:
-            _fail(FinancialIntegrityError, "evaluation_evidence_chronology")
-        conflict_count = int(connection.execute("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?", (obligation_id,)).fetchone()[0])
-        evidence_count = int(connection.execute("SELECT COUNT(*) FROM evidence WHERE item_id=?", (old["item_id"],)).fetchone()[0])
-        verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
-        completion = self._completion_time(connection, obligation_id, owed, lawful)
-        timely = int(completion is not None and completion <= int(old["due_at_ms"]))
-        amount_satisfied = int(total >= owed)
-        cash_satisfied = int(cash >= owed)
-        reporting_complete = int(old["reporting_complete"])
-        delivery = self._delivery_status(connection, obligation_id)
-        prior_case = self._case_status(connection, obligation_id)
-        if amount_satisfied and reporting_complete:
-            case_status = "RESOLVED"
-        elif amount_satisfied:
-            case_status = "ACTIONED"
-        elif prior_case in {"CORRECTION_REQUIRED", "AUTHORIZED"}:
-            case_status = prior_case
-        else:
-            case_status = "OPEN"
-        before_revision = int(old["revision"])
-        after_revision = before_revision + 1
-        evaluation_id = f"evaluation:{obligation_id}:r{after_revision}"
-        result = {
-            "evaluation_id": evaluation_id,
-            "obligation_id": obligation_id,
-            "revision": after_revision,
-            "rule_version": int(old["rule_version"]),
-            "evidence_ids": list(evidence_ids),
-            "authority_id": self.trusted_authority.authority_id,
-            "evaluated_at_ms": now_ms,
-            "owed_cents": owed,
-            "claimed_adjustment_cents": claimed,
-            "lawful_adjustment_cents": lawful,
-            "received_cash_cents": cash,
-            "shortfall_cents": shortfall,
-            "overage_cents": overage,
-            "cash_satisfied": cash_satisfied,
-            "amount_satisfied": amount_satisfied,
-            "timely": timely,
-            "reporting_complete": reporting_complete,
-            "verification_status": verification,
-            "case_status": case_status,
-            "delivery_status": delivery,
-        }
-        connection.execute("UPDATE cases SET status=?,updated_at_ms=? WHERE obligation_id=?", (case_status, now_ms, obligation_id))
-        stored_evaluation = self._insert_evaluation(
-            connection,
-            result=result,
-            pack=pack,
-            evidence_bindings=self._evidence_bindings(connection, evidence_ids),
-            authority_epoch=self.trusted_authority.epoch,
-            authority_digest=self.trusted_authority.digest,
-        )
-        updated = connection.execute(
-            "UPDATE obligations SET revision=?,claimed_adjustment_cents=?,lawful_adjustment_cents=?,received_cash_cents=?,shortfall_cents=?,overage_cents=?,cash_satisfied=?,amount_satisfied=?,timely=?,verification_status=?,case_status=?,delivery_status=?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?",
-            (after_revision, claimed, lawful, cash, shortfall, overage, cash_satisfied, amount_satisfied, timely, verification, case_status, delivery, evaluation_id, now_ms, obligation_id, before_revision),
-        )
-        if updated.rowcount != 1:
-            _fail(FinancialRevisionError, "obligation_revision_conflict")
-        return before_revision, after_revision, stored_evaluation
 
     def _scope_pack(self, pack: ControlPack) -> None:
         if type(pack) is not ControlPack:
@@ -4788,10 +4696,17 @@ class FinancialOwner:
             "updated_at_ms": mutation_time,
         })
         try:  # Lean's declared post-state (input and result context, at mutation time) is the one these writes produced.
+            authority_context = semantic.TrustedAuthorityContext.from_authority(authority)
             semantic.bind_resulting_state(
-                connection, snapshot, authority_context=semantic.TrustedAuthorityContext.from_authority(authority), evaluation_time_ms=mutation_time, mutation=mutation,
+                connection, snapshot, authority_context=authority_context, evaluation_time_ms=mutation_time, mutation=mutation,
             )
-        except semantic.SemanticAdapterError as error:
+            lean = financial_engine.evaluate_live(
+                connection, obligation_id=obligation_id, authority_context=authority_context, evaluation_time_ms=mutation_time,
+                verification={"scope": self._scope_value(), "owner_id": self.owner_id, "mode": self.mode},
+            )
+            if lean.completion_at_ms != financial_result.completion_at_ms:
+                _fail(FinancialIntegrityError, "correction_post_state:result_completion")
+        except (semantic.SemanticAdapterError, financial_engine.FinancialEngineError) as error:
             _fail(FinancialIntegrityError, f"correction_post_state:{error}")
 
         evaluation_receipt = self._insert_evaluation(
@@ -4922,12 +4837,7 @@ class FinancialOwner:
             },
             committed_at_ms=int(event["committed_at_ms"]),
         )
-        from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_obligation_connection
-
-        try:  # before COMMIT: the independent checker recomputes what Lean decided from the exact rows written
-            verify_obligation_connection(connection, obligation_id, **self._checker_expectations())
-        except IndependentFinancialError as error:
-            _fail(FinancialIntegrityError, f"correction_verification:{error}")
+        self._verify_before_commit(connection, "correction", obligation_id)
         return {
             "status": "CORRECTION_AUTHORIZED",
             "action_id": action_id,

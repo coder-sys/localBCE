@@ -4056,8 +4056,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(first_result["action_id"], first_action_id)
 
         before = store.export_continuity()
-        clock.value = low_clock_value  # the checker refuses a history whose commit times run backward
-        with self.assertRaisesRegex(FinancialIntegrityError, "event_commit_order"):
+        clock.value = low_clock_value  # a history whose commit times run backward; Lean refuses it first (the checker would too)
+        with self.assertRaisesRegex(FinancialIntegrityError, "lean_evaluation:obligation_after_evaluation"):
             store.record_offset_claim(
                 item_id=expected.H_ITEM_ID,
                 claim_id="claim:clock-rollback:second",
@@ -4501,8 +4501,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base(clock=clock)
         self._record_h_support(store)
         before = store.path.read_bytes()
-        clock.value -= 10_000  # the owner clock steps back behind evidence it already received
-        with self.assertRaisesRegex(FinancialIntegrityError, "evaluation_evidence_chronology"):
+        clock.value -= 10_000  # the owner clock steps back behind evidence it already received; Lean refuses first
+        with self.assertRaisesRegex(FinancialIntegrityError, "lean_evaluation:obligation_after_evaluation"):
             store.evaluate_obligation(expected.H_ITEM_ID)
         self.assertEqual(store.path.read_bytes(), before)
         self._assert_verified(store)
@@ -5385,10 +5385,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute("UPDATE cases SET reason=?,next_action_owner=?,due_at_ms=?,status=?,updated_at_ms=? WHERE obligation_id=?", (reason, owner, due_at_ms, status, now_ms, obligation_id))
 
         hidden = corrected()
-        with patch.object(FinancialOwner, "_ensure_case", reset):
-            hidden.record_offset_claim(**claim_b)
-        with self.assertRaisesRegex(IndependentFinancialError, "^evaluation:input-projection:case_status$"):
-            self._assert_verified(hidden)
+        hidden_bytes = hidden.path.read_bytes()
+        with patch.object(FinancialOwner, "_ensure_case", reset):  # the write is refused before COMMIT, so the store still opens
+            with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_verification:evaluation:input-projection:case_status$"):
+                hidden.record_offset_claim(**claim_b)
+        self.assertEqual(hidden.path.read_bytes(), hidden_bytes)
+        self._assert_verified(hidden)
 
     def test_retries_are_answered_from_the_command_log(self) -> None:
         store = self._build_base_for_correction()
