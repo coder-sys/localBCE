@@ -80,7 +80,7 @@ class _Kernel:
         self.CompareStringOrdinal = _FakeFunction(self._compare_string_ordinal)
         self.K32GetProcessImageFileNameW = _FakeFunction(self._process_image)
         self.ReadFile = _FakeFunction(self._read_file)
-        self.GetProcessMemoryInfo = _FakeFunction(self._memory_info)
+        self.GetProcessMemoryInfo, self.PeekNamedPipe = _FakeFunction(self._memory_info), _FakeFunction(lambda *_: 1)
         self.InitializeProcThreadAttributeList = _FakeFunction(self._attrs_init)
         self.UpdateProcThreadAttribute = _FakeFunction(self._attrs_update)
         self.DeleteProcThreadAttributeList = _FakeFunction(self._attrs_delete)
