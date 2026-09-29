@@ -2008,11 +2008,11 @@ def live_evaluation_input(
         scope, identity = _read_verified_meta(connection, verification)
         _row, _pack, evidence_by_id, facts = _load_facts(
             connection, obligation_id=obligation_id, scope=scope,
-            evaluation_time_ms=evaluation_time_ms, limit=MAX_FACT_ROWS,
+            evaluation_time_ms=evaluation_time_ms, limit=owner._MAX_ROWS,
         )
         facts["determinations"] = _load_determinations(
             connection, obligation_id=obligation_id, evidence=evidence_by_id, actions=facts["actions"],
-            authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=MAX_FACT_ROWS,
+            authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=owner._MAX_ROWS,
         )
         data = {
             "scope": scope,
