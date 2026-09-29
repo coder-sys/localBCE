@@ -8,66 +8,16 @@ Format approval (2026-09-24, CONSTITUTION V.4): the founder approved the v8 stor
 
 ### Current-source Lean reproduction (2026-09-26, XI.2 record)
 
-- Guard-log line endings: r78 refused the r77 kit (`engine_guard_log_policy_mismatch`):
-  its 99 CRLF records hold the exact v4 policy but the kit's LF-only anchors match
-  none. Predicate unchanged (parse the actual guard evidence; exact fields, counts,
-  floors, exits, cleanup and mutex release; no pass from a receipt alone). Only the
-  three record-ending patterns accept LF or CRLF; control: positive checks for both
-  forms, malformed-ending and adverse-record mutations, independent review, a new
-  complete kit run. Raw log bytes and digest binding are unchanged. Withdrawn: r78
-  verifies no kit.
-- Canonical manifest: r75 refused the r67 kit
-  (`engine_source_manifest_not_canonical_or_current`): the producer sorted native
-  Windows paths before replacing backslashes; the kit requires ordinal order of
-  portable slash paths. Keep that predicate and all identity checks; normalize
-  before sorting, compare with independently built Python canonical bytes, make
-  a new guarded release. Scope: prospective manifests; r67 gains no kit claim.
-- **Predicate:** an exact-source build claim binds the guarded producer receipt,
-  all selected Lean/config bytes, toolchain, executable and both pinned vectors.
-  **Failure:** an older binary's build does not establish reproducibility from a
-  later combined source tree.
-- **Evidence:** r67 built the 46-file source manifest at `61a24519` and
-  reproduced the existing 6,279,168-byte executable byte-for-byte; transition and
-  reuse outputs match both independent expected files. Guard exit zero, cleanup
-  PASS, mutex released. r68 separately compiled all six Lake targets.
-- **Disposition:** extend provenance with this reproduction; keep the historical
-  origin, executable pin and retired-pin registry. **Control:** hashes, raw logs
-  and exact comparisons stay inspectable; the producer's empty stream/process
-  repairs passed a binary I/O regression and independent review.
-- **Scope:** local synthetic build evidence for the recorded source and artifacts; no theorem statement, wire format, decision rule, executable bytes
-  or allowed axiom changed. **Claims withdrawn:** no assurance for later source,
-  whole-system qualification or all-theorem axiom hygiene; native diagnostic
-  axioms and 21 r68 linter warnings remain visible.
+Superseded by the correction-v2 re-pin (below). r67 reproduced the then-pinned 6,279,168-byte
+engine byte-for-byte from 46 source files at `61a24519`; the manifest-order and CRLF guard-log
+predicates were fixed prospectively; no claim for later source. Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
 
 ### Current-engine service-kit connection (2026-09-26, XI.2 record)
 
-- **Predicate:** the release producer requires four exact pinned vector inputs,
-  then requires transition and reuse actual bytes to equal their pinned
-  expected bytes; the kit checks the guarded receipt and the same inventory.
-- **Invariant / failure:** a package exercises the exact engine protocol and
-  carries the checker's pinned retired-engine registry; missing or stale inputs
-  refuse packaging.
-- **Evidence:** the producer still pinned BLFCMD01/BLFCRES1 and BLFCRU01/BLFCRV01
-  (the engine uses CMD02/RES3 and RU02/RV02 and lacks reuse fixtures), and
-  `STATE_FILES` omitted the registry the checker always requires.
-- **Disposition:** replace stale fixture pins with current canonical vectors;
-  retain all comparisons, provenance, resource checks and exact inventory.
-- **Replacement control:** an independent reader derived the reuse baseline from
-  the old immutable fixture (removing only fields ReuseCodec v2 removed);
-  expected assessment bytes were specified before engine execution. A guarded
-  actual/expected comparison, fresh release build and extracted-kit scenario
-  remain required before a packaged-runtime claim.
-- **Scope:** this synthetic current-engine release and kit inventory; no
-  theorem, protocol semantics, guard, authority or cash rule is weakened;
-  fixtures stay pinned until another release record replaces them. **Claims
-  withdrawn:** old reuse-vector evidence does not verify v2; this unchanged-state
-  baseline does not resolve paid-list/stale-shortfall reuse limitations or
-  authorize using reuse to decide live commands.
-
-Felt effect: replacement operators can install and verify the same correction
-engine and history checker, then exercise retry and restore without rebuilding
-package contents by hand. Finance staff's cash command now names the correction
-it pays; an acknowledgment still has zero cash effect.
+Superseded by the correction-v2 re-pin. The release producer and kit require the current
+pinned transition and reuse vectors and the retired-engine registry, and compare actual with
+expected bytes; stale CMD01/RES1 pins were replaced. Old reuse evidence does not verify v2.
+Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
 
 ### Kit evidence source binding (2026-09-28, XI.2 record)
 
