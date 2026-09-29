@@ -513,13 +513,15 @@ theorem Steps.at_most_once {c : Crypto} {s s' s'' : PayerState} {p p' : Payment}
   · simp at h
 
 /-- A second chain-valid certificate for an installed one's tenant and
-    epoch is recorded with it and blocks that tenant and epoch. -/
+    epoch with another public key or shard count is recorded with it and
+    blocks that tenant and epoch; a re-signature of the same body is not one. -/
 theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
     (hc : c.certChainOk e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
-    (he : x.epoch = e.epoch) (hne : x ≠ e) :
+    (he : x.epoch = e.epoch) (hne : x.publicKey ≠ e.publicKey ∨ x.shardCount ≠ e.shardCount) :
     (x, e) ∈ (installCert c s e).1.equivocations ∧ blocked (installCert c s e).1 e.tenantId e.epoch = true := by
-  have hb : (x.tenantId == e.tenantId && x.epoch == e.epoch && x != e) = true := by
-    rw [Bool.and_eq_true, Bool.and_eq_true, beq_iff_eq, beq_iff_eq, bne_iff_ne]
+  have hb : (x.tenantId == e.tenantId && x.epoch == e.epoch &&
+      (x.publicKey != e.publicKey || x.shardCount != e.shardCount)) = true := by
+    rw [Bool.and_eq_true, Bool.and_eq_true, beq_iff_eq, beq_iff_eq, Bool.or_eq_true, bne_iff_ne, bne_iff_ne]
     exact ⟨⟨ht, he⟩, hne⟩
   have hm : (x, e) ∈ (installCert c s e).1.equivocations := by
     simp only [installCert, hc, if_true]

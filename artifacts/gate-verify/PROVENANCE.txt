@@ -1,0 +1,38 @@
+gate_verify.exe: the signer's self-check for gate checkpoints (PQ signing M1); the payer's verifier is M2 and is not built
+
+Lean/Lake executable `gate_verify` (root BlindLedger.Gate.VerifyCli), built from the
+`lean/` tree whose manifest is recorded below (branch pq-m1, review-fix commit).
+Stateless: input `root_pk (2592) || u32 BE cert length || KEY-CERT || signed checkpoint`;
+output `GATE_VERIFY=ACCEPT` (exit 0) or `REJECT` (exit 1); exit 2 for malformed input.
+ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
+(Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
+
+- Size: 4,207,616 bytes
+- SHA-256: fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06
+  (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
+- Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
+  -Wl,--no-insert-timestamp (lakefile.toml).
+- Source manifest, 55 files (sha256 and path, sorted): SHA-256
+  0482e14cf80ebebba1e4634e2f1d4e536ec845fd49ba7d054f608079f19743ff, 6,023 bytes;
+  copy at C:\Users\neers\rrb\gate\pqm1-gv3-manifest.txt.
+  tests/test_right_rail_gate_formats.py recomputes it from lean/ and fails on any change
+  under lean/ until this file is updated after a rebuild.
+
+Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
+directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
+each under the guard; both gave the same SHA-256 (also equal to the in-tree build).
+- Guard v7 logs (C:\Users\neers\rrb\logs): pqm1-gv3a-a1 and pqm1-gv3b-a1. Each: child exit 0;
+  start floor 4,029,372,048; minimum free 4,300,939,264 (a) and 4,425,465,856 (b); peak working
+  set 587,255,808 and 611,164,160.
+- The engine pin (../engine-correction) is not rebuilt: lakefile.toml is in its source
+  manifest and gained the gate_verify entry before this change (its comment was relabelled
+  later), so that manifest already differs; the engine pin is void on this tree until re-pin.
+
+Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 559188c3cb024f35dd6af320eff7c799668c36337b59964e7fc13f9495933fe6
+  (before the equivocation fix: a re-signature of the same certificate body is no longer
+  equivocation; Spec.lean, Theorems.lean, Vectors.lean, Keccak.lean and lakefile.toml changed).
+- The signer worker rust/gate_mldsa87 (pin in rust/gate_mldsa87/rr_gate_mldsa87.sha256):
+  34047d3391ba6f6e898b2e5e59010db4c7715a435886a9b9e71d12b8ef15d887 (before `sign` verified its own
+  signature and `keygen` synced the key file), and the earlier seed-file worker with a `verify` mode,
+  af8743c70690f85a983762f93ad9ded731e514e106bfdb8c9d1c1cd49fed116b.
