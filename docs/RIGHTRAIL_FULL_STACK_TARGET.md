@@ -330,9 +330,8 @@ and scheduled destruction are open (§12).
 
 - **ML-DSA-87** (FIPS 204 algorithm, non-validated AWS-LC build) signs batch and
  checkpoint bytes, one signature per batch (§5). Synthetic tenants: a
- DPAPI-sealed key behind a pinned worker, every signature accepted by the Lean
- `gate_verify` first; the M1 root is ML-DSA-87 in laptop custody, not the HSM
- LMS/XMSS root below.
+ DPAPI-sealed key behind a pinned worker, each signature accepted by the Lean
+ `gate_verify` first; the M1 root is a laptop key, not the HSM LMS/XMSS root below.
 - **Long-lived root and anchor keys use LMS/XMSS** (SP 800-208), not
  SLH-DSA: no FIPS-140-3-validated cloud HSM offers SLH-DSA today, while
  LMS/XMSS is HSM-backed now (e.g. Thales Luna T7, certificate #5450). SLH-DSA stays available as an optional software-verified second
