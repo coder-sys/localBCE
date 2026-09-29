@@ -436,6 +436,8 @@ Found by reading the code; none has been run.
 The Python semantic adapter currently refuses CANCELLED rows at load
 (`right_rail_financial_semantic_adapter.py` :1593, :1613-1614, :1624-1625), so the behaviour
 test for Lean skipping a CANCELLED request lands with the command that first writes CANCELLED.
+When cancel lands, the checker must count a cancellation only from the revision it happened at (as
+`paid_at` does for payments), not by current status; today it counts every request and refuses CANCELLED.
 
 **B. Result decoding** — Lean `decodeCorrectionTransitionResult` vs Python
 `decode_correction_transition_result`.
@@ -450,7 +452,7 @@ test for Lean skipping a CANCELLED request lands with the command that first wri
    BLFIN02's magic, not well-formedness (Owner compares it to its own
    re-encoding, `right_rail_financial_semantic_adapter.py` line 2130); skips
    resulting result's context/authority/pack agreement with resulting
-   input; skips the action-amount formula (Lean decides it, B2); skips
+   input; skips the action-amount formula (the checker applies its own amount and requestable rule before COMMIT); skips
    `committedAtMs = max(decisionAt, ownerNow)`, the `evaluation:<obligation>:
    r<n>` form of inputEvaluationId, `evaluatedAt ≤ decisionAt`, the rejected
    claim in the resulting input, and supporting-evidence coverage of
@@ -461,8 +463,9 @@ test for Lean skipping a CANCELLED request lands with the command that first wri
    correctionPaid to equal its SQL-ordered
    list; `bind_resulting_state` requires the post-write snapshot
    re-encoding to equal the resulting BLFIN02 bytes, then binds the result
-   context; before COMMIT, `verify_obligation_connection` (line 4833)
-   recomputes the written evaluation from the exact rows. A replacement
+   context; before COMMIT, `verify_obligation_connection` (Owner :4874)
+   recomputes the written evaluation from the exact rows and applies the checker's action rules
+   to the obligation's correction actions, amount included. A replacement
    engine violating any of these is refused before anything commits.
 5. DUPLICATE/REJECTED: Python accepts explanation expectedRevision up to
    2^63-1; Lean caps at 10,000.

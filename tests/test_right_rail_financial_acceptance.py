@@ -4716,6 +4716,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             ("evaluation:input-projection:case_status", lambda r, m: {"case_status": "AUTHORIZED"}),
             # Refused before the checker now: the post-state binding covers the result's evidence ids.
             ("post_state:result_evidence_ids", lambda r, m: {"evidence_ids": ()}),
+            # The action amount: one cent off, with a matching payload digest and wire. Only the checker's own rule refuses it.
+            ("action:payload-binding", None),
         )
         for index, (code, change) in enumerate(tampers):
             with self.subTest(index=index, code=code):
@@ -4736,6 +4738,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 def run(release: object, *, request: bytes, change: object = change) -> object:
                     execution = real_run(release, request=request)
                     mutation = declared["mutation"] = execution.result["mutation"]
+                    if change is None:
+                        action, deps = mutation["action"], mutation["dependencies"]
+                        action["amount_cents"] -= 1
+                        action["payload_digest"] = owner._digest(owner._ACTION_DOMAIN, owner._canonical({
+                            "action_id": action["action_id"], "amount_cents": action["amount_cents"], "claim_id": deps["claim_before"]["claim_id"],
+                            "currency": action["currency"], "determination_id": action["determination_id"], "dispatch": "SYNTHETIC_RECORD_ONLY",
+                            "input_evaluation_id": deps["input_evaluation_id"], "input_evaluation_result_digest": owner._hex(deps["input_evaluation_result_digest"]),
+                            "kind": "CORRECTION_PAYMENT_REQUEST", "obligation_id": action["obligation_id"], "revision": action["revision"],
+                        }))
+                        financial_engine._validate_correction_result_shape(execution.result)
+                        return execution
                     wrong = replace(mutation["resulting_result"], **change(mutation["resulting_result"], mutation))
                     mutation["resulting_result"] = wrong
                     mutation["resulting_result_wire"] = semantic.encode_blfres02_result(wrong)
