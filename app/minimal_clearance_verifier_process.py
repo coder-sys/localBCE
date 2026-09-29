@@ -849,6 +849,7 @@ def _environment_block(workspace: Path) -> ctypes.Array:
         "SystemRoot": system_root,
         "WINDIR": windir,
         "PATH": system32,
+        "LEAN_ABORT_ON_PANIC": "1",  # a Lean panic must kill the process, never continue with a default value
         "TEMP": str(workspace),
         "TMP": str(workspace),
     }
@@ -1149,7 +1150,7 @@ def _launch_apis(with_stdin: bool) -> tuple[object, object]:
         "GetCurrentProcess", "GetSystemInfo", "CreateFileW", "GetFileType",
         "GetFileInformationByHandle", "GetFinalPathNameByHandleW",
         "GetFileInformationByHandleEx", "QueryDosDeviceW",
-        "CompareStringOrdinal", "K32GetProcessImageFileNameW", "ReadFile",
+        "CompareStringOrdinal", "K32GetProcessImageFileNameW", "ReadFile", "PeekNamedPipe",
     )
     for name in required_apis:
         if not hasattr(kernel32, name):
@@ -1184,6 +1185,11 @@ def _launch_apis(with_stdin: bool) -> tuple[object, object]:
     ]
     kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     _configure_executable_pin_apis(kernel32)
+    kernel32.PeekNamedPipe.argtypes = [
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+    ]
+    kernel32.PeekNamedPipe.restype = wintypes.BOOL
     kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
     kernel32.GetSystemInfo.argtypes = [ctypes.POINTER(_SystemInfo)]
@@ -1823,13 +1829,14 @@ class ContainedWorker:
 
     def __init__(
         self, *, kernel32: object, job: object, process_handle: object,
-        stdin_descriptor: int, stdout_descriptor: int,
+        stdin_descriptor: int, stdout_descriptor: int, stderr_descriptor: int,
     ) -> None:
         self._kernel32 = kernel32
         self._job = job
         self._process = process_handle
         self._stdin = stdin_descriptor
         self._stdout = stdout_descriptor
+        self._stderr = stderr_descriptor
         self._lock = threading.Lock()
         self._timed_out = False
         self.alive = True
@@ -1853,6 +1860,16 @@ class ContainedWorker:
                 raise VerifierProcessError("worker_exchange")
             data.extend(chunk)
         return bytes(data)
+
+    def _stderr_pending(self) -> bool:
+        """Any stderr byte (a Lean panic message) fails the request closed; the worker writes no diagnostics."""
+
+        import msvcrt
+
+        available = wintypes.DWORD()
+        return not self._kernel32.PeekNamedPipe(
+            msvcrt.get_osfhandle(self._stderr), None, 0, None, ctypes.byref(available), None
+        ) or available.value != 0
 
     def exchange(self, frame: bytes, *, response_cap_bytes: int, timeout_seconds: float) -> bytes:
         if type(frame) is not bytes or not 0 < len(frame) <= WORKER_MAX_FRAME_BYTES:
@@ -1878,7 +1895,10 @@ class ContainedWorker:
                 length = int.from_bytes(self._read_exact(4), "big")
                 if not 0 < length <= response_cap_bytes:
                     raise VerifierProcessError("worker_response_cap")
-                return self._read_exact(length)
+                response = self._read_exact(length)
+                if self._stderr_pending():
+                    raise VerifierProcessError("worker_stderr")
+                return response
             except BaseException as error:
                 self._terminate()
                 code = "worker_timeout" if self._timed_out else (
@@ -1895,7 +1915,7 @@ class ContainedWorker:
             if self._process is None:
                 return
             self.alive = False
-            for descriptor in (self._stdin, self._stdout):
+            for descriptor in (self._stdin, self._stdout, self._stderr):
                 try:
                     os.close(descriptor)
                 except OSError:
@@ -2012,14 +2032,13 @@ def launch_contained_worker(
             raise _win_error("verifier_process_resume")
         pinned.close()
         pinned = None
-        # The worker never writes diagnostics (IV.2); stderr has no reader.
+        # The worker never writes diagnostics (IV.2); the worker keeps stderr_read and treats any byte as a failure.
         owned.remove(stderr_read)
-        os.close(stderr_read)
         owned.remove(stdin_write)
         owned.remove(stdout_read)
         worker = ContainedWorker(
             kernel32=kernel32, job=job, process_handle=process_info.hProcess,
-            stdin_descriptor=stdin_write, stdout_descriptor=stdout_read,
+            stdin_descriptor=stdin_write, stdout_descriptor=stdout_read, stderr_descriptor=stderr_read,
         )
         process_info.hProcess = None
         job = None

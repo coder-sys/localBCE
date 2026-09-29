@@ -58,3 +58,9 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 name = "gate_rules"
 root = "BlindLedger.Gate.Rules.Run"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only: panics or writes stderr on request; tests/test_lean_worker_panic.py.
+[[lean_exe]]
+name = "panic_probe"
+root = "BlindLedger.Financial.PanicProbe"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
