@@ -2,7 +2,9 @@
 
 from contextlib import closing, contextmanager, redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
+import ast
 import copy
+import dataclasses
 import hashlib
 import io
 import json
@@ -18,6 +20,7 @@ from unittest.mock import patch
 from app import right_rail_financial_cash_file as cash
 from app import right_rail_financial_cash_file_independent as check
 from app import right_rail_financial_owner as owner
+from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_owner_independent import verify_database
 from tests import test_right_rail_financial_acceptance as fixtures
 from tests import rightrail_financial_expected_cases as expected
@@ -337,6 +340,72 @@ class ReceiverCashFileTests(unittest.TestCase):
                 with self.subTest(code=code, row=row):
                     self._unchanged(lambda: self._apply(self._prepare(value)), f"^{code}$")
         self._unchanged(lambda: self._apply(stale), "^cash_file_stale$")
+
+    def _file_b(self, rows):
+        self.baseline = self.store.export_continuity()
+        self.source = {**self.source, "capture_id": "capture-2"}
+        self.value = {**self.value, "source": self.source, "row_count": len(rows), "total_cents": sum(row["amount_cents"] for row in rows), "rows": rows}
+
+    def test_repeat_of_a_reversed_payment_refuses_never_labelled_duplicate(self):
+        self._apply()
+        self.store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="file-payment-1", evidence_id="reversal-1")
+        self._file_b([{**self._row(4, 100, self.store.obligation_detail(expected.H_ITEM_ID)["revision"]), "common_origin_id": "file-origin-1"}])
+        self._unchanged(lambda: self._apply(), "^cash_file_conflict$")
+
+    def _refused_by(self, rule, callback):  # the refusal class is fixed, so the rule that fired is read from the checker itself
+        seen, real = [], independent.verify_obligation_connection
+
+        def spy(*args, **kwargs):
+            try:
+                return real(*args, **kwargs)
+            except independent.IndependentFinancialError as error:
+                seen.append(str(error))
+                raise
+        with patch.object(independent, "verify_obligation_connection", spy):
+            self._unchanged(callback, "^cash_file_failed$")
+        self.assertEqual(seen, [rule])
+
+    def test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit(self):
+        store = self.store = self.fixture._build_base_for_correction()  # S4: the owner forgets earlier linked payments and overpays a correction request by 1 cent
+        self.fixture._prepare_acknowledged(store)
+        self.baseline = store.export_continuity()
+        detail = store.obligation_detail(expected.H_ITEM_ID)
+        rows = [{**self._row(1, expected.CORRECTION_PAYMENT_CENTS - 1, detail["revision"]), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS}]
+        rows.append({**self._row(2, 2, detail["revision"] + 1), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS})
+        self.source = {**self.source, "captured_at_ms": expected.P2_EVENT_MS}
+        self.value.update(source=self.source, row_count=2, rows=rows, total_cents=expected.CORRECTION_PAYMENT_CENTS + 1)
+        self.fixture._advance_clock(store, expected.P2_EVENT_MS)
+        with patch.object(owner, "_correction_paid", lambda connection, obligation_id: []):
+            self._refused_by("payment:link", lambda: self._apply())
+        self.setUp()  # S5: an OVERLAP alias is stored with a wrong content digest
+        self._apply()
+        self._file_b([self._row(3, 50, 2), {**self._row(4, 100, 3), "common_origin_id": "file-origin-1"}])
+        original = owner.FinancialOwner._insert_evidence
+        def wrong_digest(instance, connection, evidence):
+            return original(instance, connection, dataclasses.replace(evidence, content_digest=b"" * 64) if evidence.evidence_id == "file-evidence-4" else evidence)
+        with patch.object(owner.FinancialOwner, "_insert_evidence", wrong_digest):
+            self._refused_by("evidence:content-digest", lambda: self._apply())
+
+    def test_every_whole_store_rule_runs_before_commit_or_is_excused(self):
+        """A rule only the open check runs turns a bad write into a store that will not open (lean-live M0 F1, cash 1a F1)."""
+        functions = {node.name: node for node in ast.walk(ast.parse(Path(independent.__file__).read_text(encoding="utf-8"))) if isinstance(node, ast.FunctionDef)}
+        names = lambda name: {node.id for node in ast.walk(functions[name]) if isinstance(node, ast.Name)}
+        reached, todo = set(), ["verify_obligation_connection"]  # the entry both pre-COMMIT paths (cash finish, correction) call
+        while todo:
+            if (current := todo.pop()) not in reached and current in functions:
+                reached.add(current)
+                todo += names(current)
+        untouched = "no cash-file or correction write changes these rows (finish proves it for the cash file)"
+        written = "cash file: finish chains every new event and compares each written row to its command"
+        current = "the touched current evaluation and projection are recomputed; finish proves the cash deltas"
+        gap = "OPEN GAP: the correction path writes these rows; only the action rows bind them before COMMIT"
+        excused = {**dict.fromkeys(("_verify_packs", "_verify_population_manifest_rows", "_verify_populations", "_verify_population_history", "_verify_program_funding", "_verify_adjustments", "_verify_current_snapshot", "_verify_restore_source_binding"), untouched),
+                   **dict.fromkeys(("_verify_events", "_verify_payments", "_verify_conflicts", "_verify_duplicate_evidence", "_verify_event_references", "_verify_commands", "_verify_replayed_rows", "_verify_history_tables"), written),
+                   **dict.fromkeys(("_verify_obligations", "_verify_evaluations", "_verify_evaluation_history_events", "_verify_projections"), current),
+                   **dict.fromkeys(("_verify_determinations", "_verify_correction_followup_records"), gap)}
+        unreached = {name for name in names("_verify_connection") if name.startswith("_verify_") and name not in reached}
+        self.assertEqual(sorted(unreached - set(excused)), [], "a whole-store rule that neither runs before commit nor has a written reason")
+        self.assertEqual(sorted(set(excused) - unreached), [], "an excused rule that is now reachable or gone: delete its line")
 
     def test_refusals_are_fixed_classes(self):
         for error, code in ((check.CashFileError("cash_file_stale"), "cash_file_stale"), (check.CashFileError("private-marker"), "cash_file_failed"),

@@ -4,7 +4,7 @@ Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores
 
 Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to move to the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8), with v7 stores migrating all-or-nothing on owner open and v7 packages still verifiable, the founder answered "Yes, approve v8". The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`.
 
-History-completeness approval (2026-09-24, CONSTITUTION V.4): asked in session chat how v7 histories lacking full facts (payment item/time, evidence) become rebuildable, the founder chose "Opening balance": on conversion the owner writes one sealed opening-balance event holding every converted row, under a new, distinctly named digest domain, and thereafter every event records the full facts needed to rebuild all projections by apply(event). The alternative (rebuild from events plus side tables) was declined.
+History-completeness approval (2026-09-24, CONSTITUTION V.4): for v7 histories lacking full facts the founder chose one sealed opening-balance event under a new digest domain, and full facts on every later event. Superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
 
 Source: first-principles review of the financial core (owner, checker, successor,
 Mirror, Switch, engine path; ~25,100 Python lines). Constitution articles cited inline.
@@ -197,10 +197,8 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 
 ## Gaps found (under-enforcement, not just size)
 
-- No command table: each handler invents its own retry/conflict rule (III.3).
 - `expected_revision` optional on 10 handlers; 5 default the actor to a
   synthetic identity (III.3, I.2, XI.13).
-- `financial_events` has no append-only trigger; FKs enabled but none declared (III.4).
 - Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
 - Every staff read runs the full checker over the whole database (IX.3).
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
@@ -208,25 +206,15 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 
 ## Target sizes
 
-| Component | Today | Target |
-|---|---|---|
-| Owner package | ~7,100-7,400 | ~3,000 |
-| Independent checker | 4,942 | ~1,800 (replay + compare; stays code-independent) |
-| Continuity successor | 2,330 | ~300-800 (replay + TEST writer that can continue) |
-| Mirror | 1,674 | ~500 |
-| Switch | 1,408 | ~500 (reuses replay) |
-| Engine + semantic adapter | 3,799 | ~1,300 |
-| Process runner | 1,844 | ~800 (uncertain) |
-| Staff server + CLI | 1,712 | ~1,100 |
+Target lines: owner ~3,000; checker ~1,800 (replay + compare, code-independent); successor ~300-800 (replay + TEST writer that can continue); Mirror ~500; Switch ~500 (reuses replay); engine + adapter ~1,300; process runner ~800 (uncertain); staff server + CLI ~1,100.
 
 ## Migration (each step leaves a working system; one guarded run per step)
 
-0. Baseline: run the financial suites through the guard; capture golden outputs
-   (events, heads, decision packages, v7 package bytes) for the 12 cases.
-1. Retire v5/v6 stores (XI.2 record; founder approval — they appear in contracts).
+0. Baseline: guarded suites; golden events, heads, decision packages, v7 package bytes.
+1. Retire v5/v6 stores (XI.2 record; founder approval).
 2. Close gaps: `commands` table, required revision and actor, append-only triggers, FKs.
-3. Replace per-handler retry logic with the command log (goldens byte-identical).
-4. Stop re-validating own writes; one typed decoder per record; version staff snapshot id.
+3. Per-handler retry logic becomes the command log (goldens byte-identical).
+4. Stop re-validating own writes; one typed decoder per record; version the staff snapshot id.
 5. Remove Python re-derivation of Lean (replacement: read-set binding + pre-COMMIT
    per-obligation checker).
 6. Complete-fact events + `apply` reducer: OWNER/CONTINUITY v8. The v7 conversion,
@@ -306,10 +294,9 @@ domains, theorem statements, and `tests/test_right_rail_financial_constitution_i
 
 ## Receiver cash-file boundary (XI.2 design, 2026-09-26)
 
-Felt effect: during reconciliation, an implementation lead can preview one
-fictional receiver file against the reviewed ledger, then explicitly record its
-cash evidence as one transaction. This removes repeated manual entry while
-preserving exact retries and a visible all-or-nothing result. No money moves.
+Felt effect: an implementation lead previews one fictional receiver file
+against the reviewed ledger, then records its cash evidence as one transaction:
+no repeated manual entry, exact retries, all-or-nothing. No money moves.
 
 - Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
   JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
@@ -330,12 +317,11 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   JSON keys, missing/extra fields, noncanonical bytes, duplicate payment/evidence
   IDs or item/origin pairs, and count/total disagreement. MCO reports, X12
   820/835 and MMIS extracts are unsupported formats and refuse completely.
-- Evidence: `record_payment_evidence` can return CONFLICT after recording
-  conflict evidence, or DUPLICATE with a different payment ID after recording
-  alias evidence. `run_batch` rolls back exceptions, not those statuses. Checking
-  only its returned report would accept partial or differently bound work.
-  `_write` can also seal history after the batch body, so the final independent
-  check must occur after sealing and before COMMIT.
+- Evidence: `record_payment_evidence` can return CONFLICT or an alias DUPLICATE
+  after recording evidence, and `run_batch` rolls back exceptions, not those
+  statuses, so checking only the returned report would accept partial or
+  differently bound work. `_write` can seal history after the batch body: the
+  final check must follow sealing and precede COMMIT.
 - Disposition: add this explicitly fictional input contract; retain all owner
   commands, cash rules, existing wire/digest domains, expected answers and
   limits. No caller-provided callback or success flag authorizes acceptance.
@@ -346,19 +332,20 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   A retry never replaces B with a fresh snapshot. Producer and verifier parse
   and reconstruct independently; the verifier does not import the producer.
   Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
-  store to B: the same identity row and the same event head at B's sequence (the
-  whole store was verified when the owner opened it; later history is
-  append-only in the database). New work requires the store to still be at B's
-  sequence. On an older baseline only rows that write nothing (RETRY, ALIAS)
-  are allowed.
-  After final sealing, independently verify the store, row/command order,
-  payment/evidence/action links, revisions and per-item cash deltas; other cash,
-  acknowledgments and reporting remain unchanged. A file with no NEW or OVERLAP
+  store to B: the same identity row and event head at B's sequence (the owner
+  verified the whole store at open; later history is append-only). New work
+  requires the store still at B's sequence; on an older baseline only rows that
+  write nothing (RETRY, ALIAS) are allowed.
+  After final sealing the checker verifies row/command order, each new event
+  onto the chain, payment/evidence/action links, revisions, every table's
+  before/after difference and per-item cash deltas, then runs its own rules on
+  the touched obligations (see Cash-file capacity); other cash, acknowledgments
+  and reporting remain unchanged. It does not re-verify the whole store. A file with no NEW or OVERLAP
   row must leave durable state identical and make zero SQL changes. Any mismatch rolls
   back the whole file. Publish the receipt only after COMMIT succeeds.
-  Preview is the default: independently verify and restore B into isolated TEST
-  storage, using that restore's snapshot as execution baseline while retaining
-  F and original B as retry identity. Preview never opens an incumbent writer.
+  Preview is the default: verify B and restore it into isolated TEST storage,
+  bind the restore to B's sequence and head, and run the file there, retaining F
+  and original B as retry identity. Preview never opens an incumbent writer.
   Explicit apply uses the same checked boundary. Cleanup failures are visible.
   CLI apply opens only an existing, current store with the reviewed mode/ID:
   SQLite `mode=rw` prevents accidental creation; read-only setup checks refuse
@@ -372,37 +359,48 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   `recorded_count`, `duplicate_count`, `file_total_cents`, `recorded_cents`,
   `duplicate_cents`, `cash_before_cents`, `cash_after_cents`, `cash_delta_cents`,
   `proofSuiteId` (null), `production_usable` (false), `activation` (false).
-  Amounts come from independently checked pre/post cash; duplicates add zero
-  cash, including payments reversed after their original receipt. No intermediate
+  Amounts are the checker's sums of the rows before the write and the per-item
+  cash deltas it proved; totals are not re-verified over the whole store.
+  RETRY and ALIAS rows add zero cash, including payments reversed after their
+  receipt; a new repeat of a reversed payment refuses (`conflict`). No intermediate
   owner projection or raw file/error data is exported in this result.
-- Duration: v1 is a new contract with no implicit legacy migration. Subsequent
-  changes require a new explicit compatibility decision and fresh evidence.
-- Claims withdrawn: this design is not implementation or verification. Required
-  evidence covers field/context/identity mutations, altered command order,
-  exact bounds, original-baseline retry and reversal, stale/concurrent/mixed
-  batches, overlap labelled DUPLICATE, conflict and reuse refused, action limits, crashes/lost responses,
-  no ACK/report effects, source preservation, privacy and cleanup, independent
-  verification, Continuity and existing consumers. Status records actual runs.
+- Duration: v1 has no implicit legacy migration; changes need a new compatibility decision and fresh evidence.
+- Claims withdrawn: this design is not implementation or verification. The
+  runs that cover it (mutated fields, context and identity, command order,
+  bounds, retry and reversal, stale, concurrent and mixed batches, overlap,
+  conflict and reuse, action limits, crashes, no ACK/report effects, privacy,
+  cleanup, Continuity) are recorded in `STATUS.md`.
 
 ### Cash-file capacity (2026-09-28)
 
 Target: the largest state's hospital-level program, about 600 hospitals with up
-to 3 remittance or recovery lines a month (2,000 rows a month, three monthly
-files a quarter, under Lean's `maxRows`). All-provider refund flows need
-sharding or Phase 2 below and are not claimed.
+to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). Not met per rr-review: the
+8 MiB package cap on the baseline binds first (`STATUS.md`). All-provider
+refund flows need sharding or Phase 2 below and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
   busy timeout (measured locks: `STATUS.md`). One evaluation per payment is kept
   (founder, 2026-09-28).
-- The whole-store verify runs at each owner open, not twice per import under the
-  lock. An import still checks every obligation it touches, each new event onto
-  the verified chain, and every table by before/after comparison. Corruption
-  that bypassed the owner and its triggers after the open is caught at the next
-  open, by `verify-integrity` or by an export verify.
-- A row is NEW, RETRY, OVERLAP (a new repeat of a stored payment: DUPLICATE, one
-  alias event, no cash), ALIAS (a stored repeat: nothing written) or refused.
-  An exact alias repeat writes nothing whatever its expected revision.
+- Art. XI.2 record. Disposition: the whole-store verify no longer runs twice per
+  import under the lock (it runs at each open). Replacement control, before
+  COMMIT: each new event onto the chain, every table's before/after difference,
+  and the checker's own rules (never copies) on the touched rows: current
+  evaluation, action amount, requestable and `payment:link`, evidence digests. A
+  structural test lists each whole-store rule not run before COMMIT with its
+  reason; two `OPEN GAP` entries (determinations, correction follow-up records
+  on the correction path) stay unresolved. Claims withdrawn: that the store, or
+  a cash file's totals, is independently verified before COMMIT. Corruption
+  that bypassed the owner is caught at the next open or by `verify-integrity`.
+- Visible changes: the CLI prints `ERROR:receiver_cash_file_refused:{code}`; older
+  per-cause refusal codes collapsed into nine fixed classes (below); a cash file's
+  new repeat of a reversed payment refuses `conflict` (the owner's direct command still labels it DUPLICATE); `duplicate_count` includes OVERLAP
+  rows, which write alias evidence.
+- A row is NEW, RETRY, OVERLAP (a repeat of a stored payment under new ids:
+  DUPLICATE, one alias event, no cash), ALIAS (a stored repeat: nothing written)
+  or refused. Overlap needs new ids: a row that reuses stored ids must be the
+  exact stored row, else the whole file refuses. An exact alias repeat writes
+  nothing whatever its expected revision.
 - An existing-only writer (the CLI) refuses an index set older than the current
   one; a read-only SHADOW may keep the previous set.
 - Phase 2 (deferred): evaluations that bind evidence by digest, constant size.
@@ -413,7 +411,7 @@ Fixed classes only; no input or error text is ever printed. `input`: the CLI
 could not read an input. `format`: not the contract. `row_cap`: split the file.
 `binding`: hashes, scope, owner/mode or baseline do not match this store.
 `stale`: prepare against a new baseline. `conflict`: an origin is recorded with
-another amount or link; investigate. `already_recorded`: an id is reused.
+another amount or link, or was paid and reversed; investigate. `already_recorded`: an id is reused.
 `busy`: retry later. `failed`: checker or store refused; escalate.
 
 ## Browser conformance correction (2026-09-26)

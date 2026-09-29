@@ -58,37 +58,20 @@ hours come from the fixture's synthetic clock, which screen changes cannot move.
 Paying late does not erase the missed deadline: H stays 24 hours past due on
 record.
 
-## Top friction found (worst five)
+## Top friction still open (the other three of the first five were fixed)
 
-1. **Director, weekly review.** Cash recorded, program shortfall and open
- items were nowhere on screen; 20 other rows had to be added by hand: 3
- clicks, 3 of 5 totals unanswered. *Fixed:* three totals now cards on the
- overview.
-2. **Analyst and director, Monday.** 20 of 20 rows read "Case OPEN", 19 stay
- open at the end, but only H has a real problem — the fixture never records
+1. **Analyst and director, Monday.** 20 of 20 rows read "Case OPEN", 19 stay
+ open at the end, but only H has a real problem: the fixture never records
  the other hospitals' $900,000, though plan §4 says they received it.
  *Open:* fixture decision for the owner.
-3. **Analyst, correction.** Every button went dead after each command until
- reopened by hand: 2 forced reopens, no reason shown. *Fixed:* package
- reloads after the operator's own successful command.
-4. **Approver, auditor and analyst.** Needed facts (owner, claim status,
- deadline, deciding role, evidence) existed only in raw JSON: 2-3 screens.
- *Fixed:* decision panel leads with plain facts; overview answers first.
-5. **Replacement operator.** Restore to Continuity TEST is enabled only
+2. **Replacement operator.** Restore to Continuity TEST is enabled only
  after H's shortfall is 0, so a replacement cannot take over unfinished
  work, which plan §14 expects. *Open:* needs an owner decision.
 
 ## Article XIII violations found
 
-Status after this change. The Mirror redesign owns the full interaction model.
+Only the open ones remain (answer-first, dead-connection and dead-control items were fixed). The Mirror redesign owns the full interaction model.
 
-- **XIII.1, answer first.** Status, owner, gap and next step needed 2 clicks
- and raw JSON. *Fixed:* "Needs attention now" on the overview.
-- **Dead connection.** A failed or stale package read wrote its message
- inside the hidden panel, so the click showed nothing. *Fixed:* the
- message now appears in the command status.
-- **Dead control.** Refresh did nothing, silently, while a command was
- pending. *Fixed:* Refresh disabled while a command runs.
 - **Illogical path.** The approver's reject-offset is enabled in every
  session (observed for analyst, director, auditor); the page has no roles
  by design. *Open.*

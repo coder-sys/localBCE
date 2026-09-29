@@ -262,8 +262,8 @@ class CashFileCheck:
                 kind, answer = "NEW", argument["payment_id"]
             else:
                 link = self._received[existing["payment_id"]][1].get("pays_action_id")
-                _require(existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, link), "cash_file_conflict")
                 stored = evidence.get(argument["evidence_id"])
+                _require(existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, link) and (stored is not None or existing["active"] == 1), "cash_file_conflict")  # a new repeat of a reversed payment is never labelled duplicate
                 _require(stored is None or (self._aliases.get(argument["evidence_id"]) == existing["payment_id"] and _matches(stored, _fact(argument))), "cash_file_already_recorded")
                 kind, answer = "OVERLAP" if stored is None else "ALIAS", existing["payment_id"]
             _require(not self._stale or kind in ("RETRY", "ALIAS"), "cash_file_stale")
