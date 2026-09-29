@@ -19,7 +19,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 PRODUCT_CODE_LINES = 44_000
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
-EVIDENCE_CODE_LINES = 40_000
+EVIDENCE_CODE_LINES = 40_312
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.
@@ -33,7 +33,8 @@ CORE_FILE_LINES = {
     "app/right_rail_financial_mirror.py": 1_533,
     "app/right_rail_financial_engine.py": 1_454,
     "app/right_rail_financial_switch.py": 1_334,
-    "app/right_rail_financial_line_pack.py": 315,
+    "app/right_rail_financial_line_pack.py": 253,
+    "app/right_rail_financial_followthrough.py": 270,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Copy-paste: repeated 6-line windows (>=120 chars) across product Python.

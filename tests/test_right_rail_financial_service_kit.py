@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import json
@@ -80,6 +81,25 @@ class FinancialServiceKitManifestTests(unittest.TestCase):
     def test_kit_ships_every_file_the_staff_server_serves(self) -> None:
         # staff.js boots from /interaction-model.json; a kit without it serves a broken UI.
         self.assertLessEqual({"app/" + path for path, _type in _STATIC_FILES.values()}, set(STATE_FILES))
+
+    def test_kit_ships_every_module_its_python_files_import(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        def imported(path: str):
+            for node in ast.walk(ast.parse((root / path).read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Import):
+                    yield from (alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    yield node.module
+                    yield from (f"{node.module}.{alias.name}" for alias in node.names)
+
+        def missing(files: set[str]) -> list[str]:
+            need = {name.replace(".", "/") + ".py" for path in files if path.endswith(".py") for name in imported(path) if name.startswith(("app.", "tools."))}
+            return sorted(path for path in need - files if (root / path).is_file())
+
+        self.assertEqual(missing(set(STATE_FILES)), [])
+        aac195b = set(STATE_FILES) - {"app/right_rail_financial_derived.py", "app/right_rail_financial_followthrough.py", "app/right_rail_financial_line_pack.py"}
+        self.assertEqual(missing(aac195b), ["app/right_rail_financial_followthrough.py", "app/right_rail_financial_line_pack.py"])  # the list before the fix
 
     def test_kit_requires_the_exact_retired_engine_registry(self) -> None:
         root = Path(__file__).resolve().parents[1]
