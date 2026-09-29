@@ -38,6 +38,7 @@ from app.right_rail_financial_switch import (
     DifferencePolicy,
     FinancialSwitchError,
     ReferenceSpec,
+    _decode_canonical_json,
     decode_replay_input,
     prepare_shadow_replay_input,
     run_shadow_replay,
@@ -186,6 +187,15 @@ def _parser() -> argparse.ArgumentParser:
     followthrough.add_argument("--rules", type=Path, required=True, help="rules JSON listed by the approved Control Pack")
     followthrough.add_argument("--generated-at-ms", type=int, required=True)
     followthrough.add_argument("--output", type=Path, required=True, help="new follow-through file; existing paths are never replaced")
+
+    decision = subparsers.add_parser("record-followthrough-decision", help="record an official's ASSIGN or CLOSE decision on one recovery item")
+    decision.add_argument("--item-id", required=True)
+    decision.add_argument("--decision-id", required=True)
+    decision.add_argument("--act", choices=("ASSIGN", "CLOSE"), required=True)
+    decision.add_argument("--reason-code", help="CLOSE: a reason the rules list")
+    decision.add_argument("--owner-id", help="ASSIGN: a typed party the rules name")
+    decision.add_argument("--suggestion", type=Path, help="canonical JSON of the suggestion this decision answers, if any")
+    _add_actor_and_revision(decision)
 
     subparsers.add_parser("dispatch-outbox")
     return parser
@@ -618,6 +628,12 @@ def _run(args: argparse.Namespace) -> Any:
         )
         _write_new(args.output, pack)
         return {"contract": PACK_CONTRACT, "followthrough_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "followthrough_pack_path": str(args.output)}
+    if args.command == "record-followthrough-decision":
+        suggestion = None if args.suggestion is None else _decode_canonical_json(_read_package(args.suggestion, 4096, "followthrough_suggestion"), maximum=4096, label="followthrough_suggestion")
+        return _owner(args).record_followthrough_decision(
+            item_id=args.item_id, decision_id=args.decision_id, act=args.act, reason_code=args.reason_code, owner_id=args.owner_id, suggestion=suggestion,
+            actor_id=args.actor_id, actor_role=args.actor_role, expected_revision=args.expected_revision,
+        )
     owner = _owner(args)
     mirror = FinancialMirror(owner)
     command = args.command

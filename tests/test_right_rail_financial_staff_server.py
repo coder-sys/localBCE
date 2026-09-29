@@ -399,6 +399,24 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual({clock["status"] for item in done.values() if item["item_id"] != H_ITEM_ID for clock in item["clocks"]}, {"NOT_ANCHORED"})
         self.assertEqual(len(done), 20)
 
+    def test_decision_leaves_correction_followup_current(self) -> None:
+        workflow = self._workflow(with_correction_release=True)
+        owner = workflow.mirror.owner
+        workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
+        workflow.acknowledge_correction_action(self._revision_body(workflow))
+        workflow.record_cash_correction(self._cash_body(workflow))
+        status = lambda: workflow.correction_followup()["followup"]["followup_status"]
+        before = workflow.decision_view()["decision_package"]
+        self.assertEqual(status(), "CURRENT")
+        decided = owner.record_followthrough_decision(
+            item_id=H_ITEM_ID, decision_id="decision:h:assign", act="ASSIGN", owner_id="state:provider-finance",
+            actor_id="synthetic-official", actor_role="CASE_OWNER", expected_revision=before["obligation"]["revision"],
+        )
+        after = workflow.decision_view()["decision_package"]
+        self.assertEqual(decided["status"], "RECORDED")
+        self.assertEqual(status(), "CURRENT")
+        self.assertEqual((after["cash"], after["obligation"]["shortfall_cents"]), (before["cash"], before["obligation"]["shortfall_cents"]))
+
     def test_a_failed_test_restore_returns_a_valid_support_package_over_http(self) -> None:
         workflow = self._workflow()
         port = self._serve_workflow(workflow).server_address[1]

@@ -14,12 +14,17 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from app import right_rail_financial_owner as owner_module
+from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_derived import NOT_HELD, DerivedError
 from app.right_rail_financial_followthrough import MAX_RULES_BYTES, _add, _cms64_due, build_followthrough_pack
 from app.right_rail_financial_owner import (
-    ControlPack, FinancialOwner, FinancialOwnerConfig, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
+    ControlPack, FinancialAuthorityError, FinancialConflictError, FinancialInputError, FinancialIntegrityError, FinancialOwner,
+    FinancialOwnerConfig, FinancialRevisionError, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
 )
+from tests import test_right_rail_financial_acceptance as acceptance
 from tests.test_right_rail_financial_line_pack import _Clock
 from tools import right_rail_financial_cli as financial_cli
 
@@ -52,14 +57,15 @@ def _ref(rules: bytes) -> str:
     return "followthrough-rules:sha256:" + hashlib.sha256(rules).hexdigest().upper()
 
 
-def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str, ...] = (), paid: tuple[int, int] = (PAID_R1, PAID_R1), credit: int | None = CREDIT_R1) -> FinancialOwner:
+def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str, ...] = (), paid: tuple[int, int] = (PAID_R1, PAID_R1), credit: int | None = CREDIT_R1,
+                   roles: tuple[str, ...] = ("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER", "CASE_OWNER")) -> FinancialOwner:
     authority = SyntheticTrustedAuthority()
     owner = FinancialOwner(path=directory / "recovery.sqlite3", config=FinancialOwnerConfig(**SCOPE), trusted_authority=authority, clock=_Clock())
     owner.publish_control_pack(ControlPack(
         pack_id="pack:recovery-v1", **SCOPE, version=1, source_refs=("synthetic:source:v1", _ref(rules_bytes), *extra_refs),
         effective_start_ms=1_000, effective_end_ms=4_000_000_000_000, recorded_at_ms=500, approved_at_ms=500,
         calculation_rule_id="calculation:per-recipient:v1", adjustment_rule_id="adjustment:offset:v1",
-        authorized_roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER", "CASE_OWNER"),
+        authorized_roles=roles,
         expected_tests=("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate"),
     ))
     owed = {"item-r1": 1_000_000, "item-r2": 500_000, "item-r3": 300_000}
@@ -301,6 +307,309 @@ class FollowthroughTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as refusal:
                 self.assertEqual(financial_cli.main([*args[:-5], str(directory / name), *args[-4:]]), 2)
             self.assertEqual(refusal.getvalue(), f"ERROR:{code}\n")
+
+
+EVIDENCE_AT = 1_811_635_200_000  # 2027-05-30
+SUGGESTED_AT = 1_811_721_600_000  # 2027-05-31
+CLOSE_AT = 1_811_808_000_000  # 2027-06-01
+ASSIGN_AT = 1_811_894_400_000  # 2027-06-02
+CLOSE = "decision:r2:close"
+OFFICIAL = {"actor_id": "synthetic-official", "actor_role": "CASE_OWNER"}
+SUGGESTION = {"source_id": "triage-model-1", "source_ref": "triage:r2:1", "source_sha256": hashlib.sha256(b"synthetic triage note r2").hexdigest().upper(),
+              "suggested_at_ms": SUGGESTED_AT, "act": "CLOSE", "reason_code": "UNCOLLECTIBLE_OTHER", "owner_id": None}
+TRUST = lambda store: {"trusted_authority": store.trusted_authority, "expected_scope": {**SCOPE, "currency": "USD"}}
+
+
+def _legal(store: FinancialOwner, *tags: str, at_ms: int = EVIDENCE_AT) -> None:
+    for tag in tags:
+        _support(store, "r2", f"evidence:{tag}:r2", "state-legal-office", at_ms, at_ms)
+
+
+def _decide(store: FinancialOwner, at_ms: int = CLOSE_AT, **changes: object) -> dict:
+    """One decision as the official; the revision defaults to the item's current one."""
+    call = {"item_id": "item-r2", "decision_id": CLOSE, "act": "CLOSE", "reason_code": "BANKRUPTCY", **OFFICIAL, **changes}
+    call.setdefault("expected_revision", store.obligation_detail(call["item_id"])["revision"])
+    store.clock.value = at_ms
+    return store.record_followthrough_decision(**call)
+
+
+def _decided_store(directory: Path, **changes: object) -> FinancialOwner:
+    """The R store after the three legal-office records and the official's BANKRUPTCY close, with a model's suggestion beside it."""
+    store = _build_r_store(directory, RULES, **changes)
+    _legal(store, "petition", "creditor", "effort")
+    _decide(store, suggestion=SUGGESTION)
+    return store
+
+
+def _pack(store: FinancialOwner, at_ms: int = GENERATED) -> dict:
+    return json.loads(build_followthrough_pack(store.path, store.export_continuity(), rules_bytes=RULES, generated_at_ms=at_ms, **TRUST(store)))
+
+
+def _history(store: FinancialOwner) -> tuple[int, bytes]:
+    with closing(sqlite3.connect(f"file:{store.path}?mode=ro", uri=True)) as connection:
+        return connection.execute("SELECT count(*),(SELECT head FROM financial_events ORDER BY event_sequence DESC LIMIT 1) FROM financial_events").fetchone()
+
+
+def _forge_payload(edit) -> object:
+    def apply(path: Path) -> None:
+        def only_the_decision(payload: dict) -> bool:
+            if payload.get("decision_id") != CLOSE:
+                return False
+            edit(payload)
+            return True
+        assert acceptance.RightRailFinancialAcceptanceTests._rehash_history(path, only_the_decision) == 1
+    return apply
+
+
+def _forge_rows(*statements: str, rehash: bool = False) -> object:
+    """As a writer with file access: drop the append-only triggers, change rows, restore them, and re-hash the chain if asked."""
+    def apply(path: Path) -> None:
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+            triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger'").fetchall()
+            for name, _sql in triggers:
+                connection.execute(f'DROP TRIGGER "{name}"')
+            for statement in statements:
+                connection.execute(statement)
+            for _name, sql in triggers:
+                connection.execute(sql)
+        if rehash:
+            acceptance.RightRailFinancialAcceptanceTests._rehash_history(path, lambda payload: False)
+    return apply
+
+
+# (name, forgery of a copy of the decided store, the code verify_database raises, the code verify_followthrough_connection raises)
+FORGERIES = (
+    ("role", _forge_payload(lambda p: p.update(actor_role="REPORTING_EDITOR")), "followthrough:actor", "followthrough:actor"),
+    ("revision", _forge_rows("UPDATE financial_events SET after_revision=after_revision+1 WHERE kind='FOLLOWTHROUGH_DECIDED'", rehash=True), "followthrough:revision", "followthrough:revision"),
+    ("authority", _forge_payload(lambda p: p.update(authority_epoch=2)), "followthrough:authority", "followthrough:authority"),
+    ("suggestion time", _forge_payload(lambda p: p["suggestion"].update(suggested_at_ms=CLOSE_AT + 1)), "followthrough:suggestion", "followthrough:suggestion"),
+    ("extra key", _forge_payload(lambda p: p.update(rows=[])), "followthrough:payload", "followthrough:payload"),
+    ("other item", _forge_payload(lambda p: p.update(item_id="item-r3")), "followthrough:payload", "followthrough:payload"),
+    ("command row deleted", _forge_rows(f"DELETE FROM commands WHERE command_id='FOLLOWTHROUGH_DECISION:{CLOSE}'"), "commands:mismatch", "followthrough:command"),
+)
+
+
+class FollowthroughDecisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory(prefix="rr-followthrough-decision-")
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name)
+
+    def _store(self, name: str = "store", **changes: object) -> FinancialOwner:
+        (self.directory / name).mkdir()
+        return _decided_store(self.directory / name, **changes)
+
+    def _r2(self, store: FinancialOwner, at_ms: int = GENERATED) -> dict:
+        return next(item for item in _pack(store, at_ms)["items"] if item["item_id"] == "item-r2")
+
+    def _refused(self, store: FinancialOwner, error: type, code: str, **changes: object) -> None:
+        before = _history(store)
+        with self.assertRaisesRegex(error, f"^{code}$"):
+            _decide(store, **changes)
+        self.assertEqual(_history(store), before)
+
+    def test_decision_records_suggestion_and_decision_side_by_side(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        _legal(store, "petition", "creditor", "effort")
+        before = store.obligation_detail("item-r2")
+        result = _decide(store, suggestion=SUGGESTION)
+        after = store.obligation_detail("item-r2")
+        self.assertEqual((result["status"], result["decision_id"]), ("RECORDED", CLOSE))
+        for key in ("revision", "received_cash_cents", "shortfall_cents", "case_status"):
+            self.assertEqual(after[key], before[key], key)
+        item = self._r2(store)
+        with closing(sqlite3.connect(f"file:{store.path}?mode=ro", uri=True)) as connection:
+            (sequence,) = connection.execute("SELECT event_sequence FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED'").fetchone()
+        self.assertEqual(item["status"], "CLOSED")
+        self.assertEqual(item["decisions"], [{"decision_id": CLOSE, "act": "CLOSE", "reason_code": "BANKRUPTCY", "owner_id": None, "suggestion": SUGGESTION, "agrees_with_suggestion": False,
+                                              "actor_id": "synthetic-official", "actor_role": "CASE_OWNER", "decided_at_ms": CLOSE_AT, "event_sequence": sequence}])
+        federal, recovery = item["clocks"]
+        self.assertEqual((federal["status"], federal["stopped_by"]), ("STOPPED", CLOSE))
+        self.assertEqual(recovery["status"], "MISSED")  # the close came after its end
+
+    def test_decision_retry_is_duplicate_and_changed_retry_conflicts(self) -> None:
+        store = self._store()
+        before = _history(store)
+        self.assertEqual(_decide(store, suggestion=SUGGESTION)["status"], "DUPLICATE")
+        self.assertEqual(_history(store), before)
+        for changes in ({"reason_code": "UNCOLLECTIBLE_OTHER", "suggestion": SUGGESTION}, {"item_id": "item-r3", "suggestion": SUGGESTION}):
+            with self.subTest(changes), self.assertRaisesRegex(FinancialConflictError, "^followthrough_decision_conflict$"):
+                _decide(store, **changes)
+        self.assertEqual(_history(store), before)
+
+    def test_assign_after_close_reopens_and_names_the_owner(self) -> None:
+        store = self._store()
+        _decide(store, ASSIGN_AT, decision_id="decision:r2:assign", act="ASSIGN", reason_code=None, owner_id="state-recovery-unit")
+        item = self._r2(store)
+        self.assertEqual((item["status"], item["owner"]), ("OPEN", {"owner_id": "state-recovery-unit", "basis": "DECISION", "decision_id": "decision:r2:assign"}))
+        self.assertEqual(item["clocks"][0]["status"], "MISSED")
+
+    def test_decision_requires_roster_actor_and_allowed_role(self) -> None:
+        store = self._store()
+        other = {"decision_id": "decision:r2:other"}
+        for actor, code in ((("synthetic-reporter", "REPORTING_EDITOR"), "followthrough_actor_role"), (("nobody", "CASE_OWNER"), "authority_actor_not_authorized")):
+            with self.subTest(actor):
+                self._refused(store, FinancialAuthorityError, code, **other, actor_id=actor[0], actor_role=actor[1])
+        self._refused(store, FinancialInputError, "expected_revision_required", **other, expected_revision=None)
+        self._refused(store, FinancialRevisionError, "obligation_revision_conflict", **other, expected_revision=store.obligation_detail("item-r2")["revision"] + 1)
+        (self.directory / "narrow").mkdir()
+        narrow = _build_r_store(self.directory / "narrow", RULES, roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"))
+        self._refused(narrow, FinancialAuthorityError, "control_pack_actor_role_not_authorized")
+
+    def test_decision_shape_refused(self) -> None:
+        store = self._store()
+        owner_id = "state-recovery-unit"
+        for name, code, changes in (
+            ("act", "followthrough_act", {"act": "REOPEN"}),
+            ("close without reason", "followthrough_reason", {"reason_code": None}),
+            ("close with owner", "followthrough_owner", {"owner_id": owner_id}),
+            ("assign with reason", "followthrough_reason", {"act": "ASSIGN", "owner_id": owner_id}),
+            ("assign without owner", "followthrough_owner", {"act": "ASSIGN", "reason_code": None}),
+            ("extra suggestion key", "followthrough_suggestion", {"suggestion": {**SUGGESTION, "extra": 1}}),
+            ("lower-case digest", "followthrough_suggestion", {"suggestion": {**SUGGESTION, "source_sha256": SUGGESTION["source_sha256"].lower()}}),
+            ("suggestion after the clock", "followthrough_suggestion_time", {"suggestion": {**SUGGESTION, "suggested_at_ms": CLOSE_AT + 1}}),
+            ("decision id", "decision_id", {"decision_id": "bad id"}),
+        ):
+            with self.subTest(name):
+                self._refused(store, FinancialInputError, code, **{"decision_id": "decision:r2:other", **changes})
+
+    def test_checker_binds_decision_events(self) -> None:
+        store = self._store()
+        for name, forge, code, _pre in FORGERIES:
+            with self.subTest(name):
+                forged = self.directory / f"forged-{name.replace(' ', '-')}.sqlite3"
+                forged.write_bytes(store.path.read_bytes())
+                forge(forged)
+                with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                    independent.verify_database(forged, **store._checker_expectations())
+
+    def test_restore_rebuilds_decision_commands(self) -> None:
+        store = self._store()
+        restored = FinancialOwner.restore_continuity(package_bytes=store.export_continuity(), recovered_path=self.directory / "restored.sqlite3", trusted_authority=store.trusted_authority)
+        query = "SELECT command_id,request_digest FROM commands WHERE command_id=?"
+        with closing(sqlite3.connect(f"file:{store.path}?mode=ro", uri=True)) as original, closing(sqlite3.connect(f"file:{restored.path}?mode=ro", uri=True)) as copy:
+            found = original.execute(query, (f"FOLLOWTHROUGH_DECISION:{CLOSE}",)).fetchall()
+            self.assertEqual((len(found), copy.execute(query, (f"FOLLOWTHROUGH_DECISION:{CLOSE}",)).fetchall()), (1, found))
+        restored.verify_integrity()
+
+    def test_gaps_for_untyped_suggestion_unknown_reason_and_activity_after_close(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        untyped = {**SUGGESTION, "source_id": "unknown-model", "source_ref": "triage:r3:1", "reason_code": "NOT_IN_RULES"}
+        _decide(store, item_id="item-r3", decision_id="decision:r3:close", reason_code="NOT_IN_RULES", suggestion=untyped)
+        store.clock.value = ASSIGN_AT
+        store.record_payment_evidence(item_id="item-r3", payment_id="payment:r3", common_origin_id="origin:r3", amount_cents=1_000, evidence_id="evidence:payment:r3", event_at_ms=ASSIGN_AT, source_id="state-collections")
+        pack = _pack(store)
+        for gap in ("gap:decision-not-in-rules:decision:r3:close", "gap:suggestion-source-not-typed:decision:r3:close", "gap:activity-after-close:item-r3"):
+            self.assertIn(gap, pack["unavailable"])
+        r3 = next(item for item in pack["items"] if item["item_id"] == "item-r3")
+        self.assertNotIn("STOPPED", {clock["status"] for clock in r3["clocks"]})
+
+    def test_close_needs_the_433_318_evidence(self) -> None:
+        # Each purpose a reason requires is met by its own evidence row, received by the decision time. The state-legal-office
+        # holds five purposes, so each reason here needs three legal-office rows (the notice row meets DISCOVERY_NOTICE).
+        for reason, short, fixed in (("BANKRUPTCY", ("creditor", "effort"), "petition"), ("OUT_OF_BUSINESS", ("location", "effort"), "certification")):
+            with self.subTest(reason):
+                (self.directory / reason).mkdir()
+                store = _build_r_store(self.directory / reason, RULES)
+                _legal(store, *short)
+                _decide(store, decision_id="decision:short", reason_code=reason)
+                self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
+                self.assertIn("gap:closure-evidence-missing:decision:short", _pack(store)["unavailable"])
+                _legal(store, fixed, at_ms=CLOSE_AT + 1)
+                _decide(store, CLOSE_AT + 2, decision_id="decision:met", reason_code=reason)
+                self.assertEqual(self._r2(store)["clocks"][0]["status"], "STOPPED")
+                unavailable = _pack(store)["unavailable"]
+                self.assertIn("gap:closure-evidence-missing:decision:short", unavailable)  # never retroactive
+                self.assertNotIn("gap:closure-evidence-missing:decision:met", unavailable)
+
+    def test_one_document_cannot_meet_two_required_purposes(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        _legal(store, "petition-and-creditor", "effort")  # one legal-office document offered for both BANKRUPTCY_PETITION and CREDITOR_RECORD
+        _decide(store)
+        self.assertIn(f"gap:closure-evidence-missing:{CLOSE}", _pack(store)["unavailable"])
+        self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
+        _legal(store, "creditor", at_ms=CLOSE_AT + 1)
+        _decide(store, CLOSE_AT + 2, decision_id="decision:r2:close-2")
+        self.assertEqual(self._r2(store)["clocks"][0]["status"], "STOPPED")
+
+    def test_partial_recovery_then_close_keeps_the_collected_share_due(self) -> None:
+        # 433.318(a)(1) excuses the state only to the extent it cannot recover: the collected part's federal share stays due.
+        store = _build_r_store(self.directory, RULES)
+        store.clock.value = EVIDENCE_AT
+        store.record_payment_evidence(item_id="item-r2", payment_id="payment:r2:partial", common_origin_id="origin:r2:partial", amount_cents=200_000,
+                                      evidence_id="evidence:payment:r2:partial", event_at_ms=EVIDENCE_AT, source_id="state-collections")
+        _legal(store, "petition", "creditor", "effort")
+        _decide(store)
+        item = self._r2(store)
+        federal = item["clocks"][0]
+        self.assertEqual((item["status"], item["open_cents"], federal["status"], federal["report"]), ("CLOSED", 300_000, "STOPPED", None))
+        self.assertIn("gap:write-off-line-unknown:item-r2", _pack(store)["unavailable"])
+        quarter, due, _ = _cms64_due(FEDERAL_ENDS, EVIDENCE_AT, 30)
+        self.assertEqual(item["collected_share"], {
+            "clock_id": "federal-share-credit", "collected_cents": 200_000, "basis_points": 5000, "cents": 100_000, "quarter": quarter, "due_ms": due,
+            "report": {"quarter": quarter, "form": "64.9C1", "line": None, "summary_line": "9C"}, "status": "MISSED"})
+        early = next(i for i in _pack(store, CLOSE_AT + DAY)["items"] if i["item_id"] == "item-r2")
+        self.assertEqual(early["collected_share"]["status"], "DUE")
+        (self.directory / "none").mkdir()
+        self.assertIsNone(self._r2(_decided_store(self.directory / "none"))["collected_share"])  # nothing collected: nothing due
+
+    def test_evidence_recorded_after_a_close_never_covers_it(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        _legal(store, "creditor", "effort")
+        _decide(store)
+        _legal(store, "petition", at_ms=CLOSE_AT)  # the same millisecond as the decision, recorded after it
+        unavailable = _pack(store)["unavailable"]
+        self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
+        for gap in (f"gap:closure-evidence-missing:{CLOSE}", "gap:activity-after-close:item-r2"):
+            self.assertIn(gap, unavailable)
+
+    def test_one_document_recorded_three_times_meets_one_purpose(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        store.clock.value = EVIDENCE_AT
+        for copy in "abc":
+            store.record_support_evidence(item_id="item-r2", evidence_id=f"evidence:copy-{copy}:r2", common_origin_id="origin:legal-doc-1", source_id="state-legal-office",
+                                          source_version="v1", local_ref="legal:doc-1", applicable_at_ms=EVIDENCE_AT, event_at_ms=EVIDENCE_AT)
+        _decide(store)
+        self.assertIn(f"gap:closure-evidence-missing:{CLOSE}", _pack(store)["unavailable"])
+        self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
+
+    def test_an_aggregate_id_shared_across_types_still_opens(self) -> None:
+        # A pack id equal to an obligation id: the whole-database walk keys by (type, id), as the pre-COMMIT query does.
+        store = _build_r_store(self.directory, RULES)
+        store.clock.value = EVIDENCE_AT
+        store.publish_control_pack(ControlPack(
+            pack_id=store.obligation_detail("item-r3")["obligation_id"], **SCOPE, version=2, source_refs=("synthetic:source:v2",),
+            effective_start_ms=4_000_000_000_000, effective_end_ms=4_100_000_000_000, recorded_at_ms=500, approved_at_ms=500,
+            calculation_rule_id="calculation:per-recipient:v1", adjustment_rule_id="adjustment:offset:v1",
+            authorized_roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER", "CASE_OWNER"),
+            expected_tests=("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate")))
+        _decide(store, item_id="item-r3", decision_id="decision:r3:assign", act="ASSIGN", reason_code=None, owner_id="state-recovery-unit")
+        independent.verify_database(store.path, **store._checker_expectations())
+        FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock()).verify_integrity()
+
+    def test_cli_records_followthrough_decision(self) -> None:
+        store = _build_r_store(self.directory, RULES)
+        _legal(store, "petition", "creditor", "effort")
+        (self.directory / "authority.json").write_bytes(json.dumps(financial_cli.authority_file_record(store.trusted_authority)).encode("ascii"))
+        (self.directory / "suggestion.json").write_bytes(_encode(SUGGESTION))
+        args = ["--database", str(store.path), "--authority-file", str(self.directory / "authority.json"), *[f"--{key.replace('_', '-')}={value}" for key, value in SCOPE.items()],
+                "record-followthrough-decision", "--item-id", "item-r2", "--decision-id", CLOSE, "--act", "CLOSE", "--reason-code", "BANKRUPTCY", "--suggestion", str(self.directory / "suggestion.json"),
+                "--actor-id", "synthetic-official", "--actor-role", "CASE_OWNER", "--expected-revision", str(store.obligation_detail("item-r2")["revision"])]
+        with patch.object(owner_module._SystemClock, "now_ms", return_value=CLOSE_AT):
+            for status in ("RECORDED", "DUPLICATE"):
+                with redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(financial_cli.main(args), 0)
+                self.assertEqual(json.loads(output.getvalue())["status"], status)
+
+    def test_a_decision_the_checker_rejects_is_refused_before_commit(self) -> None:
+        # The lean-live M0 F1 probe for this kind: an owner bug is refused before COMMIT, not found on the next open.
+        store = _build_r_store(self.directory, RULES)
+        before = _history(store)
+        with patch.object(owner_module, "_followthrough_shape", lambda *args, **kwargs: None):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^followthrough_verification:followthrough:payload"):
+                _decide(store, item_id="item-r3", act="REOPEN", reason_code="X", owner_id=None)
+        self.assertEqual(_history(store), before)
+        FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock()).verify_integrity()
 
 
 if __name__ == "__main__":

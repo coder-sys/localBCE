@@ -73,22 +73,21 @@ Only open ones remain (answer-first, dead-connection and dead-control items are 
 
 - **Illogical path.** The approver's reject-offset is enabled in every
  session (observed for analyst, director, auditor); the page has no roles
- by design. *Open.*
+ by design.
 - **Illogical path.** "exercise wrong-role" and "exercise stale-revision"
  buttons can only ever produce a rejection, and every role sees them.
- *Open.*
 - **Illogical path.** Record-report is enabled on Monday, before any
- decision or cash (observed). *Open.*
+ decision or cash (observed).
 - **Illogical path.** Restore-test is enabled for any role once H is paid,
  including the auditor (observed); stays disabled while a case is open,
- see friction 5. *Open.*
+ see friction 5.
 - **Orphan screen.** "Owner gate results" is fed only by the exercise
  buttons, disabled after the decision, so it reads "No gate attempts
- recorded" for good. *Open.*
+ recorded" for good.
 - **Trap-like.** The 19 other rows show "Case OPEN", but only H can be
- opened or acted on. *Open.*
+ opened or acted on.
 - **Trap.** After a detected Owner fork the page stays UNAVAILABLE with no
- reload instruction (found by code reading, not exercised). *Open.*
+ reload instruction (found by code reading, not exercised).
 - **Friction.** Disabled buttons give no reason. *Open*, though the
  automatic reload removed the common case.
 - **XIII.2, no jargon or internal IDs.** Decision facts now lead in plain

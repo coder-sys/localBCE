@@ -408,16 +408,14 @@ Constitution XI.2; implementations and evidence belong in `STATUS.md`.
  current store/export limits. Existing segmented Continuity does not
  prove million-event operation.
 
-Already governed by the constitution: private ZK is active in its own
-repository, post-quantum signatures have no classical fallback, and
-production activation is not granted by local build or test results.
+Private ZK, post-quantum-only signatures and activation are governed by the
+constitution; local build or test results grant no activation.
 
 ## 15. Beyond the gate
 
 The gate sits inside the same five-part product (`README.md`, `ARCHITECTURE.md`)
 and changes no role in it: Mirror is the exception queue and audit surface, and
-the owner stays the one financial writer (atomic, integer cents, explicit retry
-identity) — a UI, connector, verifier or shadow copy never becomes a second
+the owner stays the one financial writer: a UI, connector, verifier or shadow copy never becomes a second
 writer. Connectors stay allow-listed, bounded and read-only by default; the
 official receiver and payment system keep money-movement authority; Provider App
 remains a separate provider-side product that does not gate on the government
@@ -425,11 +423,8 @@ service. Cross-state reuse stays limited to versioned, non-sensitive interface
 schemas and conformance vectors; no state's population, rates or findings cross
 to another state.
 
-Commercial terms are the founder's (Constitution VIII): ~$2M/year operations
-plus the marginal 10/7/5-basis-point covered-flow schedule with a 5-basis-point
-floor, Provider App priced separately, no share of denials, recoveries,
-penalties, sanctions or savings. Nothing here selects a procurement route,
-funding classification or go-live date.
+Commercial terms are the founder's (Constitution VIII). Nothing here selects a
+procurement route, funding classification or go-live date.
 
 ## Related documents
 
