@@ -2,8 +2,8 @@
 
 ``pin FILE`` replaces each ``snap KIND ASOF COUNT ?`` with the SHA3-512 of the
 domain tag (``RR/GATE/RELEASED/v1`` or ``RR/GATE/UNRESOLVED/v1`` for those sets, else
-``RR/GATE/SNAPSHOT/v1``), ``KIND ASOF COUNT`` and the KIND rows after it; the
-author declares COUNT.  ``demo FILE`` writes the state-ZZ scenario with its
+``RR/GATE/SNAPSHOT/v1``) and a NUL, then ``KIND ASOF COUNT`` and the KIND rows
+after it, joined by newlines; the author declares COUNT.  ``demo FILE`` writes the state-ZZ scenario with its
 pins and prints what it seeded.  No rule is evaluated here: each line's
 expected outcome is the reason it was seeded with (ALLOW when none), and the
 Lean runner decides and compares every line.
@@ -26,7 +26,7 @@ def pin(lines):
                 if g[:1] == [f[1]]:
                     rows.append(" ".join(g))
             domain = f"RR/GATE/{f[1].upper()}/v1" if f[1] in ("released", "unresolved") else "RR/GATE/SNAPSHOT/v1"
-            text = "\n".join([domain, " ".join(f[1:4])] + rows)
+            text = domain + "\0" + "\n".join([" ".join(f[1:4])] + rows)
             out[i] = " ".join(f[:4] + [hashlib.sha3_512(text.encode()).hexdigest()])
     return out
 

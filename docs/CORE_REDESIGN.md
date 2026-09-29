@@ -483,3 +483,29 @@ shown on the pack's face.
     Ledger does not hold.
   - There is no per-claim service date, so the split uses the obligation
     period.
+
+## Gate formats round 7 (2026-09-28, XI.2 record)
+
+Gate formats are not frozen (D1); round 7 changes them and reissues the golden
+vectors. Every `RR/GATE` input now starts `NAME/v1` and a NUL (registry:
+`docs/RIGHTRAIL_FULL_STACK_TARGET.md` §5).
+
+- **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound: one
+  canonical line per entry, each with the request's flow, member key and payee,
+  summing to the amount; an FFS_CLAIM request without lines is refused.
+- **TOKEN leaf:** new `decided_at` before `epoch`, with `decided_at <= issued_at`;
+  kept across reissues. An FFS_CLAIM leaf needs a nonzero `lines_root`.
+- **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
+  released pin ‖ unresolved pin), never zero. The encoder refuses a first
+  checkpoint with a previous digest and a later one without.
+- **Rules pins:** the domain is followed by a NUL, not a newline; every
+  `rules_v1` and `demo_zz` pin was reissued.
+- **Payer:** a previous link to a non-adjacent checkpoint is a fork; one
+  certificate per (tenant, epoch); a decision older than 14 days (two FFS
+  checkwrite cycles) is refused.
+- **Codec:** `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses
+  a leaf routed to another shard. It stays stateless: the serialized,
+  persist-before-publish producer, the payer pin store and KEY-CERT are unbuilt
+  preconditions (target §4-§5).
+- **Test keys:** `TEST-ONLY-SEED` and `TEST-ONLY-MEMBER` follow the same NUL
+  convention, so every synthetic key and signature changed.

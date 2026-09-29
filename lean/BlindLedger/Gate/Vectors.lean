@@ -16,7 +16,8 @@ open BlindLedger.Gate
     only ML-DSA-87 triples treated as valid; the Python test verifies each of
     them with AWS-LC.  A checkpoint line expects `accept` (stored), `fork`
     (recorded as a fork) or `reject`.  Accepted request, response and
-    checkpoint lines list the decoded fields they must yield; a response line
+    checkpoint lines, and tokens that decode, list the decoded fields they must
+    yield; a response line
     names the decoded request it answers, and a `reissue` line checks
     `reissues` on the latest revision and two tokens.  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
@@ -49,7 +50,7 @@ def hexList : List Bytes → String
   | [] => "-"
   | xs => ",".intercalate (xs.map toHex)
 
-def flowNames : List (String × Flow) :=
+def flowNames : List (String × WireFlow) :=
   [("FFS_CYCLE", .FFS_CYCLE), ("FFS_CLAIM", .FFS_CLAIM), ("CAP_820", .CAP_820), ("SDP", .SDP),
    ("PLAN_PAY", .PLAN_PAY)]
 
@@ -79,8 +80,19 @@ def renderResponse (r : Response) : List String :=
 def renderCheckpoint (x : SignedCheckpoint) : List String :=
   let c := x.checkpoint
   [text c.tenantId, text c.programId, toString c.shardId, toString c.seqFrom, toString c.seqTo, toString c.epoch,
-   toHex c.prevCheckpoint, toHex c.eventHead, toHex c.tokenRoot, toHex c.evidenceRoot,
+   toHex c.prevCheckpoint, toHex c.eventHead, toHex c.tokenRoot, toHex c.evidenceRoot, toHex c.stateDigest,
    toString c.count, toString c.createdAt, toHex (sha3 x.header)]
+
+def tagName {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").getLast!
+
+def renderToken (t : Token) : List String :=
+  let l := t.leaf
+  [text l.tenantId, text l.programId, toString l.shardId, tagName l.flow, toString l.revision,
+   text l.paymentId, toHex l.memberKey, text l.payeeRef, toString l.amountCents, text l.period,
+   toHex l.linesRoot, tagName l.outcome, if l.reasonCodes.isEmpty then "-" else ",".intercalate (l.reasonCodes.map text),
+   tagName l.authority, toHex l.grantId, toHex l.ruleVersion, toHex l.engineRelease, toHex l.inputCommitment,
+   toString l.decidedAt, toString l.epoch, toString l.seq, toString l.issuedAt, toString l.expiresAt,
+   hexList t.siblings, toHex t.checkpointDigest]
 
 structure Ctx where
   state : PayerState :=
@@ -152,11 +164,11 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
       | some s => if s.forked.length > x.state.forked.length then "fork" else "accept"
     let fields := if got == "accept" then ((decodeCheckpoint b).map renderCheckpoint).getD [] else []
     pure ({ x with state := result.getD x.state }, some (got == expect && fields == rest))
-  | ["token", expect, decodes, _, payment, bytes] =>
+  | "token" :: expect :: decodes :: _ :: payment :: bytes :: rest =>
     let b ← hex bytes
     let p ← List.lookup payment x.payments
     let ok := verifyToken x.crypto x.state p b == (← verdict expect) &&
-      (decodeToken b).isSome == (decodes == "decode-ok")
+      (decodeToken b).isSome == (decodes == "decode-ok") && ((decodeToken b).map renderToken).getD [] == rest
     pure (x, some ok)
   | ["release", expect, _, payment, bytes] =>
     stepped x expect (release x.crypto x.state (← List.lookup payment x.payments) (← hex bytes))
@@ -176,6 +188,8 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
       (← hex out)))
   | ["input", _, request, readSet, out] =>
     pure (x, some (inputCommitment sha3 (← hex request) (← hex readSet) == (← hex out)))
+  | ["state", _, released, unresolved, out] =>
+    pure (x, some (stateDigest sha3 (← hex released) (← hex unresolved) == (← hex out)))
   | ["lines-root", _, lines, out] => pure (x, some (linesRoot sha3 (← list hex lines) == (← hex out)))
   | ["end", n] => pure ({ x with expected := some (← n.toNat?) }, none)
   | _ => none

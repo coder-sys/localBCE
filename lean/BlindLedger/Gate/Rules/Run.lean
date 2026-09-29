@@ -13,8 +13,8 @@ open BlindLedger.Gate.Rules
     PAYEE REND DATE PROC UNITS CENTS`; it also drops the lines earlier commits
     added to that set), whose rows are the following lines starting with KIND.  PIN is the SHA3-512 hex
     of `RR/GATE/RELEASED/v1`, `RR/GATE/UNRESOLVED/v1` (for those sets) or
-    `RR/GATE/SNAPSHOT/v1`, then `KIND ASOF COUNT` and the rows, joined by
-    newlines; a snapshot whose pin does not match or with a row that does not
+    `RR/GATE/SNAPSHOT/v1` and a NUL (every `RR/GATE` name's separator), then
+    `KIND ASOF COUNT` and the rows, joined by newlines; a snapshot whose pin does not match or with a row that does not
     parse is treated as missing, as is one after `drop KIND`.
     `line ...row fields... [OUTCOME REASONS [with=IDS]]` adds a line to the
     batch; `commit` decides it, checks the expectations (all lines or none)
@@ -60,7 +60,7 @@ def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option
   let rows := (st.rows.filter (·.1 == kind)).map (·.2)
   let domain := if kind == "released" || kind == "unresolved" then s!"RR/GATE/{kind.toUpper}/v1"
     else "RR/GATE/SNAPSHOT/v1"
-  let text := "\n".intercalate (domain :: s!"{kind} {asOf} {count}" :: rows.map (" ".intercalate <| kind :: ·))
+  let text := s!"{domain}\x00" ++ "\n".intercalate (s!"{kind} {asOf} {count}" :: rows.map (" ".intercalate <| kind :: ·))
   guard (hexOf (BlindLedger.Semantic.sha3_512 text.toUTF8) == pin)
   pure ⟨asOf, count, ← rows.mapM row⟩
 

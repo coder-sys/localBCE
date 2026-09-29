@@ -4,8 +4,9 @@ Formats: ``RR/GATE/DECIDE-REQUEST/v1``, ``RR/GATE/DECIDE-RESPONSE/v1``,
 ``RR/GATE/TOKEN/v1``, ``RR/GATE/CHECKPOINT/v1`` (ML-DSA-87 per-batch variant
 only) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
 ``RR/GATE/INPUT/v1``, ``RR/GATE/MERKLE-NODE/v1`` (the batch token tree),
-``RR/GATE/LINES-NODE/v1`` (a payment's lines tree) and ``RR/GATE/SHARD/v1``
-(a member's shard).
+``RR/GATE/LINES-NODE/v1`` (a payment's lines tree), ``RR/GATE/SHARD/v1``
+(a member's shard) and ``RR/GATE/STATE/v1`` (a checkpoint's released and
+unresolved sets).
 
 Grammar (the BLFIN02 style): every record starts with its ASCII domain and a
 NUL, which is also its explicit version; naturals are fixed-width big-endian
@@ -37,6 +38,7 @@ INPUT: Final = b"RR/GATE/INPUT/v1\x00"
 MERKLE_NODE: Final = b"RR/GATE/MERKLE-NODE/v1\x00"
 LINES_NODE: Final = b"RR/GATE/LINES-NODE/v1\x00"
 SHARD: Final = b"RR/GATE/SHARD/v1\x00"
+STATE: Final = b"RR/GATE/STATE/v1\x00"
 
 FLOWS: Final = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820", "SDP", "PLAN_PAY")
 OUTCOMES: Final = ("ALLOW", "HOLD", "HUMAN_REVIEW", "BLOCK")
@@ -56,15 +58,16 @@ MEMBER_KEY: Final = 32  # the member's salted hash (D5 salt vault)
 ZERO_DIGEST: Final = bytes(DIGEST)
 MAX_NAT: Final = (1 << 63) - 1
 MAX_LINES: Final = 65_535  # also bounds a lines tree to depth 16
-MAX_LINE_BYTES: Final = 512
+MAX_LINE_BYTES: Final = 569  # the largest canonical line (encode_line)
 MAX_EVIDENCE_REFS: Final = 256
 MAX_REASON_CODES: Final = 32
 MAX_BATCH: Final = 1_000
 MAX_TOKEN_PATH: Final = 10  # ceil(log2(MAX_BATCH))
 MAX_TOKEN_LIFETIME: Final = 7 * 24 * 3600  # seconds from issued_at to expires_at
+MAX_DECISION_AGE: Final = 14 * 24 * 3600  # the payer refuses an older decided_at (Lean maxDecisionAge)
 MAX_RETRY_AFTER_MS: Final = 3_600_000
 MAX_REQUEST_BYTES: Final = 8 * 1024 * 1024
-MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 3,892 bytes
+MAX_TOKEN_BYTES: Final = 4 * 1024  # the largest canonical token is 3,900 bytes
 ML_DSA_87_SIGNATURE: Final = 4627
 ML_DSA_87_PUBLIC_KEY: Final = 2592
 
@@ -152,6 +155,16 @@ def input_commitment(request: "DecideRequest", read_set_digest: bytes) -> bytes:
     return sha3_512(bytes(w.out))
 
 
+def state_digest(released_pin: bytes, unresolved_pin: bytes) -> bytes:
+    """SHA3-512(RR/GATE/STATE/v1 || released pin || unresolved pin): the rules'
+    released and unresolved sets after a batch, each as its 64-byte snapshot
+    pin (``tools/gate_rules_data.py``)."""
+    w = _Writer(STATE)
+    w.digest(released_pin, "released_pin")
+    w.digest(unresolved_pin, "unresolved_pin")
+    return sha3_512(bytes(w.out))
+
+
 def merkle_tree(domain: bytes, leaves: Sequence[bytes]) -> tuple[bytes, list[list[bytes]]]:
     """Root and per-leaf sibling paths (bottom-up) under ``domain``: leaf =
     H(domain || 0 || x), node = H(domain || 1 || l || r).  An odd last node is
@@ -177,6 +190,24 @@ def lines_root(lines: Sequence[bytes]) -> bytes:
 
 
 # ------------------------------------------------------ #1 DECIDE-REQUEST/v1
+
+
+def encode_line(flow: str, line_id: str, member_key: bytes, payee_ref: str, rendering: str,
+                service_date: int, procedure: str, units: int, cents: int) -> bytes:
+    """One canonical line (Lean ``pLine``): a leaf of ``lines_root`` and an
+    entry of ``DecideRequest.lines``.  The Lean decoder checks that a request's
+    lines share its flow, member and payee and sum to its amount."""
+    w = _Writer(b"")
+    w.tag(FLOWS, flow, "line_flow")
+    w.ident(line_id, "line_id")
+    w.digest(member_key, "line_member_key", MEMBER_KEY)
+    w.ident(payee_ref, "line_payee_ref")
+    w.ident(rendering, "line_rendering")
+    w.int(service_date, 4, "line_service_date")
+    w.ident(procedure, "line_procedure")
+    w.int(units, 4, "line_units")
+    w.int(cents, 8, "line_cents")
+    return bytes(w.out)
 
 
 @dataclass(frozen=True)
@@ -205,7 +236,7 @@ def encode_decide_request(request: DecideRequest) -> bytes:
     w.ident(request.payee_ref, "payee_ref")
     w.int(request.amount_cents, 8, "amount_cents")
     w.ident(request.period, "period")
-    if type(request.lines) is not tuple or (request.flow == "FFS_CLAIM" and request.lines):
+    if type(request.lines) is not tuple or (request.flow == "FFS_CLAIM" and not request.lines):
         _fail("lines")
     w.int(len(request.lines), 2, "lines", high=MAX_LINES)
     for line in request.lines:
@@ -237,11 +268,12 @@ class Checkpoint:
     event_head: bytes
     token_root: bytes
     evidence_root: bytes
+    state_digest: bytes
     count: int
     created_at: int
 
 
-_CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "evidence_root")
+_CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "evidence_root", "state_digest")
 
 
 def encode_checkpoint_header(cp: Checkpoint) -> bytes:
@@ -256,11 +288,14 @@ def encode_checkpoint_header(cp: Checkpoint) -> bytes:
     w.int(cp.epoch, 8, "epoch")
     for name in _CHECKPOINT_DIGESTS:
         w.digest(getattr(cp, name), name)
-    w.out += ZERO_DIGEST  # the state digest: defined in a later version; all zeros in v1
     w.int(cp.count, 2, "count", low=1, high=MAX_BATCH)
     w.int(cp.created_at, 8, "created_at")
     if cp.seq_to - cp.seq_from + 1 != cp.count:
         _fail("seq_range")
+    if (cp.seq_from == 0) != (cp.prev_checkpoint_digest == ZERO_DIGEST):
+        _fail("prev_checkpoint")
+    if cp.state_digest == ZERO_DIGEST:
+        _fail("state_digest")
     return bytes(w.out)
 
 
@@ -303,6 +338,7 @@ class TokenLeaf:
     rule_version: bytes
     engine_release: bytes
     input_commitment: bytes
+    decided_at: int
     epoch: int
     seq: int
     issued_at: int
@@ -330,7 +366,7 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
     w.int(leaf.amount_cents, 8, "amount_cents")
     w.ident(leaf.period, "period")
     w.digest(leaf.lines_root, "lines_root")
-    if leaf.flow == "FFS_CLAIM" and leaf.lines_root != ZERO_DIGEST:
+    if leaf.flow == "FFS_CLAIM" and leaf.lines_root == ZERO_DIGEST:
         _fail("lines_root")
     w.tag(OUTCOMES, leaf.outcome, "outcome")
     if type(leaf.reason_codes) is not tuple:
@@ -342,9 +378,9 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
     w.tag(AUTHORITIES, leaf.authority, "authority")
     for name in ("grant_id", "rule_version", "engine_release", "input_commitment"):
         w.digest(getattr(leaf, name), name)
-    for name in ("epoch", "seq", "issued_at", "expires_at"):
+    for name in ("decided_at", "epoch", "seq", "issued_at", "expires_at"):
         w.int(getattr(leaf, name), 8, name)
-    if not leaf.issued_at <= leaf.expires_at <= leaf.issued_at + MAX_TOKEN_LIFETIME:
+    if not leaf.decided_at <= leaf.issued_at <= leaf.expires_at <= leaf.issued_at + MAX_TOKEN_LIFETIME:
         _fail("lifetime")
     return bytes(w.out)
 
@@ -368,6 +404,8 @@ def sign_batch(
     prev_checkpoint_digest: bytes,
     event_head: bytes,
     evidence_root: bytes,
+    state_digest: bytes,
+    shard_count: int,
     created_at: int,
     sign: Callable[[bytes], bytes],
 ) -> tuple[Checkpoint, bytes, list[Token]]:
@@ -375,9 +413,11 @@ def sign_batch(
     invariant); each payment's token is its leaf plus a Merkle path to token_root.
     Leaves must be one shard writer's consecutive commits: same scope, shard
     and epoch, seq increasing by one, and at most one leaf per payment id across
-    flows.  Each leaf carries the engine release that decided it, so a
-    re-issued leaf keeps its own.  ``sign`` is the only signing call (see
-    right_rail_gate_signer)."""
+    flows; each leaf's shard is its member's under ``shard_count``.  Each leaf
+    carries the engine release and decision time that decided it, so a
+    re-issued leaf keeps its own.  Stateless: the serial, persist-before-publish
+    and fork self-check producer rules are unbuilt (Lean checkpoint section).
+    ``sign`` is the only signing call (see right_rail_gate_signer)."""
     if not 1 <= len(leaves) <= MAX_BATCH:
         _fail("batch")
     first = leaves[0]
@@ -385,12 +425,14 @@ def sign_batch(
         if (leaf.tenant_id, leaf.program_id, leaf.shard_id, leaf.epoch, leaf.seq) != (
                 first.tenant_id, first.program_id, first.shard_id, first.epoch, first.seq + index):
             _fail("batch")
+        if shard_of(leaf.tenant_id, leaf.member_key, shard_count) != leaf.shard_id:
+            _fail("batch_shard")
     if len({leaf.payment_id for leaf in leaves}) != len(leaves):
         _fail("batch_payment")
     root, paths = merkle_tree(MERKLE_NODE, [encode_token_leaf(leaf) for leaf in leaves])
     checkpoint = Checkpoint(
         first.tenant_id, first.program_id, first.shard_id, first.seq, first.seq + len(leaves) - 1, first.epoch,
-        prev_checkpoint_digest, event_head, root, evidence_root, len(leaves), created_at,
+        prev_checkpoint_digest, event_head, root, evidence_root, state_digest, len(leaves), created_at,
     )
     digest = checkpoint_digest(checkpoint)
     signature = sign(encode_checkpoint_header(checkpoint))

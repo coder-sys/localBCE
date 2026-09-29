@@ -92,20 +92,27 @@ twice. Response status: `DECIDED`, `DUPLICATE`, `REJECTED` (malformed input
 or a reused key with different bytes), or `UNAVAILABLE` (with a retry time;
 a full batch commits atomically or not at all). `outcome` is ALLOW, HOLD,
 HUMAN_REVIEW or BLOCK — the engine's existing `CLEAR`/non-`CLEAR`
-distinction, unchanged.
+distinction, unchanged. An FFS_CLAIM request carries its claim lines, each
+repeating the request's flow, member key and payee and together summing to
+its amount, so the token's `lines_root` commits to exactly the lines the
+rules decided.
 
 Before releasing money, the payer runs twelve checks against the token:
 canonical parse and domain; a stored checkpoint verified under its epoch
 certificate; that checkpoint's Merkle path; epoch at or above the payer's
-fence; not expired; payment fields match exactly; the token comes from the
+fence; not expired, and decided at most 14 days ago (the decision time is
+fixed across reissues; FFS checkwrites run weekly or biweekly, so an older
+ALLOW missed two cycles and is decided again); payment fields match exactly; the token comes from the
 shard the member key routes to; outcome is ALLOW; `rule_version` and
 `engine_release` are on the payer's approved list; the payment has not
 already been released; no fork is recorded for the tenant and epoch; and
 the payer sent a command for the payment and the member key is the one its
 first command pinned (a changed key is refused as `member_key_changed` until
-an official determination, not in v1). The pin is durably persisted before
-the first command leaves the payer, and every command path (retry, new
-command key, another flow) checks the same pin store. These twelve checks are one Lean predicate
+an official determination, not in v1). Unbuilt precondition of any payer
+adapter (none exists): the pin is durably persisted before the first command
+leaves the payer, and every command path (retry, new command key, another
+flow) checks the same pin store; required test: a kill between pin-persist
+and send leaves a pin and no command, never the reverse. These twelve checks are one Lean predicate
 (`verifyToken`), proved to accept only when all twelve hold, and published to
 payers as a reference verifier with conformance vectors. A release with no
 token and no bypass is a payer-side violation visible in Mirror.
@@ -129,16 +136,37 @@ per-payment cost reduced to a Merkle path and a hash comparison.
 
 Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
-projection roots, count, time), signed with the epoch's ML-DSA-87 key.
+projection roots, a never-zero state digest over the rules' released and
+unresolved pins, count, time), signed with the epoch's ML-DSA-87 key.
 There is one sequence counter per (tenant, shard, epoch), shared by all of
 the tenant's programs and starting at 0 in each epoch: no two checkpoints in
 that scope share a sequence, whatever their program, each names the
 checkpoint ending just before it as its previous, and an epoch's first
-checkpoint has an all-zero previous digest. The gate produces checkpoints
-serially per (tenant, shard), persists each before publishing it, and checks
-it against its own stored checkpoints for a fork before publishing. The
-KEY-CERT that carries an epoch key signs every field, the tenant's shard
-count included. Checkpoints stream to an independent witness — a separate
+checkpoint has an all-zero previous digest; a previous link to a
+non-adjacent checkpoint is a fork. Unbuilt preconditions (the codec's
+`sign_batch` is stateless; no producer or KEY-CERT exists): the producer
+serializes checkpoints per (tenant, shard), persists each before publishing
+it, and checks it against its own stored checkpoints for a fork before
+publishing, with the required test that a crash between sign and persist
+never publishes the unpersisted checkpoint nor reuses its sequence with
+other bytes; the KEY-CERT that carries an epoch key signs every field, the
+tenant's shard count included, and a payer accepts one certificate per
+(tenant, epoch).
+
+Every `RR/GATE` hash or signature input starts with its name, `/v1` and a
+NUL byte:
+
+| Name | Covers |
+|---|---|
+| DECIDE-REQUEST, DECIDE-RESPONSE, TOKEN, CHECKPOINT | the signed or parsed wire formats |
+| DECISION-ID, INPUT, SHARD | decision identity, decided-input digest, shard routing |
+| MERKLE-NODE, LINES-NODE | token and claim-line Merkle trees |
+| STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
+| SEGMENT | financial history segments |
+| KEY-CERT | epoch key certificate (planned) |
+| TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
+
+Checkpoints stream to an independent witness — a separate
 state agency or auditor, outside the database administrator's control —
 which cosigns only after checking sequence monotonicity, epoch monotonicity,
 and that no two checkpoints of one (tenant, shard, epoch) share a sequence

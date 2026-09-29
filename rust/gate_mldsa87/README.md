@@ -4,7 +4,7 @@ The one ML-DSA-87 signer/verifier for gate checkpoints (AWS-LC through aws-lc-rs
 `app/right_rail_gate_signer.py` runs `target/release/rr_gate_mldsa87.exe` only if it
 hashes to `rr_gate_mldsa87.sha256`.
 
-Build: `powershell -NoProfile -File build.ps1` (under the guard, `-MinFree 4190433321`).
+Build: `powershell -NoProfile -File build.ps1` (under the guard, `-MinFree 4029372048`).
 It prints the SHA-256 to pin. The inputs that fix the bytes:
 
 - `rust-toolchain.toml`: rustc/cargo 1.96.0 (ac68faa20 2026-05-25), x86_64-pc-windows-msvc.

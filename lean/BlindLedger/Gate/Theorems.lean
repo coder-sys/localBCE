@@ -193,8 +193,8 @@ theorem installCert_shardCount {c : Crypto} {s : PayerState} {e : EpochCert} {te
           have hall := hfit.2 x (List.mem_of_find?_eq_some hx)
           have hxt := List.find?_some hx
           rw [beq_iff_eq.1 hxt, ← beq_iff_eq.1 het] at hall
-          simp only [bne_self_eq_false, Bool.false_or, beq_iff_eq] at hall
-          simp only [List.find?, het, Option.map, hall]
+          simp only [bne_self_eq_false, Bool.false_or, Bool.and_eq_true, beq_iff_eq] at hall
+          simp only [List.find?, het, Option.map, hall.1]
         | false => simp only [List.find?, het, hx, Option.map]
       · simp only [hx, Option.map]
     · simp only [hx, Option.map]
@@ -423,9 +423,10 @@ theorem release_isSome (c : Crypto) (s : PayerState) (p : Payment) (bytes : Byte
   | none => simp [verifyToken, hd]
   | some t => by_cases hv : verifyToken c s p bytes = true <;> simp [hv]
 
-/-- At most one release per payment (the model's `AtMostOnceRelease`): after a
-    release, every token for the same tenant, program and payment id, under
-    any flow, is rejected. -/
+/-- At most one release per payment (the model's `AtMostOnceRelease`): in the
+    state right after a release, every token for the same tenant, program and
+    payment id, under any flow, is rejected.  That this persists through later
+    steps rests on `Step.released_grows`, stated below and not yet proved. -/
 theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
     {bytes bytes' : Bytes} {t t' : Token} (h : release c s p bytes = some s')
     (hd : decodeToken bytes = some t) (hd' : decodeToken bytes' = some t')
@@ -438,6 +439,16 @@ theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
     simp [verifyToken, hd', unreleased, hk]
     split <;> rfl
   · simp at h
+
+/-- Frozen statement (LM1, open): no step removes a released payment. -/
+theorem Step.released_grows {c : Crypto} {s s' : PayerState} (h : Step c s s') :
+    ∀ k ∈ s.released, k ∈ s'.released := by
+  sorry
+
+/-- Frozen statement (LM1, open): every step sequence preserves `Coherent`. -/
+theorem Steps.coherent {c : Crypto} {s s' : PayerState} (h : Steps c s s') (hs : Coherent s) :
+    Coherent s' := by
+  sorry
 
 /-- Whatever `pathCollision` returns is a collision: distinct inputs, one output. -/
 theorem pathCollision_sound {H : Bytes → Bytes} {d : Bytes} (fuel : Nat) :

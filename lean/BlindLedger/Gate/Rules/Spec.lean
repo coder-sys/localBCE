@@ -74,16 +74,22 @@ namespace BlindLedger.Gate.Rules
     unresolved set is the release path's (see STATUS).
 
     Mapping onto the token (`BlindLedger.Gate.Spec`, gate-v1; not imported):
-    `Flow.tag` and the outcome names equal the token's; `reasons` lists the
-    codes in ascending byte order, as the leaf's `reasonCodes` requires.  One
-    `Line` becomes one canonical line leaf of `Request.lines` (flow tag, then
-    each field; identifiers are the u16-length identifiers read as big-endian
-    naturals after a 0x01 byte, which is injective), so `lines_root` commits
-    to exactly the lines decided here.  The payment is ALLOW when every line
-    is; a held line leaves the cycle.  Snapshot and set pins
-    (SHA3-512 under `RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` and
-    `RR/GATE/UNRESOLVED/v1` over kind,
-    date, declared count and rows) join the token's read-set digest.  Dates
+    `Flow.tag` and the outcome names equal the wire's `WireFlow` and
+    `WireOutcome`; `reasons` lists the codes in ascending byte order, as the
+    leaf's `reasonCodes` requires.  One `Line` is one canonical line of
+    `Request.lines` (`pLine`: flow tag, line id, 32-byte member key, payee,
+    rendering party, u32 date, procedure, u32 units, u64 cents); `id`,
+    `member`, `payee`, `rendering` and `proc` are those identifiers and the
+    member key read as big-endian naturals after a 0x01 byte, which is
+    injective.  The request decoder binds every line to the payment's flow,
+    member and payee and their sum to its amount, an FFS_CLAIM carries its
+    lines, and `lines_root` commits to exactly the lines decided here.  The
+    payment is ALLOW when every line is; a held line leaves the cycle.
+    Snapshot and set pins (SHA3-512 of `RR/GATE/SNAPSHOT/v1`,
+    `RR/GATE/RELEASED/v1` or `RR/GATE/UNRESOLVED/v1` and a NUL, then kind,
+    date, declared count and rows) join the token's read-set digest; the
+    released and unresolved pins after a batch are the checkpoint's state
+    digest (`RR/GATE/STATE/v1`), whose producer is not built.  Dates
     are CCYYMMDD naturals (X12 D8), so on valid dates `<` is calendar order.
     Synthetic, nonpayment, activation=false. -/
 

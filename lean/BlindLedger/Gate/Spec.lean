@@ -3,8 +3,12 @@ namespace BlindLedger.Gate
 /-! Payment gate formats, first slice (founder decision D1, 2026-09-25):
     `RR/GATE/DECIDE-REQUEST/v1`, `DECIDE-RESPONSE/v1`, `TOKEN/v1`,
     `CHECKPOINT/v1` (ML-DSA-87 per-batch variant) and the SHA3-512 digest
-    domains `DECISION-ID/v1`, `INPUT/v1`, `MERKLE-NODE/v1` (batch token tree)
-    and `LINES-NODE/v1` (a payment's lines tree).
+    domains `DECISION-ID/v1`, `INPUT/v1`, `MERKLE-NODE/v1` (batch token tree),
+    `LINES-NODE/v1` (a payment's lines tree), `SHARD/v1` and `STATE/v1` (the
+    rules' released and unresolved sets).  Every name, the rules' set pins
+    included, is registered in `docs/RIGHTRAIL_FULL_STACK_TARGET.md` §5.  Gate
+    `WireFlow` and `WireOutcome` are the wire enums; `BlindLedger.Gate.Rules`
+    has its own `Flow` and `Outcome`, whose tags and names equal these.
 
     These decoders are the specification; `app/right_rail_gate_codec.py` only
     produces bytes.  A payer installs epoch certificates and stores each signed
@@ -22,7 +26,8 @@ def maxNat : Nat := 2 ^ 63 - 1
 def maxBatch : Nat := 1000
 def maxTokenPath : Nat := 10
 def maxLines : Nat := 65535
-def maxLineBytes : Nat := 512
+/-- The largest canonical line (`pLine`: four 128-byte identifiers). -/
+def maxLineBytes : Nat := 569
 def maxEvidenceRefs : Nat := 256
 def maxReasonCodes : Nat := 32
 def maxRetryAfterMs : Nat := 3600000
@@ -36,12 +41,16 @@ def memberKeyBytes : Nat := 32
 def clockSkew : Nat := 300
 /-- Seven days: the longest `expires_at - issued_at` a token may carry. -/
 def maxTokenLifetime : Nat := 7 * 24 * 3600
+/-- Fourteen days: FFS checkwrites run weekly or biweekly, so an ALLOW is paid
+    in the cycle it was decided for or the next; an older one missed both and
+    is decided again, under a new revision, on current data. -/
+def maxDecisionAge : Nat := 14 * 24 * 3600
 def zeroDigest : Bytes := List.replicate digestBytes 0
 
 def domain (name : String) : Bytes := ("RR/GATE/" ++ name ++ "/v1").toUTF8.toList ++ [0]
 
-inductive Flow | FFS_CYCLE | FFS_CLAIM | CAP_820 | SDP | PLAN_PAY deriving DecidableEq, Repr
-inductive Outcome | ALLOW | HOLD | HUMAN_REVIEW | BLOCK deriving DecidableEq, Repr
+inductive WireFlow | FFS_CYCLE | FFS_CLAIM | CAP_820 | SDP | PLAN_PAY deriving DecidableEq, Repr
+inductive WireOutcome | ALLOW | HOLD | HUMAN_REVIEW | BLOCK deriving DecidableEq, Repr
 inductive Authority | OBSERVE | HOLD | TRANSFER deriving DecidableEq, Repr
 /-- `PAYMENT_ALREADY_DECIDED`: a new command key, under any flow, for a payment
     that already has a decision; the existing decision comes back, re-issued
@@ -137,10 +146,10 @@ def natBE (width value : Nat) : Bytes :=
 
 def identField (x : Bytes) : Bytes := natBE 2 x.length ++ x
 
-def flows : List Flow := [.FFS_CYCLE, .FFS_CLAIM, .CAP_820, .SDP, .PLAN_PAY]
+def flows : List WireFlow := [.FFS_CYCLE, .FFS_CLAIM, .CAP_820, .SDP, .PLAN_PAY]
 
 /-- The wire tag of a flow: its position in `flows`, plus one. -/
-def Flow.tag : Flow → UInt8
+def WireFlow.tag : WireFlow → UInt8
   | .FFS_CYCLE => 1 | .FFS_CLAIM => 2 | .CAP_820 => 3 | .SDP => 4 | .PLAN_PAY => 5
 
 
@@ -161,6 +170,12 @@ def shardOf (H : Bytes → Bytes) (tenant memberKey : Bytes) (shardCount : Nat) 
 
 def inputCommitment (H : Bytes → Bytes) (request readSet : Bytes) : Bytes :=
   H (domain "INPUT" ++ natBE 4 request.length ++ request ++ readSet)
+
+/-- A checkpoint's state digest: the gate's checkpoints of its released and
+    unresolved sets after the batch (`BlindLedger.Gate.Rules.Result`), each as
+    the 64-byte pin the rules runner checks (`Rules/Run.lean` `snapshot`). -/
+def stateDigest (H : Bytes → Bytes) (releasedPin unresolvedPin : Bytes) : Bytes :=
+  H (domain "STATE" ++ releasedPin ++ unresolvedPin)
 
 /-- Merkle trees under a domain `d`: `MERKLE-NODE` for a batch's tokens,
     `LINES-NODE` for a payment's lines.  Leaf `H(d ‖ 0 ‖ x)`, node `H(d ‖ 1 ‖ l ‖ r)`. -/
@@ -233,15 +248,36 @@ def leafCollision (H : Bytes → Bytes) (d x y : Bytes) (index count : Nat) (p q
 
 /-! ## #1 DECIDE-REQUEST/v1 -/
 
-def outcomes : List Outcome := [.ALLOW, .HOLD, .HUMAN_REVIEW, .BLOCK]
+def outcomes : List WireOutcome := [.ALLOW, .HOLD, .HUMAN_REVIEW, .BLOCK]
 def authorities : List Authority := [.OBSERVE, .HOLD, .TRANSFER]
 def statuses : List Status := [.DECIDED, .DUPLICATE, .REJECTED, .UNAVAILABLE, .PAYMENT_ALREADY_DECIDED]
 def rejectCodes : List RejectCode := [.MALFORMED, .COMMAND_KEY_CONFLICT]
 
+/-- One line of `Request.lines`, a leaf of `lines_root`: the rules' `Line`
+    as flow tag, line id, member key, payee, rendering party, service date
+    (CCYYMMDD), procedure, units and cents; identifiers are u16-length. -/
+structure WireLine where
+  flow : WireFlow
+  memberKey : Bytes
+  payeeRef : Bytes
+  cents : Nat
+
+def pLine : P WireLine := do
+  let flow ← tag flows
+  let _ ← ident
+  let memberKey ← take memberKeyBytes
+  let payeeRef ← ident
+  let _ ← ident
+  let _ ← nat 4
+  let _ ← ident
+  let _ ← nat 4
+  let cents ← nat 8
+  pure { flow, memberKey, payeeRef, cents }
+
 structure Request where
   tenantId : Bytes
   programId : Bytes
-  flow : Flow
+  flow : WireFlow
   commandKey : Bytes
   paymentId : Bytes
   memberKey : Bytes
@@ -263,7 +299,13 @@ def pRequest : P Request := do
   let amountCents ← nat 8
   let period ← ident
   let lines ← many (blob 1 maxLineBytes) (← nat 2 0 maxLines)
-  need (flow != .FFS_CLAIM || lines.isEmpty)
+  -- Each line is canonical and this payment's (flow, member, payee), the
+  -- lines sum to its amount, and a per-claim payment carries its lines.
+  let ls := lines.filterMap (parse pLine maxLineBytes)
+  need (ls.length == lines.length)
+  need (ls.all fun l => l.flow == flow && l.memberKey == memberKey && l.payeeRef == payeeRef)
+  need (lines.isEmpty || ls.foldl (· + ·.cents) 0 == amountCents)
+  need (flow != .FFS_CLAIM || !lines.isEmpty)
   let evidenceRefs ← many digest (← nat 2 0 maxEvidenceRefs)
   need (ascending evidenceRefs)
   pure { tenantId, programId, flow, commandKey, paymentId, memberKey, payeeRef, amountCents, period,
@@ -279,11 +321,11 @@ def decodeRequest : Bytes → Option Request := parse pRequest maxRequestBytes
     common seq whatever their program, and `prevCheckpoint` is the digest of
     the checkpoint ending at `seqFrom - 1` (`forks` checks both, within one
     epoch); the first checkpoint of an epoch has `seqFrom` 0 and an all-zero
-    `prevCheckpoint` (the decoder checks it).  The gate produces checkpoints
-    serially per (tenant, shard), persists each before publishing it, and
-    before publishing runs `forks` against its own stored checkpoints.  The
-    engine release travels in each leaf, since a re-issued leaf keeps the
-    release that decided it. -/
+    `prevCheckpoint` (the decoder checks it).  Unbuilt requirement of any
+    producer (none exists; `sign_batch` keeps no state): serial per (tenant,
+    shard), persist before publish, and run `forks` against its own stored
+    checkpoints before publishing.  The engine release travels in each leaf,
+    since a re-issued leaf keeps the release that decided it. -/
 
 structure Checkpoint where
   tenantId : Bytes
@@ -296,10 +338,12 @@ structure Checkpoint where
   eventHead : Bytes
   tokenRoot : Bytes
   evidenceRoot : Bytes
+  stateDigest : Bytes
   count : Nat
   createdAt : Nat
 
-/-- The signed header: `prevCheckpoint` is the hash of the previous one's header. -/
+/-- The signed header: `prevCheckpoint` is the hash of the previous one's
+    header; the state digest (`stateDigest`) is never zero. -/
 def pCheckpoint : P Checkpoint := do
   expect (domain "CHECKPOINT")
   let _ ← nat 1 1 1
@@ -313,14 +357,14 @@ def pCheckpoint : P Checkpoint := do
   let eventHead ← digest
   let tokenRoot ← digest
   let evidenceRoot ← digest
-  -- The state digest: defined in a later version; all zeros in v1.
-  expect zeroDigest
+  let stateDigest ← digest
   let count ← nat 2 1 maxBatch
   let createdAt ← nat 8
+  need (stateDigest != zeroDigest)
   need (seqTo + 1 == seqFrom + count)
   need ((seqFrom == 0) == (prevCheckpoint == zeroDigest))
   pure { tenantId, programId, shardId, seqFrom, seqTo, epoch, prevCheckpoint, eventHead, tokenRoot,
-         evidenceRoot, count, createdAt }
+         evidenceRoot, stateDigest, count, createdAt }
 
 structure SignedCheckpoint where
   checkpoint : Checkpoint
@@ -342,7 +386,7 @@ structure Leaf where
   tenantId : Bytes
   programId : Bytes
   shardId : Nat
-  flow : Flow
+  flow : WireFlow
   revision : Nat
   paymentId : Bytes
   memberKey : Bytes
@@ -350,13 +394,14 @@ structure Leaf where
   amountCents : Nat
   period : Bytes
   linesRoot : Bytes
-  outcome : Outcome
+  outcome : WireOutcome
   reasonCodes : List Bytes
   authority : Authority
   grantId : Bytes
   ruleVersion : Bytes
   engineRelease : Bytes
   inputCommitment : Bytes
+  decidedAt : Nat
   epoch : Nat
   seq : Nat
   issuedAt : Nat
@@ -383,16 +428,17 @@ def pLeaf : P Leaf := do
   let ruleVersion ← digest
   let engineRelease ← digest
   let inputCommitment ← digest
+  let decidedAt ← nat 8
   let epoch ← nat 8
   let seq ← nat 8
   let issuedAt ← nat 8
   let expiresAt ← nat 8
-  need (flow != .FFS_CLAIM || linesRoot == zeroDigest)
+  need (flow != .FFS_CLAIM || linesRoot != zeroDigest)
   need (ascending reasonCodes)
-  need (issuedAt ≤ expiresAt && expiresAt ≤ issuedAt + maxTokenLifetime)
+  need (decidedAt ≤ issuedAt && issuedAt ≤ expiresAt && expiresAt ≤ issuedAt + maxTokenLifetime)
   pure { tenantId, programId, shardId, flow, revision, paymentId, memberKey, payeeRef, amountCents, period,
          linesRoot, outcome, reasonCodes, authority, grantId, ruleVersion, engineRelease, inputCommitment,
-         epoch, seq, issuedAt, expiresAt }
+         decidedAt, epoch, seq, issuedAt, expiresAt }
 
 structure Token where
   leaf : Leaf
@@ -411,7 +457,8 @@ def decodeToken : Bytes → Option Token := parse pToken maxTokenBytes
 /-- Re-issue (the model's `EmitToken`).  When the stored token of an
     unreleased decision is fenced by a newer epoch or has expired, the gate
     answers `DUPLICATE` or `PAYMENT_ALREADY_DECIDED` with the same decision
-    signed again: every leaf field (engine release included) equal except a
+    signed again: every leaf field (engine release and decision time
+    included) equal except a
     later (epoch, seq), compared in that order since the seq counter restarts
     at each epoch, and a new lifetime.  Only the payment's `latest` revision
     in the gate's store is re-issued.  It never decides again. -/
@@ -489,8 +536,8 @@ inductive Refusal | member_key_changed deriving DecidableEq, Repr
 structure Crypto where
   hash : Bytes → Bytes
   /-- KEY-CERT (#5) chain validity, supplied until that format exists.
-      Normative: KEY-CERT signs every field, shard count included, so a
-      certificate id reused with any changed field has no valid chain. -/
+      Unbuilt requirement: KEY-CERT signs every field, shard count included,
+      so a certificate id reused with any changed field has no valid chain. -/
   certChainOk : EpochCert → Bool
   /-- ML-DSA-87 verification: public key, message, signature. -/
   sigOk : Bytes → Bytes → Bytes → Bool
@@ -531,10 +578,11 @@ def raiseFence (fence : Bytes → Nat) (tenant : Bytes) (epoch : Nat) : Bytes �
 
 /-- An epoch certificate the payer can install: its shard count is a u32 of
     at least 1 and equals every installed one of its tenant (v1 has no
-    resharding). -/
+    resharding), and its tenant has no installed certificate for its epoch
+    (one key per tenant and epoch). -/
 def fits (s : PayerState) (e : EpochCert) : Bool :=
   0 < e.shardCount && e.shardCount < 2 ^ 32 &&
-    s.certs.all (fun x => x.tenantId != e.tenantId || x.shardCount == e.shardCount)
+    s.certs.all (fun x => x.tenantId != e.tenantId || x.shardCount == e.shardCount && x.epoch != e.epoch)
 
 /-- Install an epoch certificate: the new state and whether it was installed.
     A valid chain raises the tenant's fence to its epoch (the model's
@@ -550,9 +598,10 @@ def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : PayerState × Bo
 def shardCountOf (s : PayerState) (tenant : Bytes) : Option Nat :=
   (s.certs.find? (·.tenantId == tenant)).map (·.shardCount)
 
-/-- `b` starts right after `a` ends but does not name `a` as its previous checkpoint. -/
+/-- `b` starts right after `a` ends but does not name `a` as its previous
+    checkpoint, or names `a` without starting right after it. -/
 def misLinked (a b : Stored) : Bool :=
-  a.checkpoint.seqTo + 1 == b.checkpoint.seqFrom && b.checkpoint.prevCheckpoint != a.digest
+  (a.checkpoint.seqTo + 1 == b.checkpoint.seqFrom) != (b.checkpoint.prevCheckpoint == a.digest)
 
 /-- Two different checkpoints of one tenant, shard and epoch fork when they
     cover a common seq or one follows the other without linking to it. -/
@@ -590,7 +639,7 @@ def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option Payer
 structure Payment where
   tenantId : Bytes
   programId : Bytes
-  flow : Flow
+  flow : WireFlow
   paymentId : Bytes
   memberKey : Bytes
   payeeRef : Bytes
@@ -605,9 +654,10 @@ def Payment.key (p : Payment) : PayKey := (p.tenantId, p.programId, p.paymentId)
 /-- The payer sends a DECIDE command for a payment (the model's only command
     step): the first send pins its member key, and every later send (a retry,
     a new command key, another flow) must carry the pinned key.  A pin is
-    never changed, and a lost or HOLD response opens no gap.  Normative: the
-    pin is durably persisted before the command leaves the payer, every
-    command path uses this one pin store, and a refused send sends nothing. -/
+    never changed, and a lost or HOLD response opens no gap.  Unbuilt
+    requirement of any payer adapter (none exists): the pin is durably
+    persisted before the command leaves the payer, every command path uses
+    this one pin store, and a refused send sends nothing. -/
 def send (s : PayerState) (p : Payment) : Except Refusal PayerState :=
   match s.pins.lookup p.key with
   | none => .ok { s with pins := (p.key, p.memberKey) :: s.pins }
@@ -628,9 +678,11 @@ def inBatch (c : Crypto) (cp : Checkpoint) (t : Token) : Bool :=
 /-- Check 4: epoch ≥ the tenant's fence. -/
 def aboveFence (s : PayerState) (t : Token) : Bool := s.fence t.leaf.tenantId ≤ t.leaf.epoch
 
-/-- Check 5: issued and not expired, each allowing `clockSkew` seconds. -/
+/-- Check 5: issued, not expired and decided less than `maxDecisionAge` ago,
+    each allowing `clockSkew` seconds. -/
 def unexpired (s : PayerState) (t : Token) : Bool :=
-  t.leaf.issuedAt ≤ s.now + clockSkew && s.now < t.leaf.expiresAt + clockSkew
+  t.leaf.issuedAt ≤ s.now + clockSkew && s.now < t.leaf.expiresAt + clockSkew &&
+    s.now < t.leaf.decidedAt + maxDecisionAge + clockSkew
 
 /-- Check 6: the payment matches field for field and its lines hash to `lines_root`. -/
 def paymentMatches (c : Crypto) (p : Payment) (t : Token) : Bool :=
@@ -679,9 +731,11 @@ def verifyToken (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Bo
         unforked s t && keyPinned s t
 
 /-- The payer's release on the token bytes `verifyToken` accepts: record the
-    payment key.  The fence needs no raise: on every reachable state it already
+    payment key.  The fence needs no raise: on a `Coherent` state it already
     equals the token's epoch (`verifyToken_fence_eq_epoch`), which is where
-    `PayerRelease` in `docs/formal/gate_failover/gate_failover.tla` puts it. -/
+    `PayerRelease` in `docs/formal/gate_failover/gate_failover.tla` puts it.
+    Install, store and release are proved to keep `Coherent`; that every
+    step sequence does (`Steps.coherent`) is stated, not yet proved. -/
 def release (c : Crypto) (s : PayerState) (p : Payment) (bytes : Bytes) : Option PayerState :=
   match decodeToken bytes with
   | none => none
