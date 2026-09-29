@@ -242,6 +242,10 @@ class FinancialMirrorTests(unittest.TestCase):
         )
         self.assertEqual(self.store.publish_control_pack(later_pack)["status"], "PUBLISHED")
         self.assertEqual(self._followup(), ("CURRENT", []))
+        support = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        accepted = support["mirror_explanation"]["accepted_basis"]["control_pack"]
+        self.assertNotEqual(accepted["pack_id"], later_pack.pack_id)  # H is decided under the older pack, so the rule version is that pack, not the current one
+        self.assertEqual(support["corporate_support"]["rule_version"], {key: accepted[key] for key in ("pack_id", "version", "digest")})
         self.store.record_offset_claim(
             item_id=H_ITEM_ID, claim_id="claim:offset:h2", amount_cents=1, evidence_id="evidence:offset:claim:h2", deadline_ms=1_774_915_200_000,
         )
@@ -274,6 +278,40 @@ class FinancialMirrorTests(unittest.TestCase):
                     with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
                         self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
 
+    def test_the_pack_named_in_a_support_package_has_fixed_shapes_or_none(self) -> None:
+        self._prepare_action()
+        good = json.loads(json.dumps(self.store.correction_followup_outputs(H_ITEM_ID, "action:correction:h")))
+
+        def output(edit: object, *, no_basis: bool = False, rule_version: object = None) -> dict:
+            bad = json.loads(json.dumps(good))
+            for part in ("mirror_explanation", "state_report"):  # the two views must agree, so both carry the edit
+                if no_basis:
+                    bad[part]["accepted_basis"] = None
+                else:
+                    edit(bad[part]["accepted_basis"]["control_pack"])
+            if rule_version is not None:
+                bad["corporate_support"]["rule_version"] = rule_version
+            else:
+                edit(bad["corporate_support"]["rule_version"])
+            return bad
+
+        for name, edit in {
+            "a free-text pack id": lambda p: p.update(pack_id="member Jane Doe"),
+            "a bool version": lambda p: p.update(version=True),
+            "a zero version": lambda p: p.update(version=0),
+            "a short digest": lambda p: p.update(digest="AB"),
+            "a lower-case digest": lambda p: p.update(digest=p["digest"].lower()),
+        }.items():
+            with self.subTest(name), mock.patch.object(self.store, "correction_followup_outputs", return_value=output(edit)):
+                with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
+                    self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+        with self.subTest("no accepted basis names no rule version"):
+            with mock.patch.object(self.store, "correction_followup_outputs", return_value=output(None, no_basis=True, rule_version="NONE")):
+                self.assertEqual(self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")["corporate_support"]["rule_version"], "NONE")
+            with mock.patch.object(self.store, "correction_followup_outputs", return_value=output(None, no_basis=True, rule_version=good["corporate_support"]["rule_version"])):
+                with self.assertRaisesRegex(FinancialMirrorContinuityError, "corporate_support_allowlist"):
+                    self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
+
     def test_a_failed_restore_gives_a_support_package_holding_only_its_fixed_failure_code(self) -> None:
         with self.assertRaises(FinancialMirrorContinuityError) as mirror_failure:
             self.mirror.restore_continuity(self.mirror.export_continuity(), self.db)
@@ -303,10 +341,12 @@ class FinancialMirrorTests(unittest.TestCase):
         root = Path(financial_engine.__file__).parent
         found = set()
         for name in ("right_rail_financial_owner.py", "right_rail_financial_mirror.py"):
-            found |= set(re.findall(r'(?:_fail\(\w*Continuity\w*,|_id\(\w*,)\s*f?"(continuity_[a-z_]+)"', (root / name).read_text(encoding="utf-8")))
+            text = (root / name).read_text(encoding="utf-8")
+            found |= set(re.findall(r'_fail\([^,]+,\s*f?"(continuity_[a-z0-9_:-]+)"', text))
+            found |= {"continuity_identity:" + sub for sub in re.findall(r'f"\{code_prefix\}:([a-z_-]+)"', text)}
         named = {"continuity_history_head", "continuity_package_digest", "continuity_shadow_boundary", "continuity_test_boundary"}
         self.assertTrue(found)
-        self.assertEqual((found | named) - set(owner.CONTINUITY_ERROR_CODES), set())
+        self.assertEqual({code for code in found | named if "{" not in code} - set(owner.CONTINUITY_ERROR_CODES), set())
         self.assertEqual(len(set(owner.CONTINUITY_ERROR_CODES)), len(owner.CONTINUITY_ERROR_CODES))
 
     def test_the_reproduction_names_a_case_in_the_pinned_vector_result(self) -> None:

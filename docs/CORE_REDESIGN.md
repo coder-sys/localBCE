@@ -144,7 +144,8 @@ the correction it pays; an acknowledgment still has zero cash effect.
   versions, `work_ref_count`, reproduction. Consumers: the correction follow-up
   (Owner builds, Mirror re-checks) and a failed Continuity restore (Mirror
   builds in `_restore_continuity` and attaches it to the raised error as
-  `corporate_support`; the staff `restore-test` endpoint returns it with the 409).
+  `corporate_support`; only the staff endpoint's 409 response returns it, the
+  403, 503 and 400 responses do not).
 - **Sources:** rule version = the pack the correction was decided under,
   `accepted_basis.control_pack` `{pack_id, version, digest}`, NONE if there is no
   accepted basis; adapter `population` = the population manifest contract for a
@@ -161,7 +162,8 @@ the correction it pays; an acknowledgment still has zero cash effect.
   anything else is `UNCLASSIFIED`; never message text.
 - **Invariant / failure:** Mirror compares the Owner's raw package with the
   approved one by JSON equality (so `false` is not `0`) before any projection,
-  so an extra key at any level is refused, not dropped. Tests run
+  so an extra key at any level is refused, not dropped; the pack fields must
+  also have fixed shapes (id pattern, positive int version, 128-digit upper hex). Tests run
   `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
   require that it reports nothing beyond its unapproved-schema notice; that is
   what is checked, not a proof that no package can leak.
@@ -173,7 +175,9 @@ the correction it pays; an acknowledgment still has zero cash effect.
   and has no outside consumer. Deleted: the Owner's `_corporate_support` and
   `continuity_restore_support` builders, its `restore_test_continuity` wrapper
   (callers use `restore_continuity(restore_mode="TEST")`) and Mirror's restore
-  re-check, which the Owner's package validation already made.
+  re-check, which the Owner's package validation already made, and the Mirror's
+  own restore-mode check (the Owner refuses a bad mode first, before it creates
+  anything).
 - **Replacement control:** Mirror, staff-server and acceptance tests, run through
   the guard.
 - **Scope / follow-ups:** correction follow-up and restore failure only. A

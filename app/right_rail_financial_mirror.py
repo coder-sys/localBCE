@@ -1059,6 +1059,9 @@ class FinancialMirror:
         stage, error_class = {"CURRENT": ("NONE", "NONE"), "REOPENED": ("FOLLOWUP_RECONCILIATION", "STALE_DEPENDENCY"),
                               "REVIEW_REQUIRED": ("FOLLOWUP_RECONCILIATION", "UNSUPPORTED_DEPENDENCY")}[status]
         pack = basis.get("control_pack") if type(basis := explanation["accepted_basis"]) is dict else None  # the pack the correction was decided under
+        if type(pack) is dict and (type(pack.get("version")) is not int or not re.fullmatch(  # free text is refused, only fixed shapes pass
+                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\|[1-9][0-9]*\|[0-9A-F]{128}", "|".join(str(pack.get(key)) for key in _PACK_REF))):
+            _fail(FinancialMirrorContinuityError, "corporate_support_allowlist")
         approved = _support(
             status=status, component="FINANCIAL_CORRECTION", artifact=artifact, failure_stage=stage, error_class=error_class,
             rule_version={key: pack.get(key) for key in _PACK_REF} if type(pack) is dict else "NONE",
@@ -1464,7 +1467,6 @@ class FinancialMirror:
         package = self.owner.export_continuity()
         if type(package) is not bytes:
             _fail(FinancialMirrorContinuityError, "continuity_export_type")
-        # Validate the exact bytes produced by the owner before exposing them.
         self.validate_owner_continuity_package(package)
         return package
 
@@ -1512,12 +1514,10 @@ class FinancialMirror:
 
     def restore_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
         """Validate and restore into a new, independently verified SHADOW owner."""
-
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="SHADOW")
 
     def restore_test_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
         """Restore into an explicitly TEST-only owner for synthetic continuation."""
-
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="TEST")
 
 
