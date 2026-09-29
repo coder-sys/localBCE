@@ -50,7 +50,7 @@ def _setup(owner: FinancialOwner, rng: random.Random, size: int, authority: Synt
         pack_id=_PACK_ID, **_SCOPE, version=1, source_refs=("harness:source:v1",), effective_start_ms=1_000,
         effective_end_ms=4_102_444_800_000, recorded_at_ms=500, approved_at_ms=500,
         calculation_rule_id="calculation:per-recipient:v1", adjustment_rule_id="adjustment:offset:v1",
-        authorized_roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"),
+        authorized_roles=("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
         expected_tests=("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate"),
     ))
     owner.register_population_manifest(PopulationManifest(

@@ -43,7 +43,7 @@ def _control_pack(version: int, start: int, end: int, *refs: str) -> ControlPack
         pack_id=f"pack:line-pack-v{version}", **SCOPE, version=version, source_refs=("synthetic:source:v1", *refs),
         effective_start_ms=start, effective_end_ms=end, recorded_at_ms=500, approved_at_ms=500,
         calculation_rule_id="calculation:per-recipient:v1", adjustment_rule_id="adjustment:offset:v1",
-        authorized_roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"),
+        authorized_roles=("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
         expected_tests=("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate"),
     )
 
