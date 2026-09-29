@@ -316,7 +316,7 @@ cash evidence as one transaction. This removes repeated manual entry while
 preserving exact retries and a visible all-or-nothing result. No money moves.
 
 - Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
-  JSON of at most 1 MiB, with 1-100 ordered rows (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
+  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
   `contract`, `source_class`, `scope`, `source`, `row_count`, `total_cents`,
   `rows`; `source_class` is `SYNTHETIC_RECEIVER_CASH`. Scope has exactly the
   existing state/deployment/program/period/currency fields, currency USD.
@@ -350,15 +350,16 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
   Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`.
   A retry never replaces B with a fresh snapshot. Producer and verifier parse
   and reconstruct independently; the verifier does not import the producer.
-  Freeze commands before comparison. Under the same BEGIN IMMEDIATE, verify
-  the whole current store and its same-connection snapshot, then bind identity,
-  scope, epoch, history and the execution baseline. New work requires exact
-  baseline equality. An older baseline is allowed only as an authenticated
-  ancestor followed by all exact duplicates with the requested payment IDs.
+  Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
+  store to B: the same identity row and the same event head at B's sequence (the
+  whole store was verified when the owner opened it; later history is
+  append-only in the database). New work requires the store to still be at B's
+  sequence. On an older baseline only rows that write nothing (RETRY, ALIAS)
+  are allowed.
   After final sealing, independently verify the store, row/command order,
   payment/evidence/action links, revisions and per-item cash deltas; other cash,
-  acknowledgments and reporting remain unchanged. An all-duplicate result must
-  leave durable state identical and make zero SQL changes. Any mismatch rolls
+  acknowledgments and reporting remain unchanged. A file with no NEW or OVERLAP
+  row must leave durable state identical and make zero SQL changes. Any mismatch rolls
   back the whole file. Publish the receipt only after COMMIT succeeds.
   Preview is the default: independently verify and restore B into isolated TEST
   storage, using that restore's snapshot as execution baseline while retaining
@@ -384,9 +385,46 @@ preserving exact retries and a visible all-or-nothing result. No money moves.
 - Claims withdrawn: this design is not implementation or verification. Required
   evidence covers field/context/identity mutations, altered command order,
   exact bounds, original-baseline retry and reversal, stale/concurrent/mixed
-  batches, alias/conflict rollback, action limits, crashes/lost responses,
+  batches, overlap labelled DUPLICATE, conflict and reuse refused, action limits, crashes/lost responses,
   no ACK/report effects, source preservation, privacy and cleanup, independent
   verification, Continuity and existing consumers. Status records actual runs.
+
+### Cash-file capacity (2026-09-28)
+
+Target: the largest state's hospital-level program, about 600 hospitals with up
+to 3 remittance or recovery lines a month (2,000 rows a month, three monthly
+files a quarter, under Lean's `maxRows`). All-provider refund flows need
+sharding or Phase 2 below and are not claimed.
+
+- One file is one `run_batch`: at most 500 rows, at most 6 per item (each
+  payment re-binds every earlier payment of its item). The bound is the 5 s
+  writer busy timeout. Measured locks are in `STATUS.md`.
+- Waste cut, results unchanged: the checker's schema and meta are read once per
+  call, sealing checks only the tables a write inserted into, and the control
+  pack is built and digest-checked once per owner for each exact row.
+- One evaluation per payment is kept (founder, 2026-09-28).
+- Verification moves from each import to each open: the whole-store verify no
+  longer runs twice per import under the lock. The import still checks every
+  obligation it touches, each new event onto the verified chain, and every
+  table by before/after comparison in the same transaction. A corruption that
+  bypassed the owner and its triggers after the open would be caught at the next
+  open, by `verify-integrity` or by an export verify.
+- A row is NEW, RETRY, OVERLAP (a new repeat of a stored payment: DUPLICATE, one
+  alias event, no cash), ALIAS (a stored repeat: nothing written) or refused.
+  An exact alias repeat writes nothing whatever its expected revision.
+- An existing-only writer (the CLI) refuses an index set older than the current
+  one; a read-only SHADOW may keep the previous set.
+- Phase 2 (deferred): evaluations that bind evidence by digest, constant size.
+
+### Cash-file refusals
+
+Fixed classes only; no input or error text is ever printed. `input`: the CLI
+could not read an input. `format`: the file is not the contract. `row_cap`:
+split the file. `binding`: the hashes, scope, owner/mode or baseline do not
+match this store. `stale`: prepare against a new baseline. `conflict`: an origin
+is already recorded with another amount or link; investigate. `already_recorded`:
+an id is reused. `busy`: retry later. `failed`: the checker or store refused;
+escalate.
 
 ## Browser conformance correction (2026-09-26)
 

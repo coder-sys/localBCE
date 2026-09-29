@@ -706,7 +706,8 @@ def main(argv: list[str] | None = None) -> int:
         ValueError,
     ) as error:
         if args.command == "receiver-cash-file":
-            print("ERROR:receiver_cash_file_refused", file=sys.stderr)
+            code = "cash_file_input" if isinstance(error, FinancialMirrorError) else cash_file.refusal(error)
+            print(f"ERROR:receiver_cash_file_refused:{code}", file=sys.stderr)
             return 2
         if args.command == "switch-compare":
             report = _switch_compare_error(error)

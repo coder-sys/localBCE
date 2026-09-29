@@ -2019,6 +2019,7 @@ class FinancialOwner:
         self.owner_id = _id(owner_id, "owner_id")
         self._batch = threading.local()  # .connection: the open run_batch transaction on this thread; .rows: its base counts
         self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at our last commit
+        self._packs: dict[tuple[object, ...], tuple[ControlPack, str, str]] = {}  # the pack, its digest check and its policy are pure functions of the exact row
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
@@ -2181,7 +2182,8 @@ class FinancialOwner:
         sealing = count > 0 and (force or count >= _SEAL_SEGMENT_EVENTS or size >= _SEAL_SEGMENT_BYTES)
         if sealing and rows is not None and rows != _count_rows(connection):  # each seal proves the cached counts exact
             _fail(FinancialIntegrityError, "row_cache_drift")
-        for (table,) in connection.execute("SELECT DISTINCT table_name FROM history_pending").fetchall():  # the Checker reads at most Lean's maxRows per table
+        touched = "SELECT table_name FROM temp.rr_row_inserts" if rows is not None else "SELECT DISTINCT table_name FROM history_pending"
+        for (table,) in connection.execute(touched).fetchall():  # only a table this write inserted into can have grown (updates add no rows, deletes abort); the Checker reads at most Lean's maxRows per table
             cached = rows[table] if rows is not None else None
             if cached is None or cached >= _MAX_ROWS - _MAX_ROWS // 20:  # within 5% of the cap, counted exactly
                 exact = connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
@@ -2256,7 +2258,7 @@ class FinancialOwner:
                         _fail(FinancialIntegrityError, "schema_tables")
                     if not no_migration:
                         _install_private_index_set(connection)
-                    elif _private_index_set_version(connection) == 0:  # read-only: checked, never upgraded
+                    elif _private_index_set_version(connection) < (_PRIVATE_INDEX_SET_VERSION if self._existing_only else 1):  # never upgraded here: a read-only SHADOW may keep v1; an existing-only writer needs the current set
                         _fail(FinancialIntegrityError, "shadow_requires_migration")
                     _install_history_append_only(connection, read_only=no_migration)
                     if verify_history or migrated:
@@ -2415,11 +2417,9 @@ class FinancialOwner:
                 _fail(FinancialInputError, "cash_file_nested_batch")
             check = CashFileCheck(commands, cash_file_context)
             commands = check.commands
-        def verify_cash(connection):
-            check.finish(connection, self._continuity_package_bytes(connection), results)
-        with self._write(before_commit=verify_cash) if check else self._write() as connection:
+        with self._write(before_commit=(lambda connection: check.finish(connection, results)) if check else None) as connection:
             if check:
-                check.begin(connection, self._continuity_package_bytes(connection))
+                check.begin(connection)
             self._batch.connection = connection
             try:
                 for index, (name, arguments) in enumerate(commands):
@@ -2684,17 +2684,14 @@ class FinancialOwner:
         ).fetchone()
         if row is None or str(row["status"]) != "APPROVED":
             _fail(FinancialIntegrityError, "control_pack_missing")
-        pack = _control_pack_from_row(row)
-        if bytes(row["pack_digest"]) != pack.digest:
-            _fail(FinancialIntegrityError, "control_pack_digest")
-        calculation, adjustment = _control_pack_policy(
-            calculation_rule_id=pack.calculation_rule_id,
-            adjustment_rule_id=pack.adjustment_rule_id,
-            authorized_roles=pack.authorized_roles,
-            expected_tests=pack.expected_tests,
-        )
-        self._scope_pack(pack)
-        return pack, calculation, adjustment
+        key = tuple(row)  # built and checked once per owner for each exact row; any changed column is a new key, rebuilt and re-checked
+        if key not in self._packs:
+            pack = _control_pack_from_row(row)
+            if bytes(row["pack_digest"]) != pack.digest:
+                _fail(FinancialIntegrityError, "control_pack_digest")
+            self._packs[key] = (pack, *_control_pack_policy(calculation_rule_id=pack.calculation_rule_id, adjustment_rule_id=pack.adjustment_rule_id, authorized_roles=pack.authorized_roles, expected_tests=pack.expected_tests))
+        self._scope_pack(self._packs[key][0])
+        return self._packs[key]
 
     def _insert_evidence(self, connection: sqlite3.Connection, evidence: EvidenceRecord) -> str:
         existing = connection.execute("SELECT record_digest,received_at_ms FROM evidence WHERE evidence_id=?", (evidence.evidence_id,)).fetchone()
@@ -4043,12 +4040,6 @@ class FinancialOwner:
                     )
                     or type(event_payload.get("evaluation_id")) is not str
                     or retry_evidence.record_digest != bytes(existing_evidence["record_digest"])
-                    or retry_evidence.content_digest != bytes(existing_evidence["content_digest"])
-                    or retry_evidence.source_id != str(existing_evidence["source_id"])
-                    or retry_evidence.source_version != str(existing_evidence["source_version"])
-                    or retry_evidence.local_ref != str(existing_evidence["local_ref"])
-                    or retry_evidence.event_at_ms != int(existing_evidence["event_at_ms"])
-                    or retry_evidence.amount_cents != int(existing_evidence["amount_cents"])
                 ):
                     _fail(FinancialConflictError, "payment_request_conflict")
                 return {
@@ -4057,12 +4048,15 @@ class FinancialOwner:
                     **self._current_projection(connection, str(obligation["obligation_id"])),
                 }
 
-            self._check_revision(obligation, expected_revision)
-            evidence = self._new_evidence(**evidence_fields, received_at_ms=self._now())
-            evidence_status = self._insert_evidence(connection, evidence)
             existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
+            same = existing is not None and int(existing["amount_cents"]) == amount_cents
+            prior = connection.execute("SELECT received_at_ms FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone() if same else None
+            if prior is None:  # an exact repeat of a stored alias confirmation is rebuilt as stored and writes nothing (III.3)
+                self._check_revision(obligation, expected_revision)
+            evidence = self._new_evidence(**evidence_fields, received_at_ms=self._now() if prior is None else int(prior[0]))
+            evidence_status = self._insert_evidence(connection, evidence)
             if existing is not None:  # existing_id is None here: that retry path returned or failed above
-                if int(existing["amount_cents"]) == amount_cents:
+                if same:
                     recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
                     if pays_action_id not in (None, recorded_link):  # it may not change or add a link; an outside confirmation that omits it corroborates
                         _fail(FinancialConflictError, "payment_request_conflict")

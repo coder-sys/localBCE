@@ -74,18 +74,22 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
  `d5853b1`, which changed `record_payment_evidence` and the funding guard cash
  files use. Not independently reviewed since `d5853b1`; rr-review 2026-09-28
  findings M1 (open) and M2 (capacity, below).
- **Capacity (M2), measured** (`cashscale-m1..m5`, fresh store, this laptop):
- apply holds the write lock through two full replays and the package grows
- O(n^2) per item (`_recompute_obligation` re-binds all of an item's evidence),
- so the 8 MiB package cap, not the 1,000-row grammar, is the limit.
- One item: 157 rows land (8.09 MB, 1.7 s lock), 165 refuse
- `continuity_package_size`. 20 items: 560 land (8.25 MB, 3.5 s), 590 refuse.
- 1,000 items, one row each: 800 land (8.28 MB, 5.9 s lock, past the 5 s busy
- timeout, so staff writers see `store_busy` from about 700 rows), 1,000 refuse
- (baseline alone 4.1 MB). Preview repeats the replay outside the lock (8-10 s at
- 1,000 items). Cap set to 100 rows per file (`cash_file_row_cap`; 1.0 s lock,
- 3.6 MB on one item), far under every shape. That is low; only an Owner/checker
- performance fix (one replay, non-quadratic evidence binding) raises it. The
+ **Capacity 1a (2026-09-28)**, measured on this laptop (guarded `cash1a-m4`,
+ `cash1a-m5`; scratch harness, package caps lifted in memory, not committed):
+ 1,000-row files lock the writer 2.1 s (first), 3.8 s (fourth), 4.95 s (sixth,
+ 5,000 earlier payments, concentrated: past the 4.5 s limit), so the cap is
+ 500 rows per file, at most 6 per item (`cash_file_row_cap`). At 500: a first
+ file 1.1 s; the eleventh, on 5,000 earlier payments, concentrated, 4.26 s (open
+ verify 9.5 s at 5,500 events, store 139 MB). Committed timing test (guarded
+ `cash1a-t3`): 1.3 s spread, 1.2 s concentrated. A twelfth file in a quarter
+ (6,000 rows) sits at the limit; Phase 1b (manifest baseline) is not started.
+ One replay per import is kept; the whole-store verify moved to the owner open.
+ Verified: `cash1a-t3` (cash-file, owner-batch, acceptance, history-segments,
+ mirror, independent, bloat) run=213 passed=212 failed=1; the one failure is
+ `test_markdown_stays_small` (168,109 > 160,000), already over at `618e81f`
+ (164,542) before this change. Full suite (`cash1a-full`):
+ run=478 passed=465 failed=1 errors=0 skipped=12 (same Markdown failure; 12 skips are the
+ absent Lean/engine artifacts and the semantic-gate candidate). The
  earlier grouped run 75/77 (size failure since resolved, skip resolved in r74)
  and acceptance/Mirror equivalence 117/117 in r65 also predate `d5853b1`.
  Size gates: 2026-09-28 split into product 44,000 and tests+Lean 40,000 lines.

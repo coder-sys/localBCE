@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections import Counter
 from collections.abc import Mapping
 from functools import wraps
 from types import MappingProxyType
@@ -18,9 +19,11 @@ from app import right_rail_financial_owner_independent as ledger
 
 
 _MAX_CENTS = 2**63 - 1
-# Measured 2026-09-28 (docs/CORE_REDESIGN.md): apply holds the write lock through two full replays and the
-# package grows O(n^2) per item, so one item stops at ~157 rows and the 8 MiB package cap refuses beyond that.
-MAX_ROWS = 100
+# docs/CORE_REDESIGN.md "Cash-file capacity": a file is one run_batch (at most 500 commands), and each payment
+# re-binds every earlier payment of its item, so one file names an item at most MAX_ITEM_ROWS times.
+MAX_ROWS = 500
+MAX_ITEM_ROWS = 6
+REFUSALS = frozenset(f"cash_file_{name}" for name in ("input", "format", "row_cap", "binding", "stale", "conflict", "already_recorded", "busy", "failed"))
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _SHA = re.compile(r"[0-9A-F]{64}\Z")
 _SCOPE = {"state_id", "deployment_id", "program_id", "period_id", "currency"}
@@ -29,12 +32,13 @@ _ROW = {"item_id", "payment_id", "common_origin_id", "evidence_id", "amount_cent
 _CONTEXT = {
     "source_bytes", "baseline_bytes", "expected_source_sha256", "expected_baseline_sha256",
     "expected_scope", "expected_source", "expected_authority", "expected_owner_id",
-    "expected_mode", "execution_baseline_bytes", "execution_owner_id",
+    "expected_mode", "execution_owner_id",
 }
+_EVALUATION = {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
 
 
 class CashFileError(ValueError):
-    """A fixed local refusal code, with no input value or underlying error text."""
+    """A fixed refusal class from REFUSALS, with no input value or underlying error text."""
 
 
 def _require(condition: bool, code: str) -> None:
@@ -50,49 +54,49 @@ def _fixed_errors(method):
         except CashFileError:
             raise
         except Exception:
-            raise CashFileError("cash_file_invalid") from None
+            raise CashFileError("cash_file_failed") from None
     return checked
 
 
 def _freeze(value: object, depth: int = 0, budget: list[int] | None = None) -> object:
     budget = [250_000] if budget is None else budget
     budget[0] -= 1
-    _require(depth <= 32 and budget[0] >= 0, "cash_file_shape")
+    _require(depth <= 32 and budget[0] >= 0, "cash_file_format")
     if type(value) is dict:
-        _require(all(type(key) is str for key in value), "cash_file_shape")
+        _require(all(type(key) is str for key in value), "cash_file_format")
         return MappingProxyType({key: _freeze(item, depth + 1, budget) for key, item in value.items()})
     if type(value) in (list, tuple):
         return tuple(_freeze(item, depth + 1, budget) for item in value)
-    _require(type(value) in (str, int, bool, bytes, type(None)), "cash_file_shape")
+    _require(type(value) in (str, int, bool, bytes, type(None)), "cash_file_format")
     return value
 
 
 def _keys(value: object, keys: set[str]) -> None:
-    _require(type(value) is dict and set(value) == keys, "cash_file_fields")
+    _require(type(value) is dict and set(value) == keys, "cash_file_format")
 
 
 def _id(value: object) -> None:
-    _require(type(value) is str and _ID.fullmatch(value) is not None, "cash_file_id")
+    _require(type(value) is str and _ID.fullmatch(value) is not None, "cash_file_format")
 
 
 def _integer(value: object, low: int, high: int) -> None:
-    _require(type(value) is int and low <= value <= high, "cash_file_integer")
+    _require(type(value) is int and low <= value <= high, "cash_file_format")
 
 
 def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result = dict(pairs)
-    _require(len(result) == len(pairs), "cash_file_duplicate_key")
+    _require(len(result) == len(pairs), "cash_file_format")
     return result
 
 
 def _source(raw: bytes) -> dict[str, object]:
-    _require(type(raw) is bytes and 0 < len(raw) <= 1024 * 1024, "cash_file_size")
+    _require(type(raw) is bytes and 0 < len(raw) <= 1024 * 1024, "cash_file_format")
     value = json.loads(raw.decode("ascii"), object_pairs_hook=_unique)
     _keys(value, {"contract", "source_class", "scope", "source", "row_count", "total_cents", "rows"})
-    _require(value["contract"] == "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" and value["source_class"] == "SYNTHETIC_RECEIVER_CASH", "cash_file_contract")
+    _require(value["contract"] == "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" and value["source_class"] == "SYNTHETIC_RECEIVER_CASH", "cash_file_format")
     _keys(value["scope"], _SCOPE)
     _keys(value["source"], _SOURCE)
-    _require(value["scope"]["currency"] == "USD", "cash_file_scope")
+    _require(value["scope"]["currency"] == "USD", "cash_file_format")
     for key in _SCOPE - {"currency"}:
         _id(value["scope"][key])
     for key in _SOURCE - {"captured_at_ms"}:
@@ -102,7 +106,7 @@ def _source(raw: bytes) -> dict[str, object]:
     _integer(value["row_count"], 1, MAX_ROWS)
     _integer(value["total_cents"], 1, _MAX_CENTS)
     rows = value["rows"]
-    _require(type(rows) is list and len(rows) == value["row_count"], "cash_file_count")
+    _require(type(rows) is list and len(rows) == value["row_count"], "cash_file_format")
     seen_payment, seen_evidence, seen_origin = set(), set(), set()
     for row in rows:
         _keys(row, _ROW)
@@ -114,11 +118,12 @@ def _source(raw: bytes) -> dict[str, object]:
         _integer(row["event_at_ms"], 0, value["source"]["captured_at_ms"])
         _integer(row["expected_revision"], 0, 9999)
         for seen, key in ((seen_payment, row["payment_id"]), (seen_evidence, row["evidence_id"]), (seen_origin, (row["item_id"], row["common_origin_id"]))):
-            _require(key not in seen, "cash_file_duplicate_row")
+            _require(key not in seen, "cash_file_format")
             seen.add(key)
-    _require(sum(row["amount_cents"] for row in rows) == value["total_cents"], "cash_file_total")
+    _require(max(Counter(row["item_id"] for row in rows).values()) <= MAX_ITEM_ROWS, "cash_file_row_cap")
+    _require(sum(row["amount_cents"] for row in rows) == value["total_cents"], "cash_file_format")
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
-    _require(raw == canonical, "cash_file_canonical")
+    _require(raw == canonical, "cash_file_format")
     return value
 
 
@@ -127,7 +132,46 @@ def _index(rows: Mapping, table: str, key: str) -> dict:
 
 
 def _unchanged(old: Mapping, new: Mapping, except_fields: set[str] = frozenset()) -> None:
-    _require(set(old) == set(new) and all(new[key] == value for key, value in old.items() if key not in except_fields), "cash_file_other_change")
+    _require(set(old) == set(new) and all(new[key] == value for key, value in old.items() if key not in except_fields), "cash_file_failed")
+
+
+def _fact(argument: Mapping) -> dict:
+    """The evidence row a confirmation from this file is stored as (its receipt time and digests aside)."""
+    fact = {key: argument[key] for key in ("evidence_id", "item_id", "common_origin_id", "source_id", "source_version", "local_ref", "event_at_ms", "amount_cents")}
+    return {**fact, "kind": "PAYMENT_CONFIRMATION", "applicable_at_ms": argument["event_at_ms"], "reversal_of": None, "supersedes": None}
+
+
+def _matches(row: Mapping | None, expected: Mapping) -> bool:
+    return row is not None and all(row[key] == value for key, value in expected.items())
+
+
+def _payment_events(events: list) -> tuple[dict, dict]:
+    """PAYMENT_RECEIVED events by payment_id, and each stored alias confirmation's evidence_id -> the payment it repeats."""
+    received, aliases = {}, {}
+    for event in events:
+        if event["kind"] in ("PAYMENT_RECEIVED", "PAYMENT_DUPLICATE_EVIDENCE"):
+            payload = json.loads(event["payload_json"])
+            if event["kind"] == "PAYMENT_DUPLICATE_EVIDENCE":
+                aliases[payload["candidate_evidence_id"]] = payload["existing_payment_id"]
+                continue
+            _require(payload["payment_id"] not in received, "cash_file_failed")
+            received[payload["payment_id"]] = (event, payload)
+    return received, aliases
+
+
+def _recorded(argument: Mapping, payment: Mapping, fact: Mapping | None, event: Mapping | None, payload: Mapping | None, actions: Mapping) -> bool:
+    """This row's payment, its confirmation and its PAYMENT_RECEIVED event are stored exactly as the row states."""
+    expected = {key: argument[key] for key in ("payment_id", "evidence_id", "amount_cents", "common_origin_id")}
+    if argument["pays_action_id"] is not None:
+        expected["pays_action_id"] = argument["pays_action_id"]
+        action = actions.get(argument["pays_action_id"])
+        if action is None or (action["kind"], action["obligation_id"]) != ("CORRECTION_PAYMENT_REQUEST", payment["obligation_id"]):
+            return False
+    return (event is not None and all(payment[key] == argument[key] for key in ("payment_id", "item_id", "evidence_id", "common_origin_id", "amount_cents", "event_at_ms"))
+            and _matches(fact, _fact(argument)) and set(payload) - {"rows"} == set(expected) | _EVALUATION
+            and all(payload[key] == value for key, value in expected.items())
+            and (event["aggregate_type"], event["aggregate_id"]) == ("OBLIGATION", payment["obligation_id"])
+            and (event["before_revision"], event["after_revision"]) == (argument["expected_revision"], argument["expected_revision"] + 1))
 
 
 class CashFileCheck:
@@ -138,43 +182,38 @@ class CashFileCheck:
         _keys(context, _CONTEXT)
         source = _source(context["source_bytes"])
         for field in ("expected_source_sha256", "expected_baseline_sha256"):
-            _require(type(context[field]) is str and _SHA.fullmatch(context[field]) is not None, "cash_file_hash")
-        _require(type(context["baseline_bytes"]) is bytes and 0 < len(context["baseline_bytes"]) <= ledger.MAX_PACKAGE_BYTES, "cash_file_baseline")
+            _require(type(context[field]) is str and _SHA.fullmatch(context[field]) is not None, "cash_file_binding")
+        _require(type(context["baseline_bytes"]) is bytes and 0 < len(context["baseline_bytes"]) <= ledger.MAX_PACKAGE_BYTES, "cash_file_format")
         self._source_sha = hashlib.sha256(context["source_bytes"]).hexdigest().upper()
         self._baseline_sha = hashlib.sha256(context["baseline_bytes"]).hexdigest().upper()
-        _require(self._source_sha == context["expected_source_sha256"] and self._baseline_sha == context["expected_baseline_sha256"], "cash_file_hash")
+        _require(self._source_sha == context["expected_source_sha256"] and self._baseline_sha == context["expected_baseline_sha256"], "cash_file_binding")
         _keys(context["expected_scope"], _SCOPE)
         _keys(context["expected_source"], _SOURCE)
         for actual, expected in ((source["scope"], context["expected_scope"]), (source["source"], context["expected_source"])):
-            _require(all(type(expected[key]) is type(value) and expected[key] == value for key, value in actual.items()), "cash_file_context")
+            _require(all(type(expected[key]) is type(value) and expected[key] == value for key, value in actual.items()), "cash_file_binding")
         _id(context["expected_owner_id"])
-        _require(type(context["expected_mode"]) is str and context["expected_mode"] in ("LIVE", "TEST", "SHADOW"), "cash_file_owner")
+        _require(type(context["expected_mode"]) is str and context["expected_mode"] in ("LIVE", "TEST", "SHADOW"), "cash_file_binding")
         self._context = _freeze(context)
         self._source = _freeze(source)
-        baseline = self._package(context["baseline_bytes"])
+        baseline = ledger.verify_continuity_package(context["baseline_bytes"], expected_scope=self._context["expected_scope"], expected_authority=self._context["expected_authority"], _include_rows=True)
         meta = baseline["_decoded_rows"]["financial_meta"][0]
-        _require(meta["owner_id"] == context["expected_owner_id"] and meta["mode"] == context["expected_mode"], "cash_file_owner")
-        self._baseline = _freeze(baseline)
-        self._preview = context["execution_baseline_bytes"] is not None
-        _require(self._preview == (context["execution_owner_id"] is not None), "cash_file_execution")
-        self._execution = context["execution_baseline_bytes"] if self._preview else context["baseline_bytes"]
+        _require(meta["owner_id"] == context["expected_owner_id"] and meta["mode"] == context["expected_mode"], "cash_file_binding")
+        self._anchor = (list(baseline["_decoded_rows"]["financial_identity"]), baseline["sequence"], bytes.fromhex(baseline["history_head"]))
+        self._epoch = baseline["continuity_epoch"]
+        self._preview = context["execution_owner_id"] is not None
         if self._preview:
             _id(context["execution_owner_id"])
-            self._package(self._execution)
-        _require(type(commands) is list and len(commands) == source["row_count"], "cash_file_commands")
+        _require(type(commands) is list and len(commands) == source["row_count"], "cash_file_binding")
         frozen_commands = []
         for entry, row in zip(commands, source["rows"]):
             arguments = {**row, "source_id": source["source"]["source_id"], "source_version": source["source"]["version"], "local_ref": self._source_sha + self._baseline_sha}
-            _require(type(entry) is tuple and len(entry) == 2 and type(entry[0]) is str and entry[0] == "record_payment_evidence" and type(entry[1]) in (dict, MappingProxyType), "cash_file_commands")
-            _require(set(entry[1]) == set(arguments) and all(type(entry[1][key]) is type(value) and entry[1][key] == value for key, value in arguments.items()), "cash_file_commands")
+            _require(type(entry) is tuple and len(entry) == 2 and type(entry[0]) is str and entry[0] == "record_payment_evidence" and type(entry[1]) in (dict, MappingProxyType), "cash_file_binding")
+            _require(set(entry[1]) == set(arguments) and all(type(entry[1][key]) is type(value) and entry[1][key] == value for key, value in arguments.items()), "cash_file_binding")
             frozen_commands.append(("record_payment_evidence", MappingProxyType(arguments)))
         self.commands = tuple(frozen_commands)
         self.receipt = None
         self._connection = None
         self._finished = False
-
-    def _package(self, raw: bytes) -> dict:
-        return ledger.verify_continuity_package(raw, expected_scope=self._context["expected_scope"], expected_authority=self._context["expected_authority"], _include_rows=True)
 
     def _expectations(self) -> dict:
         return {
@@ -182,111 +221,110 @@ class CashFileCheck:
             "expected_authority": self._context["expected_authority"],
             "expected_mode": "TEST" if self._preview else self._context["expected_mode"],
             "expected_owner_id": self._context["execution_owner_id"] if self._preview else self._context["expected_owner_id"],
-            "expected_continuity_epoch": self._baseline["continuity_epoch"],
+            "expected_continuity_epoch": self._epoch,
         }
 
-    def _snapshot(self, connection: sqlite3.Connection, raw: bytes) -> tuple[dict, dict]:
-        verified = ledger.verify_database_connection(connection, current_snapshot_package=raw, **self._expectations())
-        return verified, self._package(raw)["_decoded_rows"]
-
     @_fixed_errors
-    def begin(self, connection: sqlite3.Connection, current_bytes: bytes) -> None:
-        _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_transaction")
-        _require(self._preview or self._context["expected_mode"] in ("LIVE", "TEST"), "cash_file_owner")
-        verified, rows = self._snapshot(connection, current_bytes)
-        if self._preview:
+    def begin(self, connection: sqlite3.Connection) -> None:
+        _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_failed")
+        _require(self._preview or self._context["expected_mode"] in ("LIVE", "TEST"), "cash_file_binding")
+        rows = ledger._database_snapshot_rows(connection)
+        identity, sequence, head = self._anchor
+        meta = rows["financial_meta"][0]
+        if self._preview:  # a new TEST restore of the baseline, bound to it whole (Phase 1b previews a copy of the live store)
             ledger.verify_database_connection(connection, restore_source_package=self._context["baseline_bytes"], **self._expectations())
-            _require(current_bytes == self._execution and verified["sequence"] == self._baseline["sequence"] and verified["history_head"] == self._baseline["history_head"], "cash_file_execution")
-        else:
-            _require(rows["financial_identity"] == list(self._baseline["_decoded_rows"]["financial_identity"]), "cash_file_ancestor")
-            sequence = self._baseline["sequence"]
-            events = _index(rows, "financial_events", "event_sequence")
-            ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else events.get(sequence, {}).get("head")
-            _require(sequence <= verified["sequence"] and ancestor == bytes.fromhex(self._baseline["history_head"]), "cash_file_ancestor")
-        self._stale = current_bytes != self._execution
-        _require(not self._stale or self._baseline["sequence"] < verified["sequence"], "cash_file_ancestor")
-        self._before = _freeze(rows)
-        self._verified_before = _freeze(verified)
-        self._before_bytes = current_bytes
-        self._changes = connection.total_changes
-        self._connection = connection
+            _require((meta["sequence"], meta["history_head"]) == (sequence, head), "cash_file_binding")
+        else:  # the store descends from the reviewed baseline: the same identity, and the same event head at its sequence
+            ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
+            _require(rows["financial_identity"] == identity and ancestor == head, "cash_file_binding")
+        self._stale = meta["sequence"] != sequence
+        self._received, self._aliases = _payment_events(rows["financial_events"])
+        self._plan = self._classify(rows)
+        self._before, self._changes, self._connection = rows, connection.total_changes, connection
 
-    def _payment_binding(self, rows: Mapping, argument: Mapping, payments: Mapping, evidence: Mapping, events: Mapping) -> tuple[Mapping, Mapping]:
-        payment = payments[argument["payment_id"]]
-        fact = evidence[argument["evidence_id"]]
-        event, payload = events[argument["payment_id"]]
-        for key in ("payment_id", "item_id", "evidence_id", "common_origin_id", "amount_cents", "event_at_ms"):
-            _require(payment[key] == argument[key], "cash_file_payment")
-        expected_fact = {key: argument[key] for key in ("evidence_id", "item_id", "common_origin_id", "source_id", "source_version", "local_ref", "event_at_ms", "amount_cents")}
-        expected_fact.update(kind="PAYMENT_CONFIRMATION", applicable_at_ms=argument["event_at_ms"], reversal_of=None, supersedes=None)
-        _require(all(fact[key] == value for key, value in expected_fact.items()), "cash_file_evidence")
-        expected_payload = {key: argument[key] for key in ("payment_id", "evidence_id", "amount_cents", "common_origin_id")}
-        if argument["pays_action_id"] is not None:
-            expected_payload["pays_action_id"] = argument["pays_action_id"]
-            action = _index(rows, "actions", "action_id")[argument["pays_action_id"]]
-            _require(action["kind"] == "CORRECTION_PAYMENT_REQUEST" and action["obligation_id"] == payment["obligation_id"], "cash_file_action")
-        evaluation_fields = {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
-        _require(set(payload) - {"rows"} == set(expected_payload) | evaluation_fields and all(payload[key] == value for key, value in expected_payload.items()), "cash_file_event")
-        _require(event["aggregate_type"] == "OBLIGATION" and event["aggregate_id"] == payment["obligation_id"] and event["before_revision"] == argument["expected_revision"] and event["after_revision"] == argument["expected_revision"] + 1, "cash_file_revision")
-        return payment, event
+    def _classify(self, rows: Mapping) -> tuple[tuple[str, str], ...]:
+        """Per row, before any write, (kind, the payment_id the owner must answer): RETRY of this row's own payment,
+        ALIAS (this row's stored repeat of another payment), OVERLAP (a new repeat of one: DUPLICATE, no cash) or NEW.
+        Any other reuse of a recorded id, or an origin recorded with another amount or link, refuses the whole file."""
+        payments, evidence, actions = (_index(rows, table, key) for table, key in (("payments", "payment_id"), ("evidence", "evidence_id"), ("actions", "action_id")))
+        origins = {(row["obligation_id"], row["common_origin_id"]): row for row in rows["payments"]}
+        obligations = {row["item_id"]: row["obligation_id"] for row in rows["obligations"] if row["period_id"] == self._context["expected_scope"]["period_id"]}
+        plan = []
+        for _, argument in self.commands:
+            _require(argument["item_id"] in obligations, "cash_file_binding")
+            existing = origins.get((obligations[argument["item_id"]], argument["common_origin_id"]))
+            if argument["payment_id"] in payments:
+                recorded = _recorded(argument, payments[argument["payment_id"]], evidence.get(argument["evidence_id"]), *self._received.get(argument["payment_id"], (None, None)), actions)
+                _require(recorded, "cash_file_already_recorded")
+                kind, answer = "RETRY", argument["payment_id"]
+            elif existing is None:
+                _require(argument["evidence_id"] not in evidence, "cash_file_already_recorded")
+                kind, answer = "NEW", argument["payment_id"]
+            else:
+                link = self._received[existing["payment_id"]][1].get("pays_action_id")
+                _require(existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, link), "cash_file_conflict")
+                stored = evidence.get(argument["evidence_id"])
+                _require(stored is None or (self._aliases.get(argument["evidence_id"]) == existing["payment_id"] and _matches(stored, _fact(argument))), "cash_file_already_recorded")
+                kind, answer = "OVERLAP" if stored is None else "ALIAS", existing["payment_id"]
+            _require(not self._stale or kind in ("RETRY", "ALIAS"), "cash_file_stale")
+            plan.append((kind, answer))
+        return tuple(plan)
 
     @_fixed_errors
-    def finish(self, connection: sqlite3.Connection, current_bytes: bytes, results: object) -> None:
-        _require(connection is self._connection and connection.in_transaction and not self._finished, "cash_file_transaction")
+    def finish(self, connection: sqlite3.Connection, results: object) -> None:
+        _require(connection is self._connection and connection.in_transaction and not self._finished and type(results) is list and len(results) == len(self.commands), "cash_file_failed")
         self._finished = True
-        verified, rows = self._snapshot(connection, current_bytes)
-        _require(type(results) is list and len(results) == len(self.commands), "cash_file_results")
-        old_payments = _index(self._before, "payments", "payment_id")
-        payments = _index(rows, "payments", "payment_id")
-        evidence = _index(rows, "evidence", "evidence_id")
-        events = {}
-        for event in rows["financial_events"]:
-            if event["kind"] == "PAYMENT_RECEIVED":
-                payload = json.loads(event["payload_json"])
-                _require(payload["payment_id"] not in events, "cash_file_event")
-                events[payload["payment_id"]] = (event, payload)
-        recorded, new_events, new_evidence, new_evaluations, deltas = [], [], set(), set(), {}
-        revisions = {row["obligation_id"]: row["revision"] for row in self._before["obligations"]}
-        for (_, argument), result in zip(self.commands, results):
-            status = "DUPLICATE" if argument["payment_id"] in old_payments else "RECORDED"
-            _require(type(result) is dict and result.get("status") == status and result.get("payment_id") == argument["payment_id"], "cash_file_result")
-            payment, event = self._payment_binding(rows, argument, payments, evidence, events)
-            if status == "RECORDED":
-                _require(not self._stale and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None, "cash_file_stale")
-                obligation = payment["obligation_id"]
-                _require(argument["expected_revision"] == revisions[obligation], "cash_file_revision")
-                revisions[obligation] += 1
-                deltas[obligation] = deltas.get(obligation, 0) + argument["amount_cents"]
-                recorded.append(argument["payment_id"])
-                new_events.append(event["event_sequence"])
-                new_evidence.add(argument["evidence_id"])
-                new_evaluations.add(events[argument["payment_id"]][1]["evaluation_id"])
-        before_sequence = self._verified_before["sequence"]
-        _require(new_events == list(range(before_sequence + 1, before_sequence + len(recorded) + 1)) and verified["sequence"] == before_sequence + len(recorded), "cash_file_order")
-        for table, key, additions in (("payments", "payment_id", set(recorded)), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(new_events))):
-            old, new = _index(self._before, table, key), _index(rows, table, key)
-            _require(set(new) == set(old) | additions and all(new[key] == value for key, value in old.items()), "cash_file_other_change")
-        old_obligations, obligations = _index(self._before, "obligations", "obligation_id"), _index(rows, "obligations", "obligation_id")
-        _require(set(old_obligations) == set(obligations), "cash_file_other_change")
+        before, rows = self._before, ledger._database_snapshot_rows(connection)
+        payments, evidence, actions, events = (_index(rows, table, key) for table, key in (("payments", "payment_id"), ("evidence", "evidence_id"), ("actions", "action_id"), ("financial_events", "event_sequence")))
+        first = sequence = before["financial_meta"][0]["sequence"]
+        head = before["financial_meta"][0]["history_head"]
+        revisions = {row["obligation_id"]: row["revision"] for row in before["obligations"]}
+        recorded, new_evidence, new_evaluations, deltas, touched = set(), set(), set(), {}, set()
+        for (_, argument), (kind, answer), result in zip(self.commands, self._plan, results):
+            _require(type(result) is dict and result.get("status") == ("RECORDED" if kind == "NEW" else "DUPLICATE") and result.get("payment_id") == answer, "cash_file_failed")
+            if kind in ("RETRY", "ALIAS"):
+                continue  # wrote nothing: the table comparisons and total_changes below prove it
+            sequence += 1  # each NEW or OVERLAP row appends exactly the next event, verified onto the chain
+            event, obligation = events[sequence], payments[answer]["obligation_id"]
+            head = ledger._verify_event(event, sequence, head)
+            payload = json.loads(event["payload_json"])
+            _require(event["before_revision"] == argument["expected_revision"] == revisions[obligation] and _matches(evidence.get(argument["evidence_id"]), _fact(argument)), "cash_file_failed")
+            new_evidence.add(argument["evidence_id"])
+            touched.add(obligation)
+            if kind == "OVERLAP":  # exactly the alias label _verify_duplicate_evidence accepts; the repeated payment is unchanged
+                alias = {"candidate_evidence_id": argument["evidence_id"], "existing_payment_id": answer, "common_origin_id": argument["common_origin_id"]}
+                _require((event["kind"], event["aggregate_type"], event["aggregate_id"], event["after_revision"]) == ("PAYMENT_DUPLICATE_EVIDENCE", "OBLIGATION", obligation, revisions[obligation])
+                         and {key: value for key, value in payload.items() if key != "rows"} == alias, "cash_file_failed")
+                continue
+            payment = payments[answer]
+            _require(event["kind"] == "PAYMENT_RECEIVED" and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None and _recorded(argument, payment, evidence[argument["evidence_id"]], event, payload, actions), "cash_file_failed")
+            revisions[obligation] += 1
+            deltas[obligation] = deltas.get(obligation, 0) + argument["amount_cents"]
+            recorded.add(answer)
+            new_evaluations.add(payload["evaluation_id"])
+        _require((rows["financial_meta"][0]["sequence"], rows["financial_meta"][0]["history_head"]) == (sequence, head), "cash_file_failed")
+        for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1)))):
+            old, new = _index(before, table, key), _index(rows, table, key)
+            _require(set(new) == set(old) | additions and all(new[key] == value for key, value in old.items()), "cash_file_failed")
+        old_obligations, obligations = _index(before, "obligations", "obligation_id"), _index(rows, "obligations", "obligation_id")
+        _require(set(old_obligations) == set(obligations), "cash_file_failed")
         changed = {"revision", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "verification_status", "case_status", "current_evaluation_id", "updated_at_ms"}
         for key, old in old_obligations.items():
             new = obligations[key]
             _unchanged(old, new, changed if key in deltas else frozenset())
-            _require(new["received_cash_cents"] - old["received_cash_cents"] == deltas.get(key, 0) and new["revision"] == revisions[key], "cash_file_cash")
-        old_cases, cases = _index(self._before, "cases", "case_id"), _index(rows, "cases", "case_id")
-        _require(set(old_cases) == set(cases), "cash_file_other_change")
+            _require(new["received_cash_cents"] - old["received_cash_cents"] == deltas.get(key, 0) and new["revision"] == revisions[key], "cash_file_failed")
+        old_cases, cases = _index(before, "cases", "case_id"), _index(rows, "cases", "case_id")
+        _require(set(old_cases) == set(cases), "cash_file_failed")
         for key, old in old_cases.items():
             _unchanged(old, cases[key], {"status", "updated_at_ms"} if old["obligation_id"] in deltas else frozenset())
         variable = {"payments", "evidence", "evaluations", "financial_events", "financial_meta", "obligations", "cases"}
         for table in set(rows) - variable:
-            _require(tuple(rows[table]) == self._before[table], "cash_file_other_change")
-        _unchanged(self._before["financial_meta"][0], rows["financial_meta"][0], {"sequence", "history_head"})
+            _require(rows[table] == before[table], "cash_file_failed")
+        _unchanged(before["financial_meta"][0], rows["financial_meta"][0], {"sequence", "history_head"})
+        ledger.verify_obligation_connection(connection, *sorted(touched), **self._expectations())  # schema and meta once, then each touched obligation
+        _require(bool(new_evidence) or connection.total_changes == self._changes, "cash_file_failed")  # a file of repeats writes nothing (III.3)
         recorded_cents = sum(deltas.values())
-        before_cash = self._verified_before["totals"]["received_cash_cents"]
-        after_cash = verified["totals"]["received_cash_cents"]
-        _require(after_cash - before_cash == recorded_cents, "cash_file_cash")
-        if not recorded:
-            _require(current_bytes == self._before_bytes and connection.total_changes == self._changes, "cash_file_duplicate_write")
+        cash_before = sum(row["received_cash_cents"] for row in before["obligations"])
         self.receipt = {
             "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1",
             "mode": "PREVIEW" if self._preview else "APPLIED",
@@ -295,7 +333,7 @@ class CashFileCheck:
             "duplicate_count": len(self.commands) - len(recorded),
             "file_total_cents": self._source["total_cents"], "recorded_cents": recorded_cents,
             "duplicate_cents": self._source["total_cents"] - recorded_cents,
-            "cash_before_cents": before_cash, "cash_after_cents": after_cash,
+            "cash_before_cents": cash_before, "cash_after_cents": cash_before + recorded_cents,
             "cash_delta_cents": recorded_cents, "proofSuiteId": None,
             "production_usable": False, "activation": False,
         }

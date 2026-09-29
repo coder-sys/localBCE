@@ -4803,11 +4803,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.row_factory = sqlite3.Row
             obligation_ids = [str(row[0]) for row in connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id")]
             self.assertGreater(len(obligation_ids), 1)
-            for obligation_id in obligation_ids:
-                self.assertEqual(
-                    verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"],
-                    obligation_id,
-                )
+            self.assertEqual([row["obligation_id"] for row in verify_obligation_connection(connection, *obligation_ids, expected_config=store.config, expected_authority=self.authority)], obligation_ids)
             corrected = str(connection.execute("SELECT obligation_id FROM claimed_adjustments WHERE status='REJECTED'").fetchone()[0])
             current = "(SELECT current_evaluation_id FROM obligations WHERE obligation_id=:o)"
             tampers = (
@@ -5523,7 +5519,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.row_factory = sqlite3.Row
             connection.set_trace_callback(statements.append)
             obligation_id = str(connection.execute("SELECT obligation_id FROM obligations ORDER BY obligation_id").fetchone()[0])
-            self.assertEqual(verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)["obligation_id"], obligation_id)
+            self.assertEqual(verify_obligation_connection(connection, obligation_id, expected_config=store.config, expected_authority=self.authority)[0]["obligation_id"], obligation_id)
+            schema_reads = lambda ids: (statements.clear(), verify_obligation_connection(connection, *ids, expected_config=store.config, expected_authority=self.authority), sum("sqlite_master" in statement for statement in statements))[2]
+            self.assertEqual(schema_reads([obligation_id] * 3), schema_reads([obligation_id]))  # schema and meta once per call, not per obligation
             self.assertEqual(file_checks(), [])
             verify_database_connection(connection, expected_config=store.config, expected_authority=self.authority)
             self.assertEqual(file_checks(), ["PRAGMA integrity_check"])  # the trace does see the whole-store check

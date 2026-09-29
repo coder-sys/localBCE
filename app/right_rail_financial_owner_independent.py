@@ -3587,11 +3587,9 @@ def _verify_exact_input(connection: sqlite3.Connection, obligation: Mapping[str,
             _fail(f"obligation:exact-input:{key}")
 
 
-def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: str, **expected: Any) -> dict[str, object]:
-    """Per-obligation mode, run before COMMIT: the current evaluation was computed
-    from exactly the obligation's rows as they are now, recomputes to its values,
-    and the obligation's projection equals it. Takes verify_database's expected_*
-    keywords; the whole-database mode stays the open and audit check."""
+def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids: str, **expected: Any) -> tuple[dict[str, object], ...]:
+    """Per-obligation mode, run before COMMIT with schema and meta checked once per call: each current evaluation was
+    computed from exactly its obligation's rows as they are now, recomputes, and the projection equals it (whole-store mode is the open check)."""
 
     keys = ("expected_config", "expected_scope", "expected_authority", "expected_mode", "expected_owner_id", "expected_continuity_epoch")
     if not isinstance(connection, sqlite3.Connection):
@@ -3600,30 +3598,31 @@ def verify_obligation_connection(connection: sqlite3.Connection, obligation_id: 
         _fail("identity:expectation")
     identity = _identity(**{key: expected.get(key) for key in keys})
 
-    def check() -> dict[str, object]:
+    def check() -> Iterable[dict[str, object]]:
         meta = _verify_meta(connection, identity, _verify_schema(connection))
-        obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
-        if obligation is None:
-            _fail("obligation:missing")
-        row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (obligation["current_evaluation_id"], obligation_id)).fetchone()
-        if row is None:
-            _fail("obligation:current-evaluation")
-        population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
-        populations = {} if population is None else {str(population["population_id"]): population}
-        pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
-        packs = {} if pack is None else {str(pack["pack_id"]): pack}
-        evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
-        _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
-        _verify_exact_input(connection, obligation, snapshot)
-        _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
-        for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
-            if obligation[key] != row[key]:
-                _fail(f"obligation:projection:{key}")
-        if obligation["updated_at_ms"] != row["evaluated_at_ms"]:
-            _fail("obligation:projection:updated_at_ms")
-        return {"obligation_id": obligation_id, "revision": int(row["revision"]), "evaluation_id": str(row["evaluation_id"]), "result_digest": bytes(row["result_digest"]).hex().upper()}
+        for obligation_id in obligation_ids:
+            obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
+            if obligation is None:
+                _fail("obligation:missing")
+            row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (obligation["current_evaluation_id"], obligation_id)).fetchone()
+            if row is None:
+                _fail("obligation:current-evaluation")
+            population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
+            populations = {} if population is None else {str(population["population_id"]): population}
+            pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
+            packs = {} if pack is None else {str(pack["pack_id"]): pack}
+            evidence = {str(value["evidence_id"]): value for value in connection.execute("SELECT * FROM evidence WHERE item_id=?", (obligation["item_id"],))}
+            _, snapshot = _verify_evaluation_row(connection, meta, row, {obligation_id: obligation}, populations, packs, evidence, _evaluation_event_kinds(connection, obligation_id))
+            _verify_exact_input(connection, obligation, snapshot)
+            _verify_cases(connection, {obligation_id: obligation}, {obligation_id: row}, obligation_id)
+            for key in ("revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"):
+                if obligation[key] != row[key]:
+                    _fail(f"obligation:projection:{key}")
+            if obligation["updated_at_ms"] != row["evaluated_at_ms"]:
+                _fail("obligation:projection:updated_at_ms")
+            yield {"obligation_id": obligation_id, "revision": int(row["revision"]), "evaluation_id": str(row["evaluation_id"]), "result_digest": bytes(row["result_digest"]).hex().upper()}
 
-    return _mapped(check)
+    return _mapped(lambda: tuple(check()))
 
 
 def _verify_evaluation_history_events(
