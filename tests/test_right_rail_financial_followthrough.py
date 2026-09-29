@@ -453,8 +453,8 @@ class FollowthroughDecisionTests(unittest.TestCase):
         self._refused(store, FinancialInputError, "expected_revision_required", **other, expected_revision=None)
         self._refused(store, FinancialRevisionError, "obligation_revision_conflict", **other, expected_revision=store.obligation_detail("item-r2")["revision"] + 1)
         (self.directory / "narrow").mkdir()
-        narrow = _build_r_store(self.directory / "narrow", RULES, roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"))
-        self._refused(narrow, FinancialAuthorityError, "control_pack_actor_role_not_authorized")
+        with self.assertRaisesRegex(FinancialIntegrityError, "^lean_evaluation:case_owner_role$"):  # Lean refuses a pack no case owner can act under
+            _build_r_store(self.directory / "narrow", RULES, roles=("FINANCE_DECISION", "REPORTING_EDITOR", "RECEIVER"))
 
     def test_decision_shape_refused(self) -> None:
         store = self._store()

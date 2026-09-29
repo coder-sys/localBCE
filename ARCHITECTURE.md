@@ -81,10 +81,11 @@ replay still checks historical rows, digests and the whole store.
  committed follow-ups stay valid history, but only the current pin decides;
  a retired engine never decides after a newer one, and no correction, whatever
  engine decided it, requests more than was then requestable.
-- **Evaluation comparison:** `BLFIN02`/`BLFRES02` in
- `app/right_rail_financial_engine.py` with
- `app/right_rail_financial_semantic_adapter.py` is a read-only comparison of
- the owner's evaluation against Lean. It never writes.
+- **Evaluation:** Lean decides. Each write sends `BLFIN02` to one pinned
+ long-lived worker (`artifacts/engine-evaluator/`, `evaluate_live` in
+ `app/right_rail_financial_engine.py`); its `BLFRES02` answer is bound to the
+ three writes and re-checked before COMMIT. A down, unpinned, panicking or
+ disagreeing worker refuses the write; there is no Python fallback.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
  decision package, gate rules, theorems, semantic kernel; four executables).
@@ -174,19 +175,20 @@ is Blind Ledger as an inline gate every FFS and managed-care payment passes
 before money goes out, at full state scale. There is no integrated payer gate.
 What exists today toward it:
 
-- Lean decides one of 14 command types
+- Lean decides every evaluated money field and one of 14 command types
  (`reject_offset_and_authorize_correction`); Python still decides
  population, evidence, payment/reversal, offset authorization,
- acknowledgment, reporting, funding and evaluation recording.
+ acknowledgment, reporting and funding, and records what Lean decided.
 - The live correction codec (`BLFCMD02`/`BLFCRES3`) proves canonicity (P2)
  unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
  admissible values; nothing yet proves every value Lean emits is admissible.
 - There is no batch decide API, independent witness, fenced standby or Bypass
  outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
  the gate-v1 codec and Lean model.
-- The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
- one Windows process per call) is disqualifying for gate throughput and needs a
- long-lived worker pool; no warm-worker benchmark has been run.
+- The correction transition still starts one Windows process per call
+ (`app/minimal_clearance_verifier_process.py`), disqualifying for gate
+ throughput; only evaluation has a long-lived worker, and no worker-pool
+ benchmark has been run.
 - There is no CI, on-call rotation or tested failover drill.
 
 The target document holds the authority ladder, gate points, batch signing,

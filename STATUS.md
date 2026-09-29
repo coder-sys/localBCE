@@ -17,7 +17,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest run per claim; raw logs are the record)
 
 - **Full suite, trunk `4efcb4b` merged** (`merge4efcb4b-full1-a1-L3`): `SUMMARY run=495 passed=483 failed=0 errors=2 skipped=10`; the 2 errors are the ML-DSA vector tests (unbuilt exe). Gate Lean build, 19 jobs (`merge4efcb4b-lean2-a2`). Skips: symlink privilege, absent old engine artifact, no fresh handoff, 7 external-gate tests.
-- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT.
+- **Lean-live M0/M1** (XI.2 record): Lean decides the correction amount and every evaluated field; the checker re-checks each before COMMIT. M1 suite run: see the merge commit.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile stay NONE.
 - **Line pack (B+)** (documentation-only CMS-64.9 pack; XI.2 record): its tests run in the suite. Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
