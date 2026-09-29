@@ -645,14 +645,3 @@ class SourceAdmissionService:
             observation=observation,
             verification_receipt=verification_receipt,
         )
-
-__all__ = [
-    "EvidenceMode",
-    "SourceAdmission",
-    "SourceAdmissionError",
-    "SourceAdmissionService",
-    "SourceProfile",
-    "SourceRole",
-    "SourceVerifier",
-    "VerifiedSourceCoverage",
-]
