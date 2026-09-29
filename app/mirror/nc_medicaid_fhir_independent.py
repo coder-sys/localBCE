@@ -11,8 +11,7 @@ from typing import Mapping
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror.error_boundary import raise_redacted
 from app.mirror.nc_medicaid_fhir_profile import (
-    ALLOWED_MEDIA_TYPE, ALLOWED_RESOURCE_FIELDS, ALLOWED_RESOURCE_TYPES, CLAIM_FLAGS,
-    DEFAULT_CAPTURE_CONTEXT, DynamicCaptureContext, NC_MEDICAID_PROFILE,
+    ALLOWED_MEDIA_TYPE, CLAIM_FLAGS, DynamicCaptureContext, NC_MEDICAID_PROFILE,
     NcMedicaidFhirSourceProfile, synthetic_resource_variants,
 )
 from app.mirror.source_admission import EvidenceMode, VerifiedSourceCoverage

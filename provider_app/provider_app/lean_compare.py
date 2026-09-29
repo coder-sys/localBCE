@@ -55,7 +55,6 @@ _TIMEOUT_SECONDS = 2.0
 _PROCESS_LOCK = threading.Lock()
 _MAX_DAY = 3_652_059
 _MAX_UTC_SECOND = 315_537_897_599
-_MAX_AMOUNT = 100_000_000
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PACKAGE_ROOT = _REPO_ROOT / "lean" / "ProviderApp"
