@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools import semantic_assurance_gate as gate
+from lean.tools import semantic_assurance_gate as gate
 
 
 # Axioms that must never be approved, whatever the manifest says: `sorry`,
@@ -36,7 +36,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
     _REQUIRES_REAL_CANDIDATE = unittest.skipUnless(
         os.environ.get(CANDIDATE_ENVIRONMENT_VARIABLE),
         f"requires {CANDIDATE_ENVIRONMENT_VARIABLE}; these tests run only "
-        "inside the semantic assurance gate (tools/semantic_assurance_gate.py), "
+        "inside the semantic assurance gate (lean/tools/semantic_assurance_gate.py), "
         "which configures a verified external candidate",
     )
 

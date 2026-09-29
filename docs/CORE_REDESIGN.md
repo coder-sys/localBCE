@@ -142,7 +142,7 @@ it pays; an acknowledgment still has zero cash effect.
   approved one by JSON equality (so `false` is not `0`) before any projection,
   so an extra key at any level is refused, not dropped; pack fields have fixed
   shapes (id pattern, positive int version, 128-digit upper hex). Tests run
-  `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
+  `tests/instruments/privacy_artifact_scan.py` on the follow-up and restore packages and
   require nothing beyond its unapproved-schema notice; that is what is checked,
   not a proof that no package can leak.
 - **Raw evidence:** v1 (`82a2087`) held no rule, adapter or software version, no affected work, nothing rerunnable and no restore-failure package.
@@ -602,3 +602,17 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Scope.** All stores; permanent.
 - **Claims withdrawn.** "Any v8 checker verifies any v8 package" no longer holds: a package that contains a decision needs a checker at or after M2. No Lean theorem covers the decision act; the Lean-controlled claim still covers only the correction transition.
 - **Kill criteria.** Stop if an existing test expectation or digest changes, a table column or digest domain is needed, or the correction follow-up leaves CURRENT.
+
+## Slim-1b PR-2: guard naming and instrument classification (2026-09-29, XI.2 record)
+
+- **Felt effect.** A reviewer reads the guard that actually runs.
+- **Predicate.** Article X.2, the wrapper that heavy runs must use; and the split size budget (founder 2026-09-28, `tests/test_bloat_budget.py`).
+- **Change.** X.2 names `rr_guarded.ps1` running `work/rightrail-guard-host/native/guard/run_guarded_v7.ps1`, with an explicit exception for engine and release builds (v4). The trunk copy (`run.ps1`, `run_guarded_v4.ps1`, `pins.json`, `suites.json`, README, direct-mask fixture) moves to `parked/`. `semantic_assurance_gate.py` and its manifest move to `lean/tools/`; the privacy scanner pair moves to `tests/instruments/`; the budget counts both as evidence.
+- **Invariant.** A heavy run cannot start or continue below the memory floor, is contained, cleaned up and logged. Failure: certifying a control that does not run.
+- **Evidence.** The floor moved from v4's 2,190,433,321 to v7's 2,029,372,048 (1 GiB in away mode) under the grants cited in the amendment log. No test or product path reaches trunk `run.ps1` or v4; only the parked `-Light` lane did. The producer (`build_financial_correction_release.ps1:26,774`) and the kit (`kit.py:51,495-519`) accept only v4, and read the external v4 copy. 
+- **Disposition.** Retain the gate; park the redundant copy; name the live one.
+- **Replacement control.** The runner's hash check and the guard logs in `C:/Users/neers/rrb/logs/`; the producer's and kit's v4 hash checks are unchanged.
+- **Format.** No wire format, digest domain or theorem statement changes.
+- **Scope.** Laptop runs; permanent until the producer and kit move to v7, which is planned, not done.
+- **Claims withdrawn.** "v4 is the guarded wrapper" and "the floor is 2,190,433,321" no longer hold for tests. Engine and release builds still run at v4's floor.
+- **Kill criteria.** Restore from `parked/native_guard/` if `-Light` is revived or a release step needs the trunk v4 path.

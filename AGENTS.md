@@ -14,8 +14,8 @@ Working rules (details in the constitution):
   `C:/Users/neers/rrb/tools/rr_guarded.ps1`, which calls guard v7 (outside this
   tree; floor 2,029,372,048 bytes, 1 GiB while the owner-approved away file is
   valid; `-MinFree` 2,200,000,000 Python, 4,029,372,048 Lean/cargo/native, which
-  the runner lowers in away mode). Never weaken or bypass it. The pinned `native/guard/` v4
-  and `run.ps1` keep their own 2,190,433,321-byte floor and stay unchanged.
+  the runner lowers in away mode). Never weaken or bypass it. The old trunk copy (v4,
+  `run.ps1`) is parked in `parked/native_guard/`.
 - Lean decides; Python adapters commit. No duplicate policy, no silent fallback.
 - The pinned engine binary in `artifacts/engine-correction/` is built from
   the `lean/` commit its `PROVENANCE.md` names. Any later `lean/` change

@@ -11,7 +11,7 @@ import stat
 from typing import Any
 import unicodedata
 
-from tools.privacy_primitives import (
+from tests.instruments.privacy_primitives import (
     _DuplicateJsonKey,
     _reject_duplicate_keys,
     _security_normalize,
@@ -281,7 +281,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.path is not None and args.repo_root is not None:
         parser.error("path and --repo-root are mutually exclusive")
-    target = args.repo_root or args.path or Path(__file__).resolve().parents[1]
+    target = args.repo_root or args.path or Path(__file__).resolve().parents[2]
     findings = scan_artifacts(target)
     if findings:
         for finding in findings:

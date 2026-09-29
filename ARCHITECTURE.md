@@ -37,7 +37,7 @@ committed result is found again by its command identity.
 The owner writes one store version, `RR/FINANCIAL/OWNER/v8` (population
 manifest, program funding receipts, decision package v2, the exported
 `commands` log and declared foreign keys), with its matching
-`RR/FINANCIAL/CONTINUITY/v8` package. Owner and
+`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). Owner and
 independent checker accept v8 stores/packages only; every other version
 (v2-v7, unknown) is rejected without mutation, owner open with
 `unsupported_store_version`; a store converted from v7 (contains an
@@ -83,12 +83,13 @@ replay still checks historical rows, digests and the whole store.
  a retired engine never decides after a newer one, and no correction, whatever
  engine decided it, requests more than was then requestable.
 - **Evaluation comparison (tests only):** `BLFIN02`/`BLFRES02` in
- `app/right_rail_financial_engine.py` and the semantic adapter compare the
- owner's evaluation with Lean's; only tests call it, live evaluation is Python.
+ `app/right_rail_financial_engine.py` compare the owner's evaluation with
+ Lean's; only tests call it, live evaluation is Python. The live correction
+ path does call the semantic adapter.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
  decision package, gate rules, theorems; four executables).
- `tools/semantic_assurance_gate.py` checks the correction transition's pinned
+ `lean/tools/semantic_assurance_gate.py` checks the correction transition's pinned
  theorem statements, proofs and axioms.
 
 ## Mirror, Continuity and Switch
@@ -98,7 +99,7 @@ commands back to it. It has no tables of its own and cannot invent cash,
 authority or clearance. From one current decision package it derives the
 correction follow-up explanation, a state report and a recipient-safe
 corporate-support output; a bounded follow-up drain is repeatable, and an
-acknowledgment changes only follow-up status.
+acknowledgment changes follow-up status without changing cash.
 
 **Continuity** exports the history as chained, bounded segments
 (`RR/GATE/SEGMENT/v1`, docs/CORE_REDESIGN.md), which the checker verifies and
@@ -117,13 +118,14 @@ routing or cutover.
 **Staff server** is loopback-only and serves `app/staff_workspace/`. The
 **service kit** (`tools/right_rail_financial_service_kit.py`) is the one
 packager: it assembles, verifies, extracts, runs the end-to-end scenario and
-serves the workspace from a digest-bound offline archive. Its release
-producer and inventory bind the current vectors, retired-pin
+serves the workspace from a digest-bound offline archive. Its current
+release producer and kit inventory bind the current vectors, retired-pin
 registry and fresh guarded engine receipt. The kit checks canonical source
-paths and exact v4 guard records under LF or CRLF; exercised archives are in provenance. Staff cash evidence names the correction request it
-pays; an acknowledgment never gives that credit. The synthetic staff
+paths and the exact v4 guard records under LF or CRLF line endings (raw log
+bytes stay digest-bound); exercised archives are in provenance. Staff cash evidence names the correction request it
+pays; acknowledgment alone never provides that credit. The synthetic staff
 clock advances to the explicit decision time before issuing the correction, so
-demo acknowledgments follow their action, even after a lost response.
+new demo acknowledgments follow their action, even after a lost response.
 
 The HTTP adapter accepts exactly one length and content-type header, no
 transfer encoding, and at most 8,192 bytes within a five-second total body
@@ -151,8 +153,8 @@ capture context (subject, credential, enrollment, locator, observation and fetch
 time); all six values must match the independent source check before admission.
 Only the admitted graph reaches the read-model and export verification gates;
 the served projection keeps freshness and source truth unknown. A failed capture
-or context mismatch opens no server.
-Both CLIs accept `--source-envelope` and `--capture-context` instead
+or context mismatch opens no server. Retry recomputes the same verified projection.
+Both CLIs accept `--source-envelope` and `--capture-context` (see `--help`) instead
 of `--artifact PATH`; the four identities are opaque
 128-character hex values from the capture configuration, never parsed from the
 untrusted envelope. This is file intake for the fixed synthetic profile; no

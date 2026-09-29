@@ -34,26 +34,18 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 | Path | Contents |
 | --- | --- |
 | `app/` | Financial owner, independent checker, Mirror, Switch, Engine port, staff server; direct-state-owned clearance seam; `app/mirror/` Provider Trust Graph |
-| `lean/` | The one Lake workspace (package `RightRail`, library `BlindLedger`): financial semantics, the correction transition, the semantic kernel |
+| `lean/` | The one Lake workspace (package `RightRail`, library `BlindLedger`): financial semantics, the correction transition |
 | `artifacts/engine-correction/` | The pinned correction executable and its `PROVENANCE.md` |
-| `tools/` | CLI, offline service kit, privacy scanner |
+| `tools/` | CLI, offline service kit |
 | `tests/` | Product tests (`pytest` default run) |
 | `provider_app/` | Provider App pre-submission checker (separate product) |
-| `native/guard/` | Guarded runner for every heavy build or test |
 | `parked/` | Parked work, off the critical path (`parked/README.md`) |
 
 ## How to run
 
 All builds and tests go through the guard; never run them bare
-(Constitution X.2). See `native/guard/README.md`.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File native\guard\run.ps1 -Suite financial-correction
-```
-
-Suites live in `native/guard/suites.json` (`financial-correction`,
-`service-kit-scenario`, `lean-engine-build`, `selftest`). The default `pytest`
-configuration runs `tests/` and excludes `parked/`.
+(Constitution X.2), through `C:/Users/neers/rrb/tools/rr_guarded.ps1`. The
+default `pytest` configuration runs `tests/` and excludes `parked/`.
 
 **Python dependencies** are installed offline only, into a fresh virtual
 environment, from a pre-provisioned wheelhouse; pip refuses any wheel whose

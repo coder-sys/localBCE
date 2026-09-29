@@ -115,6 +115,7 @@ STATE_FILES = (
     "app/staff_workspace/staff.js",
     RETIRED_PIN_REGISTRY,
     "tests/__init__.py",
+    "tests/financial_decision_package_oracle.py",
     "tests/rightrail_financial_expected_cases.py",
     "tests/test_right_rail_financial_acceptance.py",
     "tests/test_right_rail_financial_staff_server.py",

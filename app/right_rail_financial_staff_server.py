@@ -226,7 +226,6 @@ class StaffWorkflow:
                 correction_transition_release=correction_transition_release,
             )
         )
-        self._gate_checks: list[dict[str, Any]] = []
         self._continuity = {
             "restored": False,
             "mode": "SYNTHETIC_LOCAL",
@@ -252,10 +251,6 @@ class StaffWorkflow:
     @property
     def continuity(self) -> dict[str, Any]:
         return dict(self._continuity)
-
-    @property
-    def gate_checks(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self._gate_checks]
 
     def close(self) -> None:
         mirror = getattr(self, "_mirror", None)
@@ -511,74 +506,12 @@ class StaffWorkflow:
             raise ValueError("review_binding")
         return revision, evaluation_id, result_digest, payload["read_binding"]
 
-    def _owner_position(self) -> tuple[int, object]:
-        """Measure the Owner's committed history position (sequence and head)."""
-        owner = self._mirror.owner
-        sequence = owner.summary().get("sequence")
-        if type(sequence) is not int or sequence < 0:
-            raise RuntimeError("owner_position_unavailable")
-        if sequence == 0:
-            return sequence, None
-        latest = owner.history(limit=1, offset=sequence - 1)
-        if len(latest) != 1 or latest[0].get("event_sequence") != sequence or latest[0].get("head") is None:
-            raise RuntimeError("owner_position_unavailable")
-        return sequence, latest[0]["head"]
-
     def _h_received_cash_cents(self) -> int:
         """Measure H's recorded cash from the Owner projection."""
         value = self._mirror.obligation_detail(H_ITEM_ID, limit=1).get("received_cash_cents")
         if type(value) is not int:
             raise RuntimeError("owner_cash_unavailable")
         return value
-
-    def _gate_attempt(self, body: object, *, stale: bool) -> dict[str, Any]:
-        revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
-        if self._mirror.decision_package(H_ITEM_ID).get("current_determination") is not None:
-            raise ValueError("gate_check_not_available_after_determination")
-        if stale:
-            actor_id = "synthetic-official"
-            expected_revision = revision - 1
-            expected_code = "obligation_revision_conflict"
-            label = "Stale revision"
-        else:
-            actor_id = "synthetic-reporter"
-            expected_revision = revision
-            expected_code = "authority_actor_not_authorized"
-            label = "Wrong role"
-        position_before = self._owner_position()
-        try:
-            self._mirror.reject_offset_and_authorize_correction(
-                item_id=H_ITEM_ID,
-                claim_id=H_CLAIM_ID,
-                actor_id=actor_id,
-                actor_role="FINANCE_DECISION",
-                expected_revision=expected_revision,
-                action_id=H_ACTION_ID,
-                decision_at_ms=DECISION_AT_MS,
-                evaluation_id=evaluation_id,
-                evaluation_result_digest=result_digest,
-                staff_read_binding=read_binding,
-            )
-        except (FinancialError, FinancialMirrorError) as exc:
-            code = str(exc)
-        else:
-            raise RuntimeError(f"demo_gate_unexpected_success:{label}")
-        if code != expected_code:
-            raise RuntimeError(f"demo_gate_verification:{label}")
-        result = {
-            "name": label,
-            "status": "REJECTED",
-            "code": code,
-            "state_unchanged": self._owner_position() == position_before,
-        }
-        self._gate_checks = [row for row in self._gate_checks if row["name"] != label]
-        self._gate_checks.append(result)
-        return result
-
-    def attempt_wrong_role(self, body: object) -> dict[str, Any]:
-        with self._lock:
-            result = self._gate_attempt(body, stale=False)
-            return {"gate": result, "workspace": self._workspace_locked()}
 
     def command(self, name: str, body: object) -> dict[str, Any]:
         """Run one staff command. On a busy store, changed is true only when this command's own record appeared,
@@ -609,11 +542,6 @@ class StaffWorkflow:
         with owner._read_snapshot() as connection:
             position = (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
             return position, connection.execute(query, arguments).fetchone()[0] > 0
-
-    def attempt_stale_revision(self, body: object) -> dict[str, Any]:
-        with self._lock:
-            result = self._gate_attempt(body, stale=True)
-            return {"gate": result, "workspace": self._workspace_locked()}
 
     def reject_offset_and_authorize_correction(self, body: object) -> dict[str, Any]:
         with self._lock:
@@ -696,7 +624,6 @@ class StaffWorkflow:
             },
             read_at=datetime.now(timezone.utc).isoformat(),
             labels=ITEM_LABELS,
-            gate_checks=self.gate_checks,
             continuity=self._continuity,
         )
 
