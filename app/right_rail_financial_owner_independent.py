@@ -148,6 +148,7 @@ _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _ROLE = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _KIND = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
 _HEX128 = re.compile(r"[0-9A-Fa-f]{128}\Z")
+_UPPER_HEX64 = re.compile(r"[0-9A-F]{64}\Z")
 
 
 # The names, order, declared SQLite types, and primary-key positions are
@@ -366,6 +367,7 @@ _COMMAND_SOURCES: dict[str, tuple[str, str | None, str, str]] = {
         "evaluation_id=d.input_evaluation_id evaluation_result_digest=d.input_evaluation_result_digest",
     ),
     "ACTION_ACKNOWLEDGMENT": ("ACTION_ACKNOWLEDGED", "action_id", "r=action_outbox.action_id", "r.acknowledgment_ref"),
+    "FOLLOWTHROUGH_DECISION": ("FOLLOWTHROUGH_DECIDED", "decision_id", "", "e.payload_digest"),  # the event is its own source row
 }
 _COMMAND_EVENT_KINDS = {event: kind for kind, spec in _COMMAND_SOURCES.items() for event in spec[0].split()}
 
@@ -416,6 +418,7 @@ _EVENT_KINDS = {
         "REPORTING_EVIDENCE_RECORDED",
         "REPORTING_CORRECTION_RECORDED",
         "EVALUATION_RECORDED",
+        "FOLLOWTHROUGH_DECIDED",
     },
 }
 _PAYMENT_EVIDENCE_KINDS = {"PAYMENT_CONFIRMATION"}
@@ -3595,16 +3598,10 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
     """Per-obligation mode, run before COMMIT with schema and meta checked once per call: each current evaluation was
     computed from exactly its obligation's rows as they are now, recomputes, and the projection equals it (whole-store mode is the open check)."""
 
-    keys = ("expected_config", "expected_scope", "expected_authority", "expected_mode", "expected_owner_id", "expected_continuity_epoch")
-    if not isinstance(connection, sqlite3.Connection):
-        _fail("database:connection")
-    if not set(expected) <= set(keys):
-        _fail("identity:expectation")
-    identity = _identity(**{key: expected.get(key) for key in keys})
     touched: dict[str, sqlite3.Row] = {}
 
     def check() -> Iterable[dict[str, object]]:
-        meta = _verify_meta(connection, identity, _verify_schema(connection))
+        identity, meta = _per_obligation_meta(connection, expected)
         for obligation_id in obligation_ids:
             obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
             if obligation is None:
@@ -3645,8 +3642,115 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
             evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
             actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
         )
+        _verify_followthrough_decisions(  # only decisions carry a payload here; the other events give the revision each decision must follow
+            connection.execute("SELECT event_sequence,aggregate_type,aggregate_id,kind,before_revision,after_revision,committed_at_ms,CASE kind WHEN 'FOLLOWTHROUGH_DECIDED' THEN payload_json END AS payload_json FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
+            meta, touched, populations, packs, identity["actors"],
+        )
 
     return _mapped(lambda: tuple(check()))
+
+
+def _per_obligation_meta(connection: sqlite3.Connection, expected: Mapping[str, Any]) -> tuple[dict[str, object], dict[str, object]]:
+    """The start both pre-COMMIT modes share: the trusted identity, then the schema and meta checked against it."""
+
+    keys = ("expected_config", "expected_scope", "expected_authority", "expected_mode", "expected_owner_id", "expected_continuity_epoch")
+    if not isinstance(connection, sqlite3.Connection):
+        _fail("database:connection")
+    if not set(expected) <= set(keys):
+        _fail("identity:expectation")
+    identity = _identity(**{key: expected.get(key) for key in keys})
+    return identity, _verify_meta(connection, identity, _verify_schema(connection))
+
+
+_FOLLOWTHROUGH_KEYS = frozenset(("decision_id", "item_id", "act", "reason_code", "owner_id", "suggestion", "actor_id", "actor_role", "authority_id", "authority_epoch", "authority_digest"))
+_SUGGESTION_KEYS = frozenset(("source_id", "source_ref", "source_sha256", "suggested_at_ms", "act", "reason_code", "owner_id"))
+
+
+def _followthrough_shaped(value: Mapping[str, object]) -> bool:
+    """A CLOSE names a reason and no owner; an ASSIGN names an owner and no reason."""
+    act, reason, owner = value["act"], value["reason_code"], value["owner_id"]
+    if act == "CLOSE":
+        return type(reason) is str and _KIND.fullmatch(reason) is not None and owner is None
+    return act == "ASSIGN" and reason is None and type(owner) is str and _ID.fullmatch(owner) is not None
+
+
+def _verify_followthrough_event(
+    event: Mapping[str, object], *, prior_revision: object, obligation: Mapping[str, object] | None,
+    pack: Mapping[str, object] | None, actors: Mapping[str, frozenset[str]], meta: Mapping[str, object],
+) -> str:
+    """Every rule the checker applies to one FOLLOWTHROUGH_DECIDED event but uniqueness, whichever mode asks; returns its decision_id."""
+
+    payload = _parse_json(event["payload_json"], "followthrough:payload")
+    if obligation is None or pack is None or not isinstance(payload, dict) or set(payload) != _FOLLOWTHROUGH_KEYS or payload["item_id"] != obligation["item_id"] or not _followthrough_shaped(payload):
+        _fail("followthrough:payload")
+    decision_id = _id(payload["decision_id"], "followthrough:payload")
+    if not event["before_revision"] == event["after_revision"] == prior_revision:
+        _fail("followthrough:revision")
+    role, actor = payload["actor_role"], payload["actor_id"]
+    if role not in ("CASE_OWNER", "FINANCE_DECISION") or type(actor) is not str or role not in actors.get(actor, frozenset()) or role not in _values_json(pack["authorized_roles_json"], "pack:roles"):
+        _fail("followthrough:actor")
+    if type(payload["authority_epoch"]) is not int or (payload["authority_id"], payload["authority_epoch"], payload["authority_digest"]) != (meta["authority_id"], meta["authority_epoch"], bytes(meta["authority_digest"]).hex().upper()):
+        _fail("followthrough:authority")
+    suggestion = payload["suggestion"]
+    if suggestion is not None and not (
+        isinstance(suggestion, dict) and set(suggestion) == _SUGGESTION_KEYS and _followthrough_shaped(suggestion)
+        and all(type(suggestion[key]) is str and _ID.fullmatch(suggestion[key]) for key in ("source_id", "source_ref"))
+        and type(suggestion["source_sha256"]) is str and _UPPER_HEX64.fullmatch(suggestion["source_sha256"]) is not None
+        and type(suggestion["suggested_at_ms"]) is int and 0 <= suggestion["suggested_at_ms"] <= event["committed_at_ms"]
+    ):
+        _fail("followthrough:suggestion")
+    return decision_id
+
+
+def _verify_followthrough_decisions(
+    events: Iterable[Mapping[str, object]], meta: Mapping[str, object], obligations: Mapping[str, Mapping[str, object]],
+    populations: Mapping[str, Mapping[str, object]], packs: Mapping[str, Mapping[str, object]], actors: Mapping[str, frozenset[str]],
+) -> None:
+    """Whole-store and touched-obligation modes: each decision in event order through the one per-event rule, each id once."""
+
+    revision: dict[tuple[object, object], object] = {}  # per (type, id): an aggregate id may repeat across types; an obligation's first event follows the import's revision 0
+    seen: set[str] = set()
+    for event in events:
+        aggregate = event["aggregate_id"]
+        key = (event["aggregate_type"], aggregate)
+        if event["kind"] == "FOLLOWTHROUGH_DECIDED":
+            obligation = obligations.get(aggregate)
+            population = None if obligation is None else populations.get(str(obligation["population_id"]))
+            decision_id = _verify_followthrough_event(
+                event, prior_revision=revision.get(key, 0), obligation=obligation, pack=None if population is None else packs.get(str(population["pack_id"])), actors=actors, meta=meta,
+            )
+            if decision_id in seen:
+                _fail("followthrough:duplicate")
+            seen.add(decision_id)
+        revision[key] = event["after_revision"]
+
+
+def verify_followthrough_connection(connection: sqlite3.Connection, obligation_id: str, decision_id: str, **expected: Any) -> dict[str, object]:
+    """Pre-COMMIT mode for one official decision: the per-event rule, its uniqueness and its command row, as the open check applies them.
+    It does not rerun the evaluation: a decision writes no table row and moves no revision."""
+
+    def check() -> dict[str, object]:
+        identity, meta = _per_obligation_meta(connection, expected)
+        obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (_id(obligation_id, "obligation:id"),)).fetchone()
+        if obligation is None:
+            _fail("obligation:missing")
+        population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
+        pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
+        events = connection.execute("SELECT * FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?", (_id(decision_id, "followthrough:payload"),)).fetchall()
+        if len(events) != 1:
+            _fail("followthrough:duplicate")
+        event = events[0]
+        if event["aggregate_id"] != obligation_id:
+            _fail("followthrough:payload")
+        prior = connection.execute("SELECT after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND event_sequence<? ORDER BY event_sequence DESC LIMIT 1", (obligation_id, event["event_sequence"])).fetchone()
+        _verify_followthrough_event(event, prior_revision=0 if prior is None else prior[0], obligation=obligation, pack=pack, actors=identity["actors"], meta=meta)
+        request = _canonical({"command": "FOLLOWTHROUGH_DECISION", "key": decision_id, "payload_digest": bytes(event["payload_digest"]).hex().upper()}, "followthrough:command")
+        command = connection.execute("SELECT kind,request_json,request_digest,event_sequence FROM commands WHERE command_id=?", (f"FOLLOWTHROUGH_DECISION:{decision_id}",)).fetchone()
+        if command is None or tuple(command) != ("FOLLOWTHROUGH_DECISION", request.decode("ascii"), _digest(COMMAND_DOMAIN, request), event["event_sequence"]):
+            _fail("followthrough:command")
+        return {"obligation_id": obligation_id, "decision_id": decision_id, "event_sequence": int(event["event_sequence"])}
+
+    return _mapped(check)
 
 
 def _verify_evaluation_history_events(
@@ -3896,7 +4000,7 @@ def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: s
             key = payload.get(field) if isinstance(payload, dict) else None
         if type(key) is not str:
             _fail(f"{code}:key")
-        found: dict[str, Mapping[str, object]] = {}
+        found: dict[str, Mapping[str, object]] = {"e": event}
         for join in joins.split():
             alias, _, target = join.partition("=")
             source, _, via = target.partition("<")
@@ -3979,10 +4083,8 @@ def _database_snapshot_rows(connection: sqlite3.Connection) -> dict[str, list[di
     snapshot: dict[str, list[dict[str, object]]] = {}
     for table in PACKAGE_TABLES:
         rows = _bounded_rows(connection, table)
-        snapshot[table] = [
-            {column: row[column] for column in TABLE_COLUMNS[table]}
-            for row in rows
-        ]
+        order = [rows[0].keys().index(column) for column in TABLE_COLUMNS[table]] if rows else []  # positions once: a name lookup per value is the slow part
+        snapshot[table] = [dict(zip(TABLE_COLUMNS[table], map(row.__getitem__, order))) for row in rows]
     return snapshot
 
 
@@ -4037,8 +4139,8 @@ def verify_history_export(directory: str | Path, *, expected_authority: object, 
     return _mapped(lambda: _verify_history_export(Path(directory), expected_authority, expected_scope, restored))
 
 
-def _verify_history_export(directory: Path, expected_authority: object, expected_scope: object | None, restored: str | Path | None) -> dict[str, object]:
-    manifest = _read_json(directory / "manifest.json", "history:manifest", MAX_JSON_BYTES)
+def _verify_manifest(manifest: object, expected_authority: object, expected_scope: object | None) -> tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
+    """The manifest's own checks (shape, digest, meta, identity), shared by a history export and a cash-file baseline: (meta, identity, scope, expected)."""
     if not isinstance(manifest, dict) or set(manifest) != {"format", "identity", "meta", "segment_count", "last_segment_digest", "manifest_digest"} or manifest["format"] != SEGMENT_FORMAT:
         _fail("history:manifest")
     body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
@@ -4055,6 +4157,12 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
         _fail("history:identity-genesis")
     if identity["anchor_sequence"] == 0 and identity["anchor_head"] != identity["genesis_head"]:
         _fail("history:identity-anchor")
+    return meta, identity, scope, expected
+
+
+def _verify_history_export(directory: Path, expected_authority: object, expected_scope: object | None, restored: str | Path | None) -> dict[str, object]:
+    manifest = _read_json(directory / "manifest.json", "history:manifest", MAX_JSON_BYTES)
+    meta, identity, scope, expected = _verify_manifest(manifest, expected_authority, expected_scope)
     count = _integer(manifest["segment_count"], "history:segment-count", maximum=MAX_ROWS)
     previous, head, sequence = ZERO_DIGEST, identity["genesis_head"], 0
     images: dict[tuple[str, tuple[object, ...]], dict[str, object]] = {}
@@ -4090,7 +4198,7 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
     if manifest["last_segment_digest"] != previous.hex().upper() or (meta["sequence"], meta["history_head"]) != (sequence, head) or identity["anchor_sequence"] > sequence:
         _fail("history:manifest-binding")
     result: dict[str, object] = {  # shaped like a verified package, for restore
-        "scope": scope, "authority": {"authority_id": authority[0], "epoch": authority[1], "digest": expected["authority_digest"].hex().upper()},
+        "scope": scope, "authority": {"authority_id": expected["authority_id"], "epoch": expected["authority_epoch"], "digest": expected["authority_digest"].hex().upper()},
         "continuity_epoch": meta["continuity_epoch"], "sequence": sequence, "history_head": head.hex().upper(), "package_digest": manifest["manifest_digest"],
         "segment_count": count, "tables": {"financial_identity": [manifest["identity"]], "financial_meta": [manifest["meta"]]},
     }
@@ -4372,6 +4480,7 @@ def _verify_connection(
     actions = _verify_actions(connection, meta, evaluations, claims, determinations, payments)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
     _verify_duplicate_evidence(connection)
+    _verify_followthrough_decisions(events, meta, obligations, populations, packs, identity["actors"])
     funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
     manifest_records = manifest_state["manifests"]
     assert isinstance(manifest_records, dict)

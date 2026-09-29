@@ -2,20 +2,20 @@
 
 Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores, conditional on every step complying with CONSTITUTION.md; any step weakening a safety property or protected answer needs a separate founder decision.
 
-Format approval (2026-09-24, CONSTITUTION V.4): asked in session chat whether to move to the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8), the founder answered "Yes, approve v8". The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`. History-completeness approval (same date): one sealed opening-balance event, then full facts on every later event. Both v7 provisions (migration on open, opening-balance conversion) were superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
+Format approval (2026-09-24, CONSTITUTION V.4): the founder approved the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8) in session chat ("Yes, approve v8"). The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`. History-completeness approval (same date): one sealed opening-balance event, then full facts on every later event. Both v7 provisions (migration on open, opening-balance conversion) were superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
 
 ## Verdict
 
 ### Current-source Lean reproduction (2026-09-26, XI.2 record)
 
 - Guard-log line endings: r78 refused the r77 kit (`engine_guard_log_policy_mismatch`):
-  its 99 CRLF records hold the exact v4 policy but the kit's LF-only anchors
-  match none. Predicate unchanged: parse the actual guard evidence and keep
-  exact fields, counts, floors, exits, cleanup and mutex release; no pass from a
-  receipt alone. Disposition: only the three record-ending patterns accept LF or
-  CRLF; control: positive checks for both forms, malformed-ending and
-  adverse-record mutations, independent review, a new complete kit run. Raw log
-  bytes and digest binding are unchanged. Withdrawn: r78 verifies no kit.
+  its 99 CRLF records hold the exact v4 policy but the kit's LF-only anchors match
+  none. Predicate unchanged (parse the actual guard evidence; exact fields, counts,
+  floors, exits, cleanup and mutex release; no pass from a receipt alone). Only the
+  three record-ending patterns accept LF or CRLF; control: positive checks for both
+  forms, malformed-ending and adverse-record mutations, independent review, a new
+  complete kit run. Raw log bytes and digest binding are unchanged. Withdrawn: r78
+  verifies no kit.
 - Canonical manifest: r75 refused the r67 kit
   (`engine_source_manifest_not_canonical_or_current`): the producer sorted native
   Windows paths before replacing backslashes; the kit requires ordinal order of
@@ -145,10 +145,7 @@ it pays; an acknowledgment still has zero cash effect.
   `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
   require nothing beyond its unapproved-schema notice; that is what is checked,
   not a proof that no package can leak.
-- **Raw evidence:** v1 (`82a2087`) had no rule, adapter or software version and
-  no affected work; its reproduction `{scenario: SYNTHETIC_CORRECTION,
-  real_data: false}` held nothing a support engineer could rerun; a restore
-  failure had no package.
+- **Raw evidence:** v1 (`82a2087`) held no rule, adapter or software version, no affected work, nothing rerunnable and no restore-failure package.
 - **Disposition:** v1 replaced, not versioned alongside (derived, synthetic, no
   outside consumer). Deleted: the Owner's `_corporate_support` and
   `continuity_restore_support` builders and `restore_test_continuity` wrapper
@@ -164,13 +161,6 @@ it pays; an acknowledgment still has zero cash effect.
 - **Claims withdrawn:** `reproduction {SYNTHETIC_CORRECTION, real_data: false}`;
   the earlier `affected_work {count, ids}` with the event sequence.
 
-The core is ~2.5x larger than the invariants need. Root cause: state lives in
-~20 editable tables with history as a side log, so every consumer (checker, successor,
-continuity, Switch, Mirror) re-validates all tables in its own copy. Target shape:
-one command log + one append-only, hash-chained history of complete facts + projections
-rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lines
-(8,000-11,000); owner ~3,000.
-
 ## Gaps found (under-enforcement, not just size)
 
 - Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
@@ -178,18 +168,12 @@ rebuilt from it by one `apply(event)` per event kind. Estimated total ~9,300 lin
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
 - The successor verifies and views but cannot continue the work (VII.2).
 
-## Target sizes (Python lines; current ceilings in `tests/test_bloat_budget.py`)
-
-Target lines: owner ~3,000; checker ~1,800 (replay + compare, code-independent); successor ~300-800 (replay + TEST writer that can continue); Mirror ~500; Switch ~500 (reuses replay); engine + adapter ~1,300; process runner ~800 (uncertain); staff server + CLI ~1,100.
-
 ## Migration (each step leaves a working system; one guarded run per step)
 
 Done: golden baselines; v5/v6 retired (XI.2 record); `commands` table, required
 revision and actor, append-only triggers, FKs; complete-fact events and the
 `apply` reducer (OWNER/CONTINUITY v8); Continuity v8 restore by replay; Switch
-and Mirror reuse the replay. The v7 conversion, `OPENING_BALANCE` and v7 receiver
-were removed 2026-09-25 (decision C3): a non-v8 store fails
-`unsupported_store_version`. Standing rules: one typed decoder per record, no
+and Mirror reuse the replay. Standing rules: one typed decoder per record, no
 re-validating own writes; Python re-derivation of Lean is replaced by read-set
 binding plus a pre-COMMIT per-obligation checker; the checker is replay +
 compare with an incremental mode and all 25 tamper tests still detect.
@@ -269,7 +253,7 @@ against the reviewed ledger, then records its cash evidence as one transaction:
 no repeated manual entry, exact retries, all-or-nothing. No money moves.
 
 - Predicate: accept only `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII
-  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`; measured limits in `STATUS.md`). Root fields are exactly
+  JSON of at most 1 MiB, with 1-500 ordered rows, at most 6 per item (more: `cash_file_row_cap`). Root fields are exactly
   `contract`, `source_class`, `scope`, `source`, `row_count`, `total_cents`,
   `rows`; `source_class` is `SYNTHETIC_RECEIVER_CASH`. Scope has exactly the
   existing state/deployment/program/period/currency fields, currency USD.
@@ -277,7 +261,7 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   `captured_at_ms`. Each row has exactly eight fields: `item_id`, `payment_id`,
   `common_origin_id`, `evidence_id`, `amount_cents`, `event_at_ms`,
   `pays_action_id`, `expected_revision`. The action link is explicitly null or
-  an ID. Eight is the exact set; no implicit extra field.
+  an ID.
 - Invariant/failure: untrusted input never skips a row, turns acknowledgment or
   reporting into cash, substitutes an ID with the same total, or commits a
   partial file. IDs/version use the owner's 128-character grammar. Cents are
@@ -296,64 +280,60 @@ no repeated manual entry, exact retries, all-or-nothing. No money moves.
   commands, cash rules, existing wire/digest domains, expected answers and
   limits. No caller-provided callback or success flag authorizes acceptance.
 - Replacement control: the caller separately supplies trusted scope, source
-  context, source SHA-256, original baseline SHA-256, owner ID/mode and authority.
-  Let F be exact file bytes and B the ORIGINAL reviewed Continuity bytes.
+  context, source SHA-256, baseline SHA-256, owner ID/mode and authority.
+  Let F be exact file bytes and B the exact `manifest.json` bytes `export-history`
+  wrote (the owner's history manifest, about 1.9 KB whatever the history).
   Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`.
-  A retry never replaces B with a fresh snapshot. Producer and verifier parse
+  A retry never replaces B with a fresh export. Producer and verifier parse
   and reconstruct independently; the verifier does not import the producer.
+  It accepts B only if canonical and it passes the export verifier's manifest checks
+  (`_verify_manifest`: digest, meta and identity against the trusted scope, owner, mode
+  LIVE or TEST and authority; no null sequence or head).
   Freeze commands before comparison. Under the same BEGIN IMMEDIATE, bind the
   store to B: the same identity row and event head at B's sequence (the owner
-  verified the whole store at open; later history is append-only). New work
-  requires the store still at B's sequence; on an older baseline only rows that
-  write nothing (RETRY, ALIAS) are allowed.
+  verified the whole store at open; later history is append-only), and B's
+  `segment_count` and `last_segment_digest` equal to the live `history_segments`
+  row sealed at B's sequence (none: 0 and the zero digest). New work requires the store still at B's sequence; on an
+  older baseline only rows that write nothing (RETRY, ALIAS) are allowed.
   After final sealing the checker verifies row/command order, each new event
   onto the chain, payment/evidence/action links, revisions, every table's
   before/after difference and per-item cash deltas, then runs its own rules on
   the touched obligations (see Cash-file capacity); other cash, acknowledgments
-  and reporting remain unchanged. It does not re-verify the whole store. A file with no NEW or OVERLAP
+  and reporting remain unchanged. A file with no NEW or OVERLAP
   row must leave durable state identical and make zero SQL changes. Any mismatch rolls
   back the whole file. Publish the receipt only after COMMIT succeeds.
-  Preview is the default: independently verify B and restore it into isolated
-  TEST storage, bind the restore to B's sequence and head, use that restore's
-  snapshot as execution baseline, and run the file there, retaining F and
-  original B as retry identity. Preview never opens an incumbent writer.
-  Explicit apply uses the same checked boundary. Cleanup failures are visible.
-  CLI apply opens only an existing, current store with the reviewed mode/ID
-  (SQLite `mode=rw`; read-only setup checks refuse missing segment/index/
-  append-only metadata instead of migrating it); a missing, empty or
-  disappearing store is refused.
+  Preview (the default) runs the checked file on a private SQLite-backup copy of the live
+  store, rolls it back and deletes it; no writer opens on the live file. Apply uses the same
+  checked boundary; cleanup failures are visible. CLI apply opens only an existing, current
+  store with the reviewed mode/ID (`mode=rw`; setup checks refuse missing segment/index/
+  append-only metadata rather than migrate it); a missing, empty or disappearing store is refused.
 - Scope: local synthetic receiver cash evidence only; Switch's owed
   comparison schema is unchanged; no live transport, source authentication/truth,
   payment or activation claim.
-- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v1` has exactly `contract`,
+- Receipt: `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2` (v1 receipts stay valid) has exactly `contract`,
   `mode` (PREVIEW or APPLIED), `source_sha256`, `baseline_sha256`, `row_count`,
   `recorded_count`, `duplicate_count`, `file_total_cents`, `recorded_cents`,
   `duplicate_cents`, `cash_before_cents`, `cash_after_cents`, `cash_delta_cents`,
   `proofSuiteId` (null), `production_usable` (false), `activation` (false).
   Amounts are the checker's sums of the rows before the write and the per-item
-  cash deltas it proved; totals are not re-verified over the whole store.
+  cash deltas it proved.
   RETRY and ALIAS rows add zero cash, including payments reversed after their
   receipt; a new repeat of a reversed payment is DUPLICATE only if dated no later than the reversal, else `conflict`. No intermediate
   owner projection or raw file/error data is exported in this result.
 - Duration: v1 has no implicit legacy migration; changes need a new compatibility decision and fresh evidence.
-- Claims withdrawn: this design is not implementation or verification. Required
-  evidence covers field/context/identity mutations, altered command order, exact
-  bounds, original-baseline retry and reversal, stale/concurrent/mixed batches,
-  overlap, alias/conflict rollback and reuse, action limits, crashes/lost
-  responses, no ACK/report effects, source preservation, privacy and cleanup,
-  independent verification, Continuity and existing consumers; the runs that
-  cover it are recorded in `STATUS.md`.
+- Claims withdrawn: this design is not implementation or verification.
 
 ### Cash-file capacity (2026-09-28)
 
 Target: the largest state's hospital-level program, about 600 hospitals with up
-to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). Not met per rr-review: the
-8 MiB package cap on the baseline binds first (`STATUS.md`). All-provider
-refund flows need sharding or Phase 2 below and are not claimed.
+to 3 lines a month (2,000 rows a month, under Lean's `maxRows`). The 8 MiB package
+baseline capped a store near 950 payments; with the manifest baseline (1b) a month
+is four full files and a quarter twelve (locks: `STATUS.md`). All-provider refund
+flows need sharding or Phase 2 and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
-  busy timeout (measured locks: `STATUS.md`). One evaluation per payment is kept
+  busy timeout. One evaluation per payment is kept
   (founder, 2026-09-28).
 - Art. XI.2 record. Disposition: the whole-store verify no longer runs twice per
   import under the lock (it runs at each open). Replacement control, before
@@ -364,11 +344,19 @@ refund flows need sharding or Phase 2 below and are not claimed.
   whole-store rule not run before COMMIT with its reason. Claims withdrawn: that the store, or
   a cash file's totals, is independently verified before COMMIT. Corruption
   that bypassed the owner is caught at the next open or by `verify-integrity`.
-- Visible changes: the CLI prints `ERROR:receiver_cash_file_refused:{code}`; older
-  per-cause refusal codes collapsed into nine fixed classes (below); a repeat of a
-  reversed payment's origin is DUPLICATE only when dated no later than the
-  reversal, else `conflict` (owner and cash file share the rule); `duplicate_count` includes OVERLAP
-  rows, which write alias evidence.
+- Art. XI.2 record, Phase 1b (2026-09-29). Felt effect: a reviewer hashes a 1.9 KB
+  manifest, not a 2.4 to 15.7 MB package. Disposition: B is the `export-history` manifest (it prints its SHA-256); the
+  receipt is v2 (same 16 keys); a SHADOW store is no longer a target
+  (`cash_file_binding`; `--mode` is LIVE or TEST). No stored format, digest or `local_ref`
+  construction changes (a `local_ref` prefix is declined: the 128-char grammar bounds it).
+  Review fixes: B's segment fields bind to the live row; a preview refuses a copy whose
+  deferred keys COMMIT would refuse; `export-history` replaces `manifest.json` only with a
+  later export of the same identity whose old last segment matches this store's at that
+  index; the preview copy lives in `<store>.cash-preview`, swept hourly. Withdrawn: "B is
+  the original reviewed Continuity bytes", "preview restores B into isolated TEST storage".
+- Visible changes: `--baseline` takes the manifest (a package is `cash_file_format`);
+  preview needs `--database`; the CLI prints `ERROR:receiver_cash_file_refused:{code}`, nine
+  fixed classes; `duplicate_count` includes OVERLAP rows, which write alias evidence.
 - A row is NEW, RETRY, OVERLAP (a repeat of a stored payment under new ids:
   DUPLICATE, one alias event, no cash), ALIAS (a stored repeat: nothing written)
   or refused. Overlap needs new ids: a row that reuses stored ids must be the
@@ -403,7 +391,7 @@ is inherited.
 
 ## Correction-v2 protected changes (2026-09-26; XI.2 record written 2026-09-28)
 
-This record replaces the one STATUS lost in `b9aa6a2` (last at `d79aceb`, lines 123-127, 130); facts are from `git show` of the commits named.
+This record replaces the one STATUS lost in `b9aa6a2` (last at `d79aceb`); facts are from `git show` of the commits named.
 
 Felt effect: a hospital short part of its claim is asked for exactly what is
 still unpaid, and no older engine record can ask for more.
@@ -426,7 +414,7 @@ still unpaid, and no older engine record can ask for more.
   - Statements changed with it: `CorrectionMutationLinkFacts` (digest and key
     equations dropped; paid-list, kind, claim-amount, amount-rule and
     input-shortfall facts added) and the reuse-independence theorem (no
-    determination-digest parameter). The list is the state at HEAD.
+    determination-digest parameter).
   - Artifacts: `artifacts/engine-correction/` re-pinned, built from `79b6913`
     (`1A7A1833…D3AF`, 6,279,168 bytes); `artifacts/engine-correction-e911/`
     deleted (recoverable at `f1de262`); `RETIRED_PINS` added (E911
@@ -492,9 +480,8 @@ unchecked rows, and a store that rolls back cannot earn ALLOW.
   149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's counterpart reason).
   4bffc1e's "No committed theorem statement's text changes" holds only for it.
 - **Disposition:** replace. Nothing is disabled.
-- **Replacement control:** all proofs compile with pinned axioms; 242/242 vectors
-  and 3,616 demo lines; 194/194 mutants killed; the unittest fails if the runner
-  is older than its sources.
+- **Replacement control:** all proofs compile with pinned axioms; the vectors, demo lines
+  and mutants pass (counts: `STATUS.md`); the unittest fails if the runner is older than its sources.
 - **Scope:** decision rules R1-R5 as tests; not the token path (no signed
   checkpoints or release path). **Duration:** until the gate-v1 token path lands.
 - **Claims withdrawn:** the earlier statements above and the vector and mutant
@@ -551,9 +538,8 @@ shown on the pack's face.
   takes no caller received time (a retry keeps the first), and a
   `decision_at_ms` after the owner clock is refused (`decision_time_future`;
   Lean needs the same guard, a follow-up). When the host clock steps back (NTP,
-  a restored VM, skew between hosts sharing a store), every write is refused
-  (`event_commit_order`) until the clock passes the last committed time: it
-  fails closed and never reorders or rewrites history. Stores written by trunk
+  a restored VM, host skew), every write is refused (`event_commit_order`) until
+  the clock passes the last committed time; history is never reordered. Stores written by trunk
   `6cccb84` or earlier are not readable (`replay:evidence-received-at`);
   recreate the synthetic workspace. `signer` is null: no PQ signing path exists.
 - **Proposed Lean (not written):** `line_pack_sum_eq_ledger`,
@@ -581,14 +567,11 @@ the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
 - **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
   released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
   digest, a later one must.
-- **Payer:** a non-adjacent previous link is a fork; one certificate per
-  (tenant, epoch); a decision older than 14 days is refused.
-- **Codec:** `encode_line`; `sign_batch(..., state_digest, shard_count)` refuses
-  a leaf routed to another shard. It stays stateless (unbuilt preconditions:
-  target §4-§5, STATUS).
-- **NUL convention:** every domain, including the rules pins and the
-  `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, is followed by a NUL, not a newline;
-  every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
+- **Payer, codec, NUL:** fork, one-certificate-per-(tenant, epoch), `encode_line`,
+  shard-checked stateless `sign_batch(..., state_digest, shard_count)` (unbuilt
+  preconditions: target §4-§5, STATUS) and the NUL after every domain, including the
+  rules pins and `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, are specified in target §4-§5.
+  Every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
 
 ## Gate formats round 8 (2026-09-29, XI.2 record)
 
@@ -605,3 +588,17 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
   `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
 - **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.
+
+## Follow-through decision event (M2, 2026-09-29, XI.2 record)
+
+- **Felt effect.** An auditor sees, for every close or assignment, the official, the role, the reason code and the AI or contractor suggestion that preceded it, side by side, with whether the two agree.
+- **Predicate.** `_EVENT_KINDS["OBLIGATION"]` and `_COMMAND_SOURCES`: the `financial_events.kind` values a Continuity v8 package may carry.
+- **Change.** One kind, `FOLLOWTHROUGH_DECIDED`, on OBLIGATION: before = after = the current revision; the payload has exactly `decision_id`, `item_id`, `act`, `reason_code`, `owner_id`, `suggestion`, `actor_id`, `actor_role`, `authority_id`, `authority_epoch` and `authority_digest`; no row images. One command kind, `FOLLOWTHROUGH_DECISION:<decision_id>`, has the request `{command, key, payload_digest}`.
+- **Invariant.** Every history act is known and fully re-verified; an unknown or forged act cannot change what an auditor reads.
+- **Evidence.** The set has no act for an official's assign or close; the alternatives break other controls: SUPPORT evidence flips `verification_status` to SUPPORTED, so a suggestion would read as proof (I.3); a side file sits outside the hash chain.
+- **Disposition.** Retain the gate: the set stays closed, extended by one kind.
+- **Control.** One `_verify_followthrough_event` checks shape, revision, roster, pack role, authority and suggestion time. It runs before COMMIT (`verify_followthrough_connection`, called by the owner inside the write; `verify_obligation_connection` also runs it on touched obligations) and on open (`_verify_followthrough_decisions`), so no decision the checker rejects can commit. The command row is re-derived from the event. Checkers from before M2 fail closed with `history:event-kind`.
+- **Format.** Unchanged: Continuity v8 and its table columns; the EVENT v2, COMMAND v1 and CONTINUITY v8 digest domains. Stores without a decision are byte-identical.
+- **Scope.** All stores; permanent.
+- **Claims withdrawn.** "Any v8 checker verifies any v8 package" no longer holds: a package that contains a decision needs a checker at or after M2. No Lean theorem covers the decision act; the Lean-controlled claim still covers only the correction transition.
+- **Kill criteria.** Stop if an existing test expectation or digest changes, a table column or digest domain is needed, or the correction follow-up leaves CURRENT.

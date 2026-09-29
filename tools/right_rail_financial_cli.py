@@ -28,6 +28,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorError,
     MAX_PACKAGE_BYTES,
 )
+from app.right_rail_financial_followthrough import MAX_RULES_BYTES, PACK_CONTRACT, build_followthrough_pack
 from app.right_rail_financial_line_pack import LINE_PACK_CONTRACT, MAX_LINE_MAP_BYTES, MAX_LINE_PACK_BYTES, build_line_pack
 from app.right_rail_financial_switch import (
     COHORT_APPROVAL_CONTRACT,
@@ -37,6 +38,7 @@ from app.right_rail_financial_switch import (
     DifferencePolicy,
     FinancialSwitchError,
     ReferenceSpec,
+    _decode_canonical_json,
     decode_replay_input,
     prepare_shadow_replay_input,
     run_shadow_replay,
@@ -131,7 +133,7 @@ def _parser() -> argparse.ArgumentParser:
     cash.add_argument("--source-context", nargs=5, required=True,
                       metavar=("SOURCE", "VERSION", "RECEIVER", "CAPTURE", "CAPTURED_AT_MS"))
     cash.add_argument("--owner-id", required=True)
-    cash.add_argument("--mode", choices=("LIVE", "TEST", "SHADOW"), required=True)
+    cash.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
     cash.add_argument("--apply", action="store_true", help="record checked evidence; default is isolated preview")
 
     report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))
@@ -146,6 +148,11 @@ def _parser() -> argparse.ArgumentParser:
 
     export = subparsers.add_parser("export-continuity")
     export.add_argument("--output", type=Path, required=True)
+
+    segments = subparsers.add_parser("export-history", help="write sealed history segments and the manifest a cash file is prepared against")
+    segments.add_argument("--output", type=Path, required=True)
+    segments.add_argument("--owner-id", required=True)
+    segments.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
 
     validate = subparsers.add_parser("validate-continuity")
     validate.add_argument("--package", type=Path, required=True)
@@ -174,6 +181,21 @@ def _parser() -> argparse.ArgumentParser:
     line_pack.add_argument("--generated-at-ms", type=int, required=True)
     line_pack.add_argument("--prior-pack", type=Path, help="the line pack this one supersedes")
     line_pack.add_argument("--output", type=Path, required=True, help="new line-pack file; existing paths are never replaced")
+
+    followthrough = subparsers.add_parser("followthrough-pack", help="write the documentation-only follow-through pack from --database, verified read-only")
+    followthrough.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
+    followthrough.add_argument("--rules", type=Path, required=True, help="rules JSON listed by the approved Control Pack")
+    followthrough.add_argument("--generated-at-ms", type=int, required=True)
+    followthrough.add_argument("--output", type=Path, required=True, help="new follow-through file; existing paths are never replaced")
+
+    decision = subparsers.add_parser("record-followthrough-decision", help="record an official's ASSIGN or CLOSE decision on one recovery item")
+    decision.add_argument("--item-id", required=True)
+    decision.add_argument("--decision-id", required=True)
+    decision.add_argument("--act", choices=("ASSIGN", "CLOSE"), required=True)
+    decision.add_argument("--reason-code", help="CLOSE: a reason the rules list")
+    decision.add_argument("--owner-id", help="ASSIGN: a typed party the rules name")
+    decision.add_argument("--suggestion", type=Path, help="canonical JSON of the suggestion this decision answers, if any")
+    _add_actor_and_revision(decision)
 
     subparsers.add_parser("dispatch-outbox")
     return parser
@@ -285,17 +307,17 @@ def _owner(args: argparse.Namespace) -> FinancialOwner:
         trusted_authority=_trusted_authority(args),
         correction_transition_release=_correction_release(args),
         **({"mode": args.mode, "owner_id": args.owner_id, "existing_only": True}
-           if args.command == "receiver-cash-file" else {}),
+           if args.command in ("receiver-cash-file", "export-history") else {}),
     )
 
 
-def _read_package(path: Path, max_bytes: int = MAX_PACKAGE_BYTES) -> bytes:
+def _read_package(path: Path, max_bytes: int = MAX_PACKAGE_BYTES, label: str = "continuity_package") -> bytes:
     if path.is_symlink() or not path.is_file():
-        raise FinancialMirrorError("continuity_package_missing")
+        raise FinancialMirrorError(f"{label}_missing")
     with path.open("rb") as stream:
         package = stream.read(max_bytes + 1)
     if len(package) > max_bytes:
-        raise FinancialMirrorError("continuity_package_size")
+        raise FinancialMirrorError(f"{label}_size")
     return package
 
 
@@ -579,7 +601,7 @@ def _run(args: argparse.Namespace) -> Any:
         )
         if args.apply:
             return _owner(args).run_batch(commands, cash_file_context=context)
-        return cash_file.preview_cash_file(commands, context, trusted_authority=authority)
+        return cash_file.preview_cash_file(commands, context, path=_existing_database(args.database), trusted_authority=authority)
     if args.command == "switch-prepare":
         return _switch_prepare(args)
     if args.command == "switch-compare":
@@ -599,6 +621,19 @@ def _run(args: argparse.Namespace) -> Any:
         )
         _write_new(args.output, pack)
         return {"contract": LINE_PACK_CONTRACT, "line_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "line_pack_path": str(args.output)}
+    if args.command == "followthrough-pack":
+        pack = build_followthrough_pack(
+            args.database, _read_package(args.package), trusted_authority=_trusted_authority(args), expected_scope=_scope(args),
+            rules_bytes=_read_package(args.rules, MAX_RULES_BYTES, "followthrough_rules"), generated_at_ms=args.generated_at_ms,
+        )
+        _write_new(args.output, pack)
+        return {"contract": PACK_CONTRACT, "followthrough_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "followthrough_pack_path": str(args.output)}
+    if args.command == "record-followthrough-decision":
+        suggestion = None if args.suggestion is None else _decode_canonical_json(_read_package(args.suggestion, 4096, "followthrough_suggestion"), maximum=4096, label="followthrough_suggestion")
+        return _owner(args).record_followthrough_decision(
+            item_id=args.item_id, decision_id=args.decision_id, act=args.act, reason_code=args.reason_code, owner_id=args.owner_id, suggestion=suggestion,
+            actor_id=args.actor_id, actor_role=args.actor_role, expected_revision=args.expected_revision,
+        )
     owner = _owner(args)
     mirror = FinancialMirror(owner)
     command = args.command
@@ -615,20 +650,9 @@ def _run(args: argparse.Namespace) -> Any:
         return mirror.history(limit=args.limit, offset=args.offset)
     if command in {"action-payload", "action"}:
         return mirror.action_payload(args.action_id)
-    if command == "authorize-offset":
-        return mirror.authorize_offset(
-            item_id=args.item_id,
-            claim_id=args.claim_id,
-            actor_id=args.actor_id,
-            actor_role=args.actor_role,
-            expected_revision=args.expected_revision,
-            action_id=args.action_id,
-            decision_at_ms=args.decision_at_ms,
-            evaluation_id=args.evaluation_id,
-            evaluation_result_digest=args.evaluation_result_digest,
-        )
-    if command in {"reject-offset-and-authorize-correction", "reject-offset"}:
-        return mirror.reject_offset_and_authorize_correction(
+    if command in {"authorize-offset", "reject-offset-and-authorize-correction", "reject-offset"}:
+        decide = mirror.authorize_offset if command == "authorize-offset" else mirror.reject_offset_and_authorize_correction
+        return decide(
             item_id=args.item_id,
             claim_id=args.claim_id,
             actor_id=args.actor_id,
@@ -678,6 +702,9 @@ def _run(args: argparse.Namespace) -> Any:
         package = mirror.export_continuity()
         _write_new(args.output, package)
         return {"schema": "RR/FINANCIAL/MIRROR/v1", "status": "EXPORTED", "path": str(args.output), "package_bytes": len(package)}
+    if command == "export-history":
+        manifest = owner.export_history(args.output)
+        return {"schema": "RR/FINANCIAL/MIRROR/v1", "status": "EXPORTED", "path": str(args.output), "manifest_sha256": hashlib.sha256(manifest).hexdigest().upper()}
     if command == "validate-continuity":
         return mirror.validate_owner_continuity_package(_read_package(args.package))
     if command == "restore-continuity":

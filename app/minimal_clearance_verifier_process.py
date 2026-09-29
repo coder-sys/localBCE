@@ -2075,12 +2075,3 @@ def launch_contained_worker(
             kernel32.CloseHandle(process_info.hProcess)
         if job:
             kernel32.CloseHandle(job)
-
-
-__all__ = (
-    "ACTIVE_PROCESS_LIMIT", "ADMISSION_CAP_BYTES", "ContainedVerifierResult",
-    "PROCESS_TREE_PEAK_CAP_BYTES",
-    "STREAM_MAX_AGGREGATE_BYTES", "STREAM_MAX_FRAME_BYTES",
-    "ContainedWorker", "VerifierProcessError", "WORKER_MAX_FRAME_BYTES",
-    "launch_contained_worker", "run_contained_verifier", "run_contained_verifier_stream",
-)

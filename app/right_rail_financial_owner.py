@@ -146,6 +146,7 @@ _FOLLOWUP_TOUCHES: Final[dict[str, tuple[str, ...]]] = {
     "PAYMENT_REVERSED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_CONFLICT_VISIBLE": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_DUPLICATE_EVIDENCE": (),  # repeats an existing payment (the checker binds it); money is unchanged
+    "FOLLOWTHROUGH_DECIDED": (),  # an official's act moves no correction dependency
     "OFFSET_CLAIMED": ("AUTHORITY", "OFFSET_EVIDENCE"),
     "OFFSET_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
     "OFFSET_REJECTED_CORRECTION_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
@@ -378,6 +379,7 @@ _COMMAND_EVENTS: Final[dict[str, tuple[str, str | None]]] = {
     "ACTION_ACKNOWLEDGED": ("ACTION_ACKNOWLEDGMENT", "action_id"),
     "REPORTING_EVIDENCE_RECORDED": ("REPORT", "evidence_id"),
     "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
+    "FOLLOWTHROUGH_DECIDED": ("FOLLOWTHROUGH_DECISION", "decision_id"),
 }
 _OPTIONAL_REQUEST_FIELDS: Final = frozenset({"evaluation_id", "evaluation_result_digest", "expected_revision", "decided_at_ms"})
 _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
@@ -404,6 +406,7 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
     ),
     "ACTION_ACKNOWLEDGMENT": "SELECT acknowledgment_ref FROM action_outbox WHERE action_id=?",
     "REPORT": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
+    "FOLLOWTHROUGH_DECISION": "SELECT payload_digest FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?",
 }
 
 
@@ -649,6 +652,21 @@ def _time(value: object, label: str) -> int:
     if type(value) is not int or value < 0 or value >= 2**63:
         _fail(FinancialInputError, label)
     return value
+
+
+def _followthrough_shape(act: object, reason_code: object, owner_id: object, code: str | None = None) -> None:
+    """The one shape of a follow-through act: CLOSE names a reason and no owner, ASSIGN an owner and no reason.
+    A defect raises its own code, or ``code`` for every defect (a suggestion)."""
+    reason = None if type(reason_code) is str and _KIND.fullmatch(reason_code) else "followthrough_reason"
+    owner = None if type(owner_id) is str and _ID.fullmatch(owner_id) else "followthrough_owner"
+    if act not in ("ASSIGN", "CLOSE"):
+        bad = "followthrough_act"
+    elif act == "CLOSE":
+        bad = reason or ("followthrough_owner" if owner_id is not None else None)
+    else:
+        bad = owner or ("followthrough_reason" if reason_code is not None else None)
+    if bad is not None:
+        _fail(FinancialInputError, code or bad)
 
 
 def _identity_record(
@@ -1892,7 +1910,8 @@ _SEGMENT_SCHEMA: Final[str] = """
 
 def _replace_file(path: Path, data: bytes) -> None:
     temporary = path.with_name(f"{path.name}.tmp")
-    with temporary.open("wb") as handle:
+    temporary.unlink(missing_ok=True)  # a leftover, or a planted link, is removed itself, never written through
+    with temporary.open("xb") as handle:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
@@ -5237,6 +5256,64 @@ class FinancialOwner:
             self._recompute_and_record(connection, str(action["obligation_id"]), kind="ACTION_ACKNOWLEDGED", payload={"action_id": action_id, "acknowledgment_ref": acknowledgment_ref, "cash_mutation": False}, now_ms=self._now())
             return {"status": "ACKNOWLEDGED", "action_id": action_id, **self._current_projection(connection, str(action["obligation_id"]))}
 
+    def record_followthrough_decision(
+        self,
+        *,
+        item_id: str,
+        decision_id: str,
+        act: str,
+        reason_code: str | None = None,
+        owner_id: str | None = None,
+        suggestion: Mapping[str, object] | None = None,
+        actor_id: str,
+        actor_role: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        """An official's follow-through act (assign an owner, or close with a reason), with any AI or contractor
+        suggestion recorded beside it, never as evidence; money is unchanged."""
+        self._assert_actionable()
+        _id(decision_id, "decision_id")
+        _followthrough_shape(act, reason_code, owner_id)
+        if actor_role not in ("CASE_OWNER", "FINANCE_DECISION"):
+            _fail(FinancialAuthorityError, "followthrough_actor_role")
+        if suggestion is not None:
+            code = "followthrough_suggestion"
+            if type(suggestion) is not dict or set(suggestion) != {"source_id", "source_ref", "source_sha256", "suggested_at_ms", "act", "reason_code", "owner_id"}:
+                _fail(FinancialInputError, code)
+            _id(suggestion["source_id"], code), _id(suggestion["source_ref"], code), _time(suggestion["suggested_at_ms"], code)
+            if type(suggestion["source_sha256"]) is not str or _UPPER_HEX64.fullmatch(suggestion["source_sha256"]) is None:
+                _fail(FinancialInputError, code)
+            _followthrough_shape(suggestion["act"], suggestion["reason_code"], suggestion["owner_id"], code)
+        if type(expected_revision) is not int:
+            _fail(FinancialInputError, "expected_revision_required")
+        with self._write() as connection:
+            obligation = self._get_obligation_row(connection, item_id)
+            obligation_id = str(obligation["obligation_id"])
+            self._authority_action(connection, obligation_id, actor_id, actor_role)
+            now = self._now()
+            if suggestion is not None and suggestion["suggested_at_ms"] > now:
+                _fail(FinancialInputError, "followthrough_suggestion_time")
+            payload = {
+                "decision_id": decision_id, "item_id": item_id, "act": act, "reason_code": reason_code, "owner_id": owner_id,
+                "suggestion": None if suggestion is None else dict(suggestion), "actor_id": actor_id, "actor_role": actor_role,
+                "authority_id": self.trusted_authority.authority_id, "authority_epoch": self.trusted_authority.epoch,
+                "authority_digest": _hex(self.trusted_authority.digest),
+            }
+            digest = _hex(_digest(_EVENT_DOMAIN, _canonical(payload)))
+            if self._replayed_command(connection, "FOLLOWTHROUGH_DECISION", decision_id, {"payload_digest": digest}, "followthrough_decision_conflict"):
+                return {"status": "DUPLICATE", "decision_id": decision_id, **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
+            revision = int(obligation["revision"])
+            self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=obligation_id, kind="FOLLOWTHROUGH_DECIDED",
+                               before_revision=revision, after_revision=revision, payload=payload, committed_at_ms=now)
+            from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_followthrough_connection
+
+            try:  # before COMMIT: the checker runs every rule it applies to this kind on open
+                verify_followthrough_connection(connection, obligation_id, decision_id, **self._checker_expectations())
+            except IndependentFinancialError as error:
+                _fail(FinancialIntegrityError, f"followthrough_verification:{error}")
+            return {"status": "RECORDED", "decision_id": decision_id, **self._projection_for_row(obligation)}
+
     def record_reporting_evidence(
         self,
         *,
@@ -6864,16 +6941,28 @@ class FinancialOwner:
 
         The manifest is read in the sealing transaction; sealed segments are append-only,
         so their files may be written after it. A segment file already in ``directory``
-        is never rewritten, only compared byte for byte (IX.3).
+        is never rewritten, only compared byte for byte (IX.3); ``manifest.json`` is replaced only by a
+        later export of the same history: a cash file's baseline is these exact bytes (III.3).
         """
         with self._write() as connection:
             self._seal_segment(connection, force=True)
             rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
             count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
         body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
         directory.mkdir(exist_ok=True)
+        target = directory / "manifest.json"
         with self._read_snapshot() as connection:
-            for segment in connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall():
+            segments = connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall()
+            if target.exists():
+                try:  # an older manifest of this identity whose last segment is this store's segment at that index
+                    old = json.loads(target.read_bytes())
+                    replaceable = old["identity"] == body["identity"] and old["segment_count"] >= 0 and old["last_segment_digest"] == (_hex(bytes(segments[old["segment_count"] - 1]["segment_digest"])) if old["segment_count"] else _hex(_ZERO_DIGEST))
+                except (ValueError, KeyError, TypeError, IndexError):
+                    replaceable = False
+                if not replaceable and target.read_bytes() != manifest:
+                    _fail(FinancialContinuityError, "history_export_mismatch")
+            for segment in segments:
                 events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
                 data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
                 path = directory / f"segment-{segment['segment_index']:08d}.json"
@@ -6883,8 +6972,8 @@ class FinancialOwner:
                     with path.open("rb") as handle:
                         if handle.read(len(data) + 1) != data:
                             _fail(FinancialContinuityError, "history_export_mismatch")
-        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
-        _replace_file(directory / "manifest.json", manifest)
+        if not target.exists() or target.read_bytes() != manifest:
+            _replace_file(target, manifest)
         return manifest
 
     def _replay_segment(self, connection: sqlite3.Connection, path: Path) -> None:
@@ -7136,25 +7225,3 @@ class FinancialOwner:
 
     def close(self) -> None:
         return None
-
-
-__all__ = (
-    "AuthorityActor",
-    "ControlPack",
-    "EvidenceRecord",
-    "FinancialAuthorityError",
-    "FinancialBusyError",
-    "FinancialConflictError",
-    "FinancialContinuityError",
-    "FinancialDispatchError",
-    "FinancialError",
-    "FinancialInputError",
-    "FinancialIntegrityError",
-    "FinancialOwner",
-    "FinancialOwnerConfig",
-    "FinancialRevisionError",
-    "PopulationItem",
-    "PopulationManifest",
-    "ProgramFundingReceipt",
-    "SyntheticTrustedAuthority",
-)

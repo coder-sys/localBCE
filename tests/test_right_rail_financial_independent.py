@@ -1144,3 +1144,26 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 owner_id=owner._TEST_OWNER_ID,
                 restore_source_package=altered_source_bytes,
             )
+
+    def test_followthrough_pre_commit_check_matches_whole_database_rules(self) -> None:
+        # The two modes must not drift: each forgery of the decided store raises the code verify_database raises
+        # (the deleted command row gives the pre-COMMIT command code), and the untouched decision passes.
+        from tests import test_right_rail_financial_followthrough as followthrough
+
+        (Path(self.temp_dir.name) / "decided").mkdir()
+        source = followthrough._decided_store(Path(self.temp_dir.name) / "decided")
+        cases = (("untouched", lambda path: None, None), *((name, forge, code) for name, forge, _whole, code in followthrough.FORGERIES))
+        for name, forge, code in cases:
+            with self.subTest(name):
+                copy = Path(self.temp_dir.name) / f"pre-commit-{name.replace(' ', '-')}.sqlite3"
+                copy.write_bytes(source.path.read_bytes())
+                forge(copy)
+                with closing(sqlite3.connect(copy, isolation_level=None)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    (obligation_id,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item-r2'").fetchone()
+                    check = lambda: independent.verify_followthrough_connection(connection, obligation_id, followthrough.CLOSE, **source._checker_expectations())
+                    if code is None:
+                        self.assertEqual(check()["decision_id"], followthrough.CLOSE)
+                    else:
+                        with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                            check()

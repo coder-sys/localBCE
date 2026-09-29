@@ -8,11 +8,13 @@ import dataclasses
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -41,8 +43,9 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.store = self.fixture._build_base()
-        self.baseline = self.store.export_continuity()
-        self.scope = json.loads(self.baseline)["scope"]
+        self.package = self.store.export_continuity()
+        self.scope = json.loads(self.package)["scope"]
+        self.baseline = self._manifest()
         self.source = {"source_id": "fictional-receiver", "version": "v1",
                        "receiver_system_id": "receiver-1", "capture_id": "capture-1",
                        "captured_at_ms": expected.CASH_EVENT_MS}
@@ -50,6 +53,10 @@ class ReceiverCashFileTests(unittest.TestCase):
                       "source_class": "SYNTHETIC_RECEIVER_CASH", "scope": self.scope,
                       "source": self.source, "row_count": 2, "total_cents": 300,
                       "rows": [self._row(1, 100, 0), self._row(2, 200, 1)]}
+
+    def _manifest(self):
+        """The history-export manifest a cash file is prepared against (Phase 1b B). Exporting seals: never call it inside _unchanged."""
+        return self.store.export_history(Path(tempfile.mkdtemp(dir=self.fixture.temp_dir.name)) / "history")
 
     def _row(self, number, amount, revision, prefix="file"):
         return {"item_id": expected.H_ITEM_ID, "payment_id": f"{prefix}-payment-{number}",
@@ -82,10 +89,10 @@ class ReceiverCashFileTests(unittest.TestCase):
 
     def test_preview_apply_retry_restart_and_reversal(self):
         prepared = self._prepare()
-        preview = cash.preview_cash_file(*prepared, trusted_authority=self.fixture.authority, clock=self.store.clock)
-        self.assertEqual(preview["mode"], "PREVIEW")
-        self.assertEqual(preview["cash_delta_cents"], 300)
-        self.assertEqual(self.store.export_continuity(), self.baseline)
+        live = self.store.path.read_bytes()
+        preview = cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
+        self.assertEqual((preview["contract"], preview["mode"], preview["cash_delta_cents"]), ("RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2", "PREVIEW", 300))
+        self.assertEqual((self.store.export_continuity(), self.store.path.read_bytes()), (self.package, live))  # the preview ran on a copy
         applied = self._apply(prepared)
         self.assertEqual((applied["recorded_count"], applied["duplicate_count"], applied["cash_delta_cents"]), (2, 0, 300))
         self.assertEqual(applied["cash_after_cents"] - applied["cash_before_cents"], 300)
@@ -172,7 +179,8 @@ class ReceiverCashFileTests(unittest.TestCase):
                 with self.subTest(section=section, field=field):
                     self._unchanged(lambda: self.store.run_batch(commands, cash_file_context={**context, section: changed}))
         self._apply((commands, context))
-        self._unchanged(lambda: self._apply(self._prepare(baseline=self.store.export_continuity())))
+        rebased = self._prepare(baseline=self._manifest())
+        self._unchanged(lambda: self._apply(rebased))
 
     def test_stale_baseline_and_mixed_retry_roll_back(self):
         commands, context = self._prepare()
@@ -212,7 +220,8 @@ class ReceiverCashFileTests(unittest.TestCase):
         store.validate_population(expected.POPULATION_ONE_ID)
         store.publish_population(expected.POPULATION_ONE_ID)
         self.fixture._advance_clock(store, expected.CASH_EVENT_MS)
-        self.store, self.baseline = store, store.export_continuity()
+        self.store = store
+        self.baseline = self._manifest()
         return ids
 
     def _timed_apply(self, prepared):
@@ -255,19 +264,103 @@ class ReceiverCashFileTests(unittest.TestCase):
                 with self.assertRaisesRegex(check.CashFileError, "^cash_file_row_cap$"):
                     check.CashFileCheck(commands, {**context, "source_bytes": raw, "expected_source_sha256": sha(raw)})
 
-    def test_full_file_applies_within_writer_timeout(self):
-        # docs/CORE_REDESIGN.md "Cash-file capacity": one full (500-row) file on the largest state's 600 hospitals, spread
-        # (1-2 rows per item) or concentrated (6 per item). The bound is the 5 s writer busy timeout.
-        for concentrated in (False, True):
-            with self.subTest(concentrated=concentrated):
-                ids = self._wide_store()
-                prepared = self._prepare(self._file_of(ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)] if concentrated else ids, check.MAX_ROWS))
-                self.assertEqual(cash.preview_cash_file(*prepared, trusted_authority=self.fixture.authority,
-                                                        clock=self.store.clock)["recorded_count"], check.MAX_ROWS)
+    def test_two_thousand_rows_in_files_within_writer_timeout_and_size(self):
+        # docs/CORE_REDESIGN.md "Cash-file capacity": the largest state's month (~1,800 lines, taken as 2,000) as full files,
+        # spread then concentrated. The manifest baseline stays constant and a preview is a copy plus one open verify.
+        ids = self._wide_store()
+        shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
+        for number in range(-(-2_000 // check.MAX_ROWS)):
+            with self.subTest(file=number):
+                self.source = {**self.source, "capture_id": f"capture-{number}"}
+                value = self._file_of(shapes[number % 2], check.MAX_ROWS, prefix=f"month-1-file-{number}")
+                self.assertLess(len(canonical(value)), cash.MAX_FILE_BYTES)
+                self.assertLess(len(self.baseline), 4096)  # the manifest stays ~1.9 KB whatever the history
+                prepared = self._prepare(value)
+                live, start = self.store.path.read_bytes(), time.perf_counter()
+                preview = cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
+                previewed = time.perf_counter() - start
+                self.assertLess(previewed, 15.0)
+                self.assertEqual((preview["recorded_count"], self.store.path.read_bytes()), (check.MAX_ROWS, live))
                 receipt, seconds = self._timed_apply(prepared)
-                print(f"CASH1A_LOCK concentrated={concentrated} seconds={seconds:.2f} store_bytes={self.store.path.stat().st_size}", flush=True)
+                print(f"CASH1B_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
                 self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
                 self.assertLess(seconds, 5.0)
+                self.baseline = self._manifest()
+        history = Path(tempfile.mkdtemp(dir=self.fixture.temp_dir.name))
+        self.store.export_history(history)
+        self.assertLess(sum(path.stat().st_size for path in history.iterdir()), 24 * 1024 * 1024)
+
+    def test_quarter_end_file_within_writer_timeout(self):
+        # A quarter's last file on 5,500 earlier payments (6,000 in all), applied through an already-open owner: the lock of a warm apply,
+        # not of a fresh CLI open (its verify adds seconds, docs/CORE_REDESIGN.md "Cash-file capacity") or of one 84-item history.
+        # If it fails, MAX_ROWS drops again (docs/CORE_REDESIGN.md "Cash-file capacity").
+        ids = self._wide_store()
+        shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
+        for number in range(6_000 // check.MAX_ROWS - 1):
+            self.store.run_batch(cash._propose(canonical(self._file_of(shapes[number % 2], check.MAX_ROWS, prefix=f"seed-{number}")), self.baseline))
+        self.baseline = self._manifest()
+        receipt, seconds = self._timed_apply(self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end")))
+        print(f"CASH1B_QUARTER_END rows={check.MAX_ROWS} lock_seconds={seconds:.2f}", flush=True)
+        self.assertEqual(receipt["recorded_count"], check.MAX_ROWS)
+        self.assertLess(seconds, 5.0)
+
+    def test_manifest_baseline_binds_digest_owner_and_the_live_chain(self):
+        manifest = json.loads(self.baseline)
+
+        def sealed(**changes):  # the manifest with its digest recomputed, as a forger would
+            body = {key: value for key, value in {**manifest, **changes}.items() if key != "manifest_digest"}
+            return canonical({**body, "manifest_digest": independent._digest(independent.SEGMENT_DOMAIN, b"manifest", canonical(body)).hex().upper()})
+        foreign = sealed(meta={**manifest["meta"], "owner_id": "other-owner"})
+        for change in ({"meta": {**manifest["meta"], "sequence": None}}, {"meta": {**manifest["meta"], "history_head": None}}, {"identity": {**manifest["identity"], "schema_version": 0}}):
+            with self.subTest(change=list(change)), self.assertRaisesRegex(check.CashFileError, "^cash_file_(binding|format)$"):
+                self._prepare(baseline=sealed(**change))  # the export verifier's own meta and identity checks, reused
+        for change in ({"segment_count": manifest["segment_count"] + 1}, {"last_segment_digest": "AB" * 32}):  # sealed lies: the live history_segments row is the anchor
+            with self.subTest(change=list(change)):
+                self._unchanged(lambda: self._apply(self._prepare(baseline=sealed(**change))), "^cash_file_binding$")
+        forged = sealed(meta={**manifest["meta"], "history_head": {"hex": "AB" * 32}})  # this sequence, another head
+        for code, baselines in {"cash_file_format": (self.baseline + b"\n", canonical({**manifest, "segment_count": 99}), self.package), "cash_file_binding": (foreign,)}.items():
+            for raw in baselines:
+                with self.subTest(code=code, size=len(raw)), self.assertRaisesRegex(check.CashFileError, f"^{code}$"):
+                    self._prepare(baseline=raw)
+        self._unchanged(lambda: self._apply(self._prepare(baseline=forged)), "^cash_file_binding$")
+
+    def test_preview_refuses_a_copy_with_a_dangling_key_and_lives_beside_the_store(self):
+        folders, finishing, connect, finish = [], [], sqlite3.connect, check.CashFileCheck.finish
+        class Dangling(sqlite3.Connection):  # a copy whose deferred keys COMMIT would refuse: the pragma reports one while the file is being finished
+            def execute(self, sql, *arguments):
+                return super().execute("SELECT 'payments',1,'obligations',0" if finishing and sql == "PRAGMA foreign_key_check" else sql, *arguments)
+        def finishing_finish(instance, connection, results):
+            finishing.append(1)
+            try:
+                return finish(instance, connection, results)
+            finally:
+                finishing.clear()
+        commands, context = self._prepare()
+        with patch.object(sqlite3, "connect", lambda *a, **k: connect(*a, **k, factory=Dangling)), patch.object(check.CashFileCheck, "finish", finishing_finish),                 self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+            cash.preview_cash_file(commands, context, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
+        folder = self.store.path.with_name(self.store.path.name + ".cash-preview")
+        stale, fresh = folder / "stale", folder / "fresh"
+        stale.mkdir(), fresh.mkdir()
+        old = time.time() - 7200
+        os.utime(stale, (old, old))
+        real = tempfile.TemporaryDirectory
+        with patch.object(cash.tempfile, "TemporaryDirectory", lambda **kwargs: folders.append(kwargs["dir"]) or real(**kwargs)):
+            self.assertEqual(cash.preview_cash_file(commands, context, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)["mode"], "PREVIEW")
+        self.assertEqual((folders, sorted(path.name for path in folder.iterdir())), ([folder], ["fresh"]))  # swept the crashed copy, kept a recent one, left none of its own
+
+    def test_history_export_replaces_only_an_earlier_manifest_of_this_history_and_not_through_a_leftover(self):
+        directory = Path(self.fixture.temp_dir.name) / "export"
+        directory.mkdir()
+        for foreign in (b"{}", canonical({**json.loads(self.baseline), "identity": {**json.loads(self.baseline)["identity"], "id": "other"}})):  # not an earlier export of this history
+            (directory / "manifest.json").write_bytes(foreign)
+            with self.assertRaisesRegex(owner.FinancialError, "history_export_mismatch"):
+                self.store.export_history(directory)
+            self.assertEqual((directory / "manifest.json").read_bytes(), foreign)
+        (directory / "manifest.json").unlink()
+        (directory / "manifest.json.tmp").write_bytes(b"leftover")
+        self.assertEqual(self.store.export_history(directory), self.baseline)
+        self.assertEqual((directory / "manifest.json").read_bytes(), self.baseline)
+        self.assertEqual(self.store.export_history(directory), self.baseline)  # the same manifest again is accepted
 
     def test_concurrent_identical_files_commit_cash_once(self):
         prepared = self._prepare()
@@ -281,7 +374,7 @@ class ReceiverCashFileTests(unittest.TestCase):
     def test_linked_action_limit_and_ack_report_separation(self):
         self.store = self.fixture._build_base_for_correction()
         self.fixture._prepare_acknowledged(self.store)
-        self.baseline = self.store.export_continuity()
+        self.package, self.baseline = self.store.export_continuity(), self._manifest()
         detail = self.store.obligation_detail(expected.H_ITEM_ID)
         rows = [self._row(1, expected.CORRECTION_PAYMENT_CENTS - 1, detail["revision"]),
                 self._row(2, 2, detail["revision"] + 1)]
@@ -295,7 +388,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.value["rows"][1]["amount_cents"] = 1
         self.value["total_cents"] = expected.CORRECTION_PAYMENT_CENTS
         self.assertEqual(self._apply()["cash_delta_cents"], expected.CORRECTION_PAYMENT_CENTS)
-        before, after = json.loads(self.baseline)["tables"], json.loads(self.store.export_continuity())["tables"]
+        before, after = json.loads(self.package)["tables"], json.loads(self.store.export_continuity())["tables"]
         for table in ("actions", "action_outbox", "determinations"):
             self.assertEqual(after[table], before[table], table)
         reports = lambda tables: [row for row in tables["evidence"] if row["kind"].startswith("REPORT")]
@@ -304,7 +397,7 @@ class ReceiverCashFileTests(unittest.TestCase):
 
     def test_overlapping_file_records_new_rows_and_labels_repeats(self):
         self._apply()  # file A: file-payment-1 (100) and file-payment-2 (200) on H, revisions 0 -> 2
-        self.baseline = self.store.export_continuity()
+        self.baseline = self._manifest()
         self.source = {**self.source, "capture_id": "capture-2"}
         repeat = {**self._row(4, 100, 3), "common_origin_id": "file-origin-1"}  # file B names payment 1 again under its own ids
         self.value = {**self.value, "source": self.source, "total_cents": 150, "rows": [self._row(3, 50, 2), repeat]}
@@ -330,7 +423,7 @@ class ReceiverCashFileTests(unittest.TestCase):
     def test_conflicting_reused_and_stale_rows_refuse_with_their_class(self):
         stale = self._prepare({**self.value, "row_count": 1, "total_cents": 7, "rows": [self._row(7, 7, 2)]})  # a new row reviewed before file A
         self._apply()
-        self.baseline = self.store.export_continuity()
+        self.baseline = self._manifest()
         origin_1 = {"common_origin_id": "file-origin-1"}
         cases = {"cash_file_conflict": ({**self._row(4, 101, 2), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),
                  "cash_file_already_recorded": ({**self._row(1, 100, 0), "common_origin_id": "file-origin-9"}, {**self._row(4, 100, 2), "evidence_id": "file-evidence-1"})}
@@ -342,7 +435,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         self._unchanged(lambda: self._apply(stale), "^cash_file_stale$")
 
     def _file_b(self, rows, captured_at_ms=None):
-        self.baseline = self.store.export_continuity()
+        self.baseline = self._manifest()
         self.source = {**self.source, "capture_id": "capture-2", "captured_at_ms": captured_at_ms or self.source["captured_at_ms"]}
         self.value = {**self.value, "source": self.source, "row_count": len(rows), "total_cents": sum(row["amount_cents"] for row in rows), "rows": rows}
 
@@ -388,7 +481,7 @@ class ReceiverCashFileTests(unittest.TestCase):
     def test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit(self):
         store = self.store = self.fixture._build_base_for_correction()  # S4: the owner forgets earlier linked payments and overpays a correction request by 1 cent
         self.fixture._prepare_acknowledged(store)
-        self.baseline = store.export_continuity()
+        self.baseline = self._manifest()
         detail = store.obligation_detail(expected.H_ITEM_ID)
         rows = [{**self._row(1, expected.CORRECTION_PAYMENT_CENTS - 1, detail["revision"]), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS}]
         rows.append({**self._row(2, 2, detail["revision"] + 1), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS})
@@ -471,8 +564,8 @@ class ReceiverCashFileTests(unittest.TestCase):
     def test_preview_cleanup_failure_cannot_publish_success(self):
         with patch.object(cash.tempfile.TemporaryDirectory, "__exit__", side_effect=OSError("private-path")):
             with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
-                cash.preview_cash_file(*self._prepare(), trusted_authority=self.fixture.authority, clock=self.store.clock)
-        self.assertEqual(self.store.export_continuity(), self.baseline)
+                cash.preview_cash_file(*self._prepare(), path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
+        self.assertEqual(self.store.export_continuity(), self.package)
 
     def _cli_fixture(self):
         directory = Path(self.fixture.temp_dir.name)
@@ -516,28 +609,33 @@ class ReceiverCashFileTests(unittest.TestCase):
                 self.assertEqual(cli.main(["--database", str(path), *args[2:], "--apply"]), 2)
         self.assertFalse(path.exists())
 
-    def test_cli_binds_custom_live_test_and_shadow_identities(self):
+    def test_cli_binds_custom_live_and_test_identities_and_never_shadow(self):
         custom = owner.FinancialOwner(path=self.fixture._path(), config=self.store.config,
                                       trusted_authority=self.fixture.authority, owner_id="custom-owner", clock=self.store.clock)
         with patch.object(self.fixture, "_make_owner", return_value=custom):
             self.fixture._build_base()
         restores = [owner.FinancialOwner.restore_continuity(
-            package_bytes=self.baseline, recovered_path=self.fixture._path(), trusted_authority=self.fixture.authority,
+            package_bytes=self.package, recovered_path=self.fixture._path(), trusted_authority=self.fixture.authority,
             restore_mode=mode, clock=self.store.clock) for mode in ("TEST", "SHADOW")]
         for store in (custom, *restores):
-            self.store, self.baseline = store, store.export_continuity()
+            self.store = store
+            self.package = store.export_continuity()
+            if store.mode == "SHADOW":  # never a cash-file target (Phase 1b): the CLI has no such mode and the checker refuses it
+                self.baseline = self._manifest()
+                with self.assertRaisesRegex(check.CashFileError, "^cash_file_binding$"):
+                    self._prepare()
+                _, _, args = self._cli_fixture()
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    cli.main(args)
+                self.assertEqual(store.export_continuity(), self.package)
+                continue
+            self.baseline = self._manifest()
             _, _, args = self._cli_fixture()
             stdout, stderr = io.StringIO(), io.StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 code = cli.main(args + ["--apply"])
-            if store.mode == "SHADOW":
-                self.assertEqual((code, stderr.getvalue()), (2, "ERROR:receiver_cash_file_refused:cash_file_binding\n"))
-                self.assertEqual(store.export_continuity(), self.baseline)
-                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                    self.assertEqual(cli.main(args), 0)
-            else:
-                self.assertEqual((code, stderr.getvalue()), (0, ""))
-                self.assertEqual(json.loads(stdout.getvalue())["cash_delta_cents"], 300)
+            self.assertEqual((code, stderr.getvalue()), (0, ""))
+            self.assertEqual(json.loads(stdout.getvalue())["cash_delta_cents"], 300)
 
     def test_checked_context_and_commands_are_immutable_copies(self):
         commands, context = self._prepare()
@@ -577,10 +675,21 @@ raise SystemExit(main(sys.argv[3:]))
             self.assertEqual((result.returncode, result.stdout, result.stderr), (code, b"", b""))
             restarted = self.fixture._make_owner(path=self.store.path, clock=self.store.clock)
             if phase == "before":
-                self.assertEqual(restarted.export_continuity(), self.baseline)
+                self.assertEqual(restarted.export_continuity(), self.package)
             else:
                 self.assertEqual(self._apply(store=restarted)["cash_delta_cents"], 0)
         self.assertEqual({name: (directory / name).read_bytes() for name in files}, files)
+
+    def test_cli_exports_the_manifest_a_file_is_prepared_against(self):
+        directory, _, args = self._cli_fixture()
+        output, stdout = directory / "history", io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main([*args[:args.index("receiver-cash-file")], "export-history", "--output", str(output),
+                                       "--owner-id", self.store.owner_id, "--mode", self.store.mode]), 0)
+        manifest = (output / "manifest.json").read_bytes()
+        self.assertEqual((json.loads(stdout.getvalue())["manifest_sha256"], manifest), (sha(manifest), self.baseline))  # nothing was written since setUp
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(args + ["--apply"]), 0)
 
     def test_cli_preview_apply_privacy_and_source_preservation(self):
         directory, files, args = self._cli_fixture()

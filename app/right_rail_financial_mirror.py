@@ -1519,15 +1519,3 @@ class FinancialMirror:
     def restore_test_continuity(self, package_bytes: bytes, recovered_path: Path) -> "FinancialMirror":
         """Restore into an explicitly TEST-only owner for synthetic continuation."""
         return self._restore_continuity(package_bytes, recovered_path, restore_mode="TEST")
-
-
-__all__ = (
-    "CONTINUITY_SCHEMA",
-    "FinancialMirror",
-    "FinancialMirrorContinuityError",
-    "FinancialMirrorDispatchError",
-    "FinancialMirrorError",
-    "FinancialMirrorInputError",
-    "MAX_PACKAGE_BYTES",
-    "MIRROR_SCHEMA",
-)
