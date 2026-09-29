@@ -87,7 +87,7 @@ replay still checks historical rows, digests and the whole store.
  owner's evaluation with Lean's; only tests call it, live evaluation is Python.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
- decision package, gate rules, theorems, semantic kernel; seven executables).
+ decision package, gate rules, theorems; four executables).
  `tools/semantic_assurance_gate.py` checks the correction transition's pinned
  theorem statements, proofs and axioms.
 

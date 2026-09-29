@@ -76,11 +76,4 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionResult_of_decode
 #print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing
 
-def main : IO Unit := do
-  IO.println "FINANCIAL_AXIOM_CHECK=SOURCE_PRINTED"
-  IO.println "FINANCIAL_EXECUTABLE_SEAM=exportedEvaluate"
-  IO.println "FINANCIAL_NONACTIVATING=true"
-
 end BlindLedger.Financial
-
-def main : IO Unit := BlindLedger.Financial.main
