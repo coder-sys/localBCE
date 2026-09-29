@@ -9,9 +9,6 @@ open BlindLedger.Financial.DecisionPackage
 open BlindLedger.Financial.CorrectionTransition
 
 def financialExitUsage : UInt8 := UInt8.ofNat 64
-def financialExitDecode : UInt8 := UInt8.ofNat 65
-def financialExitEvaluation : UInt8 := UInt8.ofNat 66
-def financialExitEncoding : UInt8 := UInt8.ofNat 67
 def financialExitKat : UInt8 := UInt8.ofNat 70
 def financialExitPackageDecode : UInt8 := UInt8.ofNat 68
 def financialExitPackageProjection : UInt8 := UInt8.ofNat 69
@@ -52,25 +49,6 @@ partial def readFinancialBounded
     (stream : IO.FS.Stream) (remaining : Nat) (accumulator : ByteArray) : IO ByteArray :=
   BlindLedger.Financial.CorrectionTransition.Runtime.readFinancialBounded
     stream remaining accumulator
-
-def runEvaluate : IO Unit := do
-  let stdin ← IO.getStdin
-  let bounded ← readFinancialBounded stdin (maxTotalEncodedBytes + 1) ByteArray.empty
-  if bounded.size > maxTotalEncodedBytes then
-    runFailure financialExitDecode "input-too-large"
-  else
-    match decodeFinancialInput bounded.toList with
-    | none => runFailure financialExitDecode "input-decode-or-validation"
-    | some input =>
-        match exportedEvaluate input with
-        | none => runFailure financialExitEvaluation "semantic-rejection"
-        | some result =>
-            match encodeFinancialResult result with
-            | none => runFailure financialExitEncoding "result-encoding"
-            | some output =>
-                let stdout ← IO.getStdout
-                stdout.write output.toByteArray
-                stdout.flush
 
 def runKatInput : IO Unit := do
   let stdout ← IO.getStdout
@@ -132,13 +110,12 @@ def main (args : List String) : IO Unit := do
   | ["--kat"] => runKat
   | ["--decision-package-kat"] => runDecisionPackageKat
   | ["--emit-kat-input"] => runKatInput
-  | ["--evaluate"] => runEvaluate
   | ["--project-decision-package"] => runProjectDecisionPackage
   | ["--correction-transition-kat"] => runCorrectionTransitionKat
   | ["--apply-correction-transition"] => runApplyCorrectionTransition
   | ["--assess-correction-reuse"] => runAssessCorrectionReuse
   | _ =>
-      IO.eprintln "FINANCIAL_ERROR=usage expected --kat, --emit-kat-input, --evaluate, --decision-package-kat, --project-decision-package, --correction-transition-kat, --apply-correction-transition, or --assess-correction-reuse"
+      IO.eprintln "FINANCIAL_ERROR=usage expected --kat, --emit-kat-input, --decision-package-kat, --project-decision-package, --correction-transition-kat, --apply-correction-transition, or --assess-correction-reuse"
       IO.Process.exit financialExitUsage
 
 end BlindLedger.Financial

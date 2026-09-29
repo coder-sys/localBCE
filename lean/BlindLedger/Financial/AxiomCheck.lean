@@ -3,6 +3,7 @@ import BlindLedger.Financial.CodecLaws
 import BlindLedger.Financial.CodecLawsCheck
 import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.Theorems
+import BlindLedger.Financial.WorkerLaws
 
 namespace BlindLedger.Financial
 
@@ -38,6 +39,10 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.historical_revision_binding_is_checked
 #print axioms BlindLedger.Financial.latest_delivery_uses_timestamp_then_id
 #print axioms BlindLedger.Financial.direct_add_operands_are_bounded
+#print axioms BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome
+#print axioms BlindLedger.Financial.evaluateWire_evaluated
+#print axioms BlindLedger.Financial.workerRespond_length_le
+#print axioms BlindLedger.Financial.maxWorkerFrameBytes_fits_u32
 #print axioms BlindLedger.Financial.codec_roundtrip_kat
 #print axioms BlindLedger.Financial.codec_trailing_bytes_rejected
 #print axioms BlindLedger.Financial.codec_mutation_rejected
