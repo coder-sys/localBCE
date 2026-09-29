@@ -61,8 +61,8 @@ class BloatBudgetTest(unittest.TestCase):
         for p in _live_files():
             ext = os.path.splitext(p)[1].lower()
             if ext in CODE_EXTS:
-                top = os.path.relpath(p, ROOT).split(os.sep)[0]
-                totals["evidence" if ext == ".lean" or top in ("tests", "lean") else "product"] += _lines(p)
+                parts = os.path.relpath(p, ROOT).split(os.sep)
+                totals["evidence" if ext == ".lean" or "tests" in parts[:-1] or parts[0] == "lean" else "product"] += _lines(p)
         self.assertLessEqual(totals["product"], PRODUCT_CODE_LINES)
         self.assertLessEqual(totals["evidence"], EVIDENCE_CODE_LINES)
 
