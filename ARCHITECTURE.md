@@ -1,6 +1,6 @@
 # RightRail architecture
 
-How the code in this trunk fits together today. The target is
+How the code fits together today. The target is
 `docs/RIGHTRAIL_FULL_STACK_TARGET.md`; run status is only in `STATUS.md`.
 
 ## Shape
@@ -22,7 +22,7 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
 ```
 
 Evidence, evaluation, official determination, authorized action, dispatch,
-receiver acknowledgment, cash and reporting are separate records. An
+receiver acknowledgment, cash and reporting are separate records; an
 acknowledgment never marks cash. Dispatch and egress are disabled; nothing here
 moves money.
 
@@ -53,7 +53,7 @@ result digest and the expected revision against current and historical
 state before the one atomic determination/action/outbox transition.
 
 Missing, stale, malformed or unauthorized input raises a typed error and
-changes nothing. The independent checker enforces actor roles against a
+changes nothing; the independent checker enforces actor roles against a
 digest-bound roster.
 
 Every outer write checks current funding projections against their immutable
@@ -107,7 +107,7 @@ acknowledgment changes follow-up status without changing cash.
 a fresh owner restores by replay; the older whole-state package (8 MiB)
 remains. Restore runs in a private attempt directory and publishes
 atomically without replacing anything; a foreign destination and its
-`-wal`/`-shm` sidecars are left intact and cleanup failures are reported.
+`-wal`/`-shm` sidecars stay intact and cleanup failures are reported.
 SHADOW opens read-only; TEST is isolated; neither can dispatch, egress,
 become a live writer or replace an identity.
 
@@ -122,24 +122,19 @@ packager: it assembles, verifies, extracts, runs the end-to-end scenario and
 serves the workspace from a digest-bound offline archive. Its current
 release producer and kit inventory bind the current vectors, retired-pin
 registry and fresh guarded engine receipt. The kit checks canonical source
-paths and the exact v4 guard records with either LF or Windows CRLF line
-endings; raw log bytes remain digest-bound. Current exercised archives are
-recorded in provenance. Staff cash evidence names the correction request it
+paths and the exact v4 guard records under LF or CRLF line endings (raw log
+bytes stay digest-bound); exercised archives are in provenance. Staff cash evidence names the correction request it
 pays; acknowledgment alone never provides that credit. The synthetic staff
 clock advances to the explicit decision time before issuing the correction, so
 new demo acknowledgments follow their action, even after a lost response.
 
 The HTTP adapter accepts exactly one length and content-type header, no
 transfer encoding, and at most 8,192 bytes within a five-second total body
-deadline before dispatch. Refusals flush their response, then drain at most
-8,193 unread bytes for 100 ms before closing; HEAD sends no body — this
-preserves ordinary Windows refusal responses without letting a slow sender
-hold the refusal path open.
+deadline. Refusals flush, then drain at most 8,193 unread bytes for 100 ms
+before closing; HEAD sends no body, so a slow sender cannot hold a refusal open.
 
-Second-state reuse needs owner, checker and Lean changed together, because
-`Types.lean:controlPackRulesWellFormed` also pins the Hospital H test labels; a
-Python-only policy-table edit would disagree with the pinned engine. The staff
-server's H labels are fixture data.
+The staff server's Hospital H labels are fixture data; a second state also
+needs Lean changed (`STATUS.md`).
 
 ## Direct-state-owned clearance route (parked)
 
@@ -157,21 +152,19 @@ creates a financial determination, clearance or action. Raw source bytes,
 identifiers, paths and error text never cross its boundary; failures use fixed
 codes. `tools/provider_trust_graph_view.py` is a loopback browser view over it.
 
-The source-intake connection takes a bounded captured envelope and independently
-supplied capture context (subject, credential, enrollment, locator, observation
-time and fetch time). All six values must match the independent source check
-before admission. Only the admitted graph reaches the existing read-model and
-export verification gates; the served projection keeps freshness and source
-truth unknown. Failed capture or context mismatch opens no server. This path
-has no writes, network fetch, cache or financial authority; retry recomputes the
-same verified projection.
+Source intake takes a bounded captured envelope and independently supplied
+capture context (subject, credential, enrollment, locator, observation and fetch
+time); all six values must match the independent source check before admission.
+Only the admitted graph reaches the read-model and export verification gates;
+the served projection keeps freshness and source truth unknown. A failed capture
+or context mismatch opens no server. No writes, network fetch, cache or
+financial authority; retry recomputes the same verified projection.
 Both CLIs accept `--source-envelope PATH --capture-context SUBJECT CREDENTIAL
-ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH`; the four
-identities are opaque 128-character hex values from the capture configuration,
-never parsed from the untrusted envelope. Comparison uses the same options with
-the `compare-` (browser) or `left-`/`right-` (read-model CLI) prefix. This is
-file intake for the fixed synthetic profile; no live fetch or financial-file
-adapter is implied.
+ENROLLMENT LOCATOR OBSERVED FETCHED` instead of `--artifact PATH` (comparison:
+the `compare-` or `left-`/`right-` prefix); the four identities are opaque
+128-character hex values from the capture configuration, never parsed from the
+untrusted envelope. This is file intake for the fixed synthetic profile; no
+live fetch or financial-file adapter is implied.
 
 ## Provider App
 
@@ -193,12 +186,11 @@ What exists today toward it:
  population, evidence, payment/reversal, offset authorization,
  acknowledgment, reporting, funding and evaluation recording.
 - The live correction codec (`BLFCMD02`/`BLFCRES3`) proves canonicity (P2)
- unconditionally, but round-trip (P1) and trailing-byte rejection (P3) only
- for admissible values; nothing yet proves every value Lean emits is
- admissible.
-- There is no batch decide API, no ML-DSA-87 checkpoint signing, no
- Merkle-inclusion token, no independent witness, no member-key sharding, no
- fenced primary/standby, and no Bypass outcome.
+ unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
+ admissible values; nothing yet proves every value Lean emits is admissible.
+- There is no batch decide API, independent witness, fenced standby or Bypass
+ outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
+ the gate-v1 codec and Lean model.
 - The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
  one Windows process per call) is disqualifying for gate throughput and needs a
  long-lived worker pool; no warm-worker benchmark has been run.
@@ -206,9 +198,8 @@ What exists today toward it:
 
 The target document holds the authority ladder, gate points, batch signing,
 fail policy, sharding, proof boundary, evidence modes and post-quantum choices,
-and which are unresolved. The separate `gate-v1` branch has format, signature
-and Lean verification work not connected here to signed grant admission,
-durable payer state or the rules path.
+and which are unresolved. Gate-v1's formats and Lean payer checks are not
+connected to signed grant admission, durable payer state or the rules path.
 
 ## Rejected directions
 

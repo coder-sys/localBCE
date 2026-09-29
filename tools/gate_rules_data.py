@@ -1,8 +1,7 @@
 """Synthetic data for the gate rules vectors (test-only; invented IDs, no PHI).
 
-``pin FILE`` replaces each ``snap KIND ASOF COUNT ?`` with the SHA3-512 of the
-domain tag (``RR/GATE/RELEASED/v1`` or ``RR/GATE/UNRESOLVED/v1`` for those sets, else
-``RR/GATE/SNAPSHOT/v1``), ``KIND ASOF COUNT`` and the KIND rows after it; the
+``pin FILE`` replaces each ``snap KIND ASOF COUNT ?`` with the pin of the KIND
+rows after it (``pinInput`` in ``lean/BlindLedger/Gate/Rules/Spec.lean``); the
 author declares COUNT.  ``demo FILE`` writes the state-ZZ scenario with its
 pins and prints what it seeded.  No rule is evaluated here: each line's
 expected outcome is the reason it was seeded with (ALLOW when none), and the
@@ -11,6 +10,20 @@ Lean runner decides and compares every line.
 
 import hashlib
 import sys
+
+KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved")
+FLOWS = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820")
+ID, PAY = 129, 261
+LINE = (ID, PAY, 1, ID, ID, ID, 4, ID, 4, 8)
+WIDTHS = {"dmf": (ID, 4), "pdeath": (ID, 4), "excl": (ID, 4, 4), "span": (ID, ID, 4, 4), "released": LINE,
+          "unresolved": LINE}
+
+
+def row(kind, fields):
+    if WIDTHS[kind] is LINE:
+        i, _, p = fields[0].partition(":")
+        fields = [i, p or i, FLOWS.index(fields[1]) + 1] + fields[2:]
+    return b"".join(int(v).to_bytes(w, "big") for w, v in zip(WIDTHS[kind], fields, strict=True))
 
 
 def pin(lines):
@@ -24,10 +37,11 @@ def pin(lines):
                 if g[:2] in (["snap", f[1]], ["drop", f[1]]):
                     break
                 if g[:1] == [f[1]]:
-                    rows.append(" ".join(g))
+                    rows.append(row(f[1], g[1:]))
             domain = f"RR/GATE/{f[1].upper()}/v1" if f[1] in ("released", "unresolved") else "RR/GATE/SNAPSHOT/v1"
-            text = "\n".join([domain, " ".join(f[1:4])] + rows)
-            out[i] = " ".join(f[:4] + [hashlib.sha3_512(text.encode()).hexdigest()])
+            head = b"".join(int(v).to_bytes(4, "big") for v in (KINDS.index(f[1]) + 1, f[2], f[3]))
+            data = domain.encode() + b"\0" + head + b"".join(sorted(rows))
+            out[i] = " ".join(f[:4] + [hashlib.sha3_512(data).hexdigest()])
     return out
 
 

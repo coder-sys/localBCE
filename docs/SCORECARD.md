@@ -52,11 +52,10 @@ this harness: "before" at 1c7ed3b (product code unchanged since e9b3727), and
 | Case H | hours unresolved / past due | unknown | 48 / 24 | 48 / 24 |
 | Accuracy | correction error, reconciliation error, double count (cents) | unknown | 0 / 0 / 0 | 0 / 0 / 0 |
 
-Note: the page now reloads the package automatically after the operator's own
-command. That costs one request per command, which is traded for a click. The
-hours come from the fixture's synthetic clock, which screen changes cannot move.
-Paying late does not erase the missed deadline: H stays 24 hours past due on
-record.
+Note: the page now reloads the package after the operator's own command: one
+request per command, traded for a click. The hours come from the fixture's
+synthetic clock, which screen changes cannot move. Paying late does not erase
+the missed deadline: H stays 24 hours past due on record.
 
 ## Top friction still open (the other three of the first five were fixed)
 
@@ -66,11 +65,11 @@ record.
  *Open:* fixture decision for the owner.
 2. **Replacement operator.** Restore to Continuity TEST is enabled only
  after H's shortfall is 0, so a replacement cannot take over unfinished
- work, which plan §14 expects. *Open:* needs an owner decision.
+ work, which plan §14 expects. Needs an owner decision.
 
 ## Article XIII violations found
 
-Only the open ones remain (answer-first, dead-connection and dead-control items were fixed). The Mirror redesign owns the full interaction model.
+Only open ones remain (answer-first, dead-connection and dead-control items are fixed); the Mirror redesign owns the interaction model.
 
 - **Illogical path.** The approver's reject-offset is enabled in every
  session (observed for analyst, director, auditor); the page has no roles

@@ -10,8 +10,8 @@ namespace BlindLedger.Gate.Rules
     and a near key: (member, rendering party, date, procedure) for FFS, the
     member-month for CAP_820.  A line claims all three for the lines after it,
     whatever its outcome, except that a CAP_820 line whose member is known not
-    to be enrolled with that plan claims no member-month, so a line for the
-    wrong plan never blocks the real one.
+    to be enrolled with that plan claims no member-month (unless already
+    released: `own`), so a line for the wrong plan never blocks the real one.
 
     - R1 `MEMBER_DECEASED`: the member's Death Master File date of death is
       before the service date (FFS) or the service-period start (CAP_820).
@@ -61,29 +61,44 @@ namespace BlindLedger.Gate.Rules
     date, so the reviewer sees it.
     No rule yields BLOCK: blocking stays a human or state action.
 
-    The released set is every line already paid by any path, including lines
-    a person released from HUMAN_REVIEW.  The unresolved set holds the gate's
-    HOLD and HUMAN_REVIEW lines, enrolled or not, until a person releases or
-    rejects them; the gate adds each identity to at most one of the two.  Both
-    are append-only in v1: each extends the gate's own checkpoint of it
-    (`releasedPrior`, `unresolvedPrior`), a REQUIRED trusted input that no
-    component supplies yet (see STATUS).  After each batch the
-    next checkpoint is the view plus the batch's own additions (`advance`),
-    whether or not the set read was chained, so a store that rolls back or
-    drops those additions no longer chains.  Moving a line out of the
-    unresolved set is the release path's (see STATUS).
+    A payment (`Line.pay`) is ALLOW only when it has a line and every line is
+    (`payOutcome`).  The released set is every line of a payment released by
+    any path: an ALLOW payment's, or one a person released from HUMAN_REVIEW;
+    an ALLOW line of a held payment joins neither set.  The unresolved set
+    holds the gate's HOLD and HUMAN_REVIEW lines, enrolled or not, until a
+    person releases or rejects them; the gate adds each identity to at most
+    one of the two.  Both are append-only in v1: each extends the gate's own
+    checkpoint of it (`releasedPrior`, `unresolvedPrior`), taken from the
+    latest signed checkpoint of the payment's shard (`anchor`), a REQUIRED
+    trusted input that no component supplies or verifies yet (see STATUS).
+    After each batch the next checkpoint is the view plus the batch's own
+    additions (`advance`), whether or not the set read was chained, so a
+    store that drops those additions no longer chains.  Moving a line out of
+    the unresolved set is the release path's (see STATUS).
+
+    Re-decision.  An ALLOW the payer never released goes stale (gate-v1
+    `maxDecisionAge`); the gate then decides that payment again under a new
+    revision on current data (`redo`).  Its own lines, already released, are
+    left out of the keys seen (`seen0`) and decided first (`order`), claiming
+    every key, so no copy passes; it is ALLOW only if each line is ALLOW and
+    its own, and it adds no line to either set.  The payer releases at most
+    one token per payment, whatever the revision (`one_payment_per_line`).
 
     Mapping onto the token (`BlindLedger.Gate.Spec`, gate-v1; not imported):
-    `Flow.tag` and the outcome names equal the token's; `reasons` lists the
-    codes in ascending byte order, as the leaf's `reasonCodes` requires.  One
-    `Line` becomes one canonical line leaf of `Request.lines` (flow tag, then
-    each field; identifiers are the u16-length identifiers read as big-endian
-    naturals after a 0x01 byte, which is injective), so `lines_root` commits
-    to exactly the lines decided here.  The payment is ALLOW when every line
-    is; a held line leaves the cycle.  Snapshot and set pins
-    (SHA3-512 under `RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` and
-    `RR/GATE/UNRESOLVED/v1` over kind,
-    date, declared count and rows) join the token's read-set digest.  Dates
+    `Flow.tag` and the outcome names equal the wire's `WireFlow` and
+    `WireOutcome`; `reasons` lists the codes in ascending byte order, as the
+    leaf's `reasonCodes` requires.  One `Line` is one canonical line of
+    `Request.lines` (`pLine`: flow tag, line id, 32-byte member key, payee,
+    rendering party, u32 date, procedure, u32 units, u64 cents); `id`,
+    `member`, `payee`, `rendering` and `proc` are those identifiers and the
+    member key read as big-endian naturals after a 0x01 byte, which is
+    injective; `pay` is program and payment id, each u16-length, likewise.
+    The request decoder binds every line to the payment's flow, member and
+    payee and their sum to its amount, every flow ruled here carries a line,
+    and `lines_root` commits to exactly the lines decided here.  Snapshot and
+    set pins (`pinInput`) join the token's read-set digest; the released and
+    unresolved pins after a batch are the checkpoint's state digest
+    (`RR/GATE/STATE/v1`), whose producer is not built.  Dates
     are CCYYMMDD naturals (X12 D8), so on valid dates `<` is calendar order.
     Synthetic, nonpayment, activation=false. -/
 
@@ -111,9 +126,10 @@ def reasons : List Reason :=
    .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
 
 /-- For CAP_820, `payee` and `rendering` are the plan and `date` is the first
-    day of the service period. -/
+    day of the service period.  `pay` is the payment the line is part of. -/
 structure Line where
   id : Nat
+  pay : Nat
   flow : Flow
   member : Nat
   payee : Nat
@@ -161,6 +177,11 @@ structure Ctx where
   unresolved : Option (Snapshot Line)
   releasedPrior : Snapshot Line
   unresolvedPrior : Snapshot Line
+  /-- The state digest of the latest signed checkpoint of the payment's shard, read big-endian;
+      the priors' pins must hash to it (`stateDigest`), which nothing verifies yet. -/
+  anchor : Nat
+  /-- The payments this batch decides again: each an ALLOW past its maximum age, never released. -/
+  redo : List Nat
 
 def entries {α : Type} (o : Option (Snapshot α)) : List α := (o.map (·.entries)).getD []
 
@@ -200,11 +221,11 @@ def usable {α : Type} (today maxAge : Nat) (ok : Nat → α → Bool) : Option 
 
 /-- The released or unresolved set: present with exactly its declared count
     (it may be empty), dated on a valid day not after today nor before the
-    checkpoint `prior`, and extending the checkpoint's lines. -/
+    checkpoint `prior`, and holding every line of the checkpoint (a set: its pin sorts the rows). -/
 def chained (today : Nat) (prior : Snapshot Line) : Option (Snapshot Line) → Bool
   | none => false
   | some s => s.entries.length == s.count && validDate s.asOf && s.asOf ≤ today && prior.asOf ≤ s.asOf &&
-      prior.entries.isPrefixOf s.entries
+      prior.entries.all s.entries.contains
 
 /-- The gate's view of a set: the set read when it is chained, else the gate's checkpoint of it. -/
 def view (today : Nat) (prior : Snapshot Line) (o : Option (Snapshot Line)) : Snapshot Line :=
@@ -274,8 +295,12 @@ def overlap (c : Ctx) (l : Line) : Bool :=
   ss.any fun s => ss.any fun t =>
     s.plan != t.plan && max first (max s.start t.start) ≤ min last (min s.stop t.stop)
 
+/-- A line of a payment this batch decides again that the released set already holds. -/
+def own (c : Ctx) (l : Line) : Bool := c.redo.contains l.pay && (releasedSet c).contains l
+
 /-- The keys a line claims for the lines after it, whatever its outcome. -/
-def claim (c : Ctx) (l : Line) : List Key := if isCap l && notEnrolled c l then [exactKey l, idKey l] else keys l
+def claim (c : Ctx) (l : Line) : List Key :=
+  if isCap l && notEnrolled c l && !own c l then [exactKey l, idKey l] else keys l
 
 /-- The keys claimed by the unresolved set. -/
 def pending (c : Ctx) : List Key := (unresolvedSet c).flatMap (claim c)
@@ -348,19 +373,40 @@ def decideAll (c : Ctx) : List Key → List Line → List Decision
   | seen, l :: ls => decideLine c seen l :: decideAll c (claim c l ++ seen) ls
 
 def enc (l : Line) : List Nat :=
-  [l.flow.tag, l.member, l.payee, l.rendering, l.date, l.proc, l.units, l.cents, l.id]
+  [l.flow.tag, l.member, l.payee, l.rendering, l.date, l.proc, l.units, l.cents, l.id, l.pay]
 
 def lineLe (x y : Line) : Bool := decide (enc x ≤ enc y)
 
 /-- Canonical order: lexicographic on `enc`; arrival order is forgotten. -/
 def canonical (batch : List Line) : List Line := batch.mergeSort lineLe
 
+/-- Decision order: a re-decision's own lines first, then the rest, each canonical. -/
+def order (c : Ctx) (b : List Line) : List Line :=
+  canonical (b.filter (own c)) ++ canonical (b.filter fun x => !own c x)
+
+/-- The keys seen before the batch: the released set's, less the batch's own lines'. -/
+def seen0 (c : Ctx) (b : List Line) : List Key :=
+  ((releasedSet c).filter fun x => !(own c x && b.contains x)).flatMap keys
+
+/-- HOLD if a line is; ALLOW if it has a line and each is ALLOW and, for a re-decision, its own;
+    else HUMAN_REVIEW (a payment with no line included). -/
+def payOutcome (c : Ctx) (ds : List Decision) (p : Nat) : Outcome :=
+  let ls := ds.filter (·.line.pay == p)
+  if ls.any (·.outcome == .HOLD) then .HOLD
+  else if !ls.isEmpty && ls.all fun d => d.outcome == .ALLOW && (!c.redo.contains p || own c d.line) then .ALLOW
+  else .HUMAN_REVIEW
+
 def allowedLines (ds : List Decision) : List Line :=
   (ds.filter (·.outcome == .ALLOW)).map (·.line)
 
-/-- HOLD and HUMAN_REVIEW lines with a new identity: they stay open until a person acts. -/
-def unresolvedLines (ds : List Decision) : List Line :=
-  (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED).map (·.line)
+/-- The lines of ALLOW payments, less a re-decision's (released already). -/
+def releasedLines (c : Ctx) (ds : List Decision) : List Line :=
+  (allowedLines ds).filter fun l => !c.redo.contains l.pay && payOutcome c ds l.pay == .ALLOW
+
+/-- HOLD and HUMAN_REVIEW lines with a new identity, not released already: they stay open until a
+    person acts. -/
+def unresolvedLines (c : Ctx) (ds : List Decision) : List Line :=
+  (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !own c d.line).map (·.line)
 
 /-- The decisions and the gate's next checkpoints of the two sets. -/
 structure Result where
@@ -369,11 +415,45 @@ structure Result where
   unresolved : Snapshot Line
   deriving DecidableEq
 
-/-- One batch against the read set: ALLOW lines join the released set, the
-    other lines with a new identity join the unresolved set. -/
+/-- One batch against the read set: ALLOW payments' lines join the released
+    set, HOLD and HUMAN_REVIEW lines with a new identity the unresolved set. -/
 def decideBatch (c : Ctx) (batch : List Line) : Result :=
-  let ds := decideAll c ((releasedSet c).flatMap keys) (canonical batch)
-  { decisions := ds, released := advance c.today c.releasedPrior c.released (allowedLines ds),
-    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines ds) }
+  let ds := decideAll c (seen0 c batch) (order c batch)
+  { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),
+    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }
+
+/-! Pins.  A snapshot or set pin is the SHA3-512 of `pinInput`: its domain
+    (`RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` or `RR/GATE/UNRESOLVED/v1`)
+    and a NUL, the kind (1 DMF, 2 provider deaths, 3 exclusions, 4
+    enrollment, 5 released, 6 unresolved), date and declared count, then the
+    rows in ascending byte order.  Every field is fixed-width big-endian (an
+    identifier `idWidth` bytes, `pay` `payWidth`, flow tag 1, date, units,
+    kind and count 4, cents 8); a value that does not fit fails the pin. -/
+
+/-- A 0x01 byte, then at most 128 identifier bytes (gate-v1 `identOk`). -/
+def idWidth : Nat := 129
+
+/-- A 0x01 byte, then program and payment id, each u16-length. -/
+def payWidth : Nat := 261
+
+def be (w n : Nat) : Option (List UInt8) :=
+  if n < 256 ^ w then some ((List.range w).reverse.map fun i => (n / 256 ^ i % 256).toUInt8) else none
+
+def Death.fields (d : Death) : List (Nat × Nat) := [(idWidth, d.id), (4, d.date)]
+
+def Exclusion.fields (e : Exclusion) : List (Nat × Nat) := [(idWidth, e.id), (4, e.start), (4, e.stop)]
+
+def Span.fields (s : Span) : List (Nat × Nat) := [(idWidth, s.member), (idWidth, s.plan), (4, s.start), (4, s.stop)]
+
+def Line.fields (l : Line) : List (Nat × Nat) :=
+  [(idWidth, l.id), (payWidth, l.pay), (1, l.flow.tag), (idWidth, l.member), (idWidth, l.payee),
+   (idWidth, l.rendering), (4, l.date), (idWidth, l.proc), (4, l.units), (8, l.cents)]
+
+def pinInput {α : Type} (domain : String) (kind : Nat) (fields : α → List (Nat × Nat)) (s : Snapshot α) :
+    Option (List UInt8) := do
+  let row (fs : List (Nat × Nat)) := (fs.mapM fun (w, n) => be w n).map List.flatten
+  let head ← row [(4, kind), (4, s.asOf), (4, s.count)]
+  let rows ← s.entries.mapM (row ∘ fields)
+  pure (domain.toUTF8.toList ++ 0 :: head ++ (rows.mergeSort fun a b => decide (a ≤ b)).flatten)
 
 end BlindLedger.Gate.Rules
