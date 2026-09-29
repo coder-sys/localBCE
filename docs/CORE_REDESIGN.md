@@ -600,8 +600,6 @@ re-decided, not stranded in review, and no line is paid twice.
   are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
 - **Rules:** `redo`/`own` re-decision; only ALLOW payments' lines are released
   (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`.
-- **Theorems:** `verifyToken_unforked` adds equivocation;
-  `later_allow_clear(_many)` add `Classical.choice`. Stated, `sorry`:
-  `released_iff`, `one_payment_per_line`, `Steps.at_most_once`,
-  `installCert_equivocation`.
+- **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
+  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
 - **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.

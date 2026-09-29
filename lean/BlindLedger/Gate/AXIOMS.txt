@@ -29,3 +29,8 @@
 'BlindLedger.Gate.pathCollision_sound' depends on axioms: [propext]
 'BlindLedger.Gate.pathCollision_complete' depends on axioms: [propext]
 'BlindLedger.Gate.verifyPath_collision' depends on axioms: [propext]
+'BlindLedger.Gate.Step.released_grows' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Steps.released_grows' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Steps.at_most_once' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.installCert_equivocation' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Steps.coherent' depends on axioms: [propext, Quot.sound]

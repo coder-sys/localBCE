@@ -426,7 +426,7 @@ theorem release_isSome (c : Crypto) (s : PayerState) (p : Payment) (bytes : Byte
 /-- At most one release per payment (the model's `AtMostOnceRelease`): in the
     state right after a release, every token for the same tenant, program and
     payment id, under any flow, is rejected.  That this persists through later
-    steps rests on `Step.released_grows`, stated below and not yet proved. -/
+    steps rests on `Step.released_grows`, below. -/
 theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
     {bytes bytes' : Bytes} {t t' : Token} (h : release c s p bytes = some s')
     (hd : decodeToken bytes = some t) (hd' : decodeToken bytes' = some t')
@@ -440,31 +440,114 @@ theorem release_at_most_once {c : Crypto} {s s' : PayerState} {p p' : Payment}
     split <;> rfl
   · simp at h
 
-/-- Frozen statement (LM1, open): no step removes a released payment. -/
+theorem storeCheckpoint_released {c : Crypto} {s s' : PayerState} {bytes : Bytes}
+    (h : storeCheckpoint c s bytes = some s') : ∀ k ∈ s.released, k ∈ s'.released := by
+  unfold storeCheckpoint at h
+  cases hd : decodeCheckpoint bytes with
+  | none => rw [hd] at h; simp at h
+  | some x =>
+    rw [hd] at h
+    dsimp only at h
+    split at h
+    · split at h
+      · obtain rfl := Option.some.inj h
+        exact fun _ => id
+      · split at h
+        · simp at h
+        · obtain rfl := Option.some.inj h
+          exact fun _ => id
+    · simp at h
+
+theorem send_released {s s' : PayerState} {p : Payment} (h : send s p = .ok s') :
+    ∀ k ∈ s.released, k ∈ s'.released := by
+  unfold send at h
+  split at h
+  · cases h; exact fun _ => id
+  · split at h
+    · cases h; exact fun _ => id
+    · cases h
+
+theorem release_released {c : Crypto} {s s' : PayerState} {p : Payment} {bytes : Bytes}
+    (h : release c s p bytes = some s') : ∀ k ∈ s.released, k ∈ s'.released := by
+  unfold release at h
+  split at h
+  · simp at h
+  · split at h
+    · obtain rfl := Option.some.inj h
+      exact fun _ hk => List.mem_cons_of_mem _ hk
+    · simp at h
+
+/-- Frozen statement (LM1): no step removes a released payment. -/
 theorem Step.released_grows {c : Crypto} {s s' : PayerState} (h : Step c s s') :
     ∀ k ∈ s.released, k ∈ s'.released := by
-  sorry
+  cases h with
+  | install e => unfold installCert; split <;> exact fun _ => id
+  | store h => exact storeCheckpoint_released h
+  | send h => exact send_released h
+  | pay h => exact release_released h
+  | context => exact fun _ => id
 
-/-- Frozen statement (LM1, open): at most one release per payment over any
+theorem Steps.released_grows {c : Crypto} {s s' : PayerState} (h : Steps c s s') :
+    ∀ k ∈ s.released, k ∈ s'.released := by
+  induction h with
+  | refl => exact fun _ => id
+  | tail _ step ih => exact fun k hk => step.released_grows k (ih k hk)
+
+/-- Frozen statement (LM1): at most one release per payment over any
     run: once a payment is released, no later state accepts a token for it. -/
 theorem Steps.at_most_once {c : Crypto} {s s' s'' : PayerState} {p p' : Payment} {bytes bytes' : Bytes}
     {t t' : Token} (h : release c s p bytes = some s') (hs : Steps c s' s'')
     (hd : decodeToken bytes = some t) (hd' : decodeToken bytes' = some t') (hk : payKey t' = payKey t) :
     verifyToken c s'' p' bytes' = false := by
-  sorry
+  unfold release at h
+  rw [hd] at h
+  dsimp only at h
+  split at h
+  · obtain rfl := Option.some.inj h
+    have hm := hs.released_grows (payKey t) (List.mem_cons_self ..)
+    have hu : unreleased s'' t' = false := by simp [unreleased, hk, hm]
+    simp only [verifyToken, hd']
+    split
+    · rfl
+    · simp [hu]
+  · simp at h
 
-/-- Open: a second chain-valid certificate for an installed one's tenant and
+/-- A second chain-valid certificate for an installed one's tenant and
     epoch is recorded with it and blocks that tenant and epoch. -/
 theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
     (hc : c.certChainOk e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
     (he : x.epoch = e.epoch) (hne : x ≠ e) :
     (x, e) ∈ (installCert c s e).1.equivocations ∧ blocked (installCert c s e).1 e.tenantId e.epoch = true := by
-  sorry
+  have hb : (x.tenantId == e.tenantId && x.epoch == e.epoch && x != e) = true := by
+    rw [Bool.and_eq_true, Bool.and_eq_true, beq_iff_eq, beq_iff_eq, bne_iff_ne]
+    exact ⟨⟨ht, he⟩, hne⟩
+  have hm : (x, e) ∈ (installCert c s e).1.equivocations := by
+    simp only [installCert, hc, if_true]
+    exact List.mem_append_left _ (List.mem_map.mpr ⟨x, List.mem_filter.mpr ⟨hx, hb⟩, rfl⟩)
+  refine ⟨hm, ?_⟩
+  simp only [blocked, Bool.or_eq_true]
+  refine Or.inr (List.any_eq_true.mpr ⟨_, hm, ?_⟩)
+  rw [Bool.and_eq_true, beq_iff_eq, beq_iff_eq]
+  exact ⟨ht, he⟩
 
-/-- Frozen statement (LM1, open): every step sequence preserves `Coherent`. -/
+/-- Frozen statement (LM1): every step sequence preserves `Coherent`. -/
 theorem Steps.coherent {c : Crypto} {s s' : PayerState} (h : Steps c s s') (hs : Coherent s) :
     Coherent s' := by
-  sorry
+  induction h with
+  | refl => exact hs
+  | tail _ step ih =>
+    cases step with
+    | install e => exact installCert_coherent c e ih
+    | store h => exact storeCheckpoint_coherent ih h
+    | send h =>
+      unfold send at h
+      split at h
+      · cases h; exact ih
+      · split at h
+        · cases h; exact ih
+        · cases h
+    | pay h => exact release_coherent ih h
+    | context => exact ih
 
 /-- Whatever `pathCollision` returns is a collision: distinct inputs, one output. -/
 theorem pathCollision_sound {H : Bytes → Bytes} {d : Bytes} (fuel : Nat) :

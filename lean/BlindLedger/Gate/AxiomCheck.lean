@@ -66,5 +66,15 @@ import BlindLedger.Gate.Theorems
 #guard_msgs in #print axioms BlindLedger.Gate.pathCollision_complete
 /-- info: 'BlindLedger.Gate.verifyPath_collision' depends on axioms: [propext] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyPath_collision
+/-- info: 'BlindLedger.Gate.Step.released_grows' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Step.released_grows
+/-- info: 'BlindLedger.Gate.Steps.released_grows' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Steps.released_grows
+/-- info: 'BlindLedger.Gate.Steps.at_most_once' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Steps.at_most_once
+/-- info: 'BlindLedger.Gate.installCert_equivocation' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_equivocation
+/-- info: 'BlindLedger.Gate.Steps.coherent' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Steps.coherent
 
 def main : IO Unit := IO.println "GATE_AXIOM_CHECK=PASS"

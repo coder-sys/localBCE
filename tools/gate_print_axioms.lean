@@ -30,3 +30,8 @@ import BlindLedger.Gate.Theorems
 #print axioms BlindLedger.Gate.pathCollision_sound
 #print axioms BlindLedger.Gate.pathCollision_complete
 #print axioms BlindLedger.Gate.verifyPath_collision
+#print axioms BlindLedger.Gate.Step.released_grows
+#print axioms BlindLedger.Gate.Steps.released_grows
+#print axioms BlindLedger.Gate.Steps.at_most_once
+#print axioms BlindLedger.Gate.installCert_equivocation
+#print axioms BlindLedger.Gate.Steps.coherent

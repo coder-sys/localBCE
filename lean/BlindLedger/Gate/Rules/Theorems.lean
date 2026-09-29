@@ -301,7 +301,7 @@ theorem payOutcome_allow {c ds p d} (h : payOutcome c ds p = .ALLOW) (hd : d ∈
   · cases h
   · split at h
     · rename_i h2
-      have := List.all_eq_true.mp ((Bool.and_eq_true _ _).mp h2).2 d (List.mem_filter.mpr ⟨hd, by simp [hp]⟩)
+      have := List.all_eq_true.mp ((Bool.and_eq_true _ _).mp h2).2 d (List.mem_filter.mpr ⟨hd, by simp only [beq_iff_eq, hp]⟩)
       simp only [Bool.and_eq_true, beq_iff_eq, Bool.or_eq_true] at this
       refine ⟨this.1, fun hr => ?_⟩
       rcases this.2 with h3 | h3
@@ -680,7 +680,41 @@ theorem released_iff {c : Ctx} {b : List Line} {x : Line} :
     x ∈ (decideBatch c b).released.entries ↔ x ∈ releasedSet c ∨
       ∃ d ∈ (decideBatch c b).decisions, d.line = x ∧ c.redo.contains x.pay = false ∧
         payOutcome c (decideBatch c b).decisions x.pay = .ALLOW := by
-  sorry
+  change x ∈ releasedSet c ++ releasedLines c (decideBatch c b).decisions ↔ _
+  rw [List.mem_append]
+  refine or_congr_right ⟨fun h => ?_, ?_⟩
+  · obtain ⟨hx, hc⟩ := List.mem_filter.mp h
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hx
+    simp only [Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq] at hc
+    exact ⟨d, (List.mem_filter.mp hd).1, rfl, hc.1, hc.2⟩
+  · rintro ⟨d, hd, rfl, hr, hp⟩
+    exact List.mem_filter.mpr ⟨List.mem_map.mpr ⟨d, List.mem_filter.mpr
+      ⟨hd, by simp [(payOutcome_allow hp hd rfl).1]⟩, rfl⟩, by rw [hr, hp]; rfl⟩
+
+/-- In a duplicate-free `flatMap`, one key belongs to at most one element. -/
+theorem flatMap_nodup_inj {α β : Type} {f : α → List β} {L : List α} (h : (L.flatMap f).Nodup)
+    {x y : α} {k : β} (hx : x ∈ L) (hy : y ∈ L) (kx : k ∈ f x) (ky : k ∈ f y) : x = y := by
+  induction L with
+  | nil => simp at hx
+  | cons a L ih =>
+    rw [List.flatMap_cons, List.nodup_append] at h
+    rcases List.mem_cons.mp hx with hxa | hxL <;> rcases List.mem_cons.mp hy with hya | hyL
+    · rw [hxa, hya]
+    · subst hxa; exact absurd rfl (h.2.2 k kx k (List.mem_flatMap.mpr ⟨y, hyL, ky⟩))
+    · subst hya; exact absurd rfl (h.2.2 k ky k (List.mem_flatMap.mpr ⟨x, hxL, kx⟩))
+    · exact ih h.2.1 hxL hyL
+
+theorem map_nodup_inj {α β : Type} {f : α → β} {L : List α} (h : (L.map f).Nodup) {x y : α}
+    (hx : x ∈ L) (hy : y ∈ L) (hf : f x = f y) : x = y := by
+  induction L with
+  | nil => simp at hx
+  | cons a L ih =>
+    rw [List.map_cons, List.nodup_cons] at h
+    rcases List.mem_cons.mp hx with hxa | hxL <;> rcases List.mem_cons.mp hy with hya | hyL
+    · rw [hxa, hya]
+    · subst hxa; exact absurd (hf ▸ List.mem_map_of_mem hyL) h.1
+    · subst hya; exact absurd (hf ▸ List.mem_map_of_mem hxL) h.1
+    · exact ih h.2 hxL hyL
 
 /-- At most one payable token per line over any run of batches, each reading
     the previous one's released set, whose ids are distinct: two ALLOW
@@ -693,11 +727,45 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
     (he : e ∈ (decideBatch (c j) (b j)).decisions)
     (hpe : payOutcome (c j) (decideBatch (c j) (b j)).decisions e.line.pay = .ALLOW)
     (hid : d.line.id = e.line.id) : d.line.pay = e.line.pay := by
-  sorry
+  have hdo := payOutcome_allow hpd hd rfl
+  have heo := payOutcome_allow hpe he rfl
+  have hk : idKey e.line = idKey d.line := by simp [idKey, hid]
+  rcases Nat.lt_or_eq_of_le hij with hlt | rfl
+  · have hx : d.line ∈ releasedSet (c (i + 1)) := by
+      rw [hv i, released_iff]
+      by_cases hr : (c i).redo.contains d.line.pay = true
+      · have := (hdo.2 hr)
+        simp only [own, Bool.and_eq_true] at this
+        exact Or.inl (by simpa using this.2)
+      · exact Or.inr ⟨d, hd, rfl, Bool.eq_false_iff.mpr hr, hpd⟩
+    have hgrow : ∀ n, d.line ∈ releasedSet (c (i + 1 + n)) := fun n => by
+      induction n with
+      | zero => exact hx
+      | succ n ih => rw [← Nat.add_assoc, hv]; exact List.mem_append_left _ ih
+    have hxj : d.line ∈ releasedSet (c j) := by
+      obtain ⟨n, rfl⟩ := Nat.exists_eq_add_of_lt hlt
+      have := hgrow n
+      rwa [show i + n + 1 = i + 1 + n by omega]
+    by_cases hown : own (c j) e.line = true
+    · have hy : e.line ∈ releasedSet (c j) := by
+        simp only [own, Bool.and_eq_true] at hown
+        simpa using hown.2
+      rw [map_nodup_inj (hn j) hxj hy hid]
+    · obtain ⟨seen, hde, hall⟩ := seen_all he (Bool.eq_false_iff.mpr hown)
+      have hs : seen.contains (idKey e.line) = true := by
+        simpa [hk] using hall d.line hxj (idKey d.line) idKey_mem
+      exact (fires_blocks (c := c j) (seen := seen) (l := e.line) (r := .ALREADY_DECIDED) (by simp only [fires, hs, Bool.true_or])
+        (by rw [← hde]; exact heo.1)).elim
+  · have hnd : ((allowedLines (decideBatch (c i) (b i)).decisions).flatMap keys).Nodup :=
+      (allowed_decideAll (c i) (seen0 (c i) (b i)) (order (c i) (b i))).1
+    have hmem : ∀ {z : Decision}, z ∈ (decideBatch (c i) (b i)).decisions → z.outcome = .ALLOW →
+        z.line ∈ allowedLines (decideBatch (c i) (b i)).decisions := fun hz ha =>
+      List.mem_map.mpr ⟨_, List.mem_filter.mpr ⟨hz, by simp [ha]⟩, rfl⟩
+    rw [flatMap_nodup_inj hnd (hmem hd hdo.1) (hmem he heo.1) (idKey_mem (l := d.line))
+      (hk ▸ idKey_mem (l := e.line))]
 
 /-! Axiom pins: no `sorryAx`, no `Lean.ofReduceBool`. `Classical.choice` in
-`deterministic` comes from core `List.le_antisymm`, in
-`later_allow_clear` from `payOutcome_allow`. -/
+`deterministic` comes from core `List.le_antisymm`. -/
 /-- info: 'BlindLedger.Gate.Rules.sound' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms sound
 /-- info: 'BlindLedger.Gate.Rules.complete' depends on axioms: [propext, Quot.sound] -/
@@ -716,11 +784,15 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms deterministic
 /-- info: 'BlindLedger.Gate.Rules.fail_closed' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms fail_closed
-/-- info: 'BlindLedger.Gate.Rules.later_allow_clear' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.Rules.later_allow_clear' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms later_allow_clear
 /-- info: 'BlindLedger.Gate.Rules.allow_clear_store' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms allow_clear_store
-/-- info: 'BlindLedger.Gate.Rules.later_allow_clear_many' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.Rules.later_allow_clear_many' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms later_allow_clear_many
+/-- info: 'BlindLedger.Gate.Rules.released_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms released_iff
+/-- info: 'BlindLedger.Gate.Rules.one_payment_per_line' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms one_payment_per_line
 
 end BlindLedger.Gate.Rules
