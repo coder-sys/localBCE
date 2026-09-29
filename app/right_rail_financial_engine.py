@@ -1290,6 +1290,8 @@ EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0
+EVALUATOR_RECYCLE_REQUESTS: Final[int] = 1000  # backstop: a long-lived worker is replaced between requests,
+EVALUATOR_RECYCLE_COMMIT_BYTES: Final[int] = 400_000_000  # never mid-request, so slow growth never reaches the job cap
 _EVALUATOR_REJECTIONS: Final[dict[int, str]] = {
     1: "evaluator_input_rejected",
     2: "evaluator_evaluation_rejected",
@@ -1297,9 +1299,12 @@ _EVALUATOR_REJECTIONS: Final[dict[int, str]] = {
 }
 _evaluator_lock = threading.Lock()
 _evaluator: list[Any] = []  # [ContainedWorker, workspace] while one is running
+_evaluator_requests = 0
 
 
 def _close_evaluator() -> None:
+    global _evaluator_requests
+    _evaluator_requests = 0
     if _evaluator:
         worker, workspace = _evaluator
         _evaluator.clear()
@@ -1336,11 +1341,16 @@ def _evaluate_wire(wire: bytes) -> bytes:
     """Lean ``evaluate`` on one BLFIN02 input: the BLFRES02 answer.  Any rejection or transport
     failure is an error; a failed worker is replaced on the next use, never retried here."""
 
+    global _evaluator_requests
     with _evaluator_lock:
         try:
-            response = _running_evaluator().exchange(
+            worker = _running_evaluator()
+            response = worker.exchange(
                 wire, response_cap_bytes=semantic.MAX_WIRE_BYTES + 1, timeout_seconds=EVALUATOR_TIMEOUT_SECONDS,
             )
+            _evaluator_requests += 1
+            if _evaluator_requests >= EVALUATOR_RECYCLE_REQUESTS or worker.commit_bytes() > EVALUATOR_RECYCLE_COMMIT_BYTES:
+                _close_evaluator()
         except process.VerifierProcessError:
             raise FinancialEngineContainmentError("evaluator_containment") from None
     if response[0] in _EVALUATOR_REJECTIONS and len(response) == 1:

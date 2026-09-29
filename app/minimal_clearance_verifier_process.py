@@ -1829,9 +1829,10 @@ class ContainedWorker:
 
     def __init__(
         self, *, kernel32: object, job: object, process_handle: object,
-        stdin_descriptor: int, stdout_descriptor: int, stderr_descriptor: int,
+        stdin_descriptor: int, stdout_descriptor: int, stderr_descriptor: int, psapi: object,
     ) -> None:
         self._kernel32 = kernel32
+        self._psapi = psapi
         self._job = job
         self._process = process_handle
         self._stdin = stdin_descriptor
@@ -1860,6 +1861,17 @@ class ContainedWorker:
                 raise VerifierProcessError("worker_exchange")
             data.extend(chunk)
         return bytes(data)
+
+    def commit_bytes(self) -> int:
+        """The child's private commit; an unreadable process counts as unbounded so its owner recycles it."""
+
+        counters = _ProcessMemoryCountersEx()
+        counters.cb = ctypes.sizeof(counters)
+        if self._process is None or not self._psapi.GetProcessMemoryInfo(
+            self._process, ctypes.byref(counters), ctypes.sizeof(counters)
+        ):
+            return 1 << 63
+        return int(counters.PrivateUsage)
 
     def _stderr_pending(self) -> bool:
         """Any stderr byte (a Lean panic message) fails the request closed; the worker writes no diagnostics."""
@@ -1951,7 +1963,7 @@ def launch_contained_worker(
     ):
         raise VerifierProcessError("verifier_memory_cap")
     _validate_executable_pin(expected_executable_size_bytes, expected_executable_sha256)
-    kernel32, _psapi = _launch_apis(True)
+    kernel32, psapi = _launch_apis(True)
     process_info = _ProcessInformation()
     job = wintypes.HANDLE()
     owned: list[int] = []
@@ -2039,6 +2051,7 @@ def launch_contained_worker(
         worker = ContainedWorker(
             kernel32=kernel32, job=job, process_handle=process_info.hProcess,
             stdin_descriptor=stdin_write, stdout_descriptor=stdout_read, stderr_descriptor=stderr_read,
+            psapi=psapi,
         )
         process_info.hProcess = None
         job = None

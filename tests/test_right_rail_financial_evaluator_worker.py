@@ -67,6 +67,24 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(engine._evaluate_wire(wire), expected)
         self.assertIsNot(engine._evaluator[0], worker)
 
+    def test_worker_is_replaced_between_requests_by_count_or_commit(self) -> None:
+        wire = self._wires()[0][0]
+        answer = engine._evaluate_wire(wire)
+        self.assertGreater(engine._evaluator[0].commit_bytes(), 0)
+        worker = engine._evaluator[0]
+        with patch.object(engine, "EVALUATOR_RECYCLE_REQUESTS", 2):
+            self.assertEqual(engine._evaluate_wire(wire), answer)  # second request: same answer, then replaced
+            self.assertFalse(engine._evaluator)
+            self.assertFalse(worker.alive)
+            self.assertEqual(engine._evaluate_wire(wire), answer)
+            self.assertTrue(engine._evaluator[0].alive)
+        worker = engine._evaluator[0]
+        with patch.object(engine, "EVALUATOR_RECYCLE_COMMIT_BYTES", 1):
+            self.assertEqual(engine._evaluate_wire(wire), answer)
+            self.assertFalse(engine._evaluator)
+            self.assertFalse(worker.alive)
+        self.assertEqual(engine._evaluate_wire(wire), answer)  # and the next request relaunches
+
     def test_unpinned_executable_is_never_run(self) -> None:
         engine._close_evaluator()  # building the fixture store already started one
         with patch.object(engine, "EVALUATOR_ARTIFACT_SHA256", bytes(32)):
