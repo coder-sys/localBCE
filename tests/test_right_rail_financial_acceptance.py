@@ -49,11 +49,11 @@ from app.right_rail_financial_owner_independent import (
     continuity_package_digest,
     verify_database,
     verify_database_connection,
-    verify_decision_package,
     verify_continuity_package,
     verify_obligation_connection,
 )
 from tests import rightrail_financial_expected_cases as expected
+from tests.financial_decision_package_oracle import verify_decision_package
 
 
 _CORRECTION_ENGINE_PATH = (

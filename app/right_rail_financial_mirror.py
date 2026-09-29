@@ -464,7 +464,6 @@ class FinancialMirror:
         *,
         read_at: str,
         labels: Mapping[str, str] | None = None,
-        gate_checks: list[dict[str, Any]] | None = None,
         continuity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Allowlist one Owner snapshot and bind its public resources to verification."""
@@ -706,7 +705,6 @@ class FinancialMirror:
                 h_obligation = next(row for row in public_items if row["item_id"] == item_id)
             integrity = self._staff_integrity_projection(public_verification)
             continuity_value = self._staff_continuity_value(continuity)
-            gates = self._staff_gate_checks(gate_checks)
             resources: dict[str, Any] = {
                 "schema": "RR/FINANCIAL/STAFF-DEMO/v2",
                 "read_at": read_at,
@@ -730,7 +728,6 @@ class FinancialMirror:
                     "timeline_total_count": timeline_total,
                     "timeline_truncated": timeline_truncated,
                 },
-                "gate_checks": gates,
                 **_staff_source_facts(support_counts[item_id]),
                 "integrity": integrity,
                 "continuity": continuity_value,
@@ -975,26 +972,6 @@ class FinancialMirror:
             "history_head": verification["history_head"],
             "counts": verification["counts"],
         }
-
-    @staticmethod
-    def _staff_gate_checks(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-        if raw is None:
-            return []
-        if type(raw) is not list or len(raw) > 8:
-            _fail(FinancialMirrorInputError, "staff_gate_checks")
-        result = []
-        for row in raw:
-            if (
-                type(row) is not dict
-                or set(row) != {"name", "status", "code", "state_unchanged"}
-                or type(row["name"]) is not str
-                or type(row["status"]) is not str
-                or type(row["code"]) is not str
-                or type(row["state_unchanged"]) is not bool
-            ):
-                _fail(FinancialMirrorContinuityError, "staff_gate_check_contract")
-            result.append({key: row[key] for key in ("name", "status", "code", "state_unchanged")})
-        return result
 
     @staticmethod
     def _staff_continuity_value(raw: Mapping[str, Any] | None) -> dict[str, Any]:

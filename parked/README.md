@@ -25,3 +25,4 @@ The private-ZK track is parked under Constitution IX.4: the plan marks the priva
 as conditional, so it stays off the critical path until a customer need selects it.
 The default `pytest` run excludes this directory; run it explicitly with `pytest parked`.
 Parked is not hidden: failures, skips and stale external pins here are still reported (VI.3).
+`parked/rust_engine/` holds the former Rust engine wrapper (Cargo build that fails closed until re-pinned); the live engine path is the pinned Lean executables in `artifacts/engine-*`.
