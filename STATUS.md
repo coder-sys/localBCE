@@ -17,7 +17,8 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest run per claim; raw logs are the record)
 
 - **Full suite** (`lqw-full1`, quick wins `a4b422e`): 547 run, 537 passed, 0 failed, 10 skipped. Gates: `lqw-l6f`, `lqw-real6`, `lqw-cpin`.
-- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount given Python's `correctionPaid` (branch `lean-paid-sum` closes that gap); the checker re-checks it before COMMIT.
+- **Paid-sum merge** (`lean-paid-sum` + trunk `eb37f1c`; `lpsm-full1`): 551 run, 537 passed, 4 failed, 10 skipped; two failures fixed (evidence ceiling, stale `gate_rules` build, `lpsm-t2`); open: prose over its ceiling by 3,436 bytes and the cash-file timing test. `gate_verify` pin unchanged (`lpsm-gva2`, `lpsm-gvb2`).
+- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount, deriving the paid-so-far from linked payments (`lean-paid-sum`); the checker re-checks it before COMMIT.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile stay NONE.
 - **Line pack (B+)** (documentation-only CMS-64.9 pack; XI.2 record): its tests run in the suite. Kill criterion 1 holds (19A 32,345 of 32,345, FULL).

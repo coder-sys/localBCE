@@ -19,13 +19,13 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 PRODUCT_CODE_LINES = 37_060
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
-# Lean paid sum (lean-paid-sum, 2026-09-29): +1,251 over trunk's 41,327 for the 3 PaidSum laws
+# Lean paid sum (lean-paid-sum, 2026-09-29): +1,251 over trunk's 41,327 (42,585 measured on the merge, 7 more than the sum of the two deltas) for the 3 PaidSum laws
 # (`linkedActivePaidCents_reverse`, `_retarget`, `_total_le_active`), the 7 PaidSumTheorems
 # (`derivedCorrectionPaid_sound`, `_complete`, `outstandingCorrectionCents_eq_linked`,
 # `applyCorrectionTransition_links_admissible`, `_paid_eq_linked`, `_action_amount_eq_linked`,
 # `_outstanding_within_shortfall_linked`), the 2 KATs `reversed_linked_payment_pays_nothing`
 # and `link_naming_unknown_request_rejected`, and their tests.
-EVIDENCE_CODE_LINES = 42_578
+EVIDENCE_CODE_LINES = 42_585
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.
