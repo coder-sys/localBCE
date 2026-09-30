@@ -188,7 +188,7 @@
     const reviewed = ownerAvailable && !commandPending && !unresolvedCashBody && !unresolvedDecision;
     const status = view.act ? view.act.status : null;
     if (name === "acknowledge") return reviewed && status === "READY";
-    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.ob.shortfall_cents > 0;
+    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.act.open_cents >= CASH_CORRECTION_COMMAND.amount_cents;
     if (name === "record-report") return reviewed && !view.ob.reporting_complete && view.ob.shortfall_cents <= 0;
     return reviewed && !(snapshot.continuity && snapshot.continuity.mode === "TEST");
   }
@@ -239,6 +239,7 @@
           : short > 0 ? "The payer owes " + name + " " + usd(short) + " after the offset was " + (v.det && v.det.decision === REJECTED ? "rejected." : "decided.")
             : name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed. The case is not closed yet.";
       R.more = v.missing.length ? "Still needed: " + v.missing.map(words).join(", ") + "." : "Owner assessment: " + words(v.assessment) + ", nothing outstanding.";
+      if (v.act && v.act.open_cents !== null && v.act.open_cents !== v.act.payload_fields.amount_cents) R.more += " Requested " + usd(v.act.payload_fields.amount_cents) + ", open " + usd(v.act.open_cents) + ".";
       R.ledger.push(["Owed to " + name, rule.source_refs[0], amt(item.owed_cents)],
         ["Cash recorded", payments + (payments === 1 ? " payment" : " payments") + " recorded", MINUS + amt(item.received_cash_cents)]);
       if (claim) R.ledger.push(["Offset claimed by the payer", "claim " + words(claim.status) + " · " + v.support, amt(claim.amount_cents)]);
