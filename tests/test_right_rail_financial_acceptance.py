@@ -5250,6 +5250,38 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(early, expected_config=store.config, expected_authority=self.authority)
 
+    def test_a_linked_payment_never_pays_past_the_balance(self) -> None:
+        # F1 scenario B: pay the request, pay the same cents unlinked, reverse the linked one. The balance is
+        # settled and the request reads open again, but it may not collect a second time. A payment still owed is taken.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000)
+        self._pay_a(store, 300_000, "p3", linked=False)
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 300_000, "p4")
+        self.assertEqual(self._durable_counts(store.path), counts)
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 100_000, "p3", linked=False)  # 200,000 is still owed
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 200_001)
+        self.assertEqual(self._pay_a(store, 200_000)["status"], "RECORDED")
+        self._assert_verified(store)
+        store = self._build_base_for_correction()  # the checker refuses the link the Owner now refuses
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000, "p3", linked=False)
+        self._pay_a(store, 300_000, "p4", linked=False)
+        forged = self._path("late-link.sqlite")
+        forged.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p4" and "common_origin_id" in payload and payload.setdefault("pays_action_id", expected.ACTION_CORRECTION_ID) is not None), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(forged, expected_config=store.config, expected_authority=self.authority)
+
     def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
         # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.
         store = self._build_base_for_correction()
