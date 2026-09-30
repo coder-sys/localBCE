@@ -35,15 +35,14 @@ partial def serve (stdin stdout : IO.FS.Stream) : IO UInt32 := do
   stdout.flush
   serve stdin stdout
 
-/-- mimalloc's process-load hook.  Lean's Windows runtime links mimalloc without the initializer that
-    calls it, so mimalloc stays in its start-up mode: it never reserves an arena and never reuses or
-    returns a freed 32 MiB segment, and every large request grew the worker (docs/CORE_REDESIGN.md,
-    Lean-live M1.5).  Idempotent. -/
-@[extern c inline "({ extern void _Z16_mi_process_loadv(void); _Z16_mi_process_loadv(); lean_io_result_mk_ok(lean_box(0)); })"]
-opaque mimallocProcessLoad : IO Unit
+-- mimalloc's start-up hook is DllMain-only in a static exe: no arena, so freed 32 MiB segments were never reused.
+@[extern c inline "lean_io_result_mk_ok(lean_box_uint32((uint32_t)mi_reserve_os_memory(#1, #2, #3)))"]
+opaque reserveArena (bytes : USize) (commit allowLarge : Bool) : IO UInt32
 
+/-- A 1 GiB uncommitted arena first (docs/CORE_REDESIGN.md, Lean-live M1.5); exit 70 without it. -/
 def main : IO UInt32 := do
-  mimallocProcessLoad
+  if (← reserveArena 1073741824 false false) != 0 then
+    return 70
   serve (← IO.getStdin) (← IO.getStdout)
 
 end BlindLedger.Financial.WorkerCli
