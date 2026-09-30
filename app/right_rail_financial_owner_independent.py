@@ -962,7 +962,7 @@ def _bounded_rows(connection: sqlite3.Connection, table: str, column: str = "", 
     try:
         if int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) > MAX_ROWS:
             _fail(f"rows:cap:{table}")
-        where, args = ("", ()) if only is None else (f" WHERE {column} IN (SELECT value FROM json_each(?)) ORDER BY rowid", (json.dumps(list(only)),))  # the index seeks; the cap above still counts the whole table
+        where, args = ("", ()) if only is None else (f" NOT INDEXED WHERE {column} IN (SELECT value FROM json_each(?)) ORDER BY rowid", (json.dumps(list(only)),))  # scans the table, never trusts an index; the cap above counts the whole table
         return list(connection.execute(f"SELECT * FROM {table}{where}", args))
     except IndependentFinancialError:
         raise
@@ -4307,7 +4307,7 @@ def _verify_connection(
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
-    # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row.
+    # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row. The pre-COMMIT modes read the touched obligation's evidence, determinations, actions and outbox NOT INDEXED and check only the touched obligation (a malformed event or row of another obligation is the whole-store verify's to find).
     if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         _fail("schema:index-integrity")
     try:

@@ -1201,3 +1201,34 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                                     check()
                         finally:
                             connection.execute("ROLLBACK")
+
+    def test_pre_commit_reads_do_not_trust_an_index_that_hides_forged_rows(self) -> None:
+        # File access can blank an index (writable_schema), insert a forged row it then omits, and restore the index SQL. Only a table scan sees it.
+        z = "zeroblob(64)"
+        cases = (  # table, its filter column, index, forged rows, the code an unhidden row gets
+            ("evidence", "item_id", "rr_financial_v1_evidence_item_id", (f"INSERT INTO evidence VALUES ('evidence:forged','item:H','SUPPORT','o','s','v','r',1,1,1,{z},{z},NULL,NULL,NULL)",), "evidence:content-digest"),
+            ("determinations", "obligation_id", "rr_financial_v1_determinations_obligation_id", (f"INSERT INTO determinations VALUES ('determination:forged',:o,NULL,'a','x','au',1,{z},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{z},'evaluation:forged',{z})",), "determination:role"),
+            ("actions", "obligation_id", "rr_financial_v1_actions_obligation_id", (f"INSERT INTO actions VALUES ('action:forged',:o,'determination:forged','CORRECTION_PAYMENT_REQUEST','READY',1,'{{}}',{z},{z},1)", f"INSERT INTO action_outbox VALUES ('action:forged','READY',0,{z},NULL,1)"), "action:determination"),
+        )
+        with closing(sqlite3.connect(self.db)) as connection:
+            (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+
+        def run(path: Path, *statements: str) -> None:  # one connection per step, so each reads the schema as the step before left it
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                for statement in statements:
+                    connection.execute(statement, {"o": obligation})
+
+        for table, column, index, forged, code in cases:
+            with self.subTest(table):
+                copy = Path(self.temp_dir.name) / f"hidden-{table}.sqlite"
+                shutil.copyfile(self.db, copy)
+                run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=sql||' WHERE 0' WHERE name='{index}'")
+                run(copy, *forged)
+                run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=replace(sql,' WHERE 0','') WHERE name='{index}'")
+                with closing(sqlite3.connect(copy, isolation_level=None)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    key = "item:H" if table == "evidence" else obligation
+                    count = lambda hint: connection.execute(f"SELECT COUNT(*) FROM {table} {hint} WHERE {column}=?", (key,)).fetchone()[0]
+                    self.assertEqual(count("NOT INDEXED"), count("") + 1)  # the index really hides it
+                    with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                        independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
