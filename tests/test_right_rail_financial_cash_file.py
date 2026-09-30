@@ -529,7 +529,9 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.source = {**self.source, "captured_at_ms": expected.P2_EVENT_MS}
         self.value.update(source=self.source, row_count=2, rows=rows, total_cents=expected.CORRECTION_PAYMENT_CENTS + 1)
         self.fixture._advance_clock(store, expected.P2_EVENT_MS)
-        with patch.object(owner, "_correction_paid", lambda connection, obligation_id: []):
+        row_of = owner.FinancialOwner._get_obligation_row  # the owner now also refuses a link past the balance (R1), so this bug forgets that limit too
+        unlimited = lambda instance, connection, item_id: {**dict(row_of(instance, connection, item_id)), "shortfall_cents": 10**9}
+        with patch.object(owner, "_correction_paid", lambda connection, obligation_id: []), patch.object(owner.FinancialOwner, "_get_obligation_row", unlimited):
             self._refused_by("payment:link", lambda: self._apply())
         self.setUp()  # S5: an OVERLAP alias is stored with a wrong content digest
         self._apply()

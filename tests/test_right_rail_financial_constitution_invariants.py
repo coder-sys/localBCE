@@ -684,7 +684,6 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
     # --- 7. A payment answering a request never pays past the balance (core-theorems-v1 F1) ---
 
     @_requires_pinned_correction_engine("the binary is executed once")
-    @unittest.expectedFailure  # F1 stays open until the linked-payment cap (R1) lands
     def test_linked_payment_never_pays_past_the_balance(self) -> None:
         store = self._build_base_for_correction()
         self._record_cash(store)

@@ -711,3 +711,11 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Predicate.** `test_linked_payment_never_pays_past_the_balance`, section 7 of `tests/test_right_rail_financial_constitution_invariants.py`, marked `expectedFailure` until the next record lands.
 - **Claims withdrawn.** "Requests never collect unowed money": after a 300,000 unlinked payment settles the balance, a second 300,000 payment naming the request is accepted and the owner is 300,000 overpaid.
 - **Disposition.** Add. **Scope.** Until the linked-payment cap (R1) removes the decorator. **Evidence.** Guard log `r1-red`.
+
+## A request never collects past the balance (2026-09-30, XI.2 record 2, branch `r1-link-cap`)
+
+- **Felt effect.** A payer who settles a shortfall directly, or whose linked payment is reversed after an unlinked one, is no longer asked for the same cents again, and a hospital is not overpaid.
+- **Predicate.** `record_payment_evidence` refuses a linked payment above the shortfall at that moment (`payment_exceeds_unpaid_balance`) as well as above the request's unpaid part; the checker's `payment:link` applies the same limit against the evaluation before the payment. A payment still owed is never refused.
+- **Invariant.** No linked cent exceeds the balance it pays into. Failure: F1 scenario A (owed 10,000,000, cash 9,700,000, request 300,000, an unlinked 300,000, then a linked 300,000 accepted). Scope: permanent. The Lean half (`paymentTransition`) stays with M3 step 2.
+- **Disposition.** Replace the weaker control with a stronger one; section 7 of the invariants test loses its `expectedFailure`; two regression tests (scenario B, and a still-owed payment accepted at its edge). No wire, digest or stored-format change. **Evidence.** Guard logs `r1-green`, `r1-full`.
+- **Claims withdrawn.** None; record 3's withdrawn claim is restored for linked payments.

@@ -2907,9 +2907,10 @@ def _verify_actions(
                 _fail("outbox:acknowledged")
     if set(outbox) != set(actions):
         _fail("outbox:orphan")
-    for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it
+    for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it or past the balance it found
         request = requests.get(obligation_id, {}).get(action_ref)
-        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request:
+        owed = next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["revision"] == paid_revision - 1), -1)
+        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed:
             _fail("payment:link")
     return actions
 
