@@ -136,11 +136,17 @@ theorem Sim.bindOpt {γ β : Type} (o : Option γ) {f : γ → Reader β} {F : �
   | none => simp
   | some c => simpa using h c ba i hi
 
+/-- `Sim` with the value mapped: a slice reader simulates a list reader up to `φ`. -/
+def SimM {α β : Type} (φ : α → β) (f : Reader α) (g : Bytes → Option (β × Bytes)) : Prop :=
+  ∀ (ba : ByteArray) (i : Nat), i ≤ ba.size →
+    (f ba i).map (fun p => (φ p.1, ba.toList.drop p.2)) = g (ba.toList.drop i) ∧
+    ∀ a j, f ba i = some (a, j) → i ≤ j ∧ j ≤ ba.size
+
 /-- The same, at one position, for a whole parse: what the rest of the parse returns is compared
     only at positions that stay in the array. -/
-theorem Sim.bind0 {α γ : Type} {f : Reader α} {F : Bytes → Option (α × Bytes)} (hf : Sim f F)
-    {ba : ByteArray} {i : Nat} (hi : i ≤ ba.size) {k : α × Nat → Option γ} {K : α × Bytes → Option γ}
-    (hk : ∀ a j, j ≤ ba.size → k (a, j) = K (a, ba.toList.drop j)) :
+theorem SimM.bind0 {α β γ : Type} {φ : α → β} {f : Reader α} {F : Bytes → Option (β × Bytes)}
+    (hf : SimM φ f F) {ba : ByteArray} {i : Nat} (hi : i ≤ ba.size) {k : α × Nat → Option γ}
+    {K : β × Bytes → Option γ} (hk : ∀ a j, j ≤ ba.size → k (a, j) = K (φ a, ba.toList.drop j)) :
     (f ba i).bind k = (F (ba.toList.drop i)).bind K := by
   obtain ⟨h1, h2⟩ := hf ba i hi
   rcases hfi : f ba i with _ | ⟨a, j⟩
@@ -151,6 +157,12 @@ theorem Sim.bind0 {α γ : Type} {f : Reader α} {F : Bytes → Option (α × By
     simp only [Option.map_some] at h1
     rw [Option.bind_some, ← h1, Option.bind_some]
     exact hk a j (h2 a j hfi).2
+
+theorem Sim.bind0 {α γ : Type} {f : Reader α} {F : Bytes → Option (α × Bytes)} (hf : Sim f F)
+    {ba : ByteArray} {i : Nat} (hi : i ≤ ba.size) {k : α × Nat → Option γ} {K : α × Bytes → Option γ}
+    (hk : ∀ a j, j ≤ ba.size → k (a, j) = K (a, ba.toList.drop j)) :
+    (f ba i).bind k = (F (ba.toList.drop i)).bind K :=
+  SimM.bind0 (φ := id) hf hi hk
 
 /-! ## Primitives -/
 
@@ -218,6 +230,97 @@ theorem sim_readList {α : Type} {p : Reader α} {P} (h : Sim p P) :
   unfold readList Financial.readList
   refine Sim.bind (sim_readNatBE 2) fun count => ?_
   exact Sim.ite _ Sim.fail (fun ba j hj => sim_readMany h count ba j hj)
+
+theorem simM_readMany {α β : Type} {φ : α → β} {p : Reader α} {P} (h : SimM φ p P) :
+    ∀ n, SimM (List.map φ) (readMany p n) (Financial.readMany P n)
+  | 0 => fun ba i hi => ⟨rfl, fun a j hj => by
+      simp only [readMany, Option.some.injEq, Prod.mk.injEq] at hj
+      obtain ⟨-, rfl⟩ := hj
+      exact ⟨Nat.le_refl _, hi⟩⟩
+  | n + 1 => fun ba i hi => by
+    obtain ⟨h1, h2⟩ := h ba i hi
+    simp only [readMany, Financial.readMany]
+    rcases hp : p ba i with _ | ⟨a, j⟩
+    · rw [hp] at h1
+      simp only [Option.map_none] at h1
+      simp [← h1]
+    · rw [hp] at h1
+      simp only [Option.map_some] at h1
+      obtain ⟨hij, hjs⟩ := h2 a j hp
+      obtain ⟨g1, g2⟩ := simM_readMany h n ba j hjs
+      simp only [← h1, Option.bind_eq_bind, Option.bind_some]
+      rcases hq : readMany p n ba j with _ | ⟨t, k⟩
+      · rw [hq] at g1
+        simp only [Option.map_none] at g1
+        simp [← g1]
+      · rw [hq] at g1
+        simp only [Option.map_some] at g1
+        obtain ⟨hjk, hks⟩ := g2 t k hq
+        rw [← g1]
+        refine ⟨by simp, fun a' l hl => ?_⟩
+        simp only [Option.bind_some, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hl
+        obtain ⟨-, rfl⟩ := hl
+        omega
+
+/-- A length-prefixed section as a slice of the frame. -/
+def readSized (maximum : Nat) : Reader ByteArray := fun ba i => do
+  let (length, i) ← readNatBE 4 ba i
+  if length > maximum || i + length > ba.size then none
+  else some (ba.extract i (i + length), i + length)
+
+theorem sim_readSized (maximum : Nat) (R : Bytes → Option (Bytes × Bytes))
+    (hR : ∀ bs, R bs = (do
+      let (length, rest) ← Financial.readNatBE 4 bs
+      if length > maximum || length > rest.length then none
+      else some (rest.take length, rest.drop length))) :
+    SimM ByteArray.toList (readSized maximum) R := by
+  intro ba i hi
+  rw [hR]
+  obtain ⟨h1, h2⟩ := sim_readNatBE 4 ba i hi
+  unfold readSized
+  rcases hr : readNatBE 4 ba i with _ | ⟨length, j⟩
+  · rw [hr] at h1
+    simp only [Option.map_none] at h1
+    simp [← h1]
+  · rw [hr] at h1
+    obtain ⟨hij, hjs⟩ := h2 length j hr
+    simp only [Option.map_some] at h1
+    simp only [Option.bind_eq_bind, Option.bind_some, ← h1]
+    by_cases hc : length > maximum || j + length > ba.size
+    · have hc' : (length > maximum || length > (ba.toList.drop j).length) = true := by
+        simp only [Bool.or_eq_true, decide_eq_true_eq, drop_length] at hc ⊢; omega
+      rw [if_pos hc, if_pos hc']
+      simp
+    · have hc' : ¬ (length > maximum || length > (ba.toList.drop j).length) = true := by
+        simp only [Bool.or_eq_true, decide_eq_true_eq, drop_length, not_or] at hc ⊢; omega
+      rw [if_neg hc, if_neg hc']
+      refine ⟨?_, fun a l hl => ?_⟩
+      · simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq]
+        exact ⟨extract_toList ba j length, by rw [List.drop_drop]⟩
+      · simp only [Option.some.injEq, Prod.mk.injEq] at hl
+        simp only [Bool.or_eq_true, decide_eq_true_eq, not_or] at hc
+        omega
+
+theorem bindEq {γ δ : Type} {o O : Option γ} {k K : γ → Option δ} (h : o = O) (hk : ∀ c, k c = K c) :
+    o.bind k = O.bind K := by
+  subst h
+  exact congrArg _ (funext hk)
+
+theorem end_iff {s : ByteArray} {j : Nat} (hj : j ≤ s.size) :
+    j ≠ s.size ↔ (!(s.toList.drop j).isEmpty) = true := by
+  have h : (s.toList.drop j).isEmpty = true ↔ j = s.size := by
+    rw [List.isEmpty_iff_length_eq_zero, drop_length]; omega
+  cases hx : (s.toList.drop j).isEmpty <;> simp_all
+
+theorem ite_none_bind {α β : Type} {c : Prop} [Decidable c] {a : Option α} {f : α → Option β} :
+    (if c then none else a).bind f = if c then none else a.bind f := by
+  split <;> rfl
+
+theorem ite_none {γ : Type} {c c' : Prop} [Decidable c] [Decidable c'] {a b : Option γ}
+    (hc : c ↔ c') (h : ¬ c → a = b) : (if c then none else a) = (if c' then none else b) := by
+  by_cases hc0 : c
+  · simp [hc0, hc.1 hc0]
+  · simp [hc0, mt hc.2 hc0, h hc0]
 
 theorem readMagic_of_prefix {magic : Bytes} {ba : ByteArray} {i : Nat}
     (hi : i ≤ ba.size) (h : magic.isPrefixOf (ba.toList.drop i) = true) :

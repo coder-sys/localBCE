@@ -204,12 +204,6 @@ def readEvaluationReceipt : Reader EvaluationReceipt := fun ba i => do
     receiptDigest := receiptDigest
     evaluationResultDigest := evaluationResultDigest }, i)
 
-/-- A length-prefixed section as a slice of the frame. -/
-def readSized (maximum : Nat) : Reader ByteArray := fun ba i => do
-  let (length, i) ← readNatBE 4 ba i
-  if length > maximum || i + length > ba.size then none
-  else some (ba.extract i (i + length), i + length)
-
 theorem sim_readOptional {α : Type} {p : Reader α} {P : Bytes → Option (α × Bytes)} [SimOf p P] :
     Sim (readOptional p) (DecisionPackage.readOptional P) := by
   have e : ∀ bs, DecisionPackage.readOptional P bs = (do
@@ -233,53 +227,8 @@ theorem sim_readOptional {α : Type} {p : Reader α} {P : Bytes → Option (α �
 instance {α : Type} {p : Reader α} {P : Bytes → Option (α × Bytes)} [SimOf p P] :
     SimOf (readOptional p) (DecisionPackage.readOptional P) := ⟨sim_readOptional⟩
 
-theorem sim_readSized (maximum : Nat) (ba : ByteArray) (i : Nat) (hi : i ≤ ba.size) :
-    (readSized maximum ba i).map (fun p => (p.1.toList, ba.toList.drop p.2)) =
-      readSizedBytes maximum (ba.toList.drop i) ∧
-    ∀ a j, readSized maximum ba i = some (a, j) → i ≤ j ∧ j ≤ ba.size := by
-  obtain ⟨h1, h2⟩ := sim_readNatBE 4 ba i hi
-  unfold readSized readSizedBytes
-  rcases hr : readNatBE 4 ba i with _ | ⟨length, j⟩
-  · rw [hr] at h1
-    simp only [Option.map_none] at h1
-    simp [← h1]
-  · rw [hr] at h1
-    obtain ⟨hij, hjs⟩ := h2 length j hr
-    simp only [Option.map_some] at h1
-    simp only [Option.bind_eq_bind, Option.bind_some, ← h1]
-    by_cases hc : length > maximum || j + length > ba.size
-    · have hc' : (length > maximum || length > (ba.toList.drop j).length) = true := by
-        simp only [Bool.or_eq_true, decide_eq_true_eq, drop_length] at hc ⊢; omega
-      rw [if_pos hc, if_pos hc']
-      simp
-    · have hc' : ¬ (length > maximum || length > (ba.toList.drop j).length) = true := by
-        simp only [Bool.or_eq_true, decide_eq_true_eq, drop_length, not_or] at hc ⊢; omega
-      rw [if_neg hc, if_neg hc']
-      refine ⟨?_, fun a l hl => ?_⟩
-      · simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq]
-        exact ⟨extract_toList ba j length, by rw [List.drop_drop]⟩
-      · simp only [Option.some.injEq, Prod.mk.injEq] at hl
-        simp only [Bool.or_eq_true, decide_eq_true_eq, not_or] at hc
-        omega
-
-theorem bind0S {γ : Type} {maximum : Nat} {ba : ByteArray} {i : Nat} (hi : i ≤ ba.size)
-    {k : ByteArray × Nat → Option γ} {K : Bytes × Bytes → Option γ}
-    (hk : ∀ a j, j ≤ ba.size → k (a, j) = K (a.toList, ba.toList.drop j)) :
-    (readSized maximum ba i).bind k = (readSizedBytes maximum (ba.toList.drop i)).bind K := by
-  obtain ⟨h1, h2⟩ := sim_readSized maximum ba i hi
-  rcases hr : readSized maximum ba i with _ | ⟨a, j⟩
-  · rw [hr] at h1
-    simp only [Option.map_none] at h1
-    simp [← h1]
-  · rw [hr] at h1
-    simp only [Option.map_some] at h1
-    rw [Option.bind_some, ← h1, Option.bind_some]
-    exact hk a j (h2 a j hr).2
-
-theorem bindEq {γ δ : Type} {o O : Option γ} {k K : γ → Option δ} (h : o = O) (hk : ∀ c, k c = K c) :
-    o.bind k = O.bind K := by
-  subst h
-  exact congrArg _ (funext hk)
+theorem sim_readSizedBytes (maximum : Nat) : SimM ByteArray.toList (readSized maximum) (readSizedBytes maximum) :=
+  sim_readSized maximum _ fun _ => rfl
 
 instance : SimOf readActionLookup CorrectionTransition.readActionLookup := ⟨by unfold readActionLookup CorrectionTransition.readActionLookup; sim_steps⟩
 instance : SimOf readQueryPredicate CorrectionTransition.readQueryPredicate := ⟨by
@@ -359,26 +308,10 @@ def decodeCorrectionTransitionRequest (ba : ByteArray) : Option CorrectionTransi
     if i = ba.size ∧ encodeCorrectionTransitionRequest request = some ba.toList then some request
     else none
 
-theorem end_iff {s : ByteArray} {j : Nat} (hj : j ≤ s.size) :
-    j ≠ s.size ↔ (!(s.toList.drop j).isEmpty) = true := by
-  have h : (s.toList.drop j).isEmpty = true ↔ j = s.size := by
-    rw [List.isEmpty_iff_length_eq_zero, drop_length]; omega
-  cases hx : (s.toList.drop j).isEmpty <;> simp_all
-
-theorem ite_none_bind {α β : Type} {c : Prop} [Decidable c] {a : Option α} {f : α → Option β} :
-    (if c then none else a).bind f = if c then none else a.bind f := by
-  split <;> rfl
-
-theorem ite_none {γ : Type} {c c' : Prop} [Decidable c] [Decidable c'] {a b : Option γ}
-    (hc : c ↔ c') (h : ¬ c → a = b) : (if c then none else a) = (if c' then none else b) := by
-  by_cases hc0 : c
-  · simp [hc0, hc.1 hc0]
-  · simp [hc0, mt hc.2 hc0, h hc0]
-
 macro "sim_chain2" : tactic => `(tactic| repeat (first
   | refine Sim.bind0 SimOf.sim (by assumption) fun _ _ _ => ?_
   | refine Sim.bind0 SimOf.sim (Nat.zero_le _) fun _ _ _ => ?_
-  | refine bind0S (by assumption) fun _ _ _ => ?_
+  | refine SimM.bind0 (sim_readSizedBytes _) (by assumption) fun _ _ _ => ?_
   | refine bindEq (decodeFinancialInput_eq _) fun _ => ?_
   | refine ite_none Iff.rfl fun _ => ?_
   | refine ite_none (end_iff (by assumption)) fun _ => ?_))
