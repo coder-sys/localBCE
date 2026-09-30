@@ -23,9 +23,10 @@ Receipt `C:/Users/neers/rrb/engine-release-partials-p1/provenance/engine-build-r
 `B51AC61815683236A7F28FDFF2A1F443A9AED724DE91E58DFED8B90CB28A087A`; schema `RR/LEAN-ENGINE/BUILD-RECEIPT/v2`, status PASS, git status
 empty, all exits 0, cleanup PASS, mutex RELEASED, minimum free 4,725,374,976 bytes); source manifest `source-manifest.json` SHA-256
 `B4CB694B5EBA48E512E40A63DF1FFAF402FBB87C3ECEAF4FF95D2DDB5C275ABC`. Direct-lane grant: `lead-2026-09-30-partials-task-message`.
-Repeated on the final tree `57634db` (lean tree `6fdc9eba...`, clean; review added `ReadUpTo.lean` to the semantic manifest only): guard log `prt-pin2-a1-L*`, output
-`C:/Users/neers/rrb/engine-release-partials-p2/`, same exe bytes, same source manifest SHA-256 `B4CB694B...5ABC`, receipt SHA-256
-`822ACBEC06F8451F3913F7D2D07C72D2E68639D21E178269808267BA60179437` (status PASS, git status empty, cleanup PASS, mutex RELEASED, minimum free 4,618,555,392 bytes).
+Repeated twice more with the same exe bytes and source manifest SHA-256 `B4CB694B...5ABC` (git status empty, PASS, cleanup PASS, mutex RELEASED): on `57634db`
+(guard log `prt-pin2`, output `C:/Users/neers/rrb/engine-release-partials-p2/`, receipt SHA-256 `822ACBEC...9437`, minimum free 4,618,555,392 bytes) and on the final tree
+`c7f8615` (lean tree `000358bc...`; review added `ReadUpTo.lean` to the semantic manifest and pinned its hash): guard log `prt-pin3`, output
+`C:/Users/neers/rrb/engine-release-partials-p3/`, receipt SHA-256 `5CE91D94AAC4B54BFE622961B9984810E2E73B16DFECA9ECFA127B9A9BDBB2F8`, minimum free 5,063,761,920 bytes.
 
 ## Paid-sum re-pin (2026-09-29, rule `h1-v1`)
 
