@@ -11,7 +11,7 @@ each one (verify from the repository root with
 
 ## Contracts
 
-- **Correction transition** `.../CORRECTION-TRANSITION/v1` (`BLFCMD02`→
+- **Correction transition** `.../CORRECTION-TRANSITION/v1` (`BLFCMD03`→
  `BLFCRES3`): vectors `artifacts/engine-correction/vectors/{request,
  result.expected}.bin`; spec [CORRECTION_TRANSITION_WIRE.md](CORRECTION_TRANSITION_WIRE.md);
  impl `blind_financial_correction.exe --apply-correction-transition`, pins

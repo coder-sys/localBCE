@@ -37,7 +37,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Artifact boundary
 
-- Pinned correction engine `1A7A1833...D3AF`, 6,279,168 bytes; exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`; a guarded rebuild at `4efcb4b` (`engine-repin-r1-a1`) after the gate and M0 Lean edits reproduced it byte-for-byte; no new pin or retired entry.
+- Pinned correction engine `1A5821FA...DBBE`, 6,298,112 bytes (Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; replaces `1A7A1833...D3AF`, now in `RETIRED_PINS`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`; two byte-identical producer builds `engine-release-lpsb-a2`/`-a3`.
 - The offline kit archive binds its assembly tree, including frozen connector and browser candidates; these checks do not qualify those tracks. Start floors are in `AGENTS.md`.
 
 ## Rules and unresolved work

@@ -423,16 +423,24 @@ private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : 
 
 /-- H1: on the KAT obligation with `cashCents` received (by default 300,000
     unpaid), reject an offset claim of `firstCents`; record `paidCents` more
-    cash, paid against that correction request when `linked`; then reject a
-    second claim of `secondCents`. -/
+    cash as payment row `payment:h:p2` (later reversed when `reversed`), linked
+    to `target` when `linked`; then reject a second claim of `secondCents`.
+    Lean derives what the first request was paid from the row and the link. -/
 private def correctionKatSequence (firstCents secondCents : Nat)
-    (cashCents : Nat := 9_700_000) (paidCents : Nat := 0) (linked : Bool := true) :
+    (cashCents : Nat := 9_700_000) (paidCents : Nat := 0) (linked : Bool := true)
+    (reversed : Bool := false) (target : String := katCorrectionActionId) :
     CorrectionTransitionResult × Option CorrectionTransitionResult :=
   let secondClaimId := "claim:h:offset2"
   let paidEvidence := { katCashEvidence (some paidCents) with
     evidenceId := "evidence:p2", commonOriginId := "origin:cash:h:p2", localRef := "ref:cash:h:p2" }
+  let reversal := { paidEvidence with
+    evidenceId := "evidence:p2:reversal", kind := "PAYMENT_REVERSAL"
+    commonOriginId := "reversal:payment:h:p2", localRef := "reversal:payment:h:p2"
+    sourceVersion := "cash-reversal-v1", reversalOf := some "payment:h:p2" }
   let paidPayment := { katPayment paidCents with
-    paymentId := "payment:h:p2", evidenceId := "evidence:p2", commonOriginId := "origin:cash:h:p2" }
+    paymentId := "payment:h:p2", evidenceId := "evidence:p2", commonOriginId := "origin:cash:h:p2"
+    reversalEvidenceId := if reversed then some reversal.evidenceId else none
+    status := if reversed then .REVERSED else .ACTIVE }
   let input := { correctionKatInput with
     payments := [katPayment cashCents]
     claims := [{ katClaim .CLAIMED with amountCents := firstCents },
@@ -449,11 +457,12 @@ private def correctionKatSequence (firstCents secondCents : Nat)
     let after := if paidCents = 0 then mutation.resultingInput else
       { mutation.resultingInput with
         payments := mutation.resultingInput.payments ++ [paidPayment]
-        evidence := mutation.resultingInput.evidence ++ [paidEvidence] }
+        evidence := mutation.resultingInput.evidence ++ [paidEvidence] ++
+          (if reversed then [reversal] else []) }
     let second := correctionKatRequestOn after secondClaimId "action:correction:h:v2" 11
     applyCorrectionTransition { second with command := { second.command with
-      correctionPaid := if linked && paidCents > 0 then
-        [{ actionId := katCorrectionActionId, paidCents := paidCents }] else [] } }))
+      paymentLinks := if linked && paidCents > 0 then
+        [{ paymentId := "payment:h:p2", actionId := target }] else [] } }))
 
 private def correctionKatActionAmount (result : CorrectionTransitionResult) : Option Nat :=
   result.mutation.map (fun mutation => mutation.action.amountCents)
@@ -483,6 +492,22 @@ def gateCorrectionPaidRequestFreesBalance : Bool :=
       correctionKatActionAmount linked = some 300_000 &&
       resultHasReason unlinked .NO_REQUESTABLE_BALANCE
   | _, _ => false
+
+/-- The same payment, reversed after it was linked, pays nothing and is no error:
+    the first request counts in full and the shortfall stays 600,000, so a
+    600,000 claim is capped at the 300,000 not yet requested. -/
+def gateCorrectionReversedLinkedPaymentPaysNothing : Bool :=
+  match correctionKatSequence 300_000 600_000 9_400_000 300_000 true true with
+  | (_, some reversed) => correctionKatActionAmount reversed = some 300_000
+  | _ => false
+
+/-- A link naming a request the snapshot does not hold is an invalid input, not a
+    silently ignored link. -/
+def gateCorrectionDanglingLinkRejected : Bool :=
+  match correctionKatSequence 300_000 300_000 9_400_000 300_000 true false
+      "action:correction:h:v2" with
+  | (_, some notYetARequest) => resultHasReason notYetARequest .INVALID_INPUT
+  | _ => false
 
 /-- 600,000 unpaid, claims of 300,000 and 400,000, then 100,000 paid against the
     first request: 500,000 short, 200,000 of the first request unpaid, so the
@@ -693,6 +718,8 @@ def correctionTransitionKatLines : List (String × Bool) := [
   ("paid_correction_request_frees_its_balance", gateCorrectionPaidRequestFreesBalance),
   ("partly_paid_correction_request_counts_unpaid_part",
     gateCorrectionPartlyPaidRequestCountsUnpaidPart),
+  ("reversed_linked_payment_pays_nothing", gateCorrectionReversedLinkedPaymentPaysNothing),
+  ("link_naming_unknown_request_rejected", gateCorrectionDanglingLinkRejected),
   ("owner_domain_digest_vectors", gateCorrectionOwnerDigestVectors),
   ("current_owner_evaluation_receipt_binding", gateCorrectionInputReceiptBound),
   ("exact_retry_after_ack_is_noop", gateCorrectionExactRetryNoEffects),

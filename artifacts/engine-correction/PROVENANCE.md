@@ -4,9 +4,25 @@
 repository's `lean/` source at commit `79b6913` (tree `lean/` =
 `git archive 79b6913 lean`, tree id `3dba470d`).
 
-- Size: 6,279,168 bytes
-- SHA-256: `1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF`
+- Size: 6,298,112 bytes
+- SHA-256: `1A5821FA944E9A2ABBE0BF154BD0CFE34069E4D728C9A5374809626D51B8DDBE`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
+
+## Paid-sum re-pin (2026-09-29, rule `h1-v1`)
+
+The engine derives each correction request's paid-so-far from the linked active
+payment rows (BLFCMD03: `paymentLinks` replaces `correctionPaid`); the result
+format BLFCRES3 and every digest are unchanged. The protected record is in
+`docs/CORE_REDESIGN.md`. Two builds by `tools/build_financial_correction_release.ps1`
+(SHA-256 `61AEB3A85B2DA8E0DBD3A5BC5BC03345B471B037C99C36FE94E4E9E6A31DC909`, the only
+edit being the new `request.bin` pin) through the v4 guard, in
+`C:/Users/neers/rrb/engine-release-lpsb-a2/` and `-a3/`, produced byte-identical
+executables (6,298,112 bytes, SHA-256 above) from the same 46-file source manifest
+(SHA-256 `38EC61E74F5EB10CAD039E0188A6C202989B8F36BEA6E7EE00BF4E946B28C14A`); build
+receipts `B4D636D6…FFB` and `95CE6199…417`. Both fresh executables reproduced the
+unchanged `result.expected.bin` and `reuse-result.expected.bin` (the base scenario
+has no links, so the derived list is empty). Only `request.bin` changed. The
+engine it replaces, `1A7A1833…D3AF`, is in `RETIRED_PINS`.
 
 ## Current-source reproduction (2026-09-26)
 
@@ -153,7 +169,7 @@ with the SHA-256 above. `blind_financial --correction-transition-kat` passed
 
 ## Vectors
 
-- `vectors/request.bin` (BLFCMD02) SHA-256 `B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067`
+- `vectors/request.bin` (BLFCMD03; was BLFCMD02 `B658DCEE…D067`, only the magic and version differ) SHA-256 `234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666`
 - `vectors/result.expected.bin` (BLFCRES3) SHA-256 `83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6`, produced by
   the first build's executable from `request.bin` with
   `vectors/run-vectors.cmd <exe> <request> <output>` under the guard.

@@ -1,6 +1,6 @@
 # Correction transition wire formats
 
-Contract `RR/FINANCIAL/CORRECTION-TRANSITION/v1`: request `BLFCMD02` (v2),
+Contract `RR/FINANCIAL/CORRECTION-TRANSITION/v1`: request `BLFCMD03` (v3),
 result `BLFCRES3` (v3). Contract `RR/FINANCIAL/CORRECTION-REUSE/v1`: request
 `BLFCRU02`, assessment `BLFCRV02` (v2 each).
 
@@ -53,12 +53,12 @@ failure: no stdout, stderr `FINANCIAL_ERROR=<reason>`. Exit 72 = transition
 too large/decode fail, 73 = transition encode fail, 75/76 = same for reuse,
 64 = usage.
 
-## 3. `BLFCMD02` request
+## 3. `BLFCMD03` request
 
 | # | Field | Encoding | Well-formed |
 |---|---|---|---|
-| 1 | magic | 8B `BLFCMD02` | exact |
-| 2 | version | `u16` | = 2 |
+| 1 | magic | 8B `BLFCMD03` | exact |
+| 2 | version | `u16` | = 3 |
 | 3 | contract | `str` | `RR/FINANCIAL/CORRECTION-TRANSITION/v1` (1-3 fill bytes 0-48) |
 | 4-7 | itemId, claimId, actionId, actorId | `str`×4 | id |
 | 8 | actorRole | `str` | role |
@@ -74,7 +74,7 @@ too large/decode fail, 73 = transition encode fail, 75/76 = same for reuse,
 | 18 | queries | 3×§3.2, order ACTION_ID, DETERMINATION_ID, EVALUATION_CONSUMED | order checked only on ACCEPTED result |
 | 19 | currentEventSequence | `u64` | sequence |
 | 20 | previousHistoryHead | `d64` | |
-| 21 | correctionPaid | `list<str actionId, u64 paidCents>` | canonical id list; paidCents 1..2^63-1 |
+| 21 | paymentLinks | `list<str paymentId, str actionId>` | ascending unique paymentId, each a payment row of the input; actionId a correction request of the input (else INVALID_INPUT); Lean derives paid-so-far from the active rows |
 | 22 | currentInput | `blob`→`BLFIN02` (§6.1) | decodes standalone |
 | 23 | currentReceipt | `blob`→receipt (§3.3) | nothing left over inside |
 
@@ -195,7 +195,7 @@ combination rejected):
   determination.supportingEvidenceIds; the 3 queries have predicates 1,2,3 in
   order, subjects actionId/determinationId/inputEvaluationId, each complete,
   matchCount 0, no resultIdentity, each at currentEventSequence/
-  previousHistoryHead; correctionPaid a canonical id list, positive amounts.
+  previousHistoryHead; dependencies.correctionPaid is Lean's derived list, a canonical id list with positive amounts.
 
 ## 5. Tag tables
 
@@ -339,8 +339,8 @@ bytes, all equal to 0xNN. Verified against `artifacts/engine-correction/vectors/
 
 ```
 offset len field value
-0 8 magic BLFCMD02
-8 2 version 0x0002
+0 8 magic BLFCMD03
+8 2 version 0x0003
 10 39 contract 0x0025 + 'RR/FINANCIAL/CORRECTION-TRANSITION/v1'
 49 8 itemId 'item-h'
 57 16 claimId 'claim:h:offset'
@@ -367,7 +367,7 @@ offset len field value
   EVALUATION_CONSUMED 'evaluation:obligation:item-h:period-01:r4'; same shape
 717 8 currentEventSequence 10
 725 64 previousHistoryHead 2ax64
-789 2 correctionPaid.count 0
+789 2 paymentLinks.count 0
 791 4 currentInput length 1610
 795 1610 currentInput BLFIN02 ...
 2405 4 currentReceipt length 950
@@ -456,12 +456,10 @@ When cancel lands, the checker must count a cancellation only from the revision 
    `committedAtMs = max(decisionAt, ownerNow)`, the `evaluation:<obligation>:
    r<n>` form of inputEvaluationId, `evaluatedAt ≤ decisionAt`, the rejected
    claim in the resulting input, and supporting-evidence coverage of
-   claimBefore's evidence; skips correctionPaid order/uniqueness/positivity
-   (Owner compares the list for equality); skips revision bounds (≤10,000).
+   claimBefore's evidence; skips revision bounds (≤10,000).
    Owner derives determination id, `evaluation:<obligation>:r<n>`, resulting
-   revision and mutation time itself and writes only those; requires
-   correctionPaid to equal its SQL-ordered
-   list; `bind_resulting_state` requires the post-write snapshot
+   revision and mutation time itself and writes only those;
+   `bind_resulting_state` requires the post-write snapshot
    re-encoding to equal the resulting BLFIN02 bytes, then binds the result
    context; before COMMIT, `verify_obligation_connection` (Owner :4874)
    recomputes the written evaluation from the exact rows and applies the checker's action rules
@@ -481,8 +479,8 @@ fail closed).
    bytes of text but not an id.
 7. Python doesn't check that query matchCount agrees with resultIdentity,
    or that the receipt's binding ids equal `result.evidenceIds`.
-8. Python doesn't check correctionPaid order/uniqueness/positivity (relies
-   on SQL `ORDER BY` and `SUM` over active payments).
+8. Python doesn't check paymentLinks order, uniqueness or targets (relies on
+   SQL `ORDER BY`); Lean refuses forged links as INVALID_INPUT.
 9. Python is stricter: receipt evidence lists must be strictly ascending
    (Lean requires only equal lists); receipt status strings must be ids
    (Lean allows 1..512-byte text); existing-lookup decision must be tag 2

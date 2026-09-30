@@ -709,7 +709,7 @@ and the `correctionPaid` clause of `commandWireAdmissible`.
 1. Recheck the worktree, branch `lean-paid-sum` and a clean status. Statement
    status: `PaidSum.lean` and `CodecLaws/PaymentLinks.lean` type-check (guarded
    run `lps-lean3-a1`: three expected `sorry` warnings, nothing else new).
-   `PaidSumTheorems.lean` is UNCHECKED: it names `CorrectionCommand.paymentLinks`
+   `PaidSumTheorems.lean` was UNCHECKED at design time: it named `CorrectionCommand.paymentLinks`
    and `derivedCorrectionPaid`, which do not exist yet. Type-check it first once
    they do; any statement you must change is an XI.2 amendment here, never silent.
 2. `CorrectionTransition/Types.lean`: import `PaidSum`; magic `BLFCMD03`;
@@ -762,3 +762,15 @@ and the `correctionPaid` clause of `commandWireAdmissible`.
     `tests.test_right_rail_financial_mirror`; then the full suite once.
 13. One line each in `ARCHITECTURE.md` (~67, ~181) and `STATUS.md` (pin line ~40);
     add the run names to this record.
+
+**Execution record (rr-eng, 2026-09-29).** All 10 statements were proved with the
+statement text unchanged and no new axiom (`#print axioms` in the exclusive build
+`lpsb-x2`: `propext`, `Classical.choice`, `Quot.sound` only). Guarded runs:
+`lpsb-x2`/`lpsb-x3` (93-job exclusive builds, no `sorry`), `lpsb-kat2` (44 of 44
+correction KATs). Two KATs were added: `reversed_linked_payment_pays_nothing` and
+`link_naming_unknown_request_rejected`. The engine re-pin used
+`tools/build_financial_correction_release.ps1` through the v4 guard
+(`engine-release-lpsb-a2`, `-a3`): byte-identical executables, new pin
+`1A5821FA…DBBE` (6,298,112 bytes), `1A7A1833…D3AF` retired under rule `h1-v1`.
+The base-scenario result and reuse vectors are unchanged; only `request.bin` was
+re-framed. Nothing amended an XI.2 statement.

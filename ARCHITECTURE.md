@@ -64,15 +64,15 @@ replay still checks historical rows, digests and the whole store.
 ## Lean decides, the owner commits
 
 - **Correction transition** (`RR/FINANCIAL/CORRECTION-TRANSITION/v1`).
- `FinancialOwner.reject_offset_and_authorize_correction` encodes a `BLFCMD02`
- request, runs the pinned Lean executable through the contained process runner
+ `FinancialOwner.reject_offset_and_authorize_correction` encodes a `BLFCMD03`
+ request (payment links, from which Lean derives paid-so-far), runs the pinned Lean executable through the contained process runner
  (`app/minimal_clearance_verifier_process.py`), decodes the `BLFCRES3` result,
  computes every storage digest itself, checks the accepted delta against its
  own reconstructed post-transition snapshot, and commits it inside its
  existing transaction. A zero shortfall is rejected with no mutation; the
  action amount is exactly the lesser of the claim and the unpaid balance
  that earlier correction requests, less what linked payments paid on them,
- do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_b2`). The release is an
+ do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_linked`). The release is an
  explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
  command fails closed. There is no Python fallback decision.
 - **Pinned executable:** `artifacts/engine-correction/`, rebuilt twice
@@ -178,7 +178,7 @@ What exists today toward it:
  (`reject_offset_and_authorize_correction`); Python still decides
  population, evidence, payment/reversal, offset authorization,
  acknowledgment, reporting, funding and evaluation recording.
-- The live correction codec (`BLFCMD02`/`BLFCRES3`) proves canonicity (P2)
+- The live correction codec (`BLFCMD03`/`BLFCRES3`) proves canonicity (P2)
  unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
  admissible values; nothing yet proves every value Lean emits is admissible.
 - There is no batch decide API, independent witness, fenced standby or Bypass

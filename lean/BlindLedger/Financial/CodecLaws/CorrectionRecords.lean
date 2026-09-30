@@ -1,5 +1,6 @@
 import BlindLedger.Financial.CodecLaws
 import BlindLedger.Financial.CorrectionTransition.Codec
+import BlindLedger.Financial.CodecLaws.PaymentLinks
 
 /-! Correction-wire codec laws, part 1: primitives, wire admissibility and the
     record parser laws that `CodecLaws.Correction` composes.  A separate module
@@ -202,7 +203,7 @@ def commandWireAdmissible (command : CorrectionCommand) : Prop :=
     queryObservationsWireAdmissible command.queryObservations ∧
     nat8WireAdmissible command.currentEventSequence ∧
     digestWireAdmissible command.previousHistoryHead ∧
-    wireListAdmissible command.correctionPaid correctionPaidWireAdmissible
+    wireListAdmissible command.paymentLinks paymentLinkWireAdmissible
 
 def evidenceBindingWireAdmissible (binding : EvidenceBinding) : Prop :=
   stringWireAdmissible binding.evidenceId ∧ digestWireAdmissible binding.recordDigest

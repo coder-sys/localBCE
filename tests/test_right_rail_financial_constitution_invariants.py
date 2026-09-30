@@ -335,7 +335,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         call = containment.call_args
         self.assertEqual(call.args[0], release.executable)
         self.assertEqual(call.args[1], financial_engine.CORRECTION_TRANSITION_ARGUMENTS)
-        self.assertTrue(bytes(call.args[2]).startswith(b"BLFCMD02"))
+        self.assertTrue(bytes(call.args[2]).startswith(b"BLFCMD03"))
         # No partial change of any kind (III.5).
         self.assertEqual(self._durable_state(store), before)
         self.assertEqual(self._correction_evidence(store), (0, 0))
