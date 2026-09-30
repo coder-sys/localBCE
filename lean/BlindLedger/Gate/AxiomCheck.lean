@@ -76,5 +76,3 @@ import BlindLedger.Gate.Theorems
 #guard_msgs in #print axioms BlindLedger.Gate.installCert_equivocation
 /-- info: 'BlindLedger.Gate.Steps.coherent' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Steps.coherent
-
-def main : IO Unit := IO.println "GATE_AXIOM_CHECK=PASS"
