@@ -398,20 +398,26 @@ theorem rawEncode_applyWrites_length (i : FinancialInput) (w : Writes)
   unfold addedBytes
   omega
 
+theorem nodup_ids_of_wf {i : FinancialInput} (hwf : financialInputWellFormed i = true) :
+    (i.payments.map Payment.paymentId).Nodup := by
+  have h1 : canonicalIdList (i.payments.map Payment.paymentId) = true := by
+    simp only [financialInputWellFormed, Bool.and_eq_true, decide_eq_true_eq] at hwf
+    simp only [hwf]
+  exact (canonical_facts h1).2.2.imp fun {a b} h e => by subst e; exact String.lt_irrefl _ h
+
+theorem ids_replace {i w p} (hw : w.payment = some p)
+    (hs : (findPayment i.payments p.paymentId).isSome = true) :
+    (applyWrites i w).payments.map Payment.paymentId = i.payments.map Payment.paymentId := by
+  simp only [applyWrites, hw, hs, ↓reduceIte, List.map_map]
+  refine List.map_congr_left fun q _ => ?_
+  simp only [Function.comp]
+  split <;> simp_all
+
 theorem payments_nodup_of_replace {i w p}
     (hwf : financialInputWellFormed (applyWrites i w) = true) (hw : w.payment = some p)
     (hs : (findPayment i.payments p.paymentId).isSome = true) :
     (i.payments.map Payment.paymentId).Nodup := by
-  have hids : (applyWrites i w).payments.map Payment.paymentId = i.payments.map Payment.paymentId := by
-    simp only [applyWrites, hw, hs, ↓reduceIte, List.map_map]
-    refine List.map_congr_left fun q _ => ?_
-    simp only [Function.comp]
-    split <;> simp_all
-  have h1 : canonicalIdList ((applyWrites i w).payments.map Payment.paymentId) = true := by
-    simp only [financialInputWellFormed, Bool.and_eq_true, decide_eq_true_eq] at hwf
-    simp only [hwf]
-  rw [← hids]
-  exact (canonical_facts h1).2.2.imp fun {a b} h e => by subst e; exact String.lt_irrefl _ h
+  rw [← ids_replace hw hs]; exact nodup_ids_of_wf hwf
 
 /-! ## The one-transition theorems (design 5.2) -/
 
@@ -478,8 +484,8 @@ theorem mutate_ne_alias {r k w pid e post} : mutate r k w ≠ .alias pid e post 
 
 theorem alias_or_dup_alias {f : Bool} {r pid e a b post}
     (h : (if f = true then aliasOf r pid e else PaymentOutcome.duplicate (some pid)) =
-      .alias a b post) : aliasOf r pid e = .alias a b post := by
-  cases f <;> simp at h <;> exact h
+      .alias a b post) : f = true ∧ aliasOf r pid e = .alias a b post := by
+  cases f <;> simp at h <;> exact ⟨rfl, h⟩
 
 theorem aliasOf_alias {r pid e pid' e' post} (h : aliasOf r pid e = .alias pid' e' post) :
     pid' = pid ∧ e' = e ∧
@@ -497,7 +503,7 @@ theorem aliasOf_alias {r pid e pid' e' post} (h : aliasOf r pid e = .alias pid' 
     · simp at h
 
 theorem recordNew_alias {r c pid e post} (h : recordNew r c = .alias pid e post) :
-    ∃ p e', aliasOf r p e' = .alias pid e post := by
+    ∃ p, aliasOf r p e = .alias pid e post ∧ findEvidence r.input.evidence e.evidenceId = none := by
   unfold recordNew at h
   dsimp only at h
   generalize r.input.payments.find? (·.commonOriginId = c.commonOriginId) = existing at h
@@ -519,7 +525,7 @@ theorem recordNew_alias {r c pid e post} (h : recordNew r c = .alias pid e post)
   · simp at h
   split at h
   · simp at h
-  generalize evidenceSlot r (confirmation r.input c receivedAt) = slot at h
+  generalize hslot : evidenceSlot r (confirmation r.input c receivedAt) = slot at h
   cases slot
   case clash => simp at h
   all_goals
@@ -535,7 +541,9 @@ theorem recordNew_alias {r c pid e post} (h : recordNew r c = .alias pid e post)
       split at h
       · split at h
         · simp at h
-        · exact ⟨_, _, alias_or_dup_alias h⟩
+        · obtain ⟨hf, ha⟩ := alias_or_dup_alias h
+          obtain ⟨-, rfl, -⟩ := aliasOf_alias ha
+          first | exact ⟨_, ha, (slot_fresh hslot).1⟩ | cases hf
       · split at h
         · simp at h
         split at h
@@ -554,11 +562,10 @@ theorem decideReverse_ne_alias {r c pid e post} : decideReverse r c ≠ .alias p
       | exact absurd h mutate_ne_alias
       | (simp at h; done)
 
-theorem paymentTransition_alias_post {r pid e post} (h : paymentTransition r = .alias pid e post) :
+theorem alias_shape {r pid e post} (h : paymentTransition r = .alias pid e post) :
     post = applyWrites r.input
         { evidence := some e, payment := none, conflict := none, receipt := none } ∧
-      financialInputWellFormed post = true ∧
-      activeCents post.payments = activeCents r.input.payments := by
+      financialInputWellFormed post = true ∧ findEvidence r.input.evidence e.evidenceId = none := by
   unfold paymentTransition at h
   cases hc : r.command with
   | record c =>
@@ -575,10 +582,18 @@ theorem paymentTransition_alias_post {r pid e post} (h : paymentTransition r = .
       simp [h, PaymentOutcome.Plain] at this
     | none =>
       simp only [hp] at h
-      obtain ⟨p, e', ha⟩ := recordNew_alias h
-      obtain ⟨-, rfl, hpost, hwf⟩ := aliasOf_alias ha
-      exact ⟨hpost, hwf, by rw [hpost]; rfl⟩
+      obtain ⟨p, ha, hfe⟩ := recordNew_alias h
+      obtain ⟨-, -, hpost, hwf⟩ := aliasOf_alias ha
+      exact ⟨hpost, hwf, hfe⟩
   | reverse c => simp only [hc] at h; exact absurd h decideReverse_ne_alias
+
+theorem paymentTransition_alias_post {r pid e post} (h : paymentTransition r = .alias pid e post) :
+    post = applyWrites r.input
+        { evidence := some e, payment := none, conflict := none, receipt := none } ∧
+      financialInputWellFormed post = true ∧
+      activeCents post.payments = activeCents r.input.payments := by
+  obtain ⟨hpost, hwf, -⟩ := alias_shape h
+  exact ⟨hpost, hwf, by rw [hpost]; rfl⟩
 
 theorem record_link_within_request {r c w post result a}
     (hc : r.command = .record c) (ha : c.paysActionId = some a)
@@ -662,5 +677,28 @@ theorem conflict_changes_no_cash {r w post result}
       simp [applyWrites, hp]
   · obtain ⟨-, -, hk, -⟩ := decideReverse_mutated hd
     cases hk
+
+/-- Everything a mutated outcome can be, with the rows it writes (used by the ledger laws). -/
+theorem mutated_shape {r k w post res} (h : paymentTransition r = .mutated k w post res) :
+    (k = .RECORDED ∧ ∃ c, r.command = .record c ∧ findPayment r.input.payments c.paymentId = none ∧
+      (∀ q ∈ r.input.payments, q.commonOriginId ≠ c.commonOriginId) ∧
+      w.payment = some (recordedPayment r.input c) ∧ w.receipt = some (recordedReceipt r.input c) ∧
+      w.conflict = none ∧ EvidenceWrite r c w.evidence ∧ revisionOk r = true) ∨
+    (k = .CONFLICT_RECORDED ∧ ∃ c, r.command = .record c ∧ w.payment = none ∧ w.receipt = none ∧
+      EvidenceWrite r c w.evidence) ∨
+    (k = .REVERSED ∧ ∃ c p e, r.command = .reverse c ∧
+      findPayment r.input.payments c.paymentId = some p ∧ p.status ≠ .REVERSED ∧
+      w = ⟨some e, some (reversedImage p c), none, none⟩ ∧
+      e = reversalRecord r.input c p (c.eventAt.getD r.input.evaluatedAt) ∧
+      findEvidence r.input.evidence c.evidenceId = none ∧ e.eventAt ≤ r.input.evaluatedAt ∧
+      formRefusal e = none) := by
+  rcases paymentTransition_cases h with ⟨c, hc, hd⟩ | ⟨c, hc, hd⟩
+  · obtain ⟨hf, hn⟩ := decideRecord_mutated hd
+    obtain ⟨-, hrev, hew, ⟨hk, hq, hwp, hwr, hwc, -⟩ | ⟨hk, p, -, -, -, hwp, hwr, -⟩⟩ :=
+      recordNew_mutated hn
+    · exact Or.inl ⟨hk, c, hc, hf, hq, hwp, hwr, hwc, hew, hrev⟩
+    · exact Or.inr (Or.inl ⟨hk, c, hc, hwp, hwr, hew⟩)
+  · obtain ⟨p, e, hk, hp, hst, hw, -, he, hfe, hle, hform⟩ := decideReverse_mutated hd
+    exact Or.inr (Or.inr ⟨hk, c, p, e, hc, hp, hst, hw, he, hfe, hle, hform⟩)
 
 end BlindLedger.Financial.Payment
