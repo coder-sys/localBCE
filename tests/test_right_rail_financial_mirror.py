@@ -223,7 +223,14 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(drained["count"], 1)
         review = drained["items"][0]["corporate_support"]
         self.assertEqual((review["error_class"], review["work_ref_count"]), ("UNSUPPORTED_DEPENDENCY", 1))
-        self.assertNotIn(str(drained["items"][0]["source_event_sequence"]), json.dumps(review))  # no store counter leaves the owner
+        # no store counter leaves the owner: no leaf value is the sequence (a substring test hit "10" inside the pin hex)
+        sequence, leaves, stack = drained["items"][0]["source_event_sequence"], [], [review]
+        while stack:
+            node = stack.pop()
+            stack.extend(node.values() if isinstance(node, dict) else node if isinstance(node, list) else ())
+            leaves += [] if isinstance(node, (dict, list)) else [node]
+        self.assertNotIn(sequence, leaves)
+        self.assertNotIn(str(sequence), leaves)
         self._assert_privacy_clean(review)
         self.assertFalse(drained["has_more"])
         self.assertEqual(drained["skipped"], {"count": 0, "reasons": {}})

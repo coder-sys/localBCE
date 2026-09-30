@@ -9,32 +9,6 @@ open BlindLedger.Financial
     `workerRespond`, which cannot fail.  Clean end of input exits 0.  A broken
     or oversize frame exits 65 without output, so no error echoes input. -/
 
-def workerExitFrame : UInt32 := 65
-
-/-- Reads until `accumulator` holds `count` bytes; `none` if the stream ends first. -/
-partial def readExact (stream : IO.FS.Stream) (count : Nat) (accumulator : ByteArray) :
-    IO (Option ByteArray) := do
-  if accumulator.size ≥ count then
-    return some accumulator
-  let chunk ← stream.read (USize.ofNat (min (count - accumulator.size) 65536))
-  if chunk.isEmpty then
-    return none
-  readExact stream count (accumulator ++ chunk)
-
-partial def serve (stdin stdout : IO.FS.Stream) : IO UInt32 := do
-  let first ← stdin.read 4
-  if first.isEmpty then
-    return 0
-  let some header ← readExact stdin 4 first | return workerExitFrame
-  let some (length, _) := readNatBE 4 header.toList | return workerExitFrame
-  if length > maxWorkerFrameBytes then
-    return workerExitFrame
-  let some frame ← readExact stdin length ByteArray.empty | return workerExitFrame
-  let response := workerRespondBA frame
-  stdout.write (natBE 4 response.length ++ response).toByteArray
-  stdout.flush
-  serve stdin stdout
-
 -- mimalloc's start-up hook is DllMain-only in a static exe: no arena, so freed 32 MiB segments were never reused.
 @[extern c inline "lean_io_result_mk_ok(lean_box_uint32((uint32_t)mi_reserve_os_memory(#1, #2, #3)))"]
 opaque reserveArena (bytes : USize) (commit allowLarge : Bool) : IO UInt32
@@ -43,7 +17,9 @@ opaque reserveArena (bytes : USize) (commit allowLarge : Bool) : IO UInt32
 def main : IO UInt32 := do
   if (← reserveArena 1073741824 false false) != 0 then
     return 70
-  serve (← IO.getStdin) (← IO.getStdout)
+  let stdin ← IO.getStdin
+  let stdout ← IO.getStdout
+  serveWorker stdin.read fun b => do stdout.write b; stdout.flush
 
 end BlindLedger.Financial.WorkerCli
 

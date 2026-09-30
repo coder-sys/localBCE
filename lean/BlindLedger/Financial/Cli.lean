@@ -45,11 +45,6 @@ def runKat : IO Unit := do
   else
     runFailure financialExitKat "kat-gate-failure"
 
-partial def readFinancialBounded
-    (stream : IO.FS.Stream) (remaining : Nat) (accumulator : ByteArray) : IO ByteArray :=
-  BlindLedger.Financial.CorrectionTransition.Runtime.readFinancialBounded
-    stream remaining accumulator
-
 def runKatInput : IO Unit := do
   let stdout ← IO.getStdout
   stdout.write katWire.toByteArray
@@ -69,7 +64,7 @@ def runDecisionPackageKat : IO Unit := do
 
 def runProjectDecisionPackage : IO Unit := do
   let stdin ← IO.getStdin
-  let bounded ← readFinancialBounded stdin (maxDecisionPackageBytes + 1) ByteArray.empty
+  let bounded ← readUpTo stdin.read (maxDecisionPackageBytes + 1) .empty
   if bounded.size > maxDecisionPackageBytes then
     runFailure financialExitPackageDecode "decision-package-input-too-large"
   else

@@ -45,11 +45,10 @@ def sponge (rate : Nat) (suffix : UInt8) (data : ByteArray) (n : Nat) : ByteArra
       st := st.set! i (st[i]! ^^^ lane)
     st := keccakF st
   let mut out := ByteArray.empty
-  repeat
+  for blk in [0:(n + rate - 1) / rate] do
+    if blk > 0 then st := keccakF st
     for j in [0:rate] do
       if out.size < n then out := out.push (st[j / 8]! >>> UInt64.ofNat (8 * (j % 8))).toUInt8
-    if out.size ≥ n then break
-    st := keccakF st
   out
 
 def sha3_512 (data : ByteArray) : ByteArray := sponge 72 0x06 data 64
