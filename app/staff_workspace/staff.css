@@ -2,32 +2,32 @@
    Machine facts are black and grey, money is set in mono, and the one accent (blue) marks
    anything a person chooses or writes. Fonts are the system's: the page allows no external font. */
 :root {
-  --ground: #f3f5f8; --sheet: #ffffff; --select: #e8edf5;
-  --ink: #0b1526; --ink-2: #3d4a5c; --ink-3: #566377;
-  --rule: #e1e6ee; --rule-2: #838ea0;
-  --blue: #1b3f8b; --blue-wash: #e9eff9;
-  --amber: #975200; --green: #146c43; --red: #b3261e;
+  --ground: #f4f5f8; --sheet: #ffffff; --select: #e9ecf5;
+  --ink: #0f1426; --ink-2: #40495c; --ink-3: #5a6277;
+  --rule: #e2e5ee; --rule-2: #868da0;
+  --blue: #2f3a8b; --blue-wash: #ebeef9;
+  --amber: #975a00; --green: #146c43; --red: #b3261e;
   --sans: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, Consolas, "SF Mono", monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #0d1422; --sheet: #111a2b; --select: #1a2539;
-    --ink: #e8edf5; --ink-2: #b3bece; --ink-3: #95a1b5;
-    --rule: #1f2a3d; --rule-2: #5b6880;
-    --blue: #bcd3fb; --blue-wash: #172747;
-    --amber: #f2a94a; --green: #5ccf95; --red: #ff9e95;
+    --ground: #101322; --sheet: #14192b; --select: #1e2439;
+    --ink: #e9ecf5; --ink-2: #b6bdce; --ink-3: #98a0b5;
+    --rule: #23293d; --rule-2: #5f6680;
+    --blue: #c3d0fb; --blue-wash: #1e2547;
+    --amber: #f9b53f; --green: #5ccf95; --red: #ff9e95;
   }
 }
 /* The bar and the queue are an ink rail in both themes; the record stays a white (or dark) sheet. */
 .bar, .queue {
-  --ground: #0f1f3d; --sheet: #16284a; --select: #1e3358;
-  --ink: #f2f5fa; --ink-2: #bcc7d8; --ink-3: #a2b0c5;
-  --rule: #213559; --rule-2: #637899;
-  --blue: #c6daff; --amber: #f2b560; --green: #72d9a3;
+  --ground: #161d3d; --sheet: #1e264a; --select: #263158;
+  --ink: #f3f5fa; --ink-2: #bfc6d8; --ink-3: #a6afc5;
+  --rule: #293359; --rule-2: #697699;
+  --blue: #cdd8ff; --amber: #f5be58; --green: #72d9a3;
   background: var(--ground); color: var(--ink);
 }
-@media (prefers-color-scheme: dark) { .bar, .queue { --ground: #0a1224; --select: #15223d; --rule: #1a2743; } }
+@media (prefers-color-scheme: dark) { .bar, .queue { --ground: #0e1124; --select: #1b203d; --rule: #202543; } }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
