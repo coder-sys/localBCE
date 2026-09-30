@@ -627,8 +627,9 @@ class GoldenVectorTests(unittest.TestCase):
     def test_gate_verify_pin_names_the_current_lean_tree(self) -> None:
         """Any change under lean/ needs a rebuilt, re-pinned gate_verify; PROVENANCE records the tree's manifest."""
         lean = signer.ROOT / "lean"
-        files = sorted(f for f in lean.rglob("*") if f.is_file() and ".lake" not in f.relative_to(lean).parts)
-        manifest = "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  lean/{f.relative_to(lean).as_posix()}\n" for f in files)
+        tracked = subprocess.run(["git", "ls-files", "-z", "lean"], cwd=signer.ROOT, capture_output=True, check=True).stdout.decode().split("\0")
+        files = sorted(name for name in tracked if name and ".lake" not in name.split("/"))  # tracked files only (no caches), plain string order
+        manifest = "".join(f"{hashlib.sha256((signer.ROOT / name).read_bytes()).hexdigest()}  {name}\n" for name in files)
         recorded = re.search(r"Source manifest.{0,90}?([0-9a-f]{64})", (signer.VERIFY.parent / "PROVENANCE.txt").read_text("utf-8"), re.S)
         self.assertEqual(recorded and recorded.group(1), hashlib.sha256(manifest.encode()).hexdigest())
         built = lean / ".lake" / "build" / "bin" / "gate_verify.exe"  # this tree's build is the pinned exe

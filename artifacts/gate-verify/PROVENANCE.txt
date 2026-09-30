@@ -12,14 +12,14 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 52 files (sha256 and path, sorted): SHA-256
-  2b99e9c5ce28d6eb03c222f5fe3729868390add4a695a9598dba5753649ba4be, 5,764 bytes;
-  copy at C:\Users\neers\rrb\gate\lqw-gv-manifest.txt.
-  tests/test_right_rail_gate_formats.py recomputes it from lean/ and fails on any change
+- Source manifest, 51 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  17e0a68931d47c4e740cef074a61bcc0ec0785b7a25be562152d7e05ba14b5ed, 5,635 bytes;
+  copy at C:\Users\neers\rrb\gate\lqw-gv-manifest-tracked.txt.
+  tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
-Re-pin (2026-09-29, branch lean-quick-wins on trunk a0fb1ca): the manifest moved (55 files, 0482e14c..., to 52 files,
-2b99e9c5...) while the exe did not: the rebuild (guard log lqw-gv1-a6-L1, `lake build -d lean`, 53 jobs) gave the same
+Re-pin (2026-09-29, branch lean-quick-wins on trunk a0fb1ca): the manifest moved (55 files, 0482e14c..., to 51 tracked files,
+17e0a689...) while the exe did not: the rebuild (guard log lqw-gv1-a6-L1, `lake build -d lean`, 53 jobs) gave the same
 SHA-256 fc45ce6d... as the pin above. Causes: slim moved the semantic gate and its manifest under lean/tools/; quick-wins
 changed lakefile.toml and AxiomCheck.lean and moved the retired Semantic kernel out of lean/. No file in gate_verify's
 import closure changed. XI.2 record: docs/CORE_REDESIGN.md, "gate_verify re-pin".
