@@ -1,8 +1,9 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable built from this
-repository's `lean/` source at commit `79b6913` (tree `lean/` =
-`git archive 79b6913 lean`, tree id `3dba470d`).
+`blind_financial_correction.exe` is the Lean/Lake executable of the paid-sum re-pin below,
+built from `lean/` as committed at `1e74852` (the 53 source files hashed in the build's
+manifest equal that commit's; the build ran in a dirty tree at `40e802f`, and `79b6913` has
+no `PaidSum.lean`).
 
 - Size: 6,298,112 bytes
 - SHA-256: `1A5821FA944E9A2ABBE0BF154BD0CFE34069E4D728C9A5374809626D51B8DDBE`
@@ -14,19 +15,21 @@ Lean derives each correction request's paid-so-far from linked payment rows (BLF
 BLFCRES3 and every digest are unchanged (record: `docs/CORE_REDESIGN.md`). Two builds by
 `tools/build_financial_correction_release.ps1` (SHA-256
 `61AEB3A85B2DA8E0DBD3A5BC5BC03345B471B037C99C36FE94E4E9E6A31DC909`) through the v4 guard, in
-`C:/Users/neers/rrb/engine-release-lpsb-a2/` and `-a3/`, gave byte-identical executables from
-one 46-file source manifest (SHA-256
-`38EC61E74F5EB10CAD039E0188A6C202989B8F36BEA6E7EE00BF4E946B28C14A`). Both reproduced the
-unchanged result and reuse vectors (empty link list); only `request.bin` changed.
-`1A7A1833…D3AF` is in `RETIRED_PINS`.
+`C:/Users/neers/rrb/engine-release-lpsb-a2/` and `-a3/`, gave byte-identical executables.
+Their receipts record HEAD `40e802f`, a dirty tree (git status SHA-256 `AD016F0A...DEEF`) and one
+53-file source manifest (SHA-256 `38EC61E74F5EB10CAD039E0188A6C202989B8F36BEA6E7EE00BF4E946B28C14A`)
+whose every file equals the same path at `1e74852`. Both reproduced the unchanged result and reuse
+vectors (empty link list); only `request.bin` changed. `1A7A1833...D3AF` is in `RETIRED_PINS`.
+Those builds were not made from the current trunk `lean/` (51 files: the gate and quick-wins
+changes since); see Current tree below.
 
-## Current-source reproduction (2026-09-26)
+## Reproduction of the retired pin `1A7A1833...D3AF` (2026-09-26)
 
-The existing pinned bytes were reproduced from commit
+This section, with the r67-r88 records below it, concerns the RETIRED h1 executable, not the
+current pin. That day's pinned bytes were reproduced from commit
 `61a24519c2d52a963769f663beec476fd6b66c8a`, Lean tree
-`29a06cbdc92fb40e0b7e0da01ef0c02d90629769`. This supplements the historical
-origin above; no executable or retired-pin entry changed. The protected change
-record is in `docs/CORE_REDESIGN.md`.
+`29a06cbdc92fb40e0b7e0da01ef0c02d90629769`; no executable or retired-pin entry
+changed. Protected change record: `docs/CORE_REDESIGN.md`.
 
 `tools/build_financial_correction_release.ps1` (SHA-256
 `BE4B0B295D057EF8C8B7C1C5AEFA8925A476C03AFEEFE39CBC7F86ED2A34F445`)
@@ -45,9 +48,9 @@ at `C:/Users/neers/rrb/engine-release-cx-r67-a1/`:
 - Reuse output: 53 bytes, SHA-256
   `973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F`.
 
-Both outputs equal the unchanged expected files. Four vector inputs were used;
-two non-input files (`result.actual.bin`, `run-vectors.cmd`) were ignored because
-actual output must be recomputed and the launcher is not input data.
+Both outputs equal the expected files. Four vector inputs were used;
+`result.actual.bin` and `run-vectors.cmd` were ignored (recomputed output and a
+launcher are not input data).
 
 The separate guarded r68 build in that same fresh stage compiled all six targets:
 `BlindLedger blind_semantic_kernel blind_financial_axioms
@@ -92,56 +95,52 @@ reproduced the same pinned executable and both vector outputs (32 build jobs):
   3,271,634,944 bytes against the unchanged 2,190,433,321-byte running floor.
 
 r78 refused the kit because its guard-log parser rejected CRLF record endings.
-Only the three line-ending patterns changed; all exact policy, resource, exit,
-cleanup, mutex and byte-hash bindings remain. The regression covers two valid
-line-ending forms and 33 adverse cases, plus the actual producer's binary I/O,
-empty streams and independently constructed canonical source manifest. r79
-passed all 24 kit, size-budget and protected-invariant tests, zero skips/errors.
-Both producer/parser changes received independent read-only review.
+Only the three line-ending patterns changed; every policy, resource, exit,
+cleanup, mutex and byte-hash binding remains. The regression covers two valid
+line-ending forms and 33 adverse cases, the producer's binary I/O, empty streams
+and an independently built canonical source manifest. r79 passed all 24 kit,
+size-budget and protected-invariant tests (zero skips/errors); both changes had
+independent read-only review.
 
-Guarded r80 assembled, independently hashed, verified and extracted
+Guarded r80 assembled, hashed, verified and extracted
 `C:/Users/neers/rrb/service-kit-cx-r80.zip`: 65,753,878 bytes, 2,673 members,
 SHA-256 `6D937707EBFF20592199271C2F589325BB5ECFF030646A17CD03493CAD57A622`.
-Its pinned bundled CPython ran the correction/lost-response/exact-retry/SHADOW
+Its bundled CPython ran the correction/lost-response/exact-retry/SHADOW
 restore scenario: one correction commit, sequence 50 to 51, duplicate retry
-with no second write, independent integrity VERIFIED, replacement refused.
-1,625 third-party `Lib/site-packages` files were explicitly excluded; Queue
-remains omitted because no current source-bound Queue runtime handoff exists.
+with no second write, integrity VERIFIED, replacement refused.
+1,625 third-party `Lib/site-packages` files were excluded; Queue remains
+omitted because no source-bound Queue runtime handoff exists.
 
-Guarded r84 exercised the extracted kit's actual `serve` command twice: HTML
-and workspace HTTP 200, integrity VERIFIED, owner/epoch/sequence/history head
-unchanged on restart, engine workspace empty. Each owned server was deliberately
-terminated for restart (server and wrapper exit -1 / unsigned 4294967295);
-the wrapper's post-stop checks completed. The enclosing check and guard exited
-zero, cleanup PASS. Earlier r81-r83 smoke-harness failures are retained: missing
-exception property, startup timeout classification, then a buffered diagnostic
-print incorrectly used as a resume signal. r84 checks the actual child resume
-argument instead. No product gate was relaxed for those harness corrections.
+Guarded r84 ran the extracted kit's `serve` command twice: HTML and workspace
+HTTP 200, integrity VERIFIED, owner/epoch/sequence/history head unchanged on
+restart, engine workspace empty. Each owned server was deliberately terminated
+for restart (exit -1 / unsigned 4294967295) and the wrapper's post-stop checks
+completed; check and guard exited zero, cleanup PASS. Earlier r81-r83
+smoke-harness failures are retained: missing exception property, startup
+timeout classification, then a buffered diagnostic print used as a resume
+signal. r84 checks the actual child resume argument. No product gate was relaxed.
 
-The extracted runtime also passed the existing durable process-restart test in
-r85: a Lean correction and linked cash commit survive reopening, with the same
-owner/epoch/sequence/history head, exact received cash, zero shortfall and
-VERIFIED integrity (1/1, zero skips/errors). All six final size gates passed.
-The enclosing r85 run then failed in an auxiliary count-print command with an
-unmatched parenthesis; this does not turn that outer run into a pass.
-The corrected count-only r87 run exited zero with cleanup PASS: 154 code files,
-78,975 lines against the founder-approved 80,000-line total cap.
+The extracted runtime also passed the durable process-restart test in r85: a Lean
+correction and linked cash commit survive reopening, same owner/epoch/sequence/
+history head, exact received cash, zero shortfall, VERIFIED (1/1, zero
+skips/errors); all six size gates passed. The enclosing r85 run then failed in an
+auxiliary count-print command (unmatched parenthesis) and is not a pass. The
+corrected count-only r87 run exited zero, cleanup PASS: 154 code files, 78,975
+lines against the then 80,000-line total cap.
 
-That extra restart test's direct child process also wrote nine Python bytecode
-files under `app/__pycache__` in the r80 extraction. r86 correctly refused its
-changed membership before starting a server; the extraction and failure remain
-preserved. The archive itself is unchanged. Guarded r88 freshly extracted that
-same pinned archive into `C:/Users/neers/rrb/service-kit-cx-r88/` and repeated both
-actual serve cycles with the hardened harness: zero readiness retries, HTTP 200,
-VERIFIED integrity, unchanged owner/history, empty engine workspace and successful
-post-stop tree verification. Child/guard exits zero, cleanup PASS. The harness
-now retains the verified child identity before HTTP, rejects HTTP error responses
-immediately, and leaves the parent available to guard cleanup if ownership or
-child termination cannot be established. The r88 extraction is the clean handoff.
+That test's child also wrote nine Python bytecode files under `app/__pycache__`
+in the r80 extraction; r86 refused its changed membership before starting a
+server (extraction and failure preserved; the archive is unchanged). Guarded r88
+freshly extracted the same archive into `C:/Users/neers/rrb/service-kit-cx-r88/` and
+repeated both serve cycles with the hardened harness (it keeps the verified child
+identity before HTTP, rejects HTTP errors at once, and leaves the parent to guard
+cleanup if child ownership or termination is unproven): zero readiness retries,
+HTTP 200, VERIFIED, unchanged owner/history, empty engine workspace, post-stop tree
+verified, exits zero, cleanup PASS. The r88 extraction is the clean handoff.
 
 The kit binds the complete working-tree inventory at assembly, including frozen
 connector/browser candidates. These Lean and service checks do not establish
-exhaustive browser conformance or qualify those other unfinished tracks.
+exhaustive browser conformance or qualify those other tracks.
 
 Source binding (2026-09-28, rr-review H1; XI.2 record in `docs/CORE_REDESIGN.md`).
 r80 was assembled from an uncommitted tree, so r80/r84/r85/r88 are not evidence
@@ -150,18 +149,6 @@ commit `707ba78`: all 46 `engine/source` Lean files and 26 of 27 `app`/`tools`/
 `tests` files. The exception is `app/right_rail_financial_engine.py`, which is the
 `86390ab` version; `707ba78` replaces its 21-line reject-requirement literal with
 an equal map derived from the tag tables. No pin, digest or vector changes.
-
-## Reproduced twice
-
-Two clean builds, each in a fresh export under its own `<BUILD_ROOT>`, each
-run through `native/guard/run_guarded_v4.ps1` (SHA-256
-`57F9EC8AEFE1D0E281B3BB0D76F2F057C8295F99AFDD04305DFC777703ED99FB`):
-
-    lake --dir <BUILD_ROOT>/lean build BlindLedger blind_semantic_kernel blind_financial_axioms blind_financial_correction blind_financial
-
-Both produced `<BUILD_ROOT>/lean/.lake/build/bin/blind_financial_correction.exe`
-with the SHA-256 above. `blind_financial --correction-transition-kat` passed
-42 of 42 gates on the first build's executable.
 
 ## Vectors
 
@@ -172,12 +159,7 @@ with the SHA-256 above. `blind_financial --correction-transition-kat` passed
 - `vectors/result.actual.bin`, produced the same way by the second build's
   executable, is byte-identical to `result.expected.bin`.
 
-The request is the previous BLFCMD01 vector (SHA-256 `13F832E8…`) re-framed as
-BLFCMD02: new magic and version, and an empty correction-paid list (two zero
-bytes) before the input length. Against the previous result the only changes
-are BLFCRES3's magic and version and the same empty list in the dependency
-facts. This pin replaces `349BED31…`, which was never released, so it is not
-listed as retired.
+The BLFCMD02-era pin `349BED31…` was never released, so it is not in `RETIRED_PINS`.
 
 ## Reuse-v2 conformance fixture (2026-09-26)
 

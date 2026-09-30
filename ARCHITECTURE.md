@@ -74,8 +74,9 @@ checks historical rows, digests and the whole store.
  do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_linked`). The release is an
  explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
  command fails closed. There is no Python fallback decision.
-- **Pinned executable:** `artifacts/engine-correction/`, rebuilt twice
- byte-identically from the `lean/` commit its `PROVENANCE.md` names. Engines
+- **Pinned executable:** `artifacts/engine-correction/`, built by the release
+ producer from the exact source its `PROVENANCE.md` records (commit and
+ file manifest); a later `lean/` change is not covered. Engines
  a re-pin retired are listed in its digest-pinned `RETIRED_PINS`: their
  committed follow-ups stay valid history, but only the current pin decides,
  and no correction, whatever engine decided it, requests more than was then

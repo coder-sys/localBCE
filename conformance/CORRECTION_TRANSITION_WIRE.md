@@ -74,7 +74,7 @@ too large/decode fail, 73 = transition encode fail, 75/76 = same for reuse,
 | 18 | queries | 3×§3.2, order ACTION_ID, DETERMINATION_ID, EVALUATION_CONSUMED | order checked only on ACCEPTED result |
 | 19 | currentEventSequence | `u64` | sequence |
 | 20 | previousHistoryHead | `d64` | |
-| 21 | paymentLinks | `list<str paymentId, str actionId>` | ascending unique paymentId, each a payment row of the input; actionId a correction request of the input (else INVALID_INPUT); Lean derives paid-so-far from the active rows |
+| 21 | paymentLinks | `list<str paymentId, str actionId>` | strictly ascending paymentId (else decode fails); each a payment row of the input, actionId a correction request of the input (else INVALID_INPUT); Lean derives paid-so-far from the active rows |
 | 22 | currentInput | `blob`→`BLFIN02` (§6.1) | decodes standalone |
 | 23 | currentReceipt | `blob`→receipt (§3.3) | nothing left over inside |
 
@@ -480,7 +480,11 @@ fail closed).
 7. Python doesn't check that query matchCount agrees with resultIdentity,
    or that the receipt's binding ids equal `result.evidenceIds`.
 8. Python doesn't check paymentLinks order, uniqueness or targets (relies on
-   SQL `ORDER BY`); Lean refuses forged links as INVALID_INPUT.
+   SQL `ORDER BY`). Lean refuses only structurally invalid links: unordered or
+   duplicate fail at decode (Owner `correction_transition_failed`), a link naming
+   no payment row or non-request is INVALID_INPUT. Links naming real rows are
+   accepted; payment timing and the per-request cap are the Owner's and the
+   independent checker's.
 9. Python is stricter: receipt evidence lists must be strictly ascending
    (Lean requires only equal lists); receipt status strings must be ids
    (Lean allows 1..512-byte text); existing-lookup decision must be tag 2

@@ -50,6 +50,9 @@ complete path with separately attributable ingestion, owner transaction,
 independent check, Continuity restore and recovery evidence. A component
 benchmark is not a system SLA; missing targets remain unknown.
 
+Corporate support, monitoring, analytics, AI tools, contractors and crash
+dumps receive zero PHI and no persistent linkable claim fingerprint (Article IV).
+
 ## Claims and sequencing
 
 Implement in dependency order: stabilize the owner contract; independently
