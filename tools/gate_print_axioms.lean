@@ -1,4 +1,5 @@
 import BlindLedger.Gate.Theorems
+import BlindLedger.Gate.MlDsa87Laws
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -35,3 +36,9 @@ import BlindLedger.Gate.Theorems
 #print axioms BlindLedger.Gate.Steps.at_most_once
 #print axioms BlindLedger.Gate.installCert_equivocation
 #print axioms BlindLedger.Gate.Steps.coherent
+#print axioms BlindLedger.Gate.MlDsa87.rejNttFrom_size
+#print axioms BlindLedger.Gate.MlDsa87.rejNttFrom_append
+#print axioms BlindLedger.Gate.MlDsa87.sampleInBallFrom_size
+#print axioms BlindLedger.Gate.MlDsa87.sampleInBallFrom_append
+#print axioms BlindLedger.Gate.MlDsa87.verify_rejects_sampleInBall_none
+#print axioms BlindLedger.Gate.MlDsa87.verify_rejects_rejNtt_none

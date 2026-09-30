@@ -148,5 +148,17 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.encodeCorrectionTransitionResult_of_decode
 /-- info: 'BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.decodeCorrectionTransitionResult_rejects_trailing
+/-- info: 'BlindLedger.Financial.readUpTo_pipe' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms readUpTo_pipe
+/-- info: 'BlindLedger.Financial.serveWorker_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms serveWorker_run
+/-- info: 'BlindLedger.Financial.workerRun_frames' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms workerRun_frames
+/-- info: 'BlindLedger.Financial.serveWorker_stateless' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms serveWorker_stateless
+/-- info: 'BlindLedger.Financial.workerRun_oversize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms workerRun_oversize
+/-- info: 'BlindLedger.Financial.workerRun_truncated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms workerRun_truncated
 
 end BlindLedger.Financial

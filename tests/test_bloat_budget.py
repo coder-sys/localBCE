@@ -36,12 +36,19 @@ PRODUCT_CODE_LINES = 37_319  # color-a (2026-09-30): +1 for the dark-theme rail 
 # `workerRespond_length_le`, `maxWorkerFrameBytes_fits_u32`, the codec and decoder equalities), the worker and its panic probe (`Worker`, `WorkerCli`, `PanicProbe`, `FastDecode`,
 # `FastEncode`) and their tests, net of the deleted Python-evaluator tests: a Lean panic or a bad worker frame refuses the write instead of passing.
 # TCB gate (tcb-gate, 2026-09-30): +313 for tools/tcb_gate.lean (152) and tests/test_tcb_gate.py (158): an auditor gets a machine-checked list of every escape hatch (axiom, partial, extern, implemented_by) each pinned exe can reach, and a violation fails the suite.  rr-check fixes: +60 more (partial bodies walked, lcProof and bare-initializer cases, the report bound to the pinned exe bytes).
-EVIDENCE_CODE_LINES = 44_323
+# Lean partials A (2026-09-30): +533 for `ReadUpTo`, `serveWorker_run`, `serveWorker_stateless`, `readUpTo_pipe`, `workerRun_frames/oversize/truncated`, their KATs and pins, the TCB gate's `fixpoint` kind
+# and `tests/test_lean_io_loops.py`, net of the deleted `serve`, `readExact` and `readFinancialBounded` loops: an auditor reads the worker's frame loop as a theorem, not a claim, and the byte-identical I/O is tested.
+# Lean partials B (2026-09-30): +202 (three of them this comment) for the six ML-DSA sampler laws in `Gate/MlDsa87Laws.lean` (`rejNtt`/`sampleInBall` never read past Table 3, `verify` rejects when they give up, the fill/sign/limit lemmas),
+# their KATs and axiom pins, and the TCB gate's `loop` kind with its negative fixture: an auditor reads gate_verify's samplers as bounded theorems, and a new while/repeat anywhere fails the gate.
+# Worker linearity guard (quad, 2026-09-30): +13 for one test that fails if worker time is quadratic in rows (10,000 rows took 16 s until ea42222).
+EVIDENCE_CODE_LINES = 45_090  # +7 mirror test: the store-counter leak check walks leaf values instead of a substring search that hit "10" in the D5A06E9F pin hex. partials merge with trunk b42f3f4: measured; trunk 44,323 + Lean partials A and B (proofs, KATs, TCB kinds, io-loop tests), the worker linearity test and the gate's loop fixtures
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,235 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability). The ui-1 merge with its STATUS line measures 158,372; the ceiling is that. 2026-09-30 lean-leak merge: +3,868 (162,240 measured, after cutting two stale lines) for the XI.2 records of Lean-live M1, M1.5 and M1.6 (2,473) and the worker's provenance (837), the merged STATUS and ARCHITECTURE lines (approx 550); Lean is the only evaluator and its pin is auditable. lean-leak re-pin (2026-09-30): +3,618 for the XI.2 record, the worker and gate_verify provenance, and the correction reproduction note (a change under lean/ cannot ship with an unreproduced pin), after cutting a stale STATUS run line.
 # TCB gate: +381 bytes in STATUS.md so the five open VIOLATION-TODO loops (with their owning plan items) are visible where status is read; +379 more for what the gate trusts and does not prove (Init/Std, the C arena call, lcProof).
-MARKDOWN_BYTES = 159_603
+# Lean partials A: +3,057 bytes for its XI.2 record in docs/CORE_REDESIGN.md, the worker re-pin in PROVENANCE.md and the STATUS.md TCB line.
+# Lean partials B: +3,588 bytes for its XI.2 record in docs/CORE_REDESIGN.md and the STATUS.md TCB line (now zero open loops), so the bounded-sampler claim, its evidence and the worker re-pin reason are on the record.
+MARKDOWN_BYTES = 169_595  # partials merge with trunk b42f3f4: measured; trunk 159,603 + the partials XI.2 records, PROVENANCE receipts and STATUS lines
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
