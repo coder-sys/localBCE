@@ -10,7 +10,7 @@ import BlindLedger.Financial.FastDecode
 namespace BlindLedger.Financial.Fast
 
 def natBEPush : Nat → Nat → ByteArray → ByteArray
-  | 0, _, acc => acc
+  | 0, _, acc => acc ++ ByteArray.empty -- consumes `acc`: returning it bare made Lean infer it borrowed, copying the accumulator per field
   | width + 1, value, acc => (natBEPush width (value / 256) acc).push (UInt8.ofNat (value % 256))
 
 def stringPush (value : String) (acc : ByteArray) : ByteArray :=
