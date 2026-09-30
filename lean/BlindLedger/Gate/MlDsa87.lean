@@ -1,4 +1,4 @@
-import BlindLedger.Keccak
+import BlindLedger.Sha3
 
 /-! ML-DSA-87 verification, written from FIPS 204 (Algorithm 8, `ML-DSA.Verify_internal`) and independent of the
     AWS-LC signer: nothing here is derived from that code.  Parameters: q = 8380417, d = 13, tau = 60,
@@ -7,7 +7,7 @@ import BlindLedger.Keccak
     test against AWS-LC.  Callers pass M' whole (`00 00 ‖ message` for a pure signature with an empty context). -/
 namespace BlindLedger.Gate.MlDsa87
 
-open BlindLedger.Keccak
+open BlindLedger.Semantic
 
 def q : Nat := 8380417
 def gamma1 : Nat := 2 ^ 19
