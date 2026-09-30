@@ -4,6 +4,8 @@ import BlindLedger.Financial.CodecLawsCheck
 import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.PaidSumTheorems
 import BlindLedger.Financial.WorkerLaws
+import BlindLedger.Financial.BatchLaws
+import BlindLedger.Financial.CursorDifferential
 
 namespace BlindLedger.Financial
 
@@ -160,5 +162,26 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms workerRun_oversize
 /-- info: 'BlindLedger.Financial.workerRun_truncated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms workerRun_truncated
+
+/-- info: 'BlindLedger.Financial.Cursor.decodeFinancialInput_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Cursor.decodeFinancialInput_eq
+/-- info: 'BlindLedger.Financial.Cursor.decodeCorrectionTransitionRequest_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Cursor.decodeCorrectionTransitionRequest_eq
+/-- info: 'BlindLedger.Financial.Batch.parseBatchRequestBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.parseBatchRequestBA_eq
+/-- info: 'BlindLedger.Financial.Batch.respondBatchBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.respondBatchBA_eq
+/-- info: 'BlindLedger.Financial.Batch.respondBatch_map' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.respondBatch_map
+/-- info: 'BlindLedger.Financial.Batch.parseBatchRequest_exact' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.parseBatchRequest_exact
+/-- info: 'BlindLedger.Financial.Batch.respondBatch_rejects' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.respondBatch_rejects
+/-- info: 'BlindLedger.Financial.Batch.batch_isolation' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.batch_isolation
+/-- info: 'BlindLedger.Financial.Batch.encodeBatchResponse_inj' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.encodeBatchResponse_inj
+/-- info: 'BlindLedger.Financial.Batch.workerRespond_lt_u32' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.workerRespond_lt_u32
 
 end BlindLedger.Financial
