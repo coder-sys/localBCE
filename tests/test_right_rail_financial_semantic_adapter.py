@@ -943,6 +943,29 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             adapter.decode_live_result(bytes(bad_tag), data)
         self.assertEqual(obligation["received_cash_cents"], EXPECTED_H_CASH_CENTS)
 
+    def test_record_cache_leaves_history_and_refusals_as_without_it(self) -> None:
+        """Six payments on one item on two identical stores, without and with the record cache, export identical
+        history; a record the encoder refuses fails under its own label either way."""
+        histories = []
+        for encode in (adapter._record_wire.__wrapped__, adapter._record_wire):
+            adapter._record_wire.cache_clear()
+            store = self._build_base()
+            with patch.object(adapter, "_record_wire", encode):
+                for number in range(6):
+                    store.record_payment_evidence(item_id=expected.H_ITEM_ID, payment_id=f"cache-payment-{number}", common_origin_id=f"cache-origin-{number}",
+                                                  amount_cents=100, evidence_id=f"cache-evidence-{number}", event_at_ms=expected.CASH_EVENT_MS)
+            directory = self._path(f"history-{len(histories)}")
+            store.export_history(directory)
+            histories.append({path.name: path.read_bytes() for path in directory.iterdir()})
+        self.assertGreater(adapter._record_wire.cache_info().hits, 0)
+        self.assertEqual(histories[0], histories[1])
+        data = self._snapshot(store).data
+        for key, value, code in (("amount_cents", True, "evidence_0_amount"), ("kind", ["unhashable"], "evidence_0_kind")):
+            refused = dict(data, evidence=[dict(data["evidence"][0], **{key: value}), *data["evidence"][1:]])
+            for encode in (adapter._record_wire.__wrapped__, adapter._record_wire):
+                with patch.object(adapter, "_record_wire", encode), self.assertRaisesRegex(adapter.SemanticAdapterCodecError, f"^{code}$"):
+                    adapter._encode_blfin02(refused)
+
 
 if __name__ == "__main__":
     unittest.main()

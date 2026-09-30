@@ -16,6 +16,8 @@ strings/lists, explicit enum tags, and no trailing bytes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import functools
+import itertools
 import json
 import re
 import sqlite3
@@ -587,14 +589,6 @@ def _read_tag(reader: _WireReader, tags: Mapping[str, int], label: str) -> str:
     return inverse[tag]
 
 
-def _write_id_list(writer: _WireWriter, values: object, label: str) -> None:
-    writer.list(values, label, lambda value, item_label: writer.identifier(value, item_label))
-
-
-def _write_text_list(writer: _WireWriter, values: object, label: str) -> None:
-    writer.list(values, label, lambda value, item_label: writer.string(value, item_label))
-
-
 def _write_context(
     writer: _WireWriter,
     *,
@@ -633,7 +627,7 @@ def _write_authority(writer: _WireWriter, authority: Mapping[str, Any]) -> None:
     def encode_actor(value: object, label: str) -> None:
         actor = _wire_mapping(value, label, {"actor_id", "roles"})
         writer.identifier(actor["actor_id"], f"{label}_id")
-        _write_id_list(writer, actor["roles"], f"{label}_roles")
+        writer.list(actor["roles"], f"{label}_roles", writer.identifier)
 
     writer.list(actors, "authority_actors", encode_actor)
 
@@ -656,15 +650,15 @@ def _write_control_pack(writer: _WireWriter, pack: Mapping[str, Any], currency: 
     writer.identifier(fields["period_id"], "pack_period_id")
     writer.string(currency, "pack_currency", max_bytes=128)
     writer.nat(fields["version"], "pack_version")
-    _write_text_list(writer, fields["source_refs"], "pack_source_refs")
+    writer.list(fields["source_refs"], "pack_source_refs", writer.string)
     writer.nat(fields["effective_start_ms"], "pack_effective_start")
     writer.nat(fields["effective_end_ms"], "pack_effective_end")
     writer.nat(fields["recorded_at_ms"], "pack_recorded_at")
     writer.nat(fields["approved_at_ms"], "pack_approved_at")
     writer.identifier(fields["calculation_rule_id"], "pack_calculation_rule")
     writer.identifier(fields["adjustment_rule_id"], "pack_adjustment_rule")
-    writer.list(fields["authorized_roles"], "pack_authorized_roles", lambda value, label: writer.role(value, label))
-    _write_text_list(writer, fields["expected_tests"], "pack_expected_tests")
+    writer.list(fields["authorized_roles"], "pack_authorized_roles", writer.role)
+    writer.list(fields["expected_tests"], "pack_expected_tests", writer.string)
     expected_digest = owner._digest(owner._EVIDENCE_DOMAIN, _canonical(fields))
     stored_digest = _wire_hex_digest(wrapper["digest"], "pack_digest")
     if stored_digest != expected_digest:
@@ -683,23 +677,38 @@ def _write_obligation(writer: _WireWriter, obligation: Mapping[str, Any]) -> Non
     writer.boolean(obligation["reporting_complete"], "obligation_reporting_complete")
 
 
-def _write_payments(writer: _WireWriter, payments: object) -> None:
-    def encode_payment(value: object, label: str) -> None:
-        payment = _wire_mapping(value, label)
-        for key, field_label in (
-            ("payment_id", "payment_id"), ("obligation_id", "payment_obligation_id"),
-            ("item_id", "payment_item_id"), ("evidence_id", "payment_evidence_id"),
-            ("common_origin_id", "payment_origin"),
-        ):
-            writer.identifier(payment[key], f"{label}_{field_label}")
-        writer.nat(payment["amount_cents"], f"{label}_amount")
-        writer.nat(payment["event_at_ms"], f"{label}_event_at")
-        writer.option_identifier(payment["reversed_by_evidence_id"], f"{label}_reversed_by")
-        active = payment["active"]
-        status = "ACTIVE" if active == 1 else "REVERSED" if active == 0 else None
-        _write_tag(writer, _PAYMENT_STATUS_TAGS, status, f"{label}_status")
+@functools.lru_cache(maxsize=1 << 14, typed=True)
+def _record_wire(encode: Any, context: object, *items: object) -> bytes:
+    writer = _WireWriter()
+    encode(writer, dict(zip(items[::2], items[1::2])), "record", context)
+    return bytes(writer._buffer)
 
-    writer.list(payments, "payments", encode_payment)
+
+def _write_records(writer: _WireWriter, records: object, label: str, encode: Any, context: object = None) -> None:
+    """A record's bytes depend only on its typed keys and values, and every evaluation re-sends an obligation's
+    earlier rows, so they come from a bounded cache. A record that fails is encoded again under its own label."""
+    def write(value: object, item_label: str) -> None:
+        record = _wire_mapping(value, item_label)
+        try:
+            writer.raw(_record_wire(encode, context, *itertools.chain.from_iterable(record.items())), item_label)
+        except Exception:
+            encode(writer, record, item_label, context)
+    writer.list(records, label, write)
+
+
+def _encode_payment(writer: _WireWriter, payment: dict[str, Any], label: str, _context: None) -> None:
+    for key, field_label in (
+        ("payment_id", "payment_id"), ("obligation_id", "payment_obligation_id"),
+        ("item_id", "payment_item_id"), ("evidence_id", "payment_evidence_id"),
+        ("common_origin_id", "payment_origin"),
+    ):
+        writer.identifier(payment[key], f"{label}_{field_label}")
+    writer.nat(payment["amount_cents"], f"{label}_amount")
+    writer.nat(payment["event_at_ms"], f"{label}_event_at")
+    writer.option_identifier(payment["reversed_by_evidence_id"], f"{label}_reversed_by")
+    active = payment["active"]
+    status = "ACTIVE" if active == 1 else "REVERSED" if active == 0 else None
+    _write_tag(writer, _PAYMENT_STATUS_TAGS, status, f"{label}_status")
 
 
 def _write_claims(writer: _WireWriter, claims: object) -> None:
@@ -732,14 +741,8 @@ def _write_determinations(writer: _WireWriter, determinations: object) -> None:
         writer.digest(_wire_hex_digest(determination["authority_digest"], f"{label}_authority_digest"), f"{label}_authority_digest")
         _write_tag(writer, _DECISION_TAGS, determination["decision"], f"{label}_decision")
         writer.nat(determination["amount_cents"], f"{label}_amount")
-        writer.list(
-            determination["supporting_evidence"],
-            f"{label}_supporting_evidence",
-            lambda binding, binding_label: writer.identifier(
-                _wire_mapping(binding, binding_label, {"evidence_id", "record_digest"})["evidence_id"],
-                binding_label,
-            ),
-        )
+        writer.list(determination["supporting_evidence"], f"{label}_supporting_evidence", lambda binding, binding_label: writer.identifier(
+            _wire_mapping(binding, binding_label, {"evidence_id", "record_digest"})["evidence_id"], binding_label))
         writer.nat(determination["expected_revision"], f"{label}_expected_revision")
         writer.nat(determination["resulting_revision"], f"{label}_resulting_revision")
         writer.nat(determination["decided_at_ms"], f"{label}_decided_at")
@@ -747,25 +750,21 @@ def _write_determinations(writer: _WireWriter, determinations: object) -> None:
     writer.list(determinations, "determinations", encode_determination)
 
 
-def _write_evidence(writer: _WireWriter, evidence: object, *, obligation_id: object) -> None:
-    def encode_evidence(value: object, label: str) -> None:
-        record = _wire_mapping(value, label)
-        writer.identifier(record["evidence_id"], f"{label}_evidence_id")
-        writer.identifier(obligation_id, f"{label}_obligation_id")
-        writer.identifier(record["item_id"], f"{label}_item_id")
-        writer.string(record["kind"], f"{label}_kind")
-        writer.identifier(record["common_origin_id"], f"{label}_common_origin_id")
-        writer.string(record["source_id"], f"{label}_source_id")
-        writer.string(record["source_version"], f"{label}_source_version")
-        writer.string(record["local_ref"], f"{label}_local_ref")
-        writer.nat(record["applicable_at_ms"], f"{label}_applicable_at")
-        writer.nat(record["event_at_ms"], f"{label}_event_at")
-        writer.nat(record["received_at_ms"], f"{label}_received_at")
-        writer.option_nat(record["amount_cents"], f"{label}_amount")
-        writer.option_identifier(record["reversal_of"], f"{label}_reversal_of")
-        writer.option_identifier(record["supersedes"], f"{label}_supersedes")
-
-    writer.list(evidence, "evidence", encode_evidence)
+def _encode_evidence(writer: _WireWriter, record: dict[str, Any], label: str, obligation_id: object) -> None:
+    writer.identifier(record["evidence_id"], f"{label}_evidence_id")
+    writer.identifier(obligation_id, f"{label}_obligation_id")
+    writer.identifier(record["item_id"], f"{label}_item_id")
+    writer.string(record["kind"], f"{label}_kind")
+    writer.identifier(record["common_origin_id"], f"{label}_common_origin_id")
+    writer.string(record["source_id"], f"{label}_source_id")
+    writer.string(record["source_version"], f"{label}_source_version")
+    writer.string(record["local_ref"], f"{label}_local_ref")
+    writer.nat(record["applicable_at_ms"], f"{label}_applicable_at")
+    writer.nat(record["event_at_ms"], f"{label}_event_at")
+    writer.nat(record["received_at_ms"], f"{label}_received_at")
+    writer.option_nat(record["amount_cents"], f"{label}_amount")
+    writer.option_identifier(record["reversal_of"], f"{label}_reversal_of")
+    writer.option_identifier(record["supersedes"], f"{label}_supersedes")
 
 
 def _write_conflicts(writer: _WireWriter, conflicts: object) -> None:
@@ -854,10 +853,10 @@ def _encode_blfin02(data: Mapping[str, Any]) -> bytes:
         _write_obligation(writer, obligation)
         writer.nat(pre["revision"], "before_revision")
         writer.nat(data["evaluation_time_ms"], "evaluated_at")
-        _write_payments(writer, data["payments"])
+        _write_records(writer, data["payments"], "payments", _encode_payment)
         _write_claims(writer, data["claims"])
         _write_determinations(writer, data["determinations"])
-        _write_evidence(writer, data["evidence"], obligation_id=pre["obligation_id"])
+        _write_records(writer, data["evidence"], "evidence", _encode_evidence, pre["obligation_id"])
         _write_conflicts(writer, data["conflicts"])
         _write_cases(writer, data["cases"])
         _write_actions(writer, data["actions"], currency=scope["currency"])
@@ -933,7 +932,7 @@ def _encode_blfres02_result(result: DecodedLeanResult) -> bytes:
     writer.nat(result.after_revision, "after_revision")
     writer.nat(result.evaluated_at_ms, "evaluated_at")
     writer.nat(result.rule_version, "rule_version")
-    _write_id_list(writer, list(result.evidence_ids), "evidence_ids")
+    writer.list(list(result.evidence_ids), "evidence_ids", writer.identifier)
     writer.option_nat(result.completion_at_ms, "completion_at")
     for field in (
         "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents",

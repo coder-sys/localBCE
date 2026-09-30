@@ -17,7 +17,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 ## Current verification (latest run per claim; raw logs are the record)
 
 - **Full suite, trunk `4efcb4b` merged** (`merge4efcb4b-full1-a1-L3`): `SUMMARY run=495 passed=483 failed=0 errors=2 skipped=10`; the 2 errors are the ML-DSA vector tests (unbuilt exe). Gate Lean build, 19 jobs (`merge4efcb4b-lean2-a2`). Skips: symlink privilege, absent old engine artifact, no fresh handoff, 7 external-gate tests.
-- **Lean-live M0/M1** (XI.2 record): Lean decides the correction amount and every evaluated field; the checker re-checks each before COMMIT. M1 suite run: see the merge commit. M1.5: worker memory growth fixed at the root (1 GiB mimalloc arena; XI.2 record).
+- **Lean-live M0/M1** (XI.2 record): Lean decides the correction amount and every evaluated field; the checker re-checks each before COMMIT. M1 suite run: see the merge commit. M1.5: worker memory growth fixed at the root (1 GiB mimalloc arena; XI.2 record). Quarter-end cash-file lock is still 8-11.5 s, over its 5 s bound (Cash-file capacity).
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile stay NONE.
 - **Line pack (B+)** (documentation-only CMS-64.9 pack; XI.2 record): its tests run in the suite. Kill criterion 1 holds (19A 32,345 of 32,345, FULL).

@@ -285,6 +285,9 @@ flows need sharding or Phase 2 and are not claimed.
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
   busy timeout. One evaluation per payment is kept
   (founder, 2026-09-28).
+- 2026-09-29: BLFIN02 bytes of each evidence and payment record are cached (same
+  typed values, same bytes). Quarter-end, no profiler: encoding 0.85 to 0.43 s; lock
+  still 8-11.5 s, over 5 s: worker 2.6 s, whole-store checks 2.9 s (`lk-break1`).
 - Art. XI.2 record. Disposition: the whole-store verify no longer runs twice per
   import under the lock (it runs at each open). Replacement control, before
   COMMIT: each new event onto the chain, every table's before/after difference,
