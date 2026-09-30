@@ -520,14 +520,15 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(seen, [rule])
 
     def test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit(self):
-        store = self.store = self.fixture._build_base_for_correction()  # S4: the owner forgets earlier linked payments and overpays a correction request by 1 cent
-        self.fixture._prepare_acknowledged(store)
+        store, reject_b = self.fixture._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)  # S4: two requests, 600,000 owed; the owner forgets earlier linked payments and pays request A twice (300,001 cents)
+        self.store = store
+        reject_b()
         self.baseline = self._manifest()
-        detail = store.obligation_detail(expected.H_ITEM_ID)
-        rows = [{**self._row(1, expected.CORRECTION_PAYMENT_CENTS - 1, detail["revision"]), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS}]
-        rows.append({**self._row(2, 2, detail["revision"] + 1), "pays_action_id": detail["actions"][0]["action_id"], "event_at_ms": expected.P2_EVENT_MS})
+        revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
+        rows = [{**self._row(1, 300_000, revision), "pays_action_id": expected.ACTION_CORRECTION_ID, "event_at_ms": expected.P2_EVENT_MS}]
+        rows.append({**self._row(2, 1, revision + 1), "pays_action_id": expected.ACTION_CORRECTION_ID, "event_at_ms": expected.P2_EVENT_MS})
         self.source = {**self.source, "captured_at_ms": expected.P2_EVENT_MS}
-        self.value.update(source=self.source, row_count=2, rows=rows, total_cents=expected.CORRECTION_PAYMENT_CENTS + 1)
+        self.value.update(source=self.source, row_count=2, rows=rows, total_cents=300_001)
         self.fixture._advance_clock(store, expected.P2_EVENT_MS)
         with patch.object(owner, "_correction_paid", lambda connection, obligation_id: []):
             self._refused_by("payment:link", lambda: self._apply())
