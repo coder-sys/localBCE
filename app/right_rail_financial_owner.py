@@ -2417,8 +2417,7 @@ class FinancialOwner:
                     done = before_commit(connection) if before_commit is not None else None  # the obligations the cash-file checker verified, on this same state
                     if self._batch.evaluated:  # the very set it verified needs only this Owner's own schema and meta check
                         self._verify_before_commit(connection, "evaluation", *(() if self._batch.evaluated == done else sorted(self._batch.evaluated)))
-                    if conclude is not None:
-                        conclude()  # a cash-file preview reports only after the check above, then rolls back
+                    conclude and conclude()  # a cash-file preview reports only after the check above, then rolls back
                     connection.execute("COMMIT")
                     self._row_cache = after
             except BaseException as error:

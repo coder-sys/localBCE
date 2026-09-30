@@ -16,9 +16,9 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
 # tests and proofs as bloat. Product code (what runs and must be read to be trusted)
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
-# lean-leak (options C, E, D and the preview fix) added 41 lines over trunk 37,063: a quarter-end cash-file lock verifies about 0.65 s less
+# lean-leak (options C, E, D and the preview fix) added 40 lines over trunk 37,063: a quarter-end cash-file lock verifies about 0.65 s less
 # (logs lta-probe2-a1-L2, lta-probe3-a1-L1), and a preview refuses what its apply would.
-PRODUCT_CODE_LINES = 37_104
+PRODUCT_CODE_LINES = 37_103
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
 EVIDENCE_CODE_LINES = 43_901
