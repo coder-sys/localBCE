@@ -12,9 +12,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 51 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  17e0a68931d47c4e740cef074a61bcc0ec0785b7a25be562152d7e05ba14b5ed, 5,635 bytes;
-  copy at C:\Users\neers\rrb\gate\lqw-gv-manifest-tracked.txt.
+- Source manifest, 54 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  1874e8483921d1c628b67e20391b121ee5249b6be7808626486bc9f2697d34a8, 6,018 bytes;
+  copy at C:\Users\neers\rrb\gate\lpsm-gv-manifest.txt.
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -28,6 +28,11 @@ Re-pin (2026-09-29, branch lean-paid-sum): the manifest moved (55 files, 0482e14
 exe did not. The tree gained the paid-sum sources and the semantic gate under lean/tools/. The 61-file tree copied to
 C:\Users\neers\rrb\gate\lps-gv-a\lean and ...\lps-gv-b\lean was built in each (guard logs lps-gvA3-a1-L2, lps-gvB3-a2-L1),
 and the in-tree build (lps-gvT-a5-L1) gave the same SHA-256 fc45ce6d... as the pin above.
+
+Re-pin (2026-09-29, merge of trunk eb37f1c into lean-paid-sum): the manifest of the merged tree is 54 tracked files,
+1874e848... (the two branch notes above give the earlier values). The exe did not move: the merged tree's 54 tracked
+files copied to C:\Users\neers\rrb\gate\lpsm-gv-a\lean and ...\lpsm-gv-b\lean were built in each (guard logs
+lpsm-gva2-a1-L3, lpsm-gvb2-a2-L3, `lake build gate_verify`, 12 jobs) and both gave SHA-256 fc45ce6d... as pinned above.
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
