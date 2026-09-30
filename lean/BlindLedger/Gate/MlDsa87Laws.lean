@@ -168,6 +168,19 @@ private def rep (n : Nat) (b : UInt8) : ByteArray := ⟨Array.replicate n b⟩
 -- SHAKE extends its own prefix (the tested half of the equivalence).
 #guard ((shake128 (rep 34 7) 894).extract 0 840).data == (shake128 (rep 34 7) 840).data
 #guard ((shake256 (rep 64 7) 272).extract 0 221).data == (shake256 (rep 64 7) 221).data
+-- Block-boundary KATs (rate - 1, rate, rate + 1; SHAKE squeezes 200 bytes, past one block), expected values from Python hashlib;
+-- a SHAKE output is compared through its SHA3-512 digest.
+private def pat (n : Nat) : ByteArray := ⟨(Array.range n).map fun i => UInt8.ofNat ((i * 7 + 3) % 256)⟩
+private def kh (b : ByteArray) : String := String.join (b.toList.map fun x => String.ofList [Nat.digitChar (x.toNat / 16), Nat.digitChar (x.toNat % 16)])
+#guard kh (sha3_512 (pat 71)) == "a02d5795bffd44cb0ac3cc3401ae89056b8017242eaf7e802033e974672ce7945811760c3b0d9578bc51bf90c364636ac87cda9b4f3e45620ea9c030421e9d86"
+#guard kh (sha3_512 (pat 72)) == "2ec0da5ff440c192d33033c4257eb39dcbd27edd7e41b5ac8db9daf13db501a2ef938151aaddd82f600335654f77512cbcc926ec5abb05b79282ec716d685618"
+#guard kh (sha3_512 (pat 73)) == "d26d1f9fc91b1d6c31405cc4a546f246fa7777f698d956c26a15170bccdd696aab3ee2e0597ee6f33bc7ac0336b1e4bfa0cc4355ab9faf8111cf27312640fd65"
+#guard kh (sha3_512 (shake128 (pat 167) 200)) == "930cb4cb909abe0bff89aa388bd8bfe33c18f06d2a4ecc70fa7379102e89f19d099e627d7a231c9a672a1c8fbb8f018aa555f6a32fa2422d689b3b7d6f9706ab"
+#guard kh (sha3_512 (shake128 (pat 168) 200)) == "5687100592e574d4cbe34a35e6f1aac5a879fe7905b573dd2023376fdb9430acbc5c5654fe71c1cea062d787e8c4fa6c72edb6bb79c84f300c2d0879150f3c07"
+#guard kh (sha3_512 (shake128 (pat 169) 200)) == "c9cd6d66542a7894fa3c782e249a6bdcc6d3f0967d54ba679699dd89f0de4a01d44e43fdfdbbbacb0d1ee95f72628453e286f42915a2b0e30105407b784c4bcf"
+#guard kh (sha3_512 (shake256 (pat 135) 200)) == "c9f5769c8a0653450247cebd8ba4e3c444c1b34a54a559ac325739a542540275b7af1b5780016f0caa4c0c9ad6569e36b9718f0bdda029c34ff40ede567ad376"
+#guard kh (sha3_512 (shake256 (pat 136) 200)) == "736f25ed2d57dc253abd3be212a96953c07ba301494aca9342d60bf8181ac3bbf0ca232223662e8d27332937a8121b5e383ce893aaa68e55a1b12ba82096030a"
+#guard kh (sha3_512 (shake256 (pat 137) 200)) == "abe98a25f3a56a6afc6de59d1e93f2ddd93187b7db23f514465f3dca67918f7a17aaf77dd005b47fb8ff0007c3de006d2027aa1c36c6fb8551d4d68bd1bf0832"
 -- the ntt/invNtt loop rewrite still round-trips
 #guard let p := (Array.range 256).map (· * 7919 % q); invNtt (ntt p) == p
 
