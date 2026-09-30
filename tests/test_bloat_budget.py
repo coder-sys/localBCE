@@ -17,11 +17,13 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # tests and proofs as bloat. Product code (what runs and must be read to be trusted)
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
 # 2026-09-29 UI M3, +154: the second lawful outcome (accept the offset) and a three-step Decide sheet in place of one unsafe click.
-PRODUCT_CODE_LINES = 37_217
+# Review fixes, +11: acknowledging the current action, so an accepted offset can close; accept bound to the read the approver saw.
+PRODUCT_CODE_LINES = 37_228
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
 # 2026-09-29 UI M3, +159: sheet states, each outcome in three steps, the accepted journey and the resend covered by the new tests.
-EVIDENCE_CODE_LINES = 43_889
+# Review fixes, +18: the accepted case reaching RESOLVED, and accept refused on a changed or moved read.
+EVIDENCE_CODE_LINES = 43_907
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.

@@ -431,8 +431,12 @@
 
   function offsetOf(pkg) {
     const page = pkg.references && pkg.references.claims;
+    const claims = page && Array.isArray(page.items) ? page.items : [];
+    const claim = claims.find((row) => row.status === "CLAIMED") || claims[0];
     return {
-      claims: page && Array.isArray(page.items) ? page.items : [],
+      claims,
+      amount: claim ? asMoney(claim.amount_cents) : "Unknown",
+      claim,
       support: decisionView.source_assessment.h_support_status === "MISSING" ? "no supporting evidence" : "support recorded, unverified",
     };
   }
@@ -604,12 +608,12 @@
     if (["acknowledge", "record-report"].includes(name)) return revision;
     if (name === "record-cash") return { ...revision, cash_command: { ...CASH_CORRECTION_COMMAND } };
     if (!pkg.evaluation_receipt) return null;
-    const decision = {
+    return {
       ...revision,
       evaluation_id: pkg.evaluation_receipt.evaluation_id,
       evaluation_result_digest: pkg.evaluation_receipt.result_digest,
+      read_binding: staffCommandBinding(decisionView.read_envelope, pkg),
     };
-    return name !== "authorize-offset" ? { ...decision, read_binding: staffCommandBinding(decisionView.read_envelope, pkg) } : decision;
   }
 
   function applyCommandSnapshot(value, startedAt) {
@@ -651,7 +655,7 @@
     const decisionRetry = Boolean(unresolvedDecision && canRetry);
     const cashRetry = Boolean(unresolvedCashBody && canRetry);
     setButton("decide", decisionRetry ? false : !reviewed || decided);
-    setButton("acknowledge", !reviewed || !action || action.status !== "READY" || action.kind !== "CORRECTION_PAYMENT_REQUEST");
+    setButton("acknowledge", !reviewed || !action || action.status !== "READY");
     setButton("record-cash", cashRetry ? false : !reviewed || !action || action.status !== "ACKNOWLEDGED" || !h || h.shortfall_cents <= 0,
       cashRetry && "Retry exact cash evidence command");
     setButton("record-report", !reviewed || !h || h.reporting_complete || h.shortfall_cents > 0);
@@ -676,9 +680,7 @@
     if (sheet.open && !(pkg && ownerAvailable)) sheet.close();
     if (!sheet.open) return;
     const h = pkg.obligation;
-    const { claims, support } = offsetOf(pkg);
-    const claim = claims.find((row) => row.status === "CLAIMED") || claims[0];
-    const amount = claim ? asMoney(claim.amount_cents) : "Unknown";
+    const { claim, amount, support } = offsetOf(pkg);
     sheetLines = [
       "Paid " + asMoney(h.received_cash_cents) + " of " + asMoney(h.owed_cents) + " owed.",
       claim ? "Plan A's offset claim: " + amount + " (" + words(claim.status) + "); " + support + "." : "No offset claim on file.",
@@ -689,13 +691,13 @@
     byId("sheet-evidence").replaceChildren(...sheetLines.map((line) => Object.assign(document.createElement("li"), {
       textContent: line + (sheetPrior && !sheetPrior.includes(line) ? " (changed)" : ""),
     })));
-    byId("sheet-rule").textContent = "Adjustment rule " + (pkg.control_pack || {}).adjustment_rule_id + ": the offset has " + support + ".";
+    byId("sheet-rule").textContent = "Adjustment rule " + (pkg.control_pack || {}).adjustment_rule_id + " applies; the offset has " + support + ". This is for your information and does not decide for you.";
     if (unresolvedDecision) form.querySelector('input[value="' + unresolvedDecision.name + '"]').checked = true;
     const held = commandPending || Boolean(unresolvedDecision);
     for (const field of [...form.querySelectorAll("input"), byId("sheet-reason")]) field.disabled = held;
     const names = model.local_controls["sheet-confirm"].names;
-    byId("sheet-confirm").textContent = commandPending ? names.pending : unresolvedDecision ? names.retry
-      : { "reject-offset": names.reject, "authorize-offset": names.accept }[chosen()] || names.idle;
+    byId("sheet-confirm").textContent = (commandPending ? names.pending : unresolvedDecision ? names.retry
+      : { "reject-offset": names.reject, "authorize-offset": names.accept }[chosen()] || names.idle).replace("{amount}", amount);
     byId("sheet-confirm").disabled = commandPending;
     byId("sheet-cancel").disabled = commandPending;
   }
@@ -762,7 +764,9 @@
     const startedAt = envelope ? { ...ownerIdentity(envelope), ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id } : null;
     const route = ROUTES[name];
     const body = commandBody(name);
-    if (!route || !body) return;
+    if (!route) return;
+    if (!body) return sheet.open ? sheetError("no_package", model.local_controls["sheet-confirm"].errors.no_package) : commandMessage("Reopen Hospital H's package, then try again.", "error");
+    const amount = name in DECISIONS ? offsetOf(currentPackage()).amount : "";
     // Hold the exact body until the Owner answers: a lost response is retried byte for byte.
     const isDecision = name in DECISIONS;
     if (isDecision) {
@@ -779,7 +783,7 @@
       const result = await postJson(route, body);
       responseReceived = true;
       const declared = model.controls[name] && model.controls[name].responses.success.message;
-      let description = declared || "Command recorded";
+      let description = (declared || "Command recorded").replace("{amount}", amount);
       if (name === "acknowledge") {
         description += " Cash before: " + asMoney(result.cash_before_cents) + "; after: " + asMoney(result.cash_after_cents) + "; cash effect: " + asMoney(result.cash_effect_cents) + ".";
       }

@@ -76,7 +76,7 @@
       "leads_to": "decision",
       "enabled_when": "(unresolved_decision_body and owner_available and not command_pending) or (reviewed and not decided)",
       "responses": {
-        "success": { "screen": "decision", "message": "You rejected the offset. Plan A must pay Hospital H $3,000.00." },
+        "success": { "screen": "decision", "message": "You rejected the {amount} offset. The correction request is recorded." },
         "obligation_revision_conflict": { "screen": "decide", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "evaluation_revision_conflict": { "screen": "decide", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "evaluation_already_consumed": { "screen": "decide", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
@@ -118,7 +118,7 @@
       "leads_to": "decision",
       "enabled_when": "(unresolved_decision_body and owner_available and not command_pending) or (reviewed and not decided)",
       "responses": {
-        "success": { "screen": "decision", "message": "You accepted the offset. The $3,000.00 counts toward Hospital H's payment." },
+        "success": { "screen": "decision", "message": "You accepted the {amount} offset. It is recorded as counting toward Hospital H's payment." },
         "obligation_revision_conflict": { "screen": "decide", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "evaluation_revision_conflict": { "screen": "decide", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "evaluation_already_consumed": { "screen": "decide", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
@@ -146,7 +146,7 @@
       "roles": ["analyst"],
       "route": "POST /api/action/acknowledge",
       "leads_to": "decision",
-      "enabled_when": "reviewed and action.status == 'READY' and action.kind == 'CORRECTION_PAYMENT_REQUEST'",
+      "enabled_when": "reviewed and action.status == 'READY'",
       "responses": {
         "success": { "screen": "decision", "message": "Delivery acknowledged. Zero cash effect." },
         "obligation_revision_conflict": { "screen": "decision", "message": "Owner rejected the stale revision. Reopen the H package." },
@@ -225,7 +225,7 @@
     "sheet-accept": { "role": "radio", "name": "Accept the offset", "visible_when": "sheet_open", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "authorize-offset" },
     "sheet-reject": { "role": "radio", "name": "Reject the offset", "visible_when": "sheet_open", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "reject-offset" },
     "sheet-reason": { "role": "textbox", "name": "Reason (required)", "visible_when": "sheet_open", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "field", "target": "the reason" },
-    "sheet-confirm": { "role": "button", "errors": { "no_choice": "Choose accept or reject.", "no_reason": "Give a reason." }, "names": { "idle": "Record decision", "reject": "Record rejection: Plan A pays $3,000.00", "accept": "Record acceptance of the $3,000.00 offset", "pending": "Recording…", "retry": "Check now" }, "visible_when": "sheet_open", "enabled_when": "not command_pending", "kind": "confirm", "target": "the chosen outcome" },
+    "sheet-confirm": { "role": "button", "errors": { "no_choice": "Choose accept or reject.", "no_reason": "Give a reason.", "no_package": "Reopen Hospital H's package, then try again." }, "names": { "idle": "Record decision", "reject": "Record rejection of the {amount} offset", "accept": "Record acceptance of the {amount} offset", "pending": "Recording…", "retry": "Check now" }, "visible_when": "sheet_open", "enabled_when": "not command_pending", "kind": "confirm", "target": "the chosen outcome" },
     "sheet-cancel": { "role": "button", "name": "Cancel", "visible_when": "sheet_open", "enabled_when": "not command_pending", "kind": "close", "target": "decision" },
     "read-detail": { "selector": "details:has(> #read-detail) > summary", "visible_when": "True", "enabled_when": "True", "kind": "disclosure", "target": "read-detail" },
     "binding-detail": { "selector": "details:has(> #binding-facts) > summary", "visible_when": "decision_open", "enabled_when": "True", "kind": "disclosure", "target": "binding-facts" },

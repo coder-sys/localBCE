@@ -52,6 +52,7 @@ H_ITEM_ID = "item-h"
 H_CLAIM_ID = "claim:obligation-item-h:offset-v1"
 H_ACTION_ID = "action:obligation-item-h:correction-v1"
 H_OFFSET_ACTION_ID = "action:obligation-item-h:offset-v1"
+ACK_REFS = {H_ACTION_ID: "ack:correction:h:v1", H_OFFSET_ACTION_ID: "ack:offset:h:v1"}
 H_OBLIGATION_ID = "obligation:item-h:period-01"
 MAX_RESTORE_DESTINATIONS = 1000
 MAX_STAFF_COMMAND_BYTES = 8192
@@ -128,7 +129,7 @@ _READ_ROUTES = {
 _OWN_RECORD = {
     "authorize_offset": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_OFFSET_ACTION_ID),
     "reject_offset_and_authorize_correction": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_ACTION_ID),
-    "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE action_id=? AND acknowledgment_ref=?", H_ACTION_ID, "ack:correction:h:v1"),
+    "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE acknowledgment_ref IN (?,?)", *ACK_REFS.values()),
     "record_cash_correction": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", CASH_CORRECTION_COMMAND["evidence_id"]),
     "record_reporting_evidence": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", "evidence:report:h:original"),
 }
@@ -565,9 +566,13 @@ class StaffWorkflow:
             return {"command": result, "workspace": self._workspace_locked()}
 
     def authorize_offset(self, body: object) -> dict[str, Any]:
-        """Accept Plan A's offset. The Owner's own revision and evaluation binding decide; a resend returns the first result."""
-        revision, evaluation_id, result_digest = self._review_values(body)
+        """Accept Plan A's offset. Bound to the read the approver saw, like restore-test; a resend returns the first result."""
+        revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
         with self._lock:
+            view = self.decision_view()
+            # Once decided, the read has moved on by design: a resend goes to the Owner, which answers DUPLICATE or refuses.
+            if view["decision_package"].get("current_determination") is None and read_binding != self._staff_command_binding(view):
+                raise FinancialRevisionError("obligation_revision_conflict")
             self._clock.advance_to(DECISION_AT_MS)
             result = self._mirror.authorize_offset(
                 item_id=H_ITEM_ID,
@@ -585,10 +590,12 @@ class StaffWorkflow:
     def acknowledge_correction_action(self, body: object) -> dict[str, Any]:
         revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
+            current = self._mirror.decision_package(H_ITEM_ID, limit=100, offset=0).get("current_action")
+            action_id = current.get("action_id") if type(current) is dict and current.get("action_id") in ACK_REFS else H_ACTION_ID
             cash_before = self._h_received_cash_cents()
             result = self._mirror.acknowledge_action(
-                H_ACTION_ID,
-                "ack:correction:h:v1",
+                action_id,
+                ACK_REFS[action_id],
                 actor_id="synthetic-receiver",
                 actor_role="RECEIVER",
                 expected_revision=revision,

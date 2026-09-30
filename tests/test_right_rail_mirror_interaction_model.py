@@ -188,8 +188,8 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             before_click()
         self.assertTrue(browser.action(name), f"{name}: enabled but not clickable")
         status = browser.last_view["texts"].get("command-status", "")
-        expected = control["responses"][response]["message"]
-        self.assertIn(expected.split(".")[0] if response == "success" else expected, status, f"{name}: {status}")
+        expected = _say(control["responses"][response]["message"])
+        self.assertIn(expected.split(". ")[0].rstrip(".") if response == "success" else expected, status, f"{name}: {status}")
 
     def _walk(self, workflow, server, sequence, position=None) -> None:
         truth = lambda: workflow.decision_view()["decision_package"]  # noqa: E731
@@ -275,7 +275,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 self.assertIn(words, browser.last_view["texts"]["command-status"])
                 self.assertEqual(browser.role("button", "Check now")["disabled"], False)  # the held body, offered again
             self.assertTrue(browser.action("reject-offset"))
-            self.assertIn(_MODEL["controls"]["reject-offset"]["responses"]["success"]["message"].split(".")[0], browser.last_view["texts"]["command-status"])
+            self.assertIn(_say(_MODEL["controls"]["reject-offset"]["responses"]["success"]["message"]).split(". ")[0], browser.last_view["texts"]["command-status"])
             self.assertEqual(workflow.decision_view()["decision_package"]["current_action"]["status"], "READY")
         finally:
             self._stop_workflow(workflow, server, thread)
@@ -295,7 +295,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             browser.role("button", "Decide Hospital H", "click")
             sheet = browser.role("dialog", "Decide Hospital H's $3,000.00 offset")
             self.assertEqual(sheet["found"], 1)
-            for phrase in ("Evidence", "no supporting evidence", "Rule check (automatic)", "Your decision (required; nothing selected)"):
+            for phrase in ("Evidence", "no supporting evidence", "Adjustment rule", "does not decide for you", "Your decision (required; nothing selected)"):
                 self.assertIn(phrase, sheet["text"])
             for radio in ("sheet-accept", "sheet-reject"):
                 found = browser.role("radio", controls[radio]["name"])
@@ -305,10 +305,10 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             browser.role("button", names["idle"], "click")  # nothing chosen: the button answers, it does not send
             self.assertEqual(browser.role("alert")["text"], errors["no_choice"])
             browser.role("radio", controls["sheet-accept"]["name"], "check")
-            browser.role("button", names["accept"], "click")  # chosen, no reason
+            browser.role("button", _say(names["accept"]), "click")  # chosen, no reason
             self.assertEqual(browser.role("alert")["text"], errors["no_reason"])
             browser.role("radio", controls["sheet-reject"]["name"], "check")
-            self.assertEqual(browser.role("button", names["reject"])["found"], 1)  # the button names verb and amount
+            self.assertEqual(browser.role("button", _say(names["reject"]))["found"], 1)  # the button names verb and amount
             self.assertEqual(browser.last_view["posts"], [])
             self.assertEqual(workflow.mirror.owner.export_continuity(), before)
             browser.role("button", controls["sheet-cancel"]["name"], "click")
@@ -324,7 +324,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             with self.subTest(outcome=outcome):
                 workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"sheet-{outcome}")
                 declared = _MODEL["controls"][outcome]["responses"]
-                button = controls["sheet-confirm"]["names"][confirm]
+                button = _say(controls["sheet-confirm"]["names"][confirm])
                 try:
                     browser = self._open("approver", server)
                     browser.click("open-package")
@@ -339,7 +339,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                     self.assertIn("(changed)", browser.role("dialog")["text"])
                     self.assertIsNone(workflow.decision_view()["decision_package"]["current_determination"])
                     browser.role("button", button, "click")  # the choice and reason are kept: confirm again on the new facts
-                    self.assertTrue(browser.last_view["texts"]["command-status"].startswith(declared["success"]["message"]))
+                    self.assertTrue(browser.last_view["texts"]["command-status"].startswith(_say(declared["success"]["message"])))
                     self.assertEqual(browser.role("dialog")["found"], 0)
                     self.assertTrue(browser.role("button", "Decide Hospital H")["disabled"])  # a finished decision cannot repeat
                     self.assertEqual(workflow.decision_view()["decision_package"]["current_determination"]["decision"], _DECISIONS[outcome])
@@ -350,7 +350,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
     def test_accepting_the_offset_walks_a_shorter_journey(self) -> None:
         workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-accept-walk")
         try:
-            self._walk(workflow, server, (("approver", "authorize-offset"), ("analyst", "record-report")))
+            self._walk(workflow, server, (("approver", "authorize-offset"), ("analyst", "acknowledge"), ("analyst", "record-report")))
+            view = workflow.decision_view()["decision_package"]  # the end state: nothing is left waiting, the case is closed
+            self.assertEqual((view["case"]["status"], view["obligation"]["shortfall_cents"]), ("RESOLVED", 0))
         finally:
             self._stop_workflow(workflow, server, thread)
 
@@ -443,7 +445,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                   else "package-staleness" if name == "open-package" and code == "success"
                   else "sheet-hint" if name == "decide" else "command-status")
         if code == "success":
-            self.assertTrue(view["texts"][region].startswith(outcome["message"]), view["texts"][region])
+            self.assertTrue(view["texts"][region].startswith(_say(outcome["message"])), view["texts"][region])
         else:
             self.assertEqual(view["texts"][region], outcome["message"])
         if outcome["screen"] == "unavailable":
@@ -518,13 +520,17 @@ _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
 _DECISIONS = {"reject-offset": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "authorize-offset": "OFFSET_AUTHORIZED"}
 _DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
 
+def _say(message: str) -> str:
+    """A declared message with the amount its page fills in (H's claim is $3,000.00)."""
+    return message.replace("{amount}", "$3,000.00")
+
 def _state(pkg: dict[str, Any], test_mode: bool) -> dict[str, Any]:
     action = pkg.get("current_action") or {}
     return {
         "reviewed": True, "command_pending": False, "test_mode": test_mode,
         "owner_available": True, "unresolved_decision_body": False, "unresolved_cash_body": False,
         "decided": pkg.get("current_determination") is not None,
-        "action": SimpleNamespace(status=action.get("status"), kind=action.get("kind")), "shortfall": pkg["obligation"]["shortfall_cents"],
+        "action": SimpleNamespace(status=action.get("status")), "shortfall": pkg["obligation"]["shortfall_cents"],
         "reporting_complete": bool(pkg["obligation"]["reporting_complete"]),
     }
 

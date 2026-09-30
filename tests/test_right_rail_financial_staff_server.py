@@ -706,6 +706,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         workflow = self._workflow()
         bodies = {
             workflow.reject_offset_and_authorize_correction: self._review_body(workflow),
+            workflow.authorize_offset: self._review_body(workflow),
             workflow.acknowledge_correction_action: self._revision_body(workflow),
             workflow.record_cash_correction: self._cash_body(workflow),
             workflow.record_reporting_evidence: self._revision_body(workflow),
@@ -755,6 +756,24 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 seen.add(function.name)
         self.assertEqual(seen, handlers)
 
+    def test_accepting_the_offset_refuses_a_changed_binding_and_a_moved_snapshot(self) -> None:
+        workflow = self._workflow()
+        owner = workflow.mirror.owner
+        altered, stale = self._review_body(workflow), self._review_body(workflow)
+        altered["read_binding"]["input"]["receipt_digest"] = "F" * 128
+        before = owner.export_continuity()
+        with self.assertRaises(FinancialRevisionError):  # a changed binding on an unmoved read
+            workflow.authorize_offset(altered)
+        self.assertEqual(owner.export_continuity(), before)
+        owner.record_support_evidence(item_id="item-01", evidence_id="evidence:support:item-01:late-accept", common_origin_id="origin:support:01:late-accept",
+                                      source_id="fixture-source", source_version="support-v2", local_ref="ref:support:01:late-accept",
+                                      applicable_at_ms=SUPPORT_EVENT_MS, event_at_ms=SUPPORT_EVENT_MS + 1)
+        moved = owner.export_continuity()
+        with self.assertRaises(FinancialRevisionError) as refused:  # a read the Owner has since moved past
+            workflow.authorize_offset(stale)
+        self.assertEqual(str(refused.exception), "obligation_revision_conflict")
+        self.assertEqual(owner.export_continuity(), moved)
+
     def test_accepting_the_offset_resends_to_the_same_result_and_shuts_out_the_other_outcome(self) -> None:
         workflow = self._workflow(with_correction_release=True)
         owner = workflow.mirror.owner
@@ -762,7 +781,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         lost = self._lose_first_response(handler_type, "/api/decision/authorize-offset")
         port = int(self._serve_workflow(workflow, handler_type).server_address[1])
         review = self._review_body(workflow)
-        body = {key: value for key, value in review.items() if key != "read_binding"}
+        body = review
         with self.assertRaises(http.client.RemoteDisconnected):  # the answer is lost after the Owner committed
             self._http_json(port, "/api/decision/authorize-offset", body)
         self.assertEqual(lost, [True])
