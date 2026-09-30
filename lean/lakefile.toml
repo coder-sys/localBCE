@@ -1,23 +1,23 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules"]
+defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_verify"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
-# correction transition, the Semantic kernel and the shared `BlindLedger.Sha3`.
-# `blind_financial_axioms` is a default target so a plain `lake build` compiles
-# every proof the semantic assurance gate checks (`CorrectionTransition.Theorems`,
-# the codec laws) and prints their axioms; the product executables import none
-# of them, so without it a broken theorem file would never break a build.
-# Parked, not built: the State kernel (`parked/state_clearance/lean`) and the
-# unbuilt Kernel-series/System modules (`parked/lean_unbuilt`).
+# correction transition, the gate and the shared `BlindLedger.Sha3`.
+# `blind_financial_axioms` is a library, not an executable, and a default target:
+# a plain `lake build` compiles every proof the semantic assurance gate checks
+# (`CorrectionTransition.Theorems`, the codec laws) and prints their axioms
+# without generating or linking any native code.  The gate refuses a pinned
+# executable whose import closure holds a Theorems, KAT, Vectors, CodecLaws or
+# *Check module, or a `#print axioms` / `#guard_msgs` command
+# (`lean/tools/semantic_assurance_gate.py`).  Theorem statements that live in
+# the closure itself, such as `CorrectionTransition.Transition`, stay.
+# Parked, not built: the State kernel (`parked/state_clearance/lean`), the retired
+# Semantic kernel (`parked/lean_retired_kernel`) and the unbuilt Kernel-series/System
+# modules (`parked/lean_unbuilt`).
 
 [[lean_lib]]
 name = "BlindLedger"
-
-[[lean_exe]]
-name = "blind_semantic_kernel"
-root = "BlindLedger.SemanticCli"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 [[lean_exe]]
 name = "blind_financial"
@@ -35,23 +35,21 @@ name = "blind_financial_worker"
 root = "BlindLedger.Financial.WorkerCli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
-[[lean_exe]]
+[[lean_lib]]
 name = "blind_financial_axioms"
-root = "BlindLedger.Financial.AxiomCheck"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+roots = ["BlindLedger.Financial.AxiomCheck"]
 
 # Payment gate formats (D1): `gate_vectors` checks tests/gate_vectors against
-# BlindLedger.Gate.Spec; `gate_axioms` builds the gate theorems and pins their
-# dependencies.  Both are default targets.
+# BlindLedger.Gate.Spec; `gate_axioms` (a library) builds the gate theorems and
+# pins their dependencies.  Both are default targets.
 [[lean_exe]]
 name = "gate_vectors"
 root = "BlindLedger.Gate.Vectors"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
-[[lean_exe]]
+[[lean_lib]]
 name = "gate_axioms"
-root = "BlindLedger.Gate.AxiomCheck"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+roots = ["BlindLedger.Gate.AxiomCheck"]
 
 # Test-only: runs tests/gate_rules/*.vectors through the gate rules; never a payment path.
 [[lean_exe]]
@@ -63,4 +61,11 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_exe]]
 name = "panic_probe"
 root = "BlindLedger.Financial.PanicProbe"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The pinned signer self-check (artifacts/gate-verify): one checkpoint against one root key, exit 0 only on ACCEPT.
+# The payer's verifier is not built; this is its Lean model run once per signature before it leaves the gate.
+[[lean_exe]]
+name = "gate_verify"
+root = "BlindLedger.Gate.VerifyCli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]

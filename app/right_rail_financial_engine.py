@@ -31,12 +31,12 @@ MAX_ENGINE_JOB_MEMORY_CAP_BYTES: Final[int] = 2_000_000_000
 CORRECTION_TRANSITION_OPERATION: Final[str] = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARGUMENTS: Final[tuple[str, ...]] = ("--apply-correction-transition",)
 MAX_CORRECTION_TRANSITION_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
-CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_279_168
+CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_298_112
 CORRECTION_TRANSITION_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "1A7A18333726484A0737DA7B005EC699F73E99EA0CFACFB409B000F964BED3AF"
+    "1A5821FA944E9A2ABBE0BF154BD0CFE34069E4D728C9A5374809626D51B8DDBE"
 )
 CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
-    "B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067"
+    "234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666"
 )
 CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
     "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
@@ -425,10 +425,10 @@ def encode_correction_transition_request(
     query_observations: Mapping[str, Mapping[str, Any]],
     current_event_sequence: int,
     previous_history_head: bytes,
-    correction_paid: list[dict[str, Any]],
+    payment_links: list[dict[str, Any]],
 ) -> bytes:
-    """Encode the BLFCMD02 request from one locked Owner snapshot; correction_paid is what linked
-    payments paid on each of the obligation's correction requests, by action id."""
+    """Encode the BLFCMD03 request from one locked Owner snapshot; payment_links names the correction
+    request each linked payment row pays. Lean sums the rows and judges order, duplicates and targets."""
 
     if type(snapshot) is not semantic.LockedSemanticSnapshot:
         raise FinancialEngineInputError("engine_correction_snapshot_type")
@@ -450,8 +450,8 @@ def encode_correction_transition_request(
         )
 
         writer = semantic._WireWriter()
-        writer.raw(b"BLFCMD02", "engine_correction_magic")
-        writer.raw((2).to_bytes(2, "big"), "engine_correction_version")
+        writer.raw(b"BLFCMD03", "engine_correction_magic")
+        writer.raw((3).to_bytes(2, "big"), "engine_correction_version")
         writer.string(CORRECTION_TRANSITION_OPERATION, "engine_correction_contract")
         for field in ("item_id", "claim_id", "action_id", "actor_id"):
             _ident(writer, command.get(field), f"engine_correction_{field}")
@@ -476,7 +476,7 @@ def encode_correction_transition_request(
             _write_correction_query_observation(writer, observation, label)
         _u64(writer, current_event_sequence, "engine_correction_event_sequence")
         _digest(writer, previous_history_head, "engine_correction_history_head")
-        writer.list(correction_paid, "engine_correction_paid", lambda entry, label: (_ident(writer, entry["action_id"], label), _u64(writer, entry["paid_cents"], label)))
+        writer.list(payment_links, "engine_correction_links", lambda link, label: (_ident(writer, link["payment_id"], label), _ident(writer, link["action_id"], label)))
         writer.raw(len(current_input).to_bytes(4, "big"), "engine_correction_input_length")
         writer.raw(current_input, "engine_correction_input")
         writer.raw(len(receipt_bytes).to_bytes(4, "big"), "engine_correction_receipt_length")
@@ -1265,7 +1265,7 @@ def run_correction_transition_v1(
         raise FinancialEngineConfigError("engine_correction_transition_release_type")
     if (
         type(request) is not bytes
-        or not request.startswith(b"BLFCMD02")
+        or not request.startswith(b"BLFCMD03")
         or not 0 < len(request) <= configured.input_max_bytes
     ):
         raise FinancialEngineInputError("engine_correction_request_contract")

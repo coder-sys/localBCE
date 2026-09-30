@@ -451,9 +451,14 @@ def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list
     ]
 
 
+def _payment_links(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
+    """Which correction request each payment row of the obligation pays, by payment id."""
+    return [{"payment_id": payment, "action_id": action} for payment, action in connection.execute("SELECT json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL ORDER BY 1", (obligation_id,))]
+
+
 def _canonical(value: Mapping[str, Any]) -> bytes:
     try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
     except (TypeError, ValueError, UnicodeError):
         _fail(FinancialIntegrityError, "canonical_json")
 
@@ -2624,7 +2629,7 @@ class FinancialOwner:
         request: Mapping[str, Any],
         conflict_code: str,
     ) -> bool:
-        """The one retry rule: True if ``kind:key`` is logged with every field (only optional ones may be None); False if new."""
+        """The one retry rule: True if ``kind:key`` is logged with every field (only optional ones may be None); False if new. ``expected_revision`` guards a first recording only; a retry of support, reversal, offset, report or acknowledgment ignores it."""
 
         row = connection.execute("SELECT request_json FROM commands WHERE command_id=?", (f"{kind}:{key}",)).fetchone()
         if row is None:
@@ -3908,15 +3913,15 @@ class FinancialOwner:
         event_at_ms: int = 1,
         expected_revision: int | None = None,
     ) -> dict[str, Any]:
-        """Received time is the owner clock, never the caller's; event_at_ms is when the document is dated."""
+        """Received time is the owner clock, never the caller's; event_at_ms is when the document is dated. A retry ignores expected_revision."""
         self._assert_actionable()
         with self._write() as connection:
             evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="SUPPORT", common_origin_id=common_origin_id, source_id=source_id, source_version=source_version, local_ref=local_ref or f"support:{evidence_id}", applicable_at_ms=applicable_at_ms, event_at_ms=event_at_ms, received_at_ms=self._now())
             obligation = self._get_obligation_row(connection, item_id)
-            self._check_revision(obligation, expected_revision)
             status = self._insert_evidence(connection, evidence)
             if status == "DUPLICATE":
                 return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)  # after the retry test (III.3); a stale write rolls the insert back
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="SUPPORT_EVIDENCE_RECORDED", payload={"evidence_id": evidence_id, "record_digest": _hex(evidence.record_digest)}, now_ms=self._now())
             return {"status": "RECORDED", **self._current_projection(connection, str(obligation["obligation_id"]))}
 
@@ -4082,15 +4087,15 @@ class FinancialOwner:
         _id(payment_id, "payment_id")
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
-            self._check_revision(obligation, expected_revision)
             payment = connection.execute("SELECT * FROM payments WHERE payment_id=? AND obligation_id=?", (payment_id, obligation["obligation_id"])).fetchone()
             if payment is None:
                 _fail(FinancialIntegrityError, "payment_missing")
-            reversal_time = self._now() if event_at_ms is None else event_at_ms
+            reversal_time = event_at_ms if event_at_ms is not None else connection.execute("SELECT COALESCE((SELECT event_at_ms FROM evidence WHERE evidence_id=?), ?)", (_id(evidence_id, "evidence_id"), self._now())).fetchone()[0]  # a retry without event_at_ms restates the first recording's time
             evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="PAYMENT_REVERSAL", common_origin_id=common_origin_id or f"reversal:{payment_id}", source_id="synthetic-payment-source", source_version="fixture-v1", local_ref=f"reversal:{payment_id}", applicable_at_ms=reversal_time, event_at_ms=reversal_time, received_at_ms=self._now(), amount_cents=int(payment["amount_cents"]), reversal_of=payment_id)
             status = self._insert_evidence(connection, evidence)
             if status == "DUPLICATE":
                 return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
             if int(payment["active"]) == 0:
                 _fail(FinancialConflictError, "payment_already_reversed")
             connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=? WHERE payment_id=? AND active=1", (evidence_id, payment_id))
@@ -4122,10 +4127,10 @@ class FinancialOwner:
             pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, str(obligation["obligation_id"]))
             if owner_role not in pack.authorized_roles:
                 _fail(FinancialAuthorityError, "control_pack_owner_role_not_authorized")
-            self._check_revision(obligation, expected_revision)
             request = {"item_id": item_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "owner_role": owner_role, "deadline_ms": deadline_ms}
             if self._replayed_command(connection, "OFFSET_CLAIM", claim_id, request, "offset_claim_identity_conflict"):
                 return {"status": "DUPLICATE", "claim_id": claim_id, **self._projection_for_row(obligation)}
+            self._check_revision(obligation, expected_revision)
             evidence_status = self._insert_evidence(connection, evidence)
             if evidence_status == "DUPLICATE":
                 _fail(FinancialConflictError, "offset_evidence_reused")
@@ -4479,7 +4484,6 @@ class FinancialOwner:
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
-        correction_paid: list[dict[str, Any]],
         transition_result: Mapping[str, Any],
         financial_engine: Any,
         semantic: Any,
@@ -4568,12 +4572,7 @@ class FinancialOwner:
             and determination["decided_at_ms"] == command["decision_at_ms"],
             "correction_determination_binding",
         )
-        require_binding(
-            dependencies["supporting_evidence"] == evidence_bindings_wire
-            and dependencies["query_observations"] == query_observations
-            and dependencies["correction_paid"] == correction_paid,
-            "correction_read_set_binding",
-        )
+        require_binding(dependencies["supporting_evidence"] == evidence_bindings_wire and dependencies["query_observations"] == query_observations, "correction_read_set_binding")
         require_binding(
             action["obligation_id"] == obligation_id and action["currency"] == self.config.currency,
             "correction_action_binding",
@@ -5150,7 +5149,6 @@ class FinancialOwner:
                     "decision_at_ms": decision_time,
                     "owner_now_ms": owner_now_ms,
                 }
-                correction_paid = _correction_paid(connection, str(obligation["obligation_id"]))
                 request = financial_engine.encode_correction_transition_request(
                     snapshot=snapshot,
                     command=command,
@@ -5158,7 +5156,7 @@ class FinancialOwner:
                     query_observations=query_observations,
                     current_event_sequence=current_event_sequence,
                     previous_history_head=previous_history_head,
-                    correction_paid=correction_paid,
+                    payment_links=_payment_links(connection, str(obligation["obligation_id"])),
                 )
                 execution = financial_engine.run_correction_transition_v1(
                     configured_release,
@@ -5214,7 +5212,6 @@ class FinancialOwner:
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
-                correction_paid=correction_paid,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
                 semantic=semantic,
@@ -6762,7 +6759,7 @@ class FinancialOwner:
         if type(package_bytes) is not bytes or not package_bytes or len(package_bytes) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
         try:
-            package = json.loads(package_bytes.decode("ascii"))
+            package = json.loads(package_bytes.decode("ascii"), parse_constant=lambda _: None, parse_float=lambda t: None if abs(float(t)) == float("inf") else float(t))  # NaN, Infinity and 1e999 become null, so the canonical comparison below refuses them
         except (UnicodeDecodeError, json.JSONDecodeError):
             _fail(FinancialContinuityError, "continuity_package_json")
         if type(package) is not dict or _canonical(package) != package_bytes:

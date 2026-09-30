@@ -3,8 +3,8 @@
 Runs the Hospital H journey end to end through what staff actually use: the real
 loopback staff server (Owner, Mirror, pinned Lean correction release) over HTTP,
 and the real served page in an isolated Edge browser driven by Playwright. Each role
-opens a fresh page, reads the overview, opens the H package only if the answer is
-not there, expands raw JSON only as a last resort, and clicks the same buttons.
+opens a fresh page, reads what is on it, opens H's record only if the answer is not
+there, and clicks the same buttons.
 
 Counts include actual server requests, clicks, screens and normal polling; the
 Owner clock is synthetic. Evidence classes (Art. XI.11): "after" is
@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 from contextlib import ExitStack
 from datetime import datetime, timezone
-from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -46,8 +45,8 @@ SCORECARD_PATH = _ROOT / "docs" / "scorecard" / "hospital_h.json"
 ENGINE_PATH = _ROOT / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 _MODEL = json.loads((_ROOT / "app" / "staff_workspace" / "interaction-model.json").read_text(encoding="utf-8"))
 HOUR_MS = 3_600_000
-# Screens in the order a person reaches them; the overview is up on page load.
-SCREEN_ORDER = ("overview", "decision_package", "raw:package-json", "raw:followup-json")
+# Screens in the order a person reaches them: the page as it opens, then H's record if H is not already up.
+SCREEN_ORDER = ("landing", "record")
 
 # The caller supplies the installed Edge executable and Playwright package.
 # Browser contexts, DOM, same-origin fetch and polling are real; no fallback.
@@ -66,6 +65,7 @@ const { chromium } = require(modulePath);
 let browser = null, context = null, page = null, changedAt = 0;
 let pending = new Set(), diagnostics = [], pageErrors = [];
 let posts = [];
+const SHEET = { "reject-offset": "Reject the offset", "authorize-offset": "Accept the offset" };
 async function settle() {
   const deadline = Date.now() + 30000;
   while (pending.size || Date.now() - changedAt < 150) {
@@ -76,22 +76,38 @@ async function settle() {
 }
 async function view() {
   const dom = await page.evaluate(() => {
-    const texts = {}, tables = {}, hidden = {}, disabled = {}, buttons = {};
+    const texts = {}, hidden = {}, disabled = {}, buttons = {}, lines = [];
     const invisible = (el) => !el.getClientRects().length || getComputedStyle(el).visibility === "hidden";
+    const text = (el) => (el.children.length && ![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())
+      ? [...el.children].map(text).filter(Boolean).join(" ") : el.textContent.replace(/\s+/g, " ").trim());
     for (const el of document.querySelectorAll("[id]")) {
       texts[el.id] = el.textContent;
-      if (el.children.length) tables[el.id] = [...el.children].map((row) => row.children.length ? [...row.children].map((cell) => cell.textContent) : [row.textContent]);
       if (invisible(el)) hidden[el.id] = true;
       if (el.disabled) disabled[el.id] = true;
     }
     for (const button of document.querySelectorAll("[data-action]")) {
       buttons[button.dataset.action] = { disabled: button.disabled, hidden: invisible(button) };
     }
+    // The two decisions have no button of their own: the choice is a radio, or, when a lost answer is retried, "Send the ... again".
+    const role = location.pathname.split("/")[2] || null;
+    const radio = document.getElementById("kind-reject-offset"), confirm = document.getElementById("confirm");
+    const open = Boolean((radio && !radio.disabled) || (confirm && !confirm.disabled && /^Send the .* again$/.test(confirm.textContent)));
+    for (const name of ["reject-offset", "authorize-offset"]) buttons[name] = { disabled: !open, hidden: role !== "approver" };
+    // What a person reads: one line per table row, fact, paragraph and queue row, tagged H or program.
+    const scope = (el) => ((el.closest("[data-record]") || {}).dataset?.record ?? (el.closest("#row-item-h") ? "item-h" : "")) === "item-h" ? "H" : "program";
+    const add = (el, line) => { if (line && !invisible(el)) lines.push({ scope: scope(el), text: line, where: el.closest("#qlist") ? "queue" : el.closest("#page") ? "page" : "status" }); };
+    for (const el of document.querySelectorAll("#page tr, #page p, #page .state, #page .line, #page .seal, #page .log li > *, #page dt, #page .steps li, #qlist .row, #qlist .group, #command-status")) {
+      add(el, el.matches("dt") ? text(el) + ": " + text(el.nextElementSibling) : el.matches("tr") ? [...el.children].map(text).filter(Boolean).join(" | ") : text(el));
+    }
+    for (const pre of document.querySelectorAll("#page pre")) for (const line of pre.textContent.split("\n")) add(pre, line.trim());
+    const named = (el) => Boolean(el.getAttribute("aria-label") || text(el) || (el.labels && el.labels.length));
+    const unnamed = [...document.querySelectorAll("button, a[href], input, textarea, select")].filter((el) => !invisible(el) && !named(el)).map((el) => el.id || el.tagName);
     const unavailable = document.getElementById("connection-status").classList.contains("unavailable");
-    const screens = { picker: !hidden["role-picker"], overview: !hidden["workspace-root"] && !unavailable,
-      decision: !hidden["decision-panel"] && !unavailable, unavailable };
-    return { texts, tables, hidden, disabled, buttons, screens, path: location.pathname,
-      hash: location.hash, focus_in_main: Boolean(document.activeElement.closest("main")) };
+    const screens = { picker: !hidden["role-picker"], overview: !hidden["queue"] && !unavailable,
+      decision: Boolean(document.querySelector('#page [data-record="item-h"]')) && !unavailable, unavailable };
+    const queue = [...document.querySelectorAll("#qlist .row")].map((row) => row.querySelector(".dot").className.replace("dot ", ""));
+    const active = document.activeElement;
+    return { texts, hidden, disabled, buttons, screens, lines, queue, unnamed, path: location.pathname, hash: location.hash, focus: active.id || active.className || active.tagName };
   });
   return { ...dom, posts };
 }
@@ -99,8 +115,9 @@ async function handle(m) {
   if (m.op === "navigate") {
     if (context) await context.close();
     if (!browser) browser = await chromium.launch({ executablePath, headless: true });
-    context = await browser.newContext({ locale: "en-US" });
+    context = await browser.newContext({ locale: "en-US", ...(m.width ? { viewport: { width: m.width, height: 800 } } : {}) });
     page = await context.newPage();
+    await page.clock.install();  // time still runs; "tick" jumps the page's 15 s read poll
     pending = new Set();
     diagnostics = [];
     pageErrors = [];
@@ -132,32 +149,38 @@ async function handle(m) {
     browser = null;
     return { closed: true };
   }
-  if (m.op === "inventory") {
-    const controls = await page.evaluate((selectors) => [...document.querySelectorAll("a,button,summary")].map((el) => ({
-      matches: Object.entries(selectors).filter(([, selector]) => el.matches(selector)).map(([name]) => name),
-      text: el.textContent.trim(), hidden: !el.getClientRects().length || getComputedStyle(el).visibility === "hidden",
-      disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
-      expanded: el.tagName === "SUMMARY" ? el.parentElement.open : null,
-    })), m.selectors);
-    return { controls, view: await view() };
-  }
-  if (m.op === "local") {
-    const control = page.locator(m.selector);
-    if (m.keyboard) {
-      await control.focus();
-      await control.press("Enter");
-      await page.keyboard.press("Tab");
-    } else {
-      await control.click();
+  if (m.op === "role") {  // a control found by its ARIA role and accessible name, or by a CSS selector
+    const control = m.selector ? page.locator(m.selector) : page.getByRole(m.role, { name: m.name ?? undefined, exact: true });
+    if (m.act === "find") {
+      const found = await control.count();
+      const text = found ? await control.first().textContent() : "";
+      return { found, text, visible: found ? await control.first().isVisible() : false, disabled: found ? await control.first().isDisabled() : null, checked: found && m.role === "radio" ? await control.first().isChecked() : null, view: await view() };
     }
+    await control.first()[m.act](...(m.text == null ? [] : [m.text]));
   } else if (m.op === "click") {
     await page.locator("#" + m.id).click();
-  } else if (m.op === "expand") {
-    await page.locator("#" + m.id).locator("..").locator("summary").click();
+  } else if (m.op === "key") {
+    await page.keyboard.press(m.key);
+  } else if (m.op === "tick") {
+    await page.clock.fastForward(15000);
   } else if (["action", "begin-action"].includes(m.op)) {
-    const button = page.locator('[data-action="' + m.name + '"]');
-    if (!await button.isVisible() || await button.isDisabled()) return { clicked: false };
-    await button.click();
+    const ready = async (locator) => await locator.count() && await locator.first().isEnabled();
+    const decision = Boolean(SHEET[m.name]);
+    if (decision) {  // the decision form: choose, record, then confirm
+      const radio = page.getByRole("radio", { name: SHEET[m.name], exact: true });
+      if (await ready(radio)) {
+        await radio.check();
+        await page.locator("#record-btn").click();
+      }
+    } else {
+      const button = page.locator('[data-action="' + m.name + '"]');
+      if (await ready(button)) await button.click();
+      else return { clicked: false };
+    }
+    if (decision || m.name === "record-cash") {  // the two money actions ask once more
+      if (!await ready(page.locator("#confirm"))) return { clicked: false };
+      await page.locator("#confirm").click();
+    }
   } else if (m.op !== "view") throw new Error("unknown_op:" + m.op);
   if (m.op !== "begin-action" && m.wait !== false) await settle();
   return { clicked: true, view: await view() };
@@ -188,70 +211,6 @@ input.on("close", () => {
 
 class HarnessUnavailable(RuntimeError):
     """A prerequisite (Node, the pinned engine artifact) is absent."""
-
-class _PageMap(HTMLParser):
-    """Served index.html -> element id: {tag, screen, label (last heading), columns, hidden, text}."""
-    _VOID = {"meta", "link", "br", "input", "img", "hr"}
-    def __init__(self, html: str) -> None:
-        super().__init__(convert_charrefs=True)
-        self._stack: list[dict[str, Any]] = []
-        self._capture: dict[str, list[str]] = {}
-        self._heading = ""
-        self._headers: list[str] = []
-        self._action = ""
-        self.elements: dict[str, dict[str, Any]] = {}
-        self.actions: dict[str, str] = {}
-        self.feed(html)
-        self.close()
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values = dict(attrs)
-        if tag in ("h1", "h2", "h3", "th", "button"):
-            self._capture[tag] = []
-        if tag == "table":
-            self._headers = []
-        if tag == "button":
-            self._action = str(values.get("data-action") or "")
-        if tag in self._VOID:
-            return
-        element_id = values.get("id") or ""
-        self._stack.append({"tag": tag, "id": element_id, "text": []})
-        if not element_id:
-            return
-        screen = "overview"
-        for frame in self._stack:
-            if frame["id"] == "decision-panel":
-                screen = "decision_package"
-            if frame["tag"] == "details":
-                screen = "raw:"  # collapsed; named after its <pre> below
-        if tag == "pre":
-            screen = "raw:" + element_id
-        self.elements[element_id] = {
-            "tag": tag, "screen": screen, "label": self._heading,
-            "columns": list(self._headers) if tag == "tbody" else [], "hidden": "hidden" in values, "text": "",
-        }
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self._capture:
-            text = " ".join("".join(self._capture.pop(tag)).split())
-            if tag == "th":
-                self._headers.append(text)
-            elif tag == "button":
-                if self._action:
-                    self.actions[self._action] = text
-            else:
-                self._heading = text
-        if tag in self._VOID:
-            return
-        while self._stack:
-            frame = self._stack.pop()
-            if frame["id"] in self.elements:
-                self.elements[frame["id"]]["text"] = " ".join("".join(frame["text"]).split())
-            if frame["tag"] == tag:
-                break
-    def handle_data(self, data: str) -> None:
-        for frame in self._stack:
-            frame["text"].append(data)
-        for parts in self._capture.values():
-            parts.append(data)
 
 class _Meter:
     """Server-side request log, tagged with the role task in progress."""
@@ -299,7 +258,6 @@ class _Browser:
             stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=str(_ROOT),
         )
         self.port = port
-        self.page: _PageMap | None = None
         self.last_view: dict[str, Any] = {}
     def call(self, message: dict[str, Any]) -> dict[str, Any]:
         assert self._process.stdin and self._process.stdout
@@ -316,14 +274,22 @@ class _Browser:
         if "view" in reply:
             self.last_view = reply["view"]
         return reply
-    def open(self, path: str = "/") -> None:
-        self.page = _PageMap(self.call({"op": "navigate", "port": self.port, "path": path})["html"])
+    def open(self, path: str = "/", width: int | None = None) -> None:
+        self.call({"op": "navigate", "port": self.port, "path": path, "width": width})
     def click(self, element_id: str) -> None:
         self.call({"op": "click", "id": element_id})
     def action(self, name: str) -> bool:
         return bool(self.call({"op": "action", "name": name})["clicked"])
     def view(self) -> dict[str, Any]:
         return self.call({"op": "view"})["view"]
+    def role(self, role: str | None, name: str | None = None, act: str = "find", text: str | None = None, selector: str | None = None) -> dict[str, Any]:
+        """One control by ARIA role and accessible name, or by CSS selector: act is find, click, check or fill."""
+        return self.call({"op": "role", "role": role, "name": name, "act": act, "text": text, "selector": selector})
+    def key(self, key: str) -> None:
+        self.call({"op": "key", "key": key})
+    def tick(self) -> None:
+        """Let the page's 15-second read poll fire now."""
+        self.call({"op": "tick"})
     def close(self) -> None:
         try:
             if self._process.poll() is None:
@@ -342,32 +308,6 @@ class _Browser:
                     if stream:
                         stream.close()
 
-# ---- What a person can read on each screen ----------------------------------
-
-_NOT_CONTENT = frozenset({"button", "main", "section", "header", "footer", "body", "h1", "h2", "h3", "a"})
-
-def _screen_lines(page: _PageMap, view: dict[str, Any], screen: str) -> list[tuple[str, str, bool]]:
-    """Visible (scope "H"|"program", line, is_table_row) of one non-raw screen."""
-    lines: list[tuple[str, str, bool]] = []
-    for element_id, spec in page.elements.items():
-        if spec["screen"] != screen or view["hidden"].get(element_id) or spec["tag"] in _NOT_CONTENT:
-            continue
-        label, columns = spec["label"], spec["columns"]
-        rows = view["tables"].get(element_id)
-        if rows is None:
-            rendered = [f"{label}: {view['texts'].get(element_id, '')}" if label else view["texts"].get(element_id, "")]
-        else:
-            rendered = [
-                " | ".join(f"{name}: {value}" for name, value in zip(columns, cells)) if columns and len(columns) == len(cells)
-                else f"{cells[0]}: {cells[1]}" if len(cells) == 2 and not columns
-                else (label + ": " if label else "") + " | ".join(cells)
-                for cells in rows
-            ]
-        for line in rendered:
-            in_h = screen == "decision_package" or element_id.startswith("h-") or "(H)" in line or label.startswith("H ")
-            lines.append(("H" if in_h else "program", line, bool(columns)))
-    return lines
-
 def _dig(value: Any, path: tuple[Any, ...]) -> Any:
     for key in path:
         if isinstance(value, dict) and key in value:
@@ -379,27 +319,18 @@ def _dig(value: Any, path: tuple[Any, ...]) -> Any:
     return value
 
 class Fact:
-    """One thing a person must see: value and context regexes on one visible line,
-    or (last resort) a path in the raw JSON screen."""
-    def __init__(self, name: str, scope: str, value: str, context: str, json_path: tuple[Any, ...] | None = None,
-                 *, rows_ok: bool = True) -> None:
-        self.name, self.scope, self.json_path, self.rows_ok = name, scope, json_path, rows_ok
+    """One thing a person must see: a value and its context on one visible line of one scope (H or program)."""
+    def __init__(self, name: str, scope: str, value: str, context: str) -> None:
+        self.name, self.scope = name, scope
         self.value = re.compile(value)
         self.context = re.compile(context, re.IGNORECASE)
-    def visible(self, screen: str, lines: list[tuple[str, str, bool]], raw: Any) -> bool:
-        if screen.startswith("raw:"):
-            return screen == "raw:package-json" and self.json_path is not None and _dig(raw, self.json_path) is not None
-        for scope, line, is_row in lines:
-            if scope == self.scope and (self.rows_ok or not is_row) and self.value.search(line) and self.context.search(line):
-                if os.environ.get("RR_SCORECARD_DEBUG"):
-                    print(f"FACT {self.name} on {screen}: {line}", file=sys.stderr)
-                return True
-        return False
+    def visible(self, lines: list[tuple[str, str]]) -> bool:
+        return any(scope == self.scope and self.value.search(line) and self.context.search(line) for scope, line in lines)
 
 def _money(cents: int) -> str:
-    """Exact dollars and cents; whole-dollar amounts may drop ".00"."""
-    text = re.escape(f"${cents // 100:,}") + (r"(?:\.00)?" if cents % 100 == 0 else re.escape(f".{cents % 100:02d}"))
-    return r"(?<![\d,$.])" + text + r"(?![\d,]|\.\d)"
+    """Exact dollars and cents, with or without the "$" (the ledger is headed "in USD"); whole-dollar amounts may drop ".00"."""
+    text = re.escape(f"{cents // 100:,}") + (r"(?:\.00)?" if cents % 100 == 0 else re.escape(f".{cents % 100:02d}"))
+    return r"(?<![\d,.])\$?" + text + r"(?![\d,]|\.\d)"
 
 def _words(code: str) -> str:
     """An Owner code as shown raw (CASE_OWNER) or in plain words (case owner)."""
@@ -420,36 +351,35 @@ def _analyst_facts(truth: dict[str, Any]) -> list[Fact]:
     else:
         next_value, next_context = _words(str(resolution["assessment"])), r"assessment|next|resolution"
     return [
-        Fact("status", "H", r"\b" + _words(str(case["status"])) + r"\b", r"case|status", ("case", "status")),
-        Fact("owner", "H", _words(str(case["next_action_owner"])), r"owner", ("case", "next_action_owner")),
-        Fact("amount_gap", "H", _money(int(package["obligation"]["shortfall_cents"])), r"shortfall|missing|gap|difference", ("obligation", "shortfall_cents")),
-        Fact("next_action", "H", next_value, next_context, ("conclusions", "case_resolution", "missing_requirements")),
+        Fact("status", "H", r"\b" + _words(str(case["status"])) + r"\b", r"case|status"),
+        Fact("owner", "H", _words(str(case["next_action_owner"])), r"owner"),
+        Fact("amount_gap", "H", _money(int(package["obligation"]["shortfall_cents"])), r"shortfall|missing|gap|difference"),
+        Fact("next_action", "H", next_value, next_context),
     ]
 
 def _approver_facts(truth: dict[str, Any]) -> list[Fact]:
     package = truth["decision_package"]
     obligation = package["obligation"]
     claim = package["references"]["claims"]["items"][0]
-    claim_path = ("references", "claims", "items", 0)
     return [
-        Fact("amount_owed", "H", _money(int(obligation["owed_cents"])), r"owed", ("obligation", "owed_cents")),
-        Fact("cash_received", "H", _money(int(obligation["received_cash_cents"])), r"cash|received", ("obligation", "received_cash_cents")),
-        Fact("offset_claimed", "H", _money(int(claim["amount_cents"])), r"offset|claim|adjust", claim_path + ("amount_cents",)),
+        Fact("amount_owed", "H", _money(int(obligation["owed_cents"])), r"owed"),
+        Fact("cash_received", "H", _money(int(obligation["received_cash_cents"])), r"cash|received"),
+        Fact("offset_claimed", "H", _money(int(claim["amount_cents"])), r"offset|claim|adjust"),
         # No support flag in the package JSON; support is a Mirror source assessment.
         Fact("offset_support", "H", r"MISSING|[Nn]o support", r"support"),
-        Fact("claim_status", "H", r"\b" + _words(str(claim["status"])) + r"\b", r"claim|offset", claim_path + ("status",)),
-        Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule", ("control_pack", "adjustment_rule_id")),
-        Fact("deadline", "H", re.escape(_utc(int(package["case"]["due_at_ms"]))), r"due|deadline", ("case", "due_at_ms")),
+        Fact("claim_status", "H", r"\b" + _words(str(claim["status"])) + r"\b", r"claim|offset"),
+        Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule"),
+        Fact("deadline", "H", re.escape(_utc(int(package["case"]["due_at_ms"]))), r"due|deadline"),
     ]
 
 def _director_facts(truth: dict[str, Any]) -> list[Fact]:
     summary, population = truth["workspace"]["summary"], truth["workspace"]["population"]
     return [
-        Fact("population", "program", re.escape(f"{summary['obligation_count']} / {population['expected_count']}"), r"population", rows_ok=False),
-        Fact("total_owed", "program", _money(int(summary["owed_cents"])), r"owed", rows_ok=False),
-        Fact("cash_recorded", "program", _money(int(summary["received_cash_cents"])), r"cash|received", rows_ok=False),
-        Fact("program_shortfall", "program", _money(int(summary["shortfall_cents"])), r"shortfall|missing|gap", rows_ok=False),
-        Fact("open_items", "program", r"(?<![\d/$,.])" + str(int(summary["open_count"])) + r"(?![\d/,.])", r"open|attention|unresolved", rows_ok=False),
+        Fact("population", "program", re.escape(f"{summary['obligation_count']} / {population['expected_count']}"), r"population"),
+        Fact("total_owed", "program", _money(int(summary["owed_cents"])), r"owed"),
+        Fact("cash_recorded", "program", _money(int(summary["received_cash_cents"])), r"cash|received"),
+        Fact("program_shortfall", "program", _money(int(summary["shortfall_cents"])), r"shortfall|missing|gap"),
+        Fact("open_items", "program", r"(?<![\d/$,.])" + str(int(summary["open_count"])) + r"(?![\d/,.])", r"open|attention|unresolved"),
     ]
 
 def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
@@ -460,19 +390,19 @@ def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
     decision = str(determination["decision"])
     obligation = package["obligation"]
     return [
-        Fact("decision", "H", _words(decision), r"determination|decision", ("current_determination", "decision")),
-        Fact("decided_by_role", "H", _words(str(determination["actor_role"])), r"determination|decision|decided|role", ("current_determination", "actor_role")),
+        Fact("decision", "H", _words(decision), r"determination|decision"),
+        Fact("decided_by_role", "H", _words(str(determination["actor_role"])), r"determination|decision|decided|role"),
         # The chronology row of the decision event also shows when it was decided.
-        Fact("decided_at", "H", re.escape(_utc(int(determination["decided_at_ms"]), "%Y-%m-%d %H:%M")), r"determination|decision|decided|" + re.escape(decision), ("current_determination", "decided_at_ms")),
-        Fact("supporting_evidence", "H", re.escape(str(evidence_id)), r"evidence", ("current_determination", "supporting_evidence")),
-        Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule", ("control_pack", "adjustment_rule_id")),
-        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"Chronology|event|sequence", ("current_determination", "determination_id")),
-        Fact("cash_reconciles", "H", _money(int(obligation["received_cash_cents"])) + r".*" + _money(int(obligation["shortfall_cents"])), r"cash|received", ("obligation", "received_cash_cents")),
+        Fact("decided_at", "H", re.escape(_utc(int(determination["decided_at_ms"]), "%Y-%m-%d %H:%M")), r"determination|decision|decided|" + re.escape(decision)),
+        Fact("supporting_evidence", "H", re.escape(str(evidence_id)), r"evidence"),
+        Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule"),
+        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"Chronology|event|sequence"),
+        Fact("cash_reconciles", "H", _money(int(obligation["received_cash_cents"])) + r".*" + _money(int(obligation["shortfall_cents"])), r"cash|received"),
     ]
 
 _CONTINUITY_FACTS = (
     Fact("continuity_test_mode", "H", r"\bTEST\b", r"continuity"),
-    Fact("package_equal", "program", r"equality: true|equal: true|matches", r"restore|continuity", rows_ok=False),
+    Fact("package_equal", "program", r"equality: true|equal: true|matches", r"restore|continuity"),
 )
 
 # ---- The journey ------------------------------------------------------------
@@ -486,6 +416,8 @@ class _Journey:
     def truth(self) -> dict[str, Any]:
         """Ground truth straight from the Owner through the Mirror (not counted)."""
         return {"workspace": self.workflow.workspace(), "decision_package": self.workflow.decision_view()["decision_package"]}
+    def _open_rows(self, view: dict[str, Any]) -> int:
+        return _open_rows(view, int(self.truth()["workspace"]["summary"]["open_count"]))
     def _task(self, tag: str) -> "_Task":
         self.meter.tag = tag
         return _Task(self, tag)
@@ -493,15 +425,15 @@ class _Journey:
         with self._task("director.weekly_review") as task:
             task.open()
             task.answer(_director_facts(self.truth()))
-            task.record("rows_to_add_by_hand", len(task.browser.last_view["tables"].get("population-rows", [])) if task.unanswered else 0)
-            task.record("rows_flagged_open", _open_rows(task.browser.last_view))
+            task.record("rows_to_add_by_hand", len(task.browser.last_view["queue"]) if task.unanswered else 0)
+            task.record("rows_flagged_open", self._open_rows(task.browser.last_view))
         with self._task("analyst.monday_reconciliation") as task:
             task.open()
-            task.record("rows_flagged_open", _open_rows(task.browser.view()))
+            task.record("rows_flagged_open", self._open_rows(task.browser.view()))
             task.answer(_analyst_facts(self.truth()))
         with self._task("approver.prepare_decision") as task:
             task.open()
-            task.answer(_approver_facts(self.truth()), need_package=True)
+            task.answer(_approver_facts(self.truth()))
             task.record("requests_to_prepare", task.request_count())
             task.command("reject-offset")
             task.record("requests_including_decision", task.request_count())
@@ -509,14 +441,10 @@ class _Journey:
                 raise RuntimeError("scorecard_decision_not_committed")
         with self._task("analyst.correction_followthrough") as task:
             task.open()
-            task.ensure_package()
-            reopens = 0
+            task.ensure_record()
             for name in ("acknowledge", "record-cash", "record-report"):
-                if task.browser.view()["buttons"][name]["disabled"]:
-                    task.click("open-package", "reopen package (forced re-review)")
-                    reopens += 1
                 task.command(name)
-            task.record("forced_package_reopens", reopens)
+            task.record("forced_package_reopens", 0)  # the record is already the package: nothing to reopen
             posts = [row for row in self.meter.rows(task.tag) if row["method"] == "POST" and row["path"] in ("/api/correction/record-cash", "/api/reporting/record")]
             task.record("evidence_resubmissions", len(posts) - len({json.dumps([row["path"], row["body"]], sort_keys=True) for row in posts}))
             self._cash_body = next(row["body"] for row in posts if row["path"] == "/api/correction/record-cash")
@@ -526,9 +454,9 @@ class _Journey:
             task.answer(_auditor_facts(self.truth()))
         with self._task("replacement.continue_from_continuity") as task:
             task.open()
-            task.ensure_package()
+            task.ensure_record()
             task.command("restore-test")
-            task.answer(list(_CONTINUITY_FACTS) + _analyst_facts(self.truth()), fresh_screens=True)
+            task.answer(list(_CONTINUITY_FACTS) + _analyst_facts(self.truth()))
         self._case_units()
         self.meter.tag = "done"
     def _repeat_message(self) -> None:
@@ -579,9 +507,13 @@ class _Journey:
             "clock_note": "Synthetic demo clock; the fixture sets these times, so UI changes cannot move them.",
         }
 
-def _open_rows(view: dict[str, Any]) -> int:
-    rows = view["tables"].get("population-rows", [])
-    return sum(1 for cells in rows if (m := re.search(r"Case ([A-Z_]+)", " ".join(cells))) and m.group(1) != "RESOLVED")
+def _open_rows(view: dict[str, Any], expected: int) -> int:
+    """Queue rows not marked settled. The Owner's own open count must agree: a meter that cannot read, or disagrees with the ledger, fails the run instead of reporting a number."""
+    rows = view["queue"]
+    count = sum(1 for kind in rows if kind != "ok")
+    if not rows or count != expected:
+        raise RuntimeError(f"scorecard_open_rows_disagree:{count}!={expected}")
+    return count
 
 # Each task tag names the role it is performed as (Art. XIII.4: roles are
 # real, so the journey now opens each task's page as that role would).
@@ -628,7 +560,7 @@ class _Task:
     def open(self) -> None:
         self.browser.open(f"/role/{self.role}")
         self.steps.append("open workspace page")
-        self.screens.append("overview")
+        self.screens.append("landing")
     def click(self, element_id: str, why: str) -> None:
         self.browser.click(element_id)
         self.step(f"click: {why}")
@@ -638,52 +570,36 @@ class _Task:
         self.step("click: " + name)
         status = self.browser.last_view["texts"].get("command-status", "")
         # The declared success text (Art. XIII.4) is checked first: a control's own
-        # wording (e.g. reject-offset's "Offset rejected...") may legitimately use a
+        # wording (e.g. reject-offset's "You rejected the offset...") may legitimately use a
         # failure-shaped word, so only fall back to the denylist once it disagrees.
-        expected = _MODEL["controls"][name]["responses"]["success"]["message"].split(".")[0]
+        expected = _MODEL["controls"][name]["responses"]["success"]["message"].replace("{amount}", "$3,000.00").split(".")[0]
         if not status or (expected not in status and any(word in status for word in ("rejected", "unresolved", "unavailable", "denied"))):
             raise RuntimeError(f"scorecard_command_failed:{name}:{status}")
-    def ensure_package(self) -> None:
-        if "decision_package" not in self.screens:
-            self.click("open-package", "open H decision package")
-            self.screens.append("decision_package")
-    def answer(self, facts: list[Fact], *, need_package: bool = False, fresh_screens: bool = False) -> None:
-        """Walk the screens in order until every fact is visible; record the cost."""
-        if need_package:
-            self.ensure_package()
+    def ensure_record(self) -> None:
+        """Open H's record from the queue unless it is already up. The director's rows are not links."""
+        if self.role != "director" and not self.browser.view()["screens"]["decision"]:
+            self.click("row-item-h", "open H's record")
+            self.screens.append("record")
+    def answer(self, facts: list[Fact]) -> None:
+        """Read the page as it opens; open H's record only if a fact is missing. Record the cost."""
         pending = list(facts)
-        opened = ["overview"]
-        package_up = not self.browser.view()["hidden"].get("decision-panel") if fresh_screens else "decision_package" in self.screens
-        if package_up:
-            opened.append("decision_package")
         for screen in SCREEN_ORDER:
-            if not pending:
-                break
-            if screen not in opened:
-                if screen == "decision_package":
-                    self.click("open-package", "open H decision package")
-                else:
-                    self.browser.call({"op": "expand", "id": screen[4:]})
-                    self.step(f"expand: {screen[4:]}")
-                opened.append(screen)
+            if screen == "record" and (not pending or "record" in self.screens):
+                continue
+            if screen == "record":
+                self.ensure_record()
             if screen not in self.screens:
                 self.screens.append(screen)
-            view = self.browser.view()
-            for seen in opened:
-                lines = [] if seen.startswith("raw:") else _screen_lines(self.browser.page, view, seen)
-                try:
-                    raw = json.loads(view["texts"].get(seen[4:], "")) if seen.startswith("raw:") else None
-                except ValueError:
-                    raw = None
-                for fact in list(pending):
-                    if fact.visible(seen, lines, raw):
-                        self.found_on[fact.name] = seen
-                        pending.remove(fact)
+            lines = [(line["scope"], line["text"]) for line in self.browser.view()["lines"]]
+            for fact in list(pending):
+                if fact.visible(lines):
+                    self.found_on[fact.name] = screen
+                    pending.remove(fact)
         self.unanswered = [fact.name for fact in pending]
         self.record("requests_to_answer", self.request_count())
         self.record("ui_actions_to_answer", self.ui_actions)
         self.record("screens_to_answer", len(self.screens))
-        self.record("facts_only_in_raw_json", sum(1 for screen in self.found_on.values() if screen.startswith("raw:")))
+        self.record("facts_only_in_raw_json", 0)  # the page has no raw-JSON screen: every fact is read on the page or is missing
         self.record("facts_unanswered", len(self.unanswered))
         self.record("facts_total", len(facts))
 

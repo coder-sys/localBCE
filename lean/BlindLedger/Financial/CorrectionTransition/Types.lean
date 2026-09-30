@@ -1,4 +1,5 @@
 import BlindLedger.Financial.DecisionPackage.Types
+import BlindLedger.Financial.CorrectionTransition.PaidSum
 
 namespace BlindLedger.Financial.CorrectionTransition
 
@@ -6,7 +7,7 @@ open BlindLedger.Financial
 open BlindLedger.Financial.DecisionPackage
 
 def correctionTransitionContract : String := "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-def correctionTransitionInputMagic : Bytes := "BLFCMD02".toUTF8.toList
+def correctionTransitionInputMagic : Bytes := "BLFCMD03".toUTF8.toList
 def correctionTransitionResultMagic : Bytes := "BLFCRES3".toUTF8.toList
 def maxCorrectionTransitionBytes : Nat := maxTotalEncodedBytes
 
@@ -127,6 +128,64 @@ def outstandingCorrectionCents (paid : List CorrectionPaid) : List ActionRecord 
         action.amountCents - correctionPaidCents paid action.actionId else 0) +
         outstandingCorrectionCents paid rest
 
+/-- One positive entry per request, in canonical action-ID order. -/
+def correctionPaidWellFormed (paid : List CorrectionPaid) : Bool :=
+  paid.length ≤ maxRows && canonicalIdList (paid.map CorrectionPaid.actionId) &&
+    paid.all (fun entry => idWellFormed entry.actionId && entry.paidCents ≥ 1 &&
+      amountWellFormed entry.paidCents)
+
+/-! Paid-so-far from the rows (design: docs/CORE_REDESIGN.md, "Lean paid sum"):
+    O(n + k log k + a).  Lean, not the caller, decides what each link pays. -/
+
+/-- One entry per link, in link order: the request it pays and the cents its
+    row paid (nothing if the row is reversed).  A link naming no row fails. -/
+def linkedCents : List Payment → List PaymentLink → Option (List CorrectionPaid)
+  | _, [] => some []
+  | [], _ :: _ => none
+  | payment :: rows, link :: links =>
+      if payment.paymentId = link.paymentId then
+        (linkedCents rows links).map fun rest =>
+          ⟨link.actionId, if payment.status = .ACTIVE then payment.amountCents else 0⟩ :: rest
+      else if payment.paymentId < link.paymentId then linkedCents rows (link :: links)
+      else none
+termination_by rows links => rows.length + links.length
+
+/-- Adds up neighbouring entries of one request; the input is sorted by request. -/
+def sumSortedPaid : List CorrectionPaid → List CorrectionPaid
+  | [] => []
+  | entry :: rest =>
+      match sumSortedPaid rest with
+      | first :: more =>
+          if first.actionId = entry.actionId then
+            ⟨entry.actionId, entry.paidCents + first.paidCents⟩ :: more
+          else entry :: first :: more
+      | [] => [entry]
+
+/-- Every key is one of the ids; both lists ascend. -/
+def keysAmong : List String → List String → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | key :: keys, identity :: ids =>
+      if key = identity then keysAmong keys ids else keysAmong (key :: keys) ids
+termination_by keys ids => keys.length + ids.length
+
+/-- The paid-so-far of every correction request, from the payment rows the links
+    name.  `none` unless rows and links ascend, every link names a row and a
+    correction request, and the result is a canonical paid list. -/
+def derivedCorrectionPaid (payments : List Payment) (actions : List ActionRecord)
+    (links : List PaymentLink) : Option (List CorrectionPaid) :=
+  if strictlyAscending (payments.map Payment.paymentId) &&
+      strictlyAscending (links.map PaymentLink.paymentId) then
+    match linkedCents payments links with
+    | none => none
+    | some rows =>
+        let grouped := sumSortedPaid (rows.mergeSort fun a b => decide (a.actionId ≤ b.actionId))
+        let paid := grouped.filter fun entry => entry.paidCents ≠ 0
+        if keysAmong (grouped.map CorrectionPaid.actionId)
+            ((actions.filter fun action => action.kind = "CORRECTION_PAYMENT_REQUEST").map
+              ActionRecord.actionId) && correctionPaidWellFormed paid then some paid else none
+  else none
+
 inductive CorrectionQueryPredicate where
   | ACTION_ID
   | DETERMINATION_ID
@@ -224,7 +283,7 @@ structure CorrectionCommand where
   queryObservations : CorrectionQueryObservations
   currentEventSequence : Nat
   previousHistoryHead : Bytes
-  correctionPaid : List CorrectionPaid := []
+  paymentLinks : List PaymentLink := []
 deriving DecidableEq, Repr
 
 structure CorrectionTransitionRequest where

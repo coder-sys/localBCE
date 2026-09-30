@@ -16,23 +16,33 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
 # tests and proofs as bloat. Product code (what runs and must be read to be trusted)
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
-# lean-leak (options C, E, D and the preview fix) added 40 lines over trunk 37,063: a quarter-end cash-file lock verifies about 0.65 s less
-# (logs lta-probe2-a1-L2, lta-probe3-a1-L1), and a preview refuses what its apply would.
-PRODUCT_CODE_LINES = 37_103
+# lean-leak merge (2026-09-30): +236 over trunk's 36,951 for the Lean worker's pool and frame in minimal_clearance_verifier_process.py (Lean is the only evaluator, so the Python evaluator and its
+# comparison are gone: the semantic adapter, engine and owner shrank 89), and a quarter-end cash-file lock that verifies about 0.65 s less (logs lta-probe2-a1-L2, lta-probe3-a1-L1).
+PRODUCT_CODE_LINES = 37_187
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
-EVIDENCE_CODE_LINES = 43_901
+# Lean paid sum (lean-paid-sum, 2026-09-29): +1,251 over trunk's 41,327 (42,585 measured on the merge, 7 more than the sum of the two deltas) for the 3 PaidSum laws
+# (`linkedActivePaidCents_reverse`, `_retarget`, `_total_le_active`), the 7 PaidSumTheorems
+# (`derivedCorrectionPaid_sound`, `_complete`, `outstandingCorrectionCents_eq_linked`,
+# `applyCorrectionTransition_links_admissible`, `_paid_eq_linked`, `_action_amount_eq_linked`,
+# `_outstanding_within_shortfall_linked`), the 2 KATs `reversed_linked_payment_pays_nothing`
+# and `link_naming_unknown_request_rejected`, and their tests.
+# Direction-6 staff workspace (ui-1: 1b7e390, 7663741), +284 over that (283 test lines, one comment line): the tests prove every staff control in a real browser, so an approver's lost answer, a stale confirm and each role's keys are checked, not assumed.
+# lean-leak merge (2026-09-30): +863 over that, for the Lean worker's 10 `WorkerLaws` theorems (`workerRespondBA_eq`, `evaluateWire_evaluated`,
+# `workerRespond_length_le`, `maxWorkerFrameBytes_fits_u32`, the codec and decoder equalities), the worker and its panic probe (`Worker`, `WorkerCli`, `PanicProbe`, `FastDecode`,
+# `FastEncode`) and their tests, net of the deleted Python-evaluator tests: a Lean panic or a bad worker frame refuses the write instead of passing.
+EVIDENCE_CODE_LINES = 43_732
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
-# contract, like test vectors, not compressible prose; it gets its own ceiling.
-MARKDOWN_BYTES = 160_000
+# contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,235 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability). The ui-1 merge with its STATUS line measures 158,372; the ceiling is that. 2026-09-30 lean-leak merge: +3,868 (162,240 measured, after cutting two stale lines) for the XI.2 records of Lean-live M1, M1.5 and M1.6 (2,473) and the worker's provenance (837), the merged STATUS and ARCHITECTURE lines (approx 550); Lean is the only evaluator and its pin is auditable.
+MARKDOWN_BYTES = 162_240
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_224,
+    "app/right_rail_financial_owner.py": 7_221,
     "app/right_rail_financial_owner_independent.py": 4_555,
     "app/right_rail_financial_semantic_adapter.py": 2_097,
-    "app/right_rail_financial_mirror.py": 1_498,
+    "app/right_rail_financial_mirror.py": 1_497,
     "app/right_rail_financial_engine.py": 1_380,
     "app/right_rail_financial_switch.py": 1_314,
     "app/right_rail_financial_line_pack.py": 253,
@@ -43,7 +53,7 @@ FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Independent checkers may restate a small shared schema by design; the rest
 # is duplication to delete.
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
-DUPLICATED_WINDOWS = 421
+DUPLICATED_WINDOWS = 410
 
 
 def _live_files():

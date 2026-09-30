@@ -1,6 +1,6 @@
 import BlindLedger.Financial.CodecLaws.CorrectionRecords
 
-/-! Codec laws for the correction wire: the BLFCMD02 request and the BLFCRES3
+/-! Codec laws for the correction wire: the BLFCMD03 request and the BLFCRES3
     result.  Canonicality (a decoded value re-encodes to the same bytes) holds
     for every byte string.  Round trip and trailing-byte rejection hold for
     every value inside the wire bounds, stated as explicit admissibility
@@ -110,7 +110,7 @@ theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransiti
   have hReceiptLength := length_le_of_append_sized _ _ hLength
   delta parseCorrectionTransitionRequest
   simp [List.append_assoc, isPrefixOf_append_self,
-    readNatBE_natBE_append 2 2 _ (by decide),
+    readNatBE_natBE_append 2 3 _ (by decide),
     readString_encodeString_append _ _ correctionTransitionContract_wireAdmissible,
     readString_encodeString_append _ _ h1, readString_encodeString_append _ _ h2,
     readString_encodeString_append _ _ h3, readString_encodeString_append _ _ h4,
@@ -120,7 +120,7 @@ theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransiti
     readNat8_natBE_append _ _ h12, readNat8_natBE_append _ _ h13,
     readActionLookup_append _ _ h14, readQueryObservations_append _ _ h15,
     readNat8_natBE_append _ _ h16, readDigest_wire_append _ _ h17,
-    readCorrectionPaids_append _ _ h18,
+    readPaymentLinks_append _ _ h18,
     readSizedBytes_encodeSizedBytes_append _ _ hInputLength,
     readSizedBytes_encodeSizedBytes_append _ _ hReceiptLength,
     decodeFinancialInput_rawEncode _ hInput, hReceiptRead]

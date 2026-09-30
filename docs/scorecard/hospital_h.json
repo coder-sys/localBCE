@@ -19,24 +19,18 @@
         "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200",
         "POST /api/action/acknowledge -> 200",
         "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200",
         "POST /api/correction/record-cash -> 200",
         "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200",
         "POST /api/reporting/record -> 200",
-        "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200"
+        "GET /api/correction-followup -> 200"
       ],
       "screens": [
-        "overview",
-        "decision_package"
+        "landing"
       ],
       "steps": [
         "open workspace page",
-        "click: open H decision package",
         "click: acknowledge",
         "click: record-cash",
         "click: record-report"
@@ -45,10 +39,10 @@
     "analyst.monday_reconciliation": {
       "enabled_commands_at_end": [],
       "facts_found_on": {
-        "amount_gap": "overview",
-        "next_action": "overview",
-        "owner": "overview",
-        "status": "overview"
+        "amount_gap": "landing",
+        "next_action": "landing",
+        "owner": "landing",
+        "status": "landing"
       },
       "facts_unanswered": [],
       "requests": [
@@ -60,7 +54,7 @@
         "GET /api/correction-followup -> 200"
       ],
       "screens": [
-        "overview"
+        "landing"
       ],
       "steps": [
         "open workspace page"
@@ -69,13 +63,13 @@
     "approver.prepare_decision": {
       "enabled_commands_at_end": [],
       "facts_found_on": {
-        "adjustment_rule": "decision_package",
-        "amount_owed": "overview",
-        "cash_received": "overview",
-        "claim_status": "decision_package",
-        "deadline": "overview",
-        "offset_claimed": "decision_package",
-        "offset_support": "decision_package"
+        "adjustment_rule": "landing",
+        "amount_owed": "landing",
+        "cash_received": "landing",
+        "claim_status": "landing",
+        "deadline": "landing",
+        "offset_claimed": "landing",
+        "offset_support": "landing"
       },
       "facts_unanswered": [],
       "requests": [
@@ -85,31 +79,27 @@
         "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200",
         "POST /api/decision/reject-offset -> 200",
-        "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200"
+        "GET /api/correction-followup -> 200"
       ],
       "screens": [
-        "overview",
-        "decision_package"
+        "landing"
       ],
       "steps": [
         "open workspace page",
-        "click: open H decision package",
         "click: reject-offset"
       ]
     },
     "auditor.answer_auditor": {
       "enabled_commands_at_end": [],
       "facts_found_on": {
-        "adjustment_rule": "decision_package",
-        "cash_reconciles": "overview",
-        "chronology": "decision_package",
-        "decided_at": "decision_package",
-        "decided_by_role": "decision_package",
-        "decision": "decision_package",
-        "supporting_evidence": "decision_package"
+        "adjustment_rule": "landing",
+        "cash_reconciles": "landing",
+        "chronology": "landing",
+        "decided_at": "landing",
+        "decided_by_role": "landing",
+        "decision": "landing",
+        "supporting_evidence": "landing"
       },
       "facts_unanswered": [],
       "requests": [
@@ -118,16 +108,13 @@
         "GET /staff.js -> 200",
         "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
-        "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200"
+        "GET /api/correction-followup -> 200"
       ],
       "screens": [
-        "overview",
-        "decision_package"
+        "landing"
       ],
       "steps": [
-        "open workspace page",
-        "click: open H decision package"
+        "open workspace page"
       ]
     },
     "case": {
@@ -151,11 +138,11 @@
     "director.weekly_review": {
       "enabled_commands_at_end": [],
       "facts_found_on": {
-        "cash_recorded": "overview",
-        "open_items": "overview",
-        "population": "overview",
-        "program_shortfall": "overview",
-        "total_owed": "overview"
+        "cash_recorded": "landing",
+        "open_items": "landing",
+        "population": "landing",
+        "program_shortfall": "landing",
+        "total_owed": "landing"
       },
       "facts_unanswered": [],
       "requests": [
@@ -167,7 +154,7 @@
         "GET /api/correction-followup -> 200"
       ],
       "screens": [
-        "overview"
+        "landing"
       ],
       "steps": [
         "open workspace page"
@@ -180,12 +167,12 @@
     "replacement.continue_from_continuity": {
       "enabled_commands_at_end": [],
       "facts_found_on": {
-        "amount_gap": "overview",
-        "continuity_test_mode": "decision_package",
-        "next_action": "overview",
-        "owner": "overview",
-        "package_equal": "overview",
-        "status": "overview"
+        "amount_gap": "landing",
+        "continuity_test_mode": "landing",
+        "next_action": "landing",
+        "owner": "landing",
+        "package_equal": "landing",
+        "status": "landing"
       },
       "facts_unanswered": [],
       "requests": [
@@ -195,31 +182,25 @@
         "GET /interaction-model.json -> 200",
         "GET /api/workspace -> 200",
         "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200",
         "POST /api/continuity/restore-test -> 200",
-        "GET /api/correction-followup -> 200",
-        "GET /api/decision-package -> 200"
+        "GET /api/correction-followup -> 200"
       ],
       "screens": [
-        "overview",
-        "decision_package"
+        "landing"
       ],
       "steps": [
         "open workspace page",
-        "click: open H decision package",
         "click: restore-test"
       ]
     }
   },
   "method": {
     "comparison": "tests/test_right_rail_scorecard.py fails if any 'after' value is worse than this file in its direction",
-    "counting": "deterministic: server-side requests, clicks and screens per role task; synthetic clock; timers recorded, not run",
-    "path": "real loopback staff server over HTTP; real served staff.js under Node against the served index.html; Owner + Mirror + pinned Lean correction release",
+    "counting": "actual server-side requests, clicks and screens per role task; synthetic Owner clock; normal browser polling",
+    "path": "real loopback staff server over HTTP; real Edge DOM through Playwright; Owner + Mirror + pinned Lean correction release",
     "screens": [
-      "overview",
-      "decision_package",
-      "raw:package-json",
-      "raw:followup-json"
+      "landing",
+      "record"
     ]
   },
   "scenario": "Hospital H: $1,000,000 across 20 synthetic hospitals; H is owed $100,000, $97,000 arrives, Plan A claims an unsupported $3,000 offset; the approver rejects it, a $3,000 correction arrives, reporting follows, and a replacement operator restores the case in Continuity TEST.",
@@ -323,7 +304,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 0
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -342,7 +323,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 16
+        "value": 12
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -361,7 +342,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 4
+        "value": 3
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -418,7 +399,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 7
+        "value": 6
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -437,7 +418,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 1
+        "value": 0
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -456,7 +437,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 2
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -513,7 +494,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 10
+        "value": 8
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -608,7 +589,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 0
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -627,7 +608,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 7
+        "value": 6
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -646,7 +627,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 1
+        "value": 0
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -665,7 +646,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 2
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -722,7 +703,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 10
+        "value": 8
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",
@@ -741,7 +722,7 @@
     {
       "after": {
         "evidence": "measured (this harness)",
-        "value": 2
+        "value": 1
       },
       "demo_baseline": {
         "evidence": "measured (this harness at 1c7ed3b, before the friction fixes)",

@@ -154,12 +154,6 @@ def readCorrectionPaid (bytes : Bytes) : Option (CorrectionPaid × Bytes) := do
   let (paidCents, rest) ← readNatBE 8 rest
   pure ({ actionId := actionId, paidCents := paidCents }, rest)
 
-/-- One positive entry per request, in canonical action-ID order. -/
-def correctionPaidWellFormed (paid : List CorrectionPaid) : Bool :=
-  paid.length ≤ maxRows && canonicalIdList (paid.map CorrectionPaid.actionId) &&
-    paid.all (fun entry => idWellFormed entry.actionId && entry.paidCents ≥ 1 &&
-      amountWellFormed entry.paidCents)
-
 def commandWellFormed (command : CorrectionCommand) : Bool :=
   [command.itemId, command.claimId, command.actionId, command.actorId,
     command.currentAuthorityId, command.evaluationId].all idWellFormed &&
@@ -170,7 +164,7 @@ def commandWellFormed (command : CorrectionCommand) : Bool :=
   timeWellFormed command.ownerNowMs && actionLookupWellFormed command.actionLookup &&
   correctionQueryObservationsWellFormed command.queryObservations &&
   command.currentEventSequence ≤ maxRows && digestWellFormed command.previousHistoryHead &&
-  correctionPaidWellFormed command.correctionPaid
+  paymentLinksWellFormed command.paymentLinks
 
 def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
   if !commandWellFormed request.command ||
@@ -179,7 +173,7 @@ def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
     none
   let inputBytes ← encodeFinancialInput request.currentInput
   let receiptBytes := encodeEvaluationReceipt request.currentReceipt
-  pure (correctionTransitionInputMagic ++ natBE 2 2 ++
+  pure (correctionTransitionInputMagic ++ natBE 2 3 ++
     encodeString correctionTransitionContract ++
     encodeString request.command.itemId ++ encodeString request.command.claimId ++
     encodeString request.command.actionId ++ encodeString request.command.actorId ++
@@ -191,21 +185,21 @@ def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
     encodeQueryObservations request.command.queryObservations ++
     natBE 8 request.command.currentEventSequence ++
     encodeDigest request.command.previousHistoryHead ++
-    encodeList encodeCorrectionPaid request.command.correctionPaid ++ encodeSizedBytes inputBytes ++
+    encodeList encodePaymentLink request.command.paymentLinks ++ encodeSizedBytes inputBytes ++
     encodeSizedBytes receiptBytes)
 
 def encodeCorrectionTransitionRequest (request : CorrectionTransitionRequest) : Option Bytes := do
   let body ← encodeInputBody request
   if body.length > maxCorrectionTransitionBytes then none else pure body
 
-/-- Reads one BLFCMD02 request and returns the unread bytes.  The decoder below
+/-- Reads one BLFCMD03 request and returns the unread bytes.  The decoder below
     accepts only an empty remainder and the canonical re-encoding. -/
 def parseCorrectionTransitionRequest (bytes : Bytes) :
     Option (CorrectionTransitionRequest × Bytes) := do
   if !correctionTransitionInputMagic.isPrefixOf bytes then none
   let rest := bytes.drop correctionTransitionInputMagic.length
   let (version, rest) ← readNatBE 2 rest
-  if version ≠ 2 then none
+  if version ≠ 3 then none
   let (contract, rest) ← readString rest
   if contract ≠ correctionTransitionContract then none
   let (itemId, rest) ← readString rest
@@ -225,7 +219,7 @@ def parseCorrectionTransitionRequest (bytes : Bytes) :
   let (queryObservations, rest) ← readQueryObservations rest
   let (currentEventSequence, rest) ← readNatBE 8 rest
   let (previousHistoryHead, rest) ← readDigest rest
-  let (correctionPaid, rest) ← readList readCorrectionPaid rest
+  let (paymentLinks, rest) ← readList readPaymentLink rest
   let (inputBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
   let (receiptBytes, rest) ← readSizedBytes maxCorrectionTransitionBytes rest
   let currentInput ← decodeFinancialInput inputBytes
@@ -250,7 +244,7 @@ def parseCorrectionTransitionRequest (bytes : Bytes) :
       queryObservations := queryObservations
       currentEventSequence := currentEventSequence
       previousHistoryHead := previousHistoryHead
-      correctionPaid := correctionPaid }
+      paymentLinks := paymentLinks }
     currentInput := currentInput
     currentReceipt := currentReceipt }
   pure (request, rest)

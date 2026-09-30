@@ -113,22 +113,18 @@ Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
 
 ## Gaps found (under-enforcement, not just size)
 
-- Python alone computes every evaluation; Lean's BLFIN02 evaluator runs only in tests (V.1/V.2).
 - Every staff read runs the full checker over the whole database (IX.3).
 - Two canonical encodings (SHA3/ASCII and SHA-256/UTF-8 staff snapshot).
 - The successor verifies and views but cannot continue the work (VII.2).
 
 ## Migration (each step leaves a working system; one guarded run per step)
 
-Done: golden baselines; v5/v6 retired (XI.2 record); `commands` table, required
-revision and actor, append-only triggers, FKs; complete-fact events and the
-`apply` reducer (OWNER/CONTINUITY v8); Continuity v8 restore by replay; Switch
-and Mirror reuse the replay. Standing rules: one typed decoder per record, no
-re-validating own writes; Python re-derivation of Lean is replaced by read-set
-binding plus a pre-COMMIT per-obligation checker; the checker is replay +
-compare with an incremental mode and all 25 tamper tests still detect.
-Open: after a guarded Lean rebuild, BLFIN02 becomes the live evaluator and more
-transitions move to Lean.
+Done (history in git): v8 owner, Continuity and replay reuse. Standing rules:
+one typed decoder per record, no re-validating own writes; Python re-derivation
+of Lean is replaced by read-set binding plus a pre-COMMIT per-obligation
+checker; the checker is replay + compare with an incremental mode and all 25
+tamper tests still detect.
+Open: more transitions move to Lean.
 
 ## History segments (approved by the founder 2026-09-25)
 
@@ -429,9 +425,7 @@ unchecked rows, and a store that rolls back cannot earn ALLOW.
     `isSome_of_mem`; new axiom pins ([propext, Quot.sound]).
 - **Invariant / failure:** X.1-X.2, XI.8, XI.10: no HOLD rests on data not
   checked against the gate's checkpoint, and no rollback or dropped row earns ALLOW.
-- **Evidence:** 78eabc7's message lists the changed vector answers (205-208 and
-  149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's counterpart reason).
-  4bffc1e's "No committed theorem statement's text changes" holds only for it.
+- **Evidence:** the changed vector answers are listed in 78eabc7's message.
 - **Disposition:** replace. Nothing is disabled.
 - **Replacement control:** all proofs compile with pinned axioms; the vectors, demo lines
   and mutants pass (counts: `STATUS.md`); the unittest fails if the runner is older than its sources.
@@ -507,40 +501,52 @@ shown on the pack's face.
   periods, which the Ledger does not hold; there is no per-claim service date,
   so the split uses the obligation period.
 
-## Gate formats round 7 (2026-09-28, XI.2 record)
+## Gate formats rounds 7 and 8 (2026-09-28 and 09-29, XI.2 record)
 
-Formats are not frozen (D1) and are specified once, in target §4-§5 (with
-the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
+These rounds reissued the golden vectors, pins, keys and signatures. Felt effect: a biweekly or
+monthly payer's stale ALLOW is re-decided, not stranded in review, and no line is paid twice.
 
-- **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound to the
-  request's flow, member key, payee and amount; an FFS_CLAIM request without
-  lines is refused.
-- **TOKEN leaf:** new `decided_at` before `epoch`, `decided_at <= issued_at`,
-  kept across reissues. An FFS_CLAIM leaf needs a nonzero `lines_root`.
-- **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
-  released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
-  digest, a later one must.
-- **Payer, codec, NUL:** fork, one-certificate-per-(tenant, epoch), `encode_line`,
-  shard-checked stateless `sign_batch(..., state_digest, shard_count)` (unbuilt
-  preconditions: target §4-§5, STATUS) and the NUL after every domain, including the
-  rules pins and `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, are specified in target §4-§5.
-  Every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
+- **Round 7:** request lines (at most 569 bytes) bound to flow, member key,
+  payee and amount; leaf `decided_at`; nonzero `lines_root` for FFS_CLAIM;
+  checkpoint `state_digest` (never zero), previous digest only after the first,
+  a non-adjacent link is a fork; one certificate per (tenant, epoch);
+  `sign_batch` refuses a leaf routed to another shard, stateless (unbuilt: STATUS).
+- **Round 8:** age per flow (`maxDecisionAge`), replacing round 7's single
+  14-day age; a second certificate for an installed (tenant, epoch) is recorded
+  (`equivocations`) and blocks it; FFS_CYCLE and CAP_820 need lines, SDP and
+  PLAN_PAY leaves are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
+  Rules: `redo`/`own` re-decision; only ALLOW payments' lines are released
+  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`. Theorems:
+  `verifyToken_unforked` adds equivocation; `released_iff`,
+  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation`
+  proved. Withdrawn: round 7's FFS_CLAIM-only lines and counts.
 
-## Gate formats round 8 (2026-09-29, XI.2 record)
+## Gate PQ signing M1 (2026-09-29, XI.2 record; founder-approved R1-R4, laptop root, ACVP download)
 
-The lead's round-7 review decisions, specified in target §4-§6; vectors and
-pins reissued. Felt effect: a biweekly or monthly payer's stale ALLOW is
-re-decided, not stranded in review, and no line is paid twice.
+Felt effect: every checkpoint signature is checked by an independent Lean
+verifier before it can leave the gate, post-quantum only.
 
-- **Payer:** age per flow (`maxDecisionAge`); a second certificate for an
-  installed (tenant, epoch) is recorded (`equivocations`) and blocks it.
-- **Formats:** FFS_CYCLE and CAP_820 need lines too; SDP and PLAN_PAY leaves
-  are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
-- **Rules:** `redo`/`own` re-decision; only ALLOW payments' lines are released
-  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`.
-- **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
-  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
-- **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.
+- **R1, KEY-CERT/v1 (the one wire change; new digest domain):** `KEY-CERT NUL ‖
+  alg u8 1 ‖ tenant ‖ epoch u64 ‖ shard_count u32 ‖ public key (2592)`, then
+  `u16 4627 ‖ root signature`; no id; 8 KiB. `certChainOk` holds iff it decodes and
+  the root key verifies the body. Unlike target §11, the
+  root is ML-DSA-87 in laptop DPAPI custody, not HSM LMS/XMSS.
+- **R2:** pure ML-DSA-87, empty context; hedged (rnd = 0 in vectors only).
+- **R3:** `EpochCert` drops `certId`, gains `signed`; `AXIOMS.txt` unchanged. Statement change: below.
+- **R4:** `artifacts/gate-verify/` (Lean `gate_verify`, the signer's self-check) and a new worker pin.
+- **Speed:** each pinned exe is copied once per process, held open and hash-checked per run.
+- **Claim:** vector-verified, not proved.
+
+**Certificate equivocation (XI.2 record).**
+- **Predicate:** `installCert_equivocation` and the `installCert` filter:
+  a second chain-valid certificate for an installed (tenant, epoch) was equivocation if it differed at all
+  (`x ≠ e`); now only if its public key or shard count differs.
+- **Invariant / failure:** one key and shard count per (tenant, epoch); a hedged re-signature has new
+  bytes, so re-issuing blocked its own epoch.
+- **Evidence and replacement control:** vectors `other8` re-signed (not flagged), `twin` (other key), `eq5`
+  (same key, 8 shards; both flagged, block); 256/256, build `pqm1-lean4-a1`; four `gate__mutants` mutants.
+- **Disposition:** weaken. **Scope:** the spec-level payer model until M2 persists `PayerState`.
+- **Claims withdrawn:** that any second, different certificate is equivocation (round 8).
 
 ## Follow-through decision event (M2, 2026-09-29, XI.2 record)
 
@@ -581,6 +587,67 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Change.** `Fast.listEqAt`, `decodeFinancialInputBA`, their theorems and `AxiomCheck` line go: unreachable code and theorems about it. No executed-path statement changes; `decodeFinancialInputBA₂_eq` covers it.
 - **Why.** Lead decision, anti-bloat and max auditability: the dead theorem made the audit trail cite the wrong proof.
 
+## Lean paid sum (2026-09-29, XI.2 record; Lean boundary inventory move 1)
+
+Lean used to take `command.correctionPaid`, per-action totals Python summed, on
+trust. It now derives the paid list from payment rows. Design and builder handoff:
+`40e802f:docs/CORE_REDESIGN.md`.
+
+- **Felt effect:** no caller can make a paid request look unpaid, or the reverse, to
+  change what the next hospital is asked for.
+- **Predicate:** the BLFCMD02 wire (`correctionPaid`, version 2); theorems
+  `applyCorrectionTransition_action_amount_eq_b2` (B2) and
+  `applyCorrectionTransition_outstanding_within_shortfall` (H1), both over
+  `request.command.correctionPaid`, and their manifest pins; `CorrectionMutationLinkFacts.
+  dependencyCorrectionPaid` and the `correctionPaid` clause of `commandWireAdmissible`; the
+  protected literal at `tests/test_right_rail_financial_constitution_invariants.py:338`
+  (`BLFCMD02`, now `BLFCMD03`).
+- **Invariant / failure:** a correction never requests more than the unpaid shortfall less
+  what open requests still ask (II, III.4); failure: a wrong or forged paid total silently
+  moving the request amount.
+- **Evidence:** `Transition.lean` made Lean's paid list equal the command's, so B2 and H1
+  held for whatever list a caller sent; the only checks were Python twins (the Owner's
+  payment cap, the checker's `paid_at`). `ARCHITECTURE.md` "Lean decides" overstated this.
+- **Disposition:** replace.
+- **Replacement control:** Lean derives the list. New proved statements: `PaidSum.lean` (3
+  row laws), `CodecLaws/PaymentLinks.lean`, `PaidSumTheorems.lean` (7, including
+  `derivedCorrectionPaid_sound`/`_complete` and the main theorem
+  `applyCorrectionTransition_paid_eq_linked`). The two removed theorems are replaced by
+  stronger ones over the derived list: `applyCorrectionTransition_action_amount_eq_linked`
+  (B2) and `_outstanding_within_shortfall_linked` (H1). Not "none edited": in
+  `CorrectionMutationLinkFacts`, `amountRule` and `inputShortfall` were restated over
+  `mutation.dependencies.correctionPaid` and a `derivedPaid` field replaced
+  `dependencyCorrectionPaid`. Tests:
+  `test_forged_links_move_the_lean_request_exactly_as_the_theorem_says`,
+  `test_lean_paid_sum_matches_the_rows_and_the_independent_checker`,
+  `test_correction_request_vector_is_blfcmd03_and_its_mutants_are_refused`; the checker's
+  `action:payload-binding` and `action:requestable`, unchanged.
+- **Scope / duration:** the synthetic correction path, until the next re-pin.
+- **Kill criteria:** stop if a stored row, digest domain or BLFIN02/BLFCRES3 byte must
+  change, if completeness needs more than a well-formed input that evaluates, or if the
+  derivation needs a quadratic step.
+- **Format.** `BLFCMD03` (version field 3): `paymentLinks` replaces `correctionPaid`:
+  u16 count, then per link `paymentId` and `actionId` (u16-length strings), strictly
+  ascending by `paymentId`, one per row whose PAYMENT_RECEIVED event names
+  `pays_action_id`. BLFIN02, BLFCRES3, BLFCRU02/BLFCRV02 and every digest domain are
+  unchanged; `dependencies.correctionPaid` echoes Lean's derived list. Hard cut, no dual
+  read; nothing stored holds BLFCMD bytes; contract string and artifact version unchanged.
+- **What Lean decides.** Decode refuses unordered or duplicate links (Owner:
+  `correction_transition_failed`, not `INVALID_INPUT`). Preflight (`derivedCorrectionPaid`,
+  O(n + k log k + a)) makes a link naming no payment row, or an action that is not a
+  correction request of the input, `INVALID_INPUT` (Owner: `correction_input_invalid`); a row
+  counts only if ACTIVE. Links naming real rows are accepted and move the request by exactly
+  the linked active cents. Which rows may be linked, payment timing and the per-request cap are
+  enforced by the Python owner (`right_rail_financial_owner.py` ~4089 via `_correction_paid`
+  ~434-445) and the independent checker (`paid_at` ~2828, ~2912), which refuses a forged list
+  before COMMIT (`action:payload-binding`).
+- **Claims withdrawn:** B2 and H1 as stated over a caller list; `1A7A1833...D3AF` as
+  decider of new corrections (history only, rule `h1-v1`). Not covered: reuse ignores the
+  paid list; Lean does not enforce payment timing or the per-request cap.
+- **Execution (rr-eng, 2026-09-29).** All 10 new statements proved against rr-core's text,
+  axioms `propext`, `Classical.choice`, `Quot.sound` only; `lpsb-x2`/`-x3` (93-job builds, no
+  `sorry`), `lpsb-kat2` (44 of 44, two new KATs). Re-pin: `PROVENANCE.md`.
+
 ## Slim-1b PR-2: guard naming and instrument classification (2026-09-29, XI.2 record)
 
 - **Felt effect.** A reviewer reads the guard that actually runs.
@@ -594,3 +661,12 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Scope.** Laptop runs; permanent until the producer and kit move to v7, which is planned, not done.
 - **Claims withdrawn.** "v4 is the guarded wrapper" and "the floor is 2,190,433,321" no longer hold for tests. Engine and release builds still run at v4's floor.
 - **Kill criteria.** Restore from `parked/native_guard/` if `-Light` is revived or a release step needs the trunk v4 path.
+
+## gate_verify re-pin after slim and quick-wins (2026-09-29, XI.2 record)
+
+- **Felt effect.** The signer runs a verifier built from the Lean tree it ships with.
+- **Predicate.** `test_gate_verify_pin_names_the_current_lean_tree`: the `lean/` manifest recorded in `artifacts/gate-verify/PROVENANCE.txt` equals the tree's, and the tree's build is the pinned exe.
+- **Change.** `gate_verify.exe` rebuilt: the hash is unchanged, so `gate_verify.sha256` is not re-pinned; the Source manifest in `PROVENANCE.txt` is re-recorded (tracked `lean/` files only). Two causes moved the manifest. Slim moved `semantic_assurance_gate.py` and its manifest under `lean/tools/`. Quick-wins changed `lakefile.toml` (comment, default targets), gave `AxiomCheck.lean` `#guard_msgs` pins for the theorems the gate does not check (the gate's own are printed, not pinned) and moved the retired Semantic kernel to `parked/`. No theorem statement or wire format changes.
+- **Invariant.** A change under `lean/` cannot ship with a stale verifier pin. Failure: the signer trusts a build no one reproduced.
+- **Disposition.** Retain the gate. **Replacement control.** None. **Scope.** Until the next `lean/` edit.
+- **Kill criteria.** Drop the manifest check if the pin moves to a hash of the exe's own import closure.

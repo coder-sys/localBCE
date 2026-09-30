@@ -10,164 +10,35 @@
   <script src="/staff.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to workspace</a>
-  <header class="site-header">
-    <p class="eyebrow">State-local synthetic demonstration</p>
-    <h1>RightRail financial staff workspace</h1>
-    <p class="lede">One Owner record, viewed and commanded through its same-owner Mirror.</p>
-    <div class="notice" role="note">
-      <strong>Demo only.</strong> No State credentials, real source truth, PHI, production identity,
-      hosting, live dispatch, or payment movement are present. Every identity and source record
-      below is synthetic. The role picker below only selects which synthetic controls are shown; it
-      does not authenticate a person. Restarting the service resets this temporary demo database.
+  <a class="sr-focus" href="#record">Skip to workspace</a>
+  <div class="app">
+    <header class="bar">
+      <span class="brand">RightRail</span>
+      <span class="ctx">Financial staff workspace</span>
+      <span class="who" id="role-status"></span>
+      <span class="tag" id="standing" title="Synthetic records. Nothing here moves money.">synthetic · not for payment · no PHI</span>
+    </header>
+    <div class="work" id="work">
+      <nav class="queue" id="queue" aria-label="Obligations" hidden>
+        <div class="qhead">
+          <div class="qtitle"><h1>Obligations</h1><span class="c" id="qcount"></span></div>
+          <a class="summary-link" id="summary-link" href="#summary" hidden>Program summary</a>
+          <input class="filter" id="filter" type="search" placeholder="Filter by name or status" aria-label="Filter obligations" hidden>
+        </div>
+        <div class="qscroll" id="qlist"></div>
+        <div class="keys" id="keys" aria-label="Keyboard shortcuts" hidden></div>
+      </nav>
+      <main class="record" id="record" tabindex="-1">
+        <p id="connection-status" class="conn" role="status" aria-live="polite">Connecting to the local Owner…</p>
+        <p id="command-status" class="flash" role="status" aria-live="polite" tabindex="-1"></p>
+        <section id="role-picker" aria-labelledby="picker-title" hidden>
+          <h1 id="picker-title">Who is using this workspace?</h1>
+          <p class="hint">This only selects which synthetic controls are shown. It does not sign anyone in. Restarting the service resets this temporary demo database.</p>
+          <ul class="picker" id="role-links"></ul>
+        </section>
+        <div id="page"></div>
+      </main>
     </div>
-    <div class="status-row" aria-label="Service status">
-      <p id="connection-status" class="status-banner pending" role="status" aria-live="polite">Connecting to the local Owner…</p>
-      <p class="status-banner unknown">Source freshness: UNKNOWN</p>
-      <p class="status-banner disabled">Dispatch and egress: DISABLED</p>
-    </div>
-    <p id="read-as-of" class="read-as-of">No successful read yet.</p>
-    <p id="role-status" class="read-as-of"></p>
-    <details class="package-details">
-      <summary>Technical read detail</summary>
-      <p id="read-detail" class="muted">No successful read yet.</p>
-    </details>
-  </header>
-
-  <main id="main" class="layout">
-    <section id="role-picker" aria-labelledby="picker-title" class="panel" hidden>
-      <p class="eyebrow">Choose your role</p>
-      <h2 id="picker-title">Who is using this workspace?</h2>
-      <p class="explanation">Each role sees only the screens and commands that role may use. Nothing here identifies a real staff member; this only selects which synthetic controls are shown.</p>
-      <ul id="role-links" class="unknown-list"></ul>
-    </section>
-
-    <div id="workspace-root" hidden>
-    <section aria-labelledby="overview-title" class="panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Population overview</p>
-          <h2 id="overview-title">Published responsibility</h2>
-        </div>
-        <button id="refresh-button" class="secondary" type="button">Refresh overview</button>
-      </div>
-      <div class="answer-first">
-        <h3>Needs attention now</h3>
-        <p id="h-attention">Waiting for the first Owner read.</p>
-      </div>
-      <div class="metric-grid" aria-label="Program totals">
-        <article class="metric"><h3>Population</h3><p id="population-count">—</p><span>owner obligations</span></article>
-        <article class="metric"><h3>Total owed</h3><p id="program-total">—</p><span>synthetic USD</span></article>
-        <article class="metric"><h3>Cash recorded</h3><p id="program-cash">—</p><span>all hospitals</span></article>
-        <article class="metric"><h3>Program shortfall</h3><p id="program-shortfall">—</p><span>owed minus cash and approved adjustments</span></article>
-        <article class="metric"><h3>Open items</h3><p id="open-items">—</p><span>hospitals not yet paid in full</span></article>
-        <article class="metric"><h3>Roster check</h3><p id="roster-status">—</p><span>internal manifest only</span></article>
-      </div>
-      <div class="split-note">
-        <div>
-          <h3>Source authenticity</h3>
-          <p id="source-status" class="status-text">UNKNOWN — no authenticated source is connected.</p>
-        </div>
-        <div>
-          <h3>Freshness</h3>
-          <p id="freshness-status" class="status-text">UNKNOWN — no source watermark or approved age rule is present.</p>
-        </div>
-      </div>
-      <p class="explanation">An exact 20-member synthetic manifest checks only the caller-supplied roster. It does not authenticate source bytes or prove an external population denominator.</p>
-
-      <div class="table-wrap">
-        <table>
-          <caption>All 20 synthetic hospital obligations and their current source/support status</caption>
-          <thead><tr>
-            <th scope="col">Recipient</th>
-            <th scope="col">Owed</th>
-            <th scope="col">Cash recorded</th>
-            <th scope="col">Shortfall</th>
-            <th scope="col">Owner status (verification, case, delivery, reporting)</th>
-            <th scope="col">Support/source status</th>
-          </tr></thead>
-          <tbody id="population-rows"><tr><td colspan="6">Waiting for Owner read.</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section id="workflow-section" aria-labelledby="workflow-title" class="panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">H case workflow</p>
-          <h2 id="workflow-title">Review, command, and recover</h2>
-        </div>
-        <button id="open-package" class="primary" type="button" aria-controls="decision-panel" aria-expanded="false">Open H exact decision package</button>
-      </div>
-      <p class="explanation">The overview rereads the Owner every 15 seconds. Opening a package captures its verified snapshot, scope, obligation revision, Control Pack, authority, and evaluation input. A correction command carries those exact displayed bindings. If a response is lost, retry sends the same command identity and bindings.</p>
-      <div id="command-status" class="command-status" role="status" aria-live="assertive" tabindex="-1">No operator command sent.</div>
-      <div class="action-grid" aria-label="Synthetic workflow commands">
-        <button type="button" data-action="reject-offset" disabled>Reject unsupported offset and authorize correction request</button>
-        <button type="button" data-action="acknowledge" disabled>Record action delivery ACK</button>
-        <button type="button" data-action="record-cash" disabled>Record synthetic $3,000 cash evidence</button>
-        <button type="button" data-action="record-report" disabled>Record separate synthetic reporting evidence</button>
-        <button type="button" data-action="restore-test" disabled>Restore current case into Continuity TEST</button>
-      </div>
-      <p class="explanation">The cash and reporting buttons record synthetic evidence through Owner commands. They do not move money or contact a payment/reporting system. An ACK remains a delivery fact with zero cash effect.</p>
-    </section>
-
-    <section id="decision-panel" class="panel decision-panel" aria-labelledby="decision-title" hidden>
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Same-owner Mirror view</p>
-          <h2 id="decision-title" tabindex="-1">H decision package</h2>
-        </div>
-        <p id="package-revision" class="revision-chip">Package not opened</p>
-      </div>
-      <p id="package-staleness" class="status-banner pending" role="status" aria-live="polite">Open the package to review the current Owner state.</p>
-      <dl id="case-facts" class="facts-grid"></dl>
-      <details class="package-details">
-        <summary>Technical bindings (snapshot, digests, receipts)</summary>
-        <dl id="binding-facts" class="facts-grid"></dl>
-      </details>
-
-      <div class="three-columns">
-        <article class="fact-card">
-          <h3>Action delivery</h3>
-          <p id="action-status">—</p>
-          <p class="muted">ACK means delivery acknowledgment only. Cash effect: $0.</p>
-        </article>
-        <article class="fact-card">
-          <h3>Cash</h3>
-          <p id="cash-status">—</p>
-          <p class="muted">Only payment evidence changes recorded cash. The demo does not send money.</p>
-        </article>
-        <article class="fact-card">
-          <h3>Reporting</h3>
-          <p id="reporting-status">—</p>
-          <p class="muted">Reporting evidence is separate from ACK and cash.</p>
-        </article>
-      </div>
-
-      <h3>Chronology</h3>
-      <div class="table-wrap">
-        <table>
-          <caption>Owner history for obligation H, ordered by committed event sequence</caption>
-          <thead><tr><th scope="col">Sequence</th><th scope="col">Owner event</th><th scope="col">Revision</th><th scope="col">Committed (UTC)</th></tr></thead>
-          <tbody id="timeline-rows"><tr><td colspan="4">Open the package to load chronology.</td></tr></tbody>
-        </table>
-      </div>
-
-      <h3>Unknowns and missing evidence</h3>
-      <ul id="unknowns" class="unknown-list"></ul>
-      <details class="package-details">
-        <summary>Inspect exact sanitized Mirror decision package JSON</summary>
-        <pre id="package-json">Open the package to load its contents.</pre>
-      </details>
-      <details class="package-details">
-        <summary>Inspect durable state report and allowlisted support</summary>
-        <pre id="followup-json">No correction follow-up is available yet.</pre>
-      </details>
-    </section>
-    </div>
-  </main>
-  <footer>
-    <p>This local demonstration retains the Owner as the only transaction writer. Continuity TEST uses a separate restored database; live dispatch and egress remain disabled.</p>
-  </footer>
+  </div>
 </body>
 </html>
