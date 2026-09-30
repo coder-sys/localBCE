@@ -1812,6 +1812,25 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             finally:
                 os.close(descriptor)
 
+    def test_contained_worker_watchdog_kills_a_silent_worker_and_ends_with_it(self):
+        # One watchdog thread per worker enforces every exchange's deadline; a worker that never answers is killed and the thread ends.
+        stdin, stdout = os.pipe(), os.pipe()
+        killed = []
+
+        class Kernel:
+            def TerminateJobObject(self, job, code):
+                if not killed:
+                    killed.append(code)
+                    os.close(stdout[1])  # the dead child's end: the blocked read now sees end of stream
+
+        worker = process.ContainedWorker(kernel32=Kernel(), job=None, process_handle=None, stdin_descriptor=stdin[1], stdout_descriptor=stdout[0], stderr_descriptor=-1, psapi=None)
+        for descriptor in (stdin[0], stdin[1], stdout[0]):
+            self.addCleanup(os.close, descriptor)
+        with self.assertRaises(process.VerifierProcessError) as caught:
+            worker.exchange(b"x", response_cap_bytes=16, timeout_seconds=0.2)
+        worker._watchdog.join(5)
+        self.assertEqual((str(caught.exception), worker.alive, killed, worker._watchdog.is_alive()), ("worker_timeout", False, [1], False))
+
 
 if __name__ == "__main__":
     unittest.main()

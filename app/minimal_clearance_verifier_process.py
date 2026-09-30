@@ -1839,19 +1839,34 @@ class ContainedWorker:
         self._stdout = stdout_descriptor
         self._stderr = stderr_descriptor
         self._lock = threading.Lock()
+        self._cond = threading.Condition()  # guards the armed deadline; held by the watchdog except while it sleeps
+        self._deadline: float | None = None
         self._timed_out = False
         self.alive = True
+        self._watchdog = threading.Thread(target=self._watch, daemon=True)
+        self._watchdog.start()
 
     def _terminate(self) -> None:
-        self.alive = False
+        with self._cond:
+            self.alive = False
+            self._cond.notify_all()
         try:
             self._kernel32.TerminateJobObject(self._job, 1)
         except BaseException:
             pass
 
-    def _on_timeout(self) -> None:
-        self._timed_out = True
-        self._terminate()
+    def _watch(self) -> None:
+        """The one thread that enforces every exchange's deadline: it sleeps to the armed deadline, or until one is armed, and kills the Job once it passes."""
+
+        with self._cond:
+            while self.alive:
+                left = None if self._deadline is None else self._deadline - time.monotonic()
+                if left is not None and left <= 0:
+                    self._deadline = None
+                    self._timed_out = True
+                    self._terminate()
+                else:
+                    self._cond.wait(left)
 
     def _read_exact(self, count: int) -> bytes:
         data = bytearray()
@@ -1893,9 +1908,9 @@ class ContainedWorker:
         with self._lock:
             if not self.alive:
                 raise VerifierProcessError("worker_unavailable")
-            timer = threading.Timer(timeout_seconds, self._on_timeout)
-            timer.daemon = True
-            timer.start()
+            with self._cond:
+                self._deadline = time.monotonic() + timeout_seconds
+                self._cond.notify()
             try:
                 payload = len(frame).to_bytes(4, "big") + frame
                 offset = 0
@@ -1918,7 +1933,7 @@ class ContainedWorker:
                 )
                 raise VerifierProcessError(code) from None
             finally:
-                timer.cancel()
+                self._deadline = None
 
     def close(self) -> None:
         """End of input lets the worker exit 0; a worker that lingers is terminated."""
@@ -1926,7 +1941,9 @@ class ContainedWorker:
         with self._lock:
             if self._process is None:
                 return
-            self.alive = False
+            with self._cond:
+                self.alive = False
+                self._cond.notify_all()
             for descriptor in (self._stdin, self._stdout, self._stderr):
                 try:
                     os.close(descriptor)
