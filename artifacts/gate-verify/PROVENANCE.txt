@@ -13,8 +13,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
 - Source manifest, 70 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  e6976e2ef135ea57290525c2c2b9a980b131b2b28d2f06873dd0d339d90bbd9e, 7,783 bytes;
-  copy at C:\Users\neers\rrb\gate\m3s1-gv-manifest.txt (branch m3-step1; last note below).
+  9666e4e34ed6bd4135f726f90454560a5a70afe23de7a03feab1e4f34a84ccac, 7,783 bytes;
+  each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
+  holding CRLF copies of five blobs; same tree, exe unchanged.
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 

@@ -60,7 +60,8 @@ def _lean_manifest() -> str:
     """The `lean/` source manifest hash of test_gate_verify_pin_names_the_current_lean_tree: tracked files, plain string order."""
     tracked = subprocess.run(["git", "ls-files", "-z", "lean"], cwd=ROOT, capture_output=True, check=True).stdout.decode().split("\0")
     files = sorted(name for name in tracked if name and ".lake" not in name.split("/"))
-    return hashlib.sha256("".join(f"{_sha256(ROOT / name)}  {name}\n" for name in files).encode()).hexdigest()
+    lf = {name: hashlib.sha256((ROOT / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest() for name in files}  # LF = the git blob (eol=lf)
+    return hashlib.sha256("".join(f"{lf[name]}  {name}\n" for name in files).encode()).hexdigest()
 
 
 def _olean_line() -> str:

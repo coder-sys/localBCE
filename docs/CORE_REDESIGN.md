@@ -725,3 +725,11 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Disposition.** Retain. No money behaviour, stored format or digest changes. Builds are in-tree and incremental, not fresh stage pairs; a fresh pair before any release is still owed.
 - **Replacement control, claims withdrawn.** None. **Scope.** Lean only.
 - **Kill criteria.** An axiom outside the standard three; any pinned exe hash moving; a theorem statement edited to pass.
+
+## lean/ manifest hashes LF bytes (2026-09-30, XI.2 record; trunk, after the m3-step1 merge)
+
+- **Predicate.** The `lean/` source manifest in `tests/test_tcb_gate.py::_lean_manifest` and `tests/test_right_rail_gate_formats.py::test_gate_verify_pin_names_the_current_lean_tree`, recorded in `artifacts/gate-verify/PROVENANCE.txt` and `tools/tcb_report.txt`.
+- **Change.** Each tracked file is hashed after CRLF→LF, which equals its git blob under `* text=auto eol=lf`. Before, the hash read raw checkout bytes, so a worktree holding CRLF copies of LF blobs gave a different manifest for the same commit: trunk computed `cea66658...` and m3-step1 recorded `e6976e2e...` for one tree. The canonical value is `9666e4e3...`, recomputed from the blobs with `git show` in both trees.
+- **Invariant.** Any change to a tracked `lean/` file's content still moves the manifest. Only line-ending noise is ignored. Exe pins are unchanged.
+- **Evidence.** Guard log `trunk-m3s1-merge-a2-L3` (the two manifest failures before the fix) and `trunk-lfmanifest` (after).
+- **Kill criteria.** A content change under `lean/` that leaves the manifest unchanged.
