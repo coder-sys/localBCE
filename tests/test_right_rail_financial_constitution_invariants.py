@@ -117,6 +117,7 @@ class _AcceptanceFixtures:
     _record_p2 = _ACCEPTANCE["_record_p2"]
     _assert_snapshot = _ACCEPTANCE["_assert_snapshot"]
     _assert_verified = _ACCEPTANCE["_assert_verified"]
+    _assert_decision_package_verified = _ACCEPTANCE["_assert_decision_package_verified"]
     _two_claim_corrections = _ACCEPTANCE["_two_claim_corrections"]
     _pay_a = _ACCEPTANCE["_pay_a"]
 
@@ -732,20 +733,23 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
             step()
             package = store.decision_package(expected.H_ITEM_ID)
             with closing(sqlite3.connect(store.path)) as connection:
+                rows = connection.execute("SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions WHERE kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision,action_id").fetchall()
+                shortfall = connection.execute("SELECT shortfall_cents FROM obligations WHERE obligation_id=(SELECT obligation_id FROM actions LIMIT 1)").fetchone()[0]
                 paid = dict(connection.execute(
                     "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
                     "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
                     "WHERE e.kind='PAYMENT_RECEIVED' AND p.active=1 GROUP BY 1"
                 ).fetchall())
-            requests = sorted((a for a in package["references"]["actions"]["items"] if a["kind"] == "CORRECTION_PAYMENT_REQUEST"), key=lambda a: (a["revision"], a["action_id"]))
-            unpaid = [a["payload_fields"]["amount_cents"] - paid.get(a["action_id"], 0) for a in requests]
-            opened = [a.get("open_cents") for a in requests]
+            shown = {a["action_id"]: a.get("open_cents") for a in package["references"]["actions"]["items"]}  # only open_cents comes from the package
+            unpaid = [amount - paid.get(action_id, 0) for action_id, amount in rows]  # amounts, order and balance come from the store rows
+            opened = [shown.get(action_id) for action_id, _ in rows]
             self.assertTrue(all(isinstance(cents, int) and 0 <= cents <= left for cents, left in zip(opened, unpaid)), opened)
-            self.assertEqual(sum(opened), min(sum(unpaid), package["cash"]["shortfall_cents"]))  # within the balance; no owed cent unrequested
+            self.assertEqual(sum(opened), min(sum(unpaid), shortfall))  # within the balance; no owed cent unrequested
             for index, cents in enumerate(opened):
                 if cents:
                     self.assertEqual(opened[:index], unpaid[:index])  # older requests are served first
             self._assert_verified(store)
+            self._assert_decision_package_verified(store, package)
 
 
 if __name__ == "__main__":

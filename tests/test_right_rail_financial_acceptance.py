@@ -5298,6 +5298,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._pay_a(store, 100_001, "p3", action=_ACTION_B)
         self.assertEqual(self._durable_counts(store.path), counts)
         self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000, _ACTION_B: 100_000})
+        self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))  # the oracle recomputes the shrunk open amounts
         self.assertEqual(self._pay_a(store, 100_000, "p3", action=_ACTION_B)["status"], "RECORDED")
         self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000, _ACTION_B: 0})  # paying B leaves A alone
         self.assertEqual(self._pay_a(store, 300_000, "p4")["status"], "RECORDED")

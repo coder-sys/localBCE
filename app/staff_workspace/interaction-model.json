@@ -138,7 +138,7 @@
       "roles": ["analyst"],
       "route": "POST /api/correction/record-cash",
       "leads_to": "decision",
-      "enabled_when": "(unresolved_cash_body and owner_available and not command_pending) or (reviewed and action.status == 'ACKNOWLEDGED' and shortfall > 0)",
+      "enabled_when": "(unresolved_cash_body and owner_available and not command_pending) or (reviewed and action.status == 'ACKNOWLEDGED' and action.open_cents >= 300000)",
       "responses": {
         "success": { "screen": "decision", "message": "Synthetic cash evidence recorded. No money moved." },
         "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },

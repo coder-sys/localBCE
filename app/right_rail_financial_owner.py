@@ -456,7 +456,7 @@ def _open_requests(connection: sqlite3.Connection, obligation_id: str, shortfall
     paid = {e["action_id"]: e["paid_cents"] for e in _correction_paid(connection, obligation_id)}
     left, open_ = shortfall, {}
     for action_id, amount in connection.execute("SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' AND status<>'CANCELLED' ORDER BY revision,action_id", (obligation_id,)):
-        open_[action_id] = min(amount - paid.get(action_id, 0), left)  # paid <= amount: payment_exceeds_unpaid_request
+        open_[action_id] = min(max(amount - paid.get(action_id, 0), 0), left)  # clamped: a request is never open below zero
         left -= open_[action_id]
     return open_
 

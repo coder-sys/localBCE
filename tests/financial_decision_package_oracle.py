@@ -461,7 +461,7 @@ def verify_decision_package(
             left = int(obligation["shortfall_cents"])
             for action_id, status, amount in connection.execute("SELECT action_id,status,json_extract(payload_json,'$.amount_cents') FROM actions WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision,action_id", (obligation_id,)).fetchall():
                 paid = connection.execute("SELECT COALESCE(SUM(p.amount_cents),0) FROM payments p JOIN financial_events e ON json_extract(e.payload_json,'$.payment_id')=p.payment_id WHERE p.active=1 AND e.kind='PAYMENT_RECEIVED' AND json_extract(e.payload_json,'$.pays_action_id')=?", (action_id,)).fetchone()[0]
-                open_cents[action_id] = 0 if status == "CANCELLED" else min(amount - paid, left)
+                open_cents[action_id] = 0 if status == "CANCELLED" else min(max(amount - paid, 0), left)
                 left -= open_cents[action_id]
 
             def project_action(row: sqlite3.Row) -> dict[str, object]:
