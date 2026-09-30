@@ -1,12 +1,11 @@
 # Felt-value scorecard: Hospital H
 
 CONSTITUTION Art. XII says the demo is the scorecard. `tools/right_rail_scorecard.py`
-runs the Hospital H journey through the real staff server and the real workspace page,
-one fresh page per role. The data is in `scorecard/hospital_h.json`.
-`tests/test_right_rail_scorecard.py` fails if any unit gets worse. After an
-improvement, rewrite the file with `--write`. All counts are deterministic.
-Synthetic, non-PHI, nonpayment, proofSuiteId=null, production_usable=false,
-activation=false.
+runs the Hospital H journey through the real staff server and workspace page, one
+fresh page per role, into `scorecard/hospital_h.json`. `tests/test_right_rail_scorecard.py`
+fails if any unit gets worse; after an improvement, rewrite the file with
+`--write`. Synthetic, non-PHI, nonpayment, proofSuiteId=null,
+production_usable=false, activation=false.
 
 ## The units: who feels them, and when
 
@@ -23,10 +22,9 @@ activation=false.
 
 ## Before and after
 
-"Manual" values are assumptions from plan §4, never measurements. "Unknown"
-means the plan gives no figure. "Demo before" and "after" were both measured by
-this harness: "before" at 1c7ed3b (product code unchanged since e9b3727), and
-"after" with this change.
+"Manual" values are assumptions from plan §4, never measurements; "unknown" means
+the plan gives no figure. "Demo before" (at 1c7ed3b, product code unchanged since
+e9b3727) and "after" were both measured by this harness.
 
 | Role, moment | Unit | Manual | Demo before | After |
 |---|---|---|---|---|
@@ -46,10 +44,8 @@ this harness: "before" at 1c7ed3b (product code unchanged since e9b3727), and
 | Case H | hours unresolved / past due | unknown | 48 / 24 | 48 / 24 |
 | Accuracy | correction error, reconciliation error, double count (cents) | unknown | 0 / 0 / 0 | 0 / 0 / 0 |
 
-Note: the page loads the case with the queue, so the package needs no
-separate request or click. The hours come from the fixture's synthetic clock,
-which screen changes cannot move. Paying late does not erase the missed
-deadline: H stays 24 hours past due on record.
+The hours come from the fixture's synthetic clock; paying late does not erase
+the missed deadline.
 
 ## Not shown, because the read model does not carry it
 

@@ -20,14 +20,9 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 
 ## Read first
 
-| File | What it is |
-| --- | --- |
-| `CONSTITUTION.md` | Supreme rules. Every change complies with it. |
-| `STATUS.md` | The only status: what runs, what is unrun, blockers, next steps. |
-| `ARCHITECTURE.md` | How the code fits together today. |
-| `docs/RIGHTRAIL_FULL_STACK_TARGET.md` | The complete target the code is building toward. |
-| `docs/DESIGN_IDEOLOGY.md` | Engineering principles (source of Constitution Article XI). |
-| `AGENTS.md` | Short instructions for AI agents working here. |
+`CONSTITUTION.md` (supreme rules), `STATUS.md` (the only status), `ARCHITECTURE.md`
+(how the code fits today), `docs/RIGHTRAIL_FULL_STACK_TARGET.md` (the target),
+`docs/DESIGN_IDEOLOGY.md` (engineering principles) and `AGENTS.md`.
 
 ## How to run
 
@@ -35,17 +30,16 @@ All builds and tests go through the guard; never run them bare
 (Constitution X.2), through `C:/Users/neers/rrb/tools/rr_guarded.ps1`. The
 default `pytest` configuration runs `tests/` and excludes `parked/`.
 
-**Python dependencies** are installed offline only, into a fresh virtual
-environment, from a pre-provisioned wheelhouse; pip refuses any wheel whose
-SHA-256 differs from `requirements-dev.txt`:
+**Python dependencies** install offline only, into a fresh virtual environment,
+from a pre-provisioned wheelhouse (pip refuses any wheel whose SHA-256 differs
+from `requirements-dev.txt`):
 
 ```powershell
 python -m pip install --no-index --find-links <wheelhouse> --require-hashes --only-binary=:all: --no-deps -r requirements-dev.txt
 ```
 
-Production has no Python package dependency (`requirements.txt` is empty);
-development adds only pytest and its five dependencies. Changing any of them
-means acquiring and reviewing new wheels, re-pinning their hashes and updating
+Production has no Python package dependency; development adds only pytest and
+its five dependencies. Changing any means re-pinning hashes and updating
 `docs/SBOM.python.spdx.json`.
 
 **Staff workspace** (loopback only, synthetic TEST owner):
@@ -56,9 +50,9 @@ python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir> `
   --correction-transition-workspace <absolute empty dir>
 ```
 
-Both correction paths must be absolute. Without them the server starts, but
-correction commands fail closed. `--resume-existing-workspace` reopens and
-re-verifies an existing TEST database instead of reseeding it.
+Both correction paths must be absolute; without them correction commands fail
+closed. `--resume-existing-workspace` reopens and re-verifies an existing TEST
+database instead of reseeding it.
 
 **CLI** over an existing owner database:
 `python -m tools.right_rail_financial_cli --database <db> summary` (also
