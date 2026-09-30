@@ -2807,7 +2807,7 @@ class FinancialOwner:
             connection,
             result=result,
             pack=pack,
-            evidence_bindings=self._evidence_bindings(connection, decided.evidence_ids),
+            evidence_ids=decided.evidence_ids,
             authority_epoch=decided.authority_epoch,
             authority_digest=decided.authority_digest,
         )
@@ -3566,15 +3566,6 @@ class FinancialOwner:
             "currency": self.config.currency,
         }
 
-    def _evidence_bindings(self, connection: sqlite3.Connection, evidence_ids: Iterable[str]) -> list[dict[str, str]]:
-        ordered = list(evidence_ids)
-        if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
-            _fail(FinancialIntegrityError, "evaluation_evidence_order")
-        digests = {row[0]: row[1] for row in connection.execute("SELECT evidence_id,record_digest FROM evidence WHERE evidence_id IN (SELECT value FROM json_each(?))", (json.dumps(ordered),))}
-        if not digests.keys() >= set(ordered):
-            _fail(FinancialIntegrityError, "evaluation_evidence_missing")
-        return [{"evidence_id": evidence_id, "record_digest": _hex(bytes(digests[evidence_id]))} for evidence_id in ordered]
-
     def _evaluation_input_snapshot(
         self,
         connection: sqlite3.Connection,
@@ -3682,10 +3673,13 @@ class FinancialOwner:
         *,
         result: Mapping[str, Any],
         pack: ControlPack,
-        evidence_bindings: list[dict[str, str]],
+        evidence_ids: Iterable[str] | None = None,
+        evidence_bindings: list[dict[str, str]] | None = None,
         authority_epoch: int,
         authority_digest: bytes,
     ) -> dict[str, Any]:
+        if (evidence_ids is None) == (evidence_bindings is None):
+            _fail(FinancialIntegrityError, "evaluation_evidence_source")
         result_body = _evaluation_result_body(result)
         result_digest = _digest(_EVALUATION_RESULT_DOMAIN, _canonical(result_body))
         stored_result = {**result_body, "result_digest": _hex(result_digest)}
@@ -3696,6 +3690,14 @@ class FinancialOwner:
             obligation_id=str(result["obligation_id"]),
             pre_revision=pre_revision,
         )
+        if evidence_bindings is None:  # batch-frames-v1 D4: the rows the snapshot just read, not a second query
+            ordered = list(evidence_ids)
+            if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
+                _fail(FinancialIntegrityError, "evaluation_evidence_order")
+            digests = {row["evidence_id"]: row["record_digest"] for row in input_snapshot["evidence"]}
+            if not digests.keys() >= set(ordered):
+                _fail(FinancialIntegrityError, "evaluation_evidence_missing")
+            evidence_bindings = [{"evidence_id": evidence_id, "record_digest": digests[evidence_id]} for evidence_id in ordered]
         input_snapshot_bytes = _canonical(input_snapshot)
         input_snapshot_digest = _digest(_EVALUATION_INPUT_DOMAIN, input_snapshot_bytes)
         receipt_body = _evaluation_receipt_body(
@@ -3742,7 +3744,7 @@ class FinancialOwner:
             connection,
             result=result,
             pack=pack,
-            evidence_bindings=[],
+            evidence_ids=[],
             authority_epoch=self.trusted_authority.epoch,
             authority_digest=self.trusted_authority.digest,
         )
