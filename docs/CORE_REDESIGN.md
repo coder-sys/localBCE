@@ -704,3 +704,14 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Replacement control.** The `loop` kind replaces two name-by-name TODOs; any new such loop in our code fails the gate unless named. **Scope.** gate_verify, worker, correction, the TCB gate. Not the Keccak duplicate, batch frames or the cursor decoder.
 - **Claims withdrawn.** "gate_verify runs FIPS 204's unbounded sampling loops"; the worker pin `EE651742...7C21`.
 - **Kill criteria.** Any ACVP or differential flip; a theorem that cannot be proved as written; axioms outside the standard three; a valid signature rejected by the bounds.
+
+## One Keccak and the last WorkerLaws pins (2026-09-30, XI.2 record, branch keccak-dedupe)
+
+- **Felt effect.** None for any user. An auditor reads one SHA-3 sponge, not two; the last four `WorkerLaws` axiom lines can no longer drift unseen.
+- **Predicate.** Lean-expansion plan item 11 ("remove the duplicate Keccak"); the ML-DSA ACVP vectors and `tests/test_lean_io_loops.py` are unchanged and pass.
+- **Change.** `BlindLedger/Keccak.lean` is deleted. `Sha3.lean` now holds the compact sponge, keeping `BlindLedger.Semantic.sha3_512` and adding `shake128` and `shake256`; `MlDsa87`, `MlDsa87Laws` and `Verify` use it. `AxiomCheck` pins `decodeWorkerOutcome_encodeWorkerOutcome` (`propext`), `evaluateWire_evaluated` and `workerRespond_length_le` (the standard three) and `maxWorkerFrameBytes_fits_u32` (no axioms). No theorem statement, digest domain, wire format or output byte changes; Lean is 112 lines shorter.
+- **Invariant.** Every SHA3-512 and SHAKE output is the same for every input: the gate's ACVP known answers exercise all three functions, and the correction vectors are byte-identical.
+- **Evidence.** Guard logs `kd-dev3-a1-L3` (axioms printed), `kd-dev5-a1-L3` (in-tree build, 83 jobs, every pin holds), `kd-stagea-a1-L3` and `kd-stageb-a13-L1` (fresh `git archive` stages of `3485bf6`, 75 jobs, byte-identical), `tcb-live-20260930105616-a10-L3` (7 of 7, 0 violations), `kd-t2-a1-L3` (46 tests: ACVP, differential, io loops, rules runner, engine; 44 passed, 2 skipped as the live TCB gate, which the previous log ran).
+- **Disposition.** Retain. Re-pin: correction `D5A06E9F...0CBB` (retired, `RETIRED_PINS`, rule `h1-v1`) to `FB659DA3...A785` (6,300,160 bytes); gate_verify `B9696F2E...D171C` to `9BD2602B...C9916` (4,205,568 bytes); worker `86299A0D...712B` unchanged. The release producer was not run: the correction pin is stage-built, as in lean-leak. **Replacement control.** None. **Scope.** Correction, gate_verify, the TCB report.
+- **Claims withdrawn.** The correction pin `D5A06E9F...0CBB` and the gate_verify pin `B9696F2E...D171C` for new work; "the Keccak duplicate is left alone" (partials B record).
+- **Kill criteria.** Any ACVP or correction-vector difference; a pinned axiom line that changes; two stages that differ.

@@ -1,13 +1,13 @@
-manifest  4ad07c06e22567b16f8cd4a9b64f6d6131fb290ec6c61490a2e59f4662b93dcc
+manifest  0d64b23b501840b96bcf4a1128b302104fdb1ce1cf66a9befcf622b94d3a21ae
 gate  15fb84774c4db423821e7cd50a1865f12717ce9a3fe0d093f53050c9c2fee688
-exe blind_financial_correction  d5a06e9ffdb13c6266c40658b06af4d93204f35159b9be7fd4387a0613a10cbb
+exe blind_financial_correction  fb659da34ad63dbaa69f9e585da1f20e1953cb986229a8cff693708371f4a785
 exe blind_financial_worker  86299a0d8925c52692f936c18c9e4a2ced7118fa32fa6b864c4a745421a1712b
-exe gate_verify  b9696f2ea715a775d93947025a0510cdec1432b5a4ab05bf3d8a75eafa4d171c
+exe gate_verify  9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916
 toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
-blind_financial_correction: 8829 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+blind_financial_correction: 8837 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
   csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
-  allowlist Init.* x187: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  allowlist Init.* x188: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
   0 violations
 blind_financial_worker: 7399 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
