@@ -1286,7 +1286,7 @@ def run_correction_transition_v1(
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
 EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 5_727_744
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "E95C6D52584DB987B771900EEEA2DA249F9E54097B2EE91AF1518072F28E3D97"
+    "EE651742B79AA6F230E612B2088EF38C856031DFF16FC1477B022711ED067C21"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0
