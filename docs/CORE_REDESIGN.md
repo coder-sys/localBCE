@@ -581,7 +581,7 @@ verifier before it can leave the gate, post-quantum only.
 
 - **Felt effect.** The signer runs a verifier built from the Lean tree it ships with.
 - **Predicate.** `test_gate_verify_pin_names_the_current_lean_tree`: the `lean/` manifest recorded in `artifacts/gate-verify/PROVENANCE.txt` equals the tree's, and the tree's build is the pinned exe.
-- **Change.** `gate_verify.exe` rebuilt and re-pinned (`gate_verify.sha256`, Source manifest, `VERIFY_PIN`). Two causes moved the manifest. Slim moved `semantic_assurance_gate.py` and its manifest under `lean/tools/`. Quick-wins changed `lakefile.toml` (comment, default targets), gave `AxiomCheck.lean` `#guard_msgs` pins and moved the retired Semantic kernel to `parked/`. No theorem statement or wire format changes.
+- **Change.** `gate_verify.exe` rebuilt: the hash is unchanged, so `gate_verify.sha256` is not re-pinned; the Source manifest in `PROVENANCE.txt` is re-recorded (tracked `lean/` files only). Two causes moved the manifest. Slim moved `semantic_assurance_gate.py` and its manifest under `lean/tools/`. Quick-wins changed `lakefile.toml` (comment, default targets), gave `AxiomCheck.lean` `#guard_msgs` pins for the theorems the gate does not check (the gate's own are printed, not pinned) and moved the retired Semantic kernel to `parked/`. No theorem statement or wire format changes.
 - **Invariant.** A change under `lean/` cannot ship with a stale verifier pin. Failure: the signer trusts a build no one reproduced.
 - **Disposition.** Retain the gate. **Replacement control.** None. **Scope.** Until the next `lean/` edit.
 - **Kill criteria.** Drop the manifest check if the pin moves to a hash of the exe's own import closure.
