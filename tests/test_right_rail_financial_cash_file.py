@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from app import right_rail_financial_cash_file as cash
 from app import right_rail_financial_cash_file_independent as check
+from app import right_rail_financial_engine as engine
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_owner_independent import verify_database
@@ -289,6 +290,24 @@ class ReceiverCashFileTests(unittest.TestCase):
         history = Path(tempfile.mkdtemp(dir=self.fixture.temp_dir.name))
         self.store.export_history(history)
         self.assertLess(sum(path.stat().st_size for path in history.iterdir()), 24 * 1024 * 1024)
+
+    def test_evaluation_bindings_cite_only_the_items_own_evidence(self):
+        # batch-frames-v1 D4: bindings come from the item's evidence read in the same transaction.
+        self._wide_store(3)  # the smallest fixture with a second item, which then holds evidence of its own
+        self.store.record_payment_evidence(**{**self._row(9, 5, 0, "other"), "item_id": "item-0001", "pays_action_id": None})
+        self.baseline = self._manifest()
+        other = self._query("SELECT evidence_id FROM evidence WHERE item_id<>? ORDER BY evidence_id LIMIT 1", expected.H_ITEM_ID)[0][0]
+        real = engine.evaluate_live
+        def citing_foreign(*args, **kwargs):
+            decided = real(*args, **kwargs)
+            return dataclasses.replace(decided, evidence_ids=tuple(sorted((*decided.evidence_ids, other))))
+        with patch.object(engine, "evaluate_live", citing_foreign):
+            self._unchanged(lambda: self.store.run_batch(cash._propose(canonical(self.value), self.baseline)), "evaluation_evidence_missing")
+
+    def test_evaluation_takes_exactly_one_evidence_source(self):
+        for given in ({}, {"evidence_ids": [], "evidence_bindings": []}):
+            with self.subTest(given=sorted(given)), self.assertRaisesRegex(owner.FinancialIntegrityError, "evaluation_evidence_source"):
+                self.store._insert_evaluation(None, result={}, pack=None, authority_epoch=0, authority_digest=b"", **given)
 
     def test_quarter_end_file_within_writer_timeout(self):
         # A quarter's last file on 5,500 earlier payments (6,000 in all), applied through an already-open owner: the lock of a warm apply,
