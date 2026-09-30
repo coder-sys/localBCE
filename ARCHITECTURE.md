@@ -21,8 +21,7 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
    +--> Switch (app/right_rail_financial_switch.py): read-only replay and comparison
 ```
 
-Dispatch and egress are disabled; nothing here moves money, and an
-acknowledgment never marks cash (the record kinds are separate: Constitution II).
+Dispatch and egress are disabled; nothing here moves money (Constitution II).
 
 ## Financial owner
 
@@ -55,10 +54,9 @@ digest-bound roster.
 
 Every outer write checks current funding projections against their immutable
 receipts, indexed funding events, successor status and root coverage under the
-same SQLite lock, before executing and before committing; the funding summary
-checks within its read snapshot. It scans current funding sources twice per
-batch and detects current-projection drift; independent full replay still
-checks historical rows, digests and the whole store.
+same SQLite lock, before executing and before committing (the funding summary
+within its read snapshot); independent full replay still checks historical rows,
+digests and the whole store.
 
 ## Lean decides, the owner commits
 
@@ -76,11 +74,9 @@ checks historical rows, digests and the whole store.
  command fails closed. There is no Python fallback decision.
 - **Pinned executable:** `artifacts/engine-correction/`, built by the release
  producer from the exact source its `PROVENANCE.md` records (commit and
- file manifest); a later `lean/` change is not covered. Engines
- a re-pin retired are listed in its digest-pinned `RETIRED_PINS`: their
- committed follow-ups stay valid history, but only the current pin decides;
- a retired engine never decides after a newer one, and no correction, whatever
- engine decided it, requests more than was then requestable.
+ file manifest); a later `lean/` change is not covered. Engines a re-pin
+ retired are in its digest-pinned `RETIRED_PINS` (rules in its `PROVENANCE.md`): only
+ the current pin decides new work.
 - **Evaluation:** Lean decides. `evaluate_live` (`app/right_rail_financial_engine.py`)
  sends `BLFIN02` to the pinned worker (`artifacts/engine-evaluator/`); its `BLFRES02`
  answer is bound to the three writes and re-checked before COMMIT. A bad worker
@@ -97,17 +93,14 @@ checks historical rows, digests and the whole store.
 commands back to it. It has no tables of its own and cannot invent cash,
 authority or clearance. From one current decision package it derives the
 correction follow-up explanation, a state report and a recipient-safe
-corporate-support output; a bounded follow-up drain is repeatable, and an
-acknowledgment changes follow-up status without changing cash.
+corporate-support output; an acknowledgment changes follow-up status, never cash.
 
 **Continuity** exports the history as chained, bounded segments
 (`RR/GATE/SEGMENT/v1`, docs/CORE_REDESIGN.md), which the checker verifies and
 a fresh owner restores by replay; the older whole-state package (8 MiB)
-remains. Restore runs in a private attempt directory and publishes
-atomically without replacing anything; a foreign destination and its
-`-wal`/`-shm` sidecars stay intact and cleanup failures are reported.
-SHADOW opens read-only; TEST is isolated; neither can dispatch, egress,
-become a live writer or replace an identity.
+remains. Restore runs in a private attempt directory and publishes atomically
+without replacing anything. SHADOW opens read-only; TEST is isolated; neither
+can dispatch, egress, become a live writer or replace an identity.
 
 **Switch** takes only independently verified Continuity SHADOW bytes, gives
 the same canonical input to a reference and a candidate evaluator supplied
@@ -120,22 +113,16 @@ packager: it assembles, verifies, extracts, runs the end-to-end scenario and
 serves the workspace from a digest-bound offline archive. Its release
 producer and inventory bind the current vectors, retired-pin registry and a
 fresh guarded engine receipt. The kit checks canonical source paths and the
-exact v4 guard records under LF or CRLF endings (raw log bytes stay
-digest-bound); exercised archives are in provenance. Staff cash evidence names the correction request it
-pays; acknowledgment alone never provides that credit. The synthetic staff
-clock advances to the explicit decision time before issuing the correction, so
-new demo acknowledgments follow their action, even after a lost response.
+exact v4 guard records under LF or CRLF endings; exercised archives are in
+provenance. Staff cash evidence names the correction request it pays;
+acknowledgment alone never provides that credit.
 
 The HTTP adapter accepts exactly one length and content-type header, no
 transfer encoding, and at most 8,192 bytes within a five-second total body
-deadline. Refusals flush, then drain at most 8,193 unread bytes for 100 ms
-before closing; HEAD sends no body, so a slow sender cannot hold a refusal open.
+deadline; a refusal drains at most 8,193 unread bytes for 100 ms before closing.
 
-## Direct-state-owned clearance route (parked)
-
-`parked/state_clearance/` (`parked/README.md`): only `CLEAR` or a valid
-`EXCEPTION_APPROVED` may advance economic state; `HOLD`, `HUMAN_REVIEW` and
-`BLOCK` cannot.
+Parked `parked/state_clearance/`: only `CLEAR` or a valid `EXCEPTION_APPROVED` may
+advance economic state; `HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
 
 ## Mirror Provider Trust Graph
 
@@ -149,29 +136,24 @@ codes. `tools/provider_trust_graph_view.py` is a loopback browser view over it.
 
 Source intake takes a bounded captured envelope and independently supplied
 capture context (subject, credential, enrollment, locator, observation and fetch
-time); all six values must match the independent source check before admission.
-Only the admitted graph reaches the read-model and export verification gates;
-the served projection keeps freshness and source truth unknown. A failed capture
-or context mismatch opens no server; retry recomputes the same projection. Both CLIs accept `--source-envelope` and
+time); all six values must match the independent source check before admission,
+so a failed capture or mismatch opens no server. The served projection keeps
+freshness and source truth unknown. Both CLIs accept `--source-envelope` and
 `--capture-context` (see `--help`) instead of `--artifact PATH`; the four
 identities are opaque 128-character hex values from the capture configuration,
 never parsed from the untrusted envelope. File intake for the fixed synthetic
-profile only; no live fetch or financial-file adapter.
+profile only.
 
 ## Provider App
 
 `provider_app/` is a separate product: an in-memory pre-submission checker for
-fictional provider facts with `PASS` / `MISSING` / `HUMAN_CHECK` outcomes, an
-independent result checker and a Lean comparison path. See
-`provider_app/README.md`.
+fictional provider facts (`provider_app/README.md`).
 
 ## Path to the payment gate
 
-The target end state
+The target
 ([`docs/RIGHTRAIL_FULL_STACK_TARGET.md`](docs/RIGHTRAIL_FULL_STACK_TARGET.md))
-is Blind Ledger as an inline gate every FFS and managed-care payment passes
-before money goes out, at full state scale. There is no integrated payer gate.
-What exists today toward it:
+is an inline gate on every payment. There is no integrated payer gate. Toward it:
 
 - Lean decides every evaluated money field and one of 18 command types
  (`reject_offset_and_authorize_correction`); Python still decides
@@ -183,12 +165,10 @@ What exists today toward it:
  admissible values; nothing yet proves every value Lean emits is admissible.
 - There is no batch decide API, independent witness, fenced standby or Bypass
  outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
- the gate-v1 codec, Lean model and `gate_verify` (no product caller).
-- The correction transition still starts one Windows process per call, disqualifying
- for gate throughput; only evaluation has a long-lived worker; no pool benchmark exists.
-
-Gate-v1's formats and Lean payer checks are not connected to signed grant
-admission, durable payer state or the rules path.
+ the gate-v1 codec, Lean model and `gate_verify` (no product caller), not
+ connected to signed grant admission, durable payer state or the rules path.
+- The correction transition starts one Windows process per call, disqualifying
+ for gate throughput; only evaluation has a long-lived worker.
 
 ## Rejected directions
 
@@ -200,6 +180,5 @@ admission, durable payer state or the rules path.
  downgrade; the approved profile fixes the evidence mode.
 - Fixed-shape/AIR compatibility as a production authority.
 
-Private zero-knowledge is an active evidence-only prototype in its separate
-repository (Constitution IX.4). The old native code under `parked/` remains
-historical reference, not the current prototype or a core-product dependency.
+Private zero-knowledge is an evidence-only prototype in its separate repository
+(Constitution IX.4); `parked/` is historical reference.

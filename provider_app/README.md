@@ -12,7 +12,7 @@ The only admitted bundle is `UNAPPROVED_SYNTHETIC_FIXTURE`. It may be used in sy
 - `provider_app/checker.py` independently reconstructs the complete result using only the Python standard library. It does not import the application package.
 - `schemas` contains versioned request, bundle, and result contracts. The result schema fixes all five rule identifiers by position. `vectors/synthetic-vectors-v1.json` contains 26 fictional expected cases.
 - `tests` includes 9 parser rejection methods, vector evaluation and independent reconstruction, checker mutation, lifecycle accounting, and duplicate/shuffled result-schema rejection. The optional `test` dependency supplies the Draft 2020-12 `jsonschema` validator.
-- `lean/ProviderApp/Semantics.lean` is a façade over the pure typed decision model in `Semantics/*.lean`, pinned to Lean 4.33.1. `lean/ProviderApp/InputProtocol.lean` parses the closed, size-bounded normalized argument through typed modules and rejects populated fact fields in `REAL_USE` mode. `Main.lean` serializes the result and runs the executable. `provider_app/lean_compare.py` checks the Lean result against Python and the independent checker and fails closed on any mismatch or unpinned artifact; it does not replace the Python application authority. See `lean/AdapterContract.md`.
+- `lean/ProviderApp/` is the pure Lean decision model, pinned to Lean 4.33.1; `provider_app/lean_compare.py` compares its result with Python and the independent checker and fails closed on any mismatch or unpinned artifact. It never replaces the Python authority. See `lean/AdapterContract.md`.
 
 The fixture categories, source names, references, and amount range are invented, not billing codes, medical rules, payer policy or coverage criteria.
 
