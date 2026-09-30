@@ -1493,4 +1493,10 @@ def evaluate_live(
         evaluation_time_ms=evaluation_time_ms,
         verification=verification,
     )
-    return semantic.decode_live_result(_evaluate_wire(wire), data)
+    answer = _evaluate_wire(wire)
+    try:
+        return semantic.decode_live_result(answer, data)
+    except BaseException:
+        with _evaluator_lock:  # an answer that does not bind to this request may mean the worker is out of step
+            _close_evaluator()
+        raise

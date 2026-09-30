@@ -1888,14 +1888,14 @@ class ContainedWorker:
             return 1 << 63
         return int(counters.PrivateUsage)
 
-    def _stderr_pending(self) -> bool:
-        """Any stderr byte (a Lean panic message) fails the request closed; the worker writes no diagnostics."""
+    def _pending(self, descriptor: int) -> bool:
+        """An unread byte fails the request closed: on stderr a Lean panic message (the worker writes no diagnostics), on stdout a second frame that would answer the next request."""
 
         import msvcrt
 
         available = wintypes.DWORD()
         return not self._kernel32.PeekNamedPipe(
-            msvcrt.get_osfhandle(self._stderr), None, 0, None, ctypes.byref(available), None
+            msvcrt.get_osfhandle(descriptor), None, 0, None, ctypes.byref(available), None
         ) or available.value != 0
 
     def exchange(self, frame: bytes, *, response_cap_bytes: int, timeout_seconds: float) -> bytes:
@@ -1912,6 +1912,8 @@ class ContainedWorker:
                 self._deadline = time.monotonic() + timeout_seconds
                 self._cond.notify()
             try:
+                if self._pending(self._stdout):
+                    raise VerifierProcessError("worker_exchange")
                 payload = len(frame).to_bytes(4, "big") + frame
                 offset = 0
                 while offset < len(payload):
@@ -1923,7 +1925,9 @@ class ContainedWorker:
                 if not 0 < length <= response_cap_bytes:
                     raise VerifierProcessError("worker_response_cap")
                 response = self._read_exact(length)
-                if self._stderr_pending():
+                if self._pending(self._stdout):
+                    raise VerifierProcessError("worker_exchange")
+                if self._pending(self._stderr):
                     raise VerifierProcessError("worker_stderr")
                 return response
             except BaseException as error:

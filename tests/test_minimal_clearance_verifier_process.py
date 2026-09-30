@@ -6,14 +6,34 @@ import itertools
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
+import time
+import types
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import app.minimal_clearance_verifier_process as process
+
+
+_ECHO = """
+import os, sys, time
+mode, go = sys.argv[1:]
+n = 0
+while len(head := sys.stdin.buffer.read(4)) == 4:
+    body = sys.stdin.buffer.read(int.from_bytes(head, "big")); n += 1
+    if mode == "silent":
+        time.sleep(60)
+    frame = (len(body) + 11).to_bytes(4, "big") + b"ANSWER-FOR-" + body
+    sys.stdout.buffer.write(frame * (2 if mode == "dup" and n == 1 else 1)); sys.stdout.buffer.flush()
+    if mode == "late" and n == 1:
+        while not os.path.exists(go):
+            time.sleep(0.01)
+        sys.stdout.buffer.write(frame); sys.stdout.buffer.flush()
+"""
 
 
 class _FakeFunction:
@@ -1812,24 +1832,56 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             finally:
                 os.close(descriptor)
 
+    def _worker(self, mode="ok"):
+        """A ContainedWorker over real pipes to a tiny child: real PeekNamedPipe, the job is fake (killing it kills the child)."""
+
+        go = Path(self.enterContext(tempfile.TemporaryDirectory())) / "go"
+        child = subprocess.Popen([sys.executable, "-c", _ECHO, mode, str(go)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.addCleanup(lambda: [child.kill(), child.wait(), *(pipe.close() for pipe in (child.stdin, child.stdout, child.stderr))])
+        kernel = types.SimpleNamespace(TerminateJobObject=lambda job, code: child.kill(), PeekNamedPipe=process._launch_apis(False)[0].PeekNamedPipe)
+        worker = process.ContainedWorker(kernel32=kernel, job=None, process_handle=None, stdin_descriptor=child.stdin.fileno(), stdout_descriptor=child.stdout.fileno(), stderr_descriptor=child.stderr.fileno(), psapi=None)
+        self.addCleanup(worker._terminate)
+        return worker, child, go
+
+    @unittest.skipUnless(os.name == "nt", "Windows worker pipe test")
     def test_contained_worker_watchdog_kills_a_silent_worker_and_ends_with_it(self):
         # One watchdog thread per worker enforces every exchange's deadline; a worker that never answers is killed and the thread ends.
-        stdin, stdout = os.pipe(), os.pipe()
-        killed = []
-
-        class Kernel:
-            def TerminateJobObject(self, job, code):
-                if not killed:
-                    killed.append(code)
-                    os.close(stdout[1])  # the dead child's end: the blocked read now sees end of stream
-
-        worker = process.ContainedWorker(kernel32=Kernel(), job=None, process_handle=None, stdin_descriptor=stdin[1], stdout_descriptor=stdout[0], stderr_descriptor=-1, psapi=None)
-        for descriptor in (stdin[0], stdin[1], stdout[0]):
-            self.addCleanup(os.close, descriptor)
+        worker, child, _ = self._worker("silent")
         with self.assertRaises(process.VerifierProcessError) as caught:
-            worker.exchange(b"x", response_cap_bytes=16, timeout_seconds=0.2)
+            worker.exchange(b"x", response_cap_bytes=16, timeout_seconds=0.5)
         worker._watchdog.join(5)
-        self.assertEqual((str(caught.exception), worker.alive, killed, worker._watchdog.is_alive()), ("worker_timeout", False, [1], False))
+        self.assertEqual((str(caught.exception), worker.alive, child.wait(5) != 0, worker._watchdog.is_alive()), ("worker_timeout", False, True, False))
+
+    @unittest.skipUnless(os.name == "nt", "Windows worker pipe test")
+    def test_contained_worker_answers_pair_with_requests_across_many_exchanges(self):
+        worker, _, _ = self._worker()
+        for n in range(200):
+            self.assertEqual(worker.exchange(b"REQ-%d" % n, response_cap_bytes=64, timeout_seconds=10.0), b"ANSWER-FOR-REQ-%d" % n)
+        self.assertTrue(worker.alive)
+
+    @unittest.skipUnless(os.name == "nt", "Windows worker pipe test")
+    def test_contained_worker_extra_frame_fails_closed_and_never_pairs_answers_off_by_one(self):
+        # "dup": the first answer is written twice.  "late": the copy arrives after the first exchange returned.
+        for mode in ("dup", "late"):
+            with self.subTest(mode=mode):
+                worker, child, go = self._worker(mode)
+                if mode == "dup":
+                    with self.assertRaises(process.VerifierProcessError) as caught:
+                        worker.exchange(b"REQ-1", response_cap_bytes=64, timeout_seconds=10.0)
+                else:
+                    self.assertEqual(worker.exchange(b"REQ-1", response_cap_bytes=64, timeout_seconds=10.0), b"ANSWER-FOR-REQ-1")
+                    go.write_bytes(b"")
+                    for _ in range(500):
+                        if worker._pending(child.stdout.fileno()):
+                            break
+                        time.sleep(0.01)
+                    with self.assertRaises(process.VerifierProcessError) as caught:
+                        worker.exchange(b"REQ-2", response_cap_bytes=64, timeout_seconds=10.0)
+                self.assertEqual((str(caught.exception), worker.alive), ("worker_exchange", False))
+                self.assertNotEqual(child.wait(5), 0)
+                with self.assertRaises(process.VerifierProcessError) as again:
+                    worker.exchange(b"REQ-3", response_cap_bytes=64, timeout_seconds=10.0)
+                self.assertEqual(str(again.exception), "worker_unavailable")
 
 
 if __name__ == "__main__":
