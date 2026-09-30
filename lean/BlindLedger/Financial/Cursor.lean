@@ -264,10 +264,14 @@ instance {α : Type} {p : Reader α} {P} [h : SimOf p P] :
     SimOf (readList p) (Financial.readList P) := ⟨sim_readList h.sim⟩
 
 /-- Peel a `do` block one bind at a time, closing each reader with its `SimOf`. -/
-macro "sim_steps" : tactic => `(tactic| repeat (first
-  | exact Sim.pure _
-  | refine Sim.bind SimOf.sim fun _ => ?_
-  | refine Sim.bindOpt _ fun _ => ?_))
+syntax "sim_steps" : tactic
+macro_rules
+  | `(tactic| sim_steps) => `(tactic| repeat (first
+    | exact Sim.pure _
+    | exact Sim.fail
+    | refine Sim.bind SimOf.sim fun _ => ?_
+    | refine Sim.bindOpt _ fun _ => ?_
+    | (refine Sim.ite _ ?_ ?_ <;> sim_steps)))
 
 def decodeContext : Reader FinancialContext := fun ba i => do
   let (ownerId, i) ← readString ba i
