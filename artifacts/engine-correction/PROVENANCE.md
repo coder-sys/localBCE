@@ -1,24 +1,18 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the core-thm re-pin below,
-built from `lean/` as committed at `909097b` (lean tree `2ffe3329a5fea794a38b711264beaccdd31d5d8a`).
+`blind_financial_correction.exe` is the Lean/Lake executable of the keccak-dedupe re-pin below: two fresh `git archive`
+stage builds of `lean/` at commit `3485bf6` (lean tree `9a7fe92f7e3cfd059d86f18d4bca01f5ba14750e`, 61 tracked files), byte-identical.
+The release producer (`tools/build_financial_correction_release.ps1`) has NOT run on this tree; its last receipts are on the partials tree, below.
 
-- Size: 6,297,088 bytes
-- SHA-256: `FB30B415B40E3C8D2CABB2285F2F21D3EB263200007943DDF32438EF95348FD6`
+- Size: 6,300,160 bytes
+- SHA-256: `FB659DA34AD63DBAA69F9E585DA1F20E1953CB986229A8CFF693708371F4A785`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
-- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`; before it `1A5821FA...DDBE`, recoverable at `3ff5c9e`.
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`.
 
-## Core-thm re-pin (2026-09-30, rule `h1-v1`, no money or format change)
+## One-Keccak re-pin (2026-09-30, rule `h1-v1`, no money or format change)
 
-Why it moved: `Transition.lean` gained eight `CorrectionMutationLinkFacts` fields (the resulting input's frame, claims, actions,
-determinations and OFFSET_AUTHORIZED filter, and the determination's decision and actor) and lost the unreachable
-`pack.status != APPROVED` refusal (`controlPackWellFormed` already demands APPROVED). The extra fields are proofs, not code;
-the exe is 1,536 bytes smaller (not attributed further).
-Evidence: two fresh `git archive HEAD lean` stage builds of `909097b` (guard logs `ct-stagea`, `ct-stageb`) gave this exe byte for byte,
-and it equals the worktree build. The re-pin differential (`bench/correction_repin_diff.py`, guard log `ct-repin-diff2`) sent the 50 BLFCMD03
-requests the acceptance and constitution suites send, each with a trailing byte, eight truncations and 32 bit flips (2,100 runs)
-to the old and the new exe: `SUMMARY captured=50 runs=2100 mismatches=0`, identical exit codes and stdout. The transition and reuse
-vectors are unchanged. No release-producer receipt was made for this pin (the producer was not run).
+`BlindLedger.Keccak` is deleted; `Sha3.lean` is the one sponge, so the transition compiles a different `sha3_512` body. Stage builds `kd-stagea-a1-L3` and
+`kd-stageb-a13-L1` (75 jobs, exit 0) are byte-identical and equal the in-tree build `kd-dev5-a1-L3`; the vector files below are unchanged.
 
 ## Partials re-pin (2026-09-30, rule `h1-v1`, no money or format change)
 

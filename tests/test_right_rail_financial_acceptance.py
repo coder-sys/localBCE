@@ -63,9 +63,9 @@ _CORRECTION_ENGINE_PATH = (
 _CORRECTION_VECTOR_DIR = (
     Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
 )
-_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_297_088
+_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_300_160
 _EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
-    "FB30B415B40E3C8D2CABB2285F2F21D3EB263200007943DDF32438EF95348FD6"
+    "FB659DA34AD63DBAA69F9E585DA1F20E1953CB986229A8CFF693708371F4A785"
 )
 _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
     "234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666"
@@ -3956,6 +3956,46 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialInputError, "decision_package_page"):
             store.decision_package(expected.H_ITEM_ID, offset=10_001)
 
+    def _assert_verdict_ignores_window(self, store: FinancialOwner) -> None:
+        """Every verdict field is a whole-obligation fact: no (limit, offset) window may change it."""
+
+        def verdict(package: dict[str, object]) -> dict[str, object]:
+            c = package["conclusions"]
+            return {
+                "cash": c["cash_satisfaction"]["evidence_status"],
+                "amount": c["amount_satisfaction"]["evidence_status"],
+                "reporting": c["reporting_completion"]["result"],
+                "delivery": c["action_acknowledgment"]["result"],
+                "resolution": {k: c["case_resolution"][k] for k in ("assessment", "required_conditions", "missing_requirements", "conflict_count")},
+            }
+
+        full = store.decision_package(expected.H_ITEM_ID, limit=100, offset=0)
+        total = full["references"]["evidence"]["total"]
+        for limit in range(1, total + 1):
+            for offset in range(total + 1):
+                window = store.decision_package(expected.H_ITEM_ID, limit=limit, offset=offset)
+                self.assertEqual(verdict(window), verdict(full), (limit, offset))
+        self.assertEqual(self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID, limit=1, offset=total - 1))["integrity"], "VERIFIED")
+
+    def test_c05_verdict_does_not_depend_on_the_page_window(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        self.assertEqual(store.decision_package(expected.H_ITEM_ID)["conclusions"]["case_resolution"]["assessment"], "SUPPORTED")
+        self._assert_verdict_ignores_window(store)
+
+    def test_c05_verdict_ignores_the_window_with_a_reversed_payment_page(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        # Reverse p2 and replace it: the middle page then holds only a reversed payment and no claim row.
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
+        store.reverse_payment(item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id=reversal.evidence_id,
+                              common_origin_id=reversal.common_origin_id, event_at_ms=reversal.event_at_ms)
+        replacement = expected.P3_REPLACEMENT_EVIDENCE
+        self._advance_clock(store, replacement.event_at_ms)
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
+        self._assert_verdict_ignores_window(store)
+
     def test_c05_v7_decision_package_survives_test_restore(self) -> None:
         store = self._build_base_for_correction(schema_version=8)
         self._prepare_acknowledged(store)
@@ -5209,6 +5249,38 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._rehash_history(early, link_cash), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(early, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_linked_payment_never_pays_past_the_balance(self) -> None:
+        # F1 scenario B: pay the request, pay the same cents unlinked, reverse the linked one. The balance is
+        # settled and the request reads open again, but it may not collect a second time. A payment still owed is taken.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000)
+        self._pay_a(store, 300_000, "p3", linked=False)
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 300_000, "p4")
+        self.assertEqual(self._durable_counts(store.path), counts)
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 100_000, "p3", linked=False)  # 200,000 is still owed
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 200_001)
+        self.assertEqual(self._pay_a(store, 200_000)["status"], "RECORDED")
+        self._assert_verified(store)
+        store = self._build_base_for_correction()  # the checker refuses the link the Owner now refuses
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000, "p3", linked=False)
+        self._pay_a(store, 300_000, "p4", linked=False)
+        forged = self._path("late-link.sqlite")
+        forged.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p4" and "common_origin_id" in payload and payload.setdefault("pays_action_id", expected.ACTION_CORRECTION_ID) is not None), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(forged, expected_config=store.config, expected_authority=self.authority)
 
     def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
         # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.

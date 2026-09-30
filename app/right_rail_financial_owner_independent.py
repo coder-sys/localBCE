@@ -63,9 +63,9 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrade
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "FB30B415B40E3C8D2CABB2285F2F21D3EB263200007943DDF32438EF95348FD6"
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "FB659DA34AD63DBAA69F9E585DA1F20E1953CB986229A8CFF693708371F4A785"
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "49de88c0948a9a95f411089674cd4131ece046173b6a3f2780d0a42b643a2a03"
+RETIRED_PINS_SHA256 = "e0cfc85d11465f5f5f3e8e57aab5cd846c6924b7ace92f6465ae3d23772bbbd0"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -2907,9 +2907,10 @@ def _verify_actions(
                 _fail("outbox:acknowledged")
     if set(outbox) != set(actions):
         _fail("outbox:orphan")
-    for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it
+    for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it or past the balance it found
         request = requests.get(obligation_id, {}).get(action_ref)
-        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request:
+        owed = next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["revision"] == paid_revision - 1), -1)
+        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed:
             _fail("payment:link")
     return actions
 

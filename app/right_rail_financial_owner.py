@@ -4070,6 +4070,8 @@ class FinancialOwner:
                 paid = next((entry["paid_cents"] for entry in _correction_paid(connection, str(obligation["obligation_id"])) if entry["action_id"] == pays_action_id), 0)
                 if paid + amount_cents > request:
                     _fail(FinancialConflictError, "payment_exceeds_unpaid_request")
+                if amount_cents > obligation["shortfall_cents"]:  # what is not owed cannot be collected through a request (R1)
+                    _fail(FinancialConflictError, "payment_exceeds_unpaid_balance")
                 link = {"pays_action_id": pays_action_id}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id, **link}, now_ms=self._now())
@@ -5893,7 +5895,7 @@ class FinancialOwner:
             elif str(obligation["verification_status"]) == "CONFLICT_VISIBLE":
                 amount_support = "CONFLICTED"
             else:
-                amount_support = "SUPPORTED" if amount_evidence_ids else "NO_LINKED_EVIDENCE"
+                amount_support = "SUPPORTED" if active_payment_count or authorized_claim_count else "NO_LINKED_EVIDENCE"
 
             requirements = {
                 "amount_satisfied": "SUPPORTED" if amount_satisfied and amount_support == "SUPPORTED" else (
