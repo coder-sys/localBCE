@@ -314,6 +314,18 @@ class ReceiverCashFileTests(unittest.TestCase):
             self.store.run_batch(cash._propose(canonical(self.value), self.baseline))
         self.assertEqual(verified, [self._query("SELECT obligation_id FROM obligations WHERE item_id=?", expected.H_ITEM_ID)[0][0]])
 
+    def test_preview_runs_the_owners_own_check_as_apply_does(self):
+        # An evaluated obligation outside what the checker verified is the owner's to verify, in a preview as in an apply.
+        finish, prepared = check.CashFileCheck.finish, self._prepare()
+        unverified = lambda instance, connection, results: finish(instance, connection, results) and set()
+        def failing(instance, connection, label, *obligation_ids):
+            if obligation_ids:
+                raise owner.FinancialIntegrityError("injected")
+        with patch.object(check.CashFileCheck, "finish", unverified), patch.object(owner.FinancialOwner, "_verify_before_commit", failing):
+            self._unchanged(lambda: self._apply(prepared), "^injected$|evaluation_verification")
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+                cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
+
     def test_manifest_baseline_binds_digest_owner_and_the_live_chain(self):
         manifest = json.loads(self.baseline)
 

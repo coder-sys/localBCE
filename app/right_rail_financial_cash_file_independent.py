@@ -369,5 +369,9 @@ class CashFileCheck:
         }
         if self._preview:  # never committed: the owner rolls the copy back (docs/CORE_REDESIGN.md "Cash-file capacity")
             _require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "cash_file_failed")  # the deferred keys COMMIT would check
-            raise CashFilePreview(self.receipt)
         return touched  # the obligations verified above, with nothing written since
+
+    def conclude(self) -> None:
+        """After the owner's own pre-COMMIT check: a preview ends here, so its copy rolls back with that check already passed."""
+        if self._preview:
+            raise CashFilePreview(self.receipt)

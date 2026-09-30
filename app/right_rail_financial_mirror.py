@@ -22,7 +22,6 @@ from typing import Any, Final
 from app import right_rail_financial_engine as engine
 from app.right_rail_financial_owner import (
     CONTINUITY_ERROR_CODES,
-    FinancialContinuityError,
     FinancialDispatchError,
     FinancialError,
     FinancialOwner,

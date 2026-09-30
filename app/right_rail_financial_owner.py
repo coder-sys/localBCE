@@ -2390,7 +2390,7 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "funding_projection_drift")
 
     @contextmanager
-    def _write(self, *, before_commit=None) -> Iterator[sqlite3.Connection]:
+    def _write(self, *, before_commit=None, conclude=None) -> Iterator[sqlite3.Connection]:
         """One atomic command; inside ``run_batch`` the batch owns the connection, BEGIN, COMMIT and ROLLBACK,
         while each command still seals as it would alone, so a batch's segments equal its commands' run singly."""
         batch = getattr(self._batch, "connection", None)
@@ -2417,6 +2417,8 @@ class FinancialOwner:
                     done = before_commit(connection) if before_commit is not None else None  # the obligations the cash-file checker verified, on this same state
                     if self._batch.evaluated:  # the very set it verified needs only this Owner's own schema and meta check
                         self._verify_before_commit(connection, "evaluation", *(() if self._batch.evaluated == done else sorted(self._batch.evaluated)))
+                    if conclude is not None:
+                        conclude()  # a cash-file preview reports only after the check above, then rolls back
                     connection.execute("COMMIT")
                     self._row_cache = after
             except BaseException as error:
@@ -2454,7 +2456,7 @@ class FinancialOwner:
                 _fail(FinancialInputError, "cash_file_nested_batch")
             check = CashFileCheck(commands, cash_file_context)
             commands = check.commands
-        with self._write(before_commit=(lambda connection: check.finish(connection, results)) if check else None) as connection:
+        with self._write(before_commit=(lambda connection: check.finish(connection, results)) if check else None, conclude=check.conclude if check else None) as connection:
             if check:
                 check.begin(connection)
             self._batch.connection = connection
