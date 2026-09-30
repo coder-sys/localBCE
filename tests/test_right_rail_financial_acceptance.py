@@ -3956,6 +3956,46 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialInputError, "decision_package_page"):
             store.decision_package(expected.H_ITEM_ID, offset=10_001)
 
+    def _assert_verdict_ignores_window(self, store: FinancialOwner) -> None:
+        """Every verdict field is a whole-obligation fact: no (limit, offset) window may change it."""
+
+        def verdict(package: dict[str, object]) -> dict[str, object]:
+            c = package["conclusions"]
+            return {
+                "cash": c["cash_satisfaction"]["evidence_status"],
+                "amount": c["amount_satisfaction"]["evidence_status"],
+                "reporting": c["reporting_completion"]["result"],
+                "delivery": c["action_acknowledgment"]["result"],
+                "resolution": {k: c["case_resolution"][k] for k in ("assessment", "required_conditions", "missing_requirements", "conflict_count")},
+            }
+
+        full = store.decision_package(expected.H_ITEM_ID, limit=100, offset=0)
+        total = full["references"]["evidence"]["total"]
+        for limit in range(1, total + 1):
+            for offset in range(total + 1):
+                window = store.decision_package(expected.H_ITEM_ID, limit=limit, offset=offset)
+                self.assertEqual(verdict(window), verdict(full), (limit, offset))
+        self.assertEqual(self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID, limit=1, offset=total - 1))["integrity"], "VERIFIED")
+
+    def test_c05_verdict_does_not_depend_on_the_page_window(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        self.assertEqual(store.decision_package(expected.H_ITEM_ID)["conclusions"]["case_resolution"]["assessment"], "SUPPORTED")
+        self._assert_verdict_ignores_window(store)
+
+    def test_c05_verdict_ignores_the_window_with_a_reversed_payment_page(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        # Reverse p2 and replace it: the middle page then holds only a reversed payment and no claim row.
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
+        store.reverse_payment(item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id=reversal.evidence_id,
+                              common_origin_id=reversal.common_origin_id, event_at_ms=reversal.event_at_ms)
+        replacement = expected.P3_REPLACEMENT_EVIDENCE
+        self._advance_clock(store, replacement.event_at_ms)
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
+        self._assert_verdict_ignores_window(store)
+
     def test_c05_v7_decision_package_survives_test_restore(self) -> None:
         store = self._build_base_for_correction(schema_version=8)
         self._prepare_acknowledged(store)
