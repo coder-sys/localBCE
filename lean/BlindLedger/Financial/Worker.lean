@@ -1,4 +1,4 @@
-import BlindLedger.Financial.FastDecode
+import BlindLedger.Financial.FastEncode
 import BlindLedger.Financial.Evaluation
 
 namespace BlindLedger.Financial
@@ -46,14 +46,35 @@ def decodeWorkerOutcome : Bytes → Option WorkerOutcome
 /-- The worker's whole policy: one BLFIN02 frame in, one outcome frame out. -/
 def workerRespond (wire : Bytes) : Bytes := encodeWorkerOutcome (evaluateWire wire)
 
-/-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA` is proved equal to the list
-    decoder on `wire.toList`, so this is `workerRespond` without a second large list. -/
+theorem financialInputWellFormed_of_decodeFinancialInput {bytes : Bytes} {input : FinancialInput}
+    (h : decodeFinancialInput bytes = some input) : financialInputWellFormed input = true := by
+  rw [← Fast.decodeFinancialInputFast_eq] at h
+  unfold Fast.decodeFinancialInput Fast.decodeInputWith at h
+  split at h
+  · simp at h
+  · obtain ⟨x, hx⟩ := Fast.parseInputWith_some h
+    by_cases hw : financialInputWellFormed x = true
+    · simp only [hw, if_true] at hx
+      rcases hE : encodeFinancialInput x with _ | c <;> simp only [hE] at hx
+      · simp at hx
+      · by_cases hc : c = bytes
+        · simp [hc] at hx; subst hx; exact hw
+        · simp [hc] at hx
+    · simp [hw] at hx
+
+theorem evaluate_eq_evaluateWellFormed {input : FinancialInput}
+    (h : financialInputWellFormed input = true) : evaluate input = evaluateWellFormed input := by
+  simp [evaluate, h]
+
+/-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA₂` is proved equal to the list
+    decoder on `wire.toList`, and its input is already well-formed, so this is `workerRespond`
+    with one well-formedness pass and no second large list. -/
 def workerRespondBA (wire : ByteArray) : Bytes :=
   encodeWorkerOutcome
-    (match Fast.decodeFinancialInputBA wire with
+    (match Fast.decodeFinancialInputBA₂ wire with
       | none => .decodeRejected
       | some input =>
-          match evaluate input with
+          match evaluateWellFormed input with
           | none => .evaluationRejected
           | some result =>
               match encodeFinancialResult result with
@@ -62,7 +83,13 @@ def workerRespondBA (wire : ByteArray) : Bytes :=
 
 theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRespond wire.toList := by
   unfold workerRespondBA workerRespond evaluateWire
-  rw [Fast.decodeFinancialInputBA_eq]
+  rw [Fast.decodeFinancialInputBA₂_eq]
+  cases hd : Fast.decodeFinancialInput wire.toList with
+  | none => rfl
+  | some input =>
+    have hw := financialInputWellFormed_of_decodeFinancialInput
+      (by rw [← Fast.decodeFinancialInputFast_eq]; exact hd)
+    simp only [evaluate_eq_evaluateWellFormed hw]
 
 def maxWorkerFrameBytes : Nat := maxTotalEncodedBytes + 1
 
