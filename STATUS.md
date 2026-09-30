@@ -47,6 +47,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 - The NC capture path is synthetic file intake, no live transport. Financial file adapters (MCO reports, X12 820/835, MMIS extracts), shared provider/gate rules and payee-identity consumption remain unbuilt. Aggregate provider export has a read-model consistency consumer; keep it.
 - Owner/Continuity v8 only; older stores fail without mutation, including trunk `6cccb84` or earlier (recreate the workspace). At most 10,000 events or rows per table.
+- TCB gate (`tools/tcb_report.txt`, live run by `tools/tcb_pin.ps1`): every constant each pinned exe reaches is proof-backed except five `partial` loops, open as VIOLATION-TODO and asserted exactly by `tests/test_tcb_gate.py`: `WorkerCli.serve` and `readExact` (M1.5, plan item 5); `Runtime.readFinancialBounded` (new, correction exe); `MlDsa87.rejNtt` and `sampleInBall` (pq M2).
 - Follow-up, not done: pin the ten `WorkerLaws` axiom lines with `#guard_msgs` in `AxiomCheck.lean` (about 20 lines; changes the `lean/` manifest, so it needs a rebuild and re-record).
 - Complete the real-browser crawl of the declared interaction model; the Node model/scorecard is not one.
 - Second synthetic state (G3) needs owner, checker and Lean changed together (`controlPackRulesWellFormed` pins H's labels), then a guarded rebuild; no partial change made. Conformance kit (G5): `conformance/`.

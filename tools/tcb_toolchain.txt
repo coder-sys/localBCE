@@ -32,5 +32,6 @@ The pinned exes link lib\*, lib\lean\*.a statically (Init, Std, the C runtime, g
 sorted `sha256  path` lines (paths relative to the toolchain):
 link inputs  588922711d8ba64df98d59de78d10aa45d8aa4d42d0aa2bdb8e7bd0ca9661fb0  48 files
 
-Not hashed: lib\lean\**\*.olean (about 2.6 GB). Lean refuses an olean from another build (the commit above is in its header),
-and the gate reads the core constants it trusts from those files (its `Init` allowlist entry).
+Every Init, Std and Lean module file the gate and its allowlist trust (`.olean`, `.olean.private`, `.olean.server`, `.ir`; not the
+`.ilean` editor data), one tree hash of the same shape (recomputed by the live gate, RR_TCB_LIVE=1):
+toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files

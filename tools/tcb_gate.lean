@@ -5,7 +5,7 @@ open Lean
     `lake env lean --run ../tools/tcb_gate.lean exe=Root.Module ...`  (tests/test_tcb_gate.py does); `--list` also names every allowlisted constant.
     For each pinned exe it walks every constant reachable from `main`, through types and values (the kernel view
     that `#print axioms` takes) and through the compiled code (the IR call graph plus `implemented_by` targets,
-    the view of what actually runs).  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
+    the view of what actually runs), and from every startup initializer and `@[csimp]` theorem.  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
     (so `sorryAx` and `Lean.ofReduceBool`, the axiom behind `native_decide`, fail), and on any partial,
     implemented_by, extern, opaque or unsafe constant that `allowed` does not name. -/
 
@@ -18,19 +18,20 @@ def axiomsAllowed : List (Name × String) :=
 
 /-- One allowlist entry: `name` is a whole module family (`module := true`: every constant declared in a module
     under that prefix) or one exact constant, and `kinds` are the escape hatches it may carry. -/
-structure Entry where
+structure Allow where
   name : Name
   module : Bool
   kinds : List String
   reason : String
+  deriving Inhabited
 
-def core (m : Name) : Entry :=
+def core (m : Name) : Allow :=
   { name := m, module := true, kinds := ["extern", "implemented_by", "opaque", "unsafe", "partial"],
     reason := s!"toolchain `{m}`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)" }
 
 /-- THE ALLOWLIST.  Anything else is a violation.  A `VIOLATION-TODO` reason marks a real hole in a pinned closure:
     it passes the gate only so the lead can decide, and the report names it. -/
-def allowed : List Entry := [
+def allowed : List Allow := [
   core `Init, core `Std,
   { name := `BlindLedger.Financial.WorkerCli.reserveArena, module := false, kinds := ["extern", "opaque"],
     reason := "the worker's mimalloc arena reservation, one C call, no decision logic" },
@@ -63,7 +64,8 @@ partial def irCallees (b : IR.FnBody) (acc : Array Name) : Array Name :=
     irCallees k acc
   | _ => acc
 
-def edges (env : Environment) (c : Name) : Array Name := Id.run do
+/-- Kernel edges (types and values), `implemented_by` targets, and the compiled code's callees, kept apart. -/
+def edges (env : Environment) (c : Name) : Array Name × Array Name := Id.run do
   let mut out : Array Name := #[]
   match env.find? c with
   | some (.defnInfo v) | some (.thmInfo v) | some (.opaqueInfo v) => out := v.type.getUsedConstants ++ v.value.getUsedConstants
@@ -71,36 +73,46 @@ def edges (env : Environment) (c : Name) : Array Name := Id.run do
   | some (.inductInfo v) => out := v.type.getUsedConstants ++ v.ctors.toArray
   | _ => pure ()
   if let some t := Compiler.getImplementedBy? env c then out := out.push t
-  if let some (.fdecl (body := b) ..) := IR.findEnvDecl env c then out := irCallees b out
-  return out
+  let calls := match IR.findEnvDecl env c with | some (.fdecl (body := b) ..) => irCallees b #[] | _ => #[]
+  return (out, calls)
 
 def moduleOf (env : Environment) (c : Name) : Name :=
   match env.getModuleIdxFor? c with
   | some i => env.header.moduleNames[i.toNat]!
   | none => .anonymous
 
-partial def walk (env : Environment) : Array Name := Id.run do
+/-- Every constant reachable from `roots`, and the set the compiled code calls. -/
+partial def walk (env : Environment) (roots : Array Name) : Array Name × NameSet := Id.run do
   let mut seen : NameSet := {}
+  let mut called : NameSet := {}
   let mut order := #[]
-  let mut todo := #[`main]
+  let mut todo := roots
   while !todo.isEmpty do
     let c := todo.back!
     todo := todo.pop
     if seen.contains c then continue
     seen := seen.insert c
     order := order.push c
-    todo := todo ++ edges env c
-  return order
+    let (kernel, calls) := edges env c
+    called := calls.foldl (·.insert ·) called
+    todo := todo ++ kernel ++ calls
+  return (order, called)
 
-def matches? (env : Environment) (c : Name) (k : String) (e : Entry) : Bool :=
+def matches? (env : Environment) (c : Name) (k : String) (e : Allow) : Bool :=
   k ∈ e.kinds && (if e.module then e.name.isPrefixOf (moduleOf env c) else e.name == c)
 
-def checkExe (list : Bool) (exe root : String) : IO Bool := do
+def checkExe (list : Bool) (csimps : Array Compiler.CSimp.Entry) (exe root : String) : IO Bool := do
   let env ← importModules #[{ module := root.toName }] {}
-  let cs := (walk env).qsort Name.lt
+  -- Roots: `main`; everything that runs at startup (`[init]` and `[builtin_init]` declarations and their init
+  -- functions); every `@[csimp]` theorem, whose proof licenses the compiler's replacement of one constant by another.
+  let inits := (env.constants.fold (init := #[]) fun acc c _ => if hasInitAttr env c then acc.push c else acc).qsort Name.lt
+  let initFns := inits.filterMap (getInitFnNameFor? env)
+  let (order, called) := walk env (#[`main] ++ inits ++ initFns ++ csimps.map (·.thmName))
+  let cs := order.qsort Name.lt
   let mut axs : Array Name := #[]
   let mut counts : Array Nat := allowed.toArray.map fun _ => 0
   let mut bad : Array String := #[]
+  let mut todos : Array String := #[]
   for c in cs do
     let some ci := env.find? c | continue
     if ci matches .axiomInfo _ then
@@ -109,21 +121,32 @@ def checkExe (list : Bool) (exe root : String) : IO Bool := do
     for k in kindsOf env c ci do
       match allowed.findIdx? (matches? env c k) with
       | some i =>
-        counts := counts.set! i (counts[i]! + 1)
+        if allowed[i]!.reason.startsWith "VIOLATION-TODO" then todos := todos.push s!"{k} {c}"
+        else counts := counts.set! i (counts[i]! + 1)
         if list then IO.println s!"    {k} {c}"
       | none => bad := bad.push s!"{k} {c} [{moduleOf env c}]"
+  let project := inits.filter fun c => (`BlindLedger).isPrefixOf (moduleOf env c)
   IO.println s!"{exe}: {cs.size} constants walked; axioms {axs.toList}"
+  IO.println s!"  startup initializers: {inits.size}, {project.size} in BlindLedger {project.toList}"
+  let stale := (csimps.filter (called.contains ·.fromDeclName)).map (·.fromDeclName)
+  IO.println s!"  csimp: {csimps.size} theorems walked; replaced constants still called by compiled code: {stale.toList}"
   for (e, n) in allowed.zip counts.toList do
     if n > 0 then IO.println s!"  allowlist {e.name}{if e.module then ".*" else ""} x{n}: {e.reason}"
+  for t in todos do IO.println s!"  VIOLATION-TODO {t}"
   for b in bad do IO.println s!"  VIOLATION {b}"
   IO.println s!"  {bad.size} violations"
   return bad.isEmpty
 
-def main (args : List String) : IO UInt32 := do
+/-- Extension state is loaded only with `loadExts`, which would run a module's initializers, so the `@[csimp]` table is
+    read from the toolchain's own `Init` and `Std` (no project code runs); a project `@[csimp]` fails the Python test. -/
+unsafe def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)
+  enableInitializersExecution
+  let core ← importModules #[{ module := `Init }, { module := `Std }] {} (loadExts := true)
+  let csimps : Array Compiler.CSimp.Entry := (Compiler.CSimp.ext.getState core).map.fold (init := #[]) fun acc _ e => acc.push e
   let mut ok := true
   for a in args.filter (· != "--list") do
     match a.splitOn "=" with
-    | [exe, root] => ok := (← checkExe (args.contains "--list") exe root) && ok
+    | [exe, root] => ok := (← checkExe (args.contains "--list") csimps exe root) && ok
     | _ => throw <| IO.userError s!"expected exe=Module, got {a}"
   return if ok then 0 else 1

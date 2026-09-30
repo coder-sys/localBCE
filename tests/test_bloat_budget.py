@@ -18,7 +18,8 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
 # lean-leak merge (2026-09-30): +236 over trunk's 36,951 for the Lean worker's pool and frame in minimal_clearance_verifier_process.py (Lean is the only evaluator, so the Python evaluator and its
 # comparison are gone: the semantic adapter, engine and owner shrank 89), and a quarter-end cash-file lock that verifies about 0.65 s less (logs lta-probe2-a1-L2, lta-probe3-a1-L1).
-PRODUCT_CODE_LINES = 37_187
+# TCB gate: +3 for tools/tcb_pin.ps1, the guarded run that pins the report the suite checks.
+PRODUCT_CODE_LINES = 37_190
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
 # Lean paid sum (lean-paid-sum, 2026-09-29): +1,251 over trunk's 41,327 (42,585 measured on the merge, 7 more than the sum of the two deltas) for the 3 PaidSum laws
@@ -31,12 +32,13 @@ PRODUCT_CODE_LINES = 37_187
 # lean-leak merge (2026-09-30): +863 over that, for the Lean worker's 10 `WorkerLaws` theorems (`workerRespondBA_eq`, `evaluateWire_evaluated`,
 # `workerRespond_length_le`, `maxWorkerFrameBytes_fits_u32`, the codec and decoder equalities), the worker and its panic probe (`Worker`, `WorkerCli`, `PanicProbe`, `FastDecode`,
 # `FastEncode`) and their tests, net of the deleted Python-evaluator tests: a Lean panic or a bad worker frame refuses the write instead of passing.
-# TCB gate (tcb-gate, 2026-09-30): +237 for tools/tcb_gate.lean (129) and tests/test_tcb_gate.py (107): an auditor gets a machine-checked list of every escape hatch (axiom, partial, extern, implemented_by) each pinned exe can reach, and a violation fails the suite.
-EVIDENCE_CODE_LINES = 43_969
+# TCB gate (tcb-gate, 2026-09-30): +313 for tools/tcb_gate.lean (152) and tests/test_tcb_gate.py (158): an auditor gets a machine-checked list of every escape hatch (axiom, partial, extern, implemented_by) each pinned exe can reach, and a violation fails the suite.
+EVIDENCE_CODE_LINES = 44_045
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,235 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability). The ui-1 merge with its STATUS line measures 158,372; the ceiling is that. 2026-09-30 lean-leak merge: +3,868 (162,240 measured, after cutting two stale lines) for the XI.2 records of Lean-live M1, M1.5 and M1.6 (2,473) and the worker's provenance (837), the merged STATUS and ARCHITECTURE lines (approx 550); Lean is the only evaluator and its pin is auditable. lean-leak re-pin (2026-09-30): +3,618 for the XI.2 record, the worker and gate_verify provenance, and the correction reproduction note (a change under lean/ cannot ship with an unreproduced pin), after cutting a stale STATUS run line.
-MARKDOWN_BYTES = 165_858
+# TCB gate: +381 bytes in STATUS.md so the five open VIOLATION-TODO loops (with their owning plan items) are visible where status is read.
+MARKDOWN_BYTES = 166_239
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {

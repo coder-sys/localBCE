@@ -1,0 +1,23 @@
+manifest  00e28f0ecd29a78b2f7ea6e374cc0b451b03346adb0f6f36e15c32a30c72db9b
+toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
+blind_financial_correction: 8643 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+  startup initializers: 1, 0 in BlindLedger []
+  csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x187: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  VIOLATION-TODO partial BlindLedger.Financial.CorrectionTransition.Runtime.readFinancialBounded
+  0 violations
+blind_financial_worker: 7128 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+  startup initializers: 1, 0 in BlindLedger []
+  csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x176: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  allowlist BlindLedger.Financial.WorkerCli.reserveArena x2: the worker's mimalloc arena reservation, one C call, no decision logic
+  VIOLATION-TODO partial BlindLedger.Financial.WorkerCli.readExact
+  VIOLATION-TODO partial BlindLedger.Financial.WorkerCli.serve
+  0 violations
+gate_verify: 6886 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+  startup initializers: 1, 0 in BlindLedger []
+  csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
+  allowlist Init.* x196: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  VIOLATION-TODO partial BlindLedger.Gate.MlDsa87.rejNtt
+  VIOLATION-TODO partial BlindLedger.Gate.MlDsa87.sampleInBall
+  0 violations
