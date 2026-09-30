@@ -296,9 +296,9 @@ def decodeAction (bytes : Bytes) : Option (ActionRecord × Bytes) := do
        payloadDigest := payloadDigest
        createdAt := createdAt }, rest)
 
-/-- The reference decoder with the canonical-bytes test abstracted as `same`. -/
-def decodeInputWith (same : Bytes → Bool) (bytes : Bytes) : Option FinancialInput := do
-  if bytes.length > maxTotalEncodedBytes then none else
+/-- The reference parse of a whole input, with what to do with the parsed input abstracted as `finish`. -/
+def parseInputWith (finish : FinancialInput → Option FinancialInput) (bytes : Bytes) :
+    Option FinancialInput := do
     let rest ← readMagic bytes
     let (context, rest) ← decodeContext rest
     let (authority, rest) ← decodeAuthority rest
@@ -314,7 +314,7 @@ def decodeInputWith (same : Bytes → Bool) (bytes : Bytes) : Option FinancialIn
     let (cases, rest) ← readList decodeCase rest
     let (actions, rest) ← readList decodeAction rest
     if rest.isEmpty then
-      let input :=
+      finish
         { context := context
           authority := authority
           pack := pack
@@ -328,12 +328,17 @@ def decodeInputWith (same : Bytes → Bool) (bytes : Bytes) : Option FinancialIn
           conflicts := conflicts
           cases := cases
           actions := actions }
+    else none
+
+/-- The reference decoder with the canonical-bytes test abstracted as `same`. -/
+def decodeInputWith (same : Bytes → Bool) (bytes : Bytes) : Option FinancialInput :=
+  if bytes.length > maxTotalEncodedBytes then none else
+    parseInputWith (fun input =>
       if financialInputWellFormed input then
         match encodeFinancialInput input with
         | some canonical => if same canonical then some input else none
         | none => none
-      else none
-    else none
+      else none) bytes
 
 def decodeFinancialInput (bytes : Bytes) : Option FinancialInput :=
   decodeInputWith (fun canonical => decide (canonical = bytes)) bytes
@@ -427,7 +432,7 @@ theorem decodeAction_eq : decodeAction = BlindLedger.Financial.decodeAction := b
 
 theorem decodeFinancialInputFast_eq (bytes : Bytes) :
     decodeFinancialInput bytes = BlindLedger.Financial.decodeFinancialInput bytes := by
-  simp only [decodeFinancialInput, decodeInputWith, decide_eq_true_eq, BlindLedger.Financial.decodeFinancialInput, decodeContext_eq, decodeAuthority_eq, decodeControlPack_eq, decodeObligation_eq, decodePayment_eq, decodeClaim_eq, decodeDetermination_eq, decodeEvidence_eq, decodeConflict_eq, decodeCase_eq, decodeAction_eq]
+  simp only [decodeFinancialInput, decodeInputWith, parseInputWith, decide_eq_true_eq, BlindLedger.Financial.decodeFinancialInput, decodeContext_eq, decodeAuthority_eq, decodeControlPack_eq, decodeObligation_eq, decodePayment_eq, decodeClaim_eq, decodeDetermination_eq, decodeEvidence_eq, decodeConflict_eq, decodeCase_eq, decodeAction_eq]
   rfl
 
 private theorem size_eq (ba : ByteArray) : ba.size = ba.data.toList.length := by

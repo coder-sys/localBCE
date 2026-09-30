@@ -42,6 +42,10 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputFast_eq
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA_eq
+#print axioms BlindLedger.Financial.Fast.rawEncodeFinancialInputBA_eq
+#print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA₂_eq
+#print axioms BlindLedger.Financial.financialInputWellFormed_of_decodeFinancialInput
+#print axioms BlindLedger.Financial.evaluate_eq_evaluateWellFormed
 #print axioms BlindLedger.Financial.workerRespondBA_eq
 #print axioms BlindLedger.Financial.evaluateWire_evaluated
 #print axioms BlindLedger.Financial.workerRespond_length_le
