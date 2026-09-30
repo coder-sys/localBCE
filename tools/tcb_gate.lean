@@ -8,7 +8,7 @@ open Lean
     the view of what actually runs; a `partial` def is walked through its `_unsafe_rec` body), and from every startup
     initializer and `@[csimp]` theorem.  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
     (so `sorryAx` and `Lean.ofReduceBool`, the axiom behind `native_decide`, fail), on any partial,
-    implemented_by, extern, opaque or unsafe constant that `allowed` does not name, on `main` without compiled code, and
+    implemented_by, extern, opaque, unsafe or fixpoint (`partial_fixpoint`) constant that `allowed` does not name, on `main` without compiled code, and
     on an `Init` or `Std` module that resolves outside the toolchain. -/
 
 /-- Lean's own logic. -/
@@ -37,12 +37,8 @@ def allowed : List Allow := [
   core `Init, core `Std,
   { name := `BlindLedger.Financial.WorkerCli.reserveArena, module := false, kinds := ["extern", "opaque"],
     reason := "the worker's mimalloc arena reservation, one C call, no decision logic" },
-  { name := `BlindLedger.Financial.WorkerCli.serve, module := false, kinds := ["partial"],
-    reason := "VIOLATION-TODO: the worker's stdin loop is partial; M1.5 makes it total (lean-expansion-plan item 5)" },
-  { name := `BlindLedger.Financial.WorkerCli.readExact, module := false, kinds := ["partial"],
-    reason := "VIOLATION-TODO: the frame reader loop is partial; M1.5 makes it total (lean-expansion-plan item 5)" },
-  { name := `BlindLedger.Financial.CorrectionTransition.Runtime.readFinancialBounded, module := false, kinds := ["partial"],
-    reason := "VIOLATION-TODO: the correction exe's request reader loop is partial; needs a fuel bound or a total loop" },
+  { name := `BlindLedger.Financial.serveWorker, module := false, kinds := ["fixpoint"],
+    reason := "the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless" },
   { name := `BlindLedger.Gate.MlDsa87.rejNtt, module := false, kinds := ["partial"],
     reason := "VIOLATION-TODO: ML-DSA rejection sampling in gate_verify's closure is partial; needs a fuel bound" },
   { name := `BlindLedger.Gate.MlDsa87.sampleInBall, module := false, kinds := ["partial"],
@@ -55,6 +51,8 @@ def kindsOf (env : Environment) (c : Name) (ci : ConstantInfo) : Array String :=
   if ci.isPartial || (ci matches .opaqueInfo _ && env.contains (Compiler.mkUnsafeRecName c)) then ks := ks.push "partial"
   else if ci matches .opaqueInfo _ then ks := ks.push "opaque"
   if ci.isUnsafe then ks := ks.push "unsafe"
+  if let some v := ci.value? then
+    if v.getUsedConstants.contains ``Lean.Order.fix then ks := ks.push "fixpoint"  -- partial_fixpoint; WF recursion uses `WellFounded.fix`
   if (Compiler.getImplementedBy? env c).isSome then ks := ks.push "implemented_by"
   if isExtern env c || (match IR.findEnvDecl env c with | some (.extern ..) => true | _ => false) then ks := ks.push "extern"
   return ks

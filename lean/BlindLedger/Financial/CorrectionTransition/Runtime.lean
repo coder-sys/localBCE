@@ -1,5 +1,6 @@
 import BlindLedger.Financial.CorrectionTransition.Codec
 import BlindLedger.Financial.CorrectionTransition.ReuseCodec
+import BlindLedger.Financial.ReadUpTo
 
 namespace BlindLedger.Financial.CorrectionTransition.Runtime
 
@@ -14,21 +15,9 @@ private def runCorrectionRuntimeFailure (code : UInt8) (reason : String) : IO Un
   IO.eprintln ("FINANCIAL_ERROR=" ++ reason)
   IO.Process.exit code
 
-partial def readFinancialBounded
-    (stream : IO.FS.Stream) (remaining : Nat) (accumulator : ByteArray) : IO ByteArray := do
-  if remaining = 0 then
-    pure accumulator
-  else
-    let chunk ← stream.read (USize.ofNat remaining)
-    if chunk.isEmpty then
-      pure accumulator
-    else
-      readFinancialBounded stream (remaining - chunk.size)
-        (ByteArray.append accumulator chunk)
-
 def runApplyCorrectionTransition : IO Unit := do
   let stdin ← IO.getStdin
-  let bounded ← readFinancialBounded stdin (maxCorrectionTransitionBytes + 1) ByteArray.empty
+  let bounded ← readUpTo stdin.read (maxCorrectionTransitionBytes + 1) .empty
   if bounded.size > maxCorrectionTransitionBytes then
     runCorrectionRuntimeFailure financialExitTransitionDecode "correction-transition-input-too-large"
   else
@@ -48,7 +37,7 @@ def runApplyCorrectionTransition : IO Unit := do
 
 def runAssessCorrectionReuse : IO Unit := do
   let stdin ← IO.getStdin
-  let bounded ← readFinancialBounded stdin (maxCorrectionReuseBytes + 1) ByteArray.empty
+  let bounded ← readUpTo stdin.read (maxCorrectionReuseBytes + 1) .empty
   if bounded.size > maxCorrectionReuseBytes then
     runCorrectionRuntimeFailure financialExitReuseDecode "correction-reuse-input-too-large"
   else

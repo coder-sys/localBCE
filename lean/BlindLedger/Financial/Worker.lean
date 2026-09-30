@@ -1,5 +1,6 @@
 import BlindLedger.Financial.FastEncode
 import BlindLedger.Financial.Evaluation
+import BlindLedger.Financial.ReadUpTo
 
 namespace BlindLedger.Financial
 
@@ -92,5 +93,25 @@ theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRes
     simp only [evaluate_eq_evaluateWellFormed hw]
 
 def maxWorkerFrameBytes : Nat := maxTotalEncodedBytes + 1
+
+def workerExitFrame : UInt32 := 65
+
+-- `open Lean.Order` does not switch this scoped lemma on in Lean 4.33.1, so the monotonicity step is named here.
+attribute [local partial_fixpoint_monotone] Lean.Order.MonadTail.monotone_bind_right
+
+/-- The worker: answer each `u32 BE length || frame` with `u32 BE length || workerRespond frame` until end of input
+    (0), or stop on a bad frame (65).  Generic in the monad so `WorkerLaws` can run it on a pure pipe model. -/
+@[specialize] def serveWorker {m : Type → Type} [Monad m] [Lean.Order.MonadTail m]
+    (read : USize → m ByteArray) (write : ByteArray → m Unit) : m UInt32 := do
+  let header ← readUpTo read 4 .empty
+  if header.size = 0 then return 0
+  let some (length, _) := readNatBE 4 header.toList | return workerExitFrame
+  if length > maxWorkerFrameBytes then return workerExitFrame
+  let frame ← readUpTo read length .empty
+  if frame.size < length then return workerExitFrame
+  let response := workerRespondBA frame
+  write (natBE 4 response.length ++ response).toByteArray
+  serveWorker read write
+partial_fixpoint
 
 end BlindLedger.Financial
