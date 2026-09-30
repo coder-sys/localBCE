@@ -7,14 +7,14 @@ output `GATE_VERIFY=ACCEPT` (exit 0) or `REJECT` (exit 1); exit 2 for malformed 
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,207,616 bytes
-- SHA-256: fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06
+- Size: 4,205,056 bytes
+- SHA-256: b9696f2ea715a775d93947025a0510cdec1432b5a4ab05bf3d8a75eafa4d171c
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 60 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  00e28f0ecd29a78b2f7ea6e374cc0b451b03346adb0f6f36e15c32a30c72db9b, 6,667 bytes;
-  copy at C:\Users\neers\rrb\gate\leakint-gv-manifest.txt.
+- Source manifest, 62 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  01e748a8cff830b602d7171a89c9dc5d3f98be866461866a8f25d012454c8cce, 6,879 bytes;
+  copy at C:\Users\neers\rrb\gate\prtb-gv-manifest.txt.
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -43,6 +43,16 @@ added the evaluator worker (Worker, WorkerCli, WorkerLaws, FastDecode, FastEncod
 and lakefile.toml, and trunk moved the retired kernel to parked/ and added the paid-sum sources. No file in gate_verify's import
 closure changed. XI.2 record: docs/CORE_REDESIGN.md, "gate_verify and worker re-pin after the lean-leak merge".
 
+Re-pin (2026-09-30, branch partials, lean-partials-v1 commit B, source commit 117ad71): this pin CHANGED, unlike the four notes
+above. Gate/MlDsa87.lean now reads at most FIPS 204 Appendix C Table 3's bytes (894 of SHAKE128 for RejNTTPoly, 221 of SHAKE256
+for SampleInBall) and rejects past them, and ntt, invNtt, hintUnpack and the Keccak squeeze are range loops. The 62 tracked lean/
+files (`git archive 117ad71 lean`) extracted to C:\Users\neers\rrb\le\stage-prtb-a and ...\stage-prtb-b were built in each
+(guard logs prtb-stagea-a2-L3 and prtb-stageb-a1-L3, `lake build blind_financial_worker blind_financial_correction gate_verify
+gate_axioms blind_financial_axioms`, 77 jobs, exit 0) and both gave gate_verify SHA-256 b9696f2e... above; the worker
+(EE651742...7C21) and the correction exe (D5A06E9F...0CBB) also matched across the two and their pins did not move. Timing: the 30
+ACVP sigVer cases through gate_vectors took 621-733 ms on the old build and 673-703 ms on the new (5 runs each, log prtb-time1-dev-a14-L1).
+XI.2 record: docs/CORE_REDESIGN.md, "Bounded ML-DSA sampling and the loop kind".
+
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
 each under the guard; both gave the same SHA-256 (also equal to the in-tree build).
@@ -54,6 +64,8 @@ each under the guard; both gave the same SHA-256 (also equal to the in-tree buil
   later), so that manifest already differs; the engine pin is void on this tree until re-pin.
 
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06 (4,207,616 bytes; before the bounded
+  samplers and range loops of lean-partials-v1 commit B; replaced by the SHA-256 above).
 - gate_verify SHA-256 559188c3cb024f35dd6af320eff7c799668c36337b59964e7fc13f9495933fe6
   (before the equivocation fix: a re-signature of the same certificate body is no longer
   equivocation; Spec.lean, Theorems.lean, Vectors.lean, Keccak.lean and lakefile.toml changed).
