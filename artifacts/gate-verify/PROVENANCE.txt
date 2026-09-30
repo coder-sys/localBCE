@@ -12,9 +12,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 62 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  4ad07c06e22567b16f8cd4a9b64f6d6131fb290ec6c61490a2e59f4662b93dcc, 6,879 bytes;
-  copy at C:\Users\neers\rrb\gate\prtb4-gv-manifest.txt (tree 97418f3; third partials note below).
+- Source manifest, 65 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  576f3bb05178911ae571153c58e034755203251a06a8654e2e3214fdb7ba1756, 7,248 bytes;
+  copy at C:\Users\neers\rrb\gate\core-thm-manifest.txt (tree 909097b; core-thm adds Conservation, Core and CoreTheoremsCheck; gate_verify is unchanged).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 

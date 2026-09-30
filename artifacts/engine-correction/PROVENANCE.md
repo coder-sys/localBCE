@@ -1,13 +1,24 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the partials re-pin below,
-built by `tools/build_financial_correction_release.ps1` from `lean/` as committed at `98b22ce`
-(lean tree `1ec582f80781bf0cb551cd5b2694022704f0024e`, clean tree, 62 tracked files).
+`blind_financial_correction.exe` is the Lean/Lake executable of the core-thm re-pin below,
+built from `lean/` as committed at `909097b` (lean tree `2ffe3329a5fea794a38b711264beaccdd31d5d8a`).
 
-- Size: 6,298,624 bytes
-- SHA-256: `D5A06E9FFDB13C6266C40658B06AF4D93204F35159B9BE7FD4387A0613A10CBB`
+- Size: 6,297,088 bytes
+- SHA-256: `FB30B415B40E3C8D2CABB2285F2F21D3EB263200007943DDF32438EF95348FD6`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
-- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`.
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`; before it `1A5821FA...DDBE`, recoverable at `3ff5c9e`.
+
+## Core-thm re-pin (2026-09-30, rule `h1-v1`, no money or format change)
+
+Why it moved: `Transition.lean` gained eight `CorrectionMutationLinkFacts` fields (the resulting input's frame, claims, actions,
+determinations and OFFSET_AUTHORIZED filter, and the determination's decision and actor) and lost the unreachable
+`pack.status != APPROVED` refusal (`controlPackWellFormed` already demands APPROVED). The extra fields are proofs, not code;
+the exe is 1,536 bytes smaller (not attributed further).
+Evidence: two fresh `git archive HEAD lean` stage builds of `909097b` (guard logs `ct-stagea`, `ct-stageb`) gave this exe byte for byte,
+and it equals the worktree build. The re-pin differential (`bench/correction_repin_diff.py`, guard log `ct-repin-diff2`) sent the 50 BLFCMD03
+requests the acceptance and constitution suites send, each with a trailing byte, eight truncations and 32 bit flips (2,100 runs)
+to the old and the new exe: `SUMMARY captured=50 runs=2100 mismatches=0`, identical exit codes and stdout. The transition and reuse
+vectors are unchanged. No release-producer receipt was made for this pin (the producer was not run).
 
 ## Partials re-pin (2026-09-30, rule `h1-v1`, no money or format change)
 
