@@ -1,6 +1,7 @@
 """The live Lean evaluator worker: one process, one frame each way, fail closed (Art. V.1, V.2, IV.2)."""
 
 import sqlite3
+import timeit
 import unittest
 from unittest.mock import patch
 
@@ -85,17 +86,28 @@ class EvaluatorWorkerTests(unittest.TestCase):
             self.assertFalse(worker.alive)
         self.assertEqual(engine._evaluate_wire(wire), answer)  # and the next request relaunches
 
+    @staticmethod
+    def _padded(data: dict, rows: int, text: str, key: str = "0" * 110) -> bytes:
+        extra = [dict(data["evidence"][0], evidence_id=f"zz{i:05d}{key}", kind="NOTE", common_origin_id=f"zz{i:05d}{key}",
+                      source_id=text, source_version=text, local_ref=text, amount_cents=None, reversal_of=None, supersedes=None)
+                 for i in range(rows)]
+        return adapter._encode_blfin02(dict(data, evidence=sorted(data["evidence"] + extra, key=lambda row: row["evidence_id"])))
+
+    def test_worker_time_is_linear_in_rows(self) -> None:
+        """4x the rows must cost about 4x, not 16x: a borrowed accumulator in the canonical re-encode made 10,000 rows take 16 s."""
+        best, data = {}, self._wires()[0][1]
+        for rows in (2_500, 9_900):  # the frame holds at most 10,000 evidence rows
+            wire = self._padded(data, rows, "x")
+            engine._evaluate_wire(wire)  # the worker is warm
+            best[rows] = min(timeit.repeat(lambda: engine._evaluate_wire(wire), number=1, repeat=3))
+        self.assertLess(best[9_900], 2.5, best)
+        self.assertLess(best[9_900] / best[2_500], 8, best)
+
     def test_large_requests_keep_the_worker_flat(self) -> None:
         """One worker, 20 accepted 600 KB requests then 8 near the 8 MiB ceiling: from each phase's second request its
         commit stays in a 16 MB band.  The M1 pin kept a further 32 MiB segment per request (M1.5 XI.2 record)."""
         data, key, long = self._wires()[0][1], "0" * 110, "x" * 500
-
-        def padded(rows: int, text: str) -> bytes:
-            extra = [dict(data["evidence"][0], evidence_id=f"zz{i:05d}{key}", kind="NOTE", common_origin_id=f"zz{i:05d}{key}",
-                          source_id=text, source_version=text, local_ref=text, amount_cents=None, reversal_of=None, supersedes=None)
-                     for i in range(rows)]
-            return adapter._encode_blfin02(dict(data, evidence=sorted(data["evidence"] + extra, key=lambda row: row["evidence_id"])))
-
+        padded = lambda rows, text: self._padded(data, rows, text)  # noqa: E731
         base = len(padded(0, ""))
         phases = ((padded(1000, key), 20), (padded((adapter.MAX_WIRE_BYTES - base) // (len(padded(1, long)) - base) - 1, long), 8))
         self.assertGreater(len(phases[1][0]), 8_000_000)

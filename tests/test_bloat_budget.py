@@ -39,6 +39,7 @@ PRODUCT_CODE_LINES = 37_316
 # and `tests/test_lean_io_loops.py`, net of the deleted `serve`, `readExact` and `readFinancialBounded` loops: an auditor reads the worker's frame loop as a theorem, not a claim, and the byte-identical I/O is tested.
 # Lean partials B (2026-09-30): +202 (three of them this comment) for the six ML-DSA sampler laws in `Gate/MlDsa87Laws.lean` (`rejNtt`/`sampleInBall` never read past Table 3, `verify` rejects when they give up, the fill/sign/limit lemmas),
 # their KATs and axiom pins, and the TCB gate's `loop` kind with its negative fixture: an auditor reads gate_verify's samplers as bounded theorems, and a new while/repeat anywhere fails the gate.
+# Worker linearity guard (quad, 2026-09-30): +13 for one test that fails if worker time is quadratic in rows (10,000 rows took 16 s until ea42222).
 EVIDENCE_CODE_LINES = 44_840
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
