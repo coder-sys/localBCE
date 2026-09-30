@@ -295,7 +295,7 @@ class CashFileCheck:
         return tuple(plan)
 
     @_fixed_errors
-    def finish(self, connection: sqlite3.Connection, results: object) -> None:
+    def finish(self, connection: sqlite3.Connection, results: object) -> set[str]:
         _require(connection is self._connection and connection.in_transaction and not self._finished and type(results) is list and len(results) == len(self.commands), "cash_file_failed")
         self._finished = True
         before, rows = self._before, _snapshot(connection)
@@ -370,3 +370,4 @@ class CashFileCheck:
         if self._preview:  # never committed: the owner rolls the copy back (docs/CORE_REDESIGN.md "Cash-file capacity")
             _require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "cash_file_failed")  # the deferred keys COMMIT would check
             raise CashFilePreview(self.receipt)
+        return touched  # the obligations verified above, with nothing written since

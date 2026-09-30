@@ -299,10 +299,20 @@ class ReceiverCashFileTests(unittest.TestCase):
         for number in range(6_000 // check.MAX_ROWS - 1):
             self.store.run_batch(cash._propose(canonical(self._file_of(shapes[number % 2], check.MAX_ROWS, prefix=f"seed-{number}")), self.baseline))
         self.baseline = self._manifest()
-        receipt, seconds = self._timed_apply(self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end")))
+        prepared, verified, real = self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end")), [], independent._verify_evaluation_row
+        with patch.object(independent, "_verify_evaluation_row", lambda *args, **kwargs: verified.append(args[2]["obligation_id"]) or real(*args, **kwargs)):
+            receipt, seconds = self._timed_apply(prepared)
         print(f"CASH1B_QUARTER_END rows={check.MAX_ROWS} lock_seconds={seconds:.2f}", flush=True)
         self.assertEqual(receipt["recorded_count"], check.MAX_ROWS)
+        self.assertEqual(len(verified), len(set(verified)), "each touched obligation is verified once per write, not by both the checker and the owner")
+        self.assertEqual(len(verified), len(shapes[1]))
         self.assertLess(seconds, 5.0)
+
+    def test_an_owner_write_without_a_checker_verifies_every_evaluated_obligation(self):
+        verified, real = [], independent._verify_evaluation_row
+        with patch.object(independent, "_verify_evaluation_row", lambda *args, **kwargs: verified.append(args[2]["obligation_id"]) or real(*args, **kwargs)):
+            self.store.run_batch(cash._propose(canonical(self.value), self.baseline))
+        self.assertEqual(verified, [self._query("SELECT obligation_id FROM obligations WHERE item_id=?", expected.H_ITEM_ID)[0][0]])
 
     def test_manifest_baseline_binds_digest_owner_and_the_live_chain(self):
         manifest = json.loads(self.baseline)
@@ -465,7 +475,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                         else:
                             self._unchanged(command, "^payment_origin_reversed$")
 
-    def _refused_by(self, rule, callback):  # the owner's pre-COMMIT check of what Lean evaluated names the checker rule
+    def _refused_by(self, rule, callback):  # finish's pre-COMMIT check refuses in its fixed class; the spy names the one checker rule
         seen, real = [], independent.verify_obligation_connection
 
         def spy(*args, **kwargs):
@@ -475,7 +485,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 seen.append(str(error))
                 raise
         with patch.object(independent, "verify_obligation_connection", spy):
-            self._unchanged(callback, f"^evaluation_verification:{rule}$")
+            self._unchanged(callback, "^cash_file_failed$")
         self.assertEqual(seen, [rule])
 
     def test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit(self):

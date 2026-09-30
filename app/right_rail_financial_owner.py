@@ -2414,10 +2414,9 @@ class FinancialOwner:
                     if _CHECK_ROW_CACHE and rows != _count_rows(connection):
                         raise AssertionError(f"row_count_cache: {rows} != {_count_rows(connection)}")
                     after = (tuple(connection.execute(_HISTORY_MARK).fetchone()), rows)
-                    if self._batch.evaluated:
-                        self._verify_before_commit(connection, "evaluation", *sorted(self._batch.evaluated))
-                    if before_commit is not None:
-                        before_commit(connection)
+                    done = before_commit(connection) if before_commit is not None else None  # the obligations the cash-file checker verified, on this same state
+                    if self._batch.evaluated:  # the very set it verified needs only this Owner's own schema and meta check
+                        self._verify_before_commit(connection, "evaluation", *(() if self._batch.evaluated == done else sorted(self._batch.evaluated)))
                     connection.execute("COMMIT")
                     self._row_cache = after
             except BaseException as error:
