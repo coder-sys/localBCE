@@ -2,7 +2,7 @@
 
 `tools/tcb_gate.lean` walks every constant reachable from each executable's `main`, its startup initializers and the `@[csimp]`
 theorems, and fails on a non-standard axiom (`sorryAx`, `Lean.ofReduceBool`) or a `partial`, `implemented_by`, `extern`, `opaque`,
-`unsafe` or `partial_fixpoint` constant its allowlist does not name.  The live gate needs 3-5 GB, so the default run only checks the committed
+`unsafe`, `partial_fixpoint` or `while`/`repeat` constant its allowlist does not name.  The live gate needs 3-5 GB, so the default run only checks the committed
 `tools/tcb_report.txt`: it must be for the current `lean/` tree and gate file and the pinned exe bytes, hold no violation, and name
 exactly the known VIOLATION-TODO set.  The pin procedure (`tools/tcb_pin.ps1`, RR_TCB_LIVE=1) builds nothing: it reruns the gate on the
 built exes (whose bytes must equal the pins), pins the toolchain and rewrites the report."""
@@ -38,13 +38,9 @@ EXE_PINS = {
     "blind_financial_correction": engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex(),
     "gate_verify": signer.VERIFY_PIN.read_text("utf-8").strip(),
 }
-# The open items: a new one, or a fixed one, changes this set (and STATUS.md).  serve/readExact/readFinancialBounded are
-# closed by lean-partials-v1; rejNtt/sampleInBall are pq M2.
-EXPECTED_TODO = {
-    "blind_financial_worker": set(),
-    "blind_financial_correction": set(),
-    "gate_verify": {"partial BlindLedger.Gate.MlDsa87.rejNtt", "partial BlindLedger.Gate.MlDsa87.sampleInBall"},
-}
+# The open items: a new one changes this set (and STATUS.md).  serve/readExact/readFinancialBounded, rejNtt and sampleInBall
+# are closed by lean-partials-v1.
+EXPECTED_TODO = {"blind_financial_worker": set(), "blind_financial_correction": set(), "gate_verify": set()}
 
 
 def _sha256(path: Path) -> str:
@@ -176,9 +172,13 @@ partial def loopE (n : Nat) : Nat := if n > 5 then partExt n else loopE (n + 1)
 initialize do IO.println (bareExt 1)
 builtin_initialize do IO.println (bareBuiltinExt 1)
 initialize initRef : IO.Ref Nat ← IO.mkRef (initExt 1)
+def spin (n : Nat) : Nat := Id.run do
+  let mut i := n
+  while i < 10 do i := i + 1
+  return i
 def spinFix (n : Nat) : Option Nat := if n > 5 then some n else spinFix (n + 1)
 partial_fixpoint
-def main : IO Unit := IO.println s!"{spinFix 0} {loopP 0} {externFn 1} {opaqueVal} {implSpec 1} {viaUnsafe 1} {usesSorry} {usesNd} {usesAx} {viaBody 0} {viaLc} {loopE 0}"
+def main : IO Unit := IO.println s!"{spin 0} {spinFix 0} {loopP 0} {externFn 1} {opaqueVal} {implSpec 1} {viaUnsafe 1} {usesSorry} {usesNd} {usesAx} {viaBody 0} {viaLc} {loopE 0}"
 """
         with tempfile.TemporaryDirectory(prefix="tcb-gate-") as tmp:
             (Path(tmp) / "Bad.lean").write_text(source, encoding="utf-8")
@@ -186,7 +186,7 @@ def main : IO Unit := IO.println s!"{spinFix 0} {loopP 0} {externFn 1} {opaqueVa
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
             done = _lean(["--run", str(GATE), "bad=Bad"], Path(tmp))
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        for expected in ("axiom myAx", "axiom sorryAx", "axiom nd._native.native_decide.ax_1_1", "partial loopP", "fixpoint spinFix", "extern externFn",
+        for expected in ("axiom myAx", "axiom sorryAx", "axiom nd._native.native_decide.ax_1_1", "partial loopP", "loop spin", "fixpoint spinFix", "extern externFn",
                          "extern initExt", "opaque opaqueVal", "implemented_by implSpec", "unsafe unsafeFn",
                          "axiom hidAx", "axiom lcProof", "unsafe usesLc", "extern partExt", "extern bareExt", "extern bareBuiltinExt"):
             self.assertIn(f"VIOLATION {expected}", done.stdout)

@@ -8,7 +8,7 @@ open Lean
     the view of what actually runs; a `partial` def is walked through its `_unsafe_rec` body), and from every startup
     initializer and `@[csimp]` theorem.  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
     (so `sorryAx` and `Lean.ofReduceBool`, the axiom behind `native_decide`, fail), on any partial,
-    implemented_by, extern, opaque, unsafe or fixpoint (`partial_fixpoint`) constant that `allowed` does not name, on `main` without compiled code, and
+    implemented_by, extern, opaque, unsafe, fixpoint (`partial_fixpoint`) or loop (`while`/`repeat`) constant that `allowed` does not name, on `main` without compiled code, and
     on an `Init` or `Std` module that resolves outside the toolchain. -/
 
 /-- Lean's own logic. -/
@@ -28,7 +28,7 @@ structure Allow where
   deriving Inhabited
 
 def core (m : Name) : Allow :=
-  { name := m, module := true, kinds := ["extern", "implemented_by", "opaque", "unsafe", "partial"],
+  { name := m, module := true, kinds := ["extern", "implemented_by", "opaque", "unsafe", "partial", "loop"],
     reason := s!"toolchain `{m}`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)" }
 
 /-- THE ALLOWLIST.  Anything else is a violation.  A `VIOLATION-TODO` reason marks a real hole in a pinned closure:
@@ -38,11 +38,7 @@ def allowed : List Allow := [
   { name := `BlindLedger.Financial.WorkerCli.reserveArena, module := false, kinds := ["extern", "opaque"],
     reason := "the worker's mimalloc arena reservation, one C call, no decision logic" },
   { name := `BlindLedger.Financial.serveWorker, module := false, kinds := ["fixpoint"],
-    reason := "the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless" },
-  { name := `BlindLedger.Gate.MlDsa87.rejNtt, module := false, kinds := ["partial"],
-    reason := "VIOLATION-TODO: ML-DSA rejection sampling in gate_verify's closure is partial; needs a fuel bound" },
-  { name := `BlindLedger.Gate.MlDsa87.sampleInBall, module := false, kinds := ["partial"],
-    reason := "VIOLATION-TODO: ML-DSA challenge sampling in gate_verify's closure is partial; needs a fuel bound" }]
+    reason := "the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless" }]
 
 /-- `c._unsafe_rec` is the body of partial def `c`: walked for what it reaches, but `c`'s own `partial` entry covers it. -/
 def kindsOf (env : Environment) (c : Name) (ci : ConstantInfo) : Array String := Id.run do
@@ -52,7 +48,9 @@ def kindsOf (env : Environment) (c : Name) (ci : ConstantInfo) : Array String :=
   else if ci matches .opaqueInfo _ then ks := ks.push "opaque"
   if ci.isUnsafe then ks := ks.push "unsafe"
   if let some v := ci.value? then
-    if v.getUsedConstants.contains ``Lean.Order.fix then ks := ks.push "fixpoint"  -- partial_fixpoint; WF recursion uses `WellFounded.fix`
+    let used := v.getUsedConstants
+    if used.contains ``Lean.Order.fix then ks := ks.push "fixpoint"  -- partial_fixpoint; WF recursion uses `WellFounded.fix`
+    if used.contains ``Lean.Loop.mk || used.contains ``repeatM then ks := ks.push "loop"  -- `while`/`repeat`: an unbounded loop hidden behind Init's `partial`
   if (Compiler.getImplementedBy? env c).isSome then ks := ks.push "implemented_by"
   if isExtern env c || (match IR.findEnvDecl env c with | some (.extern ..) => true | _ => false) then ks := ks.push "extern"
   return ks
