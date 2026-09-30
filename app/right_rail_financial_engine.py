@@ -571,6 +571,20 @@ def require_correction_transition_v1(release: object | None) -> FinancialCorrect
     return release
 
 
+_PREDICATE_TAGS: Final[dict[int, str]] = {1: "ACTION_ID", 2: "DETERMINATION_ID", 3: "EVALUATION_CONSUMED"}
+_CLAIM_STATUS_TAGS: Final[dict[int, str]] = {1: "CLAIMED", 2: "AUTHORIZED", 3: "REJECTED"}
+_DECISION_TAGS: Final[dict[int, str]] = {1: "OFFSET_AUTHORIZED", 2: "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}
+_ACTION_STATUS_TAGS: Final[dict[int, str]] = {1: "READY", 2: "ACKNOWLEDGED", 3: "CANCELLED"}
+_CASE_STATUS_TAGS: Final[dict[int, str]] = {1: "OPEN", 2: "AUTHORIZED", 3: "CORRECTION_REQUIRED", 4: "ACTIONED", 5: "RESOLVED"}
+_EFFECT_TAGS: Final[dict[int, str]] = {
+    1: "DETERMINATION_RECORDED", 2: "CLAIM_REJECTED", 3: "CASE_UPSERTED", 4: "ACTION_CREATED",
+    5: "OUTBOX_CREATED", 6: "PROJECTION_RECOMPUTED", 7: "EVENT_APPENDED",
+}
+_EXPLANATION_CODE_TAGS: Final[dict[int, str]] = {1: "CORRECTION_AUTHORIZED", 2: "EXACT_RETRY", 3: "REJECTED"}
+_TRANSITION_KIND_TAGS: Final[dict[int, str]] = {1: "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}
+_RESULT_STATUS_TAGS: Final[dict[int, str]] = {1: "ACCEPTED", 2: "DUPLICATE", 3: "REJECTED"}
+
+
 # Decoding helpers.  Reader codec failures surface as
 # FinancialEngineResultError(<wire label>) from decode_correction_transition_result.
 def _read_transition_nat(reader: Any, label: str) -> int:
@@ -597,9 +611,7 @@ def _read_optional_transition_text(reader: Any, label: str) -> str | None:
 
 
 def _read_correction_query_observation(reader: Any, label: str) -> dict[str, Any]:
-    predicates = {1: "ACTION_ID", 2: "DETERMINATION_ID", 3: "EVALUATION_CONSUMED"}
-    predicate_tag = reader.byte(f"{label}_predicate")
-    predicate = predicates.get(predicate_tag)
+    predicate = _PREDICATE_TAGS.get(reader.byte(f"{label}_predicate"))
     if predicate is None:
         raise FinancialEngineResultError(f"{label}_predicate")
     subject = reader.identifier(f"{label}_subject")
@@ -632,7 +644,6 @@ def _read_correction_query_observations(reader: Any) -> dict[str, dict[str, Any]
 
 
 def _read_correction_claim(reader: Any, label: str = "claim") -> dict[str, Any]:
-    status_tags = {1: "CLAIMED", 2: "AUTHORIZED", 3: "REJECTED"}
     claim = {
         "claim_id": reader.identifier(f"{label}_id"),
         "obligation_id": reader.identifier(f"{label}_obligation"),
@@ -641,7 +652,7 @@ def _read_correction_claim(reader: Any, label: str = "claim") -> dict[str, Any]:
         "owner_role": reader.role(f"{label}_owner_role"),
         "deadline_at_ms": _read_transition_nat(reader, f"{label}_deadline"),
     }
-    status = status_tags.get(reader.byte(f"{label}_status"))
+    status = _CLAIM_STATUS_TAGS.get(reader.byte(f"{label}_status"))
     if status is None:
         raise FinancialEngineResultError(f"{label}_status")
     claim["status"] = status
@@ -730,7 +741,6 @@ def _read_correction_followups(reader: Any) -> dict[str, Any]:
 
 
 def _read_correction_determination(reader: Any) -> dict[str, Any]:
-    decision_tags = {1: "OFFSET_AUTHORIZED", 2: "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}
     determination = {
         "determination_id": reader.identifier("determination_id"),
         "obligation_id": reader.identifier("determination_obligation_id"),
@@ -741,7 +751,7 @@ def _read_correction_determination(reader: Any) -> dict[str, Any]:
         "authority_epoch": _read_transition_nat(reader, "determination_authority_epoch"),
         "authority_digest": reader.digest("determination_authority_digest"),
     }
-    decision = decision_tags.get(reader.byte("determination_decision"))
+    decision = _DECISION_TAGS.get(reader.byte("determination_decision"))
     if decision is None:
         raise FinancialEngineResultError("determination_decision")
     determination["decision"] = decision
@@ -757,7 +767,6 @@ def _read_correction_determination(reader: Any) -> dict[str, Any]:
 
 
 def _read_correction_action(reader: Any) -> dict[str, Any]:
-    status_tags = {1: "READY", 2: "ACKNOWLEDGED", 3: "CANCELLED"}
     action_id = reader.identifier("action_id")
     obligation_id = reader.identifier("action_obligation_id")
     determination_id = reader.option_identifier("action_determination_id")
@@ -765,7 +774,7 @@ def _read_correction_action(reader: Any) -> dict[str, Any]:
     amount_cents = _read_transition_nat(reader, "action_amount")
     currency = reader.string("action_currency", max_bytes=128)
     revision = _read_transition_nat(reader, "action_revision")
-    status = status_tags.get(reader.byte("action_status"))
+    status = _ACTION_STATUS_TAGS.get(reader.byte("action_status"))
     if status is None:
         raise FinancialEngineResultError("action_status")
     payload_digest = reader.digest("action_payload_digest")
@@ -785,7 +794,6 @@ def _read_correction_action(reader: Any) -> dict[str, Any]:
 
 
 def _read_correction_case(reader: Any) -> dict[str, Any]:
-    status_tags = {1: "OPEN", 2: "AUTHORIZED", 3: "CORRECTION_REQUIRED", 4: "ACTIONED", 5: "RESOLVED"}
     case_record = {
         "case_id": reader.identifier("case_id"),
         "obligation_id": reader.identifier("case_obligation_id"),
@@ -793,7 +801,7 @@ def _read_correction_case(reader: Any) -> dict[str, Any]:
         "next_action_owner": reader.role("case_next_action_owner"),
         "due_at_ms": _read_transition_nat(reader, "case_due_at"),
     }
-    status = status_tags.get(reader.byte("case_status"))
+    status = _CASE_STATUS_TAGS.get(reader.byte("case_status"))
     if status is None:
         raise FinancialEngineResultError("case_status")
     case_record["status"] = status
@@ -864,18 +872,8 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
     transition_tag = reader.byte("correction_transition_kind")
     if transition_tag != 1:
         raise FinancialEngineResultError("engine_correction_transition_kind")
-    effect_tags = {
-        1: "DETERMINATION_RECORDED",
-        2: "CLAIM_REJECTED",
-        3: "CASE_UPSERTED",
-        4: "ACTION_CREATED",
-        5: "OUTBOX_CREATED",
-        6: "PROJECTION_RECOMPUTED",
-        7: "EVENT_APPENDED",
-    }
-
     def read_effect(_label: str) -> str:
-        value = effect_tags.get(reader.byte("correction_effect"))
+        value = _EFFECT_TAGS.get(reader.byte("correction_effect"))
         if value is None:
             raise FinancialEngineResultError("engine_correction_effect")
         return value
@@ -913,8 +911,7 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
         "inserted": inserted,
     }
     outbox_action_id = reader.identifier("correction_outbox_action_id")
-    outbox_status_tags = {1: "READY", 2: "ACKNOWLEDGED", 3: "CANCELLED"}
-    outbox_status = outbox_status_tags.get(reader.byte("correction_outbox_status"))
+    outbox_status = _ACTION_STATUS_TAGS.get(reader.byte("correction_outbox_status"))
     if outbox_status is None:
         raise FinancialEngineResultError("engine_correction_outbox_status")
     outbox_attempt = _read_transition_nat(reader, "correction_outbox_attempt")
@@ -1026,16 +1023,14 @@ def _read_optional_correction_tag(reader: Any, tags: Mapping[int, str], label: s
 
 
 def _read_correction_explanation(reader: Any) -> dict[str, Any]:
-    explanation_codes = {1: "CORRECTION_AUTHORIZED", 2: "EXACT_RETRY", 3: "REJECTED"}
-    transition_kinds = {1: "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}
-    code = explanation_codes.get(reader.byte("correction_explanation_code"))
+    code = _EXPLANATION_CODE_TAGS.get(reader.byte("correction_explanation_code"))
     if code is None:
         raise FinancialEngineResultError("engine_correction_explanation_code")
     transition_tag = reader.byte("correction_explanation_transition_tag")
     if transition_tag == 0:
         transition = None
     elif transition_tag == 1:
-        transition = transition_kinds.get(reader.byte("correction_explanation_transition"))
+        transition = _TRANSITION_KIND_TAGS.get(reader.byte("correction_explanation_transition"))
         if transition is None:
             raise FinancialEngineResultError("engine_correction_explanation_transition")
     else:
@@ -1051,6 +1046,126 @@ def _read_correction_explanation(reader: Any) -> dict[str, Any]:
         "expected_revision": _read_optional_transition_nat(reader, "correction_explanation_expected_revision"),
         "resulting_revision": _read_optional_transition_nat(reader, "correction_explanation_resulting_revision"),
     }
+
+
+# Re-encoder: a decoded BLFCRES3 value must encode back to the exact bytes Lean wrote, so a decoder that
+# drops, defaults or normalises anything is refused (V.3).  A field kind is a _WireWriter method name, a tag
+# table, or a one-tuple holding a tag table for an optional tag.
+_EXPLANATION_FIELDS: Final = (
+    ("code", _EXPLANATION_CODE_TAGS), ("transition", (_TRANSITION_KIND_TAGS,)),
+    ("reject_reason", (_CORRECTION_REJECT_REASON_TAGS,)), ("unresolved_requirement", (_CORRECTION_REQUIREMENT_TAGS,)),
+    ("claim_id", "option_identifier"), ("action_id", "option_identifier"), ("input_evaluation_id", "option_identifier"),
+    ("expected_revision", "option_nat"), ("resulting_revision", "option_nat"),
+)
+_DEPENDENCY_FIELDS: Final = (
+    ("artifact_contract", "string"), ("artifact_version", "nat"), ("authority_id", "identifier"), ("authority_epoch", "nat"),
+    ("authority_digest", "digest"), ("control_pack_id", "identifier"), ("control_pack_version", "nat"),
+    ("control_pack_digest", "digest"), ("input_evaluation_id", "identifier"), ("input_evaluation_result_digest", "digest"),
+    ("input_evaluation_revision", "nat"), ("input_evaluation_evaluated_at_ms", "nat"),
+    ("input_evaluation_snapshot_digest", "digest"), ("input_shortfall_cents", "nat"), ("decision_at_ms", "nat"),
+    ("owner_now_ms", "nat"),
+)
+_CLAIM_FIELDS: Final = (
+    ("claim_id", "identifier"), ("obligation_id", "identifier"), ("evidence_id", "identifier"), ("amount_cents", "nat"),
+    ("owner_role", "role"), ("deadline_at_ms", "nat"), ("status", _CLAIM_STATUS_TAGS),
+)
+_OBSERVATION_FIELDS: Final = (
+    ("predicate", _PREDICATE_TAGS), ("subject", "identifier"), ("complete", "boolean"), ("match_count", "nat"),
+    ("result_identity", "option_identifier"), ("version_sequence", "nat"), ("version_head", "digest"),
+)
+_FOLLOWUP_FIELDS: Final = (
+    ("action_id", "identifier"), ("outbox_action_id", "identifier"), ("case_id", "identifier"),
+    ("resulting_evaluation_id", "identifier"), ("event_sequence", "nat"),
+)
+_DETERMINATION_HEAD: Final = (
+    ("determination_id", "identifier"), ("obligation_id", "identifier"), ("claim_id", "identifier"),
+    ("actor_id", "identifier"), ("actor_role", "role"), ("authority_id", "identifier"), ("authority_epoch", "nat"),
+    ("authority_digest", "digest"), ("decision", _DECISION_TAGS), ("amount_cents", "nat"),
+)
+_DETERMINATION_TAIL: Final = (("expected_revision", "nat"), ("resulting_revision", "nat"), ("decided_at_ms", "nat"))
+_ACTION_FIELDS: Final = (
+    ("action_id", "identifier"), ("obligation_id", "identifier"), ("determination_id", "option_identifier"),
+    ("kind", "identifier"), ("amount_cents", "nat"), ("currency", "string"), ("revision", "nat"),
+    ("status", _ACTION_STATUS_TAGS), ("payload_digest", "digest"), ("created_at_ms", "nat"),
+)
+_CASE_FIELDS: Final = (
+    ("case_id", "identifier"), ("obligation_id", "identifier"), ("reason", "identifier"), ("next_action_owner", "role"),
+    ("due_at_ms", "nat"), ("status", _CASE_STATUS_TAGS), ("updated_at_ms", "nat"),
+)
+_CASE_DELTA_FIELDS: Final = (
+    ("contractual_accountability", "identifier"), ("completion_conditions_amount_satisfied", "boolean"),
+    ("completion_conditions_reporting_complete", "boolean"),
+    ("completion_conditions_delivery_acknowledged_or_not_required", "boolean"), ("inserted", "boolean"),
+)
+_EVENT_FIELDS: Final = (
+    ("sequence", "nat"), ("previous_head", "digest"), ("aggregate_type", "identifier"), ("aggregate_id", "identifier"),
+    ("kind", "identifier"), ("before_revision", "nat"), ("after_revision", "nat"), ("committed_at_ms", "nat"),
+)
+
+
+def _tag_of(table: Mapping[int, str], value: str) -> int:
+    return {name: tag for tag, name in table.items()}[value]
+
+
+def _put(writer: Any, record: Mapping[str, Any], fields: tuple[tuple[str, Any], ...]) -> None:
+    for key, kind in fields:
+        value = record[key]
+        if type(kind) is str:
+            getattr(writer, kind)(value, key)
+        elif type(kind) is tuple:
+            writer.byte(int(value is not None), key)
+            if value is not None:
+                writer.byte(_tag_of(kind[0], value), key)
+        else:
+            writer.byte(_tag_of(kind, value), key)
+
+
+def _encode_correction_transition_result(result: Mapping[str, Any]) -> bytes:
+    writer = semantic._WireWriter()
+    writer.raw(b"BLFCRES3\x00\x03", "correction_result_header")
+    _put(writer, result, (("status", _RESULT_STATUS_TAGS),))
+    writer.string(CORRECTION_TRANSITION_OPERATION, "correction_result_contract")
+    _put(writer, result, (("reject_reason", (_CORRECTION_REJECT_REASON_TAGS,)),))
+    _put(writer, result["explanation"], _EXPLANATION_FIELDS)
+    _put(writer, result, (("action_id", "option_identifier"), ("determination_id", "option_identifier")))
+    mutation = result["mutation"]
+    if mutation is None:
+        writer.byte(0, "correction_mutation_tag")
+        return writer.finish(label="correction_result_size")
+    writer.raw(b"\x01\x01", "correction_mutation_tag")  # present, and the one transition kind
+    writer.list(mutation["ordered_effects"], "correction_effects", lambda value, label: writer.byte(_tag_of(_EFFECT_TAGS, value), label))
+    dependencies = mutation["dependencies"]
+    _put(writer, dependencies, _DEPENDENCY_FIELDS)
+    _put(writer, dependencies["claim_before"], _CLAIM_FIELDS)
+    writer.list(
+        dependencies["supporting_evidence"], "dependency_supporting_evidence",
+        lambda value, _label: _put(writer, value, (("evidence_id", "identifier"), ("record_digest", "digest"))),
+    )
+    for observation in dependencies["query_observations"].values():
+        _put(writer, observation, _OBSERVATION_FIELDS)
+    _put(writer, dependencies, (("current_event_sequence", "nat"), ("previous_history_head", "digest")))
+    writer.list(
+        dependencies["correction_paid"], "dependency_correction_paid",
+        lambda value, _label: _put(writer, value, (("action_id", "identifier"), ("paid_cents", "nat"))),
+    )
+    _put(writer, mutation["followups"], _FOLLOWUP_FIELDS)
+    for name in ("resulting_input_wire", "resulting_result_wire"):
+        writer.raw(len(mutation[name]).to_bytes(4, "big") + mutation[name], name)
+    determination = mutation["determination"]
+    _put(writer, determination, _DETERMINATION_HEAD)
+    writer.list(determination["supporting_evidence_ids"], "determination_supporting_evidence", writer.identifier)
+    _put(writer, determination, _DETERMINATION_TAIL)
+    _put(writer, mutation["action"], _ACTION_FIELDS)
+    _put(writer, mutation["case_delta"]["record"], _CASE_FIELDS)
+    _put(writer, mutation["case_delta"], _CASE_DELTA_FIELDS)
+    outbox = mutation["outbox"]
+    _put(writer, outbox, (("action_id", "identifier"), ("status", _ACTION_STATUS_TAGS), ("attempt", "nat")))
+    writer.byte(int(outbox["acknowledgment_reference"] is not None), "correction_outbox_acknowledgment_tag")
+    if outbox["acknowledgment_reference"] is not None:
+        writer.string(outbox["acknowledgment_reference"], "correction_outbox_acknowledgment")
+    writer.nat(outbox["updated_at_ms"], "correction_outbox_updated_at")
+    _put(writer, mutation["event"], _EVENT_FIELDS)
+    return writer.finish(label="correction_result_size")
 
 
 def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
@@ -1217,8 +1332,7 @@ def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
             raise FinancialEngineResultError("engine_correction_result_magic")
         if int.from_bytes(reader.take(2, "correction_result_version"), "big") != 3:
             raise FinancialEngineResultError("engine_correction_result_version")
-        status_tags = {1: "ACCEPTED", 2: "DUPLICATE", 3: "REJECTED"}
-        status = status_tags.get(reader.byte("correction_result_status"))
+        status = _RESULT_STATUS_TAGS.get(reader.byte("correction_result_status"))
         if status is None:
             raise FinancialEngineResultError("engine_correction_result_status")
         contract = reader.string("correction_result_contract")
@@ -1239,6 +1353,8 @@ def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
             "mutation": mutation,
         }
         _validate_correction_result_shape(result)
+        if _encode_correction_transition_result(result) != payload:
+            raise FinancialEngineResultError("engine_correction_result_canonical")
         return result
     except FinancialEngineResultError:
         raise
@@ -1377,4 +1493,10 @@ def evaluate_live(
         evaluation_time_ms=evaluation_time_ms,
         verification=verification,
     )
-    return semantic.decode_live_result(_evaluate_wire(wire), data)
+    answer = _evaluate_wire(wire)
+    try:
+        return semantic.decode_live_result(answer, data)
+    except BaseException:
+        with _evaluator_lock:  # an answer that does not bind to this request may mean the worker is out of step
+            _close_evaluator()
+        raise
