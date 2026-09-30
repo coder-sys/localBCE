@@ -161,6 +161,31 @@ structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
     result.shortfallCents = mutation.dependencies.inputShortfallCents ∧
     outstandingCorrectionCents mutation.dependencies.correctionPaid request.currentInput.actions <
       result.shortfallCents
+  resultingEvaluates : evaluate mutation.resultingInput = some mutation.resultingResult
+  resultingFrame : mutation.resultingInput.context = request.currentInput.context ∧
+    mutation.resultingInput.authority = request.currentInput.authority ∧
+    mutation.resultingInput.pack = request.currentInput.pack ∧
+    mutation.resultingInput.obligation = request.currentInput.obligation ∧
+    mutation.resultingInput.payments = request.currentInput.payments ∧
+    mutation.resultingInput.evidence = request.currentInput.evidence ∧
+    mutation.resultingInput.conflicts = request.currentInput.conflicts
+  resultingClaims : mutation.resultingInput.claims = request.currentInput.claims.map (fun claim =>
+    if claim.claimId = request.command.claimId then
+      { mutation.dependencies.claimBefore with status := .REJECTED } else claim)
+  resultingActions : mutation.resultingInput.actions.Perm
+    (mutation.action :: request.currentInput.actions)
+  resultingDeterminations : mutation.resultingInput.determinations.Perm
+    (mutation.determination :: request.currentInput.determinations)
+  authorizedDeterminations : mutation.resultingInput.determinations.filter
+      (fun d => d.decision = .OFFSET_AUTHORIZED) =
+    request.currentInput.determinations.filter (fun d => d.decision = .OFFSET_AUTHORIZED)
+  determinationDecision : mutation.determination.decision = .OFFSET_REJECTED_CORRECTION_AUTHORIZED ∧
+    mutation.determination.claimId = request.command.claimId
+  determinationActor : mutation.determination.actorId = request.command.actorId ∧
+    mutation.determination.actorRole = request.command.actorRole ∧
+    mutation.determination.authorityId = request.currentInput.authority.authorityId ∧
+    mutation.determination.authorityEpoch = request.currentInput.authority.epoch ∧
+    mutation.determination.authorityDigest = request.currentInput.authority.digest
 
 def sameOwnerResult (result : FinancialResult) (receipt : EvaluationReceipt)
     (expectedEvaluationId : String) : Bool :=
@@ -317,6 +342,35 @@ private def insertActionSorted (record : ActionRecord) : List ActionRecord → L
   | first :: rest =>
       if record.actionId < first.actionId then record :: first :: rest
       else first :: insertActionSorted record rest
+
+private theorem insertActionSorted_perm (x : ActionRecord) :
+    ∀ l, (insertActionSorted x l).Perm (x :: l)
+  | [] => List.Perm.refl _
+  | y :: ys => by
+      unfold insertActionSorted
+      split
+      · exact List.Perm.refl _
+      · exact ((insertActionSorted_perm x ys).cons y).trans (List.Perm.swap x y ys)
+
+private theorem insertDeterminationSorted_perm (x : OffsetDetermination) :
+    ∀ l, (insertDeterminationSorted x l).Perm (x :: l)
+  | [] => List.Perm.refl _
+  | y :: ys => by
+      unfold insertDeterminationSorted
+      split
+      · exact List.Perm.refl _
+      · exact ((insertDeterminationSorted_perm x ys).cons y).trans (List.Perm.swap x y ys)
+
+private theorem insertDeterminationSorted_filter (x : OffsetDetermination)
+    (p : OffsetDetermination → Bool) (hx : p x = false) :
+    ∀ l, (insertDeterminationSorted x l).filter p = l.filter p
+  | [] => by simp [insertDeterminationSorted, hx]
+  | y :: ys => by
+      unfold insertDeterminationSorted
+      split
+      · simp [List.filter_cons, hx]
+      · simp only [List.filter_cons]
+        rw [insertDeterminationSorted_filter x p hx ys]
 
 private def updateAllCaseStatus (cases : List CaseRecord) (status : CaseStatus)
     (updatedAt : Nat) : List CaseRecord :=
@@ -762,7 +816,16 @@ def buildAccepted (request : CorrectionTransitionRequest)
       correctionKind := rfl
       claimAmount := rfl
       amountRule := rfl
-      inputShortfall := ⟨currentResult, hEvaluates, rfl, hRequestable⟩ }
+      inputShortfall := ⟨currentResult, hEvaluates, rfl, hRequestable⟩
+      resultingEvaluates := resultingResultCertificate.property
+      resultingFrame := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      resultingClaims := rfl
+      resultingActions := insertActionSorted_perm action input.actions
+      resultingDeterminations := insertDeterminationSorted_perm determination input.determinations
+      authorizedDeterminations := insertDeterminationSorted_filter determination
+        (fun d => decide (d.decision = .OFFSET_AUTHORIZED)) rfl input.determinations
+      determinationDecision := ⟨rfl, rfl⟩
+      determinationActor := ⟨rfl, rfl, rfl, rfl, rfl⟩ }
     pure ⟨mutation, linkFacts⟩
   else
     throw .REVISION_CONFLICT
@@ -826,7 +889,6 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
   if !authorityActorBindingWellFormed input.authority command.actorId command.actorRole ||
       !input.pack.authorizedRoles.contains command.actorRole then
     throw .ACTOR_UNAUTHORIZED
-  if input.pack.status ≠ .APPROVED then throw .CONTROL_PACK_REJECTED
   let some claim := findClaim input.claims command.claimId | throw .CLAIM_MISSING
   if claim.status ≠ .CLAIMED then throw .CLAIM_NOT_CLAIMED
   if command.expectedRevision = 0 then throw .REVISION_CONFLICT

@@ -1,4 +1,5 @@
 import BlindLedger.Financial.CorrectionTransition.Reuse
+import BlindLedger.Financial.Theorems.Conservation
 
 namespace BlindLedger.Financial.CorrectionTransition
 
@@ -59,52 +60,13 @@ theorem applyCorrectionTransition_zero_shortfall_has_no_mutation
       subst hSame
       omega
 
-private theorem evalAdd_some_eq {left right total : Nat}
-    (hAdd : evalAdd left right = some total) : total = left + right := by
-  unfold evalAdd at hAdd
-  split at hAdd
-  · exact (Option.some.inj hAdd).symm
-  · contradiction
-
-private theorem evaluateTotals_total {input : FinancialInput} {totals : EvaluatedTotals}
-    (hTotals : evaluateTotals input = some totals) : totals.total = totals.cash + totals.lawful := by
-  unfold evaluateTotals at hTotals
-  split at hTotals <;> try contradiction
-  split at hTotals <;> try contradiction
-  split at hTotals <;> try contradiction
-  split at hTotals <;> try contradiction
-  rename_i hAdd
-  cases hTotals
-  exact evalAdd_some_eq hAdd
-
 /-- A positive shortfall is exactly what cash and lawful adjustments leave unpaid. -/
 theorem evaluate_positive_shortfall_balance (input : FinancialInput) (result : FinancialResult)
     (hEval : evaluate input = some result) (hPositive : 0 < result.shortfallCents) :
     result.receivedCashCents + result.lawfulAdjustmentCents + result.shortfallCents =
       result.owedCents := by
-  unfold evaluate at hEval
-  split at hEval
-  · unfold evaluateWellFormed at hEval
-    cases hTotals : evaluateTotals input with
-    | none =>
-        rw [hTotals] at hEval
-        contradiction
-    | some totals =>
-        rw [hTotals] at hEval
-        have hResult : evaluateResult input totals.cash totals.claimed totals.lawful totals.total =
-            result := Option.some.inj hEval
-        subst hResult
-        have hTotal := evaluateTotals_total hTotals
-        change 0 < (if input.obligation.owedCents > totals.total then
-          input.obligation.owedCents - totals.total else 0) at hPositive
-        change totals.cash + totals.lawful + (if input.obligation.owedCents > totals.total then
-          input.obligation.owedCents - totals.total else 0) = input.obligation.owedCents
-        by_cases hShort : input.obligation.owedCents > totals.total
-        · rw [if_pos hShort]
-          omega
-        · rw [if_neg hShort] at hPositive
-          omega
-  · contradiction
+  obtain ⟨h1, h2, -⟩ := evaluate_balance hEval
+  omega
 
 /-- Amounts are conserved: the rejected offset is recorded at the claim's amount,
     the request is no more than that offset, and cash plus lawful adjustments plus

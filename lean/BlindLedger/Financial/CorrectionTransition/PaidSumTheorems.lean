@@ -1,4 +1,5 @@
 import BlindLedger.Financial.CorrectionTransition.Theorems
+import BlindLedger.Financial.Theorems.Conservation
 
 /-! Proofs of the statements in docs/CORE_REDESIGN.md, "Lean paid sum".  They
     name `CorrectionCommand.paymentLinks` and `derivedCorrectionPaid`, and sit
@@ -16,28 +17,6 @@ private theorem str_trich (a b : String) : a < b ∨ a = b ∨ b < a := by
   · by_cases h2 : b < a
     · exact Or.inr (Or.inr h2)
     · exact Or.inr (Or.inl (String.le_antisymm (String.not_lt.1 h2) (String.not_lt.1 h1)))
-
-private theorem strictlyAscending_iff :
-    ∀ l : List String, strictlyAscending l = true ↔ l.Pairwise (· < ·)
-  | [] => by simp [strictlyAscending]
-  | [a] => by simp [strictlyAscending]
-  | a :: b :: rest => by
-      rw [strictlyAscending, Bool.and_eq_true, decide_eq_true_eq, strictlyAscending_iff (b :: rest)]
-      constructor
-      · rintro ⟨hab, h⟩
-        refine List.pairwise_cons.2 ⟨?_, h⟩
-        intro x hx
-        rcases List.mem_cons.1 hx with rfl | hx
-        · exact hab
-        · exact String.lt_trans hab ((List.pairwise_cons.1 h).1 x hx)
-      · intro h
-        obtain ⟨h1, h2⟩ := List.pairwise_cons.1 h
-        exact ⟨h1 b (List.mem_cons_self ..), h2⟩
-
-private theorem canonical_facts {l : List String} (h : canonicalIdList l = true) :
-    l.length ≤ maxRows ∧ (∀ x ∈ l, idWellFormed x = true) ∧ l.Pairwise (· < ·) := by
-  simp only [canonicalIdList, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h
-  exact ⟨h.1.1, h.1.2, (strictlyAscending_iff l).1 h.2⟩
 
 private theorem paidCents_eq_sum (E : List CorrectionPaid) (a : String) :
     correctionPaidCents E a = (E.map fun e => if e.actionId = a then e.paidCents else 0).sum := by
@@ -457,37 +436,6 @@ private theorem derived_of {payments : List Payment} {actions : List ActionRecor
   exact if_pos hCheck
 
 /-! ## Total sum of the active rows -/
-
-private theorem evalAdd_some {l r t : Nat} (h : evalAdd l r = some t) :
-    t = l + r ∧ t ≤ maxCents := by
-  unfold evalAdd at h
-  split at h
-  · cases h
-    rename_i hc
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-    exact ⟨rfl, by omega⟩
-  · cases h
-
-private theorem evalPaymentSum_active : ∀ (ps : List Payment) (t : Nat),
-    evalPaymentSum ps = some t →
-    ((ps.filter fun p => p.status = .ACTIVE).map Payment.amountCents).sum = t ∧ t ≤ maxCents
-  | [], t, h => by
-      simp only [evalPaymentSum] at h
-      cases h
-      exact ⟨rfl, Nat.zero_le _⟩
-  | p :: ps, t, h => by
-      cases hT : evalPaymentSum ps with
-      | none => simp [evalPaymentSum, hT] at h
-      | some t' =>
-          obtain ⟨e1, e2⟩ := evalPaymentSum_active ps t' hT
-          by_cases hs : p.status = .ACTIVE
-          · simp only [evalPaymentSum, hT, hs, if_true] at h
-            obtain ⟨e3, e4⟩ := evalAdd_some (l := p.amountCents) (r := t') h
-            refine ⟨?_, e4⟩
-            simp [hs, e1, e3]
-          · simp only [evalPaymentSum, hT, hs, if_false] at h
-            cases h
-            exact ⟨by simp [hs, e1], e2⟩
 
 /-! ## Derivation contract (`derivedCorrectionPaid`, O(n + k log k)) -/
 
