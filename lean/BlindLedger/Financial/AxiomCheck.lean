@@ -5,6 +5,8 @@ import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.PaidSumTheorems
 import BlindLedger.Financial.WorkerLaws
 import BlindLedger.Financial.Payment.Bridge
+import BlindLedger.Financial.Payment.CodecLaws
+import BlindLedger.Financial.Payment.KAT
 
 namespace BlindLedger.Financial
 
@@ -208,5 +210,14 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.run_within_requests
 /-- info: 'BlindLedger.Financial.Payment.applyCorrectionTransition_paid_eq_ledger' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.applyCorrectionTransition_paid_eq_ledger
+
+/-- info: 'BlindLedger.Financial.Payment.decodePaymentRequest_wellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentRequest_wellFormed
+/-- info: 'BlindLedger.Financial.Payment.decodePaymentRequest_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentRequest_canonical
+/-- info: 'BlindLedger.Financial.Payment.decodePaymentRequest_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentRequest_encode
+/-- info: 'BlindLedger.Financial.Payment.paymentMagic_disjoint' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentMagic_disjoint
 
 end BlindLedger.Financial
