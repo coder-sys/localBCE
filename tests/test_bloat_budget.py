@@ -41,15 +41,15 @@ PRODUCT_CODE_LINES = 37_316
 # their KATs and axiom pins, and the TCB gate's `loop` kind with its negative fixture: an auditor reads gate_verify's samplers as bounded theorems, and a new while/repeat anywhere fails the gate.
 # Worker linearity guard (quad, 2026-09-30): +13 for one test that fails if worker time is quadratic in rows (10,000 rows took 16 s until ea42222).
 # partials merge with trunk 381767b (2026-09-30): measured 45,051 (trunk 44,303 + Lean partials A and B + the worker linearity test + this comment); no line trimmed, proofs and tests kept.
-EVIDENCE_CODE_LINES = 45_052
+EVIDENCE_CODE_LINES = 45_053
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,235 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability). The ui-1 merge with its STATUS line measures 158,372; the ceiling is that. 2026-09-30 lean-leak merge: +3,868 (162,240 measured, after cutting two stale lines) for the XI.2 records of Lean-live M1, M1.5 and M1.6 (2,473) and the worker's provenance (837), the merged STATUS and ARCHITECTURE lines (approx 550); Lean is the only evaluator and its pin is auditable. lean-leak re-pin (2026-09-30): +3,618 for the XI.2 record, the worker and gate_verify provenance, and the correction reproduction note (a change under lean/ cannot ship with an unreproduced pin), after cutting a stale STATUS run line.
 # TCB gate: +381 bytes in STATUS.md so the five open VIOLATION-TODO loops (with their owning plan items) are visible where status is read; +379 more for what the gate trusts and does not prove (Init/Std, the C arena call, lcProof).
 # Lean partials A: +3,057 bytes for its XI.2 record in docs/CORE_REDESIGN.md, the worker re-pin in PROVENANCE.md and the STATUS.md TCB line.
 # Lean partials B: +3,588 bytes for its XI.2 record in docs/CORE_REDESIGN.md and the STATUS.md TCB line (now zero open loops), so the bounded-sampler claim, its evidence and the worker re-pin reason are on the record.
-# partials merge with trunk 381767b: measured 174,281 (trunk 167,636 + the partials A and B records); the ceiling is the measurement.
-MARKDOWN_BYTES = 174_281
+# partials merge with trunk 381767b: measured 175,794 after the correction re-pin (trunk 167,636 + the partials A and B records + the producer receipt in engine-correction/PROVENANCE.md); the ceiling is the measurement.
+MARKDOWN_BYTES = 175_794
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {

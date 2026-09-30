@@ -1,13 +1,28 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the paid-sum re-pin below,
-built from `lean/` as committed at `1e74852` (the 53 source files hashed in the build's
-manifest equal that commit's; the build ran in a dirty tree at `40e802f`, and `79b6913` has
-no `PaidSum.lean`).
+`blind_financial_correction.exe` is the Lean/Lake executable of the partials re-pin below,
+built by `tools/build_financial_correction_release.ps1` from `lean/` as committed at `98b22ce`
+(lean tree `1ec582f80781bf0cb551cd5b2694022704f0024e`, clean tree, 62 tracked files).
 
-- Size: 6,298,112 bytes
-- SHA-256: `1A5821FA944E9A2ABBE0BF154BD0CFE34069E4D728C9A5374809626D51B8DDBE`
+- Size: 6,298,624 bytes
+- SHA-256: `D5A06E9FFDB13C6266C40658B06AF4D93204F35159B9BE7FD4387A0613A10CBB`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`.
+
+## Partials re-pin (2026-09-30, rule `h1-v1`, no money or format change)
+
+Why it moved: `lean-partials-v1` replaced the worker CLI's read loops with the total `readUpTo` (commit A, shared by the
+correction CLI) and range loops in the gate and Keccak (commit B); ea42222 changed `FastEncode.lean`, which this exe does not import.
+The transition and reuse vectors are byte-identical (`request.bin` `234FDF65...E666`, `result.expected.bin` `83BB53D1...E0D6`,
+reuse request `9C203F6B...5B99`, reuse result `973B0CA0...8E4B`), so the amount rule and every digest are unchanged.
+Evidence: two fresh `git archive` stage builds of `351cfa0` (`prtb2-stagea-a1-L3`, `prtb2-stageb-a1-L3`) and of `117ad71`
+(`prtb-stagea`, `prtb-stageb`) gave this exe byte for byte; the release producer (SHA-256
+`61AEB3A85B2DA8E0DBD3A5BC5BC03345B471B037C99C36FE94E4E9E6A31DC909`) then reproduced it on `98b22ce` (a merge of trunk `381767b` that
+left `lean/` unchanged), guard log `prt-pin1-a1-L*` (v10 away mode, `-MinFree 4029372048`, inner start floor 4,190,433,321).
+Receipt `C:/Users/neers/rrb/engine-release-partials-p1/provenance/engine-build-receipt.json` (SHA-256
+`B51AC61815683236A7F28FDFF2A1F443A9AED724DE91E58DFED8B90CB28A087A`; schema `RR/LEAN-ENGINE/BUILD-RECEIPT/v2`, status PASS, git status
+empty, all exits 0, cleanup PASS, mutex RELEASED, minimum free 4,725,374,976 bytes); source manifest `source-manifest.json` SHA-256
+`B4CB694B5EBA48E512E40A63DF1FFAF402FBB87C3ECEAF4FF95D2DDB5C275ABC`. Direct-lane grant: `lead-2026-09-30-partials-task-message`.
 
 ## Paid-sum re-pin (2026-09-29, rule `h1-v1`)
 
@@ -214,8 +229,4 @@ Synthetic evidence only. Non-activating and non-payment:
 
 ## Reproduction on the lean-leak tree (2026-09-30)
 
-Two fresh `git archive` stage builds of `b6bc647` (lean tree `da3d331a...`), guard logs
-`leakint-stagea-a1-L1` and `leakint-stageb-a1-L1`, reproduced `blind_financial_correction.exe`
-byte for byte: 6,298,112 bytes, `1A5821FA944E9A2ABBE0BF154BD0CFE34069E4D728C9A5374809626D51B8DDBE`.
-The release producer (receipt and source manifest) has not yet run on this tree: its inner v4
-guard needs 4,190,433,321 bytes free, the machine has about 2.7 GB, and a retry is queued.
+Superseded by the partials re-pin above: two fresh stage builds of `b6bc647` reproduced the then pin `1A5821FA...DDBE` (6,298,112 bytes, guard logs `leakint-stagea-a1-L1`, `leakint-stageb-a1-L1`). Its producer receipt was never made; that pin is retired.
