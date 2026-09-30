@@ -704,3 +704,10 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Replacement control.** The `loop` kind replaces two name-by-name TODOs; any new such loop in our code fails the gate unless named. **Scope.** gate_verify, worker, correction, the TCB gate. Not the Keccak duplicate, batch frames or the cursor decoder.
 - **Claims withdrawn.** "gate_verify runs FIPS 204's unbounded sampling loops"; the worker pin `EE651742...7C21`.
 - **Kill criteria.** Any ACVP or differential flip; a theorem that cannot be proved as written; axioms outside the standard three; a valid signature rejected by the bounds.
+
+## F1 regression test, expected failure (2026-09-30, XI.2 record 3, branch `r1-link-cap`)
+
+- **Felt effect.** None yet. It records that a correction request can still collect money no longer owed (F1, `core-theorems-v1`), so nobody relies on that.
+- **Predicate.** `test_linked_payment_never_pays_past_the_balance`, section 7 of `tests/test_right_rail_financial_constitution_invariants.py`, marked `expectedFailure` until the next record lands.
+- **Claims withdrawn.** "Requests never collect unowed money": after a 300,000 unlinked payment settles the balance, a second 300,000 payment naming the request is accepted and the owner is 300,000 overpaid.
+- **Disposition.** Add. **Scope.** Until the linked-payment cap (R1) removes the decorator. **Evidence.** Guard log `r1-red`.
