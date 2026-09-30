@@ -705,6 +705,20 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Claims withdrawn.** "gate_verify runs FIPS 204's unbounded sampling loops"; the worker pin `EE651742...7C21`.
 - **Kill criteria.** Any ACVP or differential flip; a theorem that cannot be proved as written; axioms outside the standard three; a valid signature rejected by the bounds.
 
+## F1 regression test, expected failure (2026-09-30, XI.2 record 3, branch `r1-link-cap`)
+
+- **Predicate.** `test_linked_payment_never_pays_past_the_balance`, section 7 of the constitution-invariants test, is `expectedFailure` until record 2 lands (log `r1-red-a39-L1`).
+- **Claims withdrawn.** "Requests never collect unowed money": a linked 300,000 is accepted after an unlinked 300,000 has settled the balance. **Disposition.** Add.
+
+## A linked payment never exceeds the balance (2026-09-30, XI.2 record 2, branch `r1-link-cap`)
+
+- **Felt effect.** A payer who settles a shortfall directly, or whose linked payment is reversed after an unlinked one, can no longer have the same cents collected again through the request. R1 does not close the request: it stays open and unpayable until R2 (payer-facing cancellation, held for the founder).
+- **Predicate.** `record_payment_evidence` refuses a linked payment above the shortfall at that moment (`payment_exceeds_unpaid_balance`), as well as above the request's unpaid part; the checker's `payment:link` applies the same limit against the evaluation before the payment. A linked payment whose whole amount is still owed is never refused.
+- **Invariant.** No linked cent exceeds the balance it pays into. Failure: F1 scenario A (10,000,000 owed, 9,700,000 cash, request 300,000, an unlinked 300,000, then a linked 300,000 accepted). Scope: permanent. The Lean half stays with M3 step 2.
+- **Stored format.** No wire or digest change. The rule covers all history with no version gate: a pre-R1 store holding a linked payment beyond the balance fails `open_verification:payment:link` by design and cannot be repaired (it holds an overcollection). Scanned (`r1-storescan-a1-L3`, read-only): 101 financial stores under `work/rightrail-main` and `rrb`, none with a linked payment; the six handoff zips hold no store. None was opened with the new checker, whose new limit reads only linked payments.
+- **Evidence.** `r1-green2-a1-L1` (41 run, 40 passed), `r1-s4-a1-L3` (35 run, 34 passed), `r1-full-a7-L1` (607 run, 578 passed, 1 failed, 13 errors, 15 skipped). The 13 errors are the missing `gate_verify` and `rr_gate_mldsa87` exes; the failure is the quarter-end timing test (7.3-8.3 s on trunk too, `humancue-cash-trunk-a59-L3`). Uncommitted scratch mutations: deleting the checker's request clause fails S4 (`r1-mutreq-a7-L2`), its balance clause fails the acceptance test (`r1-mutbal-a4-L1`).
+- **Disposition.** Replace the weaker control with a stronger one. **Claims withdrawn.** None; record 3's is restored for linked payments.
+
 ## Decision package verdict no longer depends on the page window (2026-09-30, XI.2 record; branch dpk-window-fix)
 
 - **Predicate.** `FinancialOwner.decision_package` and the independent checker's rebuild of it (`tests/financial_decision_package_oracle.py`): the amount-support ladder in the conclusions.
@@ -725,3 +739,11 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Disposition.** Retain. No money behaviour, stored format or digest changes. Builds are in-tree and incremental, not fresh stage pairs; a fresh pair before any release is still owed.
 - **Replacement control, claims withdrawn.** None. **Scope.** Lean only.
 - **Kill criteria.** An axiom outside the standard three; any pinned exe hash moving; a theorem statement edited to pass.
+
+## lean/ manifest hashes LF bytes (2026-09-30, XI.2 record; trunk, after the m3-step1 merge)
+
+- **Predicate.** The `lean/` source manifest in `tests/test_tcb_gate.py::_lean_manifest` and `tests/test_right_rail_gate_formats.py::test_gate_verify_pin_names_the_current_lean_tree`, recorded in `artifacts/gate-verify/PROVENANCE.txt` and `tools/tcb_report.txt`.
+- **Change.** Each tracked file is hashed after CRLF→LF, which equals its git blob under `* text=auto eol=lf`. Before, the hash read raw checkout bytes, so a worktree holding CRLF copies of LF blobs gave a different manifest for the same commit: trunk computed `cea66658...` and m3-step1 recorded `e6976e2e...` for one tree. The canonical value is `9666e4e3...`, recomputed from the blobs with `git show` in both trees.
+- **Invariant.** Any change to a tracked `lean/` file's content still moves the manifest. Only line-ending noise is ignored. Exe pins are unchanged.
+- **Evidence.** Guard log `trunk-m3s1-merge-a2-L3` (the two manifest failures before the fix) and `trunk-lfmanifest` (after).
+- **Kill criteria.** A content change under `lean/` that leaves the manifest unchanged.
