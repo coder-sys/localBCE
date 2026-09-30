@@ -958,11 +958,12 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         _fail("schema:read", error)
 
 
-def _bounded_rows(connection: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+def _bounded_rows(connection: sqlite3.Connection, table: str, column: str = "", only: Collection[str] | None = None) -> list[sqlite3.Row]:
     try:
         if int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) > MAX_ROWS:
             _fail(f"rows:cap:{table}")
-        return list(connection.execute(f"SELECT * FROM {table}"))
+        where, args = ("", ()) if only is None else (f" WHERE {column} IN (SELECT value FROM json_each(?)) ORDER BY rowid", (json.dumps(list(only)),))  # the index seeks; the cap above still counts the whole table
+        return list(connection.execute(f"SELECT * FROM {table}{where}", args))
     except IndependentFinancialError:
         raise
     except sqlite3.Error as error:
@@ -2450,10 +2451,9 @@ def _verify_evidence(
     obligations: dict[str, sqlite3.Row],
     only: Collection[str] | None = None,  # per-obligation mode: the evidence of these items, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = [row for row in _bounded_rows(connection, "evidence") if only is None or row["item_id"] in only]
     evidence: dict[str, sqlite3.Row] = {}
     obligation_items = {str(item["item_id"]) for item in obligations.values()}
-    for row in rows:
+    for row in _bounded_rows(connection, "evidence", "item_id", only):
         evidence_id = _id(row["evidence_id"], "evidence:id")
         if evidence_id in evidence:
             _fail("evidence:duplicate")
@@ -2695,8 +2695,8 @@ def _verify_determinations(
     actors: Mapping[str, frozenset[str]] | None,
     only: Collection[str] | None = None,  # per-obligation mode: these obligations' determinations, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = [row for row in _bounded_rows(connection, "determinations") if only is None or row["obligation_id"] in only]
     result: dict[str, sqlite3.Row] = {}
+    rows = _bounded_rows(connection, "determinations", "obligation_id", only)
     evaluations_by_id = {
         str(evaluation["evaluation_id"]): evaluation
         for history in evaluations.values()
@@ -2801,8 +2801,8 @@ def _verify_actions(
     payments: dict[str, sqlite3.Row],
     only: Collection[str] | None = None,  # per-obligation mode: these obligations' actions, the same rules
 ) -> dict[str, sqlite3.Row]:
-    rows = [row for row in _bounded_rows(connection, "actions") if only is None or row["obligation_id"] in only]
-    outbox_rows = [row for row in _bounded_rows(connection, "action_outbox") if only is None or row["action_id"] in {action["action_id"] for action in rows}]
+    rows = _bounded_rows(connection, "actions", "obligation_id", only)
+    outbox_rows = _bounded_rows(connection, "action_outbox", "action_id", None if only is None else [row["action_id"] for row in rows])
     outbox = {str(row["action_id"]): row for row in outbox_rows}
     acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
     registry = correction_engines()
@@ -2817,8 +2817,8 @@ def _verify_actions(
         newest = engine[0]
         decided[action_ref] = event_amount
     reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED'").fetchall())
-    links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL").fetchall()
-    links = [link for link in links if only is None or link[0] in only]
+    scope, args = ("", ()) if only is None else (" AND aggregate_id IN (SELECT value FROM json_each(?))", (json.dumps(list(only)),))  # the index seeks these obligations' events
+    links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL" + scope, args).fetchall()
     linked: dict[object, list[tuple[int, object, int]]] = {}  # correction action -> (paid at, reversed at, cents)
     for _obligation, paid_revision, payment_id, action_ref in links:
         if payment_id not in payments:

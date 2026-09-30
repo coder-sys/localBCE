@@ -1167,3 +1167,37 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
                             check()
+
+    def test_per_obligation_reads_ignore_other_obligations_but_the_caps_count_the_whole_table(self) -> None:
+        # The pre-COMMIT reads (evidence, determinations, actions, outbox) are filtered in SQL to the touched obligation. Other
+        # obligations' rows change nothing, up to the cap; one row past it fails closed even though none of them is read.
+        zero = "zeroblob(64)"
+        others = {  # table -> (column filtered on, this obligation's key, 'other' rows that would fail every check if the filter let one through)
+            "evidence": ("item_id", "item:H", f"INSERT INTO evidence SELECT 'e'||i,'item:other','SUPPORT','o','s','v','r',1,1,1,{zero},{zero},NULL,NULL,NULL FROM n"),
+            "determinations": ("obligation_id", None, f"INSERT INTO determinations SELECT 'd'||i,'obligation:other',NULL,'a','r','au',1,{zero},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{zero},'e'||i,{zero} FROM n"),
+            "actions": ("obligation_id", None, f"INSERT INTO actions SELECT 'a'||i,'obligation:other','d','K','READY',1,'{{}}',{zero},{zero},1 FROM n"),
+            "action_outbox": ("action_id", "action:offset:claim:H", f"INSERT INTO action_outbox SELECT 'a'||i,'READY',0,{zero},NULL,1 FROM n"),
+        }
+        with closing(sqlite3.connect(self.db, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            (obligation_id,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+            check = lambda: independent.verify_obligation_connection(connection, obligation_id, expected_config=self.config, expected_authority=self.authority)
+            expected = check()
+            for table, (column, key, insert) in others.items():
+                key = key or obligation_id
+                (held,) = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                for extra, code in ((independent.MAX_ROWS - held, None), (independent.MAX_ROWS - held + 1, f"^rows:cap:{table}$")):
+                    with self.subTest(table=table, extra=extra):
+                        connection.execute("BEGIN IMMEDIATE")
+                        try:
+                            connection.execute(f"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<{extra}) {insert}")
+                            if code is None:
+                                mine = independent._bounded_rows(connection, table, column, [key])
+                                self.assertTrue(mine)  # this obligation's own rows are read, in table order
+                                self.assertEqual(mine, [row for row in independent._bounded_rows(connection, table) if row[column] == key])
+                                self.assertEqual(check(), expected)
+                            else:
+                                with self.assertRaisesRegex(independent.IndependentFinancialError, code):
+                                    check()
+                        finally:
+                            connection.execute("ROLLBACK")
