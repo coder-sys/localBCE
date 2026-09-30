@@ -1,6 +1,6 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules"]
+defaultTargets = ["BlindLedger", "blind_semantic_kernel", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_verify"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
 # correction transition, the Semantic kernel and the shared `BlindLedger.Sha3`.
@@ -51,4 +51,11 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_exe]]
 name = "gate_rules"
 root = "BlindLedger.Gate.Rules.Run"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The pinned signer self-check (artifacts/gate-verify): one checkpoint against one root key, exit 0 only on ACCEPT.
+# The payer's verifier is not built; this is its Lean model run once per signature before it leaves the gate.
+[[lean_exe]]
+name = "gate_verify"
+root = "BlindLedger.Gate.VerifyCli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]

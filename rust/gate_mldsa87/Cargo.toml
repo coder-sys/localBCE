@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# One narrow ML-DSA-87 signer/verifier for RR/GATE/CHECKPOINT/v1 (gate formats, D1).
+# One narrow ML-DSA-87 custody worker for RR/GATE checkpoints and key certificates (gate formats, D1).
 # AWS-LC through aws-lc-rs; prebuilt NASM objects so no assembler is needed on MSVC.
 [dependencies]
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }

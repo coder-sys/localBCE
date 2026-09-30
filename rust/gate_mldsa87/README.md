@@ -1,8 +1,8 @@
 # rr_gate_mldsa87: build recipe
 
-The one ML-DSA-87 signer/verifier for gate checkpoints (AWS-LC through aws-lc-rs).
-`app/right_rail_gate_signer.py` runs `target/release/rr_gate_mldsa87.exe` only if it
-hashes to `rr_gate_mldsa87.sha256`.
+ML-DSA-87 signer (FIPS 204 algorithm, non-validated AWS-LC): `keygen|public-key|sign <file>`
+on a DPAPI-sealed seed (`sign` self-verifies), and `kat-*` modes for the ACVP vectors. `app/right_rail_gate_signer.py`
+runs `target/release/rr_gate_mldsa87.exe` only if it hashes to `rr_gate_mldsa87.sha256`.
 
 Build: `powershell -NoProfile -File build.ps1` (under the guard, `-MinFree 4029372048`).
 It prints the SHA-256 to pin. The inputs that fix the bytes:
@@ -14,15 +14,10 @@ It prints the SHA-256 to pin. The inputs that fix the bytes:
   hashes, not the clock. The PDB path is the bare file name (rustc's default).
 - `build.ps1` adds `--remap-path-prefix=<CARGO_HOME>=/cargo` for Rust source paths.
 
-Proof (2026-09-26): builds from this directory and from a copy at
-`C:\Users\neers\rrb\gate\signer-b\gate_mldsa87` gave byte-identical binaries,
-SHA-256 `af8743c70690f85a983762f93ad9ded731e514e106bfdb8c9d1c1cd49fed116b`
-(guard logs `gate-rr4-signA-a1`, `gate-rr4-signB-a1`).
+Two builds (2026-09-29; this directory and a copy under `C:\Users\neers\rrb\gate\`) were
+byte-identical, SHA-256 `bfe29b0c42c10b378e472b7873099fdaceab2ef980d73808547029f3cc98fc83`
+(`pqm1-cargoa4-a1`, `pqm1-cargob4-a1`). Retired pins: `artifacts/gate-verify/PROVENANCE.txt`.
 
-Known limit: aws-lc-sys compiles C with `__FILE__` paths under CARGO_HOME (long and
-8.3 forms); rustc's remap cannot reach them. A matching rebuild needs what this build
-used: CARGO_HOME at `C:\Users\neers\.cargo` on a volume that generates the same 8.3
-short names (a volume with 8.3 names off, or another short-name assignment, changes
-the bytes), MSVC 14.44.35207, and Windows SDK/UCRT 10.0.26100.0. aws-lc-sys used its
-cc builder (prebuilt assembly objects, no CMake cache); CMake 4.3.3 is installed but
-was not invoked. Other machines are untested.
+Known limit: rustc's remap cannot reach aws-lc-sys's C `__FILE__` paths under CARGO_HOME. A matching rebuild needs CARGO_HOME at
+`C:\Users\neers\.cargo` on a volume with the same 8.3 short names, MSVC 14.44.35207 and
+Windows SDK/UCRT 10.0.26100.0 (cc builder, no CMake).
