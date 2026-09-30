@@ -34,7 +34,7 @@ private theorem strictlyAscending_iff :
         obtain ⟨h1, h2⟩ := List.pairwise_cons.1 h
         exact ⟨h1 b (List.mem_cons_self ..), h2⟩
 
-private theorem canonical_facts {l : List String} (h : canonicalIdList l = true) :
+theorem canonical_facts {l : List String} (h : canonicalIdList l = true) :
     l.length ≤ maxRows ∧ (∀ x ∈ l, idWellFormed x = true) ∧ l.Pairwise (· < ·) := by
   simp only [canonicalIdList, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h
   exact ⟨h.1.1, h.1.2, (strictlyAscending_iff l).1 h.2⟩
@@ -468,7 +468,7 @@ private theorem evalAdd_some {l r t : Nat} (h : evalAdd l r = some t) :
     exact ⟨rfl, by omega⟩
   · cases h
 
-private theorem evalPaymentSum_active : ∀ (ps : List Payment) (t : Nat),
+theorem evalPaymentSum_active : ∀ (ps : List Payment) (t : Nat),
     evalPaymentSum ps = some t →
     ((ps.filter fun p => p.status = .ACTIVE).map Payment.amountCents).sum = t ∧ t ≤ maxCents
   | [], t, h => by
