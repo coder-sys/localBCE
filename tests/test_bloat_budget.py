@@ -48,7 +48,7 @@ MARKDOWN_FILES = 20
 # TCB gate: +381 bytes in STATUS.md so the five open VIOLATION-TODO loops (with their owning plan items) are visible where status is read; +379 more for what the gate trusts and does not prove (Init/Std, the C arena call, lcProof).
 # Lean partials A: +3,057 bytes for its XI.2 record in docs/CORE_REDESIGN.md, the worker re-pin in PROVENANCE.md and the STATUS.md TCB line.
 # Lean partials B: +3,588 bytes for its XI.2 record in docs/CORE_REDESIGN.md and the STATUS.md TCB line (now zero open loops), so the bounded-sampler claim, its evidence and the worker re-pin reason are on the record.
-MARKDOWN_BYTES = 169_595  # partials merge with trunk b42f3f4: measured; trunk 159,603 + the partials XI.2 records, PROVENANCE receipts and STATUS lines
+MARKDOWN_BYTES = 171_528  # m3-step1: measured; the previous 169,595 (partials merge) + the M3 step 1 XI.2 record
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
