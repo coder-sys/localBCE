@@ -756,7 +756,7 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
     actual = {
         str(row[0]): row[1]
         for row in connection.execute(
-            "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+            "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT GLOB 'sqlite_*'"
         )
     }
     if set(actual) != set(defs):
@@ -940,7 +940,11 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         schema_version = int(meta["schema_version"])
         if schema_version != SCHEMA_VERSION or meta["schema"] != SCHEMA:
             _fail("schema:version")
-        tables = {str(row[0]): row[1] for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        # First: SQLite loads a row of any type case and checks no reserved name on load, so every row must have an exact
+        # type, and a sqlite_ name only SQLite's own autoindex (no SQL). GLOB, unlike LIKE, keeps case and has no _ wildcard.
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type IS NULL OR type NOT IN ('table','index','trigger') OR (name GLOB 'sqlite_*' AND (type<>'index' OR sql IS NOT NULL))").fetchone():
+            _fail("schema:objects")
+        tables = {str(row[0]): row[1] for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'")}
         if set(tables) != TABLES | set(_HISTORY_TABLE_DEFS):
             _fail("schema:tables")
         for table, definition in {**_TABLE_DEFS, **_HISTORY_TABLE_DEFS}.items():

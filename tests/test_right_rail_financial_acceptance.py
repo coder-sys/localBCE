@@ -5731,6 +5731,34 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:sql:evidence$"):
             self._make_owner(path=self._path("table-sql-on-conflict-replace.sqlite"))
 
+    def test_checker_refuses_every_hidden_schema_object(self) -> None:
+        # SQLite loads a schema row whose type has any letter case and, while loading, never checks reserved names, so a
+        # 'Trigger' row that drops evidence inserts, a view, 'sqlitex', 'SQLITE_x' or a sqlite_autoindex name with its own
+        # SQL would each hide from a checker that asks only for type='trigger' or skips names LIKE 'sqlite_%'.
+        store = self._build_base()
+        self._assert_verified(store)
+        evil = ("CREATE TABLE evil(x)",)
+        for label, refusal, statements in (
+            ("trigger-case", "objects", ("INSERT INTO sqlite_master VALUES('Trigger','evil','evidence',0,'CREATE TRIGGER evil BEFORE INSERT ON evidence BEGIN SELECT RAISE(IGNORE); END')",)),
+            ("table-case", "objects", (*evil, "UPDATE sqlite_master SET type='Table' WHERE name='evil'")),
+            ("index-case", "objects", ("CREATE INDEX evil ON evidence(item_id)", "UPDATE sqlite_master SET type='INDEX' WHERE name='evil'")),
+            ("view", "objects", ("CREATE VIEW evil AS SELECT 1",)),
+            ("reserved-index", "objects", ("CREATE INDEX evil ON evidence(item_id) WHERE 0", "UPDATE sqlite_master SET name='sqlite_autoindex_evidence_9',sql='CREATE INDEX sqlite_autoindex_evidence_9 ON evidence(item_id) WHERE 0' WHERE name='evil'")),
+            ("sqlitex", "tables", ("CREATE TABLE sqlitex(x)",)),
+            ("upper-sqlite", "tables", (*evil, "UPDATE sqlite_master SET name='SQLITE_x',tbl_name='SQLITE_x',sql='CREATE TABLE SQLITE_x(x)' WHERE name='evil'")),
+        ):
+            with self.subTest(label):
+                path = self._path(f"hidden-{label}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    connection.execute("PRAGMA writable_schema=ON")
+                    for statement in statements:
+                        connection.execute(statement)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:{refusal}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:objects$"):
+            self._make_owner(path=self._path("hidden-trigger-case.sqlite"))
+
     def test_checker_refuses_a_hidden_partial_index(self) -> None:
         # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.
         store = self._build_base()

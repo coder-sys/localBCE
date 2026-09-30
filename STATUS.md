@@ -16,7 +16,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
-- **Table SQL pin** (`replace-trigger-guard`, XI.2 record; `rtrig-tgt2`): the checker pins every table's whole `CREATE TABLE` text, so a planted `ON CONFLICT REPLACE` or a dropped NOT NULL or CHECK is refused at open.
+- **Table SQL pin** (`replace-trigger-guard`, XI.2 record; `rtrig-tgt3`, `rtrig-full2`): the checker pins every table's whole `CREATE TABLE` text and refuses any other schema object (a `'Trigger'` row of another case, a view, a `sqlite_`-named row), so a planted `ON CONFLICT REPLACE`, a dropped NOT NULL or CHECK, or a hidden trigger is refused at open.
 
 - **Decision package window fix** (`dpk-window-fix`, XI.2 record; red `dpkfix-red1-a2-L3`, green `dpkfix-green1-a3-L1`): the verdict reads whole-obligation counts, never the page window; contract stays v2.
 - **Checker per-obligation reads** (`cksql3-after-dec`): the pre-COMMIT check reads only the touched obligation's evidence, determinations, actions and outbox rows, `NOT INDEXED`; caps still count the whole table; 44 to 13 ms at 2,500 history events, 144 to 27 ms at 9,000. Same result on every honest store and every tamper confined to the touched obligation, not on every store: another obligation's malformed rows are the whole-store verify's.
