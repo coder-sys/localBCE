@@ -585,8 +585,9 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         )
 
         def runner(*args: object, **kwargs: object) -> process.ContainedVerifierResult:
-            captured["args"] = args
             captured.update(kwargs)
+            # A real runner drains its stdin; else the wrapper can close the pipe before the writer writes.
+            captured["stdin"] = b"".join(iter(lambda: os.read(kwargs["_stdin_descriptor"], 4096), b""))
             return contained
 
         with tempfile.TemporaryDirectory() as root_name:
@@ -607,8 +608,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             self.assertEqual(captured["stderr_cap_bytes"], 8)
             self.assertIs(captured["stdout_ascii"], False)
             self.assertIs(captured["stderr_ascii"], True)
-            self.assertIsInstance(captured["_stdin_descriptor"], int)
-            self.assertGreaterEqual(captured["_stdin_descriptor"], 0)
+            self.assertEqual(captured["stdin"], b"frame")
             self.assertEqual(captured["expected_executable_size_bytes"], len(payload))
             self.assertEqual(captured["expected_executable_sha256"], hashlib.sha256(payload).digest())
             self.assertEqual(captured["job_memory_cap_bytes"], process.ADMISSION_CAP_BYTES)
