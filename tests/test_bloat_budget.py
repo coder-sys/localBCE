@@ -21,7 +21,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # TCB gate: +3 for tools/tcb_pin.ps1, the guarded run that pins the report the suite checks.
 # Decoder cross-check (dec-xcheck, 2026-09-30): +116 for the BLFCRES3 re-encoder (Lean-expansion plan item 7; the BLFRES02 and frame sites already re-encode): a Python decoder that drops, defaults or normalises a field can no longer change the money decision Lean made, so the auditor need not trust it. Tests +80 (the round trip, five lenient-decoder mutants each refused, a lenient BLFRES02 decoder, an inexact rejection frame) and +325 markdown bytes (one STATUS line).
 # Worker frame boundary (dec-xcheck, 2026-09-30): +10 product lines (process +4, engine +6) and +53 test lines (a well-behaved control, and an extra answer frame in the same write or arriving late, each refused with the worker dead; the watchdog test now runs over real pipes): a second answer frame that lands before the next request is written is refused, so it cannot become the next decision's answer (a late frame inside that window is still possible; the fix is a request digest echoed by Lean, a later wire change). Markdown +239 bytes: the dec-xcheck STATUS line cites the full run on the final tree (the old one cited an earlier commit) and describes the frame check.
-PRODUCT_CODE_LINES = 37_316
+PRODUCT_CODE_LINES = 37_317  # color-a (2026-09-30): +1 for the dark-theme rail override that palette A specifies (staff.css)
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
 # Lean paid sum (lean-paid-sum, 2026-09-29): +1,251 over trunk's 41,327 (42,585 measured on the merge, 7 more than the sum of the two deltas) for the 3 PaidSum laws
