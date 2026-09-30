@@ -15,8 +15,8 @@ import unittest
 
 from tools import right_rail_scorecard as scorecard
 
-_ROWS = "".join(f"<tr><td>H{n}</td><td>$100.00</td><td>{'$0.00' if n < 20 else '$97.00'}</td><td>{'$0.00' if n < 20 else '$3.00'}</td></tr>" for n in range(1, 21))
-_PAGE = f'<!doctype html><p id="connection-status"></p><table><tbody id="population-rows">{_ROWS}</tbody></table>'.encode()
+_ROWS = "".join(f'<a class="row"><span class="dot {"need" if n == 20 else "ok"}"></span></a>' for n in range(1, 21))
+_PAGE = f'<!doctype html><p id="connection-status"></p><div id="qlist">{_ROWS}</div>'.encode()
 
 
 class _Page(http.server.BaseHTTPRequestHandler):
@@ -81,10 +81,9 @@ class OpenRowMeterTest(unittest.TestCase):
                 browser.close()
 
     def test_a_meter_that_cannot_read_or_disagrees_with_the_ledger_fails(self):
-        table = lambda rows: {"tables": {"population-rows": rows}}  # noqa: E731
-        for view, expected in ((table([]), 0), (table([["H", "$1.00", "$1.00", "n/a"]]), 0), (table([["H", "$1.00", "$0.00", "$1.00"]]), 0), (table([["H", "$1.00", "$1.00", "$0.00"]]), 1)):
+        for queue, expected in (([], 0), (["ok"], 1), (["wait"], 0), (["ok", "need"], 2)):
             with self.assertRaises(RuntimeError):
-                scorecard._open_rows(view, expected)
+                scorecard._open_rows({"queue": queue}, expected)
 
 if __name__ == "__main__":
     unittest.main()

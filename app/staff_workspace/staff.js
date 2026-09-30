@@ -6,23 +6,32 @@
 // command instead of recomputing digests the server already verified.
 // All page text is written with textContent; the server's CSP allows only same-origin
 // script and style, and nothing here uses innerHTML, eval or inline handlers.
+// Every record is built once as data (recordOf) and drawn twice: as the screen and as
+// the plain-text view, so the two cannot say different things.
 (() => {
   const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
   const byId = (id) => document.getElementById(id);
+  const H_ID = "item-h";
+  const PAYER = "Plan A"; // the fixture's payer; the read model carries no payer name
+  const REJECTED = "OFFSET_REJECTED_CORRECTION_AUTHORIZED";
+  const MINUS = "−";
+  let model = null;
+  let role = null;
   let snapshot = null;
-  let decisionView = null;
   let correctionFollowup = null;
   let unresolvedDecision = null; // {name, body}: a decision whose answer was lost, kept for an exact resend
   let unresolvedCashBody = null;
-  let decisionOpen = false;
   let ownerAvailable = false;
-  let packageAvailable = false;
-  let packageStale = true;
   let lastSuccessfulRead = 0;
   let commandPending = false;
   let workspaceRequestGeneration = 0;
-  let decisionRequestGeneration = 0;
   let correctionFollowupRequestGeneration = 0;
+  let picked = null; // the chosen decision command, before it is confirmed
+  let draft = "";
+  let confirming = null; // "decision" | "record-cash" while its confirm step shows
+  let filterText = "";
+  let lastId = null;
+  let order = [];
   const CASH_CORRECTION_COMMAND = Object.freeze({
     item_id: "item-h",
     pays_action_id: "action:obligation-item-h:correction-v1",
@@ -50,50 +59,12 @@
     "restore-test": "/api/continuity/restore-test",
   };
   const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let model = null;
-  let role = null;
-  const allowedActions = new Set();
-  const moveFocus = (id, scroll) => { const el = byId(id); el.focus({ preventScroll: true }); if (scroll) el.scrollIntoView({ block: "start", behavior: REDUCED_MOTION ? "auto" : "smooth" }); };
+  const allows = (screen) => (model.role_screens[role] || []).includes(screen);
+  const can = (name) => model.controls[name].roles.includes(role);
 
-  // Art. XIII.4: role is resolved from the path (never a query string, which
-  // the server rejects outright) so a disallowed control is absent from the
-  // DOM for that role, not merely disabled.
-  function resolveRole() {
+  function resolveRole() { // from the path, never a query string, so a disallowed control is absent from the DOM
     const match = /^\/role\/([a-z]+)$/.exec(location.pathname);
     return match ? match[1] : null;
-  }
-
-  function renderRolePicker() {
-    const list = byId("role-links");
-    list.replaceChildren();
-    for (const [id, label] of Object.entries(model.roles)) {
-      const item = document.createElement("li");
-      const link = document.createElement("a");
-      link.href = "/role/" + id;
-      link.textContent = label;
-      item.appendChild(link);
-      list.appendChild(item);
-    }
-  }
-
-  function applyRoleGating() {
-    for (const button of document.querySelectorAll("[data-action]")) {
-      const name = button.dataset.action;
-      const control = model.controls[name];
-      const allowed = Boolean(control && control.roles.includes(role));
-      button.hidden = !allowed;
-      if (allowed) allowedActions.add(name);
-      else button.disabled = true;
-    }
-    const screens = model.role_screens[role] || [];
-    byId("workflow-section").hidden = !screens.includes("decision");
-    const status = byId("role-status");
-    status.replaceChildren(Object.assign(document.createElement("span"), { textContent: "Role: " + model.roles[role] + " · " }));
-    const switchRole = Object.assign(document.createElement("a"), { href: "/", textContent: "Switch role" });
-    switchRole.addEventListener("click", (event) => {
-      if (commandPending || unresolvedDecision || unresolvedCashBody) event.preventDefault();
-    });
-    status.appendChild(switchRole);
   }
 
   function assert(condition, code) {
@@ -126,19 +97,9 @@
     return canonicalJson(left) === canonicalJson(right);
   }
 
-  function sameFields(left, right, keys) {
-    return keys.every((key) => left[key] === right[key]);
-  }
-
   function ownerIdentity(envelope) {
-    return {
-      schema: envelope.schema,
-      schema_version: envelope.schema_version,
-      scope: envelope.scope,
-      mode: envelope.mode,
-      owner_id: envelope.owner_id,
-      continuity_epoch: envelope.continuity_epoch,
-    };
+    const { schema, schema_version, scope, mode, owner_id, continuity_epoch } = envelope;
+    return { schema, schema_version, scope, mode, owner_id, continuity_epoch };
   }
 
   function snapshotFields(envelope) {
@@ -147,129 +108,418 @@
 
   function sameSnapshot(left, right) {
     return sameJson(ownerIdentity(left), ownerIdentity(right))
-      && sameFields(left, right, ["sequence", "history_head", "snapshot_id"]);
+      && ["sequence", "history_head", "snapshot_id"].every((key) => left[key] === right[key]);
   }
 
-  // ---- Rendering (textContent only) ----
+  // ---- Words and numbers ----
 
-  function asMoney(cents) {
-    return Number.isSafeInteger(cents) ? money.format(cents / 100) : "Unknown";
-  }
+  const asMoney = (cents) => (Number.isSafeInteger(cents) ? money.format(cents / 100) : "Unknown");
+  const amt = (cents) => money.format(cents / 100).slice(1);
+  const utc = (ms) => (Number.isSafeInteger(ms) ? new Date(ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC") : "Unknown");
+  const day = (ms) => (Number.isSafeInteger(ms) ? utc(ms).slice(0, 10) : "unknown");
+  // Owner codes in plain words (CASE_OWNER -> case owner).
+  const words = (code) => (code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " "));
+  const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+  const nameOf = (item) => item.label.replace(/^Synthetic recipient /, "Hospital ");
+  const usd = (cents) => asMoney(cents);
 
-  function utc(ms) {
-    return Number.isSafeInteger(ms) ? new Date(ms).toISOString().replace("T", " ").replace(".000Z", " UTC") : "Unknown";
-  }
-
-  // Owner codes in plain words (CASE_OWNER -> case owner); dates without the clock.
-  function words(code) {
-    return code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " ");
-  }
-
-  function day(ms) {
-    return Number.isSafeInteger(ms) ? utc(ms).slice(0, 10) : "unknown";
-  }
-
-  // Answer first (Art. XIII.1): what is happening with H, who owns it, the gap, the next step.
-  function attentionText(value) {
-    const pkg = value.h.decision_package;
-    const item = value.items.find((row) => row.item_id === "item-h");
-    const kase = pkg.case;
-    const resolution = (pkg.conclusions || {}).case_resolution;
-    const missing = resolution && Array.isArray(resolution.missing_requirements) ? resolution.missing_requirements : [];
-    const parts = [(item ? item.label : "H") + " (H): case " + (kase ? words(kase.status) : "not opened"),
-      "shortfall " + asMoney(pkg.obligation.shortfall_cents)];
-    if (kase) parts.push("next step owner: " + words(kase.next_action_owner) + ", due " + day(kase.due_at_ms));
-    parts.push(missing.length
-      ? "still needed: " + missing.map(words).join(", ")
-      : "Owner assessment: " + words(resolution ? resolution.assessment : null) + ", nothing outstanding");
-    return parts.join(" · ") + ".";
-  }
-
-  function shown(value) {
-    return value === null || value === undefined ? "Unknown" : String(value);
-  }
-
-  function setText(id, value) {
-    byId(id).textContent = value === "" ? "Unknown" : shown(value);
-  }
-
-  function banner(id, kind, text) {
-    const node = byId(id);
-    node.textContent = text;
-    node.className = "status-banner " + kind;
-  }
-
-  function costText(cost) {
-    return "Owner " + cost.owner_read_statement_count + " read statements"
-      + " · independent verifier " + cost.independent_verifier_statement_count + " read statements / "
-      + (cost.independent_verifier_microseconds / 1000).toFixed(3) + " ms"
-      + " · snapshot transaction " + (cost.snapshot_transaction_microseconds / 1000).toFixed(3) + " ms";
-  }
-
-  function addRow(tbody, cells, className) {
-    const row = document.createElement("tr");
-    if (className) row.className = className;
-    for (const [value, cellClass] of cells) {
-      const cell = document.createElement("td");
-      cell.textContent = shown(value);
-      if (cellClass) cell.className = cellClass;
-      row.appendChild(cell);
+  function el(tag, attrs, ...kids) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (value === false || value === null || value === undefined) continue;
+      if (key === "text") node.textContent = value;
+      else node.setAttribute(key, value === true ? "" : value);
     }
-    tbody.appendChild(row);
-    return row;
+    node.append(...kids.flat(Infinity).filter((kid) => kid !== null && kid !== undefined && kid !== false));
+    return node;
   }
 
-  function addNoteRow(tbody, text, span) {
-    addRow(tbody, [[text]]).firstChild.colSpan = span;
-  }
+  const dot = (kind) => el("span", { class: "dot " + kind });
+  const section = (label, ...kids) => el("section", { "aria-label": label }, el("h2", { text: label }), ...kids);
+  const table = (cls, rows) => el("table", { class: cls }, el("tbody", {}, rows.map(([cells, rowClass]) => el("tr", { class: rowClass },
+    cells.map(([text, cellClass]) => el("td", { class: cellClass, text }))))));
 
-  function renderTable(id, rows, span, emptyText, render) {
-    const tbody = byId(id);
-    tbody.replaceChildren();
-    if (!Array.isArray(rows) || rows.length === 0) addNoteRow(tbody, emptyText, span);
-    else for (const row of rows) render(tbody, row);
-    return tbody;
-  }
+  // ---- What the Owner says about each obligation ----
 
-  function currentH() {
-    return snapshot && snapshot.h && snapshot.h.obligation ? snapshot.h.obligation : null;
-  }
-
-  function currentPackage() {
-    return decisionView && decisionView.decision_package ? decisionView.decision_package : null;
-  }
-
-  function staffCommandBinding(envelope, pkg) {
-    const itemBinding = envelope.item_bindings.find((binding) => binding.item_id === "item-h");
-    const receipt = pkg && pkg.evaluation_receipt;
-    assert(itemBinding && isRecord(receipt) && isRecord(receipt.authority), "staff_command_binding");
+  function hView() {
+    const pkg = snapshot.h.decision_package;
+    const claims = ((pkg.references || {}).claims || {}).items || [];
+    const resolution = (pkg.conclusions || {}).case_resolution || {};
     return {
-      contract: "RR/FINANCIAL/STAFF-COMMAND-BINDING/v2",
-      snapshot: { ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id },
-      item_binding: itemBinding,
-      authority: receipt.authority,
-      input: {
-        evaluation_id: receipt.evaluation_id,
-        evaluation_result_digest: receipt.evaluation_result_digest,
-        receipt_digest: receipt.receipt_digest,
-      },
+      pkg,
+      ob: pkg.obligation,
+      kase: pkg.case,
+      det: pkg.current_determination,
+      act: pkg.current_action,
+      claim: claims.find((row) => row.status === "CLAIMED") || claims[0] || null,
+      missing: Array.isArray(resolution.missing_requirements) ? resolution.missing_requirements : [],
+      assessment: resolution.assessment,
+      support: snapshot.source_assessment.h_support_status === "MISSING" ? "no supporting evidence" : "support recorded, unverified",
     };
   }
 
-  function detectPackageStaleness() {
-    try {
-      packageStale = !decisionView || !snapshot || !sameJson(
-        staffCommandBinding(snapshot.read_envelope, snapshot.h.decision_package),
-        staffCommandBinding(decisionView.read_envelope, decisionView.decision_package),
-      );
-    } catch (_error) {
-      packageStale = true;
+  // kind: need (a person must decide), wait (money or follow-through is outstanding), ok (settled).
+  function statusOf(item) {
+    if (item.item_id !== H_ID) {
+      const state = item.shortfall_cents > 0 ? "Short " + usd(item.shortfall_cents) : "Paid in full";
+      return { kind: item.shortfall_cents > 0 ? "wait" : "ok", state, sub: state };
     }
+    const view = hView();
+    if (view.kase && view.kase.status === "RESOLVED") {
+      const state = view.ob.lawful_adjustment_cents > 0 ? "Settled with the offset" : "Settled in full";
+      return { kind: "ok", state, sub: state };
+    }
+    if (!view.det && view.claim && view.claim.status === "CLAIMED") {
+      return {
+        kind: "need",
+        state: role === "approver" ? "Needs your decision" : "Waiting for the finance approver's decision",
+        sub: PAYER + " · " + usd(view.claim.amount_cents) + " · " + view.support,
+      };
+    }
+    const state = view.ob.shortfall_cents > 0 ? "Waiting on " + PAYER + " for " + usd(view.ob.shortfall_cents) : "Paid. Follow-through is still open";
+    return { kind: "wait", state, sub: state };
+  }
+
+  const STEPS = {
+    acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready correction action." },
+    "record-cash": { label: "Record synthetic " + money.format(CASH_CORRECTION_COMMAND.amount_cents / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action and money still short." },
+    "record-report": { label: "Record separate synthetic reporting evidence", note: "Reporting is separate from delivery and cash. The source is synthetic and unverified.", off: "Waits for nothing to be short and reporting to be pending." },
+    "restore-test": { label: "Restore current case into Continuity TEST", note: "Copies the case into a separate test database.", off: "Already restored into Continuity TEST." },
+  };
+
+  function stepEnabled(name, view) {
+    const reviewed = ownerAvailable && !commandPending && !unresolvedCashBody && !unresolvedDecision;
+    const status = view.act ? view.act.status : null;
+    if (name === "acknowledge") return reviewed && status === "READY";
+    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.ob.shortfall_cents > 0;
+    if (name === "record-report") return reviewed && !view.ob.reporting_complete && view.ob.shortfall_cents <= 0;
+    return reviewed && !(snapshot.continuity && snapshot.continuity.mode === "TEST");
+  }
+
+  function followupRows() {
+    const durable = correctionFollowup && correctionFollowup.followup;
+    if (durable) {
+      const support = durable.corporate_support;
+      const artifact = support.artifact;
+      return [
+        ["Report to the State", durable.followup_status + " · event " + durable.source_event_sequence],
+        ["Changed dependencies", durable.state_report.changed_dependencies.join(", ") || "None"],
+        ["Allowlisted support", support.status + " · " + support.failure_stage + " / " + support.error_class + (artifact ? " · artifact v" + artifact.version + " " + artifact.sha256.slice(0, 16) + "…" : "")],
+      ];
+    }
+    return correctionFollowup && correctionFollowup.status === "UNAVAILABLE" ? [["Report to the State", "Follow-up read unavailable: " + correctionFollowup.reason]] : [];
+  }
+
+  // The whole record as data: the screen and the plain-text view are both drawn from this.
+  function recordOf(item) {
+    const st = statusOf(item);
+    const isH = item.item_id === H_ID;
+    const name = nameOf(item);
+    const short = item.shortfall_cents;
+    const env = snapshot.read_envelope;
+    const R = {
+      id: item.item_id, name, kind: st.kind, state: st.state, obligation: item.obligation_id,
+      ledger: [], checks: [], decision: null, steps: [], sources: [], activity: [], followup: [], facts: [],
+    };
+    const rule = isH ? hView().pkg.control_pack : null;
+    R.facts.push(["Payee", name]);
+    if (isH) R.facts.push(["Payer", PAYER]);
+    R.facts.push(["Period", item.period_id], ["Due", day(item.due_at_ms)]);
+    const source = snapshot.source_assessment;
+    const sourceCheck = [false, "Source authenticity", "Not verified. " + sentence(words(source.status)) + ": " + source.reason];
+    if (!isH) {
+      R.claim = short > 0 ? name + " is short " + usd(short) + " for the period." : name + " was paid " + usd(item.received_cash_cents) + " in full.";
+      R.more = short > 0 ? "" : "That matches the amount owed, so nothing is waiting on anyone.";
+      R.ledger.push(["Owed to " + name, "", amt(item.owed_cents)], ["Cash recorded", "", MINUS + amt(item.received_cash_cents)], ["Shortfall", short > 0 ? "Still owed" : "Paid in full", amt(short), "total"]);
+      R.checks.push([true, "Amount owed", usd(item.owed_cents)], [short === 0, "Cash received", usd(item.received_cash_cents) + " recorded of " + usd(item.owed_cents) + " owed; shortfall " + usd(short)], sourceCheck);
+    } else {
+      const v = hView();
+      const claim = v.claim;
+      const amount = claim ? usd(claim.amount_cents) : "Unknown";
+      const payments = v.pkg.cash ? v.pkg.cash.active_payment_count : 0;
+      R.claim = short > 0 && claim && claim.status === "CLAIMED"
+        ? PAYER + " paid " + name + " " + usd(short) + " less than it owes and claims an offset of " + amount + " with " + v.support + "."
+        : v.kase && v.kase.status === "RESOLVED" ? name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed."
+          : short > 0 ? PAYER + " owes " + name + " " + usd(short) + " after the offset was " + (v.det && v.det.decision === REJECTED ? "rejected." : "decided.")
+            : name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed. The case is not closed yet.";
+      R.more = v.missing.length ? "Still needed: " + v.missing.map(words).join(", ") + "." : "Owner assessment: " + words(v.assessment) + ", nothing outstanding.";
+      R.ledger.push(["Owed to " + name, rule.source_refs[0], amt(item.owed_cents)],
+        ["Cash recorded", payments + (payments === 1 ? " payment" : " payments") + " recorded", MINUS + amt(item.received_cash_cents)]);
+      if (claim) R.ledger.push(["Offset claimed by " + PAYER, "claim " + words(claim.status) + " · " + v.support, amt(claim.amount_cents)]);
+      if (item.lawful_adjustment_cents > 0) R.ledger.push(["Offset accepted, counted as paid", "", MINUS + amt(item.lawful_adjustment_cents)]);
+      R.ledger.push(["Shortfall", !v.det && short > 0 ? "Depends on the decision" : short > 0 ? PAYER + " must pay it" : "Nothing left to pay", amt(short), "total"]);
+      R.checks.push([true, "Amount owed", usd(item.owed_cents) + " from " + rule.source_refs[0]],
+        [short === 0, "Cash received", usd(item.received_cash_cents) + " recorded of " + usd(item.owed_cents) + " owed; shortfall " + usd(short)]);
+      if (claim) R.checks.push([false, "Offset approval", "Rule " + rule.adjustment_rule_id + ": " + v.support]);
+      R.checks.push(sourceCheck, [false, "Source freshness", sentence(words(snapshot.freshness.status)) + ": " + snapshot.freshness.reason]);
+      R.caseLine = v.kase ? words(v.kase.status) + " · " + words(v.kase.reason) + " · owner: " + words(v.kase.next_action_owner) : "No case opened";
+      R.facts.push(["Case", R.caseLine], ["Rule", rule.adjustment_rule_id]);
+      if (claim && can("reject-offset") && (unresolvedDecision || (!v.det && st.kind === "need"))) {
+        const amount = usd(claim.amount_cents);
+        R.decide = {
+          options: [["authorize-offset", "1", "Accept the offset", "The " + amount + " offset counts toward " + name + "'s payment. " + name + " is owed nothing more."],
+            ["reject-offset", "2", "Reject the offset", PAYER + " must pay " + name + " " + amount + ". A correction request is recorded."]],
+          note: "This demo does not store the reason yet.",
+        };
+      }
+      if (v.det) {
+        const evidence = (v.det.supporting_evidence || []).map((row) => (isRecord(row) ? row.evidence_id : row));
+        R.decision = {
+          line: "Decided: offset " + (v.det.decision === REJECTED ? "rejected" : "accepted") + " by " + words(v.det.actor_role) + " · " + utc(v.det.decided_at_ms),
+          seal: "Determination " + v.det.decision + " · digest " + v.det.determination_digest.slice(0, 16) + "…",
+          note: "Supporting evidence: " + (evidence.join(", ") || "none") + ". This demo does not store a reason.",
+        };
+      }
+      for (const name of ["acknowledge", "record-cash", "record-report", "restore-test"]) {
+        if (can(name)) R.steps.push({ name, ...STEPS[name], enabled: stepEnabled(name, v) });
+      }
+      for (const row of (v.pkg.references.evidence || {}).items || []) {
+        R.sources.push([row.evidence_id, words(row.kind) + " · " + row.source_id, "digest " + row.record_digest.slice(0, 16) + "…"]);
+      }
+      const events = snapshot.h.timeline;
+      for (const event of events.slice().reverse()) {
+        R.activity.push([utc(event.committed_at_ms), "Owner event " + event.event_sequence + ": " + words(event.kind)
+          + (event.after_revision === null || event.after_revision === undefined ? "" : ", revision " + event.before_revision + " → " + event.after_revision)]);
+      }
+      if (snapshot.h.timeline_truncated) R.activity.push(["", "Showing " + events.length + " recent events of " + snapshot.h.timeline_total_count + "; older history is omitted."]);
+      R.followup = followupRows();
+    }
+    R.facts.push(["Obligation", item.obligation_id], ["Read", "sequence " + env.sequence + " · snapshot " + env.snapshot_id.slice(0, 16)]);
+    if (isH) R.facts.push(["Continuity", snapshot.continuity ? snapshot.continuity.mode : "Unknown"]);
+    R.meta = [item.obligation_id, "Due " + day(item.due_at_ms), R.caseLine && "Case: " + R.caseLine];
+    return R;
+  }
+
+  function textOf(R) {
+    const row = (label, ...cells) => label.padEnd(12) + cells.filter(Boolean).join("  ");
+    const lines = [row("OBLIGATION", R.obligation), row("STATUS", R.state), row("SUMMARY", R.claim), row("", R.more), "", "AMOUNTS IN USD",
+      ...R.ledger.map((entry) => row(entry[0], entry[1], entry[2]))];
+    lines.push("", "WHAT WAS CHECKED", ...R.checks.map((entry) => row((entry[0] ? "ok" : "NOT OK") + " " + entry[1], entry[2])));
+    if (R.decision) lines.push("", "DECISION", row("", R.decision.line, R.decision.seal, R.decision.note));
+    if (R.decide) lines.push("", "YOUR DECISION", ...R.decide.options.map(([, key, title, detail]) => row(key, title, detail)), row("", "Reason (required)", R.decide.note));
+    if (R.steps.length) lines.push("", "NEXT STEPS", ...R.steps.map((step) => row(step.label, step.enabled ? step.note : step.off)));
+    if (R.sources.length) lines.push("", "SOURCE RECORDS", ...R.sources.map((entry) => row(entry[0], entry[1], entry[2])));
+    if (R.activity.length) lines.push("", "ACTIVITY", ...R.activity.map((entry) => row(entry[0], entry[1])));
+    if (R.followup.length) lines.push("", "STATE REPORT", ...R.followup.map((entry) => row(entry[0], entry[1])));
+    return [...lines, "", "FACTS", ...R.facts.map((entry) => row(entry[0], entry[1]))].join("\n");
+  }
+
+  // ---- Screens ----
+
+  function queueGroups() {
+    const q = filterText.trim().toLowerCase();
+    const rows = snapshot.items.map((item, index) => ({ item, index, st: statusOf(item) }))
+      .filter(({ item, st }) => !q || [nameOf(item), item.item_id, st.state].join(" ").toLowerCase().includes(q));
+    rows.sort((a, b) => ["need", "wait", "ok"].indexOf(a.st.kind) - ["need", "wait", "ok"].indexOf(b.st.kind)
+      || (b.item.item_id === H_ID) - (a.item.item_id === H_ID) || a.index - b.index);
+    return rows;
+  }
+
+  function renderQueue() {
+    const rows = queueGroups();
+    order = rows.map(({ item }) => item.item_id);
+    const open = rows.filter(({ st }) => st.kind !== "ok").length;
+    const count = rows.filter(({ st }) => st.kind === "need").length;
+    byId("qcount").textContent = role === "approver" ? (count ? count + " for you" : "Nothing for you") : (open ? open + " open" : "None open");
+    const canOpen = allows("decision");
+    byId("summary-link").setAttribute("aria-current", String(lastId === "summary"));
+    const groups = [["need", "Needs a decision"], ["wait", "Waiting"], ["ok", "Settled"]].map(([kind, label]) => {
+      const list = rows.filter(({ st }) => st.kind === kind);
+      if (!list.length) return null;
+      const sum = kind === "ok" ? 0 : list.reduce((total, { item }) => total + item.shortfall_cents, 0);
+      return [el("div", { class: "group" }, el("span", { text: label }), el("span", { class: "num", text: String(list.length) }),
+        sum ? el("span", { class: "sum num", text: amt(sum) }) : null),
+      el("ul", { class: "rows" }, list.map(({ item, st }) => el("li", {}, el(canOpen ? "a" : "div", {
+        class: "row", id: "row-" + item.item_id, "data-id": item.item_id, href: canOpen ? "#" + item.item_id : false,
+        "aria-current": canOpen ? String(item.item_id === lastId) : false,
+      }, dot(st.kind), el("span", { class: "name", text: nameOf(item) }), el("span", { class: "amt num", text: amt(item.owed_cents) }),
+      el("span", { class: "sub", text: st.sub })))))];
+    });
+    byId("qlist").replaceChildren(...groups.flat().filter(Boolean),
+      ...(rows.length ? [] : [el("p", { class: "empty", text: "No obligation matches “" + filterText.trim() + "”." })]));
+  }
+
+  const backLink = () => el("a", { class: "back", href: "#queue", text: "← Obligations" });
+  const stateLine = (kind, text) => el("div", { class: "state " + kind }, dot(kind), text);
+
+  function decisionForm(R, v) {
+    const locked = commandPending || Boolean(confirming) || !ownerAvailable;
+    const noChoice = commandPending || Boolean(unresolvedDecision) || !ownerAvailable;
+    const amount = usd(v.claim.amount_cents);
+    const { names } = model.local_controls["record-decision"];
+    const option = ([name, key, title, detail]) => el("label", { class: "opt" },
+      el("input", { type: "radio", name: "kind", id: "kind-" + name, value: name, "aria-label": title, "aria-describedby": "detail-" + name,
+        checked: picked === name, disabled: noChoice }),
+      el("span", { class: "key", text: key }), el("span", {}, el("b", { text: title }), el("p", { id: "detail-" + name, text: detail })));
+    const verb = picked === "reject-offset" ? "rejection" : "acceptance";
+    const retry = Boolean(unresolvedDecision);
+    const primary = retry ? names.retry : names.confirm.replace("{verb}", verb).replace("{amount}", amount);
+    return el("section", { class: "decide", "aria-label": "Your decision" }, el("h2", { text: "Your decision" }),
+      el("div", { class: "opts", role: "radiogroup", "aria-label": "Should the offset stand?" },
+        R.decide.options.map(option)),
+      el("div", {}, el("label", { class: "lab", for: "reason", text: "Reason (required)" }),
+        el("textarea", { id: "reason", "aria-describedby": "reason-note", disabled: locked, text: draft }),
+        el("p", { class: "hint", id: "reason-note", text: R.decide.note })),
+      confirming === "decision"
+        ? confirmPanel("Confirm decision", "Record the " + verb + " of " + PAYER + "'s " + amount + " offset? It is recorded once written, and a later change needs a new decision.", primary, retry)
+        : el("div", { class: "acts" }, el("button", { class: "btn primary", id: "record-btn", disabled: !(picked && draft.trim()) || locked, text: names.idle }),
+          el("span", { class: "hint", id: "why-off", text: decisionHint() })));
+  }
+
+  const decisionHint = () => model.local_controls["record-decision"].hints[!picked ? "no_choice" : !draft.trim() ? "no_reason" : "ready"];
+
+  function confirmPanel(label, text, primary, retrying) {
+    return el("div", { class: "confirm", role: "group", "aria-label": label }, el("p", { text }),
+      el("div", { class: "acts" }, el("button", { class: "btn primary", id: "confirm", disabled: commandPending || !ownerAvailable, text: commandPending ? model.local_controls["record-decision"].names.pending : primary }),
+        el("button", { class: "btn", id: "cancel", disabled: commandPending || retrying, text: "Back" })));
+  }
+
+  function stepList(R) {
+    const cashAmount = money.format(CASH_CORRECTION_COMMAND.amount_cents / 100);
+    return section("Next steps", el("ul", { class: "steps" }, R.steps.map((step) => el("li", {},
+      el("button", { class: "btn small", type: "button", "data-action": step.name, disabled: !step.enabled, text: step.label }),
+      el("span", { class: "hint", text: step.enabled ? step.note : step.off }),
+      step.name === "record-cash" && confirming === "record-cash"
+        ? confirmPanel("Confirm cash evidence", "Record synthetic payment evidence of " + cashAmount + " for " + R.name + "? This records evidence only. No money moves.",
+          unresolvedCashBody ? model.local_controls["record-decision"].names.cash_retry : "Record " + cashAmount + " of cash evidence", Boolean(unresolvedCashBody))
+        : null))));
+  }
+
+  function renderRecord(R, textMode) {
+    const v = R.id === H_ID ? hView() : null;
+    const foot = el("div", { class: "foot" }, el("a", { id: "plain-text", href: "#" + R.id + (textMode ? "" : ".txt"), text: textMode ? "Back to the full view" : "View as plain text" }),
+      el("span", { text: "The same record an auditor or an agent reads." }));
+    const facts = el("dl", { class: "facts", "aria-label": "Facts" }, R.facts.map(([term, value]) => [el("dt", { text: term }), el("dd", { class: term === "Obligation" || term === "Read" ? "mono" : false, text: value })]));
+    let main;
+    if (textMode) {
+      main = [el("header", {}, backLink()), el("pre", { class: "textview", id: "text-view", text: textOf(R) })];
+    } else {
+      main = [
+        el("header", {}, backLink(), el("div", { class: "meta mono" }, R.meta.filter(Boolean).map((text) => el("span", { text }))), stateLine(R.kind, R.state),
+          el("p", { class: "claim", text: R.claim }), R.more ? el("p", { class: "claim-more", text: R.more }) : null),
+        section("Amounts in USD", table("ledger", R.ledger.map(([label, note, value, cls]) => [[[label], [note, "note"], [value, "num"]], cls]))),
+        section("What was checked", table("checks", R.checks.map(([ok, what, result]) => [[[null, "mk"], [what, "what"], [result, "res2"]], ok ? "" : "bad"]))),
+        R.decision && R.decision.line ? el("section", { class: "signed", "aria-label": "Decision" }, el("h2", { text: "Decision" }), el("div", { class: "line", text: R.decision.line }),
+          el("div", { class: "seal mono", text: R.decision.seal }), el("p", { class: "hint", text: R.decision.note })) : null,
+        R.decide ? decisionForm(R, v) : null,
+        R.steps.length ? stepList(R) : null,
+        R.sources.length ? section("Source records", table("src", R.sources.map((entry) => [[[entry[0]], [entry[1], "fp"], [entry[2], "fp mono"]]]))) : null,
+        R.activity.length ? section("Activity", el("ol", { class: "log" }, R.activity.map(([when, text]) => el("li", {}, el("time", { class: "mono", text: when }), el("div", { text }))))) : null,
+        R.followup.length ? section("State report", table("src", R.followup.map(([label, value]) => [[[label], [value]]]))) : null,
+        foot,
+      ];
+    }
+    const page = el("div", { class: "page", "data-record": R.id }, el("div", { class: "main" }, el("h1", { class: "sr", text: R.name }), main, textMode ? foot : null), facts);
+    // A dot in the checks table marks each row; drawn here so the table helper stays plain.
+    for (const [index, mark] of page.querySelectorAll(".checks td.mk").entries()) mark.append(dot(R.checks[index][0] ? "ok" : "need"));
+    byId("page").replaceChildren(page);
+  }
+
+  function renderSummary() {
+    const { summary, population, items } = snapshot;
+    const open = items.filter((item) => statusOf(item).kind !== "ok");
+    const canOpen = allows("decision");
+    const totals = [["Population", summary.obligation_count + " / " + population.expected_count + " obligations · roster " + words(population.completeness)],
+      ["Total owed", usd(summary.owed_cents)], ["Cash recorded", usd(summary.received_cash_cents)], ["Program shortfall", usd(summary.shortfall_cents)],
+      ["Open items", open.length + (open.length === 1 ? " hospital" : " hospitals") + " not paid in full"]];
+    const claim = summary.shortfall_cents > 0 ? usd(summary.shortfall_cents) + " of " + usd(summary.owed_cents) + " is still short." : "Every obligation is paid in full.";
+    byId("page").replaceChildren(el("div", { class: "page", "data-record": "summary" }, el("div", { class: "main" },
+      el("h1", { class: "sr", text: "Program summary" }),
+      el("header", {}, backLink(), stateLine(open.length ? "wait" : "ok", open.length ? "Program summary: " + open.length + " open" : "Program summary: nothing open"),
+        el("p", { class: "claim", text: claim }),
+        el("p", { class: "claim-more", text: "Source records: " + words(snapshot.source_assessment.status) + ". " + snapshot.source_assessment.reason })),
+      section("Program totals", el("dl", { class: "totals" }, totals.map(([term, value]) => [el("dt", { text: term }), el("dd", { class: "num", text: value })]))),
+      open.length ? section("Open obligations", table("sumtab", open.map((item) => [[
+        [null, "d"], [statusOf(item).state, "next"], [amt(item.shortfall_cents), "num"]]]))) : null)));
+    for (const [index, cell] of byId("page").querySelectorAll(".sumtab td.d").entries()) {
+      const label = nameOf(open[index]);
+      cell.append(canOpen ? el("a", { href: "#" + open[index].item_id, text: label }) : label);
+    }
+  }
+
+  function renderPage() {
+    const page = byId("page");
+    if (!snapshot) return page.replaceChildren(el("p", { class: "empty", text: "No verified read yet." }));
+    const hash = decodeURIComponent(location.hash.slice(1));
+    const item = snapshot.items.find((row) => row.item_id === hash.replace(/\.txt$/, ""));
+    if (!allows("decision") || (lastId === "summary" && !item)) return renderSummary();
+    return renderRecord(recordOf(snapshot.items.find((row) => row.item_id === lastId)), hash.endsWith(".txt") && Boolean(item));
+  }
+
+  function render() {
+    if (!snapshot) return renderPage();
+    const active = document.activeElement;
+    const id = active && active.id;
+    const range = active && typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
+    renderQueue();
+    renderPage();
+    const next = id && byId(id);
+    if (next && next !== active) {
+      next.focus({ preventScroll: true });
+      if (range && next.setSelectionRange) next.setSelectionRange(...range);
+    }
+  }
+
+  function defaultId() {
+    if (!allows("decision")) return "summary";
+    const all = queueGroups();
+    return all.length ? all[0].item.item_id : "summary";
+  }
+
+  function route() {
+    if (!model || !role) return;
+    const hash = decodeURIComponent(location.hash.slice(1));
+    const onList = hash === "queue";
+    const wanted = hash.replace(/\.txt$/, "");
+    const known = wanted === "summary" || Boolean(snapshot && snapshot.items.some((row) => row.item_id === wanted));
+    let id = wanted;
+    if (onList) id = lastId || defaultId();
+    else if (!known || !allows("decision")) {
+      id = defaultId();
+      if (hash && allows("decision")) history.replaceState(null, "", "#" + id);
+    }
+    const active = document.activeElement;
+    const fromRow = Boolean(active && active.closest && active.closest("#qlist .row"));
+    if (id !== lastId) {
+      byId("record").scrollTop = 0;
+      picked = null;
+      draft = "";
+      confirming = null;
+      commandMessage("", "");
+    }
+    lastId = id;
+    byId("work").classList.toggle("open", !allows("decision") || (Boolean(hash) && !onList));
+    render();
+    const current = byId("row-" + id);
+    if (current && current.offsetParent) { // scrollIntoView would move the Tab starting point past the skip link
+      const row = current.getBoundingClientRect(), list = byId("qlist"), box = list.getBoundingClientRect();
+      list.scrollTop += row.top < box.top ? row.top - box.top : Math.max(0, row.bottom - box.bottom);
+    }
+    if (fromRow) (current && current.offsetParent ? current : byId("record")).focus({ preventScroll: true });
+  }
+
+  // ---- Reads ----
+
+  function banner(kind, text) {
+    const node = byId("connection-status");
+    node.textContent = text;
+    node.className = "conn " + kind;
+  }
+
+  function markViewUnusable(kind, text) {
+    ownerAvailable = false;
+    banner(kind, text);
+    render();
+  }
+
+  function showOwnerUnavailable(message = "The Owner read failed. Reload this page to check again.") {
+    markViewUnusable("unavailable", message);
   }
 
   function applyWorkspaceSnapshot(value, requestGeneration) {
     if (requestGeneration !== null && requestGeneration !== workspaceRequestGeneration) return false;
     const incoming = value.read_envelope;
+    let changed = true;
     if (snapshot) {
       const previous = snapshot.read_envelope;
       const identityChanged = !sameJson(ownerIdentity(previous), ownerIdentity(incoming));
@@ -277,84 +527,27 @@
       if (!identityChanged && incoming.sequence === previous.sequence && !sameSnapshot(previous, incoming)) {
         // Same sequence, different history: the Owner forked. Stop trusting every read.
         workspaceRequestGeneration += 1;
-        decisionRequestGeneration += 1;
         correctionFollowupRequestGeneration += 1;
         correctionFollowup = null;
-        showOwnerUnavailable(model.controls["refresh-button"].responses.fork_detected.message);
+        showOwnerUnavailable(model.controls.read.responses.fork_detected.message);
         return false;
       }
-      if (!sameSnapshot(previous, incoming)) {
-        decisionRequestGeneration += 1;
+      changed = !sameSnapshot(previous, incoming);
+      if (changed) {
         correctionFollowupRequestGeneration += 1;
         correctionFollowup = null;
       }
       if (identityChanged) {
-        decisionView = null;
-        decisionOpen = false;
-        packageAvailable = false;
-        packageStale = true;
         unresolvedDecision = null;
         unresolvedCashBody = null;
       }
     }
-    renderSnapshot(value);
-    return true;
-  }
-
-  function renderSnapshot(value) {
     snapshot = value;
     ownerAvailable = true;
     lastSuccessfulRead = Date.now();
-    setText("population-count", value.summary.obligation_count + " / " + value.population.expected_count);
-    setText("program-total", asMoney(value.summary.owed_cents));
-    setText("program-cash", asMoney(value.summary.received_cash_cents));
-    setText("program-shortfall", asMoney(value.summary.shortfall_cents));
-    setText("open-items", value.summary.open_count);
-    setText("h-attention", attentionText(value));
-    setText("roster-status", value.population.completeness + " · " + value.population.imported_count + "/" + value.population.expected_count);
-    setText("source-status", value.source_assessment.status + " — " + value.source_assessment.reason);
-    setText("freshness-status", value.freshness.status + " — " + value.freshness.reason);
-    byId("read-as-of").textContent = "Verified as of " + new Date(value.read_at).toLocaleString() + ".";
-    byId("read-detail").textContent = "Snapshot " + value.read_envelope.snapshot_id.slice(0, 16)
-      + " · one SQLite connection · " + costText(value.read_envelope.read_cost)
-      + " · local consistency digest only; external freshness checkpoint UNKNOWN.";
-    renderTable("population-rows", value.items, 6, "No obligation rows returned.", (tbody, item) => {
-      const isH = item.item_id === "item-h";
-      addRow(tbody, [
-        [item.label + (isH ? " (H)" : "")],
-        [asMoney(item.owed_cents), "number"],
-        [asMoney(item.received_cash_cents), "number"],
-        [asMoney(item.shortfall_cents), "number"],
-        [[
-          "Verification " + words(item.verification_status),
-          "Case " + words(item.case_status),
-          "Delivery " + words(item.delivery_status),
-          "Reporting " + (item.reporting_complete ? "complete" : "pending"),
-        ].join(" · ")],
-        [words(item.source_status), "state-label " + (item.source_status.includes("MISSING") ? "missing" : "unverified")],
-      ], isH ? "highlight" : "");
-    });
-    const ownerMode = value.integrity.mode === "LIVE" ? "SYNTHETIC LOCAL (Owner native mode LIVE)" : value.integrity.mode;
-    banner("connection-status", "disabled", model.controls["refresh-button"].responses.success.message + " Owner snapshot VERIFIED · " + ownerMode + " · sequence " + value.summary.sequence
-      + " · full independent reconstruction used this same SQLite snapshot.");
-    detectPackageStaleness();
-    renderDecision();
-  }
-
-  function markViewUnusable(connectionKind, connectionText, packageText) {
-    ownerAvailable = false;
-    packageAvailable = false;
-    packageStale = true;
-    banner("connection-status", connectionKind, connectionText);
-    if (decisionOpen) banner("package-staleness", connectionKind, packageText);
-    updateActions();
-  }
-
-  function showOwnerUnavailable(message = "The Owner read failed. Reload this page to check again.") {
-    byId("read-as-of").textContent = snapshot
-      ? "Last successful read: " + new Date(snapshot.read_at).toLocaleString() + " (stale while service is unavailable)."
-      : "No successful read yet.";
-    markViewUnusable("unavailable", message, message);
+    banner("ok", model.controls.read.responses.success.message + " Sequence " + value.summary.sequence + " · synthetic local · dispatch and egress disabled.");
+    if (changed || !byId("page").firstChild) route();
+    return true;
   }
 
   async function fetchJson(url) {
@@ -369,9 +562,8 @@
     return body;
   }
 
-  function readErrorMessage(name, error) {
-    const code = error.message === "transport_failure" ? "transport_failure" : "owner_read_unavailable";
-    return model.controls[name].responses[code].message;
+  function readErrorMessage(error) {
+    return model.controls.read.responses[error.message === "transport_failure" ? "transport_failure" : "owner_read_unavailable"].message;
   }
 
   async function refreshCorrectionFollowup(requestGeneration = null) {
@@ -398,11 +590,11 @@
       correctionFollowup = value;
     } catch (error) {
       if (superseded()) return;
-      const message = readErrorMessage("refresh-button", error);
+      const message = readErrorMessage(error);
       correctionFollowup = { status: "UNAVAILABLE", reason: message };
       showOwnerUnavailable(message);
     }
-    renderDecision();
+    render();
   }
 
   async function refreshOverview() {
@@ -413,196 +605,33 @@
       if (!applyWorkspaceSnapshot(value, requestGeneration)) return;
       await refreshCorrectionFollowup(requestGeneration);
     } catch (error) {
-      if (requestGeneration === workspaceRequestGeneration) {
-        showOwnerUnavailable(readErrorMessage("refresh-button", error));
-      }
+      if (requestGeneration === workspaceRequestGeneration) showOwnerUnavailable(readErrorMessage(error));
     }
   }
 
-  function appendFact(list, label, value) {
-    const wrapper = document.createElement("div");
-    const term = document.createElement("dt");
-    const description = document.createElement("dd");
-    term.textContent = label;
-    description.textContent = shown(value);
-    wrapper.append(term, description);
-    list.appendChild(wrapper);
-  }
+  // ---- Commands ----
 
-  function offsetOf(pkg) {
-    const page = pkg.references && pkg.references.claims;
-    const claims = page && Array.isArray(page.items) ? page.items : [];
-    const claim = claims.find((row) => row.status === "CLAIMED") || claims[0];
+  function staffCommandBinding(envelope, pkg) {
+    const itemBinding = envelope.item_bindings.find((binding) => binding.item_id === H_ID);
+    const receipt = pkg && pkg.evaluation_receipt;
+    assert(itemBinding && isRecord(receipt) && isRecord(receipt.authority), "staff_command_binding");
     return {
-      claims,
-      amount: claim ? asMoney(claim.amount_cents) : "Unknown",
-      claim,
-      support: decisionView.source_assessment.h_support_status === "MISSING" ? "no supporting evidence" : "support recorded, unverified",
+      contract: "RR/FINANCIAL/STAFF-COMMAND-BINDING/v2",
+      snapshot: { ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id },
+      item_binding: itemBinding,
+      authority: receipt.authority,
+      input: {
+        evaluation_id: receipt.evaluation_id,
+        evaluation_result_digest: receipt.evaluation_result_digest,
+        receipt_digest: receipt.receipt_digest,
+      },
     };
-  }
-
-  function renderDecision() {
-    byId("decision-panel").hidden = !decisionOpen; byId("open-package").setAttribute("aria-expanded", String(decisionOpen));
-    if (!decisionOpen || !decisionView) {
-      updateActions();
-      return;
-    }
-    const pkg = currentPackage();
-    const h = pkg.obligation || {};
-    const receipt = pkg.evaluation_receipt || {};
-    const pack = pkg.control_pack || {};
-    const conclusions = pkg.conclusions || {};
-    const facts = byId("case-facts");
-    const bindings = byId("binding-facts");
-    facts.replaceChildren();
-    bindings.replaceChildren();
-    const plain = (label, value) => appendFact(facts, label, value);
-    const fact = (label, value) => appendFact(bindings, label, value);
-    const { claims, support } = offsetOf(pkg);
-    plain("Amount owed", asMoney(h.owed_cents));
-    plain("Cash received", asMoney(h.received_cash_cents));
-    plain("Offset claimed", claims.length
-      ? claims.map((claim) => asMoney(claim.amount_cents) + " · claim " + words(claim.status) + " · " + support).join("; ")
-      : "None");
-    plain("Case", pkg.case
-      ? words(pkg.case.status) + " · " + words(pkg.case.reason) + " · next step owner: " + words(pkg.case.next_action_owner)
-        + " · due " + day(pkg.case.due_at_ms)
-      : "No case opened");
-    const determination = pkg.current_determination;
-    plain("Current determination", determination
-      ? words(determination.decision) + " · decided by " + words(determination.actor_role) + " · " + utc(determination.decided_at_ms)
-        + " · evidence " + (determination.supporting_evidence || []).map((row) => (isRecord(row) ? row.evidence_id : row)).join(", ")
-      : "None yet");
-    plain("Rules", [pack.calculation_rule_id, pack.adjustment_rule_id].filter(Boolean).join(" · "));
-    plain("Continuity", snapshot && snapshot.continuity ? snapshot.continuity.mode : "Unknown");
-    fact("Decision package contract", pkg.contract);
-    fact("Owner sequence reviewed", decisionView.sequence);
-    fact("Read snapshot", decisionView.read_envelope.snapshot_id);
-    fact("Same-snapshot verification", decisionView.integrity.status + " · " + decisionView.read_envelope.verification.result_digest);
-    fact("Read cost", costText(decisionView.read_envelope.read_cost) + ".");
-    fact("Obligation revision", h.revision);
-    fact("Evaluation receipt", receipt.evaluation_id);
-    fact("Evaluation result digest", receipt.result_digest);
-    fact("Scope", JSON.stringify(pkg.scope));
-    fact("Control Pack", [pack.pack_id, "v" + String(pack.version), pack.digest].filter(Boolean).join(" · "));
-    fact("Trusted authority", receipt.authority
-      ? [receipt.authority.authority_id, "epoch " + String(receipt.authority.epoch), receipt.authority.digest].join(" · ")
-      : "Unknown");
-    // The Mirror withholds input_snapshot_digest from staff; the receipt digest binds it.
-    fact("Input state", "receipt " + String(receipt.receipt_digest));
-    fact("Case reference", pkg.case ? pkg.case.case_id : "No case reference");
-    fact("Source evidence", decisionView.source_assessment.status + " · H support " + decisionView.source_assessment.h_support_status);
-    const durable = correctionFollowup && correctionFollowup.followup;
-    const followupUnavailable = Boolean(correctionFollowup && correctionFollowup.status === "UNAVAILABLE");
-    fact("Durable correction follow-up", correctionFollowup ? correctionFollowup.status : "UNAVAILABLE");
-    byId("followup-json").textContent = durable
-      ? JSON.stringify({ state_report: durable.state_report, allowlisted_support: durable.corporate_support }, null, 2)
-      : followupUnavailable
-        ? "Follow-up read unavailable: " + correctionFollowup.reason
-        : "No accepted correction event has created durable follow-up.";
-    if (durable) {
-      const corporate = durable.corporate_support;
-      const artifact = corporate.artifact;
-      fact("Follow-up event", durable.source_event_sequence + " · " + durable.followup_status);
-      fact("State report", durable.state_report.contract + " · " + durable.state_report.followup_status);
-      fact("Changed dependencies", durable.state_report.changed_dependencies.join(", ") || "None");
-      fact("Allowlisted support", corporate.contract + " · " + corporate.status
-        + " · " + corporate.failure_stage + " / " + corporate.error_class
-        + (artifact ? " · artifact v" + artifact.version + " " + artifact.sha256 : ""));
-    } else if (followupUnavailable) {
-      fact("Follow-up read", correctionFollowup.reason);
-    }
-
-    const action = pkg.current_action;
-    const delivery = conclusions.action_acknowledgment;
-    setText("action-status", action
-      ? action.status + " · " + (delivery ? delivery.result : "UNKNOWN") + " · cash effect " + asMoney(0)
-      : "No action authorized · delivery UNKNOWN");
-    const cash = conclusions.cash_satisfaction;
-    setText("cash-status", cash
-      ? cash.result + " · " + asMoney(cash.recorded_received_cash_cents) + " received · " + asMoney(cash.missing_cents) + " missing · evidence " + cash.evidence_status
-      : "Cash status unavailable");
-    const reporting = conclusions.reporting_completion;
-    setText("reporting-status", reporting
-      ? reporting.result + " · " + String(pkg.reporting.evidence_count) + " report evidence record(s)"
-      : "Reporting status unavailable");
-
-    const unresolved = [
-      "Source authenticity is UNKNOWN: the manifest digest and evidence references are synthetic caller assertions.",
-      "No feed watermark or source-specific freshness rule is available, so source freshness remains UNKNOWN.",
-      "An action ACK records delivery only and contributes $0 to cash.",
-    ];
-    for (const claim of claims) {
-      if (claim.status === "CLAIMED") {
-        unresolved.push("H's " + asMoney(claim.amount_cents) + " offset claim has " + support + "; it is not an approved adjustment until decided.");
-      }
-    }
-    if (cash && cash.missing_cents > 0) unresolved.push("Cash shortfall remains " + asMoney(cash.missing_cents) + ".");
-    if (reporting && reporting.result !== "SUPPORTED") unresolved.push("Reporting completion remains " + reporting.result + ".");
-    const resolution = conclusions.case_resolution;
-    if (resolution) unresolved.push("Owner case assessment: " + resolution.assessment + "; missing requirements: " + (resolution.missing_requirements || []).join(", "));
-    byId("unknowns").replaceChildren(...unresolved.map((text) => {
-      const item = document.createElement("li");
-      item.textContent = text;
-      return item;
-    }));
-
-    const timeline = renderTable("timeline-rows", decisionView.timeline, 4, "No H chronology returned.", (tbody, event) => {
-      addRow(tbody, [
-        [event.event_sequence],
-        [words(event.kind)],
-        [event.after_revision === null || event.after_revision === undefined
-          ? "—"
-          : String(event.before_revision) + " → " + String(event.after_revision)],
-        [utc(event.committed_at_ms)],
-      ]);
-    });
-    if (decisionView.timeline.length > 0 && decisionView.timeline_truncated) {
-      addNoteRow(timeline, "Showing " + decisionView.timeline.length + " recent events of " + decisionView.timeline_total_count + "; older history is omitted.", 4);
-    }
-    byId("package-json").textContent = JSON.stringify(pkg, null, 2);
-    if (!ownerAvailable) {
-      banner("package-staleness", "unavailable", "UNAVAILABLE — package contents are retained from the last successful Owner read; commands are disabled.");
-    } else if (packageStale) {
-      banner("package-staleness", "stale", "STALE REVIEW — the verified snapshot, scope, H revision, evaluation, Control Pack, authority, or input state changed. Reopen the package before a new command.");
-    } else {
-      banner("package-staleness", "pending", model.controls["open-package"].responses.success.message + " The displayed scope, Owner snapshot, H revision, Control Pack, authority, and evaluation input match the current Owner view.");
-    }
-    setText("package-revision", "Sequence " + decisionView.sequence + " · revision " + h.revision);
-    updateActions();
-  }
-
-  async function openPackage() {
-    const requestGeneration = ++decisionRequestGeneration;
-    try {
-      const value = await fetchJson("/api/decision-package");
-      if (requestGeneration !== decisionRequestGeneration) return;
-      if (!snapshot || !sameSnapshot(snapshot.read_envelope, value.read_envelope)) {
-        packageAvailable = false;
-        packageStale = true;
-        const message = model.controls["open-package"].responses.stale_read.message;
-        banner("package-staleness", "stale", message);
-        commandMessage(message, "error");
-        updateActions();
-        await refreshOverview();
-        return;
-      }
-      decisionView = value;
-      decisionOpen = true;
-      packageAvailable = true;
-      detectPackageStaleness();
-      renderDecision();
-      moveFocus("decision-title", true);
-    } catch (error) {
-      if (requestGeneration !== decisionRequestGeneration) return;
-      showOwnerUnavailable(readErrorMessage("open-package", error));
-    }
   }
 
   function commandBody(name) {
     if (unresolvedDecision && unresolvedDecision.name === name) return unresolvedDecision.body;
     if (name === "record-cash" && unresolvedCashBody) return unresolvedCashBody;
-    const pkg = currentPackage();
+    const pkg = snapshot && snapshot.h.decision_package;
     if (!pkg || !pkg.obligation) return null;
     const revision = { revision: pkg.obligation.revision };
     if (["acknowledge", "record-report"].includes(name)) return revision;
@@ -612,7 +641,7 @@
       ...revision,
       evaluation_id: pkg.evaluation_receipt.evaluation_id,
       evaluation_result_digest: pkg.evaluation_receipt.result_digest,
-      read_binding: staffCommandBinding(decisionView.read_envelope, pkg),
+      read_binding: staffCommandBinding(snapshot.read_envelope, pkg),
     };
   }
 
@@ -627,93 +656,10 @@
     return identityMatches && notOlderThanStart && applyWorkspaceSnapshot(value, null);
   }
 
-  function setButton(name, disabled, retryLabel) {
-    if (!allowedActions.has(name)) return; // absent for this role: stays hidden and disabled
-    const button = document.querySelector('[data-action="' + name + '"]');
-    if (!button) return;
-    if (!button.dataset.defaultLabel) button.dataset.defaultLabel = button.textContent;
-    button.textContent = retryLabel || button.dataset.defaultLabel;
-    button.disabled = disabled;
-  }
-
-  function updateActions() {
-    const reviewed = Boolean(ownerAvailable && packageAvailable && decisionView && !packageStale && !commandPending);
-    const pkg = currentPackage();
-    const h = currentH();
-    const action = pkg ? pkg.current_action : null;
-    const decided = Boolean(pkg && pkg.current_determination);
-    const testMode = Boolean(snapshot && snapshot.continuity && snapshot.continuity.mode === "TEST");
-    const canRetry = ownerAvailable && !commandPending;
-    byId("refresh-button").disabled = commandPending;
-    byId("open-package").disabled = !canRetry;
-    const switchRole = byId("role-status").querySelector("a");
-    if (switchRole) {
-      const disabled = Boolean(commandPending || unresolvedDecision || unresolvedCashBody);
-      switchRole.setAttribute("aria-disabled", String(disabled));
-      switchRole.tabIndex = disabled ? -1 : 0;
-    }
-    const decisionRetry = Boolean(unresolvedDecision && canRetry);
-    const cashRetry = Boolean(unresolvedCashBody && canRetry);
-    setButton("decide", decisionRetry ? false : !reviewed || decided);
-    setButton("acknowledge", !reviewed || !action || action.status !== "READY");
-    setButton("record-cash", cashRetry ? false : !reviewed || !action || action.status !== "ACKNOWLEDGED" || !h || h.shortfall_cents <= 0,
-      cashRetry && "Retry exact cash evidence command");
-    setButton("record-report", !reviewed || !h || h.reporting_complete || h.shortfall_cents > 0);
-    setButton("restore-test", !reviewed || testMode || !h);
-    renderSheet();
-  }
-
-  // The Decide sheet: evidence, then the automatic rule check, then the person's own choice. Nothing is preselected.
-  const sheet = byId("decide-sheet");
-  const form = byId("decide-form");
-  const chosen = () => { const radio = form.querySelector("input:checked"); return radio ? radio.value : null; };
-  let sheetLines = [];
-  let sheetPrior = null; // the evidence shown before a failed attempt: lines that differ afterwards are marked changed
-
-  function sheetError(code, text = "") {
-    byId("sheet-error").textContent = text;
-    byId("sheet-error").dataset.error = code;
-  }
-
-  function renderSheet() {
-    const pkg = currentPackage();
-    if (sheet.open && !(pkg && ownerAvailable)) sheet.close();
-    if (!sheet.open) return;
-    const h = pkg.obligation;
-    const { claim, amount, support } = offsetOf(pkg);
-    sheetLines = [
-      "Paid " + asMoney(h.received_cash_cents) + " of " + asMoney(h.owed_cents) + " owed.",
-      claim ? "Plan A's offset claim: " + amount + " (" + words(claim.status) + "); " + support + "." : "No offset claim on file.",
-      "Plan A's source check: " + words(decisionView.source_assessment.status) + ".",
-    ];
-    byId("sheet-hint").textContent = model.controls.decide.responses.success.message;
-    byId("sheet-title").textContent = "Decide Hospital H's " + amount + " offset";
-    byId("sheet-evidence").replaceChildren(...sheetLines.map((line) => Object.assign(document.createElement("li"), {
-      textContent: line + (sheetPrior && !sheetPrior.includes(line) ? " (changed)" : ""),
-    })));
-    byId("sheet-rule").textContent = "Adjustment rule " + (pkg.control_pack || {}).adjustment_rule_id + " applies; the offset has " + support + ". This is for your information and does not decide for you.";
-    if (unresolvedDecision) form.querySelector('input[value="' + unresolvedDecision.name + '"]').checked = true;
-    const held = commandPending || Boolean(unresolvedDecision);
-    for (const field of [...form.querySelectorAll("input"), byId("sheet-reason")]) field.disabled = held;
-    const names = model.local_controls["sheet-confirm"].names;
-    byId("sheet-confirm").textContent = (commandPending ? names.pending : unresolvedDecision ? names.retry
-      : { "reject-offset": names.reject, "authorize-offset": names.accept }[chosen()] || names.idle).replace("{amount}", amount);
-    byId("sheet-confirm").disabled = commandPending;
-    byId("sheet-cancel").disabled = commandPending;
-  }
-
-  function openSheet() {
-    if (!unresolvedDecision) form.reset();
-    sheetPrior = null;
-    sheetError("");
-    sheet.showModal();
-    renderSheet();
-  }
-
   function commandMessage(text, kind) {
     const node = byId("command-status");
     node.textContent = text;
-    node.className = "command-status " + kind;
+    node.className = "flash " + kind;
   }
 
   function describeError(code, name) {
@@ -723,10 +669,10 @@
     if (declared && declared.message) return declared.message;
     return {
       authority_actor_not_authorized: "Owner denied the command because the fixed synthetic reporter role cannot make a financial decision.",
-      obligation_revision_conflict: "Owner rejected the stale revision. Reopen the H package and review the current revision.",
-      evaluation_revision_conflict: "Owner rejected the evaluation binding because it no longer matches the current package.",
+      obligation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",
+      evaluation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",
       loopback_origin_required: "The service accepts this action only from its exact loopback browser origin.",
-    }[code] || "Command result is unresolved. Refresh the overview and reopen the package before any retry.";
+    }[code] || "Command result is unresolved. Reload this page and check the record before any retry.";
   }
 
   async function postJson(url, body) {
@@ -758,32 +704,24 @@
   }
 
   async function performAction(name) {
-    if (commandPending) return;
-    const decisionWasOpen = decisionOpen;
+    if (commandPending || !ROUTES[name]) return;
     const envelope = snapshot && snapshot.read_envelope;
-    const startedAt = envelope ? { ...ownerIdentity(envelope), ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id } : null;
-    const route = ROUTES[name];
+    const startedAt = envelope ? { ...snapshotFields(envelope), snapshot_id: envelope.snapshot_id } : null;
     const body = commandBody(name);
-    if (!route) return;
-    if (!body) return sheet.open ? sheetError("no_package", model.local_controls["sheet-confirm"].errors.no_package) : commandMessage("Reopen Hospital H's package, then try again.", "error");
-    const amount = name in DECISIONS ? offsetOf(currentPackage()).amount : "";
-    // Hold the exact body until the Owner answers: a lost response is retried byte for byte.
+    if (!body) return commandMessage("Reload this page, then try again.", "error");
     const isDecision = name in DECISIONS;
-    if (isDecision) {
-      unresolvedDecision = { name, body };
-      sheetError("");
-    }
+    const amount = isDecision ? usd(hView().claim.amount_cents) : "";
+    // Hold the exact body until the Owner answers: a lost response is retried byte for byte.
+    if (isDecision) unresolvedDecision = { name, body };
     if (name === "record-cash") unresolvedCashBody = body;
     commandPending = true;
-    updateActions();
+    render();
     let refreshAfter = false;
-    let reopenAfter = false;
     let responseReceived = false;
     try {
-      const result = await postJson(route, body);
+      const result = await postJson(ROUTES[name], body);
       responseReceived = true;
-      const declared = model.controls[name] && model.controls[name].responses.success.message;
-      let description = (declared || "Command recorded").replace("{amount}", amount);
+      let description = model.controls[name].responses.success.message.replace("{amount}", amount);
       if (name === "acknowledge") {
         description += " Cash before: " + asMoney(result.cash_before_cents) + "; after: " + asMoney(result.cash_after_cents) + "; cash effect: " + asMoney(result.cash_effect_cents) + ".";
       }
@@ -791,70 +729,95 @@
       if (name === "record-report") description += " Reporting source: synthetic and unverified.";
       if (name === "restore-test") description += " H decision package equality: " + String(result.continuity.decision_package_equal) + ".";
       const applied = applyCommandSnapshot(result.workspace, startedAt);
-      commandMessage(description + (applied ? " The package below now shows the result." : " Reopen the package to review the new Owner sequence."), "success");
-      if (isDecision) {
-        unresolvedDecision = null;
-        sheet.close();
-      }
+      unresolvedDecision = null;
       if (name === "record-cash") unresolvedCashBody = null;
-      reopenAfter = decisionOpen;
-      if (applied) {
-        await refreshCorrectionFollowup(workspaceRequestGeneration);
-      } else refreshAfter = true;
+      picked = null;
+      draft = "";
+      confirming = null;
+      commandMessage(description + (applied ? "" : " Reload this page to review the new Owner sequence."), "success");
+      if (applied) await refreshCorrectionFollowup(workspaceRequestGeneration);
+      else refreshAfter = true;
     } catch (error) {
       const code = responseReceived ? "command_response_unverified" : error.message;
       if (!UNCERTAIN_OUTCOMES.includes(code)) {
         if (isDecision) unresolvedDecision = null;
         if (name === "record-cash") unresolvedCashBody = null;
+        confirming = null; // nothing was recorded: back to the choice, with the reason kept
       }
       const message = describeError(code, name);
       const response = model.controls[name].responses[code === "command_unavailable" ? "owner_command_unavailable" : code];
       commandMessage(message, "error");
-      if (isDecision) {
-        sheetPrior = sheetLines;
-        sheetError(code, message);
-      }
-      if (response && response.screen === "unavailable") {
-        showOwnerUnavailable(message);
-      } else {
-        if (code === "obligation_revision_conflict") {
-          packageStale = true;
-          banner("package-staleness", "stale", "STALE REVIEW — Owner rejected the package binding. Reload the overview and reopen H before continuing.");
-        }
-        refreshAfter = true;
-        reopenAfter = isDecision; // the sheet is modal: show it the new facts instead of stranding it on stale ones
-      }
+      if (response && response.screen === "unavailable") showOwnerUnavailable(message);
+      else refreshAfter = true;
     } finally {
       commandPending = false;
-      detectPackageStaleness();
-      renderDecision(); moveFocus(sheet.open ? "sheet-confirm" : "command-status", false);
+      render();
+      (byId("confirm") || byId("command-status")).focus({ preventScroll: true });
       if (refreshAfter) await refreshOverview();
-      if (ownerAvailable && (reopenAfter || (decisionWasOpen && !decisionOpen))) await openPackage();
     }
   }
 
-  byId("refresh-button").addEventListener("click", refreshOverview);
-  byId("open-package").addEventListener("click", openPackage);
-  document.querySelector(".action-grid").addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button || button.disabled) return;
-    if (button.dataset.action === "decide") openSheet();
-    else performAction(button.dataset.action);
-  });
-  form.addEventListener("input", () => { sheetError(""); renderSheet(); });
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (commandPending) return;
-    const name = unresolvedDecision ? unresolvedDecision.name : chosen();
-    const errors = model.local_controls["sheet-confirm"].errors;
-    if (!name) sheetError("no_choice", errors.no_choice);
-    else if (!unresolvedDecision && !byId("sheet-reason").value.trim()) sheetError("no_reason", errors.no_reason);
-    else performAction(name);
-  });
-  byId("sheet-cancel").addEventListener("click", () => sheet.close());
-  sheet.addEventListener("cancel", (event) => { if (commandPending) event.preventDefault(); });
+  // ---- Wiring ----
+
+  function pick(name) {
+    picked = name;
+    confirming = null;
+    render();
+    byId("kind-" + name).focus({ preventScroll: true });
+  }
+
+  function onRecordClick(event) {
+    const target = event.target.closest("button");
+    if (!target || target.disabled) return;
+    if (target.dataset.action) {
+      if (target.dataset.action === "record-cash") {
+        confirming = "record-cash";
+        render();
+        byId("confirm").focus({ preventScroll: true });
+      } else performAction(target.dataset.action);
+    } else if (target.id === "record-btn") {
+      confirming = "decision";
+      render();
+      byId("confirm").focus({ preventScroll: true });
+    } else if (target.id === "cancel") {
+      const wasCash = confirming === "record-cash";
+      confirming = null;
+      render();
+      (wasCash ? document.querySelector('[data-action="record-cash"]') : byId("record-btn")).focus({ preventScroll: true });
+    } else if (target.id === "confirm") {
+      performAction(confirming === "record-cash" ? "record-cash" : unresolvedDecision ? unresolvedDecision.name : picked);
+    }
+  }
+
+  function onKey(event) {
+    const record = document.querySelector("#page [data-record]");
+    const button = byId("record-btn");
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      if (record && button && !button.disabled) {
+        event.preventDefault();
+        button.click();
+      }
+      return;
+    }
+    if (event.target.closest("textarea,input[type=search]") || event.metaKey || event.ctrlKey || event.altKey || !snapshot || !allows("decision")) return;
+    if (event.key === "/") {
+      event.preventDefault();
+      byId("filter").focus();
+    } else if ((event.key === "1" || event.key === "2") && byId("kind-reject-offset") && !byId("kind-reject-offset").disabled) {
+      event.preventDefault();
+      pick(event.key === "1" ? "authorize-offset" : "reject-offset");
+      byId("reason").focus();
+    } else if (event.key === "j" || event.key === "k") {
+      const next = order[Math.max(0, Math.min(order.length - 1, order.indexOf(lastId) + (event.key === "j" ? 1 : -1)))];
+      if (next) location.hash = next;
+    } else if (event.key === "Escape" && confirming && !commandPending && !unresolvedDecision && !unresolvedCashBody) byId("cancel").click();
+  }
 
   async function boot() {
+    document.querySelector(".sr-focus").addEventListener("click", (event) => { // keep the address: the hash names the record
+      event.preventDefault();
+      byId("record").focus();
+    });
     try {
       model = await fetchJson("/interaction-model.json");
     } catch (_error) {
@@ -863,19 +826,50 @@
     }
     role = resolveRole();
     if (!role || !model.roles[role]) {
+      const list = byId("role-links");
+      for (const [id, label] of Object.entries(model.roles)) list.append(el("li", {}, el("a", { href: "/role/" + id, text: label })));
       byId("role-picker").hidden = false;
-      renderRolePicker();
+      byId("work").classList.add("open");
+      banner("ok", "Choose a role to begin.");
       return;
     }
-    byId("workspace-root").hidden = false;
-    applyRoleGating();
+    byId("role-status").replaceChildren("Role: " + model.roles[role] + " · ", el("a", { id: "switch-role", href: "/", text: "Switch role" }));
+    byId("switch-role").addEventListener("click", (event) => {
+      if (commandPending || unresolvedDecision || unresolvedCashBody) event.preventDefault();
+    });
+    byId("queue").hidden = false;
+    byId("work").classList.add("has-queue");
+    byId("filter").hidden = byId("summary-link").hidden = !allows("decision");
+    byId("keys").hidden = !allows("decision");
+    byId("filter").addEventListener("input", (event) => { filterText = event.target.value; renderQueue(); });
+    byId("filter").addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.target.value = filterText = "";
+        renderQueue();
+        event.target.blur();
+      } else if (event.key === "Enter") {
+        const first = document.querySelector("#qlist a.row");
+        if (first) {
+          location.hash = first.dataset.id;
+          event.target.blur();
+        }
+      }
+    });
+    byId("page").addEventListener("click", onRecordClick);
+    byId("page").addEventListener("input", (event) => {
+      if (event.target.id !== "reason") return;
+      draft = event.target.value;
+      byId("record-btn").disabled = !(picked && draft.trim());
+      byId("why-off").textContent = decisionHint();
+    });
+    byId("page").addEventListener("change", (event) => { if (event.target.name === "kind") pick(event.target.value); });
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("hashchange", route);
     refreshOverview();
     window.setInterval(refreshOverview, 15000);
     window.setInterval(() => {
       if (lastSuccessfulRead && Date.now() - lastSuccessfulRead > 30000 && ownerAvailable) {
-        markViewUnusable("stale",
-          "STALE LOCAL VIEW — no successful Owner read in 30 seconds; source freshness remains UNKNOWN and commands are disabled.",
-          "STALE LOCAL VIEW — the open package is retained but cannot authorize a command.");
+        markViewUnusable("stale", "STALE LOCAL VIEW — no successful Owner read in 30 seconds; commands are disabled.");
       }
     }, 5000);
   }
