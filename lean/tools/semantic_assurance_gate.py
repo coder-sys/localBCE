@@ -48,6 +48,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 from typing import Any, Mapping, Sequence
 
 
@@ -69,6 +70,12 @@ THEOREM_DECLARATION_RE = re.compile(
 AXIOM_LINE_RE = re.compile(
     r"^'(?P<name>[^']+)' (?:(?:does not depend on any axioms)|(?:depends on axioms: \[(?P<axioms>.*)\]))$"
 )
+# A pinned executable's import closure holds no proof-side module (theorems, KATs, vectors, axiom checks), so a proof
+# edit never changes its bytes. The roots are those executables' `root` entries in lakefile.toml.
+PINNED_EXES = ("blind_financial_correction",)
+PROOF_MODULE_RE = re.compile(r"(?:^|\.)(?:Theorems|KAT|Vectors|CodecLaws\w*|\w*Check)(?:\.|$)")
+PROOF_COMMAND_RE = re.compile(r"(?m)^\s*(?:#print\s+axioms|#guard_msgs)\b")
+LEAN_TOKEN_RE = re.compile(r"/-|-/|--[^\n]*|(?:(?!/-|-/|--)\S)+")
 HEX_256_RE = re.compile(r"[0-9a-f]{64}\Z")
 HEX_160_RE = re.compile(r"[0-9a-f]{40}\Z")
 LEAN_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
@@ -629,6 +636,56 @@ def _extract_git_tree(root: Path, revision: str, destination: Path) -> None:
         raise AssuranceError(f"could not extract pinned Git archive: {exc}") from exc
 
 
+def _lean_imports(source: str) -> list[str]:
+    """Modules named in a Lean file's header: `prelude`, then `[public] [meta] import [public] [meta] [all] M`, any layout."""
+    words: list[str] = []
+    depth = 0
+    for token in LEAN_TOKEN_RE.findall(source):
+        if token == "/-":
+            depth += 1
+        elif token == "-/":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and not token.startswith("--"):
+            words.append(token)
+    imports: list[str] = []
+    at = 1 if words[:1] == ["prelude"] else 0
+    while True:
+        while at < len(words) and words[at] in ("public", "meta"):
+            at += 1
+        if at + 1 >= len(words) or words[at] != "import":
+            return imports
+        at += 1
+        while at + 1 < len(words) and words[at] in ("public", "meta", "all"):
+            at += 1
+        imports.append(words[at])
+        at += 1
+
+
+def _check_pinned_exe_closure(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> int:
+    lake = tomllib.loads((lean_dir / "lakefile.toml").read_text(encoding="utf-8"))
+    roots = {str(exe["name"]): str(exe["root"]) for exe in lake.get("lean_exe", [])}
+    if any(name not in roots for name in exes):
+        raise AssuranceError("pinned executable is not a lean_exe in lakefile.toml")
+    seen: set[str] = set()
+    pending = [roots[name] for name in exes]
+    while pending:
+        module = pending.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        if PROOF_MODULE_RE.search(module):
+            raise AssuranceError(f"pinned executable imports proof module {module}")
+        *folders, name = module.split(".")
+        path = lean_dir.joinpath(*folders) / f"{name}.lean"
+        if not path.is_file():
+            continue  # Init, Std or Lean: not a source file of this workspace
+        source = path.read_text(encoding="utf-8")
+        if PROOF_COMMAND_RE.search(source):
+            raise AssuranceError(f"pinned executable imports {module}, which pins axioms")
+        pending.extend(_lean_imports(source))
+    return len(seen)
+
+
 def _toolchain_paths(manifest: Manifest) -> tuple[dict[str, Path], dict[str, Any]]:
     if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise AssuranceError(
@@ -902,6 +959,7 @@ def _verify_candidate(
     source_scan = _check_forbidden_sources(
         lean_dir, source_files, manifest.forbidden_tokens
     )
+    _check_pinned_exe_closure(lean_dir)
     tool_paths, tool_identities = _toolchain_paths(manifest)
     build_command = [
         str(tool_paths["lake"]),

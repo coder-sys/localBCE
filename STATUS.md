@@ -1,6 +1,6 @@
 # RightRail status
 
-Updated: 2026-09-29. Branch `pq-m1` = trunk `5ebffba` + PQ signing M1. Git state, raw guard
+Updated: 2026-09-29. Trunk has cash file 1a and 1b and PQ signing M1 (gate checkpoints signed with ML-DSA-87). Git state, raw guard
 logs and artifact provenance govern; a branch's pass does not verify another branch or their combination.
 `CONSTITUTION.md` is supreme. Protected-change records (Art. XI.2) are in
 `docs/CORE_REDESIGN.md`; how the code fits together is `ARCHITECTURE.md`.
@@ -16,13 +16,13 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
-- **Full suite** (`pqm1-full4-a7-L1`, pre-fix): 541 run, 531 passed, 0 failed, 10 skipped. Touched modules, final tree: `pqm1-t9-a1-L1` 29/29.
-- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount; the checker re-checks it before COMMIT.
+- **Full suite** (`lqw-full1`, quick wins `a4b422e`): 547 run, 537 passed, 0 failed, 10 skipped. Gates: `lqw-l6f`, `lqw-real6`, `lqw-cpin`.
+- **Lean-live M0** (`m0-full-r1` 463/475, 12 skipped): Lean decides the correction amount given Python's `correctionPaid` (branch `lean-paid-sum` closes that gap); the checker re-checks it before COMMIT.
 - **G2 dependency check** (`g2dep-r3-a1-L2`, 184/184): a correction follow-up reopens only when a derived dependency key moves (XI.2 record).
 - **G4 support package v2** (XI.2 record): software version and Trust Graph profile stay NONE.
 - **Line pack (B+)** (documentation-only CMS-64.9 pack; XI.2 record): its tests run in the suite. Kill criterion 1 holds (19A 32,345 of 32,345, FULL).
-- **Follow-through pack (M1)** (derived, documentation-only): its tests run in the suite.
-- **Follow-through decision (M2)** (XI.2 record; `m2-full-a4-L2` 511/525, 14 skipped): an official's ASSIGN or CLOSE is one protected event, checked before COMMIT; a close needs a distinct document per required purpose; a close stops only the uncollected share.
+- **Follow-through pack (M1)** (derived, documentation-only): full suite on merge with `8883de9`, `recm1-merge-full-a1-L3` `SUMMARY run=511 passed=497 failed=0 errors=0 skipped=14`; skips include ML-DSA vector tests (no exe).
+- **Follow-through decision (M2)** (XI.2 record; `m2-full-a4-L2` 511/525, 14 skipped): an official's ASSIGN or CLOSE is one protected event, checked before COMMIT; a close commits with no document (only the pack flags `gap:closure-evidence-missing`, yet shows CLOSED); it stops only the uncollected share.
 - **Gate decision rules R1-R5 (Lean, `BlindLedger.Gate.Rules`)**: sound, complete, fail-closed, monotone, arrival-order deterministic (stale reads give `STALE_*`/`*_UNVERIFIED` review; XI.2 records). 274/274 vectors, 3,616 demo lines; all 204 mutants killed (`gate-r8-rmut*`). Tests only, not the token path. Open Low: a CAP copy of a loose row gets no reason code; the unchained path is O(n*m).
 - **Gate formats #1-#4, #12 (gate-v1)**: CHECKPOINT/v1, TOKEN/v1 and the payer's twelve-check `verifyToken` (Lean `BlindLedger.Gate`; XI.2 records): 256/256 golden vectors judged with real ML-DSA-87; 36 theorems on `propext`/`Quot.sound` only (`AXIOMS.txt`); 133/133 mutants killed in round 8; the 4 equivocation mutants rerun on M1, 4/4 (`pqm1-mut1-a15`; `gate_mutants` edits the live `Spec.lean`). Six LM1 statements proved. **UNBUILT** (target §4-§5): the checkpoint producer, the payer pin before send, the prior-digest check. **PQ signing M1:** every checkpoint signature is verified by the Lean `gate_verify` (`artifacts/gate-verify/`) and the signer is checked against NIST ACVP (115 vectors) and AWS-LC (4,944 cases): vector-verified, not proved.
 - **Engine, proof and kit** (runs r67-r89: `artifacts/engine-correction/PROVENANCE.md`, raw guard logs): reproduced source manifest, six-target Lake build, KAT and gate-rule cases, trust-zero/axiom-closure/`leanchecker` on 18 correction declarations, 2,673-member kit, clean checkout 24/24. 21 compile warnings and 30 fixed-vector native-axiom declarations remain; not an all-theorem axiom-hygiene claim. **Retained failures (unresolved, logs kept):** r75 native-path sort order, r78 CRLF parsing, r81-r83 smoke-harness issues; r85's outer run failed only in its count-print command.
