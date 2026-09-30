@@ -12,9 +12,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 62 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  4ad07c06e22567b16f8cd4a9b64f6d6131fb290ec6c61490a2e59f4662b93dcc, 6,879 bytes;
-  copy at C:\Users\neers\rrb\gate\prtb4-gv-manifest.txt (tree 97418f3; third partials note below).
+- Source manifest, 70 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  e6976e2ef135ea57290525c2c2b9a980b131b2b28d2f06873dd0d339d90bbd9e, 7,783 bytes;
+  copy at C:\Users\neers\rrb\gate\m3s1-gv-manifest.txt (branch m3-step1; last note below).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -64,6 +64,12 @@ review added BlindLedger/Financial/ReadUpTo.lean to lean/tools/semantic_assuranc
 SHA-256; no compiled file changed. The exe did not move: fresh `git archive` stages of 8a112d7 (C:\Users\neers\rrb\le\stage-prtb3-a and -b; guard logs prtb3-stagea-a1-L3
 and prtb3-stageb-a1-L3) and of 97418f3 (stage-prtb4-a and -b; prtb4-stagea-a1-L3 and prtb4-stageb-a1-L3), same command, exit 0, all gave gate_verify b9696f2e...
 (4,205,056 bytes), the worker 86299A0D... and the correction exe D5A06E9F...0CBB.
+
+Re-pin (2026-09-30, branch m3-step1, merge of trunk 824280b): the manifest moved (62 files, 4ad07c06..., to 70 files, e6976e2e...) while the
+exe did not. The branch added the payment model under lean/BlindLedger/Financial/Payment/ (Types, Transition, Laws, Ledger, Bridge, Codec, CodecLaws,
+KAT), pinned its theorems in AxiomCheck.lean, and made two lemmas in CorrectionTransition/PaidSumTheorems.lean public. `lake build gate_verify` in the
+branch's lean/ (guard log m3s1-gv1-a10-L3, 12 jobs, exit 0) gave SHA-256 b9696f2e..., equal to the pin above. No file in gate_verify's import
+closure changed. This is an in-tree incremental build, not a pair of fresh stage builds.
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in

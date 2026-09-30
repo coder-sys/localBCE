@@ -144,7 +144,7 @@ td { padding: 9px 0; border-top: 1px solid var(--rule); vertical-align: baseline
 .confirm p { margin: 0; max-width: 62ch; }
 
 .signed { display: grid; gap: 6px; }
-.signed .line { color: var(--blue); font-weight: 500; }
+.signed .line { color: var(--blue); font-weight: 500; border-left: 2px solid var(--blue); padding-left: 12px; } /* a person's words carry a rule as well as the accent, so greyscale and print keep the cue */
 .signed .seal { color: var(--ink-3); overflow-wrap: anywhere; }
 .src td { padding: 9px 0; vertical-align: middle; }
 .src td.fp { color: var(--ink-3); padding-inline: 16px; white-space: nowrap; }

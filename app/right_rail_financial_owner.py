@@ -5893,7 +5893,7 @@ class FinancialOwner:
             elif str(obligation["verification_status"]) == "CONFLICT_VISIBLE":
                 amount_support = "CONFLICTED"
             else:
-                amount_support = "SUPPORTED" if amount_evidence_ids else "NO_LINKED_EVIDENCE"
+                amount_support = "SUPPORTED" if active_payment_count or authorized_claim_count else "NO_LINKED_EVIDENCE"
 
             requirements = {
                 "amount_satisfied": "SUPPORTED" if amount_satisfied and amount_support == "SUPPORTED" else (
