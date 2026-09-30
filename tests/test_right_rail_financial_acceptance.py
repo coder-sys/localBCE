@@ -5703,6 +5703,34 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
             verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
 
+    def test_checker_pins_every_table_clause(self) -> None:
+        # PRAGMA table_info cannot show ON CONFLICT, NOT NULL or CHECK: with file access a forger could make the Owner's
+        # plain INSERT a REPLACE (whose delete fires no trigger) or drop a guard. Only a whitespace run may differ.
+        store = self._build_base()
+        for label, table, old, new in (
+            ("on-conflict-replace", "evidence", "evidence_id TEXT PRIMARY KEY,", "evidence_id TEXT PRIMARY KEY ON CONFLICT REPLACE,"),
+            ("dropped-not-null", "evidence", "item_id TEXT NOT NULL,", "item_id TEXT,"),
+            ("dropped-check", "financial_meta", " CHECK (dispatch_enabled=0)", ""),
+            ("literal-case", "financial_meta", "'LIVE','SHADOW','TEST'", "'live','SHADOW','TEST'"),
+            ("whitespace-only", "evidence", "evidence_id TEXT PRIMARY KEY,", "evidence_id  TEXT\n\tPRIMARY KEY,"),
+        ):
+            with self.subTest(label):
+                path = self._path(f"table-sql-{label}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    read = lambda: connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                    before = read()
+                    connection.execute("PRAGMA writable_schema=ON")
+                    connection.execute("UPDATE sqlite_master SET sql=replace(sql,?,?) WHERE type='table' AND name=?", (old, new, table))
+                    self.assertNotEqual(read(), before)
+                if label == "whitespace-only":
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                    continue
+                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:sql:{table}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:sql:evidence$"):
+            self._make_owner(path=self._path("table-sql-on-conflict-replace.sqlite"))
+
     def test_checker_refuses_a_hidden_partial_index(self) -> None:
         # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.
         store = self._build_base()

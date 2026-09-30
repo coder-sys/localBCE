@@ -16,6 +16,8 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
+- **Table SQL pin** (`replace-trigger-guard`, XI.2 record; `rtrig-tgt2`): the checker pins every table's whole `CREATE TABLE` text, so a planted `ON CONFLICT REPLACE` or a dropped NOT NULL or CHECK is refused at open.
+
 - **Decision package window fix** (`dpk-window-fix`, XI.2 record; red `dpkfix-red1-a2-L3`, green `dpkfix-green1-a3-L1`): the verdict reads whole-obligation counts, never the page window; contract stays v2.
 - **Checker per-obligation reads** (`cksql3-after-dec`): the pre-COMMIT check reads only the touched obligation's evidence, determinations, actions and outbox rows, `NOT INDEXED`; caps still count the whole table; 44 to 13 ms at 2,500 history events, 144 to 27 ms at 9,000. Same result on every honest store and every tamper confined to the touched obligation, not on every store: another obligation's malformed rows are the whole-store verify's.
 - **Decoder cross-check** (`dec-xcheck`, trunk `70bbff6`; no wire, digest or Lean change; full suite `wfb-full` on the final tree: 589 run, 560 passed, 1 failed, 13 errors, 15 skipped, all known non-passes): the BLFCRES3 decoder re-encodes what it decoded and refuses any difference from Lean's bytes (`correction_transition_failed`), as the BLFRES02 decoders do; the worker frame now also fails closed (`worker_exchange`, worker killed) on any stdout byte left before a request or after a frame, and the engine recycles the worker when a result fails to decode or bind.
