@@ -120,15 +120,12 @@ Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
 
 ## Migration (each step leaves a working system; one guarded run per step)
 
-Done: golden baselines; v5/v6 retired (XI.2 record); `commands` table, required
-revision and actor, append-only triggers, FKs; complete-fact events and the
-`apply` reducer (OWNER/CONTINUITY v8); Continuity v8 restore by replay; Switch
-and Mirror reuse the replay. Standing rules: one typed decoder per record, no
-re-validating own writes; Python re-derivation of Lean is replaced by read-set
-binding plus a pre-COMMIT per-obligation checker; the checker is replay +
-compare with an incremental mode and all 25 tamper tests still detect.
-Open: after a guarded Lean rebuild, BLFIN02 becomes the live evaluator and more
-transitions move to Lean.
+Done (history in git): v8 owner, Continuity and replay reuse. Standing rules:
+one typed decoder per record, no re-validating own writes; Python re-derivation
+of Lean is replaced by read-set binding plus a pre-COMMIT per-obligation
+checker; the checker is replay + compare with an incremental mode and all 25
+tamper tests still detect.
+Open: BLFIN02 becomes the live evaluator and more transitions move to Lean.
 
 ## History segments (approved by the founder 2026-09-25)
 

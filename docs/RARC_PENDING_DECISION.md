@@ -24,8 +24,3 @@ The TSV is the executable mapping owner. Rows currently marked `PENDING_DOMAIN_R
 The current `G8A_CHARGE_VALID` row is a proposed split from a former combined charge gate. Invalid
 or malformed charge data (`16/M79`) and excessive charge (`45`, with no default RARC) are different
 decisions. A later policy-approved change should split them rather than treat one pair as both.
-
-## Sign-off record
-
-Reviewer: ____________________ Date: ____________________ Decision: approve / changes / G8 split / crosswalk review
-Notes: __________________________________________________________________________________

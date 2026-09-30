@@ -39,9 +39,8 @@ manifest, program funding receipts, decision package v2, the exported
 `commands` log and declared foreign keys), with its matching
 `RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). Owner and
 independent checker accept v8 stores/packages only; every other version
-(v2-v7, unknown) is rejected without mutation, owner open with
-`unsupported_store_version`; a store converted from v7 (contains an
-`OPENING_BALANCE` event) fails `history:event-kind`.
+is rejected without mutation, owner open with `unsupported_store_version`; a
+converted v7 store (an `OPENING_BALANCE` event) fails `history:event-kind`.
 
 The evaluation receipt binds scope, evaluation/obligation/revision, Control
 Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
@@ -57,9 +56,9 @@ digest-bound roster.
 Every outer write checks current funding projections against their immutable
 receipts, indexed funding events, successor status and root coverage under the
 same SQLite lock, before executing and before committing; the funding summary
-checks within its read snapshot. This bounded check scans current funding
-sources twice per batch and detects current-projection drift; independent full
-replay still checks historical rows, digests and the whole store.
+checks within its read snapshot. It scans current funding sources twice per
+batch and detects current-projection drift; independent full replay still
+checks historical rows, digests and the whole store.
 
 ## Lean decides, the owner commits
 
@@ -78,9 +77,9 @@ replay still checks historical rows, digests and the whole store.
 - **Pinned executable:** `artifacts/engine-correction/`, rebuilt twice
  byte-identically from the `lean/` commit its `PROVENANCE.md` names. Engines
  a re-pin retired are listed in its digest-pinned `RETIRED_PINS`: their
- committed follow-ups stay valid history, but only the current pin decides;
- a retired engine never decides after a newer one, and no correction, whatever
- engine decided it, requests more than was then requestable.
+ committed follow-ups stay valid history, but only the current pin decides,
+ and no correction, whatever engine decided it, requests more than was then
+ requestable.
 - **Evaluation comparison (tests only):** `BLFIN02`/`BLFRES02` in
  `app/right_rail_financial_engine.py` compare the owner's evaluation with
  Lean's; only tests call it, live evaluation is Python. The live correction
@@ -117,11 +116,11 @@ routing or cutover.
 **Staff server** is loopback-only and serves `app/staff_workspace/`. The
 **service kit** (`tools/right_rail_financial_service_kit.py`) is the one
 packager: it assembles, verifies, extracts, runs the end-to-end scenario and
-serves the workspace from a digest-bound offline archive. Its current
-release producer and kit inventory bind the current vectors, retired-pin
-registry and fresh guarded engine receipt. The kit checks canonical source
-paths and the exact v4 guard records under LF or CRLF line endings (raw log
-bytes stay digest-bound); exercised archives are in provenance. Staff cash evidence names the correction request it
+serves the workspace from a digest-bound offline archive. Its release
+producer and inventory bind the current vectors, retired-pin registry and a
+fresh guarded engine receipt. The kit checks canonical source paths and the
+exact v4 guard records under LF or CRLF endings (raw log bytes stay
+digest-bound); exercised archives are in provenance. Staff cash evidence names the correction request it
 pays; acknowledgment alone never provides that credit. The synthetic staff
 clock advances to the explicit decision time before issuing the correction, so
 new demo acknowledgments follow their action, even after a lost response.
@@ -133,9 +132,9 @@ before closing; HEAD sends no body, so a slow sender cannot hold a refusal open.
 
 ## Direct-state-owned clearance route (parked)
 
-Parked in `parked/state_clearance/` (`parked/README.md`): the State `BLSDRQ01`
-route. Only `CLEAR` or a valid `EXCEPTION_APPROVED` may advance economic state;
-`HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
+`parked/state_clearance/` (`parked/README.md`): only `CLEAR` or a valid
+`EXCEPTION_APPROVED` may advance economic state; `HOLD`, `HUMAN_REVIEW` and
+`BLOCK` cannot.
 
 ## Mirror Provider Trust Graph
 
@@ -152,12 +151,11 @@ capture context (subject, credential, enrollment, locator, observation and fetch
 time); all six values must match the independent source check before admission.
 Only the admitted graph reaches the read-model and export verification gates;
 the served projection keeps freshness and source truth unknown. A failed capture
-or context mismatch opens no server. Retry recomputes the same verified projection.
-Both CLIs accept `--source-envelope` and `--capture-context` (see `--help`) instead
-of `--artifact PATH`; the four identities are opaque
-128-character hex values from the capture configuration, never parsed from the
-untrusted envelope. This is file intake for the fixed synthetic profile; no
-live fetch or financial-file adapter is implied.
+or context mismatch opens no server; retry recomputes the same projection. Both CLIs accept `--source-envelope` and
+`--capture-context` (see `--help`) instead of `--artifact PATH`; the four
+identities are opaque 128-character hex values from the capture configuration,
+never parsed from the untrusted envelope. File intake for the fixed synthetic
+profile only; no live fetch or financial-file adapter.
 
 ## Provider App
 
@@ -188,12 +186,9 @@ What exists today toward it:
 - The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
  one Windows process per call) is disqualifying for gate throughput and needs a
  long-lived worker pool; no warm-worker benchmark has been run.
-- There is no CI, on-call rotation or tested failover drill.
 
-The target document holds the authority ladder, gate points, batch signing,
-fail policy, sharding, proof boundary, evidence modes and post-quantum choices,
-and which are unresolved. Gate-v1's formats and Lean payer checks are not
-connected to signed grant admission, durable payer state or the rules path.
+Gate-v1's formats and Lean payer checks are not connected to signed grant
+admission, durable payer state or the rules path.
 
 ## Rejected directions
 

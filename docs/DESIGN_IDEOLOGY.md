@@ -35,26 +35,13 @@ Missing, stale, malformed, ambiguous or unauthorized authority fails closed
 effective directives, exceptions, chronology, state mutation and payment stay
 state-owned even when a verifier or proof supplies an evidence result.
 
-## Persistence, recovery and retries
-
-The durable transition and retry rules are Article III.2-III.3 (one atomic
-write; an exact retry is a duplicate, changed identity or input a conflict).
-Recovery must prove behavior both when a process exits before COMMIT and when
-the committed result is lost before the caller receives it; restart and
-independent verification are part of the contract, not operational decoration.
-
-Continuity restore is bounded and isolated as `ARCHITECTURE.md` states; cleanup
-removes only an owned attempt or published identity, and failures are visible.
-
 ## Lean direction
 
 Implement everything reasonably implementable in Lean (Article XI.8): a small
-trusted state and explicit state machines; independent checks and fail-closed
-authority; explicit recovery, idempotency and atomic history-projection-outbox
-properties; and a pinned executable Lean artifact linked to the working runtime
-only after refinement, theorem, adapter, mutation, KAT and resource evidence
-exists. Source adapters, generated vectors or differential tests do not
-themselves create formal authority.
+trusted state, explicit state machines and independent checks. A pinned Lean
+artifact is linked to the working runtime only after refinement, theorem,
+adapter, mutation, KAT and resource evidence exists; source adapters, generated
+vectors or differential tests do not themselves create formal authority.
 
 ## Bounded resources and privacy
 
@@ -62,10 +49,6 @@ Set finite record, payload, package, memory and process limits. Measure the
 complete path with separately attributable ingestion, owner transaction,
 independent check, Continuity restore and recovery evidence. A component
 benchmark is not a system SLA; missing targets remain unknown.
-
-Corporate support, monitoring, analytics, AI tools, contractors and crash
-dumps receive zero PHI and no persistent linkable claim fingerprint (Article IV).
-Synthetic reproduction is preferred.
 
 ## Claims and sequencing
 

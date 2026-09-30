@@ -29,7 +29,7 @@ EVIDENCE_CODE_LINES = 42_585
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.
-MARKDOWN_BYTES = 157_973
+MARKDOWN_BYTES = 157_858
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
