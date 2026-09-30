@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialRevisionError, _canonical
+from app.right_rail_financial_owner import FinancialContinuityError, FinancialInputError, FinancialIntegrityError, FinancialOwner, FinancialRevisionError, _canonical
 from tests.test_right_rail_financial_followthrough import RULES, _build_r_store, _history
 
 
@@ -41,12 +41,22 @@ class RetryOrderTests(unittest.TestCase):
                         write(item, "b", original)
                     self.assertEqual((_history(store), store.obligation_detail(item)), (before, detail))
 
+    def test_reversal_refuses_a_malformed_evidence_id_before_any_lookup(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="rr-retry-order-") as directory:
+            store = _build_r_store(Path(directory), RULES)
+            for bad in (["evidence:x"], {"id": 1}, 7, None):
+                with self.subTest(bad=bad), self.assertRaisesRegex(FinancialInputError, "^evidence_id$"):
+                    store.reverse_payment(item_id="item-r1", payment_id="payment:r1", evidence_id=bad)
+
     def test_canonical_json_rejects_nan_and_infinity(self) -> None:
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=value), self.assertRaisesRegex(FinancialIntegrityError, "^canonical_json$"):
                 _canonical({"amount": value})
             with self.subTest(package=value), self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_canonical$"):
                 FinancialOwner.validate_continuity_package(b'{"amount":%s}' % json.dumps(value).encode())
+        for text in (b"1e999", b"-1E400"):  # float() overflows to infinity
+            with self.subTest(package=text), self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_canonical$"):
+                FinancialOwner.validate_continuity_package(b'{"amount":' + text + b"}")
 
 
 if __name__ == "__main__":

@@ -4106,7 +4106,7 @@ class FinancialOwner:
             payment = connection.execute("SELECT * FROM payments WHERE payment_id=? AND obligation_id=?", (payment_id, obligation["obligation_id"])).fetchone()
             if payment is None:
                 _fail(FinancialIntegrityError, "payment_missing")
-            reversal_time = event_at_ms if event_at_ms is not None else connection.execute("SELECT COALESCE((SELECT event_at_ms FROM evidence WHERE evidence_id=?), ?)", (evidence_id, self._now())).fetchone()[0]  # a retry without event_at_ms restates the first recording's time
+            reversal_time = event_at_ms if event_at_ms is not None else connection.execute("SELECT COALESCE((SELECT event_at_ms FROM evidence WHERE evidence_id=?), ?)", (_id(evidence_id, "evidence_id"), self._now())).fetchone()[0]  # a retry without event_at_ms restates the first recording's time
             evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="PAYMENT_REVERSAL", common_origin_id=common_origin_id or f"reversal:{payment_id}", source_id="synthetic-payment-source", source_version="fixture-v1", local_ref=f"reversal:{payment_id}", applicable_at_ms=reversal_time, event_at_ms=reversal_time, received_at_ms=self._now(), amount_cents=int(payment["amount_cents"]), reversal_of=payment_id)
             status = self._insert_evidence(connection, evidence)
             if status == "DUPLICATE":
@@ -6781,7 +6781,7 @@ class FinancialOwner:
         if type(package_bytes) is not bytes or not package_bytes or len(package_bytes) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
         try:
-            package = json.loads(package_bytes.decode("ascii"), parse_constant=lambda _: None)  # NaN and Infinity become null, so the canonical comparison below refuses them
+            package = json.loads(package_bytes.decode("ascii"), parse_constant=lambda _: None, parse_float=lambda t: None if abs(float(t)) == float("inf") else float(t))  # NaN, Infinity and 1e999 become null, so the canonical comparison below refuses them
         except (UnicodeDecodeError, json.JSONDecodeError):
             _fail(FinancialContinuityError, "continuity_package_json")
         if type(package) is not dict or _canonical(package) != package_bytes:
