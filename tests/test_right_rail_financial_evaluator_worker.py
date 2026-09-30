@@ -85,6 +85,32 @@ class EvaluatorWorkerTests(unittest.TestCase):
             self.assertFalse(worker.alive)
         self.assertEqual(engine._evaluate_wire(wire), answer)  # and the next request relaunches
 
+    def test_large_requests_keep_the_worker_flat(self) -> None:
+        """One worker, 20 accepted 600 KB requests then 8 near the 8 MiB ceiling: from each phase's second request its
+        commit stays in a 16 MB band.  The M1 pin kept a further 32 MiB segment per request (M1.5 XI.2 record)."""
+        data, key, long = self._wires()[0][1], "0" * 110, "x" * 500
+
+        def padded(rows: int, text: str) -> bytes:
+            extra = [dict(data["evidence"][0], evidence_id=f"zz{i:05d}{key}", kind="NOTE", common_origin_id=f"zz{i:05d}{key}",
+                          source_id=text, source_version=text, local_ref=text, amount_cents=None, reversal_of=None, supersedes=None)
+                     for i in range(rows)]
+            return adapter._encode_blfin02(dict(data, evidence=sorted(data["evidence"] + extra, key=lambda row: row["evidence_id"])))
+
+        base = len(padded(0, ""))
+        phases = ((padded(1000, key), 20), (padded((adapter.MAX_WIRE_BYTES - base) // (len(padded(1, long)) - base) - 1, long), 8))
+        self.assertGreater(len(phases[1][0]), 8_000_000)
+        with patch.object(engine, "EVALUATOR_RECYCLE_COMMIT_BYTES", 1 << 40):
+            for wire, calls in phases:
+                answers, commits = set(), []
+                for _ in range(calls):
+                    try:
+                        answers.add(engine._evaluate_wire(wire))
+                    except engine.FinancialEngineResultError as error:  # the near-ceiling frame is refused, as wire_max was
+                        answers.add(str(error))
+                    commits.append(engine._evaluator[0].commit_bytes())
+                self.assertEqual(len(answers), 1)
+                self.assertLess(max(commits[1:]) - commits[1], 16_000_000, [round(c / 1e6) for c in commits])
+
     def test_unpinned_executable_is_never_run(self) -> None:
         engine._close_evaluator()  # building the fixture store already started one
         with patch.object(engine, "EVALUATOR_ARTIFACT_SHA256", bytes(32)):

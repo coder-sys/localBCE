@@ -465,7 +465,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                         else:
                             self._unchanged(command, "^payment_origin_reversed$")
 
-    def _refused_by(self, rule, callback):  # the refusal class is fixed, so the rule that fired is read from the checker itself
+    def _refused_by(self, rule, callback):  # the owner's pre-COMMIT check of what Lean evaluated names the checker rule
         seen, real = [], independent.verify_obligation_connection
 
         def spy(*args, **kwargs):
@@ -475,7 +475,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 seen.append(str(error))
                 raise
         with patch.object(independent, "verify_obligation_connection", spy):
-            self._unchanged(callback, "^cash_file_failed$")
+            self._unchanged(callback, f"^evaluation_verification:{rule}$")
         self.assertEqual(seen, [rule])
 
     def test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit(self):
