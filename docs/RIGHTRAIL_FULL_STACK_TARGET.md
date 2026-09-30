@@ -7,19 +7,17 @@ service and, within it, Blind Ledger as an inline payment gate.
 it. [`ARCHITECTURE.md`](../ARCHITECTURE.md) describes today's code;
 [`STATUS.md`](../STATUS.md) is the only status record. This document holds no
 status and selects no state, program, deployment profile, evidence mode,
-authority level, or receiver. It draws on design notes held outside the repo:
-`next-phase.md` (build order after the core rebuild), `gate-design.md` (gate
-transport/signing/failover/audit) and `fv-plan.md` (formal-verification plan),
-the last two reviewed by three 2026-09-25 red-team passes (crypto/ZK,
-engineering, policy/market) whose corrections it folds in. Everything below the state of `STATUS.md` is design,
-not built, run, or approved: `proofSuiteId=null`, `production_usable=false`,
-`activation=false`.
+authority level, or receiver. It draws on design notes held outside the repo
+(`next-phase.md`, `gate-design.md`, `fv-plan.md`; the last two reviewed by three
+2026-09-25 red-team passes whose corrections it folds in). Everything here is
+design, not built, run, or approved: `proofSuiteId=null`,
+`production_usable=false`, `activation=false`.
 
 ## 1. The end state
 
-The gate below is one authority level within the product `ARCHITECTURE.md`
-describes, not the whole product; the core financial cycle, provider evidence,
-independent exit and reuse remain useful without an inline payment gate.
+The gate is one authority level within the product `ARCHITECTURE.md` describes;
+the core financial cycle, provider evidence, independent exit and reuse remain
+useful without it.
 
 Every Medicaid payment a state routes through RightRail — FFS and managed
 care alike — passes Blind Ledger before money goes out, at full state scale
@@ -33,8 +31,7 @@ determination the state's system consults," never "the gate holds the
 payment."
 
 Gating is **off by default**. A state turns on only the authority it grants,
-per flow, through a state-signed `AUTHORITY-GRANT` (§3). Nothing here
-selects a state, a flow, or a go-live date.
+per flow, through a state-signed `AUTHORITY-GRANT` (§3).
 
 ## 2. Gate points and rollout order
 
@@ -51,11 +48,11 @@ claim or member-month lines underneath it.
 
 Rollout order: **FFS weekly cycle first, then FFS per-claim; managed care
 capitation release first, then directed payments, then plan-to-provider.**
-Pharmacy stays retrospective through PBMs, never gated inline. This order
+Pharmacy stays retrospective through PBMs, never gated inline. The order
 follows feasibility and existing measurement, not fraud exposure: GAO found CMS
 does not measure plan-to-provider payments (GAO-25-107770), so gating capitation
-first risks moving fraud into the one channel nobody watches. Pairing early capitation gating with a plan-to-
-provider sampling commitment is a named mitigation, not yet designed.
+first risks moving fraud into that channel. A plan-to-provider sampling
+commitment is a named mitigation, not yet designed.
 
 ## 3. Authority ladder
 
@@ -63,17 +60,16 @@ A state-signed `AUTHORITY-GRANT` sets one of three levels per flow. Levels
 move up only by a new grant, never automatically:
 
 1. **OBSERVE.** Gate checks nothing; RightRail assembles evidence and
- prepares a decision package for a human. Intended first posture for any
+ prepares a decision package for a human. The first posture for any
  new flow.
 2. **HOLD.** Narrow automation: the gate may return a non-ALLOW outcome only
  for rules the grant names; any other finding stays advisory, carried as
- an ALLOW reason. Everything else the gate finds is a lead, not a hold.
+ an ALLOW reason.
 3. **TRANSFER.** Full control set applies; every in-scope payment needs a
  token (§5).
 
-The grant also carries the flow's fail policy (§6). Progression is never
-automatic; passing a comparison or proof gate does not itself grant the next
-level.
+The grant also carries the flow's fail policy (§6). Passing a comparison or
+proof gate does not itself grant the next level.
 
 ## 4. Decide, token, and the payer's checks
 
@@ -122,8 +118,7 @@ separately signed token.
 
 Signing each token would cost ~45–90 TB over 7 years at New York's volume
 (12.6M tokens a week) and exhaust a shared HSM/KMS quota (AWS KMS default:
-1,000 requests/second per account). Batch signing needs hundreds to a few
-thousand signatures a week; per-payment cost is a Merkle path and a hash.
+1,000 requests/second per account).
 
 Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
@@ -199,8 +194,7 @@ payments, and the weekly cycle has ~5 days of slack before issue) or
 flows, as a standing pre-signed bypass that activates only while the gate
 is down — the analogue of NCPDP Reject 92 with a 420-DK=13 override). There
 is no other fallback: Constitution III.5 makes fail-closed the universal
-default, and an inline block on a $1.8B weekly cycle is a provider cash-flow
-crisis, not an abstract SLA miss.
+default.
 
 **Emergency bypass.** Two distinct state officials — the payment authority
 and a program-integrity or CIO official — sign a `BYPASS-GRANT` with keys
@@ -218,53 +212,44 @@ Fail-closed is proved today as an unconditional invariant (`outcome ≠
 Accepted → delta = ∅`, fv-plan's T1). A time-boxed, bounded, logged Bypass
 outcome needs its own theorem — that a bypass cannot outlive its
 authorization and cannot be exercised silently — so T1 becomes conditional
-on the absence of an active bypass grant rather than being weakened. This
-theorem and the bypass path are designed, not built.
+on the absence of an active bypass grant rather than being weakened.
 
 ## 7. Primary, fenced standby, and the operational runbook
 
-The 99.8%-monthly availability target (~87.6 minutes of allowed downtime a
-month, matching a real state Medicaid MCO SLA exhibit) is met by one primary
-and one synchronous standby — no consensus cluster. A fencer in the state
+The 99.8%-monthly availability target (~87.6 minutes of downtime a month) is
+met by one primary and one synchronous standby, no consensus cluster. A fencer in the state
 tenant is the sole writer of the epoch, using an HSM monotonic counter plus
 a short primary lease; safety never depends on clocks, only on when to
-promote. A stale primary cannot forge a valid token for three independent
-reasons: it cannot commit (no standby of its own epoch will acknowledge
-it), it cannot sign (its epoch key is disabled in the HSM), and payers
-refuse it (a payer that has seen the higher epoch rejects the old one). A
+promote. A stale primary cannot forge a valid token: it cannot commit (no standby of its
+own epoch will acknowledge it), it cannot sign (its epoch key is disabled in the
+HSM), and payers refuse it (a payer that has seen the higher epoch rejects the
+old one). A
 TLA+ model (`gate_failover.tla`) checks these properties —
 `NoConflictingTokens`, `NoFencedTokenAccepted`, `AtMostOnceRelease`,
 `NoLostDecision`, `StaleCannotSign`, `EpochMonotone`,
-`BypassEventuallyReconciled` — as bounded state-space search, not proof;
-finding a counterexample interleaving is worth more here than a proof that
-covers only the model. Checked bounds and remaining larger runs belong in
+`BypassEventuallyReconciled` — as bounded state-space search, not proof. Checked bounds and remaining larger runs belong in
 `STATUS.md` and `docs/formal/gate_failover/README.md`.
 
-This architecture makes 99.8% achievable, not automatic: the trunk has no CI,
-on-call rotation or tested failover drill, and fencing systems fail in practice
-when a watchdog is disabled or the failover path is degraded. **A tested failover drill and an operational runbook (source
-outage, database outage, key loss, corrupted package, partial release,
-receiver timeout, operator exit) are acceptance prerequisites for claiming
-99.8%, not a property that falls out of the primary/standby architecture by
-itself.**
+**A tested failover drill and an operational runbook (source outage, database
+outage, key loss, corrupted package, partial release, receiver timeout,
+operator exit) are acceptance prerequisites for claiming 99.8%**; the trunk has
+neither.
 
 ## 8. Sharding by member key
 
-Data shards by person/member key, never by program or plan, which would scatter
-one member's payments and leave the gate's core cross-boundary check (one person
-double-billed across FFS and managed care, or two plans) to an asynchronous,
-staleness-bounded reconciliation pass. Member-key sharding keeps it in one shard. No Postgres migration and no
-multi-region work happen before a measured SQLite ceiling shows the need; a
-warm-worker throughput benchmark is the first thing to
-measure, not the last (Constitution IX.3).
+Data shards by person/member key, never by program or plan, so the gate's core
+cross-boundary check (one person double-billed across FFS and managed care, or
+two plans) stays in one shard instead of an asynchronous reconciliation pass. No Postgres migration and no
+multi-region work happen before a measured SQLite ceiling shows the need
+(Constitution IX.3).
 
 ## 9. The proof boundary: prove the interpreter, version the rule data
 
 Formal verification goes where a defect can release, withhold or misstate
-money, or forge or replay authority — concentrated in four places: the
-decision function, the bytes into and out of it, the replay checker and the
-signed token. Those are Lean, with proofs; interleavings (crash, failover,
-fencing) get TLA+ model checking instead; everything else gets tests.
+money, or forge or replay authority: the decision function, the bytes into and
+out of it, the replay checker and the signed token. Those are Lean, with
+proofs; interleavings (crash, failover, fencing) get TLA+ model checking;
+everything else gets tests.
 
 **Core invariants are proved once, over the interpreter, never over one
 rule's content.** `step`/`batch` (a pure `ReadSet -> Command -> Outcome`
@@ -278,18 +263,14 @@ edit pairs and per-state coverage tables ship as versioned, hash-pinned,
 test-vectored data, with no theorem review per update**: Medicaid rule content
 changes on independent cadences (NCCI quarterly, fee schedules ad hoc, SPAs
 continuously), so a theorem change per content change would make ordinary
-maintenance unusable (an engineering red-team finding).
+maintenance unusable.
 `CAP-REL` (§10) is data-shaped Lean evaluated by the interpreter, so it stays
 on the interpreter's proof.
-
-Today Lean decides one of 18 command types (`ARCHITECTURE.md`); §13 orders
-the rest.
 
 ## 10. Evidence modes: the non-ZK path ships first
 
 - **`DIRECT_STATE_OWNED`** uses canonical facts lawfully held in the state
- boundary directly; a fact does not need a cryptographic wrapper merely
- because it is sensitive.
+ boundary directly, with no cryptographic wrapper.
 - **`AUTHORITATIVE_ASSERTION`** uses a narrowly scoped, signed assertion from
  a qualified source; signature acceptance proves provenance, not truth,
  population completeness, or state disposition.
@@ -302,26 +283,22 @@ auditors:** signed batch checkpoints, the independent witness cosign chain,
 Merkle inclusion proofs for selective disclosure, and a reproducible Lean
 checker an auditor reruns in the state's own tenant. GAGAS auditors already
 work this way with IT-generated evidence, and no CMS, OIG, GAO or state
-auditor guidance accepts ZK proofs as audit evidence (the policy red-team found
-no precedent). This path alone gets an estimated 90% of a full ZK design's value.
+auditor guidance accepts ZK proofs as audit evidence.
 
-`PRIVATE_ZK` is a **parallel add-on**, not a prerequisite, scoped narrowly:
-ZK's marginal value is not "anyone can verify," since the state and the
-entity signing the roots ZK proves against are the same side (crypto red-team).
-Its real value is the cross-organizational case with an unmotivated verifier,
-e.g. proving to an MCO or a federal partner that no member in a release is on a
-death-match file without disclosing the eligibility list. The cheap step now is writing `CAP-REL-v1`
-(the capitation-release relation) as a plain Lean predicate evaluated directly
-(useful today as `DIRECT_STATE_OWNED` evidence), so a later hidden-input proof
-has an exact spec. Circuit and verifier proofs stay research-grade work (20–35
-engineer-weeks for the circuit, 40–80 for a verified verifier) and are not
-scheduled.
+`PRIVATE_ZK` is a **parallel add-on**, not a prerequisite. Its marginal value
+is not "anyone can verify," since the state and the entity signing the roots ZK
+proves against are the same side; it is the cross-organizational case with an
+unmotivated verifier, e.g. proving to an MCO or a federal partner that no member
+in a release is on a death-match file without disclosing the eligibility list.
+The cheap step now is writing `CAP-REL-v1` (the capitation-release relation) as
+a plain Lean predicate (useful today as `DIRECT_STATE_OWNED` evidence), so a
+later hidden-input proof has an exact spec. Circuit and verifier proofs (20–35
+engineer-weeks for the circuit, 40–80 for a verified verifier) are not scheduled.
 
-If `PRIVATE_ZK` is ever selected, its parameters come from one canonical
-source, `zk-spike/params.md`'s P128-R set (128-bit classical soundness,
-~64-bit under a quantum random oracle, 100-bit under the conjecture-free
-unique-decoding bound). Salt sizing, custody, and the choice between 7-year retained salts
-and scheduled destruction are open (§12).
+If `PRIVATE_ZK` is ever selected, its parameters come from `zk-spike/params.md`'s
+P128-R set (128-bit classical soundness, ~64-bit under a quantum random oracle,
+100-bit under the conjecture-free unique-decoding bound). Salt sizing, custody,
+and 7-year retained salts versus scheduled destruction are open (§14).
 
 ## 11. Post-quantum cryptography
 
@@ -339,17 +316,18 @@ and scheduled destruction are open (§12).
 - **Hybrid ML-KEM TLS (X25519MLKEM768)** protects the gate-to-payer and
  gate-to-standby channels. Confirmed available on AWS GovCloud
  load-balancer policies as of late 2025; Azure Government's support is
- unconfirmed as of this writing, so the design terminates TLS on the
- gate's own backend (AWS-LC or OpenSSL 3.5+) behind an ordinary L4 load
- balancer where a PQ-capable managed front end is not available.
+ unconfirmed, so the design terminates TLS on the gate's own backend (AWS-LC
+ or OpenSSL 3.5+) behind an ordinary L4 load balancer where a PQ-capable
+ managed front end is unavailable.
 
 We verify none of these primitives ourselves; we consume AWS-LC's
 machine-checked proofs (HOL Light and CBMC, for ML-KEM and, as it lands,
 ML-DSA), run ACVP/KAT vectors in CI against the exact library build, and
 prove only the binding — that signed bytes name exactly one decision. ML-DSA
-integration into AWS-LC's FIPS-validated path was still landing as of the
-most recent research pass; check certification for the selected deployment. Constitution VI.5 forbids RSA/ECDSA fallback
-signatures; certification delay does not authorize a downgrade.
+integration into AWS-LC's FIPS-validated path was still landing; check
+certification per deployment.
+Constitution VI.5 forbids RSA/ECDSA fallback signatures; certification delay
+does not authorize a downgrade.
 
 ## 12. Evidence and integration
 
@@ -357,29 +335,20 @@ A format model, compiled rules, a pinned executable and an integrated workflow
 are separate claims, and one branch's results do not verify another's or their
 combination. `artifacts/engine-correction/PROVENANCE.md` is the engine pin.
 
-The payer gate needs both authenticated checkpoint ancestry and admission of
-signed, tenant/program-scoped, current authority grants. A checkpoint
-signature alone does not establish continuity with an unseen predecessor.
-An in-memory list of active grant identifiers does not establish state
-authority. Persisted fences, released/unresolved identities, rules, tokens
-and payer release must be connected and exercised through restart, retry
-and partial failure before an end-to-end gate claim; the format model
-assumes some of them (STATUS).
-
-Batch windows, worker counts and private-proof latency estimates remain
-targets until measured against the exact executed source and artifact. A
-model crawl does not replace Article XIII's real-browser crawl.
+The payer gate needs authenticated checkpoint ancestry and admission of signed,
+tenant/program-scoped, current authority grants; persisted fences,
+released/unresolved identities, rules, tokens and payer release must be
+connected and exercised through restart, retry and partial failure before an
+end-to-end gate claim (STATUS). Batch windows, worker counts and private-proof latency
+estimates remain targets until measured.
 
 ## 13. Path
 
-Most risk removed per week first (`fv-plan.md`): port the remaining command
-types in order of money impact (the live evaluator is already Lean). In
-parallel: the warm-worker throughput benchmark and the owner
-throughput harness (branch `load-test`), needed before any batch-sizing or
-worker-pool claim. The X12/NCPDP tokenizer comes with the adapter build, not ahead of it.
-`PRIVATE_ZK` continues in its separate prototype repository under
-Constitution IX.4; it produces evidence only and requires a third-party
-audit before a PRIVATE_ZK claim.
+Port the remaining command types in order of money impact (`fv-plan.md`), with the
+warm-worker and owner throughput benchmarks (branch `load-test`) before any
+batch-sizing or worker-pool claim. The X12/NCPDP tokenizer comes with the
+adapter build. `PRIVATE_ZK` stays in its separate prototype repository
+(Constitution IX.4) and needs a third-party audit before any claim.
 
 ## 14. Remaining design decisions
 
@@ -389,9 +358,6 @@ Constitution XI.2; implementations and evidence belong in `STATUS.md`.
 - Complete the authority-grant, bypass, release and witness admission
  contracts, including checkpoint ancestry, scope, revocation and durable
  recovery.
-- A state selects its flows, fail policy and any bounded emergency bypass
- through signed authority. Fail-closed remains the default; there is no
- implicit outage permission to release.
 - Resolve salt custody for any future private-proof deployment: retained
  wrapped salts and scheduled destruction have different disclosure
  guarantees.
@@ -399,19 +365,12 @@ Constitution XI.2; implementations and evidence belong in `STATUS.md`.
  current store/export limits. Existing segmented Continuity does not
  prove million-event operation.
 
-Private ZK, post-quantum-only signatures and activation are governed by the
-constitution; local build or test results grant no activation.
-
 ## 15. Beyond the gate
 
-The gate sits inside the same five-part product (`README.md`, `ARCHITECTURE.md`)
-and changes no role in it: Mirror is the exception queue and audit surface, and
-the owner stays the one financial writer (Constitution III.1). Connectors stay allow-listed, bounded and read-only by default; the
-official receiver and payment system keep money-movement authority; Provider App
-remains a separate provider-side product that does not gate on the government
-service. Cross-state reuse stays limited to versioned, non-sensitive interface
-schemas and conformance vectors; no state's population, rates or findings cross
-to another state.
-
-Commercial terms are the founder's (Constitution VIII). Nothing here selects a
-procurement route, funding classification or go-live date.
+The gate changes no role in the five-part product (`README.md`,
+`ARCHITECTURE.md`): Mirror is the exception queue and audit surface, and the
+owner stays the one financial writer (Constitution III.1). The official receiver
+and payment system keep money-movement authority; Provider App remains a
+separate provider-side product. Cross-state reuse stays limited to versioned,
+non-sensitive interface schemas and conformance vectors. Commercial terms are
+the founder's (Constitution VIII).

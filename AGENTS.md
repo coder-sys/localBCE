@@ -23,27 +23,15 @@ Working rules (details in the constitution):
 - Private zero-knowledge is an active prototype track (Constitution IX.4). It
   is evidence only and never blocks core or gate work. The old code under
   `parked/` stays reference material.
-- Update `STATUS.md` in a few lines per change. Raw logs stay in log files.
+- Update `STATUS.md` in a few lines per change.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.
-- Helpers are matched to the work (founder, 2026-09-28; definitions in
-  `~/.claude/agents/`). Helpers do their own work and never spawn helpers.
-  Sonnet never runs at extra-high or max effort.
-  - `rr-core` (Opus, high effort): designing or changing money logic, new
-    formats and digests, new theorem statements, crypto, security, undiagnosed
-    failures. For a large build it writes the design, tests and theorem
-    statements; rr-eng implements and proves against them.
-  - `rr-eng` (Sonnet 5.5, high): clear-spec work near the core that existing
-    tests or proofs will catch: performance, finishing a planned track,
-    build/pin plumbing, proofs of fixed statements. Escalates to rr-core.
-  - `rr-review` (Opus, extra-high, read-only): the final bug-hunt before any
-    money-logic, storage-format or crypto change merges.
-  - `rr-check` (Opus, medium, read-only): pre-merge review for everything
-    else (UI, tooling, tests, docs).
-  - `rr-analyst` (Opus, high): red-teams, judgment research, sizing calls.
-  - `rr-build` (Sonnet 5.5, high): screens, harnesses, clear-spec refactors.
-  - `rr-research` (Sonnet 5.5, medium): plain sourced lookups.
-  - `rr-chore` (Haiku, low): mechanically checkable chores only.
+- Helpers are matched to the work (founder, 2026-09-28; definitions, models
+  and effort in `~/.claude/agents/`: `rr-core`, `rr-eng`, `rr-review`,
+  `rr-check`, `rr-analyst`, `rr-build`, `rr-research`, `rr-chore`). Helpers do
+  their own work and never spawn helpers. Sonnet never runs at extra-high or
+  max effort. Money logic, formats, digests, theorem statements and crypto go
+  to `rr-core`; `rr-review` bug-hunts any such change before merge.
 - One lead session at a time; at most about three helpers, one or two of
   them using the guard (16 GB laptop).
 - Never destroy uncommitted work, raw evidence, keys or the only copy of

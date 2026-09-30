@@ -3,61 +3,42 @@
 Updated: 2026-09-23. Owner: independent design contract for the smallest
 correct implementation, deterministic evidence, bounded resources, modular
 ownership, and fail-closed execution. Constitution Article XI is distilled from
-it; the constitution wins any conflict.
+it; the constitution wins any conflict and states the principles (invariants,
+one owner per truth, narrow interfaces, formal means executed, fail-closed
+authority). Assessing a substantial workflow change is Article XII. This document adds
+only the following.
 
-Assessing a substantial workflow change is Article XII. Routine fixes stay
-lightweight; cross-participant benefit needs an integrated scenario, not a
-feature label.
+## Boundaries
 
-## Principles stated in Constitution Article XI
+The financial owner is the only writer, Mirror is a caller/read model,
+Continuity is a bounded SHADOW/TEST handoff, and State owns rules, authority,
+policy transitions and official consequences, even when a verifier or proof
+supplies an evidence result. Every module states what it owns, receives and may
+mutate, and what evidence proves the boundary; no second ledger, speculative
+orchestration layer or duplicate receipt format compensates for an unresolved
+contract. Corruption, omission, duplication, replay, stale revision, wrong
+scope, cross-owner, cross-period and wrong-mode cases must fail visibly. A
+failed determination leaves durable bytes unchanged, and a version-tag rejection
+test is not evidence of historical-schema compatibility. A receipt binds the
+exact scope, revision, rule/control-pack identity, evidence references/digests,
+authority, result fields and digest domains it claims; it is not source truth or
+payment confirmation. A pinned Lean artifact is linked to the working runtime
+only after refinement, theorem, adapter, mutation, KAT and resource evidence
+exists; adapters, generated vectors or differential tests do not themselves
+create formal authority.
 
-Article XI.1-XI.2, XI.5, XI.7, XI.9 and XI.14 (invariants, one owner per truth,
-narrow interfaces, deterministic inputs, adversarial simplicity) are not
-restated here. What this document adds: the financial owner is the only writer, Mirror is a
-caller/read model, Continuity is a bounded SHADOW/TEST handoff, and State owns
-rules, authority, policy transitions and official consequences. Every module
-states what it owns, receives and may mutate, and what evidence proves the
-boundary; no second ledger, speculative orchestration layer or duplicate
-receipt format compensates for an unresolved contract. Corruption, omission,
-duplication, replay, stale revision, wrong scope, cross-owner, cross-period and
-wrong-mode cases must fail visibly. A failed determination leaves durable bytes
-unchanged, and a version-tag rejection test is not evidence of
-historical-schema compatibility.
-
-## Evidence, authority and state
-
-Facts stay separate (Article II). A receipt binds the exact scope, revision, rule/control-pack identity, evidence
-references/digests, authority, result fields and digest domains it claims; it
-is not source truth or payment confirmation.
-
-Missing, stale, malformed, ambiguous or unauthorized authority fails closed
-(XI.10), and no caller-selected fallback may downgrade a required evidence mode. Policy,
-effective directives, exceptions, chronology, state mutation and payment stay
-state-owned even when a verifier or proof supplies an evidence result.
-
-## Lean direction
-
-Implement everything reasonably implementable in Lean (Article XI.8): a small
-trusted state, explicit state machines and independent checks. A pinned Lean
-artifact is linked to the working runtime only after refinement, theorem,
-adapter, mutation, KAT and resource evidence exists; source adapters, generated
-vectors or differential tests do not themselves create formal authority.
-
-## Bounded resources and privacy
+## Bounded resources
 
 Set finite record, payload, package, memory and process limits. Measure the
 complete path with separately attributable ingestion, owner transaction,
 independent check, Continuity restore and recovery evidence. A component
 benchmark is not a system SLA; missing targets remain unknown.
 
-Corporate support, monitoring, analytics, AI tools, contractors and crash
-dumps receive zero PHI and no persistent linkable claim fingerprint (Article IV).
-
-## Claims and sequencing
+## Sequencing
 
 Implement in dependency order: stabilize the owner contract; independently
 verify schema, history, retries and recovery; complete and verify the Lean
 semantic implementation and concrete adapter contract; link and qualify the
-formal boundary; then qualify custody, source, operations, shadow use and
-any activation. Don't let a later commercial or routing need silently expand
-current financial authority.
+formal boundary; then qualify custody, source, operations, shadow use and any
+activation. A later commercial or routing need never silently expands current
+financial authority.
