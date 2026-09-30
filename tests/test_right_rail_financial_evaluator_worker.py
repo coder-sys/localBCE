@@ -166,7 +166,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
             with self.assertRaises(owner_module.FinancialIntegrityError) as raised:
                 self.fixture._record_cash(self.store)
         self.assertEqual(str(raised.exception), "lean_evaluation:result_context_binding")
-        self.assertEqual(self._counts(), before)
+        self.assertEqual((self._counts(), engine._evaluator), (before, []))  # and the worker that gave it is not reused
 
 
 if __name__ == "__main__":

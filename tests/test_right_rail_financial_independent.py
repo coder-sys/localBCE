@@ -1167,3 +1167,68 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
                             check()
+
+    def test_per_obligation_reads_ignore_other_obligations_but_the_caps_count_the_whole_table(self) -> None:
+        # The pre-COMMIT reads (evidence, determinations, actions, outbox) are filtered in SQL to the touched obligation. Other
+        # obligations' rows change nothing, up to the cap; one row past it fails closed even though none of them is read.
+        zero = "zeroblob(64)"
+        others = {  # table -> (column filtered on, this obligation's key, 'other' rows that would fail every check if the filter let one through)
+            "evidence": ("item_id", "item:H", f"INSERT INTO evidence SELECT 'e'||i,'item:other','SUPPORT','o','s','v','r',1,1,1,{zero},{zero},NULL,NULL,NULL FROM n"),
+            "determinations": ("obligation_id", None, f"INSERT INTO determinations SELECT 'd'||i,'obligation:other',NULL,'a','r','au',1,{zero},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{zero},'e'||i,{zero} FROM n"),
+            "actions": ("obligation_id", None, f"INSERT INTO actions SELECT 'a'||i,'obligation:other','d','K','READY',1,'{{}}',{zero},{zero},1 FROM n"),
+            "action_outbox": ("action_id", "action:offset:claim:H", f"INSERT INTO action_outbox SELECT 'a'||i,'READY',0,{zero},NULL,1 FROM n"),
+        }
+        with closing(sqlite3.connect(self.db, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            (obligation_id,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+            check = lambda: independent.verify_obligation_connection(connection, obligation_id, expected_config=self.config, expected_authority=self.authority)
+            expected = check()
+            for table, (column, key, insert) in others.items():
+                key = key or obligation_id
+                (held,) = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                for extra, code in ((independent.MAX_ROWS - held, None), (independent.MAX_ROWS - held + 1, f"^rows:cap:{table}$")):
+                    with self.subTest(table=table, extra=extra):
+                        connection.execute("BEGIN IMMEDIATE")
+                        try:
+                            connection.execute(f"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<{extra}) {insert}")
+                            if code is None:
+                                mine = independent._bounded_rows(connection, table, column, [key])
+                                self.assertTrue(mine)  # this obligation's own rows are read, in table order
+                                self.assertEqual(mine, [row for row in independent._bounded_rows(connection, table) if row[column] == key])
+                                self.assertEqual(check(), expected)
+                            else:
+                                with self.assertRaisesRegex(independent.IndependentFinancialError, code):
+                                    check()
+                        finally:
+                            connection.execute("ROLLBACK")
+
+    def test_pre_commit_reads_do_not_trust_an_index_that_hides_forged_rows(self) -> None:
+        # File access can blank an index (writable_schema), insert a forged row it then omits, and restore the index SQL. Only a table scan sees it.
+        z = "zeroblob(64)"
+        cases = (  # table, its filter column, index, forged rows, the code an unhidden row gets
+            ("evidence", "item_id", "rr_financial_v1_evidence_item_id", (f"INSERT INTO evidence VALUES ('evidence:forged','item:H','SUPPORT','o','s','v','r',1,1,1,{z},{z},NULL,NULL,NULL)",), "evidence:content-digest"),
+            ("determinations", "obligation_id", "rr_financial_v1_determinations_obligation_id", (f"INSERT INTO determinations VALUES ('determination:forged',:o,NULL,'a','x','au',1,{z},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{z},'evaluation:forged',{z})",), "determination:role"),
+            ("actions", "obligation_id", "rr_financial_v1_actions_obligation_id", (f"INSERT INTO actions VALUES ('action:forged',:o,'determination:forged','CORRECTION_PAYMENT_REQUEST','READY',1,'{{}}',{z},{z},1)", f"INSERT INTO action_outbox VALUES ('action:forged','READY',0,{z},NULL,1)"), "action:determination"),
+        )
+        with closing(sqlite3.connect(self.db)) as connection:
+            (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+
+        def run(path: Path, *statements: str) -> None:  # one connection per step, so each reads the schema as the step before left it
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                for statement in statements:
+                    connection.execute(statement, {"o": obligation})
+
+        for table, column, index, forged, code in cases:
+            with self.subTest(table):
+                copy = Path(self.temp_dir.name) / f"hidden-{table}.sqlite"
+                shutil.copyfile(self.db, copy)
+                run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=sql||' WHERE 0' WHERE name='{index}'")
+                run(copy, *forged)
+                run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=replace(sql,' WHERE 0','') WHERE name='{index}'")
+                with closing(sqlite3.connect(copy, isolation_level=None)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    key = "item:H" if table == "evidence" else obligation
+                    count = lambda hint: connection.execute(f"SELECT COUNT(*) FROM {table} {hint} WHERE {column}=?", (key,)).fetchone()[0]
+                    self.assertEqual(count("NOT INDEXED"), count("") + 1)  # the index really hides it
+                    with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                        independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
