@@ -72,7 +72,8 @@ replay still checks historical rows, digests and the whole store.
  existing transaction. A zero shortfall is rejected with no mutation; the
  action amount is exactly the lesser of the claim and the unpaid balance
  that earlier correction requests, less what linked payments paid on them,
- do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_b2`). The release is an
+ do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_b2`), given Python's
+ `correctionPaid` (branch `lean-paid-sum` closes that gap). The release is an
  explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
  command fails closed. There is no Python fallback decision.
 - **Pinned executable:** `artifacts/engine-correction/`, rebuilt twice
@@ -81,13 +82,13 @@ replay still checks historical rows, digests and the whole store.
  committed follow-ups stay valid history, but only the current pin decides;
  a retired engine never decides after a newer one, and no correction, whatever
  engine decided it, requests more than was then requestable.
-- **Evaluation comparison:** `BLFIN02`/`BLFRES02` in
- `app/right_rail_financial_engine.py` with
- `app/right_rail_financial_semantic_adapter.py` is a read-only comparison of
- the owner's evaluation against Lean. It never writes.
+- **Evaluation comparison (tests only):** `BLFIN02`/`BLFRES02` in
+ `app/right_rail_financial_engine.py` compare the owner's evaluation with
+ Lean's; only tests call it, live evaluation is Python. The live correction
+ path does call the semantic adapter.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
- decision package, gate rules, theorems, semantic kernel; four executables).
+ decision package, gate rules, theorems; four executables).
  `lean/tools/semantic_assurance_gate.py` checks the correction transition's pinned
  theorem statements, proofs and axioms.
 
@@ -174,10 +175,11 @@ is Blind Ledger as an inline gate every FFS and managed-care payment passes
 before money goes out, at full state scale. There is no integrated payer gate.
 What exists today toward it:
 
-- Lean decides one of 14 command types
+- Lean decides one of 18 command types
  (`reject_offset_and_authorize_correction`); Python still decides
- population, evidence, payment/reversal, offset authorization,
- acknowledgment, reporting, funding and evaluation recording.
+ population, Control Pack publishing, evidence, payment/reversal, offset
+ authorization, acknowledgment, follow-through decisions, reporting, funding
+ and evaluation recording.
 - The live correction codec (`BLFCMD02`/`BLFCRES3`) proves canonicity (P2)
  unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
  admissible values; nothing yet proves every value Lean emits is admissible.

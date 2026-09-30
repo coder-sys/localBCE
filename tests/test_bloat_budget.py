@@ -23,11 +23,11 @@ PRODUCT_CODE_LINES = 37_228
 # theorems the new lines cover.
 # 2026-09-29 UI M3, +159: sheet states, each outcome in three steps, the accepted journey and the resend covered by the new tests.
 # Review fixes, +18: the accepted case reaching RESOLVED, and accept refused on a changed or moved read.
-EVIDENCE_CODE_LINES = 43_907
+EVIDENCE_CODE_LINES = 41_504
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
 # contract, like test vectors, not compressible prose; it gets its own ceiling.
-MARKDOWN_BYTES = 160_000
+MARKDOWN_BYTES = 157_973
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {

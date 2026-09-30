@@ -409,6 +409,29 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             result,
         )
 
+    def test_pinned_exe_closure_has_no_proof_module(self) -> None:
+        self.assertGreater(gate._check_pinned_exe_closure(gate.ROOT / "lean"), 10)
+        header = "/- import Ignored.Theorems -/\nprelude\npublic import A  import B\n  meta import C\nimport all D\npublic meta import all E.F -- import G\nimport\n  H\ndef x := 1\nimport Late\n"
+        self.assertEqual(gate._lean_imports(header), ["A", "B", "C", "D", "E.F", "H"])
+        with tempfile.TemporaryDirectory(prefix="semantic-gate-closure-") as temporary:
+            root = Path(temporary)
+            (root / "lib").mkdir()
+            (root / "lakefile.toml").write_text('[[lean_exe]]\nname = "pin"\nroot = "lib.Cli"\n', encoding="utf-8")
+            (root / "lib" / "Cli.lean").write_text("import lib.Mid\nimport Std\n", encoding="utf-8")
+            for mid, message in (
+                ("def one := 1\n", None),
+                ("meta import all lib.Foo.Theorems\n", "imports proof module lib.Foo.Theorems"),
+                ("import lib.AxiomCheck\n", "imports proof module lib.AxiomCheck"),
+                ("#print axioms lib.one\n", "which pins axioms"),
+            ):
+                (root / "lib" / "Mid.lean").write_text(mid, encoding="utf-8")
+                with self.subTest(mid):
+                    if message is None:
+                        self.assertEqual(gate._check_pinned_exe_closure(root, ("pin",)), 3)
+                    else:
+                        with self.assertRaisesRegex(gate.AssuranceError, message):
+                            gate._check_pinned_exe_closure(root, ("pin",))
+
     def test_source_scan_uses_manifest_token_values(self) -> None:
         with tempfile.TemporaryDirectory(prefix="semantic-gate-source-token-") as temporary:
             root = Path(temporary)
