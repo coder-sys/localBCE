@@ -35,7 +35,7 @@ from tests.rightrail_financial_expected_cases import (
     PROGRAM_ITEMS,
     UNAPPROVED_OFFSET_CENTS,
 )
-from tools.privacy_artifact_scan import scan_artifacts
+from tests.instruments.privacy_artifact_scan import scan_artifacts
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
     _correction_transition_test_release,
@@ -624,6 +624,24 @@ class FinancialMirrorTests(unittest.TestCase):
         with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
             self.mirror.reject_offset_and_authorize_correction(**{**request, "claim_id": "claim:changed:h"})
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+
+    def test_correction_refuses_a_known_actor_without_the_decision_role_and_changes_nothing(self) -> None:
+        self._prepare_claim()
+        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
+        before = self.store.export_continuity()
+        with self.assertRaisesRegex(owner.FinancialAuthorityError, "authority_actor_not_authorized"):
+            self.mirror.reject_offset_and_authorize_correction(
+                item_id=H_ITEM_ID,
+                claim_id="claim:offset:h",
+                actor_id="synthetic-reporter",
+                actor_role="FINANCE_DECISION",
+                action_id="action:wrong-role:h",
+                expected_revision=receipt["revision"],
+                decision_at_ms=1_774_922_400_000,
+                evaluation_id=receipt["evaluation_id"],
+                evaluation_result_digest=receipt["result_digest"],
+            )
+        self.assertEqual(self.store.export_continuity(), before)
 
     def test_reporting_correction_accepts_explicit_evidence_lineage(self) -> None:
         original = self.mirror.record_reporting_evidence(

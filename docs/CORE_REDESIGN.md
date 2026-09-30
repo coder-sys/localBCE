@@ -92,7 +92,7 @@ Full record: `2ec89a0:docs/CORE_REDESIGN.md`.
   approved one by JSON equality (so `false` is not `0`) before any projection,
   so an extra key at any level is refused, not dropped; pack fields have fixed
   shapes (id pattern, positive int version, 128-digit upper hex). Tests run
-  `tools/privacy_artifact_scan.py` on the follow-up and restore packages and
+  `tests/instruments/privacy_artifact_scan.py` on the follow-up and restore packages and
   require nothing beyond its unapproved-schema notice; that is what is checked,
   not a proof that no package can leak.
 - **Raw evidence:** v1 (`82a2087`) held no rule, adapter or software version, no affected work, nothing rerunnable and no restore-failure package.
@@ -426,9 +426,7 @@ unchecked rows, and a store that rolls back cannot earn ALLOW.
     `isSome_of_mem`; new axiom pins ([propext, Quot.sound]).
 - **Invariant / failure:** X.1-X.2, XI.8, XI.10: no HOLD rests on data not
   checked against the gate's checkpoint, and no rollback or dropped row earns ALLOW.
-- **Evidence:** 78eabc7's message lists the changed vector answers (205-208 and
-  149 gain `*_UNVERIFIED`; 175 and 177 gain the checkpoint's counterpart reason).
-  4bffc1e's "No committed theorem statement's text changes" holds only for it.
+- **Evidence:** the changed vector answers are listed in 78eabc7's message.
 - **Disposition:** replace. Nothing is disabled.
 - **Replacement control:** all proofs compile with pinned axioms; the vectors, demo lines
   and mutants pass (counts: `STATUS.md`); the unittest fails if the runner is older than its sources.
@@ -504,40 +502,52 @@ shown on the pack's face.
   periods, which the Ledger does not hold; there is no per-claim service date,
   so the split uses the obligation period.
 
-## Gate formats round 7 (2026-09-28, XI.2 record)
+## Gate formats rounds 7 and 8 (2026-09-28 and 09-29, XI.2 record)
 
-Formats are not frozen (D1) and are specified once, in target §4-§5 (with
-the `RR/GATE` registry); round 7 changed them and reissued the golden vectors.
+These rounds reissued the golden vectors, pins, keys and signatures. Felt effect: a biweekly or
+monthly payer's stale ALLOW is re-decided, not stranded in review, and no line is paid twice.
 
-- **DECIDE-REQUEST:** lines are parsed (at most 569 bytes each) and bound to the
-  request's flow, member key, payee and amount; an FFS_CLAIM request without
-  lines is refused.
-- **TOKEN leaf:** new `decided_at` before `epoch`, `decided_at <= issued_at`,
-  kept across reissues. An FFS_CLAIM leaf needs a nonzero `lines_root`.
-- **CHECKPOINT:** the zero field is now `state_digest` = H(`STATE/v1` NUL ‖
-  released pin ‖ unresolved pin), never zero; a first checkpoint has no previous
-  digest, a later one must.
-- **Payer, codec, NUL:** fork, one-certificate-per-(tenant, epoch), `encode_line`,
-  shard-checked stateless `sign_batch(..., state_digest, shard_count)` (unbuilt
-  preconditions: target §4-§5, STATUS) and the NUL after every domain, including the
-  rules pins and `TEST-ONLY-SEED`/`TEST-ONLY-MEMBER` keys, are specified in target §4-§5.
-  Every `rules_v1` and `demo_zz` pin, synthetic key and signature was reissued.
+- **Round 7:** request lines (at most 569 bytes) bound to flow, member key,
+  payee and amount; leaf `decided_at`; nonzero `lines_root` for FFS_CLAIM;
+  checkpoint `state_digest` (never zero), previous digest only after the first,
+  a non-adjacent link is a fork; one certificate per (tenant, epoch);
+  `sign_batch` refuses a leaf routed to another shard, stateless (unbuilt: STATUS).
+- **Round 8:** age per flow (`maxDecisionAge`), replacing round 7's single
+  14-day age; a second certificate for an installed (tenant, epoch) is recorded
+  (`equivocations`) and blocks it; FFS_CYCLE and CAP_820 need lines, SDP and
+  PLAN_PAY leaves are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
+  Rules: `redo`/`own` re-decision; only ALLOW payments' lines are released
+  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`. Theorems:
+  `verifyToken_unforked` adds equivocation; `released_iff`,
+  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation`
+  proved. Withdrawn: round 7's FFS_CLAIM-only lines and counts.
 
-## Gate formats round 8 (2026-09-29, XI.2 record)
+## Gate PQ signing M1 (2026-09-29, XI.2 record; founder-approved R1-R4, laptop root, ACVP download)
 
-The lead's round-7 review decisions, specified in target §4-§6; vectors and
-pins reissued. Felt effect: a biweekly or monthly payer's stale ALLOW is
-re-decided, not stranded in review, and no line is paid twice.
+Felt effect: every checkpoint signature is checked by an independent Lean
+verifier before it can leave the gate, post-quantum only.
 
-- **Payer:** age per flow (`maxDecisionAge`); a second certificate for an
-  installed (tenant, epoch) is recorded (`equivocations`) and blocks it.
-- **Formats:** FFS_CYCLE and CAP_820 need lines too; SDP and PLAN_PAY leaves
-  are HUMAN_REVIEW; `redecides` makes revision `latest + 1`.
-- **Rules:** `redo`/`own` re-decision; only ALLOW payments' lines are released
-  (`payOutcome`); binary set pins (`pinInput`); `Ctx.anchor`.
-- **Theorems:** `verifyToken_unforked` adds equivocation; `released_iff`,
-  `one_payment_per_line`, `Steps.at_most_once`, `installCert_equivocation` proved.
-- **Withdrawn:** round 7's single 14-day age, FFS_CLAIM-only lines, counts.
+- **R1, KEY-CERT/v1 (the one wire change; new digest domain):** `KEY-CERT NUL ‖
+  alg u8 1 ‖ tenant ‖ epoch u64 ‖ shard_count u32 ‖ public key (2592)`, then
+  `u16 4627 ‖ root signature`; no id; 8 KiB. `certChainOk` holds iff it decodes and
+  the root key verifies the body. Unlike target §11, the
+  root is ML-DSA-87 in laptop DPAPI custody, not HSM LMS/XMSS.
+- **R2:** pure ML-DSA-87, empty context; hedged (rnd = 0 in vectors only).
+- **R3:** `EpochCert` drops `certId`, gains `signed`; `AXIOMS.txt` unchanged. Statement change: below.
+- **R4:** `artifacts/gate-verify/` (Lean `gate_verify`, the signer's self-check) and a new worker pin.
+- **Speed:** each pinned exe is copied once per process, held open and hash-checked per run.
+- **Claim:** vector-verified, not proved.
+
+**Certificate equivocation (XI.2 record).**
+- **Predicate:** `installCert_equivocation` and the `installCert` filter:
+  a second chain-valid certificate for an installed (tenant, epoch) was equivocation if it differed at all
+  (`x ≠ e`); now only if its public key or shard count differs.
+- **Invariant / failure:** one key and shard count per (tenant, epoch); a hedged re-signature has new
+  bytes, so re-issuing blocked its own epoch.
+- **Evidence and replacement control:** vectors `other8` re-signed (not flagged), `twin` (other key), `eq5`
+  (same key, 8 shards; both flagged, block); 256/256, build `pqm1-lean4-a1`; four `gate__mutants` mutants.
+- **Disposition:** weaken. **Scope:** the spec-level payer model until M2 persists `PayerState`.
+- **Claims withdrawn:** that any second, different certificate is equivocation (round 8).
 
 ## Follow-through decision event (M2, 2026-09-29, XI.2 record)
 
@@ -589,3 +599,17 @@ prose are in `40e802f:docs/CORE_REDESIGN.md`.
   Re-pin by the release producer through the v4 guard (`engine-release-lpsb-a2`,
   `-a3`, byte-identical): `1A5821FA…DBBE`, 6,298,112 bytes; only `request.bin` changed.
   Protected literal `tests/test_right_rail_financial_constitution_invariants.py:338` is now `BLFCMD03`.
+
+## Slim-1b PR-2: guard naming and instrument classification (2026-09-29, XI.2 record)
+
+- **Felt effect.** A reviewer reads the guard that actually runs.
+- **Predicate.** Article X.2, the wrapper that heavy runs must use; and the split size budget (founder 2026-09-28, `tests/test_bloat_budget.py`).
+- **Change.** X.2 names `rr_guarded.ps1` running `work/rightrail-guard-host/native/guard/run_guarded_v7.ps1`, with an explicit exception for engine and release builds (v4). The trunk copy (`run.ps1`, `run_guarded_v4.ps1`, `pins.json`, `suites.json`, README, direct-mask fixture) moves to `parked/`. `semantic_assurance_gate.py` and its manifest move to `lean/tools/`; the privacy scanner pair moves to `tests/instruments/`; the budget counts both as evidence.
+- **Invariant.** A heavy run cannot start or continue below the memory floor, is contained, cleaned up and logged. Failure: certifying a control that does not run.
+- **Evidence.** The floor moved from v4's 2,190,433,321 to v7's 2,029,372,048 (1 GiB in away mode) under the grants cited in the amendment log. No test or product path reaches trunk `run.ps1` or v4; only the parked `-Light` lane did. The producer (`build_financial_correction_release.ps1:26,774`) and the kit (`kit.py:51,495-519`) accept only v4, and read the external v4 copy. 
+- **Disposition.** Retain the gate; park the redundant copy; name the live one.
+- **Replacement control.** The runner's hash check and the guard logs in `C:/Users/neers/rrb/logs/`; the producer's and kit's v4 hash checks are unchanged.
+- **Format.** No wire format, digest domain or theorem statement changes.
+- **Scope.** Laptop runs; permanent until the producer and kit move to v7, which is planned, not done.
+- **Claims withdrawn.** "v4 is the guarded wrapper" and "the floor is 2,190,433,321" no longer hold for tests. Engine and release builds still run at v4's floor.
+- **Kill criteria.** Restore from `parked/native_guard/` if `-Light` is revived or a release step needs the trunk v4 path.

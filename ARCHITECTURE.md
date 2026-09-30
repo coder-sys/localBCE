@@ -88,7 +88,7 @@ replay still checks historical rows, digests and the whole store.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
  decision package, gate rules, theorems, semantic kernel; four executables).
- `tools/semantic_assurance_gate.py` checks the correction transition's pinned
+ `lean/tools/semantic_assurance_gate.py` checks the correction transition's pinned
  theorem statements, proofs and axioms.
 
 ## Mirror, Continuity and Switch
@@ -183,7 +183,7 @@ What exists today toward it:
  admissible values; nothing yet proves every value Lean emits is admissible.
 - There is no batch decide API, independent witness, fenced standby or Bypass
  outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
- the gate-v1 codec and Lean model.
+ the gate-v1 codec, Lean model and `gate_verify` (no product caller).
 - The subprocess-per-decision path (`app/minimal_clearance_verifier_process.py`,
  one Windows process per call) is disqualifying for gate throughput and needs a
  long-lived worker pool; no warm-worker benchmark has been run.

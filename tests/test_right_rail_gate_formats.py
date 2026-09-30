@@ -1,19 +1,20 @@
 """Gate formats #1-#4 and #12: encoder laws, batch builder, golden vectors.
 
 ``tests/gate_vectors/gate_v1.vectors`` is produced by ``build_vectors`` with the
-real AWS-LC ML-DSA-87 signer (``python -m tests.test_right_rail_gate_formats``)
-and judged by the Lean ``gate_vectors`` executable, the only decoder.  Here
-Python must reproduce every byte of it (signatures are looked up, since
-ML-DSA-87 signing is randomized) and AWS-LC must accept every recorded
-signature and reject flipped ones.  Synthetic, non-PHI.
+worker's deterministic known-answer signer (``python -m tests.test_right_rail_gate_formats``: every key is
+a test-only seed, every signature has rnd = 0) and judged by the Lean ``gate_vectors`` executable, the only
+decoder and verifier.  Here Python must reproduce every byte of it, Lean must accept it, and ``checked`` must
+release a signature only when the pinned Lean ``gate_verify`` accepts.  Synthetic, non-PHI.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from itertools import count
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,18 +26,17 @@ from tools import gate_rules_data
 
 VECTORS = Path(__file__).resolve().parent / "gate_vectors" / "gate_v1.vectors"
 RULES = VECTORS.parents[1] / "gate_rules" / "rules_v1.vectors"
-TENANT, OTHER, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "medicaid-ffs", "2026-09"
+TENANT, OTHER, STANDBY, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "nc-standby", "medicaid-ffs", "2026-09"
 EPOCH, NOW, EXPIRES = 7, 1_790_000_000, 1_790_086_400
 DECIDED = NOW - 3600
 D = [gate.sha3_512(bytes([i])) for i in range(17)]
 SHARDS, SHARD, OTHER_SHARDS = 8, 3, 4  # shard counts, and the shard of the main batch
-# Epoch certificates: id, epoch, tenant, shard count.  Each has its own test-only key.
-CERTS = {"e7": (D[5], EPOCH, TENANT, SHARDS), "e6": (D[8], EPOCH - 1, TENANT, SHARDS), "other": (D[9], EPOCH, OTHER, OTHER_SHARDS),
-         "bad": (D[10], EPOCH, TENANT, SHARDS), "reshard": (D[12], EPOCH - 2, TENANT, 2 * SHARDS),
-         "no-shards": (D[13], EPOCH, "nc-third", 0), "other8": (D[11], EPOCH + 1, OTHER, OTHER_SHARDS),
-         "e8": (D[1], EPOCH + 1, TENANT, SHARDS), "huge-shards": (D[14], EPOCH, "nc-third", 2**32),
-         "reshard-e9": (D[15], EPOCH + 2, TENANT, 2 * SHARDS), "no-shards-other9": (D[16], EPOCH + 2, OTHER, 0),
-         "twin": (D[3], EPOCH + 1, OTHER, OTHER_SHARDS)}
+# Epoch certificates: epoch, tenant, shard count.  Each has its own test-only key; each tenant's root key signs them.
+CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "other": (EPOCH, OTHER, OTHER_SHARDS),
+         "bad": (EPOCH, TENANT, SHARDS), "reshard": (EPOCH - 2, TENANT, 2 * SHARDS), "other8": (EPOCH + 1, OTHER, OTHER_SHARDS),
+         "e8": (EPOCH + 1, TENANT, SHARDS), "reshard-e9": (EPOCH + 2, TENANT, 2 * SHARDS),
+         "reshard-other9": (EPOCH + 2, OTHER, 2 * OTHER_SHARDS), "twin": (EPOCH + 1, OTHER, OTHER_SHARDS),
+         "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
            "decision-id", "input", "lines-root", "state")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
@@ -46,8 +46,30 @@ STATE = gate.state_digest(*PINS)
 PROCS = ("99213", "99214", "99215")
 
 
-def seed(cert: str) -> bytes:
-    return gate.sha3_512(b"RR/GATE/TEST-ONLY-SEED/v1\x00" + cert.encode())[:32]
+def seed(name: str) -> bytes:
+    return gate.sha3_512(b"RR/GATE/TEST-ONLY-SEED/v1\x00" + name.encode())[:32]
+
+
+def _kat(mode: str, data: bytes, size: int) -> bytes:
+    return signer._run(signer.BINARY, signer.PIN, (mode,), data, size)
+
+
+def keypair(name: str) -> tuple[bytes, bytes]:
+    """(public key, secret key) of a test-only key: ``name`` is a certificate name or ``root-<tenant>``."""
+    pair = _kat("kat-keygen", seed(name), gate.ML_DSA_87_PUBLIC_KEY + 4896)
+    return pair[: gate.ML_DSA_87_PUBLIC_KEY], pair[gate.ML_DSA_87_PUBLIC_KEY :]
+
+
+def det_sign(name: str, message: bytes, rnd: bytes = bytes(32)) -> bytes:
+    """Deterministic (rnd = 0 unless given) pure ML-DSA-87 with an empty context: M' = 00 00 || message."""
+    return _kat("kat-sign", keypair(name)[1] + rnd + b"\x00\x00" + message, gate.ML_DSA_87_SIGNATURE)
+
+
+def key_cert(name: str, root: str = "", edit=lambda body: body, rnd: bytes = bytes(32)) -> bytes:
+    """The certificate ``name`` signed by ``root``'s root key (default its tenant's); ``edit`` changes the body first."""
+    epoch, tenant, shards = CERTS[name]
+    body = edit(gate.encode_key_cert(tenant, epoch, shards, keypair(name)[0]))
+    return gate.attach_signature(body, det_sign(f"root-{root or tenant}", body, rnd))
 
 
 def member(n: int, shard: int = SHARD) -> bytes:
@@ -93,15 +115,17 @@ def _leaf(n: int, seq: int, outcome: str = "ALLOW", flow: str = "", shard: int =
 def _batch(leaves, sign, prev: bytes = D[0]) -> tuple[gate.Checkpoint, bytes, list[gate.Token]]:
     return gate.sign_batch(leaves, prev_checkpoint_digest=prev, event_head=D[1], evidence_root=D[2],
                            state_digest=STATE, shard_count=SHARDS if leaves and leaves[0].tenant_id == TENANT
-                           else OTHER_SHARDS, created_at=NOW, sign=sign)
+                           else OTHER_SHARDS, created_at=NOW,
+                           sign=sign if isinstance(sign, gate.CheckedSigner) else gate.CheckedSigner(sign))
 
 
 def _flip(data: bytes, at: int, bit: int = 0x80) -> bytes:
     return data[:at] + bytes([data[at] ^ bit]) + data[at + 1 :]
 
 
-def build_vectors(sign) -> str:
-    """Every vector, deterministic except the signatures ``sign(cert, message)`` returns."""
+def build_vectors() -> str:
+    """Every vector; all keys and signatures are deterministic."""
+    sign = det_sign
     out = ["# RR/GATE formats #1-#4, #12 golden vectors (D1). Synthetic, non-PHI, activation=false."]
     add = out.append
     h = bytes.hex
@@ -155,21 +179,31 @@ def build_vectors(sign) -> str:
     ):
         add(f"request reject {name} {h(data)}")
 
-    # Payer setup: certificates (checked installs) and one active grant
-    pks = {name: signer.public_key(seed(name)) for name in CERTS}
+    # Payer setup: root keys, certificates (checked installs) and one active grant
+    for tenant in (TENANT, OTHER, STANDBY):
+        add(f"root {tenant} {h(keypair(f'root-{tenant}')[0])}")
 
-    def cert(name: str, verdict: str = "accept", chain: str = "ok") -> None:
-        cert_id, epoch, tenant, shards = CERTS[name]
-        add(f"cert {verdict} {h(cert_id)} {epoch} {tenant} {shards} {h(pks[name])} chain-{chain}")
+    def cert(name: str, verdict: str = "accept") -> None:
+        add(f"cert {verdict} {h(key_cert(name))}")
 
     for name in ("e7", "e6", "other"):
         cert(name)
-    cert("bad", "reject", "bad")
+    add(f"cert reject {h(key_cert('bad', root=OTHER))}")  # another tenant's root key signed it
     cert("reshard", "reject")  # a second shard count for the tenant: v1 has no resharding
-    cert("no-shards", "reject")
-    cert("huge-shards", "reject")  # shard counts are u32
-    # KEY-CERT signs every field: that id reused with a fitting shard count has no valid chain
-    add(f"cert reject {h(D[14])} {EPOCH} nc-third 4 {h(pks['huge-shards'])} chain-bad")
+    # The root signs every field: shard count 9 under e7's own signature has no valid chain
+    good = key_cert("e7")
+    epoch_at = len(gate.KEY_CERT) + 1 + 2 + len(TENANT)
+    add(f"cert reject {h(good[: epoch_at + 8] + (SHARDS + 1).to_bytes(4, 'big') + good[epoch_at + 12 :])}")
+    # Signed by the root but not canonical: the decoder refuses each
+    for name, data in (
+        ("shard-count-zero", key_cert("e7", edit=lambda b: b[: epoch_at + 8] + bytes(4) + b[epoch_at + 12 :])),
+        ("epoch-over-2^63", key_cert("e7", edit=lambda b: b[:epoch_at] + (2**63).to_bytes(8, "big") + b[epoch_at + 8 :])),
+        ("other-algorithm", key_cert("e7", edit=lambda b: b[: len(gate.KEY_CERT)] + b"\x02" + b[len(gate.KEY_CERT) + 1 :])),
+        ("trailing", good + b"\x00"),
+        ("short-signature", good[: -gate.ML_DSA_87_SIGNATURE - 2] + (gate.ML_DSA_87_SIGNATURE - 1).to_bytes(2, "big") + good[-gate.ML_DSA_87_SIGNATURE : -1]),
+        ("wrong-domain", gate.CHECKPOINT + good[len(gate.KEY_CERT) :]),
+    ):
+        add(f"cert reject {h(data)}")
     add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
     add(f"now {NOW}")
 
@@ -181,13 +215,11 @@ def build_vectors(sign) -> str:
     def signed(c: gate.Checkpoint, key: str = "e7", sig: bytes | None = None) -> bytes:
         header = gate.encode_checkpoint_header(c)
         sig = sig if sig is not None else sign(key, header)
-        add(f"sig {h(pks[key])} {h(header)} {h(sig)}")
         return gate.encode_checkpoint(c, sig)
 
     def resigned(header: bytes) -> bytes:
         """A changed header signed again, so it is refused for the change itself."""
         sig = sign("e7", header)
-        add(f"sig {h(pks['e7'])} {h(header)} {h(sig)}")
         return header + len(sig).to_bytes(2, "big") + sig
 
     def checkpoint_line(name: str, c: gate.Checkpoint, data: bytes) -> None:
@@ -416,7 +448,7 @@ def build_vectors(sign) -> str:
     checkpoint_line("other-reissue-e8", other_e8_cp, signed(other_e8_cp, "other8"))
     token("accept", "other-reissued-e8", "p30", p30_e8)
     # A newer certificate with a valid chain raises its tenant's fence even when refused
-    for name, payment, t in (("reshard-e9", "p1", t1_e8), ("no-shards-other9", "p30", p30_e8)):
+    for name, payment, t in (("reshard-e9", "p1", t1_e8), ("reshard-other9", "p30", p30_e8)):
         cert(name, "reject")
         token("reject", f"fenced-by-{name}", payment, t)
     for verdict, name, latest, leaf in (
@@ -458,11 +490,47 @@ def build_vectors(sign) -> str:
         eq.append(_batch([reissued(replace(_leaf(n, 0), tenant_id=OTHER), n - 31)], lambda m: sign("other8", m),
                          gate.checkpoint_digest(eq[-1] if eq else other_e8_cp))[0])
     cert("other8", "reject")
+    add(f"cert reject {h(key_cert('other8', rnd=bytes([1]) * 32))}")  # the same body signed again: no equivocation
     checkpoint_line("other8-same-cert-again", eq[0], signed(eq[0], "other8"))
     cert("twin", "reject")
     add(f"checkpoint reject other8-after-twin {h(signed(eq[1], 'other8'))}")
     checkpoint_line("e8-after-twin", e8_cp, e8_signed)
     checkpoint_line("other-tenant-after-twin", other_cp, other_signed)
+
+    # A fenced standby (tenant nc-standby, 4 shards): epoch 2's certificate fences epoch 1, whose late
+    # checkpoints are stored as evidence but release nothing, and whose fork blocks epoch 1 alone
+    member_sb = next(k for i in count() if (k := gate.sha3_512(b"RR/GATE/TEST-ONLY-MEMBER/v1\x00sb" + bytes([i]))[:gate.MEMBER_KEY])
+                     and gate.shard_of(STANDBY, k, OTHER_SHARDS) == 0)
+
+    def standby(n: int, seq: int, epoch: int) -> gate.TokenLeaf:
+        return replace(_leaf(n, seq, shard=0, member_key=member_sb), tenant_id=STANDBY, epoch=epoch)
+
+    e1_cp, _, (e1_t,) = _batch([standby(41, 0, 1)], lambda m: sign("sb1", m), gate.ZERO_DIGEST)
+    cert("sb1")
+    checkpoint_line("standby-e1", e1_cp, signed(e1_cp, "sb1"))
+    payment_line("p41", e1_t.leaf)
+    token("accept", "standby-before-fence", "p41", e1_t)
+    cert("sb2")
+    token("reject", "standby-fenced", "p41", e1_t)
+    late_cp, _, (late_t,) = _batch([standby(42, 1, 1)], lambda m: sign("sb1", m), gate.checkpoint_digest(e1_cp))
+    checkpoint_line("standby-late-e1", late_cp, signed(late_cp, "sb1"))
+    payment_line("p42", late_t.leaf)
+    token("reject", "standby-late-e1-fenced", "p42", late_t)
+    e2_cp, _, (e2_t,) = _batch([standby(41, 0, 2)], lambda m: sign("sb2", m), gate.ZERO_DIGEST)
+    add(f"checkpoint reject standby-e2-signed-by-e1 {h(signed(e2_cp, 'sb1'))}")
+    add(f"checkpoint fork standby-e1-fork {h(signed(replace(e1_cp, token_root=_flip(e1_cp.token_root, 0, 0x01)), 'sb1'))}")
+    next_cp = _batch([standby(43, 2, 1)], lambda m: b"", gate.checkpoint_digest(late_cp))[0]
+    add(f"checkpoint reject standby-e1-after-fork {h(signed(next_cp, 'sb1'))}")
+    checkpoint_line("standby-e2", e2_cp, signed(e2_cp, "sb2"))
+    token("accept", "standby-reissued-e2", "p41", e2_t)
+    add(f"release accept standby-e2 p41 {h(gate.encode_token(e2_t))}")
+    add(f"release reject standby-e2-again p41 {h(gate.encode_token(e2_t))}")
+    # Equivocation by shard count alone: epoch 5's same key with 8 shards, root-signed, is recorded and blocks epoch 5
+    cert("eq5")
+    shards_at = len(gate.KEY_CERT) + 1 + 2 + len(STANDBY) + 8
+    add(f"cert reject {h(key_cert('eq5', edit=lambda b: b[:shards_at] + (2 * OTHER_SHARDS).to_bytes(4, 'big') + b[shards_at + 4 :]))}")
+    eq5_cp = _batch([standby(44, 0, 5)], lambda m: sign("eq5", m), gate.ZERO_DIGEST)[0]
+    add(f"checkpoint reject eq5-after-shard-count-equivocation {h(signed(eq5_cp, 'eq5'))}")
 
     # #2 DECIDE-RESPONSE/v1, each judged against the request it answers
     requests = {"r0": _request("FFS_CYCLE", 0, _lines(0, "FFS_CYCLE")), "r1": _request("FFS_CLAIM", 1, _lines(1)),
@@ -523,52 +591,112 @@ def _records() -> list[list[str]]:
     return [line.split(" ") for line in VECTORS.read_text("ascii").splitlines() if not line.startswith("#")]
 
 
-def _verify(pk: bytes, message: bytes, signature: bytes) -> bool:
-    """AWS-LC's verdict byte; anything but 0 or 1 is a failure."""
-    verdict = signer._run("verify", pk + signature + message, 1)
-    if verdict not in (b"\x00", b"\x01"):
-        raise signer.GateSignerError("mldsa87_verify_output")
-    return verdict == b"\x01"
-
-
-NEEDS_SIGNER = unittest.skipUnless(signer.BINARY.is_file(), f"ML-DSA VECTORS NOT RUN: {signer.BINARY} is missing; run rust/gate_mldsa87/build.ps1")
+LEAN_VECTORS = signer.ROOT / "lean" / ".lake" / "build" / "bin" / "gate_vectors.exe"
 
 
 class GoldenVectorTests(unittest.TestCase):
-    @NEEDS_SIGNER
     def test_python_reproduces_every_vector_byte(self) -> None:
-        recorded = {(r[1], r[2]): bytes.fromhex(r[3]) for r in _records() if r[0] == "sig"}
-        self.assertEqual(len(recorded), 29)
-        pks = {name: signer.public_key(seed(name)).hex() for name in CERTS}
-        self.assertEqual(build_vectors(lambda key, m: recorded[(pks[key], m.hex())]), VECTORS.read_text("ascii"))
+        self.assertEqual(build_vectors(), VECTORS.read_text("ascii"))
+
+    def test_lean_judges_every_golden_vector(self) -> None:
+        done = subprocess.run([str(LEAN_VECTORS), str(VECTORS)], capture_output=True, text=True, timeout=1800, check=False)
+        self.assertRegex(done.stdout.strip(), r"^GATE_VECTORS=PASS checked=(\d+) expected=\1 failed=0$")
 
     def test_state_digest_commits_to_the_rules_pins(self) -> None:
         rules = RULES.read_text("ascii")
         for kind, pin in zip(("released", "unresolved"), PINS):
             self.assertIn(f"\nsnap {kind} 20270315 0 {pin.hex()}\n", rules)
 
-    @NEEDS_SIGNER
-    def test_aws_lc_accepts_recorded_signatures_and_rejects_flips(self) -> None:
-        triples = [[bytes.fromhex(x) for x in r[1:]] for r in _records() if r[0] == "sig"]
-        pks = {signer.public_key(seed(name)) for name in CERTS}
-        self.assertEqual(len(pks), len(CERTS))
-        for pk, message, signature in triples:
-            self.assertIn(pk, pks)
-            self.assertTrue(_verify(pk, message, signature))
-        pk, message, signature = triples[0]
-        self.assertFalse(_verify(pk, message, _flip(signature, 100)))
-        self.assertFalse(_verify(pk, _flip(message, 40, 1), signature))
-        self.assertTrue(_verify(pk, message, signer.sign(seed("e7"), message)))
-        with self.assertRaises(signer.GateSignerError):
-            signer._run("verify", pk + signature[:-1], 1)
-
     def test_signer_refuses_an_unpinned_or_missing_binary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            wrong = Path(tmp) / "pin"
+            handle, wrong, absent = str(Path(tmp) / "k"), Path(tmp) / "pin", Path(tmp) / "absent.exe"
+            signer.keygen(handle)  # a real key, so each refusal is the one under test and not a missing key
             wrong.write_text("0" * 64 + "\n", "ascii")
-            for name, value in (("PIN", wrong), ("BINARY", Path(tmp) / "absent.exe")):
-                with self.subTest(name), mock.patch.object(signer, name, value), self.assertRaises(signer.GateSignerError):
-                    signer.public_key(seed("e7"))
+            for name, value, refusal in (("PIN", wrong, "rr_gate_mldsa87_pin_mismatch"), ("BINARY", absent, "absent_failed"),
+                                         ("VERIFY_PIN", wrong, "gate_verify_pin_mismatch"), ("VERIFY", absent, "absent_failed")):
+                with self.subTest(name), mock.patch.object(signer, name, value), self.assertRaisesRegex(signer.GateSignerError, refusal):
+                    signer.checked(handle, bytes(2592), b"")(b"header")
+
+    def test_the_hashed_copy_cannot_be_written_or_deleted(self) -> None:
+        copy = signer._private_copy(signer.BINARY)[0]
+        with self.assertRaises(PermissionError):
+            copy.write_bytes(b"x")
+        with self.assertRaises(PermissionError):
+            copy.unlink()
+
+    def test_gate_verify_pin_names_the_current_lean_tree(self) -> None:
+        """Any change under lean/ needs a rebuilt, re-pinned gate_verify; PROVENANCE records the tree's manifest."""
+        lean = signer.ROOT / "lean"
+        files = sorted(f for f in lean.rglob("*") if f.is_file() and ".lake" not in f.relative_to(lean).parts)
+        manifest = "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  lean/{f.relative_to(lean).as_posix()}\n" for f in files)
+        recorded = re.search(r"Source manifest.{0,90}?([0-9a-f]{64})", (signer.VERIFY.parent / "PROVENANCE.txt").read_text("utf-8"), re.S)
+        self.assertEqual(recorded and recorded.group(1), hashlib.sha256(manifest.encode()).hexdigest())
+        built = lean / ".lake" / "build" / "bin" / "gate_verify.exe"  # this tree's build is the pinned exe
+        self.assertEqual(hashlib.sha256(built.read_bytes()).hexdigest(), signer.VERIFY_PIN.read_text("ascii").strip())
+
+    def test_only_the_signer_makes_a_checked_signer(self) -> None:
+        for source in (signer.ROOT / "app").rglob("*.py"):
+            self.assertEqual(source.read_text("utf-8").count("CheckedSigner("), int(source.name == "right_rail_gate_signer.py"), source.name)
+
+    def test_sign_batch_takes_only_a_checked_signer(self) -> None:
+        with self.assertRaisesRegex(gate.GateCodecError, "signer"):
+            gate.sign_batch([_leaf(0, 40)], prev_checkpoint_digest=D[0], event_head=D[1], evidence_root=D[2],
+                            state_digest=STATE, shard_count=SHARDS, created_at=NOW, sign=lambda m: bytes(gate.ML_DSA_87_SIGNATURE))
+
+    def test_signing_is_hedged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handle = str(Path(tmp) / "k")
+            pk = signer.keygen(handle)
+            first, second = signer.sign(handle, b"same message"), signer.sign(handle, b"same message")
+            self.assertNotEqual(first, second)
+            for sig in (first, second):
+                self.assertEqual(_kat("kat-verify", pk + sig + b"\x00\x00same message", 1), b"\x01")
+
+
+class CheckedSigningTests(unittest.TestCase):
+    """The ``checked`` callback signs through custody and releases the signature only on GATE_VERIFY=ACCEPT."""
+
+    @staticmethod
+    def _custody(tmp: str, name: str, cert_name: str = "e7", root: str = "") -> tuple[str, bytes, bytes]:
+        """A fresh epoch key file, the root public key, and the certificate for that key."""
+        handle = str(Path(tmp) / f"{name}.key")
+        epoch, tenant, shards = CERTS[cert_name]
+        body = gate.encode_key_cert(tenant, epoch, shards, signer.keygen(handle))
+        return handle, keypair(f"root-{tenant}")[0], gate.attach_signature(body, det_sign(f"root-{root or tenant}", body))
+
+    def test_signature_leaves_only_when_gate_verify_accepts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = self._custody(tmp, "e7")
+            cp, signature, tokens = _batch([_leaf(n, 40 + n) for n in range(5)], signer.checked(handle, root_pk, cert))
+            self.assertEqual(len(signature), gate.ML_DSA_87_SIGNATURE)
+            epoch_at = len(gate.KEY_CERT) + 1 + 2 + len(TENANT)
+            body = cert[: -gate.ML_DSA_87_SIGNATURE - 2]
+            by_epoch_key = gate.attach_signature(body, signer.sign(handle, body))
+            epoch_edited = cert[:epoch_at] + (EPOCH + 1).to_bytes(8, "big") + cert[epoch_at + 8 :]
+            old = self._custody(tmp, "e6", "e6")
+            # Each case breaks one link; the verifier's own verdict is REJECT (exit 1) and no signature leaves
+            for name, key, chain, change in (
+                ("another tenant's root key", handle, (keypair(f"root-{OTHER}")[0], cert), {}),
+                ("a certificate whose signature bit was flipped", handle, (root_pk, _flip(cert, len(cert) - 1, 0x01)), {}),
+                ("a certificate signed by the epoch key, not the root", handle, (root_pk, by_epoch_key), {}),
+                ("a certificate whose epoch was edited after signing", handle, (root_pk, epoch_edited), {"epoch": EPOCH + 1}),
+                ("an epoch 6 header signed with the epoch 7 key", handle, (root_pk, cert), {"epoch": EPOCH - 1}),
+                ("an epoch 8 header signed with the epoch 7 key", handle, (root_pk, cert), {"epoch": EPOCH + 1}),
+                ("a header for another tenant", handle, (root_pk, cert), {"tenant_id": OTHER}),
+                ("an epoch 6 key and certificate on an epoch 7 header", old[0], old[1:], {}),
+            ):
+                with self.subTest(name):
+                    headers: list[bytes] = []
+                    leaf = replace(_leaf(0, 1), **change)
+                    _, sig, _ = _batch([leaf], lambda m: headers.append(m) or signer.sign(key, m))
+                    framed = chain[0] + len(chain[1]).to_bytes(4, "big") + chain[1] + gate.attach_signature(headers[0], sig)
+                    done = subprocess.run([str(signer._private_copy(signer.VERIFY)[0])], input=framed, capture_output=True, check=False)
+                    self.assertEqual((done.returncode, done.stdout), (1, b"GATE_VERIFY=REJECT\n"))
+                    with self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                        _batch([leaf], signer.checked(key, *chain))
+            real = signer.sign  # a faulty signature never leaves
+            with mock.patch.object(signer, "sign", lambda h, m: _flip(real(h, m), 100)), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                _batch([_leaf(0, 1)], signer.checked(handle, root_pk, cert))
 
 
 class AxiomRecordTests(unittest.TestCase):
@@ -648,5 +776,5 @@ class EncoderLawTests(unittest.TestCase):
 
 if __name__ == "__main__":
     VECTORS.parent.mkdir(exist_ok=True)
-    VECTORS.write_text(build_vectors(lambda key, message: signer.sign(seed(key), message)), "ascii", newline="\n")
+    VECTORS.write_text(build_vectors(), "ascii", newline="\n")
     sys.exit(0)
