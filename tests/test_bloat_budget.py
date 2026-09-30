@@ -16,18 +16,21 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
 # tests and proofs as bloat. Product code (what runs and must be read to be trusted)
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
-# 2026-09-29 UI M3, +154: the second lawful outcome (accept the offset) and a three-step Decide sheet in place of one unsafe click.
-# Review fixes, +11: acknowledging the current action, so an accepted offset can close; accept bound to the read the approver saw.
-PRODUCT_CODE_LINES = 37_228
+PRODUCT_CODE_LINES = 36_951
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
-# 2026-09-29 UI M3, +159: sheet states, each outcome in three steps, the accepted journey and the resend covered by the new tests.
-# Review fixes, +18: the accepted case reaching RESOLVED, and accept refused on a changed or moved read.
-EVIDENCE_CODE_LINES = 41_504
+# Lean paid sum (lean-paid-sum, 2026-09-29): +1,251 over trunk's 41,327 (42,585 measured on the merge, 7 more than the sum of the two deltas) for the 3 PaidSum laws
+# (`linkedActivePaidCents_reverse`, `_retarget`, `_total_le_active`), the 7 PaidSumTheorems
+# (`derivedCorrectionPaid_sound`, `_complete`, `outstandingCorrectionCents_eq_linked`,
+# `applyCorrectionTransition_links_admissible`, `_paid_eq_linked`, `_action_amount_eq_linked`,
+# `_outstanding_within_shortfall_linked`), the 2 KATs `reversed_linked_payment_pays_nothing`
+# and `link_naming_unknown_request_rejected`, and their tests.
+# Direction-6 staff workspace (ui-1: 1b7e390, 7663741), +284 over that (283 test lines, one comment line): the tests prove every staff control in a real browser, so an approver's lost answer, a stale confirm and each role's keys are checked, not assumed.
+EVIDENCE_CODE_LINES = 42_869
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
-# contract, like test vectors, not compressible prose; it gets its own ceiling.
-MARKDOWN_BYTES = 157_973
+# contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,235 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability). The ui-1 merge measures 158,173; the ceiling is that.
+MARKDOWN_BYTES = 158_173
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {

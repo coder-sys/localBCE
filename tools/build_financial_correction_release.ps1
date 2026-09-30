@@ -28,7 +28,7 @@ $script:GuardPhysicalFloorBytes = [UInt64]2190433321
 $script:LeanCompilerStartFloorBytes = [UInt64]4190433321
 $script:Utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
 $script:PinnedVectorSpecs = @(
-    [pscustomobject]@{ SourceName = 'request.bin'; OutputName = 'request.bin'; Sha256 = 'B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067' },
+    [pscustomobject]@{ SourceName = 'request.bin'; OutputName = 'request.bin'; Sha256 = '234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666' },
     [pscustomobject]@{ SourceName = 'result.expected.bin'; OutputName = 'result.expected.bin'; Sha256 = '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6' },
     [pscustomobject]@{ SourceName = 'reuse-request.bin'; OutputName = 'reuse-request.bin'; Sha256 = '9C203F6BF50DA69D9D77CAFC4ADBF7BD3628724DFABF87E69E141A319F185B99' },
     [pscustomobject]@{ SourceName = 'reuse-result.expected.bin'; OutputName = 'reuse-result.expected.bin'; Sha256 = '973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F' }
@@ -619,7 +619,7 @@ function Invoke-GuardedChild {
     $builtIdentity = Get-RegularFileIdentity -Path $builtExecutable
     if ($builtIdentity.SizeBytes -le 0) { throw 'freshly built executable is empty' }
     $vectorRoot = Join-Path $outputFull 'vectors'
-    $transition = Invoke-VectorOperation -Name TRANSITION -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'request.bin' -ExpectedName 'result.expected.bin' -ActualName 'result.actual.bin' -OperationArgument '--apply-correction-transition' -RequestSha256 'B658DCEE04138FDCBA6C9D72F3D2D044E5F596AA5794B3562A8312FBB57AD067' -ExpectedSha256 '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6'
+    $transition = Invoke-VectorOperation -Name TRANSITION -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'request.bin' -ExpectedName 'result.expected.bin' -ActualName 'result.actual.bin' -OperationArgument '--apply-correction-transition' -RequestSha256 '234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666' -ExpectedSha256 '83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6'
     $reuse = Invoke-VectorOperation -Name REUSE -Executable $builtExecutable -StageRoot $stageFull -VectorRoot $vectorRoot -RequestName 'reuse-request.bin' -ExpectedName 'reuse-result.expected.bin' -ActualName 'reuse-result.actual.bin' -OperationArgument '--assess-correction-reuse' -RequestSha256 '9C203F6BF50DA69D9D77CAFC4ADBF7BD3628724DFABF87E69E141A319F185B99' -ExpectedSha256 '973B0CA003384170C5031B0E32295E02D8F34D80BFE095B30DE6142DBD378E4F'
     if ($transition.ExitCode -ne 0 -or -not $transition.OutputMatches -or $reuse.ExitCode -ne 0 -or -not $reuse.OutputMatches) {
         Write-ChildMarker -Text 'ENGINE_PRODUCER_CHILD_RESULT=FAIL'

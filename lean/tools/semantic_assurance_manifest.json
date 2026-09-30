@@ -4,13 +4,11 @@
   "candidate": {
     "lean_root": "lean",
     "namespace": "BlindLedger.Financial.CorrectionTransition",
-    "module": "BlindLedger.Financial.CorrectionTransition.Theorems",
+    "module": "BlindLedger.Financial.CorrectionTransition.PaidSumTheorems",
     "theorem_source": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
     "declaration_sources": {
       "canonicalActionPayload_dispatch_is_synthetic_record_only": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_mutation_links": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
-      "applyCorrectionTransition_action_amount_eq_b2": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
-      "applyCorrectionTransition_outstanding_within_shortfall": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_zero_shortfall_has_no_mutation": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "evaluate_positive_shortfall_balance": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "applyCorrectionTransition_amounts_conserved": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
@@ -24,14 +22,27 @@
       "assessCorrectionReuse_approval_independent_of_calculation_and_execution_observations": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "assessCorrectionReuse_local_permission_matches_denial": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
       "assessCorrectionReuse_never_permits_external_dispatch": "BlindLedger/Financial/CorrectionTransition/Theorems.lean",
-      "evaluate_after_case_status_update_fixedPoint": "BlindLedger/Financial/CorrectionTransition/Transition.lean"
+      "evaluate_after_case_status_update_fixedPoint": "BlindLedger/Financial/CorrectionTransition/Transition.lean",
+      "linkedActivePaidCents_reverse": "BlindLedger/Financial/CorrectionTransition/PaidSum.lean",
+      "linkedActivePaidCents_retarget": "BlindLedger/Financial/CorrectionTransition/PaidSum.lean",
+      "linkedActivePaidCents_total_le_active": "BlindLedger/Financial/CorrectionTransition/PaidSum.lean",
+      "derivedCorrectionPaid_sound": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
+      "derivedCorrectionPaid_complete": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
+      "outstandingCorrectionCents_eq_linked": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
+      "applyCorrectionTransition_links_admissible": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
+      "applyCorrectionTransition_paid_eq_linked": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
+      "applyCorrectionTransition_action_amount_eq_linked": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
+      "applyCorrectionTransition_outstanding_within_shortfall_linked": "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean"
     },
     "source_files": [
       "BlindLedger/Financial/Cli.lean",
       "BlindLedger/Financial/Codec.lean",
+      "BlindLedger/Financial/CodecLaws/PaymentLinks.lean",
       "BlindLedger/Financial/CorrectionTransition.lean",
       "BlindLedger/Financial/CorrectionTransition/Codec.lean",
       "BlindLedger/Financial/CorrectionTransition/KAT.lean",
+      "BlindLedger/Financial/CorrectionTransition/PaidSum.lean",
+      "BlindLedger/Financial/CorrectionTransition/PaidSumTheorems.lean",
       "BlindLedger/Financial/CorrectionTransition/Reuse.lean",
       "BlindLedger/Financial/CorrectionTransition/ReuseCodec.lean",
       "BlindLedger/Financial/CorrectionTransition/Runtime.lean",
@@ -107,26 +118,6 @@
         {
           "name": "applyCorrectionTransition_mutation_links",
           "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : (applyCorrectionTransition request).status = .ACCEPTED ∧ (applyCorrectionTransition request).actionId = some request.command.actionId ∧ (applyCorrectionTransition request).determinationId = some (\"determination:\" ++ request.command.actionId) ∧ (applyCorrectionTransition request).explanation.transition = some .OFFSET_REJECTED_CORRECTION_AUTHORIZED ∧ (applyCorrectionTransition request).explanation.resultingRevision = some mutation.resultingResult.afterRevision ∧ request.currentInput.beforeRevision + 1 = request.command.expectedRevision ∧ CorrectionMutationLinkFacts request mutation"
-        }
-      ]
-    },
-    {
-      "id": "applyCorrectionTransition_action_amount_eq_b2",
-      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents (result.shortfallCents - outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions) ∧ mutation.action.amountCents ≤ result.shortfallCents",
-      "declarations": [
-        {
-          "name": "applyCorrectionTransition_action_amount_eq_b2",
-          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents (result.shortfallCents - outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions) ∧ mutation.action.amountCents ≤ result.shortfallCents"
-        }
-      ]
-    },
-    {
-      "id": "applyCorrectionTransition_outstanding_within_shortfall",
-      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents request.command.correctionPaid (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents",
-      "declarations": [
-        {
-          "name": "applyCorrectionTransition_outstanding_within_shortfall",
-          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ outstandingCorrectionCents request.command.correctionPaid (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents"
         }
       ]
     },
@@ -269,6 +260,106 @@
           "source_statement": "(input : FinancialInput) (result : FinancialResult) (updatedAt : Nat) (hEval : evaluate input = some result) (hUpdatedWellFormed : financialInputWellFormed { input with cases := updateAllCaseStatus input.cases result.caseStatus updatedAt } = true) : evaluate { input with cases := updateAllCaseStatus input.cases result.caseStatus updatedAt } = some result"
         }
       ]
+    },
+    {
+      "id": "linkedActivePaidCents_reverse",
+      "statement": "(payments : List Payment) (links : List PaymentLink) (payment : Payment) (actionId other : String) (hRows : (payments.map Payment.paymentId).Nodup) (hLinks : (links.map PaymentLink.paymentId).Nodup) (hMember : payment ∈ payments) (hActive : payment.status = .ACTIVE) (hLinked : (⟨payment.paymentId, actionId⟩ : PaymentLink) ∈ links) : linkedActivePaidCents (reversePaymentRow payment.paymentId payments) links other + (if other = actionId then payment.amountCents else 0) = linkedActivePaidCents payments links other",
+      "declarations": [
+        {
+          "name": "linkedActivePaidCents_reverse",
+          "source_statement": "(payments : List Payment) (links : List PaymentLink) (payment : Payment) (actionId other : String) (hRows : (payments.map Payment.paymentId).Nodup) (hLinks : (links.map PaymentLink.paymentId).Nodup) (hMember : payment ∈ payments) (hActive : payment.status = .ACTIVE) (hLinked : (⟨payment.paymentId, actionId⟩ : PaymentLink) ∈ links) : linkedActivePaidCents (reversePaymentRow payment.paymentId payments) links other + (if other = actionId then payment.amountCents else 0) = linkedActivePaidCents payments links other"
+        }
+      ]
+    },
+    {
+      "id": "linkedActivePaidCents_retarget",
+      "statement": "(payments : List Payment) (links : List PaymentLink) (payment : Payment) (fromId toId other : String) (hRows : (payments.map Payment.paymentId).Nodup) (hLinks : (links.map PaymentLink.paymentId).Nodup) (hMember : payment ∈ payments) (hActive : payment.status = .ACTIVE) (hLinked : (⟨payment.paymentId, fromId⟩ : PaymentLink) ∈ links) : linkedActivePaidCents payments (retargetPaymentLink payment.paymentId toId links) other + (if other = fromId then payment.amountCents else 0) = linkedActivePaidCents payments links other + (if other = toId then payment.amountCents else 0)",
+      "declarations": [
+        {
+          "name": "linkedActivePaidCents_retarget",
+          "source_statement": "(payments : List Payment) (links : List PaymentLink) (payment : Payment) (fromId toId other : String) (hRows : (payments.map Payment.paymentId).Nodup) (hLinks : (links.map PaymentLink.paymentId).Nodup) (hMember : payment ∈ payments) (hActive : payment.status = .ACTIVE) (hLinked : (⟨payment.paymentId, fromId⟩ : PaymentLink) ∈ links) : linkedActivePaidCents payments (retargetPaymentLink payment.paymentId toId links) other + (if other = fromId then payment.amountCents else 0) = linkedActivePaidCents payments links other + (if other = toId then payment.amountCents else 0)"
+        }
+      ]
+    },
+    {
+      "id": "linkedActivePaidCents_total_le_active",
+      "statement": "(payments : List Payment) (links : List PaymentLink) (actionIds : List String) (hActions : actionIds.Nodup) (hLinks : (links.map PaymentLink.paymentId).Nodup) : (actionIds.map (linkedActivePaidCents payments links)).sum ≤ ((payments.filter fun payment => payment.status = .ACTIVE).map Payment.amountCents).sum",
+      "declarations": [
+        {
+          "name": "linkedActivePaidCents_total_le_active",
+          "source_statement": "(payments : List Payment) (links : List PaymentLink) (actionIds : List String) (hActions : actionIds.Nodup) (hLinks : (links.map PaymentLink.paymentId).Nodup) : (actionIds.map (linkedActivePaidCents payments links)).sum ≤ ((payments.filter fun payment => payment.status = .ACTIVE).map Payment.amountCents).sum"
+        }
+      ]
+    },
+    {
+      "id": "derivedCorrectionPaid_sound",
+      "statement": "(payments : List Payment) (actions : List ActionRecord) (links : List PaymentLink) (paid : List CorrectionPaid) (hDerived : derivedCorrectionPaid payments actions links = some paid) : correctionPaidWellFormed paid = true ∧ paymentLinksAdmissible payments actions links = true ∧ ∀ actionId, correctionPaidCents paid actionId = linkedActivePaidCents payments links actionId",
+      "declarations": [
+        {
+          "name": "derivedCorrectionPaid_sound",
+          "source_statement": "(payments : List Payment) (actions : List ActionRecord) (links : List PaymentLink) (paid : List CorrectionPaid) (hDerived : derivedCorrectionPaid payments actions links = some paid) : correctionPaidWellFormed paid = true ∧ paymentLinksAdmissible payments actions links = true ∧ ∀ actionId, correctionPaidCents paid actionId = linkedActivePaidCents payments links actionId"
+        }
+      ]
+    },
+    {
+      "id": "derivedCorrectionPaid_complete",
+      "statement": "(input : FinancialInput) (links : List PaymentLink) (result : FinancialResult) (hInput : financialInputWellFormed input = true) (hLinks : paymentLinksWellFormed links = true) (hAdmissible : paymentLinksAdmissible input.payments input.actions links = true) (hEval : evaluate input = some result) : ∃ paid, derivedCorrectionPaid input.payments input.actions links = some paid",
+      "declarations": [
+        {
+          "name": "derivedCorrectionPaid_complete",
+          "source_statement": "(input : FinancialInput) (links : List PaymentLink) (result : FinancialResult) (hInput : financialInputWellFormed input = true) (hLinks : paymentLinksWellFormed links = true) (hAdmissible : paymentLinksAdmissible input.payments input.actions links = true) (hEval : evaluate input = some result) : ∃ paid, derivedCorrectionPaid input.payments input.actions links = some paid"
+        }
+      ]
+    },
+    {
+      "id": "outstandingCorrectionCents_eq_linked",
+      "statement": "(paid : List CorrectionPaid) (payments : List Payment) (links : List PaymentLink) (actions : List ActionRecord) (hPaid : ∀ actionId, correctionPaidCents paid actionId = linkedActivePaidCents payments links actionId) : outstandingCorrectionCents paid actions = linkedOutstandingCents payments links actions",
+      "declarations": [
+        {
+          "name": "outstandingCorrectionCents_eq_linked",
+          "source_statement": "(paid : List CorrectionPaid) (payments : List Payment) (links : List PaymentLink) (actions : List ActionRecord) (hPaid : ∀ actionId, correctionPaidCents paid actionId = linkedActivePaidCents payments links actionId) : outstandingCorrectionCents paid actions = linkedOutstandingCents payments links actions"
+        }
+      ]
+    },
+    {
+      "id": "applyCorrectionTransition_links_admissible",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : paymentLinksAdmissible request.currentInput.payments request.currentInput.actions request.command.paymentLinks = true",
+      "declarations": [
+        {
+          "name": "applyCorrectionTransition_links_admissible",
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : paymentLinksAdmissible request.currentInput.payments request.currentInput.actions request.command.paymentLinks = true"
+        }
+      ]
+    },
+    {
+      "id": "applyCorrectionTransition_paid_eq_linked",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∀ actionId, correctionPaidCents mutation.dependencies.correctionPaid actionId = linkedActivePaidCents request.currentInput.payments request.command.paymentLinks actionId",
+      "declarations": [
+        {
+          "name": "applyCorrectionTransition_paid_eq_linked",
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∀ actionId, correctionPaidCents mutation.dependencies.correctionPaid actionId = linkedActivePaidCents request.currentInput.payments request.command.paymentLinks actionId"
+        }
+      ]
+    },
+    {
+      "id": "applyCorrectionTransition_action_amount_eq_linked",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ linkedOutstandingCents request.currentInput.payments request.command.paymentLinks request.currentInput.actions < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents (result.shortfallCents - linkedOutstandingCents request.currentInput.payments request.command.paymentLinks request.currentInput.actions) ∧ mutation.action.amountCents ≤ result.shortfallCents",
+      "declarations": [
+        {
+          "name": "applyCorrectionTransition_action_amount_eq_linked",
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ linkedOutstandingCents request.currentInput.payments request.command.paymentLinks request.currentInput.actions < result.shortfallCents ∧ mutation.action.amountCents = min mutation.dependencies.claimBefore.amountCents (result.shortfallCents - linkedOutstandingCents request.currentInput.payments request.command.paymentLinks request.currentInput.actions) ∧ mutation.action.amountCents ≤ result.shortfallCents"
+        }
+      ]
+    },
+    {
+      "id": "applyCorrectionTransition_outstanding_within_shortfall_linked",
+      "statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ linkedOutstandingCents request.currentInput.payments request.command.paymentLinks (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents",
+      "declarations": [
+        {
+          "name": "applyCorrectionTransition_outstanding_within_shortfall_linked",
+          "source_statement": "(request : CorrectionTransitionRequest) (mutation : CorrectionMutation) (hMutation : (applyCorrectionTransition request).mutation = some mutation) : ∃ result, evaluate request.currentInput = some result ∧ linkedOutstandingCents request.currentInput.payments request.command.paymentLinks (mutation.action :: request.currentInput.actions) ≤ result.shortfallCents"
+        }
+      ]
     }
   ],
   "allowed_axioms": [
@@ -288,7 +379,7 @@
       "--correction-transition-kat"
     ],
     "header": [
-      "BLFCMD02/BLFCRES3",
+      "BLFCMD03/BLFCRES3",
       "contract=RR/FINANCIAL/CORRECTION-TRANSITION/v1",
       "claim=PURE_SYNTHETIC_NONACTIVATING"
     ],
@@ -304,6 +395,8 @@
       "second_correction_requests_remaining_balance",
       "paid_correction_request_frees_its_balance",
       "partly_paid_correction_request_counts_unpaid_part",
+      "reversed_linked_payment_pays_nothing",
+      "link_naming_unknown_request_rejected",
       "owner_domain_digest_vectors",
       "current_owner_evaluation_receipt_binding",
       "exact_retry_after_ack_is_noop",

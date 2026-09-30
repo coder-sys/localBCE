@@ -2,7 +2,7 @@ import BlindLedger.Financial.Executable
 import BlindLedger.Financial.CodecLaws
 import BlindLedger.Financial.CodecLawsCheck
 import BlindLedger.Financial.CodecLaws.Correction
-import BlindLedger.Financial.CorrectionTransition.Theorems
+import BlindLedger.Financial.CorrectionTransition.PaidSumTheorems
 
 namespace BlindLedger.Financial
 
@@ -100,8 +100,18 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_nonaccepted_has_no_mutation
 #print axioms BlindLedger.Financial.CorrectionTransition.rejectedCorrectionTransition_has_no_mutation
 #print axioms BlindLedger.Financial.CorrectionTransition.duplicateCorrectionTransition_has_no_mutation
-#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_action_amount_eq_b2
-#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_outstanding_within_shortfall
+#print axioms BlindLedger.Financial.CorrectionTransition.linkedActivePaidCents_reverse
+#print axioms BlindLedger.Financial.CorrectionTransition.linkedActivePaidCents_retarget
+#print axioms BlindLedger.Financial.CorrectionTransition.linkedActivePaidCents_total_le_active
+#print axioms BlindLedger.Financial.CorrectionTransition.derivedCorrectionPaid_sound
+#print axioms BlindLedger.Financial.CorrectionTransition.derivedCorrectionPaid_complete
+#print axioms BlindLedger.Financial.CorrectionTransition.outstandingCorrectionCents_eq_linked
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_links_admissible
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_paid_eq_linked
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_action_amount_eq_linked
+#print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_outstanding_within_shortfall_linked
+#print axioms BlindLedger.Financial.CorrectionTransition.readPaymentLink_append
+#print axioms BlindLedger.Financial.CorrectionTransition.readPaymentLinks_append
 /-- info: 'BlindLedger.Financial.CorrectionTransition.outstandingCorrectionCents_eq_uncancelled' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.outstandingCorrectionCents_eq_uncancelled
 #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_zero_shortfall_has_no_mutation

@@ -139,7 +139,8 @@ structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
     request.currentReceipt.evidenceBindings
   dependencyQueries : mutation.dependencies.queryObservations =
     request.command.queryObservations
-  dependencyCorrectionPaid : mutation.dependencies.correctionPaid = request.command.correctionPaid
+  derivedPaid : derivedCorrectionPaid request.currentInput.payments request.currentInput.actions
+    request.command.paymentLinks = some mutation.dependencies.correctionPaid
   readyAction : mutation.action.status = .READY
   readyOutbox : mutation.outbox.status = .READY
   outboxAttempt : mutation.outbox.attempt = 0
@@ -155,10 +156,10 @@ structure CorrectionMutationLinkFacts (request : CorrectionTransitionRequest)
   claimAmount : mutation.determination.amountCents = mutation.dependencies.claimBefore.amountCents
   amountRule : mutation.action.amountCents =
     min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
-      outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions)
+      outstandingCorrectionCents mutation.dependencies.correctionPaid request.currentInput.actions)
   inputShortfall : ∃ result, evaluate request.currentInput = some result ∧
     result.shortfallCents = mutation.dependencies.inputShortfallCents ∧
-    outstandingCorrectionCents request.command.correctionPaid request.currentInput.actions <
+    outstandingCorrectionCents mutation.dependencies.correctionPaid request.currentInput.actions <
       result.shortfallCents
 
 def sameOwnerResult (result : FinancialResult) (receipt : EvaluationReceipt)
@@ -549,8 +550,11 @@ private theorem correctionCase_found_links {cases : List CaseRecord}
 def buildAccepted (request : CorrectionTransitionRequest)
     (currentResult : FinancialResult) (claim : Claim)
     (hEvaluates : evaluate request.currentInput = some currentResult)
-    (hRequestable : outstandingCorrectionCents request.command.correctionPaid
-      request.currentInput.actions < currentResult.shortfallCents) :
+    (paid : List CorrectionPaid)
+    (hDerived : derivedCorrectionPaid request.currentInput.payments request.currentInput.actions
+      request.command.paymentLinks = some paid)
+    (hRequestable : outstandingCorrectionCents paid request.currentInput.actions <
+      currentResult.shortfallCents) :
     Except TransitionRejectReason { mutation : CorrectionMutation // CorrectionMutationLinkFacts request mutation } := do
   let command := request.command
   let input := request.currentInput
@@ -579,7 +583,7 @@ def buildAccepted (request : CorrectionTransitionRequest)
   -- earlier correction requests, less what was paid against them, do not
   -- already ask for.
   let amountCents := min claim.amountCents
-    (currentResult.shortfallCents - outstandingCorrectionCents command.correctionPaid input.actions)
+    (currentResult.shortfallCents - outstandingCorrectionCents paid input.actions)
   let action := {
     actionId := command.actionId
     obligationId := input.context.obligationId
@@ -685,7 +689,7 @@ def buildAccepted (request : CorrectionTransitionRequest)
         queryObservations := command.queryObservations
         currentEventSequence := command.currentEventSequence
         previousHistoryHead := command.previousHistoryHead
-        correctionPaid := command.correctionPaid }
+        correctionPaid := paid }
       followUps := {
         actionId := command.actionId
         outboxActionId := command.actionId
@@ -747,7 +751,7 @@ def buildAccepted (request : CorrectionTransitionRequest)
       dependencyControlPackDigest := rfl
       dependencyEvidence := rfl
       dependencyQueries := rfl
-      dependencyCorrectionPaid := rfl
+      derivedPaid := hDerived
       readyAction := rfl
       readyOutbox := rfl
       outboxAttempt := rfl
@@ -768,8 +772,11 @@ inductive CorrectionTransitionPreflight (request : CorrectionTransitionRequest) 
   | ready (currentResult : FinancialResult) (claim : Claim)
       (inputRevisionMatches : request.currentInput.beforeRevision + 1 = request.command.expectedRevision)
       (evaluates : evaluate request.currentInput = some currentResult)
-      (requestable : outstandingCorrectionCents request.command.correctionPaid
-        request.currentInput.actions < currentResult.shortfallCents)
+      (paid : List CorrectionPaid)
+      (derived : derivedCorrectionPaid request.currentInput.payments request.currentInput.actions
+        request.command.paymentLinks = some paid)
+      (requestable : outstandingCorrectionCents paid request.currentInput.actions <
+        currentResult.shortfallCents)
 
 def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
     Except TransitionRejectReason (CorrectionTransitionPreflight request) := do
@@ -808,6 +815,9 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
   let input := request.currentInput
   if input.context.mode = .SHADOW then throw .SHADOW_READ_ONLY
   if !financialInputWellFormed input then throw .INVALID_INPUT
+  -- Lean, not the caller, decides what each correction request has been paid.
+  let some paid := optionWithProof (derivedCorrectionPaid input.payments input.actions
+    command.paymentLinks) | throw .INVALID_INPUT
   if input.context.itemId ≠ command.itemId || input.context.obligationId ≠ request.currentReceipt.result.obligationId then
     throw .SCOPE_MISMATCH
   if !sameAuthority input.authority command.currentAuthorityId
@@ -842,9 +852,10 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
     if currentResult.shortfallCents = 0 then throw .NO_SHORTFALL
     -- Earlier correction requests, less what was paid against them, already
     -- ask for the whole unpaid balance.
-    if hRequestable : outstandingCorrectionCents command.correctionPaid input.actions <
+    if hRequestable : outstandingCorrectionCents paid.val input.actions <
         currentResult.shortfallCents then
-      pure (.ready currentResult claim hInputRevision currentCertificate.property hRequestable)
+      pure (.ready currentResult claim hInputRevision currentCertificate.property paid.val
+        paid.property hRequestable)
     else
       throw .NO_REQUESTABLE_BALANCE
   else
@@ -854,8 +865,8 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
   match preflightCorrectionTransition request with
   | .error reason => reject request.command reason
   | .ok .duplicate => duplicate request.command
-  | .ok (.ready currentResult claim _ hEvaluates hRequestable) =>
-      match buildAccepted request currentResult claim hEvaluates hRequestable with
+  | .ok (.ready currentResult claim _ hEvaluates paid hDerived hRequestable) =>
+      match buildAccepted request currentResult claim hEvaluates paid hDerived hRequestable with
       | .error reason => reject request.command reason
       | .ok certified =>
           let mutation := certified.val

@@ -29,18 +29,6 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 | `docs/DESIGN_IDEOLOGY.md` | Engineering principles (source of Constitution Article XI). |
 | `AGENTS.md` | Short instructions for AI agents working here. |
 
-## Layout
-
-| Path | Contents |
-| --- | --- |
-| `app/` | Financial owner, independent checker, Mirror, Switch, Engine port, staff server; direct-state-owned clearance seam; `app/mirror/` Provider Trust Graph |
-| `lean/` | The one Lake workspace (package `RightRail`, library `BlindLedger`): financial semantics, the correction transition |
-| `artifacts/engine-correction/` | The pinned correction executable and its `PROVENANCE.md` |
-| `tools/` | CLI, offline service kit |
-| `tests/` | Product tests (`pytest` default run) |
-| `provider_app/` | Provider App pre-submission checker (separate product) |
-| `parked/` | Parked work, off the critical path (`parked/README.md`) |
-
 ## How to run
 
 All builds and tests go through the guard; never run them bare

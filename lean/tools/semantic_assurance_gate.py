@@ -59,7 +59,7 @@ COMMAND_TIMEOUT_SECONDS = 180.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "6606918908b28a5b8478d73719d8fcf6ddeb616c7c0151bd77a9c1c0912cec2c"
+REQUIRED_MANIFEST_SHA256 = "308cf0bbf1e4deae2753cd3e20e73a9fbd222ff4a1bf09f6fd2616897de4c4c6"
 
 # The only axioms a manifest may allow: the ones Lean's own logic rests on.
 STANDARD_LEAN_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})

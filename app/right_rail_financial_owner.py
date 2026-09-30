@@ -445,6 +445,11 @@ def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list
     ]
 
 
+def _payment_links(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
+    """Which correction request each payment row of the obligation pays, by payment id."""
+    return [{"payment_id": payment, "action_id": action} for payment, action in connection.execute("SELECT json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL ORDER BY 1", (obligation_id,))]
+
+
 def _canonical(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
@@ -4500,7 +4505,6 @@ class FinancialOwner:
         query_observations: Mapping[str, Mapping[str, Any]],
         current_event_sequence: int,
         previous_history_head: bytes,
-        correction_paid: list[dict[str, Any]],
         transition_result: Mapping[str, Any],
         financial_engine: Any,
         semantic: Any,
@@ -4589,12 +4593,7 @@ class FinancialOwner:
             and determination["decided_at_ms"] == command["decision_at_ms"],
             "correction_determination_binding",
         )
-        require_binding(
-            dependencies["supporting_evidence"] == evidence_bindings_wire
-            and dependencies["query_observations"] == query_observations
-            and dependencies["correction_paid"] == correction_paid,
-            "correction_read_set_binding",
-        )
+        require_binding(dependencies["supporting_evidence"] == evidence_bindings_wire and dependencies["query_observations"] == query_observations, "correction_read_set_binding")
         require_binding(
             action["obligation_id"] == obligation_id and action["currency"] == self.config.currency,
             "correction_action_binding",
@@ -5169,7 +5168,6 @@ class FinancialOwner:
                     "decision_at_ms": decision_time,
                     "owner_now_ms": owner_now_ms,
                 }
-                correction_paid = _correction_paid(connection, str(obligation["obligation_id"]))
                 request = financial_engine.encode_correction_transition_request(
                     snapshot=snapshot,
                     command=command,
@@ -5177,7 +5175,7 @@ class FinancialOwner:
                     query_observations=query_observations,
                     current_event_sequence=current_event_sequence,
                     previous_history_head=previous_history_head,
-                    correction_paid=correction_paid,
+                    payment_links=_payment_links(connection, str(obligation["obligation_id"])),
                 )
                 execution = financial_engine.run_correction_transition_v1(
                     configured_release,
@@ -5233,7 +5231,6 @@ class FinancialOwner:
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
-                correction_paid=correction_paid,
                 transition_result=transition_result,
                 financial_engine=financial_engine,
                 semantic=semantic,

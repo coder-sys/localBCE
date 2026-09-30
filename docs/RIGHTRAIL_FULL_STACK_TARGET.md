@@ -1,18 +1,17 @@
 # RightRail full-stack target
 
-Updated: 2026-09-26. Owner: the target architecture for the complete RightRail
-government service and, within it, Blind Ledger as an inline payment gate.
+Updated: 2026-09-26. The target architecture for the complete RightRail
+service and, within it, Blind Ledger as an inline payment gate.
 
 `CONSTITUTION.md` is supreme; this document elaborates it and cannot weaken
 it. [`ARCHITECTURE.md`](../ARCHITECTURE.md) describes today's code;
 [`STATUS.md`](../STATUS.md) is the only status record. This document holds no
 status and selects no state, program, deployment profile, evidence mode,
-authority level, or receiver. It draws on design notes held outside the repo,
-cited by name: `next-phase.md` (build order after the core rebuild),
-`gate-design.md` (gate transport/signing/failover/audit, 2026-09-25) and
-`fv-plan.md` (formal-verification plan, 2026-09-25), the last two reviewed by
-three 2026-09-25 red-team passes (crypto/ZK, engineering, policy/market) whose
-corrections it folds in. Everything below the state of `STATUS.md` is design,
+authority level, or receiver. It draws on design notes held outside the repo:
+`next-phase.md` (build order after the core rebuild), `gate-design.md` (gate
+transport/signing/failover/audit) and `fv-plan.md` (formal-verification plan),
+the last two reviewed by three 2026-09-25 red-team passes (crypto/ZK,
+engineering, policy/market) whose corrections it folds in. Everything below the state of `STATUS.md` is design,
 not built, run, or approved: `proofSuiteId=null`, `production_usable=false`,
 `activation=false`.
 
@@ -121,11 +120,10 @@ closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
 of a few hundred bytes against that checkpoint's `token_root`, not a
 separately signed token.
 
-Signing every token individually would cost ~45–90 TB over 7 years of
-retention at New York's volume (12.6M tokens a week) and exhaust a shared
-HSM/KMS signing quota (a documented AWS KMS default is 1,000 requests/second
-per account). Batch signing needs hundreds to a few thousand HSM signatures a
-week; per-payment cost is a Merkle path and a hash comparison.
+Signing each token would cost ~45–90 TB over 7 years at New York's volume
+(12.6M tokens a week) and exhaust a shared HSM/KMS quota (AWS KMS default:
+1,000 requests/second per account). Batch signing needs hundreds to a few
+thousand signatures a week; per-payment cost is a Merkle path and a hash.
 
 Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
@@ -243,8 +241,8 @@ covers only the model. Checked bounds and remaining larger runs belong in
 `STATUS.md` and `docs/formal/gate_failover/README.md`.
 
 This architecture makes 99.8% achievable, not automatic: the trunk has no CI,
-no on-call rotation and no tested failover drill, and fencing systems fail in
-practice when a watchdog is disabled or the failover path is degraded. **A tested failover drill and an operational runbook (source
+on-call rotation or tested failover drill, and fencing systems fail in practice
+when a watchdog is disabled or the failover path is degraded. **A tested failover drill and an operational runbook (source
 outage, database outage, key loss, corrupted package, partial release,
 receiver timeout, operator exit) are acceptance prerequisites for claiming
 99.8%, not a property that falls out of the primary/standby architecture by
@@ -253,10 +251,9 @@ itself.**
 ## 8. Sharding by member key
 
 Data shards by person/member key, never by program or plan, which would scatter
-one member's payments and leave the gate's core cross-boundary check (the same
-person double-billed across FFS and managed care, or two plans) to an
-asynchronous, staleness-bounded reconciliation pass. Member-key sharding keeps
-that detection inside one shard. No Postgres migration and no
+one member's payments and leave the gate's core cross-boundary check (one person
+double-billed across FFS and managed care, or two plans) to an asynchronous,
+staleness-bounded reconciliation pass. Member-key sharding keeps it in one shard. No Postgres migration and no
 multi-region work happen before a measured SQLite ceiling shows the need; a
 warm-worker throughput benchmark is the first thing to
 measure, not the last (Constitution IX.3).
@@ -282,11 +279,10 @@ test-vectored data, with no theorem review per update**: Medicaid rule content
 changes on independent cadences (NCCI quarterly, fee schedules ad hoc, SPAs
 continuously), so a theorem change per content change would make ordinary
 maintenance unusable (an engineering red-team finding).
-`CAP-REL`, the capitation-release relation, is written as data-shaped Lean
-evaluated by the interpreter (§10), not baked into a bespoke theorem, so it
-stays on the interpreter's proof, not a new one.
+`CAP-REL` (§10) is data-shaped Lean evaluated by the interpreter, so it stays
+on the interpreter's proof.
 
-Today Lean decides one of 14 command types (`ARCHITECTURE.md`); §13 orders
+Today Lean decides one of 18 command types (`ARCHITECTURE.md`); §13 orders
 the rest.
 
 ## 10. Evidence modes: the non-ZK path ships first
@@ -359,8 +355,7 @@ signatures; certification delay does not authorize a downgrade.
 
 A format model, compiled rules, a pinned executable and an integrated workflow
 are separate claims, and one branch's results do not verify another's or their
-combination. `STATUS.md` is the evidence record, `ARCHITECTURE.md` the connected
-implementation, `artifacts/engine-correction/PROVENANCE.md` the engine pin.
+combination. `artifacts/engine-correction/PROVENANCE.md` is the engine pin.
 
 The payer gate needs both authenticated checkpoint ancestry and admission of
 signed, tenant/program-scoped, current authority grants. A checkpoint
@@ -377,15 +372,11 @@ model crawl does not replace Article XIII's real-browser crawl.
 
 ## 13. Path
 
-The ordered path removes the most risk per week first (`fv-plan.md`'s
-roadmap, steps 1–4 first): proof hygiene on the existing theorem manifest
-and a reproducible rebuild of the pinned binary from current source; codec
-laws for the live command path; the existing `evaluate` proof made the live
-evaluator; the remaining thirteen command types ported in order of money
-impact. In parallel: the warm-worker throughput benchmark and the owner
+Most risk removed per week first (`fv-plan.md`): make the existing `evaluate`
+proof the live evaluator, then port the remaining command types in order of
+money impact. In parallel: the warm-worker throughput benchmark and the owner
 throughput harness (branch `load-test`), needed before any batch-sizing or
-worker-pool claim is more than a guess. `CAP-REL` as a plain Lean rule and the
-X12/NCPDP tokenizer are scheduled with the adapter build, not ahead of it.
+worker-pool claim. The X12/NCPDP tokenizer comes with the adapter build, not ahead of it.
 `PRIVATE_ZK` continues in its separate prototype repository under
 Constitution IX.4; it produces evidence only and requires a third-party
 audit before a PRIVATE_ZK claim.
@@ -415,8 +406,7 @@ constitution; local build or test results grant no activation.
 
 The gate sits inside the same five-part product (`README.md`, `ARCHITECTURE.md`)
 and changes no role in it: Mirror is the exception queue and audit surface, and
-the owner stays the one financial writer: a UI, connector, verifier or shadow copy never becomes a second
-writer. Connectors stay allow-listed, bounded and read-only by default; the
+the owner stays the one financial writer (Constitution III.1). Connectors stay allow-listed, bounded and read-only by default; the
 official receiver and payment system keep money-movement authority; Provider App
 remains a separate provider-side product that does not gate on the government
 service. Cross-state reuse stays limited to versioned, non-sensitive interface
@@ -425,12 +415,3 @@ to another state.
 
 Commercial terms are the founder's (Constitution VIII). Nothing here selects a
 procurement route, funding classification or go-live date.
-
-## Related documents
-
-- [Constitution](../CONSTITUTION.md)
-- [Status](../STATUS.md)
-- [How the code fits together](../ARCHITECTURE.md)
-- [Design ideology](DESIGN_IDEOLOGY.md)
-- [Provider App](../provider_app/README.md)
-- [Historical private-proof reference](../parked/README.md)
