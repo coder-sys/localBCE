@@ -729,3 +729,21 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Replacement control.** The new window tests; the oracle keeps its independent ladder with the same one-condition fix (S4), so an auditor can re-check without Lean.
 - **Claims withdrawn.** "A package read at any window carries the same verdict" was untrue before this fix and is true after it.
 - **Kill criteria.** Any window whose verdict differs from the full window; a change to the full-window package bytes.
+
+## Lean-live M3 step 1: the payment model and the form-A codec (2026-09-30, XI.2 record, branch m3-step1)
+
+- **Felt effect.** None for any user today: nothing calls the new Lean code. It is the checked model the payment path will be moved onto in later steps.
+- **Predicate.** `designs/lean-live-m3-v1.md` rev 1.1, section 5: the payment ledger's step, run and codec theorems, as stated.
+- **Change.** `lean/BlindLedger/Financial/Payment/` (Types, Transition, Laws, Ledger, Bridge, Codec, CodecLaws, KAT). 27 theorems proved as stated and pinned in `AxiomCheck.lean` on the standard three axioms; the BLFPAY01 form-A request codec with its decode-only-canonical round trip. Two lemmas in `CorrectionTransition/PaidSumTheorems.lean` became public. Not proved, not restated: the section 5 items that are false or undefined as written (`run_conflict_retry_unchanged`, `step_wellFormed`, `stepView_state`, `stepView_eq`, `paymentRespond_decode_none`, and the second conjunct of `chain_fold_eq_full`), reported to rr-core for revision; the form-B and answer codec, `Chain`, `ChainLaws` and the worker theorems are not built.
+- **Invariant.** No compiled artifact moved: `gate_verify` `B9696F2E...D171C`, the worker `86299A0D...712B` and the correction exe `D5A06E9F...0CBB` are byte-identical to their pins (guard logs `m3s1-gv1-a10-L3`, `m3s1-exes-a1-L1`, 85 jobs, exit 0). The `lean/` manifest moved, 62 files `4ad07c06...` to 70 files `e6976e2e...`; `tools/tcb_report.txt` changes only that line, 0 violations (`tcb-live-20260930112008-a6-L3`, 7 of 7).
+- **Disposition.** Retain. No money behaviour, stored format or digest changes. Builds are in-tree and incremental, not fresh stage pairs; a fresh pair before any release is still owed.
+- **Replacement control, claims withdrawn.** None. **Scope.** Lean only.
+- **Kill criteria.** An axiom outside the standard three; any pinned exe hash moving; a theorem statement edited to pass.
+
+## lean/ manifest hashes LF bytes (2026-09-30, XI.2 record; trunk, after the m3-step1 merge)
+
+- **Predicate.** The `lean/` source manifest in `tests/test_tcb_gate.py::_lean_manifest` and `tests/test_right_rail_gate_formats.py::test_gate_verify_pin_names_the_current_lean_tree`, recorded in `artifacts/gate-verify/PROVENANCE.txt` and `tools/tcb_report.txt`.
+- **Change.** Each tracked file is hashed after CRLF→LF, which equals its git blob under `* text=auto eol=lf`. Before, the hash read raw checkout bytes, so a worktree holding CRLF copies of LF blobs gave a different manifest for the same commit: trunk computed `cea66658...` and m3-step1 recorded `e6976e2e...` for one tree. The canonical value is `9666e4e3...`, recomputed from the blobs with `git show` in both trees.
+- **Invariant.** Any change to a tracked `lean/` file's content still moves the manifest. Only line-ending noise is ignored. Exe pins are unchanged.
+- **Evidence.** Guard log `trunk-m3s1-merge-a2-L3` (the two manifest failures before the fix) and `trunk-lfmanifest` (after).
+- **Kill criteria.** A content change under `lean/` that leaves the manifest unchanged.
