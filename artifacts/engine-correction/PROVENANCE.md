@@ -10,19 +10,15 @@ repository's `lean/` source at commit `79b6913` (tree `lean/` =
 
 ## Paid-sum re-pin (2026-09-29, rule `h1-v1`)
 
-The engine derives each correction request's paid-so-far from the linked active
-payment rows (BLFCMD03: `paymentLinks` replaces `correctionPaid`); the result
-format BLFCRES3 and every digest are unchanged. The protected record is in
-`docs/CORE_REDESIGN.md`. Two builds by `tools/build_financial_correction_release.ps1`
-(SHA-256 `61AEB3A85B2DA8E0DBD3A5BC5BC03345B471B037C99C36FE94E4E9E6A31DC909`, the only
-edit being the new `request.bin` pin) through the v4 guard, in
-`C:/Users/neers/rrb/engine-release-lpsb-a2/` and `-a3/`, produced byte-identical
-executables (6,298,112 bytes, SHA-256 above) from the same 46-file source manifest
-(SHA-256 `38EC61E74F5EB10CAD039E0188A6C202989B8F36BEA6E7EE00BF4E946B28C14A`); build
-receipts `B4D636D6…FFB` and `95CE6199…417`. Both fresh executables reproduced the
-unchanged `result.expected.bin` and `reuse-result.expected.bin` (the base scenario
-has no links, so the derived list is empty). Only `request.bin` changed. The
-engine it replaces, `1A7A1833…D3AF`, is in `RETIRED_PINS`.
+Lean derives each correction request's paid-so-far from linked payment rows (BLFCMD03);
+BLFCRES3 and every digest are unchanged (record: `docs/CORE_REDESIGN.md`). Two builds by
+`tools/build_financial_correction_release.ps1` (SHA-256
+`61AEB3A85B2DA8E0DBD3A5BC5BC03345B471B037C99C36FE94E4E9E6A31DC909`) through the v4 guard, in
+`C:/Users/neers/rrb/engine-release-lpsb-a2/` and `-a3/`, gave byte-identical executables from
+one 46-file source manifest (SHA-256
+`38EC61E74F5EB10CAD039E0188A6C202989B8F36BEA6E7EE00BF4E946B28C14A`). Both reproduced the
+unchanged result and reuse vectors (empty link list); only `request.bin` changed.
+`1A7A1833…D3AF` is in `RETIRED_PINS`.
 
 ## Current-source reproduction (2026-09-26)
 
