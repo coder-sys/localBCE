@@ -3,8 +3,9 @@
 `tools/tcb_gate.lean` walks every constant reachable from each executable's `main`, its startup initializers and the `@[csimp]`
 theorems, and fails on a non-standard axiom (`sorryAx`, `Lean.ofReduceBool`) or a `partial`, `implemented_by`, `extern`, `opaque` or
 `unsafe` constant its allowlist does not name.  The live gate needs 3-5 GB, so the default run only checks the committed
-`tools/tcb_report.txt`: it must be for the current `lean/` tree, hold no violation, and name exactly the known VIOLATION-TODO set.
-The pin procedure (`tools/tcb_pin.ps1`, RR_TCB_LIVE=1) reruns the gate on the built exes, pins the toolchain and rewrites the report."""
+`tools/tcb_report.txt`: it must be for the current `lean/` tree and gate file and the pinned exe bytes, hold no violation, and name
+exactly the known VIOLATION-TODO set.  The pin procedure (`tools/tcb_pin.ps1`, RR_TCB_LIVE=1) builds nothing: it reruns the gate on the
+built exes (whose bytes must equal the pins), pins the toolchain and rewrites the report."""
 
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ import tempfile
 import tomllib
 import unittest
 
+from app import right_rail_financial_engine as engine
+from app import right_rail_gate_signer as signer
 from lean.tools import semantic_assurance_gate as gate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +31,13 @@ TCB_EXES = gate.PINNED_EXES + ("gate_verify",)
 VERSION = (LEAN / "lean-toolchain").read_text("utf-8").strip().split(":v")[1]
 TOOLCHAIN = Path.home() / ".elan" / "toolchains" / f"leanprover--lean4---v{VERSION}"
 BUILT = LEAN / ".lake" / "build" / "lib" / "lean"
-LIVE = unittest.skipUnless(os.environ.get("RR_TCB_LIVE") == "1" and TOOLCHAIN.is_dir(), "live TCB gate: run tools/tcb_pin.ps1 (RR_TCB_LIVE=1)")
+LIVE = unittest.skipUnless(os.environ.get("RR_TCB_LIVE") == "1", "live TCB gate: run tools/tcb_pin.ps1 (RR_TCB_LIVE=1)")
+# The committed pins of the three executables: the exes the report must be about.
+EXE_PINS = {
+    "blind_financial_worker": engine.EVALUATOR_ARTIFACT_SHA256.hex(),
+    "blind_financial_correction": engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex(),
+    "gate_verify": signer.VERIFY_PIN.read_text("utf-8").strip(),
+}
 # The open items: a new one, or a fixed one, changes this set (and STATUS.md).  Owners: serve/readExact M1.5 (plan item 5),
 # readFinancialBounded new, rejNtt/sampleInBall pq M2.
 EXPECTED_TODO = {
@@ -65,6 +74,11 @@ def _olean_line() -> str:
     return f"toolchain oleans  {_tree(files)}  {len(files)} files"
 
 
+def _bound(report: str) -> list[str]:
+    """The report's binding lines: the gate file and each built exe, by SHA-256."""
+    return [line for line in report.splitlines() if line.startswith(("gate  ", "exe "))]
+
+
 def _blocks(report: str) -> dict[str, tuple[int, set[str]]]:
     """exe -> (violation count, VIOLATION-TODO set) from the gate's per-exe output."""
     found = {}
@@ -91,6 +105,10 @@ class TcbReportTests(unittest.TestCase):
         self.assertIn(f"manifest  {_lean_manifest()}", report.splitlines(), "lean/ changed since the report: rerun tools/tcb_pin.ps1")
         self.assertEqual(_blocks(report), {exe: (0, todo) for exe, todo in EXPECTED_TODO.items()})
 
+    def test_committed_report_is_about_the_pinned_exes_and_this_gate(self) -> None:
+        bound = [f"gate  {_sha256(GATE)}"] + [f"exe {exe}  {pin.lower()}" for exe, pin in ((e, EXE_PINS[e]) for e in TCB_EXES)]
+        self.assertEqual(_bound(REPORT.read_text("utf-8")), bound, "the gate or a pinned exe changed since the report: rerun tools/tcb_pin.ps1")
+
     def test_toolchain_note_matches_the_report(self) -> None:
         pinned = PIN.read_text("utf-8").splitlines()
         self.assertIn(f"lean-toolchain: {(LEAN / 'lean-toolchain').read_text('utf-8').strip()}", pinned)
@@ -108,6 +126,7 @@ class LiveTcbGateTests(unittest.TestCase):
     """The pin procedure: 3-5 GB, one Lean process at a time."""
 
     def test_toolchain_and_exes_pass_and_the_report_is_rewritten(self) -> None:
+        self.assertTrue(TOOLCHAIN.is_dir(), f"pinned toolchain missing: {TOOLCHAIN}")
         pinned = PIN.read_text("utf-8").splitlines()
         for path in sorted(p for p in (TOOLCHAIN / "bin").iterdir() if p.is_file()):
             self.assertIn(f"{_sha256(path)}  {path.relative_to(TOOLCHAIN).as_posix()}", pinned)
@@ -117,7 +136,12 @@ class LiveTcbGateTests(unittest.TestCase):
         self.assertIn(oleans, pinned)
         lake = tomllib.loads((LEAN / "lakefile.toml").read_text("utf-8"))
         roots = {e["name"]: e["root"] for e in lake["lean_exe"]}
-        text = f"manifest  {_lean_manifest()}\n{oleans}\n"
+        text = f"manifest  {_lean_manifest()}\ngate  {_sha256(GATE)}\n"
+        for exe in TCB_EXES:
+            built = _sha256(LEAN / ".lake" / "build" / "bin" / f"{exe}.exe")
+            self.assertEqual(built, EXE_PINS[exe].lower(), f"the built {exe} is not the pinned one: build in-tree first")
+            text += f"exe {exe}  {built}\n"
+        text += f"{oleans}\n"
         for exe in TCB_EXES:
             done = _lean(["--run", str(GATE), f"{exe}={roots[exe]}"], BUILT)
             self.assertEqual((done.returncode, done.stderr), (0, ""), done.stdout)
@@ -126,7 +150,7 @@ class LiveTcbGateTests(unittest.TestCase):
         REPORT.write_text(text, encoding="utf-8", newline="\n")
 
     def test_gate_refuses_every_escape_hatch(self) -> None:
-        """A module that reaches each hatch from `main` (or from a startup initializer) fails the gate once per hatch."""
+        """A module that reaches each hatch from `main`, from a startup initializer (bare `initialize do` too) or only through a partial body fails the gate once per hatch."""
         source = """axiom myAx : 1 = 2
 partial def loopP (n : Nat) : Nat := if n > 5 then n else loopP (n + 1)
 @[extern "ext_fn"] opaque externFn : Nat → Nat
@@ -140,8 +164,18 @@ def usesSorry : Nat := sorry
 theorem nd : 2 + 2 = 4 := by native_decide
 def usesNd : Nat := have _ := nd; 1
 def usesAx : Nat := have _ := myAx; 1
+axiom hidAx : 1 = 3
+partial def viaBody (n : Nat) : Nat := have _ := hidAx; if n > 5 then n else viaBody (n + 1)
+unsafe def usesLc : Nat := #[1][5]'lcProof
+@[implemented_by usesLc] def viaLc : Nat := 0
+@[extern "part_ext"] opaque partExt : Nat → Nat
+partial def loopE (n : Nat) : Nat := if n > 5 then partExt n else loopE (n + 1)
+@[extern "bare_init"] opaque bareExt : Nat → Nat
+@[extern "bare_builtin_init"] opaque bareBuiltinExt : Nat → Nat
+initialize do IO.println (bareExt 1)
+builtin_initialize do IO.println (bareBuiltinExt 1)
 initialize initRef : IO.Ref Nat ← IO.mkRef (initExt 1)
-def main : IO Unit := IO.println s!"{loopP 0} {externFn 1} {opaqueVal} {implSpec 1} {viaUnsafe 1} {usesSorry} {usesNd} {usesAx}"
+def main : IO Unit := IO.println s!"{loopP 0} {externFn 1} {opaqueVal} {implSpec 1} {viaUnsafe 1} {usesSorry} {usesNd} {usesAx} {viaBody 0} {viaLc} {loopE 0}"
 """
         with tempfile.TemporaryDirectory(prefix="tcb-gate-") as tmp:
             (Path(tmp) / "Bad.lean").write_text(source, encoding="utf-8")
@@ -150,7 +184,8 @@ def main : IO Unit := IO.println s!"{loopP 0} {externFn 1} {opaqueVal} {implSpec
             done = _lean(["--run", str(GATE), "bad=Bad"], Path(tmp))
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         for expected in ("axiom myAx", "axiom sorryAx", "axiom nd._native.native_decide.ax_1_1", "partial loopP", "extern externFn",
-                         "extern initExt", "opaque opaqueVal", "implemented_by implSpec", "unsafe unsafeFn"):
+                         "extern initExt", "opaque opaqueVal", "implemented_by implSpec", "unsafe unsafeFn",
+                         "axiom hidAx", "axiom lcProof", "unsafe usesLc", "extern partExt", "extern bareExt", "extern bareBuiltinExt"):
             self.assertIn(f"VIOLATION {expected}", done.stdout)
 
 

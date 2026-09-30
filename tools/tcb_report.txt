@@ -1,12 +1,16 @@
 manifest  00e28f0ecd29a78b2f7ea6e374cc0b451b03346adb0f6f36e15c32a30c72db9b
+gate  4d91a4394780fe51c8dced4ee72addec8154a060417997b94f342be0841f1fea
+exe blind_financial_correction  1a5821fa944e9a2abbe0bf154bd0cfe34069e4d728c9a5374809626d51b8ddbe
+exe blind_financial_worker  e95c6d52584db987b771900eeea2da249f9e54097b2ee91af1518072f28e3d97
+exe gate_verify  fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06
 toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
-blind_financial_correction: 8643 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+blind_financial_correction: 8825 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
   csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
   allowlist Init.* x187: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
   VIOLATION-TODO partial BlindLedger.Financial.CorrectionTransition.Runtime.readFinancialBounded
   0 violations
-blind_financial_worker: 7128 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+blind_financial_worker: 7269 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
   csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
   allowlist Init.* x176: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
@@ -14,7 +18,7 @@ blind_financial_worker: 7128 constants walked; axioms [lcProof, propext, Classic
   VIOLATION-TODO partial BlindLedger.Financial.WorkerCli.readExact
   VIOLATION-TODO partial BlindLedger.Financial.WorkerCli.serve
   0 violations
-gate_verify: 6886 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+gate_verify: 7006 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
   csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
   allowlist Init.* x196: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)

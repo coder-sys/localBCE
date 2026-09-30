@@ -1,5 +1,5 @@
-Toolchain pin for the TCB gate (tools/tcb_gate.lean). tests/test_tcb_gate.py recomputes every hash below from the installed
-toolchain and fails on any difference, so a changed compiler, linker or runtime cannot pass unnoticed.
+Toolchain pin for the TCB gate (tools/tcb_gate.lean). The live run (tools/tcb_pin.ps1, RR_TCB_LIVE=1) recomputes every hash
+below from the installed toolchain and fails on any difference; the default test only checks that the `toolchain oleans` line matches the report.
 
 lean-toolchain: leanprover/lean4:v4.33.1
 Lean (version 4.33.1, x86_64-w64-windows-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)

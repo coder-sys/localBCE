@@ -5,14 +5,16 @@ open Lean
     `lake env lean --run ../tools/tcb_gate.lean exe=Root.Module ...`  (tests/test_tcb_gate.py does); `--list` also names every allowlisted constant.
     For each pinned exe it walks every constant reachable from `main`, through types and values (the kernel view
     that `#print axioms` takes) and through the compiled code (the IR call graph plus `implemented_by` targets,
-    the view of what actually runs), and from every startup initializer and `@[csimp]` theorem.  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
-    (so `sorryAx` and `Lean.ofReduceBool`, the axiom behind `native_decide`, fail), and on any partial,
-    implemented_by, extern, opaque or unsafe constant that `allowed` does not name. -/
+    the view of what actually runs; a `partial` def is walked through its `_unsafe_rec` body), and from every startup
+    initializer and `@[csimp]` theorem.  It exits 1 on any axiom outside `standardAxioms` and `axiomsAllowed`
+    (so `sorryAx` and `Lean.ofReduceBool`, the axiom behind `native_decide`, fail), on any partial,
+    implemented_by, extern, opaque or unsafe constant that `allowed` does not name, on `main` without compiled code, and
+    on an `Init` or `Std` module that resolves outside the toolchain. -/
 
 /-- Lean's own logic. -/
 def standardAxioms : List Name := [`propext, `Classical.choice, `Quot.sound]
 
-/-- Non-standard axioms a pinned closure may reach, each with its reason. -/
+/-- Non-standard axioms a pinned closure may reach, each with its reason, and only from a constant declared in `Init`/`Std`. -/
 def axiomsAllowed : List (Name × String) :=
   [(`lcProof, "core placeholder proof inside `unsafeCast`, reached through `List.attachWith`'s implementation")]
 
@@ -46,8 +48,10 @@ def allowed : List Allow := [
   { name := `BlindLedger.Gate.MlDsa87.sampleInBall, module := false, kinds := ["partial"],
     reason := "VIOLATION-TODO: ML-DSA challenge sampling in gate_verify's closure is partial; needs a fuel bound" }]
 
+/-- `c._unsafe_rec` is the body of partial def `c`: walked for what it reaches, but `c`'s own `partial` entry covers it. -/
 def kindsOf (env : Environment) (c : Name) (ci : ConstantInfo) : Array String := Id.run do
   let mut ks := #[]
+  if (Compiler.isUnsafeRecName? c).isSome then return ks
   if ci.isPartial || (ci matches .opaqueInfo _ && env.contains (Compiler.mkUnsafeRecName c)) then ks := ks.push "partial"
   else if ci matches .opaqueInfo _ then ks := ks.push "opaque"
   if ci.isUnsafe then ks := ks.push "unsafe"
@@ -62,7 +66,7 @@ partial def irCallees (b : IR.FnBody) (acc : Array Name) : Array Name :=
   | .case _ _ _ alts => alts.foldl (fun a alt => irCallees alt.body a) acc
   | .set _ _ _ k | .setTag _ _ k | .uset _ _ _ k | .sset _ _ _ _ _ k | .inc _ _ _ _ k | .dec _ _ _ _ k | .del _ k =>
     irCallees k acc
-  | _ => acc
+  | .ret .. | .jmp .. | .unreachable => acc
 
 /-- Kernel edges (types and values), `implemented_by` targets, and the compiled code's callees, kept apart. -/
 def edges (env : Environment) (c : Name) : Array Name × Array Name := Id.run do
@@ -73,6 +77,7 @@ def edges (env : Environment) (c : Name) : Array Name × Array Name := Id.run do
   | some (.inductInfo v) => out := v.type.getUsedConstants ++ v.ctors.toArray
   | _ => pure ()
   if let some t := Compiler.getImplementedBy? env c then out := out.push t
+  if env.contains (Compiler.mkUnsafeRecName c) then out := out.push (Compiler.mkUnsafeRecName c)
   let calls := match IR.findEnvDecl env c with | some (.fdecl (body := b) ..) => irCallees b #[] | _ => #[]
   return (out, calls)
 
@@ -98,26 +103,43 @@ partial def walk (env : Environment) (roots : Array Name) : Array Name × NameSe
     todo := todo ++ kernel ++ calls
   return (order, called)
 
+def trusted (m : Name) : Bool := (`Init).isPrefixOf m || (`Std).isPrefixOf m
+
+/-- Every `Init.*`/`Std.*` module the environment imported must come from the toolchain's `lib/lean`. -/
+def strayModules (env : Environment) (sysroot : System.FilePath) : IO (Array String) := do
+  let norm (p : System.FilePath) : IO String := return (← IO.FS.realPath p).toString.replace "\\" "/" |>.toLower
+  let lib ← norm (sysroot / "lib" / "lean")
+  let mut out := #[]
+  for m in env.header.moduleNames.filter trusted do
+    let f ← norm (← findOLean m)
+    unless f.startsWith (lib ++ "/") do out := out.push s!"module {m} resolves outside the toolchain: {f}"
+  return out
+
 def matches? (env : Environment) (c : Name) (k : String) (e : Allow) : Bool :=
   k ∈ e.kinds && (if e.module then e.name.isPrefixOf (moduleOf env c) else e.name == c)
 
-def checkExe (list : Bool) (csimps : Array Compiler.CSimp.Entry) (exe root : String) : IO Bool := do
+def checkExe (list : Bool) (sysroot : System.FilePath) (csimps : Array Compiler.CSimp.Entry) (exe root : String) : IO Bool := do
   let env ← importModules #[{ module := root.toName }] {}
   -- Roots: `main`; everything that runs at startup (`[init]` and `[builtin_init]` declarations and their init
-  -- functions); every `@[csimp]` theorem, whose proof licenses the compiler's replacement of one constant by another.
-  let inits := (env.constants.fold (init := #[]) fun acc c _ => if hasInitAttr env c then acc.push c else acc).qsort Name.lt
+  -- functions, bare `initialize do ...` included); every `@[csimp]` theorem, whose proof licenses the compiler's replacement of one constant by another.
+  let inits := (env.constants.fold (init := #[]) fun acc c _ => if hasInitAttr env c || isIOUnitInitFn env c then acc.push c else acc).qsort Name.lt
   let initFns := inits.filterMap (getInitFnNameFor? env)
   let (order, called) := walk env (#[`main] ++ inits ++ initFns ++ csimps.map (·.thmName))
   let cs := order.qsort Name.lt
   let mut axs : Array Name := #[]
   let mut counts : Array Nat := allowed.toArray.map fun _ => 0
-  let mut bad : Array String := #[]
+  let mut bad : Array String := ← strayModules env sysroot
+  if (IR.findEnvDecl env `main).isNone then bad := bad.push "no compiled code for main"
   let mut todos : Array String := #[]
   for c in cs do
     let some ci := env.find? c | continue
     if ci matches .axiomInfo _ then
       axs := axs.push c
-      unless c ∈ standardAxioms || axiomsAllowed.any (·.1 == c) do bad := bad.push s!"axiom {c}"
+      if c ∈ standardAxioms then pure ()
+      else if axiomsAllowed.any (·.1 == c) then
+        for r in cs do
+          if (edges env r).1.contains c && !trusted (moduleOf env r) then bad := bad.push s!"axiom {c} [used by {r} in {moduleOf env r}]"
+      else bad := bad.push s!"axiom {c}"
     for k in kindsOf env c ci do
       match allowed.findIdx? (matches? env c k) with
       | some i =>
@@ -140,13 +162,16 @@ def checkExe (list : Bool) (csimps : Array Compiler.CSimp.Entry) (exe root : Str
 /-- Extension state is loaded only with `loadExts`, which would run a module's initializers, so the `@[csimp]` table is
     read from the toolchain's own `Init` and `Std` (no project code runs); a project `@[csimp]` fails the Python test. -/
 unsafe def main (args : List String) : IO UInt32 := do
-  initSearchPath (← findSysroot)
+  let sysroot ← findSysroot
+  initSearchPath sysroot
   enableInitializersExecution
   let core ← importModules #[{ module := `Init }, { module := `Std }] {} (loadExts := true)
+  let stray ← strayModules core sysroot
+  for s in stray do IO.eprintln s
   let csimps : Array Compiler.CSimp.Entry := (Compiler.CSimp.ext.getState core).map.fold (init := #[]) fun acc _ e => acc.push e
-  let mut ok := true
+  let mut ok := stray.isEmpty
   for a in args.filter (· != "--list") do
     match a.splitOn "=" with
-    | [exe, root] => ok := (← checkExe (args.contains "--list") csimps exe root) && ok
+    | [exe, root] => ok := (← checkExe (args.contains "--list") sysroot csimps exe root) && ok
     | _ => throw <| IO.userError s!"expected exe=Module, got {a}"
   return if ok then 0 else 1
