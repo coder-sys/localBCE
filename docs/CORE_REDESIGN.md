@@ -565,7 +565,7 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Replacement control:** worker laws on `propext`, `Classical.choice`, `Quot.sound`; checker re-check before COMMIT; every failure closed.
 - **Scope, duration:** live evaluation only; until M3.
 - **Withdrawn:** "evaluation is a read-only comparison"; the r74 snapshot evidence.
-- **Open:** two large Lists alive at once leak about 34 MB per call in the compiled worker, cause unknown; one list kept, restart at 1,000 requests or 400 MB, cursor decoder queued (M1.5).
+- **Open:** closed in M1.5.
 
 ## Lean-live M1.5: evaluator worker memory (2026-09-29, XI.2 record)
 
@@ -574,7 +574,12 @@ re-decided, not stranded in review, and no line is paid twice.
 - **Change:** the worker reserves a 1 GiB uncommitted arena (`mi_reserve_os_memory`) before its first frame; exit 70 if refused. The 1e9-byte job cap lies inside it.
 - **Evidence:** `test_large_requests_keep_the_worker_flat` fails on the M1 pin (137 to 776 MB over 20 requests of 600 KB) and passes on this pin (`leak-pin-t1`); two fresh stage builds gave the same bytes. Bisection and option sweep: `rrb/designs/lean-leak-bisect.md`.
 - **Disposition:** fixed at the root; restart at 1,000 requests or 400 MB stays as a backstop. The cursor decoder is not needed for memory.
-- **Rejected:** `MIMALLOC_RESERVE_OS_MEMORY` commits the arena up front; `mi_process_init` has no effect; `_mi_process_load` also works (`ea126da`) but is internal and C++-mangled.
+- **Rejected:** other options: the bisection note.
+
+## Lean-live M1.6: dead decoder (2026-09-30, XI.2 record)
+
+- **Change.** `Fast.listEqAt`, `decodeFinancialInputBA`, their theorems and `AxiomCheck` line go: unreachable code and theorems about it. No executed-path statement changes; `decodeFinancialInputBA₂_eq` covers it.
+- **Why.** Lead decision, anti-bloat and max auditability: the dead theorem made the audit trail cite the wrong proof.
 
 ## Slim-1b PR-2: guard naming and instrument classification (2026-09-29, XI.2 record)
 

@@ -41,7 +41,6 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.direct_add_operands_are_bounded
 #print axioms BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputFast_eq
-#print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA_eq
 #print axioms BlindLedger.Financial.Fast.rawEncodeFinancialInputBA_eq
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA₂_eq
 #print axioms BlindLedger.Financial.financialInputWellFormed_of_decodeFinancialInput

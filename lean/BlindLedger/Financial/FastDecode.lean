@@ -343,16 +343,6 @@ def decodeInputWith (same : Bytes → Bool) (bytes : Bytes) : Option FinancialIn
 def decodeFinancialInput (bytes : Bytes) : Option FinancialInput :=
   decodeInputWith (fun canonical => decide (canonical = bytes)) bytes
 
-/-- `l` is `ba` from index `i`, checked cell by cell.  The worker keeps the input as a `ByteArray`
-    and compares the canonical re-encoding here, so no second copy of the input list is alive;
-    two large lists alive together made the worker's memory grow by about 34 MB per 615 KB request. -/
-def listEqAt : List UInt8 → ByteArray → Nat → Bool
-  | [], ba, i => decide (ba.size ≤ i)
-  | b :: rest, ba, i => decide (i < ba.size) && b == ba.get! i && listEqAt rest ba (i + 1)
-
-def decodeFinancialInputBA (ba : ByteArray) : Option FinancialInput :=
-  decodeInputWith (fun canonical => listEqAt canonical ba 0) ba.toList
-
 theorem readString_eq : readString = BlindLedger.Financial.readString := by
   funext bytes
   unfold readString BlindLedger.Financial.readString
@@ -466,35 +456,6 @@ theorem toList_eq (ba : ByteArray) : ba.toList = ba.data.toList := by
   have h := loop _ 0 [] rfl
   unfold ByteArray.toList
   rw [h]
-  simp
-
-theorem listEqAt_eq (l : List UInt8) (ba : ByteArray) (i : Nat) :
-    listEqAt l ba i = decide (l = ba.data.toList.drop i) := by
-  induction l generalizing i with
-  | nil =>
-    simp only [listEqAt]
-    by_cases hi : i < ba.size
-    · rw [drop_cons ba i hi]
-      have : ¬ ba.size ≤ i := by omega
-      simp [this]
-    · rw [drop_nil ba i (by omega)]
-      have : ba.size ≤ i := by omega
-      simp [this]
-  | cons b rest ih =>
-    simp only [listEqAt]
-    by_cases hi : i < ba.size
-    · rw [drop_cons ba i hi, ih]
-      by_cases h1 : b = ba.get! i <;> by_cases h2 : rest = ba.data.toList.drop (i + 1) <;>
-        simp [hi, h1, h2]
-    · rw [drop_nil ba i (by omega)]
-      simp [hi]
-
-theorem decodeFinancialInputBA_eq (ba : ByteArray) :
-    decodeFinancialInputBA ba = decodeFinancialInput ba.toList := by
-  unfold decodeFinancialInputBA decodeFinancialInput
-  congr 1
-  funext canonical
-  rw [listEqAt_eq, toList_eq]
   simp
 
 end BlindLedger.Financial.Fast
