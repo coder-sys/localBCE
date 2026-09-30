@@ -38,7 +38,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Artifact boundary
 
-- Pinned correction engine `1A5821FA...DBBE`, 6,298,112 bytes (Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; replaces `1A7A1833...D3AF`, now in `RETIRED_PINS`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`. Two byte-identical producer builds (`engine-release-lpsb-a2`/`-a3`) came from a dirty tree at `40e802f` whose 53 `lean/` files equal `1e74852`'s. **Void on this tree until re-pin:** trunk's `lean/` has since changed (51-file manifest), so those builds do not vouch for it.
+- Pinned correction engine `1A5821FA...DBBE`, 6,298,112 bytes (Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; replaces `1A7A1833...D3AF`, now in `RETIRED_PINS`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`. Two byte-identical producer builds (`engine-release-lpsb-a2`/`-a3`) came from a dirty tree at `40e802f` whose 53 `lean/` files equal `1e74852`'s. **Void on this tree until re-pin:** trunk's `lean/` has since changed (51-file manifest), so those builds do not vouch for it. Rebuild `lpsm-pin1` built nothing (v4 start floor).
 - The offline kit archive binds its assembly tree, including frozen connector and browser candidates; these checks do not qualify those tracks. Start floors are in `AGENTS.md`.
 
 ## Rules and unresolved work

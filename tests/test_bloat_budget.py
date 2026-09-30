@@ -28,8 +28,8 @@ PRODUCT_CODE_LINES = 37_060
 EVIDENCE_CODE_LINES = 42_585
 MARKDOWN_FILES = 20
 # 2026-09-28 split (lead decision): the conformance/ wire spec is a normative
-# contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,123 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability).
-MARKDOWN_BYTES = 158_981
+# contract, like test vectors, not compressible prose; it gets its own ceiling. 2026-09-30 review fixes (lean-paid-sum): +1,235 over the 157,858 measured, after cuts, for the seven XI.2 fields the paid-sum record lost, the true forged-link boundary and an accurate pin trail (auditability).
+MARKDOWN_BYTES = 159_093
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {

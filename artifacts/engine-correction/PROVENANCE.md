@@ -21,7 +21,7 @@ Their receipts record HEAD `40e802f`, a dirty tree (git status SHA-256 `AD016F0A
 whose every file equals the same path at `1e74852`. Both reproduced the unchanged result and reuse
 vectors (empty link list); only `request.bin` changed. `1A7A1833...D3AF` is in `RETIRED_PINS`.
 Those builds were not made from the current trunk `lean/` (51 files: the gate and quick-wins
-changes since); see Current tree below.
+changes since). Rebuild `lpsm-pin1` (2026-09-30) built nothing: v4's 4.19 GB start floor was unmet.
 
 ## Reproduction of the retired pin `1A7A1833...D3AF` (2026-09-26)
 
