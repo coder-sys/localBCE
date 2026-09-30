@@ -1,6 +1,6 @@
 {
   "schema": "RR/MIRROR/INTERACTION-MODEL/v1",
-  "note": "CONSTITUTION Art. XIII.4: the declared interaction model. Screens name visible regions, not exclusive routes; unavailable retains stale content with commands disabled, and the page reads again on its own every 15 seconds. enabled_when is a Python boolean expression checked against the served DOM. Response rendering tests inject negative replies at the real HTTP handler boundary; only separate Owner tests establish the actual refusal cause. The two decision commands are reached through the decision form on H's record: choose, give a reason, record, then confirm, and each POSTs its own route. Every money command has its own confirm step. Defensive integrity codes unreachable through the other fixed UI commands remain outside this response inventory; no exhaustive Owner failure claim follows from the browser crawl.",
+  "note": "CONSTITUTION Art. XIII.4: the declared interaction model. Screens name visible regions, not exclusive routes; unavailable retains stale content with commands disabled, and the page reads again on its own every 15 seconds. enabled_when is a Python boolean expression checked against the served DOM. Response rendering tests inject negative replies at the real HTTP handler boundary; only separate Owner tests establish the actual refusal cause. The two decision commands are reached through the decision form on H's record: choose, record, then confirm, and each POSTs its own route. Every money command has its own confirm step. Defensive integrity codes unreachable through the other fixed UI commands remain outside this response inventory; no exhaustive Owner failure claim follows from the browser crawl.",
   "state": {
     "reviewed": "Owner available, the record shows the current package, and no command pending",
     "owner_available": "The latest Owner read is usable",
@@ -76,14 +76,14 @@
         "correction_duplicate_without_action": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "correction_snapshot_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "control_pack_not_approved": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
-        "correction_no_shortfall": { "screen": "decision", "message": "You can't reject this offset: Hospital H has no unpaid balance to correct." },
-        "correction_no_requestable_balance": { "screen": "decision", "message": "You can't reject this offset: earlier requests already ask Plan A for all of Hospital H's unpaid balance." },
+        "correction_no_shortfall": { "screen": "decision", "message": "You can't reject this offset: the recipient has no unpaid balance to correct." },
+        "correction_no_requestable_balance": { "screen": "decision", "message": "You can't reject this offset: earlier requests already ask the payer for all of the recipient's unpaid balance." },
         "invalid_request": { "screen": "decision", "message": "The decision could not be sent. Reload this page and try again." },
-        "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Press Check now." },
+        "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
         "owner_command_unavailable": { "screen": "unavailable", "message": "We can't confirm your decision was saved. Reload this page to check again." },
-        "store_busy": { "screen": "decision", "message": "The ledger was busy and nothing was saved. Press Check now to send it again." },
-        "store_busy_outcome_unknown": { "screen": "decision", "message": "We can't confirm your decision was saved. Press Check now." },
-        "command_response_unverified": { "screen": "decision", "message": "We can't confirm your decision was saved. Press Check now." }
+        "store_busy": { "screen": "decision", "message": "The ledger was busy and nothing was saved. Send it again." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
+        "command_response_unverified": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." }
       }
     },
     "authorize-offset": {
@@ -93,7 +93,7 @@
       "leads_to": "decision",
       "enabled_when": "(unresolved_decision_body and owner_available and not command_pending) or (reviewed and not decided)",
       "responses": {
-        "success": { "screen": "decision", "message": "You accepted the {amount} offset. It is recorded as counting toward Hospital H's payment." },
+        "success": { "screen": "decision", "message": "You accepted the {amount} offset. It is recorded as counting toward the recipient's payment." },
         "obligation_revision_conflict": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "evaluation_revision_conflict": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "evaluation_already_consumed": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
@@ -109,11 +109,11 @@
         "history_segment_size": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
         "determination_revision_binding": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
         "invalid_request": { "screen": "decision", "message": "The decision could not be sent. Reload this page and try again." },
-        "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Press Check now." },
+        "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
         "owner_command_unavailable": { "screen": "unavailable", "message": "We can't confirm your decision was saved. Reload this page to check again." },
-        "store_busy": { "screen": "decision", "message": "The ledger was busy and nothing was saved. Press Check now to send it again." },
-        "store_busy_outcome_unknown": { "screen": "decision", "message": "We can't confirm your decision was saved. Press Check now." },
-        "command_response_unverified": { "screen": "decision", "message": "We can't confirm your decision was saved. Press Check now." }
+        "store_busy": { "screen": "decision", "message": "The ledger was busy and nothing was saved. Send it again." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
+        "command_response_unverified": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." }
       }
     },
     "acknowledge": {
@@ -143,11 +143,11 @@
         "success": { "screen": "decision", "message": "Synthetic cash evidence recorded. No money moved." },
         "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },
         "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
-        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Press Check now to send the same evidence again." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Send the cash evidence again." },
         "owner_command_unavailable": { "screen": "unavailable", "message": "Command outcome is unknown and may have committed. Reload this page to check again." },
         "store_busy": { "screen": "decision", "message": "The Owner store was busy and recorded nothing. Retry the same command in a moment." },
-        "store_busy_outcome_unknown": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Press Check now to send the same evidence again." },
-        "command_response_unverified": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Press Check now to send the same evidence again." }
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Send the cash evidence again." },
+        "command_response_unverified": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Send the cash evidence again." }
       }
     },
     "record-report": {
@@ -204,8 +204,7 @@
     "plain-text": { "selector": "#plain-text", "visible_when": "role in ('analyst', 'approver', 'auditor', 'operator')", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>.txt" },
     "choose-accept": { "role": "radio", "name": "Accept the offset", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "authorize-offset" },
     "choose-reject": { "role": "radio", "name": "Reject the offset", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "reject-offset" },
-    "reason": { "role": "textbox", "name": "Reason (required)", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "field", "target": "the reason" },
-    "record-decision": { "role": "button", "names": { "idle": "Record decision", "confirm": "Record {verb} of the {amount} offset", "pending": "Recording…", "retry": "Check now", "cash_retry": "Check now" }, "hints": { "no_choice": "Choose accept or reject.", "no_reason": "Give a reason.", "ready": "" }, "visible_when": "decision_form", "enabled_when": "picked and reason", "kind": "confirm", "target": "the chosen outcome" },
+    "record-decision": { "role": "button", "names": { "idle": "Record decision", "confirm": "Record {verb} of the {amount} offset", "pending": "Recording…", "retry": "Send the {verb} of {amount} again", "cash_retry": "Send the cash evidence again" }, "hints": { "no_choice": "Choose accept or reject." }, "visible_when": "decision_form", "enabled_when": "picked", "kind": "confirm", "target": "the chosen outcome" },
     "back-from-confirm": { "role": "button", "name": "Back", "visible_when": "decision_form and confirming", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "close", "target": "the decision form" }
   },
   "dependent_reads": {

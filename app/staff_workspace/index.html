@@ -16,17 +16,17 @@
       <span class="brand">RightRail</span>
       <span class="ctx">Financial staff workspace</span>
       <span class="who" id="role-status"></span>
-      <span class="tag" title="Synthetic records. Nothing here moves money.">synthetic · not for payment</span>
+      <span class="tag" id="standing" title="Synthetic records. Nothing here moves money.">synthetic · not for payment · no PHI</span>
     </header>
     <div class="work" id="work">
       <nav class="queue" id="queue" aria-label="Obligations" hidden>
         <div class="qhead">
           <div class="qtitle"><h1>Obligations</h1><span class="c" id="qcount"></span></div>
           <a class="summary-link" id="summary-link" href="#summary" hidden>Program summary</a>
-          <input class="filter" id="filter" type="search" placeholder="Filter by hospital or status" aria-label="Filter obligations" hidden>
+          <input class="filter" id="filter" type="search" placeholder="Filter by name or status" aria-label="Filter obligations" hidden>
         </div>
         <div class="qscroll" id="qlist"></div>
-        <div class="keys" id="keys" aria-label="Keyboard shortcuts" hidden><span><kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>1</kbd> <kbd>2</kbd> choose</span><span><kbd>Ctrl</kbd> <kbd>Enter</kbd> record</span><span><kbd>/</kbd> filter</span></div>
+        <div class="keys" id="keys" aria-label="Keyboard shortcuts" hidden></div>
       </nav>
       <main class="record" id="record" tabindex="-1">
         <p id="connection-status" class="conn" role="status" aria-live="polite">Connecting to the local Owner…</p>

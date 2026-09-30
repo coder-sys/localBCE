@@ -1,5 +1,6 @@
 """Exhaustive check of interaction-model.json (Art. XIII.4): its structure (no dead control, orphan screen or trap), then the real page, role by role."""
 
+import copy
 import json
 import re
 import socket
@@ -106,7 +107,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         owner_dir.mkdir()
         workflow = scorecard.staff.StaffWorkflow(owner_dir, correction_transition_release=cls.release)
         server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), _response_handler(workflow))
-        server.fault, server.fault_requests = None, []
+        server.fault, server.fault_requests, server.rewrite = None, [], None
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         thread.start()
         return workflow, server, thread
@@ -144,7 +145,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         for role in (None, *_MODEL["roles"]):
             browser = self._open_path("/" if role is None else f"/role/{role}#item-h")
             ns = {"role": role, "phone": False, "decision_form": role == "approver", "confirming": False, "command_pending": False,
-                  "unresolved_decision_body": False, "unresolved_cash_body": False, "picked": False, "reason": False}
+                  "unresolved_decision_body": False, "unresolved_cash_body": False, "picked": False}
             for name, control in _MODEL["local_controls"].items():
                 with self.subTest(role=role, control=name):
                     found = browser.role(control.get("role"), control.get("name") or control.get("names", {}).get("idle"), selector=control.get("selector"))
@@ -172,8 +173,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         self.assertEqual(browser.view()["focus"], "record")
         browser.key("2")
         self.assertTrue(browser.role("radio", "Reject the offset")["checked"])
-        self.assertEqual(browser.view()["focus"], "reason")
-        browser.key("x")
+        self.assertEqual(browser.view()["focus"], "kind-reject-offset")
         browser.key("Control+Enter")
         self.assertTrue(browser.role("button", "Back")["found"])  # confirm step reached without the mouse
         browser.key("Escape")
@@ -295,10 +295,117 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 workflow.reject_offset_and_authorize_correction = busy_after(commit)
                 self.assertTrue(browser.action("reject-offset"))
                 self.assertIn(words, browser.last_view["texts"]["command-status"])
-                self.assertEqual(browser.role("button", "Check now")["disabled"], False)  # the held body, offered again
+                self.assertEqual(browser.role("button", _say(_MODEL["local_controls"]["record-decision"]["names"]["retry"].replace("{verb}", "rejection")))["disabled"], False)  # the held body, offered again
             self.assertTrue(browser.action("reject-offset"))
             self.assertIn(_say(_MODEL["controls"]["reject-offset"]["responses"]["success"]["message"]).split(". ")[0], browser.last_view["texts"]["command-status"])
             self.assertEqual(workflow.decision_view()["decision_package"]["current_action"]["status"], "READY")
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_a_lost_decision_answer_stays_retryable_after_moving_away_and_back(self) -> None:
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-lost-navigate")
+        route = _MODEL["controls"]["reject-offset"]["route"]
+        retry = _say(_MODEL["local_controls"]["record-decision"]["names"]["retry"].replace("{verb}", "rejection"))
+        try:
+            browser = self._open("approver", server)
+            server.fault = {"route": route, "code": "transport_failure", "commit": True}
+            self.assertTrue(browser.action("reject-offset"))
+            server.fault = None
+            self.assertEqual(browser.role("button", retry)["disabled"], False)
+            browser.key("j")
+            self.assertNotEqual(browser.view()["hash"], "#item-h")
+            browser.key("k")
+            self.assertEqual(browser.view()["hash"], "#item-h")
+            self.assertEqual(browser.role("button", retry)["disabled"], False)  # the held answer is still offered on return
+            server.fault = {"route": route, "code": "success", "commit": True}
+            browser.role("button", retry, "click")
+            self.assertEqual(server.fault_requests[-1]["body"], server.fault_requests[0]["body"])  # the same decision, byte for byte
+            self.assertTrue(browser.last_view["texts"]["command-status"].startswith(_say(_MODEL["controls"]["reject-offset"]["responses"]["success"]["message"])))
+        finally:
+            server.fault = None
+            self._stop_workflow(workflow, server, thread)
+
+    def test_a_confirm_step_whose_form_or_step_a_read_removed_is_dropped(self) -> None:
+        """Another actor decides, or cash arrives, while a confirm shows: the next read drops it, and Escape then does nothing."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-stale-confirm")
+
+        def held_body(role: str, name: str) -> Any:  # the exact body the page would send, stopped before the Owner sees it
+            server.fault = {"route": _MODEL["controls"][name]["route"], "code": "transport_failure"}
+            self.assertTrue(self._open(role, server).action(name))
+            server.fault = None
+            return server.fault_requests[-1]["body"]
+
+        try:
+            decision = held_body("approver", "reject-offset")
+            browser = self._open("approver", server)
+            browser.key("2")
+            browser.key("Control+Enter")
+            self.assertEqual(browser.role("button", "Back")["found"], 1)
+            workflow.command("reject_offset_and_authorize_correction", decision)  # someone else decides
+            browser.tick()
+            self.assertEqual((browser.role("button", "Back")["found"], browser.role(None, selector="#confirm")["found"]), (0, 0))
+            browser.key("Escape")  # the driver fails on any page error
+            self.assertEqual(browser.last_view["posts"], [])
+            self._run_step(workflow, server, "analyst", "acknowledge")
+            cash = held_body("analyst", "record-cash")
+            browser = self._open("analyst", server)
+            browser.role(None, selector='[data-action="record-cash"]', act="click")
+            self.assertEqual(browser.role("button", "Back")["found"], 1)
+            workflow.command("record_cash_correction", cash)  # the cash arrives elsewhere: the step is no longer offered
+            browser.tick()
+            self.assertEqual((browser.role("button", "Back")["found"], browser.role(None, selector="#confirm")["found"]), (0, 0))
+            browser.key("Escape")
+            self.assertEqual(browser.last_view["posts"], [])
+        finally:
+            server.fault = None
+            self._stop_workflow(workflow, server, thread)
+
+    def test_the_choose_keys_do_nothing_while_a_decision_is_being_confirmed(self) -> None:
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-keys-confirm")
+        confirm = _say(_MODEL["local_controls"]["record-decision"]["names"]["confirm"].replace("{verb}", "rejection"))
+        try:
+            browser = self._open("approver", server)
+            browser.key("2")
+            browser.key("Control+Enter")
+            self.assertEqual(browser.role("button", confirm)["found"], 1)
+            browser.key("1")
+            self.assertEqual(browser.role("button", confirm)["found"], 1)
+            self.assertEqual([browser.role("radio", name)["checked"] for name in ("Reject the offset", "Accept the offset")], [True, False])
+            self.assertEqual(browser.last_view["posts"], [])
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_the_key_legend_lists_only_keys_that_do_something_for_the_role(self) -> None:
+        for role in _MODEL["roles"]:
+            view = self._open(role).view()
+            legend = view["texts"]["keys"]
+            self.assertEqual(bool(view["hidden"].get("keys")), role not in _DECISION_ROLES, role)
+            if role in _DECISION_ROLES:
+                self.assertTrue("move" in legend and "filter" in legend, role)
+                self.assertEqual(("choose" in legend, "record" in legend), (role == "approver",) * 2, role)
+
+    def test_the_page_says_only_what_the_read_says(self) -> None:
+        """No name, payer or claim is in the page: labels appear as the server gives them, consequences follow from the claim and the shortfall, and the standing tag follows the read."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-read-says")
+
+        def claim(cents: int):
+            def rewrite(value):
+                value["h"]["decision_package"]["references"]["claims"]["items"][0]["amount_cents"] = cents
+                return value
+            return rewrite
+        try:
+            view = self._open("approver", server).view()
+            shown = " ".join(line["text"] for line in view["lines"])
+            self.assertIn("Synthetic recipient H", " ".join(line["text"] for line in view["lines"] if line["where"] == "queue"))
+            self.assertTrue("the payer" in shown and not any(word in shown for word in ("Plan A", "Hospital", "Payer:")), shown)
+            self.assertTrue(all(word in view["texts"]["standing"] for word in ("synthetic", "not for payment", "no PHI", "not production")))
+            for cents, left in ((200000, "is still owed $1,000.00."), (400000, "is owed nothing more.")):  # the shortfall is $3,000.00
+                server.rewrite = claim(cents)
+                texts = self._open("approver", server).view()["texts"]
+                self.assertEqual(texts["detail-authorize-offset"], f"The {_money(cents)} offset counts toward Synthetic recipient H's payment. Synthetic recipient H {left}")
+                self.assertEqual(texts["detail-reject-offset"], "The payer must pay Synthetic recipient H $3,000.00. A correction request is recorded.")
+            server.rewrite = lambda value: {**value, "summary": {**value["summary"], "production_usable": True}}
+            self.assertNotIn("not production", self._open("approver", server).view()["texts"]["standing"])
         finally:
             self._stop_workflow(workflow, server, thread)
 
@@ -317,24 +424,22 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             before = workflow.mirror.owner.export_continuity()
             record = lambda: browser.role("button", names["idle"])  # noqa: E731
             self.assertEqual((record()["disabled"], browser.last_view["texts"]["why-off"]), (True, hints["no_choice"]))  # nothing chosen: it says why, it does not send
-            browser.role("radio", controls["choose-accept"]["name"], "check")
-            self.assertEqual((record()["disabled"], browser.last_view["texts"]["why-off"]), (True, hints["no_reason"]))
+            self.assertEqual(browser.role("textbox")["found"], 0)  # no reason field: nothing here would be sent or stored
+            self.assertIn("does not store decision reasons", " ".join(line["text"] for line in browser.view()["lines"]))
             browser.role("radio", controls["choose-reject"]["name"], "check")
-            browser.role("textbox", controls["reason"]["name"], "fill", "Plan A gave no approval reference.")
             self.assertFalse(record()["disabled"])
             browser.role("button", names["idle"], "click")
             confirm = _say(names["confirm"].replace("{verb}", "rejection"))  # the button names verb and amount
             self.assertEqual(browser.role("button", confirm)["found"], 1)
             browser.role("button", controls["back-from-confirm"]["name"], "click")
             self.assertEqual(browser.role("button", confirm)["found"], 0)
-            self.assertTrue(browser.role("radio", controls["choose-reject"]["name"])["checked"])  # Back keeps the choice and the reason
-            self.assertEqual(browser.role("textbox", controls["reason"]["name"])["text"], "Plan A gave no approval reference.")
+            self.assertTrue(browser.role("radio", controls["choose-reject"]["name"])["checked"])  # Back keeps the choice
             self.assertEqual(browser.last_view["posts"], [])
             self.assertEqual(workflow.mirror.owner.export_continuity(), before)
         finally:
             self._stop_workflow(workflow, server, thread)
 
-    def test_each_outcome_takes_four_steps_and_a_page_gone_stale_is_told_to_review(self) -> None:
+    def test_each_outcome_takes_three_steps_and_a_page_gone_stale_is_told_to_review(self) -> None:
         controls = _MODEL["local_controls"]
         for outcome, (radio, verb) in {"reject-offset": ("choose-reject", "rejection"), "authorize-offset": ("choose-accept", "acceptance")}.items():
             with self.subTest(outcome=outcome):
@@ -344,14 +449,13 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 try:
                     browser = self._open("approver", server)
                     browser.role("radio", controls[radio]["name"], "check")  # step 1: choose
-                    browser.role("textbox", controls["reason"]["name"], "fill", "Plan A gave no approval reference.")  # step 2: reason
-                    browser.role("button", names["idle"], "click")  # step 3: record; step 4 is the confirm
+                    browser.role("button", names["idle"], "click")  # step 2: record; step 3 is the confirm
                     self.assertEqual(browser.last_view["posts"], [])  # nothing sends before the confirm
                     workflow.mirror.owner.record_support_evidence(item_id=scorecard.staff.H_ITEM_ID, evidence_id="evidence:stale-form", common_origin_id="origin:stale-form")
                     browser.role("button", _say(names["confirm"].replace("{verb}", verb)), "click")  # on facts that have moved
                     self.assertEqual(browser.last_view["texts"]["command-status"], declared["obligation_revision_conflict"]["message"])
                     self.assertIsNone(workflow.decision_view()["decision_package"]["current_determination"])
-                    browser.role("button", names["idle"], "click")  # the choice and reason are kept: record and confirm again on the new facts
+                    browser.role("button", names["idle"], "click")  # the choice is kept: record and confirm again on the new facts
                     browser.role("button", _say(names["confirm"].replace("{verb}", verb)), "click")
                     self.assertTrue(browser.last_view["texts"]["command-status"].startswith(_say(declared["success"]["message"])))
                     self.assertEqual(browser.role("radio", controls[radio]["name"])["found"], 0)  # a finished decision cannot repeat
@@ -510,6 +614,9 @@ _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
 _DECISIONS = {"reject-offset": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "authorize-offset": "OFFSET_AUTHORIZED"}
 _DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
 
+def _money(cents: int) -> str:
+    return f"${cents // 100:,}.{cents % 100:02d}"
+
 def _say(message: str) -> str:
     """A declared message with the amount its page fills in (H's claim is $3,000.00)."""
     return message.replace("{amount}", "$3,000.00")
@@ -555,6 +662,11 @@ def _response_handler(workflow):
             else:
                 self._respond(503, {"error": {"code": code}, "changed": None if code == "store_busy_outcome_unknown" else False})
             return True
+
+        def _respond(self, status, value, *args, **kwargs) -> None:
+            if self.path == "/api/workspace" and self.server.rewrite:  # a read the Owner did not send, to test what the page says of it
+                value = self.server.rewrite(copy.deepcopy(value))
+            super()._respond(status, value, *args, **kwargs)
 
         def do_GET(self) -> None:
             if not self._inject():

@@ -88,10 +88,10 @@ async function view() {
     for (const button of document.querySelectorAll("[data-action]")) {
       buttons[button.dataset.action] = { disabled: button.disabled, hidden: invisible(button) };
     }
-    // The two decisions have no button of their own: the choice is a radio, or, when a lost answer is retried, "Check now".
+    // The two decisions have no button of their own: the choice is a radio, or, when a lost answer is retried, "Send the ... again".
     const role = location.pathname.split("/")[2] || null;
     const radio = document.getElementById("kind-reject-offset"), confirm = document.getElementById("confirm");
-    const open = Boolean((radio && !radio.disabled) || (confirm && !confirm.disabled && /^Check now/.test(confirm.textContent)));
+    const open = Boolean((radio && !radio.disabled) || (confirm && !confirm.disabled && /^Send the .* again$/.test(confirm.textContent)));
     for (const name of ["reject-offset", "authorize-offset"]) buttons[name] = { disabled: !open, hidden: role !== "approver" };
     // What a person reads: one line per table row, fact, paragraph and queue row, tagged H or program.
     const scope = (el) => ((el.closest("[data-record]") || {}).dataset?.record ?? (el.closest("#row-item-h") ? "item-h" : "")) === "item-h" ? "H" : "program";
@@ -166,11 +166,10 @@ async function handle(m) {
   } else if (["action", "begin-action"].includes(m.op)) {
     const ready = async (locator) => await locator.count() && await locator.first().isEnabled();
     const decision = Boolean(SHEET[m.name]);
-    if (decision) {  // the decision form: choose, give a reason, record, then confirm
+    if (decision) {  // the decision form: choose, record, then confirm
       const radio = page.getByRole("radio", { name: SHEET[m.name], exact: true });
       if (await ready(radio)) {
         await radio.check();
-        await page.getByRole("textbox", { name: "Reason (required)", exact: true }).fill("Plan A gave no approval reference.");
         await page.locator("#record-btn").click();
       }
     } else {

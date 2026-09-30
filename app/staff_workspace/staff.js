@@ -11,8 +11,6 @@
 (() => {
   const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
   const byId = (id) => document.getElementById(id);
-  const H_ID = "item-h";
-  const PAYER = "Plan A"; // the fixture's payer; the read model carries no payer name
   const REJECTED = "OFFSET_REJECTED_CORRECTION_AUTHORIZED";
   const MINUS = "−";
   let model = null;
@@ -27,7 +25,6 @@
   let workspaceRequestGeneration = 0;
   let correctionFollowupRequestGeneration = 0;
   let picked = null; // the chosen decision command, before it is confirmed
-  let draft = "";
   let confirming = null; // "decision" | "record-cash" while its confirm step shows
   let filterText = "";
   let lastId = null;
@@ -120,7 +117,7 @@
   // Owner codes in plain words (CASE_OWNER -> case owner).
   const words = (code) => (code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " "));
   const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
-  const nameOf = (item) => item.label.replace(/^Synthetic recipient /, "Hospital ");
+  const hId = () => snapshot.h.obligation.item_id; // the one obligation that carries a decision package
   const usd = (cents) => asMoney(cents);
 
   function el(tag, attrs, ...kids) {
@@ -160,7 +157,7 @@
 
   // kind: need (a person must decide), wait (money or follow-through is outstanding), ok (settled).
   function statusOf(item) {
-    if (item.item_id !== H_ID) {
+    if (item.item_id !== hId()) {
       const state = item.shortfall_cents > 0 ? "Short " + usd(item.shortfall_cents) : "Paid in full";
       return { kind: item.shortfall_cents > 0 ? "wait" : "ok", state, sub: state };
     }
@@ -173,10 +170,10 @@
       return {
         kind: "need",
         state: role === "approver" ? "Needs your decision" : "Waiting for the finance approver's decision",
-        sub: PAYER + " · " + usd(view.claim.amount_cents) + " · " + view.support,
+        sub: "Offset claim " + usd(view.claim.amount_cents) + " · " + view.support,
       };
     }
-    const state = view.ob.shortfall_cents > 0 ? "Waiting on " + PAYER + " for " + usd(view.ob.shortfall_cents) : "Paid. Follow-through is still open";
+    const state = view.ob.shortfall_cents > 0 ? "Waiting on the payer for " + usd(view.ob.shortfall_cents) : "Paid. Follow-through is still open";
     return { kind: "wait", state, sub: state };
   }
 
@@ -213,8 +210,8 @@
   // The whole record as data: the screen and the plain-text view are both drawn from this.
   function recordOf(item) {
     const st = statusOf(item);
-    const isH = item.item_id === H_ID;
-    const name = nameOf(item);
+    const isH = item.item_id === hId();
+    const name = item.label;
     const short = item.shortfall_cents;
     const env = snapshot.read_envelope;
     const R = {
@@ -223,7 +220,6 @@
     };
     const rule = isH ? hView().pkg.control_pack : null;
     R.facts.push(["Payee", name]);
-    if (isH) R.facts.push(["Payer", PAYER]);
     R.facts.push(["Period", item.period_id], ["Due", day(item.due_at_ms)]);
     const source = snapshot.source_assessment;
     const sourceCheck = [false, "Source authenticity", "Not verified. " + sentence(words(source.status)) + ": " + source.reason];
@@ -238,16 +234,16 @@
       const amount = claim ? usd(claim.amount_cents) : "Unknown";
       const payments = v.pkg.cash ? v.pkg.cash.active_payment_count : 0;
       R.claim = short > 0 && claim && claim.status === "CLAIMED"
-        ? PAYER + " paid " + name + " " + usd(short) + " less than it owes and claims an offset of " + amount + " with " + v.support + "."
+        ? "The payer paid " + name + " " + usd(short) + " less than it owes and claims an offset of " + amount + " with " + v.support + "."
         : v.kase && v.kase.status === "RESOLVED" ? name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed."
-          : short > 0 ? PAYER + " owes " + name + " " + usd(short) + " after the offset was " + (v.det && v.det.decision === REJECTED ? "rejected." : "decided.")
+          : short > 0 ? "The payer owes " + name + " " + usd(short) + " after the offset was " + (v.det && v.det.decision === REJECTED ? "rejected." : "decided.")
             : name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed. The case is not closed yet.";
       R.more = v.missing.length ? "Still needed: " + v.missing.map(words).join(", ") + "." : "Owner assessment: " + words(v.assessment) + ", nothing outstanding.";
       R.ledger.push(["Owed to " + name, rule.source_refs[0], amt(item.owed_cents)],
         ["Cash recorded", payments + (payments === 1 ? " payment" : " payments") + " recorded", MINUS + amt(item.received_cash_cents)]);
-      if (claim) R.ledger.push(["Offset claimed by " + PAYER, "claim " + words(claim.status) + " · " + v.support, amt(claim.amount_cents)]);
+      if (claim) R.ledger.push(["Offset claimed by the payer", "claim " + words(claim.status) + " · " + v.support, amt(claim.amount_cents)]);
       if (item.lawful_adjustment_cents > 0) R.ledger.push(["Offset accepted, counted as paid", "", MINUS + amt(item.lawful_adjustment_cents)]);
-      R.ledger.push(["Shortfall", !v.det && short > 0 ? "Depends on the decision" : short > 0 ? PAYER + " must pay it" : "Nothing left to pay", amt(short), "total"]);
+      R.ledger.push(["Shortfall", !v.det && short > 0 ? "Depends on the decision" : short > 0 ? "The payer must pay it" : "Nothing left to pay", amt(short), "total"]);
       R.checks.push([true, "Amount owed", usd(item.owed_cents) + " from " + rule.source_refs[0]],
         [short === 0, "Cash received", usd(item.received_cash_cents) + " recorded of " + usd(item.owed_cents) + " owed; shortfall " + usd(short)]);
       if (claim) R.checks.push([false, "Offset approval", "Rule " + rule.adjustment_rule_id + ": " + v.support]);
@@ -255,11 +251,12 @@
       R.caseLine = v.kase ? words(v.kase.status) + " · " + words(v.kase.reason) + " · owner: " + words(v.kase.next_action_owner) : "No case opened";
       R.facts.push(["Case", R.caseLine], ["Rule", rule.adjustment_rule_id]);
       if (claim && can("reject-offset") && (unresolvedDecision || (!v.det && st.kind === "need"))) {
-        const amount = usd(claim.amount_cents);
+        const left = short - claim.amount_cents; // what stays unpaid once the offset counts as paid
         R.decide = {
-          options: [["authorize-offset", "1", "Accept the offset", "The " + amount + " offset counts toward " + name + "'s payment. " + name + " is owed nothing more."],
-            ["reject-offset", "2", "Reject the offset", PAYER + " must pay " + name + " " + amount + ". A correction request is recorded."]],
-          note: "This demo does not store the reason yet.",
+          options: [["authorize-offset", "1", "Accept the offset", "The " + usd(claim.amount_cents) + " offset counts toward " + name + "'s payment. "
+            + (left > 0 ? name + " is still owed " + usd(left) + "." : name + " is owed nothing more.")],
+          ["reject-offset", "2", "Reject the offset", "The payer must pay " + name + " " + usd(short) + ". A correction request is recorded."]],
+          note: "This demo does not store decision reasons yet.",
         };
       }
       if (v.det) {
@@ -296,7 +293,7 @@
       ...R.ledger.map((entry) => row(entry[0], entry[1], entry[2]))];
     lines.push("", "WHAT WAS CHECKED", ...R.checks.map((entry) => row((entry[0] ? "ok" : "NOT OK") + " " + entry[1], entry[2])));
     if (R.decision) lines.push("", "DECISION", row("", R.decision.line, R.decision.seal, R.decision.note));
-    if (R.decide) lines.push("", "YOUR DECISION", ...R.decide.options.map(([, key, title, detail]) => row(key, title, detail)), row("", "Reason (required)", R.decide.note));
+    if (R.decide) lines.push("", "YOUR DECISION", ...R.decide.options.map(([, key, title, detail]) => row(key, title, detail)), row("", R.decide.note));
     if (R.steps.length) lines.push("", "NEXT STEPS", ...R.steps.map((step) => row(step.label, step.enabled ? step.note : step.off)));
     if (R.sources.length) lines.push("", "SOURCE RECORDS", ...R.sources.map((entry) => row(entry[0], entry[1], entry[2])));
     if (R.activity.length) lines.push("", "ACTIVITY", ...R.activity.map((entry) => row(entry[0], entry[1])));
@@ -309,9 +306,9 @@
   function queueGroups() {
     const q = filterText.trim().toLowerCase();
     const rows = snapshot.items.map((item, index) => ({ item, index, st: statusOf(item) }))
-      .filter(({ item, st }) => !q || [nameOf(item), item.item_id, st.state].join(" ").toLowerCase().includes(q));
+      .filter(({ item, st }) => !q || [item.label, item.item_id, st.state].join(" ").toLowerCase().includes(q));
     rows.sort((a, b) => ["need", "wait", "ok"].indexOf(a.st.kind) - ["need", "wait", "ok"].indexOf(b.st.kind)
-      || (b.item.item_id === H_ID) - (a.item.item_id === H_ID) || a.index - b.index);
+      || (b.item.item_id === hId()) - (a.item.item_id === hId()) || a.index - b.index);
     return rows;
   }
 
@@ -332,7 +329,7 @@
       el("ul", { class: "rows" }, list.map(({ item, st }) => el("li", {}, el(canOpen ? "a" : "div", {
         class: "row", id: "row-" + item.item_id, "data-id": item.item_id, href: canOpen ? "#" + item.item_id : false,
         "aria-current": canOpen ? String(item.item_id === lastId) : false,
-      }, dot(st.kind), el("span", { class: "name", text: nameOf(item) }), el("span", { class: "amt num", text: amt(item.owed_cents) }),
+      }, dot(st.kind), el("span", { class: "name", text: item.label }), el("span", { class: "amt num", text: amt(item.owed_cents) }),
       el("span", { class: "sub", text: st.sub })))))];
     });
     byId("qlist").replaceChildren(...groups.flat().filter(Boolean),
@@ -343,30 +340,25 @@
   const stateLine = (kind, text) => el("div", { class: "state " + kind }, dot(kind), text);
 
   function decisionForm(R, v) {
-    const locked = commandPending || Boolean(confirming) || !ownerAvailable;
     const noChoice = commandPending || Boolean(unresolvedDecision) || !ownerAvailable;
     const amount = usd(v.claim.amount_cents);
-    const { names } = model.local_controls["record-decision"];
+    const { names, hints } = model.local_controls["record-decision"];
     const option = ([name, key, title, detail]) => el("label", { class: "opt" },
       el("input", { type: "radio", name: "kind", id: "kind-" + name, value: name, "aria-label": title, "aria-describedby": "detail-" + name,
         checked: picked === name, disabled: noChoice }),
       el("span", { class: "key", text: key }), el("span", {}, el("b", { text: title }), el("p", { id: "detail-" + name, text: detail })));
     const verb = picked === "reject-offset" ? "rejection" : "acceptance";
     const retry = Boolean(unresolvedDecision);
-    const primary = retry ? names.retry : names.confirm.replace("{verb}", verb).replace("{amount}", amount);
+    const primary = (retry ? names.retry : names.confirm).replace("{verb}", verb).replace("{amount}", amount);
     return el("section", { class: "decide", "aria-label": "Your decision" }, el("h2", { text: "Your decision" }),
       el("div", { class: "opts", role: "radiogroup", "aria-label": "Should the offset stand?" },
         R.decide.options.map(option)),
-      el("div", {}, el("label", { class: "lab", for: "reason", text: "Reason (required)" }),
-        el("textarea", { id: "reason", "aria-describedby": "reason-note", disabled: locked, text: draft }),
-        el("p", { class: "hint", id: "reason-note", text: R.decide.note })),
+      el("p", { class: "hint", text: R.decide.note }),
       confirming === "decision"
-        ? confirmPanel("Confirm decision", "Record the " + verb + " of " + PAYER + "'s " + amount + " offset? It is recorded once written, and a later change needs a new decision.", primary, retry)
-        : el("div", { class: "acts" }, el("button", { class: "btn primary", id: "record-btn", disabled: !(picked && draft.trim()) || locked, text: names.idle }),
-          el("span", { class: "hint", id: "why-off", text: decisionHint() })));
+        ? confirmPanel("Confirm decision", "Record the " + verb + " of the payer's " + amount + " offset? It is recorded once written, and a later change needs a new decision.", primary, retry)
+        : el("div", { class: "acts" }, el("button", { class: "btn primary", id: "record-btn", disabled: !picked || noChoice, text: names.idle }),
+          el("span", { class: "hint", id: "why-off", text: picked ? "" : hints.no_choice })));
   }
-
-  const decisionHint = () => model.local_controls["record-decision"].hints[!picked ? "no_choice" : !draft.trim() ? "no_reason" : "ready"];
 
   function confirmPanel(label, text, primary, retrying) {
     return el("div", { class: "confirm", role: "group", "aria-label": label }, el("p", { text }),
@@ -386,7 +378,10 @@
   }
 
   function renderRecord(R, textMode) {
-    const v = R.id === H_ID ? hView() : null;
+    const v = R.id === hId() ? hView() : null;
+    const cash = R.steps.find((step) => step.name === "record-cash");
+    // A read can remove the form or step a confirm belonged to (another actor decided, cash arrived); a command in flight settles it itself.
+    if (!commandPending && ((confirming === "decision" && !R.decide) || (confirming === "record-cash" && !(cash && cash.enabled)))) confirming = null;
     const foot = el("div", { class: "foot" }, el("a", { id: "plain-text", href: "#" + R.id + (textMode ? "" : ".txt"), text: textMode ? "Back to the full view" : "View as plain text" }),
       el("span", { text: "The same record an auditor or an agent reads." }));
     const facts = el("dl", { class: "facts", "aria-label": "Facts" }, R.facts.map(([term, value]) => [el("dt", { text: term }), el("dd", { class: term === "Obligation" || term === "Read" ? "mono" : false, text: value })]));
@@ -421,7 +416,7 @@
     const canOpen = allows("decision");
     const totals = [["Population", summary.obligation_count + " / " + population.expected_count + " obligations · roster " + words(population.completeness)],
       ["Total owed", usd(summary.owed_cents)], ["Cash recorded", usd(summary.received_cash_cents)], ["Program shortfall", usd(summary.shortfall_cents)],
-      ["Open items", open.length + (open.length === 1 ? " hospital" : " hospitals") + " not paid in full"]];
+      ["Open items", open.length + (open.length === 1 ? " obligation" : " obligations") + " not paid in full"]];
     const claim = summary.shortfall_cents > 0 ? usd(summary.shortfall_cents) + " of " + usd(summary.owed_cents) + " is still short." : "Every obligation is paid in full.";
     byId("page").replaceChildren(el("div", { class: "page", "data-record": "summary" }, el("div", { class: "main" },
       el("h1", { class: "sr", text: "Program summary" }),
@@ -432,7 +427,7 @@
       open.length ? section("Open obligations", table("sumtab", open.map((item) => [[
         [null, "d"], [statusOf(item).state, "next"], [amt(item.shortfall_cents), "num"]]]))) : null)));
     for (const [index, cell] of byId("page").querySelectorAll(".sumtab td.d").entries()) {
-      const label = nameOf(open[index]);
+      const label = open[index].label;
       cell.append(canOpen ? el("a", { href: "#" + open[index].item_id, text: label }) : label);
     }
   }
@@ -482,9 +477,8 @@
     const fromRow = Boolean(active && active.closest && active.closest("#qlist .row"));
     if (id !== lastId) {
       byId("record").scrollTop = 0;
-      picked = null;
-      draft = "";
-      confirming = null;
+      picked = unresolvedDecision ? unresolvedDecision.name : null; // a lost answer stays retryable wherever the person went
+      confirming = unresolvedDecision ? "decision" : null;
       commandMessage("", "");
     }
     lastId = id;
@@ -545,6 +539,7 @@
     snapshot = value;
     ownerAvailable = true;
     lastSuccessfulRead = Date.now();
+    byId("standing").textContent = "synthetic · not for payment · no PHI · " + (value.summary.production_usable ? "production" : "not production");
     banner("ok", model.controls.read.responses.success.message + " Sequence " + value.summary.sequence + " · synthetic local · dispatch and egress disabled.");
     if (changed || !byId("page").firstChild) route();
     return true;
@@ -612,7 +607,7 @@
   // ---- Commands ----
 
   function staffCommandBinding(envelope, pkg) {
-    const itemBinding = envelope.item_bindings.find((binding) => binding.item_id === H_ID);
+    const itemBinding = envelope.item_bindings.find((binding) => binding.item_id === hId());
     const receipt = pkg && pkg.evaluation_receipt;
     assert(itemBinding && isRecord(receipt) && isRecord(receipt.authority), "staff_command_binding");
     return {
@@ -732,7 +727,6 @@
       unresolvedDecision = null;
       if (name === "record-cash") unresolvedCashBody = null;
       picked = null;
-      draft = "";
       confirming = null;
       commandMessage(description + (applied ? "" : " Reload this page to review the new Owner sequence."), "success");
       if (applied) await refreshCorrectionFollowup(workspaceRequestGeneration);
@@ -742,7 +736,7 @@
       if (!UNCERTAIN_OUTCOMES.includes(code)) {
         if (isDecision) unresolvedDecision = null;
         if (name === "record-cash") unresolvedCashBody = null;
-        confirming = null; // nothing was recorded: back to the choice, with the reason kept
+        confirming = null; // nothing was recorded: back to the choice
       }
       const message = describeError(code, name);
       const response = model.controls[name].responses[code === "command_unavailable" ? "owner_command_unavailable" : code];
@@ -799,18 +793,17 @@
       }
       return;
     }
-    if (event.target.closest("textarea,input[type=search]") || event.metaKey || event.ctrlKey || event.altKey || !snapshot || !allows("decision")) return;
+    if (event.target.closest("input[type=search]") || event.metaKey || event.ctrlKey || event.altKey || !snapshot || !allows("decision")) return;
     if (event.key === "/") {
       event.preventDefault();
       byId("filter").focus();
-    } else if ((event.key === "1" || event.key === "2") && byId("kind-reject-offset") && !byId("kind-reject-offset").disabled) {
+    } else if ((event.key === "1" || event.key === "2") && !confirming && byId("kind-reject-offset") && !byId("kind-reject-offset").disabled) {
       event.preventDefault();
       pick(event.key === "1" ? "authorize-offset" : "reject-offset");
-      byId("reason").focus();
     } else if (event.key === "j" || event.key === "k") {
       const next = order[Math.max(0, Math.min(order.length - 1, order.indexOf(lastId) + (event.key === "j" ? 1 : -1)))];
       if (next) location.hash = next;
-    } else if (event.key === "Escape" && confirming && !commandPending && !unresolvedDecision && !unresolvedCashBody) byId("cancel").click();
+    } else if (event.key === "Escape" && byId("cancel") && !byId("cancel").disabled) byId("cancel").click();
   }
 
   async function boot() {
@@ -841,6 +834,9 @@
     byId("work").classList.add("has-queue");
     byId("filter").hidden = byId("summary-link").hidden = !allows("decision");
     byId("keys").hidden = !allows("decision");
+    const decides = can("reject-offset"); // only the keys that do something for this role
+    byId("keys").replaceChildren(...[[["j", "k"], "move"], ...(decides ? [[["1", "2"], "choose"], [["Ctrl", "Enter"], "record"]] : []), [["/"], "filter"]]
+      .map(([caps, what]) => el("span", {}, caps.flatMap((cap) => [el("kbd", { text: cap }), " "]), what)));
     byId("filter").addEventListener("input", (event) => { filterText = event.target.value; renderQueue(); });
     byId("filter").addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
@@ -856,12 +852,6 @@
       }
     });
     byId("page").addEventListener("click", onRecordClick);
-    byId("page").addEventListener("input", (event) => {
-      if (event.target.id !== "reason") return;
-      draft = event.target.value;
-      byId("record-btn").disabled = !(picked && draft.trim());
-      byId("why-off").textContent = decisionHint();
-    });
     byId("page").addEventListener("change", (event) => { if (event.target.name === "kind") pick(event.target.value); });
     document.addEventListener("keydown", onKey);
     window.addEventListener("hashchange", route);
