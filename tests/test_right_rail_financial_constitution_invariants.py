@@ -25,6 +25,10 @@ Each test names the articles of ``CONSTITUTION.md`` it enforces:
 * ``test_correction_requests_only_the_unpaid_balance``
   II and III.4 (a correction asks only for money actually short: zero
   shortfall is a Lean rejection with no write; otherwise min(claim, shortfall)).
+* ``test_open_requests_stay_within_the_unpaid_balance``
+  II and III.4 (R2: after every command the correction requests may together
+  collect exactly min(what they leave unpaid, the unpaid balance), oldest
+  first), V.4 (the expected amounts are derived here, not by the owner).
 
 Every test also carries VI (honest claims): these are synthetic, non-PHI,
 nonpayment fixtures; a local pass is "verified locally", never "qualified",
@@ -113,6 +117,8 @@ class _AcceptanceFixtures:
     _record_p2 = _ACCEPTANCE["_record_p2"]
     _assert_snapshot = _ACCEPTANCE["_assert_snapshot"]
     _assert_verified = _ACCEPTANCE["_assert_verified"]
+    _two_claim_corrections = _ACCEPTANCE["_two_claim_corrections"]
+    _pay_a = _ACCEPTANCE["_pay_a"]
 
 
 # --- Independent BLFCRES3 encoder ------------------------------------------------
@@ -705,6 +711,41 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
             pay(2, expected.ACTION_CORRECTION_ID)  # the open request must not collect it again
         self.assertEqual(str(raised.exception), "payment_exceeds_unpaid_balance")
         self.assertEqual(self._durable_state(store), before)
+
+    # --- 8. Open correction requests stay within the unpaid balance (R2, core-theorems-v1 §4.4) ---
+
+    @_requires_pinned_correction_engine("the binary is executed twice")
+    def test_open_requests_stay_within_the_unpaid_balance(self) -> None:
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+
+        def reverse(suffix: str) -> None:
+            store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", evidence_id=f"evidence:reversal-h:{suffix}")
+
+        for step in (
+            reject_b,  # 600,000 owed; A and B each request 300,000
+            lambda: self._pay_a(store, 200_000, linked=False),  # 400,000 owed: B shrinks
+            lambda: self._pay_a(store, 100_000, "p3", action=acceptance._ACTION_B),  # B collects what it has open
+            lambda: reverse("p2"),  # 500,000 owed: B regrows
+            lambda: self._pay_a(store, 500_000, "p4", linked=False),  # nothing owed: both close
+            lambda: reverse("p4"),  # both reopen
+        ):
+            step()
+            package = store.decision_package(expected.H_ITEM_ID)
+            with closing(sqlite3.connect(store.path)) as connection:
+                paid = dict(connection.execute(
+                    "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
+                    "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
+                    "WHERE e.kind='PAYMENT_RECEIVED' AND p.active=1 GROUP BY 1"
+                ).fetchall())
+            requests = sorted((a for a in package["references"]["actions"]["items"] if a["kind"] == "CORRECTION_PAYMENT_REQUEST"), key=lambda a: (a["revision"], a["action_id"]))
+            unpaid = [a["payload_fields"]["amount_cents"] - paid.get(a["action_id"], 0) for a in requests]
+            opened = [a.get("open_cents") for a in requests]
+            self.assertTrue(all(isinstance(cents, int) and 0 <= cents <= left for cents, left in zip(opened, unpaid)), opened)
+            self.assertEqual(sum(opened), min(sum(unpaid), package["cash"]["shortfall_cents"]))  # within the balance; no owed cent unrequested
+            for index, cents in enumerate(opened):
+                if cents:
+                    self.assertEqual(opened[:index], unpaid[:index])  # older requests are served first
+            self._assert_verified(store)
 
 
 if __name__ == "__main__":
