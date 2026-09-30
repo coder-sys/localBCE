@@ -13,8 +13,8 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
 - Source manifest, 62 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  01e748a8cff830b602d7171a89c9dc5d3f98be866461866a8f25d012454c8cce, 6,879 bytes;
-  copy at C:\Users\neers\rrb\gate\prtb-gv-manifest.txt.
+  37abccb51fdffd02c63cfb5bf5e18856e8c1004d20e8f4410193bfd8a38ee285, 6,879 bytes;
+  copy at C:\Users\neers\rrb\gate\prtb2-gv-manifest.txt (tree 351cfa0; second partials note below).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -52,6 +52,12 @@ gate_axioms blind_financial_axioms`, 77 jobs, exit 0) and both gave gate_verify 
 (EE651742...7C21) and the correction exe (D5A06E9F...0CBB) also matched across the two and their pins did not move. Timing: the 30
 ACVP sigVer cases through gate_vectors took 621-733 ms on the old build and 673-703 ms on the new (5 runs each, log prtb-time1-dev-a14-L1).
 XI.2 record: docs/CORE_REDESIGN.md, "Bounded ML-DSA sampling and the loop kind".
+
+Re-pin (2026-09-30, branch partials, source commit 351cfa0): the manifest moved again (01e748a8... to 37abccb5..., still 62 files)
+because the lead had commit ea42222 (one line of FastEncode.lean, `natBEPush` consumes its accumulator) cherry-picked before the pins.
+The exe did not move. The 62 tracked files (`git archive 351cfa0 lean`) built in C:\Users\neers\rrb\le\stage-prtb2-a and ...\stage-prtb2-b
+(guard logs prtb2-stagea-a1-L3 and prtb2-stageb-a1-L3, same command as above, 77 jobs, exit 0) both gave gate_verify SHA-256
+b9696f2e... as pinned above; the correction exe stayed D5A06E9F...0CBB and the worker moved to 86299A0D... (artifacts/engine-evaluator/PROVENANCE.md).
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
