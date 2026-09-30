@@ -211,3 +211,11 @@ updating `RETIRED_PINS_SHA256` too.
 
 Synthetic evidence only. Non-activating and non-payment:
 `proofSuiteId=null`, `production_usable=false`, `activation=false`.
+
+## Reproduction on the lean-leak tree (2026-09-30)
+
+Two fresh `git archive` stage builds of `b6bc647` (lean tree `da3d331a...`), guard logs
+`leakint-stagea-a1-L1` and `leakint-stageb-a1-L1`, reproduced `blind_financial_correction.exe`
+byte for byte: 6,298,112 bytes, `1A5821FA944E9A2ABBE0BF154BD0CFE34069E4D728C9A5374809626D51B8DDBE`.
+The release producer (receipt and source manifest) has not yet run on this tree: its inner v4
+guard needs 4,190,433,321 bytes free, the machine has about 2.7 GB, and a retry is queued.

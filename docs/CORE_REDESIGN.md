@@ -670,3 +670,14 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Invariant.** A change under `lean/` cannot ship with a stale verifier pin. Failure: the signer trusts a build no one reproduced.
 - **Disposition.** Retain the gate. **Replacement control.** None. **Scope.** Until the next `lean/` edit.
 - **Kill criteria.** Drop the manifest check if the pin moves to a hash of the exe's own import closure.
+
+## gate_verify and worker re-pin after the lean-leak merge (2026-09-30, XI.2 record)
+
+- **Felt effect.** The signer and the evaluator worker run binaries built from the Lean tree they ship with; a payer's checkpoint is never checked by an unreproduced build.
+- **Predicate.** `test_gate_verify_pin_names_the_current_lean_tree` (the `lean/` manifest in `artifacts/gate-verify/PROVENANCE.txt` equals the tree's); the worker pin (`EVALUATOR_ARTIFACT_SIZE_BYTES`, SHA-256 in `app/right_rail_financial_engine.py` and `artifacts/engine-evaluator/PROVENANCE.md`); `PINNED_EXES` in `lean/tools/semantic_assurance_gate.py`, which now lists `blind_financial_worker` beside the correction exe.
+- **Change.** Merge of trunk `1e1579c` into `lean-leak` (`b6bc647`, lean tree `da3d331a`). Manifest re-recorded: 60 files (was 54), `00e28f0e...`. Gate exe: unchanged `fc45ce6d...`. Worker: new 5,727,744 bytes, `E95C6D52...3D97`, from the M1.6 dead-decoder removal; two fresh stages `leakint-stagea`/`leakint-stageb` byte-identical. Correction engine `1A5821FA...DDBE`: reproduced byte for byte by the same two stage builds (its pin is not re-recorded); the release producer has not run on this tree, see `artifacts/engine-correction/PROVENANCE.md`. No theorem statement, wire format or digest changes.
+- **Invariant.** A change under `lean/` cannot ship with a stale verifier or worker pin; the worker's import closure holds no proof-side module (V.3). Failure: the signer or the write path trusts a build no one reproduced, or a proof edit moves the worker's bytes.
+- **Evidence.** Guard logs `leakint-stagea`, `leakint-stageb`, `leakint-probe`, `leakint-full1` (SUMMARY in its console log). The ten `WorkerLaws` theorems use `propext`, `Classical.choice`, `Quot.sound` only, some fewer (stage log).
+- **Disposition.** Retain the gates. Re-record the manifest, re-pin the worker, add the worker to the closure check. **Replacement control.** None. **Scope.** Until the next `lean/` edit.
+- **Claims withdrawn.** The worker pin `0AE566ED...` (5,728,256 bytes); the `lean-paid-sum` builds do not vouch for the merged tree.
+- **Kill criteria.** Stop if the two stages differ, the gate exe moves without a source change in its closure, or the correction engine is not reproduced.

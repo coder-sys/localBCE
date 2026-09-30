@@ -12,9 +12,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 54 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  1874e8483921d1c628b67e20391b121ee5249b6be7808626486bc9f2697d34a8, 6,018 bytes;
-  copy at C:\Users\neers\rrb\gate\lpsm-gv-manifest.txt.
+- Source manifest, 60 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  00e28f0ecd29a78b2f7ea6e374cc0b451b03346adb0f6f36e15c32a30c72db9b, 6,667 bytes;
+  copy at C:\Users\neers\rrb\gate\leakint-gv-manifest.txt.
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -33,6 +33,15 @@ Re-pin (2026-09-29, merge of trunk eb37f1c into lean-paid-sum): the manifest of 
 1874e848... (the two branch notes above give the earlier values). The exe did not move: the merged tree's 54 tracked
 files copied to C:\Users\neers\rrb\gate\lpsm-gv-a\lean and ...\lpsm-gv-b\lean were built in each (guard logs
 lpsm-gva2-a1-L3, lpsm-gvb2-a2-L3, `lake build gate_verify`, 12 jobs) and both gave SHA-256 fc45ce6d... as pinned above.
+
+Re-pin (2026-09-30, merge of trunk 1e1579c into lean-leak, commit b6bc647): the manifest of the merged tree is 60 tracked
+files, 00e28f0e... (the notes above give the earlier values). The exe did not move. The tree's `lean/`
+(`git archive b6bc647 lean`) was extracted to C:\Users\neers\rrb\le\stage-leakint-a and ...\stage-leakint-b and built in each
+(guard logs leakint-stagea-a1-L1 and leakint-stageb-a1-L1, 101 and 54 jobs); both gave SHA-256
+fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06, equal to the pin above. Causes of the manifest move: lean-leak
+added the evaluator worker (Worker, WorkerCli, WorkerLaws, FastDecode, FastEncode, PanicProbe), changed Cli.lean, AxiomCheck.lean
+and lakefile.toml, and trunk moved the retired kernel to parked/ and added the paid-sum sources. No file in gate_verify's import
+closure changed. XI.2 record: docs/CORE_REDESIGN.md, "gate_verify and worker re-pin after the lean-leak merge".
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
