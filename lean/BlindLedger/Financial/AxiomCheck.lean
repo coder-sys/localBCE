@@ -10,8 +10,8 @@ namespace BlindLedger.Financial
 /-! `#guard_msgs` fails this build if a pinned theorem's dependency set changes.  The 17 theorems the
     semantic assurance gate checks (its manifest, `--trust=0` axiom stage) are printed, not pinned: the gate
     is their one authority.  29 of the 66 rest on a `native_decide` axiom, `authorized_kat_is_correct`
-    through `evaluator_corresponds_to_independent_specification`.  The 10 `WorkerLaws` theorems at the end of
-    the block are printed, not yet pinned: no build has recorded their axioms. -/
+    through `evaluator_corresponds_to_independent_specification`.  All 10 `WorkerLaws` theorems are pinned (build
+    `kd-dev3`); the codec and decoder equalities among the printed ones are not `WorkerLaws`. -/
 
 /-- info: 'BlindLedger.Financial.evaluation_deterministic' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluation_deterministic
@@ -97,16 +97,20 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codecLawsNoTrailingManifest
 /-- info: 'BlindLedger.Financial.codecLawsWholeWireManifest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.codecLawsWholeWireManifest
-#print axioms BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome
+/-- info: 'BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.decodeWorkerOutcome_encodeWorkerOutcome
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputFast_eq
 #print axioms BlindLedger.Financial.Fast.rawEncodeFinancialInputBA_eq
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA₂_eq
 #print axioms BlindLedger.Financial.financialInputWellFormed_of_decodeFinancialInput
 #print axioms BlindLedger.Financial.evaluate_eq_evaluateWellFormed
 #print axioms BlindLedger.Financial.workerRespondBA_eq
-#print axioms BlindLedger.Financial.evaluateWire_evaluated
-#print axioms BlindLedger.Financial.workerRespond_length_le
-#print axioms BlindLedger.Financial.maxWorkerFrameBytes_fits_u32
+/-- info: 'BlindLedger.Financial.evaluateWire_evaluated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWire_evaluated
+/-- info: 'BlindLedger.Financial.workerRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_length_le
+/-- info: 'BlindLedger.Financial.maxWorkerFrameBytes_fits_u32' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.maxWorkerFrameBytes_fits_u32
 #print axioms BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only
 #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_links
 #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_nonaccepted_has_no_mutation

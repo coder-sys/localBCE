@@ -3,7 +3,7 @@ import BlindLedger.Gate.MlDsa87
 /-! Laws of the bounded ML-DSA-87 samplers (lean-partials-v1, section 2.2).  Not in any executable's closure. -/
 namespace BlindLedger.Gate.MlDsa87
 
-open BlindLedger.Keccak
+open BlindLedger.Semantic
 
 private theorem get!_append_left {s t : ByteArray} {i : Nat} (h : i < s.size) : (s ++ t).get! i = s.get! i := by
   have h' : i < (s ++ t).size := by rw [ByteArray.size_append]; omega
