@@ -42,7 +42,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Artifact boundary
 
-- Pinned correction engine `D5A06E9F...0CBB`, 6,298,624 bytes (Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; rule `h1-v1`; replaces `1A5821FA...DDBE` and `1A7A1833...D3AF`, both in `RETIRED_PINS`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`. Release producer receipt on the partials tree: `engine-release-partials-p1` (git status empty, PASS), reproducing the stage-built exe (partials re-pin, `artifacts/engine-correction/PROVENANCE.md`).
+- Pinned correction engine `D5A06E9F...0CBB`, 6,298,624 bytes (Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; rule `h1-v1`; replaces `1A5821FA...DDBE` and `1A7A1833...D3AF`, both in `RETIRED_PINS`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`. Release producer receipt on the partials tree: `engine-release-partials-p1` and `-p2` (git status empty, PASS), reproducing the stage-built exe (partials re-pin, `artifacts/engine-correction/PROVENANCE.md`).
 - The offline kit archive binds its assembly tree, including frozen connector and browser candidates; these checks do not qualify those tracks. Start floors are in `AGENTS.md`.
 
 ## Rules and unresolved work
