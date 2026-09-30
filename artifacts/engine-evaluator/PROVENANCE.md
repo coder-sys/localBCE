@@ -11,6 +11,7 @@ Lake build of `lean/` at commit `351cfa091428b2488e84f54df55afae6be69d46d` (lean
   (`C:/Users/neers/rrb/logs/`). Both workers are byte-identical. In both stages the correction exe stayed
   `D5A06E9FFDB13C6266C40658B06AF4D93204F35159B9BE7FD4387A0613A10CBB` (6,298,624 bytes; it does not import FastEncode) and
   gate_verify stayed `B9696F2E...D171C` (4,205,056 bytes).
+- Reproduced on the final partials tree `8a112d7` (lean tree `6fdc9eba...`; only `lean/tools/semantic_assurance_manifest.json` differs from the tree above) by two more fresh stages, `prtb3-stagea` and `prtb3-stageb` (guard logs `prtb3-stagea-a1-L3`, `prtb3-stageb-a1-L3`): same bytes.
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: `docs/CORE_REDESIGN.md` (lean-partials-v1).
 - Why it moved: commit ea42222 (cherry-picked from branch `quad` as 351cfa0) changes one line of `FastEncode.lean`: `natBEPush` now
   consumes its accumulator, which removes a quadratic copy in the canonical re-encode. No behaviour, format or digest changes; only the

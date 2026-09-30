@@ -13,8 +13,8 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
 - Source manifest, 62 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  37abccb51fdffd02c63cfb5bf5e18856e8c1004d20e8f4410193bfd8a38ee285, 6,879 bytes;
-  copy at C:\Users\neers\rrb\gate\prtb2-gv-manifest.txt (tree 351cfa0; second partials note below).
+  e89da7b3d2a37bde3bc5a335282ae15c771d5701dd28179a57f34b27c07fa462, 6879 bytes;
+  copy at C:\Users\neers\rrb\gate\prtb3-gv-manifest.txt (tree 8a112d7; third partials note below).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -58,6 +58,11 @@ because the lead had commit ea42222 (one line of FastEncode.lean, `natBEPush` co
 The exe did not move. The 62 tracked files (`git archive 351cfa0 lean`) built in C:\Users\neers\rrb\le\stage-prtb2-a and ...\stage-prtb2-b
 (guard logs prtb2-stagea-a1-L3 and prtb2-stageb-a1-L3, same command as above, 77 jobs, exit 0) both gave gate_verify SHA-256
 b9696f2e... as pinned above; the correction exe stayed D5A06E9F...0CBB and the worker moved to 86299A0D... (artifacts/engine-evaluator/PROVENANCE.md).
+
+Re-pin (2026-09-30, branch partials, source commit 8a112d7, lean tree 6fdc9eba...): the manifest moved a third time (37abccb5... to e89da7b3..., 62 files) because
+review added BlindLedger/Financial/ReadUpTo.lean to lean/tools/semantic_assurance_manifest.json; no compiled file changed. The exe did not move: fresh
+`git archive 8a112d7 lean` stages C:\Users\neers\rrb\le\stage-prtb3-a and ...\stage-prtb3-b (guard logs prtb3-stagea-a1-L3 and prtb3-stageb-a1-L3, same command,
+exit 0) both gave gate_verify b9696f2e... (4,205,056 bytes), the worker 86299A0D... and the correction exe D5A06E9F...0CBB.
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
