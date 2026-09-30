@@ -16,7 +16,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Founder 2026-09-28 split the old single 80,000 total so the budget stops charging
 # tests and proofs as bloat. Product code (what runs and must be read to be trusted)
 # ratchets down; lower it to the actual size after the in-flight merges (B+, G2, G3).
-PRODUCT_CODE_LINES = 37_085
+PRODUCT_CODE_LINES = 37_082
 # Tests and Lean proofs: raising needs a commit line naming the behaviours or
 # theorems the new lines cover.
 EVIDENCE_CODE_LINES = 43_581
@@ -27,7 +27,7 @@ MARKDOWN_BYTES = 160_000
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 40_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_227,
+    "app/right_rail_financial_owner.py": 7_224,
     "app/right_rail_financial_owner_independent.py": 4_555,
     "app/right_rail_financial_semantic_adapter.py": 2_097,
     "app/right_rail_financial_mirror.py": 1_498,

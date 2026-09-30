@@ -3565,13 +3565,10 @@ class FinancialOwner:
         ordered = list(evidence_ids)
         if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
             _fail(FinancialIntegrityError, "evaluation_evidence_order")
-        bindings: list[dict[str, str]] = []
-        for evidence_id in ordered:
-            row = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "evaluation_evidence_missing")
-            bindings.append({"evidence_id": evidence_id, "record_digest": _hex(bytes(row[0]))})
-        return bindings
+        digests = {row[0]: row[1] for row in connection.execute("SELECT evidence_id,record_digest FROM evidence WHERE evidence_id IN (SELECT value FROM json_each(?))", (json.dumps(ordered),))}
+        if not digests.keys() >= set(ordered):
+            _fail(FinancialIntegrityError, "evaluation_evidence_missing")
+        return [{"evidence_id": evidence_id, "record_digest": _hex(bytes(digests[evidence_id]))} for evidence_id in ordered]
 
     def _evaluation_input_snapshot(
         self,
