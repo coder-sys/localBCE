@@ -1,4 +1,5 @@
 import BlindLedger.Financial.Payment.ChainLaws
+import BlindLedger.Financial.Payment.Open
 import BlindLedger.Financial.Theorems.Vectors
 
 namespace BlindLedger.Financial.Payment
@@ -155,5 +156,27 @@ private def yRetry : Call := { yRec with now := 1_774_922_402_000 }
 #guard financialInputWellFormed yL0.input && requestWellFormed (yL2.request yRetry)
 #guard kind (yL0.outcome yRec) == "RECORDED" && agrees yL0 yRec
 #guard kind (yL1.outcome yRev) == "REVERSED" && agrees yL1 yRev
+
+/-! R2 known answers: two requests of 300,000 at revisions 1 and 2. -/
+
+private def kReq (id : String) (rev : Nat) : ActionRecord :=
+  { actionId := id, obligationId := "o", determinationId := none, kind := "CORRECTION_PAYMENT_REQUEST",
+    amountCents := 300000, currency := "USD", revision := rev, status := .READY, payloadDigest := [],
+    createdAt := rev }
+private def kPay (id : String) (cents : Nat) : Payment :=
+  { paymentId := id, obligationId := "o", itemId := "i", evidenceId := id, commonOriginId := id,
+    amountCents := cents, eventAt := 0, reversalEvidenceId := none, status := .ACTIVE }
+private def kXs : List ActionRecord := [kReq "b" 2, kReq "a" 1]  -- list order is not service order
+
+-- Balance 400,000 after 200,000 unlinked: the older request keeps 300,000, the newer is cut to 100,000.
+#guard kXs.map (openCents 400000 [] [] kXs) == [100000, 300000]
+-- Balance 0: both are cut to nothing; balance back to 600,000 (a reversal): both regrow to 300,000.
+#guard kXs.map (openCents 0 [] [] kXs) == [0, 0]
+#guard kXs.map (openCents 600000 [] [] kXs) == [300000, 300000]
+-- 100,000 paid on the older one at balance 500,000: it keeps 200,000, the newer keeps all 300,000.
+#guard kXs.map (openCents 500000 [kPay "p" 100000] [⟨"p", "a"⟩] kXs) == [300000, 200000]
+-- A cancelled request asks for nothing and gives way to the next.
+#guard openCents 300000 [] [] [kReq "b" 2, { kReq "a" 1 with status := .CANCELLED }] (kReq "b" 2) == 300000
+#guard openTotal 400000 [] [] kXs == min (CorrectionTransition.linkedOutstandingCents [] [] kXs) 400000
 
 end BlindLedger.Financial.Payment

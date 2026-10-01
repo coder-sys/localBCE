@@ -11,6 +11,7 @@ import BlindLedger.Financial.CorrectionTransition.Theorems.Core
 import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.CodecLaws
 import BlindLedger.Financial.Payment.KAT
+import BlindLedger.Financial.Payment.OpenLaws
 
 namespace BlindLedger.Financial
 
@@ -323,3 +324,16 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.stepView_eq
 /-- info: 'BlindLedger.Financial.Payment.chain_fold_eq_full' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.chain_fold_eq_full
+-- R2 (open amounts of correction requests); #2 `requests_within_balance` is core-theorems-v1 section 4.4 item 1.
+/-- info: 'BlindLedger.Financial.Payment.openTotal_eq_min' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openTotal_eq_min
+/-- info: 'BlindLedger.Financial.Payment.openCents_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_le
+/-- info: 'BlindLedger.Financial.Payment.requests_within_balance' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.requests_within_balance
+/-- info: 'BlindLedger.Financial.Payment.openCents_eq_unpaid_of_within' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_eq_unpaid_of_within
+/-- info: 'BlindLedger.Financial.Payment.engine_requestable_agrees' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.engine_requestable_agrees
+/-- info: 'BlindLedger.Financial.Payment.openCents_pay_local' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_pay_local
