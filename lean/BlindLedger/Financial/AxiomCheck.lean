@@ -195,6 +195,16 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_authorized
 /-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_authorized' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_authorized
+/-- info: 'BlindLedger.Financial.CorrectionTransition.ite_error_ok' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.ite_error_ok
+/-- info: 'BlindLedger.Financial.CorrectionTransition.buildAccepted_facts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAccepted_facts
+/-- info: 'BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_ready_facts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_ready_facts
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_resultWellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_resultWellFormed
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_encodes_unless_oversize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_encodes_unless_oversize
 
 /-- info: 'BlindLedger.Financial.Payment.paymentTransition_mutated_post' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentTransition_mutated_post

@@ -950,4 +950,229 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
             (some ("determination:" ++ request.command.actionId))
             (some mutation)
 
+/-- The case found after the upsert and the status update is the requested case with the
+    new status and time. -/
+private theorem correctionCase_found_eq {cases : List CaseRecord}
+    {requested record : CaseRecord} {status : CaseStatus} {updatedAt : Nat}
+    (hFound : findCase (updateAllCaseStatus (upsertCorrectionCase cases requested).1 status updatedAt)
+      requested.caseId = some record) :
+    record = { requested with status := status, updatedAt := updatedAt } := by
+  obtain ⟨hMem, hId⟩ := findCase_some hFound
+  obtain ⟨original, hOriginalMem, rfl⟩ := List.mem_map.1 hMem
+  rw [upsertCorrectionCase_sameId hOriginalMem hId]
+theorem ite_error_ok {c : Prop} [Decidable c] {ε α} {e : ε} {X : Except ε α} {r : α}
+    (h : (if c then Except.error e else X) = Except.ok r) : ¬ c ∧ X = Except.ok r := by
+  split at h <;> simp_all
+
+private theorem dite_error_ok {c : Prop} [Decidable c] {ε α} {e : ε} {X : c → Except ε α} {r : α}
+    (h : (if hc : c then X hc else Except.error e) = Except.ok r) : ∃ hc : c, X hc = Except.ok r := by
+  split at h
+  · exact ⟨‹_›, h⟩
+  · cases h
+
+private theorem bind_ok {ε α β} {x : Except ε α} {f : α → Except ε β} {r : β}
+    (h : (x >>= f) = Except.ok r) : ∃ a, x = Except.ok a ∧ f a = Except.ok r := by
+  cases x with
+  | error e => cases h
+  | ok a => exact ⟨a, rfl, h⟩
+
+private theorem ite_cases {c : Prop} [Decidable c] {α} {X Y r : α}
+    (h : (if c then X else Y) = r) : (c ∧ X = r) ∨ (¬c ∧ Y = r) := by
+  by_cases hc : c
+  · rw [if_pos hc] at h; exact Or.inl ⟨hc, h⟩
+  · rw [if_neg hc] at h; exact Or.inr ⟨hc, h⟩
+
+private theorem dite_cases {c : Prop} [Decidable c] {α} {X : c → α} {Y r : α}
+    (h : (if hc : c then X hc else Y) = r) : (∃ hc : c, X hc = r) ∨ (¬c ∧ Y = r) := by
+  by_cases hc : c
+  · rw [dif_pos hc] at h; exact Or.inl ⟨hc, h⟩
+  · rw [dif_neg hc] at h; exact Or.inr ⟨hc, h⟩
+
+-- The proofs below split on these calls; keeping them opaque stops `split` evaluating the input.
+-- The sections keep the attribute off the executable's definitions.
+section
+attribute [local irreducible] evaluateWithProof requireFinancialInputWellFormed optionWithProof findCase
+
+/-- What the accepted mutation records beyond the link facts: the claim it rejects, the times,
+    the constants, and the case it writes. -/
+theorem buildAccepted_facts {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {hEvaluates paid hDerived hRequestable}
+    {mutation : CorrectionMutation} {links : CorrectionMutationLinkFacts request mutation}
+    (h : buildAccepted request currentResult claim hEvaluates paid hDerived hRequestable =
+      .ok ⟨mutation, links⟩) :
+    mutation.dependencies.claimBefore = claim ∧
+      mutation.event.aggregateType = "OBLIGATION" ∧
+      mutation.event.committedAtMs = max request.command.decisionAtMs request.command.ownerNowMs ∧
+      mutation.action.createdAt = mutation.event.committedAtMs ∧
+      mutation.determination.decidedAt = request.command.decisionAtMs ∧
+      mutation.determination.supportingEvidenceIds =
+        request.currentReceipt.evidenceBindings.map EvidenceBinding.evidenceId ∧
+      mutation.dependencies.artifactContract = correctionTransitionContract ∧
+      mutation.dependencies.artifactVersion = 1 ∧
+      request.currentReceipt.inputSnapshotDigest =
+        some mutation.dependencies.inputEvaluationSnapshotDigest ∧
+      mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" ∧
+      mutation.caseDelta.record.nextActionOwner = "CASE_OWNER" ∧
+      mutation.caseDelta.record.dueAt = claim.deadlineAt ∧
+      mutation.caseDelta.record.status = mutation.resultingResult.caseStatus ∧
+      mutation.caseDelta.record.updatedAt = mutation.event.committedAtMs ∧
+      mutation.caseDelta.contractualAccountability = "PROGRAM_ACCOUNTABILITY" ∧
+      mutation.caseDelta.completionConditionsAmountSatisfied = true ∧
+      mutation.caseDelta.completionConditionsReportingComplete = true ∧
+      mutation.caseDelta.completionConditionsDeliveryAcknowledgedOrNotRequired = true ∧
+      financialInputWellFormed mutation.resultingInput = true ∧
+      mutation.outbox.updatedAtMs = mutation.event.committedAtMs := by
+  delta buildAccepted at h
+  generalize hDigest : request.currentReceipt.inputSnapshotDigest = D at h
+  cases D with
+  | none => cases h
+  | some digest =>
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    generalize evaluateWithProof _ = A at h
+    cases A with
+    | none => cases h
+    | some certificate =>
+      obtain ⟨hRes0, -, h⟩ := bind_ok h
+      obtain ⟨hRev, h⟩ := dite_error_ok h
+      generalize optionWithProof _ = C at h
+      cases C with
+      | none => cases h
+      | some foundCase =>
+        have hCase := correctionCase_found_eq foundCase.property
+        obtain ⟨-, h⟩ := ite_error_ok h
+        cases Except.ok.inj h
+        generalize foundCase.val = R at hCase ⊢
+        subst hCase
+        refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+          hRes0.down, rfl⟩
+        all_goals rfl
+
+end
+
+section
+attribute [local irreducible] evaluateWithProof requireFinancialInputWellFormed optionWithProof findCase
+
+private theorem no_match_observed {n : Nat} {r : Option String}
+    (h : ¬(decide (n ≠ 0) || r.isSome) = true) : n = 0 ∧ r = none := by
+  cases r <;> simp_all
+
+/-- A ready preflight has passed the live-mode, well-formedness, authority and actor checks, and
+    found the claim still claimed and covered by receipt evidence, against an unconsumed evaluation
+    whose id, action id and determination id nothing has used. -/
+theorem preflightCorrectionTransition_ready_facts {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {a b paid c d}
+    (h : preflightCorrectionTransition request = .ok
+      (.ready currentResult claim a b paid c d)) :
+    request.currentInput.context.mode ≠ .SHADOW ∧
+      financialInputWellFormed request.currentInput = true ∧
+      sameAuthority request.currentInput.authority request.command.currentAuthorityId
+        request.command.currentAuthorityEpoch request.command.currentAuthorityDigest = true ∧
+      authorityActorBindingWellFormed request.currentInput.authority request.command.actorId
+        request.command.actorRole = true ∧
+      request.currentInput.pack.authorizedRoles.contains request.command.actorRole = true ∧
+      findClaim request.currentInput.claims request.command.claimId = some claim ∧
+      claim.status = .CLAIMED ∧
+      request.command.evaluationId = "evaluation:" ++ request.currentInput.context.obligationId ++
+        ":r" ++ toString request.command.expectedRevision ∧
+      request.currentReceipt.evidenceBindings.any
+        (fun binding => binding.evidenceId = claim.evidenceId) = true ∧
+      request.currentReceipt.result.evaluatedAtMs ≤ request.command.decisionAtMs ∧
+      (∀ x ∈ request.currentInput.actions, x.actionId ≠ request.command.actionId) ∧
+      (request.command.queryObservations.actionId.predicate = .ACTION_ID ∧
+        request.command.queryObservations.actionId.subject = request.command.actionId ∧
+        request.command.queryObservations.actionId.complete = true ∧
+        request.command.queryObservations.actionId.matchCount = 0 ∧
+        request.command.queryObservations.actionId.resultIdentity = none) ∧
+      (request.command.queryObservations.determinationId.predicate = .DETERMINATION_ID ∧
+        request.command.queryObservations.determinationId.subject =
+          "determination:" ++ request.command.actionId ∧
+        request.command.queryObservations.determinationId.complete = true ∧
+        request.command.queryObservations.determinationId.matchCount = 0 ∧
+        request.command.queryObservations.determinationId.resultIdentity = none) ∧
+      (request.command.queryObservations.evaluationConsumed.predicate = .EVALUATION_CONSUMED ∧
+        request.command.queryObservations.evaluationConsumed.subject = request.command.evaluationId ∧
+        request.command.queryObservations.evaluationConsumed.complete = true ∧
+        request.command.queryObservations.evaluationConsumed.matchCount = 0 ∧
+        request.command.queryObservations.evaluationConsumed.resultIdentity = none) ∧
+      correctionQueryObservationsAt request.command.queryObservations
+        request.command.currentEventSequence request.command.previousHistoryHead = true := by
+  delta preflightCorrectionTransition at h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  obtain ⟨hQ, h⟩ := ite_error_ok h
+  generalize request.command.actionLookup = L at h
+  cases L
+  · obtain ⟨hA, h⟩ := ite_error_ok h
+    obtain ⟨hD, h⟩ := ite_error_ok h
+    obtain ⟨hShadow, h⟩ := ite_error_ok h
+    obtain ⟨hWf, h⟩ := ite_error_ok h
+    generalize optionWithProof (derivedCorrectionPaid request.currentInput.payments
+      request.currentInput.actions request.command.paymentLinks) = P at h
+    cases P with
+    | none => cases h
+    | some paid' =>
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨hAuth, h⟩ := ite_error_ok h
+      obtain ⟨hActor, h⟩ := ite_error_ok h
+      generalize hCl : findClaim request.currentInput.claims request.command.claimId = Cl at h
+      cases Cl with
+      | none => cases h
+      | some claim' =>
+        obtain ⟨hStatus, h⟩ := ite_error_ok h
+        obtain ⟨-, h⟩ := ite_error_ok h
+        rcases dite_cases h with ⟨hI, h⟩ | ⟨-, h⟩
+        · generalize evaluateWithProof request.currentInput = E at h
+          cases E with
+          | none => cases h
+          | some certificate =>
+            obtain ⟨hNone, h⟩ := ite_error_ok h
+            obtain ⟨hBound, h⟩ := ite_error_ok h
+            obtain ⟨hCover, h⟩ := ite_error_ok h
+            obtain ⟨hChron, h⟩ := ite_error_ok h
+            obtain ⟨hConsumed, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨hFresh, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            rcases dite_cases h with ⟨hR, h⟩ | ⟨-, h⟩
+            · cases Except.ok.inj h
+              have hQ' : querySetCompleteAtCommand request.command = true := by simpa using hQ
+              unfold querySetCompleteAtCommand querySubjectsMatch at hQ'
+              simp only [Bool.and_eq_true, decide_eq_true_eq] at hQ'
+              obtain ⟨⟨⟨⟨⟨-, qa⟩, qd⟩, qc⟩, ⟨⟨⟨⟨⟨pa, sa⟩, pd⟩, sd⟩, pc⟩, sc⟩⟩, qat⟩ := hQ'
+              have hB : currentReceiptBound request certificate.val = true := by simpa using hBound
+              have hDg : request.currentReceipt.inputSnapshotDigest.isSome = true := by
+                cases hD : request.currentReceipt.inputSnapshotDigest with
+                | none => exact absurd (by rw [hD]; try rfl) hNone
+                | some d => rfl
+              obtain ⟨d, hDd⟩ := Option.isSome_iff_exists.1 hDg
+              delta currentReceiptBound at hB
+              dsimp only at hB
+              rw [hDd] at hB
+              simp only [Bool.and_eq_true, decide_eq_true_eq] at hB
+              obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨-, -⟩, -⟩, hEv⟩, -⟩, -⟩, -⟩, -⟩, -⟩, -⟩ := hB
+              have hAct : authorityActorBindingWellFormed request.currentInput.authority
+                    request.command.actorId request.command.actorRole = true ∧
+                  request.currentInput.pack.authorizedRoles.contains request.command.actorRole = true := by
+                simpa using hActor
+              obtain ⟨hA0, hA1⟩ := no_match_observed hA
+              obtain ⟨hD0, hD1⟩ := no_match_observed hD
+              obtain ⟨hC0, hC1⟩ := no_match_observed hConsumed
+              refine ⟨hShadow, by simpa using hWf, by simpa using hAuth, hAct.1, hAct.2,
+                by first | rfl | assumption, by simpa using hStatus, hEv, by simpa using hCover,
+                by omega, ?_, ⟨pa, sa, qa, hA0, hA1⟩, ⟨pd, sd, qd, hD0, hD1⟩,
+                ⟨pc, sc, qc, hC0, hC1⟩, qat⟩
+              intro x hx hEq
+              apply hFresh
+              simp only [Bool.or_eq_true, decide_eq_true_eq]
+              exact Or.inl (List.mem_map.2 ⟨x, hx, hEq⟩)
+            · cases h
+        · cases h
+  · exfalso
+    rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩
+    · rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩ <;> cases h
+    · cases h
+  · cases h
+
+end
+
 end BlindLedger.Financial.CorrectionTransition
