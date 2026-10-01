@@ -5,7 +5,7 @@ import BlindLedger.Gate.MlDsa87Laws
 
 /-! ML-DSA-87 non-bypass and totality: the fixed theorem STATEMENTS of lean-expansion-plan item 11
     (design: C:\Users\neers\rrb\designs\mldsa-theorems-v1.md).  Proved: the non-bypass group, useHint_lt, verify_true_checks, sig_canonical, sponge_prefix,
-    rejNtt_stable, sampleInBall_stable.  Still `sorry`: invNtt_ntt, invNtt_pointwise.
+    rejNtt_stable, sampleInBall_stable, invNtt_ntt, invNtt_pointwise (layer-wise NTT algebra, then the convolution theorem).
     This file is outside `lean/`, so no executable, library target, TCB report or pin manifest sees it.
     Check: from `lean/`, `lake build BlindLedger.Gate.Theorems BlindLedger.Gate.Verify`, then
     `lake env lean ../tools/mldsa87_goals.lean`.  A prover moves each statement, unchanged, into
@@ -417,7 +417,7 @@ private def sqOut (K : Array UInt64 → Array UInt64) (rate n blk : Nat) (s : Ar
     let s1 ← forIn (List.range' 0 rate) s.2 (sqIn n s.1)
     pure (ForInStep.yield (s.1, s1))
 
-private def Sq (K : Array UInt64 → Array UInt64) (rate n : Nat) (st : Array UInt64) : ByteArray :=
+private def Fq (K : Array UInt64 → Array UInt64) (rate n : Nat) (st : Array UInt64) : ByteArray :=
   (forIn (m := Id) (List.range' 0 ((n + rate - 1) / rate)) (st, ByteArray.empty) (sqOut K rate n)).2
 
 private theorem ofF_push (f : Nat → UInt8) (N : Nat) : (ofF f N).push (f N) = ofF f (N + 1) := by
@@ -491,7 +491,7 @@ private theorem sq_outer (K : Array UInt64 → Array UInt64) (rate n : Nat) (hr 
     exact this
 
 private theorem sq_eq (K : Array UInt64 → Array UInt64) (rate n : Nat) (hr : 0 < rate) (st : Array UInt64) :
-    Sq K rate n st = ofF (fb K rate st) n := by
+    Fq K rate n st = ofF (fb K rate st) n := by
   have h := sq_outer K rate n hr st ((n + rate - 1) / rate) 0 (by omega)
   have h2 : min n (rate * (0 + (n + rate - 1) / rate)) = n := by
     have := Nat.div_add_mod (n + rate - 1) rate
@@ -499,7 +499,7 @@ private theorem sq_eq (K : Array UInt64 → Array UInt64) (rate n : Nat) (hr : 0
     rw [Nat.zero_add]
     omega
   rw [h2] at h
-  unfold Sq
+  unfold Fq
   have h0 : (st, ByteArray.empty) = (rep K (0 - 1) st, ofF (fb K rate st) (min n (rate * 0))) := by
     simp [rep, ofF]
     exact ByteArray.ext (by simp)
@@ -515,12 +515,12 @@ private theorem ofF_prefix (f : Nat → UInt8) {m n : Nat} (h : m ≤ n) : (ofF 
     simp
 
 private theorem sq_prefix (K : Array UInt64 → Array UInt64) (rate : Nat) {m n : Nat} (h : m ≤ n) (st : Array UInt64) :
-    (Sq K rate n st).extract 0 m = Sq K rate m st := by
+    (Fq K rate n st).extract 0 m = Fq K rate m st := by
   by_cases hr : 0 < rate
   · rw [sq_eq K rate n hr st, sq_eq K rate m hr st]; exact ofF_prefix _ h
   · have : rate = 0 := by omega
     subst this
-    simp [Sq]
+    simp [Fq]
     show ByteArray.empty.extract 0 m = ByteArray.empty
     rw [ByteArray.extract_eq_empty_iff]
     simp
@@ -1104,19 +1104,794 @@ theorem useHint_lt (h : Nat) {r : Nat} (hr : r < q) : useHint h r < 16 := by
   all_goals (try simp only [beq_iff_eq] at *)
   all_goals omega
 
+private theorem q_eq : q = 8380417 := rfl
+private instance : NeZero q := ⟨by unfold q; omega⟩
+private def cf (a : Nat) : Fin q := ⟨a % q, Nat.mod_lt _ (by unfold q; omega)⟩
+private def tf (w : Poly) (i : Nat) : Fin q := cf w[i]!
+
+private theorem cf_add (a b : Nat) : cf (a + b) = cf a + cf b :=
+  Fin.ext (by show (a + b) % q = (a % q + b % q) % q; exact Nat.add_mod ..)
+private theorem cf_mul (a b : Nat) : cf (a * b) = cf a * cf b :=
+  Fin.ext (by show (a * b) % q = (a % q * (b % q)) % q; exact Nat.mul_mod ..)
+private theorem cf_mod (a : Nat) : cf (a % q) = cf a :=
+  Fin.ext (by show a % q % q = a % q; exact Nat.mod_mod ..)
+private theorem cf_zero : cf 0 = 0 := by decide
+private theorem cf_one : cf 1 = 1 := by decide
+private theorem cf_q : cf q = 0 := by decide
+private theorem cf_sub {a b : Nat} (hb : b ≤ q) : cf (a + q - b) = cf a - cf b := by
+  have h : cf (a + q - b) + cf b = cf a := by
+    rw [← cf_add, show a + q - b + b = a + q by omega, cf_add, cf_q]; simp
+  grind
+private theorem cf_neg {a : Nat} (ha : a ≤ q) : cf (q - a) = - cf a := by
+  have := cf_sub (a := 0) ha
+  rw [Nat.zero_add, cf_zero] at this; grind
+private theorem mod_le (x : Nat) : x % q ≤ q := Nat.le_of_lt (Nat.mod_lt x (show q > 0 by unfold q; omega))
+private theorem mod_lt' (x : Nat) : x % q < q := Nat.mod_lt x (show q > 0 by unfold q; omega)
+
+private theorem ite_swap {α : Type} (c d : Prop) [Decidable c] [Decidable d] (h : ¬(c ∧ d)) (A B C : α) :
+    (if c then A else if d then B else C) = (if d then B else if c then A else C) := by
+  by_cases hc : c
+  · by_cases hd : d
+    · exact absurd ⟨hc, hd⟩ h
+    · simp [hc, hd]
+  · simp [hc]
+private theorem lt8 (ℓ : Nat) (h : ℓ < 8) : ℓ = 0 ∨ ℓ = 1 ∨ ℓ = 2 ∨ ℓ = 3 ∨ ℓ = 4 ∨ ℓ = 5 ∨ ℓ = 6 ∨ ℓ = 7 := by omega
+
+private theorem tf_set (w : Poly) (j v : Nat) (hj : j < w.size) (i : Nat) :
+    tf (w.set! j v) i = if i = j then cf v else tf w i := by
+  unfold tf
+  by_cases h : i = j
+  · subst h; rw [Array.getElem!_set!_self w i v hj, if_pos rfl]
+  · rw [Array.getElem!_set!_ne w j i v (Ne.symm h), if_neg h]
+
+private abbrev InvQ (w : Poly) : Prop := ∀ i : Nat, w[i]! < q
+private abbrev IQ (w0 w : Poly) : Prop := InvQ w0 → InvQ w
+
+private theorem invQ_set {w : Poly} (hw : InvQ w) {j v : Nat} (hj : j < w.size) (hv : v < q) : InvQ (w.set! j v) := by
+  intro i
+  by_cases h : i = j
+  · subst h; rw [Array.getElem!_set!_self w i v hj]; exact hv
+  · rw [Array.getElem!_set!_ne w j i v (Ne.symm h)]; exact hw i
+
+private def stF (len z j : Nat) (w : Poly) : Poly :=
+  let t := z * w[j + len]! % q
+  let w := w.set! (j + len) ((w[j]! + q - t) % q)
+  w.set! j ((w[j]! + t) % q)
+
+private theorem stF_spec (len z j : Nat) (w : Poly) (hw : w.size = 256) (hj : j + len < 256) (hl : 0 < len) :
+    (stF len z j w).size = 256 ∧ (InvQ w → InvQ (stF len z j w)) ∧ ∀ i, tf (stF len z j w) i =
+      if i = j then tf w j + cf z * tf w (j + len)
+      else if i = j + len then tf w j - cf z * tf w (j + len) else tf w i := by
+  have hq := mod_le (z * w[j + len]!)
+  have h1 : (w.set! (j + len) ((w[j]! + q - z * w[j + len]! % q) % q))[j]! = w[j]! :=
+    Array.getElem!_set!_ne w (j + len) j _ (by omega)
+  refine ⟨by simp only [stF, Array.size_set!, hw], fun hI => ?_, fun i => ?_⟩
+  · exact invQ_set (invQ_set hI (by omega) (mod_lt' _)) (by simp only [Array.size_set!]; omega) (mod_lt' _)
+  simp only [stF]
+  rw [tf_set _ _ _ (by simp only [Array.size_set!]; omega), h1, tf_set _ _ _ (by omega)]
+  have e1 : cf ((w[j]! + z * w[j + len]! % q) % q) = tf w j + cf z * tf w (j + len) := by
+    rw [cf_mod, cf_add, cf_mod, cf_mul]; rfl
+  have e2 : cf ((w[j]! + q - z * w[j + len]! % q) % q) = tf w j - cf z * tf w (j + len) := by
+    rw [cf_mod, cf_sub hq, cf_mod, cf_mul]; rfl
+  rw [e1, e2]
+
+private def stI (len z j : Nat) (w : Poly) : Poly :=
+  let t := w[j]!
+  let w := w.set! j ((t + w[j + len]!) % q)
+  w.set! (j + len) (z * ((t + q - w[j + len]!) % q) % q)
+
+private theorem stI_spec (len z j : Nat) (w : Poly) (hw : w.size = 256) (hI : InvQ w) (hj : j + len < 256) (hl : 0 < len) :
+    (stI len z j w).size = 256 ∧ InvQ (stI len z j w) ∧ ∀ i, tf (stI len z j w) i =
+      if i = j then tf w j + tf w (j + len)
+      else if i = j + len then cf z * (tf w j - tf w (j + len)) else tf w i := by
+  have h1 : (w.set! j ((w[j]! + w[j + len]!) % q))[j + len]! = w[j + len]! :=
+    Array.getElem!_set!_ne w j (j + len) _ (by omega)
+  have hb : w[j + len]! ≤ q := Nat.le_of_lt (hI _)
+  refine ⟨by simp only [stI, Array.size_set!, hw], ?_, fun i => ?_⟩
+  · intro i
+    simp only [stI]
+    by_cases hi : i = j + len
+    · subst hi; rw [Array.getElem!_set!_self _ _ _ (by simp only [Array.size_set!]; omega)]; exact mod_lt' _
+    · rw [Array.getElem!_set!_ne _ _ _ _ (Ne.symm hi)]
+      by_cases hi2 : i = j
+      · subst hi2; rw [Array.getElem!_set!_self _ _ _ (by omega)]; exact mod_lt' _
+      · rw [Array.getElem!_set!_ne _ _ _ _ (Ne.symm hi2)]; exact hI i
+  simp only [stI]
+  rw [tf_set _ _ _ (by simp only [Array.size_set!]; omega), h1, tf_set _ _ _ (by omega)]
+  have e1 : cf ((w[j]! + w[j + len]!) % q) = tf w j + tf w (j + len) := by
+    rw [cf_mod, cf_add]; rfl
+  have e2 : cf (z * ((w[j]! + q - w[j + len]!) % q) % q) = cf z * (tf w j - tf w (j + len)) := by
+    rw [cf_mod, cf_mul, cf_mod, cf_sub hb]; rfl
+  rw [e1, e2]; exact ite_swap _ _ (by omega) _ _ _
+
+private theorem inner_loop (len s : Nat) (stp : Nat → Poly → Poly) (Inv : Poly → Prop)
+    (P Q : Fin q → Fin q → Fin q) (hl : 0 < len)
+    (hst : ∀ j w, w.size = 256 → Inv w → j + len < 256 → (stp j w).size = 256 ∧ Inv (stp j w) ∧
+      ∀ i, tf (stp j w) i =
+        if i = j then P (tf w j) (tf w (j + len))
+        else if i = j + len then Q (tf w j) (tf w (j + len)) else tf w i)
+    (hs : s + 2 * len ≤ 256) (w : Poly) (hw : w.size = 256) (hi : Inv w) :
+    ∀ t, t ≤ len → ((List.range' s t).foldl (fun w j => stp j w) w).size = 256 ∧
+      Inv ((List.range' s t).foldl (fun w j => stp j w) w) ∧
+      ∀ i, tf ((List.range' s t).foldl (fun w j => stp j w) w) i =
+        if s ≤ i ∧ i < s + t then P (tf w i) (tf w (i + len))
+        else if s + len ≤ i ∧ i < s + len + t then Q (tf w (i - len)) (tf w i) else tf w i := by
+  intro t
+  induction t with
+  | zero => intro _; refine ⟨hw, hi, fun i => ?_⟩; simp only [List.range'_zero, List.foldl_nil]; rw [if_neg (by omega), if_neg (by omega)]
+  | succ t ih =>
+    intro ht
+    obtain ⟨h1, h2, h3⟩ := ih (by omega)
+    rw [List.range'_concat, List.foldl_append, List.foldl_cons, List.foldl_nil]
+    obtain ⟨g1, g2, g3⟩ := hst (s + 1 * t) _ h1 h2 (by omega)
+    refine ⟨g1, g2, fun i => ?_⟩
+    rw [g3 i, h3 (s + 1 * t), h3 (s + 1 * t + len), h3 i]
+    simp only [Nat.one_mul]
+    grind
+
+
+private abbrev Fq := Nat → Fin q
+private def Zt (m : Nat) : Fin q := cf zetas[m]!
+private def Cl (f : Fq) : Prop := ∀ i, 256 ≤ i → f i = 0
+
+private def fwdL (ℓ : Nat) (f : Fq) : Fq := fun i =>
+  if i < 256 then
+    (if i % (2 * (128 >>> ℓ)) < 128 >>> ℓ then f i + Zt ((1 <<< ℓ) + i / (2 * (128 >>> ℓ))) * f (i + (128 >>> ℓ))
+     else f (i - (128 >>> ℓ)) - Zt ((1 <<< ℓ) + i / (2 * (128 >>> ℓ))) * f i)
+  else 0
+
+private def invL (ℓ : Nat) (f : Fq) : Fq := fun i =>
+  if i < 256 then
+    (if i % (2 * (1 <<< ℓ)) < 1 <<< ℓ then f i + f (i + (1 <<< ℓ))
+     else (- Zt (2 * (128 >>> ℓ) - (i / (2 * (1 <<< ℓ)) + 1))) * (f (i - (1 <<< ℓ)) - f i))
+  else 0
+
+private def Tw (ℓ p : Nat) : Fin q := if ℓ = 0 then -1 else (if p % 2 = 0 then (1 : Fin q) else -1) * Zt ((1 <<< ℓ) / 2 + p / 2)
+private def Sh (n : Nat) (tw : Nat → Fin q) (f : Fq) : Fq := fun i =>
+  if i < 256 then (if i % n = 0 then tw (i / n) * f (i + n - 1) else f (i - 1)) else 0
+private def ShL (ℓ : Nat) : Fq → Fq := Sh (256 >>> ℓ) (Tw ℓ)
+
+-- table facts
+private theorem tabA : ∀ l, l < 8 → ∀ b, b < 1 <<< l →
+    (zetas[2 * (1 <<< l) - (b + 1)]! * zetas[(1 <<< l) + b]! + 1) % q = 0 := by decide +kernel
+private theorem tabB0 : (1 + zetas[1]! * zetas[1]!) % q = 0 := by decide +kernel
+private theorem tabB1 : ∀ l, l < 8 → ∀ p, p < 1 <<< l → 1 ≤ l → p % 2 = 0 →
+    zetas[(1 <<< l) / 2 + p / 2]! % q = zetas[(1 <<< l) + p]! * zetas[(1 <<< l) + p]! % q := by decide +kernel
+private theorem tabB2 : ∀ l, l < 8 → ∀ p, p < 1 <<< l → 1 ≤ l → p % 2 = 1 →
+    (zetas[(1 <<< l) / 2 + p / 2]! + zetas[(1 <<< l) + p]! * zetas[(1 <<< l) + p]!) % q = 0 := by decide +kernel
+private theorem tabC : 256 * 8347681 % q = 1 := by decide
+private theorem tabD : ∀ m, m < 256 → zetas[m]! < q := by decide +kernel
+
+private theorem zetas_le (m : Nat) : zetas[m]! ≤ q := by
+  by_cases h : m < 256
+  · exact Nat.le_of_lt (tabD m h)
+  · have : ¬ m < zetas.size := by unfold zetas; simpa using h
+    simp [getElem!_neg, this]
+
+private theorem zinv (ℓ : Nat) (hℓ : ℓ < 8) (b : Nat) (hb : b < 1 <<< ℓ) :
+    Zt (2 * (1 <<< ℓ) - (b + 1)) * Zt ((1 <<< ℓ) + b) = -1 := by
+  have h := congrArg cf (tabA ℓ hℓ b hb)
+  rw [cf_mod, cf_add, cf_mul, cf_zero, cf_one] at h
+  unfold Zt; grind
+
+private theorem tw_sq (ℓ : Nat) (hℓ : ℓ < 8) (p : Nat) (hp : p < 1 <<< ℓ) :
+    Zt ((1 <<< ℓ) + p) * Zt ((1 <<< ℓ) + p) = Tw ℓ p := by
+  unfold Tw
+  by_cases h0 : ℓ = 0
+  · subst h0
+    have h := congrArg cf tabB0
+    rw [cf_mod, cf_add, cf_mul, cf_zero, cf_one] at h
+    have : p = 0 := by simp at hp; omega
+    subst this; simp; unfold Zt; grind
+  · simp only [h0, if_false]
+    by_cases h2 : p % 2 = 0
+    · have h := congrArg cf (tabB1 ℓ hℓ p hp (by omega) h2)
+      rw [cf_mod, cf_mod, cf_mul] at h
+      simp only [h2, if_true]; unfold Zt; grind
+    · have h := congrArg cf (tabB2 ℓ hℓ p hp (by omega) (by omega))
+      rw [cf_mod, cf_add, cf_mul, cf_zero] at h
+      simp only [h2, if_false]; unfold Zt; grind
+
+private theorem blk_lt (ℓ : Nat) (hℓ : ℓ < 8) (i : Nat) (hi : i < 256) : i / (2 * (128 >>> ℓ)) < 1 <<< ℓ := by
+  rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> simp only [Nat.reduceShiftRight, Nat.reduceShiftLeft, Nat.reduceMul] <;> omega
+
+private theorem fwdL_Cl (ℓ : Nat) (f : Fq) : Cl (fwdL ℓ f) := fun i hi => by simp [fwdL, Nat.not_lt.2 hi]
+private theorem invL_Cl (ℓ : Nat) (f : Fq) : Cl (invL ℓ f) := fun i hi => by simp [invL, Nat.not_lt.2 hi]
+
+private theorem invL_smul (ℓ : Nat) (c : Fin q) (f : Fq) :
+    invL ℓ (fun i => c * f i) = fun i => c * invL ℓ f i := by
+  funext i; unfold invL
+  by_cases h1 : i < 256 <;> by_cases h2 : i % (2 * (1 <<< ℓ)) < 1 <<< ℓ <;> simp [h1, h2] <;> grind
+
+private theorem inv_fwd (ℓ : Nat) (hℓ : ℓ < 8) (f : Fq) (hf : Cl f) :
+    invL (7 - ℓ) (fwdL ℓ f) = fun i => cf 2 * f i := by
+  funext i
+  by_cases hi : i < 256
+  · have hz := zinv ℓ hℓ (i / (2 * (128 >>> ℓ))) (blk_lt ℓ hℓ i hi)
+    have hc : cf 2 = 2 := by decide
+    rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> (simp only [invL, fwdL, hi, if_true] at hz ⊢; simp at hz ⊢; grind)
+  · have := hf i (by omega); simp [invL, hi, this]; grind
+
+
+private theorem idrun {α : Type} (x : α) : Id.run (x : Id α) = x := rfl
+
+private theorem tf_big (w : Poly) (hw : w.size = 256) (i : Nat) (hi : 256 ≤ i) : tf w i = 0 := by
+  unfold tf; rw [getElem!_neg w i (by simp [hw]; omega)]; exact cf_zero
+
+private theorem shl_succ (k : Nat) : 1 <<< (k + 1) = 2 * (1 <<< k) := by
+  simp only [Nat.shiftLeft_eq, Nat.pow_succ]; omega
+private theorem shl_pos (k : Nat) : 0 < 1 <<< k := by
+  simp only [Nat.shiftLeft_eq]; exact Nat.mul_pos (by omega) (Nat.two_pow_pos k)
+private theorem shr_pos (ℓ : Nat) (hℓ : ℓ < 8) : 0 < 128 >>> ℓ := by
+  rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> simp only [Nat.reduceShiftRight] <;> omega
+private theorem shr_ar (ℓ : Nat) (hℓ : ℓ < 8) : 256 >>> ℓ = 2 * (128 >>> ℓ) ∧ 256 >>> (ℓ + 1) = 128 >>> ℓ := by
+  rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> decide
+
+-- block arithmetic: len is the butterfly span, 2 * len * t the start of block t
+private theorem blk_ar (len nb : Nat) (hn : 2 * len * nb = 256) (t : Nat) (ht : t < nb) :
+    2 * len * (t + 1) ≤ 256 ∧ 2 * len * (t + 1) = 2 * len * t + 2 * len ∧
+    ∀ i, 2 * len * t ≤ i → i < 2 * len * t + 2 * len →
+      i / (2 * len) = t ∧ (i % (2 * len) < len ↔ i < 2 * len * t + len) := by
+  have e : 2 * len * (t + 1) = 2 * len * t + 2 * len := Nat.mul_succ ..
+  have e2 : 2 * len * (t + 1) ≤ 2 * len * nb := Nat.mul_le_mul_left _ ht
+  refine ⟨by omega, e, fun i h1 h2 => ?_⟩
+  have c1 := Nat.mul_comm t (2 * len)
+  have c2 := Nat.mul_comm (t + 1) (2 * len)
+  have hd : i / (2 * len) = t := Nat.div_eq_of_lt_le (by omega) (by omega)
+  refine ⟨hd, ?_⟩
+  have := Nat.div_add_mod i (2 * len)
+  rw [hd] at this
+  constructor <;> intro h <;> omega
+
+private theorem full_ar (ℓ : Nat) (hℓ : ℓ < 8) : 2 * (128 >>> ℓ) * (1 <<< ℓ) = 256 ∧ 2 * (1 <<< ℓ) * (128 >>> ℓ) = 256 := by
+  rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> decide
+
+
+private def nttBlk (ℓ : Nat) (st : Poly × Nat) (b : Nat) : Poly × Nat :=
+  ((List.range' (2 * (128 >>> ℓ) * b) (128 >>> ℓ)).foldl (fun w j => stF (128 >>> ℓ) zetas[st.2 + 1]! j w) st.1, st.2 + 1)
+private def nttBlks (ℓ : Nat) (st : Poly × Nat) (t : Nat) : Poly × Nat :=
+  (List.range' 0 t).foldl (fun st b => nttBlk ℓ st b) st
+private def nttRun (w : Poly) (k : Nat) : Poly × Nat :=
+  (List.range' 0 k).foldl (fun st ℓ => nttBlks ℓ st (1 <<< ℓ)) (w, 0)
+
+private theorem ntt_eq (w : Poly) : ntt w = (nttRun w 8).1 := by
+  have h : ntt w = Id.run (nttRun w 8).1 := by
+    simp [ntt, nttRun, nttBlks, nttBlk, stF]
+  exact h
+
+private theorem nttBlks_succ (ℓ : Nat) (st : Poly × Nat) (t : Nat) :
+    nttBlks ℓ st (t + 1) = nttBlk ℓ (nttBlks ℓ st t) t := by
+  simp [nttBlks, List.range'_concat]
+
+private theorem fwd_blocks (ℓ : Nat) (hℓ : ℓ < 8) (w0 w : Poly) (hw : w.size = 256) (hi : IQ w0 w) (m : Nat)
+    (hm : m + 1 = 1 <<< ℓ) : ∀ t, t ≤ 1 <<< ℓ →
+    (nttBlks ℓ (w, m) t).1.size = 256 ∧ IQ w0 (nttBlks ℓ (w, m) t).1 ∧ (nttBlks ℓ (w, m) t).2 = m + t ∧
+    ∀ i, tf (nttBlks ℓ (w, m) t).1 i = if i < 2 * (128 >>> ℓ) * t then fwdL ℓ (tf w) i else tf w i := by
+  intro t
+  induction t with
+  | zero => intro _; refine ⟨hw, hi, rfl, fun i => ?_⟩; simp [nttBlks]
+  | succ t ih =>
+    intro ht
+    obtain ⟨h1, h2, h3, h4⟩ := ih (by omega)
+    obtain ⟨a1, a2, a3⟩ := blk_ar (128 >>> ℓ) (1 <<< ℓ) (full_ar ℓ hℓ).1 t (by omega)
+    have hl := shr_pos ℓ hℓ
+    rw [nttBlks_succ]
+    generalize nttBlks ℓ (w, m) t = st at h1 h2 h3 h4 ⊢
+    obtain ⟨g1, g2, g3⟩ := inner_loop (128 >>> ℓ) (2 * (128 >>> ℓ) * t)
+      (fun j v => stF (128 >>> ℓ) zetas[st.2 + 1]! j v) (IQ w0)
+      (fun x y => x + cf zetas[st.2 + 1]! * y) (fun x y => x - cf zetas[st.2 + 1]! * y) hl
+      (fun j v hv hI hj => let ⟨s1, s2, s3⟩ := stF_spec _ _ j v hv hj hl; ⟨s1, fun hq => s2 (hI hq), s3⟩)
+      (by omega) st.1 h1 h2 (128 >>> ℓ) (Nat.le_refl _)
+    simp only [nttBlk]
+    refine ⟨g1, g2, by omega, fun i => ?_⟩
+    have hZ : ∀ i, 2 * (128 >>> ℓ) * t ≤ i → i < 2 * (128 >>> ℓ) * t + 2 * (128 >>> ℓ) →
+        Zt ((1 <<< ℓ) + i / (2 * (128 >>> ℓ))) = cf zetas[st.2 + 1]! := fun i hi hi' => by
+      unfold Zt; rw [(a3 i hi hi').1]; congr 2; omega
+    rw [g3 i, a2]
+    by_cases c1 : 2 * (128 >>> ℓ) * t ≤ i ∧ i < 2 * (128 >>> ℓ) * t + (128 >>> ℓ)
+    · have hd := a3 i c1.1 (by omega)
+      have hlt : i < 256 := by omega
+      have hm1 := hd.2.mpr c1.2
+      have n1 : ¬ i < 2 * (128 >>> ℓ) * t := by omega
+      have n2 : ¬ i + 128 >>> ℓ < 2 * (128 >>> ℓ) * t := by omega
+      have p1 : i < 2 * (128 >>> ℓ) * t + 2 * (128 >>> ℓ) := by omega
+      rw [if_pos c1, h4 i, h4 (i + 128 >>> ℓ), if_neg n1, if_neg n2, if_pos p1]
+      have hz := hZ i c1.1 p1; rw [hd.1] at hz
+      simp only [fwdL, if_pos hlt, if_pos hm1, hd.1, hz]
+    · by_cases c2 : 2 * (128 >>> ℓ) * t + (128 >>> ℓ) ≤ i ∧ i < 2 * (128 >>> ℓ) * t + (128 >>> ℓ) + (128 >>> ℓ)
+      · have p1 : i < 2 * (128 >>> ℓ) * t + 2 * (128 >>> ℓ) := by omega
+        have hd := a3 i (by omega) p1
+        have hlt : i < 256 := by omega
+        have hm1 : ¬ i % (2 * (128 >>> ℓ)) < 128 >>> ℓ := fun h => by have := hd.2.mp h; omega
+        have n1 : ¬ i - 128 >>> ℓ < 2 * (128 >>> ℓ) * t := by omega
+        have n2 : ¬ i < 2 * (128 >>> ℓ) * t := by omega
+        rw [if_neg c1, if_pos c2, h4 (i - 128 >>> ℓ), h4 i, if_neg n1, if_neg n2, if_pos p1]
+        have hz := hZ i (by omega) p1; rw [hd.1] at hz
+        simp only [fwdL, if_pos hlt, if_neg hm1, hd.1, hz]
+      · rw [if_neg c1, if_neg c2, h4 i]
+        by_cases c3 : i < 2 * (128 >>> ℓ) * t
+        · have p1 : i < 2 * (128 >>> ℓ) * t + 2 * (128 >>> ℓ) := by omega
+          rw [if_pos c3, if_pos p1]
+        · have p1 : ¬ i < 2 * (128 >>> ℓ) * t + 2 * (128 >>> ℓ) := by omega
+          rw [if_neg c3, if_neg p1]
+
+
+private def NTTk (f : Fq) : Nat → Fq
+  | 0 => f
+  | k + 1 => fwdL k (NTTk f k)
+
+private theorem nttRun_succ (w : Poly) (k : Nat) : nttRun w (k + 1) = nttBlks k (nttRun w k) (1 <<< k) := by
+  simp [nttRun, List.range'_concat]
+
+private theorem fwd_layers (w0 w : Poly) (hw : w.size = 256) (hi : IQ w0 w) :
+    ∀ k, k ≤ 8 → (nttRun w k).1.size = 256 ∧ IQ w0 (nttRun w k).1 ∧ (nttRun w k).2 + 1 = 1 <<< k ∧
+      ∀ i, tf (nttRun w k).1 i = NTTk (tf w) k i := by
+  intro k
+  induction k with
+  | zero => intro _; exact ⟨hw, hi, by simp [nttRun], fun i => by simp [nttRun, NTTk]⟩
+  | succ k ih =>
+    intro hk
+    obtain ⟨h1, h2, h3, h4⟩ := ih (by omega)
+    rw [nttRun_succ]
+    obtain ⟨g1, g2, g3, g4⟩ := fwd_blocks k (by omega) w0 _ h1 h2 _ h3 (1 <<< k) (Nat.le_refl _)
+    refine ⟨g1, g2, by rw [g3, shl_succ]; omega, fun i => ?_⟩
+    rw [g4 i, (full_ar k (by omega)).1]
+    have e : tf (nttRun w k).1 = NTTk (tf w) k := funext h4
+    rw [e]
+    by_cases hi : i < 256
+    · rw [if_pos hi]; rfl
+    · rw [if_neg hi, ← h4 i, tf_big _ h1 i (by omega)]; exact (fwdL_Cl k _ i (by omega)).symm
+
+private theorem ntt_spec (w : Poly) (hw : w.size = 256) :
+    (ntt w).size = 256 ∧ (InvQ w → InvQ (ntt w)) ∧ ∀ i, tf (ntt w) i = NTTk (tf w) 8 i := by
+  rw [ntt_eq]
+  obtain ⟨h1, h2, _, h4⟩ := fwd_layers w w hw id 8 (Nat.le_refl _)
+  exact ⟨h1, h2, h4⟩
+
+
+private def invBlk (ℓ : Nat) (st : Poly × Nat) (b : Nat) : Poly × Nat :=
+  ((List.range' (2 * (1 <<< ℓ) * b) (1 <<< ℓ)).foldl (fun w j => stI (1 <<< ℓ) (q - zetas[st.2 - 1]!) j w) st.1, st.2 - 1)
+private def invBlks (ℓ : Nat) (st : Poly × Nat) (t : Nat) : Poly × Nat :=
+  (List.range' 0 t).foldl (fun st b => invBlk ℓ st b) st
+private def invRun (w : Poly) (k : Nat) : Poly × Nat :=
+  (List.range' 0 k).foldl (fun st ℓ => invBlks ℓ st (128 >>> ℓ)) (w, 256)
+
+private theorem invNtt_eq (w : Poly) : invNtt w = (invRun w 8).1.map fun x => x * 8347681 % q := by
+  have h : invNtt w = Id.run ((invRun w 8).1.map fun x => x * 8347681 % q) := by
+    simp only [invNtt, invRun, invBlks, invBlk, stI, Array.set!_eq_setIfInBounds, Std.Legacy.Range.forIn_eq_forIn_range',
+      Std.Legacy.Range.size, Nat.add_sub_cancel_left, Nat.add_one_sub_one, Nat.div_one, List.forIn_pure_yield_eq_foldl,
+      bind_pure_comp, map_pure, Nat.sub_zero, Nat.reduceAdd, pure_bind]
+  rw [h]; exact idrun _
+
+private theorem invBlks_succ (ℓ : Nat) (st : Poly × Nat) (t : Nat) :
+    invBlks ℓ st (t + 1) = invBlk ℓ (invBlks ℓ st t) t := by
+  simp [invBlks, List.range'_concat]
+
+private theorem inv_blocks (ℓ : Nat) (hℓ : ℓ < 8) (w : Poly) (hw : w.size = 256) (hi : InvQ w) (m : Nat)
+    (hm : m = 2 * (128 >>> ℓ)) : ∀ t, t ≤ 128 >>> ℓ →
+    (invBlks ℓ (w, m) t).1.size = 256 ∧ InvQ (invBlks ℓ (w, m) t).1 ∧ (invBlks ℓ (w, m) t).2 = m - t ∧
+    ∀ i, tf (invBlks ℓ (w, m) t).1 i = if i < 2 * (1 <<< ℓ) * t then invL ℓ (tf w) i else tf w i := by
+  intro t
+  induction t with
+  | zero => intro _; refine ⟨hw, hi, rfl, fun i => ?_⟩; simp [invBlks]
+  | succ t ih =>
+    intro ht
+    obtain ⟨h1, h2, h3, h4⟩ := ih (by omega)
+    obtain ⟨a1, a2, a3⟩ := blk_ar (1 <<< ℓ) (128 >>> ℓ) (full_ar ℓ hℓ).2 t (by omega)
+    have hl := shl_pos ℓ
+    have hz := zetas_le (m - t - 1)
+    rw [invBlks_succ]
+    generalize invBlks ℓ (w, m) t = st at h1 h2 h3 h4 ⊢
+    obtain ⟨g1, g2, g3⟩ := inner_loop (1 <<< ℓ) (2 * (1 <<< ℓ) * t)
+      (fun j v => stI (1 <<< ℓ) (q - zetas[st.2 - 1]!) j v) InvQ
+      (fun x y => x + y) (fun x y => cf (q - zetas[st.2 - 1]!) * (x - y)) hl
+      (fun j v hv hI hj => stI_spec _ _ j v hv hI hj hl)
+      (by omega) st.1 h1 h2 (1 <<< ℓ) (Nat.le_refl _)
+    simp only [invBlk]
+    refine ⟨g1, g2, by omega, fun i => ?_⟩
+    have hZ : ∀ i, 2 * (1 <<< ℓ) * t ≤ i → i < 2 * (1 <<< ℓ) * t + 2 * (1 <<< ℓ) →
+        cf (q - zetas[st.2 - 1]!) = - Zt (2 * (128 >>> ℓ) - (i / (2 * (1 <<< ℓ)) + 1)) := fun i hi hi' => by
+      rw [cf_neg (zetas_le _)]; unfold Zt; rw [(a3 i hi hi').1]; congr 3; omega
+    rw [g3 i, a2]
+    by_cases c1 : 2 * (1 <<< ℓ) * t ≤ i ∧ i < 2 * (1 <<< ℓ) * t + (1 <<< ℓ)
+    · have hd := a3 i c1.1 (by omega)
+      have hm1 := hd.2.mpr c1.2
+      have n1 : ¬ i < 2 * (1 <<< ℓ) * t := by omega
+      have n2 : ¬ i + 1 <<< ℓ < 2 * (1 <<< ℓ) * t := by omega
+      have p1 : i < 2 * (1 <<< ℓ) * t + 2 * (1 <<< ℓ) := by omega
+      have hlt : i < 256 := by omega
+      rw [if_pos c1, h4 i, h4 (i + 1 <<< ℓ), if_neg n1, if_neg n2, if_pos p1]
+      simp only [invL, if_pos hlt, if_pos hm1]
+    · by_cases c2 : 2 * (1 <<< ℓ) * t + (1 <<< ℓ) ≤ i ∧ i < 2 * (1 <<< ℓ) * t + (1 <<< ℓ) + (1 <<< ℓ)
+      · have p1 : i < 2 * (1 <<< ℓ) * t + 2 * (1 <<< ℓ) := by omega
+        have hd := a3 i (by omega) p1
+        have hm1 : ¬ i % (2 * (1 <<< ℓ)) < 1 <<< ℓ := fun h => by have := hd.2.mp h; omega
+        have n1 : ¬ i - 1 <<< ℓ < 2 * (1 <<< ℓ) * t := by omega
+        have n2 : ¬ i < 2 * (1 <<< ℓ) * t := by omega
+        have hlt : i < 256 := by omega
+        rw [if_neg c1, if_pos c2, h4 (i - 1 <<< ℓ), h4 i, if_neg n1, if_neg n2, if_pos p1]
+        simp only [invL, if_pos hlt, if_neg hm1, hZ i (by omega) p1]
+      · rw [if_neg c1, if_neg c2, h4 i]
+        by_cases c3 : i < 2 * (1 <<< ℓ) * t
+        · have p1 : i < 2 * (1 <<< ℓ) * t + 2 * (1 <<< ℓ) := by omega
+          rw [if_pos c3, if_pos p1]
+        · have p1 : ¬ i < 2 * (1 <<< ℓ) * t + 2 * (1 <<< ℓ) := by omega
+          rw [if_neg c3, if_neg p1]
+
+private def INVk (f : Fq) : Nat → Fq
+  | 0 => f
+  | k + 1 => invL k (INVk f k)
+
+private theorem invRun_succ (w : Poly) (k : Nat) : invRun w (k + 1) = invBlks k (invRun w k) (128 >>> k) := by
+  simp [invRun, List.range'_concat]
+
+private theorem inv_layers (w : Poly) (hw : w.size = 256) (hi : InvQ w) :
+    ∀ k, k ≤ 8 → (invRun w k).1.size = 256 ∧ InvQ (invRun w k).1 ∧ (invRun w k).2 = 256 >>> k ∧
+      ∀ i, tf (invRun w k).1 i = INVk (tf w) k i := by
+  intro k
+  induction k with
+  | zero => intro _; exact ⟨hw, hi, by simp [invRun], fun i => by simp [invRun, INVk]⟩
+  | succ k ih =>
+    intro hk
+    obtain ⟨h1, h2, h3, h4⟩ := ih (by omega)
+    obtain ⟨s1, s2⟩ := shr_ar k (by omega)
+    rw [invRun_succ]
+    obtain ⟨g1, g2, g3, g4⟩ := inv_blocks k (by omega) _ h1 h2 (invRun w k).2 (by omega) (128 >>> k) (Nat.le_refl _)
+    refine ⟨g1, g2, by rw [g3]; omega, fun i => ?_⟩
+    rw [g4 i, (full_ar k (by omega)).2]
+    have e : tf (invRun w k).1 = INVk (tf w) k := funext h4
+    rw [e]
+    by_cases hi : i < 256
+    · rw [if_pos hi]; rfl
+    · rw [if_neg hi, ← h4 i, tf_big _ h1 i (by omega)]; exact (invL_Cl k _ i (by omega)).symm
+
+private theorem map_get (a : Poly) (f : Nat → Nat) (i : Nat) (hi : i < a.size) : (a.map f)[i]! = f a[i]! := by
+  rw [getElem!_pos (a.map f) i (by simpa using hi), Array.getElem_map, ← getElem!_pos a i hi]
+
+private theorem invNtt_spec (w : Poly) (hw : w.size = 256) (hq : InvQ w) :
+    (invNtt w).size = 256 ∧ InvQ (invNtt w) ∧ ∀ i, tf (invNtt w) i = cf 8347681 * INVk (tf w) 8 i := by
+  rw [invNtt_eq]
+  obtain ⟨h1, h2, _, h4⟩ := inv_layers w hw hq 8 (Nat.le_refl _)
+  refine ⟨by simp [h1], fun i => ?_, fun i => ?_⟩
+  · by_cases hi : i < 256
+    · rw [map_get (invRun w 8).1 _ i (by omega)]; exact mod_lt' _
+    · rw [getElem!_neg _ i (by simp [h1]; omega)]; show 0 < q; unfold q; omega
+  · by_cases hi : i < 256
+    · have e : tf ((invRun w 8).1.map fun x => x * 8347681 % q) i = tf (invRun w 8).1 i * cf 8347681 := by
+        unfold tf; rw [map_get (invRun w 8).1 _ i (by omega), cf_mod, cf_mul]
+      rw [e, h4 i]; grind
+    · rw [← h4 i, tf_big _ h1 i (by omega), tf_big _ (by simp [h1]) i (by omega)]; grind
+
+private theorem mz (x : Fin q) : x * 0 = 0 := Fin.mul_zero x
+
+-- linearity
+private def ad (f g : Fq) : Fq := fun i => f i + g i
+private def sc (c : Fin q) (f : Fq) : Fq := fun i => c * f i
+private theorem fwdL_add (ℓ : Nat) (f g : Fq) : fwdL ℓ (ad f g) = ad (fwdL ℓ f) (fwdL ℓ g) := by
+  funext i; unfold fwdL ad
+  by_cases h1 : i < 256 <;> by_cases h2 : i % (2 * (128 >>> ℓ)) < 128 >>> ℓ <;> simp [h1, h2] <;> grind
+private theorem fwdL_sc (ℓ : Nat) (c : Fin q) (f : Fq) : fwdL ℓ (sc c f) = sc c (fwdL ℓ f) := by
+  funext i; unfold fwdL sc
+  by_cases h1 : i < 256 <;> by_cases h2 : i % (2 * (128 >>> ℓ)) < 128 >>> ℓ <;> simp [h1, h2] <;> grind
+private theorem fwdL_zero (ℓ : Nat) : fwdL ℓ (fun _ => 0) = fun _ => 0 := by
+  funext i; unfold fwdL
+  by_cases h1 : i < 256
+  · by_cases h2 : i % (2 * (128 >>> ℓ)) < 128 >>> ℓ
+    · simp only [h1, h2, if_true, mz]; decide
+    · simp only [h1, h2, if_true, if_false, mz]; decide
+  · simp only [h1, if_false]
+
+private theorem NTTk_add (f g : Fq) : ∀ k, NTTk (ad f g) k = ad (NTTk f k) (NTTk g k)
+  | 0 => rfl
+  | k + 1 => by show fwdL k (NTTk (ad f g) k) = _; rw [NTTk_add f g k, fwdL_add]; rfl
+private theorem NTTk_sc (c : Fin q) (f : Fq) : ∀ k, NTTk (sc c f) k = sc c (NTTk f k)
+  | 0 => rfl
+  | k + 1 => by show fwdL k (NTTk (sc c f) k) = _; rw [NTTk_sc c f k, fwdL_sc]; rfl
+private theorem NTTk_zero : ∀ k, NTTk (fun _ => 0) k = fun _ => 0
+  | 0 => rfl
+  | k + 1 => by show fwdL k (NTTk (fun _ => 0) k) = _; rw [NTTk_zero k, fwdL_zero]
+
+private theorem Cl_NTTk (f : Fq) (hf : Cl f) (k : Nat) : Cl (NTTk f k) := by
+  cases k with
+  | zero => exact hf
+  | succ k => exact fwdL_Cl k _
+
+-- NTT of a product by X is a twist
+private theorem tw_next (ℓ p : Nat) : Tw (ℓ + 1) p = (if p % 2 = 0 then (1 : Fin q) else -1) * Zt ((1 <<< ℓ) + p / 2) := by
+  have h : (1 <<< (ℓ + 1)) / 2 = 1 <<< ℓ := by rw [shl_succ]; omega
+  unfold Tw; simp [h]
+
+private theorem blk_lt2 (ℓ : Nat) (hℓ : ℓ < 8) (i : Nat) (hi : i < 256) : i / (256 >>> ℓ) < 1 <<< ℓ := by
+  rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;> simp only [Nat.reduceShiftRight, Nat.reduceShiftLeft] <;> omega
+
+private theorem interw (ℓ : Nat) (hℓ : ℓ < 8) (f : Fq) : fwdL ℓ (ShL ℓ f) = ShL (ℓ + 1) (fwdL ℓ f) := by
+  funext i
+  by_cases hi : i < 256
+  · have e1 := tw_next ℓ (i / (256 >>> (ℓ + 1)))
+    have e2 := tw_sq ℓ hℓ (i / (256 >>> ℓ)) (blk_lt2 ℓ hℓ i hi)
+    rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;>
+      (simp only [fwdL, ShL, Sh, Nat.reduceShiftLeft, Nat.reduceShiftRight, Nat.reduceMul, Nat.reduceAdd, hi, if_true] at e1 e2 ⊢; grind)
+  · simp [fwdL, ShL, Sh, hi]
+
+private def ShN : Nat → Fq → Fq
+  | 0, f => f
+  | j + 1, f => ShL 0 (ShN j f)
+
+private theorem ShL_Cl (ℓ : Nat) (f : Fq) : Cl (ShL ℓ f) := fun i hi => by simp [ShL, Sh, Nat.not_lt.2 hi]
+private theorem ShN_Cl (g : Fq) (hg : Cl g) : ∀ j, Cl (ShN j g)
+  | 0 => hg
+  | j + 1 => ShL_Cl 0 _
+
+private theorem NTT_sh (f : Fq) : ∀ k, k ≤ 8 → NTTk (ShL 0 f) k = ShL k (NTTk f k)
+  | 0, _ => rfl
+  | k + 1, hk => by
+    show fwdL k (NTTk (ShL 0 f) k) = ShL (k + 1) (fwdL k (NTTk f k))
+    rw [NTT_sh f k (by omega)]; exact interw k (by omega) _
+
+private theorem ShL8 (g : Fq) (hg : Cl g) : ShL 8 g = fun i => Tw 8 i * g i := by
+  funext i
+  by_cases hi : i < 256
+  · simp [ShL, Sh, hi, Nat.mod_one]
+  · have := hg i (by omega); simp only [ShL, Sh, hi, if_false, this]; grind
+
+private def tp : Nat → Nat → Fin q
+  | 0, _ => 1
+  | j + 1, i => Tw 8 i * tp j i
+
+private theorem NTT_ShN (g : Fq) (hg : Cl g) : ∀ j i, NTTk (ShN j g) 8 i = tp j i * NTTk g 8 i
+  | 0, i => by simp only [ShN, tp]; grind
+  | j + 1, i => by
+    show NTTk (ShL 0 (ShN j g)) 8 i = tp (j + 1) i * NTTk g 8 i
+    rw [NTT_sh _ 8 (Nat.le_refl _), ShL8 _ (Cl_NTTk _ (ShN_Cl g hg j) 8)]
+    show Tw 8 i * NTTk (ShN j g) 8 i = _
+    rw [NTT_ShN g hg j i]
+    simp only [tp]; grind
+
+-- the unit
+private def e0 : Fq := fun i => if i = 0 then 1 else 0
+private theorem e0_Cl : Cl e0 := fun i hi => by simp [e0]; omega
+
+private theorem fwdL_pat (ℓ : Nat) (hℓ : ℓ < 8) :
+    fwdL ℓ (fun i => if i < 256 ∧ i % (256 >>> ℓ) = 0 then 1 else 0) = fun i => if i < 256 ∧ i % (256 >>> (ℓ + 1)) = 0 then 1 else 0 := by
+  funext i
+  by_cases hi : i < 256
+  · rcases lt8 ℓ hℓ with rfl|rfl|rfl|rfl|rfl|rfl|rfl|rfl <;>
+      (simp only [fwdL, Nat.reduceShiftLeft, Nat.reduceShiftRight, Nat.reduceMul, Nat.reduceAdd, hi, if_true]; grind)
+  · simp [fwdL, hi]
+
+private theorem NTT_e0 : ∀ k, k ≤ 8 → NTTk e0 k = fun i => if i < 256 ∧ i % (256 >>> k) = 0 then 1 else 0
+  | 0, _ => by
+    funext i
+    show e0 i = _
+    by_cases h : i = 0
+    · subst h; simp [e0]
+    · have : ¬ (i < 256 ∧ i % (256 >>> 0) = 0) := by simp only [Nat.reduceShiftRight]; omega
+      rw [if_neg this]; simp [e0, h]
+  | k + 1, hk => by
+    show fwdL k (NTTk e0 k) = _
+    rw [NTT_e0 k (by omega), fwdL_pat k (by omega)]
+
+private theorem NTT_e0' (i : Nat) : NTTk e0 8 i = if i < 256 then 1 else 0 := by
+  rw [NTT_e0 8 (Nat.le_refl _)]; simp [Nat.mod_one]
+
+
+-- schoolbook product as an X-adic sum
+private theorem ShL0_pt (f : Fq) (i : Nat) (hi : i < 256) : ShL 0 f i = if i = 0 then - f 255 else f (i - 1) := by
+  by_cases h : i = 0 <;> simp [ShL, Sh, Tw, hi, h, Nat.mod_eq_of_lt hi] <;> grind
+
+private theorem ShN_pt (g : Fq) : ∀ j, j ≤ 256 → ∀ i, i < 256 →
+    ShN j g i = if j ≤ i then g (i - j) else - g (i + 256 - j)
+  | 0, _, i, hi => by simp [ShN]
+  | j + 1, hj, i, hi => by
+    show ShL 0 (ShN j g) i = _
+    rw [ShL0_pt _ i hi]
+    by_cases h0 : i = 0
+    · subst h0
+      rw [if_pos rfl, ShN_pt g j (by omega) 255 (by omega), if_pos (show j ≤ 255 by omega),
+        if_neg (show ¬ (j + 1 ≤ 0) by omega), show 0 + 256 - (j + 1) = 255 - j by omega]
+    · rw [if_neg h0, ShN_pt g j (by omega) (i - 1) (by omega)]
+      by_cases h1 : j + 1 ≤ i
+      · rw [if_pos (show j ≤ i - 1 by omega), if_pos h1, show i - 1 - j = i - (j + 1) by omega]
+      · rw [if_neg (show ¬ (j ≤ i - 1) by omega), if_neg h1, show i - 1 + 256 - j = i + 256 - (j + 1) by omega]
+
+private def tm (f g : Fq) (i j : Nat) : Fin q := if j ≤ i then f j * g (i - j) else - (f j * g (i + 256 - j))
+private def cvS (n : Nat) (f g : Fq) : Fq := fun i =>
+  if i < 256 then (List.range n).foldl (fun acc j => acc + tm f g i j) 0 else 0
+
+private theorem cvS_Cl (n : Nat) (f g : Fq) : Cl (cvS n f g) := fun i hi => by simp [cvS, Nat.not_lt.2 hi]
+
+private theorem cvS_succ (n : Nat) (hn : n < 256) (f g : Fq) (hg : Cl g) :
+    cvS (n + 1) f g = ad (cvS n f g) (sc (f n) (ShN n g)) := by
+  funext i
+  show cvS (n + 1) f g i = cvS n f g i + f n * ShN n g i
+  by_cases hi : i < 256
+  · rw [ShN_pt g n (by omega) i hi]
+    simp only [cvS, hi, if_true, List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, tm]
+    by_cases h : n ≤ i
+    · simp only [h, if_true]
+    · simp only [h, if_false]; grind
+  · have h1 : ShN n g i = 0 := by
+      cases n with
+      | zero => exact hg i (by omega)
+      | succ n => exact ShL_Cl 0 _ i (by omega)
+    simp only [cvS, hi, if_false, h1, mz]; try decide
+
+private theorem NTT_cvS (f g : Fq) (hg : Cl g) : ∀ n, n ≤ 256 →
+    NTTk (cvS n f g) 8 = fun i => NTTk (cvS n f e0) 8 i * NTTk g 8 i
+  | 0, _ => by
+    have h0 : ∀ g, cvS 0 f g = fun _ => 0 := fun g => by funext i; simp [cvS]
+    rw [h0, h0, NTTk_zero]; funext i
+    show (0 : Fin q) = 0 * NTTk g 8 i; grind
+  | n + 1, hn => by
+    rw [cvS_succ n (by omega) f g hg, cvS_succ n (by omega) f e0 e0_Cl, NTTk_add, NTTk_sc, NTTk_add, NTTk_sc,
+      NTT_cvS f g hg n (by omega)]
+    funext i
+    show NTTk (cvS n f e0) 8 i * NTTk g 8 i + f n * NTTk (ShN n g) 8 i =
+      (NTTk (cvS n f e0) 8 i + f n * NTTk (ShN n e0) 8 i) * NTTk g 8 i
+    rw [NTT_ShN g hg n i, NTT_ShN e0 e0_Cl n i, NTT_e0']
+    by_cases hi : i < 256
+    · rw [if_pos hi]; grind
+    · rw [if_neg hi, Cl_NTTk g hg 8 i (by omega)]; simp only [mz]; try decide
+
+private theorem fold_single (T : Nat → Fin q) (i : Nat) (hT : ∀ j, j ≠ i → T j = 0) :
+    ∀ n, (List.range n).foldl (fun acc j => acc + T j) 0 = if i < n then T i else 0
+  | 0 => by simp
+  | n + 1 => by
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, fold_single T i hT n]
+    by_cases h : i < n
+    · have := hT n (by omega); rw [if_pos h, if_pos (by omega)]; grind
+    · by_cases h2 : i = n
+      · subst h2; rw [if_neg h, if_pos (by omega)]; grind
+      · have := hT n (fun h3 => h2 h3.symm); rw [if_neg h, if_neg (by omega)]; grind
+
+private theorem cvS_e0 (f : Fq) (hf : Cl f) : cvS 256 f e0 = f := by
+  funext i
+  by_cases hi : i < 256
+  · simp only [cvS, hi, if_true]
+    rw [fold_single (tm f e0 i) i (fun j hj => by
+      unfold tm e0
+      by_cases h : j ≤ i
+      · rw [if_pos h, if_neg (by omega)]; grind
+      · rw [if_neg h]
+        by_cases h' : i + 256 - j = 0
+        · rw [if_pos h', hf j (by omega)]; grind
+        · rw [if_neg h']; grind) 256, if_pos hi]
+    unfold tm e0
+    rw [if_pos (Nat.le_refl i), Nat.sub_self, if_pos rfl]; grind
+  · simp only [cvS, hi, if_false]; exact (hf i (by omega)).symm
+
+private theorem INV_NTT (f : Fq) (hf : Cl f) : INVk (NTTk f 8) 8 = fun i => cf 256 * f i := by
+  have key : ∀ k, k ≤ 8 → INVk (NTTk f 8) k = fun i => cf (2 ^ k) * NTTk f (8 - k) i := by
+    intro k
+    induction k with
+    | zero =>
+      intro _; funext i
+      show NTTk f 8 i = cf (2 ^ 0) * NTTk f 8 i
+      rw [show cf (2 ^ 0) = 1 from by decide]; grind
+    | succ k ih =>
+      intro hk
+      show invL k (INVk (NTTk f 8) k) = _
+      rw [ih (by omega), invL_smul]
+      have e8 : 8 - k = (7 - k) + 1 := by omega
+      have e7 : 7 - (7 - k) = k := by omega
+      have hi := inv_fwd (7 - k) (by omega) (NTTk f (7 - k)) (Cl_NTTk f hf _)
+      rw [e7] at hi
+      funext i
+      rw [e8]
+      show cf (2 ^ k) * invL k (fwdL (7 - k) (NTTk f (7 - k))) i = _
+      rw [hi, show 7 - k = 8 - (k + 1) by omega, Nat.pow_succ, cf_mul]
+      grind
+  rw [key 8 (Nat.le_refl _)]; funext i; rfl
+
+private theorem NTT_cv (f g : Fq) (hf : Cl f) (hg : Cl g) :
+    NTTk (cvS 256 f g) 8 = fun i => NTTk f 8 i * NTTk g 8 i := by
+  rw [NTT_cvS f g hg 256 (Nat.le_refl _), cvS_e0 f hf]
+
+private theorem scal (x : Fin q) : cf 8347681 * (cf 256 * x) = x := by
+  have h : cf 8347681 * cf 256 = 1 := by
+    rw [← cf_mul, Nat.mul_comm, ← cf_mod, tabC, cf_one]
+  grind
+
+
+private theorem arr_eq (a b : Poly) (ha : a.size = 256) (hb : b.size = 256) (qa : InvQ a) (qb : InvQ b)
+    (h : ∀ i, tf a i = tf b i) : a = b := by
+  have hx : ∀ i, a[i]! = b[i]! := fun i => by
+    have h1 : a[i]! % q = b[i]! % q := congrArg Fin.val (h i)
+    rwa [Nat.mod_eq_of_lt (qa i), Nat.mod_eq_of_lt (qb i)] at h1
+  apply Array.ext (by omega)
+  intro i h1 h2
+  have := hx i
+  rwa [getElem!_pos a i h1, getElem!_pos b i h2] at this
+
+private theorem range_get (i : Nat) (hi : i < 256) : (Array.range 256)[i]! = i := by
+  rw [getElem!_pos (Array.range 256) i (by simp; omega)]; simp
+
 /-- NTT round trip (Algorithms 41 and 42) on reduced polynomials. -/
 theorem invNtt_ntt {p : Poly} (hs : p.size = 256) (hq : ∀ x ∈ p, x < q) : invNtt (ntt p) = p := by
-  sorry
+  have hQ : InvQ p := fun i => by
+    by_cases h : i < p.size
+    · rw [getElem!_pos p i h]; exact hq _ (Array.getElem_mem h)
+    · rw [getElem!_neg p i h]; show 0 < q; unfold q; omega
+  obtain ⟨n1, n2, n3⟩ := ntt_spec p hs
+  obtain ⟨v1, v2, v3⟩ := invNtt_spec (ntt p) n1 (n2 hQ)
+  apply arr_eq _ _ v1 hs v2 hQ
+  intro i
+  rw [v3 i, show tf (ntt p) = NTTk (tf p) 8 from funext n3, INV_NTT _ (fun j hj => tf_big p hs j hj)]
+  exact scal _
 
 /-- Schoolbook product in Z_q[X]/(X^256 + 1): the reference that the NTT-domain product must equal. -/
 def negacyclic (a b : Poly) : Poly :=
   (Array.range 256).map fun i => (List.range 256).foldl (fun acc j =>
     if j ≤ i then (acc + a[j]! * b[i - j]!) % q else (acc + (q - a[j]! * b[i + 256 - j]! % q)) % q) 0
 
+
+private theorem fold_lt (F : Nat → Nat → Nat) (hF : ∀ acc j, F acc j < q) (l : List Nat) (acc : Nat) (ha : acc < q) :
+    l.foldl F acc < q := by
+  induction l generalizing acc with
+  | nil => exact ha
+  | cons j l ih => exact ih _ (hF acc j)
+
+private theorem neg_size (a b : Poly) : (negacyclic a b).size = 256 := by simp [negacyclic]
+
+private theorem neg_lt (a b : Poly) : InvQ (negacyclic a b) := by
+  intro i
+  by_cases hi : i < 256
+  · unfold negacyclic
+    rw [map_get (Array.range 256) _ i (by simp; omega), range_get i hi]
+    refine fold_lt _ (fun acc j => ?_) _ 0 (by unfold q; omega)
+    by_cases h : j ≤ i
+    · simp only [h, if_true]; exact mod_lt' _
+    · simp only [h, if_false]; exact mod_lt' _
+  · rw [getElem!_neg _ i (by simp [negacyclic]; omega)]; show 0 < q; unfold q; omega
+
+private theorem neg_tf (a b : Poly) (i : Nat) : tf (negacyclic a b) i = cvS 256 (tf a) (tf b) i := by
+  by_cases hi : i < 256
+  · have key : ∀ n, cf ((List.range n).foldl (fun acc j =>
+        if j ≤ i then (acc + a[j]! * b[i - j]!) % q else (acc + (q - a[j]! * b[i + 256 - j]! % q)) % q) 0) =
+        (List.range n).foldl (fun acc j => acc + tm (tf a) (tf b) i j) 0 := by
+      intro n
+      induction n with
+      | zero => simp [cf_zero]
+      | succ n ih =>
+        simp only [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil]
+        rw [← ih]
+        generalize (List.range n).foldl _ 0 = X
+        by_cases h : n ≤ i
+        · simp only [h, if_true, tm]
+          rw [cf_mod, cf_add, cf_mul]; rfl
+        · simp only [h, if_false, tm]
+          rw [cf_mod, cf_add, cf_neg (mod_le _), cf_mod, cf_mul]; rfl
+    have e : tf (negacyclic a b) i = cf ((List.range 256).foldl (fun acc j =>
+        if j ≤ i then (acc + a[j]! * b[i - j]!) % q else (acc + (q - a[j]! * b[i + 256 - j]! % q)) % q) 0) := by
+      unfold tf negacyclic
+      rw [map_get (Array.range 256) _ i (by simp; omega), range_get i hi]
+    rw [e, key 256]; simp only [cvS, hi, if_true]
+  · rw [tf_big _ (neg_size a b) i (by omega)]; exact (cvS_Cl 256 _ _ i (by omega)).symm
+
 /-- The pointwise NTT product is the negacyclic product, so verify's `A z - c t1 2^d` is the standard's. -/
 theorem invNtt_pointwise {a b : Poly} (ha : a.size = 256) (hb : b.size = 256) :
     invNtt ((Array.range 256).map fun j => (ntt a)[j]! * (ntt b)[j]! % q) = negacyclic a b := by
-  sorry
+  obtain ⟨a1, _, a3⟩ := ntt_spec a ha
+  obtain ⟨b1, _, b3⟩ := ntt_spec b hb
+  have hsz : ((Array.range 256).map fun j => (ntt a)[j]! * (ntt b)[j]! % q).size = 256 := by simp
+  have hQ : InvQ ((Array.range 256).map fun j => (ntt a)[j]! * (ntt b)[j]! % q) := fun i => by
+    by_cases hi : i < 256
+    · rw [map_get (Array.range 256) _ i (by simp; omega)]; exact mod_lt' _
+    · rw [getElem!_neg _ i (by simp; omega)]; show 0 < q; unfold q; omega
+  have ht : tf ((Array.range 256).map fun j => (ntt a)[j]! * (ntt b)[j]! % q) =
+      fun i => NTTk (tf a) 8 i * NTTk (tf b) 8 i := by
+    funext i
+    by_cases hi : i < 256
+    · have e : tf ((Array.range 256).map fun j => (ntt a)[j]! * (ntt b)[j]! % q) i = tf (ntt a) i * tf (ntt b) i := by
+        unfold tf
+        rw [map_get (Array.range 256) _ i (by simp; omega), range_get i hi, cf_mod, cf_mul]
+      rw [e, a3 i, b3 i]
+    · rw [tf_big _ hsz i (by omega), Cl_NTTk (tf a) (tf_big a ha) 8 i (by omega)]; grind
+  obtain ⟨c1, c2, c3⟩ := invNtt_spec _ hsz hQ
+  apply arr_eq _ _ c1 (neg_size a b) c2 (neg_lt a b)
+  intro i
+  rw [c3 i, ht, ← NTT_cv _ _ (tf_big a ha) (tf_big b hb), INV_NTT _ (cvS_Cl 256 _ _), neg_tf]
+  exact scal _
 
 end BlindLedger.Gate.MlDsa87
 
@@ -1145,3 +1920,7 @@ end BlindLedger.Gate.MlDsa87
 #guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.rejNtt_stable
 /-- info: 'BlindLedger.Gate.MlDsa87.sampleInBall_stable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.sampleInBall_stable
+/-- info: 'BlindLedger.Gate.MlDsa87.invNtt_ntt' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.invNtt_ntt
+/-- info: 'BlindLedger.Gate.MlDsa87.invNtt_pointwise' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.invNtt_pointwise
