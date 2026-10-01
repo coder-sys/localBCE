@@ -2626,4 +2626,104 @@ private def worstRecord : Command := .record
 #eval hex (rawEncodeStepOutcome (.refused .CAPACITY))
 #eval (viewOfAnchor (kL0.request c1)).map fun v => ((encodeStepOutcome (stepView v)).map hex)
 
+/-! ## Two statements above are false as written (counterexamples; the statements are untouched)
+
+    `chain_fold_eq_full`: `clocksOk` does not require well-formed commands, and an ill-formed command
+    (empty payment id) makes the reference refuse (POST_REJECTED) while the view's step mutates.
+    `decodePaymentItem_coherent`: a well-formed request may hold a REVERSED payment whose id, time and
+    amount equal an offset determination's contribution; form A (`viewOfAnchor`) never checks
+    `coherent`, so the decoded view is incoherent. -/
+
+private def badCall : Call := ⟨kNow, some 0, .record { kRec with paymentId := "" }⟩
+#guard financialInputWellFormed kL0.input && receiptsWellFormed kL0.input kL0.receipts
+#guard decide (kL0.input.evaluatedAt ≤ kNow) && decide (kNow < 2 ^ 63)
+#guard decide (kL0.input.beforeRevision + 1 ≤ maxRevision)
+#guard commandWellFormed badCall.command == false
+#guard match viewOfAnchor (kL0.request badCall) with
+  | none => false
+  | some v => decide (absorbed v = v) && !decide (some (stepView v) = project (kL0.request badCall) (outcome kL0 badCall))
+
+-- A reversed payment whose id, event time and amount equal an authorized offset determination's.
+private def xPay : Payment :=
+  { katPayment 300_000 1_774_864_800_000 with
+    paymentId := "determination:action:h:offset", reversalEvidenceId := some "evidence:reversal", status := .REVERSED }
+private def xCash : EvidenceRecord :=
+  { katCashEvidence (some 300_000) with
+    applicableAt := 1_774_864_800_000
+    eventAt := 1_774_864_800_000
+    receivedAt := 1_774_864_800_000 }
+private def xRev : EvidenceRecord :=
+  { katReversalEvidence with
+    reversalOf := some xPay.paymentId
+    amountCents := some 300_000 }
+private def xInput : FinancialInput :=
+  { katAuthorized with beforeRevision := 2, payments := [xPay], evidence := [xCash, katOffsetEvidence, xRev] }
+private def xCmd : RecordCommand :=
+  { paymentId := xPay.paymentId, evidenceId := "evidence:cash", commonOriginId := xPay.commonOriginId,
+    sourceId := "fixture-payment-file", sourceVersion := "cash-v1", localRef := none, amountCents := 300_000,
+    eventAt := 1_774_864_800_000, paysActionId := none }
+private def xL : Ledger := ⟨xInput, [⟨xPay.paymentId, 1, none⟩]⟩
+private def xCall : Call := ⟨1_774_922_400_000, none, .record xCmd⟩
+
+
+#guard financialInputWellFormed xInput
+#guard receiptsWellFormed xInput xL.receipts
+#guard requestWellFormed (xL.request xCall)
+#guard ((decodePaymentItem (encodePaymentRequest (xL.request xCall))).map coherent) == some false
+
+/-- info: 'BlindLedger.Financial.Payment.Rev12.paymentRespond_decode_none' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms paymentRespond_decode_none
+/-- info: 'BlindLedger.Financial.Payment.Rev12.decodeStepOutcome_encode' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms decodeStepOutcome_encode
+/-- info: 'BlindLedger.Financial.Payment.Rev12.refusals_complete' depends on axioms: [propext] -/
+#guard_msgs in #print axioms refusals_complete
+/-- info: 'BlindLedger.Financial.Payment.Rev12.absorb_summarize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms absorb_summarize
+/-- info: 'BlindLedger.Financial.Payment.Rev12.evaluateState_summarize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms evaluateState_summarize
+/-- info: 'BlindLedger.Financial.Payment.Rev12.state_requests_paid' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms state_requests_paid
+/-- info: 'BlindLedger.Financial.Payment.Rev12.anchorItem_fits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms anchorItem_fits
+/-- info: 'BlindLedger.Financial.Payment.Rev12.anchorItem_length' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms anchorItem_length
+/-- info: 'BlindLedger.Financial.Payment.Rev12.step_anchor_fits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms step_anchor_fits
+/-- info: 'BlindLedger.Financial.Payment.Rev12.decodePaymentItem_encode' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms decodePaymentItem_encode
+/-- info: 'BlindLedger.Financial.Payment.Rev12.run_conflict_retry_unchanged' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms run_conflict_retry_unchanged
+/-- info: 'BlindLedger.Financial.Payment.Rev12.step_wellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms step_wellFormed
+/-- info: 'BlindLedger.Financial.Payment.Rev12.record_link_within_shortfall' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms record_link_within_shortfall
+/-- info: 'BlindLedger.Financial.Payment.Rev12.run_linked_within_shortfall' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms run_linked_within_shortfall
+/-- info: 'BlindLedger.Financial.Payment.Rev12.run_balance_identity' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms run_balance_identity
+/-- info: 'BlindLedger.Financial.Payment.Rev12.paymentTransition_shadow_refused' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms paymentTransition_shadow_refused
+/-- info: 'BlindLedger.Financial.Payment.Rev12.run_record_retry_duplicate' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms run_record_retry_duplicate
+/-- info: 'BlindLedger.Financial.Payment.Rev12.run_reverse_retry_duplicate' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms run_reverse_retry_duplicate
+
 end BlindLedger.Financial.Payment.Rev12
