@@ -12,10 +12,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 78 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  0f51e9baf3e9248edf66a98226fd72a2325db83ee687ef622afb65cc6cc4370b, 8,718 bytes;
-  each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
-  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\m3r12-gv-manifest.txt (m3-rev12, Rev12.lean added).
+- Source manifest, 82 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  15f62270317b252223d6555dedc4cb978de335d876030cdccf52906e7f701000, 9,171 bytes;
+  each file hashed as LF bytes (= its git blob; eol=lf). Copy: C:\Users\neers\rrb\gate\m3s2-c4b-gv-manifest.txt (m3-step2 C4b).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -94,6 +93,8 @@ bf-lean added the cursor decoders and batch laws and moved the correction exe to
 byte for byte, both equal to their pins.
 
 Re-pin (2026-10-01, branch m3-rev12, merged with trunk a52f852): the manifest moved (77 files, bd74758e..., to 78 files, 0f51e9ba...) while no exe did. m3-rev12 added Payment/Rev12.lean and one Refusal constructor in Payment/Types.lean; no pinned exe imports either, and the in-tree build (m3r-build-a1-L3, m3r-build2-a1-L1) gave gate_verify 9bd2602b..., the worker 86299A0D... and the correction exe 441EB3E8..., each equal to its pin.
+
+Re-pin (2026-10-01, branch m3-step2, source commit 1168909 plus lean/tools/semantic_assurance_manifest.json and semantic_assurance_gate.py, which pins that manifest): the manifest moved (78 files, 0f51e9ba..., to 82 files, 15f62270...) while gate_verify did not. m3-step2 replaced Rev12.lean with the live payment step and added Payment/Open.lean and OpenLaws.lean; no Gate file changed. Two fresh git-archive stage builds (m3s2-stagea-a1-L2, m3s2-stageb-a1-L2, 104 jobs, exit 0) gave gate_verify 9bd2602b... (4,205,568 bytes) byte for byte, equal to its pin; the worker moved to 36D3FE0C... and the correction exe to C6177355....
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in

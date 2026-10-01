@@ -1,8 +1,11 @@
 """The live Lean evaluator worker: one process, one frame each way, fail closed (Art. V.1, V.2, IV.2)."""
 
+import hashlib
+import json
 import sqlite3
 import timeit
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app import minimal_clearance_verifier_process as process
@@ -179,6 +182,40 @@ class EvaluatorWorkerTests(unittest.TestCase):
                 self.fixture._record_cash(self.store)
         self.assertEqual(str(raised.exception), "lean_evaluation:result_context_binding")
         self.assertEqual((self._counts(), engine._evaluator), (before, []))  # and the worker that gave it is not reused
+
+
+    @staticmethod
+    def _frames() -> dict[str, bytes]:
+        """Lean-live M3 step 2 known answers: the raw payment frames of lean-live-m3-v1 16.10 (form B of the record and the
+        reverse), the R2 S1 refusal frame of KAT.lean, and the worker's byte-for-byte answers (00 then BLFPRS01 ...)."""
+        path = Path(__file__).with_name("fixtures") / "payment_frames.json"
+        return {name: bytes.fromhex(hexed) for name, hexed in json.loads(path.read_text(encoding="utf-8")).items()}
+
+    @staticmethod
+    def _exchange(frame: bytes) -> bytes:
+        with engine._evaluator_lock:
+            return engine._running_evaluator().exchange(
+                frame, response_cap_bytes=adapter.MAX_WIRE_BYTES + 1, timeout_seconds=engine.EVALUATOR_TIMEOUT_SECONDS)
+
+    def test_payment_frames_are_answered_byte_for_byte_and_evaluator_frames_as_before(self) -> None:
+        frames = self._frames()
+        self.assertEqual(self._exchange(frames["c1"]), frames["c1_answer"])  # RECORDED
+        self.assertEqual(self._exchange(frames["c2"]), frames["c2_answer"])  # REVERSED
+        self.assertEqual(self._exchange(frames["s1_refused"]), frames["s1_refused_answer"])  # REFUSED, code 8 (LINK_EXCEEDS_UNPAID)
+        self.assertEqual(frames["s1_refused_answer"][-2:], b"")
+        self.assertEqual(self._exchange(frames["c1"][:-1]), b"")  # a truncated item is not decoded
+        old = "4989cc7d8f1ec95ffeef2a4a3a6e1f7504ade818803213815935b711a3d40cc5"  # the answer to the first fixture input from the worker before payment frames existed
+        self.assertEqual(hashlib.sha256(engine._evaluate_wire(self._wires()[0][0])).hexdigest(), old)
+
+    def test_payment_frames_keep_the_worker_flat(self) -> None:
+        frames = self._frames()
+        sent = [frames["c1"], frames["c2"], frames["s1_refused"]]
+        with patch.object(engine, "EVALUATOR_RECYCLE_COMMIT_BYTES", 1 << 40):
+            commits = []
+            for i in range(300):
+                self._exchange(sent[i % 3])
+                commits.append(engine._evaluator[0].commit_bytes())
+        self.assertLess(max(commits[3:]) - commits[3], 16_000_000, [round(c / 1e6) for c in commits[::30]])
 
 
 if __name__ == "__main__":
