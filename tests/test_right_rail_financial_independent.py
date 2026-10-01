@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
@@ -1253,3 +1254,51 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                         check(connection)
                     if table == "financial_events":  # the Owner's command-source read, which must find exactly one, sees both too
                         self.assertEqual(len(connection.execute(owner._COMMAND_REQUEST_SQL["FOLLOWTHROUGH_DECISION"], (followthrough.CLOSE,)).fetchall()), 2)
+
+    def test_pre_commit_never_selects_evaluation_snapshots(self) -> None:
+        # The per-obligation check reads each evaluation's O(n)-byte input snapshot only for the current row, by its id: never for the whole history.
+        with closing(sqlite3.connect(self._copy_database("snapshots.sqlite"))) as connection:
+            connection.row_factory = sqlite3.Row
+            (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+            statements: list[str] = []
+            connection.set_trace_callback(statements.append)
+            independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
+        reads = [statement for statement in statements if "FROM evaluations" in statement]
+        self.assertTrue(any("json_each" in statement for statement in reads), "the history read ran")
+        for statement in reads:
+            if "json_each" in statement:
+                self.assertFalse(any(name in statement for name in ("*", "input_snapshot_json", "evidence_bindings_json", "receipt_digest")), statement)
+            elif "input_snapshot_json" in statement or "*" in statement:
+                self.assertIn("WHERE evaluation_id=", statement)
+
+    def test_a_column_the_rules_need_is_never_dropped(self) -> None:
+        # Forge each column of each of the item's evaluation rows in turn: the narrowed read must give the verdict the read of whole rows gave.
+        with closing(sqlite3.connect(self._copy_database("columns.sqlite"), isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+            rowids = [row[0] for row in connection.execute("SELECT rowid FROM evaluations WHERE obligation_id=?", (obligation,))]
+            columns = [row["name"] for row in connection.execute("PRAGMA table_info(evaluations)")]
+
+            def verdict() -> str:
+                try:
+                    independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
+                except independent.IndependentFinancialError as error:
+                    return str(error)
+                return "ok"
+
+            self.assertEqual(verdict(), "ok")
+            verdicts = set()
+            for rowid in rowids:
+                for column in columns:
+                    connection.execute("BEGIN")
+                    try:
+                        connection.execute(f"UPDATE evaluations SET {column}=CASE typeof({column}) WHEN 'integer' THEN {column}+1 WHEN 'blob' THEN x'00'||{column} WHEN 'null' THEN 1 ELSE {column}||'x' END WHERE rowid=?", (rowid,))
+                        narrow = verdict()
+                        with patch.object(independent, "_EVALUATION_COLUMNS", "rowid," + ",".join(columns)):
+                            self.assertEqual(narrow, verdict(), (rowid, column))
+                        verdicts.add(narrow)
+                    except sqlite3.IntegrityError:
+                        pass  # the schema itself refuses this forgery
+                    finally:
+                        connection.execute("ROLLBACK")
+            self.assertGreater(len(verdicts), 2, verdicts)

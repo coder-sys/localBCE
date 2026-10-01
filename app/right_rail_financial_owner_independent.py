@@ -3512,6 +3512,25 @@ def _verify_exact_input(connection: sqlite3.Connection, obligation: Mapping[str,
             _fail(f"obligation:exact-input:{key}")
 
 
+_EVALUATION_COLUMNS = "rowid,evaluation_id,obligation_id,revision,evidence_ids_json,evaluated_at_ms,shortfall_cents,result_digest,control_pack_id,control_pack_version,control_pack_digest,authority_id,authority_epoch,authority_digest,case_status"
+
+
+class _Evaluations(dict):
+    """Evaluation rows without the columns stored behind the O(n)-byte input snapshot: a follow-up record that names a row reads them from that row."""
+
+    def __init__(self, connection: sqlite3.Connection, rows: Iterable[Mapping[str, object]]):
+        super().__init__((str(row["evaluation_id"]), dict(row)) for row in rows)
+        self._connection = connection
+
+    def get(self, key: object, default: object = None) -> object:
+        row = super().get(key)
+        if row is None:
+            return default
+        if "receipt_digest" not in row:
+            row.update(self._connection.execute("SELECT evidence_bindings_json,input_snapshot_digest,receipt_digest FROM evaluations WHERE rowid=?", (row["rowid"],)).fetchone())
+        return row
+
+
 def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids: str, **expected: Any) -> tuple[dict[str, object], ...]:
     """Per-obligation mode, run before COMMIT with schema and meta checked once per call: each current evaluation was
     computed from exactly its obligation's rows as they are now, recomputes, and the projection equals it (whole-store mode is the open check)."""
@@ -3547,17 +3566,17 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
         items = {str(value["item_id"]): value for value in touched.values()}
         evidence = _verify_evidence(connection, items, touched, only=items)
 
-        def mine(table: str) -> Iterable[sqlite3.Row]:
-            return connection.execute(f"SELECT * FROM {table} WHERE obligation_id IN (SELECT value FROM json_each(?))", (marks,))
+        def mine(table: str, columns: str = "*") -> Iterable[sqlite3.Row]:
+            return connection.execute(f"SELECT {columns} FROM {table} WHERE obligation_id IN (SELECT value FROM json_each(?))", (marks,))
 
         populations = {str(v["population_id"]): v for v in connection.execute("SELECT * FROM population_imports WHERE population_id IN (SELECT population_id FROM obligations WHERE obligation_id IN (SELECT value FROM json_each(?)))", (marks,))}
         packs = {str(v["pack_id"]): v for v in connection.execute("SELECT * FROM control_packs")}
-        evaluations, claims = _group(mine("evaluations"), "obligation_id"), {str(v["claim_id"]): v for v in mine("claimed_adjustments")}
+        evaluations, claims = _group(mine("evaluations", _EVALUATION_COLUMNS), "obligation_id"), {str(v["claim_id"]): v for v in mine("claimed_adjustments")}
         determinations = _verify_determinations(connection, meta, touched, populations, packs, claims, evidence, evaluations, actors=identity["actors"], only=touched)
         _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
         _verify_correction_followup_records(
             connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND +kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),  # +kind keeps the per-obligation seek off the store-wide kind index
-            evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
+            evaluations=_Evaluations(connection, (v for rows in evaluations.values() for v in rows)), determinations={key: dict(v) for key, v in determinations.items()},
             actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
         )
         _verify_followthrough_decisions(  # only decisions carry a payload here; the other events give the revision each decision must follow
