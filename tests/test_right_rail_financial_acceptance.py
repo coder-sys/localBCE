@@ -4038,7 +4038,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "member_count": len(expected.POPULATION_MANIFEST_MEMBER_IDS),
             "member_digest": _independent_hex(manifest.member_digest),
         }
-        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v2")
+        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v3")
         self.assertEqual(package["population_binding"], expected_binding)
         obligation_id = package["obligation"]["obligation_id"]
         self.assertEqual(package["obligation"]["population_id"], expected_binding["population_id"])
@@ -5151,15 +5151,20 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return store, reject_b
 
     @staticmethod
-    def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True) -> dict[str, object]:
-        """A cash payment of ``cents`` after A's decision, answering A's correction request when ``linked``."""
+    def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True, action: str = expected.ACTION_CORRECTION_ID) -> dict[str, object]:
+        """A cash payment of ``cents`` after A's decision, answering correction request ``action`` (A's) when ``linked``."""
         RightRailFinancialAcceptanceTests._advance_clock(store, expected.CORRECTION_AUTH_MS + 500)
         return store.record_payment_evidence(
             item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
             amount_cents=cents, evidence_id=f"evidence:payment-h:{suffix}", event_at_ms=expected.CORRECTION_AUTH_MS + 500,
             source_id="fixture-payment-file", source_version="payment-v2", local_ref=f"ref:payment:h:{suffix}",
-            pays_action_id=expected.ACTION_CORRECTION_ID if linked else None,
+            pays_action_id=action if linked else None,
         )
+
+    @staticmethod
+    def _open_cents(store: FinancialOwner) -> dict[str, object]:
+        """R2: what each action may still collect, as the decision package shows it."""
+        return {entry["action_id"]: entry.get("open_cents") for entry in store.decision_package(expected.H_ITEM_ID)["references"]["actions"]["items"]}
 
     @staticmethod
     def _requested_and_claimed(store: FinancialOwner) -> tuple[list[int], list[int]]:
@@ -5279,6 +5284,62 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         forged = self._path("late-link.sqlite")
         forged.write_bytes(store.path.read_bytes())
         self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p4" and "common_origin_id" in payload and payload.setdefault("pays_action_id", expected.ACTION_CORRECTION_ID) is not None), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(forged, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_falling_balance_shrinks_the_newest_request_first(self) -> None:
+        # R2: 600,000 unpaid; A and B each request 300,000. 200,000 arrives unlinked, so 400,000 is owed:
+        # the older request keeps its 300,000, the newer is cut to 100,000, and a payment may collect only that.
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        reject_b()
+        self._pay_a(store, 200_000, linked=False)
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 100_001, "p3", action=_ACTION_B)
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000, _ACTION_B: 100_000})
+        self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))  # the oracle recomputes the shrunk open amounts
+        self.assertEqual(self._pay_a(store, 100_000, "p3", action=_ACTION_B)["status"], "RECORDED")
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000, _ACTION_B: 0})  # paying B leaves A alone
+        self.assertEqual(self._pay_a(store, 300_000, "p4")["status"], "RECORDED")
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_request_closes_with_the_balance_and_reopens_when_it_returns(self) -> None:
+        # R2: one 300,000 request. 300,000 arrives unlinked: nothing is owed and the request is closed.
+        # That payment is reversed: 300,000 is owed again and the request reopens, never past its own amount.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000, linked=False)
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 0})
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000})
+        self.assertEqual(self._pay_a(store, 300_000, "p3")["status"], "RECORDED")
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 0})
+        self._assert_verified(store)
+
+    def test_an_older_request_holds_only_its_unpaid_part(self) -> None:
+        # R2: 600,000 unpaid; A requests 300,000 and 100,000 of it is paid; B requests 300,000. A holds only its
+        # unpaid 200,000, so B's whole 300,000 is open and payable (a checker that holds A's full amount refuses this).
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        self._pay_a(store, 100_000)
+        reject_b()
+        self.assertEqual(self._pay_a(store, 300_000, "p3", action=_ACTION_B)["status"], "RECORDED")
+        self._assert_verified(store)
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 200_000, _ACTION_B: 0})
+
+    def test_the_checker_refuses_a_payment_past_its_requests_open_amount(self) -> None:
+        # R2: with A and B open at 300,000 and 100,000, a linked 300,000 pays A. Retargeted to B it stays within
+        # B's request and within the balance (R1); only the open amount refuses it.
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        reject_b()
+        self._pay_a(store, 200_000, linked=False)
+        self._pay_a(store, 300_000, "p3")
+        self._assert_verified(store)
+        forged = self._path("newer-link.sqlite")
+        forged.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p3" and "common_origin_id" in payload and payload.update(pays_action_id=_ACTION_B) is None), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(forged, expected_config=store.config, expected_authority=self.authority)
 
@@ -5702,6 +5763,62 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
             verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
+
+    def test_checker_pins_every_table_clause(self) -> None:
+        # PRAGMA table_info cannot show ON CONFLICT, NOT NULL or CHECK: with file access a forger could make the Owner's
+        # plain INSERT a REPLACE (whose delete fires no trigger) or drop a guard. Only a whitespace run may differ.
+        store = self._build_base()
+        for label, table, old, new in (
+            ("on-conflict-replace", "evidence", "evidence_id TEXT PRIMARY KEY,", "evidence_id TEXT PRIMARY KEY ON CONFLICT REPLACE,"),
+            ("dropped-not-null", "evidence", "item_id TEXT NOT NULL,", "item_id TEXT,"),
+            ("dropped-check", "financial_meta", " CHECK (dispatch_enabled=0)", ""),
+            ("literal-case", "financial_meta", "'LIVE','SHADOW','TEST'", "'live','SHADOW','TEST'"),
+            ("whitespace-only", "evidence", "evidence_id TEXT PRIMARY KEY,", "evidence_id  TEXT\n\tPRIMARY KEY,"),
+        ):
+            with self.subTest(label):
+                path = self._path(f"table-sql-{label}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    read = lambda: connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                    before = read()
+                    connection.execute("PRAGMA writable_schema=ON")
+                    connection.execute("UPDATE sqlite_master SET sql=replace(sql,?,?) WHERE type='table' AND name=?", (old, new, table))
+                    self.assertNotEqual(read(), before)
+                if label == "whitespace-only":
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                    continue
+                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:sql:{table}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:sql:evidence$"):
+            self._make_owner(path=self._path("table-sql-on-conflict-replace.sqlite"))
+
+    def test_checker_refuses_every_hidden_schema_object(self) -> None:
+        # SQLite loads a schema row whose type has any letter case and, while loading, never checks reserved names, so a
+        # 'Trigger' row that drops evidence inserts, a view, 'sqlitex', 'SQLITE_x' or a sqlite_autoindex name with its own
+        # SQL would each hide from a checker that asks only for type='trigger' or skips names LIKE 'sqlite_%'.
+        store = self._build_base()
+        self._assert_verified(store)
+        evil = ("CREATE TABLE evil(x)",)
+        for label, refusal, statements in (
+            ("trigger-case", "objects", ("INSERT INTO sqlite_master VALUES('Trigger','evil','evidence',0,'CREATE TRIGGER evil BEFORE INSERT ON evidence BEGIN SELECT RAISE(IGNORE); END')",)),
+            ("table-case", "objects", (*evil, "UPDATE sqlite_master SET type='Table' WHERE name='evil'")),
+            ("index-case", "objects", ("CREATE INDEX evil ON evidence(item_id)", "UPDATE sqlite_master SET type='INDEX' WHERE name='evil'")),
+            ("view", "objects", ("CREATE VIEW evil AS SELECT 1",)),
+            ("reserved-index", "objects", ("CREATE INDEX evil ON evidence(item_id) WHERE 0", "UPDATE sqlite_master SET name='sqlite_autoindex_evidence_9',sql='CREATE INDEX sqlite_autoindex_evidence_9 ON evidence(item_id) WHERE 0' WHERE name='evil'")),
+            ("sqlitex", "tables", ("CREATE TABLE sqlitex(x)",)),
+            ("upper-sqlite", "tables", (*evil, "UPDATE sqlite_master SET name='SQLITE_x',tbl_name='SQLITE_x',sql='CREATE TABLE SQLITE_x(x)' WHERE name='evil'")),
+        ):
+            with self.subTest(label):
+                path = self._path(f"hidden-{label}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    connection.execute("PRAGMA writable_schema=ON")
+                    for statement in statements:
+                        connection.execute(statement)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:{refusal}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:objects$"):
+            self._make_owner(path=self._path("hidden-trigger-case.sqlite"))
 
     def test_checker_refuses_a_hidden_partial_index(self) -> None:
         # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.

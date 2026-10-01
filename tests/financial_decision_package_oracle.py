@@ -34,7 +34,7 @@ from app.right_rail_financial_owner_independent import (
 )
 
 
-DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v2"
+DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v3"
 MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
 MAX_DECISION_PACKAGE_DEPTH = 32
 
@@ -457,6 +457,13 @@ def verify_decision_package(
                 "input_evaluation_result_digest", "dispatch",
             )
 
+            open_cents: dict[str, int] = {}  # R2, recomputed from the rows: oldest request keeps its unpaid part, the balance bounds the rest
+            left = int(obligation["shortfall_cents"])
+            for action_id, status, amount in connection.execute("SELECT action_id,status,json_extract(payload_json,'$.amount_cents') FROM actions WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision,action_id", (obligation_id,)).fetchall():
+                paid = connection.execute("SELECT COALESCE(SUM(p.amount_cents),0) FROM payments p JOIN financial_events e ON json_extract(e.payload_json,'$.payment_id')=p.payment_id WHERE p.active=1 AND e.kind='PAYMENT_RECEIVED' AND json_extract(e.payload_json,'$.pays_action_id')=?", (action_id,)).fetchone()[0]
+                open_cents[action_id] = 0 if status == "CANCELLED" else min(max(amount - paid, 0), left)
+                left -= open_cents[action_id]
+
             def project_action(row: sqlite3.Row) -> dict[str, object]:
                 payload = _parse_json(row["payload_json"], "decision-package:action-payload")
                 if not isinstance(payload, dict):
@@ -470,6 +477,7 @@ def verify_decision_package(
                     "revision": int(row["revision"]),
                     "payload_digest": _blob64(row["payload_digest"], "decision-package:action-digest").hex().upper(),
                     "payload_fields": {key: payload[key] for key in action_fields if key in payload},
+                    "open_cents": open_cents.get(str(row["action_id"])) if row["kind"] == "CORRECTION_PAYMENT_REQUEST" else None,
                     "created_at_ms": int(row["created_at_ms"]),
                     "acknowledgment": {
                         "status": str(row["outbox_status"]),
