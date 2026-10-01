@@ -18,8 +18,8 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   tests/test_tcb_gate.py recomputes it and fails when one of those files changes until tools/tcb_pin.ps1 is rerun; an edit to any
   other lean/ file does not move it.
 
-Re-pin procedure: when this exe's SHA-256 moves, build once from a fresh `git archive <commit> lean` stage and byte-match it with
-the in-tree build; release pins need two fresh builds. When only the manifest moves (no exe changes), rerun tools/tcb_pin.ps1 and
+Re-pin procedure: when this exe's SHA-256 moves, build it in each of two fresh `git archive <commit> lean` stages and byte-match
+both with the in-tree build (a reproduced pair). When only the manifest moves (no exe changes), rerun tools/tcb_pin.ps1 and
 commit tools/tcb_report.txt (it requires the in-tree build to equal the pins).
 
 Retired pins, not deleted (each replaced by the pin file named):
