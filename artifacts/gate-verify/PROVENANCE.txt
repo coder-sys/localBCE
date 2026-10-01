@@ -12,10 +12,10 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 77 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  bd74758e3327aec989c78c2a3609e516999d8ce9962c3a5f6a67c8d2ad80cca0, 8,606 bytes;
+- Source manifest, 78 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  0f51e9baf3e9248edf66a98226fd72a2325db83ee687ef622afb65cc6cc4370b, 8,718 bytes;
   each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
-  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\bf1m2-gv-manifest.txt (bf-lean, after the semantic-gate source_files fix).
+  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\m3r12-gv-manifest.txt (m3-rev12, Rev12.lean added).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -92,6 +92,8 @@ Re-pin (2026-10-01, branch bf-lean, source commit 7b47660, lean tree 0b05ecaa...
 bf-lean added the cursor decoders and batch laws and moved the correction exe to 441EB3E8... (artifacts/engine-correction/PROVENANCE.md). Two fresh `git archive 7b47660 lean` stages
 (C:\Users\neers\rrb\le\stage-bf-a and -b; guard logs bf1m-stagea-a5-L2 and bf1m-stageb-a1-L2, same five targets, 94 jobs, exit 0) gave gate_verify 9bd2602b... and the worker 86299A0D...
 byte for byte, both equal to their pins.
+
+Re-pin (2026-10-01, branch m3-rev12, merged with trunk a52f852): the manifest moved (77 files, bd74758e..., to 78 files, 0f51e9ba...) while no exe did. m3-rev12 added Payment/Rev12.lean and one Refusal constructor in Payment/Types.lean; no pinned exe imports either, and the in-tree build (m3r-build-a1-L3, m3r-build2-a1-L1) gave gate_verify 9bd2602b..., the worker 86299A0D... and the correction exe 441EB3E8..., each equal to its pin.
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
