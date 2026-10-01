@@ -7,7 +7,7 @@ import BlindLedger.Gate.MlDsa87
     store the checkpoint, on an empty payer state. -/
 namespace BlindLedger.Gate
 
-def sha3 (x : Bytes) : Bytes := (Keccak.sha3_512 x.toByteArray).toList
+def sha3 (x : Bytes) : Bytes := (Semantic.sha3_512 x.toByteArray).toList
 
 def mlDsaOk (pk msg sig : Bytes) : Bool :=
   MlDsa87.verify pk.toByteArray (([0, 0] ++ msg).toByteArray) sig.toByteArray

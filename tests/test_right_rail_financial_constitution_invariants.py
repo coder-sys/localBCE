@@ -681,6 +681,31 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                 self.assertEqual(determined, claim_cents)  # the rejected offset stays whole
                 self._assert_verified(store)
 
+    # --- 7. A payment answering a request never pays past the balance (core-theorems-v1 F1) ---
+
+    @_requires_pinned_correction_engine("the binary is executed once")
+    def test_linked_payment_never_pays_past_the_balance(self) -> None:
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        cash = expected.H_CASH_EVIDENCE
+
+        def pay(n: int, link: str | None = None) -> None:
+            store.record_payment_evidence(
+                item_id=cash.item_id, payment_id=f"payment:h:direct:{n}", common_origin_id=f"origin:cash:h:direct:{n}",
+                amount_cents=expected.UNAPPROVED_OFFSET_CENTS, evidence_id=f"evidence:cash-h:direct:{n}",
+                event_at_ms=expected.CORRECTION_AUTH_MS, source_id=cash.source_id, source_version=cash.source_version,
+                local_ref=f"ref:cash:h:direct:{n}", pays_action_id=link,
+            )
+
+        pay(1)  # the payer settles the balance without naming the request
+        self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID)["shortfall_cents"], 0)
+        before = self._durable_state(store)
+        with self.assertRaises(FinancialConflictError) as raised:
+            pay(2, expected.ACTION_CORRECTION_ID)  # the open request must not collect it again
+        self.assertEqual(str(raised.exception), "payment_exceeds_unpaid_balance")
+        self.assertEqual(self._durable_state(store), before)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,13 +1,18 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the partials re-pin below,
-built by `tools/build_financial_correction_release.ps1` from `lean/` as committed at `98b22ce`
-(lean tree `1ec582f80781bf0cb551cd5b2694022704f0024e`, clean tree, 62 tracked files).
+`blind_financial_correction.exe` is the Lean/Lake executable of the keccak-dedupe re-pin below: two fresh `git archive`
+stage builds of `lean/` at commit `3485bf6` (lean tree `9a7fe92f7e3cfd059d86f18d4bca01f5ba14750e`, 61 tracked files), byte-identical.
+The release producer (`tools/build_financial_correction_release.ps1`) has NOT run on this tree; its last receipts are on the partials tree, below.
 
-- Size: 6,298,624 bytes
-- SHA-256: `D5A06E9FFDB13C6266C40658B06AF4D93204F35159B9BE7FD4387A0613A10CBB`
+- Size: 6,300,160 bytes
+- SHA-256: `FB659DA34AD63DBAA69F9E585DA1F20E1953CB986229A8CFF693708371F4A785`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
-- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`.
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`.
+
+## One-Keccak re-pin (2026-09-30, rule `h1-v1`, no money or format change)
+
+`BlindLedger.Keccak` is deleted; `Sha3.lean` is the one sponge, so the transition compiles a different `sha3_512` body. Stage builds `kd-stagea-a1-L3` and
+`kd-stageb-a13-L1` (75 jobs, exit 0) are byte-identical and equal the in-tree build `kd-dev5-a1-L3`; the vector files below are unchanged.
 
 ## Partials re-pin (2026-09-30, rule `h1-v1`, no money or format change)
 
