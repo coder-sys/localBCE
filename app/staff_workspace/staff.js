@@ -188,7 +188,7 @@
 
   const STEPS = {
     acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready correction action." },
-    "record-cash": { label: "Record synthetic " + money.format(CASH_CORRECTION_COMMAND.amount_cents / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action and money still short." },
+    "record-cash": { label: "Record synthetic " + money.format(CASH_CORRECTION_COMMAND.amount_cents / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action whose open amount covers this payment." },
     "record-report": { label: "Record separate synthetic reporting evidence", note: "Reporting is separate from delivery and cash. The source is synthetic and unverified.", off: "Waits for nothing to be short and reporting to be pending." },
     "restore-test": { label: "Restore current case into Continuity TEST", note: "Copies the case into a separate test database.", off: "Already restored into Continuity TEST." },
   };
@@ -197,7 +197,7 @@
     const reviewed = ownerAvailable && !commandPending && !unresolvedCashBody && !unresolvedDecision;
     const status = view.act ? view.act.status : null;
     if (name === "acknowledge") return reviewed && status === "READY";
-    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.ob.shortfall_cents > 0;
+    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.act.open_cents >= CASH_CORRECTION_COMMAND.amount_cents;
     if (name === "record-report") return reviewed && !view.ob.reporting_complete && view.ob.shortfall_cents <= 0;
     return reviewed && !(snapshot.continuity && snapshot.continuity.mode === "TEST");
   }
@@ -248,6 +248,7 @@
           : short > 0 ? "The payer owes " + name + " " + usd(short) + " after the offset was " + (v.det && v.det.decision === REJECTED ? "rejected." : "decided.")
             : name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed. The case is not closed yet.";
       R.more = v.missing.length ? "Still needed: " + v.missing.map(words).join(", ") + "." : "Owner assessment: " + words(v.assessment) + ", nothing outstanding.";
+      if (v.act && v.act.open_cents !== null && v.act.open_cents !== v.act.payload_fields.amount_cents) R.more += " Requested " + usd(v.act.payload_fields.amount_cents) + ", open " + usd(v.act.open_cents) + ".";
       R.ledger.push(["Owed to " + name, rule.source_refs[0], amt(item.owed_cents)],
         ["Cash recorded", payments + (payments === 1 ? " payment" : " payments") + " recorded", MINUS + amt(item.received_cash_cents)]);
       if (claim) R.ledger.push(["Offset claimed by the payer", "claim " + words(claim.status) + " · " + v.support, amt(claim.amount_cents)]);

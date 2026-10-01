@@ -518,6 +518,27 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         finally:
             self._stop_workflow(workflow, server, thread)
 
+    def test_record_cash_follows_the_open_amount_not_the_balance(self) -> None:
+        """R2: an acknowledged request with money still owed but less open than the payment (a state the demo never reaches; H is still short $3,000.00) keeps the button off and says why."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-open-amount")
+
+        def action(open_cents: int):
+            def rewrite(value):
+                value["h"]["decision_package"]["current_action"] = {"status": "ACKNOWLEDGED", "open_cents": open_cents, "payload_fields": {"amount_cents": 300000}}
+                return value
+            return rewrite
+        try:
+            self.assertGreater(workflow.decision_view()["decision_package"]["obligation"]["shortfall_cents"], 0)  # money is owed in both states below
+            for open_cents, enabled in ((100000, False), (300000, True)):
+                server.rewrite = action(open_cents)
+                view = self._open("analyst", server).view()
+                self.assertEqual(not view["buttons"]["record-cash"]["disabled"], enabled, open_cents)
+                self.assertEqual(any("Requested $3,000.00, open $1,000.00." in line["text"] for line in view["lines"]), open_cents < 300000, open_cents)
+            server.rewrite = action(100000)
+            self.assertIn("open amount covers this payment", " ".join(line["text"] for line in self._open("analyst", server).view()["lines"]))
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
     def test_the_decision_form_starts_empty_and_asks_before_it_records(self) -> None:
         """Every decision control, in every state it can be in before a decision, found by role and name only."""
         controls = _MODEL["local_controls"]
@@ -738,7 +759,7 @@ def _state(pkg: dict[str, Any], test_mode: bool) -> dict[str, Any]:
         "reviewed": True, "command_pending": False, "test_mode": test_mode,
         "owner_available": True, "unresolved_decision_body": False, "unresolved_cash_body": False,
         "decided": pkg.get("current_determination") is not None,
-        "action": SimpleNamespace(status=action.get("status")), "shortfall": pkg["obligation"]["shortfall_cents"],
+        "action": SimpleNamespace(status=action.get("status"), open_cents=action.get("open_cents")), "shortfall": pkg["obligation"]["shortfall_cents"],
         "reporting_complete": bool(pkg["obligation"]["reporting_complete"]),
     }
 
