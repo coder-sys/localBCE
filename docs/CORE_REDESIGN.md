@@ -855,14 +855,27 @@ trust. It now derives the paid list from payment rows. Design and builder handof
   - An event past the meta sequence, written outside the Owner, is refused with `history_sequence` instead of a raw `UNIQUE` error.
 - **Format: one additive index, no data change.**
   - A writing open of a v1 or v2 store installs the index in its own transaction.
-  - A SHADOW or CLI existing-only open of an older store is refused with `shadow_requires_migration` and writes nothing.
+  - A SHADOW open reads a v1 or v2 set as is. Only an existing-only open (the cash-file CLI) needs v3; it refuses an older store with `shadow_requires_migration` and writes nothing.
   - The checker accepts exactly the v1, v2 and v3 sets. A version that claims an index it lacks is refused with `schema:private-indexes`.
   - Without the index a store verifies the same, only slower.
   - `integrity_check` covers the index entries. A hidden partial index is refused with `schema:index-integrity`; this is now tested for the v2 and v3 indexes.
 - **Strength, per check (decision C).**
   - Correction-decision engine order: still store-wide, same rows and order. Exactly as strong.
-  - Acknowledgments and reversals: kept store-wide, through the kind index. Nothing binds such an event's aggregate to the action or payment it names, so a read scoped to the touched obligations would miss a mis-aggregated one. Exactly as strong.
+  - Acknowledgments and reversals: kept store-wide, through the kind index. Nothing binds such an event's aggregate to the action or payment it names, so a read scoped to the touched obligations would miss a mis-aggregated one. In pre-commit mode these reads already trusted the v2 index; a row hidden from the index in use is missed on v2 and v3 alike. Whole-store mode runs `integrity_check` first.
+  - Follow-through decision (review fix): the checker's `verify_followthrough_connection` and the Owner's command-source read each require exactly one row. On v2 they scanned the table; on v3 they would seek the kind index, and a copy hidden from it passed (a second `decision:r2:close` recorded). Both are now `NOT INDEXED`, as on v2. The hidden-index test has this events case; it failed before the fix (`r1c-hide-pre1`).
+  - Touched obligations' correction-decision records (pre-commit): `+kind` keeps the v2 per-obligation seek.
   - Evidence: unchanged, the pre-commit read stays `NOT INDEXED`. An index read cannot be checked complete at flat cost: SQLite answers `COUNT(*) ... INDEXED BY` from the smallest index (`r1c-count`). The protected hidden-index test refused the attempt (`r1c-t2`). The flat first-write test stays skipped: [48, 101] against 60, with +48 of the growth from this scan.
+- **Every `financial_events` read, v2 against v3 plan** (`r1c-eqp1` before the review fix, `r1c-eqp2` after; 44 reads in the Owner and the checker, f-string and scoped variants included).
+
+  | Read | Mode | v2 | v3 | Decision |
+  |---|---|---|---|---|
+  | Follow-through decision, checker and Owner | pre-commit | scan | kind index | `NOT INDEXED` |
+  | Touched correction-decision records | pre-commit | v2 seek | kind index | `+kind`: v2 seek |
+  | Acknowledgments, engine order, reversals | both | v2 index | kind index | keep (intended) |
+  | Conflicts, duplicate evidence, all claim acts, all payment links | whole-store, after `integrity_check` | v2 index or scan | kind index | keep |
+  | Owner correction follow-up list | read API | v2 index | kind index | keep |
+  | The other 32 | | same | same | unchanged |
+
 - **Quarter-end (decision A), not changed.**
   - Batch frames need a worker rebuild and re-pin. They save only the round trips: 0.084 ms each, 42 ms per file.
   - Each payment's input reads the state left by the previous payment's evaluation.
@@ -873,4 +886,5 @@ trust. It now derives the paid list from payment rows. Design and builder handof
 - **Tests.**
   - The R1c input test is ported from `958947a`. Its evaluations and control-pack cases accept the Owner's earlier refusal by code (decision E).
   - Index tests name v3 and cover the v1 and v2 upgrades. No expected refusal changed.
+  - Runs: full suite `r1c-full1` 645 run, 628 passed, 14 skipped, 3 failed (quarter-end 6.47 s; two bloat ceilings, raised, `r1c-bloat1` 6 of 6). After the review fix, targeted `r1c-t5` (independent, core R1, acceptance, cash file, follow-through, bloat) 226 run, 222 passed, 1 skipped, 3 failed (quarter-end 6.53 s; two bloat ceilings, raised in the same commit).
 - **Kill.** Kill on any checker result that differs between a store with the kind index and the same store without it.

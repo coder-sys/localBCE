@@ -408,7 +408,7 @@ _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
     ),
     "ACTION_ACKNOWLEDGMENT": "SELECT acknowledgment_ref FROM action_outbox WHERE action_id=?",
     "REPORT": "SELECT item_id,record_digest FROM evidence WHERE evidence_id=?",
-    "FOLLOWTHROUGH_DECISION": "SELECT payload_digest FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?",
+    "FOLLOWTHROUGH_DECISION": "SELECT payload_digest FROM financial_events NOT INDEXED WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?",  # NOT INDEXED: exactly one, counting copies an index hides
 }
 
 

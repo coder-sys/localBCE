@@ -3556,7 +3556,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
         determinations = _verify_determinations(connection, meta, touched, populations, packs, claims, evidence, evaluations, actors=identity["actors"], only=touched)
         _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
         _verify_correction_followup_records(
-            connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
+            connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND +kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),  # +kind keeps the per-obligation seek off the store-wide kind index
             evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
             actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
         )
@@ -3654,7 +3654,7 @@ def verify_followthrough_connection(connection: sqlite3.Connection, obligation_i
             _fail("obligation:missing")
         population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
         pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
-        events = connection.execute("SELECT * FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?", (_id(decision_id, "followthrough:payload"),)).fetchall()
+        events = connection.execute("SELECT * FROM financial_events NOT INDEXED WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?", (_id(decision_id, "followthrough:payload"),)).fetchall()  # NOT INDEXED: a copy hidden from an index still counts
         if len(events) != 1:
             _fail("followthrough:duplicate")
         event = events[0]

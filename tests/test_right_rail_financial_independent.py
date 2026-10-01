@@ -1210,30 +1210,46 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def test_pre_commit_reads_do_not_trust_an_index_that_hides_forged_rows(self) -> None:
         # File access can blank an index (writable_schema), insert a forged row it then omits, and restore the index SQL. Only a table scan sees it.
+        from tests import test_right_rail_financial_followthrough as followthrough
+
         z = "zeroblob(64)"
-        cases = (  # table, its filter column, index, forged rows, the code an unhidden row gets
-            ("evidence", "item_id", "rr_financial_v1_evidence_item_id", (f"INSERT INTO evidence VALUES ('evidence:forged','item:H','SUPPORT','o','s','v','r',1,1,1,{z},{z},NULL,NULL,NULL)",), "evidence:content-digest"),
-            ("determinations", "obligation_id", "rr_financial_v1_determinations_obligation_id", (f"INSERT INTO determinations VALUES ('determination:forged',:o,NULL,'a','x','au',1,{z},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{z},'evaluation:forged',{z})",), "determination:role"),
-            ("actions", "obligation_id", "rr_financial_v1_actions_obligation_id", (f"INSERT INTO actions VALUES ('action:forged',:o,'determination:forged','CORRECTION_PAYMENT_REQUEST','READY',1,'{{}}',{z},{z},1)", f"INSERT INTO action_outbox VALUES ('action:forged','READY',0,{z},NULL,1)"), "action:determination"),
-        )
         with closing(sqlite3.connect(self.db)) as connection:
             (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+        (Path(self.temp_dir.name) / "decided").mkdir()
+        decided = followthrough._decided_store(Path(self.temp_dir.name) / "decided")
+        decided.close()  # R1a: its commits reach the main file when it closes
+        with closing(sqlite3.connect(decided.path)) as connection:
+            (decided_obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item-r2'").fetchone()
+
+        def decided_copy(name: str) -> Path:
+            return Path(shutil.copy2(decided.path, Path(self.temp_dir.name) / name))
+
+        per_obligation = lambda connection: independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
+        cases = (  # copy, table, its filter column and key, index, forged rows, the code an unhidden row gets, the pre-COMMIT check
+            (self._copy_database, "evidence", "item_id", "item:H", "rr_financial_v1_evidence_item_id",(f"INSERT INTO evidence VALUES ('evidence:forged','item:H','SUPPORT','o','s','v','r',1,1,1,{z},{z},NULL,NULL,NULL)",), "evidence:content-digest", per_obligation),
+            (self._copy_database, "determinations", "obligation_id", obligation, "rr_financial_v1_determinations_obligation_id",(f"INSERT INTO determinations VALUES ('determination:forged',:o,NULL,'a','x','au',1,{z},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{z},'evaluation:forged',{z})",), "determination:role", per_obligation),
+            (self._copy_database, "actions", "obligation_id", obligation, "rr_financial_v1_actions_obligation_id",(f"INSERT INTO actions VALUES ('action:forged',:o,'determination:forged','CORRECTION_PAYMENT_REQUEST','READY',1,'{{}}',{z},{z},1)", f"INSERT INTO action_outbox VALUES ('action:forged','READY',0,{z},NULL,1)"), "action:determination", per_obligation),
+            (decided_copy, "financial_events", "kind", "FOLLOWTHROUGH_DECIDED", "rr_financial_v3_events_kind",  # R1c: a second copy of the decision
+             (f"INSERT INTO financial_events SELECT event_sequence+1000,{z},aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,previous_head,head,committed_at_ms FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED'",),
+             "followthrough:duplicate", lambda connection: independent.verify_followthrough_connection(connection, decided_obligation, followthrough.CLOSE, **decided._checker_expectations())),
+        )
 
         def run(path: Path, *statements: str) -> None:  # one connection per step, so each reads the schema as the step before left it
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
                 for statement in statements:
                     connection.execute(statement, {"o": obligation})
 
-        for table, column, index, forged, code in cases:
+        for copy_of, table, column, key, index, forged, code, check in cases:
             with self.subTest(table):
-                copy = self._copy_database(f"hidden-{table}.sqlite")
+                copy = copy_of(f"hidden-{table}.sqlite")
                 run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=sql||' WHERE 0' WHERE name='{index}'")
                 run(copy, *forged)
                 run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=replace(sql,' WHERE 0','') WHERE name='{index}'")
                 with closing(sqlite3.connect(copy, isolation_level=None)) as connection:
                     connection.row_factory = sqlite3.Row
-                    key = "item:H" if table == "evidence" else obligation
                     count = lambda hint: connection.execute(f"SELECT COUNT(*) FROM {table} {hint} WHERE {column}=?", (key,)).fetchone()[0]
                     self.assertEqual(count("NOT INDEXED"), count("") + 1)  # the index really hides it
                     with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
-                        independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
+                        check(connection)
+                    if table == "financial_events":  # the Owner's command-source read, which must find exactly one, sees both too
+                        self.assertEqual(len(connection.execute(owner._COMMAND_REQUEST_SQL["FOLLOWTHROUGH_DECISION"], (followthrough.CLOSE,)).fetchall()), 2)
