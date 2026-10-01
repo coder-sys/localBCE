@@ -57,10 +57,11 @@ PRIVATE_INDEX_DEFS_V1 = {  # name -> (table, key columns); each is exactly CREAT
     "rr_financial_v1_evaluations_obligation_revision": ("evaluations", ("obligation_id", "revision")),
     "rr_financial_v1_determinations_obligation_id": ("determinations", ("obligation_id", "determination_id")),
 }
-PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrades 1 to 2 on open
+PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; a writing Owner upgrades 1 and 2 to 3 on open
     1: PRIVATE_INDEX_DEFS_V1,
     2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": ("financial_events", ("aggregate_type", "aggregate_id", "kind"))},
 }
+PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind": ("financial_events", ("kind", "aggregate_type"))}
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARTIFACT_SHA256 = "C617735511364625BD0FF790F1FE662E8F96F70C38211928DDC7D39F99012DCC"
@@ -2839,7 +2840,7 @@ def _verify_actions(
     rows = _bounded_rows(connection, "actions", "obligation_id", only)
     outbox_rows = _bounded_rows(connection, "action_outbox", "action_id", None if only is None else [row["action_id"] for row in rows])
     outbox = {str(row["action_id"]): row for row in outbox_rows}
-    acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED'")}
+    acks = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.action_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='ACTION_ACKNOWLEDGED' ORDER BY event_sequence")}
     registry = correction_engines()
     current = registry[CORRECTION_TRANSITION_ARTIFACT_SHA256]
     engines: dict[str, tuple[int, str]] = {}  # correction action -> the engine that decided it, by its decision event
@@ -2851,7 +2852,7 @@ def _verify_actions(
             _fail("action:engine-order")  # a retired engine never decides after a newer one
         newest = engine[0]
         decided[action_ref] = event_amount
-    reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED'").fetchall())
+    reversed_at = dict(connection.execute("SELECT json_extract(payload_json,'$.payment_id'),after_revision FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_REVERSED' ORDER BY event_sequence").fetchall())
     scope, args = ("", ()) if only is None else (" AND aggregate_id IN (SELECT value FROM json_each(?))", (json.dumps(list(only)),))  # the index seeks these obligations' events
     links = connection.execute("SELECT aggregate_id,after_revision,json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL" + scope, args).fetchall()
     linked: dict[object, list[tuple[int, object, int]]] = {}  # correction action -> (paid at, reversed at, cents)
@@ -2961,7 +2962,7 @@ def _verify_conflicts(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "financial_conflicts")
     conflicts: dict[str, sqlite3.Row] = {}
-    visible = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE'")}
+    visible = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE' ORDER BY event_sequence")}
     keys: set[tuple[str, str, str]] = set()
     for row in rows:
         conflict_id = _id(row["conflict_id"], "conflict:id")
@@ -3555,7 +3556,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
         determinations = _verify_determinations(connection, meta, touched, populations, packs, claims, evidence, evaluations, actors=identity["actors"], only=touched)
         _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
         _verify_correction_followup_records(
-            connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),
+            connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND +kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),  # +kind keeps the per-obligation seek off the store-wide kind index
             evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
             actions={str(v["action_id"]): dict(v) for v in mine("actions")}, cases={str(v["case_id"]): dict(v) for v in mine("cases")}, packs={key: dict(v) for key, v in packs.items()},
         )
@@ -3653,7 +3654,7 @@ def verify_followthrough_connection(connection: sqlite3.Connection, obligation_i
             _fail("obligation:missing")
         population = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (obligation["population_id"],)).fetchone()
         pack = None if population is None else connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (population["pack_id"],)).fetchone()
-        events = connection.execute("SELECT * FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?", (_id(decision_id, "followthrough:payload"),)).fetchall()
+        events = connection.execute("SELECT * FROM financial_events NOT INDEXED WHERE kind='FOLLOWTHROUGH_DECIDED' AND json_extract(payload_json,'$.decision_id')=?", (_id(decision_id, "followthrough:payload"),)).fetchall()  # NOT INDEXED: a copy hidden from an index still counts
         if len(events) != 1:
             _fail("followthrough:duplicate")
         event = events[0]

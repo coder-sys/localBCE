@@ -628,8 +628,8 @@ class ReceiverCashFileTests(unittest.TestCase):
         directory, _, args = self._cli_fixture()
         changes = [tuple(f"DROP TABLE {name}" for name in ("history_segments", "history_pending", "history_open")),
                    tuple(f'DROP TRIGGER "{name}"' for name in owner._HISTORY_APPEND_ONLY_TRIGGERS),
-                   tuple(f'DROP INDEX "{name}"' for name, _, _ in owner._PRIVATE_INDEX_SETS[2]) + ("PRAGMA user_version=0",),
-                   (f'DROP INDEX "{owner._PRIVATE_INDEX_SETS[2][-1][0]}"', "PRAGMA user_version=1")]  # L2: a v1 index set is never written
+                   tuple(f'DROP INDEX "{name}"' for name, _, _ in owner._PRIVATE_INDEX_SETS[3]) + ("PRAGMA user_version=0",),
+                   (f'DROP INDEX "{owner._PRIVATE_INDEX_SETS[3][-1][0]}"', "PRAGMA user_version=2")]  # L2: an older index set is never written
         for index, statements in enumerate(changes):
             path = directory / f"old-{index}.sqlite"
             path.write_bytes(fixtures._image(self.store.path))

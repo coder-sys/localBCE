@@ -1,7 +1,7 @@
 """Core R1a (docs/CORE_REDESIGN.md "R1a"; red team rrb/reviews/core-r1-redteam.md H1, M1): one writer connection
 holds a verified mark checked at every BEGIN. A commit it did not make means the store is verified again exactly as a
-fresh open verifies it; a swapped file is store_replaced; any error discards the connection. R1c, R1d and R1b tests
-are in commit 958947a (branch core-r1a) until their slices land.
+fresh open verifies it; a swapped file is store_replaced; any error discards the connection. R1c: the correction's
+own checks cover every input it reads. R1d and R1b tests are in commit 958947a (branch core-r1a) until they land.
 
 Lock work is counted as SQLite VM steps (x100) run inside a transaction on connections made through
 sqlite3.connect: deterministic, but blind to Python-side work, so the wall-time gates stay in the bench."""
@@ -22,6 +22,7 @@ from tests import test_right_rail_financial_acceptance as acceptance
 FLAT = 1.25  # R1 gate: at most 25% more lock work after the unrelated history (docs/CORE_REDESIGN.md)
 UNRELATED = ("item-01", "item-02", "item-03", "item-04")
 CLAIM = "claim:obligation-item-h:offset-v1"
+H_OBLIGATION = "(SELECT obligation_id FROM obligations WHERE item_id='item-h')"
 TAMPER = "UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE item_id='item-06'"
 
 
@@ -149,7 +150,7 @@ class CoreR1aMarkTests(unittest.TestCase):
                 command()
         self.assertEqual(acceptance._image(store.path), rewound)
 
-    @unittest.skip("R1c: checker indexes")
+    @unittest.skip("R1c: the pre-commit evidence read stays NOT INDEXED (an index-only read is weaker); lead decision pending")
     def test_first_write_after_open_lock_work_is_flat_in_history(self):
         fixture = self._fixture()
         store = fixture._build_base()
@@ -210,6 +211,76 @@ class CoreR1aMarkTests(unittest.TestCase):
             store.record_payment_evidence(**_pay("item-06"))
         store.close()
         os.replace(path, Path(f"{path}.moved"))  # Windows refuses this while any handle is open
+
+
+class CoreR1cInputTests(unittest.TestCase):
+    """R1c: the correction's per-obligation check covers every input it reads (conflicts, outbox acknowledgments,
+    command rows; index-filtered scans), so a stale whole-store result cannot let a tamper through."""
+
+    _fixture = CoreR1aMarkTests._fixture
+
+    def _correction_ready(self):
+        fixture = self._fixture()
+        store = fixture._build_base_for_correction()
+        fixture._record_cash(store)
+        fixture._record_claim(store)
+        return fixture, store
+
+    def test_every_decision_input_is_rechecked_when_the_whole_store_result_is_stale(self):
+        # H3: a stand-in returns the pre-tamper whole-store result; the correction's own checks must still refuse.
+        # Tables with no item-h row at this point get a forged row; immutable ones must be refused by the store.
+        forged_determination = f"INSERT INTO determinations VALUES ('forged-determination',{H_OBLIGATION},NULL,'x','x','x',1,zeroblob(64),'x',0,'[]',0,0,0,zeroblob(64),'forged-evaluation',zeroblob(64));"
+        forged_action = f"INSERT INTO actions VALUES ('forged-action',{H_OBLIGATION},'forged-determination','x','READY',0,'{{}}',zeroblob(64),zeroblob(64),0);"
+        tampers = {
+            "none": None,
+            "financial_meta": "UPDATE financial_meta SET continuity_epoch=continuity_epoch+1",
+            "obligations": "UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE item_id='item-h'",
+            "evaluations": "UPDATE evaluations SET received_cash_cents=received_cash_cents+1 WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id='item-h')",
+            "population_items": "UPDATE population_items SET owed_cents=owed_cents+1 WHERE item_id='item-h'",
+            "population_imports": "UPDATE population_imports SET expected_count=expected_count+1",
+            "control_packs": "UPDATE control_packs SET effective_end_ms=effective_end_ms+1",
+            "payments": "UPDATE payments SET amount_cents=amount_cents+1 WHERE payment_id='payment:h:cash'",
+            "claimed_adjustments": f"UPDATE claimed_adjustments SET amount_cents=amount_cents+1 WHERE claim_id='{CLAIM}'",
+            "cases": f"INSERT INTO cases VALUES ('forged-case',{H_OBLIGATION},'x','x','x',0,'[]','OPEN',0)",
+            "determinations": forged_determination,
+            "actions": forged_determination + forged_action,
+            "action_outbox": forged_determination + forged_action + "INSERT INTO action_outbox VALUES ('forged-action','ACKNOWLEDGED',1,zeroblob(64),'forged-ack',0);",
+            "financial_conflicts": f"INSERT INTO financial_conflicts VALUES ('forged-conflict',{H_OBLIGATION},'origin:cash:h:v1','payment:h:cash','{expected.H_CASH_EVIDENCE.evidence_id}',1,2,'x',0)",
+            "financial_events": f"INSERT INTO financial_events VALUES ((SELECT MAX(event_sequence)+1 FROM financial_events),zeroblob(64),'OBLIGATION',{H_OBLIGATION},'x',0,0,'{{}}',zeroblob(64),zeroblob(64),zeroblob(64),0)",
+            "commands": f"INSERT INTO commands VALUES ('OFFSET_DECISION:{expected.ACTION_CORRECTION_ID}','OFFSET_DECISION','{{}}',zeroblob(64),999999)",
+        }
+        immutable = {
+            "evidence": ("UPDATE evidence SET amount_cents=amount_cents+1 WHERE evidence_id='evidence:cash-h:9700000'", "evidence_record_immutable"),
+            "financial_identity": ("UPDATE financial_identity SET bound_owner_id='x'", "financial_identity_immutable"),
+        }
+        for table, (sql, refusal) in immutable.items():
+            with self.subTest(table=table):
+                _, store = self._correction_ready()
+                with self.assertRaisesRegex(sqlite3.DatabaseError, refusal):
+                    _foreign(store.path, sql)
+        owner_first = {"evaluations": "evaluation_result_digest", "control_packs": "control_pack_digest"}
+        for table, sql in tampers.items():
+            with self.subTest(table=table):
+                fixture, store = self._correction_ready()
+                with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+                    connection.row_factory = sqlite3.Row
+                    connection.execute("BEGIN")
+                    verified = independent.verify_database_connection(connection, **store._checker_expectations())
+                    connection.execute("COMMIT")
+                    before = connection.total_changes
+                    connection.executescript(sql or "")
+                    self.assertEqual(connection.total_changes > before, sql is not None)
+                stand_in = []
+                with patch.object(independent, "verify_database_connection", lambda connection, **_: stand_in.append(1) or verified):
+                    if sql is None:
+                        self.assertEqual(fixture._reject(store, CLAIM)["status"], "CORRECTION_AUTHORIZED")
+                        continue
+                    with self.assertRaises(owner.FinancialError) as refused:
+                        fixture._reject(store, CLAIM)
+                if table in owner_first:  # the Owner's own read refuses before the whole-store check is asked
+                    self.assertEqual(str(refused.exception), owner_first[table])
+                else:
+                    self.assertTrue(stand_in, "the refusal must come after the stale whole-store result was used")
 
 
 if __name__ == "__main__":
