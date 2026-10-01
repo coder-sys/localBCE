@@ -119,9 +119,10 @@
     if (part === null || typeof part !== "object") return part;
     if (!Number.isSafeInteger(part.at)) return "Unknown";
     if (!onScreen) return utc(part.at);
-    zoned = zoned || new Intl.DateTimeFormat("en-US", { timeZone: model.time.zone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-    const p = Object.fromEntries(zoned.formatToParts(part.at).map(({ type, value }) => [type, value]));
-    return p.day + " " + p.month + " " + p.hour + ":" + p.minute + " " + model.time.label;
+    zoned = zoned || new Intl.DateTimeFormat("en-US", { timeZone: model.time.zone, year: "numeric", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    const when = (ms) => Object.fromEntries(zoned.formatToParts(ms).map(({ type, value }) => [type, value]));
+    const p = when(part.at); // the year shows only when the instant is from another year than the snapshot's own as-of time
+    return p.day + " " + p.month + (p.year === when(Date.parse(snapshot.read_at)).year ? "" : " " + p.year) + " " + p.hour + ":" + p.minute + " " + model.time.label;
   }).join("");
   // Owner codes in plain words (CASE_OWNER -> case owner).
   const words = (code) => (code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " "));
@@ -187,7 +188,7 @@
   }
 
   const STEPS = {
-    acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready correction action." },
+    acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready action that still asks for money." },
     "record-cash": { label: "Record synthetic " + money.format(CASH_CORRECTION_COMMAND.amount_cents / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action whose open amount covers this payment." },
     "record-report": { label: "Record separate synthetic reporting evidence", note: "Reporting is separate from delivery and cash. The source is synthetic and unverified.", off: "Waits for nothing to be short and reporting to be pending." },
     "restore-test": { label: "Restore current case into Continuity TEST", note: "Copies the case into a separate test database.", off: "Already restored into Continuity TEST." },
@@ -196,7 +197,7 @@
   function stepEnabled(name, view) {
     const reviewed = ownerAvailable && !commandPending && !unresolvedCashBody && !unresolvedDecision;
     const status = view.act ? view.act.status : null;
-    if (name === "acknowledge") return reviewed && status === "READY";
+    if (name === "acknowledge") return reviewed && status === "READY" && view.act.open_cents !== 0;
     if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.act.open_cents >= CASH_CORRECTION_COMMAND.amount_cents;
     if (name === "record-report") return reviewed && !view.ob.reporting_complete && view.ob.shortfall_cents <= 0;
     return reviewed && !(snapshot.continuity && snapshot.continuity.mode === "TEST");

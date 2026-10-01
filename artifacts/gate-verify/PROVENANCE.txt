@@ -86,6 +86,9 @@ Two fresh `git archive 7dde24e lean` stages (C:\Users\neers\rrb\le\stage-ctm-a a
 byte for byte, both equal to their pins.
 
 Re-pin (2026-10-01, branch bf-lean, source commit 7b47660, lean tree 0b05ecaa...): the manifest moved (72 files, 3815f1fa..., to 77 files, 4d8dc37b...; then bd74758e..., when `lean/tools/semantic_assurance_manifest.json` and `semantic_assurance_gate.py` gained the three closure files) while this exe did not.
+The correction exe moved to 441EB3E8... (artifacts/engine-correction/PROVENANCE.md); two stage builds of 7b47660 (bf1m-stagea-a5-L2, bf1m-stageb-a1-L2) gave gate_verify 9bd2602b... and the worker 86299A0D..., equal to their pins.
+
+Re-pin (2026-10-01, branch bf-lean, source commit 7b47660, lean tree 0b05ecaa...): the manifest moved (72 files, 3815f1fa..., to 77 files, 4d8dc37b...; then bd74758e..., when `lean/tools/semantic_assurance_manifest.json` and `semantic_assurance_gate.py` gained the three closure files) while this exe did not.
 bf-lean added the cursor decoders and batch laws and moved the correction exe to 441EB3E8... (artifacts/engine-correction/PROVENANCE.md). Two fresh `git archive 7b47660 lean` stages
 (C:\Users\neers\rrb\le\stage-bf-a and -b; guard logs bf1m-stagea-a5-L2 and bf1m-stageb-a1-L2, same five targets, 94 jobs, exit 0) gave gate_verify 9bd2602b... and the worker 86299A0D...
 byte for byte, both equal to their pins.

@@ -254,12 +254,18 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 with self.subTest(role=role):
                     page = " ".join(line["text"] for line in self._open(role, server).view()["lines"] if line["where"] == "page")
                     record = self._open_path(f"/role/{role}#item-h.txt", server).view()["texts"]["text-view"]
-                    self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms) for ms in [due, decided, *events]))
-                    self.assertIn("Due: " + scorecard._program_time(due), page)
+                    self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms, view["read_at"]) for ms in [due, decided, *events]))
+                    self.assertIn("Due: " + scorecard._program_time(due, view["read_at"]), page)
                     self.assertIsNone(re.search(r"\d{4}-\d\d-\d\d", page), page)
                     self.assertEqual(_UTC_TIME.findall(record), [utc(ms) for ms in [decided, *events, due]])
                     self.assertFalse(any(word in page for word in ("UTC", "Owner event", "revision")), page)
                     self.assertTrue("Owner event" in record and "revision" in record)
+            workflow._clock.advance_to(1_815_000_000_000)  # the snapshot is now read in 2027: every 2026 instant on the screen names its year
+            view = workflow.decision_view()
+            page = " ".join(line["text"] for line in self._open("analyst", server).view()["lines"] if line["where"] == "page")
+            self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms, view["read_at"]) for ms in [due, decided, *events]))
+            self.assertIn("Due: " + scorecard._program_time(due, view["read_at"]), page)
+            self.assertIn(" 2026 ", page)
         finally:
             self._stop_workflow(workflow, server, thread)
 
@@ -541,6 +547,22 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         finally:
             self._stop_workflow(workflow, server, thread)
 
+    def test_acknowledge_is_offered_only_for_an_action_that_still_asks(self) -> None:
+        """Stale corrections: a ready request the balance no longer needs (open $0.00) is not offered for a delivery ACK; a request that still asks, or an action with no open amount (offset notice), is."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-ack-open")
+
+        def action(open_cents):
+            def rewrite(value):
+                value["h"]["decision_package"]["current_action"] = {"status": "READY", "open_cents": open_cents, "payload_fields": {"amount_cents": 300000}}
+                return value
+            return rewrite
+        try:
+            for open_cents, enabled in ((0, False), (300000, True), (None, True)):
+                server.rewrite = action(open_cents)
+                self.assertEqual(not self._open("analyst", server).view()["buttons"]["acknowledge"]["disabled"], enabled, open_cents)
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
     def test_the_decision_form_starts_empty_and_asks_before_it_records(self) -> None:
         """Every decision control, in every state it can be in before a decision, found by role and name only."""
         controls = _MODEL["local_controls"]
@@ -745,7 +767,7 @@ _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))
 _DECISIONS = {"reject-offset": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "authorize-offset": "OFFSET_AUTHORIZED"}
 
-_PROGRAM_TIME = re.compile(r"\d{1,2} [A-Z][a-z]{2} \d\d:\d\d CT")
+_PROGRAM_TIME = re.compile(r"\d{1,2} [A-Z][a-z]{2}(?: \d{4})? \d\d:\d\d CT")
 _UTC_TIME = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC")
 
 def _money(cents: int) -> str:
