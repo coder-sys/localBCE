@@ -121,13 +121,15 @@ def evalLatestDelivery : List ActionRecord → DeliveryStatus
           | .ACKNOWLEDGED => .ACKNOWLEDGED
           | .CANCELLED => .CANCELLED
 
-def evalCaseStatus (input : FinancialInput) (amountSatisfied : Bool) : CaseStatus :=
-  let prior := evalLatestCase input.cases
-  if amountSatisfied && input.obligation.reportingComplete then .RESOLVED
+def caseStatusFrom (prior : CaseStatus) (reportingComplete amountSatisfied : Bool) : CaseStatus :=
+  if amountSatisfied && reportingComplete then .RESOLVED
   else if amountSatisfied then .ACTIONED
   else if prior = .CORRECTION_REQUIRED then .CORRECTION_REQUIRED
   else if prior = .AUTHORIZED then .AUTHORIZED
   else .OPEN
+
+def evalCaseStatus (input : FinancialInput) (amountSatisfied : Bool) : CaseStatus :=
+  caseStatusFrom (evalLatestCase input.cases) input.obligation.reportingComplete amountSatisfied
 
 def evalVerificationStatus (input : FinancialInput) : VerificationStatus :=
   if input.conflicts.isEmpty then

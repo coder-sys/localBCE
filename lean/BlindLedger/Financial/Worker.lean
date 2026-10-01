@@ -1,6 +1,7 @@
 import BlindLedger.Financial.FastEncode
 import BlindLedger.Financial.Evaluation
 import BlindLedger.Financial.ReadUpTo
+import BlindLedger.Financial.Payment.Codec
 
 namespace BlindLedger.Financial
 
@@ -44,8 +45,11 @@ def decodeWorkerOutcome : Bytes → Option WorkerOutcome
       else if tag.toNat = 3 then some .encodingRejected
       else none
 
-/-- The worker's whole policy: one BLFIN02 frame in, one outcome frame out. -/
-def workerRespond (wire : Bytes) : Bytes := encodeWorkerOutcome (evaluateWire wire)
+/-- The worker's whole policy, one frame in and one answer out: a frame that starts with the payment
+    magic is one payment step; any other is one BLFIN02 input. -/
+def workerRespond (wire : Bytes) : Bytes :=
+  if Payment.paymentMagic.isPrefixOf wire then Payment.paymentRespond wire
+  else encodeWorkerOutcome (evaluateWire wire)
 
 theorem financialInputWellFormed_of_decodeFinancialInput {bytes : Bytes} {input : FinancialInput}
     (h : decodeFinancialInput bytes = some input) : financialInputWellFormed input = true := by
@@ -69,21 +73,38 @@ theorem evaluate_eq_evaluateWellFormed {input : FinancialInput}
 
 /-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA₂` is proved equal to the list
     decoder on `wire.toList`, and its input is already well-formed, so this is `workerRespond`
-    with one well-formedness pass and no second large list. -/
+    with one well-formedness pass and no second large list. The payment test reads only the first
+    bytes of the array, so an evaluator frame is never copied into a list. -/
 def workerRespondBA (wire : ByteArray) : Bytes :=
-  encodeWorkerOutcome
-    (match Fast.decodeFinancialInputBA₂ wire with
-      | none => .decodeRejected
-      | some input =>
-          match evaluateWellFormed input with
-          | none => .evaluationRejected
-          | some result =>
-              match encodeFinancialResult result with
-              | none => .encodingRejected
-              | some output => .evaluated output)
+  if Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList then
+    Payment.paymentRespond wire.toList
+  else
+    encodeWorkerOutcome
+      (match Fast.decodeFinancialInputBA₂ wire with
+        | none => .decodeRejected
+        | some input =>
+            match evaluateWellFormed input with
+            | none => .evaluationRejected
+            | some result =>
+                match encodeFinancialResult result with
+                | none => .encodingRejected
+                | some output => .evaluated output)
+
+theorem magic_prefix_extract (wire : ByteArray) :
+    Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList =
+      Payment.paymentMagic.isPrefixOf wire.toList := by
+  have hx : (wire.extract 0 Payment.paymentMagic.length).toList =
+      wire.toList.take Payment.paymentMagic.length := by
+    rw [Fast.toList_eq, ByteArray.data_extract, Array.toList_extract, Fast.toList_eq]
+    simp
+  rw [hx, Bool.eq_iff_iff, List.isPrefixOf_iff_prefix, List.isPrefixOf_iff_prefix, List.prefix_take_iff]
+  exact ⟨fun h => h.1, fun h => ⟨h, Nat.le_refl _⟩⟩
 
 theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRespond wire.toList := by
   unfold workerRespondBA workerRespond evaluateWire
+  rw [magic_prefix_extract]
+  split
+  · rfl
   rw [Fast.decodeFinancialInputBA₂_eq]
   cases hd : Fast.decodeFinancialInput wire.toList with
   | none => rfl

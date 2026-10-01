@@ -98,9 +98,42 @@ theorem evaluateWire_evaluated {wire result : Bytes}
               exact ⟨input, decided, rfl, hEval, evaluate_satisfies_specification input decided hEval,
                 decodeFinancialResult_of_encodeFinancialResult decided hAdm.1 output hEnc, hAdm.2⟩
 
+/-- Evaluator frames answer as before the payment frames existed. -/
+theorem workerRespond_evaluator_unchanged (w : Bytes) (h : Payment.paymentMagic.isPrefixOf w = false) :
+    workerRespond w = encodeWorkerOutcome (evaluateWire w) := by
+  simp [workerRespond, h]
+
+theorem workerRespond_payment (w : Bytes) (h : Payment.paymentMagic.isPrefixOf w = true) :
+    workerRespond w = Payment.paymentRespond w := by
+  simp [workerRespond, h]
+
+private theorem Payment.encodeStepOutcome_length_le {o : Payment.StepOutcome} {b : Bytes}
+    (h : Payment.encodeStepOutcome o = some b) : b.length ≤ maxTotalEncodedBytes := by
+  unfold Payment.encodeStepOutcome at h
+  dsimp only at h
+  split at h
+  · simp only [Option.some.injEq] at h; subst h; omega
+  · simp at h
+
+theorem paymentRespond_length_le (w : Bytes) :
+    (Payment.paymentRespond w).length ≤ maxWorkerFrameBytes := by
+  unfold Payment.paymentRespond maxWorkerFrameBytes
+  cases Payment.decodePaymentItem w with
+  | none => simp
+  | some v =>
+    cases hE : Payment.encodeStepOutcome (Payment.stepView v) with
+    | none => simp [hE]
+    | some b =>
+      have := Payment.encodeStepOutcome_length_le hE
+      simp only [hE, List.length_cons]
+      omega
+
 theorem workerRespond_length_le (wire : Bytes) :
     (workerRespond wire).length ≤ maxWorkerFrameBytes := by
-  unfold workerRespond maxWorkerFrameBytes
+  by_cases hm : Payment.paymentMagic.isPrefixOf wire = true
+  · rw [workerRespond_payment wire hm]; exact paymentRespond_length_le wire
+  rw [workerRespond_evaluator_unchanged wire (Bool.not_eq_true _ ▸ hm)]
+  unfold maxWorkerFrameBytes
   cases hOut : evaluateWire wire with
   | evaluated result =>
       obtain ⟨_, _, _, _, _, _, hLen⟩ := evaluateWire_evaluated hOut

@@ -139,12 +139,18 @@ def Slot.isSame : Slot → Bool
 
 /-- `_insert_evidence`: a stored id is a retry iff the new record, given the stored
     received time, equals the stored record and its event is not after that time. -/
-def evidenceSlot (r : PaymentRequest) (e : EvidenceRecord) : Slot :=
-  if r.foreign.evidenceId then .clash else
-  match findEvidence r.input.evidence e.evidenceId with
+def slotOf (foreign : Bool) (stored : Option EvidenceRecord) (e : EvidenceRecord) : Slot :=
+  if foreign then .clash else
+  match stored with
   | none => .fresh
   | some s => if e.eventAt ≤ s.receivedAt ∧ { e with receivedAt := s.receivedAt } = s
               then .same s else .clash
+
+def evidenceSlot (r : PaymentRequest) (e : EvidenceRecord) : Slot :=
+  slotOf r.foreign.evidenceId (findEvidence r.input.evidence e.evidenceId) e
+
+def conflictIdOf (i : FinancialInput) (c : RecordCommand) : String :=
+  "conflict:" ++ i.context.itemId ++ ":" ++ c.commonOriginId ++ ":" ++ c.evidenceId
 
 def applyWrites (i : FinancialInput) (w : Writes) : FinancialInput :=
   { i with
@@ -168,8 +174,21 @@ def oldPay (i : FinancialInput) (w : Writes) : Nat :=
 def addedBytes (i : FinancialInput) (w : Writes) : Nat :=
   evBytes w + (newPay w - oldPay i w) + cfBytes w
 
+def paymentMagic : Bytes := "BLFPAY01".toUTF8.toList
+
+def encodeReceipt (k : Receipt) : Bytes :=
+  encodeString k.paymentId ++ natBE 8 k.recordedRevision ++ encodeOptionString k.paysActionId
+
+def anchorOverhead : Nat := paymentMagic.length + 1 + 4
+def maxCallTailBytes : Nat := 1024
+def receiptBytes (w : Writes) : Nat := (w.receipt.map fun k => (encodeReceipt k).length).getD 0
+
+def anchorItemLength (i : FinancialInput) (rs : List Receipt) : Nat :=
+  anchorOverhead + (rawEncodeFinancialInput i).length + (encodeList encodeReceipt rs).length
+
 def withinCapacity (r : PaymentRequest) (w : Writes) : Bool :=
-  r.inputBytes + addedBytes r.input w ≤ maxTotalEncodedBytes
+  anchorOverhead + r.inputBytes + (encodeList encodeReceipt r.receipts).length + addedBytes r.input w +
+    receiptBytes w + maxCallTailBytes ≤ maxTotalEncodedBytes
 
 /-! ## Request well-formedness, which the decoder enforces (section 2.4) -/
 

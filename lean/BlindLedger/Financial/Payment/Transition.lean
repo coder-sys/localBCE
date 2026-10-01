@@ -1,25 +1,8 @@
-import BlindLedger.Financial.Payment.Types
+import BlindLedger.Financial.Payment.Open
 
 namespace BlindLedger.Financial.Payment
 
 open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
-
-/-- Every write that changes a value ends here: capacity, then Lean's own post-state
-    must evaluate (evaluate re-checks well-formedness). Fail closed otherwise. -/
-def mutate (r : PaymentRequest) (k : Mutation) (w : Writes) : PaymentOutcome :=
-  if !withinCapacity r w then .refused .CAPACITY else
-  let post := applyWrites r.input w
-  match evaluate post with
-  | none => .refused .POST_REJECTED
-  | some result => .mutated k w post result
-
-/-- An alias writes one evidence row and no evaluation (a repeat changes no value),
-    but its post-state must still be well-formed, so the next snapshot decodes. -/
-def aliasOf (r : PaymentRequest) (pid : String) (e : EvidenceRecord) : PaymentOutcome :=
-  let w : Writes := { evidence := some e, payment := none, conflict := none, receipt := none }
-  if !withinCapacity r w then .refused .CAPACITY else
-  let post := applyWrites r.input w
-  if financialInputWellFormed post then .alias pid e post else .refused .POST_REJECTED
 
 /-- The row images written (named so the laws can state them). -/
 def recordedPayment (i : FinancialInput) (c : RecordCommand) : Payment :=
@@ -60,7 +43,21 @@ def recordRetry (r : PaymentRequest) (c : RecordCommand) (p : Payment) : Payment
            p.amountCents = c.amountCents ∧ p.eventAt = c.eventAt ∧ e = s
         then .duplicate (some c.paymentId) else .refused .REQUEST_CONFLICT
 
-/-- A record with a fresh payment id: duplicate origin, conflict, alias or a new payment. -/
+def mutate (r : PaymentRequest) (k : Mutation) (w : Writes) : PaymentOutcome :=
+  if r.input.context.mode = .SHADOW then .refused .SHADOW_READ_ONLY else
+  if !withinCapacity r w then .refused .CAPACITY else
+  let post := applyWrites r.input w
+  match evaluate post with
+  | none => .refused .POST_REJECTED
+  | some result => .mutated k w post result
+
+def aliasOf (r : PaymentRequest) (pid : String) (e : EvidenceRecord) : PaymentOutcome :=
+  let w : Writes := { evidence := some e, payment := none, conflict := none, receipt := none }
+  if r.input.context.mode = .SHADOW then .refused .SHADOW_READ_ONLY else
+  if !withinCapacity r w then .refused .CAPACITY else
+  let post := applyWrites r.input w
+  if financialInputWellFormed post then .alias pid e post else .refused .POST_REJECTED
+
 def recordNew (r : PaymentRequest) (c : RecordCommand) : PaymentOutcome :=
   let i := r.input
   let now := i.evaluatedAt
@@ -68,11 +65,10 @@ def recordNew (r : PaymentRequest) (c : RecordCommand) : PaymentOutcome :=
   let same := existing.any (·.amountCents = c.amountCents)
   let stored := findEvidence i.evidence c.evidenceId
   let prior := same && (stored.isSome || r.foreign.evidenceId)
-  let conflictId := "conflict:" ++ i.context.itemId ++ ":" ++ c.commonOriginId ++ ":" ++ c.evidenceId
+  let conflictId := conflictIdOf i c
   let reversedBefore := existing.any fun p => p.status = .REVERSED &&
     ((p.reversalEvidenceId.bind (findEvidence i.evidence)).any fun v => v.eventAt < c.eventAt)
   if same && !prior && reversedBefore then .refused .ORIGIN_REVERSED else
-  -- D1: an exact retry of a visible conflict is CONFLICT at any revision (III.3)
   if existing.isSome && !same && i.conflicts.any (·.conflictId = conflictId) &&
      (evidenceSlot r (confirmation i c now)).isSame
   then .conflictUnchanged conflictId else
@@ -101,13 +97,7 @@ def recordNew (r : PaymentRequest) (c : RecordCommand) : PaymentOutcome :=
         { evidence := if fresh then some e else none, payment := none, receipt := none,
           conflict := some (conflictImage i c p conflictId) }
     | none =>
-      let linkOk : Option Refusal := c.paysActionId.bind fun a =>
-        match i.actions.find? (fun x => x.actionId = a && x.kind = "CORRECTION_PAYMENT_REQUEST") with
-        | none => some .LINK_UNKNOWN
-        | some req =>
-          if linkedActivePaidCents i.payments (linksOf r.receipts) a + c.amountCents > req.amountCents
-          then some .LINK_EXCEEDS_UNPAID else none
-      match linkOk with
+      match linkRefusal i r.receipts c with
       | some f => .refused f
       | none => mutate r .RECORDED
         { evidence := if fresh then some e else none, conflict := none,
@@ -135,7 +125,7 @@ def decideReverse (r : PaymentRequest) (c : ReverseCommand) : PaymentOutcome :=
     if time > now then .refused .CHRONOLOGY else
     match evidenceSlot r e with
     | .clash => .refused .EVIDENCE_CONFLICT
-    | .same _ => .duplicate none                  -- retry ignores the revision (III.3)
+    | .same _ => .duplicate none
     | .fresh =>
       if !revisionOk r then .refused .REVISION_CONFLICT else
       if p.status = .REVERSED then .refused .ALREADY_REVERSED else

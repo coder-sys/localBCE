@@ -23,13 +23,20 @@ def Ledger.request (L : Ledger) (c : Call) : PaymentRequest :=
     receipts := L.receipts, foreign := ⟨false, false⟩,
     expectedRevision := c.expectedRevision, command := c.command }
 
+/-! The ledger commits the owner's case update (carry premise A1). -/
+
 def Ledger.outcome (L : Ledger) (c : Call) : PaymentOutcome := paymentTransition (L.request c)
+
+def commitInput (post : FinancialInput) (res : FinancialResult) : FinancialInput :=
+  { post with beforeRevision := post.beforeRevision + 1,
+              cases := post.cases.map fun k => { k with status := res.caseStatus, updatedAt := post.evaluatedAt } }
+
+def commitReceipts (rs : List Receipt) (w : Writes) : List Receipt :=
+  (w.receipt.map fun k => insertBy Receipt.paymentId k rs).getD rs
 
 def step (L : Ledger) (c : Call) : Ledger :=
   match L.outcome c with
-  | .mutated _ w post _ =>
-      { input := { post with beforeRevision := post.beforeRevision + 1 },
-        receipts := (w.receipt.map fun k => insertBy Receipt.paymentId k L.receipts).getD L.receipts }
+  | .mutated _ w post res => { input := commitInput post res, receipts := commitReceipts L.receipts w }
   | .alias _ _ post => { L with input := post }
   | _ => L
 
@@ -38,6 +45,10 @@ def run (L : Ledger) (calls : List Call) : Ledger := calls.foldl step L
 def trace : Ledger → List Call → List PaymentOutcome
   | _, [] => []
   | L, c :: cs => L.outcome c :: trace (step L c) cs
+
+def ledgers : Ledger → List Call → List Ledger
+  | _, [] => []
+  | L, c :: cs => L :: ledgers (step L c) cs
 
 def ledgerWellFormed (L : Ledger) : Prop :=
   financialInputWellFormed L.input = true ∧ receiptsWellFormed L.input L.receipts = true
@@ -73,6 +84,7 @@ def reversedCent : PaymentOutcome → Nat
   | _ => 0
 
 def recordedCents (os : List PaymentOutcome) : Nat := (os.map recordedCent).sum
+
 def reversedOutcomeCents (os : List PaymentOutcome) : Nat := (os.map reversedCent).sum
 
 /-! ## List facts -/
@@ -174,45 +186,6 @@ theorem Silent.fields {o} (h : Silent o) : recordedPaymentId? o = none ∧ recor
     · exact ⟨rfl, rfl, rfl, rfl, rfl⟩
   all_goals exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
-theorem step_cases (L : Ledger) (c : Call) :
-    (∃ k w post res, L.outcome c = .mutated k w post res ∧ step L c =
-      { input := { post with beforeRevision := post.beforeRevision + 1 },
-        receipts := (w.receipt.map fun k => insertBy Receipt.paymentId k L.receipts).getD
-          L.receipts }) ∨
-    (∃ pid e post, L.outcome c = .alias pid e post ∧ step L c = { L with input := post }) ∨
-    (Silent (L.outcome c) ∧ insertedEvidenceId? (L.outcome c) = none ∧ step L c = L) := by
-  unfold step
-  cases ho : L.outcome c with
-  | mutated k w post res => exact Or.inl ⟨k, w, post, res, rfl, rfl⟩
-  | alias pid e post => exact Or.inr (Or.inl ⟨pid, e, post, rfl, rfl⟩)
-  | _ => exact Or.inr (Or.inr ⟨silent_of_ne fun _ _ _ _ h => (by cases h), rfl, rfl⟩)
-
-theorem step_unchanged_of_quiet (L c) (h : ∀ k w post res pid e post', L.outcome c ≠ .mutated k w post res ∧
-    L.outcome c ≠ .alias pid e post') : step L c = L := by
-  unfold step
-  cases ho : L.outcome c with
-  | mutated k w post res => exact absurd ho (h k w post res "" default post).1
-  | alias pid e post => exact absurd ho (h .RECORDED ⟨none, none, none, none⟩ post default pid e post).2
-  | _ => rfl
-
-theorem step_context (L c) : (step L c).input.context = L.input.context := by
-  rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
-  · dsimp only; rw [(paymentTransition_mutated_post ho).1]; rfl
-  · dsimp only; rw [(alias_shape ho).1]; rfl
-
-theorem mutated_fresh {r k w post res} (h : paymentTransition r = .mutated k w post res) :
-    ∀ e, w.evidence = some e → findEvidence r.input.evidence e.evidenceId = none := by
-  intro e he
-  rcases mutated_shape h with
-    ⟨-, c, -, -, -, -, -, -, hew, -⟩ | ⟨-, c, -, -, -, hew⟩ | ⟨-, c, p, e', -, -, -, hw, hr, hfe, -, -⟩
-  · rcases hew.2.2.2 with ⟨h1, h2⟩ | ⟨h1, -⟩
-    · rw [h1] at he; cases he; exact h2
-    · rw [h1] at he; cases he
-  · rcases hew.2.2.2 with ⟨h1, h2⟩ | ⟨h1, -⟩
-    · rw [h1] at he; cases he; exact h2
-    · rw [h1] at he; cases he
-  · subst hw; cases he; rw [hr]; exact hfe
-
 theorem findEvidence_applyWrites {i w id s}
     (hfresh : ∀ e, w.evidence = some e → findEvidence i.evidence e.evidenceId = none)
     (h : findEvidence i.evidence id = some s) :
@@ -226,15 +199,6 @@ theorem findEvidence_applyWrites {i w id s}
     rw [find_insertBy EvidenceRecord.evidenceId e id i.evidence hf]
     have hne : e.evidenceId ≠ id := fun eq => by rw [eq, h] at hf; simp at hf
     simpa [hne] using h
-
-theorem step_evidence (L c) {id s} (h : findEvidence L.input.evidence id = some s) :
-    findEvidence (step L c).input.evidence id = some s := by
-  rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
-  · dsimp only; rw [(paymentTransition_mutated_post ho).1]
-    exact findEvidence_applyWrites (mutated_fresh ho) h
-  · dsimp only; rw [(alias_shape ho).1]
-    exact findEvidence_applyWrites (fun e' hw => by cases hw; exact (alias_shape ho).2.2) h
-  · exact h
 
 theorem findPayment_insertBy {p : Payment} {l pid} (hf : findPayment l p.paymentId = none) :
     findPayment (insertBy Payment.paymentId p l) pid =
@@ -252,6 +216,184 @@ theorem findPayment_replace (l : List Payment) (p0 p' : Payment) (hid : p'.payme
       by_cases hx : x.paymentId = p0.paymentId <;> simp [hx, hid]
     simp only [List.map_cons, findPayment, hfx]
     by_cases h : x.paymentId = pid <;> simp [h, ih]
+
+theorem findPayment_reversed {l : List Payment} {p vc} (hf : findPayment l vc.paymentId = some p) :
+    findPayment (l.map fun x => if x.paymentId = p.paymentId then reversedImage p vc else x)
+      vc.paymentId = some (reversedImage p vc) := by
+  rw [findPayment_replace l p (reversedImage p vc) rfl, hf]; simp
+
+/-! ## The invariant every step keeps -/
+
+def Inv (L : Ledger) : Prop :=
+  (L.input.payments.map Payment.paymentId).Nodup ∧
+    L.receipts.map Receipt.paymentId = L.input.payments.map Payment.paymentId
+
+theorem Inv_of_wf {L} (hL : ledgerWellFormed L) : Inv L := by
+  refine ⟨nodup_ids_of_wf hL.1, ?_⟩
+  have := hL.2
+  simp only [receiptsWellFormed, Bool.and_eq_true, beq_iff_eq] at this
+  exact this.1
+
+theorem receiptOf_none {L : Ledger} (hI : Inv L) {id} (hf : findPayment L.input.payments id = none) :
+    receiptOf L.receipts id = none := by
+  unfold receiptOf
+  rw [List.find?_eq_none]
+  intro x hx hxe
+  have hm : x.paymentId ∈ L.input.payments.map Payment.paymentId := by
+    rw [← hI.2]; exact List.mem_map.2 ⟨x, hx, rfl⟩
+  obtain ⟨y, hy, hyx⟩ := List.mem_map.1 hm
+  rw [findPayment_eq, List.find?_eq_none] at hf
+  exact hf y hy (by simp [hyx, of_decide_eq_true hxe])
+
+theorem receiptOf_insertBy {K : Receipt} {rs id} (hf : receiptOf rs K.paymentId = none) :
+    receiptOf (insertBy Receipt.paymentId K rs) id =
+      if K.paymentId = id then some K else receiptOf rs id :=
+  find_insertBy _ K id rs hf
+
+/-! ## Something happens once -/
+
+theorem findEvidence_insertBy {e : EvidenceRecord} {l id} (hf : findEvidence l e.evidenceId = none) :
+    findEvidence (insertBy EvidenceRecord.evidenceId e l) id =
+      if e.evidenceId = id then some e else findEvidence l id := by
+  rw [findEvidence_eq, findEvidence_eq, find_insertBy _ e id l (by rwa [← findEvidence_eq])]
+
+/-! ## Rows only grow; cash is conserved -/
+
+/-! ## Retries (III.3): a repeat of a recorded command is a duplicate, for any calls between -/
+
+theorem confirmation_ctx {i j : FinancialInput} (h : i.context = j.context) (c t) :
+    confirmation i c t = confirmation j c t := by simp only [confirmation, h]
+
+theorem reversalRecord_congr {i j : FinancialInput} {p q : Payment} (hc : i.context = j.context)
+    (hi : p.paymentId = q.paymentId) (ha : p.amountCents = q.amountCents) (c t a) :
+    { reversalRecord i c p t with receivedAt := a } = { reversalRecord j c q t with receivedAt := a } := by
+  simp only [reversalRecord, hc, hi, ha]
+
+/-- What a form check reads (origin and local reference) does not depend on when or where. -/
+theorem formRefusal_of_conf {i j c t u s} (hc : confirmation i c t = s)
+    (h : formRefusal (confirmation j c u) = none) : formRefusal s = none := by
+  subst hc
+  exact Eq.trans (rfl : formRefusal (confirmation i c t) = formRefusal (confirmation j c u)) h
+
+theorem recordRetry_dup {r c p s k}
+    (hs : findEvidence r.input.evidence c.evidenceId = some s) (hfs : formRefusal s = none)
+    (hle : c.eventAt ≤ s.receivedAt) (hk : receiptOf r.receipts p.paymentId = some k)
+    (hrev : r.expectedRevision = some k.recordedRevision) (hact : k.paysActionId = c.paysActionId)
+    (he : p.evidenceId = c.evidenceId) (ho : p.commonOriginId = c.commonOriginId)
+    (ha : p.amountCents = c.amountCents) (ht : p.eventAt = c.eventAt)
+    (hc : confirmation r.input c s.receivedAt = s) :
+    recordRetry r c p = .duplicate (some c.paymentId) := by
+  simp [recordRetry, hs, hfs, hk, Nat.not_lt.2 hle, hrev, hact, he, ho, ha, ht, hc]
+
+/-- A recorded command, as the next snapshot sees it. -/
+def Rec (M : Ledger) (c : RecordCommand) (rev : Nat) : Prop :=
+  Inv M ∧ c.amountCents ≠ 0 ∧
+  (∃ p, findPayment M.input.payments c.paymentId = some p ∧ p.evidenceId = c.evidenceId ∧
+    p.commonOriginId = c.commonOriginId ∧ p.amountCents = c.amountCents ∧ p.eventAt = c.eventAt) ∧
+  (∃ k, receiptOf M.receipts c.paymentId = some k ∧ k.recordedRevision = rev ∧
+    k.paysActionId = c.paysActionId) ∧
+  (∃ s, findEvidence M.input.evidence c.evidenceId = some s ∧ c.eventAt ≤ s.receivedAt ∧
+    confirmation M.input c s.receivedAt = s ∧ formRefusal s = none)
+
+/-! ## The same for a reversal -/
+
+theorem evidenceSlot_same {r : PaymentRequest} {e s} (hf : r.foreign.evidenceId = false)
+    (hs : findEvidence r.input.evidence e.evidenceId = some s) (hle : e.eventAt ≤ s.receivedAt)
+    (heq : { e with receivedAt := s.receivedAt } = s) : evidenceSlot r e = .same s := by
+  simp [evidenceSlot, slotOf, hf, hs, hle, heq]
+
+def RevDone (M : Ledger) (c : ReverseCommand) (b : Nat) : Prop :=
+  ∃ p s, findPayment M.input.payments c.paymentId = some p ∧ p.status = .REVERSED ∧
+    findEvidence M.input.evidence c.evidenceId = some s ∧ s.eventAt ≤ s.receivedAt ∧
+    s.receivedAt ≤ b ∧ (∀ t, c.eventAt = some t → t = s.eventAt) ∧
+    { reversalRecord M.input c p s.eventAt with receivedAt := s.receivedAt } = s ∧ formRefusal s = none
+
+section LedgerLayer
+open BlindLedger.Financial.CorrectionTransition
+
+/-! ## Ledger layer: the old one-step laws, restated for rev 1.2's `step` (commitInput, extra refusals) -/
+
+theorem trm {r k w post res} (h : paymentTransition r = .mutated k w post res) :
+    Base.paymentTransition r = .mutated k w post res := (paymentTransition_tr h fun _ => nofun).1
+
+theorem tra {r pid e post} (h : paymentTransition r = .alias pid e post) :
+    Base.paymentTransition r = .alias pid e post := (paymentTransition_tr h fun _ => nofun).1
+
+theorem mutated_shape {r k w post res} (h : paymentTransition r = .mutated k w post res) :
+    type_of% (Base.mutated_shape (trm h)) := Base.mutated_shape (trm h)
+
+theorem paymentTransition_mutated_post {r k w post res} (h : paymentTransition r = .mutated k w post res) :
+    type_of% (Base.paymentTransition_mutated_post (trm h)) := Base.paymentTransition_mutated_post (trm h)
+
+theorem conflict_changes_no_cash {r w post result}
+    (h : paymentTransition r = .mutated .CONFLICT_RECORDED w post result) :
+    type_of% (Base.conflict_changes_no_cash (trm h)) := Base.conflict_changes_no_cash (trm h)
+
+theorem alias_shape {r pid e post} (h : paymentTransition r = .alias pid e post) :
+    type_of% (Base.alias_shape (tra h)) := Base.alias_shape (tra h)
+
+theorem reverse_exact {r c w post result}
+    (hc : r.command = .reverse c) (h : paymentTransition r = .mutated .REVERSED w post result) :
+    type_of% (Base.reverse_exact hc (trm h)) := Base.reverse_exact hc (trm h)
+
+theorem paymentTransition_result_cash {r k w post result}
+    (h : paymentTransition r = .mutated k w post result) :
+    type_of% (Base.paymentTransition_result_cash (trm h)) := Base.paymentTransition_result_cash (trm h)
+
+theorem paymentTransition_alias_post {r pid e post} (h : paymentTransition r = .alias pid e post) :
+    type_of% (Base.paymentTransition_alias_post (tra h)) := Base.paymentTransition_alias_post (tra h)
+
+theorem record_link_within_request {r c w post result a}
+    (hc : r.command = .record c) (ha : c.paysActionId = some a)
+    (h : paymentTransition r = .mutated .RECORDED w post result) :
+    type_of% (Base.record_link_within_request hc ha (trm h)) := Base.record_link_within_request hc ha (trm h)
+
+theorem record_amount_zero {r c} (hc : r.command = .record c) (h0 : c.amountCents = 0) :
+    paymentTransition r = .refused .AMOUNT_ZERO := by
+  unfold paymentTransition
+  simp [hc, decideRecord, h0]
+
+theorem run_cons (L c cs) : run L (c :: cs) = run (step L c) cs := rfl
+
+theorem mutated_fresh {r k w post res} (h : paymentTransition r = .mutated k w post res) :
+    ∀ e, w.evidence = some e → findEvidence r.input.evidence e.evidenceId = none := by
+  intro e he
+  rcases mutated_shape h with
+    ⟨-, c, -, -, -, -, -, -, hew, -⟩ | ⟨-, c, -, -, -, hew⟩ | ⟨-, c, p, e', -, -, -, hw, hr, hfe, -, -⟩
+  · rcases hew.2.2.2 with ⟨h1, h2⟩ | ⟨h1, -⟩
+    · rw [h1] at he; cases he; exact h2
+    · rw [h1] at he; cases he
+  · rcases hew.2.2.2 with ⟨h1, h2⟩ | ⟨h1, -⟩
+    · rw [h1] at he; cases he; exact h2
+    · rw [h1] at he; cases he
+  · subst hw; cases he; rw [hr]; exact hfe
+
+theorem step_cases (L : Ledger) (c : Call) :
+    (∃ k w post res, L.outcome c = .mutated k w post res ∧ step L c =
+      { input := commitInput post res,
+        receipts := (w.receipt.map fun k => insertBy Receipt.paymentId k L.receipts).getD
+          L.receipts }) ∨
+    (∃ pid e post, L.outcome c = .alias pid e post ∧ step L c = { L with input := post }) ∨
+    (Silent (L.outcome c) ∧ insertedEvidenceId? (L.outcome c) = none ∧ step L c = L) := by
+  unfold step
+  cases ho : L.outcome c with
+  | mutated k w post res => exact Or.inl ⟨k, w, post, res, rfl, rfl⟩
+  | alias pid e post => exact Or.inr (Or.inl ⟨pid, e, post, rfl, rfl⟩)
+  | _ => exact Or.inr (Or.inr ⟨silent_of_ne fun _ _ _ _ h => (by cases h), rfl, rfl⟩)
+
+theorem step_context (L c) : (step L c).input.context = L.input.context := by
+  rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
+  · dsimp only; rw [(paymentTransition_mutated_post ho).1]; rfl
+  · dsimp only; rw [(alias_shape ho).1]; rfl
+
+theorem step_evidence (L c) {id s} (h : findEvidence L.input.evidence id = some s) :
+    findEvidence (step L c).input.evidence id = some s := by
+  rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
+  · dsimp only; rw [(paymentTransition_mutated_post ho).1]
+    exact findEvidence_applyWrites (mutated_fresh ho) h
+  · dsimp only; rw [(alias_shape ho).1]
+    exact findEvidence_applyWrites (fun e' hw => by cases hw; exact (alias_shape ho).2.2) h
+  · exact h
 
 /-- Every step is silent, records one payment, or reverses one. -/
 theorem step_kind (L : Ledger) (c : Call) :
@@ -326,14 +468,10 @@ theorem step_find (L c) {pid p} (h : findPayment L.input.payments pid = some p) 
       exact ⟨_, by simp [reversedImage], Or.inr ⟨vc.evidenceId, rfl⟩⟩
     · exact ⟨p, by simp [hpp], Or.inl rfl⟩
 
-theorem findPayment_reversed {l : List Payment} {p vc} (hf : findPayment l vc.paymentId = some p) :
-    findPayment (l.map fun x => if x.paymentId = p.paymentId then reversedImage p vc else x)
-      vc.paymentId = some (reversedImage p vc) := by
-  rw [findPayment_replace l p (reversedImage p vc) rfl, hf]; simp
-
 theorem step_payments_mutated {L c k w post res} (ho : L.outcome c = .mutated k w post res) :
     (step L c).input.payments = post.payments := by
   simp only [step, ho]
+  rfl
 
 theorem step_recorded {L c w post res} (h : L.outcome c = .mutated .RECORDED w post res) :
     ∃ rc, c.command = .record rc ∧ w.payment = some (recordedPayment (L.request c).input rc) ∧
@@ -350,18 +488,6 @@ theorem step_recorded {L c w post res} (h : L.outcome c = .mutated .RECORDED w p
   · cases h.symm.trans ho; exact ⟨rc, hcmd, hp, hr, hf, hrev, hew, hpay, hrec⟩
   · cases h.symm.trans ho
 
-/-! ## The invariant every step keeps -/
-
-def Inv (L : Ledger) : Prop :=
-  (L.input.payments.map Payment.paymentId).Nodup ∧
-    L.receipts.map Receipt.paymentId = L.input.payments.map Payment.paymentId
-
-theorem Inv_of_wf {L} (hL : ledgerWellFormed L) : Inv L := by
-  refine ⟨nodup_ids_of_wf hL.1, ?_⟩
-  have := hL.2
-  simp only [receiptsWellFormed, Bool.and_eq_true, beq_iff_eq] at this
-  exact this.1
-
 theorem step_Inv {L : Ledger} (c) (hI : Inv L) : Inv (step L c) := by
   rcases step_kind L c with ⟨-, hp, hr⟩ | ⟨rc, w, post, res, -, -, -, -, -, -, -, -, hnd, hp, hr⟩ |
     ⟨vc, p, w, post, res, -, -, -, -, -, hnd, hp, hr, -⟩
@@ -373,28 +499,6 @@ theorem step_Inv {L : Ledger} (c) (hI : Inv L) : Inv (step L c) := by
     rw [hr, hp, hI.2, List.map_map]
     exact List.map_congr_left fun x _ => by
       by_cases hx : x.paymentId = p.paymentId <;> simp [Function.comp, hx, reversedImage]
-
-theorem run_cons (L c cs) : run L (c :: cs) = run (step L c) cs := rfl
-
-theorem run_Inv {L : Ledger} (hI : Inv L) : ∀ calls, Inv (run L calls)
-  | [] => hI
-  | c :: cs => run_Inv (step_Inv c hI) cs
-
-theorem receiptOf_none {L : Ledger} (hI : Inv L) {id} (hf : findPayment L.input.payments id = none) :
-    receiptOf L.receipts id = none := by
-  unfold receiptOf
-  rw [List.find?_eq_none]
-  intro x hx hxe
-  have hm : x.paymentId ∈ L.input.payments.map Payment.paymentId := by
-    rw [← hI.2]; exact List.mem_map.2 ⟨x, hx, rfl⟩
-  obtain ⟨y, hy, hyx⟩ := List.mem_map.1 hm
-  rw [findPayment_eq, List.find?_eq_none] at hf
-  exact hf y hy (by simp [hyx, of_decide_eq_true hxe])
-
-theorem receiptOf_insertBy {K : Receipt} {rs id} (hf : receiptOf rs K.paymentId = none) :
-    receiptOf (insertBy Receipt.paymentId K rs) id =
-      if K.paymentId = id then some K else receiptOf rs id :=
-  find_insertBy _ K id rs hf
 
 theorem step_receipt {L : Ledger} (c) (hI : Inv L) {id k} (h : receiptOf L.receipts id = some k) :
     receiptOf (step L c).receipts id = some k := by
@@ -409,15 +513,8 @@ theorem step_receipt {L : Ledger} (c) (hI : Inv L) {id k} (h : receiptOf L.recei
     exact h
   · rw [hr]; exact h
 
-/-! ## Something happens once -/
-
-theorem findEvidence_insertBy {e : EvidenceRecord} {l id} (hf : findEvidence l e.evidenceId = none) :
-    findEvidence (insertBy EvidenceRecord.evidenceId e l) id =
-      if e.evidenceId = id then some e else findEvidence l id := by
-  rw [findEvidence_eq, findEvidence_eq, find_insertBy _ e id l (by rwa [← findEvidence_eq])]
-
 theorem step_mutated {L c k w post res} (ho : L.outcome c = .mutated k w post res) :
-    (step L c).input = { post with beforeRevision := post.beforeRevision + 1 } := by
+    (step L c).input = commitInput post res := by
   simp only [step, ho]
 
 theorem step_mutated_evidence {L c k w post res e} (ho : L.outcome c = .mutated k w post res)
@@ -425,7 +522,228 @@ theorem step_mutated_evidence {L c k w post res e} (ho : L.outcome c = .mutated 
   have hf := mutated_fresh ho e hw
   rw [step_mutated ho, (paymentTransition_mutated_post ho).1]
   simp only [applyWrites, hw, Option.map_some, Option.getD_some]
+  dsimp only [commitInput]
   rw [findEvidence_insertBy hf, if_pos rfl]
+
+theorem step_conserve (L c) :
+    activeCents (step L c).input.payments + reversedCent (L.outcome c) =
+      activeCents L.input.payments + recordedCent (L.outcome c) := by
+  rcases step_kind L c with ⟨hs, hp, -⟩ | ⟨rc, w, post, res, -, ho, hp, -, -, -, -, -, -, hpay, -⟩ |
+    ⟨vc, _, w, post, res, hcmd, ho, _⟩
+  · rw [hp, hs.fields.2.2.2.1, hs.fields.2.2.2.2]
+  · have e1 : reversedCent (L.outcome c) = 0 := by rw [ho]; rfl
+    have e2 : recordedCent (L.outcome c) = (recordedPayment (L.request c).input rc).amountCents := by
+      rw [ho]; simp [recordedCent, hp]
+    rw [e1, e2, hpay, activeCents_eq, activeCents_eq, sum_insertBy]
+    simp [recordedPayment] <;> omega
+  · obtain ⟨p', -, -, hw', -, hact, -⟩ := reverse_exact (r := L.request c) hcmd ho
+    have e1 : reversedCent (L.outcome c) = p'.amountCents := by rw [ho]; simp [reversedCent, hw']
+    have e2 : recordedCent (L.outcome c) = 0 := by rw [ho]; rfl
+    have hact' : activeCents post.payments + p'.amountCents = activeCents L.input.payments := hact
+    rw [step_payments_mutated ho, e1, e2]; omega
+
+theorem run_conservation (L : Ledger) (calls : List Call) :
+    activeCents (run L calls).input.payments + reversedOutcomeCents (trace L calls) =
+      activeCents L.input.payments + recordedCents (trace L calls) := by
+  induction calls generalizing L with
+  | nil => simp [run, trace, reversedOutcomeCents, recordedCents]
+  | cons c cs ih =>
+    have ih := ih (step L c)
+    have h := step_conserve L c
+    simp only [run_cons, trace, reversedOutcomeCents, recordedCents, List.map_cons,
+      List.sum_cons] at ih ⊢
+    omega
+
+theorem decideRecord_retry {r c p} (hz : c.amountCents ≠ 0) (hfor : r.foreign.paymentId = false)
+    (hp : findPayment r.input.payments c.paymentId = some p) : decideRecord r c = recordRetry r c p := by
+  simp [decideRecord, hz, hfor, hp]
+
+theorem rec_duplicate {M : Ledger} {c rev} (now' : Nat) (h : Rec M c rev) :
+    M.outcome ⟨now', some rev, .record c⟩ = .duplicate (some c.paymentId) := by
+  obtain ⟨-, hz, ⟨p, hp, he, ho, ha, ht⟩, ⟨k, hk, hkr, hkp⟩, ⟨s, hs, hle, hce, hfs⟩⟩ := h
+  show decideRecord (M.request ⟨now', some rev, .record c⟩) c = _
+  rw [decideRecord_retry (r := M.request ⟨now', some rev, .record c⟩) hz rfl hp]
+  have hk' : receiptOf (M.request ⟨now', some rev, .record c⟩).receipts p.paymentId = some k := by
+    rw [findPayment_id _ _ _ hp]; exact hk
+  exact recordRetry_dup hs hfs hle hk' (by simp [Ledger.request, hkr]) hkp he ho ha ht hce
+
+theorem Rec_step {M c rev} (h : Rec M c rev) (c') : Rec (step M c') c rev := by
+  obtain ⟨hI, hz, ⟨p, hp, he, ho, ha, ht⟩, ⟨k, hk, hkr, hkp⟩, ⟨s, hs, hle, hce, hfs⟩⟩ := h
+  refine ⟨step_Inv c' hI, hz, ?_, ⟨k, step_receipt c' hI hk, hkr, hkp⟩,
+    ⟨s, step_evidence M c' hs, hle, ?_, hfs⟩⟩
+  · obtain ⟨q, hq, hc⟩ := step_find M c' hp
+    rcases hc with rfl | ⟨e, rfl⟩ <;> exact ⟨_, hq, he, ho, ha, ht⟩
+  · rw [confirmation_ctx (step_context M c') c s.receivedAt]; exact hce
+
+theorem run_Rec {M c rev} (h : Rec M c rev) : ∀ calls, Rec (run M calls) c rev
+  | [] => h
+  | c' :: cs => run_Rec (Rec_step h c') cs
+
+theorem Rec_init {L : Ledger} (hI : Inv L) {c : RecordCommand} {c0 : Call} {rev w post res}
+    (hcmd : c0.command = .record c) (hexp : c0.expectedRevision = some rev)
+    (h : L.outcome c0 = .mutated .RECORDED w post res) : Rec (step L c0) c rev := by
+  obtain ⟨rc, hcmd', -, -, hf, hrev, hew, hpay, hrec⟩ := step_recorded h
+  obtain rfl : rc = c := Command.record.inj (hcmd'.symm.trans hcmd)
+  have hz : rc.amountCents ≠ 0 := fun h0 => by
+    have h' : paymentTransition (L.request c0) = .mutated .RECORDED w post res := h
+    rw [record_amount_zero (r := L.request c0) hcmd h0] at h'
+    cases h'
+  have hrv : rev = L.input.beforeRevision := by
+    simpa [revisionOk, Ledger.request, hexp] using hrev
+  refine ⟨step_Inv c0 hI, hz, ⟨recordedPayment (L.request c0).input rc, ?_, rfl, rfl, rfl, rfl⟩,
+    ⟨recordedReceipt (L.request c0).input rc, ?_, hrv.symm, rfl⟩, ?_⟩
+  · rw [hpay, findPayment_insertBy (p := recordedPayment (L.request c0).input rc) hf,
+      if_pos (show (recordedPayment (L.request c0).input rc).paymentId = rc.paymentId from rfl)]
+  · rw [hrec, receiptOf_insertBy (K := recordedReceipt (L.request c0).input rc) (receiptOf_none hI hf),
+      if_pos (show (recordedReceipt (L.request c0).input rc).paymentId = rc.paymentId from rfl)]
+  · obtain ⟨hform, hle, -, hcase⟩ := hew
+    rcases hcase with ⟨hw, -⟩ | ⟨-, s, hs, hle', hce⟩
+    · refine ⟨_, step_mutated_evidence h hw, hle, ?_, hform⟩
+      exact (confirmation_ctx (step_context L c0) rc _).trans
+        (confirmation_ctx (i := L.input) (j := (L.request c0).input) rfl rc _)
+    · refine ⟨s, step_evidence L c0 hs, hle', ?_, formRefusal_of_conf hce hform⟩
+      exact (confirmation_ctx (step_context L c0) rc _).trans
+        ((confirmation_ctx (i := L.input) (j := (L.request c0).input) rfl rc _).trans hce)
+
+theorem decideReverse_dup {r c p s} (hp : findPayment r.input.payments c.paymentId = some p)
+    (hf : r.foreign.evidenceId = false) (hs : findEvidence r.input.evidence c.evidenceId = some s)
+    (ht : ∀ t, c.eventAt = some t → t = s.eventAt)
+    (hfe : formRefusal (reversalRecord r.input c p s.eventAt) = none)
+    (hle : s.eventAt ≤ r.input.evaluatedAt) (hle2 : s.eventAt ≤ s.receivedAt)
+    (heq : { reversalRecord r.input c p s.eventAt with receivedAt := s.receivedAt } = s) :
+    decideReverse r c = .duplicate none := by
+  have htime : c.eventAt.getD (((findEvidence r.input.evidence c.evidenceId).map (·.eventAt)).getD
+      r.input.evaluatedAt) = s.eventAt := by
+    rw [hs]
+    cases hce : c.eventAt with
+    | none => rfl
+    | some t => exact ht t hce
+  have hslot : evidenceSlot r (reversalRecord r.input c p s.eventAt) = .same s :=
+    evidenceSlot_same hf hs hle2 heq
+  simp [decideReverse, hp, hf, htime, hfe, Nat.not_lt.2 hle, hslot]
+
+theorem revDone_duplicate {M : Ledger} {c b} (exp' : Option Nat) (h : RevDone M c b) :
+    M.outcome ⟨b, exp', .reverse c⟩ = .duplicate none := by
+  obtain ⟨p, s, hp, -, hs, hle, hb, ht, hrr, hfs⟩ := h
+  have hfe : formRefusal (reversalRecord (M.request ⟨b, exp', .reverse c⟩).input c p s.eventAt) = none :=
+    (congrArg formRefusal hrr).trans hfs
+  exact decideReverse_dup (r := M.request ⟨b, exp', .reverse c⟩) hp rfl hs ht hfe (Nat.le_trans hle hb) hle hrr
+
+theorem RevDone_step {M c b} (h : RevDone M c b) (c') : RevDone (step M c') c b := by
+  obtain ⟨p, s, hp, hst, hs, h1, h2, ht, hrr, hfs⟩ := h
+  obtain ⟨q, hq, hc⟩ := step_find M c' hp
+  have hqp : q.paymentId = p.paymentId ∧ q.amountCents = p.amountCents := by
+    rcases hc with rfl | ⟨e, rfl⟩ <;> exact ⟨rfl, rfl⟩
+  have hqs : q.status = .REVERSED := by
+    rcases hc with rfl | ⟨e, rfl⟩
+    · exact hst
+    · rfl
+  exact ⟨q, s, hq, hqs, step_evidence M c' hs, h1, h2, ht,
+    (reversalRecord_congr (step_context M c') hqp.1 hqp.2 c s.eventAt s.receivedAt).trans hrr, hfs⟩
+
+theorem run_RevDone {M c b} (h : RevDone M c b) : ∀ calls, RevDone (run M calls) c b
+  | [] => h
+  | c' :: cs => run_RevDone (RevDone_step h c') cs
+
+theorem step_reversed {L c w post res} (h : L.outcome c = .mutated .REVERSED w post res) :
+    ∃ vc p e, c.command = .reverse vc ∧ findPayment L.input.payments vc.paymentId = some p ∧
+      w.evidence = some e ∧
+      e = reversalRecord (L.request c).input vc p (vc.eventAt.getD (L.request c).input.evaluatedAt) ∧
+      e.eventAt ≤ (L.request c).input.evaluatedAt ∧ formRefusal e = none ∧
+      (step L c).input.payments = L.input.payments.map
+        (fun x => if x.paymentId = p.paymentId then reversedImage p vc else x) := by
+  rcases step_kind L c with ⟨hs, -⟩ | ⟨_, _, _, _, _, ho, _⟩ |
+    ⟨vc, p, w', post', res', hcmd, ho, hf, -, hw, -, hpay, -, e, hwe, he, -, hle, hform⟩
+  · exact absurd h (hs.2 w post res)
+  · cases h.symm.trans ho
+  · cases h.symm.trans ho
+    exact ⟨vc, p, e, hcmd, hf, hwe, he, hle, hform, hpay⟩
+
+theorem RevDone_init {L : Ledger} {c : ReverseCommand} {c0 : Call} {b w post res}
+    (hcmd : c0.command = .reverse c) (hb : c0.now ≤ b)
+    (h : L.outcome c0 = .mutated .REVERSED w post res) : RevDone (step L c0) c b := by
+  obtain ⟨vc, p, e, hcmd', hf, hw, he, hle, hform, hpay⟩ := step_reversed h
+  obtain rfl : vc = c := Command.reverse.inj (hcmd'.symm.trans hcmd)
+  subst he
+  refine ⟨reversedImage p vc, _, ?_, rfl, step_mutated_evidence h hw, hle, hb, ?_, ?_, hform⟩
+  · rw [hpay]; exact findPayment_reversed hf
+  · intro t ht; simp [reversalRecord, ht]
+  · exact (reversalRecord_congr (step_context L c0) rfl rfl vc _ _).trans
+      (reversalRecord_congr (i := L.input) (j := (L.request c0).input) rfl rfl rfl vc _ _)
+
+theorem evaluate_balance {i r} (h : evaluate i = some r) :
+    ∃ la, evalLawfulSum i.claims = some la ∧
+      r.shortfallCents + (activeCents i.payments + la) = r.overageCents + i.obligation.owedCents := by
+  unfold evaluate at h
+  split at h
+  · unfold evaluateWellFormed evaluateTotals at h
+    cases hc : evalPaymentSum i.payments with
+    | none => simp [hc] at h
+    | some cash =>
+      cases hcl : evalClaimedSum i.claims with
+      | none => simp [hc, hcl] at h
+      | some cl =>
+        cases hl : evalLawfulSum i.claims with
+        | none => simp [hc, hcl, hl] at h
+        | some la =>
+          cases ht : evalAdd cash la with
+          | none => simp [hc, hcl, hl, ht] at h
+          | some t =>
+            simp only [hc, hcl, hl, ht, Option.map_some, Option.some.injEq] at h
+            subst h
+            have hcash : cash = activeCents i.payments := ((evalPaymentSum_active _ _ hc).1).symm
+            have ht' : t = cash + la := by
+              unfold evalAdd at ht
+              split at ht
+              · exact (Option.some.inj ht).symm
+              · cases ht
+            refine ⟨la, rfl, ?_⟩
+            show (if i.obligation.owedCents > t then i.obligation.owedCents - t else 0) +
+              (activeCents i.payments + la) =
+              (if t > i.obligation.owedCents then t - i.obligation.owedCents else 0) + i.obligation.owedCents
+            rw [← hcash]
+            split <;> split <;> omega
+  · simp at h
+
+theorem step_frame (L c) : (step L c).input.claims = L.input.claims ∧
+    (step L c).input.obligation = L.input.obligation := by
+  rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
+  · dsimp only; rw [(paymentTransition_mutated_post ho).1]; exact ⟨rfl, rfl⟩
+  · dsimp only; rw [(alias_shape ho).1]; exact ⟨rfl, rfl⟩
+  · exact ⟨rfl, rfl⟩
+
+theorem run_frame (L : Ledger) : ∀ calls, (run L calls).input.claims = L.input.claims ∧
+    (run L calls).input.obligation = L.input.obligation
+  | [] => ⟨rfl, rfl⟩
+  | c :: cs => by
+    obtain ⟨h1, h2⟩ := run_frame (step L c) cs
+    obtain ⟨g1, g2⟩ := step_frame L c
+    exact ⟨by rw [run_cons, h1, g1], by rw [run_cons, h2, g2]⟩
+
+theorem trace_get : ∀ (calls : List Call) (L : Ledger) (n : Nat) (o : PaymentOutcome),
+    (trace L calls)[n]? = some o → ∃ c, calls[n]? = some c ∧ o = (run L (calls.take n)).outcome c
+  | [], L, n, o, h => by simp [trace] at h
+  | c :: cs, L, 0, o, h => by
+    simp only [trace, List.getElem?_cons_zero, Option.some.injEq] at h
+    exact ⟨c, rfl, h.symm⟩
+  | c :: cs, L, n + 1, o, h => by
+    simp only [trace, List.getElem?_cons_succ] at h
+    obtain ⟨c', hc', ho⟩ := trace_get cs (step L c) n o h
+    exact ⟨c', by simpa using hc', by rw [List.take_succ_cons, run_cons]; exact ho⟩
+
+end LedgerLayer
+
+theorem step_unchanged_of_quiet (L c) (h : ∀ k w post res pid e post', L.outcome c ≠ .mutated k w post res ∧
+    L.outcome c ≠ .alias pid e post') : step L c = L := by
+  unfold step
+  cases ho : L.outcome c with
+  | mutated k w post res => exact absurd ho (h k w post res "" default post).1
+  | alias pid e post => exact absurd ho (h .RECORDED ⟨none, none, none, none⟩ post default pid e post).2
+  | _ => rfl
+
+theorem run_Inv {L : Ledger} (hI : Inv L) : ∀ calls, Inv (run L calls)
+  | [] => hI
+  | c :: cs => run_Inv (step_Inv c hI) cs
 
 theorem step_inserts {L c eid} (hE : insertedEvidenceId? (L.outcome c) = some eid) :
     findEvidence L.input.evidence eid = none ∧ (findEvidence (step L c).input.evidence eid).isSome = true := by
@@ -564,8 +882,6 @@ theorem run_inserts_evidence_once (L) (hL : ledgerWellFormed L) (calls) (hc : cl
       exact ⟨by simp [h0], h1⟩)
     calls L (Inv_of_wf hL)
 
-/-! ## Rows only grow; cash is conserved -/
-
 theorem step_rows {L : Ledger} (c) (hI : Inv L) {x} (hx : x ∈ L.input.payments) :
     ∃ q ∈ (step L c).input.payments, q.paymentId = x.paymentId ∧
       { q with status := x.status, reversalEvidenceId := x.reversalEvidenceId } = x := by
@@ -591,39 +907,6 @@ theorem run_rows_append_only (L) (hL : ledgerWellFormed L) (calls) (hc : clocksO
       { q with status := p.status, reversalEvidenceId := p.reversalEvidenceId } = p :=
   run_rows (Inv_of_wf hL) calls
 
-theorem step_conserve (L c) :
-    activeCents (step L c).input.payments + reversedCent (L.outcome c) =
-      activeCents L.input.payments + recordedCent (L.outcome c) := by
-  rcases step_kind L c with ⟨hs, hp, -⟩ | ⟨rc, w, post, res, -, ho, hp, -, -, -, -, -, -, hpay, -⟩ |
-    ⟨vc, _, w, post, res, hcmd, ho, _⟩
-  · rw [hp, hs.fields.2.2.2.1, hs.fields.2.2.2.2]
-  · have e1 : reversedCent (L.outcome c) = 0 := by rw [ho]; rfl
-    have e2 : recordedCent (L.outcome c) = (recordedPayment (L.request c).input rc).amountCents := by
-      rw [ho]; simp [recordedCent, hp]
-    rw [e1, e2, hpay, activeCents_eq, activeCents_eq, sum_insertBy]
-    simp [recordedPayment] <;> omega
-  · obtain ⟨p', -, -, hw', -, hact, -⟩ := reverse_exact (r := L.request c) hcmd ho
-    have e1 : reversedCent (L.outcome c) = p'.amountCents := by rw [ho]; simp [reversedCent, hw']
-    have e2 : recordedCent (L.outcome c) = 0 := by rw [ho]; rfl
-    have hact' : activeCents post.payments + p'.amountCents = activeCents L.input.payments := hact
-    rw [step_payments_mutated ho, e1, e2]; omega
-
-theorem conserve_gen : ∀ (calls : List Call) (L : Ledger),
-    activeCents (run L calls).input.payments + reversedOutcomeCents (trace L calls) =
-      activeCents L.input.payments + recordedCents (trace L calls)
-  | [], L => by simp [run, trace, reversedOutcomeCents, recordedCents]
-  | c :: cs, L => by
-    have ih := conserve_gen cs (step L c)
-    have h := step_conserve L c
-    simp only [run_cons, trace, reversedOutcomeCents, recordedCents, List.map_cons,
-      List.sum_cons] at ih ⊢
-    omega
-
-theorem run_conservation (L : Ledger) (hL : ledgerWellFormed L) (calls) (hc : clocksOk L calls) :
-    activeCents (run L calls).input.payments + reversedOutcomeCents (trace L calls) =
-      activeCents L.input.payments + recordedCents (trace L calls) :=
-  conserve_gen calls L
-
 theorem mem_trace : ∀ (calls : List Call) (L : Ledger) {o}, o ∈ trace L calls →
     ∃ (M : Ledger) (c : Call), o = M.outcome c
   | [], _, _, h => by simp [trace] at h
@@ -642,7 +925,7 @@ theorem run_paid_total (L) (hL : ledgerWellFormed L) (h0 : L.input.payments = []
     ∀ o ∈ trace L calls, ∀ k w post res, o = .mutated k w post res →
       res.receivedCashCents = activeCents post.payments := by
   refine ⟨?_, fun o ho k w post res h => ?_⟩
-  · have := conserve_gen calls L
+  · have := run_conservation L calls
     rw [h0] at this
     simpa [activeCents] using this
   · obtain ⟨M, c, rfl⟩ := mem_trace calls L ho
@@ -673,191 +956,20 @@ theorem record_then_reverse_restores (L) (hL : ledgerWellFormed L) (rc : RecordC
     hact2
   rw [step_payments_mutated ho2]; omega
 
-/-! ## Retries (III.3): a repeat of a recorded command is a duplicate, for any calls between -/
-
-theorem confirmation_ctx {i j : FinancialInput} (h : i.context = j.context) (c t) :
-    confirmation i c t = confirmation j c t := by simp only [confirmation, h]
-
-theorem reversalRecord_congr {i j : FinancialInput} {p q : Payment} (hc : i.context = j.context)
-    (hi : p.paymentId = q.paymentId) (ha : p.amountCents = q.amountCents) (c t a) :
-    { reversalRecord i c p t with receivedAt := a } = { reversalRecord j c q t with receivedAt := a } := by
-  simp only [reversalRecord, hc, hi, ha]
-
-/-- What a form check reads (origin and local reference) does not depend on when or where. -/
-theorem formRefusal_of_conf {i j c t u s} (hc : confirmation i c t = s)
-    (h : formRefusal (confirmation j c u) = none) : formRefusal s = none := by
-  subst hc
-  exact Eq.trans (rfl : formRefusal (confirmation i c t) = formRefusal (confirmation j c u)) h
-
-theorem recordRetry_dup {r c p s k}
-    (hs : findEvidence r.input.evidence c.evidenceId = some s) (hfs : formRefusal s = none)
-    (hle : c.eventAt ≤ s.receivedAt) (hk : receiptOf r.receipts p.paymentId = some k)
-    (hrev : r.expectedRevision = some k.recordedRevision) (hact : k.paysActionId = c.paysActionId)
-    (he : p.evidenceId = c.evidenceId) (ho : p.commonOriginId = c.commonOriginId)
-    (ha : p.amountCents = c.amountCents) (ht : p.eventAt = c.eventAt)
-    (hc : confirmation r.input c s.receivedAt = s) :
-    recordRetry r c p = .duplicate (some c.paymentId) := by
-  simp [recordRetry, hs, hfs, hk, Nat.not_lt.2 hle, hrev, hact, he, ho, ha, ht, hc]
-
-theorem decideRecord_retry {r c p} (hz : c.amountCents ≠ 0) (hfor : r.foreign.paymentId = false)
-    (hp : findPayment r.input.payments c.paymentId = some p) : decideRecord r c = recordRetry r c p := by
-  simp [decideRecord, hz, hfor, hp]
-
-/-- A recorded command, as the next snapshot sees it. -/
-def Rec (M : Ledger) (c : RecordCommand) (rev : Nat) : Prop :=
-  Inv M ∧ c.amountCents ≠ 0 ∧
-  (∃ p, findPayment M.input.payments c.paymentId = some p ∧ p.evidenceId = c.evidenceId ∧
-    p.commonOriginId = c.commonOriginId ∧ p.amountCents = c.amountCents ∧ p.eventAt = c.eventAt) ∧
-  (∃ k, receiptOf M.receipts c.paymentId = some k ∧ k.recordedRevision = rev ∧
-    k.paysActionId = c.paysActionId) ∧
-  (∃ s, findEvidence M.input.evidence c.evidenceId = some s ∧ c.eventAt ≤ s.receivedAt ∧
-    confirmation M.input c s.receivedAt = s ∧ formRefusal s = none)
-
-theorem rec_duplicate {M : Ledger} {c rev} (now' : Nat) (h : Rec M c rev) :
-    M.outcome ⟨now', some rev, .record c⟩ = .duplicate (some c.paymentId) := by
-  obtain ⟨-, hz, ⟨p, hp, he, ho, ha, ht⟩, ⟨k, hk, hkr, hkp⟩, ⟨s, hs, hle, hce, hfs⟩⟩ := h
-  show decideRecord (M.request ⟨now', some rev, .record c⟩) c = _
-  rw [decideRecord_retry (r := M.request ⟨now', some rev, .record c⟩) hz rfl hp]
-  have hk' : receiptOf (M.request ⟨now', some rev, .record c⟩).receipts p.paymentId = some k := by
-    rw [findPayment_id _ _ _ hp]; exact hk
-  exact recordRetry_dup hs hfs hle hk' (by simp [Ledger.request, hkr]) hkp he ho ha ht hce
-
-theorem Rec_step {M c rev} (h : Rec M c rev) (c') : Rec (step M c') c rev := by
-  obtain ⟨hI, hz, ⟨p, hp, he, ho, ha, ht⟩, ⟨k, hk, hkr, hkp⟩, ⟨s, hs, hle, hce, hfs⟩⟩ := h
-  refine ⟨step_Inv c' hI, hz, ?_, ⟨k, step_receipt c' hI hk, hkr, hkp⟩,
-    ⟨s, step_evidence M c' hs, hle, ?_, hfs⟩⟩
-  · obtain ⟨q, hq, hc⟩ := step_find M c' hp
-    rcases hc with rfl | ⟨e, rfl⟩ <;> exact ⟨_, hq, he, ho, ha, ht⟩
-  · rw [confirmation_ctx (step_context M c') c s.receivedAt]; exact hce
-
-theorem run_Rec {M c rev} (h : Rec M c rev) : ∀ calls, Rec (run M calls) c rev
-  | [] => h
-  | c' :: cs => run_Rec (Rec_step h c') cs
-
-theorem Rec_init {L : Ledger} (hI : Inv L) {c : RecordCommand} {c0 : Call} {rev w post res}
-    (hcmd : c0.command = .record c) (hexp : c0.expectedRevision = some rev)
-    (h : L.outcome c0 = .mutated .RECORDED w post res) : Rec (step L c0) c rev := by
-  obtain ⟨rc, hcmd', -, -, hf, hrev, hew, hpay, hrec⟩ := step_recorded h
-  obtain rfl : rc = c := Command.record.inj (hcmd'.symm.trans hcmd)
-  have hz : rc.amountCents ≠ 0 := fun h0 => by
-    have h' : paymentTransition (L.request c0) = .mutated .RECORDED w post res := h
-    rw [record_amount_zero (r := L.request c0) hcmd h0] at h'
-    cases h'
-  have hrv : rev = L.input.beforeRevision := by
-    simpa [revisionOk, Ledger.request, hexp] using hrev
-  refine ⟨step_Inv c0 hI, hz, ⟨recordedPayment (L.request c0).input rc, ?_, rfl, rfl, rfl, rfl⟩,
-    ⟨recordedReceipt (L.request c0).input rc, ?_, hrv.symm, rfl⟩, ?_⟩
-  · rw [hpay, findPayment_insertBy (p := recordedPayment (L.request c0).input rc) hf,
-      if_pos (show (recordedPayment (L.request c0).input rc).paymentId = rc.paymentId from rfl)]
-  · rw [hrec, receiptOf_insertBy (K := recordedReceipt (L.request c0).input rc) (receiptOf_none hI hf),
-      if_pos (show (recordedReceipt (L.request c0).input rc).paymentId = rc.paymentId from rfl)]
-  · obtain ⟨hform, hle, -, hcase⟩ := hew
-    rcases hcase with ⟨hw, -⟩ | ⟨-, s, hs, hle', hce⟩
-    · refine ⟨_, step_mutated_evidence h hw, hle, ?_, hform⟩
-      exact (confirmation_ctx (step_context L c0) rc _).trans
-        (confirmation_ctx (i := L.input) (j := (L.request c0).input) rfl rc _)
-    · refine ⟨s, step_evidence L c0 hs, hle', ?_, formRefusal_of_conf hce hform⟩
-      exact (confirmation_ctx (step_context L c0) rc _).trans
-        ((confirmation_ctx (i := L.input) (j := (L.request c0).input) rfl rc _).trans hce)
-
-theorem run_record_retry_duplicate (L) (hL : ledgerWellFormed L) (c : RecordCommand) (now rev : Nat)
-    (calls) (now' : Nat)
-    (hc : clocksOk L (⟨now, some rev, .record c⟩ :: calls ++ [⟨now', some rev, .record c⟩]))
+-- 16.2 item 6 (5.3): placeholders removed, unused hypotheses dropped
+theorem run_record_retry_duplicate (L : Ledger) (hL : ledgerWellFormed L) (c : RecordCommand)
+    (now rev : Nat) (calls : List Call) (now' : Nat)
     (h : ∃ w post res, L.outcome ⟨now, some rev, .record c⟩ = .mutated .RECORDED w post res) :
     (run (step L ⟨now, some rev, .record c⟩) calls).outcome ⟨now', some rev, .record c⟩ =
       .duplicate (some c.paymentId) := by
   obtain ⟨w, post, res, ho⟩ := h
   exact rec_duplicate now' (run_Rec (Rec_init (Inv_of_wf hL) rfl rfl ho) calls)
 
-/-! ## The same for a reversal -/
-
-theorem evidenceSlot_same {r : PaymentRequest} {e s} (hf : r.foreign.evidenceId = false)
-    (hs : findEvidence r.input.evidence e.evidenceId = some s) (hle : e.eventAt ≤ s.receivedAt)
-    (heq : { e with receivedAt := s.receivedAt } = s) : evidenceSlot r e = .same s := by
-  simp [evidenceSlot, hf, hs, hle, heq]
-
-theorem decideReverse_dup {r c p s} (hp : findPayment r.input.payments c.paymentId = some p)
-    (hf : r.foreign.evidenceId = false) (hs : findEvidence r.input.evidence c.evidenceId = some s)
-    (ht : ∀ t, c.eventAt = some t → t = s.eventAt)
-    (hfe : formRefusal (reversalRecord r.input c p s.eventAt) = none)
-    (hle : s.eventAt ≤ r.input.evaluatedAt) (hle2 : s.eventAt ≤ s.receivedAt)
-    (heq : { reversalRecord r.input c p s.eventAt with receivedAt := s.receivedAt } = s) :
-    decideReverse r c = .duplicate none := by
-  have htime : c.eventAt.getD (((findEvidence r.input.evidence c.evidenceId).map (·.eventAt)).getD
-      r.input.evaluatedAt) = s.eventAt := by
-    rw [hs]
-    cases hce : c.eventAt with
-    | none => rfl
-    | some t => exact ht t hce
-  have hslot : evidenceSlot r (reversalRecord r.input c p s.eventAt) = .same s :=
-    evidenceSlot_same hf hs hle2 heq
-  simp [decideReverse, hp, hf, htime, hfe, Nat.not_lt.2 hle, hslot]
-
-def RevDone (M : Ledger) (c : ReverseCommand) (b : Nat) : Prop :=
-  ∃ p s, findPayment M.input.payments c.paymentId = some p ∧ p.status = .REVERSED ∧
-    findEvidence M.input.evidence c.evidenceId = some s ∧ s.eventAt ≤ s.receivedAt ∧
-    s.receivedAt ≤ b ∧ (∀ t, c.eventAt = some t → t = s.eventAt) ∧
-    { reversalRecord M.input c p s.eventAt with receivedAt := s.receivedAt } = s ∧ formRefusal s = none
-
-theorem revDone_duplicate {M : Ledger} {c b} (exp' : Option Nat) (h : RevDone M c b) :
-    M.outcome ⟨b, exp', .reverse c⟩ = .duplicate none := by
-  obtain ⟨p, s, hp, -, hs, hle, hb, ht, hrr, hfs⟩ := h
-  have hfe : formRefusal (reversalRecord (M.request ⟨b, exp', .reverse c⟩).input c p s.eventAt) = none :=
-    (congrArg formRefusal hrr).trans hfs
-  exact decideReverse_dup (r := M.request ⟨b, exp', .reverse c⟩) hp rfl hs ht hfe (Nat.le_trans hle hb) hle hrr
-
-theorem RevDone_step {M c b} (h : RevDone M c b) (c') : RevDone (step M c') c b := by
-  obtain ⟨p, s, hp, hst, hs, h1, h2, ht, hrr, hfs⟩ := h
-  obtain ⟨q, hq, hc⟩ := step_find M c' hp
-  have hqp : q.paymentId = p.paymentId ∧ q.amountCents = p.amountCents := by
-    rcases hc with rfl | ⟨e, rfl⟩ <;> exact ⟨rfl, rfl⟩
-  have hqs : q.status = .REVERSED := by
-    rcases hc with rfl | ⟨e, rfl⟩
-    · exact hst
-    · rfl
-  exact ⟨q, s, hq, hqs, step_evidence M c' hs, h1, h2, ht,
-    (reversalRecord_congr (step_context M c') hqp.1 hqp.2 c s.eventAt s.receivedAt).trans hrr, hfs⟩
-
-theorem run_RevDone {M c b} (h : RevDone M c b) : ∀ calls, RevDone (run M calls) c b
-  | [] => h
-  | c' :: cs => run_RevDone (RevDone_step h c') cs
-
-theorem step_reversed {L c w post res} (h : L.outcome c = .mutated .REVERSED w post res) :
-    ∃ vc p e, c.command = .reverse vc ∧ findPayment L.input.payments vc.paymentId = some p ∧
-      w.evidence = some e ∧
-      e = reversalRecord (L.request c).input vc p (vc.eventAt.getD (L.request c).input.evaluatedAt) ∧
-      e.eventAt ≤ (L.request c).input.evaluatedAt ∧ formRefusal e = none ∧
-      (step L c).input.payments = L.input.payments.map
-        (fun x => if x.paymentId = p.paymentId then reversedImage p vc else x) := by
-  rcases step_kind L c with ⟨hs, -⟩ | ⟨_, _, _, _, _, ho, _⟩ |
-    ⟨vc, p, w', post', res', hcmd, ho, hf, -, hw, -, hpay, -, e, hwe, he, -, hle, hform⟩
-  · exact absurd h (hs.2 w post res)
-  · cases h.symm.trans ho
-  · cases h.symm.trans ho
-    exact ⟨vc, p, e, hcmd, hf, hwe, he, hle, hform, hpay⟩
-
-theorem RevDone_init {L : Ledger} {c : ReverseCommand} {c0 : Call} {b w post res}
-    (hcmd : c0.command = .reverse c) (hb : c0.now ≤ b)
-    (h : L.outcome c0 = .mutated .REVERSED w post res) : RevDone (step L c0) c b := by
-  obtain ⟨vc, p, e, hcmd', hf, hw, he, hle, hform, hpay⟩ := step_reversed h
-  obtain rfl : vc = c := Command.reverse.inj (hcmd'.symm.trans hcmd)
-  subst he
-  refine ⟨reversedImage p vc, _, ?_, rfl, step_mutated_evidence h hw, hle, hb, ?_, ?_, hform⟩
-  · rw [hpay]; exact findPayment_reversed hf
-  · intro t ht; simp [reversalRecord, ht]
-  · exact (reversalRecord_congr (step_context L c0) rfl rfl vc _ _).trans
-      (reversalRecord_congr (i := L.input) (j := (L.request c0).input) rfl rfl rfl vc _ _)
-
-theorem run_reverse_retry_duplicate (L) (hL : ledgerWellFormed L) (c : ReverseCommand) (now : Nat)
-    (exp exp' : Option Nat) (calls) (now' : Nat)
-    (hc : clocksOk L (⟨now, exp, .reverse c⟩ :: calls ++ [⟨now', exp', .reverse c⟩]))
+theorem run_reverse_retry_duplicate (L : Ledger) (c : ReverseCommand) (now : Nat)
+    (exp exp' : Option Nat) (calls : List Call) (now' : Nat) (hnow : now ≤ now')
     (h : ∃ w post res, L.outcome ⟨now, exp, .reverse c⟩ = .mutated .REVERSED w post res) :
     (run (step L ⟨now, exp, .reverse c⟩) calls).outcome ⟨now', exp', .reverse c⟩ = .duplicate none := by
   obtain ⟨w, post, res, ho⟩ := h
-  have hnow : now ≤ now' := by
-    obtain ⟨-, h2⟩ := List.pairwise_cons.1 hc.1
-    exact (List.pairwise_cons.1 h2).1 now'
-      (List.mem_map.2 ⟨_, List.mem_append_right _ (List.mem_singleton_self _), rfl⟩)
   exact revDone_duplicate exp' (run_RevDone (RevDone_init rfl hnow ho) calls)
 
 end BlindLedger.Financial.Payment

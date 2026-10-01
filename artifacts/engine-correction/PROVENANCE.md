@@ -1,13 +1,17 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the cursor-decoder re-pin below: two fresh `git archive`
-stage builds of `lean/` at `7b47660` (lean tree `0b05ecaa079d5ec1b83da25f43adf49d99ac15c9`, 77 files), byte-identical.
-The release producer has NOT run on this tree; its last receipts are on the partials tree, below.
+`blind_financial_correction.exe` is the Lean/Lake executable of the m3-step2 re-pin below: two fresh `git archive` stage builds of `lean/` at `1168909`
+(lean tree `3cf4adb420ce25197fdfb7a419055e62408af34e`), byte-identical. The release producer has NOT run on this tree; its last receipts are on the partials tree, below.
 
-- Size: 6,431,232 bytes
-- SHA-256: `441EB3E83DEAF561811065F8B9ACB6EEDC31389C7361E3A75B2519C2521F4A8A`
+- Size: 6,433,792 bytes
+- SHA-256: `C617735511364625BD0FF790F1FE662E8F96F70C38211928DDC7D39F99012DCC`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
-- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`. `FB659DA3...A785`, 6,300,160 bytes, recoverable at `84f3044`; `2CD5822D...1E58B`, 6,298,624 bytes, recoverable at `6326b9d` (retired 2026-10-01).
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`. `FB659DA3...A785`, 6,300,160 bytes, recoverable at `84f3044`; `2CD5822D...1E58B`, 6,298,624 bytes, recoverable at `6326b9d` (retired 2026-10-01). `441EB3E8...F4A8A`, 6,431,232 bytes, recoverable at `a62906f` (retired 2026-10-01).
+
+## m3-step2 re-pin (2026-10-01, rule `h1-v1`, no money or format change)
+
+Why it moved: `Evaluation.lean` gained `caseStatusFrom` and `Financial/Types.lean` gained `envWellFormed` (m3-step2 C1, shared with the payment step); the transition is unchanged. The exe is 2,560 bytes larger.
+Evidence: two fresh `git archive 1168909` stage builds (`m3s2-stagea-a1-L2`, `m3s2-stageb-a1-L2`; `lake build` of `blind_financial_worker blind_financial_correction gate_verify gate_axioms blind_financial_axioms`, 104 jobs, exit 0) gave this exe byte for byte; gate_verify (`9bd2602b...`) did not move and the worker moved (`36D3FE0C...1AEA`, `../engine-evaluator/PROVENANCE.md`). Differential `bench/correction_repin_diff.py` (log `m3s2-rdiff-dev-a1-L2`), `441EB3E8...F4A8A` against this exe on the 52 requests the acceptance and constitution suites send, each with a trailing byte, truncations, bit flips, 0xFF overwrites, insertions, deletions and 0xC0 in strings: `SUMMARY captured=52 runs=11646 mismatches=0`. The vectors below are unchanged. No release-producer receipt was made for this pin.
 
 ## Cursor-decoder re-pin (2026-10-01, rule `h1-v1`, no money or format change)
 

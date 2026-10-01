@@ -11,6 +11,7 @@ import BlindLedger.Financial.CorrectionTransition.Theorems.Core
 import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.CodecLaws
 import BlindLedger.Financial.Payment.KAT
+import BlindLedger.Financial.Payment.OpenLaws
 import BlindLedger.Financial.DecisionPackage.Laws
 
 namespace BlindLedger.Financial
@@ -117,6 +118,15 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWire_evaluated
 /-- info: 'BlindLedger.Financial.workerRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_length_le
+
+/-- info: 'BlindLedger.Financial.workerRespond_evaluator_unchanged' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_evaluator_unchanged
+
+/-- info: 'BlindLedger.Financial.workerRespond_payment' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_payment
+
+/-- info: 'BlindLedger.Financial.paymentRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.paymentRespond_length_le
 /-- info: 'BlindLedger.Financial.maxWorkerFrameBytes_fits_u32' does not depend on any axioms -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.maxWorkerFrameBytes_fits_u32
 #print axioms BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only
@@ -332,3 +342,59 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageAnswer_respond
 
 end BlindLedger.Financial
+/-- info: 'BlindLedger.Financial.Payment.paymentRespond_decode_none' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentRespond_decode_none
+/-- info: 'BlindLedger.Financial.Payment.decodeStepOutcome_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodeStepOutcome_encode
+/-- info: 'BlindLedger.Financial.Payment.refusals_complete' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.refusals_complete
+/-- info: 'BlindLedger.Financial.Payment.absorb_summarize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.absorb_summarize
+/-- info: 'BlindLedger.Financial.Payment.evaluateState_summarize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.evaluateState_summarize
+/-- info: 'BlindLedger.Financial.Payment.state_requests_paid' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.state_requests_paid
+/-- info: 'BlindLedger.Financial.Payment.anchorItem_fits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.anchorItem_fits
+/-- info: 'BlindLedger.Financial.Payment.anchorItem_length' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.anchorItem_length
+/-- info: 'BlindLedger.Financial.Payment.step_anchor_fits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.step_anchor_fits
+/-- info: 'BlindLedger.Financial.Payment.decodePaymentItem_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentItem_encode
+/-- info: 'BlindLedger.Financial.Payment.run_conflict_retry_unchanged' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.run_conflict_retry_unchanged
+/-- info: 'BlindLedger.Financial.Payment.step_wellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.step_wellFormed
+/-- info: 'BlindLedger.Financial.Payment.record_link_within_shortfall' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.record_link_within_shortfall
+/-- info: 'BlindLedger.Financial.Payment.run_balance_identity' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.run_balance_identity
+/-- info: 'BlindLedger.Financial.Payment.paymentTransition_shadow_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentTransition_shadow_refused
+/-- info: 'BlindLedger.Financial.Payment.decodePaymentItem_command' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentItem_command
+/-- info: 'BlindLedger.Financial.Payment.decodePaymentItem_coherent' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentItem_coherent
+/-- info: 'BlindLedger.Financial.Payment.stepView_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.stepView_eq
+/-- info: 'BlindLedger.Financial.Payment.chain_fold_eq_full' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.chain_fold_eq_full
+-- R2 (open amounts of correction requests); #2 `requests_within_balance` is core-theorems-v1 section 4.4 item 1,
+-- and with #6 `record_link_within_open` it replaces the dropped run-level R1 law (section 4.4, `run_linked_within_shortfall`).
+/-- info: 'BlindLedger.Financial.Payment.openTotal_eq_min' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openTotal_eq_min
+/-- info: 'BlindLedger.Financial.Payment.openCents_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_le
+/-- info: 'BlindLedger.Financial.Payment.requests_within_balance' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.requests_within_balance
+/-- info: 'BlindLedger.Financial.Payment.openCents_eq_unpaid_of_within' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_eq_unpaid_of_within
+/-- info: 'BlindLedger.Financial.Payment.engine_requestable_agrees' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.engine_requestable_agrees
+/-- info: 'BlindLedger.Financial.Payment.openCents_pay_local' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_pay_local
+/-- info: 'BlindLedger.Financial.Payment.record_link_within_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.record_link_within_open
+/-- info: 'BlindLedger.Financial.Payment.linkRefusal_implies_r1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.linkRefusal_implies_r1

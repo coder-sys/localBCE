@@ -153,7 +153,7 @@ theorem wf_owed_pos {input : FinancialInput} (h : financialInputWellFormed input
     0 < input.obligation.owedCents := by
   have hO : obligationWellFormed input.obligation = true := by
     unfold financialInputWellFormed at h
-    simp only [Bool.and_eq_true] at h
+    simp only [envWellFormed, envOf, Bool.and_eq_true] at h
     grind
   simp only [obligationWellFormed, positiveAmountWellFormed, Bool.and_eq_true, decide_eq_true_eq]
     at hO
@@ -862,7 +862,7 @@ theorem evaluate_resultWellFormed {input : FinancialInput} {r : FinancialResult}
       timeWellFormed input.evaluatedAt = true ∧
       canonicalIdList (input.evidence.map EvidenceRecord.evidenceId) = true := by
     unfold financialInputWellFormed at hWf
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at hWf
+    simp only [envWellFormed, envOf, Bool.and_eq_true, decide_eq_true_eq] at hWf
     grind
   obtain ⟨hCtx, hAuth, hPack, hObl, hBef, hRev, hEv, hIds⟩ := hIn
   simp only [authorityWellFormed, Bool.and_eq_true, decide_eq_true_eq] at hAuth
