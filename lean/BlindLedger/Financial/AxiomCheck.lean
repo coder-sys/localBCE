@@ -117,6 +117,15 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWire_evaluated
 /-- info: 'BlindLedger.Financial.workerRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_length_le
+
+/-- info: 'BlindLedger.Financial.workerRespond_evaluator_unchanged' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_evaluator_unchanged
+
+/-- info: 'BlindLedger.Financial.workerRespond_payment' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_payment
+
+/-- info: 'BlindLedger.Financial.paymentRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.paymentRespond_length_le
 /-- info: 'BlindLedger.Financial.maxWorkerFrameBytes_fits_u32' does not depend on any axioms -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.maxWorkerFrameBytes_fits_u32
 #print axioms BlindLedger.Financial.CorrectionTransition.canonicalActionPayload_dispatch_is_synthetic_record_only

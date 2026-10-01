@@ -265,10 +265,11 @@ def parseStepOutcome (b : Bytes) : Option StepOutcome := do
 def decodeStepOutcome (b : Bytes) : Option StepOutcome :=
   (parseStepOutcome b).filter fun o => rawEncodeStepOutcome o == b
 
-/-- An answer is sent only if it decodes to exactly the outcome; otherwise worker byte 3. -/
+/-- An answer is sent only if it fits a worker frame and decodes to exactly the outcome;
+    otherwise worker byte 3. -/
 def encodeStepOutcome (o : StepOutcome) : Option Bytes :=
   let b := rawEncodeStepOutcome o
-  if decodeStepOutcome b = some o then some b else none
+  if b.length ≤ maxTotalEncodedBytes ∧ decodeStepOutcome b = some o then some b else none
 
 def paymentRespond (w : Bytes) : Bytes :=
   match decodePaymentItem w with
