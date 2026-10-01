@@ -1,12 +1,14 @@
-import BlindLedger.Gate.Rules.Spec
+import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Sha3
+
+/-! The test-only vector runner: decides with `Fast.decideBatchF` (= `decideBatch`, `FastEq.decideBatchF_eq`; no reversed re-run, `decideBatchF_reverse`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
 
 namespace BlindLedger.Gate.Rules.Run
 
 open BlindLedger.Gate.Rules
 
-/-! Runs a rules vector file through `decideBatch`.  Directives, one per line:
-    `case NAME` clears the batch, the totals, the lines earlier commits
+/-! Runs a rules vector file through `decideBatch` (its proved twin `Fast.decideBatchF`).  Directives,
+    one per line: `case NAME` clears the batch, the totals, the lines earlier commits
     released or left unresolved and the gate's checkpoints; `today D`;
     `snap KIND ASOF COUNT PIN` (re)declares a snapshot (`dmf`, `pdeath`,
     `excl`, `span`) or the `released` or `unresolved` set (rows `ID[:PAY] FLOW
@@ -18,9 +20,9 @@ open BlindLedger.Gate.Rules
     `line ...row fields... [OUTCOME REASONS [with=IDS]]` adds a line to the
     batch, `redo PAY` makes the batch re-decide that payment and `pay PAY
     OUTCOME` expects its `payOutcome`; `commit` decides the batch, checks the
-    expectations (all lines or none) and that the reversed batch decides the
-    same, adds its released and unresolved lines to those sets, and
-    takes the result's checkpoints (`advance`); `report`
+    expectations (all lines or none), adds its released and unresolved lines
+    to those sets, and takes the result's checkpoints (`advance`).  Arrival
+    order cannot change a decision (`Fast.decideBatchF_reverse`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
 
@@ -38,18 +40,30 @@ def hexOf (b : ByteArray) : String :=
 /-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
     it from the files, so a stale runner fails that test whatever its file times. -/
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
-  include_str "Run.lean", include_str "../../Sha3.lean", include_str "../../../lakefile.toml",
+  include_str "Fast.lean", include_str "Run.lean",  -- FAST
+  include_str "../../Sha3.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
+
+/-- The six pinned inputs, parsed and pin-checked once per declaration.  -- FAST -/
+structure Pinned where
+  dmf : Option (Snapshot Death)
+  pdeath : Option (Snapshot Death)
+  excl : Option (Snapshot Exclusion)
+  span : Option (Snapshot Span)
+  released : Option (Snapshot Line)
+  unresolved : Option (Snapshot Line)
 
 structure St where
   today : Nat := 0
   snaps : List (String × Nat × Nat × String) := []
-  rows : List (String × List String) := []
+  rows : Array (String × List String) := #[]           -- FAST: was a List grown by `++ [x]`
+  /-- `pin` of the current `snaps` and `rows`; cleared whenever either changes.  -- FAST -/
+  pinned : Option Pinned := none
   extra : List Line := []
   held : List Line := []
   rprior : Snapshot Line := ⟨0, 0, []⟩
   uprior : Snapshot Line := ⟨0, 0, []⟩
-  batch : List (Line × Option String) := []
+  batch : Array (Line × Option String) := #[]          -- FAST
   redo : List Nat := []
   pays : List (Nat × String) := []
   done : List Decision := []
@@ -60,12 +74,12 @@ structure St where
 def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option α)
     (fields : α → List (Nat × Nat)) : Option (Snapshot α) := do
   let (asOf, count, pin) ← st.snaps.lookup kind
-  let s : Snapshot α := ⟨asOf, count, ← ((st.rows.filter (·.1 == kind)).map (·.2)).mapM row⟩
+  let s : Snapshot α := ⟨asOf, count, ← ((st.rows.filter (·.1 == kind)).toList.map (·.2)).mapM row⟩
   let domain := if kind == "released" || kind == "unresolved" then s!"RR/GATE/{kind.toUpper}/v1"
     else "RR/GATE/SNAPSHOT/v1"
   let kinds := ["dmf", "pdeath", "excl", "span", "released", "unresolved"]
-  let bytes ← pinInput domain (kinds.idxOf kind + 1) fields s
-  guard (hexOf (BlindLedger.Semantic.sha3_512 ⟨bytes.toArray⟩) == pin)
+  let bytes ← Fast.pinBytes domain (kinds.idxOf kind + 1) fields s   -- FAST: `pin_run_eq`
+  guard (hexOf (BlindLedger.Semantic.sha3_512 bytes) == pin)
   pure s
 
 def parseLine : List String → Option Line
@@ -83,18 +97,26 @@ def death (r : List String) : Option Death := match r.mapM String.toNat? with
 def grow (o : Option (Snapshot Line)) (xs : List Line) : Option (Snapshot Line) :=
   o.map fun s => { s with count := s.count + xs.length, entries := s.entries ++ xs }
 
-def St.ctx (st : St) : Ctx where
-  today := st.today
+def St.pin (st : St) : Pinned where
   dmf := snapshot st "dmf" death Death.fields
-  providerDeaths := snapshot st "pdeath" death Death.fields
-  exclusions := snapshot st "excl" (fun r => match r.mapM String.toNat? with
+  pdeath := snapshot st "pdeath" death Death.fields
+  excl := snapshot st "excl" (fun r => match r.mapM String.toNat? with
     | some [i, a, b] => some ⟨i, a, b⟩
     | _ => none) Exclusion.fields
-  enrollment := snapshot st "span" (fun r => match r.mapM String.toNat? with
+  span := snapshot st "span" (fun r => match r.mapM String.toNat? with
     | some [m, p, a, b] => some ⟨m, p, a, b⟩
     | _ => none) Span.fields
-  released := grow (snapshot st "released" parseLine Line.fields) st.extra
-  unresolved := grow (snapshot st "unresolved" parseLine Line.fields) st.held
+  released := snapshot st "released" parseLine Line.fields
+  unresolved := snapshot st "unresolved" parseLine Line.fields
+
+def St.ctx (st : St) (p : Pinned) : Ctx where
+  today := st.today
+  dmf := p.dmf
+  providerDeaths := p.pdeath
+  exclusions := p.excl
+  enrollment := p.span
+  released := grow p.released st.extra
+  unresolved := grow p.unresolved st.held
   releasedPrior := st.rprior
   unresolvedPrior := st.uprior
   anchor := 0
@@ -119,40 +141,43 @@ def tally (ds : List Decision) : String :=
   s!"lines={ds.length} cents={c} ({money c})"
 
 def commit (st : St) : St × List String :=
-  let c := st.ctx
-  let lines := st.batch.map (·.1)
-  let r := decideBatch c lines
-  let det := decideBatch c lines.reverse == r
-  let exp := st.batch.filterMap (·.2)
+  let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
+  let c := st.ctx p
+  let lines := st.batch.toList.map (·.1)
+  let x := Fast.Ix.build c lines                        -- FAST
+  let r := x.run lines                                  -- FAST: = decideBatch c lines
+  let exp := st.batch.toList.filterMap (·.2)
   let got := r.decisions.map render
-  let bad := st.pays.filter fun (p, o) => name (payOutcome c r.decisions p) != o
+  let bad := st.pays.filter fun (q, o) => name (x.payOutcome r.decisions q) != o
   let (ok, n, msg) :=
-    if exp.isEmpty then (det, 0, [])
-    else if exp.length == lines.length && det && sorted exp == sorted got then (true, lines.length, [])
+    if exp.isEmpty then (true, 0, [])                   -- FAST: no reversed re-run
+    else if exp.length == lines.length && sorted exp == sorted got then (true, lines.length, [])
     else (false, 0, ((sorted got).filter (!exp.contains ·)).map ("RULES_GOT " ++ ·))
   let ok := ok && bad.isEmpty
-  let msg := msg ++ bad.map fun (p, o) => s!"RULES_PAY {p} expected={o}"
-  ({ st with extra := st.extra ++ r.released.entries.drop (releasedSet c).length,
-             held := st.held ++ r.unresolved.entries.drop (unresolvedSet c).length,
-             rprior := r.released, uprior := r.unresolved, batch := [], redo := [], pays := [],
+  let msg := msg ++ bad.map fun (q, o) => s!"RULES_PAY {q} expected={o}"
+  ({ st with pinned := some p,
+             extra := st.extra ++ r.released.entries.drop x.relN,     -- FAST: `run_relN`
+             held := st.held ++ r.unresolved.entries.drop x.unrN,
+             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], pays := [],
              done := st.done ++ r.decisions, checked := st.checked + (if ok then n + st.pays.length else 0),
              failed := st.failed + (if ok then 0 else 1) },
-   if ok then [] else s!"RULES_VECTOR_MISMATCH commit determinism={det}" :: msg)
+   if ok then [] else "RULES_VECTOR_MISMATCH commit" :: msg)
 
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
-                                   batch := [], redo := [], pays := [], done := [] }, [])
+                                   batch := #[], redo := [], pays := [], done := [] }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
+                    pinned := none,
                     extra := if k == "released" then [] else st.extra,
                     held := if k == "unresolved" then [] else st.held }, [])
-  | ["drop", k] => pure ({ st with snaps := st.snaps.filter (·.1 != k) }, [])
+  | ["drop", k] => pure ({ st with snaps := st.snaps.filter (·.1 != k), pinned := none }, [])
   | "line" :: fs => do
     let l ← parseLine (fs.take 9)
     let e := fs.drop 9
     guard ([0, 2, 3].contains e.length)
-    pure ({ st with batch := st.batch ++ [(l, if e.isEmpty then none else some (" ".intercalate (lineText l :: e)))] }, [])
+    pure ({ st with batch := st.batch.push (l, if e.isEmpty then none else some (" ".intercalate (lineText l :: e))) }, [])
   | ["redo", p] => do pure ({ st with redo := (← p.toNat?) :: st.redo }, [])
   | ["pay", p, o] => do pure ({ st with pays := st.pays ++ [(← p.toNat?, o)] }, [])
   | ["commit"] => pure (commit st)
@@ -164,7 +189,7 @@ def step (st : St) : List String → Option (St × List String)
   | ["end", n] => do pure ({ st with expected := some (← n.toNat?) }, [])
   | k :: fs => do
     guard (["dmf", "pdeath", "excl", "span", "released", "unresolved"].contains k)
-    pure ({ st with rows := st.rows ++ [(k, fs)] }, [])
+    pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 
 def main (args : List String) : IO UInt32 := do
