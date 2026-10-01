@@ -20,8 +20,9 @@ production_usable=false, activation=false.
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -96,7 +97,7 @@ async function view() {
     // What a person reads: one line per table row, fact, paragraph and queue row, tagged H or program.
     const scope = (el) => ((el.closest("[data-record]") || {}).dataset?.record ?? (el.closest("#row-item-h") ? "item-h" : "")) === "item-h" ? "H" : "program";
     const add = (el, line) => { if (line && !invisible(el)) lines.push({ scope: scope(el), text: line, where: el.closest("#qlist") ? "queue" : el.closest("#page") ? "page" : "status" }); };
-    for (const el of document.querySelectorAll("#page tr, #page p, #page .state, #page .line, #page .seal, #page .log li > *, #page dt, #page .steps li, #qlist .row, #qlist .group, #command-status")) {
+    for (const el of document.querySelectorAll("#page tr, #page p, #page .state, #page .line, #page .seal, #page .log li, #page dt, #page .steps li, #qlist .row, #qlist .group, #command-status")) {
       add(el, el.matches("dt") ? text(el) + ": " + text(el.nextElementSibling) : el.matches("tr") ? [...el.children].map(text).filter(Boolean).join(" | ") : text(el));
     }
     for (const pre of document.querySelectorAll("#page pre")) for (const line of pre.textContent.split("\n")) add(pre, line.trim());
@@ -148,6 +149,10 @@ async function handle(m) {
     if (browser) await browser.close();
     browser = null;
     return { closed: true };
+  }
+  if (m.op === "download") {  // a link found by role and name, clicked; the file the browser saved
+    const [file] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: m.name, exact: true }).click()]);
+    return { filename: file.suggestedFilename(), data: require("fs").readFileSync(await file.path()).toString("base64") };
   }
   if (m.op === "role") {  // a control found by its ARIA role and accessible name, or by a CSS selector
     const control = m.selector ? page.locator(m.selector) : page.getByRole(m.role, { name: m.name ?? undefined, exact: true });
@@ -285,6 +290,10 @@ class _Browser:
     def role(self, role: str | None, name: str | None = None, act: str = "find", text: str | None = None, selector: str | None = None) -> dict[str, Any]:
         """One control by ARIA role and accessible name, or by CSS selector: act is find, click, check or fill."""
         return self.call({"op": "role", "role": role, "name": name, "act": act, "text": text, "selector": selector})
+    def download(self, name: str) -> tuple[str, bytes]:
+        """Click the link with this accessible name; return the saved file's name and bytes."""
+        reply = self.call({"op": "download", "name": name})
+        return reply["filename"], base64.b64decode(reply["data"])
     def key(self, key: str) -> None:
         self.call({"op": "key", "key": key})
     def tick(self) -> None:
@@ -339,6 +348,14 @@ def _words(code: str) -> str:
 def _utc(ms: int, fmt: str = "%Y-%m-%d") -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(fmt)
 
+def _program_time(ms: int, read_at: str) -> str:
+    """An instant as the screen writes it: program zone and label, and the year only when it is not the snapshot's own as-of year. A fixed UTC-5 holds only in 2026 US daylight time, so any other instant fails by name."""
+    if not 1772956800000 <= ms < 1793516400000:  # 2026-03-08 08:00 UTC to 2026-11-01 07:00 UTC
+        raise RuntimeError(f"scorecard_program_time_outside_2026_us_daylight_time:{ms}")
+    zone = timezone(timedelta(hours=-5))
+    moment, as_of = datetime.fromtimestamp(ms / 1000, tz=zone), datetime.fromisoformat(read_at).astimezone(zone)
+    return f"{moment.day} {moment:%b}{'' if moment.year == as_of.year else f' {moment.year}'} {moment:%H:%M} {_MODEL['time']['label']}"
+
 # ---- Fact sets per role (expected values come from the Owner, not the page) --
 
 def _analyst_facts(truth: dict[str, Any]) -> list[Fact]:
@@ -358,7 +375,7 @@ def _analyst_facts(truth: dict[str, Any]) -> list[Fact]:
     ]
 
 def _approver_facts(truth: dict[str, Any]) -> list[Fact]:
-    package = truth["decision_package"]
+    package, read_at = truth["decision_package"], truth["workspace"]["read_at"]
     obligation = package["obligation"]
     claim = package["references"]["claims"]["items"][0]
     return [
@@ -369,7 +386,7 @@ def _approver_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("offset_support", "H", r"MISSING|[Nn]o support", r"support"),
         Fact("claim_status", "H", r"\b" + _words(str(claim["status"])) + r"\b", r"claim|offset"),
         Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule"),
-        Fact("deadline", "H", re.escape(_utc(int(package["case"]["due_at_ms"]))), r"due|deadline"),
+        Fact("deadline", "H", re.escape(_program_time(int(package["case"]["due_at_ms"]), read_at)), r"due|deadline"),
     ]
 
 def _director_facts(truth: dict[str, Any]) -> list[Fact]:
@@ -383,7 +400,7 @@ def _director_facts(truth: dict[str, Any]) -> list[Fact]:
     ]
 
 def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
-    package = truth["decision_package"]
+    package, read_at = truth["decision_package"], truth["workspace"]["read_at"]
     determination = package["current_determination"]
     evidence = (determination.get("supporting_evidence") or [{"evidence_id": "none"}])[0]
     evidence_id = evidence.get("evidence_id", "none") if isinstance(evidence, dict) else evidence
@@ -393,10 +410,10 @@ def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("decision", "H", _words(decision), r"determination|decision"),
         Fact("decided_by_role", "H", _words(str(determination["actor_role"])), r"determination|decision|decided|role"),
         # The chronology row of the decision event also shows when it was decided.
-        Fact("decided_at", "H", re.escape(_utc(int(determination["decided_at_ms"]), "%Y-%m-%d %H:%M")), r"determination|decision|decided|" + re.escape(decision)),
+        Fact("decided_at", "H", re.escape(_program_time(int(determination["decided_at_ms"]), read_at)), r"determination|decision|decided|" + re.escape(decision)),
         Fact("supporting_evidence", "H", re.escape(str(evidence_id)), r"evidence"),
         Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule"),
-        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"Chronology|event|sequence"),
+        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"^\d+ \w+ (?:\d{4} )?\d\d:\d\d CT"),  # a row of the Activity list, which opens with its time; the Decision line, which ends with one, does not count
         Fact("cash_reconciles", "H", _money(int(obligation["received_cash_cents"])) + r".*" + _money(int(obligation["shortfall_cents"])), r"cash|received"),
     ]
 
@@ -576,8 +593,8 @@ class _Task:
         if not status or (expected not in status and any(word in status for word in ("rejected", "unresolved", "unavailable", "denied"))):
             raise RuntimeError(f"scorecard_command_failed:{name}:{status}")
     def ensure_record(self) -> None:
-        """Open H's record from the queue unless it is already up. The director's rows are not links."""
-        if self.role != "director" and not self.browser.view()["screens"]["decision"]:
+        """Open H's record from the queue unless it is already up."""
+        if not self.browser.view()["screens"]["decision"]:
             self.click("row-item-h", "open H's record")
             self.screens.append("record")
     def answer(self, facts: list[Fact]) -> None:

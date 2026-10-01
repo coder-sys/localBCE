@@ -12,6 +12,7 @@ from dataclasses import replace
 import hashlib
 import inspect
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -65,7 +66,7 @@ _CORRECTION_VECTOR_DIR = (
 )
 _EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_298_624
 _EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
-    "D5A06E9FFDB13C6266C40658B06AF4D93204F35159B9BE7FD4387A0613A10CBB"
+    "2CD5822D4F53A06EECEC0C8098E5D937AB63C431C561D3B34761C4C20EC1E58B"
 )
 _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
     "234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666"
@@ -3956,6 +3957,46 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialInputError, "decision_package_page"):
             store.decision_package(expected.H_ITEM_ID, offset=10_001)
 
+    def _assert_verdict_ignores_window(self, store: FinancialOwner) -> None:
+        """Every verdict field is a whole-obligation fact: no (limit, offset) window may change it."""
+
+        def verdict(package: dict[str, object]) -> dict[str, object]:
+            c = package["conclusions"]
+            return {
+                "cash": c["cash_satisfaction"]["evidence_status"],
+                "amount": c["amount_satisfaction"]["evidence_status"],
+                "reporting": c["reporting_completion"]["result"],
+                "delivery": c["action_acknowledgment"]["result"],
+                "resolution": {k: c["case_resolution"][k] for k in ("assessment", "required_conditions", "missing_requirements", "conflict_count")},
+            }
+
+        full = store.decision_package(expected.H_ITEM_ID, limit=100, offset=0)
+        total = full["references"]["evidence"]["total"]
+        for limit in range(1, total + 1):
+            for offset in range(total + 1):
+                window = store.decision_package(expected.H_ITEM_ID, limit=limit, offset=offset)
+                self.assertEqual(verdict(window), verdict(full), (limit, offset))
+        self.assertEqual(self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID, limit=1, offset=total - 1))["integrity"], "VERIFIED")
+
+    def test_c05_verdict_does_not_depend_on_the_page_window(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        self.assertEqual(store.decision_package(expected.H_ITEM_ID)["conclusions"]["case_resolution"]["assessment"], "SUPPORTED")
+        self._assert_verdict_ignores_window(store)
+
+    def test_c05_verdict_ignores_the_window_with_a_reversed_payment_page(self) -> None:
+        store = self._build_base_for_correction()
+        self._prepare_reported(store)
+        # Reverse p2 and replace it: the middle page then holds only a reversed payment and no claim row.
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        self._advance_clock(store, reversal.event_at_ms)
+        store.reverse_payment(item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id=reversal.evidence_id,
+                              common_origin_id=reversal.common_origin_id, event_at_ms=reversal.event_at_ms)
+        replacement = expected.P3_REPLACEMENT_EVIDENCE
+        self._advance_clock(store, replacement.event_at_ms)
+        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
+        self._assert_verdict_ignores_window(store)
+
     def test_c05_v7_decision_package_survives_test_restore(self) -> None:
         store = self._build_base_for_correction(schema_version=8)
         self._prepare_acknowledged(store)
@@ -3998,7 +4039,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "member_count": len(expected.POPULATION_MANIFEST_MEMBER_IDS),
             "member_digest": _independent_hex(manifest.member_digest),
         }
-        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v2")
+        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v3")
         self.assertEqual(package["population_binding"], expected_binding)
         obligation_id = package["obligation"]["obligation_id"]
         self.assertEqual(package["obligation"]["population_id"], expected_binding["population_id"])
@@ -5111,15 +5152,27 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return store, reject_b
 
     @staticmethod
-    def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True) -> dict[str, object]:
-        """A cash payment of ``cents`` after A's decision, answering A's correction request when ``linked``."""
+    def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True, action: str = expected.ACTION_CORRECTION_ID) -> dict[str, object]:
+        """A cash payment of ``cents`` after A's decision, answering correction request ``action`` (A's) when ``linked``."""
         RightRailFinancialAcceptanceTests._advance_clock(store, expected.CORRECTION_AUTH_MS + 500)
         return store.record_payment_evidence(
             item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", common_origin_id=f"origin:payment:h:{suffix}",
             amount_cents=cents, evidence_id=f"evidence:payment-h:{suffix}", event_at_ms=expected.CORRECTION_AUTH_MS + 500,
             source_id="fixture-payment-file", source_version="payment-v2", local_ref=f"ref:payment:h:{suffix}",
-            pays_action_id=expected.ACTION_CORRECTION_ID if linked else None,
+            pays_action_id=action if linked else None,
         )
+
+    @staticmethod
+    def _open_cents(store: FinancialOwner) -> dict[str, object]:
+        """R2: what each action may still collect, as the decision package shows it."""
+        return {entry["action_id"]: entry.get("open_cents") for entry in store.decision_package(expected.H_ITEM_ID)["references"]["actions"]["items"]}
+
+    @staticmethod
+    def _delivery(store: FinancialOwner) -> tuple[object, bool, object, object]:
+        """Stale corrections: the delivery requirement, whether it is listed missing, the case assessment, the newest action's own ACK result."""
+        conclusions = store.decision_package(expected.H_ITEM_ID)["conclusions"]
+        case, requirement = conclusions["case_resolution"], "delivery_acknowledged_or_not_required"
+        return case["required_conditions"][requirement], requirement in case["missing_requirements"], case["assessment"], conclusions["action_acknowledgment"]["result"]
 
     @staticmethod
     def _requested_and_claimed(store: FinancialOwner) -> tuple[list[int], list[int]]:
@@ -5209,6 +5262,173 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._rehash_history(early, link_cash), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(early, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_linked_payment_never_pays_past_the_balance(self) -> None:
+        # F1 scenario B: pay the request, pay the same cents unlinked, reverse the linked one. The balance is
+        # settled and the request reads open again, but it may not collect a second time. A payment still owed is taken.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000)
+        self._pay_a(store, 300_000, "p3", linked=False)
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 300_000, "p4")
+        self.assertEqual(self._durable_counts(store.path), counts)
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 100_000, "p3", linked=False)  # 200,000 is still owed
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 200_001)
+        self.assertEqual(self._pay_a(store, 200_000)["status"], "RECORDED")
+        self._assert_verified(store)
+        store = self._build_base_for_correction()  # the checker refuses the link the Owner now refuses
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000, "p3", linked=False)
+        self._pay_a(store, 300_000, "p4", linked=False)
+        forged = self._path("late-link.sqlite")
+        forged.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p4" and "common_origin_id" in payload and payload.setdefault("pays_action_id", expected.ACTION_CORRECTION_ID) is not None), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(forged, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_falling_balance_shrinks_the_newest_request_first(self) -> None:
+        # R2: 600,000 unpaid; A and B each request 300,000. 200,000 arrives unlinked, so 400,000 is owed:
+        # the older request keeps its 300,000, the newer is cut to 100,000, and a payment may collect only that.
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        reject_b()
+        self._pay_a(store, 200_000, linked=False)
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
+            self._pay_a(store, 100_001, "p3", action=_ACTION_B)
+        self.assertEqual(self._durable_counts(store.path), counts)
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000, _ACTION_B: 100_000})
+        self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))  # the oracle recomputes the shrunk open amounts
+        self.assertEqual(self._pay_a(store, 100_000, "p3", action=_ACTION_B)["status"], "RECORDED")
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000, _ACTION_B: 0})  # paying B leaves A alone
+        self.assertEqual(self._pay_a(store, 300_000, "p4")["status"], "RECORDED")
+        self._assert_verified(store)
+        self._make_owner(path=store.path)
+
+    def test_a_request_closes_with_the_balance_and_reopens_when_it_returns(self) -> None:
+        # R2: one 300,000 request. 300,000 arrives unlinked: nothing is owed and the request is closed.
+        # That payment is reversed: 300,000 is owed again and the request reopens, never past its own amount.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        self._pay_a(store, 300_000, linked=False)
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 0})
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 300_000})
+        self.assertEqual(self._pay_a(store, 300_000, "p3")["status"], "RECORDED")
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 0})
+        self._assert_verified(store)
+
+    def test_an_older_request_holds_only_its_unpaid_part(self) -> None:
+        # R2: 600,000 unpaid; A requests 300,000 and 100,000 of it is paid; B requests 300,000. A holds only its
+        # unpaid 200,000, so B's whole 300,000 is open and payable (a checker that holds A's full amount refuses this).
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        self._pay_a(store, 100_000)
+        reject_b()
+        self.assertEqual(self._pay_a(store, 300_000, "p3", action=_ACTION_B)["status"], "RECORDED")
+        self._assert_verified(store)
+        self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 200_000, _ACTION_B: 0})
+
+    def test_the_checker_refuses_a_payment_past_its_requests_open_amount(self) -> None:
+        # R2: with A and B open at 300,000 and 100,000, a linked 300,000 pays A. Retargeted to B it stays within
+        # B's request and within the balance (R1); only the open amount refuses it.
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        reject_b()
+        self._pay_a(store, 200_000, linked=False)
+        self._pay_a(store, 300_000, "p3")
+        self._assert_verified(store)
+        forged = self._path("newer-link.sqlite")
+        forged.write_bytes(store.path.read_bytes())
+        self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p3" and "common_origin_id" in payload and payload.update(pays_action_id=_ACTION_B) is None), 1)
+        with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
+            verify_database(forged, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_request_the_balance_no_longer_needs_is_not_waiting_on_delivery(self) -> None:
+        # Stale corrections: one READY 300,000 request, never acknowledged. 300,000 arrives unlinked, so it asks for
+        # nothing and delivery is not required; a reversal makes it ask again. Paid again and reported, the closed
+        # case reads SUPPORTED, not UNSUPPORTED. The newest action's own ACK result stays NOT_SATISFIED throughout.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        seen = [self._delivery(store)]
+        self._pay_a(store, 300_000, linked=False)
+        seen.append(self._delivery(store))
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        seen.append(self._delivery(store))
+        self._pay_a(store, 300_000, "p3", linked=False)
+        self._record_report(store)
+        seen.append(self._delivery(store))
+        self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))  # the oracle recomputes the verdict
+        self._assert_verified(store)
+        self.assertEqual(seen, [
+            ("NOT_SATISFIED", True, "NOT_RESOLVED", "NOT_SATISFIED"),  # asks 300,000 and is not delivered
+            ("SUPPORTED", False, "NOT_RESOLVED", "NOT_SATISFIED"),  # asks nothing: not required
+            ("NOT_SATISFIED", True, "NOT_RESOLVED", "NOT_SATISFIED"),  # the reversal makes it ask again
+            ("SUPPORTED", False, "SUPPORTED", "NOT_SATISFIED"),  # paid and reported: nothing waits on it
+        ])
+
+    def test_every_action_that_still_asks_must_be_delivered(self) -> None:
+        # Stale corrections: 600,000 unpaid; A and B each request 300,000. Delivery waits on every action that still asks
+        # for money, not only the newest. B acknowledged leaves A waiting until A is acknowledged; A acknowledged leaves
+        # B waiting until 300,000 arrives unlinked and cuts B, the newest, to nothing.
+        seen = {}
+        for first in (_ACTION_B, expected.ACTION_CORRECTION_ID):
+            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+            reject_b()
+            store.acknowledge_action(first, "ack:correction:h:first")
+            seen[first] = [self._delivery(store)[0]]
+            if first == _ACTION_B:
+                self._ack(store)
+            else:
+                self._pay_a(store, 300_000, linked=False)
+            seen[first].append(self._delivery(store)[0])
+            self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))
+            self._assert_verified(store)
+        self.assertEqual(seen, {_ACTION_B: ["NOT_SATISFIED", "SUPPORTED"], expected.ACTION_CORRECTION_ID: ["NOT_SATISFIED", "SUPPORTED"]})
+
+    def test_delivery_matches_the_oracle_under_many_orderings_of_money_and_acks(self) -> None:
+        # Stale corrections: 600,000 unpaid, requests A and B (300,000 each) and a READY offset notice N (claim C, 100,000), so 500,000 is owed.
+        # Four of seven moves in a fixed stride over all 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
+        # oracle's recomputation (its own delivery rule), and a refused move is skipped. Both delivery verdicts must occur, or the sweep proves nothing.
+        item, act_n, made, seen = expected.H_ITEM_ID, "action:obligation-item-h:offset-c", [], set()
+        ack = lambda store, action: store.acknowledge_action(action, f"ack:{action}")
+        pay = lambda store, tag, cents, **link: (self._pay_a(store, cents, tag, **link), made.append(tag))  # remembered only once recorded
+        moves = {
+            "pay-a": lambda store: pay(store, "pa", 300_000),
+            "pay-b": lambda store: pay(store, "pb", 100_000, action=_ACTION_B),
+            "pay-free": lambda store: pay(store, "pf", 150_000, linked=False),
+            "reverse": lambda store: store.reverse_payment(item_id=item, payment_id=f"payment:h:{made[0]}", evidence_id="evidence:reversal-h:sweep"),
+            "ack-a": lambda store: ack(store, expected.ACTION_CORRECTION_ID),
+            "ack-b": lambda store: ack(store, _ACTION_B),
+            "ack-n": lambda store: ack(store, act_n),
+        }
+        for order in list(itertools.permutations(moves, 4))[::30]:
+            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+            reject_b()
+            store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)
+            receipt = store.current_evaluation_receipt(item)
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
+            store.authorize_offset(item_id=item, claim_id="claim:obligation-item-h:offset-c", expected_revision=receipt["revision"], action_id=act_n,
+                                   decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+            made.clear()
+            for move in order:
+                try:
+                    moves[move](store)
+                except (owner.FinancialError, IndexError):  # refused by the owner (nothing to reverse, already acknowledged, over the open amount)
+                    continue
+                package = store.decision_package(item)
+                seen.add(package["conclusions"]["case_resolution"]["required_conditions"]["delivery_acknowledged_or_not_required"])
+                self._assert_decision_package_verified(store, package)
+            self._assert_verified(store)
+        self.assertEqual(seen, {"NOT_SATISFIED", "SUPPORTED"})
 
     def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
         # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.
@@ -5630,6 +5850,62 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(IndependentFinancialError, "^schema:foreign-keys:commands$"):
             verify_database(store.path, expected_config=store.config, expected_authority=self.authority)
+
+    def test_checker_pins_every_table_clause(self) -> None:
+        # PRAGMA table_info cannot show ON CONFLICT, NOT NULL or CHECK: with file access a forger could make the Owner's
+        # plain INSERT a REPLACE (whose delete fires no trigger) or drop a guard. Only a whitespace run may differ.
+        store = self._build_base()
+        for label, table, old, new in (
+            ("on-conflict-replace", "evidence", "evidence_id TEXT PRIMARY KEY,", "evidence_id TEXT PRIMARY KEY ON CONFLICT REPLACE,"),
+            ("dropped-not-null", "evidence", "item_id TEXT NOT NULL,", "item_id TEXT,"),
+            ("dropped-check", "financial_meta", " CHECK (dispatch_enabled=0)", ""),
+            ("literal-case", "financial_meta", "'LIVE','SHADOW','TEST'", "'live','SHADOW','TEST'"),
+            ("whitespace-only", "evidence", "evidence_id TEXT PRIMARY KEY,", "evidence_id  TEXT\n\tPRIMARY KEY,"),
+        ):
+            with self.subTest(label):
+                path = self._path(f"table-sql-{label}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    read = lambda: connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+                    before = read()
+                    connection.execute("PRAGMA writable_schema=ON")
+                    connection.execute("UPDATE sqlite_master SET sql=replace(sql,?,?) WHERE type='table' AND name=?", (old, new, table))
+                    self.assertNotEqual(read(), before)
+                if label == "whitespace-only":
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                    continue
+                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:sql:{table}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:sql:evidence$"):
+            self._make_owner(path=self._path("table-sql-on-conflict-replace.sqlite"))
+
+    def test_checker_refuses_every_hidden_schema_object(self) -> None:
+        # SQLite loads a schema row whose type has any letter case and, while loading, never checks reserved names, so a
+        # 'Trigger' row that drops evidence inserts, a view, 'sqlitex', 'SQLITE_x' or a sqlite_autoindex name with its own
+        # SQL would each hide from a checker that asks only for type='trigger' or skips names LIKE 'sqlite_%'.
+        store = self._build_base()
+        self._assert_verified(store)
+        evil = ("CREATE TABLE evil(x)",)
+        for label, refusal, statements in (
+            ("trigger-case", "objects", ("INSERT INTO sqlite_master VALUES('Trigger','evil','evidence',0,'CREATE TRIGGER evil BEFORE INSERT ON evidence BEGIN SELECT RAISE(IGNORE); END')",)),
+            ("table-case", "objects", (*evil, "UPDATE sqlite_master SET type='Table' WHERE name='evil'")),
+            ("index-case", "objects", ("CREATE INDEX evil ON evidence(item_id)", "UPDATE sqlite_master SET type='INDEX' WHERE name='evil'")),
+            ("view", "objects", ("CREATE VIEW evil AS SELECT 1",)),
+            ("reserved-index", "objects", ("CREATE INDEX evil ON evidence(item_id) WHERE 0", "UPDATE sqlite_master SET name='sqlite_autoindex_evidence_9',sql='CREATE INDEX sqlite_autoindex_evidence_9 ON evidence(item_id) WHERE 0' WHERE name='evil'")),
+            ("sqlitex", "tables", ("CREATE TABLE sqlitex(x)",)),
+            ("upper-sqlite", "tables", (*evil, "UPDATE sqlite_master SET name='SQLITE_x',tbl_name='SQLITE_x',sql='CREATE TABLE SQLITE_x(x)' WHERE name='evil'")),
+        ):
+            with self.subTest(label):
+                path = self._path(f"hidden-{label}.sqlite")
+                path.write_bytes(store.path.read_bytes())
+                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    connection.execute("PRAGMA writable_schema=ON")
+                    for statement in statements:
+                        connection.execute(statement)
+                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:{refusal}$"):
+                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:objects$"):
+            self._make_owner(path=self._path("hidden-trigger-case.sqlite"))
 
     def test_checker_refuses_a_hidden_partial_index(self) -> None:
         # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.

@@ -1,6 +1,7 @@
 {
   "schema": "RR/MIRROR/INTERACTION-MODEL/v1",
   "note": "CONSTITUTION Art. XIII.4: the declared interaction model. Screens name visible regions, not exclusive routes; unavailable retains stale content with commands disabled, and the page reads again on its own every 15 seconds. enabled_when is a Python boolean expression checked against the served DOM. Response rendering tests inject negative replies at the real HTTP handler boundary; only separate Owner tests establish the actual refusal cause. The two decision commands are reached through the decision form on H's record: choose, record, then confirm, and each POSTs its own route. Every money command has its own confirm step. Defensive integrity codes unreachable through the other fixed UI commands remain outside this response inventory; no exhaustive Owner failure claim follows from the browser crawl.",
+  "time": { "zone": "America/Chicago", "label": "CT", "note": "The synthetic program's zone: the screen shows an instant in it with its label, and the downloadable record keeps UTC." },
   "state": {
     "reviewed": "Owner available, the record shows the current package, and no command pending",
     "owner_available": "The latest Owner read is usable",
@@ -26,7 +27,7 @@
   "role_screens": {
     "analyst": ["overview", "decision", "unavailable"],
     "approver": ["overview", "decision", "unavailable"],
-    "director": ["overview", "unavailable"],
+    "director": ["overview", "decision", "unavailable"],
     "auditor": ["overview", "decision", "unavailable"],
     "operator": ["overview", "decision", "unavailable"]
   },
@@ -121,7 +122,7 @@
       "roles": ["analyst"],
       "route": "POST /api/action/acknowledge",
       "leads_to": "decision",
-      "enabled_when": "reviewed and action.status == 'READY'",
+      "enabled_when": "reviewed and action.status == 'READY' and action.open_cents != 0",
       "responses": {
         "success": { "screen": "decision", "message": "Delivery acknowledged. Zero cash effect." },
         "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },
@@ -138,7 +139,7 @@
       "roles": ["analyst"],
       "route": "POST /api/correction/record-cash",
       "leads_to": "decision",
-      "enabled_when": "(unresolved_cash_body and owner_available and not command_pending) or (reviewed and action.status == 'ACKNOWLEDGED' and shortfall > 0)",
+      "enabled_when": "(unresolved_cash_body and owner_available and not command_pending) or (reviewed and action.status == 'ACKNOWLEDGED' and (action.open_cents or 0) >= 300000)",
       "responses": {
         "success": { "screen": "decision", "message": "Synthetic cash evidence recorded. No money moved." },
         "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },
@@ -197,11 +198,12 @@
     "choose-auditor": { "selector": "#role-links a[href='/role/auditor']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/auditor" },
     "choose-operator": { "selector": "#role-links a[href='/role/operator']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/operator" },
     "switch-role": { "selector": "#role-status a[href='/']", "visible_when": "role is not None", "enabled_when": "not command_pending and not unresolved_decision_body and not unresolved_cash_body", "kind": "navigate", "target": "/" },
-    "open-record": { "selector": "#qlist a.row", "visible_when": "role in ('analyst', 'approver', 'auditor', 'operator')", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>" },
-    "summary-link": { "selector": "#summary-link", "visible_when": "role in ('analyst', 'approver', 'auditor', 'operator')", "enabled_when": "True", "kind": "navigate", "target": "#summary" },
-    "filter": { "selector": "#filter", "visible_when": "role in ('analyst', 'approver', 'auditor', 'operator')", "enabled_when": "True", "kind": "field", "target": "the queue" },
+    "open-record": { "selector": "#qlist a.row", "visible_when": "role is not None", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>" },
+    "summary-link": { "selector": "#summary-link", "visible_when": "role is not None", "enabled_when": "True", "kind": "navigate", "target": "#summary" },
+    "filter": { "selector": "#filter", "visible_when": "role is not None", "enabled_when": "True", "kind": "field", "target": "the queue" },
     "back-to-queue": { "selector": "a.back", "visible_when": "role is not None and phone", "enabled_when": "True", "kind": "navigate", "target": "#queue" },
-    "plain-text": { "selector": "#plain-text", "visible_when": "role in ('analyst', 'approver', 'auditor', 'operator')", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>.txt" },
+    "plain-text": { "selector": "#plain-text", "visible_when": "role is not None", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>.txt" },
+    "download-record": { "role": "link", "name": "Download record", "visible_when": "role is not None", "enabled_when": "True", "kind": "download", "target": "record-<obligation>.txt" },
     "choose-accept": { "role": "radio", "name": "Accept the offset", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "authorize-offset" },
     "choose-reject": { "role": "radio", "name": "Reject the offset", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "reject-offset" },
     "record-decision": { "role": "button", "names": { "idle": "Record decision", "confirm": "Record {verb} of the {amount} offset", "pending": "Recording…", "retry": "Send the {verb} of {amount} again", "cash_retry": "Send the cash evidence again" }, "hints": { "no_choice": "Choose accept or reject." }, "visible_when": "decision_form", "enabled_when": "picked", "kind": "confirm", "target": "the chosen outcome" },
