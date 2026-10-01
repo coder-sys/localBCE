@@ -21,8 +21,10 @@ useful without it.
 
 Every Medicaid payment a state routes through RightRail — FFS and managed
 care alike — passes Blind Ledger before money goes out, at full state scale
-(New York's eMedNY cycle is the sizing reference: ~12.6M claims and $1.8B
-paid per weekly cycle, audited by the NY Comptroller). RightRail still never
+(New York's eMedNY cycle is the sizing reference: ~9.6M claims and $1.9B
+paid per weekly cycle, per the NY Comptroller audit of 2025-06-18,
+https://www.osc.ny.gov/state-agencies/audits/2025/06/18/medicaid-program-claims-processing-activity-april-1-2024-through-september-30-2024).
+RightRail still never
 moves money (Constitution I.4): the state's own payment system checks the
 gate's decision and remains the party that holds or releases. No legal
 precedent exists for a private vendor to hold the 42 CFR 455.23 suspension

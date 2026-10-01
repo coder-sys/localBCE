@@ -11,11 +11,12 @@ Working rules (details in the constitution):
 
 - All product code lives here. Do not create per-team copies of modules.
 - Heavy runs (builds, tests, provers) go only through the shared runner
-  `C:/Users/neers/rrb/tools/rr_guarded.ps1`, which calls guard v7 (outside this
-  tree; floor 2,029,372,048 bytes, 1 GiB while the owner-approved away file is
-  valid; `-MinFree` 2,200,000,000 Python, 4,029,372,048 Lean/cargo/native, which
-  the runner lowers in away mode). Never weaken or bypass it. The old trunk copy (v4,
-  `run.ps1`) is parked in `parked/native_guard/`.
+  `C:/Users/neers/rrb/tools/rr_guarded.ps1`, which calls guard v10 (outside this
+  tree; floor 2,029,372,048 bytes, 250 MiB while the owner-approved away file is
+  valid; `-MinFree` 2,200,000,000 Python and small Lean runs, 4,029,372,048 cold,
+  pin, release, cargo or native, which the runner lowers in away mode). Never
+  weaken or bypass it. The old trunk copy (v4, `run.ps1`) is parked in
+  `parked/native_guard/`.
 - Lean decides; Python adapters commit. No duplicate policy, no silent fallback.
 - The pinned engine binary in `artifacts/engine-correction/` is built from
   the `lean/` commit its `PROVENANCE.md` names. Any later `lean/` change
