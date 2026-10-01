@@ -137,14 +137,7 @@ operational authority.
    what is blocked, the next step — in a few lines; it keeps no change log,
    since `git log` is the log. Raw logs live in log files, not in markdown.
    No hash tables in status documents except the pinned-artifact list.
-2. Heavy runs (builds, tests, provers) on the laptop go through the guarded
-   wrapper (`C:/Users/neers/rrb/tools/rr_guarded.ps1`, which runs the guard-host
-   `work/rightrail-guard-host/native/guard/run_guarded_v7.ps1`) with its memory floor; it is
-   never bypassed or weakened there. CI and cloud runners use their own
-   resource limits. Exception: engine and release builds run under the preserved
-   v4 guard (SHA-256 `57F9EC8A…99FB`, external copy
-   `work/pq-wide-seed-native-20260913/build-filter-native/run_guarded_v4.ps1`)
-   until a planned producer and kit move to v7.
+2. Heavy runs (builds, tests, provers) on the laptop go only through the guarded wrapper `C:/Users/neers/rrb/tools/rr_guarded.ps1`, under the guard and memory limits named in the driver root `AGENTS.md` (one source; no other document restates them). The wrapper is never bypassed or weakened there. CI and cloud runners use their own resource limits. The release producer is parked in `parked/` until a release is planned, and it moves to the wrapper before it runs again.
 3. Never destroy uncommitted work, raw evidence, keys, or the only copy of
    anything. Deletions are recoverable first (Recycle Bin, Git bundle, archive).
 4. Every session leaves a working increment and a clear next step.
@@ -167,7 +160,7 @@ revision). These are binding working principles, not suggestions.
    control; scope and duration; and the claims withdrawn. A changed gate
    inherits none of the old assurance. Never bypass a gate silently or change
    policy bytes to get a pass. An ordinary test edit outside this list needs
-   only a clear commit message.
+   only a clear commit message. A re-pin that leaves every pinned executable's SHA-256 unchanged and only refreshes its source-manifest record is a record update, not a gate change: it still needs the live pin check, but only a clear commit message, not the full record.
 3. **Disciplined creativity.** The current implementation is a hypothesis. When
    evidence shows it cannot meet the invariant, bound or throughput target,
    return to first principles and look for a materially simpler composition,
@@ -316,7 +309,7 @@ what is added.
 
 Only the founders amend this constitution. Amendments are explicit, dated edits
 to this file with a one-line reason. Silence, convenience or a passing test is
-never an amendment.
+never an amendment. Each amendment-log entry quotes the founder's own words that authorize it.
 
 ### Amendment log
 
@@ -354,3 +347,4 @@ never an amendment.
   2026-09-29 "As long as it doesn't compromise safety and accuracy do whatever u
   want"; standing 2026-09-25 "u have all auth". XI.2 record in
   `docs/CORE_REDESIGN.md`.
+- 2026-10-01 — Articles X.2 and XI.2 and the Amendment section amended by the founders ("yes", 2026-10-01, to: re-recording a program fingerprint that did not change is not a gate change; the memory-guard rules live in one place; every amendment quotes the founder's words; and the release-packaging tool is shelved until a release is planned). X.2 points to the driver root AGENTS.md and drops the v4 exception; XI.2 treats an unchanged-hash re-pin as a record update; amendment entries quote the founder.
