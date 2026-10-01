@@ -109,13 +109,16 @@ def readContribution (b : Bytes) : Option (EvalContribution × Bytes) := do
   pure (⟨time, identity, amountCents⟩, b)
 
 def encodeRequestPaid (q : RequestPaid) : Bytes :=
-  encodeString q.actionId ++ natBE 8 q.amountCents ++ natBE 8 q.paidCents
+  encodeString q.actionId ++ natBE 8 q.amountCents ++ natBE 8 q.paidCents ++ natBE 8 q.revision ++
+    encodeBool q.counted
 
 def readRequestPaid (b : Bytes) : Option (RequestPaid × Bytes) := do
   let (actionId, b) ← readString b
   let (amountCents, b) ← readNatBE 8 b
   let (paidCents, b) ← readNatBE 8 b
-  pure (⟨actionId, amountCents, paidCents⟩, b)
+  let (revision, b) ← readNatBE 8 b
+  let (counted, b) ← readBool b
+  pure (⟨actionId, amountCents, paidCents, revision, counted⟩, b)
 
 /-- Contributions: u16 count up to 2 * maxRows (payments plus determinations). -/
 def encodeItemState (s : ItemState) : Bytes :=
@@ -179,7 +182,8 @@ def stateWellFormed (s : ItemState) : Bool :=
     s.contributions.all (fun x => timeWellFormed x.time && idWellFormed x.identity && x.amountCents ≤ maxCents) &&
     s.conflictCount ≤ maxRows && s.evidenceIds.length ≤ maxRows && canonicalIdList s.evidenceIds &&
     s.requests.length ≤ maxRows &&
-    s.requests.all (fun q => idWellFormed q.actionId && q.amountCents ≤ maxCents && q.paidCents ≤ maxCents) &&
+    s.requests.all (fun q => idWellFormed q.actionId && q.amountCents ≤ maxCents && q.paidCents ≤ maxCents &&
+      revisionWellFormed q.revision) &&
     s.anchorBytes ≤ maxTotalEncodedBytes
 
 def viewWellFormed (v : PaymentView) : Bool :=

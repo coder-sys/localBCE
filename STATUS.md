@@ -16,7 +16,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
-- **Open requests shrink with the balance** (R2, XI.2 record 4; merge 26f704c records the evidence): a linked payment may not exceed its request's derived open amount (oldest keeps, newest shrinks); package contract v3 adds `open_cents`. Python only; the Lean half is M3 step 2 (`tools/r2_request_shrink_goals.lean`).
+- **Open requests shrink with the balance** (R2, XI.2 record 4; merge 26f704c records the evidence): a linked payment may not exceed its request's derived open amount (oldest keeps, newest shrinks); package contract v3 adds `open_cents`. Python only; the Lean half is M3 step 2 (`Payment/OpenLaws.lean`).
 - **Table SQL pin** (`replace-trigger-guard`, XI.2 record; `rtrig-tgt3`, `rtrig-full2`): the checker pins every table's whole `CREATE TABLE` text and refuses any other schema object (a `'Trigger'` row of another case, a view, a `sqlite_`-named row), so a planted `ON CONFLICT REPLACE`, a dropped NOT NULL or CHECK, or a hidden trigger is refused at open.
 
 - **R0.5 durable commits** (`core-r05-only`, XI.2 record; red `r05o-red-r05`, green `r05o-green1`, full `r05o-full1` bar the timing test): WAL and `synchronous=FULL`; a pre-WAL store switches only in a migrating open; a restore checkpoints before it publishes.

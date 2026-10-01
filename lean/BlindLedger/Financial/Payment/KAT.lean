@@ -179,4 +179,44 @@ private def kXs : List ActionRecord := [kReq "b" 2, kReq "a" 1]  -- list order i
 #guard openCents 300000 [] [] [kReq "b" 2, { kReq "a" 1 with status := .CANCELLED }] (kReq "b" 2) == 300000
 #guard openTotal 400000 [] [] kXs == min (CorrectionTransition.linkedOutstandingCents [] [] kXs) 400000
 
+/-! R2 S1 through the chain: requests A (revision 1) and B (revision 2) ask 300,000 each of 600,000
+    owed; 200,000 arrived unlinked, so 400,000 is left.  A link of 100,001 to B is refused, 100,000 is
+    recorded, and A then still collects its 300,000. -/
+
+private def s1Req (n : String) (rev : Nat) : ActionRecord :=
+  { actionId := "action:s1:" ++ n, obligationId := katContext.obligationId,
+    determinationId := some ("determination:action:s1:" ++ n), kind := "CORRECTION_PAYMENT_REQUEST",
+    amountCents := 300_000, currency := "USD", revision := rev, status := .READY,
+    payloadDigest := katDigest, createdAt := 1_774_926_000_000 }
+private def s1Input : FinancialInput :=
+  { katBase with
+    beforeRevision := 2, evaluatedAt := 1_774_926_000_000,
+    obligation := { katObligation with owedCents := 600_000 },
+    payments := [katPayment 200_000],
+    claims := [("a", 1), ("b", 2)].map fun (n, _) =>
+      { katClaim .REJECTED with claimId := "claim:s1:" ++ n, evidenceId := "evidence:s1:" ++ n },
+    determinations := [("a", 1), ("b", 2)].map fun (n, rev) =>
+      { katDetermination .OFFSET_REJECTED_CORRECTION_AUTHORIZED with
+        determinationId := "determination:action:s1:" ++ n, claimId := "claim:s1:" ++ n,
+        supportingEvidenceIds := ["evidence:s1:" ++ n], expectedRevision := rev - 1,
+        resultingRevision := rev, decidedAt := 1_774_925_000_000 },
+    evidence := katCashEvidence (some 200_000) :: ["a", "b"].map fun n =>
+      { katOffsetEvidence with evidenceId := "evidence:s1:" ++ n, commonOriginId := "claim:s1:" ++ n },
+    actions := [s1Req "a" 1, s1Req "b" 2] }
+private def s1L : Ledger := ⟨s1Input, [⟨"payment:h:cash", 1, none⟩]⟩
+private def s1Link (n : String) (id : Nat) (cents : Nat) (rev : Nat) : Call :=
+  ⟨1_774_927_000_000, some rev, .record
+    { paymentId := s!"payment:s1:{id}", evidenceId := s!"evidence:s1:p{id}", commonOriginId := s!"origin:s1:{id}",
+      sourceId := "source:kat", sourceVersion := "v1", localRef := none, amountCents := cents,
+      eventAt := 1_774_900_000_000, paysActionId := some ("action:s1:" ++ n) }⟩
+
+#guard financialInputWellFormed s1Input && receiptsWellFormed s1Input s1L.receipts
+#guard (viewOfAnchor (s1L.request (s1Link "b" 1 100_001 2))).any fun v =>
+  decide (stepView v = .refused .LINK_EXCEEDS_UNPAID)
+#guard kind (s1L.outcome (s1Link "b" 1 100_001 2)) == "REFUSED" && agrees s1L (s1Link "b" 1 100_001 2)
+#guard kind (s1L.outcome (s1Link "b" 1 100_000 2)) == "RECORDED" && agrees s1L (s1Link "b" 1 100_000 2)
+#guard kind ((step s1L (s1Link "b" 1 100_000 2)).outcome (s1Link "a" 2 300_000 3)) == "RECORDED" &&
+  agrees (step s1L (s1Link "b" 1 100_000 2)) (s1Link "a" 2 300_000 3)
+#guard kind ((step s1L (s1Link "b" 1 100_000 2)).outcome (s1Link "a" 2 300_001 3)) == "REFUSED"
+
 end BlindLedger.Financial.Payment

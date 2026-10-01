@@ -429,13 +429,15 @@ private theorem readContribution_append (x : EvalContribution) (t : Bytes)
 
 private theorem readRequestPaid_append (x : RequestPaid) (t : Bytes)
     (h1 : stringWireAdmissible x.actionId) (h2 : nat8WireAdmissible x.amountCents)
-    (h3 : nat8WireAdmissible x.paidCents) :
+    (h3 : nat8WireAdmissible x.paidCents) (h4 : nat8WireAdmissible x.revision) :
     readRequestPaid (encodeRequestPaid x ++ t) = some (x, t) := by
   unfold readRequestPaid encodeRequestPaid
   simp only [List.append_assoc]
   step (readString_encodeString_append _ _ h1)
   step (readNat8_natBE_append _ _ h2)
   step (readNat8_natBE_append _ _ h3)
+  step (readNat8_natBE_append _ _ h4)
+  step (readBool_encodeBool_append _ _)
   rfl
 
 private theorem readEnv_append (e : Env) (rest : Bytes) (h : envWellFormed e = true) :
@@ -491,7 +493,8 @@ private theorem readItemState_append (s : ItemState) (rest : Bytes) (h : stateWe
     (fun q hq t => by
       have hq2 := List.all_eq_true.mp hReq q hq
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hq2
-      exact readRequestPaid_append q t (idWire hq2.1.1) (cents8 hq2.1.2) (cents8 hq2.2)))
+      exact readRequestPaid_append q t (idWire hq2.1.1.1) (cents8 hq2.1.1.2) (cents8 hq2.1.2)
+        (rev8 (by simpa [revisionWellFormed] using hq2.2))))
   step (readNatBE_natBE_append 4 s.anchorBytes _
     (Nat.lt_of_le_of_lt hAB (by unfold maxTotalEncodedBytes; decide)))
   rfl

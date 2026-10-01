@@ -1,5 +1,5 @@
 import BlindLedger.Financial.Payment.Open
-import BlindLedger.Financial.Payment.Bridge
+import BlindLedger.Financial.Theorems.Conservation
 
 namespace BlindLedger.Financial.Payment
 
@@ -202,6 +202,24 @@ private theorem unpaidBefore_eq (ps : List Payment) (ls : List PaymentLink) (xs 
       (((xs.filter countedRequest).filter (servedBefore · a)).map (unpaidOf ps ls)).sum := by
   simp [unpaidBefore, List.filter_filter, Bool.and_comm]
 
+theorem nodup_actions_of_wf {i : FinancialInput} (hwf : financialInputWellFormed i = true) :
+    (i.actions.map ActionRecord.actionId).Nodup := by
+  have h1 : canonicalIdList (i.actions.map ActionRecord.actionId) = true := by
+    simp only [financialInputWellFormed, Bool.and_eq_true, decide_eq_true_eq] at hwf
+    simp only [hwf]
+  exact (canonical_facts h1).2.2.imp fun {a b} h e => by subst e; exact String.lt_irrefl _ h
+
+theorem eq_of_nodup_map {α β} {f : α → β} : ∀ {l : List α}, (l.map f).Nodup →
+    ∀ {x y}, x ∈ l → y ∈ l → f x = f y → x = y
+  | [], _, _, _, hx, _, _ => by simp at hx
+  | z :: zs, hn, x, y, hx, hy, e => by
+    rw [List.map_cons, List.nodup_cons] at hn
+    rcases List.mem_cons.1 hx with rfl | hx' <;> rcases List.mem_cons.1 hy with rfl | hy'
+    · rfl
+    · exact absurd (List.mem_map.2 ⟨y, hy', e.symm⟩) hn.1
+    · exact absurd (List.mem_map.2 ⟨x, hx', e⟩) hn.1
+    · exact eq_of_nodup_map hn.2 hx' hy' e
+
 /-- 1. The allocation identity: the open amounts add up to the outstanding requests, capped by
     the balance.  The substance of R2; statements 2, 3, 4 and 8 follow from it. -/
 theorem openTotal_eq_min (s : Nat) (ps : List Payment) (ls : List PaymentLink)
@@ -230,6 +248,83 @@ theorem openCents_le (s : Nat) (ps : List Payment) (ls : List PaymentLink) (xs :
     openCents s ps ls xs a ≤ s ∧ openCents s ps ls xs a ≤ unpaidOf ps ls a := by
   unfold openCents
   split <;> omega
+
+/-- A link that is not refused names a request and fits that request's open amount. -/
+theorem linkRefusal_none {i : FinancialInput} {rs : List Receipt} {c : RecordCommand} {a : String}
+    (ha : c.paysActionId = some a) (h : linkRefusal i rs c = none) :
+    ∃ x, i.actions.find? (fun x => x.actionId = a && x.kind = "CORRECTION_PAYMENT_REQUEST") = some x ∧
+      ∃ before, evaluate i = some before ∧
+        c.amountCents ≤ openCents before.shortfallCents i.payments (linksOf rs) i.actions x := by
+  unfold linkRefusal at h
+  rw [ha, Option.bind_some] at h
+  cases hf : i.actions.find? (fun x => x.actionId = a && x.kind = "CORRECTION_PAYMENT_REQUEST") with
+  | none => simp [hf] at h
+  | some x =>
+    refine ⟨x, rfl, ?_⟩
+    cases hE : evaluate i with
+    | none => simp [hf, hE] at h
+    | some b => simpa [hf, hE] using h
+
+/-- The same, in step 1's terms: inside the request's amount, and inside the balance owed. -/
+theorem linkRefusal_find {i : FinancialInput} {rs : List Receipt} {c : RecordCommand} {a : String}
+    (ha : c.paysActionId = some a) (hz : c.amountCents ≠ 0) (h : linkRefusal i rs c = none) :
+    ∃ x, i.actions.find? (fun x => x.actionId = a && x.kind = "CORRECTION_PAYMENT_REQUEST") = some x ∧
+      linkedActivePaidCents i.payments (linksOf rs) a + c.amountCents ≤ x.amountCents ∧
+      ∃ before, evaluate i = some before ∧ c.amountCents ≤ before.shortfallCents := by
+  obtain ⟨x, hf, before, hE, hle⟩ := linkRefusal_none ha h
+  have hp := List.find?_some hf
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
+  have hl := openCents_le before.shortfallCents i.payments (linksOf rs) i.actions x
+  have hu : c.amountCents ≤ x.amountCents - linkedActivePaidCents i.payments (linksOf rs) x.actionId :=
+    Nat.le_trans hle hl.2
+  rw [hp.1] at hu
+  exact ⟨x, hf, by omega, before, hE, Nat.le_trans hle hl.1⟩
+
+/-- R2 implies R1: a link that is not refused satisfies both R1 clauses.  The step-1 half of
+    `recordNew_tr`. -/
+theorem linkRefusal_implies_r1 {i : FinancialInput} {rs : List Receipt} {c : RecordCommand}
+    {a : String} (ha : c.paysActionId = some a) (hz : c.amountCents ≠ 0)
+    (h : linkRefusal i rs c = none) :
+    ∃ x ∈ i.actions, x.actionId = a ∧ x.kind = "CORRECTION_PAYMENT_REQUEST" ∧
+      linkedActivePaidCents i.payments (linksOf rs) a + c.amountCents ≤ x.amountCents ∧
+      ∃ before, evaluate i = some before ∧ c.amountCents ≤ before.shortfallCents := by
+  obtain ⟨x, hf, h1, h2⟩ := linkRefusal_find ha hz h
+  have hp := List.find?_some hf
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
+  exact ⟨x, List.mem_of_find?_eq_some hf, hp.1, hp.2, h1, h2⟩
+
+/-- The view's open amount is the reference one.  No hypotheses: a non-request or a cancelled one
+    is `0` on both sides. -/
+theorem openState_summarize (sh : Nat) (ps : List Payment) (ls : List PaymentLink)
+    (xs : List ActionRecord) (x : ActionRecord) :
+    openState sh ((xs.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map (requestPaidOf ps ls))
+        (requestPaidOf ps ls x) = openCents sh ps ls xs x := by
+  have hk : ∀ b ∈ xs, (decide (b.kind = "CORRECTION_PAYMENT_REQUEST") &&
+      countedRequest b && servedBefore b x) = (countedRequest b && servedBefore b x) := by
+    intro b _
+    by_cases hc : countedRequest b = true
+    · have := (countedRequest_iff b).1 hc
+      simp [hc, this.1]
+    · simp [hc]
+  have e1 : (((xs.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map (requestPaidOf ps ls)).filter
+        fun b => b.counted && (b.revision < x.revision ||
+          (b.revision == x.revision && decide (b.actionId < x.actionId)))).map
+        (fun b => b.amountCents - b.paidCents) = (xs.filter fun b => countedRequest b && servedBefore b x).map
+        (unpaidOf ps ls) := by
+    rw [List.filter_map, List.map_map, List.filter_filter]
+    have : xs.filter (fun b => ((fun b : RequestPaid => b.counted && (b.revision < x.revision ||
+          (b.revision == x.revision && decide (b.actionId < x.actionId)))) ∘ requestPaidOf ps ls) b &&
+          decide (b.kind = "CORRECTION_PAYMENT_REQUEST")) =
+        xs.filter fun b => countedRequest b && servedBefore b x := by
+      apply List.filter_congr
+      intro b hb
+      rw [Bool.and_comm, ← hk b hb, Bool.and_assoc]; rfl
+    rw [this]; rfl
+  unfold openState openCents unpaidBefore
+  rw [show (requestPaidOf ps ls x).counted = countedRequest x from rfl,
+    show (requestPaidOf ps ls x).revision = x.revision from rfl,
+    show (requestPaidOf ps ls x).actionId = x.actionId from rfl, e1]
+  rfl
 
 /-- 2. The literal core-theorems item-1 invariant, for every state Lean evaluates, whatever
     command produced it (payment, reversal, correction or offset authorization).  From 1: `evaluate`

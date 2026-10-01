@@ -706,12 +706,12 @@ theorem find_requests (l : List ActionRecord) (a : String) (f : ActionRecord →
     by_cases hk : x.kind = "CORRECTION_PAYMENT_REQUEST" <;> by_cases ha : x.actionId = a <;>
       simp [List.filter_cons, List.find?_cons, hk, ha, hf, ih]
 
-/-- R1 over the state is R1 over the snapshot. -/
+/-- The link rule over the state is the link rule over the snapshot. -/
 theorem linkRefusalView_eq {i : FinancialInput} {rs b S} (hw : financialInputWellFormed i = true)
     (hS : summarize i rs b = some S) (c : RecordCommand) :
     linkRefusalView (envOf i) S c = linkRefusal i rs c := by
-  have hreq : S.requests = (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map fun a =>
-      ⟨a.actionId, a.amountCents, linkedActivePaidCents i.payments (linksOf rs) a.actionId⟩ := by
+  have hreq : S.requests = (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map
+      (requestPaidOf i.payments (linksOf rs)) := by
     unfold summarize at hS
     cases hT : evaluateTotals i with
     | none => simp [hT] at hS
@@ -724,10 +724,7 @@ theorem linkRefusalView_eq {i : FinancialInput} {rs b S} (hw : financialInputWel
     rw [hev, hreq, find_requests _ _ _ (fun _ => rfl)]
     cases hfnd : i.actions.find? (fun x => x.actionId = a && x.kind = "CORRECTION_PAYMENT_REQUEST") with
     | none => simp
-    | some q =>
-      have hq := List.find?_some hfnd
-      simp only [Bool.and_eq_true, decide_eq_true_eq] at hq
-      simp [hq.1]
+    | some q => simp only [Option.map_some, openState_summarize]
 
 -- 16.2 item 5 (5.1): both forms
 theorem paymentRespond_decode_none {w : Bytes} (h : decodePaymentItem w = none) :
@@ -1270,8 +1267,8 @@ private theorem summarize_some {i : FinancialInput} {rs b S} (h : summarize i rs
             contributions := evalSortContributions (evalContributions i),
             latestCase := evalLatestCase i.cases, delivery := evalLatestDelivery i.actions,
             conflictCount := i.conflicts.length, evidenceIds := i.evidence.map (·.evidenceId),
-            requests := (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map fun a =>
-              ⟨a.actionId, a.amountCents, linkedActivePaidCents i.payments (linksOf rs) a.actionId⟩,
+            requests := (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map
+              (requestPaidOf i.payments (linksOf rs)),
             anchorBytes := b } := by
   unfold summarize at h
   cases ht : evaluateTotals i with
@@ -1847,8 +1844,8 @@ private theorem summarize_upd {i : FinancialInput} {rs b0 S} (hS : summarize i r
           cash := activeCents P,
           contributions := evalSortContributions (pcOf P ++ dcOf i.determinations),
           conflictCount := C.length, evidenceIds := E.map EvidenceRecord.evidenceId,
-          requests := ((i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map fun a =>
-            ⟨a.actionId, a.amountCents, linkedActivePaidCents P (linksOf rs') a.actionId⟩),
+          requests := (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map
+            (requestPaidOf P (linksOf rs')),
           anchorBytes := b }
       else none := by
   obtain ⟨t, ht, rfl⟩ := summarize_some hS
@@ -1878,8 +1875,8 @@ private theorem S_facts {i : FinancialInput} {rs b S} (h : summarize i rs b = so
     S.evidenceIds = i.evidence.map EvidenceRecord.evidenceId ∧ S.conflictCount = i.conflicts.length ∧
     S.cash = activeCents i.payments ∧ S.cash + S.lawful ≤ maxCents ∧
     S.contributions = evalSortContributions (pcOf i.payments ++ dcOf i.determinations) ∧
-    S.requests = (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map (fun a =>
-      (⟨a.actionId, a.amountCents, linkedActivePaidCents i.payments (linksOf rs) a.actionId⟩ : RequestPaid)) ∧
+    S.requests = (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map
+      (requestPaidOf i.payments (linksOf rs)) ∧
     S.anchorBytes = b := by
   have hc := cash_eq h
   obtain ⟨t, ht, rfl⟩ := summarize_some h
@@ -2122,7 +2119,7 @@ private theorem shape_recorded {r : PaymentRequest} {V : PaymentView} {S : ItemS
             refine List.map_congr_left fun a _ => ?_
             have := paid_insert r.input (K := recordedReceipt r.input c) hnd hrec hxact rfl hpid a.actionId
             simp only [Function.comp]
-            by_cases h : (recordedReceipt r.input c).paysActionId = some a.actionId <;> simp [h, this]
+            by_cases h : (recordedReceipt r.input c).paysActionId = some a.actionId <;> simp [requestPaidOf, h, this]
       · rw [hcash]; omega
 
 private theorem adv_cf (V : PaymentView) (S : ItemState) (ev : Option EvidenceRecord) (x : FinancialConflict) :
@@ -2449,9 +2446,9 @@ private theorem shape_reversed {r : PaymentRequest} {V : PaymentView} {S : ItemS
         simp only [Function.comp]
         by_cases h : k.paysActionId = some a.actionId
         · rw [if_pos h] at this
-          simp only [if_pos h, RequestPaid.mk.injEq, eq_self, true_and]; omega
+          simp only [requestPaidOf, h, ↓reduceIte, RequestPaid.mk.injEq, eq_self, true_and, and_true]; omega
         · rw [if_neg h] at this
-          simp only [if_neg h, RequestPaid.mk.injEq, eq_self, true_and]; omega
+          simp only [requestPaidOf, h, ↓reduceIte, RequestPaid.mk.injEq, eq_self, true_and, and_true]; omega
 
 private theorem alias_wf {r : PaymentRequest} (hwf : financialInputWellFormed r.input = true)
     {c : RecordCommand} (hc : commandWellFormed (.record c) = true)

@@ -1,4 +1,4 @@
-import BlindLedger.Financial.Payment.Types
+import BlindLedger.Financial.Payment.Open
 
 namespace BlindLedger.Financial.Payment
 
@@ -57,16 +57,6 @@ def aliasOf (r : PaymentRequest) (pid : String) (e : EvidenceRecord) : PaymentOu
   if !withinCapacity r w then .refused .CAPACITY else
   let post := applyWrites r.input w
   if financialInputWellFormed post then .alias pid e post else .refused .POST_REJECTED
-
-/-- The one link rule, R1: within the request and within the balance still owed. -/
-def linkRefusal (i : FinancialInput) (rs : List Receipt) (c : RecordCommand) : Option Refusal :=
-  c.paysActionId.bind fun a =>
-    match i.actions.find? (fun x => x.actionId = a && x.kind = "CORRECTION_PAYMENT_REQUEST") with
-    | none => some .LINK_UNKNOWN
-    | some req =>
-      if CorrectionTransition.linkedActivePaidCents i.payments (linksOf rs) a + c.amountCents >
-           req.amountCents || !(evaluate i).any (c.amountCents ≤ ·.shortfallCents)
-      then some .LINK_EXCEEDS_UNPAID else none
 
 def recordNew (r : PaymentRequest) (c : RecordCommand) : PaymentOutcome :=
   let i := r.input

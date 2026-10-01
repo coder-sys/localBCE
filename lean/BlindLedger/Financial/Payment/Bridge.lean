@@ -179,24 +179,6 @@ theorem step_actions (L c) : (step L c).input.actions = L.input.actions := by
   · dsimp only; rw [(paymentTransition_mutated_post ho).1]; rfl
   · dsimp only; rw [(alias_shape ho).1]; rfl
 
-theorem nodup_actions_of_wf {i : FinancialInput} (hwf : financialInputWellFormed i = true) :
-    (i.actions.map ActionRecord.actionId).Nodup := by
-  have h1 : canonicalIdList (i.actions.map ActionRecord.actionId) = true := by
-    simp only [financialInputWellFormed, Bool.and_eq_true, decide_eq_true_eq] at hwf
-    simp only [hwf]
-  exact (canonical_facts h1).2.2.imp fun {a b} h e => by subst e; exact String.lt_irrefl _ h
-
-theorem eq_of_nodup_map {α β} {f : α → β} : ∀ {l : List α}, (l.map f).Nodup →
-    ∀ {x y}, x ∈ l → y ∈ l → f x = f y → x = y
-  | [], _, _, _, hx, _, _ => by simp at hx
-  | z :: zs, hn, x, y, hx, hy, e => by
-    rw [List.map_cons, List.nodup_cons] at hn
-    rcases List.mem_cons.1 hx with rfl | hx' <;> rcases List.mem_cons.1 hy with rfl | hy'
-    · rfl
-    · exact absurd (List.mem_map.2 ⟨y, hy', e.symm⟩) hn.1
-    · exact absurd (List.mem_map.2 ⟨x, hx', e⟩) hn.1
-    · exact eq_of_nodup_map hn.2 hx' hy' e
-
 theorem step_within {L : Ledger} (c : Call) (hI : Inv L)
     (hA : (L.input.actions.map ActionRecord.actionId).Nodup) (hW : withinRequests L) :
     withinRequests (step L c) := by

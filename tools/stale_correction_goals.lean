@@ -5,8 +5,8 @@ import BlindLedger.Financial.Payment.Bridge
     This file is outside `lean/`, so no executable, library target, TCB report or pin manifest sees it.
     Check: from `lean/`, `lake env lean ../tools/stale_correction_goals.lean` over a build of
     `BlindLedger.Financial.Payment.Bridge` (lean tree b8b824e3, trunk 5e2e552).
-    The five R2 definitions are verbatim copies of `tools/r2_request_shrink_goals.lean` (a tools file
-    cannot be imported).  M3 step 2 moves R2's definitions to `lean/BlindLedger/Financial/Payment/Open.lean`;
+    The five R2 definitions are verbatim copies of the definitions now in
+    `Payment/Open.lean` (the goals file they were copied from is deleted).  M3 step 2 moves R2's definitions to `lean/BlindLedger/Financial/Payment/Open.lean`;
     that builder deletes the copies here and moves `stillAsks`, `deliveryMet`, `ackAction` and
     statements 1-6 beside them, unchanged, each with its proof and an axiom pin, then deletes this file. -/
 

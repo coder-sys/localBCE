@@ -6,12 +6,6 @@ open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
 
 /-! ## 16.7 Chain state, view and step -/
 
-structure RequestPaid where
-  actionId : String
-  amountCents : Nat
-  paidCents : Nat
-deriving DecidableEq, Repr
-
 structure ItemState where
   revision : Nat
   cash : Nat
@@ -52,9 +46,8 @@ def summarize (i : FinancialInput) (rs : List Receipt) (anchorBytes : Nat) : Opt
       contributions := evalSortContributions (evalContributions i),
       latestCase := evalLatestCase i.cases, delivery := evalLatestDelivery i.actions,
       conflictCount := i.conflicts.length, evidenceIds := i.evidence.map (·.evidenceId),
-      requests := (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map fun a =>
-        ⟨a.actionId, a.amountCents,
-          CorrectionTransition.linkedActivePaidCents i.payments (linksOf rs) a.actionId⟩,
+      requests := (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map
+        (requestPaidOf i.payments (linksOf rs)),
       anchorBytes }
 
 def summaryOf (i : FinancialInput) (rs : List Receipt) : Option ItemState :=
@@ -166,9 +159,8 @@ def linkRefusalView (e : Env) (s : ItemState) (c : RecordCommand) : Option Refus
     match s.requests.find? (·.actionId = a) with
     | none => some .LINK_UNKNOWN
     | some q =>
-      if q.paidCents + c.amountCents > q.amountCents ||
-         !(evaluateState e s).any (c.amountCents ≤ ·.shortfallCents)
-      then some .LINK_EXCEEDS_UNPAID else none
+      if (evaluateState e s).any fun b => c.amountCents ≤ openState b.shortfallCents s.requests q
+      then none else some .LINK_EXCEEDS_UNPAID
 
 def viewRecordNew (v : PaymentView) (s : ItemState) (c : RecordCommand) : StepOutcome :=
   let i := v.env.head

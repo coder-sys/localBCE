@@ -1,4 +1,5 @@
 import BlindLedger.Financial.Payment.Base
+import BlindLedger.Financial.Payment.OpenLaws
 import BlindLedger.Financial.CorrectionTransition.PaidSumTheorems
 import BlindLedger.Financial.CodecLaws.CorrectionRecords
 
@@ -792,25 +793,25 @@ theorem alias_tr {r pid e o} (h : aliasOf r pid e = o) (hn : ∀ f, o ≠ .refus
   · exact absurd (h1.trans ho) Base.aliasOf_ne_mutated
   · obtain ⟨-, rfl, -⟩ := Base.aliasOf_alias (h1.trans ho); exact hc
 
-def R1Holds (r : PaymentRequest) (c : RecordCommand) (o : PaymentOutcome) : Prop :=
-  ∀ w post res, o = .mutated .RECORDED w post res → ∀ a, c.paysActionId = some a →
-    (evaluate r.input).any (fun x => decide (c.amountCents ≤ x.shortfallCents)) = true
+/-- A recorded payment's link was not refused. -/
+def LinkHolds (r : PaymentRequest) (c : RecordCommand) (o : PaymentOutcome) : Prop :=
+  ∀ w post res, o = .mutated .RECORDED w post res → linkRefusal r.input r.receipts c = none
 
 theorem facts_nm {r c x o} (h : x = o) (hm : ∀ k w p res, x ≠ .mutated k w p res)
-    (ha : ∀ pid e p, x ≠ .alias pid e p) : x = o ∧ Live r o ∧ R1Holds r c o :=
+    (ha : ∀ pid e p, x ≠ .alias pid e p) : x = o ∧ Live r o ∧ LinkHolds r c o :=
   ⟨h, ⟨fun _ => ⟨fun k w p res ho => hm k w p res (h.trans ho), fun pid e p ho => ha pid e p (h.trans ho)⟩,
     fun k w p res ho => absurd (h.trans ho) (hm k w p res), fun pid e p ho => absurd (h.trans ho) (ha pid e p)⟩,
    fun w p res ho => absurd (h.trans ho) (hm _ _ _ _)⟩
 
 theorem dup_leaf {r c o pid} (h : PaymentOutcome.duplicate pid = o) :
-    PaymentOutcome.duplicate pid = o ∧ Live r o ∧ R1Holds r c o :=
+    PaymentOutcome.duplicate pid = o ∧ Live r o ∧ LinkHolds r c o :=
   facts_nm h (fun _ _ _ _ => nofun) (fun _ _ _ => nofun)
 
 set_option maxHeartbeats 2000000 in
-theorem recordNew_tr {r c o} (h : recordNew r c = o) (hn : ∀ f, o ≠ .refused f) :
-    Base.recordNew r c = o ∧ Live r o ∧ R1Holds r c o := by
+theorem recordNew_tr {r c o} (h : recordNew r c = o) (hz : c.amountCents ≠ 0) (hn : ∀ f, o ≠ .refused f) :
+    Base.recordNew r c = o ∧ Live r o ∧ LinkHolds r c o := by
   have nm : ∀ {x : PaymentOutcome}, x = o → (∀ k w p res, x ≠ .mutated k w p res) →
-      (∀ pid e p, x ≠ .alias pid e p) → x = o ∧ Live r o ∧ R1Holds r c o := facts_nm
+      (∀ pid e p, x ≠ .alias pid e p) → x = o ∧ Live r o ∧ LinkHolds r c o := facts_nm
   unfold recordNew at h
   unfold Base.recordNew
   unfold conflictIdOf at h
@@ -863,7 +864,7 @@ theorem recordNew_tr {r c o} (h : recordNew r c = o) (hn : ∀ f, o ≠ .refused
         first
           | (with_reducible exact dup_leaf h)
           | (obtain ⟨h1, h2⟩ := alias_tr (r := r) (pid := p.paymentId) (e := confirmation r.input c receivedAt) h hn
-             unfold R1Holds
+             unfold LinkHolds
              exact ⟨h1, h2, fun w' p' r' ho => absurd (h1.trans ho) (Base.aliasOf_ne_mutated (r := r) (pid := p.paymentId))⟩)
       · rw [if_neg s1] at h ⊢
         by_cases c7 : cv = true
@@ -873,37 +874,27 @@ theorem recordNew_tr {r c o} (h : recordNew r c = o) (hn : ∀ f, o ≠ .refused
         · rw [if_pos c8] at h ⊢; exact nm h (fun _ _ _ _ => nofun) (fun _ _ _ => nofun)
         rw [if_neg c8] at h ⊢
         obtain ⟨h1, h2⟩ := mutate_tr h hn
-        unfold R1Holds
+        unfold LinkHolds
         exact ⟨h1, h2, fun w' p' r' ho => by
           have := (Base.mutate_eq (h1.trans ho)).1
           cases this⟩
     | none =>
-      unfold R1Holds
+      unfold LinkHolds
       dsimp only at h ⊢
-      unfold linkRefusal at h
-      generalize c.paysActionId = pa at h ⊢
-      cases pa with
+      cases hl : linkRefusal r.input r.receipts c with
+      | some f => simp only [hl] at h; exact absurd h.symm (hn _)
       | none =>
+        simp only [hl] at h
         obtain ⟨h1, h2⟩ := mutate_tr h hn
-        exact ⟨h1, h2, fun w' p' r' ho a ha => by cases ha⟩
-      | some a =>
-        simp only [Option.bind_some] at h ⊢
-        generalize List.find? (fun x => decide (x.actionId = a) && decide (x.kind = "CORRECTION_PAYMENT_REQUEST")) r.input.actions = fo at h ⊢
-        cases fo with
-        | none => dsimp only at h ⊢; exact ⟨h, ⟨fun _ => ⟨fun k w p res ho => (nomatch h.trans ho), fun pid e p ho => (nomatch h.trans ho)⟩, fun k w p res ho => (nomatch h.trans ho), fun pid e p ho => (nomatch h.trans ho)⟩, fun w p res ho => (nomatch h.trans ho)⟩
-        | some req =>
-          dsimp only at h ⊢
-          generalize Option.any (fun x => decide (c.amountCents ≤ x.shortfallCents)) (evaluate r.input) = B at h ⊢
-          by_cases a1 : linkedActivePaidCents r.input.payments (linksOf r.receipts) a + c.amountCents > req.amountCents
-          · simp only [a1, decide_true, Bool.true_or, ↓reduceIte] at h ⊢
-            exact ⟨h, ⟨fun _ => ⟨fun k w p res ho => (nomatch h.trans ho), fun pid e p ho => (nomatch h.trans ho)⟩, fun k w p res ho => (nomatch h.trans ho), fun pid e p ho => (nomatch h.trans ho)⟩, fun w p res ho => (nomatch h.trans ho)⟩
-          · simp only [a1, decide_false, Bool.false_or, ↓reduceIte] at h ⊢
-            by_cases b1 : (!B) = true
-            · simp only [b1, ↓reduceIte] at h; exact absurd h.symm (hn _)
-            · simp only [b1] at h
-              obtain ⟨h1, h2⟩ := mutate_tr h hn
-              refine ⟨h1, h2, fun w' p' r' ho a' ha => ?_⟩
-              simpa using b1
+        refine ⟨?_, h2, fun _ _ _ _ => rfl⟩
+        cases hp : c.paysActionId with
+        | none => simpa using h1
+        | some a =>
+          obtain ⟨x, hf, hlk, -⟩ := linkRefusal_find hp hz hl
+          have hn1 : ¬ (linkedActivePaidCents r.input.payments (linksOf r.receipts) a + c.amountCents >
+              x.amountCents) := by omega
+          simp only [Option.bind_some, hf, hn1, ↓reduceIte]
+          exact h1
 
 theorem decideReverse_tr {r c o} (h : decideReverse r c = o) (hn : ∀ f, o ≠ .refused f) :
     Base.decideReverse r c = o ∧ Live r o := by
@@ -946,7 +937,7 @@ theorem decideReverse_tr {r c o} (h : decideReverse r c = o) (hn : ∀ f, o ≠ 
         exact mutate_tr h hn
 
 theorem decideRecord_tr {r c o} (h : decideRecord r c = o) (hn : ∀ f, o ≠ .refused f) :
-    Base.decideRecord r c = o ∧ Live r o ∧ R1Holds r c o := by
+    Base.decideRecord r c = o ∧ Live r o ∧ LinkHolds r c o := by
   unfold decideRecord at h
   unfold Base.decideRecord
   by_cases z : c.amountCents = 0
@@ -961,7 +952,7 @@ theorem decideRecord_tr {r c o} (h : decideRecord r c = o) (hn : ∀ f, o ≠ .r
     dsimp only at h ⊢
     exact facts_nm h (fun _ _ _ _ hh => by have := recordRetry_plain r c p; rw [hh] at this; exact this)
       (fun _ _ _ hh => by have := recordRetry_plain r c p; rw [hh] at this; exact this)
-  | none => exact recordNew_tr h hn
+  | none => exact recordNew_tr h z hn
 
 theorem paymentTransition_tr {r o} (h : paymentTransition r = o) (hn : ∀ f, o ≠ .refused f) :
     Base.paymentTransition r = o ∧ Live r o := by
@@ -980,23 +971,37 @@ theorem transition_alias_cap {r pid e post} (h : paymentTransition r = .alias pi
     withinCapacity r { evidence := some e, payment := none, conflict := none, receipt := none } = true :=
   (paymentTransition_tr h fun _ => nofun).2.2.2 pid e post rfl
 
-theorem paymentTransition_r1 {r c o} (hc : r.command = .record c) (h : paymentTransition r = o)
-    (hn : ∀ f, o ≠ .refused f) : R1Holds r c o := by
+theorem paymentTransition_link {r c o} (hc : r.command = .record c) (h : paymentTransition r = o)
+    (hn : ∀ f, o ≠ .refused f) : LinkHolds r c o := by
   unfold paymentTransition at h
   rw [hc] at h
   exact (decideRecord_tr (c := c) h hn).2.2
 
 end TrLayer
 
+/-- R2 #6: a recorded payment that names a request fits that request's open amount, evaluated
+    at the balance before the payment. -/
+theorem record_link_within_open {r : PaymentRequest} {c : RecordCommand} {w : Writes}
+    {post : FinancialInput} {result : FinancialResult} {a : String}
+    (hc : r.command = .record c) (ha : c.paysActionId = some a)
+    (h : paymentTransition r = .mutated .RECORDED w post result) :
+    ∃ before x, evaluate r.input = some before ∧ x ∈ r.input.actions ∧ x.actionId = a ∧
+      x.kind = "CORRECTION_PAYMENT_REQUEST" ∧
+      c.amountCents ≤ openCents before.shortfallCents r.input.payments (linksOf r.receipts)
+        r.input.actions x := by
+  obtain ⟨x, hf, before, hE, hle⟩ := linkRefusal_none ha
+    (paymentTransition_link hc h (fun f => nofun) w post result rfl)
+  have hp := List.find?_some hf
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
+  exact ⟨before, x, hE, List.mem_of_find?_eq_some hf, hp.1, hp.2, hle⟩
+
 -- 16.9 R1 (5.2) as signed
 theorem record_link_within_shortfall {r : PaymentRequest} {c w post result a}
     (hc : r.command = .record c) (ha : c.paysActionId = some a)
     (h : paymentTransition r = .mutated .RECORDED w post result) :
     ∃ before, evaluate r.input = some before ∧ c.amountCents ≤ before.shortfallCents := by
-  have h1 := paymentTransition_r1 hc h (fun f => nofun) w post result rfl a ha
-  cases hE : evaluate r.input with
-  | none => rw [hE] at h1; simp at h1
-  | some b => rw [hE] at h1; exact ⟨b, rfl, by simpa using h1⟩
+  obtain ⟨before, x, hE, -, -, -, hle⟩ := record_link_within_open hc ha h
+  exact ⟨before, hE, Nat.le_trans hle (openCents_le _ _ _ _ _).1⟩
 
 -- 16.9 A2 (5.2), strengthened to aliases
 theorem paymentTransition_shadow_refused (r : PaymentRequest)

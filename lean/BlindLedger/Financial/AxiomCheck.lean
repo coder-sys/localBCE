@@ -324,7 +324,8 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.stepView_eq
 /-- info: 'BlindLedger.Financial.Payment.chain_fold_eq_full' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.chain_fold_eq_full
--- R2 (open amounts of correction requests); #2 `requests_within_balance` is core-theorems-v1 section 4.4 item 1.
+-- R2 (open amounts of correction requests); #2 `requests_within_balance` is core-theorems-v1 section 4.4 item 1,
+-- and with #6 `record_link_within_open` it replaces the dropped run-level R1 law (section 4.4, `run_linked_within_shortfall`).
 /-- info: 'BlindLedger.Financial.Payment.openTotal_eq_min' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openTotal_eq_min
 /-- info: 'BlindLedger.Financial.Payment.openCents_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
@@ -337,3 +338,7 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.engine_requestable_agrees
 /-- info: 'BlindLedger.Financial.Payment.openCents_pay_local' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.openCents_pay_local
+/-- info: 'BlindLedger.Financial.Payment.record_link_within_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.record_link_within_open
+/-- info: 'BlindLedger.Financial.Payment.linkRefusal_implies_r1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.linkRefusal_implies_r1
