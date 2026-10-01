@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
+import BlindLedger.Gate.ProducerTheorems
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -42,3 +43,12 @@ import BlindLedger.Gate.MlDsa87Laws
 #print axioms BlindLedger.Gate.MlDsa87.sampleInBallFrom_append
 #print axioms BlindLedger.Gate.MlDsa87.verify_rejects_sampleInBall_none
 #print axioms BlindLedger.Gate.MlDsa87.verify_rejects_rejNtt_none
+#print axioms BlindLedger.Gate.storedOf_wf
+#print axioms BlindLedger.Gate.forks_comm
+#print axioms BlindLedger.Gate.chain_no_fork
+#print axioms BlindLedger.Gate.follows_twice_forks
+#print axioms BlindLedger.Gate.publishOk_sound
+#print axioms BlindLedger.Gate.publish_payer_local
+#print axioms BlindLedger.Gate.verifyToken_slice
+#print axioms BlindLedger.Gate.storeCheckpoint_slice
+#print axioms BlindLedger.Gate.firstFailure_none
