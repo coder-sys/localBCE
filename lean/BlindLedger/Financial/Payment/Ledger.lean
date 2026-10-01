@@ -774,7 +774,7 @@ theorem run_record_retry_duplicate (L) (hL : ledgerWellFormed L) (c : RecordComm
 theorem evidenceSlot_same {r : PaymentRequest} {e s} (hf : r.foreign.evidenceId = false)
     (hs : findEvidence r.input.evidence e.evidenceId = some s) (hle : e.eventAt ≤ s.receivedAt)
     (heq : { e with receivedAt := s.receivedAt } = s) : evidenceSlot r e = .same s := by
-  simp [evidenceSlot, hf, hs, hle, heq]
+  simp [evidenceSlot, slotOf, hf, hs, hle, heq]
 
 theorem decideReverse_dup {r c p s} (hp : findPayment r.input.payments c.paymentId = some p)
     (hf : r.foreign.evidenceId = false) (hs : findEvidence r.input.evidence c.evidenceId = some s)

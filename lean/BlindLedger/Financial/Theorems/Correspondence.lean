@@ -298,7 +298,7 @@ theorem evaluateWellFormed_matches_specification
   simp [expected, evaluateResult, evalTimely_matches_spec,
     evalLatestCase_matches_spec, evalLatestDelivery_matches_spec,
     evalVerificationStatus, specVerificationStatus,
-    evalCaseStatus, specCaseStatus]
+    evalCaseStatus, caseStatusFrom, specCaseStatus]
   have hCompletion := evalCompletion_matches_spec input
   have hTimely := evalTimely_matches_spec input
   have hSpecTimely := specTimely_identity input

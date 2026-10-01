@@ -111,7 +111,7 @@ theorem applyCorrectionTransition_mutation_authorized (request : CorrectionTrans
   have hApproved : request.currentInput.pack.status = .APPROVED := by
     have hPack : controlPackWellFormed request.currentInput.pack = true := by
       unfold financialInputWellFormed at hWf
-      simp only [Bool.and_eq_true, decide_eq_true_eq] at hWf
+      simp only [envWellFormed, envOf, Bool.and_eq_true, decide_eq_true_eq] at hWf
       grind
     simp only [controlPackWellFormed, Bool.and_eq_true, decide_eq_true_eq] at hPack
     grind
@@ -424,7 +424,7 @@ private theorem dig_len {d : Bytes} (h : digestWellFormed d = true) : d.length â
 private theorem ctx_parts {x : FinancialInput} (h : financialInputWellFormed x = true) :
     x.context.currency = "USD" := by
   unfold financialInputWellFormed at h
-  simp only [Bool.and_eq_true] at h
+  simp only [envWellFormed, envOf, Bool.and_eq_true] at h
   have hc : contextWellFormed x.context = true := by grind
   unfold contextWellFormed at hc
   simp only [Bool.and_eq_true, List.all_cons, List.all_nil, decide_eq_true_eq] at hc

@@ -139,12 +139,18 @@ def Slot.isSame : Slot → Bool
 
 /-- `_insert_evidence`: a stored id is a retry iff the new record, given the stored
     received time, equals the stored record and its event is not after that time. -/
-def evidenceSlot (r : PaymentRequest) (e : EvidenceRecord) : Slot :=
-  if r.foreign.evidenceId then .clash else
-  match findEvidence r.input.evidence e.evidenceId with
+def slotOf (foreign : Bool) (stored : Option EvidenceRecord) (e : EvidenceRecord) : Slot :=
+  if foreign then .clash else
+  match stored with
   | none => .fresh
   | some s => if e.eventAt ≤ s.receivedAt ∧ { e with receivedAt := s.receivedAt } = s
               then .same s else .clash
+
+def evidenceSlot (r : PaymentRequest) (e : EvidenceRecord) : Slot :=
+  slotOf r.foreign.evidenceId (findEvidence r.input.evidence e.evidenceId) e
+
+def conflictIdOf (i : FinancialInput) (c : RecordCommand) : String :=
+  "conflict:" ++ i.context.itemId ++ ":" ++ c.commonOriginId ++ ":" ++ c.evidenceId
 
 def applyWrites (i : FinancialInput) (w : Writes) : FinancialInput :=
   { i with

@@ -199,7 +199,7 @@ theorem inputWire_of_wellFormed {i : FinancialInput} (h : financialInputWellForm
     financialInputWireAdmissible i := by
   have hWF := h
   unfold financialInputWellFormed at h
-  simp only [Bool.and_eq_true, decide_eq_true_eq, and_assoc] at h
+  simp only [envWellFormed, envOf, Bool.and_eq_true, decide_eq_true_eq, and_assoc] at h
   obtain ⟨hCtx, hAuth, hPack, hObl, -, hBef, hEval, -, -, -, -, -, -, -, -, -, hPL, hCL, hDL, hEL,
     hFL, -, hCsL, hAL, -, -, -, -, -, -, -, hP, hC, hEv, hD, hF, hCs, hA, -⟩ := h
   have hAuthW := authorityWire hAuth

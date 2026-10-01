@@ -34,8 +34,12 @@ theorem wf_setRevision {i : FinancialInput} {b : Nat} (h : financialInputWellFor
     (hle : i.beforeRevision ≤ b) (hb : b < maxRevision) :
     financialInputWellFormed { i with beforeRevision := b } = true := by
   have e : financialInputWellFormed { i with beforeRevision := b } = financialInputWellFormed i := by
-    simp only [financialInputWellFormed, Bool.and_eq_true, decide_eq_true_eq] at h
-    have hd : i.determinations.all (determinationWellFormed i) = true := by simp only [h]
+    have henvi : envWellFormed (envOf i) = true := by
+      simp only [financialInputWellFormed, Bool.and_eq_true, and_assoc] at h
+      exact h.1
+    have hd : i.determinations.all (determinationWellFormed i) = true := by
+      simp only [financialInputWellFormed, Bool.and_eq_true, and_assoc] at h
+      grind
     have hdet : i.determinations.all (determinationWellFormed { i with beforeRevision := b }) =
         i.determinations.all (determinationWellFormed i) := by
       apply Bool.eq_iff_iff.2
@@ -43,11 +47,13 @@ theorem wf_setRevision {i : FinancialInput} {b : Nat} (h : financialInputWellFor
       constructor <;> intro hh x hx
       · rw [← wfDet_setRevision (List.all_eq_true.1 hd x hx) hle]; exact hh x hx
       · rw [wfDet_setRevision (List.all_eq_true.1 hd x hx) hle]; exact hh x hx
-    have h5 : i.beforeRevision < maxRevision := by simp only [h]
-    have h6 : revisionWellFormed i.beforeRevision = true := by simp only [h]
     have h6' : revisionWellFormed b = true := by
       simp only [revisionWellFormed, decide_eq_true_eq]; omega
-    simp only [financialInputWellFormed, hdet, decide_eq_true h5, decide_eq_true hb, h6, h6']
+    have henv : envWellFormed (envOf { i with beforeRevision := b }) = envWellFormed (envOf i) := by
+      rw [henvi]
+      simp only [envWellFormed, envOf, Bool.and_eq_true, decide_eq_true_eq] at henvi ⊢
+      grind
+    simp only [financialInputWellFormed, henv, hdet]
     rfl
   rw [e]; exact h
 
@@ -69,7 +75,7 @@ theorem mutate_eq {r k w k' w' post res} (h : mutate r k w = .mutated k' w' post
 
 theorem slot_fresh {r e} (h : evidenceSlot r e = .fresh) :
     findEvidence r.input.evidence e.evidenceId = none ∧ r.foreign.evidenceId = false := by
-  unfold evidenceSlot at h
+  unfold evidenceSlot slotOf at h
   by_cases hf : r.foreign.evidenceId = true
   · simp [hf] at h
   · simp only [hf, Bool.false_eq_true, ↓reduceIte] at h
@@ -119,7 +125,7 @@ theorem slot_cases {r e} (h : evidenceSlot r e ≠ .clash) :
       ((evidenceSlot r e = .fresh ∧ findEvidence r.input.evidence e.evidenceId = none) ∨
        ∃ s, evidenceSlot r e = .same s ∧ findEvidence r.input.evidence e.evidenceId = some s ∧
          e.eventAt ≤ s.receivedAt ∧ { e with receivedAt := s.receivedAt } = s) := by
-  unfold evidenceSlot at h ⊢
+  unfold evidenceSlot slotOf at h ⊢
   by_cases hf : r.foreign.evidenceId = true
   · simp [hf] at h
   · simp only [hf, Bool.false_eq_true, ↓reduceIte] at h ⊢

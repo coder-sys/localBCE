@@ -657,20 +657,33 @@ def actionWellFormed (input : FinancialInput) (action : ActionRecord) : Bool :=
     digestWellFormed action.payloadDigest && timeWellFormed action.createdAt &&
     actionBindingWellFormed input action
 
+/-- The head of a `FinancialInput`: everything but the row lists. -/
+structure Env where
+  context : FinancialContext
+  authority : TrustedAuthority
+  pack : ControlPack
+  obligation : Obligation
+  beforeRevision : Nat
+  evaluatedAt : Nat
+deriving DecidableEq, Repr
+
+def envOf (i : FinancialInput) : Env :=
+  ⟨i.context, i.authority, i.pack, i.obligation, i.beforeRevision, i.evaluatedAt⟩
+
+/-- The head conjuncts of `financialInputWellFormed`. -/
+def envWellFormed (e : Env) : Bool :=
+  contextWellFormed e.context && authorityWellFormed e.authority &&
+    controlPackWellFormed e.pack && obligationWellFormed e.obligation &&
+    e.beforeRevision < maxRevision && revisionWellFormed e.beforeRevision &&
+    timeWellFormed e.evaluatedAt &&
+    e.pack.stateId = e.context.stateId && e.pack.deploymentId = e.context.deploymentId &&
+    e.pack.programId = e.context.programId && e.pack.periodId = e.context.periodId &&
+    e.pack.currency = e.context.currency &&
+    e.obligation.populationId = e.context.populationId && e.obligation.itemId = e.context.itemId &&
+    e.obligation.obligationId = e.context.obligationId && e.obligation.ruleVersion = e.pack.version
+
 def financialInputWellFormed (input : FinancialInput) : Bool :=
-  contextWellFormed input.context && authorityWellFormed input.authority &&
-    controlPackWellFormed input.pack && obligationWellFormed input.obligation &&
-    input.beforeRevision < maxRevision && revisionWellFormed input.beforeRevision &&
-    timeWellFormed input.evaluatedAt &&
-    input.pack.stateId = input.context.stateId &&
-    input.pack.deploymentId = input.context.deploymentId &&
-    input.pack.programId = input.context.programId &&
-    input.pack.periodId = input.context.periodId &&
-    input.pack.currency = input.context.currency &&
-    input.obligation.populationId = input.context.populationId &&
-    input.obligation.itemId = input.context.itemId &&
-    input.obligation.obligationId = input.context.obligationId &&
-    input.obligation.ruleVersion = input.pack.version &&
+  envWellFormed (envOf input) &&
     input.payments.length ≤ maxRows && input.claims.length ≤ maxRows &&
     input.determinations.length ≤ maxRows && input.evidence.length ≤ maxRows &&
     input.conflicts.length ≤ maxRows && input.cases.length ≥ 1 &&
