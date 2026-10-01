@@ -4,6 +4,7 @@ rr-core's, copied unchanged from branch hist-inc."""
 
 import subprocess
 import re
+import sqlite3
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -48,20 +49,34 @@ class ChangeLogCompareTests(unittest.TestCase):
         values = ",".join(value if name == column else name for name in columns)
         return f"REPLACE INTO {table}({','.join(columns)}) SELECT {values} FROM {table} WHERE {where}"
 
+    @classmethod
+    def _past_the_owner(cls, table, where, column=None, value=None):
+        """The REPLACE with the owner's own delete guard dropped first, so the refusal under test is finish's, not the owner's."""
+        return (f'DROP TRIGGER temp."rr_track_{table}_DELETE"', cls._replace_sql(table, where, column, value))
+
     def test_writes_the_file_does_not_name_are_refused(self):  # green on trunk (the snapshot compare); must stay green
         other = f"(SELECT obligation_id FROM obligations WHERE item_id<>'{H}' ORDER BY rowid LIMIT 1)"
-        for label, sql in (
-            ("an untouched obligation's row", f"UPDATE obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}"),
-            ("an untouched obligation's case", f"UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}"),
-            ("an earlier evaluation row", "UPDATE evaluations SET evaluated_at_ms=evaluated_at_ms+1 WHERE rowid=(SELECT min(rowid) FROM evaluations)"),
+        for label, statements in (
+            ("an untouched obligation's row", (f"UPDATE obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}",)),
+            ("an untouched obligation's case", (f"UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}",)),
+            ("an earlier evaluation row", ("UPDATE evaluations SET evaluated_at_ms=evaluated_at_ms+1 WHERE rowid=(SELECT min(rowid) FROM evaluations)",)),
             ("an evidence row replaced with other content (REPLACE skips the UPDATE trigger)",
-             self._replace_sql("evidence", "rowid=(SELECT min(rowid) FROM evidence)", "received_at_ms", "received_at_ms+1")),
+             self._past_the_owner("evidence", "rowid=(SELECT min(rowid) FROM evidence)", "received_at_ms", "received_at_ms+1")),
         ):
             with self.subTest(write=label):
-                self._inject(lambda connection, sql=sql: connection.execute(sql))
+                self._inject(lambda connection, statements=statements: [connection.execute(sql) for sql in statements])
 
     def test_an_identical_replace_that_moves_a_row_is_refused(self):  # RED: the snapshot compare is keyed by content, not rowid
-        self._inject(lambda connection: connection.execute(self._replace_sql("evidence", "rowid=(SELECT min(rowid) FROM evidence)")))
+        self._inject(lambda connection: [connection.execute(sql) for sql in self._past_the_owner("evidence", "rowid=(SELECT min(rowid) FROM evidence)")])
+
+    def test_the_owner_refuses_a_replace_itself(self):  # with recursive_triggers ON the REPLACE's delete reaches the owner's guard
+        def replace_then_bypass(connection):
+            drop, replace = self._past_the_owner("evidence", "rowid=(SELECT min(rowid) FROM evidence)")
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "^history_row_delete$"):
+                connection.execute(replace)
+            connection.execute(drop)
+            connection.execute(replace)
+        self._inject(replace_then_bypass)
 
     def test_finish_takes_no_whole_table_snapshot(self):  # RED: trunk reads every package table twice (937 ms at E=8,500)
         with patch.object(check, "_snapshot", side_effect=AssertionError("whole-table snapshot"), create=True):
