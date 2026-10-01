@@ -3280,6 +3280,9 @@ class FinancialOwner:
                 _fail(FinancialConflictError, "population_import_identity_conflict")
             if str(existing["status"]) == "PUBLISHED":
                 _fail(FinancialConflictError, "population_already_published")
+            imported = existing["imported_count"]
+            if type(imported) is not int or imported < 0 or imported != connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0]:
+                _fail(FinancialIntegrityError, "population_manifest_imported_count")
             return existing, False
         if not create:
             _fail(FinancialIntegrityError, "population_import_missing")
@@ -3315,14 +3318,7 @@ class FinancialOwner:
                 expected_count=expected_count,
             )
             manifest_members = set(manifest.member_ids)
-            current_count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
-            persisted_imported_count = population["imported_count"]
-            if (
-                type(persisted_imported_count) is not int
-                or persisted_imported_count < 0
-                or current_count != persisted_imported_count
-            ):
-                _fail(FinancialIntegrityError, "population_manifest_imported_count")
+            current_count = population["imported_count"]  # its item count (_ensure_population_import)
             seen: dict[str, tuple[str, int, int, str]] = {}
             new_items: list[PopulationItem] = []
             for item in chunk:
