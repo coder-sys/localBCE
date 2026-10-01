@@ -201,6 +201,26 @@ class CoreR1aMarkTests(unittest.TestCase):
             self.assertIn("status", store.record_payment_evidence(**_pay("item-05")))
         self.assertEqual(len(calls), 1)
 
+    def test_a_clock_step_ahead_is_refused_unwritten_and_writes_resume_when_it_is_corrected(self):
+        # safety red team M1: one commit at a stepped clock made event_commit_order refuse every later write store-wide
+        store = self._fixture()._build_base()
+        wall, mono = [store.clock.value + 1_000], [0]  # ms; a wall step moves only `wall`
+        store.clock = owner._SystemClock()
+        with patch.object(owner.time, "time_ns", lambda: wall[0] * 1_000_000), patch.object(owner.time, "monotonic_ns", lambda: mono[0] * 1_000_000):
+            store.record_payment_evidence(**_pay("item-05"))
+            wall[0] += 60_000
+            mono[0] += 60_000
+            store.record_payment_evidence(**_pay("item-06"))  # normal running
+            wall[0] += owner._CLOCK_SKEW_MS - 1  # a small skew inside the bound
+            store.record_payment_evidence(**_pay("item-04"))
+            wall[0] += 3_600_000  # an hour's step ahead
+            before = acceptance._image(store.path)
+            with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
+                store.record_payment_evidence(**_pay("item-03"))
+            self.assertEqual(acceptance._image(store.path), before)
+            wall[0] -= 3_600_000  # the clock is corrected
+            self.assertIn("status", store.record_payment_evidence(**_pay("item-03")))
+
     def test_close_is_idempotent_and_releases_the_store(self):
         fixture = self._fixture()
         base = fixture._build_base()
