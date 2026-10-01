@@ -11,7 +11,7 @@ The release producer (`tools/build_financial_correction_release.ps1`) has NOT ru
 
 ## Cursor-decoder re-pin (2026-10-01, rule `h1-v1`, no money or format change)
 
-Why it moved: `CorrectionTransition/Runtime.lean` now decodes the request with `Cursor.decodeCorrectionTransitionRequest` over the stdin byte array (one parse, no `List UInt8`),
+Why it moved: `CorrectionTransition/Runtime.lean` now decodes the request with `Cursor.decodeCorrectionTransitionRequest` over the stdin byte array (one parse in place over the array; it still makes one `List UInt8` of the request and re-encodes it as a list to check the frame is canonical),
 proved equal to the reference list decoder (`Cursor.decodeCorrectionTransitionRequest_eq`, pinned in `AxiomCheck.lean`); the exe is 132,608 bytes larger (the cursor readers, not attributed further).
 Evidence: two fresh `git archive 7b47660 lean` stage builds (`C:\Users\neers\rrb\le\stage-bf-a` and `-b`; guard logs `bf1m-stagea-a5-L2` and `bf1m-stageb-a1-L2`,
 `lake build -d` of `blind_financial_worker blind_financial_correction gate_verify gate_axioms blind_financial_axioms`, 94 jobs, exit 0) gave this exe byte for byte, equal to the in-tree build (`bf1m-full2-a2-L3`); gate_verify

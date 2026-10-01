@@ -13,9 +13,9 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
 - Source manifest, 77 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  4d8dc37b82f5f653c4b8fa030e76bca4a5af37e56daf7883f068ad0482162901, 8,606 bytes;
+  bd74758e3327aec989c78c2a3609e516999d8ce9962c3a5f6a67c8d2ad80cca0, 8,606 bytes;
   each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
-  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\bf1m-gv-manifest.txt (tree 7b47660, bf-lean).
+  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\bf1m2-gv-manifest.txt (bf-lean, after the semantic-gate source_files fix).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -85,7 +85,7 @@ Two fresh `git archive 7dde24e lean` stages (C:\Users\neers\rrb\le\stage-ctm-a a
 `blind_financial_worker blind_financial_correction gate_verify gate_axioms blind_financial_axioms`, 87 jobs, exit 0) gave gate_verify 9bd2602b... and the worker 86299A0D...
 byte for byte, both equal to their pins.
 
-Re-pin (2026-10-01, branch bf-lean, source commit 7b47660, lean tree 0b05ecaa...): the manifest moved (72 files, 3815f1fa..., to 77 files, 4d8dc37b...) while this exe did not.
+Re-pin (2026-10-01, branch bf-lean, source commit 7b47660, lean tree 0b05ecaa...): the manifest moved (72 files, 3815f1fa..., to 77 files, 4d8dc37b...; then bd74758e..., when `lean/tools/semantic_assurance_manifest.json` and `semantic_assurance_gate.py` gained the three closure files) while this exe did not.
 bf-lean added the cursor decoders and batch laws and moved the correction exe to 441EB3E8... (artifacts/engine-correction/PROVENANCE.md). Two fresh `git archive 7b47660 lean` stages
 (C:\Users\neers\rrb\le\stage-bf-a and -b; guard logs bf1m-stagea-a5-L2 and bf1m-stageb-a1-L2, same five targets, 94 jobs, exit 0) gave gate_verify 9bd2602b... and the worker 86299A0D...
 byte for byte, both equal to their pins.
