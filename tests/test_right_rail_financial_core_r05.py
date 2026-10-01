@@ -63,7 +63,7 @@ class DurabilityR05Tests(unittest.TestCase):
             self.assertEqual(handle.read(20)[18:20], b"\x02\x02", "file header bytes 18-19 are 2,2 only in WAL mode")
         self.assertEqual({opener for opener, _caller, _statements in traces}, {"_connect"})
         self.assertEqual({caller for _opener, caller, _statements in traces},
-                         {"_initialize", "_verify_open_identity", "_write", "_read_snapshot", "restore_continuity"})
+                         {"_initialize", "_verify_open_identity", "_read_snapshot", "restore_continuity"})  # R1a: writes reuse the open's connection
         for _opener, caller, statements in traces:
             with self.subTest(caller=caller):
                 sync = next((i for i, sql in enumerate(statements) if FULL_SYNC.fullmatch(sql)), None)
@@ -95,6 +95,7 @@ class DurabilityR05Tests(unittest.TestCase):
         store = self.fixture._make_owner()
         summary = store.summary()
         shadow = self._restore(store, Path(self.fixture.temp_dir.name) / "shadow.sqlite")
+        store.close()  # R1a: changing the journal mode needs the owner's writer closed
         common = {"config": store.config, "trusted_authority": self.fixture.authority, "clock": acceptance._Clock()}
         opens = {
             "shadow": (shadow.path, "^shadow_requires_migration$", {"mode": "SHADOW", "owner_id": owner._SHADOW_OWNER_ID}),
@@ -109,6 +110,7 @@ class DurabilityR05Tests(unittest.TestCase):
                     owner.FinancialOwner(path=path, **common, **arguments)
                 self.assertEqual((path.read_bytes(), Path(f"{path}-wal").exists()), (before, False))
         migrated = owner.FinancialOwner(path=store.path, **common)
+        self.addCleanup(migrated.close)
         self.assertEqual(_journal(store.path), "wal")
         self.assertEqual(migrated.summary(), summary)
         self.fixture._assert_verified(migrated)
@@ -126,6 +128,7 @@ class DurabilityR05Tests(unittest.TestCase):
         with no_wal, self.assertRaisesRegex(owner.FinancialIntegrityError, "^journal_mode$"):
             self.fixture._make_owner(path=Path(self.fixture.temp_dir.name) / "born.sqlite")
         store = self.fixture._make_owner()
+        store.close()
         self.assertEqual(_journal(store.path, "=DELETE"), "delete")
         with no_wal, self.assertRaisesRegex(owner.FinancialIntegrityError, "^journal_mode$"):
             owner.FinancialOwner(path=store.path, config=store.config, trusted_authority=self.fixture.authority, clock=acceptance._Clock())

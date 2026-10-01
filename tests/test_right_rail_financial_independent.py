@@ -38,6 +38,13 @@ class _Clock:
         return self.value
 
 
+def _unverified_export(store: owner.FinancialOwner) -> bytes:
+    """A compromised writer's package: R1a's export verifies the store first, so it is built here directly."""
+    with closing(store._connect()) as connection:
+        connection.execute("BEGIN")
+        return store._continuity_package_bytes(connection)
+
+
 class IndependentFinancialCheckerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-independent-")
@@ -57,6 +64,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=self.clock,
         )
+        self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
         self.scope = {
             "state_id": self.config.state_id,
@@ -236,6 +244,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def _copy_database(self, name: str) -> Path:
         target = Path(self.temp_dir.name) / name
+        self.store.close()  # R1a: the writer's commits reach the main file when it closes
         shutil.copy2(self.db, target)
         return target
 
@@ -553,13 +562,10 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             path=target, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE",
             owner_id="financial-owner-v1", correction_transition_release=None, identity_contract=None,
         )
-        try:
-            with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
-                independent.verify_continuity_package(
-                    tampered_owner.export_continuity(), expected_scope=self.scope, expected_authority=self.authority_binding,
-                )
-        finally:
-            tampered_owner.close()
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
+            independent.verify_continuity_package(
+                _unverified_export(tampered_owner), expected_scope=self.scope, expected_authority=self.authority_binding,
+            )
 
     def test_rehashed_evidence_received_before_its_event_committed_fails_replay(self) -> None:
         def skew_support_received(rows: list[dict[str, object]]) -> None:
@@ -831,7 +837,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 correction_transition_release=None,
                 identity_contract=None,
             )
-            tampered_package = tampered_owner.export_continuity()
+            tampered_package = _unverified_export(tampered_owner)
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
                 independent.verify_continuity_package(
                     tampered_package,
@@ -1076,8 +1082,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         for label, statement, expected_error in corruptions:
             with self.subTest(label=label):
-                target = Path(self.temp_dir.name) / f"{label}.sqlite"
-                shutil.copyfile(self.db, target)
+                target = self._copy_database(f"{label}.sqlite")
                 with closing(sqlite3.connect(target, isolation_level=None)) as connection:
                     for sql in statement.split("; "):
                         connection.execute(sql)
@@ -1152,6 +1157,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         (Path(self.temp_dir.name) / "decided").mkdir()
         source = followthrough._decided_store(Path(self.temp_dir.name) / "decided")
+        source.close()  # R1a: its commits reach the main file when it closes
         cases = (("untouched", lambda path: None, None), *((name, forge, code) for name, forge, _whole, code in followthrough.FORGERIES))
         for name, forge, code in cases:
             with self.subTest(name):
@@ -1220,8 +1226,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         for table, column, index, forged, code in cases:
             with self.subTest(table):
-                copy = Path(self.temp_dir.name) / f"hidden-{table}.sqlite"
-                shutil.copyfile(self.db, copy)
+                copy = self._copy_database(f"hidden-{table}.sqlite")
                 run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=sql||' WHERE 0' WHERE name='{index}'")
                 run(copy, *forged)
                 run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=replace(sql,' WHERE 0','') WHERE name='{index}'")

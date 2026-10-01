@@ -660,6 +660,7 @@ class ReceiverCashFileTests(unittest.TestCase):
             package_bytes=self.package, recovered_path=self.fixture._path(), trusted_authority=self.fixture.authority,
             restore_mode=mode, clock=self.store.clock) for mode in ("TEST", "SHADOW")]
         for store in (custom, *restores):
+            self.addCleanup(store.close)  # R1a: an owner holds the store open until closed
             self.store = store
             self.package = store.export_continuity()
             if store.mode == "SHADOW":  # never a cash-file target (Phase 1b): the CLI has no such mode and the checker refuses it

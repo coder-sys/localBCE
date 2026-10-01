@@ -680,13 +680,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             currency=expected.CURRENCY,
             schema_version=schema_version,
         )
-        return FinancialOwner(
+        owner = FinancialOwner(
             path=path or self._path(),
             config=config,
             trusted_authority=self.authority,
             clock=clock or _Clock(),
             correction_transition_release=correction_transition_release,
         )
+        self.addCleanup(owner.close)  # R1a: the writer holds the file open until closed
+        return owner
 
     def _make_write_boundary_owner(
         self,
@@ -706,7 +708,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             currency=expected.CURRENCY,
             schema_version=schema_version,
         )
-        return _WriteBoundaryOwner(
+        owner = _WriteBoundaryOwner(
             path=path,
             config=config,
             trusted_authority=self.authority,
@@ -714,6 +716,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             fault=fault,
             correction_transition_release=correction_transition_release,
         )
+        self.addCleanup(owner.close)
+        return owner
 
     @staticmethod
     def _durable_counts(path: Path) -> dict[str, int]:
@@ -1708,6 +1712,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         test_destination = self._path("test-continuation.sqlite")
         test_mirror = source_mirror.restore_test_continuity(package, test_destination)
         test_store = test_mirror.owner
+        self.addCleanup(test_store.close)
         self.assertEqual(test_store.mode, "TEST")
         self.assertEqual(test_store.owner_id, owner._TEST_OWNER_ID)
         self.assertFalse(test_store.summary()["dispatch_enabled"])
@@ -1753,6 +1758,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             mode="TEST",
             owner_id=owner._TEST_OWNER_ID,
         )
+        self.addCleanup(reopened_test.close)
         self.assertEqual(reopened_test.verify_integrity()["mode"], "TEST")
         self._assert_snapshot(reopened_test, expected.H_P3_REPLACED)
         self._assert_verified(reopened_test, restore_source_package=package)
@@ -1974,6 +1980,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._path("funding-test-restore.sqlite"),
         )
         restored = restored_mirror.owner
+        self.addCleanup(restored.close)
         self.assertEqual(restored.mode, "TEST")
         self.assertEqual(restored_mirror.program_funding_summary(), current_summary)
         self.assertEqual(restored_mirror.verify_integrity()["program_funding"]["reported_funding_cents"], 99_000_000)
@@ -2215,7 +2222,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         connection.execute(statement)
                 before = hashlib.sha256(_image(path)).hexdigest()
                 with self.assertRaisesRegex(FinancialIntegrityError, "^shadow_requires_migration$") if refusal else nullcontext():
-                    FinancialOwner(path=path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID)
+                    FinancialOwner(path=path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID).close()
                 self.assertEqual(hashlib.sha256(_image(path)).hexdigest(), before)
                 with closing(sqlite3.connect(str(path))) as connection:
                     self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0 if refusal == "no-index-set" else 1 if refusal is None else 2)
@@ -2490,6 +2497,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
         )
+        self.addCleanup(source.close)
         source_package = source.export_continuity()
         legacy_path = self._path("admission-migration-legacy.sqlite")
         legacy_path.write_bytes(_image(source.path))
@@ -2519,6 +2527,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=_Clock(initial=1_700_000_000_000),
         )
+        self.addCleanup(migrated.close)
         self.assertEqual(migrated.export_continuity(), source_package)
         self._assert_verified(migrated)
 
@@ -2556,6 +2565,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 trusted_authority=self.authority,
                 clock=_Clock(initial=1_700_100_000_000),
             )
+            self.addCleanup(store.close)
             if history_size:
                 with store._write() as connection:
                     for index in range(history_size):
@@ -2618,6 +2628,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             clock=_Clock(initial=1_700_000_000_000),
             owner_id="o" * 128,
         )
+        self.addCleanup(store.close)
 
         def receipt_for(index: int) -> ProgramFundingReceipt:
             receipt_prefix = f"funding-cap-receipt:{index:05d}:"
@@ -2645,7 +2656,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         package = store.export_continuity()  # the largest package, one receipt under the cap, restores and verifies
         self.assertLess(owner._MAX_PACKAGE_BYTES - len(package), 8_000)
         verify_continuity_package(package, expected_scope=json.loads(package)["scope"], expected_authority=self.authority)
-        restored_package = FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner.export_continuity()
+        with FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner as restored:
+            restored_package = restored.export_continuity()
         self.assertLessEqual(len(restored_package), owner._MAX_PACKAGE_BYTES)
         self.assertEqual(store.record_program_funding_receipt(receipt_for(index))["status"], "RECORDED")
         with self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_size$"):
@@ -2957,6 +2969,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         test_mirror = mirror.restore_test_continuity(source_package, self._path("first-service-test-restore.sqlite"))
         test_store = test_mirror.owner
+        self.addCleanup(test_store.close)
         self.assertEqual(test_store.mode, "TEST")
         self.assertEqual(test_store.owner_id, owner._TEST_OWNER_ID)
         self.assertFalse(test_mirror.summary()["dispatch_enabled"])
@@ -3528,7 +3541,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 (population_id,),
             )
             connection.commit()
-        before = store.export_continuity()
+        before = _image(store.path)  # R1a: an export after this outside edit is refused
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_imported_count"):
             store.stage_population(
                 population_id=population_id,
@@ -3540,7 +3553,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=items[1:2],
                 chunk_size=1,
             )
-        self.assertEqual(store.export_continuity(), before)
+        self.assertEqual(_image(store.path), before)
         with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",

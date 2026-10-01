@@ -111,9 +111,8 @@ def run(n: int, seed: int, batch: int = 0, history: Path | None = None, cohort: 
     if not (0 < n <= _MAX_N and 0 <= batch <= 1_000 and 0 < cohort <= 1_000):
         raise SystemExit(f"aborting: need 0 < n <= {_MAX_N}, 0 <= batch <= 1000 and 0 < cohort <= 1000, got n={n} batch={batch} cohort={cohort}")
     rng = random.Random(seed)
-    with tempfile.TemporaryDirectory(prefix="rr-load-synthetic-") as tmp:
-        authority = SyntheticTrustedAuthority()
-        owner = FinancialOwner(path=Path(tmp) / "load.sqlite3", config=FinancialOwnerConfig(**_SCOPE), trusted_authority=authority)
+    authority = SyntheticTrustedAuthority()
+    with tempfile.TemporaryDirectory(prefix="rr-load-synthetic-") as tmp, FinancialOwner(path=Path(tmp) / "load.sqlite3", config=FinancialOwnerConfig(**_SCOPE), trusted_authority=authority) as owner:
         items = _setup(owner, rng, cohort, authority)
         commands = [_command(rng, items[i % cohort], seed, i) for i in range(n)]
         latencies: list[float] = []  # each command's latency is its own commit (alone) or its batch's

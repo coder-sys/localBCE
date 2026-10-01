@@ -40,6 +40,7 @@ class FinancialSwitchCliTests(unittest.TestCase):
             trusted_authority=self.fixture.authority,
             restore_mode="SHADOW",
         )
+        self.addCleanup(self.shadow.close)  # R1a: its export opens the writer
         self.package = self.shadow.export_continuity()
         self.incumbent_before = self.incumbent.export_continuity()
         self.shadow_before = self.shadow.export_continuity()

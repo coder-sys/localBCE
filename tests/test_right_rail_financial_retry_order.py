@@ -15,8 +15,7 @@ from tests.test_right_rail_financial_followthrough import RULES, _build_r_store,
 
 class RetryOrderTests(unittest.TestCase):
     def test_exact_retry_is_duplicate_and_stale_change_conflicts(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="rr-retry-order-") as directory:
-            store = _build_r_store(Path(directory), RULES)
+        with tempfile.TemporaryDirectory(prefix="rr-retry-order-") as directory, _build_r_store(Path(directory), RULES) as store:
             offset = dict(amount_cents=1_000, owner_role="CASE_OWNER", deadline_ms=store.clock.value + 86_400_000)
             payment = dict(amount_cents=5_000, event_at_ms=store.clock.value, source_id="state-collections")
             writes = {
@@ -42,8 +41,7 @@ class RetryOrderTests(unittest.TestCase):
                     self.assertEqual((_history(store), store.obligation_detail(item)), (before, detail))
 
     def test_reversal_refuses_a_malformed_evidence_id_before_any_lookup(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="rr-retry-order-") as directory:
-            store = _build_r_store(Path(directory), RULES)
+        with tempfile.TemporaryDirectory(prefix="rr-retry-order-") as directory, _build_r_store(Path(directory), RULES) as store:
             for bad in (["evidence:x"], {"id": 1}, 7, None):
                 with self.subTest(bad=bad), self.assertRaisesRegex(FinancialInputError, "^evidence_id$"):
                     store.reverse_payment(item_id="item-r1", payment_id="payment:r1", evidence_id=bad)

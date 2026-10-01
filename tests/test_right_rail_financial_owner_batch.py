@@ -17,7 +17,7 @@ import app.right_rail_financial_owner as owner_module
 import app.right_rail_financial_owner_independent as checker_module
 from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
 from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database
-from tests.test_right_rail_financial_acceptance import _Clock
+from tests.test_right_rail_financial_acceptance import _Clock, _image
 from tools import load_synthetic as harness
 
 _AUTHORITY = SyntheticTrustedAuthority()
@@ -102,8 +102,12 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.directory = Path(directory.name)
 
+    def _closing(self, owner):
+        self.addCleanup(owner.close)  # R1a: the owner's writer holds the file open until closed
+        return owner
+
     def _store(self, name, owner_type=FinancialOwner):
-        owner = _open(self.directory / name, owner_type)
+        owner = self._closing(_open(self.directory / name, owner_type))
         harness._setup(owner, random.Random(1), 4, _AUTHORITY)
         return owner
 
@@ -134,7 +138,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
     def test_cached_row_counts_stay_exact_through_batches_rollback_other_writers_and_reopen(self) -> None:
         self.assertTrue(owner_module._CHECK_ROW_CACHE)  # every commit below also recounts every table and compares
         owner, commands = self._store("counts.sqlite", _Owner), _commands(40)
-        another = lambda: FinancialOwner(path=owner.path, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock)  # same time line
+        another = lambda: self._closing(FinancialOwner(path=owner.path, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock))  # same time line
         owner.run_batch(commands[:20])
         with self.assertRaisesRegex(FinancialIntegrityError, "synthetic_refusal_after_writes"):
             owner.run_batch([*commands[20:25], _support("evidence:refused")])  # its inserts roll back, uncounted
@@ -153,7 +157,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
     def test_a_cache_recounts_after_another_writer_seals_back_to_the_pending_count_it_saw(self) -> None:
         with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):  # every write seals, so each commit ends with 0 pending
             owner = self._store("sealed.sqlite")
-            other = FinancialOwner(path=owner.path, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock)
+            other = self._closing(FinancialOwner(path=owner.path, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock))
             owner.run_batch([_support("evidence:a-1")])
             seen = _where(owner.path)
             other.run_batch([_support("evidence:b-1")])
@@ -163,31 +167,33 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.assertEqual(owner._row_cache[1], _rows(owner.path))
         owner.verify_integrity()
 
-    def test_a_swapped_in_fork_with_the_same_segments_and_pending_is_recounted(self) -> None:
+    def test_a_swapped_in_fork_with_the_same_segments_and_pending_is_refused(self) -> None:
         with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):
             owner = self._store("fork-a.sqlite")
             fork = self.directory / "fork-b.sqlite"
-            fork.write_bytes(owner.path.read_bytes())
+            fork.write_bytes(_image(owner.path))
             owner.run_batch([_support("evidence:a-1")])
-            FinancialOwner(path=fork, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock).evaluate_obligation(item_id="item:000001")
+            self._closing(FinancialOwner(path=fork, config=owner.config, trusted_authority=_AUTHORITY, clock=owner.clock)).evaluate_obligation(item_id="item:000001")
             self.assertEqual(_where(fork)[:2], _where(owner.path)[:2])  # same segments and pending ...
             self.assertNotEqual(_where(fork)[2], _where(owner.path)[2])  # ... a different history
             self.assertNotEqual(_rows(fork), owner._row_cache[1])
-            owner.path.write_bytes(fork.read_bytes())
-            owner.run_batch([_support("evidence:a-2")])
-        self.assertEqual(owner._row_cache[1], _rows(owner.path))
-        owner.verify_integrity()
+            with closing(sqlite3.connect(fork)) as source, closing(sqlite3.connect(owner.path)) as live:
+                source.backup(live)  # R1a: the swap goes through SQLite while the owner holds the file open
+            for _ in range(2):  # the same sequence with another head is a rewind, refused for the owner's life
+                with self.assertRaisesRegex(FinancialIntegrityError, "^store_replaced$"):
+                    owner.run_batch([_support("evidence:a-2")])
+        self.assertEqual(_rows(owner.path), _rows(fork))
 
     def test_a_drifted_cache_fails_closed_at_the_next_seal(self) -> None:
         owner = self._store("drift.sqlite")
         owner.run_batch([_support("evidence:d-1")])
         mark, rows = owner._row_cache
         owner._row_cache = (mark, {**rows, "evidence": rows["evidence"] - 1})  # as if one committed insert went uncounted
-        before = owner.path.read_bytes()
+        before = _image(owner.path)
         with mock.patch.object(owner_module, "_CHECK_ROW_CACHE", False), mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):
             with self.assertRaisesRegex(FinancialIntegrityError, "^row_cache_drift$"):
                 owner.run_batch([_support("evidence:d-2")])
-        self.assertEqual((owner.path.read_bytes(), owner._row_cache), (before, None))  # a proven drift is not kept
+        self.assertEqual((_image(owner.path), owner._row_cache), (before, None))  # a proven drift is not kept
         self.assertEqual(owner.run_batch([_support("evidence:d-2")])[0]["status"], "RECORDED")  # the next write recounts
         self.assertEqual(owner._row_cache[1], _rows(owner.path))
 
@@ -197,25 +203,25 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             owner.run_batch([_support("evidence:near-cap")])
         mark, rows = owner._row_cache
         owner._row_cache = (mark, {**rows, "evidence": rows["evidence"] - 1})  # one committed row went uncounted
-        before = owner.path.read_bytes()
+        before = _image(owner.path)
         with mock.patch.object(owner_module, "_MAX_ROWS", rows["evidence"]), mock.patch.object(owner_module, "_CHECK_ROW_CACHE", False):
             with self.assertRaisesRegex(FinancialIntegrityError, "^row_cache_drift$"):  # counted by the cache alone, it would pass the cap
                 _insert_copies(owner, "evidence", 1, stop_after_seal=True)  # the cache says exactly at the cap; the table is one past it
-        self.assertEqual(owner.path.read_bytes(), before)
+        self.assertEqual(_image(owner.path), before)
 
     def test_the_counter_holds_events_and_a_projection_table_at_the_cap(self) -> None:
         owner = self._store("cap.sqlite")
         with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):  # sealed: only the table under test is pending
             owner.run_batch([_support("evidence:cap")])  # a primed cache, then a fresh owner that counts
         for table in ("financial_events", "evidence"):
-            for at_cap in (owner, _open(owner.path)):
+            for at_cap in (owner, self._closing(_open(owner.path))):
                 with self.subTest(table=table, fresh=at_cap is not owner), mock.patch.object(owner_module, "_MAX_ROWS", _rows(owner.path)[table] + 2):
-                    before = owner.path.read_bytes()
+                    before = _image(owner.path)
                     with self.assertRaisesRegex(FinancialIntegrityError, "^history_capacity$"):
                         _insert_copies(at_cap, table, 3)
                     with self.assertRaises(_AtCap):  # exactly at the cap: the counter lets it through to the seal
                         _insert_copies(at_cap, table, 2, stop_after_seal=True)
-                    self.assertEqual(owner.path.read_bytes(), before)
+                    self.assertEqual(_image(owner.path), before)
 
     def test_a_lock_held_past_the_busy_timeout_is_store_busy(self) -> None:
         owner = self._store("busy.sqlite")
@@ -405,7 +411,8 @@ class FinancialOwnerBatchTests(unittest.TestCase):
 
             def create(name):
                 try:
-                    outcome[name] = _open(created).summary()["sequence"]
+                    with _open(created) as store:
+                        outcome[name] = store.summary()["sequence"]
                 except Exception as error:  # noqa: BLE001 - the outcome is the assertion
                     outcome[name] = repr(error)
             hidden = lambda path: False if loser_saw_no_file and path == created and threading.current_thread().name == "second" else real_exists(path)
@@ -453,7 +460,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         child = subprocess.run([sys.executable, "-c", _CRASH_CHILD, str(owner.path)], cwd=root, capture_output=True, text=True, timeout=60)
         self.assertEqual(child.returncode, 75, child.stderr)
-        reopened = _open(owner.path)  # opening rolls back the hot journal and replays history
+        reopened = self._closing(_open(owner.path))  # opening rolls back the hot journal and replays history
         self.assertEqual(_history(owner.path), history)
         reopened.verify_integrity()
 

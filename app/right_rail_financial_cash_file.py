@@ -125,8 +125,9 @@ def preview_cash_file(commands, context, *, path, trusted_authority, clock=None)
             store = Path(directory) / "preview.sqlite"
             with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as live, closing(sqlite3.connect(store)) as target:
                 live.backup(target)  # a consistent snapshot; the live file is only read
-            FinancialOwner(path=store, config=FinancialOwnerConfig(**context["expected_scope"]), trusted_authority=trusted_authority, clock=clock,
-                           mode=context["expected_mode"], owner_id=context["expected_owner_id"], existing_only=True).run_batch(commands, cash_file_context={**context, "preview": True})
+            with FinancialOwner(path=store, config=FinancialOwnerConfig(**context["expected_scope"]), trusted_authority=trusted_authority, clock=clock,
+                                mode=context["expected_mode"], owner_id=context["expected_owner_id"], existing_only=True) as owner:
+                owner.run_batch(commands, cash_file_context={**context, "preview": True})
     except CashFilePreview as preview:
         return preview.args[0]
     except Exception as error:
