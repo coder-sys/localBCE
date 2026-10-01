@@ -63,9 +63,9 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrade
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "FB659DA34AD63DBAA69F9E585DA1F20E1953CB986229A8CFF693708371F4A785"
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "2CD5822D4F53A06EECEC0C8098E5D937AB63C431C561D3B34761C4C20EC1E58B"
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "e0cfc85d11465f5f5f3e8e57aab5cd846c6924b7ace92f6465ae3d23772bbbd0"
+RETIRED_PINS_SHA256 = "5d55fd180986090444eaaf4569de75aa2b75fa8ff17cba309d7d6f5f2308888a"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -388,6 +388,39 @@ _TRIGGER_DEFS = {
     "command_delete_immutable": "CREATE TRIGGER command_delete_immutable BEFORE DELETE ON commands BEGIN SELECT RAISE(ABORT,'command_immutable'); END",
     "history_segment_update_immutable": "CREATE TRIGGER history_segment_update_immutable BEFORE UPDATE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END",
     "history_segment_delete_immutable": "CREATE TRIGGER history_segment_delete_immutable BEFORE DELETE ON history_segments BEGIN SELECT RAISE(ABORT,'history_segment_immutable'); END",
+}
+
+# Each table's whole stored CREATE TABLE text (every NOT NULL, CHECK, DEFAULT, UNIQUE and ON CONFLICT clause), as
+# SHA-256 of the Owner's DDL with each run of SQLite whitespace [ \t\n\f\r] made one space. Collapsing a run neither
+# joins nor splits a token, and no pinned literal or identifier holds whitespace and the DDL has no comment, so any
+# other clause, literal, case or comment changes the digest (docs/CORE_REDESIGN.md "Table SQL pin").
+_TABLE_SQL_SHA256 = {
+    "action_outbox": "841E8256DD35D074476B732F427886D66DE735ABBF9C105D552C846832F51613",
+    "actions": "A17BA2F7AA3780BE782FD27439BB16A7A28E60B4E5848775DB15ADECB3211CC3",
+    "cases": "282F6346E442F11FCA082930B98F4CBF6BE000104302FE9BDEFD6DF497D2BCA9",
+    "claimed_adjustments": "EACD7C76D0C77D6FC1C39E04DE0C1B747F011C8FC129F79FDEE428EAC5B5C7B3",
+    "commands": "E84D95A74D39F1DBFE0D53E4F21526E938D3AD559CF281F7B2935BC818CA5574",
+    "control_packs": "BB4531728B94F204119B5A76ACBE8BC2FB74FC8B23CC608778F2EFA40CB0194A",
+    "determinations": "10AE6ABC6C546811392713BCF96308ACA2F0A74931D5094C588A62E50DB96544",
+    "evaluations": "E5AABB22BC444F3549B9E449E94C846F08D5D1976848AAB915773C470B8D1822",
+    "evidence": "EF8DDBE58E7CB498B3F1AB68C1782EBFEF5B04D865385C2937604FCA09F073EC",
+    "financial_conflicts": "37FFDBF262363E8235BC996EE61F616D2223177074D25EA3424FAE5B2CCEBB53",
+    "financial_events": "AFA98975280275E675D49F484CB7D6003E460F337772AB813AABDE2D4D1FA6C1",
+    "financial_identity": "A4DD84D295F23838298AC50DC43BB2B84E6049D3D9ED9D412AAECD1298CDF276",
+    "financial_meta": "9EC6484329A635988B71FB227E06E792D95547B5C6D897671F14AC415DE0A8C2",
+    "history_open": "73F86E8BF5374287A8BCB42659D0B7C9E0F38240DEEA2310468482C5BD68B862",
+    "history_pending": "49E753E0FADFD9EA3F30531BB990745701079124AA4BC56FD22DC035A523966C",
+    "history_segments": "3A2409FFBE13EB6E3E06C77D5BA85F2013BBBA7A2A293064E893024F8F08D312",
+    "obligations": "051611B1E93AB8470F6DF0B56751527D8F507BD4F4B174E5A78ECB2DEE894BC8",
+    "payments": "909D76178FCC96D17AC944FA2CDEC517E90DD4E1120C2BFC1941E8B3BFAF4608",
+    "population_imports": "8098AEA9F8CAB51FF757FC9F359D26A969DC84C2B67EAD43EB7960C459102203",
+    "population_items": "3EDAD3E1DE38D337373AA5EF3B8BB2248B87816BBE98F80B66D649F367F10A53",
+    "population_manifest_bindings": "BC6CB595B773DDFE60B8119167F7DABA2B40C61F4902B59F6258BD88100AD72E",
+    "population_manifest_heads": "DB1A3FE702AE3FD8CBCFE325A5302F21DAFF564399497EFFEFDDC1DE81676E54",
+    "population_manifest_members": "0A4E3B04BF14D7A6E23F657DBD56F0F9128FF1109C25B18E7AE942E2C5D6701E",
+    "population_manifests": "588849D4CA1F716A1D9E86BC3EBEB29FE2AEA562A04EF80643A9E8A29A7DD0DE",
+    "program_funding_projection": "B012359290E3CD00BE90E896753E524CF96C00B42D67CD21B86E31B2F1FAA1CC",
+    "program_funding_receipts": "FC04238B5CE122591D55D7EC41494926950F92D2EB8003DD0482A486B6831FC3",
 }
 
 _EVENT_KINDS = {
@@ -723,7 +756,7 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
     actual = {
         str(row[0]): row[1]
         for row in connection.execute(
-            "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+            "SELECT name,sql FROM sqlite_master WHERE type='index' AND name NOT GLOB 'sqlite_*'"
         )
     }
     if set(actual) != set(defs):
@@ -907,13 +940,12 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         schema_version = int(meta["schema_version"])
         if schema_version != SCHEMA_VERSION or meta["schema"] != SCHEMA:
             _fail("schema:version")
-        tables = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-        }
-        if tables != TABLES | set(_HISTORY_TABLE_DEFS):
+        # First: SQLite loads a row of any type case and checks no reserved name on load, so every row must have an exact
+        # type, and a sqlite_ name only SQLite's own autoindex (no SQL). GLOB, unlike LIKE, keeps case and has no _ wildcard.
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type IS NULL OR type NOT IN ('table','index','trigger') OR (name GLOB 'sqlite_*' AND (type<>'index' OR sql IS NOT NULL))").fetchone():
+            _fail("schema:objects")
+        tables = {str(row[0]): row[1] for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'")}
+        if set(tables) != TABLES | set(_HISTORY_TABLE_DEFS):
             _fail("schema:tables")
         for table, definition in {**_TABLE_DEFS, **_HISTORY_TABLE_DEFS}.items():
             actual = tuple(
@@ -932,7 +964,7 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
             if _normal_sql(triggers[name]) != _normal_sql(expected):
                 _fail(f"schema:trigger:{name}")
         for table in sorted(TABLES):
-            sql = _normal_sql(connection.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0])
+            sql = _normal_sql(tables[table])
             references = sql.count("references ")  # every one deferred: PRAGMA foreign_key_list cannot show it
             deferred = references == len(re.findall(r"references \w+ ?\([^)]*\) deferrable initially deferred", sql))
             declared: dict[int, list[sqlite3.Row]] = {}
@@ -950,6 +982,9 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
             }
             if not deferred or len(actual_keys) != len(declared) or references != len(declared) or actual_keys != _FOREIGN_KEY_DEFS.get(table, frozenset()):
                 _fail(f"schema:foreign-keys:{table}")
+        for table, sql in sorted(tables.items()):  # table_info cannot show a clause; the stored text is what SQLite enforces
+            if type(sql) is not str or hashlib.sha256(re.sub(r"[ \t\n\f\r]+", " ", sql).encode()).hexdigest().upper() != _TABLE_SQL_SHA256[table]:
+                _fail(f"schema:sql:{table}")
         _verify_private_index_schema(connection)
         return schema_version
     except IndependentFinancialError:
@@ -2910,7 +2945,10 @@ def _verify_actions(
     for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it or past the balance it found
         request = requests.get(obligation_id, {}).get(action_ref)
         owed = next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["revision"] == paid_revision - 1), -1)
-        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed:
+        if request is None or actions[action_ref]["revision"] >= paid_revision:
+            _fail("payment:link")
+        older = sum(max(cents - paid_at(ref, paid_revision), 0) for ref, cents in requests[obligation_id].items() if (actions[ref]["revision"], ref) < (actions[action_ref]["revision"], action_ref))  # R2: older requests keep their unpaid part first
+        if paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed - older:
             _fail("payment:link")
     return actions
 

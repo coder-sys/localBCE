@@ -7,6 +7,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -79,9 +80,9 @@ class InteractionModelPageTests(unittest.TestCase):
         self.assertIn('href="#record"', _HTML)  # the skip link lands on the workspace region
         self.assertIn('id="record"', _HTML)
 
-    def test_only_the_roles_that_open_records_have_the_decision_screen(self) -> None:
+    def test_every_role_opens_a_record(self) -> None:
         for role, screens in _MODEL["role_screens"].items():
-            self.assertEqual("decision" in screens, role in _DECISION_ROLES, role)
+            self.assertIn("decision", screens, role)
 
 class InteractionModelBrowserCrawlTests(unittest.TestCase):
     """Drive the real staff.js against the real server, one role at a time."""
@@ -135,7 +136,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             declared = {n for n, c in _MODEL["controls"].items() if role in c["roles"] and c["screen"] == "decision"}
             self.assertEqual(visible, declared, role)
             screens = view["screens"]
-            self.assertEqual((screens["decision"], screens["overview"], screens["picker"]), (role in _DECISION_ROLES, True, False), role)
+            self.assertEqual((screens["decision"], screens["overview"], screens["picker"]), (True, True, False), role)
 
     def test_no_role_in_the_path_shows_the_picker_not_the_workspace(self) -> None:
         view = self._open_path("/").view()
@@ -156,14 +157,21 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
     def test_a_phone_shows_one_pane_at_a_time_and_always_a_way_back(self) -> None:
         browser = self.browser
         browser.port = self.server.server_address[1]
-        browser.open("/role/approver", width=390)
         panes = lambda: [n for n in ("queue", "record") if not browser.view()["hidden"].get(n)]  # noqa: E731
-        self.assertEqual(panes(), ["queue"])
-        browser.click("row-item-h")
-        self.assertEqual(panes(), ["record"])
-        self.assertEqual(browser.role(None, selector="a.back")["visible"], True)
-        browser.role(None, selector="a.back", act="click")
-        self.assertEqual(panes(), ["queue"])
+        back = lambda: browser.role(None, selector="a.back", act="click")  # noqa: E731
+        for role, first in (("approver", ["queue"]), ("director", ["record"])):  # the director lands on the program's totals
+            with self.subTest(role=role):
+                browser.open(f"/role/{role}", width=390)
+                self.assertEqual(panes(), first)
+                if first == ["record"]:
+                    self.assertEqual(browser.role(None, selector="a.back")["visible"], True)
+                    back()
+                    self.assertEqual(panes(), ["queue"])
+                browser.click("row-item-h")
+                self.assertEqual(panes(), ["record"])
+                self.assertEqual(browser.role(None, selector="a.back")["visible"], True)
+                back()
+                self.assertEqual(panes(), ["queue"])
 
     def test_the_keyboard_alone_reaches_and_records_a_decision(self) -> None:
         browser = self._open_path("/role/approver")  # no fragment: it would move the tab starting point past the skip link
@@ -188,6 +196,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         squash = lambda text: re.sub(r"[^0-9A-Za-z]", "", text)  # noqa: E731
         def compare(role: str) -> None:
             screen = [line["text"] for line in self._open(role, server).view()["lines"] if line["where"] == "page"]
+            screen = [line for line in (_PROGRAM_TIME.sub("", line).strip() for line in screen) if line]  # an instant's two conventions are compared in their own test
             text = squash(" ".join(line["text"] for line in self._open_path(f"/role/{role}#item-h.txt", server).view()["lines"] if line["where"] == "page"))
             self.assertTrue(screen and len(screen) > 10, role)
             self.assertEqual([line for line in screen if squash(line) not in text], [], role)
@@ -199,6 +208,115 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             compare("auditor")
         finally:
             self._stop_workflow(workflow, server, thread)
+
+    def test_every_role_downloads_the_record_byte_for_byte_at_every_stage(self) -> None:
+        """M5, roles able to download the record: 0 of 5 before (no download existed), 5 of 5 now, at every stage of H's journey and for a settled item; the file is the plain-text record itself, the same bytes for every role (the on-page view adds only the role's own status wording, decision and next-step sections)."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-download")
+        link, able, same = _MODEL["local_controls"]["download-record"]["name"], set(), {}
+
+        def check(stage: str) -> None:
+            for role in _MODEL["roles"]:
+                for item in ("item-h", "item-01"):
+                    with self.subTest(stage=stage, role=role, item=item):
+                        found = self._open_path(f"/role/{role}#{item}", server).role("link", link)
+                        self.assertEqual((found["found"], found["visible"], found["disabled"]), (1, True, False))
+                        name, data = self.browser.download(link)
+                        shown = self._open_path(f"/role/{role}#{item}.txt", server).view()["texts"]["text-view"]
+                        neutral = re.sub(r"\n\n(?:YOUR DECISION|NEXT STEPS)\n.*?(?=\n\n|\Z)", "", shown, flags=re.S)  # the on-page view's own sections; its STATUS wording is set aside below
+                        unstated = lambda text: re.sub(r"(?m)^STATUS .*\n", "", text)  # noqa: E731
+                        self.assertEqual((name, unstated(data.decode("utf-8"))), (f"record-{item}.txt", unstated(neutral)))
+                        self.assertEqual(same.setdefault((stage, item), data), data)  # role-neutral: one record, whoever downloads it
+                        self.assertTrue(data.startswith(b"OBLIGATION") and "−".encode() in data)  # a real file, non-ASCII bytes intact
+                        able.add(role)
+        try:
+            check("start")
+            for role, step in _JOURNEY:
+                self._run_step(workflow, server, role, step)
+                check(step)
+        finally:
+            self._stop_workflow(workflow, server, thread)
+        self.assertEqual(able, set(_MODEL["roles"]))
+
+    def test_the_screen_writes_instants_in_program_time_and_the_record_in_utc(self) -> None:
+        """M5, one time convention: every instant on the screen, the due date included, is the Owner's instant in the program's zone with its label and no calendar date is left; the record keeps the same instants in UTC, newest first; the engine's detail stays in the record."""
+        self.assertEqual((_MODEL["time"]["zone"], _MODEL["time"]["label"]), ("America/Chicago", "CT"))
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-time")
+        try:
+            for role, step in _JOURNEY:
+                self._run_step(workflow, server, role, step)
+            view = workflow.decision_view()  # the Owner's instants, not the page's text
+            decided, due = (int(view["decision_package"]["current_determination"]["decided_at_ms"]), int(view["decision_package"]["case"]["due_at_ms"]))
+            events = [int(event["committed_at_ms"]) for event in sorted(view["timeline"], key=lambda event: -event["event_sequence"])]
+            self.assertGreater(len(events), 4)
+            self.assertGreater(decided, due, "H is decided after it was due: the screen must not make it look early")
+            utc = lambda ms: datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")  # noqa: E731
+            for role in _MODEL["roles"]:
+                with self.subTest(role=role):
+                    page = " ".join(line["text"] for line in self._open(role, server).view()["lines"] if line["where"] == "page")
+                    record = self._open_path(f"/role/{role}#item-h.txt", server).view()["texts"]["text-view"]
+                    self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms, view["read_at"]) for ms in [due, decided, *events]))
+                    self.assertIn("Due: " + scorecard._program_time(due, view["read_at"]), page)
+                    self.assertIsNone(re.search(r"\d{4}-\d\d-\d\d", page), page)
+                    self.assertEqual(_UTC_TIME.findall(record), [utc(ms) for ms in [decided, *events, due]])
+                    self.assertFalse(any(word in page for word in ("UTC", "Owner event", "revision")), page)
+                    self.assertTrue("Owner event" in record and "revision" in record)
+            workflow._clock.advance_to(1_815_000_000_000)  # the snapshot is now read in 2027: every 2026 instant on the screen names its year
+            view = workflow.decision_view()
+            page = " ".join(line["text"] for line in self._open("analyst", server).view()["lines"] if line["where"] == "page")
+            self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms, view["read_at"]) for ms in [due, decided, *events]))
+            self.assertIn("Due: " + scorecard._program_time(due, view["read_at"]), page)
+            self.assertIn(" 2026 ", page)
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_the_director_lands_on_the_totals_and_opens_any_record_from_the_queue(self) -> None:
+        browser = self._open_path("/role/director")
+        self.assertFalse(browser.view()["screens"]["decision"])
+        self.assertTrue(any(line["text"].startswith("Total owed") for line in browser.last_view["lines"]))
+        browser.click("row-item-h")
+        self.assertTrue(browser.view()["screens"]["decision"])
+        self.assertEqual(browser.role("link", "Download record")["found"], 1)
+        self.assertEqual(browser.role("button", "Record decision")["found"], 0)  # a record to read, nothing to decide
+
+    def test_clicking_each_navigation_control_leads_where_the_model_says(self) -> None:
+        """The real-browser crawl of every declared navigation control, as every role; a control added to the model with no expectation here fails."""
+        controls = _MODEL["local_controls"]
+        elsewhere = {"choose-accept", "choose-reject", "record-decision", "back-from-confirm", "back-to-queue"}  # the decision tests and the phone test click these
+        pickers = {name for name in controls if name.startswith("choose-") and "selector" in controls[name]}
+        crawled = {"skip-workspace", "switch-role", "open-record", "summary-link", "filter", "plain-text", "download-record"}
+        self.assertEqual(set(controls), pickers | crawled | elsewhere)
+
+        def act(browser, name, how="click", text=None):
+            control = controls[name]
+            return browser.role(control.get("role"), control.get("name"), how, text, control.get("selector"))
+        for name in sorted(pickers):
+            with self.subTest(control=name):
+                browser = self._open_path("/")
+                act(browser, name)
+                self.assertEqual(browser.view()["path"], controls[name]["target"])
+        for role in _MODEL["roles"]:
+            with self.subTest(role=role):
+                browser = self._open_path(f"/role/{role}")
+                act(browser, "skip-workspace", "focus")  # hidden until focused: reached as a keyboard user does, focus then Enter
+                browser.key("Enter")
+                self.assertEqual(browser.view()["focus"], "record")
+                act(browser, "summary-link")
+                self.assertEqual(browser.view()["hash"], "#summary")
+                self.assertTrue(any(line["text"].startswith("Total owed") for line in browser.last_view["lines"]))
+                act(browser, "open-record")
+                self.assertEqual((browser.view()["hash"], browser.last_view["screens"]["decision"]), ("#item-h", True))
+                act(browser, "plain-text")
+                self.assertEqual(browser.view()["hash"], "#item-h.txt")
+                self.assertTrue(browser.last_view["texts"]["text-view"])
+                act(browser, "plain-text")
+                self.assertEqual(browser.view()["hash"], "#item-h")
+                self.assertNotIn("text-view", browser.last_view["texts"])
+                act(browser, "filter", "fill", "no such obligation")
+                self.assertIn("No obligation matches", browser.view()["texts"]["qlist"])
+                act(browser, "filter", "fill", "")
+                self.assertNotIn("No obligation matches", browser.view()["texts"]["qlist"])
+                act(browser, "switch-role")
+                self.assertEqual((browser.view()["path"], browser.last_view["screens"]["picker"]), ("/", True))
 
     def _check_state(self, pkg: dict[str, Any], test_mode: bool, server: Any = None) -> None:
         ns = _state(pkg, test_mode)
@@ -379,10 +497,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         for role in _MODEL["roles"]:
             view = self._open(role).view()
             legend = view["texts"]["keys"]
-            self.assertEqual(bool(view["hidden"].get("keys")), role not in _DECISION_ROLES, role)
-            if role in _DECISION_ROLES:
-                self.assertTrue("move" in legend and "filter" in legend, role)
-                self.assertEqual(("choose" in legend, "record" in legend), (role == "approver",) * 2, role)
+            self.assertFalse(view["hidden"].get("keys"), role)
+            self.assertTrue("move" in legend and "filter" in legend, role)
+            self.assertEqual(("choose" in legend, "record" in legend), (role == "approver",) * 2, role)
 
     def test_the_page_says_only_what_the_read_says(self) -> None:
         """No name, payer or claim is in the page: labels appear as the server gives them, consequences follow from the claim and the shortfall, and the standing tag follows the read."""
@@ -406,6 +523,43 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 self.assertEqual(texts["detail-reject-offset"], "The payer must pay Synthetic recipient H $3,000.00. A correction request is recorded.")
             server.rewrite = lambda value: {**value, "summary": {**value["summary"], "production_usable": True}}
             self.assertNotIn("not production", self._open("approver", server).view()["texts"]["standing"])
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_record_cash_follows_the_open_amount_not_the_balance(self) -> None:
+        """R2: an acknowledged request with money still owed but less open than the payment (a state the demo never reaches; H is still short $3,000.00) keeps the button off and says why."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-open-amount")
+
+        def action(open_cents: int):
+            def rewrite(value):
+                value["h"]["decision_package"]["current_action"] = {"status": "ACKNOWLEDGED", "open_cents": open_cents, "payload_fields": {"amount_cents": 300000}}
+                return value
+            return rewrite
+        try:
+            self.assertGreater(workflow.decision_view()["decision_package"]["obligation"]["shortfall_cents"], 0)  # money is owed in both states below
+            for open_cents, enabled in ((100000, False), (300000, True)):
+                server.rewrite = action(open_cents)
+                view = self._open("analyst", server).view()
+                self.assertEqual(not view["buttons"]["record-cash"]["disabled"], enabled, open_cents)
+                self.assertEqual(any("Requested $3,000.00, open $1,000.00." in line["text"] for line in view["lines"]), open_cents < 300000, open_cents)
+            server.rewrite = action(100000)
+            self.assertIn("open amount covers this payment", " ".join(line["text"] for line in self._open("analyst", server).view()["lines"]))
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
+    def test_acknowledge_is_offered_only_for_an_action_that_still_asks(self) -> None:
+        """Stale corrections: a ready request the balance no longer needs (open $0.00) is not offered for a delivery ACK; a request that still asks, or an action with no open amount (offset notice), is."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-ack-open")
+
+        def action(open_cents):
+            def rewrite(value):
+                value["h"]["decision_package"]["current_action"] = {"status": "READY", "open_cents": open_cents, "payload_fields": {"amount_cents": 300000}}
+                return value
+            return rewrite
+        try:
+            for open_cents, enabled in ((0, False), (300000, True), (None, True)):
+                server.rewrite = action(open_cents)
+                self.assertEqual(not self._open("analyst", server).view()["buttons"]["acknowledge"]["disabled"], enabled, open_cents)
         finally:
             self._stop_workflow(workflow, server, thread)
 
@@ -524,7 +678,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                                 self._check_success(workflow, name, package)
                             browser.tick()  # unavailable recovers on the next real read, with no reload
                             self.assertTrue(browser.view()["screens"]["overview"])
-                            self.assertEqual(browser.last_view["screens"]["decision"], role in _DECISION_ROLES)
+                            self.assertTrue(browser.last_view["screens"]["decision"], role)
                             observed.add((role, name, code))
                             print("BROWSER_RESPONSE_CASE=" + json.dumps([role, name, code]), flush=True)
             finally:
@@ -612,7 +766,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
 _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))
 _DECISIONS = {"reject-offset": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "authorize-offset": "OFFSET_AUTHORIZED"}
-_DECISION_ROLES = ("analyst", "approver", "auditor", "operator")
+
+_PROGRAM_TIME = re.compile(r"\d{1,2} [A-Z][a-z]{2}(?: \d{4})? \d\d:\d\d CT")
+_UTC_TIME = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC")
 
 def _money(cents: int) -> str:
     return f"${cents // 100:,}.{cents % 100:02d}"
@@ -627,7 +783,7 @@ def _state(pkg: dict[str, Any], test_mode: bool) -> dict[str, Any]:
         "reviewed": True, "command_pending": False, "test_mode": test_mode,
         "owner_available": True, "unresolved_decision_body": False, "unresolved_cash_body": False,
         "decided": pkg.get("current_determination") is not None,
-        "action": SimpleNamespace(status=action.get("status")), "shortfall": pkg["obligation"]["shortfall_cents"],
+        "action": SimpleNamespace(status=action.get("status"), open_cents=action.get("open_cents")), "shortfall": pkg["obligation"]["shortfall_cents"],
         "reporting_complete": bool(pkg["obligation"]["reporting_complete"]),
     }
 

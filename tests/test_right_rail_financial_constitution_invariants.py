@@ -25,6 +25,10 @@ Each test names the articles of ``CONSTITUTION.md`` it enforces:
 * ``test_correction_requests_only_the_unpaid_balance``
   II and III.4 (a correction asks only for money actually short: zero
   shortfall is a Lean rejection with no write; otherwise min(claim, shortfall)).
+* ``test_open_requests_stay_within_the_unpaid_balance``
+  II and III.4 (R2: after every command the correction requests may together
+  collect exactly min(what they leave unpaid, the unpaid balance), oldest
+  first), V.4 (the expected amounts are derived here, not by the owner).
 
 Every test also carries VI (honest claims): these are synthetic, non-PHI,
 nonpayment fixtures; a local pass is "verified locally", never "qualified",
@@ -113,6 +117,9 @@ class _AcceptanceFixtures:
     _record_p2 = _ACCEPTANCE["_record_p2"]
     _assert_snapshot = _ACCEPTANCE["_assert_snapshot"]
     _assert_verified = _ACCEPTANCE["_assert_verified"]
+    _assert_decision_package_verified = _ACCEPTANCE["_assert_decision_package_verified"]
+    _two_claim_corrections = _ACCEPTANCE["_two_claim_corrections"]
+    _pay_a = _ACCEPTANCE["_pay_a"]
 
 
 # --- Independent BLFCRES3 encoder ------------------------------------------------
@@ -705,6 +712,44 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
             pay(2, expected.ACTION_CORRECTION_ID)  # the open request must not collect it again
         self.assertEqual(str(raised.exception), "payment_exceeds_unpaid_balance")
         self.assertEqual(self._durable_state(store), before)
+
+    # --- 8. Open correction requests stay within the unpaid balance (R2, core-theorems-v1 §4.4) ---
+
+    @_requires_pinned_correction_engine("the binary is executed twice")
+    def test_open_requests_stay_within_the_unpaid_balance(self) -> None:
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+
+        def reverse(suffix: str) -> None:
+            store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", evidence_id=f"evidence:reversal-h:{suffix}")
+
+        for step in (
+            reject_b,  # 600,000 owed; A and B each request 300,000
+            lambda: self._pay_a(store, 200_000, linked=False),  # 400,000 owed: B shrinks
+            lambda: self._pay_a(store, 100_000, "p3", action=acceptance._ACTION_B),  # B collects what it has open
+            lambda: reverse("p2"),  # 500,000 owed: B regrows
+            lambda: self._pay_a(store, 500_000, "p4", linked=False),  # nothing owed: both close
+            lambda: reverse("p4"),  # both reopen
+        ):
+            step()
+            package = store.decision_package(expected.H_ITEM_ID)
+            with closing(sqlite3.connect(store.path)) as connection:
+                rows = connection.execute("SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions WHERE kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision,action_id").fetchall()
+                shortfall = connection.execute("SELECT shortfall_cents FROM obligations WHERE obligation_id=(SELECT obligation_id FROM actions LIMIT 1)").fetchone()[0]
+                paid = dict(connection.execute(
+                    "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
+                    "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
+                    "WHERE e.kind='PAYMENT_RECEIVED' AND p.active=1 GROUP BY 1"
+                ).fetchall())
+            shown = {a["action_id"]: a.get("open_cents") for a in package["references"]["actions"]["items"]}  # only open_cents comes from the package
+            unpaid = [amount - paid.get(action_id, 0) for action_id, amount in rows]  # amounts, order and balance come from the store rows
+            opened = [shown.get(action_id) for action_id, _ in rows]
+            self.assertTrue(all(isinstance(cents, int) and 0 <= cents <= left for cents, left in zip(opened, unpaid)), opened)
+            self.assertEqual(sum(opened), min(sum(unpaid), shortfall))  # within the balance; no owed cent unrequested
+            for index, cents in enumerate(opened):
+                if cents:
+                    self.assertEqual(opened[:index], unpaid[:index])  # older requests are served first
+            self._assert_verified(store)
+            self._assert_decision_package_verified(store, package)
 
 
 if __name__ == "__main__":
