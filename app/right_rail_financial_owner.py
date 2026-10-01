@@ -420,7 +420,7 @@ CONTINUITY_ERROR_CODES: Final[tuple[str, ...]] = tuple("continuity_" + code for 
     "identity_binding identity_cardinality identity_genesis identity_history_anchor identity_id identity_rows meta_binding "
     "meta_columns meta_rows owner_identity package_authority package_binding package_canonical package_digest package_epoch "
     "package_json package_row package_rows package_schema package_scope package_sequence package_shape package_size "
-    "package_tables package_type restore_cleanup restore_integrity restore_mode restore_owner row_cap schema_columns "
+    "package_tables package_type restore_checkpoint restore_cleanup restore_integrity restore_mode restore_owner row_cap schema_columns "
     "scope_currency scope_deployment_id scope_mismatch scope_period_id scope_program_id scope_state_id second_writer "
     "shadow_boundary source source_overwrite test_boundary trusted_authority_required value"
 ).split())
@@ -2110,6 +2110,8 @@ class FinancialOwner:
                 initial_history_head = bytes(identity["anchor_head"])
             with closing(self._connect()) as connection:
                 try:
+                    if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # R0.5: born WAL (persistent header)
+                        _fail(FinancialIntegrityError, "journal_mode")
                     connection.execute("BEGIN IMMEDIATE")
                 except sqlite3.OperationalError as error:  # another creator holds the new file
                     _raise_if_busy(error)
@@ -2133,6 +2135,7 @@ class FinancialOwner:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
+            connection.execute("PRAGMA synchronous=FULL")  # R0.5: with WAL, an acknowledged commit survives power loss
             connection.create_function("rr_segment_bytes", -1, lambda table, *values: len(_canonical(self._segment_record(table, values))) + 1)
             connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
             connection.execute("CREATE TEMP TABLE rr_captured_rows(image TEXT NOT NULL)")
@@ -2276,6 +2279,8 @@ class FinancialOwner:
         no_migration = self.mode == "SHADOW" or self._existing_only
         try:
             with closing(self._connect()) as connection:
+                if no_migration and connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":  # R0.5: a pre-WAL header changes only in a migrating open
+                    _fail(FinancialIntegrityError, "shadow_requires_migration")
                 try:
                     connection.execute("BEGIN IMMEDIATE")
                     meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
@@ -2308,6 +2313,8 @@ class FinancialOwner:
                     if connection.in_transaction:
                         connection.execute("ROLLBACK")
                     raise
+                if not no_migration and connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # only once verified
+                    _fail(FinancialIntegrityError, "journal_mode")
         except sqlite3.DatabaseError as error:
             _raise_if_busy(error)
             _fail(FinancialIntegrityError, "schema_read")
@@ -7177,6 +7184,9 @@ class FinancialOwner:
             if history is not None:
                 verify_history_export(history, expected_authority=_checker_authority(trusted_authority), restored=owner.path)
             owner.close()
+            with closing(owner._connect()) as connection:  # WAL: only the main file is published
+                if tuple(connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()) != (0, 0, 0):
+                    _fail(FinancialContinuityError, "continuity_restore_checkpoint")
             attempt_stat = attempt_path.stat()
             attempt_identity = (int(attempt_stat.st_dev), int(attempt_stat.st_ino))
             if any(occupied(path) for path in sidecar_paths):

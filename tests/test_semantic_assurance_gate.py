@@ -795,5 +795,23 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 )
 
 
+class SourceFilesCoverImportClosureTests(unittest.TestCase):
+    """`source_files` is what the gate scans and hashes: it must hold every workspace file the proved root and the correction exe's root import."""
+
+    def test_source_files_cover_the_import_closure(self) -> None:
+        lean = Path(gate.__file__).resolve().parents[1]
+        manifest = gate.json.loads(gate.MANIFEST_PATH.read_text(encoding="utf-8"))["candidate"]
+        exe_root = {e["name"]: e["root"] for e in gate.tomllib.loads((lean / "lakefile.toml").read_text(encoding="utf-8"))["lean_exe"]}["blind_financial_correction"]
+        for root in (manifest["module"], exe_root):
+            seen, pending = set(), [root]
+            while pending:
+                module = pending.pop()
+                path = lean.joinpath(*module.split(".")[:-1]) / f"{module.split('.')[-1]}.lean"
+                if module not in seen and path.is_file():  # Init, Std and Lean are not files of this workspace
+                    seen.add(module)
+                    pending.extend(gate._lean_imports(path.read_text(encoding="utf-8")))
+            self.assertEqual(sorted(f"{m.replace('.', '/')}.lean" for m in seen if f"{m.replace('.', '/')}.lean" not in manifest["source_files"]), [], root)
+
+
 if __name__ == "__main__":
     unittest.main()

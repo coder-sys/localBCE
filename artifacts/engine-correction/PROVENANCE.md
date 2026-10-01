@@ -1,13 +1,18 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the core-thm re-pin below: two fresh `git archive`
-stage builds of `lean/` at commit `7dde24e` (lean tree `3c597a0ce8f65a0d26dc1af1934171fa811cd2f4`, 72 tracked files), byte-identical.
-The release producer (`tools/build_financial_correction_release.ps1`) has NOT run on this tree; its last receipts are on the partials tree, below.
+`blind_financial_correction.exe` is the Lean/Lake executable of the cursor-decoder re-pin below: two fresh `git archive`
+stage builds of `lean/` at `7b47660` (lean tree `0b05ecaa079d5ec1b83da25f43adf49d99ac15c9`, 77 files), byte-identical.
+The release producer has NOT run on this tree; its last receipts are on the partials tree, below.
 
-- Size: 6,298,624 bytes
-- SHA-256: `2CD5822D4F53A06EECEC0C8098E5D937AB63C431C561D3B34761C4C20EC1E58B`
+- Size: 6,431,232 bytes
+- SHA-256: `441EB3E83DEAF561811065F8B9ACB6EEDC31389C7361E3A75B2519C2521F4A8A`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
-- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`. `FB659DA3...A785`, 6,300,160 bytes, recoverable at `84f3044` (retired 2026-10-01).
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`. `FB659DA3...A785`, 6,300,160 bytes, recoverable at `84f3044`; `2CD5822D...1E58B`, 6,298,624 bytes, recoverable at `6326b9d` (retired 2026-10-01).
+
+## Cursor-decoder re-pin (2026-10-01, rule `h1-v1`, no money or format change)
+
+Why it moved: `CorrectionTransition/Runtime.lean` decodes the request with `Cursor.decodeCorrectionTransitionRequest` over the stdin byte array (one parse in place, plus one `List UInt8` and a list re-encode for the canonical check), proved equal to the list decoder (`decodeCorrectionTransitionRequest_eq`, pinned in `AxiomCheck.lean`); the exe is 132,608 bytes larger.
+Evidence: two fresh `git archive 7b47660 lean` stage builds (logs `bf1m-stagea-a5-L2`, `bf1m-stageb-a1-L2`, five targets, 94 jobs, exit 0) gave this exe byte for byte, equal to the in-tree build (`bf1m-full2-a2-L3`); gate_verify (`9bd2602b...`) and the worker (`86299A0D...`) did not move. Differential `bench/correction_repin_diff.py` (log `bf1m-rdiff2-dev-a1-L1`), `2CD5822D...1E58B` against this exe on the 52 requests the acceptance and constitution suites send, each with a trailing byte, truncations, bit flips, 0xFF length overwrites, insertions, deletions and 0xC0 in strings: `SUMMARY captured=52 runs=11646 mismatches=0`. No release-producer receipt was made for this pin.
 
 ## Core-thm re-pin (2026-10-01, rule `h1-v1`, no money or format change)
 
