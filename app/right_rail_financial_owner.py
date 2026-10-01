@@ -2059,7 +2059,12 @@ class FinancialOwner:
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
         self._batch = threading.local()  # .connection: the open run_batch transaction on this thread; .rows: its base counts
-        self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at our last commit
+        self._lock = threading.RLock()  # R1a: one writer connection, one transaction at a time
+        self._writer: sqlite3.Connection | None = None  # R1a: kept from the open; any error discards it with the mark and cache
+        self._mark: tuple[int, int, int] | None = None  # (data_version, device, file index) where the writer last verified or wrote
+        self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at that point
+        self._refusal: FinancialError | None = None  # a failed re-verification, raised once the command's own checks pass
+        self._high: tuple[object, ...] | None = None  # (sequence, head) last verified or committed; kept for the object's life
         self._packs: dict[tuple[object, ...], tuple[ControlPack, str, str]] = {}  # the pack, its digest check and its policy are pure functions of the exact row
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
@@ -2109,7 +2114,8 @@ class FinancialOwner:
                     _fail(FinancialIntegrityError, "identity_contract_source")
                 initial_sequence = int(identity["anchor_sequence"])
                 initial_history_head = bytes(identity["anchor_head"])
-            with closing(self._connect()) as connection:
+            connection = self._connect()
+            try:
                 try:
                     if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # R0.5: born WAL (persistent header)
                         _fail(FinancialIntegrityError, "journal_mode")
@@ -2118,7 +2124,6 @@ class FinancialOwner:
                     _raise_if_busy(error)
                     raise
                 if connection.execute("SELECT 1 FROM sqlite_master").fetchone() is not None:  # another creator won: a retry opens its store
-                    connection.execute("ROLLBACK")
                     _fail(FinancialBusyError, "store_busy")
                 _sql_schema(connection)
                 connection.execute(
@@ -2126,13 +2131,18 @@ class FinancialOwner:
                     (1, self.schema_version, self.schema, config.state_id, config.deployment_id, config.program_id, config.period_id, config.currency, initial_sequence, initial_history_head, 1, 0, 0, trusted_authority.authority_id, trusted_authority.epoch, trusted_authority.digest, mode, self.owner_id),
                 )
                 self._insert_row(connection, "financial_identity", identity)
+                self._adopt(connection)  # what this owner just wrote needs no verification (a restore imports here)
                 connection.execute("COMMIT")
+            except BaseException:
+                self._discard_writer()
+                connection.close()  # closing rolls back
+                raise
 
-    def _connect(self, *, capture_triggers: bool = False) -> sqlite3.Connection:
+    def _connect(self) -> sqlite3.Connection:
         connection = None
         try:
             location = self.path.resolve().as_uri() + "?mode=rw" if self._existing_only else str(self.path)
-            connection = sqlite3.connect(location, uri=self._existing_only, timeout=5.0, isolation_level=None)
+            connection = sqlite3.connect(location, uri=self._existing_only, timeout=5.0, isolation_level=None, check_same_thread=False)  # the writer serves any thread, under _lock
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
@@ -2141,8 +2151,6 @@ class FinancialOwner:
             connection.create_function("rr_segment_bytes", -1, lambda table, *values: len(_canonical(self._segment_record(table, values))) + 1)
             connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
             connection.execute("CREATE TEMP TABLE rr_captured_rows(image TEXT NOT NULL)")
-            if capture_triggers:
-                self._install_capture_triggers(connection)
             return connection
         except sqlite3.Error as error:
             if connection is not None:
@@ -2208,13 +2216,61 @@ class FinancialOwner:
             counts[table] += inserted
         return counts
 
-    def _committed_row_counts(self, connection: sqlite3.Connection) -> dict[str, int]:
-        """Rows per history table at BEGIN. The owner's cache from its last commit is used only if the history
-        has not moved since; another writer's commit or a swapped file moves it, so the tables are counted afresh."""
-        mark, cache = tuple(connection.execute(_HISTORY_MARK).fetchone()), self._row_cache
-        if cache is not None and cache[0] == mark:
-            return cache[1]
-        return _count_rows(connection)
+    def _read_mark(self, connection: sqlite3.Connection) -> tuple[tuple[int, int, int], tuple[object, ...]]:
+        """(data_version, device, file index) and the history mark, inside the caller's transaction (H1)."""
+        history = tuple(connection.execute(_HISTORY_MARK).fetchone())
+        try:
+            stat = os.stat(self.path)
+        except OSError:
+            _fail(FinancialIntegrityError, "store_replaced")
+        return (connection.execute("PRAGMA data_version").fetchone()[0], stat.st_dev, stat.st_ino), history
+
+    def _adopt(self, connection: sqlite3.Connection) -> None:
+        """Keep this connection as the writer (R1a), marked inside the transaction that verified or created the store."""
+        self._install_capture_triggers(connection)
+        mark, history = self._read_mark(connection)
+        if self._rewound(history):
+            _fail(FinancialIntegrityError, "store_replaced")
+        self._mark, self._writer, self._row_cache, self._high = mark, connection, (history, _count_rows(connection)), history[2:]
+
+    def _rewound(self, history: tuple[object, ...]) -> bool:
+        """A lower sequence than this owner last verified or committed, or that sequence with another head (III.6)."""
+        return self._high is not None and (history[2] < self._high[0] or (history[2] == self._high[0] and history[3] != self._high[1]))
+
+    def _discard_writer(self) -> None:
+        writer, self._writer, self._mark, self._row_cache, self._refusal = self._writer, None, None, None, None
+        if writer is not None:
+            writer.close()
+
+    def _begin(self, statement: str) -> sqlite3.Connection:
+        """The writer inside ``statement`` at its marked point. SQLite moves data_version for every other connection's
+        commit (a raw page edit moves nothing, and the writer's cache may keep the old pages: such an edit is seen at
+        the next open or audit). A moved mark is verified again exactly as a fresh open verifies it. Another file,
+        or a history behind the (sequence, head) this owner last verified or committed, is store_replaced, for as
+        long as this object lives. If the history check refuses, the command still runs its own checks first on a
+        connection that never commits, so a refusal they find keeps its code; otherwise the fresh open's refusal is
+        raised before anything is reported or committed."""
+        while True:
+            if self._writer is None:
+                try:
+                    self._verify_open_identity(verify_history=True)
+                except FinancialIntegrityError as refusal:
+                    if not str(refusal).startswith("open_verification:"):  # identity, schema, triggers: as a fresh open
+                        raise
+                    high, connection = self._high, self._connect()
+                    try:
+                        self._adopt(connection)
+                    except BaseException:
+                        connection.close()
+                        raise refusal
+                    self._refusal, self._high = refusal, high  # an unverified store never moves the high-water
+            self._writer.execute(statement)
+            mark, history = self._read_mark(self._writer)
+            if (mark, history) == (self._mark, self._row_cache[0]):
+                return self._writer
+            if mark[1:] != self._mark[1:] or self._rewound(history):
+                _fail(FinancialIntegrityError, "store_replaced")
+            self._discard_writer()
 
     def _seal_segment(self, connection: sqlite3.Connection, *, force: bool = False, rows: dict[str, int] | None = None) -> bytes | None:
         """Seal the open segment at a soft bound (or when forced); refuse a write past a hard bound."""
@@ -2278,48 +2334,52 @@ class FinancialOwner:
             )
 
     def _verify_open_identity(self, *, verify_history: bool) -> None:
+        """On a new connection, which stays as the writer once the history is verified (R1a)."""
         no_migration = self.mode == "SHADOW" or self._existing_only
+        self._discard_writer()
+        connection = self._connect()
         try:
-            with closing(self._connect()) as connection:
-                if no_migration and connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":  # R0.5: a pre-WAL header changes only in a migrating open
+            if no_migration and connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":  # R0.5: a pre-WAL header changes only in a migrating open
+                _fail(FinancialIntegrityError, "shadow_requires_migration")
+            connection.execute("BEGIN IMMEDIATE")
+            meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
+            if meta is None:
+                _fail(FinancialIntegrityError, "schema_meta")
+            if (meta["schema_version"], meta["schema"]) != (_SCHEMA_VERSION, _SCHEMA):
+                _fail(FinancialIntegrityError, "unsupported_store_version")
+            migrated = False
+            self._verify_meta_identity(connection, meta)
+            tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
+                # A v8 store from before history segments: replayed, then its whole history opens the first segment.
+                if no_migration:
                     _fail(FinancialIntegrityError, "shadow_requires_migration")
-                try:
-                    connection.execute("BEGIN IMMEDIATE")
-                    meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-                    if meta is None:
-                        _fail(FinancialIntegrityError, "schema_meta")
-                    if (meta["schema_version"], meta["schema"]) != (_SCHEMA_VERSION, _SCHEMA):
-                        _fail(FinancialIntegrityError, "unsupported_store_version")
-                    migrated = False
-                    self._verify_meta_identity(connection, meta)
-                    tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
-                    if tables in (_TABLES, _TABLES | {"right_rail_continuity_admission"}):
-                        # A v8 store from before history segments: replayed, then its whole history opens the first segment.
-                        if no_migration:
-                            _fail(FinancialIntegrityError, "shadow_requires_migration")
-                        migrated = True
-                        connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
-                        _execute_script(connection, _SEGMENT_SCHEMA)
-                        self._track_all(connection)
-                    elif tables != _TABLES | _SEGMENT_TABLES:
-                        _fail(FinancialIntegrityError, "schema_tables")
-                    if not no_migration:
-                        _install_private_index_set(connection)
-                    elif _private_index_set_version(connection) < (_PRIVATE_INDEX_SET_VERSION if self._existing_only else 1):  # never upgraded here: a read-only SHADOW may keep v1; an existing-only writer needs the current set
-                        _fail(FinancialIntegrityError, "shadow_requires_migration")
-                    _install_history_append_only(connection, read_only=no_migration)
-                    if verify_history or migrated:
-                        self._verify_history_in_transaction(connection)
-                    connection.execute("COMMIT")
-                except BaseException:
-                    if connection.in_transaction:
-                        connection.execute("ROLLBACK")
-                    raise
-                if not no_migration and connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # only once verified
-                    _fail(FinancialIntegrityError, "journal_mode")
-        except sqlite3.DatabaseError as error:
-            _raise_if_busy(error)
-            _fail(FinancialIntegrityError, "schema_read")
+                migrated = True
+                connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
+                _execute_script(connection, _SEGMENT_SCHEMA)
+                self._track_all(connection)
+            elif tables != _TABLES | _SEGMENT_TABLES:
+                _fail(FinancialIntegrityError, "schema_tables")
+            if not no_migration:
+                _install_private_index_set(connection)
+            elif _private_index_set_version(connection) < (_PRIVATE_INDEX_SET_VERSION if self._existing_only else 1):  # never upgraded here: a read-only SHADOW may keep v1; an existing-only writer needs the current set
+                _fail(FinancialIntegrityError, "shadow_requires_migration")
+            _install_history_append_only(connection, read_only=no_migration)
+            if verify_history or migrated:
+                self._verify_history_in_transaction(connection)
+                self._adopt(connection)
+            connection.execute("COMMIT")
+            if not no_migration and connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # only once verified
+                _fail(FinancialIntegrityError, "journal_mode")
+        except BaseException as error:
+            self._discard_writer()
+            connection.close()  # closing rolls back
+            if isinstance(error, sqlite3.DatabaseError):
+                _raise_if_busy(error)
+                _fail(FinancialIntegrityError, "schema_read")
+            raise
+        if self._writer is None:  # a restore's unverified import check: its own checker runs next
+            connection.close()
 
     def _verify_meta_identity(self, connection: sqlite3.Connection, meta: sqlite3.Row) -> None:
         """Bind persisted meta and identity rows to this Owner's config, mode, owner id and authority."""
@@ -2419,14 +2479,14 @@ class FinancialOwner:
         while each command still seals as it would alone, so a batch's segments equal its commands' run singly."""
         batch = getattr(self._batch, "connection", None)
         began = batch is None
-        with closing(self._connect(capture_triggers=True)) if began else nullcontext(batch) as connection:
+        with self._lock if began else nullcontext():
             outer_now, self._batch.now = getattr(self._batch, "now", None), -1  # this command's clock is unread (_now)
             if collect := began and gc.isenabled(): gc.disable()  # a write makes millions of short-lived objects; the cycle collector's passes over the live rows cost ~10% of a full file's lock
             try:
+                connection = self._begin("BEGIN IMMEDIATE") if began else batch
                 if began:
-                    connection.execute("BEGIN IMMEDIATE")
                     self._verify_funding_projection(connection)
-                    self._batch.rows = self._committed_row_counts(connection)
+                    self._batch.rows = self._row_cache[1]
                     self._batch.evaluated = set()  # obligations Lean evaluated in this write
                 yield connection
                 if began:
@@ -2442,13 +2502,16 @@ class FinancialOwner:
                     done = before_commit(connection) if before_commit is not None else None  # the obligations the cash-file checker verified, on this same state
                     if self._batch.evaluated:  # the very set it verified needs only this Owner's own schema and meta check
                         self._verify_before_commit(connection, "evaluation", *(() if self._batch.evaluated == done else sorted(self._batch.evaluated)))
+                    if self._refusal is not None:
+                        self._seal_segment(connection, force=True)  # its seal-time checks speak too (history_segment_chain)
+                        raise self._refusal
                     conclude and conclude()  # a cash-file preview reports only after the check above, then rolls back
+                    connection.execute("DELETE FROM temp.rr_row_inserts")  # the next write counts its own
                     connection.execute("COMMIT")
-                    self._row_cache = after
+                    self._row_cache, self._high = after, after[0][2:]
             except BaseException as error:
-                self._row_cache = None  # a failed write (a proven drift included) leaves the next write to recount
-                if began and connection.in_transaction:
-                    connection.execute("ROLLBACK")
+                if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full
+                    self._discard_writer()
                 _raise_if_busy(error)
                 raise
             finally:
@@ -3230,6 +3293,9 @@ class FinancialOwner:
                 _fail(FinancialConflictError, "population_import_identity_conflict")
             if str(existing["status"]) == "PUBLISHED":
                 _fail(FinancialConflictError, "population_already_published")
+            imported = existing["imported_count"]
+            if type(imported) is not int or imported < 0 or imported != connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0]:
+                _fail(FinancialIntegrityError, "population_manifest_imported_count")
             return existing, False
         if not create:
             _fail(FinancialIntegrityError, "population_import_missing")
@@ -3265,14 +3331,7 @@ class FinancialOwner:
                 expected_count=expected_count,
             )
             manifest_members = set(manifest.member_ids)
-            current_count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
-            persisted_imported_count = population["imported_count"]
-            if (
-                type(persisted_imported_count) is not int
-                or persisted_imported_count < 0
-                or current_count != persisted_imported_count
-            ):
-                _fail(FinancialIntegrityError, "population_manifest_imported_count")
+            current_count = population["imported_count"]  # its item count (_ensure_population_import)
             seen: dict[str, tuple[str, int, int, str]] = {}
             new_items: list[PopulationItem] = []
             for item in chunk:
@@ -6954,9 +7013,18 @@ class FinancialOwner:
         return encoded
 
     def export_continuity(self) -> bytes:
-        """Export only bounded, allowlisted responsibility state."""
-        with self._read_snapshot() as connection:
-            return self._continuity_package_bytes(connection)
+        """Export only bounded, allowlisted responsibility state, from history a full verification covers (R1a, M5)."""
+        with self._lock:
+            try:
+                package = self._continuity_package_bytes(self._begin("BEGIN"))
+                if self._refusal is not None:
+                    raise self._refusal
+                self._writer.execute("ROLLBACK")
+                return package
+            except BaseException as error:
+                self._discard_writer()
+                _raise_if_busy(error)
+                raise
 
     def export_history(self, directory: Path) -> bytes:
         """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
@@ -7249,4 +7317,11 @@ class FinancialOwner:
         _fail(FinancialDispatchError, "dispatch_disabled")
 
     def close(self) -> None:
-        return None
+        with self._lock:
+            self._discard_writer()
+
+    def __enter__(self) -> "FinancialOwner":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()

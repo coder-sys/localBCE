@@ -75,6 +75,7 @@ class FinancialMirrorTests(unittest.TestCase):
                 workspace=self.root / "correction-engine-workspace"
             ),
         )
+        self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
         self.mirror = FinancialMirror(self.store)
 
@@ -992,6 +993,7 @@ class FinancialMirrorTests(unittest.TestCase):
             mode="SHADOW",
             owner_id="continuity-shadow-owner-v1",
         )
+        self.addCleanup(reopened_owner.close)
         reopened = FinancialMirror(reopened_owner)
         self.assertEqual(reopened.obligation_detail(H_ITEM_ID)["case_status"], "CORRECTION_REQUIRED")
         self.assertEqual(reopened.verify_integrity()["mode"], "SHADOW")
@@ -1004,6 +1006,7 @@ class FinancialMirrorTests(unittest.TestCase):
         package = self.mirror.export_continuity()
         destination = self.root / "test-restore-then-reject.sqlite"
         restored = self.mirror.restore_test_continuity(package, destination)
+        self.addCleanup(restored.owner.close)
         self.assertIsNotNone(restored.owner.correction_transition_release)
         receipt = restored.current_evaluation_receipt(H_ITEM_ID)
         decision = restored.reject_offset_and_authorize_correction(

@@ -600,7 +600,8 @@ def _run(args: argparse.Namespace) -> Any:
             expected_mode=args.mode, trusted_authority=authority,
         )
         if args.apply:
-            return _owner(args).run_batch(commands, cash_file_context=context)
+            with _owner(args) as owner:  # R1a: an owner holds the store open until closed, on success and on error
+                return owner.run_batch(commands, cash_file_context=context)
         return cash_file.preview_cash_file(commands, context, path=_existing_database(args.database), trusted_authority=authority)
     if args.command == "switch-prepare":
         return _switch_prepare(args)
@@ -630,11 +631,16 @@ def _run(args: argparse.Namespace) -> Any:
         return {"contract": PACK_CONTRACT, "followthrough_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "followthrough_pack_path": str(args.output)}
     if args.command == "record-followthrough-decision":
         suggestion = None if args.suggestion is None else _decode_canonical_json(_read_package(args.suggestion, 4096, "followthrough_suggestion"), maximum=4096, label="followthrough_suggestion")
-        return _owner(args).record_followthrough_decision(
-            item_id=args.item_id, decision_id=args.decision_id, act=args.act, reason_code=args.reason_code, owner_id=args.owner_id, suggestion=suggestion,
-            actor_id=args.actor_id, actor_role=args.actor_role, expected_revision=args.expected_revision,
-        )
-    owner = _owner(args)
+        with _owner(args) as owner:
+            return owner.record_followthrough_decision(
+                item_id=args.item_id, decision_id=args.decision_id, act=args.act, reason_code=args.reason_code, owner_id=args.owner_id, suggestion=suggestion,
+                actor_id=args.actor_id, actor_role=args.actor_role, expected_revision=args.expected_revision,
+            )
+    with _owner(args) as owner:
+        return _owner_command(args, owner)
+
+
+def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
     mirror = FinancialMirror(owner)
     command = args.command
 

@@ -104,7 +104,7 @@ class FollowthroughTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.owner = None
+        cls.owner.close()
         cls.tmp.cleanup()
 
     def _raw(self, at_ms: int = GENERATED, **changes: object) -> bytes:
@@ -166,8 +166,7 @@ class FollowthroughTests(unittest.TestCase):
             self.assertEqual(clock["status"], "NOT_ANCHORED")
 
     def test_anchor_is_the_earliest_listed_fact_and_backdating_is_visible(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="rr-followthrough-ack-") as tmp:
-            owner = _build_r_store(Path(tmp), RULES)
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-ack-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
             _support(owner, "r2", "evidence:ack:r2", "state-mailroom", 1_808_611_200_000, 1_799_539_200_000)  # recorded 2027-04-25, dated 2027-01-10
             raw = build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust)
         federal, recovery = next(item["clocks"] for item in json.loads(raw)["items"] if item["item_id"] == "item-r2")
@@ -181,9 +180,8 @@ class FollowthroughTests(unittest.TestCase):
                 ("unlisted", b"not the rules", (), "not-in-approved-control-pack"),
                 ("twice", RULES, ("followthrough-rules:sha256:" + "0" * 64,), "ref-not-unique"),
             ):
-                with self.subTest(name):
-                    (Path(tmp) / name).mkdir()
-                    owner = _build_r_store(Path(tmp) / name, rules, extra_refs=extra)
+                (Path(tmp) / name).mkdir()
+                with self.subTest(name), _build_r_store(Path(tmp) / name, rules, extra_refs=extra) as owner:
                     package = owner.export_continuity()
                     with self.assertRaises(DerivedError) as caught:
                         build_followthrough_pack(owner.path, package, rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust)
@@ -221,8 +219,7 @@ class FollowthroughTests(unittest.TestCase):
 
     def test_fmap_period_missing_is_a_declared_gap(self) -> None:
         rules = _mutated(lambda value: value.update(fmap_basis_points=[{"basis_points": 5000, "period_id": "period:ffy2027q3"}]))
-        with tempfile.TemporaryDirectory(prefix="rr-followthrough-fmap-") as tmp:
-            owner = _build_r_store(Path(tmp), rules)
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-fmap-") as tmp, _build_r_store(Path(tmp), rules) as owner:
             pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust))
         self.assertEqual([item["federal_share"] for item in pack["items"]], [None] * 3)
         self.assertIn("gap:fmap-period-missing:period:ffy2027q2", pack["unavailable"])
@@ -248,8 +245,7 @@ class FollowthroughTests(unittest.TestCase):
             ("collected before the year end, recorded after it", (DAY_MS(2028, 1, 10), DAY_MS(2028, 1, 20)), None, GENERATED, ("FFY2028Q2", "64.9C1", FEDERAL_DUE, "MISSED"), (DAY_MS(2028, 1, 10), "MET_LATE")),
             ("collected on time, recorded late", (DAY_MS(2027, 3, 10), DAY_MS(2027, 3, 20)), CREDIT_R1, GENERATED, ("FFY2027Q2", "64.9C1", COLLECTED_DUE, "MET"), (DAY_MS(2027, 3, 10), "MET")),
         ):
-            with self.subTest(name), tempfile.TemporaryDirectory(prefix="rr-followthrough-lag-") as tmp:
-                owner = _build_r_store(Path(tmp), RULES, paid=paid, credit=credit)
+            with self.subTest(name), tempfile.TemporaryDirectory(prefix="rr-followthrough-lag-") as tmp, _build_r_store(Path(tmp), RULES, paid=paid, credit=credit) as owner:
                 item = next(i for i in json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=generated, **self.trust))["items"] if i["item_id"] == "item-r1")
                 credit_clock, action_clock = item["clocks"]
                 self.assertEqual((credit_clock["report"]["quarter"], credit_clock["report"]["form"], credit_clock["due_ms"], credit_clock["status"]), federal)
@@ -257,8 +253,7 @@ class FollowthroughTests(unittest.TestCase):
 
     def test_finder_not_typed_is_a_declared_gap(self) -> None:
         rules = _mutated(lambda value: value.update(parties=[party for party in value["parties"] if party["party_id"] != "rac-contractor-1"]))
-        with tempfile.TemporaryDirectory(prefix="rr-followthrough-finder-") as tmp:
-            owner = _build_r_store(Path(tmp), rules)
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-finder-") as tmp, _build_r_store(Path(tmp), rules) as owner:
             pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust))
         self.assertEqual({(item["found"]["party"], item["found"]["kind"]) for item in pack["items"]}, {(None, None)})
         self.assertIn("gap:finder-not-typed:rac-contractor-1", pack["unavailable"])
@@ -267,8 +262,7 @@ class FollowthroughTests(unittest.TestCase):
         for unit in ("YEAR", "DAY"):
             with self.subTest(unit), self.assertRaisesRegex(DerivedError, "^clock-date-range$"):
                 _add(DAY_MS(9999, 12, 1), {"count": 1 if unit == "YEAR" else 60, "unit": unit})
-        with tempfile.TemporaryDirectory(prefix="rr-followthrough-far-") as tmp:
-            owner = _build_r_store(Path(tmp), RULES)
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-far-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
             _support(owner, "r3", "evidence:notice:r3", "state-demand-letters", DAY_MS(9999, 12, 1), DAY_MS(9999, 12, 1))
             with self.assertRaisesRegex(DerivedError, "^followthrough:clock-date-range$"):
                 build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=DAY_MS(9999, 12, 1), **self.trust)
@@ -280,8 +274,7 @@ class FollowthroughTests(unittest.TestCase):
         self.assertEqual((pack["contract"], pack["documentation_only"], pack["claims"], pack["signer"], pack["comparison"]), ("RR/FOLLOWTHROUGH/PACK/v1", True, {"proofSuiteId": None, "production_usable": False, "activation": False}, None, None))
         self.assertEqual(pack["unavailable"], sorted(NOT_HELD))
         self._refused("followthrough:generated-before-package", at_ms=CREDIT_R1 - 1)
-        with tempfile.TemporaryDirectory(prefix="rr-followthrough-stale-") as tmp:
-            owner = _build_r_store(Path(tmp), RULES)
+        with tempfile.TemporaryDirectory(prefix="rr-followthrough-stale-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
             early = owner.export_continuity()
             _support(owner, "r2", "evidence:ack:r2", "state-mailroom", 1_808_611_200_000, 1_799_539_200_000)
             with self.assertRaisesRegex(DerivedError, "^followthrough:"):  # a package older than the database is the checker's refusal
@@ -397,7 +390,11 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def _store(self, name: str = "store", **changes: object) -> FinancialOwner:
         (self.directory / name).mkdir()
-        return _decided_store(self.directory / name, **changes)
+        return self._closing(_decided_store(self.directory / name, **changes))
+
+    def _closing(self, store: FinancialOwner) -> FinancialOwner:
+        self.addCleanup(store.close)  # R1a: the owner's writer holds the file open until closed
+        return store
 
     def _r2(self, store: FinancialOwner, at_ms: int = GENERATED) -> dict:
         return next(item for item in _pack(store, at_ms)["items"] if item["item_id"] == "item-r2")
@@ -409,7 +406,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
         self.assertEqual(_history(store), before)
 
     def test_decision_records_suggestion_and_decision_side_by_side(self) -> None:
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         _legal(store, "petition", "creditor", "effort")
         before = store.obligation_detail("item-r2")
         result = _decide(store, suggestion=SUGGESTION)
@@ -475,6 +472,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def test_checker_binds_decision_events(self) -> None:
         store = self._store()
+        store.close()  # R1a: its commits reach the main file when it closes
         for name, forge, code, _pre in FORGERIES:
             with self.subTest(name):
                 forged = self.directory / f"forged-{name.replace(' ', '-')}.sqlite3"
@@ -485,7 +483,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def test_restore_rebuilds_decision_commands(self) -> None:
         store = self._store()
-        restored = FinancialOwner.restore_continuity(package_bytes=store.export_continuity(), recovered_path=self.directory / "restored.sqlite3", trusted_authority=store.trusted_authority)
+        restored = self._closing(FinancialOwner.restore_continuity(package_bytes=store.export_continuity(), recovered_path=self.directory / "restored.sqlite3", trusted_authority=store.trusted_authority))
         query = "SELECT command_id,request_digest FROM commands WHERE command_id=?"
         with closing(sqlite3.connect(f"file:{store.path}?mode=ro", uri=True)) as original, closing(sqlite3.connect(f"file:{restored.path}?mode=ro", uri=True)) as copy:
             found = original.execute(query, (f"FOLLOWTHROUGH_DECISION:{CLOSE}",)).fetchall()
@@ -493,7 +491,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
         restored.verify_integrity()
 
     def test_gaps_for_untyped_suggestion_unknown_reason_and_activity_after_close(self) -> None:
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         untyped = {**SUGGESTION, "source_id": "unknown-model", "source_ref": "triage:r3:1", "reason_code": "NOT_IN_RULES"}
         _decide(store, item_id="item-r3", decision_id="decision:r3:close", reason_code="NOT_IN_RULES", suggestion=untyped)
         store.clock.value = ASSIGN_AT
@@ -510,7 +508,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
         for reason, short, fixed in (("BANKRUPTCY", ("creditor", "effort"), "petition"), ("OUT_OF_BUSINESS", ("location", "effort"), "certification")):
             with self.subTest(reason):
                 (self.directory / reason).mkdir()
-                store = _build_r_store(self.directory / reason, RULES)
+                store = self._closing(_build_r_store(self.directory / reason, RULES))
                 _legal(store, *short)
                 _decide(store, decision_id="decision:short", reason_code=reason)
                 self.assertEqual(self._r2(store)["clocks"][0]["status"], "MISSED")
@@ -523,7 +521,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
                 self.assertNotIn("gap:closure-evidence-missing:decision:met", unavailable)
 
     def test_one_document_cannot_meet_two_required_purposes(self) -> None:
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         _legal(store, "petition-and-creditor", "effort")  # one legal-office document offered for both BANKRUPTCY_PETITION and CREDITOR_RECORD
         _decide(store)
         self.assertIn(f"gap:closure-evidence-missing:{CLOSE}", _pack(store)["unavailable"])
@@ -534,7 +532,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def test_partial_recovery_then_close_keeps_the_collected_share_due(self) -> None:
         # 433.318(a)(1) excuses the state only to the extent it cannot recover: the collected part's federal share stays due.
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         store.clock.value = EVIDENCE_AT
         store.record_payment_evidence(item_id="item-r2", payment_id="payment:r2:partial", common_origin_id="origin:r2:partial", amount_cents=200_000,
                                       evidence_id="evidence:payment:r2:partial", event_at_ms=EVIDENCE_AT, source_id="state-collections")
@@ -551,10 +549,10 @@ class FollowthroughDecisionTests(unittest.TestCase):
         early = next(i for i in _pack(store, CLOSE_AT + DAY)["items"] if i["item_id"] == "item-r2")
         self.assertEqual(early["collected_share"]["status"], "DUE")
         (self.directory / "none").mkdir()
-        self.assertIsNone(self._r2(_decided_store(self.directory / "none"))["collected_share"])  # nothing collected: nothing due
+        self.assertIsNone(self._r2(self._closing(_decided_store(self.directory / "none")))["collected_share"])  # nothing collected: nothing due
 
     def test_evidence_recorded_after_a_close_never_covers_it(self) -> None:
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         _legal(store, "creditor", "effort")
         _decide(store)
         _legal(store, "petition", at_ms=CLOSE_AT)  # the same millisecond as the decision, recorded after it
@@ -564,7 +562,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
             self.assertIn(gap, unavailable)
 
     def test_one_document_recorded_three_times_meets_one_purpose(self) -> None:
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         store.clock.value = EVIDENCE_AT
         for copy in "abc":
             store.record_support_evidence(item_id="item-r2", evidence_id=f"evidence:copy-{copy}:r2", common_origin_id="origin:legal-doc-1", source_id="state-legal-office",
@@ -575,7 +573,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def test_an_aggregate_id_shared_across_types_still_opens(self) -> None:
         # A pack id equal to an obligation id: the whole-database walk keys by (type, id), as the pre-COMMIT query does.
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         store.clock.value = EVIDENCE_AT
         store.publish_control_pack(ControlPack(
             pack_id=store.obligation_detail("item-r3")["obligation_id"], **SCOPE, version=2, source_refs=("synthetic:source:v2",),
@@ -585,10 +583,10 @@ class FollowthroughDecisionTests(unittest.TestCase):
             expected_tests=("program-total=100000000", "H-owed=10000000", "other-total=90000000", "timeliness-separate")))
         _decide(store, item_id="item-r3", decision_id="decision:r3:assign", act="ASSIGN", reason_code=None, owner_id="state-recovery-unit")
         independent.verify_database(store.path, **store._checker_expectations())
-        FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock()).verify_integrity()
+        self._closing(FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock())).verify_integrity()
 
     def test_cli_records_followthrough_decision(self) -> None:
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         _legal(store, "petition", "creditor", "effort")
         (self.directory / "authority.json").write_bytes(json.dumps(financial_cli.authority_file_record(store.trusted_authority)).encode("ascii"))
         (self.directory / "suggestion.json").write_bytes(_encode(SUGGESTION))
@@ -603,13 +601,13 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def test_a_decision_the_checker_rejects_is_refused_before_commit(self) -> None:
         # The lean-live M0 F1 probe for this kind: an owner bug is refused before COMMIT, not found on the next open.
-        store = _build_r_store(self.directory, RULES)
+        store = self._closing(_build_r_store(self.directory, RULES))
         before = _history(store)
         with patch.object(owner_module, "_followthrough_shape", lambda *args, **kwargs: None):
             with self.assertRaisesRegex(FinancialIntegrityError, "^followthrough_verification:followthrough:payload"):
                 _decide(store, item_id="item-r3", act="REOPEN", reason_code="X", owner_id=None)
         self.assertEqual(_history(store), before)
-        FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock()).verify_integrity()
+        self._closing(FinancialOwner(path=store.path, config=FinancialOwnerConfig(**SCOPE), trusted_authority=store.trusted_authority, clock=_Clock())).verify_integrity()
 
 
 if __name__ == "__main__":
