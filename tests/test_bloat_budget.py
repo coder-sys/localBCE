@@ -1,8 +1,4 @@
 """Size budget for the trunk (CONSTITUTION Art. IX, X.1, XI).
-    unittest.main()
-if __name__ == "__main__":
-"""Size budget for the trunk (CONSTITUTION Art. IX, X.1, XI).
-"""Size budget for the trunk (CONSTITUTION Art. IX, X.1, XI).
 
 Ceilings only ratchet down. Raising one needs a commit message that names the
 felt effect (Art. XII) the extra size buys; lower them whenever work shrinks
