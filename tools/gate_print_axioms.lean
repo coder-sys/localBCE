@@ -54,6 +54,7 @@ import BlindLedger.Gate.AnchorTheorems
 #print axioms BlindLedger.Gate.storeCheckpoint_slice
 #print axioms BlindLedger.Gate.firstFailure_none
 #print axioms BlindLedger.Gate.anchored_binding
+#print axioms BlindLedger.Gate.anchored_binding_witness
 #print axioms BlindLedger.Gate.pinInput_lines
 #print axioms BlindLedger.Gate.decideAnchored_some
 #print axioms BlindLedger.Gate.load_ok

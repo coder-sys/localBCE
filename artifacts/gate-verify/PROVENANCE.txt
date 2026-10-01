@@ -1,21 +1,26 @@
-gate_verify.exe: the signer's self-check for gate checkpoints (PQ signing M1); the payer's verifier is M2 and is not built
+gate_verify.exe: the gate's Lean decisions for the producer's publish check and the payer's index, fork and release checks
 
 Lean/Lake executable `gate_verify` (root BlindLedger.Gate.VerifyCli), built from the
-`lean/` tree whose manifest is recorded below (branch pq-m1, review-fix commit).
-Stateless: input `root_pk (2592) || u32 BE cert length || KEY-CERT || signed checkpoint`;
-output `GATE_VERIFY=ACCEPT` (exit 0) or `REJECT` (exit 1); exit 2 for malformed input.
+`lean/` tree whose manifest is recorded below (branch gate-producer, G3).
+One exe, four mode-byte frames (the stateless frame is deleted); exit 0 for ACCEPT, INDEX, STORED
+and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FRAME`):
+- 0x01 PUBLISH: `root_pk || u32|cert || u32|last (0 = genesis) || u32|signed new || u16 k || (u32|token)^k`.
+- 0x02 INDEX: `u32|signed checkpoint`; prints `GATE_VERIFY=INDEX <tenant hex> shard epoch from to <digest hex> <prev hex>`.
+- 0x03 STORE: `root_pk || u16 m || certs || u16 j || candidates || u16 f || fork evidence || u32|new`.
+- 0x04 RELEASE: `root_pk || u16 m || certs || u16 f || fork evidence || u32|checkpoint || u64 now || u16 g || grants ||
+  u8 released || u8 pinned [|| 32-byte key] || u32|DECIDE-REQUEST || u32|token`; answers ACCEPT or HOLD <first failure>.
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,205,568 bytes
-- SHA-256: 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916
+- Size: 4,311,040 bytes
+- SHA-256: 47ba66f6b6fc30f7769d5c48a2e42a83dd9d9e91cf07532a77e7e18a1a63fc8c
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
 - Source manifest, 86 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  61e8bcaa5be0f706843a7ba17b9987d3fa9b53543679ad155e2c6bc53ccd5252, 9,598 bytes;
+  3bb1efcf82df662242e074f549f4e3565037246225b23b4b81ee6a20616caf33, 9,598 bytes;
   each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
-  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\dpk1-gv-manifest.txt (dpk-step1, DecisionPackage Conclude, Wire, Laws added).
+  holding CRLF copies of five blobs; same tree, exe unchanged. Copies: C:\Users\neers\rrb\gate\gp3-manifest.txt (gate-producer G3); C:\Users\neers\rrb\gate\dpk1-gv-manifest.txt (dpk-step1).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
   under lean/ until this file is updated after a rebuild.
 
@@ -107,6 +112,13 @@ Re-pin (2026-10-01, branch gate-producer, G2): the manifest moved (84 files, 02c
 exe did not: the tree gained Gate/Anchor.lean (imports Rules.Spec, so it runs in the decide runtime only) and
 Gate/AnchorTheorems.lean (six theorems), neither in gate_verify's import closure. Computed as the G1 note says.
 
+Re-pin (2026-10-01, branch gate-producer, G3): gate_verify moved, 9bd2602b... to 47ba66f6... (4,205,568 to 4,311,040 bytes), and the
+manifest moved (86 files, 61e8bcaa..., to 86 files, 3bb1efcf...; Gate/VerifyCli.lean now has four mode frames, the stateless frame is
+gone, and the witness theorem and axiom lines were added). Two git-archive stage builds (C:\Users\neers\rrb\le\stage-gp3-a and -b; guard
+logs gp3-stagea2-a86-L3 and gp3-stageb2-a2-L3, 105 jobs each, exit 0, FLOOR_KILLS=0) gave byte-identical exes, equal to the in-tree
+build; the worker 86299A0D... and the correction exe 441EB3E8... did not move. The old-vs-new behaviour diff over the golden vectors
+is not recorded here: its first run (gpb-diff1) stopped on a harness error and was not repeated.
+
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in
 each under the guard; both gave the same SHA-256 (also equal to the in-tree build).
@@ -118,6 +130,8 @@ each under the guard; both gave the same SHA-256 (also equal to the in-tree buil
   later), so that manifest already differs; the engine pin is void on this tree until re-pin.
 
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916 (4,205,568 bytes; before the four mode frames and the
+  stateless frame's removal; replaced by the SHA-256 above).
 - gate_verify SHA-256 b9696f2ea715a775d93947025a0510cdec1432b5a4ab05bf3d8a75eafa4d171c (4,205,056 bytes; before the one-Keccak dedupe; replaced by the SHA-256 above).
 - gate_verify SHA-256 fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06 (4,207,616 bytes; before the bounded
   samplers and range loops of lean-partials-v1 commit B; replaced by the SHA-256 above).

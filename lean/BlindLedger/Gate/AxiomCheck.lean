@@ -111,6 +111,8 @@ import BlindLedger.Gate.AnchorTheorems
 #guard_msgs in #print axioms BlindLedger.Gate.firstFailure_none
 /-- info: 'BlindLedger.Gate.anchored_binding' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.anchored_binding
+/-- info: 'BlindLedger.Gate.anchored_binding_witness' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.anchored_binding_witness
 /-- info: 'BlindLedger.Gate.pinInput_lines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.pinInput_lines
 /-- info: 'BlindLedger.Gate.decideAnchored_some' depends on axioms: [propext, Quot.sound] -/

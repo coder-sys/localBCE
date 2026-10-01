@@ -50,6 +50,7 @@
 'BlindLedger.Gate.storeCheckpoint_slice' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.firstFailure_none' depends on axioms: [propext]
 'BlindLedger.Gate.anchored_binding' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.anchored_binding_witness' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.pinInput_lines' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.decideAnchored_some' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.load_ok' depends on axioms: [propext, Quot.sound]

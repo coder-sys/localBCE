@@ -844,7 +844,7 @@ class AxiomRecordTests(unittest.TestCase):
                   if (m := re.match(r"'BlindLedger\.Gate\.(\S+)' depends", line))}
         for name in ("storedOf_wf", "forks_comm", "chain_no_fork", "follows_twice_forks", "publishOk_sound",
                      "publish_payer_local", "verifyToken_slice", "storeCheckpoint_slice", "firstFailure_none",
-                     "anchored_binding", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
+                     "anchored_binding", "anchored_binding_witness", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
             with self.subTest(name):
                 self.assertIn(name, record)
                 self.assertNotIn("sorryAx", record[name])
