@@ -1,4 +1,4 @@
-"""Proof obligations for the read-only CMS-64.9 line pack (docs/CORE_REDESIGN.md "Line pack").
+"""Proof obligations for the read-only CMS-64.9 line pack (rrb/archive/xi2-records-20261001.md "Line pack").
 
 One synthetic store (public Owner commands only) and its Continuity package; every build verifies
 the store read-only. The Ledger total each test compares against is recomputed here with read-only SQL.

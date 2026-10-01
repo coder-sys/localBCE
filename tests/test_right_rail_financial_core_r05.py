@@ -1,4 +1,4 @@
-"""Core R0.5 (docs/CORE_REDESIGN.md "State-resident core R0.5"; red team rrb/reviews/core-r1-redteam.md H4-H5):
+"""Core R0.5 (rrb/archive/xi2-records-20261001.md "R0.5"; red team rrb/reviews/core-r1-redteam.md H4-H5):
 the store is WAL with full sync, so an acknowledged commit is durable and a reader never blocks a write.
 
 Power loss cannot be simulated here: durability rests on WAL with synchronous=FULL (SQLite's documented guarantee,

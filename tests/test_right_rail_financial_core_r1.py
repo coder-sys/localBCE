@@ -1,4 +1,4 @@
-"""Core R1a (docs/CORE_REDESIGN.md "R1a"; red team rrb/reviews/core-r1-redteam.md H1, M1): one writer connection
+"""Core R1a (rrb/archive/xi2-records-20261001.md "R1a"; red team rrb/reviews/core-r1-redteam.md H1, M1): one writer connection
 holds a verified mark checked at every BEGIN. A commit it did not make means the store is verified again exactly as a
 fresh open verifies it; a swapped file is store_replaced; any error discards the connection. R1c, R1d and R1b tests
 are in commit 958947a (branch core-r1a) until their slices land.

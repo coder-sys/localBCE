@@ -1,4 +1,4 @@
-"""Proof obligations for the read-only follow-through pack (docs/CORE_REDESIGN.md "Follow-through pack").
+"""Proof obligations for the read-only follow-through pack (rrb/archive/xi2-records-20261001.md "Follow-through decision event").
 
 The "R" store is built with public Owner commands only; every build verifies it read-only.
 """

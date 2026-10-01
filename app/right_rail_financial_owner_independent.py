@@ -393,7 +393,7 @@ _TRIGGER_DEFS = {
 # Each table's whole stored CREATE TABLE text (every NOT NULL, CHECK, DEFAULT, UNIQUE and ON CONFLICT clause), as
 # SHA-256 of the Owner's DDL with each run of SQLite whitespace [ \t\n\f\r] made one space. Collapsing a run neither
 # joins nor splits a token, and no pinned literal or identifier holds whitespace and the DDL has no comment, so any
-# other clause, literal, case or comment changes the digest (docs/CORE_REDESIGN.md "Table SQL pin").
+# other clause, literal, case or comment changes the digest (rrb/archive/xi2-records-20261001.md "Table SQL pin").
 _TABLE_SQL_SHA256 = {
     "action_outbox": "841E8256DD35D074476B732F427886D66DE735ABBF9C105D552C846832F51613",
     "actions": "A17BA2F7AA3780BE782FD27439BB16A7A28E60B4E5848775DB15ADECB3211CC3",
