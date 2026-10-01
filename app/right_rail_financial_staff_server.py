@@ -242,10 +242,14 @@ class StaffWorkflow:
             "package_bytes": None,
             "decision_package_equal": None,
         }
-        if resume_existing:
-            self._verify_resumable_workspace()
-        else:
-            self._seed_synthetic_population()
+        try:
+            if resume_existing:
+                self._verify_resumable_workspace()
+            else:
+                self._seed_synthetic_population()
+        except BaseException:
+            self.close()  # R1a: the owner holds the store open
+            raise
 
     def __enter__(self) -> "StaffWorkflow":
         return self
@@ -754,7 +758,8 @@ class StaffWorkflow:
                 or restored_summary.get("proof_suite_id") is not None
             ):
                 raise FinancialMirrorError("continuity_test_boundary")
-            self._mirror = restored
+            previous, self._mirror = self._mirror, restored
+            previous.owner.close()
             self._continuity = {
                 "restored": True,
                 "mode": "TEST",

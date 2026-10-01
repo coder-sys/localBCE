@@ -1042,25 +1042,22 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             workflow = self._workflow(workspace_dir=workspace)
             server = self._serve_workflow(workflow)
             owner, port, body = workflow.mirror.owner, int(server.server_address[1]), json.dumps(self._revision_body(workflow))
-            holder = sqlite3.connect(owner.path, isolation_level=None, check_same_thread=False)  # used from the server thread
-            self.addCleanup(holder.close)
             real_record, real_snapshot, before = workflow.mirror.record_reporting_evidence, owner._read_snapshot, owner.summary()["sequence"]
+            locked = []
 
             def commit_then_lock(**arguments: object) -> object:
                 result = real_record(**arguments)  # the owner has committed
-                holder.execute("PRAGMA locking_mode=EXCLUSIVE")  # WAL (R0.5): only an exclusive-locking-mode holder locks a reader out
-                holder.execute("BEGIN EXCLUSIVE")
+                locked.append(True)  # R1a: the owner's open writer keeps any exclusive-locking-mode holder out, so the lock is simulated
                 return result
 
             @contextmanager
             def snapshot(**arguments: object):  # type: ignore[no-untyped-def]
-                try:
-                    with real_snapshot(**arguments) as connection:
-                        yield connection
-                except FinancialBusyError:
+                if locked:
                     if released:
-                        holder.close()  # in exclusive locking mode only closing releases the lock
-                    raise
+                        locked.clear()  # released after the failed read-back
+                    raise FinancialBusyError("store_busy")
+                with real_snapshot(**arguments) as connection:
+                    yield connection
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
             self.addCleanup(connection.close)
@@ -1068,7 +1065,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
                 response = connection.getresponse()
                 answer = (response.status, response.getheader("Retry-After"), json.loads(response.read().decode("utf-8")))
-            holder.close()
             code = "store_busy" if released else "store_busy_outcome_unknown"
             self.assertEqual(answer, (503, None, {"error": {"code": code}, "changed": True if released else None}))
             self.assertGreater(owner.summary()["sequence"], before)  # it did commit

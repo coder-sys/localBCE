@@ -114,7 +114,7 @@ class LinePackTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.owner = None
+        cls.owner.close()
         cls.tmp.cleanup()
 
     def _raw(self, line: str = "19A", reported: int = 32_345, at_ms: int = AT, **changes: object) -> bytes:

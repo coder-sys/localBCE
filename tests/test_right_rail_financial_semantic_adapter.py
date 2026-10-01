@@ -12,7 +12,6 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 import hashlib
 from pathlib import Path
-import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -30,6 +29,7 @@ from tests import rightrail_financial_expected_cases as expected
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
     _correction_transition_test_release,
+    _image,
     _items_from_fixture,
     _population_manifest_from_fixture,
     _record_fixture_support,
@@ -80,7 +80,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             period_id=period_id,
             currency=expected.CURRENCY,
         )
-        return FinancialOwner(
+        owner = FinancialOwner(
             path=path or self._path(),
             config=config,
             trusted_authority=self.authority,
@@ -89,6 +89,8 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             owner_id=owner_id,
             correction_transition_release=correction_transition_release,
         )
+        self.addCleanup(owner.close)  # R1a: the owner's writer holds the file open until closed
+        return owner
 
     def _correction_release(self) -> financial_engine.FinancialCorrectionTransitionRelease:
         # The Owner fails closed without a release (Art. V.2); success-path
@@ -268,7 +270,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     @staticmethod
     def _hash(path: Path) -> str:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashlib.sha256(_image(path)).hexdigest()  # R0.5/R1a: the committed content, whichever connection closed last
 
     def _assert_no_source_mutation(self, store: FinancialOwner, before_hash: str) -> None:
         self.assertEqual(self._hash(store.path), before_hash)
@@ -338,7 +340,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     def _copy_store(self, store: FinancialOwner, name: str) -> Path:
         target = self._path(name)
-        shutil.copy2(store.path, target)
+        target.write_bytes(_image(store.path))
         return target
 
     def _snapshot_on_path(self, path: Path, *, context: adapter.TrustedAuthorityContext | None = None) -> adapter.LockedSemanticSnapshot:

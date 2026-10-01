@@ -57,6 +57,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=self.clock,
         )
+        self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
         self.scope = {
             "state_id": self.config.state_id,
@@ -236,6 +237,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def _copy_database(self, name: str) -> Path:
         target = Path(self.temp_dir.name) / name
+        self.store.close()  # R1a: the writer's commits reach the main file when it closes
         shutil.copy2(self.db, target)
         return target
 
@@ -1076,8 +1078,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         for label, statement, expected_error in corruptions:
             with self.subTest(label=label):
-                target = Path(self.temp_dir.name) / f"{label}.sqlite"
-                shutil.copyfile(self.db, target)
+                target = self._copy_database(f"{label}.sqlite")
                 with closing(sqlite3.connect(target, isolation_level=None)) as connection:
                     for sql in statement.split("; "):
                         connection.execute(sql)
@@ -1152,6 +1153,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         (Path(self.temp_dir.name) / "decided").mkdir()
         source = followthrough._decided_store(Path(self.temp_dir.name) / "decided")
+        source.close()  # R1a: its commits reach the main file when it closes
         cases = (("untouched", lambda path: None, None), *((name, forge, code) for name, forge, _whole, code in followthrough.FORGERIES))
         for name, forge, code in cases:
             with self.subTest(name):
@@ -1220,8 +1222,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         for table, column, index, forged, code in cases:
             with self.subTest(table):
-                copy = Path(self.temp_dir.name) / f"hidden-{table}.sqlite"
-                shutil.copyfile(self.db, copy)
+                copy = self._copy_database(f"hidden-{table}.sqlite")
                 run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=sql||' WHERE 0' WHERE name='{index}'")
                 run(copy, *forged)
                 run(copy, "PRAGMA writable_schema=ON", f"UPDATE sqlite_master SET sql=replace(sql,' WHERE 0','') WHERE name='{index}'")
