@@ -817,7 +817,7 @@ def _collect_sources(args: argparse.Namespace) -> dict[str, Path]:
             f"extra={sorted(set(release_files) - set(RELEASE_FILES))}:directories={sorted(release_directories)}"
         )
     sources.update({RELEASE_FILES[relative]: path for relative, path in release_files.items()})
-    sources[PRODUCER] = REPO_ROOT / "tools" / "build_financial_correction_release.ps1"
+    sources[PRODUCER] = REPO_ROOT / "parked" / "release-producer" / "build_financial_correction_release.ps1"
     runtime_root = _absolute(args.python_runtime_root, "python_runtime_root_invalid")
     sources.update({RUNTIME_PREFIX + relative: path for relative, path in _runtime_files(runtime_root).items()})
     if len(sources) > MAX_ARCHIVE_MEMBERS:

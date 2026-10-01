@@ -13,12 +13,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 37_651
+PRODUCT_CODE_LINES = 36_591
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 27_003
+EVIDENCE_CODE_LINES = 26_873
 MARKDOWN_FILES = 20
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 218_143
+MARKDOWN_BYTES = 125_196
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
