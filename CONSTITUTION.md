@@ -122,9 +122,15 @@ operational authority.
    workflow engine, custom database, service-per-module, universal query
    engine or orchestration built before measured need. A new abstraction needs
    two real consumers.
-3. Ordinary work scales with the change, not with total history. Every input,
-   queue, report, export and proof has explicit bounds. Measure before
-   claiming performance.
+3. **History never costs more.** Ordinary work scales with the change, not with
+   total history. `tests/test_history_growth.py` counts SQLite steps, bytes
+   hashed, evaluator frame bytes and peak Python memory for the listed owner
+   operations and the gate pin at two history sizes, and fails when a count
+   rises 5% over its pin or an unlisted count grows faster than log n. The
+   counts that still grow are named exceptions on a dated list that only
+   shrinks (the continuity export refuses at 2,560 payments). No bound may
+   become a way to block service as history grows. Every input, queue, report,
+   export and proof has explicit bounds. Measure before claiming performance.
 4. Build what the plan needs now. The private zero-knowledge evidence mode
    (PRIVATE_ZK) is an active prototype track (founder, 2026-09-25). It produces
    evidence only, never a hold or payment directive. It never blocks core, gate
@@ -348,3 +354,8 @@ never an amendment. Each amendment-log entry quotes the founder's own words that
   want"; standing 2026-09-25 "u have all auth". XI.2 record in
   `docs/CORE_REDESIGN.md`.
 - 2026-10-01 — Articles X.2 and XI.2 and the Amendment section amended by the founders ("yes", 2026-10-01, to: re-recording a program fingerprint that did not change is not a gate change; the memory-guard rules live in one place; every amendment quotes the founder's words; and the release-packaging tool is shelved until a release is planned). X.2 points to the driver root AGENTS.md and drops the v4 exception; XI.2 treats an unchanged-hash re-pin as a record update; amendment entries quote the founder.
+- 2026-10-01 — Article IX.3 strengthened by the founders ("we need to make sure
+  our stack doesnt get bloated or gets slower or vulenrable as history grows,
+  thats a core value, we need to makes re thats handled", 2026-10-01):
+  a deterministic growth test pins the listed operations' work at two history
+  sizes, with a shrink-only exception list.
