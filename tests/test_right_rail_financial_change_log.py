@@ -64,7 +64,7 @@ class ChangeLogCompareTests(unittest.TestCase):
         self._inject(lambda connection: connection.execute(self._replace_sql("evidence", "rowid=(SELECT min(rowid) FROM evidence)")))
 
     def test_finish_takes_no_whole_table_snapshot(self):  # RED: trunk reads every package table twice (937 ms at E=8,500)
-        with patch.object(check, "_snapshot", side_effect=AssertionError("whole-table snapshot")):
+        with patch.object(check, "_snapshot", side_effect=AssertionError("whole-table snapshot"), create=True):
             self.assertEqual(self.files._apply()["recorded_count"], 2)
 
     def _log_triggers(self, connection):
@@ -129,6 +129,5 @@ class ChangeLogDifferentialTests(unittest.TestCase):
                 old = self._verdict(self.snapshots, [sql])
                 self.assertIsNotNone(old, "the whole-table snapshots refuse it")
                 self.assertEqual(self._verdict(check, [sql]), old)
-        for label, sql in {"an identical replace that moves a row": replace("evidence", first("evidence"))}.items():
-            with self.subTest(write=label):  # the snapshots compare content, not rowids, and accept this: the log is stronger
-                self.assertEqual(self._verdict(check, [sql]), ("CashFileError", "cash_file_failed"))
+        with self.subTest(write="an identical replace that moves a row"):  # the snapshots compare content and accept it; with recursive_triggers ON the owner's delete guard refuses it first
+            self.assertEqual(self._verdict(check, [replace("evidence", first("evidence"))]), ("IntegrityError", "history_row_delete"))
