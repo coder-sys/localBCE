@@ -23,7 +23,7 @@ Working rules (details in the constitution):
 - Private zero-knowledge is an active prototype track (Constitution IX.4). It
   is evidence only and never blocks core or gate work. The old code under
   `parked/` stays reference material.
-- Update `STATUS.md` in a few lines per change.
+- Only the lead edits `STATUS.md`, once per trunk merge, replacing what it supersedes.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.
 - Helpers are matched to the work (founder, 2026-09-28; definitions, models

@@ -20,7 +20,7 @@ MARKDOWN_FILES = 20
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 218_143
 CONFORMANCE_MARKDOWN_BYTES = 30_000
-STATUS_BYTES = 40_000
+STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_357,
     "app/right_rail_financial_owner_independent.py": 4_624,
