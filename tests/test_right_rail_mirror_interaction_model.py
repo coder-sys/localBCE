@@ -254,7 +254,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                     page = " ".join(line["text"] for line in self._open(role, server).view()["lines"] if line["where"] == "page")
                     record = self._open_path(f"/role/{role}#item-h.txt", server).view()["texts"]["text-view"]
                     self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms) for ms in [due, decided, *events]))
-                    self.assertIn("Due " + scorecard._program_time(due), page)
+                    self.assertIn("Due: " + scorecard._program_time(due), page)
                     self.assertIsNone(re.search(r"\d{4}-\d\d-\d\d", page), page)
                     self.assertEqual(_UTC_TIME.findall(record), [utc(ms) for ms in [decided, *events, due]])
                     self.assertFalse(any(word in page for word in ("UTC", "Owner event", "revision")), page)
