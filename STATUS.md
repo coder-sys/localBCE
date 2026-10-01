@@ -16,6 +16,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Current verification (latest run per claim; raw logs are the record)
 
+- **Open requests shrink with the balance** (R2, XI.2 record 4; `r2b-t1-a1-L1`, `r2b-fix3-a3-L2`; the full suite is not yet run): a linked payment may not exceed its request's derived open amount (oldest keeps, newest shrinks); package contract v3 adds `open_cents`. Python only; the Lean half is M3 step 2 (`tools/r2_request_shrink_goals.lean`). The first `CANCELLED` transition must exclude cancelled requests in the owner and checker loops.
 - **Table SQL pin** (`replace-trigger-guard`, XI.2 record; `rtrig-tgt3`, `rtrig-full2`): the checker pins every table's whole `CREATE TABLE` text and refuses any other schema object (a `'Trigger'` row of another case, a view, a `sqlite_`-named row), so a planted `ON CONFLICT REPLACE`, a dropped NOT NULL or CHECK, or a hidden trigger is refused at open.
 
 - **Decision package window fix** (`dpk-window-fix`, XI.2 record; red `dpkfix-red1-a2-L3`, green `dpkfix-green1-a3-L1`): the verdict reads whole-obligation counts, never the page window; contract stays v2.

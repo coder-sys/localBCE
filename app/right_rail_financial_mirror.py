@@ -31,7 +31,7 @@ from app.right_rail_financial_owner import (
 
 
 MIRROR_SCHEMA: Final[str] = "RR/FINANCIAL/MIRROR/v1"
-_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v3"
 CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
 MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
@@ -123,7 +123,7 @@ _DETERMINATION: Final = _fields(
     "input_evaluation_result_digest", authority=_AUTHORITY, supporting_evidence=_EVIDENCE_REF,
 )
 _ACTION: Final = _fields(
-    "action_id", "obligation_id", "determination_id", "kind", "status", "revision", "payload_digest", "created_at_ms",
+    "action_id", "obligation_id", "determination_id", "kind", "status", "revision", "payload_digest", "created_at_ms", "open_cents",
     payload_fields=_fields(*_ACTION_FIELDS),
     acknowledgment=_fields("status", "reference", "attempt", "updated_at_ms", "cash_effect_cents"),
 )

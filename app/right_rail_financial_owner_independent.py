@@ -2945,7 +2945,10 @@ def _verify_actions(
     for obligation_id, paid_revision, payment_id, action_ref in links:  # a payment pays an earlier request, never past it or past the balance it found
         request = requests.get(obligation_id, {}).get(action_ref)
         owed = next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["revision"] == paid_revision - 1), -1)
-        if request is None or actions[action_ref]["revision"] >= paid_revision or paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed:
+        if request is None or actions[action_ref]["revision"] >= paid_revision:
+            _fail("payment:link")
+        older = sum(max(cents - paid_at(ref, paid_revision), 0) for ref, cents in requests[obligation_id].items() if (actions[ref]["revision"], ref) < (actions[action_ref]["revision"], action_ref))  # R2: older requests keep their unpaid part first
+        if paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed - older:
             _fail("payment:link")
     return actions
 
