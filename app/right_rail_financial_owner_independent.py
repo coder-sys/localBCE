@@ -4545,7 +4545,7 @@ def verify_database(
     try:
         # Unlocked, each read sees the latest commit, so a commit landing mid-check can mix two states. A check the
         # store sat still for keeps its verdict; a mixed pass with no finding is busy (retry). A mixed pass with a
-        # finding is judged again on one snapshot, so a tamper never looks retryable; writers wait meanwhile.
+        # finding is judged again on one snapshot, so a tamper never looks retryable; WAL writers still commit.
         version = data_version()
         try:
             result = check()

@@ -90,10 +90,10 @@ class ReceiverCashFileTests(unittest.TestCase):
 
     def test_preview_apply_retry_restart_and_reversal(self):
         prepared = self._prepare()
-        live = self.store.path.read_bytes()
+        live = fixtures._image(self.store.path)
         preview = cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
         self.assertEqual((preview["contract"], preview["mode"], preview["cash_delta_cents"]), ("RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2", "PREVIEW", 300))
-        self.assertEqual((self.store.export_continuity(), self.store.path.read_bytes()), (self.package, live))  # the preview ran on a copy
+        self.assertEqual((self.store.export_continuity(), fixtures._image(self.store.path)), (self.package, live))  # the preview ran on a copy
         applied = self._apply(prepared)
         self.assertEqual((applied["recorded_count"], applied["duplicate_count"], applied["cash_delta_cents"]), (2, 0, 300))
         self.assertEqual(applied["cash_after_cents"] - applied["cash_before_cents"], 300)
@@ -277,11 +277,11 @@ class ReceiverCashFileTests(unittest.TestCase):
                 self.assertLess(len(canonical(value)), cash.MAX_FILE_BYTES)
                 self.assertLess(len(self.baseline), 4096)  # the manifest stays ~1.9 KB whatever the history
                 prepared = self._prepare(value)
-                live, start = self.store.path.read_bytes(), time.perf_counter()
+                live, start = fixtures._image(self.store.path), time.perf_counter()
                 preview = cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
                 previewed = time.perf_counter() - start
                 self.assertLess(previewed, 15.0)
-                self.assertEqual((preview["recorded_count"], self.store.path.read_bytes()), (check.MAX_ROWS, live))
+                self.assertEqual((preview["recorded_count"], fixtures._image(self.store.path)), (check.MAX_ROWS, live))
                 receipt, seconds = self._timed_apply(prepared)
                 print(f"CASH1B_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
                 self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
@@ -632,16 +632,16 @@ class ReceiverCashFileTests(unittest.TestCase):
                    (f'DROP INDEX "{owner._PRIVATE_INDEX_SETS[2][-1][0]}"', "PRAGMA user_version=1")]  # L2: a v1 index set is never written
         for index, statements in enumerate(changes):
             path = directory / f"old-{index}.sqlite"
-            path.write_bytes(self.store.path.read_bytes())
+            path.write_bytes(fixtures._image(self.store.path))
             with sqlite3.connect(path) as connection:
                 for statement in statements:
                     connection.execute(statement)
-            before = path.read_bytes()
+            before = fixtures._image(path)
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(["--database", str(path), *args[2:], "--apply"]), 2)
-            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(fixtures._image(path), before)
         path = directory / "disappearing.sqlite"
-        path.write_bytes(self.store.path.read_bytes())
+        path.write_bytes(fixtures._image(self.store.path))
         connect = owner.FinancialOwner._connect
         def disappear(instance, **kwargs):
             instance.path.unlink()
