@@ -12,6 +12,7 @@ from dataclasses import replace
 import hashlib
 import inspect
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -5392,6 +5393,42 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))
             self._assert_verified(store)
         self.assertEqual(seen, {_ACTION_B: ["NOT_SATISFIED", "SUPPORTED"], expected.ACTION_CORRECTION_ID: ["NOT_SATISFIED", "SUPPORTED"]})
+
+    def test_delivery_matches_the_oracle_under_many_orderings_of_money_and_acks(self) -> None:
+        # Stale corrections: 600,000 unpaid, requests A and B (300,000 each) and a READY offset notice N (claim C, 100,000), so 500,000 is owed.
+        # Four of seven moves in a fixed stride over all 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
+        # oracle's recomputation (its own delivery rule), and a refused move is skipped. Both delivery verdicts must occur, or the sweep proves nothing.
+        item, act_n, made, seen = expected.H_ITEM_ID, "action:obligation-item-h:offset-c", [], set()
+        ack = lambda store, action: store.acknowledge_action(action, f"ack:{action}")
+        pay = lambda store, tag, cents, **link: (self._pay_a(store, cents, tag, **link), made.append(tag))  # remembered only once recorded
+        moves = {
+            "pay-a": lambda store: pay(store, "pa", 300_000),
+            "pay-b": lambda store: pay(store, "pb", 100_000, action=_ACTION_B),
+            "pay-free": lambda store: pay(store, "pf", 150_000, linked=False),
+            "reverse": lambda store: store.reverse_payment(item_id=item, payment_id=f"payment:h:{made[0]}", evidence_id="evidence:reversal-h:sweep"),
+            "ack-a": lambda store: ack(store, expected.ACTION_CORRECTION_ID),
+            "ack-b": lambda store: ack(store, _ACTION_B),
+            "ack-n": lambda store: ack(store, act_n),
+        }
+        for order in list(itertools.permutations(moves, 4))[::30]:
+            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+            reject_b()
+            store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)
+            receipt = store.current_evaluation_receipt(item)
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
+            store.authorize_offset(item_id=item, claim_id="claim:obligation-item-h:offset-c", expected_revision=receipt["revision"], action_id=act_n,
+                                   decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+            made.clear()
+            for move in order:
+                try:
+                    moves[move](store)
+                except (owner.FinancialError, IndexError):  # refused by the owner (nothing to reverse, already acknowledged, over the open amount)
+                    continue
+                package = store.decision_package(item)
+                seen.add(package["conclusions"]["case_resolution"]["required_conditions"]["delivery_acknowledged_or_not_required"])
+                self._assert_decision_package_verified(store, package)
+            self._assert_verified(store)
+        self.assertEqual(seen, {"NOT_SATISFIED", "SUPPORTED"})
 
     def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
         # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.

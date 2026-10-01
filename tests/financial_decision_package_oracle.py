@@ -597,12 +597,16 @@ def verify_decision_package(
                 amount_support = "CONFLICTED"
             else:
                 amount_support = "SUPPORTED" if active_payment_count or authorized_claim_count else "NO_LINKED_EVIDENCE"
+            # Delivery, from the spec: every action that is not cancelled, not acknowledged, and is either not a request or has open cents left.
+            every_action = connection.execute("SELECT action_id,kind,status FROM actions WHERE obligation_id=?", (obligation_id,)).fetchall()
+            still_asking = [row for row in every_action if row["status"] not in ("CANCELLED", "ACKNOWLEDGED") and (row["kind"] != "CORRECTION_PAYMENT_REQUEST" or open_cents[row["action_id"]] > 0)]
+            delivery_requirement = "UNKNOWN" if not every_action else "NOT_SATISFIED" if still_asking else "SUPPORTED"
             requirements = {
                 "amount_satisfied": "SUPPORTED" if amount_satisfied and amount_support == "SUPPORTED" else (
                     "NOT_SATISFIED" if not amount_satisfied and amount_support != "CONFLICTED"
                     else "CONFLICTED" if amount_support == "CONFLICTED" else "UNKNOWN"
                 ),
-                "delivery_acknowledged_or_not_required": "UNKNOWN" if current_action is None else "NOT_SATISFIED" if any(open_cents.get(a, 1) > 0 for (a,) in connection.execute("SELECT action_id FROM actions WHERE obligation_id=? AND status='READY'", (obligation_id,))) else "SUPPORTED",
+                "delivery_acknowledged_or_not_required": delivery_requirement,
                 "reporting_complete": reporting_support,
             }
             missing_requirements = sorted(key for key, value in requirements.items() if value != "SUPPORTED")
