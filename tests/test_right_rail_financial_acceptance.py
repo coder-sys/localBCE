@@ -5391,6 +5391,72 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(forged, expected_config=store.config, expected_authority=self.authority)
 
+    def _lean_link_answers(self, store: FinancialOwner) -> dict[str, tuple[int, bytes, bytes]]:
+        """Per request with an open amount, Python's open cents and the Lean worker's answers to a linked payment of exactly
+        that and of one cent more (BLFPAY01 form A of lean-live-m3-v1 3.1: the store's BLFIN02 input, its receipts, one record)."""
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        text = lambda value: len(value.encode()).to_bytes(2, "big") + value.encode()  # noqa: E731
+        obligation_id = store._obligation_id(expected.H_ITEM_ID, expected.PERIOD_ONE_ID)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN")
+            wire, data = semantic.live_evaluation_input(
+                connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(store.trusted_authority),
+                evaluation_time_ms=store.clock.value + 1, verification={"scope": store._scope_value(), "owner_id": store.owner_id, "mode": store.mode})
+            links = {row["payment_id"]: row["action_id"] for row in owner._payment_links(connection, obligation_id)}
+            connection.execute("ROLLBACK")
+        receipts = b"".join(
+            text(row["payment_id"]) + (0).to_bytes(8, "big") + (b"\x01" + text(links[row["payment_id"]]) if row["payment_id"] in links else b"\x00")
+            for row in data["payments"])
+
+        def ask(action_id: str, cents: int) -> bytes:
+            command = (b"\x01" + text("payment:diff") + text("evidence:diff") + text("origin:diff") + text("source:diff") + text("v1") + b"\x00"
+                       + cents.to_bytes(8, "big") + data["evaluation_time_ms"].to_bytes(8, "big") + b"\x01" + text(action_id))
+            frame = (b"BLFPAY01\x01" + len(wire).to_bytes(4, "big") + wire + len(data["payments"]).to_bytes(2, "big") + receipts
+                     + b"\x00\x01" + data["pre_evaluation"]["revision"].to_bytes(8, "big") + command)
+            with financial_engine._evaluator_lock:
+                return financial_engine._running_evaluator().exchange(
+                    frame, response_cap_bytes=semantic.MAX_WIRE_BYTES + 1, timeout_seconds=financial_engine.EVALUATOR_TIMEOUT_SECONDS)
+
+        return {action_id: (cents, ask(action_id, cents) if cents else b"", ask(action_id, cents + 1))
+                for action_id, cents in self._open_cents(store).items() if cents is not None}
+
+    def test_the_lean_link_rule_agrees_with_pythons_open_amounts(self) -> None:
+        # Python decides linked payments today (`_open_requests`); the Lean rule (`Payment.linkRefusal`, BLFPAY01) is the
+        # proved but unwired twin. For every request the R2 scenarios above leave, Lean records open_cents and refuses
+        # open_cents + 1 with code 8 (LINK_EXCEEDS_UNPAID). A request with 0 open is refused at 1 cent (nothing to record at 0).
+        recorded, refused = b"\x00BLFPRS01\x01", b"\x00BLFPRS01\x07\x08"
+        seen: list[tuple[str, int]] = []
+
+        def agree(store: FinancialOwner, label: str) -> None:
+            answers = self._lean_link_answers(store)
+            self.assertTrue(answers, label)
+            for action_id, (cents, at_open, past_open) in answers.items():
+                seen.append((action_id, cents))
+                self.assertEqual(past_open, refused, (label, action_id, cents + 1))
+                if cents:
+                    self.assertEqual(at_open[:len(recorded)], recorded, (label, action_id, cents))
+
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        agree(store, "one request")
+        self._pay_a(store, 300_000, linked=False)
+        agree(store, "closed by the balance")
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        agree(store, "reopened")
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        reject_b()
+        self._pay_a(store, 200_000, linked=False)
+        agree(store, "newest shrunk")
+        self._pay_a(store, 100_000, "p3", action=_ACTION_B)
+        agree(store, "newest paid")
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        self._pay_a(store, 100_000)
+        reject_b()
+        agree(store, "older holds its unpaid part")
+        self.assertEqual({cents for _, cents in seen} >= {0, 100_000, 200_000, 300_000}, True, seen)
+
     def test_a_request_the_balance_no_longer_needs_is_not_waiting_on_delivery(self) -> None:
         # Stale corrections: one READY 300,000 request, never acknowledged. 300,000 arrives unlinked, so it asks for
         # nothing and delivery is not required; a reversal makes it ask again. Paid again and reported, the closed
