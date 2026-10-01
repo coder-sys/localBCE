@@ -1251,16 +1251,48 @@ private def Sh (n : Nat) (tw : Nat → Fin q) (f : Fq) : Fq := fun i =>
   if i < 256 then (if i % n = 0 then tw (i / n) * f (i + n - 1) else f (i - 1)) else 0
 private def ShL (ℓ : Nat) : Fq → Fq := Sh (256 >>> ℓ) (Tw ℓ)
 
--- table facts
+-- table facts: zetas[m] = 1753^(bitrev8 m) mod q; the bit-reversal identities are small kernel checks
+private theorem pw_fold (n : Nat) : (List.range n).foldl (fun a _ => a * 1753 % q) 1 = 1753 ^ n % q := by
+  induction n with
+  | zero => decide
+  | succ n ih =>
+    rw [List.range_succ, List.foldl_append, ih, List.foldl_cons, List.foldl_nil, Nat.pow_succ,
+      Nat.mul_mod (1753 ^ n) 1753 q, show 1753 % q = 1753 by decide]
+private theorem zetas_pow (m : Nat) (hm : m < 256) : zetas[m]! = 1753 ^ bitrev8 m % q := by
+  unfold zetas
+  rw [getElem!_pos _ m (by simp; omega), Array.getElem_map, Array.getElem_range, pw_fold]
+private theorem pmul (a b : Nat) : 1753 ^ a % q * (1753 ^ b % q) % q = 1753 ^ (a + b) % q := by
+  rw [← Nat.mul_mod, ← Nat.pow_add]
+private theorem bd : ∀ l, l < 8 → ∀ p, p < 1 <<< l →
+    2 * (1 <<< l) - (p + 1) < 256 ∧ (1 <<< l) + p < 256 ∧ (1 <<< l) / 2 + p / 2 < 256 := by decide +kernel
+private theorem brA : ∀ l, l < 8 → ∀ b, b < 1 <<< l →
+    bitrev8 (2 * (1 <<< l) - (b + 1)) + bitrev8 ((1 <<< l) + b) = 256 := by decide +kernel
+private theorem brB1 : ∀ l, l < 8 → ∀ p, p < 1 <<< l → 1 ≤ l → p % 2 = 0 →
+    bitrev8 ((1 <<< l) / 2 + p / 2) = 2 * bitrev8 ((1 <<< l) + p) := by decide +kernel
+private theorem brB2 : ∀ l, l < 8 → ∀ p, p < 1 <<< l → 1 ≤ l → p % 2 = 1 →
+    bitrev8 ((1 <<< l) / 2 + p / 2) + 256 = 2 * bitrev8 ((1 <<< l) + p) := by decide +kernel
+
 private theorem tabA : ∀ l, l < 8 → ∀ b, b < 1 <<< l →
-    (zetas[2 * (1 <<< l) - (b + 1)]! * zetas[(1 <<< l) + b]! + 1) % q = 0 := by decide +kernel
-private theorem tabB0 : (1 + zetas[1]! * zetas[1]!) % q = 0 := by decide +kernel
+    (zetas[2 * (1 <<< l) - (b + 1)]! * zetas[(1 <<< l) + b]! + 1) % q = 0 := fun l hl b hb => by
+  obtain ⟨h1, h2, _⟩ := bd l hl b hb
+  rw [zetas_pow _ h1, zetas_pow _ h2, Nat.add_mod, pmul, brA l hl b hb]; decide
+private theorem tabB0 : (1 + zetas[1]! * zetas[1]!) % q = 0 := by
+  rw [zetas_pow 1 (by decide), show bitrev8 1 = 128 by decide, Nat.add_mod, pmul]; decide
 private theorem tabB1 : ∀ l, l < 8 → ∀ p, p < 1 <<< l → 1 ≤ l → p % 2 = 0 →
-    zetas[(1 <<< l) / 2 + p / 2]! % q = zetas[(1 <<< l) + p]! * zetas[(1 <<< l) + p]! % q := by decide +kernel
+    zetas[(1 <<< l) / 2 + p / 2]! % q = zetas[(1 <<< l) + p]! * zetas[(1 <<< l) + p]! % q := fun l hl p hp h1 h2 => by
+  obtain ⟨_, h3, h4⟩ := bd l hl p hp
+  rw [zetas_pow _ h4, zetas_pow _ h3, Nat.mod_mod, pmul, brB1 l hl p hp h1 h2, Nat.two_mul]
 private theorem tabB2 : ∀ l, l < 8 → ∀ p, p < 1 <<< l → 1 ≤ l → p % 2 = 1 →
-    (zetas[(1 <<< l) / 2 + p / 2]! + zetas[(1 <<< l) + p]! * zetas[(1 <<< l) + p]!) % q = 0 := by decide +kernel
+    (zetas[(1 <<< l) / 2 + p / 2]! + zetas[(1 <<< l) + p]! * zetas[(1 <<< l) + p]!) % q = 0 := fun l hl p hp h1 h2 => by
+  obtain ⟨_, h3, h4⟩ := bd l hl p hp
+  have e := brB2 l hl p hp h1 h2
+  rw [zetas_pow _ h4, zetas_pow _ h3, Nat.add_mod, Nat.mod_mod, pmul,
+    show bitrev8 ((1 <<< l) + p) + bitrev8 ((1 <<< l) + p) = bitrev8 ((1 <<< l) / 2 + p / 2) + 256 by omega,
+    Nat.pow_add, Nat.mul_mod, show 1753 ^ 256 % q = 8380416 by decide +kernel]
+  generalize 1753 ^ bitrev8 ((1 <<< l) / 2 + p / 2) % q = t
+  unfold q; omega
 private theorem tabC : 256 * 8347681 % q = 1 := by decide
-private theorem tabD : ∀ m, m < 256 → zetas[m]! < q := by decide +kernel
+private theorem tabD : ∀ m, m < 256 → zetas[m]! < q := fun m hm => by rw [zetas_pow m hm]; exact mod_lt' _
 
 private theorem zetas_le (m : Nat) : zetas[m]! ≤ q := by
   by_cases h : m < 256
