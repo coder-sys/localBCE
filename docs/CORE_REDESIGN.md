@@ -832,5 +832,5 @@ trust. It now derives the paid list from payment rows. Design and builder handof
   - A fork swap goes through SQLite's backup.
   - Exports of deliberately tampered stores build the package directly, because R1a refuses them (M5).
   - The staff "lock right after a commit" is simulated, since the open writer keeps any exclusive-locking-mode holder out.
-- **Evidence.** Targeted `r1a2-t4` (359/362, quarter-end timing and the import case then fixed) and `r1a2-t5` (161/162, 1 skipped); full suite `r1a2-full1`.
+- **Evidence.** Targeted `r1a2-t4` (359/362, quarter-end timing and the import case then fixed) and `r1a2-t5` (161/162, 1 skipped); full suite `r1a2-full1` 628/644, 14 skipped; its failures: the known quarter-end timing (lock 7.02 s) and `gate_rules` built before trunk 08184c8's Lean (no Lean change here).
 - **Scope, trust, kill.** Trusts SQLite's `data_version` (it moves on every other connection's commit) and a stable file index. A raw page edit that moves neither stays unseen until the next open or audit. The main file lags its `-wal` while the owner is open, so a copy must use the backup API or follow `close()`. One owner per process is assumed (H2: a second costs a full verify per alternation). Kill on a write that commits after a foreign change without a full verification.
