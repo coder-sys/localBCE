@@ -1,6 +1,7 @@
 import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.Codec
 import BlindLedger.Financial.Theorems.Vectors
+import BlindLedger.Financial.CodecLaws.Records
 
 /-! Design rev 1.2 (rrb/designs/lean-live-m3-v1.md section 16), type-checked with `sorry` proofs.
     Scratch only (branch m3-rev12): the builder ports each definition in place at M3 step 2.
@@ -1838,8 +1839,65 @@ theorem commitView_fits {v s k w k' w' s' r} (h : commitView v s k w = .mutated 
       show s2.anchorBytes + _ ≤ _
       omega
 
+private def Fits (o : StepOutcome) : Prop :=
+  ∀ k w s r, o = .mutated k w s r → s.anchorBytes + maxCallTailBytes ≤ maxTotalEncodedBytes
+
+private theorem fits_commit {v s k w} : Fits (commitView v s k w) :=
+  fun _ _ _ _ h => commitView_fits h
+private theorem fits_refused {x} : Fits (.refused x) := fun _ _ _ _ h => by cases h
+private theorem fits_dup {x} : Fits (.duplicate x) := fun _ _ _ _ h => by cases h
+private theorem fits_cu {x} : Fits (.conflictUnchanged x) := fun _ _ _ _ h => by cases h
+private theorem fits_alias {x y} : Fits (.alias x y) := fun _ _ _ _ h => by cases h
+
+private theorem fits_ite {c : Prop} [Decidable c] {a b : StepOutcome} (ha : Fits a) (hb : Fits b) :
+    Fits (if c then a else b) := by
+  by_cases h : c
+  · rw [if_pos h]; exact ha
+  · rw [if_neg h]; exact hb
+
+private theorem fits_aliasView {v s p e} : Fits (aliasView v s p e) := by
+  unfold aliasView
+  refine fits_ite fits_refused (fits_ite fits_refused (fits_ite fits_alias fits_refused))
+
+set_option maxHeartbeats 1000000 in
+private theorem fits_reverse {v s c} : Fits (viewReverse v s c) := by
+  unfold viewReverse; dsimp only; repeat' split
+  all_goals first | exact fits_refused | exact fits_dup | exact fits_commit | skip
+
+set_option maxHeartbeats 1000000 in
+private theorem fits_retry {v c p k} : Fits (viewRecordRetry v c p k) := by
+  unfold viewRecordRetry; dsimp only; repeat' split
+  all_goals first | exact fits_refused | exact fits_dup | skip
+
+set_option maxHeartbeats 1000000 in
+private theorem fits_new {v s c} : Fits (viewRecordNew v s c) := by
+  unfold viewRecordNew
+  dsimp only
+  refine fits_ite fits_refused (fits_ite fits_cu (fits_ite fits_refused (fits_ite fits_refused ?_)))
+  split
+  · exact fits_refused
+  · refine fits_ite fits_refused ?_
+    split
+    · exact fits_refused
+    · split
+      · exact fits_ite (fits_ite fits_refused (fits_ite fits_aliasView fits_dup))
+          (fits_ite fits_cu (fits_ite fits_refused fits_commit))
+      · split
+        · exact fits_refused
+        · exact fits_commit
+
+private theorem fits_step {v} : Fits (stepView v) := by
+  unfold stepView
+  dsimp only
+  split
+  · refine fits_ite fits_refused (fits_ite fits_refused ?_)
+    split
+    · exact fits_retry
+    · exact fits_new
+  · exact fits_reverse
+
 theorem anchorItem_fits {v : PaymentView} {k w s r} (h : stepView v = .mutated k w s r) :
-    s.anchorBytes + maxCallTailBytes ≤ maxTotalEncodedBytes := sorry
+    s.anchorBytes + maxCallTailBytes ≤ maxTotalEncodedBytes := fits_step k w s r h
 
 theorem idWellFormed_len {s : String} (h : idWellFormed s = true) : s.toUTF8.toList.length ≤ 128 := by
   simp only [idWellFormed, Bool.and_eq_true, decide_eq_true_eq] at h
@@ -2037,8 +2095,358 @@ theorem decodeStepOutcome_encode {o : StepOutcome} {b : Bytes} (h : encodeStepOu
 theorem decodePaymentItem_coherent {w : Bytes} {v : PaymentView} (h : decodePaymentItem w = some v) :
     coherent v = true := sorry
 
+section FormBRoundTrip
+
+private theorem bind_step {α β : Type} {x : Option α} {a : α} {f : α → Option β} {y : Option β}
+    (hx : x = some a) (hf : f a = y) : (x >>= f) = y := by
+  subst hx; exact hf
+
+local macro "step " h:term : tactic => `(tactic| (refine bind_step $h ?_; try dsimp only))
+
+private theorem lenWire {v : String} (h : v.toUTF8.toList.length ≤ 512) : stringWireAdmissible v :=
+  stringWireAdmissible_of_length v (Nat.lt_of_le_of_lt h (by decide))
+
+private theorem idWire {v : String} (h : idWellFormed v = true) : stringWireAdmissible v := by
+  unfold idWellFormed maxIdBytes at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  exact lenWire (Nat.le_trans h.1.2 (by decide))
+
+private theorem textWire {v : String} (h : textWellFormed v = true) : stringWireAdmissible v := by
+  unfold textWellFormed maxTextBytes at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  exact lenWire h.1.2
+
+private theorem tokenWire {v : String} (h : tokenWellFormed v = true) : stringWireAdmissible v := by
+  unfold tokenWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  exact lenWire (Nat.le_trans h.1.2 (by decide))
+
+private theorem usdWire : stringWireAdmissible "USD" := by
+  apply stringWireAdmissible_of_length
+  have hBytes := string_utf8_length_le "USD"
+  have hChars : "USD".toList.length = 3 := by decide
+  omega
+
+private theorem nat8Wire {v b : Nat} (h : v ≤ b) (hb : b < 256 ^ 8) : nat8WireAdmissible v :=
+  Nat.lt_of_le_of_lt h hb
+
+private theorem cents8 {v : Nat} (h : v ≤ maxCents) : nat8WireAdmissible v := nat8Wire h maxCents_fits_u64
+private theorem time8 {v : Nat} (h : v ≤ maxTime) : nat8WireAdmissible v := nat8Wire h maxTime_fits_u64
+private theorem rev8 {v : Nat} (h : v ≤ maxRevision) : nat8WireAdmissible v :=
+  nat8Wire h maxRevision_fits_u64
+
+private theorem listWire {α : Type} {vs : List α} {P : α → Prop} (h : vs.length ≤ maxRows)
+    (hP : ∀ x ∈ vs, P x) : wireListAdmissible vs P :=
+  ⟨⟨h, Nat.lt_of_le_of_lt h (by decide)⟩, hP⟩
+
+private theorem optIdWire {o : Option String} (h : optionalIdWellFormed o = true) :
+    optionStringWireAdmissible o := by
+  cases o with
+  | none => trivial
+  | some v => exact idWire h
+
+private theorem digestWire {d : Bytes} (h : digestWellFormed d = true) : digestWireAdmissible d := by
+  simpa [digestWellFormed, digestWireAdmissible] using h
+
+private theorem contextWire {c : FinancialContext} (h : contextWellFormed c = true) :
+    contextWireAdmissible c := by
+  unfold contextWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+  obtain ⟨hI, hCur, _⟩ := h
+  exact ⟨idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    idWire (hI _ (by simp)), idWire (hI _ (by simp)), hCur ▸ usdWire⟩
+
+private theorem authorityWire {a : TrustedAuthority} (h : authorityWellFormed a = true) :
+    authorityWireAdmissible a := by
+  unfold authorityWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+  obtain ⟨hId, -, hEpoch, hDig, -, -, hLen, -, hActors⟩ := h
+  refine ⟨idWire hId, nat8Wire hEpoch maxCents_fits_u64, digestWire hDig,
+    listWire hLen fun actor ha => ?_⟩
+  have hA := hActors actor ha
+  unfold authorityActorWellFormed at hA
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at hA
+  obtain ⟨hAId, -, hRLen, hRoles, -⟩ := hA
+  exact ⟨idWire hAId, listWire hRLen fun r hr => tokenWire (hRoles r hr)⟩
+
+private theorem packWire {p : ControlPack} (h : controlPackWellFormed p = true) :
+    controlPackWireAdmissible p := by
+  unfold controlPackWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+  obtain ⟨hI, hCur, -, hV, hSrc, hS, hE, hR, hA, -, -, hRoles, hTLen, hTests, hDig, -⟩ := h
+  unfold sourceRefsWellFormed boundedTextList at hSrc
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hSrc
+  unfold authorizedRolesWellFormed at hRoles
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at hRoles
+  unfold timeWellFormed at hS hE hR hA
+  simp only [decide_eq_true_eq] at hS hE hR hA
+  exact ⟨idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    idWire (hI _ (by simp)), idWire (hI _ (by simp)), hCur ▸ usdWire, rev8 hV,
+    listWire hSrc.2.1 fun s hs => textWire (hSrc.2.2 s hs), time8 hS, time8 hE, time8 hR, time8 hA,
+    idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    listWire hRoles.1 fun s hs => tokenWire (hRoles.2.1 s hs),
+    listWire hTLen fun s hs => textWire (hTests s hs), digestWire hDig⟩
+
+private theorem obligationWire {o : Obligation} (h : obligationWellFormed o = true) :
+    obligationWireAdmissible o := by
+  unfold obligationWellFormed positiveAmountWellFormed amountWellFormed timeWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+  obtain ⟨hI, -, hOwed, hDue, -, hRule⟩ := h
+  exact ⟨idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    cents8 hOwed, time8 hDue, rev8 hRule⟩
+
+private theorem paymentWire {c : FinancialContext} {p : Payment}
+    (h : paymentWellFormed c p = true) : paymentWireAdmissible p := by
+  unfold paymentWellFormed positiveAmountWellFormed amountWellFormed timeWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+  obtain ⟨hI, -, -, -, hAmt, hTime, hRev⟩ := h
+  exact ⟨idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    idWire (hI _ (by simp)), idWire (hI _ (by simp)), cents8 hAmt, time8 hTime, optIdWire hRev⟩
+
+private theorem evidenceWire {c : FinancialContext} {e : EvidenceRecord}
+    (h : evidenceWellFormed c e = true) : evidenceWireAdmissible e := by
+  unfold evidenceWellFormed timeWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+  obtain ⟨hI, hKind, -, -, hA, hE, hR, -, hM, hRev, hSup⟩ := h
+  refine ⟨idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    tokenWire hKind, idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
+    idWire (hI _ (by simp)), time8 hA, time8 hE, time8 hR, ?_, optIdWire hRev, optIdWire hSup⟩
+  cases hAm : e.amountCents with
+  | none => trivial
+  | some a => rw [hAm] at hM; exact cents8 (by simpa [amountWellFormed] using hM)
+
+private theorem optAllWire {o : Option String} (h : o.all idWellFormed = true) :
+    optionStringWireAdmissible o := by
+  cases o with
+  | none => trivial
+  | some v => exact idWire h
+
+private theorem optNonEmptyWire {o : Option String} (h : (nonEmpty o).all idWellFormed = true) :
+    optionStringWireAdmissible o := by
+  cases o with
+  | none => trivial
+  | some v =>
+    by_cases hv : v = ""
+    · subst hv
+      apply stringWireAdmissible_of_length
+      have := string_utf8_length_le ""
+      have h0 : "".toList.length = 0 := rfl
+      omega
+    · exact idWire (by simpa [nonEmpty, hv] using h)
+
+private theorem opt63Wire {o : Option Nat} (h : o.all (· < 2 ^ 63) = true) :
+    optionNatWireAdmissible o := by
+  cases o with
+  | none => trivial
+  | some v => exact Nat.lt_of_lt_of_le (of_decide_eq_true h) (by decide)
+
+private theorem readReceipt_append (k : Receipt) (rest : Bytes)
+    (h1 : stringWireAdmissible k.paymentId) (h2 : nat8WireAdmissible k.recordedRevision)
+    (h3 : optionStringWireAdmissible k.paysActionId) :
+    readReceipt (encodeReceipt k ++ rest) = some (k, rest) := by
+  unfold readReceipt encodeReceipt
+  simp only [List.append_assoc]
+  step (readString_encodeString_append _ _ h1)
+  step (readNat8_natBE_append _ _ h2)
+  step (readOptionString_encodeOptionString_append _ _ h3)
+  rfl
+
+private theorem readForeign_append (f : Foreign) (rest : Bytes) :
+    readForeign (encodeForeign f ++ rest) = some (f, rest) := by
+  cases f with | mk a b => cases a <;> cases b <;> rfl
+
+private theorem readCommand_append (c : Command) (rest : Bytes) (h : commandWellFormed c = true) :
+    readCommand (encodeCommand c ++ rest) = some (c, rest) := by
+  unfold commandWellFormed at h
+  cases c with
+  | record c =>
+    simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
+    obtain ⟨hI, hL, hP, hAmt, hTime⟩ := h
+    unfold encodeCommand readCommand
+    simp only [List.cons_append, List.append_assoc]
+    step rfl
+    rw [if_pos (by decide)]
+    step (readString_encodeString_append _ _ (idWire (hI _ (by simp))))
+    step (readString_encodeString_append _ _ (idWire (hI _ (by simp))))
+    step (readString_encodeString_append _ _ (idWire (hI _ (by simp))))
+    step (readString_encodeString_append _ _ (idWire (hI _ (by simp))))
+    step (readString_encodeString_append _ _ (idWire (hI _ (by simp))))
+    step (readOptionString_encodeOptionString_append _ _ (optNonEmptyWire hL))
+    step (readNat8_natBE_append _ _ (cents8 hAmt))
+    step (readNat8_natBE_append _ _ (Nat.lt_of_lt_of_le hTime (by decide)))
+    step (readOptionString_encodeOptionString_append _ _ (optAllWire hP))
+    rfl
+  | reverse c =>
+    simp only [Bool.and_eq_true, and_assoc] at h
+    obtain ⟨hP, hE, hO, hT⟩ := h
+    unfold encodeCommand readCommand
+    simp only [List.cons_append, List.append_assoc]
+    step rfl
+    rw [if_neg (by decide), if_pos (by decide)]
+    step (readString_encodeString_append _ _ (idWire hP))
+    step (readString_encodeString_append _ _ (idWire hE))
+    step (readOptionString_encodeOptionString_append _ _ (optNonEmptyWire hO))
+    step (readOptionNat_encodeOptionNat_append _ _ (opt63Wire hT))
+    rfl
+
+
+private theorem drop_hdr {α : Type} (l : List α) (a : α) (b : List α) :
+    (l ++ a :: b).drop (l.length + 1) = b := by
+  have h := List.drop_left (l₁ := l ++ [a]) (l₂ := b)
+  simpa [List.length_append] using h
+
+private theorem readOpt_append {α : Type} {f : Bytes → Option (α × Bytes)} {g : α → Bytes}
+    {o : Option α} (rest : Bytes) (h : ∀ a, o = some a → ∀ t, f (g a ++ t) = some (a, t)) :
+    readOpt f (encodeOpt g o ++ rest) = some (o, rest) := by
+  cases o with
+  | none => simp [encodeOpt, readOpt, readByte]
+  | some a => simp [encodeOpt, readOpt, readByte, h a rfl rest]
+
+private theorem all_some {α : Type} {o : Option α} {p : α → Bool} (h : o.all p = true) {a : α}
+    (ha : o = some a) : p a = true := by
+  subst ha; exact h
+
+private theorem encodeList_def {α : Type} (enc : α → Bytes) (vs : List α) :
+    encodeList enc vs = natBE 2 vs.length ++ vs.flatMap enc := rfl
+
+private theorem readContribution_append (x : EvalContribution) (t : Bytes)
+    (h1 : nat8WireAdmissible x.time) (h2 : stringWireAdmissible x.identity)
+    (h3 : nat8WireAdmissible x.amountCents) :
+    readContribution (encodeContribution x ++ t) = some (x, t) := by
+  unfold readContribution encodeContribution
+  simp only [List.append_assoc]
+  step (readNat8_natBE_append _ _ h1)
+  step (readString_encodeString_append _ _ h2)
+  step (readNat8_natBE_append _ _ h3)
+  rfl
+
+private theorem readRequestPaid_append (x : RequestPaid) (t : Bytes)
+    (h1 : stringWireAdmissible x.actionId) (h2 : nat8WireAdmissible x.amountCents)
+    (h3 : nat8WireAdmissible x.paidCents) :
+    readRequestPaid (encodeRequestPaid x ++ t) = some (x, t) := by
+  unfold readRequestPaid encodeRequestPaid
+  simp only [List.append_assoc]
+  step (readString_encodeString_append _ _ h1)
+  step (readNat8_natBE_append _ _ h2)
+  step (readNat8_natBE_append _ _ h3)
+  rfl
+
+private theorem readEnv_append (e : Env) (rest : Bytes) (h : envWellFormed e = true) :
+    readEnv (encodeEnv e ++ rest) = some (e, rest) := by
+  simp only [envWellFormed, Bool.and_eq_true, decide_eq_true_eq, and_assoc] at h
+  obtain ⟨hC, hA, hP, hO, hB, -, hT, -⟩ := h
+  unfold readEnv encodeEnv
+  simp only [List.append_assoc]
+  step (decodeContext_encodeContext_append _ _ (contextWire hC))
+  step (decodeAuthority_encodeAuthority_append _ _ (authorityWire hA))
+  step (decodeControlPack_encodeControlPack_append _ _ (packWire hP))
+  step (decodeObligation_encodeObligation_append _ _ (obligationWire hO))
+  step (readNat8_natBE_append _ _ (rev8 (Nat.le_of_lt hB)))
+  step (readNat8_natBE_append _ _ (time8 (by simpa [timeWellFormed] using hT)))
+  rfl
+
+private theorem env_before_lt {e : Env} (h : envWellFormed e = true) :
+    e.beforeRevision < maxRevision := by
+  simp only [envWellFormed, Bool.and_eq_true, decide_eq_true_eq, and_assoc] at h
+  obtain ⟨-, -, -, -, hB, -⟩ := h
+  exact hB
+
+private theorem readItemState_append (s : ItemState) (rest : Bytes) (h : stateWellFormed s = true) :
+    readItemState (encodeItemState s ++ rest) = some (s, rest) := by
+  simp only [stateWellFormed, Bool.and_eq_true, decide_eq_true_eq, and_assoc] at h
+  obtain ⟨hRev, hCash, hCl, hLaw, hCN, hCon, hCC, hEL, hEC, hRL, hReq, hAB⟩ := h
+  simp only [canonicalIdList, Bool.and_eq_true, decide_eq_true_eq] at hEC
+  unfold readItemState encodeItemState
+  rw [encodeList_def encodeContribution s.contributions]
+  simp only [List.append_assoc, List.cons_append]
+  step (readNat8_natBE_append _ _ (rev8 (Nat.le_of_lt hRev)))
+  step (readNat8_natBE_append _ _ (cents8 hCash))
+  step (readNat8_natBE_append _ _ (cents8 hCl))
+  step (readNat8_natBE_append _ _ (cents8 hLaw))
+  step (readNatBE_natBE_append 2 s.contributions.length _
+    (Nat.lt_of_le_of_lt hCN (by unfold maxRows; decide)))
+  rw [if_neg (by omega)]
+  step (readMany_flatMap_append_of_mem encodeContribution readContribution s.contributions _
+    (fun x hx t => by
+      have hx2 := List.all_eq_true.mp hCon x hx
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hx2
+      exact readContribution_append x t (time8 (by simpa [timeWellFormed] using hx2.1.1))
+        (idWire hx2.1.2) (cents8 hx2.2)))
+  step rfl
+  step (decodeCaseStatus_encodeCaseStatus _)
+  step rfl
+  step (decodeDeliveryStatus_encodeDeliveryStatus _)
+  step (readNatBE_natBE_append 2 s.conflictCount _ (Nat.lt_of_le_of_lt hCC maxRows_fits_u16))
+  step (readList_encodeString_append s.evidenceIds _ hEL
+    (fun v hv => idWire (List.all_eq_true.mp hEC.1.2 v hv)))
+  step (readList_encodeList_append_of_mem encodeRequestPaid readRequestPaid s.requests _ hRL
+    (Nat.lt_of_le_of_lt hRL maxRows_fits_u16)
+    (fun q hq t => by
+      have hq2 := List.all_eq_true.mp hReq q hq
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hq2
+      exact readRequestPaid_append q t (idWire hq2.1.1) (cents8 hq2.1.2) (cents8 hq2.2)))
+  step (readNatBE_natBE_append 4 s.anchorBytes _
+    (Nat.lt_of_le_of_lt hAB (by unfold maxTotalEncodedBytes; decide)))
+  rfl
+
+private theorem parseFormB_encode (v : PaymentView) (hw : viewWellFormed v = true) :
+    parseFormB (encodeFormB v) = some v := by
+  simp only [viewWellFormed, Bool.and_eq_true, decide_eq_true_eq, and_assoc] at hw
+  obtain ⟨hEnv, hSt, hPL, -, hPA, hId, hOr, hEv, hCmd, hEx⟩ := hw
+  have hB := env_before_lt hEnv
+  unfold parseFormB encodeFormB
+  simp only [List.append_assoc, List.cons_append, List.nil_append]
+  rw [drop_hdr]
+  step (readEnv_append _ _ hEnv)
+  step (readItemState_append _ _ hSt)
+  step (readList_encodeList_append_of_mem encodeEvidence decodeEvidence v.pending _ hPL
+    (Nat.lt_of_le_of_lt hPL maxRows_fits_u16)
+    (fun e he t => decodeEvidence_encodeEvidence_append e t
+      (evidenceWire (List.all_eq_true.mp hPA e he))))
+  step (readOpt_append _ (fun a ha t => by
+    have hr := all_some hId ha
+    simp only [Bool.and_eq_true, decide_eq_true_eq, and_assoc] at hr
+    obtain ⟨hp, hk, hlt, hpa⟩ := hr
+    simp only [List.append_assoc]
+    step (decodePayment_encodePayment_append _ _ (paymentWire hp))
+    step (readReceipt_append _ _ (by rw [hk]; exact (paymentWire hp).1) (rev8 (by omega))
+      (optAllWire hpa))
+    rfl))
+  step (readOpt_append _ (fun a ha t => by
+    have hr := all_some hOr ha
+    simp only [Bool.and_eq_true, decide_eq_true_eq, and_assoc] at hr
+    obtain ⟨hp, hk, hlt, hpa, hev⟩ := hr
+    simp only [List.append_assoc]
+    step (decodePayment_encodePayment_append _ _ (paymentWire hp))
+    step (readReceipt_append _ _ (by rw [hk]; exact (paymentWire hp).1) (rev8 (by omega))
+      (optAllWire hpa))
+    step (readOpt_append _ (fun e he t => decodeEvidence_encodeEvidence_append e t
+      (evidenceWire (all_some hev he))))
+    rfl))
+  step (readOpt_append _ (fun e he t => decodeEvidence_encodeEvidence_append e t
+    (evidenceWire (all_some hEv he))))
+  step (readBool_encodeBool_append _ _)
+  step (readForeign_append _ _)
+  step (readOptionNat_encodeOptionNat_append _ _ (opt63Wire hEx))
+  have hc := readCommand_append v.command [] hCmd
+  rw [List.append_nil] at hc
+  step hc
+  rfl
+
+end FormBRoundTrip
+
 theorem decodePaymentItem_encode (v : PaymentView) (hw : viewWellFormed v = true)
-    (hc : coherent v = true) : decodePaymentItem (encodeFormB v) = some v := sorry
+    (hc : coherent v = true) : decodePaymentItem (encodeFormB v) = some v := by
+  have hp := parseFormB_encode v hw
+  have h1 : (encodeFormB v).drop paymentMagic.length =
+      UInt8.ofNat 2 :: (encodeFormB v).drop (paymentMagic.length + 1) := by
+    unfold encodeFormB
+    simp only [List.append_assoc, List.cons_append, List.nil_append]
+    rw [List.drop_left, drop_hdr]
+  unfold decodePaymentItem
+  rw [h1]
+  simp [hp, hw, hc]
 
 -- 16.2 item 6 (5.3): placeholders removed, unused hypotheses dropped
 theorem run_record_retry_duplicate (L : Ledger) (hL : ledgerWellFormed L) (c : RecordCommand)
