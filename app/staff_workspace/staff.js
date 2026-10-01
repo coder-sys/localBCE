@@ -55,8 +55,6 @@
     "record-report": "/api/reporting/record",
     "restore-test": "/api/continuity/restore-test",
   };
-  const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const allows = (screen) => (model.role_screens[role] || []).includes(screen);
   const can = (name) => model.controls[name].roles.includes(role);
 
   function resolveRole() { // from the path, never a query string, so a disallowed control is absent from the DOM
@@ -113,7 +111,19 @@
   const asMoney = (cents) => (Number.isSafeInteger(cents) ? money.format(cents / 100) : "Unknown");
   const amt = (cents) => money.format(cents / 100).slice(1);
   const utc = (ms) => (Number.isSafeInteger(ms) ? new Date(ms).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC") : "Unknown");
-  const day = (ms) => (Number.isSafeInteger(ms) ? utc(ms).slice(0, 10) : "unknown");
+  // One time convention: the screen shows an instant in the program's zone with its label; the record keeps UTC.
+  // A record holds instants as at(ms) and each drawing writes them in its own convention; dates stay calendar dates.
+  let zoned = null;
+  const at = (ms) => ({ at: ms });
+  const fill = (parts, onScreen) => [].concat(parts).map((part) => {
+    if (part === null || typeof part !== "object") return part;
+    if (!Number.isSafeInteger(part.at)) return "Unknown";
+    if (!onScreen) return utc(part.at);
+    zoned = zoned || new Intl.DateTimeFormat("en-US", { timeZone: model.time.zone, year: "numeric", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    const when = (ms) => Object.fromEntries(zoned.formatToParts(ms).map(({ type, value }) => [type, value]));
+    const p = when(part.at); // the year shows only when the instant is from another year than the snapshot's own as-of time
+    return p.day + " " + p.month + (p.year === when(Date.parse(snapshot.read_at)).year ? "" : " " + p.year) + " " + p.hour + ":" + p.minute + " " + model.time.label;
+  }).join("");
   // Owner codes in plain words (CASE_OWNER -> case owner).
   const words = (code) => (code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " "));
   const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -169,7 +179,7 @@
     if (!view.det && view.claim && view.claim.status === "CLAIMED") {
       return {
         kind: "need",
-        state: role === "approver" ? "Needs your decision" : "Waiting for the finance approver's decision",
+        state: role === "approver" ? "Needs your decision" : "Waiting for the finance approver's decision", plain: "Waiting for the finance approver's decision",
         sub: "Offset claim " + usd(view.claim.amount_cents) + " · " + view.support,
       };
     }
@@ -215,12 +225,12 @@
     const short = item.shortfall_cents;
     const env = snapshot.read_envelope;
     const R = {
-      id: item.item_id, name, kind: st.kind, state: st.state, obligation: item.obligation_id,
+      id: item.item_id, name, kind: st.kind, state: st.state, plain: st.plain || st.state, obligation: item.obligation_id,
       ledger: [], checks: [], decision: null, steps: [], sources: [], activity: [], followup: [], facts: [],
     };
     const rule = isH ? hView().pkg.control_pack : null;
     R.facts.push(["Payee", name]);
-    R.facts.push(["Period", item.period_id], ["Due", day(item.due_at_ms)]);
+    R.facts.push(["Period", item.period_id], ["Due", at(item.due_at_ms)]);
     const source = snapshot.source_assessment;
     const sourceCheck = [false, "Source authenticity", "Not verified. " + sentence(words(source.status)) + ": " + source.reason];
     if (!isH) {
@@ -263,7 +273,7 @@
       if (v.det) {
         const evidence = (v.det.supporting_evidence || []).map((row) => (isRecord(row) ? row.evidence_id : row));
         R.decision = {
-          line: "Decided: offset " + (v.det.decision === REJECTED ? "rejected" : "accepted") + " by " + words(v.det.actor_role) + " · " + utc(v.det.decided_at_ms),
+          line: ["Decided: offset " + (v.det.decision === REJECTED ? "rejected" : "accepted") + " by " + words(v.det.actor_role) + " · ", at(v.det.decided_at_ms)],
           seal: "Determination " + v.det.decision + " · digest " + v.det.determination_digest.slice(0, 16) + "…",
           note: "Supporting evidence: " + (evidence.join(", ") || "none") + ". This demo does not store a reason.",
         };
@@ -276,30 +286,30 @@
       }
       const events = snapshot.h.timeline;
       for (const event of events.slice().reverse()) {
-        R.activity.push([utc(event.committed_at_ms), "Owner event " + event.event_sequence + ": " + words(event.kind)
+        R.activity.push([at(event.committed_at_ms), sentence(words(event.kind)), " · Owner event " + event.event_sequence
           + (event.after_revision === null || event.after_revision === undefined ? "" : ", revision " + event.before_revision + " → " + event.after_revision)]);
       }
-      if (snapshot.h.timeline_truncated) R.activity.push(["", "Showing " + events.length + " recent events of " + snapshot.h.timeline_total_count + "; older history is omitted."]);
+      if (snapshot.h.timeline_truncated) R.activity.push(["", "Showing " + events.length + " recent events of " + snapshot.h.timeline_total_count + "; older history is omitted.", ""]);
       R.followup = followupRows();
     }
     R.facts.push(["Obligation", item.obligation_id], ["Read", "sequence " + env.sequence + " · snapshot " + env.snapshot_id.slice(0, 16)]);
     if (isH) R.facts.push(["Continuity", snapshot.continuity ? snapshot.continuity.mode : "Unknown"]);
-    R.meta = [item.obligation_id, "Due " + day(item.due_at_ms), R.caseLine && "Case: " + R.caseLine];
+    R.meta = [item.obligation_id, ["Due ", at(item.due_at_ms)], R.caseLine && "Case: " + R.caseLine];
     return R;
   }
 
-  function textOf(R) {
+  function textOf(R, forThisRole) { // the downloaded record is the same bytes for every role; only the on-page plain-text view adds this role's own status wording and sections
     const row = (label, ...cells) => label.padEnd(12) + cells.filter(Boolean).join("  ");
-    const lines = [row("OBLIGATION", R.obligation), row("STATUS", R.state), row("SUMMARY", R.claim), row("", R.more), "", "AMOUNTS IN USD",
+    const lines = [row("OBLIGATION", R.obligation), row("STATUS", forThisRole ? R.state : R.plain), row("SUMMARY", R.claim), row("", R.more), "", "AMOUNTS IN USD",
       ...R.ledger.map((entry) => row(entry[0], entry[1], entry[2]))];
     lines.push("", "WHAT WAS CHECKED", ...R.checks.map((entry) => row((entry[0] ? "ok" : "NOT OK") + " " + entry[1], entry[2])));
-    if (R.decision) lines.push("", "DECISION", row("", R.decision.line, R.decision.seal, R.decision.note));
-    if (R.decide) lines.push("", "YOUR DECISION", ...R.decide.options.map(([, key, title, detail]) => row(key, title, detail)), row("", R.decide.note));
-    if (R.steps.length) lines.push("", "NEXT STEPS", ...R.steps.map((step) => row(step.label, step.enabled ? step.note : step.off)));
+    if (R.decision) lines.push("", "DECISION", row("", fill(R.decision.line, false), R.decision.seal, R.decision.note));
+    if (forThisRole && R.decide) lines.push("", "YOUR DECISION", ...R.decide.options.map(([, key, title, detail]) => row(key, title, detail)), row("", R.decide.note));
+    if (forThisRole && R.steps.length) lines.push("", "NEXT STEPS", ...R.steps.map((step) => row(step.label, step.enabled ? step.note : step.off)));
     if (R.sources.length) lines.push("", "SOURCE RECORDS", ...R.sources.map((entry) => row(entry[0], entry[1], entry[2])));
-    if (R.activity.length) lines.push("", "ACTIVITY", ...R.activity.map((entry) => row(entry[0], entry[1])));
+    if (R.activity.length) lines.push("", "ACTIVITY", ...R.activity.map(([when, what, detail]) => row(fill(when, false), what + detail)));
     if (R.followup.length) lines.push("", "STATE REPORT", ...R.followup.map((entry) => row(entry[0], entry[1])));
-    return [...lines, "", "FACTS", ...R.facts.map((entry) => row(entry[0], entry[1]))].join("\n");
+    return [...lines, "", "FACTS", ...R.facts.map((entry) => row(entry[0], fill(entry[1], false)))].join("\n");
   }
 
   // ---- Screens ----
@@ -319,7 +329,6 @@
     const open = rows.filter(({ st }) => st.kind !== "ok").length;
     const count = rows.filter(({ st }) => st.kind === "need").length;
     byId("qcount").textContent = role === "approver" ? (count ? count + " for you" : "Nothing for you") : (open ? open + " open" : "None open");
-    const canOpen = allows("decision");
     byId("summary-link").setAttribute("aria-current", String(lastId === "summary"));
     const groups = [["need", "Needs a decision"], ["wait", "Waiting"], ["ok", "Settled"]].map(([kind, label]) => {
       const list = rows.filter(({ st }) => st.kind === kind);
@@ -327,9 +336,8 @@
       const sum = kind === "ok" ? 0 : list.reduce((total, { item }) => total + item.shortfall_cents, 0);
       return [el("div", { class: "group" }, el("span", { text: label }), el("span", { class: "num", text: String(list.length) }),
         sum ? el("span", { class: "sum num", text: amt(sum) }) : null),
-      el("ul", { class: "rows" }, list.map(({ item, st }) => el("li", {}, el(canOpen ? "a" : "div", {
-        class: "row", id: "row-" + item.item_id, "data-id": item.item_id, href: canOpen ? "#" + item.item_id : false,
-        "aria-current": canOpen ? String(item.item_id === lastId) : false,
+      el("ul", { class: "rows" }, list.map(({ item, st }) => el("li", {}, el("a", {
+        class: "row", id: "row-" + item.item_id, "data-id": item.item_id, href: "#" + item.item_id, "aria-current": String(item.item_id === lastId),
       }, dot(st.kind), el("span", { class: "name", text: item.label }), el("span", { class: "amt num", text: amt(item.owed_cents) }),
       el("span", { class: "sub", text: st.sub })))))];
     });
@@ -384,23 +392,24 @@
     // A read can remove the form or step a confirm belonged to (another actor decided, cash arrived); a command in flight settles it itself.
     if (!commandPending && ((confirming === "decision" && !R.decide) || (confirming === "record-cash" && !(cash && cash.enabled)))) confirming = null;
     const foot = el("div", { class: "foot" }, el("a", { id: "plain-text", href: "#" + R.id + (textMode ? "" : ".txt"), text: textMode ? "Back to the full view" : "View as plain text" }),
+      el("a", { id: "download-record", href: "data:text/plain;charset=utf-8," + encodeURIComponent(textOf(R)), download: "record-" + R.id + ".txt", text: "Download record" }),
       el("span", { text: "The same record an auditor or an agent reads." }));
-    const facts = el("dl", { class: "facts", "aria-label": "Facts" }, R.facts.map(([term, value]) => [el("dt", { text: term }), el("dd", { class: term === "Obligation" || term === "Read" ? "mono" : false, text: value })]));
+    const facts = el("dl", { class: "facts", "aria-label": "Facts" }, R.facts.map(([term, value]) => [el("dt", { text: term }), el("dd", { class: term === "Obligation" || term === "Read" ? "mono" : false, text: fill(value, true) })]));
     let main;
     if (textMode) {
-      main = [el("header", {}, backLink()), el("pre", { class: "textview", id: "text-view", text: textOf(R) })];
+      main = [el("header", {}, backLink()), el("pre", { class: "textview", id: "text-view", text: textOf(R, true) })];
     } else {
       main = [
-        el("header", {}, backLink(), el("div", { class: "meta mono" }, R.meta.filter(Boolean).map((text) => el("span", { text }))), stateLine(R.kind, R.state),
+        el("header", {}, backLink(), el("div", { class: "meta mono" }, R.meta.filter(Boolean).map((part) => el("span", { text: fill(part, true) }))), stateLine(R.kind, R.state),
           el("p", { class: "claim", text: R.claim }), R.more ? el("p", { class: "claim-more", text: R.more }) : null),
         section("Amounts in USD", table("ledger", R.ledger.map(([label, note, value, cls]) => [[[label], [note, "note"], [value, "num"]], cls]))),
         section("What was checked", table("checks", R.checks.map(([ok, what, result]) => [[[null, "mk"], [what, "what"], [result, "res2"]], ok ? "" : "bad"]))),
-        R.decision && R.decision.line ? el("section", { class: "signed", "aria-label": "Decision" }, el("h2", { text: "Decision" }), el("div", { class: "line", text: R.decision.line }),
+        R.decision && R.decision.line ? el("section", { class: "signed", "aria-label": "Decision" }, el("h2", { text: "Decision" }), el("div", { class: "line", text: fill(R.decision.line, true) }),
           el("div", { class: "seal mono", text: R.decision.seal }), el("p", { class: "hint", text: R.decision.note })) : null,
         R.decide ? decisionForm(R, v) : null,
         R.steps.length ? stepList(R) : null,
         R.sources.length ? section("Source records", table("src", R.sources.map((entry) => [[[entry[0]], [entry[1], "fp"], [entry[2], "fp mono"]]]))) : null,
-        R.activity.length ? section("Activity", el("ol", { class: "log" }, R.activity.map(([when, text]) => el("li", {}, el("time", { class: "mono", text: when }), el("div", { text }))))) : null,
+        R.activity.length ? section("Activity", el("ol", { class: "log" }, R.activity.map(([when, text]) => el("li", {}, el("time", { class: "mono", text: fill(when, true) }), el("div", { text }))))) : null,
         R.followup.length ? section("State report", table("src", R.followup.map(([label, value]) => [[[label], [value]]]))) : null,
         foot,
       ];
@@ -414,7 +423,6 @@
   function renderSummary() {
     const { summary, population, items } = snapshot;
     const open = items.filter((item) => statusOf(item).kind !== "ok");
-    const canOpen = allows("decision");
     const totals = [["Population", summary.obligation_count + " / " + population.expected_count + " obligations · roster " + words(population.completeness)],
       ["Total owed", usd(summary.owed_cents)], ["Cash recorded", usd(summary.received_cash_cents)], ["Program shortfall", usd(summary.shortfall_cents)],
       ["Open items", open.length + (open.length === 1 ? " obligation" : " obligations") + " not paid in full"]];
@@ -429,7 +437,7 @@
         [null, "d"], [statusOf(item).state, "next"], [amt(item.shortfall_cents), "num"]]]))) : null)));
     for (const [index, cell] of byId("page").querySelectorAll(".sumtab td.d").entries()) {
       const label = open[index].label;
-      cell.append(canOpen ? el("a", { href: "#" + open[index].item_id, text: label }) : label);
+      cell.append(el("a", { href: "#" + open[index].item_id, text: label }));
     }
   }
 
@@ -438,7 +446,7 @@
     if (!snapshot) return page.replaceChildren(el("p", { class: "empty", text: "No verified read yet." }));
     const hash = decodeURIComponent(location.hash.slice(1));
     const item = snapshot.items.find((row) => row.item_id === hash.replace(/\.txt$/, ""));
-    if (!allows("decision") || (lastId === "summary" && !item)) return renderSummary();
+    if (lastId === "summary" && !item) return renderSummary();
     return renderRecord(recordOf(snapshot.items.find((row) => row.item_id === lastId)), hash.endsWith(".txt") && Boolean(item));
   }
 
@@ -457,7 +465,7 @@
   }
 
   function defaultId() {
-    if (!allows("decision")) return "summary";
+    if (role === "director") return "summary"; // the director's answer is the program's totals
     const all = queueGroups();
     return all.length ? all[0].item.item_id : "summary";
   }
@@ -470,9 +478,9 @@
     const known = wanted === "summary" || Boolean(snapshot && snapshot.items.some((row) => row.item_id === wanted));
     let id = wanted;
     if (onList) id = lastId || defaultId();
-    else if (!known || !allows("decision")) {
+    else if (!known) {
       id = defaultId();
-      if (hash && allows("decision")) history.replaceState(null, "", "#" + id);
+      if (hash) history.replaceState(null, "", "#" + id);
     }
     const active = document.activeElement;
     const fromRow = Boolean(active && active.closest && active.closest("#qlist .row"));
@@ -483,7 +491,7 @@
       commandMessage("", "");
     }
     lastId = id;
-    byId("work").classList.toggle("open", !allows("decision") || (Boolean(hash) && !onList));
+    byId("work").classList.toggle("open", !onList && (Boolean(hash) || role === "director"));
     render();
     const current = byId("row-" + id);
     if (current && current.offsetParent) { // scrollIntoView would move the Tab starting point past the skip link
@@ -794,7 +802,7 @@
       }
       return;
     }
-    if (event.target.closest("input[type=search]") || event.metaKey || event.ctrlKey || event.altKey || !snapshot || !allows("decision")) return;
+    if (event.target.closest("input[type=search]") || event.metaKey || event.ctrlKey || event.altKey || !snapshot) return;
     if (event.key === "/") {
       event.preventDefault();
       byId("filter").focus();
@@ -833,8 +841,6 @@
     });
     byId("queue").hidden = false;
     byId("work").classList.add("has-queue");
-    byId("filter").hidden = byId("summary-link").hidden = !allows("decision");
-    byId("keys").hidden = !allows("decision");
     const decides = can("reject-offset"); // only the keys that do something for this role
     byId("keys").replaceChildren(...[[["j", "k"], "move"], ...(decides ? [[["1", "2"], "choose"], [["Ctrl", "Enter"], "record"]] : []), [["/"], "filter"]]
       .map(([caps, what]) => el("span", {}, caps.flatMap((cap) => [el("kbd", { text: cap }), " "]), what)));

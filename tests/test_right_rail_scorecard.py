@@ -59,6 +59,19 @@ class FeltValueScorecardTest(unittest.TestCase):
         self.assertEqual(worse, [], "felt-value regression (Art. XII)")
 
 
+class ChronologyFactTest(unittest.TestCase):
+    def test_the_chronology_fact_is_read_from_the_activity_list_alone(self):
+        """The Decision line ends with a time too: with the Activity list gone it must not satisfy the auditor's chronology fact."""
+        truth = {"workspace": {"read_at": "2026-04-02T00:00:00+00:00"}, "decision_package": {
+            "current_determination": {"decision": "OFFSET_REJECTED", "actor_role": "APPROVER", "decided_at_ms": 1775001600000, "supporting_evidence": []},
+            "control_pack": {"adjustment_rule_id": "rule"}, "obligation": {"received_cash_cents": 1, "shortfall_cents": 1}}}
+        chronology = next(fact for fact in scorecard._auditor_facts(truth) if fact.name == "chronology")
+        decision = ("H", "Decided: offset rejected by approver · 31 Mar 20:00 CT")
+        activity = ("H", "31 Mar 20:00 CT Offset rejected correction authorized")
+        self.assertTrue(chronology.visible([decision, activity]))
+        self.assertFalse(chronology.visible([decision]))
+        self.assertTrue(chronology.visible([("H", "31 Mar 2025 20:00 CT Offset rejected correction authorized")]))
+
 class OpenRowMeterTest(unittest.TestCase):
     def test_a_page_with_one_open_row_reads_one(self):
         """The meter once read 0 on a page with 1 open row because its pattern stopped matching."""

@@ -37,7 +37,7 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 [[lean_lib]]
 name = "blind_financial_axioms"
-roots = ["BlindLedger.Financial.AxiomCheck"]
+roots = ["BlindLedger.Financial.AxiomCheck", "BlindLedger.Financial.CoreTheoremsCheck"]
 
 # Payment gate formats (D1): `gate_vectors` checks tests/gate_vectors against
 # BlindLedger.Gate.Spec; `gate_axioms` (a library) builds the gate theorems and
