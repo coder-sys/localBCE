@@ -28,6 +28,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorError,
     MAX_PACKAGE_BYTES,
 )
+from app.right_rail_financial_custody import Custody
 from app.right_rail_financial_followthrough import MAX_RULES_BYTES, PACK_CONTRACT, build_followthrough_pack
 from app.right_rail_financial_line_pack import LINE_PACK_CONTRACT, MAX_LINE_MAP_BYTES, MAX_LINE_PACK_BYTES, build_line_pack
 from app.right_rail_financial_switch import (
@@ -78,6 +79,8 @@ def _parser() -> argparse.ArgumentParser:
         help="pinned correction Engine executable; without it correction commands fail closed",
     )
     parser.add_argument("--correction-transition-workspace", type=Path, help="empty Engine workspace directory")
+    parser.add_argument("--custody-dir", type=Path, help="H2 custody log directory, outside the store's; with --custody-key, Owner commands check and extend it and packs are signed")
+    parser.add_argument("--custody-key", help="ML-DSA-87 custody key file (a gate signer handle)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("summary")
@@ -197,6 +200,13 @@ def _parser() -> argparse.ArgumentParser:
     decision.add_argument("--suggestion", type=Path, help="canonical JSON of the suggestion this decision answers, if any")
     _add_actor_and_revision(decision)
 
+    resolve = subparsers.add_parser("custody-resolve", help="an operator's signed custody act: ADOPTED where the log is lost, REWIND_ACCEPTED for a restored store")
+    resolve.add_argument("--kind", choices=("ADOPTED", "REWIND_ACCEPTED"), required=True)
+    resolve.add_argument("--actor-id", required=True)
+    resolve.add_argument("--reason-ref", required=True)
+    resolve.add_argument("--expect-store-sequence", type=int, required=True, help="the store state the operator verified (verify-integrity)")
+    resolve.add_argument("--expect-store-head", required=True, help="that state's history head, hex")
+
     subparsers.add_parser("dispatch-outbox")
     return parser
 
@@ -306,9 +316,16 @@ def _owner(args: argparse.Namespace) -> FinancialOwner:
         config=config,
         trusted_authority=_trusted_authority(args),
         correction_transition_release=_correction_release(args),
+        custody=None if args.command == "custody-resolve" else _custody(args),  # an operator act opens unchecked, then resolves
         **({"mode": args.mode, "owner_id": args.owner_id, "existing_only": True}
            if args.command in ("receiver-cash-file", "export-history") else {}),
     )
+
+
+def _custody(args: argparse.Namespace) -> Custody | None:
+    if (args.custody_dir is None) != (args.custody_key is None):
+        raise FinancialMirrorError("custody_arguments")
+    return None if args.custody_dir is None else Custody(args.custody_dir, args.custody_key)
 
 
 def _read_package(path: Path, max_bytes: int = MAX_PACKAGE_BYTES, label: str = "continuity_package") -> bytes:
@@ -617,7 +634,7 @@ def _run(args: argparse.Namespace) -> Any:
             line=args.line,
             quarter=args.quarter,
             reported_line_cents=args.reported_line_cents,
-            generated_at_ms=args.generated_at_ms,
+            generated_at_ms=args.generated_at_ms, custody=_custody(args),
             prior_pack=None if args.prior_pack is None else _read_package(args.prior_pack, MAX_LINE_PACK_BYTES),
         )
         _write_new(args.output, pack)
@@ -625,10 +642,18 @@ def _run(args: argparse.Namespace) -> Any:
     if args.command == "followthrough-pack":
         pack = build_followthrough_pack(
             args.database, _read_package(args.package), trusted_authority=_trusted_authority(args), expected_scope=_scope(args),
-            rules_bytes=_read_package(args.rules, MAX_RULES_BYTES, "followthrough_rules"), generated_at_ms=args.generated_at_ms,
+            rules_bytes=_read_package(args.rules, MAX_RULES_BYTES, "followthrough_rules"), generated_at_ms=args.generated_at_ms, custody=_custody(args),
         )
         _write_new(args.output, pack)
         return {"contract": PACK_CONTRACT, "followthrough_pack_sha256": hashlib.sha256(pack).hexdigest().upper(), "followthrough_pack_path": str(args.output)}
+    if args.command == "custody-resolve":
+        custody = _custody(args)
+        if custody is None:
+            raise FinancialMirrorError("custody_arguments")
+        with _owner(args) as owner:
+            owner.resolve_custody(custody, args.kind, actor_id=args.actor_id, reason_ref=args.reason_ref,
+                                  expect_sequence=args.expect_store_sequence, expect_head=bytes.fromhex(args.expect_store_head))
+            return {"custody": args.kind, "sequence": args.expect_store_sequence}
     if args.command == "record-followthrough-decision":
         suggestion = None if args.suggestion is None else _decode_canonical_json(_read_package(args.suggestion, 4096, "followthrough_suggestion"), maximum=4096, label="followthrough_suggestion")
         with _owner(args) as owner:

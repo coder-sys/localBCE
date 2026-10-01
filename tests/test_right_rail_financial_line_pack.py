@@ -15,11 +15,14 @@ import sqlite3
 import tempfile
 import unittest
 
+from app import right_rail_gate_signer as signer
+from app.right_rail_financial_custody import verify_pack
 from app.right_rail_financial_line_pack import NOT_HELD, LinePackError, build_line_pack, quarter_window
 from app.right_rail_financial_owner import (
-    ControlPack, FinancialOwner, FinancialOwnerConfig, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
+    ControlPack, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
 )
 from app.right_rail_financial_owner_independent import continuity_package_digest
+from tests.test_right_rail_financial_custody import fixture_custody
 from tools import right_rail_financial_cli as financial_cli
 
 LINE_MAP = Path(__file__).resolve().parent / "fixtures" / "cms64_line_map_synthetic_v1.json"
@@ -32,6 +35,10 @@ V2_START, V3_START, V3_END = 4_000_000_000_000, 4_050_000_000_000, 4_102_444_800
 
 def _encode(value: object) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("ascii")
+
+
+def _unsigned(raw: bytes) -> dict:
+    return {key: value for key, value in json.loads(raw).items() if key != "signature"}
 
 
 def _ref(line_map: bytes) -> str:
@@ -109,6 +116,7 @@ class LinePackTests(unittest.TestCase):
         cls.authority = SyntheticTrustedAuthority()
         cls.line_map = LINE_MAP.read_bytes()
         cls.owner = _build(Path(cls.tmp.name), cls.authority, cls.line_map)
+        cls.custody = fixture_custody(cls.owner)
         cls.package = cls.owner.export_continuity()
         cls.trust = {"trusted_authority": cls.authority, "expected_scope": {**SCOPE, "currency": "USD"}}
 
@@ -118,11 +126,11 @@ class LinePackTests(unittest.TestCase):
         cls.tmp.cleanup()
 
     def _raw(self, line: str = "19A", reported: int = 32_345, at_ms: int = AT, **changes: object) -> bytes:
-        return build_line_pack(**{"database": self.db, "package_bytes": self.package, "line_map_bytes": self.line_map, "line": line, "quarter": "FFY2025Q4", "reported_line_cents": reported, "generated_at_ms": at_ms, **self.trust, **changes})
+        return build_line_pack(**{"database": self.db, "package_bytes": self.package, "line_map_bytes": self.line_map, "line": line, "quarter": "FFY2025Q4", "reported_line_cents": reported, "generated_at_ms": at_ms, **self.trust, "custody": self.custody, **changes})
 
     def _pack(self, *args: object, **changes: object) -> dict:
         raw = self._raw(*args, **changes)
-        self.assertEqual(self._raw(*args, **changes), raw)  # deterministic on every build
+        self.assertEqual(_unsigned(self._raw(*args, **changes)), _unsigned(raw))  # deterministic on every build but the hedged signature
         return json.loads(raw)
 
     def _sql(self, query: str, parameters: tuple = ()) -> list[tuple]:
@@ -214,7 +222,7 @@ class LinePackTests(unittest.TestCase):
         self.assertEqual((conflicted["row_count"], conflicted["coverage"]["status"]), (1, "PARTIAL"))
 
     def test_deterministic_same_store_same_bytes(self) -> None:
-        self.assertEqual(self._raw(package_bytes=self.owner.export_continuity()), self._raw())
+        self.assertEqual(_unsigned(self._raw(package_bytes=self.owner.export_continuity())), _unsigned(self._raw()))
 
     def test_chronology_strict_for_a_superseding_pack(self) -> None:
         prior = self._raw()
@@ -250,15 +258,21 @@ class LinePackTests(unittest.TestCase):
         pack = json.loads(raw)
         self.assertIs(pack["documentation_only"], True)
         self.assertEqual(pack["claims"], {"proofSuiteId": None, "production_usable": False, "activation": False})
-        self.assertIsNone(pack["signer"])
         for word in (b"approv", b"allowab", b"valid", b"necessary", b"eligible", b"covered"):
             self.assertNotIn(word, raw.lower())
         self.assertEqual(set(pack), {
             "contract", "documentation_only", "claims", "line", "quarter", "window_ms", "payment_date_basis", "total_cents",
             "row_count", "rows", "prior_quarter_adjustments", "service_period_split",
             "member_manifest_digest", "provenance_root", "unavailable", "coverage", "versions", "source", "generated_at_ms",
-            "supersedes", "signer",
+            "supersedes", "signer", "signature",
         })
+        public_key = signer.public_key(self.custody.key)  # H2: signed by the owner's custody key at the custody log's tail
+        self.assertEqual((pack["contract"], verify_pack(raw, public_key)), ("RR/LINE-PACK/CMS-64.9/v2", _unsigned(raw)))
+        tail = json.loads(self.custody.directory.joinpath(f"{pack['source']['owner_id']}.custody").read_bytes().splitlines()[-1])
+        self.assertEqual((pack["signer"]["custody_n"], pack["signer"]["custody_digest"], tail["sequence"]), (tail["n"], tail["digest"], pack["source"]["sequence"]))
+        for forged, key in ((raw.replace(b'"generated_at_ms":3000000000000', b'"generated_at_ms":3000000000001'), public_key), (raw, bytes(len(public_key)))):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^pack_signature$"):
+                verify_pack(forged, key)
         expected_root = hashlib.sha256(_encode({"contract": "RR/LINE-PACK/PROVENANCE/v1", "evidence_record_digests": [row["evidence_record_digest"] for row in pack["rows"]]})).hexdigest().upper()
         self.assertEqual(pack["provenance_root"], expected_root)
 
@@ -305,16 +319,20 @@ class LinePackTests(unittest.TestCase):
         (directory / "authority.json").write_bytes(json.dumps(financial_cli.authority_file_record(self.authority)).encode("ascii"))
         (directory / "package.bin").write_bytes(self.package)
         output = directory / "line-pack-19A.json"
-        args = ["--authority-file", str(directory / "authority.json"), *[f"--{key.replace('_', '-')}={value}" for key, value in SCOPE.items()],
-                "line-pack", "--package", str(directory / "package.bin"), "--line-map", str(LINE_MAP), "--line", "19A",
+        store = ["--authority-file", str(directory / "authority.json"), *[f"--{key.replace('_', '-')}={value}" for key, value in SCOPE.items()]]
+        custody = ["--custody-dir", str(self.custody.directory), "--custody-key", self.custody.key]
+        args = [*custody, *store, "line-pack", "--package", str(directory / "package.bin"), "--line-map", str(LINE_MAP), "--line", "19A",
                 "--quarter", "FFY2025Q4", "--reported-line-cents", "32345", "--generated-at-ms", str(AT), "--output", str(output)]
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
-            self.assertEqual(financial_cli.main(args), 2)  # no --database: refused, nothing written
-        self.assertIn("line-pack:database:path", errors.getvalue())
+        for refused, code in ((args, "line-pack:database:path"), (["--database", str(self.db), *args[2:]], "custody_arguments"),
+                              (["--database", str(self.db), *custody, *store, "custody-resolve", "--kind", "ADOPTED", "--actor-id", "operator:ana", "--reason-ref", "r",
+                                "--expect-store-sequence", str(self.owner._high[0]), "--expect-store-head", self.owner._high[1].hex()], "custody_present")):
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(financial_cli.main(refused), 2)  # no --database, a key without a log directory, a second adoption: refused
+            self.assertIn(code, errors.getvalue())
         self.assertFalse(output.exists())
         with redirect_stdout(io.StringIO()):
             self.assertEqual(financial_cli.main(["--database", str(self.db), *args]), 0)
-        self.assertEqual(output.read_bytes(), self._raw())
+        self.assertEqual(_unsigned(output.read_bytes()), _unsigned(self._raw()))
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(financial_cli.main(["--database", str(self.db), *args]), 2)  # the output file exists: never replaced
 
@@ -323,7 +341,7 @@ class LateRecordingTests(unittest.TestCase):
     def test_a_fact_recorded_after_quarter_end_changes_only_the_quarter_that_records_it(self) -> None:
         authority, line_map = SyntheticTrustedAuthority(), LINE_MAP.read_bytes()
         with tempfile.TemporaryDirectory(prefix="rr-line-pack-late-") as tmp, _build(Path(tmp), authority, line_map) as owner:
-            trust = {"trusted_authority": authority, "expected_scope": {**SCOPE, "currency": "USD"}}
+            trust = {"trusted_authority": authority, "expected_scope": {**SCOPE, "currency": "USD"}, "custody": fixture_custody(owner)}
 
             def pack(package: bytes, quarter: str, at_ms: int = AT, **changes: object) -> bytes:
                 return build_line_pack(database=Path(tmp) / "line-pack.sqlite3", package_bytes=package, line="19A",
@@ -339,7 +357,7 @@ class LateRecordingTests(unittest.TestCase):
             owner.publish_control_pack(_control_pack(4, V3_END, V3_END + DAY, _ref(late_map)))
             package = owner.export_continuity()
             rebuilt = pack(package, "FFY2025Q4", at_ms=AT + 1, prior_pack=closed)  # ancestry holds: the old head is in this history
-            content = lambda raw: {k: v for k, v in json.loads(raw).items() if k not in {"source", "generated_at_ms", "supersedes"}}
+            content = lambda raw: {k: v for k, v in json.loads(raw).items() if k not in {"source", "generated_at_ms", "supersedes", "signer", "signature"}}
             self.assertEqual(content(rebuilt), content(closed))
             self.assertEqual(json.loads(rebuilt)["supersedes"], hashlib.sha256(closed).hexdigest().upper())
             listed = {quarter: json.loads(pack(package, quarter)) for quarter in ("FFY2025Q3", "FFY2025Q4", "FFY2026Q1", "FFY2026Q2")}

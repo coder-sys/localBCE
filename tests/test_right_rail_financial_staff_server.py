@@ -362,7 +362,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         scope = {key: getattr(owner.config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
 
         def items(at_ms: int) -> dict[str, dict]:
-            pack = build_followthrough_pack(owner.path, owner.export_continuity(), trusted_authority=owner.trusted_authority, expected_scope=scope, rules_bytes=rules, generated_at_ms=at_ms)
+            with patch("app.right_rail_financial_followthrough.signed_pack", lambda record, *_: json.dumps(record).encode()):  # content only: signing is tested in test_right_rail_financial_custody, and the kit ships no signer
+                pack = build_followthrough_pack(owner.path, owner.export_continuity(), trusted_authority=owner.trusted_authority, expected_scope=scope, rules_bytes=rules, generated_at_ms=at_ms, custody=None)
             return {item["item_id"]: item for item in json.loads(pack)["items"]}
 
         def query(sql: str) -> tuple:

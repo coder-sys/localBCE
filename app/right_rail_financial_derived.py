@@ -9,9 +9,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from pathlib import Path
 import re
 
+from app.right_rail_financial_custody import Custody
 from app.right_rail_financial_owner_independent import MAX_CENTS, verify_continuity_package, verify_database
+from app.right_rail_financial_switch import _canonical_json
 
 
 NOT_HELD = (  # never in the Ledger; stated on every pack
@@ -36,6 +39,15 @@ def cents(value: object, label: str, *, minimum: int = 0) -> int:
 
 def hex_upper(value: bytes) -> str:
     return value.hex().upper()
+
+
+def signed_pack(record: dict, custody: object, database: object, maximum: int) -> bytes:
+    """The pack's canonical bytes, signed with the owner's custody key at the custody log's tail (H2): ``signer``
+    names the key and the custody record, ``signature`` covers every other byte (``custody.verify_pack``)."""
+    if type(custody) is not Custody:
+        raise DerivedError("custody-required")
+    record["signer"] = custody.pack_signer(record["source"], Path(database))
+    return _canonical_json({**record, "signature": custody.sign_pack(_canonical_json(record, maximum=maximum))}, maximum=maximum)
 
 
 def quarter_window(quarter: str) -> tuple[int, int]:

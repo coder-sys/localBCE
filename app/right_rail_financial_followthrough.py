@@ -15,13 +15,13 @@ import json
 import re
 
 from app.right_rail_financial_derived import (
-    NOT_HELD, DerivedError, bound_control_pack, hex_upper, quarter_of, quarter_window, verified_rows,
+    NOT_HELD, DerivedError, bound_control_pack, hex_upper, quarter_of, quarter_window, signed_pack, verified_rows,
 )
 from app.right_rail_financial_owner_independent import IndependentFinancialError, MAX_PACKAGE_BYTES
-from app.right_rail_financial_switch import FinancialSwitchError, _canonical_json, _decode_canonical_json, _id, _text
+from app.right_rail_financial_switch import FinancialSwitchError, _decode_canonical_json, _id, _text
 
 RULES_CONTRACT = "RR/FOLLOWTHROUGH/RULES/v1"
-PACK_CONTRACT = "RR/FOLLOWTHROUGH/PACK/v1"
+PACK_CONTRACT = "RR/FOLLOWTHROUGH/PACK/v2"  # v2 (H2): signed with the custody key; v1 had "signer": null
 RULES_SOURCE_REF = "followthrough-rules:sha256:"  # the approved Control Pack lists this ref plus the rules' SHA-256
 MAX_RULES_BYTES = 64 * 1024
 MAX_FOLLOWTHROUGH_PACK_BYTES = 2 * MAX_PACKAGE_BYTES
@@ -197,18 +197,18 @@ def _fact(source: str, at_ms: int, evidence: dict | None, **more: object) -> dic
             "evidence_record_digest": None if evidence is None else hex_upper(evidence["record_digest"]), **more}
 
 
-def build_followthrough_pack(database: object, package_bytes: bytes, *, trusted_authority: object, expected_scope: object, rules_bytes: bytes, generated_at_ms: int) -> bytes:
+def build_followthrough_pack(database: object, package_bytes: bytes, *, trusted_authority: object, expected_scope: object, rules_bytes: bytes, generated_at_ms: int, custody: object) -> bytes:
     """Canonical follow-through pack bytes for every obligation in the verified store.
 
-    The same inputs always give the same bytes (``generated_at_ms`` is an input, never read from a clock).
+    The same inputs always give the same bytes but the hedged ``signature`` (``generated_at_ms`` is an input, never read from a clock).
     """
     try:
-        return _build(database, package_bytes, trusted_authority=trusted_authority, expected_scope=expected_scope, rules_bytes=rules_bytes, generated_at_ms=generated_at_ms)
+        return _build(database, package_bytes, trusted_authority=trusted_authority, expected_scope=expected_scope, rules_bytes=rules_bytes, generated_at_ms=generated_at_ms, custody=custody)
     except (DerivedError, FinancialSwitchError, IndependentFinancialError) as error:
         raise DerivedError(f"followthrough:{error}") from None
 
 
-def _build(database: object, package_bytes: bytes, *, trusted_authority: object, expected_scope: object, rules_bytes: bytes, generated_at_ms: int) -> bytes:
+def _build(database: object, package_bytes: bytes, *, trusted_authority: object, expected_scope: object, rules_bytes: bytes, generated_at_ms: int, custody: object) -> bytes:
     store, rows, source = verified_rows(database, package_bytes, trusted_authority=trusted_authority, expected_scope=expected_scope, generated_at_ms=generated_at_ms)
     rules = _rules(rules_bytes, store["scope"]["state_id"])
     rules_sha256 = hashlib.sha256(rules_bytes).hexdigest().upper()
@@ -323,7 +323,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             "collected_share": collected_share,
             "decisions": decisions,
         })
-    return _canonical_json({
+    return signed_pack({
         "contract": PACK_CONTRACT,
         "documentation_only": True,
         "claims": {"proofSuiteId": None, "production_usable": False, "activation": False},
@@ -333,5 +333,4 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
         "unavailable": sorted({*NOT_HELD, *gaps}),
         "versions": {"rules_sha256": rules_sha256, "control_pack": {"pack_id": pack["pack_id"], "version": pack["version"], "digest": hex_upper(pack["pack_digest"])}},
         "source": source,
-        "signer": None,  # no post-quantum signing path exists yet; never RSA/ECDSA
-    }, maximum=MAX_FOLLOWTHROUGH_PACK_BYTES)
+    }, custody, database, MAX_FOLLOWTHROUGH_PACK_BYTES)

@@ -16,13 +16,13 @@ import json
 import re
 
 from app.right_rail_financial_derived import (  # NOT_HELD and quarter_window stay importable from here
-    NOT_HELD, DerivedError, bound_control_pack, cents as _cents, hex_upper as _hex, quarter_of as _quarter_of, quarter_window, verified_rows,
+    NOT_HELD, DerivedError, bound_control_pack, cents as _cents, hex_upper as _hex, quarter_of as _quarter_of, quarter_window, signed_pack, verified_rows,
 )
 from app.right_rail_financial_owner_independent import IndependentFinancialError, MAX_PACKAGE_BYTES
 from app.right_rail_financial_switch import FinancialSwitchError, _canonical_json, _decode_canonical_json, _id
 
 
-LINE_PACK_CONTRACT = "RR/LINE-PACK/CMS-64.9/v1"
+LINE_PACK_CONTRACT = "RR/LINE-PACK/CMS-64.9/v2"  # v2 (H2): signed with the custody key; v1 had "signer": null
 LINE_MAP_CONTRACT = "RR/LINE-PACK/LINE-MAP/v1"
 PROVENANCE_CONTRACT = "RR/LINE-PACK/PROVENANCE/v1"
 PAYMENT_DATE_BASIS = "PAYMENT_EVENT_AT"  # CMS-64 reports by payment date; the only basis the Ledger holds
@@ -105,7 +105,7 @@ def build_line_pack(database: object, package_bytes: bytes, **inputs: object) ->
 
     ``database`` is verified in full, read-only, against caller-supplied authority and scope, and
     ``package_bytes`` must be its current snapshot row for row; nothing else is trusted. The same
-    inputs always give the same bytes (``generated_at_ms`` is an input, never read from a clock).
+    inputs always give the same bytes but the hedged ``signature`` (``generated_at_ms`` is an input, never read from a clock).
     ``reported_line_cents`` is the state's reported line amount: the coverage denominator. Every field reads only what
     the owner clock recorded before quarter end; a payment, reversal or amount conflict recorded later is listed once,
     in the adjustments of the quarter that recorded it, so a closed quarter's pack never changes.
@@ -128,6 +128,7 @@ def _build(
     reported_line_cents: int,
     generated_at_ms: int,
     prior_pack: bytes | None = None,
+    custody: object,
 ) -> bytes:
     start_ms, end_ms = quarter_window(quarter)
     denominator = _cents(reported_line_cents, "reported-line-cents", minimum=1)
@@ -248,6 +249,5 @@ def _build(
         "source": source,
         "generated_at_ms": generated_at_ms,
         "supersedes": _prior(prior_pack, line, quarter, source, generated_at_ms, {e["event_sequence"]: _hex(e["head"]) for e in rows["financial_events"]}),
-        "signer": None,  # no post-quantum signing path exists yet; never RSA/ECDSA
     }
-    return _canonical_json(record, maximum=MAX_LINE_PACK_BYTES)
+    return signed_pack(record, custody, database, MAX_LINE_PACK_BYTES)
