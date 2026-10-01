@@ -844,30 +844,33 @@ trust. It now derives the paid list from payment rows. Design and builder handof
   - Known lows, not fixed: a use after `close()` silently re-opens; an owner dropped without `close()` holds the file until garbage collection; any refused input discards the writer, so the next write pays a full verify under the write lock (a cost lever, from decision 4); the owner's lock has no timeout.
   - Kill on a write that commits after a foreign change without a full verification, or after a rewind this owner has seen.
 
-## R1c: store-wide event lookups by kind (2026-10-01, XI.2 record, `core-r1c`; design `rrb/designs/state-resident-core-v1.md` R1, red team `rrb/reviews/core-r1-redteam.md`)
+## R1c: store-wide event lookups by kind (2026-10-01, XI.2 record, `core-r1c`; design `rrb/designs/state-resident-core-v1.md` R1)
 
-- **Felt effect.** The checker's store-wide event lookups (acknowledgments, correction decisions, reversals, visible conflicts, duplicate evidence) seek one kind instead of walking every obligation event. On the flat-history probe the acknowledgment, correction-decision and reversal scans grew +30 (x100 VM steps) each across the added history; now they grow 0, 0 and +4. Quarter-end lock (5 runs, guarded dev lane): 6.45 s median before (`r1c-before1`: 6.32-7.07), 5.90 s after (`r1c-after1`: 5.68-6.34). It is still over the 5 s bound. Append median: 14.87 ms before, 14.22 ms after.
+- **Felt effect.** The checker's store-wide event lookups (acknowledgments, correction decisions, reversals, visible conflicts, duplicate evidence) seek one kind instead of walking every obligation event.
+  - On the flat-history probe, three of those scans each grew +30 (x100 VM steps) with added history: acknowledgments, correction decisions and reversals. Now they grow 0, 0 and +4.
+  - Quarter-end lock, median of 5 runs: 6.45 s before (`r1c-before1`) and 5.90 s after (`r1c-after1`). It is still over the 5 s bound. Append median: 14.87 ms before, 14.22 ms after.
 - **Change (owner +3, checker +1).**
-  - **Index set v3.** Private index set v3 adds `rr_financial_v3_events_kind ON financial_events(kind,aggregate_type)`.
-  - **Scan order.** The acknowledgment, reversal and visible-conflict scans build maps and now read `ORDER BY event_sequence`, so the result never depends on the index the planner picks.
-  - **Refusal code.** An event row past the meta sequence, written outside the Owner, made the next append fail with a raw `UNIQUE` error. It now fails with `history_sequence`.
-- **Format.** The change is one additive index; no data changes.
-  - **Upgrade.** A writing open (LIVE/TEST) of a v1 or v2 store installs the index in the open's own transaction, as v1 to v2 did.
-  - **Opens that never write.** A SHADOW or CLI existing-only open of an older set is refused with `shadow_requires_migration` and writes nothing.
-  - **What the checker accepts.** It accepts exactly the v1, v2 and v3 sets. A store whose version claims an index it lacks is refused with `schema:private-indexes` by the checker and `schema_private_indexes` by the owner.
-  - **Without the index.** A store without the index verifies with the same result, only slower, because the lookups name no index.
-  - **Tampered index.** The full verify's `integrity_check` covers its entries. A copy with a hidden partial index is refused with `schema:index-integrity`, now tested for both the v2 and v3 indexes.
-- **Strength, per check (lead decision C).**
-  - Correction-decision engine order: still store-wide, same rows, same order. Exactly as strong.
-  - Acknowledgments and reversals: kept store-wide through the kind index, not scoped to the touched obligations. Nothing binds such an event's aggregate to the action or payment it names, so a scoped read would miss a mis-aggregated one. Exactly as strong.
-  - Evidence: unchanged, the per-obligation read stays `NOT INDEXED`. An index read cannot be made exactly as strong at flat cost. SQLite answers `COUNT(*) ... INDEXED BY` from the smallest index, not the named one (probe `r1c-count`), so a missing entry is invisible without a scan. The protected test `test_pre_commit_reads_do_not_trust_an_index_that_hides_forged_rows` refused the attempt (`r1c-t2`). The flat first-write test therefore stays skipped: it measures [48, 101] against a limit of 60, and the evidence scan accounts for +48 of the growth.
-- **Quarter-end (lead decision A), not changed.**
-  - **Batch frames (A1).** The pinned worker answers single BLFIN02 frames only, so batch frames need a worker rebuild and re-pin (artifacts). They would save at most the round trips: 0.084 ms each, 42 ms per file (`r1c-split3`). The worker's 1.19 s is evaluation compute.
-  - **Caching (A2).** Each payment's input reads its obligation after the previous payment's evaluation. Split of a 5.49 s wrapped lock: evaluations 3.22 s, made of Lean 1.19 s, input build 1.03 s (of which evidence 0.25, payments 0.20, encode 0.29, population and pack 0.11) and stored rows 0.62 s. The rest of the lock is mainly the cash-file checker's pre-commit verify of the 86 touched obligations (about 1.2 s; profile `r1c-prof4`), which reads each obligation's whole evaluation history. Caching every part that repeats per obligation would save about 0.5 s; the full suite's load has measured the lock at 6.97 s.
+  - Private index set v3 adds `rr_financial_v3_events_kind ON financial_events(kind,aggregate_type)`.
+  - The acknowledgment, reversal and conflict maps are read `ORDER BY event_sequence`, so no index choice changes them.
+  - An event past the meta sequence, written outside the Owner, is refused with `history_sequence` instead of a raw `UNIQUE` error.
+- **Format: one additive index, no data change.**
+  - A writing open of a v1 or v2 store installs the index in its own transaction.
+  - A SHADOW or CLI existing-only open of an older store is refused with `shadow_requires_migration` and writes nothing.
+  - The checker accepts exactly the v1, v2 and v3 sets. A version that claims an index it lacks is refused with `schema:private-indexes`.
+  - Without the index a store verifies the same, only slower.
+  - `integrity_check` covers the index entries. A hidden partial index is refused with `schema:index-integrity`; this is now tested for the v2 and v3 indexes.
+- **Strength, per check (decision C).**
+  - Correction-decision engine order: still store-wide, same rows and order. Exactly as strong.
+  - Acknowledgments and reversals: kept store-wide, through the kind index. Nothing binds such an event's aggregate to the action or payment it names, so a read scoped to the touched obligations would miss a mis-aggregated one. Exactly as strong.
+  - Evidence: unchanged, the pre-commit read stays `NOT INDEXED`. An index read cannot be checked complete at flat cost: SQLite answers `COUNT(*) ... INDEXED BY` from the smallest index (`r1c-count`). The protected hidden-index test refused the attempt (`r1c-t2`). The flat first-write test stays skipped: [48, 101] against 60, with +48 of the growth from this scan.
+- **Quarter-end (decision A), not changed.**
+  - Batch frames need a worker rebuild and re-pin. They save only the round trips: 0.084 ms each, 42 ms per file.
+  - Each payment's input reads the state left by the previous payment's evaluation.
+  - The wrapped 5.49 s lock (`r1c-split3`) splits into:
+    - Evaluations, 3.22 s: Lean 1.19 s, input 1.03 s (evidence 0.25, payments 0.20, encode 0.29), stored rows 0.62 s.
+    - The cash-file checker's pre-commit verify of 86 obligations, about 1.2 s (`r1c-prof4`). It reads each obligation's whole evaluation history.
+  - Caching every per-obligation repeat would save about 0.5 s. Under full-suite load the lock measured 6.47 s.
 - **Tests.**
-  - `tests/test_right_rail_financial_core_r1.py` gains `CoreR1cInputTests`, ported from `958947a`. The evaluations and control-pack tamper cases accept the Owner's earlier refusal by its code (`evaluation_result_digest`, `control_pack_digest`; lead decision E).
-  - The acceptance index tests cover v1 and v2 upgrades and the v3 set. The cash-file CLI refusal test covers an existing-only v2 store.
-  - Existing tests changed only where they name the current index set. The v1-to-v2 upgrade test became v1 and v2 to v3, and the shadow, CLI and partial-index tests now name v3. No refusal they expect changed.
-- **Scope, trust, kill.**
-  - Trusts SQLite's `integrity_check` for index contents, as v2 did.
-  - Kill on any checker result that differs between a store with the kind index and the same store without it.
+  - The R1c input test is ported from `958947a`. Its evaluations and control-pack cases accept the Owner's earlier refusal by code (decision E).
+  - Index tests name v3 and cover the v1 and v2 upgrades. No expected refusal changed.
+- **Kill.** Kill on any checker result that differs between a store with the kind index and the same store without it.
