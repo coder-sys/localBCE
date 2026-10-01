@@ -3,6 +3,7 @@ import BlindLedger.Financial.Payment.Ledger
 namespace BlindLedger.Financial.Payment
 
 open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
+open Base
 
 /-! The cross-module law (design 5.4): what correction reads as paid on request `a` is what the
     payment history recorded to `a`, less what it reversed from `a`.  Nothing calls this yet. -/

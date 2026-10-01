@@ -174,9 +174,6 @@ def oldPay (i : FinancialInput) (w : Writes) : Nat :=
 def addedBytes (i : FinancialInput) (w : Writes) : Nat :=
   evBytes w + (newPay w - oldPay i w) + cfBytes w
 
-def withinCapacity (r : PaymentRequest) (w : Writes) : Bool :=
-  r.inputBytes + addedBytes r.input w ≤ maxTotalEncodedBytes
-
 /-! ## Request well-formedness, which the decoder enforces (section 2.4) -/
 
 def commandWellFormed : Command → Bool

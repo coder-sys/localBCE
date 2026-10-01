@@ -1,4 +1,4 @@
-import BlindLedger.Financial.Payment.Transition
+import BlindLedger.Financial.Payment.Base
 import BlindLedger.Financial.CorrectionTransition.PaidSumTheorems
 import BlindLedger.Financial.CodecLaws.CorrectionRecords
 
@@ -59,6 +59,8 @@ theorem wf_setRevision {i : FinancialInput} {b : Nat} (h : financialInputWellFor
 
 /-! ## Shapes of a mutated outcome -/
 
+namespace Base
+
 theorem mutate_eq {r k w k' w' post res} (h : mutate r k w = .mutated k' w' post res) :
     k' = k ∧ w' = w ∧ post = applyWrites r.input w ∧ evaluate post = some res ∧
       withinCapacity r w = true := by
@@ -73,6 +75,8 @@ theorem mutate_eq {r k w k' w' post res} (h : mutate r k w = .mutated k' w' post
         exact ⟨rfl, rfl, rfl, he, hc⟩
   · simp [hc] at h
 
+end Base
+
 theorem slot_fresh {r e} (h : evidenceSlot r e = .fresh) :
     findEvidence r.input.evidence e.evidenceId = none ∧ r.foreign.evidenceId = false := by
   unfold evidenceSlot slotOf at h
@@ -82,6 +86,8 @@ theorem slot_fresh {r e} (h : evidenceSlot r e = .fresh) :
     cases hs : findEvidence r.input.evidence e.evidenceId with
     | none => exact ⟨rfl, by simpa using hf⟩
     | some s => simp only [hs] at h; split at h <;> simp at h
+
+namespace Base
 
 theorem decideReverse_mutated {r c k w post res}
     (h : decideReverse r c = .mutated k w post res) :
@@ -119,6 +125,8 @@ theorem decideReverse_mutated {r c k w post res}
                 simp only [hfe, Option.map_none, Option.getD_none] at h hform hchron
                 obtain ⟨rfl, rfl, -, -, -⟩ := mutate_eq h
                 exact ⟨p, _, rfl, rfl, hst, rfl, h, rfl, hfe, by simpa [reversalRecord] using hchron, hform⟩
+
+end Base
 
 theorem slot_cases {r e} (h : evidenceSlot r e ≠ .clash) :
     r.foreign.evidenceId = false ∧
@@ -162,6 +170,8 @@ theorem evidenceWrite_of_slot {r c slot}
   rcases hs with ⟨hs, hfe⟩ | ⟨s, hs, hfe, hle, heq⟩
   · rw [hs]; exact Or.inl ⟨rfl, hfe⟩
   · rw [hs]; exact Or.inr ⟨rfl, s, hfe, hle, heq⟩
+
+namespace Base
 
 theorem aliasOf_ne_mutated {r pid e k w post res} : aliasOf r pid e ≠ .mutated k w post res := by
   unfold aliasOf
@@ -274,6 +284,8 @@ theorem recordNew_mutated {r c k w post res} (h : recordNew r c = .mutated k w p
         exact ⟨h, hrev, by simpa [Slot.isFresh] using evidenceWrite_of_slot hform hchron' hslot hne,
           Or.inr ⟨rfl, p, List.mem_of_find?_eq_some hex, hp, hsame, rfl, rfl, rfl⟩⟩
 
+end Base
+
 /-- Outcomes that write nothing and return no post-state. -/
 def PaymentOutcome.Plain : PaymentOutcome → Prop
   | .duplicate _ | .conflictUnchanged _ | .refused _ => True
@@ -294,6 +306,8 @@ theorem recordRetry_plain (r c p) : (recordRetry r c p).Plain := by
       · cases hk : receiptOf r.receipts p.paymentId with
         | none => simp [hk, PaymentOutcome.Plain]
         | some k' => simp only [hk]; split <;> simp [PaymentOutcome.Plain]
+
+namespace Base
 
 theorem decideRecord_mutated {r c k w post res} (h : decideRecord r c = .mutated k w post res) :
     findPayment r.input.payments c.paymentId = none ∧ recordNew r c = .mutated k w post res := by
@@ -326,6 +340,8 @@ theorem mutate_of_transition {r k w post res} (h : paymentTransition r = .mutate
     exact hm
 
 /-! ## Growth of `applyWrites` under BLFIN02 -/
+
+end Base
 
 theorem length_encodeList {α} (enc : α → Bytes) (l : List α) :
     (encodeList enc l).length = 2 + (l.map fun x => (enc x).length).sum := by
@@ -451,6 +467,8 @@ theorem evaluate_facts {i res} (h : evaluate i = some res) :
             subst h
             exact ⟨hw, rfl, rfl, ((evalPaymentSum_active _ _ hc).1).symm⟩
   · simp at h
+
+namespace Base
 
 theorem paymentTransition_mutated_post {r : PaymentRequest} {k w post result}
     (h : paymentTransition r = .mutated k w post result) :
@@ -614,6 +632,8 @@ theorem record_link_within_request {r c w post result a}
   · obtain ⟨-, -, hk, -⟩ := decideReverse_mutated hd
     cases hk
 
+end Base
+
 theorem findPayment_id : ∀ (l : List Payment) (id : String) (p : Payment),
     findPayment l id = some p → p.paymentId = id
   | [], _, _, h => by simp [findPayment] at h
@@ -638,6 +658,8 @@ theorem reversedCents_eq : ∀ l : List Payment,
       have := reversedCents_eq xs
       unfold reversedCents at this ⊢
       by_cases h : x.status = .REVERSED <;> simp [List.filter_cons, h, this]
+
+namespace Base
 
 theorem reverse_exact {r c w post result}
     (hc : r.command = .reverse c) (h : paymentTransition r = .mutated .REVERSED w post result) :
@@ -706,5 +728,7 @@ theorem mutated_shape {r k w post res} (h : paymentTransition r = .mutated k w p
     · exact Or.inr (Or.inl ⟨hk, c, hc, hwp, hwr, hew⟩)
   · obtain ⟨p, e, hk, hp, hst, hw, -, he, hfe, hle, hform⟩ := decideReverse_mutated hd
     exact Or.inr (Or.inr ⟨hk, c, p, e, hc, hp, hst, hw, he, hfe, hle, hform⟩)
+
+end Base
 
 end BlindLedger.Financial.Payment

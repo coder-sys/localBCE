@@ -3,6 +3,7 @@ import BlindLedger.Financial.Payment.Laws
 namespace BlindLedger.Financial.Payment
 
 open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
+open Base
 
 /-! Command sequences (design 5.3).  The single-obligation model: `step` is exactly what the
     adapter commits, re-read by the next snapshot (carry premise A1).  Nothing calls this yet. -/
