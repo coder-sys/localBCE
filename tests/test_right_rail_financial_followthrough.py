@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 from app import right_rail_financial_owner as owner_module
 from app import right_rail_financial_owner_independent as independent
+from app import right_rail_gate_signer as signer
+from app.right_rail_financial_custody import verify_pack
 from app.right_rail_financial_derived import NOT_HELD, DerivedError
 from app.right_rail_financial_followthrough import MAX_RULES_BYTES, _add, _cms64_due, build_followthrough_pack
 from app.right_rail_financial_owner import (
@@ -25,7 +27,8 @@ from app.right_rail_financial_owner import (
     FinancialOwnerConfig, FinancialRevisionError, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
 )
 from tests import test_right_rail_financial_acceptance as acceptance
-from tests.test_right_rail_financial_line_pack import _Clock
+from tests.test_right_rail_financial_custody import fixture_custody
+from tests.test_right_rail_financial_line_pack import _Clock, _unsigned
 from tools import right_rail_financial_cli as financial_cli
 
 RULES = (Path(__file__).resolve().parent / "fixtures" / "followthrough_rules_recovery_v1.json").read_bytes()
@@ -86,6 +89,7 @@ def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str
     owner.record_payment_evidence(item_id="item-r1", payment_id="payment:r1", common_origin_id="origin:r1", amount_cents=1_000_000, evidence_id="evidence:payment:r1", event_at_ms=paid[0], source_id="state-collections")
     if credit is not None:
         _support(owner, "r1", "evidence:credit:r1", "state-cms64", credit, credit, local_ref="cms64:FFY2027Q2:64.9C1:9C")
+    fixture_custody(owner)
     return owner
 
 
@@ -108,7 +112,7 @@ class FollowthroughTests(unittest.TestCase):
         cls.tmp.cleanup()
 
     def _raw(self, at_ms: int = GENERATED, **changes: object) -> bytes:
-        return build_followthrough_pack(**{"database": self.db, "package_bytes": self.package, "rules_bytes": RULES, "generated_at_ms": at_ms, **self.trust, **changes})
+        return build_followthrough_pack(**{"database": self.db, "package_bytes": self.package, "rules_bytes": RULES, "generated_at_ms": at_ms, **self.trust, "custody": self.owner._custody, **changes})
 
     def _items(self, *args: object, **changes: object) -> dict[str, dict]:
         return {item["item_id"]: item for item in json.loads(self._raw(*args, **changes))["items"]}
@@ -168,7 +172,7 @@ class FollowthroughTests(unittest.TestCase):
     def test_anchor_is_the_earliest_listed_fact_and_backdating_is_visible(self) -> None:
         with tempfile.TemporaryDirectory(prefix="rr-followthrough-ack-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
             _support(owner, "r2", "evidence:ack:r2", "state-mailroom", 1_808_611_200_000, 1_799_539_200_000)  # recorded 2027-04-25, dated 2027-01-10
-            raw = build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust)
+            raw = build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust, custody=owner._custody)
         federal, recovery = next(item["clocks"] for item in json.loads(raw)["items"] if item["item_id"] == "item-r2")
         self.assertEqual({key: federal["anchor"][key] for key in ("source", "at_ms", "recorded_at_ms", "evidence_id")}, {"source": "EVIDENCE:PROVIDER_ACKNOWLEDGMENT", "at_ms": 1_799_539_200_000, "recorded_at_ms": 1_808_611_200_000, "evidence_id": "evidence:ack:r2"})
         self.assertEqual((federal["ends_ms"], federal["report"]["quarter"], federal["report"]["form"], federal["due_ms"]), (1_831_075_200_000, "FFY2028Q2", "64.9O", FEDERAL_DUE))
@@ -184,7 +188,7 @@ class FollowthroughTests(unittest.TestCase):
                 with self.subTest(name), _build_r_store(Path(tmp) / name, rules, extra_refs=extra) as owner:
                     package = owner.export_continuity()
                     with self.assertRaises(DerivedError) as caught:
-                        build_followthrough_pack(owner.path, package, rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust)
+                        build_followthrough_pack(owner.path, package, rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust, custody=owner._custody)
                     self.assertEqual(str(caught.exception), f"followthrough:followthrough-rules-{code}")
                     self.assertEqual(owner.export_continuity(), package)  # history unchanged
         for name, rules in (("one byte in a citation", RULES.replace(b"discovery;", b"Discovery;", 1)), ("pack_version 2", _mutated(lambda value: value.update(pack_version=2)))):
@@ -220,7 +224,7 @@ class FollowthroughTests(unittest.TestCase):
     def test_fmap_period_missing_is_a_declared_gap(self) -> None:
         rules = _mutated(lambda value: value.update(fmap_basis_points=[{"basis_points": 5000, "period_id": "period:ffy2027q3"}]))
         with tempfile.TemporaryDirectory(prefix="rr-followthrough-fmap-") as tmp, _build_r_store(Path(tmp), rules) as owner:
-            pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust))
+            pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust, custody=owner._custody))
         self.assertEqual([item["federal_share"] for item in pack["items"]], [None] * 3)
         self.assertIn("gap:fmap-period-missing:period:ffy2027q2", pack["unavailable"])
 
@@ -246,7 +250,7 @@ class FollowthroughTests(unittest.TestCase):
             ("collected on time, recorded late", (DAY_MS(2027, 3, 10), DAY_MS(2027, 3, 20)), CREDIT_R1, GENERATED, ("FFY2027Q2", "64.9C1", COLLECTED_DUE, "MET"), (DAY_MS(2027, 3, 10), "MET")),
         ):
             with self.subTest(name), tempfile.TemporaryDirectory(prefix="rr-followthrough-lag-") as tmp, _build_r_store(Path(tmp), RULES, paid=paid, credit=credit) as owner:
-                item = next(i for i in json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=generated, **self.trust))["items"] if i["item_id"] == "item-r1")
+                item = next(i for i in json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=generated, **self.trust, custody=owner._custody))["items"] if i["item_id"] == "item-r1")
                 credit_clock, action_clock = item["clocks"]
                 self.assertEqual((credit_clock["report"]["quarter"], credit_clock["report"]["form"], credit_clock["due_ms"], credit_clock["status"]), federal)
                 self.assertEqual((action_clock["satisfied"]["at_ms"], action_clock["status"]), action)
@@ -254,7 +258,7 @@ class FollowthroughTests(unittest.TestCase):
     def test_finder_not_typed_is_a_declared_gap(self) -> None:
         rules = _mutated(lambda value: value.update(parties=[party for party in value["parties"] if party["party_id"] != "rac-contractor-1"]))
         with tempfile.TemporaryDirectory(prefix="rr-followthrough-finder-") as tmp, _build_r_store(Path(tmp), rules) as owner:
-            pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust))
+            pack = json.loads(build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=rules, generated_at_ms=GENERATED, **self.trust, custody=owner._custody))
         self.assertEqual({(item["found"]["party"], item["found"]["kind"]) for item in pack["items"]}, {(None, None)})
         self.assertIn("gap:finder-not-typed:rac-contractor-1", pack["unavailable"])
 
@@ -265,20 +269,21 @@ class FollowthroughTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="rr-followthrough-far-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
             _support(owner, "r3", "evidence:notice:r3", "state-demand-letters", DAY_MS(9999, 12, 1), DAY_MS(9999, 12, 1))
             with self.assertRaisesRegex(DerivedError, "^followthrough:clock-date-range$"):
-                build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=DAY_MS(9999, 12, 1), **self.trust)
+                build_followthrough_pack(owner.path, owner.export_continuity(), rules_bytes=RULES, generated_at_ms=DAY_MS(9999, 12, 1), **self.trust, custody=owner._custody)
 
     def test_pack_is_deterministic_and_documentation_only(self) -> None:
         raw = self._raw()
-        self.assertEqual(self._raw(), raw)
+        self.assertEqual(_unsigned(self._raw()), _unsigned(raw))  # the signature is hedged
         pack = json.loads(raw)
-        self.assertEqual((pack["contract"], pack["documentation_only"], pack["claims"], pack["signer"], pack["comparison"]), ("RR/FOLLOWTHROUGH/PACK/v1", True, {"proofSuiteId": None, "production_usable": False, "activation": False}, None, None))
+        self.assertEqual((pack["contract"], pack["documentation_only"], pack["claims"], pack["comparison"]), ("RR/FOLLOWTHROUGH/PACK/v2", True, {"proofSuiteId": None, "production_usable": False, "activation": False}, None))
+        self.assertEqual(verify_pack(raw, signer.public_key(self.owner._custody.key)), _unsigned(raw))  # H2: signed at the custody log's tail
         self.assertEqual(pack["unavailable"], sorted(NOT_HELD))
         self._refused("followthrough:generated-before-package", at_ms=CREDIT_R1 - 1)
         with tempfile.TemporaryDirectory(prefix="rr-followthrough-stale-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
             early = owner.export_continuity()
             _support(owner, "r2", "evidence:ack:r2", "state-mailroom", 1_808_611_200_000, 1_799_539_200_000)
             with self.assertRaisesRegex(DerivedError, "^followthrough:"):  # a package older than the database is the checker's refusal
-                build_followthrough_pack(owner.path, early, rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust)
+                build_followthrough_pack(owner.path, early, rules_bytes=RULES, generated_at_ms=GENERATED, **self.trust, custody=owner._custody)
 
     def test_cli_writes_followthrough_pack_and_never_replaces(self) -> None:
         directory = Path(self.tmp.name)
@@ -286,14 +291,15 @@ class FollowthroughTests(unittest.TestCase):
         (directory / "package.bin").write_bytes(self.package)
         (directory / "rules.json").write_bytes(RULES)
         output = directory / "followthrough.json"
-        args = ["--database", str(self.db), "--authority-file", str(directory / "authority.json"), *[f"--{key.replace('_', '-')}={value}" for key, value in SCOPE.items()],
+        args = ["--database", str(self.db), "--custody-dir", str(self.owner._custody.directory), "--custody-key", self.owner._custody.key, "--authority-file", str(directory / "authority.json"), *[f"--{key.replace('_', '-')}={value}" for key, value in SCOPE.items()],
                 "followthrough-pack", "--package", str(directory / "package.bin"), "--rules", str(directory / "rules.json"), "--generated-at-ms", str(GENERATED), "--output", str(output)]
         with redirect_stdout(io.StringIO()):
             self.assertEqual(financial_cli.main(args), 0)
-        self.assertEqual(output.read_bytes(), self._raw())
+        written = output.read_bytes()
+        self.assertEqual(_unsigned(written), _unsigned(self._raw()))
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(financial_cli.main(args), 2)  # the output file exists: never replaced
-        self.assertEqual(output.read_bytes(), self._raw())
+        self.assertEqual(output.read_bytes(), written)
         for name, contents, code in (("absent.json", None, "followthrough_rules_missing"), ("big.json", b"x" * (MAX_RULES_BYTES + 1), "followthrough_rules_size")):
             if contents is not None:
                 (directory / name).write_bytes(contents)
@@ -310,7 +316,7 @@ CLOSE = "decision:r2:close"
 OFFICIAL = {"actor_id": "synthetic-official", "actor_role": "CASE_OWNER"}
 SUGGESTION = {"source_id": "triage-model-1", "source_ref": "triage:r2:1", "source_sha256": hashlib.sha256(b"synthetic triage note r2").hexdigest().upper(),
               "suggested_at_ms": SUGGESTED_AT, "act": "CLOSE", "reason_code": "UNCOLLECTIBLE_OTHER", "owner_id": None}
-TRUST = lambda store: {"trusted_authority": store.trusted_authority, "expected_scope": {**SCOPE, "currency": "USD"}}
+TRUST = lambda store: {"trusted_authority": store.trusted_authority, "expected_scope": {**SCOPE, "currency": "USD"}, "custody": store._custody}
 
 
 def _legal(store: FinancialOwner, *tags: str, at_ms: int = EVIDENCE_AT) -> None:

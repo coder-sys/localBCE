@@ -1,4 +1,5 @@
-"""The one ML-DSA-87 signer for the gate: ``RR/GATE/CHECKPOINT/v1`` headers and ``KEY-CERT/v1`` bodies.
+"""The one ML-DSA-87 signer: the gate's ``RR/GATE/CHECKPOINT/v1`` headers and ``KEY-CERT/v1`` bodies, and the
+financial owner's custody records and packs (``app/right_rail_financial_custody.py``), each under its own key.
 
 ML-DSA-87 (FIPS 204 algorithm) from a non-validated AWS-LC build (aws-lc-rs),
 built from ``rust/gate_mldsa87``.  A key is a *handle*, today a key-file path;
@@ -98,6 +99,14 @@ def public_key(handle: str) -> bytes:
 
 def sign(handle: str, message: bytes) -> bytes:
     return _run(BINARY, PIN, ("sign", handle), message, ML_DSA_87_SIGNATURE)
+
+
+def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    """Pure ML-DSA-87 verification with the empty context that ``sign`` uses. FIPS 204 Algorithm 3 is
+    ``Verify_internal(pk, 0x00 || 0x00 || message, sig)``, which the pinned worker's ``kat-verify`` mode runs."""
+    if len(public_key) != ML_DSA_87_PUBLIC_KEY or len(signature) != ML_DSA_87_SIGNATURE:
+        return False
+    return _run(BINARY, PIN, ("kat-verify",), public_key + signature + b"\x00\x00" + message, 1) == b"\x01"
 
 
 def checked(handle: str, root_pk: bytes, key_cert: bytes) -> CheckedSigner:

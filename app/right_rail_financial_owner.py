@@ -1980,7 +1980,9 @@ class FinancialOwner:
         owner_id: str = "financial-owner-v1",
         correction_transition_release: object | None = None,
         existing_only: bool = False,
+        custody: Any = None,
     ) -> None:
+        created = isinstance(path, Path) and not path.exists()
         self._initialize(
             path=path,
             config=config,
@@ -1993,6 +1995,13 @@ class FinancialOwner:
             existing_only=existing_only,
         )
         self._verify_open_identity(verify_history=True)
+        if custody is not None:  # H2: the custody log outside the store (app/right_rail_financial_custody.py), before any write
+            try:
+                custody.open(self.owner_id, path, self._high, self._head_at, created=created)
+            except BaseException:
+                self._discard_writer()
+                raise
+        self._custody = custody
 
     def _verify_history_in_transaction(self, connection: sqlite3.Connection) -> None:
         """Replay the stored history against its projections before any use (Art. III.5).
@@ -2085,6 +2094,7 @@ class FinancialOwner:
         self._refusal: FinancialError | None = None  # a failed re-verification, raised once the command's own checks pass
         self._high: tuple[object, ...] | None = None  # (sequence, head) last verified or committed; kept for the object's life
         self._packs: dict[tuple[object, ...], tuple[ControlPack, str, str]] = {}  # the pack, its digest check and its policy are pure functions of the exact row
+        self._custody: Any = None  # H2: set once the open's custody check passes
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
@@ -2251,6 +2261,26 @@ class FinancialOwner:
         if self._rewound(history):
             _fail(FinancialIntegrityError, "store_replaced")
         self._mark, self._writer, self._row_cache, self._high = mark, connection, (history, _count_rows(connection)), history[2:]
+
+    def _head_at(self, sequence: int) -> bytes | None:
+        """The store's history head at ``sequence`` (0: its genesis), for the custody check."""
+        with self._read_snapshot() as connection:
+            row = connection.execute("SELECT head FROM financial_events WHERE event_sequence=?1 UNION ALL SELECT genesis_head FROM financial_identity WHERE ?1=0", (sequence,)).fetchone()
+        return None if row is None else bytes(row[0])
+
+    def resolve_custody(self, custody: Any, kind: str, *, actor_id: str, reason_ref: str, expect_sequence: int, expect_head: bytes) -> None:
+        """An operator's custody act on this owner, opened without custody so its open verified the store in full:
+        ``ADOPTED`` restarts a lost log, ``REWIND_ACCEPTED`` accepts a restored store. The operator states the
+        restored (sequence, head); the signed record names them, the reason and the tail it lowers from. Never automatic."""
+        _id(actor_id, "actor_id")
+        _id(reason_ref, "reason_ref")
+        with self._lock:
+            if self._custody is not None or kind not in ("ADOPTED", "REWIND_ACCEPTED"):
+                _fail(FinancialInputError, "custody_resolution")
+            if self._high != (expect_sequence, expect_head):
+                _fail(FinancialIntegrityError, "custody_expectation")
+            custody.resolve(self.owner_id, kind, self.path, self._high, self._head_at, actor_id=actor_id, reason_ref=reason_ref)
+            self._custody = custody
 
     def _rewound(self, history: tuple[object, ...]) -> bool:
         """A lower sequence than this owner last verified or committed, or that sequence with another head (III.6)."""
@@ -2502,6 +2532,8 @@ class FinancialOwner:
             outer_now, self._batch.now = getattr(self._batch, "now", None), -1  # this command's clock is unread (_now)
             if collect := began and gc.isenabled(): gc.disable()  # a write makes millions of short-lived objects; the cycle collector's passes over the live rows cost ~10% of a full file's lock
             try:
+                if began and self._custody is not None:
+                    self._custody.settle(self.owner_id)  # an owed custody MARK lands first, or nothing more is written
                 connection = self._begin("BEGIN IMMEDIATE") if began else batch
                 if began:
                     self._verify_funding_projection(connection)
@@ -2528,6 +2560,8 @@ class FinancialOwner:
                     connection.execute("DELETE FROM temp.rr_row_inserts")  # the next write counts its own
                     connection.execute("COMMIT")
                     self._row_cache, self._high = after, after[0][2:]
+                    if self._custody is not None:
+                        self._custody.mark(self.owner_id, self._high)  # only after COMMIT, so custody never names an uncommitted head
             except BaseException as error:
                 if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full
                     self._discard_writer()
@@ -7342,6 +7376,8 @@ class FinancialOwner:
     def close(self) -> None:
         with self._lock:
             self._discard_writer()
+            if self._custody is not None:
+                self._custody.close(self.owner_id, self._high)  # a signed ANCHOR at the last verified or committed state
 
     def __enter__(self) -> "FinancialOwner":
         return self
