@@ -20,8 +20,9 @@ production_usable=false, activation=false.
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -148,6 +149,10 @@ async function handle(m) {
     if (browser) await browser.close();
     browser = null;
     return { closed: true };
+  }
+  if (m.op === "download") {  // a link found by role and name, clicked; the file the browser saved
+    const [file] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: m.name, exact: true }).click()]);
+    return { filename: file.suggestedFilename(), data: require("fs").readFileSync(await file.path()).toString("base64") };
   }
   if (m.op === "role") {  // a control found by its ARIA role and accessible name, or by a CSS selector
     const control = m.selector ? page.locator(m.selector) : page.getByRole(m.role, { name: m.name ?? undefined, exact: true });
@@ -285,6 +290,10 @@ class _Browser:
     def role(self, role: str | None, name: str | None = None, act: str = "find", text: str | None = None, selector: str | None = None) -> dict[str, Any]:
         """One control by ARIA role and accessible name, or by CSS selector: act is find, click, check or fill."""
         return self.call({"op": "role", "role": role, "name": name, "act": act, "text": text, "selector": selector})
+    def download(self, name: str) -> tuple[str, bytes]:
+        """Click the link with this accessible name; return the saved file's name and bytes."""
+        reply = self.call({"op": "download", "name": name})
+        return reply["filename"], base64.b64decode(reply["data"])
     def key(self, key: str) -> None:
         self.call({"op": "key", "key": key})
     def tick(self) -> None:
@@ -339,6 +348,13 @@ def _words(code: str) -> str:
 def _utc(ms: int, fmt: str = "%Y-%m-%d") -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime(fmt)
 
+def _program_time(ms: int) -> str:
+    """An instant as the screen writes it: program zone and label. A fixed UTC-5 holds only in 2026 US daylight time, so any other instant fails by name."""
+    if not 1772956800000 <= ms < 1793516400000:  # 2026-03-08 08:00 UTC to 2026-11-01 07:00 UTC
+        raise RuntimeError(f"scorecard_program_time_outside_2026_us_daylight_time:{ms}")
+    moment = datetime.fromtimestamp(ms / 1000, tz=timezone(timedelta(hours=-5)))
+    return f"{moment.day} {moment:%b} {moment:%H:%M} {_MODEL['time']['label']}"
+
 # ---- Fact sets per role (expected values come from the Owner, not the page) --
 
 def _analyst_facts(truth: dict[str, Any]) -> list[Fact]:
@@ -369,7 +385,7 @@ def _approver_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("offset_support", "H", r"MISSING|[Nn]o support", r"support"),
         Fact("claim_status", "H", r"\b" + _words(str(claim["status"])) + r"\b", r"claim|offset"),
         Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule"),
-        Fact("deadline", "H", re.escape(_utc(int(package["case"]["due_at_ms"]))), r"due|deadline"),
+        Fact("deadline", "H", re.escape(_program_time(int(package["case"]["due_at_ms"]))), r"due|deadline"),
     ]
 
 def _director_facts(truth: dict[str, Any]) -> list[Fact]:
@@ -393,10 +409,10 @@ def _auditor_facts(truth: dict[str, Any]) -> list[Fact]:
         Fact("decision", "H", _words(decision), r"determination|decision"),
         Fact("decided_by_role", "H", _words(str(determination["actor_role"])), r"determination|decision|decided|role"),
         # The chronology row of the decision event also shows when it was decided.
-        Fact("decided_at", "H", re.escape(_utc(int(determination["decided_at_ms"]), "%Y-%m-%d %H:%M")), r"determination|decision|decided|" + re.escape(decision)),
+        Fact("decided_at", "H", re.escape(_program_time(int(determination["decided_at_ms"]))), r"determination|decision|decided|" + re.escape(decision)),
         Fact("supporting_evidence", "H", re.escape(str(evidence_id)), r"evidence"),
         Fact("adjustment_rule", "H", re.escape(str(package["control_pack"]["adjustment_rule_id"])), r"rule"),
-        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"Chronology|event|sequence"),
+        Fact("chronology", "H", r"(?i:determin|offset[_ ]rejected|correction)", r"\d:\d\d CT"),  # a dated row of the activity list
         Fact("cash_reconciles", "H", _money(int(obligation["received_cash_cents"])) + r".*" + _money(int(obligation["shortfall_cents"])), r"cash|received"),
     ]
 
@@ -576,8 +592,8 @@ class _Task:
         if not status or (expected not in status and any(word in status for word in ("rejected", "unresolved", "unavailable", "denied"))):
             raise RuntimeError(f"scorecard_command_failed:{name}:{status}")
     def ensure_record(self) -> None:
-        """Open H's record from the queue unless it is already up. The director's rows are not links."""
-        if self.role != "director" and not self.browser.view()["screens"]["decision"]:
+        """Open H's record from the queue unless it is already up."""
+        if not self.browser.view()["screens"]["decision"]:
             self.click("row-item-h", "open H's record")
             self.screens.append("record")
     def answer(self, facts: list[Fact]) -> None:
