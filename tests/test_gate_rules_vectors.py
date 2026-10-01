@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import shutil
 import subprocess
 import unittest
 
@@ -10,7 +11,9 @@ LEAN = os.path.join(ROOT, "lean")
 EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name == "nt" else "gate_rules")
 # The files the runner embeds (`Run.source`); Theorems.lean is checked by the build, not linked.
 SOURCES = ["BlindLedger/Gate/Rules/Spec.lean", "BlindLedger/Gate/Rules/Fast.lean", "BlindLedger/Gate/Rules/Run.lean",
-           "BlindLedger/Gate/Rules/RunCli.lean", "BlindLedger/Sha3.lean", "lakefile.toml", "lean-toolchain"]
+           "BlindLedger/Sha3.lean", "lakefile.toml", "lean-toolchain"]
+# The twin's equality proof and the Spec's theorems; the runner does not import them, so only this test notices a stale proof.
+PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Theorems"]
 
 
 @unittest.skipUnless(os.path.isfile(EXE),
@@ -21,6 +24,11 @@ class GateRulesVectors(unittest.TestCase):
         run = subprocess.run([EXE], capture_output=True, text=True, timeout=60)
         self.assertEqual(run.stdout.split("\n")[0], "RULES_SOURCE " + hashlib.sha3_512(text).hexdigest(),
                          "gate_rules was not built from these sources; run `lake build gate_rules` in lean/")
+
+    def test_proofs_are_current(self):
+        lake = shutil.which("lake") or os.path.join(os.path.expanduser("~"), ".elan", "bin", "lake")
+        run = subprocess.run([lake, "build", "--no-build", *PROOFS], cwd=LEAN, capture_output=True, text=True, timeout=600)
+        self.assertEqual(run.returncode, 0, "the FastEq or Theorems proofs are stale; run `lake build` in lean/\n" + run.stdout[-1500:])
 
     def test_vectors_pass(self):
         for name in ("rules_v1.vectors", "demo_zz.vectors"):

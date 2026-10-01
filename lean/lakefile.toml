@@ -54,7 +54,7 @@ roots = ["BlindLedger.Gate.AxiomCheck"]
 # Test-only: runs tests/gate_rules/*.vectors through the gate rules; never a payment path.
 [[lean_exe]]
 name = "gate_rules"
-root = "BlindLedger.Gate.Rules.RunCli"
+root = "BlindLedger.Gate.Rules.Run"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # Test-only: panics or writes stderr on request; tests/test_lean_worker_panic.py.

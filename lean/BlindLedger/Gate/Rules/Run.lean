@@ -1,11 +1,7 @@
 import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Sha3
 
-/-! DRAFT (gate-rules-fast-v1): replaces lean/BlindLedger/Gate/Rules/Run.lean.  Changes from the
-    pq-m1 file, each marked `-- FAST`: decides with `Fast.decideBatchF` (= `decideBatch`,
-    `FastEq.decideBatchF_eq`); drops the reversed-order re-run (`decideBatchF_reverse`); pins with
-    `Fast.pinBytes` (`pin_run_eq`) once per snapshot declaration, not per commit; rows and batch are
-    Arrays (push, not `++ [x]`); the root `main` moves to RunCli.lean so Diff.lean can import this. -/
+/-! The test-only vector runner: decides with `Fast.decideBatchF` (= `decideBatch`, `FastEq.decideBatchF_eq`; no reversed re-run, `decideBatchF_reverse`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
 
 namespace BlindLedger.Gate.Rules.Run
 
@@ -44,7 +40,7 @@ def hexOf (b : ByteArray) : String :=
 /-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
     it from the files, so a stale runner fails that test whatever its file times. -/
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
-  include_str "Fast.lean", include_str "Run.lean", include_str "RunCli.lean",  -- FAST
+  include_str "Fast.lean", include_str "Run.lean",  -- FAST
   include_str "../../Sha3.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
 
@@ -196,19 +192,17 @@ def step (st : St) : List String → Option (St × List String)
     pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 
-/-- Splits a vector file into directive fields (shared with Diff.lean). -/
-def directives (text : String) : List (Nat × List String) :=
-  ((text.splitOn "\n").zipIdx 1).filterMap fun (raw, number) =>
-    let fields := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
-    if fields.isEmpty || fields.head!.startsWith "#" then none else some (number, fields)
-
 def main (args : List String) : IO UInt32 := do
   IO.println s!"RULES_SOURCE {source}"
   let [path] := args
     | IO.eprintln "RULES_VECTORS=USAGE gate_rules <path>"
       return 2
   let mut st : St := {}
-  for (number, fields) in directives (← IO.FS.readFile path) do
+  let mut number := 0
+  for raw in (← IO.FS.readFile path).splitOn "\n" do
+    number := number + 1
+    let fields := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
+    if fields.isEmpty || fields.head!.startsWith "#" then continue
     match step st fields with
     | none =>
       st := { st with failed := st.failed + 1 }
@@ -222,3 +216,5 @@ def main (args : List String) : IO UInt32 := do
   return (if pass then 0 else 1)
 
 end BlindLedger.Gate.Rules.Run
+
+def main (args : List String) : IO UInt32 := BlindLedger.Gate.Rules.Run.main args

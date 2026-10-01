@@ -32,6 +32,7 @@ REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DAT
 # A mutant the vectors miss is still killed if these proofs no longer build: the Spec's order independence
 # (the runner no longer re-decides each batch in reverse) and the twin's equality with the Spec.
 PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq")
+PROOF_FILES = ("Theorems.lean", "FastEq.lean")
 KEPT = "d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED"
 # Fast.lean text.
 R2 = "x.seen s (exactKey l) || x.seen s (nearKey l) || x.spanOk && validDate l.date && x.overlap l"
@@ -305,9 +306,15 @@ DEMO_MUTANTS = [("demo: two held lines swap reasons", swap_reasons),
                 ("demo: a held and an allowed line of one amount swap", swap_outcomes)]
 
 
-def build(lean: Path, lake: str, *targets: str) -> bool:
-    return subprocess.run([lake, "-d", str(lean), "build", *(targets or ("gate_rules",))],
-                          capture_output=True).returncode == 0
+def build(lean: Path, lake: str, *targets: str) -> tuple[bool, str]:
+    run = subprocess.run([lake, "-d", str(lean), "build", *(targets or ("gate_rules",))],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return run.returncode == 0, run.stdout.decode("utf-8", "replace")  # Lean prints characters such as ✝
+
+
+def proof_error(output: str) -> str:
+    """The first Lean `error:` line in a proof file, or ""."""
+    return next((s for s in output.splitlines() if s.startswith("error:") and any(f in s for f in PROOF_FILES)), "")
 
 
 def vectors(lean: Path, path: Path) -> str:
@@ -324,9 +331,10 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         lean = Path(tmp) / "lean"
         shutil.copytree(lean_dir, lean)
-        built = build(lean, lake)
+        built = build(lean, lake)[0]
         base = [vectors(lean, Path(p)) if built else "BUILD_ERROR" for p in (rules, demo)]
-        print(f"BASELINE rules={base[0]} demo={base[1]}", flush=True)
+        proved = build(lean, lake, *PROOFS)[0]  # a proof kill below means nothing unless the unmutated proofs build
+        print(f"BASELINE rules={base[0]} demo={base[1]} proofs={'BUILT' if proved else 'BUILD_ERROR'}", flush=True)
         for name, mutate in DEMO_MUTANTS:
             lines = Path(demo).read_text(encoding="utf-8").splitlines()
             mutate(lines)
@@ -349,9 +357,11 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
             for o, n in edits:
                 mutated = mutated.replace(o, n)
             src.write_text(mutated, encoding="utf-8")
-            result = vectors(lean, Path(rules)) if build(lean, lake) else "BUILD_ERROR"
-            if result == "RULES_VECTORS=PASS" and not build(lean, lake, *PROOFS):
-                result = "RULES_VECTORS=FAIL by_proof"  # the vectors cannot see it; the Lean proofs do
+            result = vectors(lean, Path(rules)) if build(lean, lake)[0] else "BUILD_ERROR"
+            if result == "RULES_VECTORS=PASS":  # the vectors cannot see it: killed only by a Lean error in a proof file
+                ok, output = build(lean, lake, *PROOFS)
+                error = proof_error(output)
+                result = "RULES_VECTORS=FAIL by_proof " + error if error else f"SURVIVED proofs_ok={ok}"
             src.write_text(text, encoding="utf-8")
             killed += result.startswith("RULES_VECTORS=FAIL")
             print(f"MUTANT {name}: {result}", flush=True)
@@ -359,7 +369,7 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
     total = len(chosen) + len(DEMO_MUTANTS)
     print(f"TRACKED_SOURCES sha256_before={before} sha256_after={after}")
     print(f"MUTANTS part={part} total={total} killed={killed}")
-    ok = base == ["RULES_VECTORS=PASS"] * 2 and killed == total and before == after
+    ok = proved and base == ["RULES_VECTORS=PASS"] * 2 and killed == total and before == after
     return 0 if ok else 1
 
 

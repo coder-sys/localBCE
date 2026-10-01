@@ -2,8 +2,7 @@ import Std.Data.HashMap
 import Std.Data.HashSet
 import BlindLedger.Gate.Rules.Spec
 
-/-! DRAFT (gate-rules-fast-v1, rrb/designs/gate-rules-fast-v1.md).  Target path:
-    lean/BlindLedger/Gate/Rules/Fast.lean.  Not compiled yet. -/
+/-! Indexed twin of `Spec.decideBatch` and `pinInput` (design rrb/designs/gate-rules-fast-v1.md); `FastEq.lean` proves it equal. -/
 
 namespace BlindLedger.Gate.Rules.Fast
 
@@ -190,7 +189,7 @@ def Ix.decideAll (x : Ix) : HashSet Key → List Line → List Decision
 def Ix.order (x : Ix) (b : List Line) : List Line :=
   canonical (b.filter x.own) ++ canonical (b.filter fun y => !x.own y)
 
-/-- O(|ds|) per call, as in the Spec: O(b²) per batch (b ≤ 1,000: about 5 µs a line). -/
+/-- O(|ds|) per call, as in the Spec: O(b²) per batch (b ≤ 1,000; about 5 µs a line is estimated from the design, not measured). -/
 def Ix.payOutcome (x : Ix) (ds : List Decision) (p : Nat) : Outcome :=
   let ls := ds.filter (·.line.pay == p)
   if ls.any (·.outcome == .HOLD) then .HOLD

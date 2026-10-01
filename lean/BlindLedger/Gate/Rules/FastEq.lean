@@ -1,10 +1,7 @@
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.Fast
 
-/-! DRAFT (gate-rules-fast-v1).  Target path: lean/BlindLedger/Gate/Rules/FastEq.lean, in the
-    `BlindLedger` library (default target), NOT imported by the runner, so a mutant of `Fast.lean`
-    still builds `gate_rules`.  Every `sorry` must be gone, and the axiom pins at the end pass, before
-    Run.lean calls the twin.  Statements are fixed; the implementer proves them and may add lemmas. -/
+/-! Proves `Fast.decideBatchF` equal to `Spec.decideBatch` (and `pinBytes` to `pinInput`), plus its order laws; not imported by the runner, so a mutant of `Fast.lean` still builds `gate_rules`. -/
 
 namespace BlindLedger.Gate.Rules.Fast
 
