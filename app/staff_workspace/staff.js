@@ -178,7 +178,7 @@
     if (!view.det && view.claim && view.claim.status === "CLAIMED") {
       return {
         kind: "need",
-        state: role === "approver" ? "Needs your decision" : "Waiting for the finance approver's decision",
+        state: role === "approver" ? "Needs your decision" : "Waiting for the finance approver's decision", plain: "Waiting for the finance approver's decision",
         sub: "Offset claim " + usd(view.claim.amount_cents) + " · " + view.support,
       };
     }
@@ -224,7 +224,7 @@
     const short = item.shortfall_cents;
     const env = snapshot.read_envelope;
     const R = {
-      id: item.item_id, name, kind: st.kind, state: st.state, obligation: item.obligation_id,
+      id: item.item_id, name, kind: st.kind, state: st.state, plain: st.plain || st.state, obligation: item.obligation_id,
       ledger: [], checks: [], decision: null, steps: [], sources: [], activity: [], followup: [], facts: [],
     };
     const rule = isH ? hView().pkg.control_pack : null;
@@ -297,9 +297,9 @@
     return R;
   }
 
-  function textOf(R, forThisRole) { // the downloaded record is the same bytes for every role; only the on-page plain-text view adds this role's own sections
+  function textOf(R, forThisRole) { // the downloaded record is the same bytes for every role; only the on-page plain-text view adds this role's own status wording and sections
     const row = (label, ...cells) => label.padEnd(12) + cells.filter(Boolean).join("  ");
-    const lines = [row("OBLIGATION", R.obligation), row("STATUS", R.state), row("SUMMARY", R.claim), row("", R.more), "", "AMOUNTS IN USD",
+    const lines = [row("OBLIGATION", R.obligation), row("STATUS", forThisRole ? R.state : R.plain), row("SUMMARY", R.claim), row("", R.more), "", "AMOUNTS IN USD",
       ...R.ledger.map((entry) => row(entry[0], entry[1], entry[2]))];
     lines.push("", "WHAT WAS CHECKED", ...R.checks.map((entry) => row((entry[0] ? "ok" : "NOT OK") + " " + entry[1], entry[2])));
     if (R.decision) lines.push("", "DECISION", row("", fill(R.decision.line, false), R.decision.seal, R.decision.note));

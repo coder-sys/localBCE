@@ -210,7 +210,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self._stop_workflow(workflow, server, thread)
 
     def test_every_role_downloads_the_record_byte_for_byte_at_every_stage(self) -> None:
-        """M5, roles able to download the record: 0 of 5 before (no download existed), 5 of 5 now, at every stage of H's journey and for a settled item; the file is the plain-text record itself, the same bytes for every role (the on-page view adds only the role's own decision and next-step sections)."""
+        """M5, roles able to download the record: 0 of 5 before (no download existed), 5 of 5 now, at every stage of H's journey and for a settled item; the file is the plain-text record itself, the same bytes for every role (the on-page view adds only the role's own status wording, decision and next-step sections)."""
         workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-download")
         link, able, same = _MODEL["local_controls"]["download-record"]["name"], set(), {}
 
@@ -222,8 +222,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                         self.assertEqual((found["found"], found["visible"], found["disabled"]), (1, True, False))
                         name, data = self.browser.download(link)
                         shown = self._open_path(f"/role/{role}#{item}.txt", server).view()["texts"]["text-view"]
-                        neutral = re.sub(r"\n\n(?:YOUR DECISION|NEXT STEPS)\n.*?(?=\n\n|\Z)", "", shown, flags=re.S)
-                        self.assertEqual((name, data), (f"record-{item}.txt", neutral.encode("utf-8")))
+                        neutral = re.sub(r"\n\n(?:YOUR DECISION|NEXT STEPS)\n.*?(?=\n\n|\Z)", "", shown, flags=re.S)  # the on-page view's own sections; its STATUS wording is set aside below
+                        unstated = lambda text: re.sub(r"(?m)^STATUS .*\n", "", text)  # noqa: E731
+                        self.assertEqual((name, unstated(data.decode("utf-8"))), (f"record-{item}.txt", unstated(neutral)))
                         self.assertEqual(same.setdefault((stage, item), data), data)  # role-neutral: one record, whoever downloads it
                         self.assertTrue(data.startswith(b"OBLIGATION") and "−".encode() in data)  # a real file, non-ASCII bytes intact
                         able.add(role)
@@ -290,7 +291,8 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         for role in _MODEL["roles"]:
             with self.subTest(role=role):
                 browser = self._open_path(f"/role/{role}")
-                act(browser, "skip-workspace")
+                act(browser, "skip-workspace", "focus")  # hidden until focused: reached as a keyboard user does, focus then Enter
+                browser.key("Enter")
                 self.assertEqual(browser.view()["focus"], "record")
                 act(browser, "summary-link")
                 self.assertEqual(browser.view()["hash"], "#summary")
