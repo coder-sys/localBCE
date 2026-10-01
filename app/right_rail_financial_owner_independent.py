@@ -63,9 +63,9 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; the Owner upgrade
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "2CD5822D4F53A06EECEC0C8098E5D937AB63C431C561D3B34761C4C20EC1E58B"
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "441EB3E83DEAF561811065F8B9ACB6EEDC31389C7361E3A75B2519C2521F4A8A"
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "5d55fd180986090444eaaf4569de75aa2b75fa8ff17cba309d7d6f5f2308888a"
+RETIRED_PINS_SHA256 = "67d68f22f8ce60259654536d242fcb262cbc5fbf9de666f95f928aff7a7d07ee"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -4545,7 +4545,7 @@ def verify_database(
     try:
         # Unlocked, each read sees the latest commit, so a commit landing mid-check can mix two states. A check the
         # store sat still for keeps its verdict; a mixed pass with no finding is busy (retry). A mixed pass with a
-        # finding is judged again on one snapshot, so a tamper never looks retryable; writers wait meanwhile.
+        # finding is judged again on one snapshot, so a tamper never looks retryable; WAL writers still commit.
         version = data_version()
         try:
             result = check()

@@ -1,6 +1,7 @@
 import BlindLedger.Financial.CorrectionTransition.Codec
 import BlindLedger.Financial.CorrectionTransition.ReuseCodec
 import BlindLedger.Financial.ReadUpTo
+import BlindLedger.Financial.CursorCorrection
 
 namespace BlindLedger.Financial.CorrectionTransition.Runtime
 
@@ -21,7 +22,7 @@ def runApplyCorrectionTransition : IO Unit := do
   if bounded.size > maxCorrectionTransitionBytes then
     runCorrectionRuntimeFailure financialExitTransitionDecode "correction-transition-input-too-large"
   else
-    match decodeCorrectionTransitionRequest bounded.toList with
+    match Cursor.decodeCorrectionTransitionRequest bounded with
     | none =>
         runCorrectionRuntimeFailure financialExitTransitionDecode "correction-transition-input-decode"
     | some request =>

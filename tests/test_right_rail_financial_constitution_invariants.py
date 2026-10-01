@@ -245,22 +245,37 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
     # --- helpers ---------------------------------------------------------------
 
     def _durable_state(self, store: FinancialOwner) -> dict[str, object]:
-        """Byte-level identity of everything durable the owner can have written."""
+        """Byte-level identity of everything durable the owner can have written.
 
-        database = store.path.read_bytes()
+        WAL (R0.5; XI.2 record in docs/CORE_REDESIGN.md): the database is the image a crash recovery reads, the
+        main file plus every committed -wal frame, taken through a read-only connection that never checkpoints.
+        The main file's bytes and the -wal/-shm names depend on which connection closed last, not on any commit."""
+
+        with closing(sqlite3.connect(store.path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            database = connection.serialize()
         sidecars = sorted(
             path.name
             for path in store.path.parent.iterdir()
-            if path.name != store.path.name and path.name.startswith(store.path.name)
+            if path.name.startswith(store.path.name) and path.name not in {store.path.name, f"{store.path.name}-wal", f"{store.path.name}-shm"}
         )
         return {
-            "database_sha256": hashlib.sha256(database).hexdigest(),
-            "database_size": len(database),
+            "database_image_sha256": hashlib.sha256(database).hexdigest(),
+            "database_image_size": len(database),
             "sidecars": sidecars,
             "continuity_sha256": hashlib.sha256(store.export_continuity()).hexdigest(),
             "counts": self._durable_counts(store.path),
             "summary": store.summary(),
         }
+
+    @contextmanager
+    def _commits(self, store: FinancialOwner, committed: bool) -> Iterator[None]:
+        """A probe held open across the step: PRAGMA data_version moves iff another connection committed a page,
+        even one a later commit restored, which the image above cannot see (III.3; XI.2 record)."""
+
+        with closing(sqlite3.connect(store.path.resolve().as_uri() + "?mode=ro", uri=True)) as probe:
+            version = probe.execute("PRAGMA data_version").fetchone()[0]
+            yield
+            self.assertEqual(probe.execute("PRAGMA data_version").fetchone()[0] != version, committed)
 
     def _correction_evidence(self, store: FinancialOwner) -> tuple[int, int]:
         detail = store.obligation_detail(expected.H_ITEM_ID)
@@ -485,12 +500,8 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         assert isinstance(release, financial_engine.FinancialCorrectionTransitionRelease)
         clock_value = max(store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)  # type: ignore[attr-defined]  # not before the decision
 
-        crashed = self._run_process_boundary(
-            store=store,
-            claim_id=claim_id,
-            fault="process_postcommit",
-            clock_value=clock_value,
-        )
+        with self._commits(store, True):
+            crashed = self._run_process_boundary(store=store, claim_id=claim_id, fault="process_postcommit", clock_value=clock_value)
         # The child committed, then died before returning or draining anything.
         self.assertEqual(crashed.returncode, 74)
         self.assertEqual(crashed.stdout, "PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n")
@@ -510,7 +521,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         self._assert_snapshot(reopened, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened)
         committed_state = self._durable_state(reopened)
-
+        self.enterContext(self._commits(reopened, False))  # checked at cleanup: no drain or retry below commits
         first = reopened.drain_correction_followups(limit=10)
         self.assertEqual(first["count"], 1)
         self.assertFalse(first["has_more"])
