@@ -1,6 +1,7 @@
 import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
 import BlindLedger.Gate.ProducerTheorems
+import BlindLedger.Gate.AnchorTheorems
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -108,3 +109,15 @@ import BlindLedger.Gate.ProducerTheorems
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_slice
 /-- info: 'BlindLedger.Gate.firstFailure_none' depends on axioms: [propext] -/
 #guard_msgs in #print axioms BlindLedger.Gate.firstFailure_none
+/-- info: 'BlindLedger.Gate.anchored_binding' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.anchored_binding
+/-- info: 'BlindLedger.Gate.pinInput_lines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.pinInput_lines
+/-- info: 'BlindLedger.Gate.decideAnchored_some' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decideAnchored_some
+/-- info: 'BlindLedger.Gate.load_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.load_ok
+/-- info: 'BlindLedger.Gate.step_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.step_ok
+/-- info: 'BlindLedger.Gate.natBE_beNat' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.natBE_beNat

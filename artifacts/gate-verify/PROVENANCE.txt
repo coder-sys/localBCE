@@ -12,8 +12,8 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 84 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  02c936656e9ab6389ac91e414d4cbc677686162115db0af7679f339dfec954e6, 9,390 bytes;
+- Source manifest, 86 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
+  61e8bcaa5be0f706843a7ba17b9987d3fa9b53543679ad155e2c6bc53ccd5252, 9,598 bytes;
   each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
   holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\dpk1-gv-manifest.txt (dpk-step1, DecisionPackage Conclude, Wire, Laws added).
   tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
@@ -102,6 +102,10 @@ exe did not. The tree gained Gate/Producer.lean, Gate/Payer.lean and Gate/Produc
 slice and nine theorems) and nothing in gate_verify's import closure changed (the exe's CLI does not import them yet). The
 manifest was computed from the staged blobs by the test's own formula, which reproduces f6d42e02... from HEAD; tools/tcb_report.txt
 moves by its manifest line only, to be regenerated live at G3 (a live run needs a clean tree, and G3's VerifyCli is not staged yet).
+
+Re-pin (2026-10-01, branch gate-producer, G2): the manifest moved (84 files, 02c93665..., to 86 files, 61e8bcaa...) while the
+exe did not: the tree gained Gate/Anchor.lean (imports Rules.Spec, so it runs in the decide runtime only) and
+Gate/AnchorTheorems.lean (six theorems), neither in gate_verify's import closure. Computed as the G1 note says.
 
 Reproduction (2026-09-29): the working tree's 55 lean/ files (no .lake) were copied into two
 directories, C:\Users\neers\rrb\gate\pqm1-gv3-a\lean and ...\pqm1-gv3-b\lean, and built in

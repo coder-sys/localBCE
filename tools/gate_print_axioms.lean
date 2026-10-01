@@ -1,6 +1,7 @@
 import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
 import BlindLedger.Gate.ProducerTheorems
+import BlindLedger.Gate.AnchorTheorems
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -52,3 +53,9 @@ import BlindLedger.Gate.ProducerTheorems
 #print axioms BlindLedger.Gate.verifyToken_slice
 #print axioms BlindLedger.Gate.storeCheckpoint_slice
 #print axioms BlindLedger.Gate.firstFailure_none
+#print axioms BlindLedger.Gate.anchored_binding
+#print axioms BlindLedger.Gate.pinInput_lines
+#print axioms BlindLedger.Gate.decideAnchored_some
+#print axioms BlindLedger.Gate.load_ok
+#print axioms BlindLedger.Gate.step_ok
+#print axioms BlindLedger.Gate.natBE_beNat
