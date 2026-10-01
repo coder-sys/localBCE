@@ -4215,7 +4215,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         return store, request, int(receipt["evaluated_at_ms"])
 
-    @unittest.expectedFailure  # S2-impl: fails until design s2-timely-v1 lands (today the backdate is accepted and reads timely)
     def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
         # safety red team S2: a decision committed after the due date may not name a time at or before it
         clock = _Clock()
@@ -4229,7 +4228,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertFalse(store.obligation_detail(expected.H_ITEM_ID)["timely"])
         self._assert_verified(store)
 
-    @unittest.expectedFailure  # S2-impl
     def test_an_offset_committed_one_ms_after_the_due_date_cannot_name_the_due_date(self) -> None:
         clock = _Clock()
         store, request, _evaluated_at = self._s2_offset_request(clock)
@@ -4274,7 +4272,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.addCleanup(restored.close)
         restored.verify_integrity()
 
-    @unittest.expectedFailure  # S2-impl
     def test_the_checker_refuses_an_offset_backdated_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
         # S2: a writer that misreads the due date is stopped before COMMIT; one that also skips that check
         # (or predates the rule) leaves a store the whole-store check refuses

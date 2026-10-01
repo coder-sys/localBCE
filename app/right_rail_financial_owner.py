@@ -5040,6 +5040,8 @@ class FinancialOwner:
                 expected_revision=expected_revision,
             )
             mutation_time = max(decision_time, self._now())
+            if decision_time <= int(obligation["due_at_ms"]) < mutation_time:
+                _fail(FinancialInputError, "decision_time_backdated_past_due")
             before_revision = int(obligation["revision"])
             resulting_revision = before_revision + 1
             determination_id = f"determination:{action_ref}"
