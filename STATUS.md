@@ -46,7 +46,7 @@ systems move money. Synthetic, non-PHI, nonpayment; `proofSuiteId=null`,
 
 ## Artifact boundary
 
-- Pinned correction engine `FB659DA3...A785`, 6,300,160 bytes (one Keccak, `Sha3.lean`; stage-built, release-producer receipt not re-run; replaces `D5A06E9F...0CBB`, `1A5821FA...DDBE` and `1A7A1833...D3AF`, all in `RETIRED_PINS`; Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; rule `h1-v1`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`. The retired `D5A06E9F...0CBB` had release producer receipts `engine-release-partials-p1` to `-p3`; `FB659DA3...A785` has none (`artifacts/engine-correction/PROVENANCE.md`).
+- Pinned correction engine `2CD5822D...1E58B`, 6,298,624 bytes (core-thm; stage-built twice and diffed against the old exe, release-producer receipt not re-run; replaces `FB659DA3...A785`, `D5A06E9F...0CBB`, `1A5821FA...DDBE` and `1A7A1833...D3AF`, all in `RETIRED_PINS`; Lean derives each correction request's paid-so-far from linked payments; BLFCMD03; rule `h1-v1`); exact pins and construction in `artifacts/engine-correction/PROVENANCE.md`. The retired `D5A06E9F...0CBB` had release producer receipts `engine-release-partials-p1` to `-p3`; `2CD5822D...1E58B` has none.
 - The offline kit archive binds its assembly tree, including frozen connector and browser candidates; these checks do not qualify those tracks. Start floors are in `AGENTS.md`.
 
 ## Rules and unresolved work

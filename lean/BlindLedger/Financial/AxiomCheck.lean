@@ -4,6 +4,8 @@ import BlindLedger.Financial.CodecLawsCheck
 import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.PaidSumTheorems
 import BlindLedger.Financial.WorkerLaws
+import BlindLedger.Financial.Theorems.Conservation
+import BlindLedger.Financial.CorrectionTransition.Theorems.Core
 import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.CodecLaws
 import BlindLedger.Financial.Payment.KAT
@@ -167,6 +169,42 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms workerRun_oversize
 /-- info: 'BlindLedger.Financial.workerRun_truncated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms workerRun_truncated
+/-- info: 'BlindLedger.Financial.evaluate_balance' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_balance
+/-- info: 'BlindLedger.Financial.evalContributions_sum' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evalContributions_sum
+/-- info: 'BlindLedger.Financial.evaluate_completion_iff_satisfied' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_completion_iff_satisfied
+/-- info: 'BlindLedger.Financial.evaluate_completionAt_first' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_completionAt_first
+/-- info: 'BlindLedger.Financial.evaluate_monotone' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_monotone
+/-- info: 'BlindLedger.Financial.evaluate_evaluatedAt_irrelevant' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_evaluatedAt_irrelevant
+/-- info: 'BlindLedger.Financial.evaluate_encodes' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluate_encodes
+/-- info: 'BlindLedger.Financial.evaluateWire_ne_encodingRejected' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWire_ne_encodingRejected
+/-- info: 'BlindLedger.Financial.CorrectionTransition.linkedOutstandingCents_perm' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.linkedOutstandingCents_perm
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_money_unchanged' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_money_unchanged
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_post_within_shortfall' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_post_within_shortfall
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_authorized' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_mutation_authorized
+/-- info: 'BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_authorized' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.assessCorrectionReuse_allowed_authorized
+/-- info: 'BlindLedger.Financial.CorrectionTransition.ite_error_ok' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.ite_error_ok
+/-- info: 'BlindLedger.Financial.CorrectionTransition.buildAccepted_facts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAccepted_facts
+/-- info: 'BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_ready_facts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_ready_facts
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_resultWellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_resultWellFormed
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_encodes_unless_oversize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_encodes_unless_oversize
 
 /-- info: 'BlindLedger.Financial.Payment.paymentTransition_mutated_post' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentTransition_mutated_post
