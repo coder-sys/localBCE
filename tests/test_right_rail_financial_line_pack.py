@@ -235,6 +235,10 @@ class LinePackTests(unittest.TestCase):
         ((earlier_head,),) = self._sql("SELECT head FROM financial_events WHERE event_sequence=?", (source["sequence"] - 1,))
         earlier = {**source, "sequence": source["sequence"] - 1, "history_head": earlier_head.hex().upper()}
         self.assertIsNotNone(self._pack(at_ms=AT + 1, prior_pack=_encode({**json.loads(prior), "source": earlier}))["supersedes"])
+        v1 = {key: value for key, value in json.loads(prior).items() if key != "signature"} | {"contract": "RR/LINE-PACK/CMS-64.9/v1", "signer": None}
+        self.assertIsNotNone(self._pack(at_ms=AT + 1, prior_pack=_encode(v1))["supersedes"])  # a signed v2 pack supersedes an unsigned v1 pack
+        with self.assertRaisesRegex(LinePackError, "prior-pack-identity"):
+            self._raw(at_ms=AT + 1, prior_pack=_encode({**v1, "contract": "RR/LINE-PACK/CMS-64.9/v0"}))
         for edit, code in (
             ({"sequence": source["sequence"] + 1}, "chronology-not-strict"),
             ({"history_head": "0" * 128}, "chronology-not-strict"),  # same sequence, another head

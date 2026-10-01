@@ -443,7 +443,7 @@ line and quarter reconciled to the cent in minutes, not weeks. Coverage is
 shown on the pack's face.
 
 - **Predicate:** `app/right_rail_financial_line_pack.py` emits canonical
-  `RR/LINE-PACK/CMS-64.9/v1` JSON from a Continuity package that
+  `RR/LINE-PACK/CMS-64.9/v2` JSON (H2; v1 had no signature) from a Continuity package that
   `verify_database` binds row for row to a fully verified store opened
   read-only (the package digest is public, so package checks alone prove
   nothing), and a line map. Exactly one `line-map:sha256:<hex>` entry in an
@@ -490,7 +490,7 @@ shown on the pack's face.
   a restored VM, host skew), every write is refused (`event_commit_order`) until
   the clock passes the last committed time; history is never reordered. Stores written by trunk
   `6cccb84` or earlier are not readable (`replay:evidence-received-at`);
-  recreate the synthetic workspace. `signer` is null: no PQ signing path exists.
+  recreate the synthetic workspace. Since H2, `signer` names the custody key and log record and `signature` is ML-DSA-87 over the pack (`RR/FINANCIAL/PACK-SIGNED/v1`); it binds the exported pack, not the local store (see `app/right_rail_financial_custody.py`, Limit).
 - **Proposed Lean (not written):** `line_pack_sum_eq_ledger`,
   `line_pack_rule_version_bound`, `line_pack_complete_or_declares_gap`,
   `line_pack_deterministic`, `line_pack_chronology_strict`,

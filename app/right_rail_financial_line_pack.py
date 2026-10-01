@@ -84,7 +84,7 @@ def _prior(prior_pack: bytes | None, line: str, quarter: str, source: dict, gene
     try:
         old = prior["source"]
         same = (
-            prior["contract"] == LINE_PACK_CONTRACT
+            prior["contract"] in (LINE_PACK_CONTRACT, "RR/LINE-PACK/CMS-64.9/v1")
             and prior["line"] == line
             and prior["quarter"] == quarter
             and {k: v for k, v in old.items() if k not in _SOURCE_STATE} == {k: v for k, v in source.items() if k not in _SOURCE_STATE}

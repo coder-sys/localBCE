@@ -240,6 +240,50 @@ class CustodyTests(unittest.TestCase):
         with self.assertRaisesRegex(FinancialIntegrityError, "^custody_not_rewound$"):
             again.resolve_custody(self._custody(), "REWIND_ACCEPTED", actor_id="operator:ana", reason_ref="restore-8", expect_sequence=again._high[0], expect_head=again._high[1])
 
+    def test_after_an_accepted_rewind_the_abandoned_store_cannot_catch_up(self) -> None:
+        store = self._base()
+        store.record_payment_evidence(**_pay("item-05", "t0"))
+        early, late = (Path(self.fixture.temp_dir.name) / name for name in ("t0", "late"))
+        self._copy(store.path, early)
+        t0 = store._high
+        store.record_payment_evidence(**_pay("item-06", "later"))
+        store.close()
+        self._copy(store.path, late)
+        self._restore(early, store.path)
+        plain = self._open(store.path, store.clock)
+        plain.resolve_custody(self._custody(), "REWIND_ACCEPTED", actor_id="operator:ana", reason_ref="restore-7", expect_sequence=t0[0], expect_head=t0[1])
+        plain.close()
+        self._restore(late, store.path)  # ahead of the accepted tail and holding its head: a catch-up MARK would admit it
+        with self.assertRaisesRegex(FinancialIntegrityError, "^store_forked$"):
+            self._open(store.path, store.clock, self._custody())
+
+    # LIMIT (review of 02c57d7): the local refusal is only as strong as the custody file's write ACL.  MARKs are
+    # unsigned, so these two edits need no key and open succeeds.  They pass by documenting the hole; the fix they
+    # await is an outside witness or per-commit signing under a separate account, both listed as not done.
+    def test_limit_a_log_cut_back_to_an_earlier_mark_admits_the_copy_taken_there(self) -> None:
+        store, t0 = self._rewound()
+        lines = self._log(store).read_bytes().splitlines(keepends=True)
+        at = next(n for n, line in enumerate(lines) if json.loads(line)["sequence"] == t0[0]) + 1
+        self._log(store).write_bytes(b"".join(lines[:at]))  # one cut: the chain prefix is valid, the genesis ANCHOR verifies
+        self._open(store.path, store.clock, self._custody()).close()
+
+    def test_limit_one_appended_unsigned_mark_admits_a_fork(self) -> None:
+        store = self._base()
+        copy = Path(self.fixture.temp_dir.name) / "fork"
+        self._copy(store.path, copy)
+        store.record_payment_evidence(**_pay("item-05", "live"))
+        store.close()
+        self._restore(copy, store.path)
+        other = self._open(store.path, store.clock)
+        other.record_payment_evidence(**_pay("item-05", "fork"))
+        other.record_payment_evidence(**_pay("item-06", "fork"))
+        fork = other._high
+        other.close()
+        keyless = self._custody(str(Path(self.fixture.temp_dir.name) / "no-such.key"))
+        keyless._append(store.owner_id, "MARK", fork)  # no key file exists: a MARK is never signed
+        keyless._release()
+        self._open(store.path, store.clock, self._custody()).close()
+
     def test_a_crash_between_commit_and_mark_leaves_custody_behind_never_ahead(self) -> None:
         store = self._base()
         log = self._log(store)

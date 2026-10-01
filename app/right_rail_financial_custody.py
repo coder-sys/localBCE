@@ -1,5 +1,6 @@
 """The owner's custody log (H2): every committed (owner_id, sequence, history head), hash-chained in a file outside
-the store's directory, so a store copied back after a restart is refused.  Synthetic, activation=false.
+the store's directory, so a store copied back after a restart is refused unless the log was edited too (Limit,
+below).  Synthetic, activation=false.
 
 ``<directory>/<owner_id>.custody`` holds one canonical JSON record per line, chained by
 ``digest = SHA3-512("RR/FINANCIAL/CUSTODY/v1\\0" || the record's canonical JSON without digest and sig)`` and
@@ -20,8 +21,10 @@ C ahead of S is ``store_rewound``; S's head at C's sequence differing from C's i
 equal heads (a crash between COMMIT and MARK) gets one catch-up MARK.  A final line without its newline is a torn
 append: ignored, and cut before the next append.  A pack is signed with the same key, only at the log's tail.
 
-Limit: whoever runs as the owner's Windows user can rewrite both files and use its DPAPI key; a signed pack that
-left the machine is the outside witness.
+Limit: the local refusal is only as strong as the custody file's write ACL.  MARKs are unsigned, so whoever can
+write the log can, with no key, cut it back to an earlier MARK and restore the store copied there, or append a MARK
+naming a fork.  The ANCHOR, ADOPTED and REWIND_ACCEPTED signatures bind only the exported witness (signed packs) and
+operator attribution.  Closing this needs an outside witness or per-commit signing under a separate account.
 """
 
 from __future__ import annotations
@@ -153,6 +156,8 @@ class Custody:
         """Refuse a store older than, or forked from, the log's tail; True when the tail is behind it."""
         if last["sequence"] > state[0]:
             _refuse("store_rewound")
+        if last["kind"] in ("ADOPTED", "REWIND_ACCEPTED") and last["sequence"] != state[0]:
+            _refuse("store_forked")  # an operator accepted exactly one (sequence, head): no catch-up past it
         if (state[1] if last["sequence"] == state[0] else head_at(last["sequence"])) != bytes.fromhex(last["head"]):
             _refuse("store_forked")
         return last["sequence"] < state[0]
