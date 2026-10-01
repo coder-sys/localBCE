@@ -1,0 +1,218 @@
+{
+  "automatic_adoption": false,
+  "candidates": [
+    {
+      "automatic_adoption": false,
+      "compatibility_assessment": "already_reinforced",
+      "crosswalk_flags": [
+        "reinforces_no_direct_payment_authority"
+      ],
+      "decision_rationale": null,
+      "decision_status": "pending_human_review",
+      "evidence": [
+        {
+          "excerpt": "- V2 separates the timelocked administrator, emergency pauser, and treasury.",
+          "file_sha256": "d80e9e2d74ff2667d95ba131d0a232f5418985fa07f502dd510c6fe1c316ccd6",
+          "line_number": 72,
+          "path": "STARK_RUNTIME.md",
+          "relation": "separates operational authorities"
+        },
+        {
+          "excerpt": "- A 72-hour OpenZeppelin `TimelockController` governs attestor, policy,",
+          "file_sha256": "d80e9e2d74ff2667d95ba131d0a232f5418985fa07f502dd510c6fe1c316ccd6",
+          "line_number": 73,
+          "path": "STARK_RUNTIME.md",
+          "relation": "places governed changes behind an explicit authorization delay"
+        }
+      ],
+      "execution_allowed": false,
+      "human_decision": null,
+      "page_number": 3,
+      "proof_binding": false,
+      "proposed_decision": "adopt",
+      "queue_id": "rrreview-30f34633f2b4fcfea09be93d",
+      "recommendation_only": true,
+      "recommendation_rationale": "The governed V2 design already separates administrative, emergency, and treasury authority and subjects configuration changes to a timelock.",
+      "remaining_gaps": [
+        "A named architecture owner and security owner must confirm that every transaction hold or release path is covered by an explicit role."
+      ],
+      "required_reviewer_roles": [
+        "architecture_owner",
+        "security_owner"
+      ],
+      "requirement_id": "rrreq-67912f32e7f312fa84682009",
+      "reviewed_at": null,
+      "reviewer_identity": null,
+      "runtime_eligible": false,
+      "source_path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+      "source_sha256": "6f8d5201dedda81644901fa2e574a0cdcf560eff61878dbb72c48e159eab730c",
+      "source_statement_number": 44,
+      "statement": "Any power to approve, hold or release a transaction requires a separate, explicit authorization."
+    },
+    {
+      "automatic_adoption": false,
+      "compatibility_assessment": "partial_control_with_policy_gap",
+      "crosswalk_flags": [
+        "reinforces_no_direct_payment_authority"
+      ],
+      "decision_rationale": null,
+      "decision_status": "pending_human_review",
+      "evidence": [
+        {
+          "excerpt": "- batch ingestion and payment orchestration after proof and policy controls",
+          "file_sha256": "c2866a852444be2b9decc15aecdf9b4d90d7169a12b8ba6ea6f7a86b82f1533a",
+          "line_number": 82,
+          "path": "ARCHITECTURE_ALIGNMENT.md",
+          "relation": "keeps payment orchestration behind policy controls"
+        },
+        {
+          "excerpt": "- Real production claims/payments: blocked until production STARK proving,",
+          "file_sha256": "a9d72576f0041041a97c8a85977d1a649fcf1ab44d287092ff1d777581a742d3",
+          "line_number": 10,
+          "path": "ops/RISK_REGISTER.md",
+          "relation": "blocks real claims and payments pending external gates"
+        }
+      ],
+      "execution_allowed": false,
+      "human_decision": null,
+      "page_number": 11,
+      "proof_binding": false,
+      "proposed_decision": "adapt",
+      "queue_id": "rrreview-9cafc366a687dd6e292c4912",
+      "recommendation_only": true,
+      "recommendation_rationale": "Settlement configuration is governed, but localBCE does not yet define the legal or program authority for true-ups and withholding.",
+      "remaining_gaps": [
+        "Define and review the authority record required for each true-up, withholding, or settlement action before adding any executable behavior.",
+        "Keep payment orchestration outside active adjudication until proof, policy, and external approval gates are complete."
+      ],
+      "required_reviewer_roles": [
+        "architecture_owner",
+        "rules_owner",
+        "security_owner",
+        "settlement_owner"
+      ],
+      "requirement_id": "rrreq-a12d621a2ca01539ab58ac39",
+      "reviewed_at": null,
+      "reviewer_identity": null,
+      "runtime_eligible": false,
+      "source_path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+      "source_sha256": "6f8d5201dedda81644901fa2e574a0cdcf560eff61878dbb72c48e159eab730c",
+      "source_statement_number": 243,
+      "statement": "Any proposed true-up, withholding or settlement must have its own valid authority."
+    },
+    {
+      "automatic_adoption": false,
+      "compatibility_assessment": "privacy_goal_present_policy_gap",
+      "crosswalk_flags": [
+        "reinforces_sensitive_data_boundary"
+      ],
+      "decision_rationale": null,
+      "decision_status": "pending_human_review",
+      "evidence": [
+        {
+          "excerpt": "Blind Ledger is a local prototype for privacy-preserving healthcare claims adjudication using:",
+          "file_sha256": "c78645256cf6d48ba9dd62c54c36544df74ff0fbf7569d9f4b97ff3fc0a02cb1",
+          "line_number": 3,
+          "path": "README.md",
+          "relation": "states the current privacy objective"
+        },
+        {
+          "excerpt": "1. Production secrets must never be stored in the repo.",
+          "file_sha256": "3b040df2066836b31a809a56a9c26defd03195facbb9bf954e026845f1aa366c",
+          "line_number": 21,
+          "path": "ops/KEY_CUSTODY_AND_ROTATION.md",
+          "relation": "provides a narrower sensitive-secret boundary"
+        }
+      ],
+      "execution_allowed": false,
+      "human_decision": null,
+      "page_number": 12,
+      "proof_binding": false,
+      "proposed_decision": "adapt",
+      "queue_id": "rrreview-15a01f7b5bdb9a17ec7d27da",
+      "recommendation_only": true,
+      "recommendation_rationale": "The repository states a privacy-preserving goal and protects production secrets, but it does not yet codify an approved-data boundary for analytics, monitoring, external AI tools, and shared libraries.",
+      "remaining_gaps": [
+        "Create a separately reviewed data-classification and external-tool policy that defines approved non-sensitive material.",
+        "Require privacy-owner review before any RightRail language is ported into an active operational control."
+      ],
+      "required_reviewer_roles": [
+        "architecture_owner",
+        "security_owner"
+      ],
+      "requirement_id": "rrreq-1b3cd95e3a11c2424f08b587",
+      "reviewed_at": null,
+      "reviewer_identity": null,
+      "runtime_eligible": false,
+      "source_path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+      "source_sha256": "6f8d5201dedda81644901fa2e574a0cdcf560eff61878dbb72c48e159eab730c",
+      "source_statement_number": 287,
+      "statement": "Corporate support systems, product analytics, ordinary monitoring, external AI tools and the shared multi-state library receive only approved non-sensitive material."
+    },
+    {
+      "automatic_adoption": false,
+      "compatibility_assessment": "already_reinforced",
+      "crosswalk_flags": [
+        "reinforces_nonactivation"
+      ],
+      "decision_rationale": null,
+      "decision_status": "pending_human_review",
+      "evidence": [
+        {
+          "excerpt": "Until those gates are approved, this remains a production-shaped prototype and",
+          "file_sha256": "d80e9e2d74ff2667d95ba131d0a232f5418985fa07f502dd510c6fe1c316ccd6",
+          "line_number": 172,
+          "path": "STARK_RUNTIME.md",
+          "relation": "distinguishes the prototype from production approval"
+        },
+        {
+          "excerpt": "Status: local and pilot-prep runbook. This is not production approval.",
+          "file_sha256": "de34e7e28f4e7077d116cecaac6126762ecb3d58695437719484f048ddb58bab",
+          "line_number": 3,
+          "path": "ops/DEPLOYMENT_RUNBOOK.md",
+          "relation": "labels operating instructions as non-production evidence"
+        }
+      ],
+      "execution_allowed": false,
+      "human_decision": null,
+      "page_number": 22,
+      "proof_binding": false,
+      "proposed_decision": "adopt",
+      "queue_id": "rrreview-b0e3969356638ebe923414f5",
+      "recommendation_only": true,
+      "recommendation_rationale": "Active documentation already distinguishes production-shaped design and examples from audited or production-approved results.",
+      "remaining_gaps": [
+        "A named architecture owner and security owner must approve the wording before it is treated as an adopted project requirement."
+      ],
+      "required_reviewer_roles": [
+        "architecture_owner",
+        "security_owner"
+      ],
+      "requirement_id": "rrreq-943958497348dcb629992a81",
+      "reviewed_at": null,
+      "reviewer_identity": null,
+      "runtime_eligible": false,
+      "source_path": "original/reference/RightRail_Architecture_and_Operating_Plan.pdf",
+      "source_sha256": "6f8d5201dedda81644901fa2e574a0cdcf560eff61878dbb72c48e159eab730c",
+      "source_statement_number": 519,
+      "statement": "The workflow examples and proposed procedures explain the intended design and remain distinct from production results."
+    }
+  ],
+  "checkpoint_sha256": "a18276e9d7f9068bd956d9df36133f66c667d19541a930efd33c9a018edd6eca",
+  "execution_allowed": false,
+  "final_decision_count": 0,
+  "human_reviewed_count": 0,
+  "prepared_recommendation_count": 4,
+  "priority_candidate_count": 4,
+  "proof_binding_count": 0,
+  "proposed_decision_counts": {
+    "adapt": 2,
+    "adopt": 2
+  },
+  "review_status": "pending_named_human_review",
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-safety-review-packet-v1",
+  "source_queue_checkpoint_sha256": "c4b933a7a095134a53eae0f49d58b3e0f7e2fae6e060629b2fa53f3e2351d66d",
+  "source_queue_item_count": 110,
+  "source_queue_sha256": "53c47905a20e42bff818058673c8dfa39992ce9a0b0ee9398b523dd7494e544c"
+}

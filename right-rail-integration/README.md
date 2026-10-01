@@ -49,6 +49,8 @@ python3 scripts/extract_rightrail_requirements.py \
   /path/to/RightRail-Agent-20260919
 
 python3 scripts/build_rightrail_operating_plan_review_queue.py
+
+python3 scripts/build_rightrail_safety_review_packet.py
 ```
 
 The generated reports are intentional checkpoint artifacts:
@@ -63,6 +65,7 @@ The generated reports are intentional checkpoint artifacts:
 - `reports/requirements_crosswalk_summary_v1.json`
 - `reports/operating_plan_review_queue_v1.jsonl`
 - `reports/operating_plan_review_queue_summary_v1.json`
+- `reports/operating_plan_safety_review_packet_v1.json`
 
 The static workspace analysis inventories build descriptors, tests, language
 surfaces, preserved binaries, and review markers across all 73 workspaces. It
@@ -80,6 +83,12 @@ references and are not treated as product requirements.
 The operating-plan review queue prioritizes the four existing safety-boundary
 candidates and leaves every human decision empty. Repository paths are only
 cross-reference suggestions; they are not evidence of adoption or compatibility.
+
+The safety review packet pins repository evidence for those four priority
+candidates and records non-binding `adopt` or `adapt` recommendations. It does
+not record human approval: all four remain pending named architecture, security,
+privacy, rules, or settlement review as applicable, and none is executable,
+runtime eligible, or proof bound.
 
 ## Safety Boundaries
 
