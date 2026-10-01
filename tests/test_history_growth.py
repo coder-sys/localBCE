@@ -17,6 +17,7 @@ production_usable=false, activation=false.
 """
 
 import functools
+import gc
 import hashlib
 import math
 from pathlib import Path
@@ -49,24 +50,24 @@ GROWS = {  # operation: (counters that grow, owner branch, listed, strength of t
     "export": ("sql_ops peak_kib", "none", "2026-10-01", "WEAKENS: earlier exported segments stop being re-compared; a tampered copy is caught by its reader's chain check, not by the next export"),
     "continuity": ("sql_ops hashed peak_kib refused", "auth-state K1", "2026-10-01", "EXACT: a manifest of sealed segments plus current state, each verified against its digest on restore"),
     "open": ("sql_ops hashed peak_kib", "auth-state R1/R2", "2026-10-01", "EXACT only if the off-lock history sweep gates release; else WEAKENS: tamper in unread history found after open"),
-    "item_decision": ("hashed frame peak_kib", "hist-flat S3 + S6", "2026-10-01", "EXACT: M3 view decide with a Lean _eq theorem against the full decide"),
+    "item_decision": ("sql_ops hashed frame peak_kib", "hist-flat S3 + S6", "2026-10-01", "EXACT: M3 view decide with a Lean _eq theorem against the full decide"),  # sql_ops: the per-item payment read is old, its growth unchanged (~36k steps for 16 to 160 payments, 37k before); core-r1c halved the base, so the ratio now shows it. S3 + S6 remove it.
     "gate_state_pin": ("hashed peak_kib", "auth-state STATE/v2", "2026-10-01", "EXACT: decideBatch_slice"),
 }
 SQLITE = "3.53.1"  # sql_ops counts this library's VM steps; another version changes them, so re-measure
 PINNED = {  # operation: (small-history work, large-history work) on trunk b180c97 (run hgfix-measure); lower it when an operation gets cheaper
-    "decision": ((15487, 32313, 1939, 93, 0), (72362, 32313, 1939, 88, 0)),
-    "reverse": ((15701, 34012, 2208, 96, 0), (72576, 34012, 2208, 95, 0)),
-    "evaluate": ((15463, 37428, 2208, 98, 0), (72338, 37428, 2208, 98, 0)),
-    "cash_file": ((98509, 137432, 19248, 6239, 0), (585584, 137073, 18852, 103305, 0)),
-    "export": ((7042, 48693, 0, 11806, 0), (46935, 48542, 0, 58510, 0)),
-    "continuity": ((32004, 2226225, 0, 10731, 0), (229802, 44523292, 0, 141710, 1)),
-    "package": ((3152, 18608, 0, 86, 0), (3152, 18608, 0, 104, 0)),
-    "audit": ((13875, 23969, 0, 94, 0), (70750, 23969, 0, 103, 0)),
-    "summary": ((2796, 0, 0, 7, 0), (2796, 0, 0, 7, 0)),
-    "history": ((2306, 0, 0, 312, 0), (2306, 0, 0, 324, 0)),
-    "open": ((266619, 3924859, 0, 5924, 0), (2540817, 83604988, 0, 96577, 0)),
-    "item_decision": ((72592, 63415, 8364, 242, 0), (109744, 361982, 70428, 7699, 0)),
-    "gate_state_pin": ((0, 236354, 0, 705, 0), (0, 2362946, 0, 7045, 0)),
+    "decision": ((11777, 32313, 1939, 119, 0), (31560, 32313, 1939, 116, 0)),
+    "reverse": ((11985, 34012, 2208, 128, 0), (31768, 34012, 2208, 131, 0)),
+    "evaluate": ((11738, 37428, 2208, 141, 0), (31521, 37428, 2208, 134, 0)),
+    "cash_file": ((90892, 137432, 19248, 6423, 0), (503783, 137073, 18852, 103328, 0)),
+    "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
+    "continuity": ((32004, 2226225, 0, 10760, 0), (229802, 44523292, 0, 141728, 1)),
+    "package": ((3152, 18608, 0, 112, 0), (3152, 18608, 0, 112, 0)),
+    "audit": ((10050, 23969, 0, 126, 0), (29833, 23969, 0, 126, 0)),
+    "summary": ((2796, 0, 0, 11, 0), (2796, 0, 0, 11, 0)),
+    "history": ((2306, 0, 0, 328, 0), (2306, 0, 0, 328, 0)),
+    "open": ((257358, 3924859, 0, 6039, 0), (2442549, 83604988, 0, 96729, 0)),
+    "item_decision": ((34055, 63415, 8364, 289, 0), (69911, 361982, 70428, 7852, 0)),
+    "gate_state_pin": ((0, 236354, 0, 706, 0), (0, 2362946, 0, 7046, 0)),
 }
 # Every public FinancialOwner method is measured or named here with the reason it is not (history-guard-v1.md, inventory).
 MEASURED = {"record_payment_evidence", "reverse_payment", "evaluate_obligation", "run_batch", "export_history", "export_continuity", "decision_package", "summary", "history"}
@@ -119,6 +120,8 @@ def _measure(operation):
         engine._running_evaluator()  # warm, so no operation pays (and hashes) a worker launch
         engine._evaluator_requests = 0  # and none recycles one mid-operation
     before, refused = dict(_work), 0
+    gc.collect()
+    gc.disable()  # a collection that fires mid-call frees cycles at a point that depends on earlier tests; the peak swung 20% between runs
     tracemalloc.start()
     try:
         operation()
@@ -128,6 +131,7 @@ def _measure(operation):
     finally:
         peak = tracemalloc.get_traced_memory()[1]
         tracemalloc.stop()
+        gc.enable()
     return tuple(_work[name] - before[name] for name in COUNTERS[:3]) + (peak // 1024, refused)
 
 
