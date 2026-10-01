@@ -174,6 +174,22 @@ def oldPay (i : FinancialInput) (w : Writes) : Nat :=
 def addedBytes (i : FinancialInput) (w : Writes) : Nat :=
   evBytes w + (newPay w - oldPay i w) + cfBytes w
 
+def paymentMagic : Bytes := "BLFPAY01".toUTF8.toList
+
+def encodeReceipt (k : Receipt) : Bytes :=
+  encodeString k.paymentId ++ natBE 8 k.recordedRevision ++ encodeOptionString k.paysActionId
+
+def anchorOverhead : Nat := paymentMagic.length + 1 + 4
+def maxCallTailBytes : Nat := 1024
+def receiptBytes (w : Writes) : Nat := (w.receipt.map fun k => (encodeReceipt k).length).getD 0
+
+def anchorItemLength (i : FinancialInput) (rs : List Receipt) : Nat :=
+  anchorOverhead + (rawEncodeFinancialInput i).length + (encodeList encodeReceipt rs).length
+
+def withinCapacity (r : PaymentRequest) (w : Writes) : Bool :=
+  anchorOverhead + r.inputBytes + (encodeList encodeReceipt r.receipts).length + addedBytes r.input w +
+    receiptBytes w + maxCallTailBytes ≤ maxTotalEncodedBytes
+
 /-! ## Request well-formedness, which the decoder enforces (section 2.4) -/
 
 def commandWellFormed : Command → Bool

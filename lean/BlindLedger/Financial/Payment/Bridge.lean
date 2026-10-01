@@ -3,7 +3,6 @@ import BlindLedger.Financial.Payment.Ledger
 namespace BlindLedger.Financial.Payment
 
 open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
-open Base
 
 /-! The cross-module law (design 5.4): what correction reads as paid on request `a` is what the
     payment history recorded to `a`, less what it reversed from `a`.  Nothing calls this yet. -/
@@ -168,7 +167,7 @@ theorem run_bridge (a : String) : ∀ (calls : List Call) (L : Ledger), Inv L �
     simp only [run_cons, trace, reversedFrom, recordedTo, List.map_cons, List.sum_cons] at ih ⊢
     omega
 
-theorem run_ledgerPaid (L) (hL : ledgerWellFormed L) (calls) (hc : clocksOk L calls) (a : String) :
+theorem run_ledgerPaid (L) (hL : ledgerWellFormed L) (calls) (a : String) :
     ledgerPaid (run L calls) a + reversedFrom a (run L calls).receipts (trace L calls) =
       ledgerPaid L a + recordedTo a (trace L calls) :=
   run_bridge a calls L (Inv_of_wf hL)
@@ -235,8 +234,8 @@ theorem run_within : ∀ (calls : List Call) (L : Ledger), Inv L →
   | c :: cs, L, hI, hA, hW =>
     run_within cs (step L c) (step_Inv c hI) (by rw [step_actions]; exact hA) (step_within c hI hA hW)
 
-theorem run_within_requests (L) (hL : ledgerWellFormed L) (hW : withinRequests L) (calls)
-    (hc : clocksOk L calls) : withinRequests (run L calls) :=
+theorem run_within_requests (L) (hL : ledgerWellFormed L) (hW : withinRequests L) (calls) :
+    withinRequests (run L calls) :=
   run_within calls L (Inv_of_wf hL) (nodup_actions_of_wf hL.1) hW
 
 /-- The paid total correction reads is the one the payment transitions recorded. -/
