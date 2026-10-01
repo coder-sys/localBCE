@@ -750,19 +750,25 @@ class FinancialClock(Protocol):
 
 
 # One wall-clock step ahead (NTP, VM resume, a manual change) that commits and is then corrected leaves every
-# later write refused as event_commit_order, store-wide. Ten minutes covers real drift; more is refused unwritten.
+# later write refused as event_commit_order, store-wide. Ten minutes covers real drift; more is refused unwritten
+# until the new wall time has held in step with the monotonic clock for as long, then it is the new baseline. An
+# operator-mistake guard, not a tamper control: setting the clock back before the first reading, or restarting, passes it.
 _CLOCK_SKEW_MS: Final = 600_000
 
 
 class _SystemClock:
     def __init__(self) -> None:
         self._seen: tuple[int, int] | None = None  # (wall ms, monotonic ms) of the last accepted reading
+        self._held: tuple[int, int] | None = None  # the first refused reading of the current stable stretch
 
     def now_ms(self) -> int:
         wall, mono = time.time_ns() // 1_000_000, time.monotonic_ns() // 1_000_000
         if self._seen is not None and wall > self._seen[0] + (mono - self._seen[1]) + _CLOCK_SKEW_MS:
-            _fail(FinancialIntegrityError, "clock_jump_ahead")
-        self._seen = (wall, mono)
+            if self._held is None or abs(wall - self._held[0] - (mono - self._held[1])) > _CLOCK_SKEW_MS:
+                self._held = (wall, mono)
+            if mono - self._held[1] < _CLOCK_SKEW_MS:
+                _fail(FinancialIntegrityError, "clock_jump_ahead")
+        self._seen, self._held = (wall, mono), None
         return wall
 
 

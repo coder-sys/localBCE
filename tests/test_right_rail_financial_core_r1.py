@@ -244,6 +244,25 @@ class CoreR1aMarkTests(unittest.TestCase):
             wall[0] -= 3_600_000  # the clock is corrected
             self.assertIn("status", store.record_payment_evidence(**_pay("item-03")))
 
+    def test_a_forward_clock_step_that_stays_put_is_accepted_after_the_lockstep_window(self):
+        store = self._fixture()._build_base()
+        wall, mono = [store.clock.value + 1_000], [0]
+        store.clock = owner._SystemClock()
+        with patch.object(owner.time, "time_ns", lambda: wall[0] * 1_000_000), patch.object(owner.time, "monotonic_ns", lambda: mono[0] * 1_000_000):
+            store.record_payment_evidence(**_pay("item-05"))
+            wall[0] += 3_600_000  # a step ahead that is never corrected
+            for _ in range(2):
+                with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
+                    store.record_payment_evidence(**_pay("item-06"))
+                wall[0] += owner._CLOCK_SKEW_MS // 2
+                mono[0] += owner._CLOCK_SKEW_MS // 2  # time passes in step, still inside the window
+            wall[0] += 1
+            mono[0] += 1
+            self.assertIn("status", store.record_payment_evidence(**_pay("item-06")))  # held for the whole window: the new baseline
+            wall[0] += 60_000
+            mono[0] += 60_000
+            self.assertIn("status", store.record_payment_evidence(**_pay("item-04")))
+
     def test_close_is_idempotent_and_releases_the_store(self):
         fixture = self._fixture()
         base = fixture._build_base()
