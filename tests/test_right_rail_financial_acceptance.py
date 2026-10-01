@@ -2656,7 +2656,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         package = store.export_continuity()  # the largest package, one receipt under the cap, restores and verifies
         self.assertLess(owner._MAX_PACKAGE_BYTES - len(package), 8_000)
         verify_continuity_package(package, expected_scope=json.loads(package)["scope"], expected_authority=self.authority)
-        restored_package = FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner.export_continuity()
+        with FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner as restored:
+            restored_package = restored.export_continuity()
         self.assertLessEqual(len(restored_package), owner._MAX_PACKAGE_BYTES)
         self.assertEqual(store.record_program_funding_receipt(receipt_for(index))["status"], "RECORDED")
         with self.assertRaisesRegex(FinancialContinuityError, "^continuity_package_size$"):
@@ -3540,7 +3541,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 (population_id,),
             )
             connection.commit()
-        before = store.export_continuity()
+        before = _image(store.path)  # R1a: an export after this outside edit is refused
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_imported_count"):
             store.stage_population(
                 population_id=population_id,
@@ -3552,7 +3553,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 items=items[1:2],
                 chunk_size=1,
             )
-        self.assertEqual(store.export_continuity(), before)
+        self.assertEqual(_image(store.path), before)
         with store._read_snapshot() as connection:
             imported = connection.execute(
                 "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",

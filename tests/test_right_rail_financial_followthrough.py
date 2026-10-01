@@ -549,7 +549,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
         early = next(i for i in _pack(store, CLOSE_AT + DAY)["items"] if i["item_id"] == "item-r2")
         self.assertEqual(early["collected_share"]["status"], "DUE")
         (self.directory / "none").mkdir()
-        self.assertIsNone(self._r2(self._store("none"))["collected_share"])  # nothing collected: nothing due
+        self.assertIsNone(self._r2(self._closing(_decided_store(self.directory / "none")))["collected_share"])  # nothing collected: nothing due
 
     def test_evidence_recorded_after_a_close_never_covers_it(self) -> None:
         store = self._closing(_build_r_store(self.directory, RULES))

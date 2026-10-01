@@ -38,6 +38,13 @@ class _Clock:
         return self.value
 
 
+def _unverified_export(store: owner.FinancialOwner) -> bytes:
+    """A compromised writer's package: R1a's export verifies the store first, so it is built here directly."""
+    with closing(store._connect()) as connection:
+        connection.execute("BEGIN")
+        return store._continuity_package_bytes(connection)
+
+
 class IndependentFinancialCheckerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-independent-")
@@ -555,13 +562,10 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             path=target, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE",
             owner_id="financial-owner-v1", correction_transition_release=None, identity_contract=None,
         )
-        try:
-            with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
-                independent.verify_continuity_package(
-                    tampered_owner.export_continuity(), expected_scope=self.scope, expected_authority=self.authority_binding,
-                )
-        finally:
-            tampered_owner.close()
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
+            independent.verify_continuity_package(
+                _unverified_export(tampered_owner), expected_scope=self.scope, expected_authority=self.authority_binding,
+            )
 
     def test_rehashed_evidence_received_before_its_event_committed_fails_replay(self) -> None:
         def skew_support_received(rows: list[dict[str, object]]) -> None:
@@ -833,7 +837,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 correction_transition_release=None,
                 identity_contract=None,
             )
-            tampered_package = tampered_owner.export_continuity()
+            tampered_package = _unverified_export(tampered_owner)
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
                 independent.verify_continuity_package(
                     tampered_package,

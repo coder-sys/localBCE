@@ -2236,15 +2236,15 @@ class FinancialOwner:
     def _begin(self, statement: str) -> sqlite3.Connection:
         """The writer inside ``statement`` at its marked point. SQLite moves data_version only for other connections'
         commits, so a moved mark means something outside this owner changed the store: it is verified again exactly
-        as a fresh open verifies it, and a swapped file or a lower sequence is store_replaced. If that verification
+        as a fresh open verifies it, and a swapped file or a lower sequence is store_replaced. If the history check
         refuses, the command still runs its own checks first on a connection that never commits, so a refusal they
         find keeps its code; otherwise the fresh open's refusal is raised before anything is reported or committed."""
         while True:
             if self._writer is None:
                 try:
                     self._verify_open_identity(verify_history=True)
-                except FinancialError as refusal:
-                    if isinstance(refusal, FinancialBusyError):
+                except FinancialIntegrityError as refusal:
+                    if not str(refusal).startswith("open_verification:"):  # identity, schema, triggers: as a fresh open
                         raise
                     connection = self._connect()
                     try:
@@ -2491,6 +2491,7 @@ class FinancialOwner:
                     if self._batch.evaluated:  # the very set it verified needs only this Owner's own schema and meta check
                         self._verify_before_commit(connection, "evaluation", *(() if self._batch.evaluated == done else sorted(self._batch.evaluated)))
                     if self._refusal is not None:
+                        self._seal_segment(connection, force=True)  # its seal-time checks speak too (history_segment_chain)
                         raise self._refusal
                     conclude and conclude()  # a cash-file preview reports only after the check above, then rolls back
                     connection.execute("DELETE FROM temp.rr_row_inserts")  # the next write counts its own

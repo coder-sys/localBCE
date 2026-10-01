@@ -321,9 +321,8 @@ class LinePackTests(unittest.TestCase):
 
 class LateRecordingTests(unittest.TestCase):
     def test_a_fact_recorded_after_quarter_end_changes_only_the_quarter_that_records_it(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="rr-line-pack-late-") as tmp:
-            authority, line_map = SyntheticTrustedAuthority(), LINE_MAP.read_bytes()
-            owner = _build(Path(tmp), authority, line_map)
+        authority, line_map = SyntheticTrustedAuthority(), LINE_MAP.read_bytes()
+        with tempfile.TemporaryDirectory(prefix="rr-line-pack-late-") as tmp, _build(Path(tmp), authority, line_map) as owner:
             trust = {"trusted_authority": authority, "expected_scope": {**SCOPE, "currency": "USD"}}
 
             def pack(package: bytes, quarter: str, at_ms: int = AT, **changes: object) -> bytes:

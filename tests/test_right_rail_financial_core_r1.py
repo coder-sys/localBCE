@@ -128,7 +128,7 @@ class CoreR1aMarkTests(unittest.TestCase):
         fixture._record_claim(store)
         reopened = fixture._make_owner(path=store.path, clock=store.clock, correction_transition_release=store.correction_transition_release)
         _foreign(store.path, TAMPER)
-        with self.assertRaisesRegex(owner.FinancialIntegrityError, "^open_verification:"):
+        with self.assertRaises(owner.FinancialIntegrityError):  # its own snapshot check finds it first (decision 1)
             fixture._reject(reopened, CLAIM)
 
     def test_a_store_file_replaced_under_the_owner_is_refused(self):

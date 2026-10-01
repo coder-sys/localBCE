@@ -1006,6 +1006,7 @@ class FinancialMirrorTests(unittest.TestCase):
         package = self.mirror.export_continuity()
         destination = self.root / "test-restore-then-reject.sqlite"
         restored = self.mirror.restore_test_continuity(package, destination)
+        self.addCleanup(restored.owner.close)
         self.assertIsNotNone(restored.owner.correction_transition_release)
         receipt = restored.current_evaluation_receipt(H_ITEM_ID)
         decision = restored.reject_offset_and_authorize_correction(
