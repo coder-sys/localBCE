@@ -11,6 +11,7 @@ import BlindLedger.Financial.CorrectionTransition.Theorems.Core
 import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.CodecLaws
 import BlindLedger.Financial.Payment.KAT
+import BlindLedger.Financial.DecisionPackage.Laws
 
 namespace BlindLedger.Financial
 
@@ -283,5 +284,51 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.decodePaymentRequest_encode
 /-- info: 'BlindLedger.Financial.Payment.paymentMagic_disjoint' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentMagic_disjoint
+
+/-! The decision package (`DecisionPackage.Laws`): the section 4.1 to 4.4 theorems, plus the two definitions the
+    worker will call, which depend on no axiom. -/
+
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude
+/-- info: 'BlindLedger.Financial.DecisionPackage.packageRespond' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.packageRespond
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_missingCents' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_missingCents
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_missingCents_zero_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_missingCents_zero_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_cash_supported_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_cash_supported_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_cash_conflicted_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_cash_conflicted_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.factsOfEvaluation_sums' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.factsOfEvaluation_sums
+/-- info: 'BlindLedger.Financial.DecisionPackage.factsOfEvaluation_not_conflicted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.factsOfEvaluation_not_conflicted
+/-- info: 'BlindLedger.Financial.DecisionPackage.factsOfEvaluation_missingCents_zero_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.factsOfEvaluation_missingCents_zero_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_amount_supported_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_amount_supported_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_delivery_supported_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_delivery_supported_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_missingMask_zero_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_missingMask_zero_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_missingMask_lt' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_missingMask_lt
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_not_resolved_iff' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_not_resolved_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_assessment_supported_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_assessment_supported_iff
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_supported_has_evidence' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_supported_has_evidence
+/-- info: 'BlindLedger.Financial.DecisionPackage.conclude_cash_independent_of_action' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.conclude_cash_independent_of_action
+/-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageFacts_canonical
+/-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_encode' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageFacts_encode
+/-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageFacts_wellFormed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageFacts_wellFormed
+/-- info: 'BlindLedger.Financial.DecisionPackage.decodePackageAnswer_respond' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.DecisionPackage.decodePackageAnswer_respond
 
 end BlindLedger.Financial
