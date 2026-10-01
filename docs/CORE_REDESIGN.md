@@ -281,9 +281,11 @@ flows need sharding or Phase 2 and are not claimed.
   payment re-binds every earlier payment of its item), bounded by the 5 s writer
   busy timeout. One evaluation per payment is kept
   (founder, 2026-09-28).
-- 2026-09-29: BLFIN02 bytes of each evidence and payment record are cached (same
-  typed values, same bytes). Quarter-end, no profiler: encoding 0.85 to 0.43 s; lock
-  still 8-11.5 s, over 5 s: worker 2.6 s, whole-store checks 2.9 s (`lk-break1`).
+- Quarter-end lock, 7.4 s: owner path 5.3 (Lean worker 1.3, SQL 1.5, canonical
+  JSON 0.8), checker 1.8, COMMIT 0.4 (`cqe-prof9`). A 64 MiB page cache and the
+  collector paused in one write: 5.9-6.9 s (`cqe-red1`-`3`), still over 5 s; a row
+  memo gained nothing. The rest is 0.1-0.3 s items: under 5 s needs a limit or a
+  check restructure (rr-core).
 - Art. XI.2 record. Disposition: the whole-store verify no longer runs twice per
   import under the lock (it runs at each open). Replacement control, before
   COMMIT: each new event onto the chain, every table's before/after difference,
