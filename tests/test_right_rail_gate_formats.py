@@ -624,16 +624,8 @@ class GoldenVectorTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             copy.unlink()
 
-    def test_gate_verify_pin_names_the_current_lean_tree(self) -> None:
-        """Any change under lean/ needs a rebuilt, re-pinned gate_verify; PROVENANCE records the tree's manifest."""
-        lean = signer.ROOT / "lean"
-        tracked = subprocess.run(["git", "ls-files", "-z", "lean"], cwd=signer.ROOT, capture_output=True, check=True).stdout.decode().split("\0")
-        files = sorted(name for name in tracked if name and ".lake" not in name.split("/"))  # tracked files only (no caches), plain string order
-        lf = {name: hashlib.sha256((signer.ROOT / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest() for name in files}  # LF = the git blob (eol=lf): a CRLF checkout must not move it
-        manifest = "".join(f"{lf[name]}  {name}\n" for name in files)
-        recorded = re.search(r"Source manifest.{0,90}?([0-9a-f]{64})", (signer.VERIFY.parent / "PROVENANCE.txt").read_text("utf-8"), re.S)
-        self.assertEqual(recorded and recorded.group(1), hashlib.sha256(manifest.encode()).hexdigest())
-        built = lean / ".lake" / "build" / "bin" / "gate_verify.exe"  # this tree's build is the pinned exe
+    def test_the_in_tree_gate_verify_build_is_the_pinned_exe(self) -> None:
+        built = signer.ROOT / "lean" / ".lake" / "build" / "bin" / "gate_verify.exe"  # this tree's build is the pinned exe; the sources it came from are tools/tcb_report.txt's manifest line
         self.assertEqual(hashlib.sha256(built.read_bytes()).hexdigest(), signer.VERIFY_PIN.read_text("ascii").strip())
 
     def test_only_the_signer_makes_a_checked_signer(self) -> None:

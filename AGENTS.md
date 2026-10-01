@@ -10,12 +10,7 @@ This is the single RightRail codebase (`rightrail-main`). Read, in order:
 Working rules (details in the constitution):
 
 - All product code lives here. Do not create per-team copies of modules.
-- Heavy runs (builds, tests, provers) go only through the shared runner
-  `C:/Users/neers/rrb/tools/rr_guarded.ps1`, which calls guard v7 (outside this
-  tree; floor 2,029,372,048 bytes, 1 GiB while the owner-approved away file is
-  valid; `-MinFree` 2,200,000,000 Python, 4,029,372,048 Lean/cargo/native, which
-  the runner lowers in away mode). Never weaken or bypass it. The old trunk copy (v4,
-  `run.ps1`) is parked in `parked/native_guard/`.
+- Heavy runs go only through `C:/Users/neers/rrb/tools/rr_guarded.ps1` under the limits in the driver root AGENTS.md (`../../AGENTS.md`); never weaken or bypass it.
 - Lean decides; Python adapters commit. No duplicate policy, no silent fallback.
 - The pinned engine binary in `artifacts/engine-correction/` is built from
   the `lean/` commit its `PROVENANCE.md` names. Any later `lean/` change
@@ -23,7 +18,7 @@ Working rules (details in the constitution):
 - Private zero-knowledge is an active prototype track (Constitution IX.4). It
   is evidence only and never blocks core or gate work. The old code under
   `parked/` stays reference material.
-- Update `STATUS.md` in a few lines per change.
+- Only the lead edits `STATUS.md`, once per trunk merge, replacing what it supersedes.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.
 - Helpers are matched to the work (founder, 2026-09-28; definitions, models
@@ -32,8 +27,7 @@ Working rules (details in the constitution):
   their own work and never spawn helpers. Sonnet never runs at extra-high or
   max effort. Money logic, formats, digests, theorem statements and crypto go
   to `rr-core`; `rr-review` bug-hunts any such change before merge.
-- One lead session at a time; at most about three helpers, one or two of
-  them using the guard (16 GB laptop).
+- One lead session at a time; runs share lanes 1-3 per the driver root AGENTS.md.
 - Never destroy uncommitted work, raw evidence, keys or the only copy of
   anything. No `git reset --hard`, `git clean`, or force pushes.
 

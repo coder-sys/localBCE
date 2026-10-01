@@ -1,6 +1,6 @@
 """Read-only follow-through pack: who found each obligation, who owns it and which clocks run on it.
 
-Documentation only (docs/CORE_REDESIGN.md "Follow-through pack"). Deadlines are Control Pack data: a
+Documentation only (rrb/archive/xi2-records-20261001.md "Follow-through decision event"). Deadlines are Control Pack data: a
 canonical rules file whose SHA-256 exactly one approved Control Pack lists. The pack is built from a
 verified store (right_rail_financial_derived) and writes nothing. Standing claims: synthetic,
 non-PHI, nonpayment, proofSuiteId=null, production_usable=false, activation=false.

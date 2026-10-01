@@ -661,7 +661,7 @@ def _lean_imports(source: str) -> list[str]:
         at += 1
 
 
-def _check_pinned_exe_closure(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> int:
+def _pinned_exe_modules(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> set[str]:
     lake = tomllib.loads((lean_dir / "lakefile.toml").read_text(encoding="utf-8"))
     roots = {str(exe["name"]): str(exe["root"]) for exe in lake.get("lean_exe", [])}
     if any(name not in roots for name in exes):
@@ -683,7 +683,23 @@ def _check_pinned_exe_closure(lean_dir: Path, exes: Sequence[str] = PINNED_EXES)
         if PROOF_COMMAND_RE.search(source):
             raise AssuranceError(f"pinned executable imports {module}, which pins axioms")
         pending.extend(_lean_imports(source))
-    return len(seen)
+    return seen
+
+
+def _check_pinned_exe_closure(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> int:
+    return len(_pinned_exe_modules(lean_dir, exes))
+
+
+def pinned_source_manifest(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> str:
+    """SHA-256 over `sha256  lean/path` lines (LF bytes, string-sorted) for the sources the exes are built from: each exe's import closure and the build files."""
+    names = {"lakefile.toml", "lean-toolchain", "lake-manifest.json"}
+    sources = {module.replace(".", "/") + ".lean" for module in _pinned_exe_modules(lean_dir, exes)}
+    names |= {name for name in sources if (lean_dir / name).is_file()}  # Init, Std and Lean are not files of this tree
+    digest = hashlib.sha256()
+    for name in sorted(names):
+        lf = (lean_dir / name).read_bytes().replace(b"\r\n", b"\n")
+        digest.update(f"{hashlib.sha256(lf).hexdigest()}  lean/{name}\n".encode())
+    return digest.hexdigest()
 
 
 def _toolchain_paths(manifest: Manifest) -> tuple[dict[str, Path], dict[str, Any]]:

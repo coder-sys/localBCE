@@ -1,6 +1,6 @@
 """Read-only CMS-64.9 line pack: one line and one quarter, documented from a verified store.
 
-The pack is documentation only (docs/CORE_REDESIGN.md "Line pack"). It reconciles cents to the
+The pack is documentation only (rrb/archive/xi2-records-20261001.md "Line pack"). It reconciles cents to the
 Ledger, names each row's evidence digest and the Control Pack and rule version it was decided
 under, splits service period from payment date and lists what the Ledger does not hold. It makes
 no determination about any payment. It is built only from a Continuity package that the
