@@ -113,6 +113,24 @@ class DurabilityR05Tests(unittest.TestCase):
         self.assertEqual(migrated.summary(), summary)
         self.fixture._assert_verified(migrated)
 
+    def test_a_store_that_will_not_become_wal_is_refused(self):
+        # A file system without shared memory answers journal_mode=WAL with another mode: creation and the migrating
+        # switch both refuse it rather than acknowledge commits without the WAL durability claim.
+        connect = sqlite3.connect
+
+        class NoWal(sqlite3.Connection):
+            def execute(self, sql, *args):
+                return super().execute("SELECT 'delete'" if sql == "PRAGMA journal_mode=WAL" else sql, *args)
+
+        no_wal = patch.object(sqlite3, "connect", lambda *args, **kwargs: connect(*args, factory=NoWal, **kwargs))
+        with no_wal, self.assertRaisesRegex(owner.FinancialIntegrityError, "^journal_mode$"):
+            self.fixture._make_owner(path=Path(self.fixture.temp_dir.name) / "born.sqlite")
+        store = self.fixture._make_owner()
+        self.assertEqual(_journal(store.path, "=DELETE"), "delete")
+        with no_wal, self.assertRaisesRegex(owner.FinancialIntegrityError, "^journal_mode$"):
+            owner.FinancialOwner(path=store.path, config=store.config, trusted_authority=self.fixture.authority, clock=acceptance._Clock())
+        self.assertEqual(_journal(store.path), "delete")
+
     def test_a_restore_refuses_to_publish_while_a_reader_pins_the_wal(self):
         # A reader's open transaction keeps the import in the attempt's -wal: the checkpoint cannot empty it.
         store = self.fixture._build_base()
