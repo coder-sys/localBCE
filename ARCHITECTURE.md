@@ -72,9 +72,9 @@ digests and the whole store.
  do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_linked`). The release is an
  explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
  command fails closed. There is no Python fallback decision.
-- **Pinned executable:** `artifacts/engine-correction/`, built by the release
- producer from the exact source its `PROVENANCE.md` records (commit and
- file manifest); a later `lean/` change is not covered. Engines a re-pin
+- **Pinned executable:** `artifacts/engine-correction/`, built from the exact
+ source its `PROVENANCE.md` records (commit and file manifest; the release
+ producer is parked and frozen, below); a later `lean/` change is not covered. Engines a re-pin
  retired are in its digest-pinned `RETIRED_PINS` (rules in its `PROVENANCE.md`): only
  the current pin decides new work.
 - **Evaluation:** Lean decides. `evaluate_live` (`app/right_rail_financial_engine.py`)
@@ -110,9 +110,11 @@ routing or cutover.
 **Staff server** is loopback-only and serves `app/staff_workspace/`. The
 **service kit** (`tools/right_rail_financial_service_kit.py`) is the one
 packager: it assembles, verifies, extracts, runs the end-to-end scenario and
-serves the workspace from a digest-bound offline archive. Its release
-producer and inventory bind the current vectors, retired-pin registry and a
-fresh guarded engine receipt. The kit checks canonical source paths and the
+serves the workspace from a digest-bound offline archive. Its inventory binds
+the current vectors and retired-pin registry. The release producer is parked
+and frozen in `parked/release-producer/` (never run on this tree; its path
+check refuses to run there); only the kit still reads it, bundling the script
+byte for byte and recording its hash in the engine receipt. The kit checks canonical source paths and the
 exact v4 guard records under LF or CRLF endings; exercised archives are in
 provenance. Staff cash evidence names the correction request it pays;
 acknowledgment alone never provides that credit.

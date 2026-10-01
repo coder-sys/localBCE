@@ -63,7 +63,7 @@ level within that product. Existing payment systems move money. Synthetic, non-P
   take over work.
 - No cancel or reduce command for stale corrections; CANCELLED is never written. The receipt's `delivery_status` is the newest
   action's, not the verdict, which lives in Python until M3 step 2.
-- Core size targets unmet: owner about 3,000 lines targeted against 7,327, checker about 1,800 against 5,225.
+- Core size targets unmet: owner about 3,000 lines targeted against 7,327, checker about 1,800 against 4,594.
 - Isolated TEST restore uses the system clock. The command log omits `pays_action_id`; the event chain carries it.
 
 Next: connector and browser completion is paused at the founder's request; final combined-source verification is outstanding. This
