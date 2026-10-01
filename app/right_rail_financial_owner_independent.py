@@ -2835,6 +2835,7 @@ def _verify_actions(
     claims: dict[str, sqlite3.Row],
     determinations: dict[str, sqlite3.Row],
     payments: dict[str, sqlite3.Row],
+    obligations: Mapping[str, sqlite3.Row],
     only: Collection[str] | None = None,  # per-obligation mode: these obligations' actions, the same rules
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "actions", "obligation_id", only)
@@ -2928,6 +2929,8 @@ def _verify_actions(
         created = _time(row["created_at_ms"], "action:created")
         if created < determination["decided_at_ms"]:
             _fail("action:chronology")
+        if determination["decision"] == "OFFSET_AUTHORIZED" and determination["decided_at_ms"] <= obligations[obligation_id]["due_at_ms"] < created:
+            _fail("action:backdated-past-due")
         box = outbox.get(action_id)
         if box is None:
             _fail("outbox:missing")
@@ -3554,7 +3557,7 @@ def verify_obligation_connection(connection: sqlite3.Connection, *obligation_ids
         packs = {str(v["pack_id"]): v for v in connection.execute("SELECT * FROM control_packs")}
         evaluations, claims = _group(mine("evaluations"), "obligation_id"), {str(v["claim_id"]): v for v in mine("claimed_adjustments")}
         determinations = _verify_determinations(connection, meta, touched, populations, packs, claims, evidence, evaluations, actors=identity["actors"], only=touched)
-        _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, only=touched)
+        _verify_actions(connection, meta, evaluations, claims, determinations, {str(v["payment_id"]): v for v in mine("payments")}, touched, only=touched)
         _verify_correction_followup_records(
             connection.execute("SELECT * FROM financial_events WHERE aggregate_type='OBLIGATION' AND +kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' AND aggregate_id IN (SELECT value FROM json_each(?)) ORDER BY event_sequence", (marks,)),  # +kind keeps the per-obligation seek off the store-wide kind index
             evaluations={str(v["evaluation_id"]): dict(v) for rows in evaluations.values() for v in rows}, determinations={key: dict(v) for key, v in determinations.items()},
@@ -4395,7 +4398,7 @@ def _verify_connection(
         evaluations,
         actors=identity["actors"],
     )
-    actions = _verify_actions(connection, meta, evaluations, claims, determinations, payments)
+    actions = _verify_actions(connection, meta, evaluations, claims, determinations, payments, obligations)
     conflicts = _verify_conflicts(connection, obligations, evidence, payments)
     _verify_duplicate_evidence(connection)
     _verify_followthrough_decisions(events, meta, obligations, populations, packs, identity["actors"])

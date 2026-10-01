@@ -56,6 +56,10 @@ _JOB_LIMIT_FLAGS = (
 )
 _DUPLICATE_SAME_ACCESS = 0x00000002
 _PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
+_PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY = 0x00020007
+# The pinned exe's directory is first in the loader's search order, so a DLL planted beside it would run in the
+# checked file's process (safety red team L1). These make the child take System32's DLLs and nothing from a share.
+_IMAGE_LOAD_POLICY = (1 << 52) | (1 << 60)  # NO_REMOTE_ALWAYS_ON | PREFER_SYSTEM32_ALWAYS_ON
 _GENERIC_READ = 0x80000000
 _FILE_READ_ATTRIBUTES = 0x00000080
 _FILE_SHARE_READ = 0x00000001
@@ -1031,14 +1035,14 @@ def _create_process_with_owned_output_handles(
 
         attribute_size = ctypes.c_size_t(0)
         first_call = kernel32.InitializeProcThreadAttributeList(
-            None, 1, 0, ctypes.byref(attribute_size)
+            None, 2, 0, ctypes.byref(attribute_size)
         )
         if first_call or not attribute_size.value:
             raise VerifierProcessError("verifier_attribute_list_size")
         attribute_storage = ctypes.create_string_buffer(attribute_size.value)
         attribute_list = ctypes.cast(attribute_storage, wintypes.LPVOID)
         if not kernel32.InitializeProcThreadAttributeList(
-            attribute_list, 1, 0, ctypes.byref(attribute_size)
+            attribute_list, 2, 0, ctypes.byref(attribute_size)
         ):
             raise _win_error("verifier_attribute_list_initialize")
         attribute_list_initialized = True
@@ -1051,6 +1055,13 @@ def _create_process_with_owned_output_handles(
             ctypes.sizeof(inherited_handles), None, None,
         ):
             raise _win_error("verifier_attribute_list_update")
+        image_policy = ctypes.c_uint64(_IMAGE_LOAD_POLICY)
+        if not kernel32.UpdateProcThreadAttribute(
+            attribute_list, 0, _PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+            ctypes.cast(ctypes.pointer(image_policy), wintypes.LPVOID),
+            ctypes.sizeof(image_policy), None, None,
+        ):
+            raise _win_error("verifier_image_policy")
         startup.lpAttributeList = attribute_list
         if not kernel32.CreateProcessW(
             str(executable), command_line, None, None, True,

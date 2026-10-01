@@ -202,6 +202,68 @@ class CoreR1aMarkTests(unittest.TestCase):
             self.assertIn("status", store.record_payment_evidence(**_pay("item-05")))
         self.assertEqual(len(calls), 1)
 
+    def test_a_raw_page_edit_while_the_owner_is_open_is_not_committed_on_top_of(self):
+        # safety red team S1: a byte edit of a payments page moves no data_version and the writer's cached pages may
+        # still be the old ones, so the correction's pre-COMMIT check could pass on state the file no longer holds
+        fixture = self._fixture()
+        store = fixture._build_base_for_correction()
+        fixture._record_cash(store)
+        claim = fixture._record_claim(store)
+        _foreign(store.path, "PRAGMA wal_checkpoint(TRUNCATE)")  # the page is in the main file, not only the WAL
+        key = b"origin:cash:h:v1" + expected.H_CASH_CENTS.to_bytes(4, "big")  # a payments row ends origin, amount
+        image = Path(store.path).read_bytes()
+        self.assertEqual(image.count(key), 1)
+        with open(store.path, "r+b") as raw:
+            raw.seek(image.index(key) + len(key) - 1)
+            raw.write(bytes([image[image.index(key) + len(key) - 1] ^ 1]))  # one cent more cash than the history holds
+        outcome = "committed"
+        try:
+            fixture._reject(store, claim)
+        except owner.FinancialError as refusal:
+            outcome = str(refusal)
+        self.assertNotEqual(outcome, "committed")
+        with self.assertRaises(owner.FinancialIntegrityError):
+            fixture._make_owner(path=store.path, clock=store.clock)  # a fresh open sees the edit either way
+
+    def test_a_clock_step_ahead_is_refused_unwritten_and_writes_resume_when_it_is_corrected(self):
+        # safety red team M1: one commit at a stepped clock made event_commit_order refuse every later write store-wide
+        store = self._fixture()._build_base()
+        wall, mono = [store.clock.value + 1_000], [0]  # ms; a wall step moves only `wall`
+        store.clock = owner._SystemClock()
+        with patch.object(owner.time, "time_ns", lambda: wall[0] * 1_000_000), patch.object(owner.time, "monotonic_ns", lambda: mono[0] * 1_000_000):
+            store.record_payment_evidence(**_pay("item-05"))
+            wall[0] += 60_000
+            mono[0] += 60_000
+            store.record_payment_evidence(**_pay("item-06"))  # normal running
+            wall[0] += owner._CLOCK_SKEW_MS - 1  # a small skew inside the bound
+            store.record_payment_evidence(**_pay("item-04"))
+            wall[0] += 3_600_000  # an hour's step ahead
+            before = acceptance._image(store.path)
+            with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
+                store.record_payment_evidence(**_pay("item-03"))
+            self.assertEqual(acceptance._image(store.path), before)
+            wall[0] -= 3_600_000  # the clock is corrected
+            self.assertIn("status", store.record_payment_evidence(**_pay("item-03")))
+
+    def test_a_forward_clock_step_that_stays_put_is_accepted_after_the_lockstep_window(self):
+        store = self._fixture()._build_base()
+        wall, mono = [store.clock.value + 1_000], [0]
+        store.clock = owner._SystemClock()
+        with patch.object(owner.time, "time_ns", lambda: wall[0] * 1_000_000), patch.object(owner.time, "monotonic_ns", lambda: mono[0] * 1_000_000):
+            store.record_payment_evidence(**_pay("item-05"))
+            wall[0] += 3_600_000  # a step ahead that is never corrected
+            for _ in range(2):
+                with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
+                    store.record_payment_evidence(**_pay("item-06"))
+                wall[0] += owner._CLOCK_SKEW_MS // 2
+                mono[0] += owner._CLOCK_SKEW_MS // 2  # time passes in step, still inside the window
+            wall[0] += 1
+            mono[0] += 1
+            self.assertIn("status", store.record_payment_evidence(**_pay("item-06")))  # held for the whole window: the new baseline
+            wall[0] += 60_000
+            mono[0] += 60_000
+            self.assertIn("status", store.record_payment_evidence(**_pay("item-04")))
+
     def test_close_is_idempotent_and_releases_the_store(self):
         fixture = self._fixture()
         base = fixture._build_base()

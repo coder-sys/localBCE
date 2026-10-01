@@ -140,6 +140,9 @@ class _Kernel:
         return 0 if self.failure == "attribute_initialize" else 1
 
     def _attrs_update(self, _attribute_list, _flags, attribute, value, size, _previous, _returned):
+        if int(attribute) == process._PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY:
+            self.events.append(("attr_image_policy", ctypes.cast(value, ctypes.POINTER(ctypes.c_uint64)).contents.value))
+            return 1
         self.events.append(("attr_update", int(attribute)))
         if self.failure == "attribute_update":
             return 0
@@ -447,7 +450,8 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         create_args = next(value for name, value in kernel.events if name == "create_args")
         self.assertTrue(create_args[0])
         self.assertTrue(create_args[1] & process._EXTENDED_STARTUPINFO_PRESENT)
-        self.assertEqual([name for name, _ in kernel.events if name.startswith("attr_")], ["attr_size", "attr_initialize", "attr_update", "attr_bytes", "attr_delete"])
+        self.assertEqual([name for name, _ in kernel.events if name.startswith("attr_")], ["attr_size", "attr_initialize", "attr_update", "attr_bytes", "attr_image_policy", "attr_delete"])
+        self.assertEqual(next(value for name, value in kernel.events if name == "attr_image_policy"), process._IMAGE_LOAD_POLICY)
 
     def test_verify_handle_list_adds_only_artifact_stdin(self):
         kernel = _Kernel()
@@ -1359,6 +1363,41 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             )
         self.assertEqual(result.exit_code, 0)
         self.assertTrue(result.measurement_complete)
+
+    @unittest.skipUnless(os.name == "nt", "Windows loader test")
+    def test_real_dll_planted_beside_the_pinned_exe_is_not_loaded(self):
+        # safety red team L1: more.com imports ulib.dll, which is no KnownDLL, so a copy beside the exe is loaded
+        # first unless the launch sets the image-load policy; the planted copy is the real DLL, so only its path differs
+        system = Path(os.environ["SystemRoot"]) / "System32"
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        psapi.EnumProcessModulesEx.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32]
+        psapi.GetModuleFileNameExW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        for policy, loaded_from in ((process._IMAGE_LOAD_POLICY, "system"), (0, "beside")):  # 0: the attack works without the policy
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as root_name, patch.object(process, "_IMAGE_LOAD_POLICY", policy):
+                beside, work = Path(root_name) / "artifact", Path(root_name) / "work"
+                beside.mkdir(), work.mkdir()
+                shutil.copyfile(system / "more.com", beside / "more.com")
+                shutil.copyfile(system / "ulib.dll", beside / "ulib.dll")
+                payload = (beside / "more.com").read_bytes()
+                worker = process.launch_contained_worker(beside / "more.com", workspace=work, job_memory_cap_bytes=1_000_000_000,
+                                                         expected_executable_size_bytes=len(payload), expected_executable_sha256=hashlib.sha256(payload).digest())
+                try:
+                    found = None
+                    for _ in range(200):  # the loader resolves imports shortly after the resume
+                        modules, needed = (ctypes.c_void_p * 512)(), ctypes.c_uint32()
+                        self.assertTrue(psapi.EnumProcessModulesEx(worker._process, modules, ctypes.sizeof(modules), ctypes.byref(needed), 3))
+                        for module in modules[: needed.value // ctypes.sizeof(ctypes.c_void_p)]:
+                            name = ctypes.create_unicode_buffer(1024)
+                            psapi.GetModuleFileNameExW(worker._process, module, name, 1024)
+                            if os.path.basename(name.value).lower() == "ulib.dll":
+                                found = Path(name.value.removeprefix("\\\\?\\")).parent
+                        if found is not None:
+                            break
+                        time.sleep(0.05)
+                finally:
+                    worker._terminate()
+                self.assertIsNotNone(found)
+                self.assertEqual(os.path.normcase(found), os.path.normcase(system if loaded_from == "system" else beside))
 
     @unittest.skipUnless(os.name == "nt", "Windows reparse-point pin test")
     def test_real_symlink_is_rejected_without_following_target(self):

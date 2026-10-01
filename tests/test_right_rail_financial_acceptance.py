@@ -4211,6 +4211,96 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store.evaluate_obligation(expected.H_ITEM_ID)  # the clock was never held ahead of the honest writes
         self._assert_verified(store)
 
+    def _s2_offset_request(self, clock: _Clock) -> tuple[FinancialOwner, dict[str, object], int]:
+        """S2 (design rrb/designs/s2-timely-v1.md): cash and an offset claim evaluated before the due date; the offset completes the item.
+        Each write reads the clock once, at value + 1, so ``clock.value = t - 1`` makes the next write commit at t."""
+        store = self._build_base_for_correction(clock=clock)
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self.assertLess(int(receipt["evaluated_at_ms"]), expected.H_DUE_AT_MS)
+        request = {
+            "item_id": expected.H_ITEM_ID, "claim_id": claim_id, "expected_revision": int(receipt["revision"]), "action_id": expected.ACTION_OFFSET_ID,
+            "evaluation_id": str(receipt["evaluation_id"]), "evaluation_result_digest": str(receipt["result_digest"]),
+        }
+        return store, request, int(receipt["evaluated_at_ms"])
+
+    def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
+        # safety red team S2: a decision committed after the due date may not name a time at or before it
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS + 172_800_000  # the official actually decides two days late
+        before = store.export_continuity()
+        with self.assertRaisesRegex(FinancialInputError, "^decision_time_backdated_past_due$"):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        self.assertEqual(store.export_continuity(), before)
+        store.authorize_offset(**request)  # recorded at its real time, the offset is late
+        self.assertFalse(store.obligation_detail(expected.H_ITEM_ID)["timely"])
+        self._assert_verified(store)
+
+    def test_an_offset_committed_one_ms_after_the_due_date_cannot_name_the_due_date(self) -> None:
+        clock = _Clock()
+        store, request, _evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS  # commits at due + 1
+        with self.assertRaisesRegex(FinancialInputError, "^decision_time_backdated_past_due$"):
+            store.authorize_offset(**request, decision_at_ms=expected.H_DUE_AT_MS)
+        clock.value = expected.H_DUE_AT_MS  # the refused write wrote nothing; commit at due + 1 again
+        store.authorize_offset(**request, decision_at_ms=expected.H_DUE_AT_MS + 1)
+        self.assertFalse(store.obligation_detail(expected.H_ITEM_ID)["timely"])
+
+    def test_an_offset_committed_exactly_at_the_due_date_keeps_its_earlier_decision_time_and_is_timely(self) -> None:
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS - 1  # commits exactly at the due date
+        store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        self.assertTrue(store.obligation_detail(expected.H_ITEM_ID)["timely"])
+        self._assert_verified(store)
+
+    def test_a_decision_before_its_evaluation_is_still_refused_as_chronology_after_the_due_date(self) -> None:
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS + 1
+        with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_chronology$"):  # the older check speaks first
+            store.authorize_offset(**request, decision_at_ms=evaluated_at - 1)
+
+    def test_an_on_time_offset_store_reopens_retries_as_duplicate_and_restores_after_the_due_date(self) -> None:
+        # S2 migration: an offset committed by the due date under an earlier named decision time (every honest
+        # store before the rule) keeps reading, and its resend after the due date is DUPLICATE, not refused
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        clock.value = expected.H_DUE_AT_MS + 172_800_000
+        store.close()
+        reopened = self._make_owner(path=store.path, clock=clock)
+        self.assertEqual(reopened.authorize_offset(**request, decision_at_ms=evaluated_at)["status"], "DUPLICATE")
+        self.assertTrue(reopened.obligation_detail(expected.H_ITEM_ID)["timely"])
+        self._assert_verified(reopened)
+        restored = FinancialOwner.restore_continuity(
+            package_bytes=reopened.export_continuity(), recovered_path=self._path("s2-restored.sqlite"),
+            trusted_authority=self.authority, clock=_Clock(initial=clock.value), restore_mode="TEST",
+        )
+        self.addCleanup(restored.close)
+        restored.verify_integrity()
+
+    def test_the_checker_refuses_an_offset_backdated_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
+        # S2: a writer that misreads the due date is stopped before COMMIT; one that also skips that check
+        # (or predates the rule) leaves a store the whole-store check refuses
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS + 172_800_000
+        read = FinancialOwner._get_obligation_row
+
+        def due_misread(owner_self: FinancialOwner, connection: sqlite3.Connection, item_id: str) -> dict[str, object]:
+            return {**dict(read(owner_self, connection, item_id)), "due_at_ms": 2**62}
+
+        with patch.object(FinancialOwner, "_get_obligation_row", due_misread):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_verification:action:backdated-past-due$"):
+                store.authorize_offset(**request, decision_at_ms=evaluated_at)
+            with patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
+                store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
+            self._assert_verified(store)
+
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
         package = store.decision_package(expected.H_ITEM_ID)
