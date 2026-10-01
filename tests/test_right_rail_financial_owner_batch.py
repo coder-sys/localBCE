@@ -224,9 +224,13 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             holder.execute("BEGIN IMMEDIATE")  # another writer
             with busy("write"):
                 owner.run_batch([_support("evidence:busy")])
+            owner.summary()  # WAL: the other writer does not block a read
             holder.execute("ROLLBACK")
+            # WAL (R0.5): a writer never blocks a reader, and no lock can be taken once a reader's connection is open;
+            # only an exclusive-locking-mode holder that came first locks readers out.
+            holder.execute("PRAGMA locking_mode=EXCLUSIVE")
+            holder.execute("BEGIN EXCLUSIVE")
             with busy("read"), owner._read_snapshot() as connection:
-                holder.execute("BEGIN EXCLUSIVE")  # taken after this read began
                 owner.summary(_connection=connection)
             with busy("open"):
                 _open(owner.path)

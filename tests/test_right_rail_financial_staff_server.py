@@ -833,46 +833,26 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         def tracked_detail(*args, **kwargs):
             return original_detail(*args, **kwargs)
 
-        # The Owner database uses SQLite's rollback journal, so a second writer
-        # cannot commit while this read snapshot is open: it waits (busy
-        # timeout) and commits once the snapshot closes. The concurrent write
-        # therefore runs on its own thread; a same-thread write here could only
-        # deadlock into "database is locked".
-        writer_threads: list[threading.Thread] = []
-        writer_errors: list[BaseException] = []
-        writer_pending_during_verification: list[bool] = []
-        journal_path = Path(f"{first_owner.path}-journal")
-
-        def concurrent_write() -> None:
-            try:
-                writer.record_support_evidence(
-                    item_id="item-01",
-                    evidence_id="evidence:staff-snapshot-interleave:item-01",
-                    common_origin_id="origin:staff-snapshot-interleave:item-01",
-                    source_id="fixture-source",
-                    source_version="staff-interleave-v1",
-                    local_ref="ref:staff-snapshot-interleave:item-01",
-                    applicable_at_ms=1_767_312_000_000,
-                    event_at_ms=1_767_312_000_001,
-                    expected_revision=int(before["revision"]),
-                )
-            except BaseException as error:  # reported by the main thread below
-                writer_errors.append(error)
+        # WAL (R0.5): a second writer commits while this read snapshot is open (it no longer waits for the
+        # snapshot to close); the verification and every rendered row must still be the state before that commit.
+        committed_during_verification: list[int] = []
 
         def write_during_verification(connection, **kwargs):
             transaction_states.append((connection.in_transaction, "before"))
-            thread = threading.Thread(target=concurrent_write, daemon=True)
-            writer_threads.append(thread)
-            thread.start()
-            # Wait until the writer is inside its write transaction (its
-            # rollback journal exists) before verifying this snapshot.
-            deadline = time.monotonic() + 4.0
-            while not journal_path.exists() and thread.is_alive() and time.monotonic() < deadline:
-                time.sleep(0.002)
-            writer_pending_during_verification.append(journal_path.exists() and thread.is_alive())
+            writer.record_support_evidence(
+                item_id="item-01",
+                evidence_id="evidence:staff-snapshot-interleave:item-01",
+                common_origin_id="origin:staff-snapshot-interleave:item-01",
+                source_id="fixture-source",
+                source_version="staff-interleave-v1",
+                local_ref="ref:staff-snapshot-interleave:item-01",
+                applicable_at_ms=1_767_312_000_000,
+                event_at_ms=1_767_312_000_001,
+                expected_revision=int(before["revision"]),
+            )
+            committed_during_verification.append(writer.summary()["sequence"])
             result = original_verify(connection, **kwargs)
             transaction_states.append((connection.in_transaction, "after"))
-            writer_pending_during_verification.append(thread.is_alive())
             return result
 
         with (
@@ -881,13 +861,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             patch.object(independent, "verify_database_connection", side_effect=write_during_verification) as verify_spy,
         ):
             snapshot = workflow.workspace()
-        self.assertEqual(len(writer_threads), 1)
-        writer_threads[0].join(timeout=15)
-        self.assertFalse(writer_threads[0].is_alive())
-        self.assertEqual(writer_errors, [])
-        # The write was in flight for the whole verification and committed only
-        # after the verified snapshot closed.
-        self.assertEqual(writer_pending_during_verification, [True, True])
+        self.assertEqual(len(committed_during_verification), 1)
+        self.assertGreater(committed_during_verification[0], snapshot["summary"]["sequence"])  # committed before the verification ran
 
         self.assertEqual(connect_spy.call_count, 1)
         self.assertEqual(detail_spy.call_count, 1)
@@ -1073,6 +1048,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
             def commit_then_lock(**arguments: object) -> object:
                 result = real_record(**arguments)  # the owner has committed
+                holder.execute("PRAGMA locking_mode=EXCLUSIVE")  # WAL (R0.5): only an exclusive-locking-mode holder locks a reader out
                 holder.execute("BEGIN EXCLUSIVE")
                 return result
 
@@ -1082,8 +1058,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                     with real_snapshot(**arguments) as connection:
                         yield connection
                 except FinancialBusyError:
-                    if released and holder.in_transaction:
-                        holder.execute("ROLLBACK")
+                    if released:
+                        holder.close()  # in exclusive locking mode only closing releases the lock
                     raise
 
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
@@ -1092,8 +1068,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
                 response = connection.getresponse()
                 answer = (response.status, response.getheader("Retry-After"), json.loads(response.read().decode("utf-8")))
-            if holder.in_transaction:
-                holder.execute("ROLLBACK")
+            holder.close()
             code = "store_busy" if released else "store_busy_outcome_unknown"
             self.assertEqual(answer, (503, None, {"error": {"code": code}, "changed": True if released else None}))
             self.assertGreater(owner.summary()["sequence"], before)  # it did commit
