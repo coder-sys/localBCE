@@ -134,6 +134,37 @@ theorem anchored_binding {H : Bytes → Bytes} (hl : ∀ x, (H x).length = diges
     · exact Or.inr ⟨A, A', hAA, hq3⟩
   · exact Or.inr ⟨_, _, hq, e⟩
 
+/-- `anchored_binding` with the collision named: its right disjunct alone is always true by pigeonhole, so
+    this one ties the colliding pair to the four pin inputs `A B A' B'` and the two state-digest inputs. -/
+theorem anchored_binding_witness {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestBytes) {c c' : Rules.Ctx}
+    (h : anchored H c = true) (h' : anchored H c' = true) (ha : c.anchor = c'.anchor) {A B A' B' : Bytes}
+    (hA : Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c.releasedPrior = some A)
+    (hB : Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c.unresolvedPrior = some B)
+    (hA' : Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c'.releasedPrior = some A')
+    (hB' : Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c'.unresolvedPrior = some B') :
+    (Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c.releasedPrior =
+        Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c'.releasedPrior ∧
+      Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c.unresolvedPrior =
+        Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c'.unresolvedPrior) ∨
+    ∃ x y, x ≠ y ∧ H x = H y ∧ ((x, y) = (A, A') ∨ (x, y) = (B, B') ∨
+      (x, y) = (domain "STATE" ++ H A ++ H B, domain "STATE" ++ H A' ++ H B')) := by
+  unfold anchored setsDigest setPins at h h'
+  simp only [beq_iff_eq] at h h'
+  simp [hA, hB] at h
+  simp [hA', hB'] at h'
+  rw [← ha] at h'
+  have e : stateDigest H (H A) (H B) = stateDigest H (H A') (H B') := h.trans h'.symm
+  unfold stateDigest at e
+  by_cases hq : domain "STATE" ++ H A ++ H B = domain "STATE" ++ H A' ++ H B'
+  · obtain ⟨hq1, hq2⟩ := List.append_inj' hq (by rw [hl, hl])
+    have hq3 := List.append_cancel_left hq1
+    by_cases hAA : A = A'
+    · by_cases hBB : B = B'
+      · subst hAA; subst hBB; rw [hA, hA', hB, hB']; exact Or.inl ⟨rfl, rfl⟩
+      · exact Or.inr ⟨B, B', hBB, hq2, Or.inr (Or.inl rfl)⟩
+    · exact Or.inr ⟨A, A', hAA, hq3, Or.inl rfl⟩
+  · exact Or.inr ⟨_, _, hq, e, Or.inr (Or.inr rfl)⟩
+
 
 /-! ### The pin input is injective up to row order -/
 
