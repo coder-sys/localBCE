@@ -204,7 +204,10 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(self._exchange(frames["s1_refused"]), frames["s1_refused_answer"])  # REFUSED, code 8 (LINK_EXCEEDS_UNPAID)
         self.assertEqual(frames["s1_refused_answer"][-2:], b"\x07\x08")
         self.assertEqual(self._exchange(frames["c1"][:-1]), b"\x01")  # a truncated item is not decoded
-        old = "4989cc7d8f1ec95ffeef2a4a3a6e1f7504ade818803213815935b711a3d40cc5"  # the answer to the first fixture input from the worker before payment frames existed
+        # The answer to the first fixture input from the worker before payment frames existed: the pinned 86299A0D exe
+        # (5,724,160 bytes; the engine pin at 1168909 admits no other), guarded dev run m3s2-oldhash-dev-a1-L1 on 2026-10-01,
+        # two identical HASH lines (rrb/logs/m3s2-oldhash-dev-a1-L1.guard.log; child log guarded-command-m3s2-oldhash-dev-a1-L1.stdout.log).
+        old = "4989cc7d8f1ec95ffeef2a4a3a6e1f7504ade818803213815935b711a3d40cc5"
         self.assertEqual(hashlib.sha256(engine._evaluate_wire(self._wires()[0][0])).hexdigest(), old)
 
     def test_payment_frames_keep_the_worker_flat(self) -> None:
