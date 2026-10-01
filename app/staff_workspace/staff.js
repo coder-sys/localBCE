@@ -178,7 +178,7 @@
   }
 
   const STEPS = {
-    acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready correction action." },
+    acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready action that still asks for money." },
     "record-cash": { label: "Record synthetic " + money.format(CASH_CORRECTION_COMMAND.amount_cents / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action whose open amount covers this payment." },
     "record-report": { label: "Record separate synthetic reporting evidence", note: "Reporting is separate from delivery and cash. The source is synthetic and unverified.", off: "Waits for nothing to be short and reporting to be pending." },
     "restore-test": { label: "Restore current case into Continuity TEST", note: "Copies the case into a separate test database.", off: "Already restored into Continuity TEST." },
@@ -187,7 +187,7 @@
   function stepEnabled(name, view) {
     const reviewed = ownerAvailable && !commandPending && !unresolvedCashBody && !unresolvedDecision;
     const status = view.act ? view.act.status : null;
-    if (name === "acknowledge") return reviewed && status === "READY";
+    if (name === "acknowledge") return reviewed && status === "READY" && view.act.open_cents !== 0;
     if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.act.open_cents >= CASH_CORRECTION_COMMAND.amount_cents;
     if (name === "record-report") return reviewed && !view.ob.reporting_complete && view.ob.shortfall_cents <= 0;
     return reviewed && !(snapshot.continuity && snapshot.continuity.mode === "TEST");

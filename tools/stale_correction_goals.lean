@@ -1,7 +1,7 @@
 import BlindLedger.Financial.Payment.Bridge
 
 /-! Stale corrections: the theorem STATEMENTS of design
-    C:\Users\neers\rrb\designs\stale-correction-v1.md §6.  Every proof is `sorry`.
+    C:\Users\neers\rrb\designs\stale-correction-v1.md §6.  Every statement is proved (no `sorry`).
     This file is outside `lean/`, so no executable, library target, TCB report or pin manifest sees it.
     Check: from `lean/`, `lake env lean ../tools/stale_correction_goals.lean` over a build of
     `BlindLedger.Financial.Payment.Bridge` (lean tree b8b824e3, trunk 5e2e552).
@@ -82,38 +82,69 @@ private def kReq (id : String) (rev : Nat) (st : ActionStatus) : ActionRecord :=
 theorem openCents_le_balance_and_unpaid (s : Nat) (ps : List Payment) (ls : List PaymentLink)
     (xs : List ActionRecord) (a : ActionRecord) :
     openCents s ps ls xs a ≤ s ∧ openCents s ps ls xs a ≤ unpaidOf ps ls a := by
-  sorry
+  unfold openCents
+  split <;> omega
 
 /-- 2. Reduce, derived: a falling balance (unlinked payment, accepted offset) never raises what any
     request asks; a rising balance (reversal) never lowers it. -/
 theorem openCents_mono_balance {s s' : Nat} (ps : List Payment) (ls : List PaymentLink)
     (xs : List ActionRecord) (a : ActionRecord) (h : s' ≤ s) :
     openCents s' ps ls xs a ≤ openCents s ps ls xs a := by
-  sorry
+  unfold openCents
+  split <;> omega
 
 /-- 3. The specification of the delivery requirement. -/
 theorem deliveryMet_iff (s : Nat) (ps : List Payment) (ls : List PaymentLink) (xs : List ActionRecord) :
     deliveryMet s ps ls xs = true ↔
       ∀ x ∈ xs, stillAsks s ps ls xs x = true → x.status = .ACKNOWLEDGED := by
-  sorry
+  simp [deliveryMet, List.all_eq_true]
+  refine forall_congr' fun x => forall_congr' fun _ => ?_
+  cases stillAsks s ps ls xs x <;> simp
 
 /-- 4. A stale request never blocks: once delivery is met, a falling balance keeps it met. -/
 theorem deliveryMet_of_balance_le {s s' : Nat} (ps : List Payment) (ls : List PaymentLink)
     (xs : List ActionRecord) (h : s' ≤ s) (hm : deliveryMet s ps ls xs = true) :
     deliveryMet s' ps ls xs = true := by
-  sorry
+  have key : ∀ x ∈ xs, stillAsks s' ps ls xs x = true → stillAsks s ps ls xs x = true := by
+    intro x _ hx
+    have := openCents_mono_balance (s := s) (s' := s') ps ls xs x h
+    simp only [stillAsks, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hx ⊢
+    exact ⟨hx.1, hx.2.imp id (fun h2 => by omega)⟩
+  rw [deliveryMet_iff] at hm ⊢
+  exact fun x hx h => hm x hx (key x hx h)
 
 /-- 5. Cancel, derived: when nothing is owed, delivery waits on no correction request, only on
     other actions still READY. -/
 theorem deliveryMet_zero_balance (ps : List Payment) (ls : List PaymentLink) (xs : List ActionRecord) :
     deliveryMet 0 ps ls xs =
       xs.all fun x => x.kind == "CORRECTION_PAYMENT_REQUEST" || x.status != .READY := by
-  sorry
+  have z : ∀ x, openCents 0 ps ls xs x = 0 := fun x => by unfold openCents; split <;> omega
+  unfold deliveryMet stillAsks
+  congr 1
+  funext x
+  simp only [z]
+  cases hb : (x.kind == "CORRECTION_PAYMENT_REQUEST") <;> cases x.status <;> simp [bne, hb]
 
 /-- 6. Delivery is not cash: acknowledging a READY action changes no request's open amount. -/
 theorem openCents_ack (s : Nat) (ps : List Payment) (ls : List PaymentLink) (xs : List ActionRecord)
     (id : String) (hr : ∀ y ∈ xs, y.actionId = id → y.status = .READY) :
     ∀ y ∈ xs, openCents s ps ls (xs.map (ackAction id)) (ackAction id y) = openCents s ps ls xs y := by
-  sorry
+  have unp : ∀ z, unpaidOf ps ls (ackAction id z) = unpaidOf ps ls z := fun z => by
+    unfold ackAction; split <;> rfl
+  have cnt : ∀ z ∈ xs, countedRequest (ackAction id z) = countedRequest z := fun z hz => by
+    unfold ackAction countedRequest; split
+    · rw [hr z hz ‹_›]; rfl
+    · rfl
+  have srv : ∀ b a, servedBefore (ackAction id b) (ackAction id a) = servedBefore b a := fun b a => by
+    unfold ackAction; split <;> split <;> rfl
+  intro y hy
+  have before : unpaidBefore ps ls (xs.map (ackAction id)) (ackAction id y) = unpaidBefore ps ls xs y := by
+    unfold unpaidBefore
+    rw [List.filter_map, List.map_map]
+    congr 2
+    · funext b; exact unp b
+    · exact List.filter_congr (fun b hb => by simp [Function.comp, cnt b hb, srv])
+  unfold openCents
+  rw [before, unp, cnt y hy]
 
 end BlindLedger.Financial.Payment.Stale

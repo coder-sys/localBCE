@@ -121,7 +121,7 @@
       "roles": ["analyst"],
       "route": "POST /api/action/acknowledge",
       "leads_to": "decision",
-      "enabled_when": "reviewed and action.status == 'READY'",
+      "enabled_when": "reviewed and action.status == 'READY' and action.open_cents != 0",
       "responses": {
         "success": { "screen": "decision", "message": "Delivery acknowledged. Zero cash effect." },
         "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },

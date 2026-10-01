@@ -5915,7 +5915,7 @@ class FinancialOwner:
                     "NOT_SATISFIED" if not amount_satisfied and amount_support != "CONFLICTED"
                     else "CONFLICTED" if amount_support == "CONFLICTED" else "UNKNOWN"
                 ),
-                "delivery_acknowledged_or_not_required": delivery_support,
+                "delivery_acknowledged_or_not_required": "UNKNOWN" if current_action is None else "NOT_SATISFIED" if any(open_cents.get(a, 1) > 0 for (a,) in connection.execute("SELECT action_id FROM actions WHERE obligation_id=? AND status='READY'", (obligation_id,))) else "SUPPORTED",  # every READY action that still asks (a request with open > 0; any other kind, default 1) waits on delivery
                 "reporting_complete": reporting_support,
             }
             missing_requirements = sorted(key for key, value in requirements.items() if value != "SUPPORTED")
