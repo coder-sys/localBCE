@@ -2064,6 +2064,7 @@ class FinancialOwner:
         self._mark: tuple[int, int, int] | None = None  # (data_version, device, file index) where the writer last verified or wrote
         self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at that point
         self._refusal: FinancialError | None = None  # a failed re-verification, raised once the command's own checks pass
+        self._high: tuple[object, ...] | None = None  # (sequence, head) last verified or committed; kept for the object's life
         self._packs: dict[tuple[object, ...], tuple[ControlPack, str, str]] = {}  # the pack, its digest check and its policy are pure functions of the exact row
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
@@ -2227,8 +2228,14 @@ class FinancialOwner:
     def _adopt(self, connection: sqlite3.Connection) -> None:
         """Keep this connection as the writer (R1a), marked inside the transaction that verified or created the store."""
         self._install_capture_triggers(connection)
-        self._mark, history = self._read_mark(connection)
-        self._writer, self._row_cache = connection, (history, _count_rows(connection))
+        mark, history = self._read_mark(connection)
+        if self._rewound(history):
+            _fail(FinancialIntegrityError, "store_replaced")
+        self._mark, self._writer, self._row_cache, self._high = mark, connection, (history, _count_rows(connection)), history[2:]
+
+    def _rewound(self, history: tuple[object, ...]) -> bool:
+        """A lower sequence than this owner last verified or committed, or that sequence with another head (III.6)."""
+        return self._high is not None and (history[2] < self._high[0] or (history[2] == self._high[0] and history[3] != self._high[1]))
 
     def _discard_writer(self) -> None:
         writer, self._writer, self._mark, self._row_cache, self._refusal = self._writer, None, None, None, None
@@ -2236,11 +2243,13 @@ class FinancialOwner:
             writer.close()
 
     def _begin(self, statement: str) -> sqlite3.Connection:
-        """The writer inside ``statement`` at its marked point. SQLite moves data_version only for other connections'
-        commits, so a moved mark means something outside this owner changed the store: it is verified again exactly
-        as a fresh open verifies it, and a swapped file or a lower sequence is store_replaced. If the history check
-        refuses, the command still runs its own checks first on a connection that never commits, so a refusal they
-        find keeps its code; otherwise the fresh open's refusal is raised before anything is reported or committed."""
+        """The writer inside ``statement`` at its marked point. SQLite moves data_version for every other connection's
+        commit (a raw page edit moves nothing, and the writer's cache may keep the old pages: such an edit is seen at
+        the next open or audit). A moved mark is verified again exactly as a fresh open verifies it. Another file,
+        or a history behind the (sequence, head) this owner last verified or committed, is store_replaced, for as
+        long as this object lives. If the history check refuses, the command still runs its own checks first on a
+        connection that never commits, so a refusal they find keeps its code; otherwise the fresh open's refusal is
+        raised before anything is reported or committed."""
         while True:
             if self._writer is None:
                 try:
@@ -2248,18 +2257,18 @@ class FinancialOwner:
                 except FinancialIntegrityError as refusal:
                     if not str(refusal).startswith("open_verification:"):  # identity, schema, triggers: as a fresh open
                         raise
-                    connection = self._connect()
+                    high, connection = self._high, self._connect()
                     try:
                         self._adopt(connection)
                     except BaseException:
                         connection.close()
                         raise refusal
-                    self._refusal = refusal
+                    self._refusal, self._high = refusal, high  # an unverified store never moves the high-water
             self._writer.execute(statement)
             mark, history = self._read_mark(self._writer)
             if (mark, history) == (self._mark, self._row_cache[0]):
                 return self._writer
-            if mark[1:] != self._mark[1:] or history[2] < self._row_cache[0][2]:
+            if mark[1:] != self._mark[1:] or self._rewound(history):
                 _fail(FinancialIntegrityError, "store_replaced")
             self._discard_writer()
 
@@ -2499,7 +2508,7 @@ class FinancialOwner:
                     conclude and conclude()  # a cash-file preview reports only after the check above, then rolls back
                     connection.execute("DELETE FROM temp.rr_row_inserts")  # the next write counts its own
                     connection.execute("COMMIT")
-                    self._row_cache = after
+                    self._row_cache, self._high = after, after[0][2:]
             except BaseException as error:
                 if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full
                     self._discard_writer()

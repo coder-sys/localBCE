@@ -167,7 +167,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.assertEqual(owner._row_cache[1], _rows(owner.path))
         owner.verify_integrity()
 
-    def test_a_swapped_in_fork_with_the_same_segments_and_pending_is_recounted(self) -> None:
+    def test_a_swapped_in_fork_with_the_same_segments_and_pending_is_refused(self) -> None:
         with mock.patch.object(owner_module, "_SEAL_SEGMENT_EVENTS", 1):
             owner = self._store("fork-a.sqlite")
             fork = self.directory / "fork-b.sqlite"
@@ -179,9 +179,10 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             self.assertNotEqual(_rows(fork), owner._row_cache[1])
             with closing(sqlite3.connect(fork)) as source, closing(sqlite3.connect(owner.path)) as live:
                 source.backup(live)  # R1a: the swap goes through SQLite while the owner holds the file open
-            owner.run_batch([_support("evidence:a-2")])
-        self.assertEqual(owner._row_cache[1], _rows(owner.path))
-        owner.verify_integrity()
+            for _ in range(2):  # the same sequence with another head is a rewind, refused for the owner's life
+                with self.assertRaisesRegex(FinancialIntegrityError, "^store_replaced$"):
+                    owner.run_batch([_support("evidence:a-2")])
+        self.assertEqual(_rows(owner.path), _rows(fork))
 
     def test_a_drifted_cache_fails_closed_at_the_next_seal(self) -> None:
         owner = self._store("drift.sqlite")

@@ -131,20 +131,23 @@ class CoreR1aMarkTests(unittest.TestCase):
         with self.assertRaises(owner.FinancialIntegrityError):  # its own snapshot check finds it first (decision 1)
             fixture._reject(reopened, CLAIM)
 
-    def test_a_store_file_replaced_under_the_owner_is_refused(self):
-        # M1: a file swapped or restored over the path is a rewind (III.6); a restore goes through the restore path
+    def test_an_older_copy_restored_in_place_stays_refused(self):
+        # M1: an older, internally consistent copy written over the live file is a rewind (III.6): every later
+        # command and export is refused while the owner lives, not only the first (a restore has its own path)
         fixture = self._fixture()
         store = fixture._build_base()
         earlier = Path(tempfile.mkdtemp(dir=fixture.temp_dir.name)) / "earlier.sqlite"
         with closing(sqlite3.connect(str(store.path))) as live, closing(sqlite3.connect(str(earlier))) as copy:
             live.backup(copy)
         store.record_payment_evidence(**_pay("item-06"))
-        try:
-            os.replace(earlier, store.path)
-        except PermissionError:
-            return  # the owner holds the file open (Windows): nothing was swapped
-        with self.assertRaisesRegex(owner.FinancialIntegrityError, "^store_replaced$"):
-            store.record_payment_evidence(**_pay("item-05"))
+        with closing(sqlite3.connect(str(earlier))) as copy, closing(sqlite3.connect(str(store.path))) as live:
+            copy.backup(live)  # same file, so only the history mark shows the rewind
+        rewound = acceptance._image(store.path)
+        for command in (lambda: store.record_payment_evidence(**_pay("item-05")),
+                        lambda: store.record_payment_evidence(**_pay("item-04")), store.export_continuity):
+            with self.assertRaisesRegex(owner.FinancialIntegrityError, "^store_replaced$"):
+                command()
+        self.assertEqual(acceptance._image(store.path), rewound)
 
     @unittest.skip("R1c: checker indexes")
     def test_first_write_after_open_lock_work_is_flat_in_history(self):
