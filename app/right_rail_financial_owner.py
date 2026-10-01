@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 import ctypes
+import gc
 import hashlib
 import json
 import os
@@ -2136,6 +2137,7 @@ class FinancialOwner:
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("PRAGMA synchronous=FULL")  # R0.5: with WAL, an acknowledged commit survives power loss
+            connection.execute("PRAGMA cache_size=-65536")
             connection.create_function("rr_segment_bytes", -1, lambda table, *values: len(_canonical(self._segment_record(table, values))) + 1)
             connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
             connection.execute("CREATE TEMP TABLE rr_captured_rows(image TEXT NOT NULL)")
@@ -2419,6 +2421,7 @@ class FinancialOwner:
         began = batch is None
         with closing(self._connect(capture_triggers=True)) if began else nullcontext(batch) as connection:
             outer_now, self._batch.now = getattr(self._batch, "now", None), -1  # this command's clock is unread (_now)
+            if collect := began and gc.isenabled(): gc.disable()  # a write makes millions of short-lived objects; the cycle collector's passes over the live rows cost ~10% of a full file's lock
             try:
                 if began:
                     connection.execute("BEGIN IMMEDIATE")
@@ -2449,6 +2452,7 @@ class FinancialOwner:
                 _raise_if_busy(error)
                 raise
             finally:
+                collect and gc.enable()
                 self._batch.now = outer_now
                 if began:
                     self._batch.rows = None
