@@ -119,9 +119,10 @@
     if (part === null || typeof part !== "object") return part;
     if (!Number.isSafeInteger(part.at)) return "Unknown";
     if (!onScreen) return utc(part.at);
-    zoned = zoned || new Intl.DateTimeFormat("en-US", { timeZone: model.time.zone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-    const p = Object.fromEntries(zoned.formatToParts(part.at).map(({ type, value }) => [type, value]));
-    return p.day + " " + p.month + " " + p.hour + ":" + p.minute + " " + model.time.label;
+    zoned = zoned || new Intl.DateTimeFormat("en-US", { timeZone: model.time.zone, year: "numeric", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    const when = (ms) => Object.fromEntries(zoned.formatToParts(ms).map(({ type, value }) => [type, value]));
+    const p = when(part.at); // the year shows only when the instant is from another year than the snapshot's own as-of time
+    return p.day + " " + p.month + (p.year === when(Date.parse(snapshot.read_at)).year ? "" : " " + p.year) + " " + p.hour + ":" + p.minute + " " + model.time.label;
   }).join("");
   // Owner codes in plain words (CASE_OWNER -> case owner).
   const words = (code) => (code === null || code === undefined ? "unknown" : String(code).toLowerCase().replaceAll("_", " "));

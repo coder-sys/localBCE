@@ -254,12 +254,18 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 with self.subTest(role=role):
                     page = " ".join(line["text"] for line in self._open(role, server).view()["lines"] if line["where"] == "page")
                     record = self._open_path(f"/role/{role}#item-h.txt", server).view()["texts"]["text-view"]
-                    self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms) for ms in [due, decided, *events]))
-                    self.assertIn("Due: " + scorecard._program_time(due), page)
+                    self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms, view["read_at"]) for ms in [due, decided, *events]))
+                    self.assertIn("Due: " + scorecard._program_time(due, view["read_at"]), page)
                     self.assertIsNone(re.search(r"\d{4}-\d\d-\d\d", page), page)
                     self.assertEqual(_UTC_TIME.findall(record), [utc(ms) for ms in [decided, *events, due]])
                     self.assertFalse(any(word in page for word in ("UTC", "Owner event", "revision")), page)
                     self.assertTrue("Owner event" in record and "revision" in record)
+            workflow._clock.advance_to(1_815_000_000_000)  # the snapshot is now read in 2027: every 2026 instant on the screen names its year
+            view = workflow.decision_view()
+            page = " ".join(line["text"] for line in self._open("analyst", server).view()["lines"] if line["where"] == "page")
+            self.assertEqual(sorted(_PROGRAM_TIME.findall(page)), sorted(scorecard._program_time(ms, view["read_at"]) for ms in [due, decided, *events]))
+            self.assertIn("Due: " + scorecard._program_time(due, view["read_at"]), page)
+            self.assertIn(" 2026 ", page)
         finally:
             self._stop_workflow(workflow, server, thread)
 
@@ -745,7 +751,7 @@ _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))
 _DECISIONS = {"reject-offset": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "authorize-offset": "OFFSET_AUTHORIZED"}
 
-_PROGRAM_TIME = re.compile(r"\d{1,2} [A-Z][a-z]{2} \d\d:\d\d CT")
+_PROGRAM_TIME = re.compile(r"\d{1,2} [A-Z][a-z]{2}(?: \d{4})? \d\d:\d\d CT")
 _UTC_TIME = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC")
 
 def _money(cents: int) -> str:

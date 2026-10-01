@@ -165,6 +165,11 @@ class _DemoClock:
         with self._lock:
             self._value = max(self._value, event_at_ms)
 
+    def as_of(self) -> str:
+        """The fixture's own present, read without ticking it: the screen shows a year only when an instant is from another one."""
+        with self._lock:
+            return datetime.fromtimestamp(self._value / 1000, timezone.utc).isoformat()
+
 
 class StaffWorkflow:
     """Synthetic workspace backed by one current Owner/Mirror pair."""
@@ -650,7 +655,7 @@ class StaffWorkflow:
                 "detail_limit": 100,
                 "history_limit": 200,
             },
-            read_at=datetime.now(timezone.utc).isoformat(),
+            read_at=self._clock.as_of(),
             labels=ITEM_LABELS,
             continuity=self._continuity,
         )
@@ -663,7 +668,7 @@ class StaffWorkflow:
         with self._lock:
             return self._mirror.staff_read_snapshot(
                 {"resource": "decision_package", "item_id": H_ITEM_ID, "limit": 100, "offset": 0},
-                read_at=datetime.now(timezone.utc).isoformat(),
+                read_at=self._clock.as_of(),
             )
 
     @staticmethod
