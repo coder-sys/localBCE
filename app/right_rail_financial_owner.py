@@ -107,7 +107,7 @@ _SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history
 # the exact history: the chain head differs between any two histories, so a swapped-in fork never matches.
 _HISTORY_MARK: Final[str] = "SELECT (SELECT MAX(segment_index) FROM history_segments),(SELECT COUNT(*) FROM history_pending),sequence,history_head FROM financial_meta WHERE id=1"
 _CHECK_ROW_CACHE: Final[bool] = os.environ.get("RIGHTRAIL_CHECK_ROW_CACHE") == "1"  # tests: recount after every write
-_PRIVATE_INDEX_SET_VERSION: Final[int] = 2  # v2 adds the events lookup the checker runs per obligation
+_PRIVATE_INDEX_SET_VERSION: Final[int] = 3  # v2 adds the events lookup the checker runs per obligation; v3 its store-wide lookups by kind
 # The history is append-only in the database itself (Art. III.4); stores
 # created before these triggers get them once, atomically, on open.
 _HISTORY_APPEND_ONLY_TRIGGERS: Final[dict[str, str]] = {
@@ -127,6 +127,7 @@ _PRIVATE_INDEX_SETS: Final[dict[int, tuple[tuple[str, str, tuple[str, ...]], ...
     1: _PRIVATE_INDEX_SET_V1,
     2: (*_PRIVATE_INDEX_SET_V1, ("rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind"))),
 }
+_PRIVATE_INDEX_SETS[3] = (*_PRIVATE_INDEX_SETS[2], ("rr_financial_v3_events_kind", "financial_events", ("kind", "aggregate_type")))
 _CORRECTION_FOLLOWUP_CONTRACT: Final[str] = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 _CORRECTION_FOLLOWUP_DEPENDENCIES: Final[tuple[str, ...]] = (
     "OBLIGATION_REVISION",
@@ -2648,6 +2649,8 @@ class FinancialOwner:
         sequence = int(meta["sequence"]) + 1
         if (last := connection.execute("SELECT committed_at_ms FROM financial_events WHERE event_sequence=?", (sequence - 1,)).fetchone()) and committed_at_ms < last[0]:
             _fail(FinancialIntegrityError, "event_commit_order")  # checker history:commit-order: a clock behind its history writes nothing
+        if connection.execute("SELECT 1 FROM financial_events WHERE event_sequence>=?", (sequence,)).fetchone() is not None:
+            _fail(FinancialIntegrityError, "history_sequence")  # an event past the meta sequence was written outside this Owner
         previous_head = bytes(meta["history_head"])
         header = b"".join(
             value.to_bytes(8, "big")
