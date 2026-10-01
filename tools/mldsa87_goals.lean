@@ -1,11 +1,11 @@
+import Lean
 import BlindLedger.Gate.Verify
 import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
 
 /-! ML-DSA-87 non-bypass and totality: the fixed theorem STATEMENTS of lean-expansion-plan item 11
-    (design: C:\Users\neers\rrb\designs\mldsa-theorems-v1.md).  Proved: the non-bypass group, useHint_lt, verify_true_checks, sig_canonical;
-    rejNtt_stable and sampleInBall_stable modulo `sponge_prefix`.
-    Still `sorry`: sponge_prefix, invNtt_ntt, invNtt_pointwise.
+    (design: C:\Users\neers\rrb\designs\mldsa-theorems-v1.md).  Proved: the non-bypass group, useHint_lt, verify_true_checks, sig_canonical, sponge_prefix,
+    rejNtt_stable, sampleInBall_stable.  Still `sorry`: invNtt_ntt, invNtt_pointwise.
     This file is outside `lean/`, so no executable, library target, TCB report or pin manifest sees it.
     Check: from `lean/`, `lake build BlindLedger.Gate.Theorems BlindLedger.Gate.Verify`, then
     `lake env lean ../tools/mldsa87_goals.lean`.  A prover moves each statement, unchanged, into
@@ -385,18 +385,158 @@ theorem release_signed {c : Crypto} {s s' : PayerState} {p : Payment} {bytes : B
 
 end BlindLedger.Gate
 
-namespace BlindLedger.Keccak
+namespace BlindLedger.Semantic
+
+/- The sponge is private to `Sha3.lean` (making it public would change the exe symbols); these two commands name it
+    through its private name so `sponge_prefix` keeps the statement about the one implementation. -/
+open Lean Elab Tactic Meta in
+elab "spongeP" : term => return mkConst (mkPrivateNameCore `BlindLedger.Sha3 `BlindLedger.Semantic.sponge)
+open Lean Elab Tactic Meta in
+elab "unfold_sponge" : tactic => liftMetaTactic fun g => do
+  return [← unfoldTarget g (mkPrivateNameCore `BlindLedger.Sha3 `BlindLedger.Semantic.sponge)]
+
+private def rep (K : Array UInt64 → Array UInt64) : Nat → Array UInt64 → Array UInt64
+  | 0, s => s
+  | b + 1, s => K (rep K b s)
+
+private def fb (K : Array UInt64 → Array UInt64) (rate : Nat) (st : Array UInt64) (g : Nat) : UInt8 :=
+  ((rep K (g / rate) st)[g % rate / 8]! >>> UInt64.ofNat (8 * (g % rate % 8))).toUInt8
+
+private def ofF (f : Nat → UInt8) (N : Nat) : ByteArray := ⟨(Array.range N).map f⟩
+
+private def sqIn (n : Nat) (st : Array UInt64) (j : Nat) (out : ByteArray) : Id (ForInStep ByteArray) :=
+  if out.size < n then pure (ForInStep.yield (out.push (st[j / 8]! >>> UInt64.ofNat (8 * (j % 8))).toUInt8))
+  else pure (ForInStep.yield out)
+
+private def sqOut (K : Array UInt64 → Array UInt64) (rate n blk : Nat) (s : Array UInt64 × ByteArray) :
+    Id (ForInStep (Array UInt64 × ByteArray)) :=
+  if blk > 0 then do
+    let s1 ← forIn (List.range' 0 rate) s.2 (sqIn n (K s.1))
+    pure (ForInStep.yield (K s.1, s1))
+  else do
+    let s1 ← forIn (List.range' 0 rate) s.2 (sqIn n s.1)
+    pure (ForInStep.yield (s.1, s1))
+
+private def Sq (K : Array UInt64 → Array UInt64) (rate n : Nat) (st : Array UInt64) : ByteArray :=
+  (forIn (m := Id) (List.range' 0 ((n + rate - 1) / rate)) (st, ByteArray.empty) (sqOut K rate n)).2
+
+private theorem ofF_push (f : Nat → UInt8) (N : Nat) : (ofF f N).push (f N) = ofF f (N + 1) := by
+  unfold ofF
+  simp [Array.range_succ, ByteArray.push]
+
+private theorem ofF_size (f : Nat → UInt8) (N : Nat) : (ofF f N).size = N := by
+  show ((Array.range N).map f).size = N
+  simp
+
+private theorem sq_inner (n : Nat) (stc : Array UInt64) (f : Nat → UInt8) (c : Nat) :
+    ∀ (t a : Nat), (∀ j, a ≤ j → j < a + t → (stc[j / 8]! >>> UInt64.ofNat (8 * (j % 8))).toUInt8 = f (c + j)) →
+    forIn (m := Id) (List.range' a t) (ofF f (min n (c + a))) (sqIn n stc) = ofF f (min n (c + a + t)) := by
+  intro t
+  induction t with
+  | zero => intro a _; exact rfl
+  | succ t ih =>
+    intro a h
+    rw [List.range'_succ, List.forIn_cons]
+    by_cases hlt : c + a < n
+    · have e : sqIn n stc a (ofF f (min n (c + a))) = pure (ForInStep.yield (ofF f (min n (c + a + 1)))) := by
+        unfold sqIn
+        rw [if_pos (by rw [ofF_size]; omega), h a (Nat.le_refl _) (by omega), Nat.min_eq_right (Nat.le_of_lt hlt),
+          ofF_push, Nat.min_eq_right (by omega)]
+      simp only [e, pure_bind]
+      have := ih (a + 1) (fun j h1 h2 => h j (by omega) (by omega))
+      rw [show c + (a + 1) + t = c + a + (t + 1) by omega] at this
+      exact this
+    · have e : sqIn n stc a (ofF f (min n (c + a))) = pure (ForInStep.yield (ofF f (min n (c + a)))) := by
+        unfold sqIn
+        rw [if_neg (by rw [ofF_size]; omega)]
+      simp only [e, pure_bind]
+      have := ih (a + 1) (fun j h1 h2 => h j (by omega) (by omega))
+      rw [show c + (a + 1) + t = c + a + (t + 1) by omega, show min n (c + (a + 1)) = min n (c + a) by omega] at this
+      exact this
+
+
+private theorem sqOut_eq (K : Array UInt64 → Array UInt64) (rate n b : Nat) (s : Array UInt64 × ByteArray)
+    (st : Array UInt64) (hs : s.1 = rep K (b - 1) st) :
+    sqOut K rate n b s = (do
+      let s1 ← forIn (m := Id) (List.range' 0 rate) s.2 (sqIn n (rep K b st))
+      pure (ForInStep.yield (rep K b st, s1))) := by
+  unfold sqOut
+  cases b with
+  | zero => rw [if_neg (by omega), hs]
+  | succ b => rw [if_pos (by omega), hs, Nat.add_sub_cancel]; rfl
+
+private theorem sq_outer (K : Array UInt64 → Array UInt64) (rate n : Nat) (hr : 0 < rate) (st : Array UInt64) :
+    ∀ (k b : Nat), b + k ≤ (n + rate - 1) / rate →
+    forIn (m := Id) (List.range' b k) (rep K (b - 1) st, ofF (fb K rate st) (min n (rate * b))) (sqOut K rate n)
+      = (rep K (b + k - 1) st, ofF (fb K rate st) (min n (rate * (b + k)))) := by
+  intro k
+  induction k with
+  | zero => intro b _; exact rfl
+  | succ k ih =>
+    intro b hb
+    have hlt : rate * b < n := by
+      have h1 : b + 1 ≤ (n + rate - 1) / rate := by omega
+      have h2 := (Nat.le_div_iff_mul_le hr).1 h1
+      rw [Nat.add_mul, Nat.one_mul, Nat.mul_comm] at h2
+      omega
+    rw [List.range'_succ, List.forIn_cons, sqOut_eq K rate n b _ st rfl]
+    have hin := sq_inner n (rep K b st) (fb K rate st) (rate * b) rate 0 (fun j _ hj => by
+      have e1 : (rate * b + j) / rate = b := by rw [Nat.mul_add_div hr, Nat.div_eq_of_lt (by omega)]; rfl
+      have e2 : (rate * b + j) % rate = j := by rw [Nat.mul_add_mod, Nat.mod_eq_of_lt (by omega)]
+      unfold fb; rw [e1, e2])
+    simp only [Nat.add_zero] at hin
+    simp only [hin, bind_assoc, pure_bind]
+    have := ih (b + 1) (by omega)
+    rw [show b + 1 + k = b + (k + 1) by omega, Nat.mul_add rate b 1, Nat.mul_one] at this
+    exact this
+
+private theorem sq_eq (K : Array UInt64 → Array UInt64) (rate n : Nat) (hr : 0 < rate) (st : Array UInt64) :
+    Sq K rate n st = ofF (fb K rate st) n := by
+  have h := sq_outer K rate n hr st ((n + rate - 1) / rate) 0 (by omega)
+  have h2 : min n (rate * (0 + (n + rate - 1) / rate)) = n := by
+    have := Nat.div_add_mod (n + rate - 1) rate
+    have := Nat.mod_lt (n + rate - 1) hr
+    rw [Nat.zero_add]
+    omega
+  rw [h2] at h
+  unfold Sq
+  have h0 : (st, ByteArray.empty) = (rep K (0 - 1) st, ofF (fb K rate st) (min n (rate * 0))) := by
+    simp [rep, ofF]
+    exact ByteArray.ext (by simp)
+  rw [h0, h]
+
+private theorem ofF_prefix (f : Nat → UInt8) {m n : Nat} (h : m ≤ n) : (ofF f n).extract 0 m = ofF f m := by
+  apply ByteArray.ext
+  rw [ByteArray.data_extract]
+  show ((Array.range n).map f).extract 0 m = (Array.range m).map f
+  apply Array.ext
+  · simp; omega
+  · intro i h1 h2
+    simp
+
+private theorem sq_prefix (K : Array UInt64 → Array UInt64) (rate : Nat) {m n : Nat} (h : m ≤ n) (st : Array UInt64) :
+    (Sq K rate n st).extract 0 m = Sq K rate m st := by
+  by_cases hr : 0 < rate
+  · rw [sq_eq K rate n hr st, sq_eq K rate m hr st]; exact ofF_prefix _ h
+  · have : rate = 0 := by omega
+    subst this
+    simp [Sq]
+    show ByteArray.empty.extract 0 m = ByteArray.empty
+    rw [ByteArray.extract_eq_empty_iff]
+    simp
 
 /-- A shorter squeeze is a prefix of a longer one (FIPS 202's SHAKE is an extendable-output function). -/
 theorem sponge_prefix (rate : Nat) (suffix : UInt8) (data : ByteArray) {m n : Nat} (h : m ≤ n) :
-    (sponge rate suffix data n).extract 0 m = sponge rate suffix data m := by
-  sorry
+    (spongeP rate suffix data n).extract 0 m = spongeP rate suffix data m := by
+  unfold_sponge
+  simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size, Nat.add_sub_cancel, Nat.sub_zero, Nat.div_one]
+  exact sq_prefix _ rate h _
 
-end BlindLedger.Keccak
+end BlindLedger.Semantic
 
 namespace BlindLedger.Gate.MlDsa87
 
-open BlindLedger.Keccak
+open BlindLedger.Semantic
 
 section
 
@@ -980,8 +1120,7 @@ theorem invNtt_pointwise {a b : Poly} (ha : a.size = 256) (hb : b.size = 256) :
 
 end BlindLedger.Gate.MlDsa87
 
-/-! Axiom pins for the proved theorems (rejNtt_stable and sampleInBall_stable are proved but depend on
-    `sponge_prefix`, still `sorry`, so they are not pinned). -/
+/-! Axiom pins for the proved theorems. -/
 /-- info: 'BlindLedger.Gate.decodeCheckpoint_bytes' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint_bytes
 /-- info: 'BlindLedger.Gate.decodeKeyCert_bytes' depends on axioms: [propext, Quot.sound] -/
@@ -1000,3 +1139,9 @@ end BlindLedger.Gate.MlDsa87
 #guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.verify_true_checks
 /-- info: 'BlindLedger.Gate.MlDsa87.sig_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.sig_canonical
+/-- info: 'BlindLedger.Semantic.sponge_prefix' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.sponge_prefix
+/-- info: 'BlindLedger.Gate.MlDsa87.rejNtt_stable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.rejNtt_stable
+/-- info: 'BlindLedger.Gate.MlDsa87.sampleInBall_stable' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.sampleInBall_stable
