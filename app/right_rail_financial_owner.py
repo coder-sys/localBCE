@@ -77,7 +77,7 @@ def _raise_if_busy(error: BaseException) -> None:
 _SCHEMA_VERSION: Final[int] = 8
 _SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v8"
 _CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
-_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v2"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v3"
 _POPULATION_MANIFEST_CONTRACT: Final[str] = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
@@ -449,6 +449,16 @@ def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list
             (obligation_id,),
         )
     ]
+
+
+def _open_requests(connection: sqlite3.Connection, obligation_id: str, shortfall: int) -> dict[str, int]:
+    """R2: what each correction request may still collect, oldest first, within the unpaid balance (derived, never stored)."""
+    paid = {e["action_id"]: e["paid_cents"] for e in _correction_paid(connection, obligation_id)}
+    left, open_ = shortfall, {}
+    for action_id, amount in connection.execute("SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' AND status<>'CANCELLED' ORDER BY revision,action_id", (obligation_id,)):
+        open_[action_id] = min(max(amount - paid.get(action_id, 0), 0), left)  # clamped: a request is never open below zero
+        left -= open_[action_id]
+    return open_
 
 
 def _payment_links(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
@@ -4070,7 +4080,7 @@ class FinancialOwner:
                 paid = next((entry["paid_cents"] for entry in _correction_paid(connection, str(obligation["obligation_id"])) if entry["action_id"] == pays_action_id), 0)
                 if paid + amount_cents > request:
                     _fail(FinancialConflictError, "payment_exceeds_unpaid_request")
-                if amount_cents > obligation["shortfall_cents"]:  # what is not owed cannot be collected through a request (R1)
+                if amount_cents > _open_requests(connection, str(obligation["obligation_id"]), int(obligation["shortfall_cents"])).get(pays_action_id, 0):  # R2: only what the request still has open within the balance
                     _fail(FinancialConflictError, "payment_exceeds_unpaid_balance")
                 link = {"pays_action_id": pays_action_id}
             connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
@@ -5716,6 +5726,8 @@ class FinancialOwner:
                 "input_evaluation_result_digest", "dispatch",
             )
 
+            open_cents = _open_requests(connection, obligation_id, int(obligation["shortfall_cents"]))
+
             def action_ref(row: sqlite3.Row) -> dict[str, Any]:
                 payload = _stored_object(row["payload_json"], "decision_package_action")
                 payload_fields: dict[str, Any] = {}
@@ -5735,6 +5747,7 @@ class FinancialOwner:
                     "revision": int(row["revision"]),
                     "payload_digest": _hex(bytes(row["payload_digest"])),
                     "payload_fields": payload_fields,
+                    "open_cents": open_cents.get(str(row["action_id"]), 0 if row["kind"] == "CORRECTION_PAYMENT_REQUEST" else None),
                     "created_at_ms": int(row["created_at_ms"]),
                     "acknowledgment": {
                         "status": str(row["outbox_status"]),

@@ -477,7 +477,7 @@ class FinancialMirrorTests(unittest.TestCase):
         second = self.mirror.decision_package(H_ITEM_ID, limit=1, offset=1)
         self.assertEqual(first["schema"], "RR/FINANCIAL/MIRROR/v1")
         self.assertEqual(first["resource"], "decision_package")
-        self.assertEqual(first["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v2")
+        self.assertEqual(first["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v3")
         self.assertEqual(first["cash"]["recorded_received_cash_cents"], H_CASH_CENTS)
         self.assertEqual(first["cash"]["shortfall_cents"], UNAPPROVED_OFFSET_CENTS)
         self.assertEqual(first["current_action"]["status"], "ACKNOWLEDGED")
