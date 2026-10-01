@@ -202,8 +202,8 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(self._exchange(frames["c1"]), frames["c1_answer"])  # RECORDED
         self.assertEqual(self._exchange(frames["c2"]), frames["c2_answer"])  # REVERSED
         self.assertEqual(self._exchange(frames["s1_refused"]), frames["s1_refused_answer"])  # REFUSED, code 8 (LINK_EXCEEDS_UNPAID)
-        self.assertEqual(frames["s1_refused_answer"][-2:], b"")
-        self.assertEqual(self._exchange(frames["c1"][:-1]), b"")  # a truncated item is not decoded
+        self.assertEqual(frames["s1_refused_answer"][-2:], b"\x07\x08")
+        self.assertEqual(self._exchange(frames["c1"][:-1]), b"\x01")  # a truncated item is not decoded
         old = "4989cc7d8f1ec95ffeef2a4a3a6e1f7504ade818803213815935b711a3d40cc5"  # the answer to the first fixture input from the worker before payment frames existed
         self.assertEqual(hashlib.sha256(engine._evaluate_wire(self._wires()[0][0])).hexdigest(), old)
 
