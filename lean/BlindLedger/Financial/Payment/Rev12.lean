@@ -614,10 +614,12 @@ def viewWellFormed (v : PaymentView) : Bool :=
     v.evidence.all (evidenceWellFormed ctx) &&
     commandWellFormed v.command && v.expectedRevision.all (· < 2 ^ 63)
 
-/-- Section 2.6 coherence: the rows are the ones the command names, and agree with the state. -/
+/-- Section 2.6 coherence: the rows are the ones the command names, and agree with the state.
+    An ACTIVE row's contribution is in the state (`advance` erases it). A REVERSED row is not
+    checked: an authorized determination may carry the same (time, id, amount) contribution. -/
 def coherent (v : PaymentView) : Bool :=
   let contributes (p : Payment) :=
-    decide (p.status = .ACTIVE) == v.state.contributions.contains ⟨p.eventAt, p.paymentId, p.amountCents⟩
+    !decide (p.status = .ACTIVE) || v.state.contributions.contains ⟨p.eventAt, p.paymentId, p.amountCents⟩
   v.state.revision = v.env.beforeRevision &&
     v.byId.all (fun x => x.1.paymentId = cmdPaymentId v.command && contributes x.1) &&
     v.evidence.all (·.evidenceId = cmdEvidenceId v.command) &&
@@ -2069,18 +2071,13 @@ theorem stepView_eq {r : PaymentRequest} (hr : requestWellFormed r = true)
     (hb : r.inputBytes = (rawEncodeFinancialInput r.input).length) {v : PaymentView}
     (hv : Faithful r v) : some (stepView v) = project r (paymentTransition r) := sorry
 
-
+/-- `hw` is `decodePaymentItem_command` for each view: the worker steps only decoded views. -/
 theorem chain_fold_eq_full (L : Ledger) (hL : ledgerWellFormed L) (calls : List Call)
     (hc : clocksOk L calls) (hR : L.input.beforeRevision + calls.length ≤ maxRevision)
-    (vs : List PaymentView) (hv : ChainFaithful L calls vs) :
+    (vs : List PaymentView) (hv : ChainFaithful L calls vs)
+    (hw : vs.all fun v => commandWellFormed v.command && v.expectedRevision.all (· < 2 ^ 63)) :
     vs.map (some ∘ stepView) =
       ((ledgers L calls).zip calls).map fun M => project (M.1.request M.2) (outcome M.1 M.2) := sorry
-
-
-
--- 16.2 item 4 (5.1, D3)
-
-
 
 -- 16.2 item 5 (5.1): both forms
 theorem paymentRespond_decode_none {w : Bytes} (h : decodePaymentItem w = none) :
@@ -2092,8 +2089,122 @@ theorem decodeStepOutcome_encode {o : StepOutcome} {b : Bytes} (h : encodeStepOu
   dsimp only [encodeStepOutcome] at h
   split at h <;> simp_all
 
+theorem evalInsertContribution_perm (y : EvalContribution) :
+    ∀ l, (evalInsertContribution y l).Perm (y :: l)
+  | [] => .refl _
+  | a :: l => by
+    unfold evalInsertContribution
+    split
+    · exact .refl _
+    · exact ((evalInsertContribution_perm y l).cons a).trans (.swap y a l)
+
+theorem evalSortContributions_perm : ∀ l, (evalSortContributions l).Perm l
+  | [] => .refl _
+  | a :: l => (evalInsertContribution_perm a _).trans ((evalSortContributions_perm l).cons a)
+
+theorem active_contribution {i : FinancialInput} {p : Payment} (hp : p ∈ i.payments)
+    (ha : p.status = .ACTIVE) :
+    (evalSortContributions (evalContributions i)).contains ⟨p.eventAt, p.paymentId, p.amountCents⟩ = true := by
+  rw [List.contains_iff_mem, (evalSortContributions_perm _).mem_iff]
+  simp only [evalContributions]
+  apply List.mem_append_left
+  generalize i.payments = ps at hp
+  induction ps with
+  | nil => cases hp
+  | cons q qs ih =>
+    rcases List.mem_cons.mp hp with rfl | h
+    · simp [ha]
+    · simp only [List.foldr_cons]; split <;> simp [ih h]
+
+theorem findEvidence_id : ∀ {l : List EvidenceRecord} {id : String} {e : EvidenceRecord},
+    findEvidence l id = some e → e.evidenceId = id
+  | [], _, _, h => by simp [findEvidence] at h
+  | x :: xs, id, e, h => by
+      unfold findEvidence at h
+      split at h
+      · cases h; assumption
+      · exact findEvidence_id h
+
+theorem viewOfAnchor_coherent {r : PaymentRequest} {v : PaymentView} (h : viewOfAnchor r = some v) :
+    coherent v = true := by
+  obtain ⟨i, n, rs, fo, er, cmd⟩ := r
+  unfold viewOfAnchor at h
+  obtain ⟨S, hS, rfl⟩ := Option.map_eq_some_iff.mp h
+  unfold summarize at hS
+  obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hS
+  have hc : ∀ p ∈ i.payments, (!decide (p.status = .ACTIVE) ||
+      (evalSortContributions (evalContributions i)).contains ⟨p.eventAt, p.paymentId, p.amountCents⟩) = true := by
+    intro p hp
+    by_cases ha : p.status = .ACTIVE
+    · rw [active_contribution hp ha, Bool.or_true]
+    · simp [ha]
+  have hid : ∀ x, ((findPayment i.payments (cmdPaymentId cmd)).bind fun p =>
+      (receiptOf rs p.paymentId).map fun k => (p, k)) = some x →
+      x.1.paymentId = cmdPaymentId cmd ∧ x.1 ∈ i.payments := by
+    intro x hx
+    obtain ⟨p, hp, hx⟩ := Option.bind_eq_some_iff.mp hx
+    obtain ⟨k, -, rfl⟩ := Option.map_eq_some_iff.mp hx
+    exact ⟨findPayment_id _ _ _ hp, findPayment_mem hp⟩
+  cases cmd with
+  | record c =>
+    simp only [coherent, Bool.and_eq_true, Option.all_eq_true]
+    refine ⟨⟨⟨⟨decide_eq_true rfl, fun x hx => ?_⟩, fun e he => decide_eq_true (findEvidence_id he)⟩, rfl⟩,
+      fun x hx => ?_⟩
+    · obtain ⟨hpid, hmem⟩ := hid x hx
+      exact ⟨decide_eq_true hpid, hc _ hmem⟩
+    · obtain ⟨p, hp, hx⟩ := Option.bind_eq_some_iff.mp hx
+      obtain ⟨pk, hk, rfl⟩ := Option.map_eq_some_iff.mp hx
+      obtain ⟨k, -, rfl⟩ := Option.map_eq_some_iff.mp hk
+      have ho := List.find?_some hp
+      simp only [decide_eq_true_eq] at ho
+      refine ⟨⟨decide_eq_true ho, hc _ (List.mem_of_find?_eq_some hp)⟩,
+        fun e he => decide_eq_true ?_⟩
+      obtain ⟨id, hr, he⟩ := Option.bind_eq_some_iff.mp he
+      show some e.evidenceId = p.reversalEvidenceId
+      rw [hr, findEvidence_id he]
+  | reverse c =>
+    simp only [coherent, Bool.and_eq_true, Option.all_eq_true]
+    refine ⟨⟨⟨⟨decide_eq_true rfl, fun x hx => ?_⟩, fun e he => decide_eq_true (findEvidence_id he)⟩, rfl⟩,
+      rfl, rfl⟩
+    obtain ⟨hpid, hmem⟩ := hid x hx
+    exact ⟨decide_eq_true hpid, hc _ hmem⟩
+
+theorem decodePaymentItem_cases {w : Bytes} {v : PaymentView} (h : decodePaymentItem w = some v) :
+    (∃ r, decodePaymentRequest w = some r ∧ viewOfAnchor r = some v) ∨
+      (viewWellFormed v = true ∧ coherent v = true) := by
+  unfold decodePaymentItem at h
+  split at h
+  · split at h
+    · exact .inl (Option.bind_eq_some_iff.mp h)
+    · split at h
+      · obtain ⟨-, hf⟩ := Option.filter_eq_some_iff.mp h
+        simp only [Bool.and_eq_true] at hf
+        exact .inr ⟨hf.1.1, hf.1.2⟩
+      · cases h
+  · cases h
+
+/-- The worker steps only views whose command is well formed: the hypothesis `hw` of
+    `chain_fold_eq_full`. Form A: `decodePaymentRequest`'s filter (Codec.lean:79, as
+    CodecLaws.lean:371); form B: `viewWellFormed` (above). -/
+theorem decodePaymentItem_command {w : Bytes} {v : PaymentView} (h : decodePaymentItem w = some v) :
+    (commandWellFormed v.command && v.expectedRevision.all (· < 2 ^ 63)) = true := by
+  rcases decodePaymentItem_cases h with ⟨r, hr, hv⟩ | ⟨hw, -⟩
+  · unfold decodePaymentRequest at hr
+    have hq := (Option.filter_eq_some_iff.mp hr).2
+    simp only [Bool.and_eq_true] at hq
+    have hq := hq.1.1
+    simp only [requestWellFormed, Bool.and_eq_true] at hq
+    unfold viewOfAnchor at hv
+    obtain ⟨S, -, rfl⟩ := Option.map_eq_some_iff.mp hv
+    simp [hq.1.2, hq.2]
+  · simp only [viewWellFormed, Bool.and_eq_true] at hw
+    simp [hw.1.2, hw.2]
+
 theorem decodePaymentItem_coherent {w : Bytes} {v : PaymentView} (h : decodePaymentItem w = some v) :
-    coherent v = true := sorry
+    coherent v = true := by
+  rcases decodePaymentItem_cases h with ⟨r, -, hv⟩ | ⟨-, hc⟩
+  · exact viewOfAnchor_coherent hv
+  · exact hc
 
 section FormBRoundTrip
 
@@ -2626,13 +2737,13 @@ private def worstRecord : Command := .record
 #eval hex (rawEncodeStepOutcome (.refused .CAPACITY))
 #eval (viewOfAnchor (kL0.request c1)).map fun v => ((encodeStepOutcome (stepView v)).map hex)
 
-/-! ## Two statements above are false as written (counterexamples; the statements are untouched)
+/-! ## Why `chain_fold_eq_full` has `hw`, and why `coherent` skips REVERSED rows
 
-    `chain_fold_eq_full`: `clocksOk` does not require well-formed commands, and an ill-formed command
-    (empty payment id) makes the reference refuse (POST_REJECTED) while the view's step mutates.
-    `decodePaymentItem_coherent`: a well-formed request may hold a REVERSED payment whose id, time and
-    amount equal an offset determination's contribution; form A (`viewOfAnchor`) never checks
-    `coherent`, so the decoded view is incoherent. -/
+    `hw`: with only the other hypotheses, an ill-formed command (empty payment id) makes the
+    reference refuse (POST_REJECTED) while the view mutates. No worker input carries one
+    (`decodePaymentItem_command`). `coherent`: a payment may share its (time, id, amount)
+    contribution with an authorized determination. The `y` chain reaches that state through the
+    reference ledger; the view agrees at every step, and the reversed row decodes in both forms. -/
 
 private def badCall : Call := ⟨kNow, some 0, .record { kRec with paymentId := "" }⟩
 #guard financialInputWellFormed kL0.input && receiptsWellFormed kL0.input kL0.receipts
@@ -2643,33 +2754,24 @@ private def badCall : Call := ⟨kNow, some 0, .record { kRec with paymentId := 
   | none => false
   | some v => decide (absorbed v = v) && !decide (some (stepView v) = project (kL0.request badCall) (outcome kL0 badCall))
 
--- A reversed payment whose id, event time and amount equal an authorized offset determination's.
-private def xPay : Payment :=
-  { katPayment 300_000 1_774_864_800_000 with
-    paymentId := "determination:action:h:offset", reversalEvidenceId := some "evidence:reversal", status := .REVERSED }
-private def xCash : EvidenceRecord :=
-  { katCashEvidence (some 300_000) with
-    applicableAt := 1_774_864_800_000
-    eventAt := 1_774_864_800_000
-    receivedAt := 1_774_864_800_000 }
-private def xRev : EvidenceRecord :=
-  { katReversalEvidence with
-    reversalOf := some xPay.paymentId
-    amountCents := some 300_000 }
-private def xInput : FinancialInput :=
-  { katAuthorized with beforeRevision := 2, payments := [xPay], evidence := [xCash, katOffsetEvidence, xRev] }
 private def xCmd : RecordCommand :=
-  { paymentId := xPay.paymentId, evidenceId := "evidence:cash", commonOriginId := xPay.commonOriginId,
+  { paymentId := "determination:action:h:offset", evidenceId := "evidence:cash", commonOriginId := "origin:cash:h",
     sourceId := "fixture-payment-file", sourceVersion := "cash-v1", localRef := none, amountCents := 300_000,
     eventAt := 1_774_864_800_000, paysActionId := none }
-private def xL : Ledger := ⟨xInput, [⟨xPay.paymentId, 1, none⟩]⟩
-private def xCall : Call := ⟨1_774_922_400_000, none, .record xCmd⟩
+private def yL0 : Ledger :=
+  ⟨{ katAuthorized with beforeRevision := 2, payments := [], evidence := [katOffsetEvidence] }, []⟩
+private def yRec : Call := ⟨1_774_922_400_000, none, .record xCmd⟩
+private def yRev : Call := ⟨1_774_922_401_000, none, .reverse
+  { paymentId := xCmd.paymentId, evidenceId := "evidence:reversal", commonOriginId := none, eventAt := some 1_774_900_000_000 }⟩
+private def yL1 : Ledger := step yL0 yRec
+private def yL2 : Ledger := step yL1 yRev
+private def yRetry : Call := { yRec with now := 1_774_922_402_000 }
 
-
-#guard financialInputWellFormed xInput
-#guard receiptsWellFormed xInput xL.receipts
-#guard requestWellFormed (xL.request xCall)
-#guard ((decodePaymentItem (encodePaymentRequest (xL.request xCall))).map coherent) == some false
+#guard financialInputWellFormed yL0.input && requestWellFormed (yL2.request yRetry)
+#guard kind (outcome yL0 yRec) == "RECORDED" && agrees yL0 yRec
+#guard kind (outcome yL1 yRev) == "REVERSED" && agrees yL1 yRev
+#guard agrees yL2 yRetry && formBRoundTrips yL2 yRetry
+#guard ((decodePaymentItem (encodePaymentRequest (yL2.request yRetry))).map coherent) == some true
 
 /-- info: 'BlindLedger.Financial.Payment.Rev12.paymentRespond_decode_none' depends on axioms: [propext,
  Classical.choice,
@@ -2725,5 +2827,13 @@ private def xCall : Call := ⟨1_774_922_400_000, none, .record xCmd⟩
  Classical.choice,
  Quot.sound] -/
 #guard_msgs in #print axioms run_reverse_retry_duplicate
+/-- info: 'BlindLedger.Financial.Payment.Rev12.decodePaymentItem_command' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms decodePaymentItem_command
+/-- info: 'BlindLedger.Financial.Payment.Rev12.decodePaymentItem_coherent' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in #print axioms decodePaymentItem_coherent
 
 end BlindLedger.Financial.Payment.Rev12
