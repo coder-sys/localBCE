@@ -4201,6 +4201,24 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store.evaluate_obligation(expected.H_ITEM_ID)  # the clock was never held ahead of the honest writes
         self._assert_verified(store)
 
+    @unittest.expectedFailure  # safety red team S2, CONFIRMED by this test: the offset reads timely; reported to the lead, not fixed here
+    def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
+        # safety red team S2: decision_at_ms may be any time from the evaluation up to now, and an offset's
+        # completion is its decision time, so a claim evaluated before the due date could be decided long after it
+        clock = _Clock()
+        store = self._build_base_for_correction(clock=clock)
+        self._record_cash(store)
+        claim_id = self._record_claim(store)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        evaluated_at = clock.value
+        self.assertLess(evaluated_at, expected.H_DUE_AT_MS)
+        clock.value = expected.H_DUE_AT_MS + 172_800_000  # the official actually decides two days late
+        store.authorize_offset(
+            item_id=expected.H_ITEM_ID, claim_id=claim_id, expected_revision=receipt["revision"], action_id=expected.ACTION_OFFSET_ID,
+            decision_at_ms=evaluated_at, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"],
+        )
+        self.assertFalse(store.obligation_detail(expected.H_ITEM_ID)["timely"])
+
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
         package = store.decision_package(expected.H_ITEM_ID)
