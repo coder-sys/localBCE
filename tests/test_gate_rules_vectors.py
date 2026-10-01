@@ -9,8 +9,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEAN = os.path.join(ROOT, "lean")
 EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name == "nt" else "gate_rules")
 # The files the runner embeds (`Run.source`); Theorems.lean is checked by the build, not linked.
-SOURCES = ["BlindLedger/Gate/Rules/Spec.lean", "BlindLedger/Gate/Rules/Run.lean", "BlindLedger/Sha3.lean",
-           "lakefile.toml", "lean-toolchain"]
+SOURCES = ["BlindLedger/Gate/Rules/Spec.lean", "BlindLedger/Gate/Rules/Fast.lean", "BlindLedger/Gate/Rules/Run.lean",
+           "BlindLedger/Gate/Rules/RunCli.lean", "BlindLedger/Sha3.lean", "lakefile.toml", "lean-toolchain"]
 
 
 @unittest.skipUnless(os.path.isfile(EXE),
