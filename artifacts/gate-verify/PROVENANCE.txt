@@ -1,7 +1,7 @@
 gate_verify.exe: the signer's self-check for gate checkpoints (PQ signing M1); the payer's verifier is M2 and is not built
 
 Lean/Lake executable `gate_verify` (root BlindLedger.Gate.VerifyCli), built from the
-`lean/` tree whose manifest is recorded below (branch pq-m1, review-fix commit).
+`lean/` sources whose manifest is recorded in tools/tcb_report.txt.
 Stateless: input `root_pk (2592) || u32 BE cert length || KEY-CERT || signed checkpoint`;
 output `GATE_VERIFY=ACCEPT` (exit 0) or `REJECT` (exit 1); exit 2 for malformed input.
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
@@ -12,12 +12,11 @@ ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
-- Source manifest, 81 git-tracked files under lean/ (sha256 and path, string-sorted, no caches): SHA-256
-  f6d42e02fe789f1d47704da024177ad16d8a976b2a6760836ab4812e0cc72463, 9,079 bytes;
-  each file hashed as LF bytes (= its git blob; eol=lf). m3-step1 recorded e6976e2e... from a checkout
-  holding CRLF copies of five blobs; same tree, exe unchanged. Copy: C:\Users\neers\rrb\gate\dpk1-gv-manifest.txt (dpk-step1, DecisionPackage Conclude, Wire, Laws added).
-  tests/test_right_rail_gate_formats.py recomputes it from `git ls-files lean` and fails on any change
-  under lean/ until this file is updated after a rebuild.
+- Source manifest: the `manifest` line of tools/tcb_report.txt (the one copy), a SHA-256 over the sources this exe and the two
+  engine exes are built from: each exe's import closure (lean/tools/semantic_assurance_gate.py `pinned_source_manifest`) plus
+  lean/lakefile.toml, lean/lean-toolchain and lean/lake-manifest.json, each file hashed as LF bytes (= its git blob).
+  tests/test_tcb_gate.py recomputes it and fails when one of those files changes until tools/tcb_pin.ps1 is rerun; an edit to any
+  other lean/ file does not move it.
 
 Re-pin (2026-09-29, branch lean-quick-wins on trunk a0fb1ca): the manifest moved (55 files, 0482e14c..., to 51 tracked files,
 17e0a689...) while the exe did not: the rebuild (guard log lqw-gv1-a6-L1, `lake build -d lean`, 53 jobs) gave the same

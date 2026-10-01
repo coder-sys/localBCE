@@ -3,7 +3,7 @@
 `tools/tcb_gate.lean` walks every constant reachable from each executable's `main`, its startup initializers and the `@[csimp]`
 theorems, and fails on a non-standard axiom (`sorryAx`, `Lean.ofReduceBool`) or a `partial`, `implemented_by`, `extern`, `opaque`,
 `unsafe`, `partial_fixpoint`, `while`/`repeat`, `IO.iterate` or stream-`for` constant its allowlist does not name.  The live gate needs 3-5 GB, so the default run only checks the committed
-`tools/tcb_report.txt`: it must be for the current `lean/` tree and gate file and the pinned exe bytes, hold no violation, and name
+`tools/tcb_report.txt`: it must be for the pinned exes' import closures (and lakefile.toml, lean-toolchain, lake-manifest.json), the gate file and the pinned exe bytes, hold no violation, and name
 exactly the known VIOLATION-TODO set.  The pin procedure (`tools/tcb_pin.ps1`, RR_TCB_LIVE=1) builds nothing: it reruns the gate on the
 built exes (whose bytes must equal the pins), pins the toolchain and rewrites the report."""
 
@@ -13,6 +13,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -56,14 +57,6 @@ def _tree(files: list[Path]) -> str:
     return hashlib.sha256("".join(f"{_sha256(p)}  {p.relative_to(TOOLCHAIN).as_posix()}\n" for p in sorted(files)).encode()).hexdigest()
 
 
-def _lean_manifest() -> str:
-    """The `lean/` source manifest hash of test_gate_verify_pin_names_the_current_lean_tree: tracked files, plain string order."""
-    tracked = subprocess.run(["git", "ls-files", "-z", "lean"], cwd=ROOT, capture_output=True, check=True).stdout.decode().split("\0")
-    files = sorted(name for name in tracked if name and ".lake" not in name.split("/"))
-    lf = {name: hashlib.sha256((ROOT / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest() for name in files}  # LF = the git blob (eol=lf)
-    return hashlib.sha256("".join(f"{lf[name]}  {name}\n" for name in files).encode()).hexdigest()
-
-
 def _olean_line() -> str:
     """Every Init, Std and Lean module file the allowlist and the gate trust (oleans, IR, server data), less `.ilean` editor data."""
     lib = TOOLCHAIN / "lib" / "lean"
@@ -97,9 +90,30 @@ class TcbReportTests(unittest.TestCase):
         """No KAT or `native_decide` module sits in any pinned executable's import closure, gate_verify included."""
         self.assertGreater(gate._check_pinned_exe_closure(LEAN, TCB_EXES), 20)
 
+    def test_manifest_covers_the_pinned_closures_and_build_files_only(self) -> None:
+        """An edit to a lean file no pinned exe imports leaves the manifest alone; one to a closure file or a build file moves it."""
+        closure = {module.replace(".", "/") + ".lean" for module in gate._pinned_exe_modules(LEAN, TCB_EXES)}
+        outside = next(p for p in sorted(LEAN.rglob("*.lean")) if ".lake" not in p.parts and p.relative_to(LEAN).as_posix() not in closure)
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "lean"
+            shutil.copytree(LEAN, copy, ignore=shutil.ignore_patterns(".lake"))
+            before = gate.pinned_source_manifest(copy, TCB_EXES)
+            self.assertEqual(before, gate.pinned_source_manifest(LEAN, TCB_EXES))
+            with (copy / outside.relative_to(LEAN)).open("a", encoding="utf-8") as handle:
+                handle.write("-- edit\n")
+            self.assertEqual(gate.pinned_source_manifest(copy, TCB_EXES), before, outside.name)
+            for name in ("BlindLedger/Gate/VerifyCli.lean", "lakefile.toml", "lean-toolchain", "lake-manifest.json"):
+                with self.subTest(name):
+                    path = copy / name
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"\n")
+                    self.assertNotEqual(gate.pinned_source_manifest(copy, TCB_EXES), before)
+                    path.write_bytes(original)
+                    self.assertEqual(gate.pinned_source_manifest(copy, TCB_EXES), before)
+
     def test_committed_report_is_current_and_clean(self) -> None:
         report = REPORT.read_text("utf-8")
-        self.assertIn(f"manifest  {_lean_manifest()}", report.splitlines(), "lean/ changed since the report: rerun tools/tcb_pin.ps1")
+        self.assertIn(f"manifest  {gate.pinned_source_manifest(LEAN, TCB_EXES)}", report.splitlines(), "a pinned exe's sources changed since the report: rerun tools/tcb_pin.ps1")
         self.assertEqual(_blocks(report), {exe: (0, todo) for exe, todo in EXPECTED_TODO.items()})
         self.assertEqual(report.count("allowlist BlindLedger.Financial.serveWorker x1"), 1, "the worker's one partial_fixpoint")
 
@@ -134,7 +148,7 @@ class LiveTcbGateTests(unittest.TestCase):
         self.assertIn(oleans, pinned)
         lake = tomllib.loads((LEAN / "lakefile.toml").read_text("utf-8"))
         roots = {e["name"]: e["root"] for e in lake["lean_exe"]}
-        text = f"manifest  {_lean_manifest()}\ngate  {_sha256(GATE)}\n"
+        text = f"manifest  {gate.pinned_source_manifest(LEAN, TCB_EXES)}\ngate  {_sha256(GATE)}\n"
         for exe in TCB_EXES:
             built = _sha256(LEAN / ".lake" / "build" / "bin" / f"{exe}.exe")
             self.assertEqual(built, EXE_PINS[exe].lower(), f"the built {exe} is not the pinned one: build in-tree first")
