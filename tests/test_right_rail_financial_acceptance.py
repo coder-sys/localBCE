@@ -5167,6 +5167,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return {entry["action_id"]: entry.get("open_cents") for entry in store.decision_package(expected.H_ITEM_ID)["references"]["actions"]["items"]}
 
     @staticmethod
+    def _delivery(store: FinancialOwner) -> tuple[object, bool, object, object]:
+        """Stale corrections: the delivery requirement, whether it is listed missing, the case assessment, the newest action's own ACK result."""
+        conclusions = store.decision_package(expected.H_ITEM_ID)["conclusions"]
+        case, requirement = conclusions["case_resolution"], "delivery_acknowledged_or_not_required"
+        return case["required_conditions"][requirement], requirement in case["missing_requirements"], case["assessment"], conclusions["action_acknowledgment"]["result"]
+
+    @staticmethod
     def _requested_and_claimed(store: FinancialOwner) -> tuple[list[int], list[int]]:
         """Correction request amounts (action rows) and decision event amounts, in decision order."""
         with closing(sqlite3.connect(str(store.path))) as connection:
@@ -5342,6 +5349,49 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._rehash_history(forged, lambda payload: payload.get("payment_id") == "payment:h:p3" and "common_origin_id" in payload and payload.update(pays_action_id=_ACTION_B) is None), 1)
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(forged, expected_config=store.config, expected_authority=self.authority)
+
+    def test_a_request_the_balance_no_longer_needs_is_not_waiting_on_delivery(self) -> None:
+        # Stale corrections: one READY 300,000 request, never acknowledged. 300,000 arrives unlinked, so it asks for
+        # nothing and delivery is not required; a reversal makes it ask again. Paid again and reported, the closed
+        # case reads SUPPORTED, not UNSUPPORTED. The newest action's own ACK result stays NOT_SATISFIED throughout.
+        store = self._build_base_for_correction()
+        self._record_cash(store)
+        self._reject(store, self._record_claim(store))
+        seen = [self._delivery(store)]
+        self._pay_a(store, 300_000, linked=False)
+        seen.append(self._delivery(store))
+        store.reverse_payment(item_id=expected.H_ITEM_ID, payment_id="payment:h:p2", evidence_id="evidence:reversal-h:p2")
+        seen.append(self._delivery(store))
+        self._pay_a(store, 300_000, "p3", linked=False)
+        self._record_report(store)
+        seen.append(self._delivery(store))
+        self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))  # the oracle recomputes the verdict
+        self._assert_verified(store)
+        self.assertEqual(seen, [
+            ("NOT_SATISFIED", True, "NOT_RESOLVED", "NOT_SATISFIED"),  # asks 300,000 and is not delivered
+            ("SUPPORTED", False, "NOT_RESOLVED", "NOT_SATISFIED"),  # asks nothing: not required
+            ("NOT_SATISFIED", True, "NOT_RESOLVED", "NOT_SATISFIED"),  # the reversal makes it ask again
+            ("SUPPORTED", False, "SUPPORTED", "NOT_SATISFIED"),  # paid and reported: nothing waits on it
+        ])
+
+    def test_every_action_that_still_asks_must_be_delivered(self) -> None:
+        # Stale corrections: 600,000 unpaid; A and B each request 300,000. Delivery waits on every action that still asks
+        # for money, not only the newest. B acknowledged leaves A waiting until A is acknowledged; A acknowledged leaves
+        # B waiting until 300,000 arrives unlinked and cuts B, the newest, to nothing.
+        seen = {}
+        for first in (_ACTION_B, expected.ACTION_CORRECTION_ID):
+            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+            reject_b()
+            store.acknowledge_action(first, "ack:correction:h:first")
+            seen[first] = [self._delivery(store)[0]]
+            if first == _ACTION_B:
+                self._ack(store)
+            else:
+                self._pay_a(store, 300_000, linked=False)
+            seen[first].append(self._delivery(store)[0])
+            self._assert_decision_package_verified(store, store.decision_package(expected.H_ITEM_ID))
+            self._assert_verified(store)
+        self.assertEqual(seen, {_ACTION_B: ["NOT_SATISFIED", "SUPPORTED"], expected.ACTION_CORRECTION_ID: ["NOT_SATISFIED", "SUPPORTED"]})
 
     def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
         # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.

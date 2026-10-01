@@ -430,6 +430,22 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         finally:
             self._stop_workflow(workflow, server, thread)
 
+    def test_acknowledge_is_offered_only_for_an_action_that_still_asks(self) -> None:
+        """Stale corrections: a ready request the balance no longer needs (open $0.00) is not offered for a delivery ACK; a request that still asks, or an action with no open amount (offset notice), is."""
+        workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-ack-open")
+
+        def action(open_cents):
+            def rewrite(value):
+                value["h"]["decision_package"]["current_action"] = {"status": "READY", "open_cents": open_cents, "payload_fields": {"amount_cents": 300000}}
+                return value
+            return rewrite
+        try:
+            for open_cents, enabled in ((0, False), (300000, True), (None, True)):
+                server.rewrite = action(open_cents)
+                self.assertEqual(not self._open("analyst", server).view()["buttons"]["acknowledge"]["disabled"], enabled, open_cents)
+        finally:
+            self._stop_workflow(workflow, server, thread)
+
     def test_the_decision_form_starts_empty_and_asks_before_it_records(self) -> None:
         """Every decision control, in every state it can be in before a decision, found by role and name only."""
         controls = _MODEL["local_controls"]
