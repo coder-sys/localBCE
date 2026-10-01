@@ -123,14 +123,14 @@ operational authority.
    engine or orchestration built before measured need. A new abstraction needs
    two real consumers.
 3. **History never costs more.** Ordinary work scales with the change, not with
-   total history: the time, memory, bytes read and hashed, and attack surface of
-   every hot-path operation — a decision, a cash-file apply, a gate batch, a
-   release, an open, a restart, the audit of one decision — stay flat as history
-   grows. A deterministic growth test (`tests/test_history_growth.py`) counts that
-   work at more than one history size and fails on growth; operations that still
-   grow sit on a dated exception list that only shrinks. No bound may become a way
-   to block service as history grows. Every input, queue, report, export and proof
-   has explicit bounds. Measure before claiming performance.
+   total history. `tests/test_history_growth.py` counts SQLite steps, bytes
+   hashed, evaluator frame bytes and peak Python memory for the listed owner
+   operations and the gate pin at two history sizes, and fails when a count
+   rises 5% over its pin or an unlisted count grows faster than log n. The
+   counts that still grow are named exceptions on a dated list that only
+   shrinks (the continuity export refuses at 2,560 payments). No bound may
+   become a way to block service as history grows. Every input, queue, report,
+   export and proof has explicit bounds. Measure before claiming performance.
 4. Build what the plan needs now. The private zero-knowledge evidence mode
    (PRIVATE_ZK) is an active prototype track (founder, 2026-09-25). It produces
    evidence only, never a hold or payment directive. It never blocks core, gate
@@ -363,5 +363,5 @@ never an amendment.
 - 2026-10-01 — Article IX.3 strengthened by the founders ("we need to make sure
   our stack doesnt get bloated or gets slower or vulenrable as history grows,
   thats a core value, we need to makes re thats handled", 2026-10-01):
-  history-flat cost, memory and attack surface, enforced by a deterministic
-  growth test with a shrink-only exception list.
+  a deterministic growth test pins the listed operations' work at two history
+  sizes, with a shrink-only exception list.

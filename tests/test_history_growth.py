@@ -11,8 +11,8 @@ A counter may grow at most like log n: large <= small * log2(L) / log2(S) * SLAC
 1 + c * log2(L / S) with c = 1 / log2(S), the tightest c that admits every a + b * log n cost (a
 Merkle path), and SLACK covers digit-width wobble.  A counter that grows faster must be on GROWS,
 a dated exception list that only shrinks: the test fails when an unlisted counter grows and when a
-listed one has stopped growing.  BASELINE is today's small-history work, so flatness cannot be
-bought by making small stores slower.  Synthetic, non-PHI, nonpayment; proofSuiteId=null,
+listed one has stopped growing.  PINNED holds today's measured work at both sizes (5% margin,
+2 KiB for peak_kib), so no operation, listed or not, can get costlier unnoticed.  Synthetic, non-PHI, nonpayment; proofSuiteId=null,
 production_usable=false, activation=false.
 """
 
@@ -38,7 +38,7 @@ from tools import gate_rules_data
 COUNTERS = ("sql_ops", "hashed", "frame", "peak_kib", "refused")
 SIZES = {"store": (256, 2_560), "item": (16, 160), "gate": (256, 2_560)}  # earlier payments; one item's payments; released rows
 SLACK = 1.05
-MARGIN = 1.05  # BASELINE: deterministic counters, plus room for tracemalloc's small run-to-run spread
+MARGIN = 1.05  # PINNED: deterministic counters, plus room for tracemalloc's small run-to-run spread
 CHAIN = "EXACT if each indexed read is verified against the M3 chain / auth-state head; else WEAKENS: an index-only tamper waits for the sweep"
 GROWS = {  # operation: (counters that grow, owner branch, listed, strength of the planned fix); design (c)
     "decision": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
@@ -52,11 +52,21 @@ GROWS = {  # operation: (counters that grow, owner branch, listed, strength of t
     "item_decision": ("hashed frame peak_kib", "hist-flat S3 + S6", "2026-10-01", "EXACT: M3 view decide with a Lean _eq theorem against the full decide"),
     "gate_state_pin": ("hashed peak_kib", "auth-state STATE/v2", "2026-10-01", "EXACT: decideBatch_slice"),
 }
-BASELINE = {  # small-history work on trunk b180c97 (run hg-probe3); lower it when an operation gets cheaper
-    "decision": (15487, 32313, 1939, 94, 0), "reverse": (15701, 34012, 2208, 96, 0), "evaluate": (15463, 37428, 2208, 98, 0),
-    "cash_file": (98509, 137432, 19248, 6239, 0), "export": (7042, 48693, 0, 11806, 0), "continuity": (32004, 2226225, 0, 10731, 0),
-    "package": (3152, 18608, 0, 86, 0), "audit": (13875, 23969, 0, 94, 0), "summary": (2796, 0, 0, 7, 0), "history": (2306, 0, 0, 312, 0),
-    "open": (266619, 3924859, 0, 5929, 0), "item_decision": (72592, 63415, 8364, 242, 0), "gate_state_pin": (0, 236354, 0, 705, 0),
+SQLITE = "3.53.1"  # sql_ops counts this library's VM steps; another version changes them, so re-measure
+PINNED = {  # operation: (small-history work, large-history work) on trunk b180c97 (run hgfix-measure); lower it when an operation gets cheaper
+    "decision": ((15487, 32313, 1939, 93, 0), (72362, 32313, 1939, 88, 0)),
+    "reverse": ((15701, 34012, 2208, 96, 0), (72576, 34012, 2208, 95, 0)),
+    "evaluate": ((15463, 37428, 2208, 98, 0), (72338, 37428, 2208, 98, 0)),
+    "cash_file": ((98509, 137432, 19248, 6239, 0), (585584, 137073, 18852, 103305, 0)),
+    "export": ((7042, 48693, 0, 11806, 0), (46935, 48542, 0, 58510, 0)),
+    "continuity": ((32004, 2226225, 0, 10731, 0), (229802, 44523292, 0, 141710, 1)),
+    "package": ((3152, 18608, 0, 86, 0), (3152, 18608, 0, 104, 0)),
+    "audit": ((13875, 23969, 0, 94, 0), (70750, 23969, 0, 103, 0)),
+    "summary": ((2796, 0, 0, 7, 0), (2796, 0, 0, 7, 0)),
+    "history": ((2306, 0, 0, 312, 0), (2306, 0, 0, 324, 0)),
+    "open": ((266619, 3924859, 0, 5924, 0), (2540817, 83604988, 0, 96577, 0)),
+    "item_decision": ((72592, 63415, 8364, 242, 0), (109744, 361982, 70428, 7699, 0)),
+    "gate_state_pin": ((0, 236354, 0, 705, 0), (0, 2362946, 0, 7045, 0)),
 }
 # Every public FinancialOwner method is measured or named here with the reason it is not (history-guard-v1.md, inventory).
 MEASURED = {"record_payment_evidence", "reverse_payment", "evaluate_obligation", "run_batch", "export_history", "export_continuity", "decision_package", "summary", "history"}
@@ -207,11 +217,14 @@ class HistoryGrowthTests(unittest.TestCase):
                 self.assertEqual(listed - grown, set(), f"on GROWS but flat now; delete it, the list only shrinks: {small} -> {large}")
         self.assertEqual(set(GROWS) - set(self.work), set())
 
-    def test_small_history_is_no_slower_than_today(self):
-        for name, (_, small, _) in self.work.items():
-            with self.subTest(operation=name):
-                self.assertIn(name, BASELINE)
-                self.assertEqual([c for c, s, b in zip(COUNTERS, small, BASELINE[name]) if s > b * MARGIN], [], f"{small} against {BASELINE[name]}")
+    def test_work_stays_at_its_pinned_values(self):
+        self.assertEqual(sqlite3.sqlite_version, SQLITE, f"re-measure baseline for SQLite {sqlite3.sqlite_version}")
+        self.assertEqual(set(PINNED), set(self.work))
+        for name, (_, *measured) in self.work.items():
+            for size, pinned in zip(measured, PINNED[name]):
+                with self.subTest(operation=name):
+                    over = [c for c, m, p in zip(COUNTERS, size, pinned) if m > p + max(p * (MARGIN - 1), 2 if c == "peak_kib" else 0)]
+                    self.assertEqual(over, [], f"{size} against {pinned}")
 
     def test_every_owner_method_is_measured_or_named(self):
         public = {name for name in vars(owner.FinancialOwner) if not name.startswith("_")}
