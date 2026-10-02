@@ -54,4 +54,43 @@ def sha3_512 (data : ByteArray) : ByteArray := sponge 72 0x06 data 64
 def shake128 (data : ByteArray) (n : Nat) : ByteArray := sponge 168 0x1F data n
 def shake256 (data : ByteArray) (n : Nat) : ByteArray := sponge 136 0x1F data n
 
+private theorem fill_size (n : Nat) (f : Nat → UInt8) : ∀ (l : List Nat) (o : ByteArray), o.size ≤ n →
+    (Id.run (forIn l o fun j o =>
+      if o.size < n then pure (ForInStep.yield (o.push (f j))) else pure (ForInStep.yield o))).size =
+      min n (o.size + l.length)
+  | [], o, h => by
+    show o.size = min n (o.size + 0)
+    omega
+  | j :: l, o, h => by
+    simp only [List.forIn_cons, List.length_cons]
+    by_cases hj : o.size < n
+    · simp only [hj, if_true, pure_bind]
+      rw [fill_size n f l _ (by rw [ByteArray.size_push]; omega), ByteArray.size_push]; omega
+    · simp only [hj, if_false, pure_bind]
+      rw [fill_size n f l o h]; omega
+
+private theorem sha3_512_size (data : ByteArray) : (sha3_512 data).size = 64 := by
+  unfold sha3_512 sponge
+  simp only [Id.run_bind, Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size,
+    show List.range' 0 1 1 = [0] from rfl, List.forIn_cons, List.forIn_nil, gt_iff_lt, Nat.lt_irrefl, if_false]
+  refine (fill_size 64 _ _ ByteArray.empty (by simp)).trans ?_
+  simp
+
+private theorem loop_length (b : ByteArray) (n : Nat) :
+    ∀ i r, b.size - i = n → (ByteArray.toList.loop b i r).length = r.length + n := by
+  induction n with
+  | zero => intro i r hn; unfold ByteArray.toList.loop; rw [if_neg (by omega)]; simp
+  | succ n ih =>
+    intro i r hn
+    unfold ByteArray.toList.loop
+    rw [if_pos (by omega), ih (i + 1) _ (by omega)]
+    simp only [List.length_cons]
+    omega
+
+/-- SHA3-512 output is 64 bytes whatever the input, as the list the gate's `sha3` returns. -/
+theorem sha3_512_toList_length (data : ByteArray) : (sha3_512 data).toList.length = 64 := by
+  unfold ByteArray.toList
+  rw [loop_length _ _ 0 [] rfl]
+  simp [sha3_512_size]
+
 end BlindLedger.Semantic
