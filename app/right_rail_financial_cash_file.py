@@ -12,7 +12,7 @@ import tempfile
 import time
 from typing import Any
 
-from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, _checker_authority
+from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, _TABLE_COLUMNS, _checker_authority
 from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError, CashFilePreview
 
 
@@ -152,8 +152,8 @@ class CashPlan:
     commands: tuple
     context: dict
     results: tuple
-    baseline: tuple  # (sequence, history_head) of the store the copy was taken from
-    last_ms: int  # the last owner-clock reading the file took on the copy
+    baseline: tuple  # (sequence, history_head, segment count) of the store the copy was taken from
+    last_ms: int | None  # the last owner-clock reading the file took on the copy
     writes: tuple  # (table, rowid, last image) in first-write order
     tables: dict[str, Any]  # every table: (row count, max rowid, None without one)
     seal: tuple | None  # a segment sealed inside the file: the copy's final pending rows and open counts, which replayed inserts cannot rebuild
@@ -185,7 +185,7 @@ def plan_cash_file(commands, context, *, path, trusted_authority, clock=None):
                 for op, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
                     if name not in _DERIVED or op == "DELETE":
                         connection.execute(f"CREATE TEMP TRIGGER rr_plan_{name}_{op} AFTER {op} ON main.\"{name}\" BEGIN INSERT INTO rr_plan(tbl,op,rid) VALUES ('{name}','{op}',{0 if name in _DERIVED else row + '.rowid'}); END")
-            baseline = tuple(connection.execute("SELECT sequence,history_head FROM financial_meta").fetchone())
+            baseline = _baseline(connection)
             owner.run_batch(commands, cash_file_context=context)
             log = connection.execute("SELECT tbl,op,rid FROM temp.rr_plan ORDER BY id").fetchall()
             if any(op == "DELETE" and table not in _DERIVED for table, op, _ in log):
@@ -193,8 +193,16 @@ def plan_cash_file(commands, context, *, path, trusted_authority, clock=None):
             seal = (tuple(tuple(row) for row in connection.execute("SELECT * FROM history_pending ORDER BY 1,2")), tuple(connection.execute("SELECT * FROM history_open").fetchone())) if any(op == "DELETE" for _, op, _ in log) else None
             writes = tuple((table, rowid, tuple(connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (rowid,)).fetchone())) for table, rowid in dict.fromkeys((table, rowid) for table, op, rowid in log if op != "DELETE"))
             return CashPlan(tuple(commands), context, tuple(results), baseline, reading.last, writes, table_shapes(connection), seal)
-    except Exception as error:
-        raise CashFileError(refusal(error)) from None
+    except (CashFileError, FinancialBusyError, FinancialRevisionError, FinancialConflictError) as error:
+        raise CashFileError(refusal(error)) from None  # an integrity error is not a refusal: it propagates
+
+
+def _baseline(connection):
+    return tuple(connection.execute("SELECT sequence,history_head,(SELECT count(*) FROM history_segments) FROM financial_meta").fetchone())
+
+
+def _identity(row):
+    return row["table"], row["key"] if "key" in row else row["row"][_TABLE_COLUMNS[row["table"]][0]]
 
 
 def commit_cash_plan(owner, plan):
@@ -205,8 +213,9 @@ def commit_cash_plan(owner, plan):
         return done
     with owner._write(before_commit=finished) as connection:
         now = owner._now()
-        if not plan.last_ms <= now < plan.last_ms + PLAN_WINDOW_MS or tuple(connection.execute("SELECT sequence,history_head FROM financial_meta").fetchone()) != plan.baseline:
-            raise FinancialRevisionError("cash_plan_stale")
+        if not plan.writes or plan.last_ms is None or not plan.last_ms <= now < plan.last_ms + PLAN_WINDOW_MS or _baseline(connection) != plan.baseline or connection.execute(
+                "SELECT 1 FROM obligations WHERE due_at_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM claimed_adjustments WHERE deadline_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM cases WHERE due_at_ms BETWEEN ?1 AND ?2 LIMIT 1", (plan.last_ms, now)).fetchone():
+            raise FinancialRevisionError("cash_plan_stale")  # also stale: a deadline fell between the plan's clock and this one, so a direct run would decide it differently
         check.begin(connection)
         statements, order = {}, {}
         for table, rowid, values in sorted(plan.writes, key=lambda write: order.setdefault(write[0], len(order))):  # a table at a time: once a child row is in, SQLite scans every child table on each deferred-key parent insert
@@ -223,7 +232,10 @@ def commit_cash_plan(owner, plan):
             connection.executemany("INSERT INTO history_pending VALUES (?,?,?)", plan.seal[0])  # its trigger rebuilds the open counts
         if table_shapes(connection) != plan.tables or plan.seal is not None and tuple(connection.execute("SELECT * FROM history_open").fetchone()) != plan.seal[1] or any(tuple(connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (rowid,)).fetchone() or ()) != values for table, rowid, values in plan.writes):
             raise FinancialIntegrityError("cash_plan_rows")
-        connection.execute("DELETE FROM temp.rr_captured_rows")  # the replayed events already carry what these triggers captured
+        carried = {_identity(row) for (payload,) in connection.execute("SELECT payload_json FROM financial_events WHERE event_sequence>?", (plan.baseline[0],)) for row in json.loads(payload).get("rows", ())}
+        if not {_identity(json.loads(image)) for (image,) in connection.execute("SELECT image FROM temp.rr_captured_rows")} <= carried:
+            raise FinancialIntegrityError("cash_plan_captured")  # a replayed row no event carries
+        connection.execute("DELETE FROM temp.rr_captured_rows")  # the replayed events carry what these triggers captured
     return check.receipt
 
 

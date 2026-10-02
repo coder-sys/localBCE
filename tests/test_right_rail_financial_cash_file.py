@@ -374,8 +374,19 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(_tables(self.store.path), before)
 
     def test_planned_commit_writes_the_store_and_receipt_a_direct_apply_writes(self):
-        ids = self._wide_store(count=8)
-        prepared, clock = self._prepare(self._file_of(ids, 24)), _FixedClock(self.store.clock.value + 1)
+        self._planned_equals_direct(self._prepare(self._file_of(self._wide_store(count=8), 24)))
+
+    def test_planned_commit_equals_direct_when_a_history_segment_seals_mid_file(self):
+        with patch.object(owner, "_SEAL_SEGMENT_EVENTS", 5):
+            self._planned_equals_direct(self._prepare(self._file_of(self._wide_store(count=8), 24)))
+
+    def test_planned_commit_equals_direct_for_an_overlapping_file_with_an_alias_row(self):
+        self._apply()
+        self._file_b([self._row(3, 50, 2), {**self._row(4, 100, 3), "common_origin_id": "file-origin-1"}])
+        self._planned_equals_direct(self._prepare())
+
+    def _planned_equals_direct(self, prepared):
+        clock = _FixedClock(self.store.clock.value + 1)
         path = Path(tempfile.mkdtemp(dir=self.fixture.temp_dir.name)) / "direct.sqlite"
         with closing(sqlite3.connect(self.store.path.resolve().as_uri() + "?mode=ro", uri=True)) as live, closing(sqlite3.connect(path)) as target:
             live.backup(target)
@@ -388,6 +399,44 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.store.clock.value = clock.value  # the live clock reads at or after the plan's readings
         self.assertEqual(cash.commit_cash_plan(self.store, plan), expected_receipt)
         self.assertEqual(_tables(self.store.path), _tables(path))
+
+    def test_a_plan_turns_only_refusals_into_a_fallback(self):
+        for error, refusal in ((owner.FinancialRevisionError, "cash_file_stale"), (owner.FinancialConflictError, "cash_file_conflict")):
+            with patch.object(owner.FinancialOwner, "run_batch", side_effect=error("injected")):
+                self._refused(self._plan, refusal)
+        with patch.object(owner.FinancialOwner, "run_batch", side_effect=owner.FinancialIntegrityError("injected")), self.assertRaisesRegex(owner.FinancialIntegrityError, "^injected$"):
+            self._plan()
+
+    def test_a_plan_with_nothing_to_write_or_after_a_seal_is_stale(self):
+        self._apply()
+        self._refused(lambda: cash.commit_cash_plan(self.store, self._plan()), "cash_file_stale", "cash_plan_stale")  # a resend: no clock reading, nothing to replay
+        self._file_b([self._row(3, 50, 2)])
+        plan = self._plan()
+        self.assertEqual(plan.baseline[2], self._query("SELECT count(*) FROM history_segments")[0][0])
+        self._refused(lambda: cash.commit_cash_plan(self.store, dataclasses.replace(plan, baseline=(*plan.baseline[:2], plan.baseline[2] - 1))), "cash_file_stale", "cash_plan_stale")  # a segment sealed between plan and commit
+
+    def test_planned_commit_refuses_a_replayed_row_no_event_carries(self):
+        plan = self._plan()
+        bare = lambda values: (*values[:7], json.dumps({key: value for key, value in json.loads(values[7]).items() if key != "rows"}), *values[8:])
+        writes = tuple((table, rowid, bare(values) if table == "financial_events" else values) for table, rowid, values in plan.writes)
+        self._refused(lambda: cash.commit_cash_plan(self.store, dataclasses.replace(plan, writes=writes)), "cash_file_failed", "cash_plan_captured")
+
+    def test_cli_apply_takes_the_direct_path_for_a_resent_file_and_for_a_plan_overtaken_by_another_writer(self):
+        _, _, args = self._cli_fixture()
+        overtaken, plan_file = [], cash.plan_cash_file
+        def apply():
+            out = io.StringIO()
+            with redirect_stdout(out), redirect_stderr(io.StringIO()):
+                code = cli.main(args + ["--apply"])
+            return code, {key: json.loads(out.getvalue())[key] for key in ("recorded_count", "duplicate_count", "cash_delta_cents")}
+        def planned_then_overtaken(*arguments, **keywords):
+            plan = plan_file(*arguments, **keywords)
+            if not overtaken:
+                overtaken.append(self._apply())  # another writer lands the same file between plan and commit
+            return plan
+        with patch.object(cash, "plan_cash_file", planned_then_overtaken):
+            self.assertEqual(apply(), (0, {"recorded_count": 0, "duplicate_count": 2, "cash_delta_cents": 0}))  # the direct path's DUPLICATE, not cash_file_stale
+        self.assertEqual(apply(), (0, {"recorded_count": 0, "duplicate_count": 2, "cash_delta_cents": 0}))  # a resend plans nothing to write
 
     def test_planned_commit_refuses_rows_unlike_the_plan_in_any_table(self):
         plan = self._plan()
@@ -413,6 +462,12 @@ class ReceiverCashFileTests(unittest.TestCase):
         later = self._plan(self._prepare({**self.value, "rows": [self._row(3, 100, 2), self._row(4, 200, 3)]}))
         self.store.run_batch(cash._propose(canonical({**self.value, "rows": [self._row(1, 50, 2, "other")], "row_count": 1, "total_cents": 50}), self.baseline))
         self._refused(lambda: cash.commit_cash_plan(self.store, later), "cash_file_stale", "cash_plan_stale")  # another writer moved the store first
+
+    def test_a_plan_is_stale_when_a_deadline_fell_between_its_clock_and_the_commit(self):
+        plan = self._plan()
+        due = self._query("SELECT min(due_at_ms) FROM obligations")[0][0]
+        self.store.clock.value = due
+        self._refused(lambda: cash.commit_cash_plan(self.store, dataclasses.replace(plan, last_ms=due - 1)), "cash_file_stale", "cash_plan_stale")
 
     def test_planned_commit_runs_the_checker_on_the_live_rows_inside_the_lock(self):
         plan, seen, finish = self._plan(), [], check.CashFileCheck.finish

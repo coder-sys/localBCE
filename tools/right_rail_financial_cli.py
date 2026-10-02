@@ -594,10 +594,9 @@ def _run(args: argparse.Namespace) -> Any:
         if args.apply:
             with _owner(args) as owner:  # R1a: an owner holds the store open until closed, on success and on error
                 try:
-                    plan = cash_file.plan_cash_file(commands, context, path=owner.path, trusted_authority=authority)  # outside the write lock
-                except cash_file.CashFileError:
-                    return owner.run_batch(commands, cash_file_context=context)  # a file the planner refuses takes the direct path, which says why
-                return cash_file.commit_cash_plan(owner, plan)
+                    return cash_file.commit_cash_plan(owner, cash_file.plan_cash_file(commands, context, path=owner.path, trusted_authority=authority))  # the plan is made outside the write lock
+                except (cash_file.CashFileError, cash_file.FinancialRevisionError):
+                    return owner.run_batch(commands, cash_file_context=context)  # a refused or stale plan, or one with nothing to write, takes the direct path: the reference answer
         return cash_file.preview_cash_file(commands, context, path=_existing_database(args.database), trusted_authority=authority)
     if args.command == "switch-prepare":
         return _switch_prepare(args)
