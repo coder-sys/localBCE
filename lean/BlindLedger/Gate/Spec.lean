@@ -582,9 +582,13 @@ structure Crypto where
   hash : Bytes → Bytes
   /-- KEY-CERT (#5) validity: the certificate decodes and its root signature verifies.  The root
       signs every field, shard count included, so a changed field has no valid certificate. -/
-  certChainOk : EpochCert → Bool
+  rootSigned : EpochCert → Bool
+  /-- The certified key may verify checkpoints: it is not a root key (one key per purpose). -/
+  keyUsable : EpochCert → Bool
   /-- ML-DSA-87 verification: public key, message, signature. -/
   sigOk : Bytes → Bytes → Bytes → Bool
+
+def Crypto.certChainOk (c : Crypto) (e : EpochCert) : Bool := c.rootSigned e && c.keyUsable e
 
 structure Grant where
   grantId : Bytes
@@ -602,10 +606,10 @@ structure Stored where
     is not part of it, so a payment is released at most once across flows. -/
 abbrev PayKey := Bytes × Bytes × Bytes
 
-/-- Payer-side state.  `fence` is per tenant; `certs` hold only chain-verified
+/-- Payer-side state.  `fence` is per tenant; `certs` hold only root-signed
     certificates; `grants` only active grants; `forked` holds each detected
     fork as (stored side, new side), both signed checkpoints as evidence;
-    `equivocations` each second chain-valid certificate with another public key or shard count for an installed
+    `equivocations` each second root-signed certificate with another public key or shard count for an installed
     one's tenant and epoch, with it; `pins` is the sent set: each payment the payer sent a command for, with
     the member key its first send pinned. -/
 structure PayerState where
@@ -631,7 +635,7 @@ def fits (s : PayerState) (e : EpochCert) : Bool :=
     s.certs.all (fun x => x.tenantId != e.tenantId || x.shardCount == e.shardCount && x.epoch != e.epoch)
 
 /-- Install an epoch certificate: the new state and whether it was installed.
-    A valid chain raises the tenant's fence to its epoch (the model's
+    A valid root signature raises the tenant's fence to its epoch (the model's
     `PayerLearnFence`) even when the certificate does not fit, so a refused
     newer certificate fails closed until a fitting one arrives.  One that
     differs in public key or shard count from an installed certificate of its
@@ -639,7 +643,7 @@ def fits (s : PayerState) (e : EpochCert) : Bool :=
     tenant and epoch.  A re-signature of the same body (hedged signing gives a
     new one on every retry) is not equivocation. -/
 def installCert (c : Crypto) (s : PayerState) (e : EpochCert) : PayerState × Bool :=
-  if c.certChainOk e then
+  if c.rootSigned e then
     ({ s with certs := if fits s e then e :: s.certs else s.certs,
               fence := raiseFence s.fence e.tenantId e.epoch,
               equivocations := (s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&
@@ -670,8 +674,8 @@ def blocked (s : PayerState) (tenant : Bytes) (epoch : Nat) : Bool :=
     s.equivocations.any fun q => q.1.tenantId == tenant && q.1.epoch == epoch
 
 /-- Store a signed checkpoint: one ML-DSA-87 verification per batch, under an
-    installed certificate for the checkpoint's tenant and epoch (check 2).  A
-    verified checkpoint that forks a stored one is not stored; the pair is
+    installed certificate for the checkpoint's tenant and epoch whose key is
+    usable (check 2).  A verified checkpoint that forks a stored one is not stored; the pair is
     recorded, which blocks its tenant and epoch (check 11), and no other
     checkpoint of a blocked tenant and epoch is stored. -/
 def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
@@ -680,7 +684,7 @@ def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option Payer
   | some x =>
     let new : Stored := ⟨c.hash x.header, x.checkpoint, bytes⟩
     if s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
-        c.sigOk e.publicKey x.header x.signature then
+        (c.keyUsable e && c.sigOk e.publicKey x.header x.signature) then
       match s.checkpoints.find? (forks new) with
       | some old => some { s with forked := (old, new) :: s.forked }
       | none =>

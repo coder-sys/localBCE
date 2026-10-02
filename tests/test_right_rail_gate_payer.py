@@ -118,6 +118,35 @@ class PayerTests(fx.Scratch):
             self.assertEqual(outcomes, ["stored", "fork"])
             self.assertEqual(store.holds(), [])  # nothing is released or held by storing
 
+    def test_a_root_signed_self_certificate_still_fences_and_equivocates(self) -> None:
+        """M4 refuses the root key only as a checkpoint key: a root-signed certificate of the root key itself still
+        raises its tenant's fence, and with another key for the same epoch still blocks that epoch, in either order."""
+        root, root_pk = f"root-{fx.TENANT}", fx.keypair(f"root-{fx.TENANT}")[0]
+
+        def self_cert(epoch: int) -> bytes:
+            body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, root_pk)
+            return gate.attach_signature(body, fx.det_sign(root, body))
+
+        with self.scratch() as tmp:
+            handle, _, cert = fx.custody(tmp)
+            store = self._store(tmp)
+            store.install_cert(cert)
+            checkpoint, tokens = fx.build(fx.batch_leaves(0, 2))
+            header = gate.encode_checkpoint_header(checkpoint)
+            self.assertEqual(store.store_checkpoint(gate.attach_signature(header, signer.sign(handle, header))), "stored")
+            store.send(fx.payment_request(0), transmit=lambda data: None)
+            store.install_cert(self_cert(fx.EPOCH + 1))
+            self.assertEqual(store.release(fx.payment_request(0), gate.encode_token(tokens[0]), now=fx.NOW), "fence")
+        for self_first in (True, False):
+            with self.subTest(self_first=self_first), self.scratch() as tmp:
+                handle, _, cert = fx.custody(tmp)
+                store = self._store(tmp)
+                for one in (self_cert(fx.EPOCH), cert)[:: 1 if self_first else -1]:
+                    store.install_cert(one)
+                header = gate.encode_checkpoint_header(fx.build(fx.batch_leaves(0, 2))[0])
+                with self.assertRaisesRegex(payer.GatePayerError, "checkpoint_rejected"):
+                    store.store_checkpoint(gate.attach_signature(header, signer.sign(handle, header)))
+
 
 
 if __name__ == "__main__":

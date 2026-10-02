@@ -393,7 +393,7 @@ theorem storeCheckpoint_slice {c : Crypto} {s : PayerState} {bytes : Bytes} {x :
   rw [hx]
   dsimp only
   by_cases hs : (s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
-      c.sigOk e.publicKey x.header x.signature) = true
+      (c.keyUsable e && c.sigOk e.publicKey x.header x.signature)) = true
   · simp only [hs, if_true]
     rw [find?_filter_of_imp s.checkpoints q _ hq]
     cases hfd : s.checkpoints.find? (forks ⟨c.hash x.header, x.checkpoint, bytes⟩) with
@@ -495,7 +495,39 @@ theorem firstFailure_none {c : Crypto} {s : PayerState} {p : Payment} {bytes : B
 theorem realCrypto_cert_not_root (t pk : Bytes) (e : EpochCert)
     (h : (realCrypto [(t, pk)]).certChainOk e = true) : e.publicKey ≠ pk := by
   intro hp
-  simp [realCrypto, hp] at h
+  simp [Crypto.certChainOk, realCrypto, hp] at h
+
+/-- STORE and RELEASE (`storeCheckpoint`, on whatever certificates `certState` installed) verify a checkpoint
+    only under an installed certificate whose key is usable. -/
+theorem storeCheckpoint_signed {c : Crypto} {s s' : PayerState} {bytes : Bytes}
+    (h : storeCheckpoint c s bytes = some s') : ∃ x e, decodeCheckpoint bytes = some x ∧ e ∈ s.certs ∧
+      c.keyUsable e = true ∧ c.sigOk e.publicKey x.header x.signature = true := by
+  unfold storeCheckpoint at h
+  cases hd : decodeCheckpoint bytes with
+  | none => rw [hd] at h; simp at h
+  | some x =>
+    rw [hd] at h
+    dsimp only at h
+    split at h
+    · rename_i hany
+      obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany
+      simp only [Bool.and_eq_true] at hm
+      exact ⟨x, e, rfl, he, hm.2.1, hm.2.2⟩
+    · simp at h
+
+/-- So the real verifier never verifies a checkpoint under the root key, even when a root-signed certificate
+    of the root key itself is installed. -/
+theorem storeCheckpoint_not_root {t pk bytes : Bytes} {s s' : PayerState}
+    (h : storeCheckpoint (realCrypto [(t, pk)]) s bytes = some s') : ∃ x e, decodeCheckpoint bytes = some x ∧
+      e ∈ s.certs ∧ e.publicKey ≠ pk ∧ mlDsaOk e.publicKey x.header x.signature = true := by
+  obtain ⟨x, e, hx, he, hu, hs⟩ := storeCheckpoint_signed h
+  refine ⟨x, e, hx, he, fun hp => ?_, hs⟩
+  simp [realCrypto, hp] at hu
+
+/-- A root-signed certificate that fits is installed whether or not its key is usable (`installCert_fence`). -/
+theorem installCert_certs (c : Crypto) (s : PayerState) (e : EpochCert) :
+    (installCert c s e).1.certs = if c.rootSigned e && fits s e then e :: s.certs else s.certs := by
+  unfold installCert; split <;> rename_i h <;> simp [h]
 
 theorem accepts_cert_not_root {rootPk cert cp : Bytes} {e : EpochCert}
     (ha : accepts rootPk cert cp = true) (he : decodeKeyCert cert = some e) : e.publicKey ≠ rootPk := by
@@ -508,10 +540,18 @@ theorem accepts_cert_not_root {rootPk cert cp : Bytes} {e : EpochCert}
       cases ok with
       | false => simp [hx, he, hi] at ha
       | true =>
-        refine realCrypto_cert_not_root x.checkpoint.tenantId rootPk e ?_
-        cases hc : (realCrypto [(x.checkpoint.tenantId, rootPk)]).certChainOk e
-        · simp [installCert, hc] at hi
-        · rfl
+        cases hst : storeCheckpoint (realCrypto [(x.checkpoint.tenantId, rootPk)]) s cp with
+        | none => simp [hx, he, hi, hst] at ha
+        | some s' =>
+          obtain ⟨-, k, -, hk, hne, -⟩ := storeCheckpoint_not_root hst
+          have hc : s.certs = (installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e).1.certs := by
+            rw [hi]
+          rw [hc, installCert_certs] at hk
+          simp only [emptyState] at hk
+          have key : ∀ b : Bool, k ∈ (if b = true then [e] else []) → k = e := by
+            intro b; cases b <;> simp
+          obtain rfl := key _ hk
+          exact hne
 
 /-- A parser leaves a suffix of its input. -/
 def Eats {α : Type} (p : P α) : Prop := ∀ b a s, p.run b = some (a, s) → ∃ c, b = c ++ s

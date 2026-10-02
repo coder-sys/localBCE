@@ -63,3 +63,8 @@ import BlindLedger.Gate.AnchorTheorems
 #print axioms BlindLedger.Gate.realCrypto_cert_not_root
 #print axioms BlindLedger.Gate.accepts_cert_not_root
 #print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body
+#print axioms BlindLedger.Gate.installCert_fence
+#print axioms BlindLedger.Gate.installCert_equivocation_signed
+#print axioms BlindLedger.Gate.installCert_certs
+#print axioms BlindLedger.Gate.storeCheckpoint_signed
+#print axioms BlindLedger.Gate.storeCheckpoint_not_root

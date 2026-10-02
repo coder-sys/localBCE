@@ -129,3 +129,13 @@ import BlindLedger.Gate.AnchorTheorems
 #guard_msgs in #print axioms BlindLedger.Gate.accepts_cert_not_root
 /-- info: 'BlindLedger.Gate.checkpoint_header_ne_keycert_body' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body
+/-- info: 'BlindLedger.Gate.installCert_fence' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_fence
+/-- info: 'BlindLedger.Gate.installCert_equivocation_signed' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_equivocation_signed
+/-- info: 'BlindLedger.Gate.installCert_certs' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_certs
+/-- info: 'BlindLedger.Gate.storeCheckpoint_signed' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_signed
+/-- info: 'BlindLedger.Gate.storeCheckpoint_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_not_root

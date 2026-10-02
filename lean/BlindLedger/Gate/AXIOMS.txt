@@ -59,3 +59,8 @@
 'BlindLedger.Gate.realCrypto_cert_not_root' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.accepts_cert_not_root' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.checkpoint_header_ne_keycert_body' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.installCert_fence' depends on axioms: [propext]
+'BlindLedger.Gate.installCert_equivocation_signed' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.installCert_certs' depends on axioms: [propext]
+'BlindLedger.Gate.storeCheckpoint_signed' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.storeCheckpoint_not_root' depends on axioms: [propext, Quot.sound]
