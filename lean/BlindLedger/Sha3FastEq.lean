@@ -199,6 +199,22 @@ theorem sha3_512_eq : sha3_512 = sha3_512Fast := funext fun d => sponge_eq 72 (b
 theorem shake128_eq : shake128 = shake128Fast := funext fun d => funext fun n => sponge_eq 168 (by omega) _ d n
 theorem shake256_eq : shake256 = shake256Fast := funext fun d => funext fun n => sponge_eq 136 (by omega) _ d n
 
+/-! Known answers: SHA3-512 of the empty string, of "abc" and of the 1600-bit message of 0xA3 bytes (FIPS 202 examples),
+    and the first 32 bytes of SHAKE128("abc") and SHAKE256("abc"). -/
+private def hex (b : ByteArray) : String :=
+  String.join (b.toList.map fun x =>
+    let h := Nat.toDigits 16 x.toNat
+    String.ofList (if h.length < 2 then '0' :: h else h))
+
+#guard hex (sha3_512Fast ByteArray.empty) ==
+  "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26"
+#guard hex (sha3_512Fast "abc".toUTF8) ==
+  "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0"
+#guard hex (sha3_512Fast ⟨Array.replicate 200 0xA3⟩) ==
+  "e76dfad22084a8b1467fcf2ffa58361bec7628edf5f3fdc0e4805dc48caeeca81b7c13c30adf52a3659584739a2df46be589c51ca1a4a8416df6545a1ce8ba00"
+#guard hex (shake128Fast "abc".toUTF8 32) == "5881092dd818bf5cf8a3ddb793fbcba74097d5c526a6d35f97b83351940f2cc8"
+#guard hex (shake256Fast "abc".toUTF8 32) == "483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739"
+
 end BlindLedger.Semantic
 
 /-- info: 'BlindLedger.Semantic.sha3_512_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
