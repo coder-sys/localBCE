@@ -365,7 +365,7 @@ private def insertActionSorted (record : ActionRecord) : List ActionRecord → L
       if record.actionId < first.actionId then record :: first :: rest
       else first :: insertActionSorted record rest
 
-private theorem insertActionSorted_perm (x : ActionRecord) :
+theorem insertActionSorted_perm (x : ActionRecord) :
     ∀ l, (insertActionSorted x l).Perm (x :: l)
   | [] => List.Perm.refl _
   | y :: ys => by
@@ -374,7 +374,7 @@ private theorem insertActionSorted_perm (x : ActionRecord) :
       · exact List.Perm.refl _
       · exact ((insertActionSorted_perm x ys).cons y).trans (List.Perm.swap x y ys)
 
-private theorem insertDeterminationSorted_perm (x : OffsetDetermination) :
+theorem insertDeterminationSorted_perm (x : OffsetDetermination) :
     ∀ l, (insertDeterminationSorted x l).Perm (x :: l)
   | [] => List.Perm.refl _
   | y :: ys => by
@@ -1251,6 +1251,26 @@ private theorem correctionCase_found_eq {cases : List CaseRecord}
   obtain ⟨hMem, hId⟩ := findCase_some hFound
   obtain ⟨original, hOriginalMem, rfl⟩ := List.mem_map.1 hMem
   rw [upsertCorrectionCase_sameId hOriginalMem hId]
+
+/-- The case `buildAuthorized` finds: a row of the updated cases with the new status and time,
+    and, when the upsert inserted it, the requested case. -/
+theorem offsetCase_found {cases : List CaseRecord} {requested record : CaseRecord}
+    {status : CaseStatus} {updatedAt : Nat}
+    (hFound : findCase (updateAllCaseStatus (upsertOffsetCase cases requested).1 status updatedAt)
+      requested.caseId = some record) :
+    record ∈ updateAllCaseStatus (upsertOffsetCase cases requested).1 status updatedAt ∧
+      record.caseId = requested.caseId ∧ record.status = status ∧ record.updatedAt = updatedAt ∧
+      ((upsertOffsetCase cases requested).2 = true → record.reason = requested.reason ∧
+        record.nextActionOwner = requested.nextActionOwner ∧ record.dueAt = requested.dueAt) := by
+  obtain ⟨hMem, hId⟩ := findCase_some hFound
+  obtain ⟨original, -, rfl⟩ := List.mem_map.1 hMem
+  refine ⟨hMem, hId, rfl, rfl, fun hInserted => ?_⟩
+  have hUpsert : upsertOffsetCase cases requested = upsertCorrectionCase cases requested := by
+    unfold upsertOffsetCase at hInserted ⊢
+    split at hInserted <;> (try split at hInserted) <;> simp_all
+  rw [hUpsert] at hFound
+  rw [correctionCase_found_eq hFound]
+  exact ⟨rfl, rfl, rfl⟩
 theorem ite_error_ok {c : Prop} [Decidable c] {ε α} {e : ε} {X : Except ε α} {r : α}
     (h : (if c then Except.error e else X) = Except.ok r) : ¬ c ∧ X = Except.ok r := by
   split at h <;> simp_all
