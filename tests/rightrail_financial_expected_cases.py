@@ -358,7 +358,7 @@ CONTROL_PACK_V1 = ControlPackExpectation(
 CONTROL_PACK_V2 = ControlPackExpectation(
     "control-pack:fixture-2026-02:v2", PERIOD_TWO_SCOPE, 2,
     ("fixture-source:approved-schedule:v2", "fixture-source:rule-change:2026-04-01"),
-    PERIOD_TWO_START_MS, PERIOD_TWO_END_MS, 1_774_915_200_000, 1_774_958_400_000,
+    PERIOD_TWO_START_MS, PERIOD_TWO_END_MS, 1_774_742_400_000, 1_774_785_600_000,
     "calculation:per-recipient:v2", "adjustment:offset:v2",
     ("FINANCE_DECISION", "CASE_OWNER", "REPORTING_EDITOR", "RECEIVER"),
     ("period-02-uses-rule-v2", "period-01-evaluation-preserved", "retrospective-authority-required"),

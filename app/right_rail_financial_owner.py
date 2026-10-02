@@ -4363,11 +4363,12 @@ class FinancialOwner:
                 _fail(FinancialConflictError, "action_payload_immutable")
             return {"status": "DUPLICATE", "action_id": action_id, **self._current_projection(connection, str(action["obligation_id"]))}
 
-    def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> None:
+    def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> ControlPack:
         self.trusted_authority.require(actor_id, actor_role)
         pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, obligation_id)
         if actor_role not in pack.authorized_roles:
             _fail(FinancialAuthorityError, "control_pack_actor_role_not_authorized")
+        return pack
 
     def _validate_evaluation_reference(
         self,
@@ -5072,7 +5073,7 @@ class FinancialOwner:
     ) -> tuple[sqlite3.Row, int, dict[str, Any], bytes]:
         """Authority, claim, decision time and current-evaluation checks shared by both offset decisions."""
 
-        self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
+        pack = self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
         claim = connection.execute("SELECT * FROM claimed_adjustments WHERE claim_id=? AND obligation_id=?", (claim_id, obligation["obligation_id"])).fetchone()
         if claim is None:
             _fail(FinancialIntegrityError, "offset_claim_missing")
@@ -5081,6 +5082,8 @@ class FinancialOwner:
         decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
         if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
             _fail(FinancialInputError, "decision_time_future")
+        if decision_time < pack.approved_at_ms:  # Lean preflightOffsetDecision: no decision predates the pack that authorizes it
+            _fail(FinancialIntegrityError, "control_pack_not_approved")
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,

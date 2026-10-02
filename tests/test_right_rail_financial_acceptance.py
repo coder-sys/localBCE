@@ -4122,6 +4122,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         return store, request, int(receipt["evaluated_at_ms"])
 
+    def test_a_decision_dated_before_its_control_pack_approval_is_refused(self) -> None:
+        store, request, _evaluated_at = self._s2_offset_request(_Clock())
+        before = store.export_continuity()
+        for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^control_pack_not_approved$"):
+                decide(**request, decision_at_ms=expected.CONTROL_PACK_V1.approved_at_ms - 1)
+        self.assertEqual(store.export_continuity(), before)
+
     def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
         # safety red team S2: a decision committed after the due date may not name a time at or before it
         clock = _Clock()
