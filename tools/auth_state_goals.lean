@@ -982,9 +982,376 @@ theorem logConsistency_sound {H : Bytes → Bytes} (hl : HashLen H) (xs ys p : L
   rw [h1, h2, h3] at hcf
   exact cons_prefix hl64 hg xs ys hx0 hy0 (by omega) hn hsx hsy p0 ps fn sn hps hcf hci
 
-theorem logConsistency_complete {H : Bytes → Bytes} (xs zs : List Bytes) (hn : (xs ++ zs).length ≤ maxSize) :
+/-! ### consistency completeness: the proof is read off the level lists (`pairUp` iterates) -/
+
+theorem cc_swo_pos {F fn : Nat} (sn : Nat) (h : fn % 2 = 1) :
+    shiftWhileOdd (F + 1) fn sn = shiftWhileOdd F (fn / 2) (sn / 2) := by
+  simp [shiftWhileOdd, h]
+
+theorem cc_swo_neg {F fn : Nat} (sn : Nat) (h : ¬ fn % 2 = 1) : shiftWhileOdd (F + 1) fn sn = (fn, sn) := by
+  simp [shiftWhileOdd, h]
+
+theorem cc_swe_pos {F fn : Nat} (sn : Nat) (h1 : fn % 2 = 0) (h2 : fn ≠ 0) :
+    shiftWhileEven (F + 1) fn sn = shiftWhileEven F (fn / 2) (sn / 2) := by
+  simp [shiftWhileEven, h1, h2]
+
+theorem cc_swe_neg {F fn : Nat} (sn : Nat) (h : fn % 2 = 0 → fn = 0) : shiftWhileEven (F + 1) fn sn = (fn, sn) := by
+  have hc : ¬ ((fn % 2 == 0 && fn != 0) = true) := by simpa using h
+  simp only [shiftWhileEven, if_neg hc]
+
+theorem cc_swo_fuel : ∀ (F fn sn : Nat), fn < 2 ^ F → shiftWhileOdd (F + 1) fn sn = shiftWhileOdd F fn sn
+  | 0, fn, sn, h => by
+    have : fn = 0 := by simpa using h
+    subst this; simp [shiftWhileOdd]
+  | F + 1, fn, sn, h => by
+    by_cases ho : fn % 2 = 1
+    · rw [cc_swo_pos sn ho, cc_swo_pos sn ho]
+      exact cc_swo_fuel F (fn / 2) (sn / 2) (by rw [Nat.pow_succ] at h; omega)
+    · rw [cc_swo_neg sn ho, cc_swo_neg sn ho]
+
+theorem cc_swe_fuel : ∀ (F fn sn : Nat), fn < 2 ^ F → shiftWhileEven (F + 1) fn sn = shiftWhileEven F fn sn
+  | 0, fn, sn, h => by
+    have : fn = 0 := by simpa using h
+    subst this; simp [shiftWhileEven]
+  | F + 1, fn, sn, h => by
+    by_cases ho : fn % 2 = 0 ∧ fn ≠ 0
+    · rw [cc_swe_pos sn ho.1 ho.2, cc_swe_pos sn ho.1 ho.2]
+      exact cc_swe_fuel F (fn / 2) (sn / 2) (by rw [Nat.pow_succ] at h; omega)
+    · have ho' : fn % 2 = 0 → fn = 0 := fun h0 => Classical.byContradiction fun h1 => ho ⟨h0, h1⟩
+      rw [cc_swe_neg sn ho', cc_swe_neg sn ho']
+
+theorem cc_carry {H : Bytes → Bytes} (fn : Nat) (fr sr c : Bytes) (cs : List Bytes)
+    (he : fn % 2 = 0) (h0 : fn ≠ 0) (hf : fn < 2 ^ 63) :
+    consFold H fn fn fr sr (c :: cs) = consFold H (fn / 2) (fn / 2) fr sr (c :: cs) := by
+  have hg0 : fn / 2 ≠ 0 := by omega
+  have hg63 : fn / 2 < 2 ^ 63 := by omega
+  have hsw : shiftWhileEven logFuel fn fn =
+      (if (fn / 2) % 2 == 1 then (fn / 2, fn / 2) else shiftWhileEven logFuel (fn / 2) (fn / 2)) := by
+    have e1 : shiftWhileEven logFuel fn fn = shiftWhileEven 63 (fn / 2) (fn / 2) :=
+      cc_swe_pos fn he h0
+    rw [e1]
+    by_cases hg : (fn / 2) % 2 = 1
+    · have hg' : ((fn / 2) % 2 == 1) = true := by simpa using hg
+      rw [if_pos hg']
+      exact cc_swe_neg (F := 62) (fn / 2) (fun h => by omega)
+    · have hg' : ¬ (((fn / 2) % 2 == 1) = true) := by simpa using hg
+      rw [if_neg hg']
+      exact (cc_swe_fuel 63 (fn / 2) (fn / 2) hg63).symm
+  have c1 : ¬ ((fn == 0) = true) := by simpa using h0
+  have c2 : ((fn % 2 == 1 || fn == fn) = true) := by simp
+  have c3 : ¬ ((fn / 2 == 0) = true) := by simpa using hg0
+  have c4 : ((fn / 2 % 2 == 1 || fn / 2 == fn / 2) = true) := by simp
+  have c5 : ¬ ((fn % 2 == 1) = true) := by simp [he]
+  conv =>
+    lhs
+    rw [consFold, if_neg c1, if_pos c2, if_neg c5, hsw]
+  conv =>
+    rhs
+    rw [consFold, if_neg c3, if_pos c4]
+  all_goals rfl
+
+theorem cc_pow2 (m : Nat) (hm : 0 < m) :
+    (m &&& (m - 1) = 0 ↔ (m % 2 = 1 ∧ m = 1) ∨ (m % 2 = 0 ∧ (m / 2) &&& (m / 2 - 1) = 0)) := by
+  have hd : (m &&& (m - 1)) / 2 = (m / 2) &&& ((m - 1) / 2) := Nat.and_div_two
+  have hx : (m &&& (m - 1)) % 2 = 1 ↔ (m % 2 = 1 ∧ (m - 1) % 2 = 1) := by
+    have h := Nat.testBit_and m (m - 1) 0
+    rw [Nat.testBit_zero, Nat.testBit_zero, Nat.testBit_zero] at h
+    exact decide_eq_decide.mp (by rw [h, Bool.decide_and])
+  by_cases hm2 : m % 2 = 1
+  · have e : (m - 1) / 2 = m / 2 := by omega
+    rw [e, Nat.and_self] at hd
+    generalize m &&& (m - 1) = X at hd hx ⊢
+    generalize (m / 2) &&& (m / 2 - 1) = Y
+    omega
+  · have e : (m - 1) / 2 = m / 2 - 1 := by omega
+    rw [e] at hd
+    generalize m &&& (m - 1) = X at hd hx ⊢
+    generalize (m / 2) &&& (m / 2 - 1) = Y at hd ⊢
+    omega
+
+theorem cc_treeRoot_pairUp (H : Bytes → Bytes) (f : Nat) : ∀ xs : List Bytes, xs ≠ [] →
+    treeRoot H [] (f + 1) xs = treeRoot H [] f (pairUp H [] xs)
+  | [], h => absurd rfl h
+  | [x], _ => by simp [treeRoot, pairUp]
+  | a :: b :: rest, _ => rfl
+
+theorem cc_pair_inv (H : Bytes → Bytes) (N M : List Bytes)
+    (hN : ∀ i, i + 1 < N.length → N[i]? = M[i]?) :
+    ∀ i, i + 1 < (pairUp H [] N).length → (pairUp H [] N)[i]? = (pairUp H [] M)[i]? := by
+  intro i hi
+  rw [pairUp_length] at hi
+  have h1 := hN (2 * i) (by omega)
+  have h2 := hN (2 * i + 1) (by omega)
+  obtain ⟨a, ha⟩ : ∃ a, N[2 * i]? = some a := ⟨N[2 * i], List.getElem?_eq_getElem (by omega)⟩
+  obtain ⟨b, hb⟩ : ∃ b, N[2 * i + 1]? = some b := ⟨N[2 * i + 1], List.getElem?_eq_getElem (by omega)⟩
+  rw [pairUp_getElem?_pair H N i a b ha hb, pairUp_getElem?_pair H M i a b (h1.symm.trans ha) (h2.symm.trans hb)]
+
+theorem cc_pair_full (H : Bytes → Bytes) (N M : List Bytes)
+    (hN : ∀ i, i < N.length → N[i]? = M[i]?) (he : N.length % 2 = 0) :
+    ∀ i, i < (pairUp H [] N).length → (pairUp H [] N)[i]? = (pairUp H [] M)[i]? := by
+  intro i hi
+  rw [pairUp_length] at hi
+  have h1 := hN (2 * i) (by omega)
+  have h2 := hN (2 * i + 1) (by omega)
+  obtain ⟨a, ha⟩ : ∃ a, N[2 * i]? = some a := ⟨N[2 * i], List.getElem?_eq_getElem (by omega)⟩
+  obtain ⟨b, hb⟩ : ∃ b, N[2 * i + 1]? = some b := ⟨N[2 * i + 1], List.getElem?_eq_getElem (by omega)⟩
+  rw [pairUp_getElem?_pair H N i a b ha hb, pairUp_getElem?_pair H M i a b (h1.symm.trans ha) (h2.symm.trans hb)]
+
+theorem cc_single (H : Bytes → Bytes) (f : Nat) (N M : List Bytes) (fr sr : Bytes) (hN : N ≠ [])
+    (hle : N.length ≤ M.length) (h1 : M.length ≤ 1) (hf : N[N.length - 1]? = some fr)
+    (hs : M[N.length - 1]? = some sr) :
+    ∃ cs : List Bytes, (∀ c ∈ cs, c.length = 64) ∧
+      consFold H (N.length - 1) (M.length - 1) fr sr cs = some (treeRoot H [] (f + 1) N, treeRoot H [] (f + 1) M, 0) := by
+  have hn1 : N.length = 1 := by have := List.length_pos_iff.mpr hN; omega
+  have hm1 : M.length = 1 := by omega
+  obtain ⟨a, rfl⟩ := List.length_eq_one_iff.mp hn1
+  obtain ⟨b, rfl⟩ := List.length_eq_one_iff.mp hm1
+  simp at hf hs
+  subst hf hs
+  exact ⟨[], by simp, by simp [consFold, treeRoot]⟩
+
+theorem cc_main {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) :
+    ∀ f, f ≤ 63 → ∀ (N M : List Bytes) (fr sr : Bytes), N ≠ [] → N.length ≤ M.length →
+      (∀ i, i + 1 < N.length → N[i]? = M[i]?) → N[N.length - 1]? = some fr → M[N.length - 1]? = some sr →
+      (∀ x ∈ M, x.length = 64) → M.length ≤ 2 ^ f →
+      ∃ cs : List Bytes, (∀ c ∈ cs, c.length = 64) ∧
+        consFold H (N.length - 1) (M.length - 1) fr sr cs =
+          some (treeRoot H [] (f + 1) N, treeRoot H [] (f + 1) M, 0) := by
+  intro f
+  induction f with
+  | zero =>
+    intro _ N M fr sr hN hle hinv hlast hMlast hM64 hMl
+    exact cc_single H 0 N M fr sr hN hle (by simpa using hMl) hlast hMlast
+  | succ f ih =>
+    intro hf N M fr sr hN hle hinv hlast hMlast hM64 hMl
+    by_cases h1 : M.length ≤ 1
+    · exact cc_single H (f + 1) N M fr sr hN hle h1 hlast hMlast
+    have hNpos : 0 < N.length := List.length_pos_iff.mpr hN
+    have hM0 : M ≠ [] := List.length_pos_iff.mp (by omega)
+    have hpow : 2 ^ (f + 1) = 2 ^ f * 2 := Nat.pow_succ ..
+    have hpow63 : 2 ^ (f + 1) ≤ 2 ^ 63 := Nat.pow_le_pow_right (by decide) hf
+    have hlN := pairUp_length H N
+    have hlM := pairUp_length H M
+    have hM64' := pairUp_len64 hl hM64
+    have hMl' : (pairUp H [] M).length ≤ 2 ^ f := by omega
+    have hN' : pairUp H [] N ≠ [] := List.length_pos_iff.mp (by rw [hlN]; omega)
+    have rN := cc_treeRoot_pairUp H (f + 1) N hN
+    have rM := cc_treeRoot_pairUp H (f + 1) M hM0
+    by_cases hodd : (N.length - 1) % 2 = 1
+    · -- the old tip is a right child: the sibling `c` sits on its left, in both trees
+      obtain ⟨c, hc⟩ : ∃ c, M[N.length - 2]? = some c := ⟨M[N.length - 2], List.getElem?_eq_getElem (by omega)⟩
+      have hcN : N[N.length - 2]? = some c := (hinv (N.length - 2) (by omega)).trans hc
+      have hc64 : c.length = 64 := hM64 c (List.mem_of_getElem? hc)
+      have hk : (pairUp H [] N).length - 1 = (N.length - 2) / 2 := by omega
+      have e1 : 2 * ((N.length - 2) / 2) = N.length - 2 := by omega
+      have e2 : 2 * ((N.length - 2) / 2) + 1 = N.length - 1 := by omega
+      obtain ⟨cs, hcs, hfold⟩ := ih (by omega) (pairUp H [] N) (pairUp H [] M) (nodeHash H [] c fr)
+        (nodeHash H [] c sr) hN' (by omega)
+        (cc_pair_inv H N M hinv)
+        (by rw [hk]; exact pairUp_getElem?_pair H N _ c fr (by rw [e1]; exact hcN) (by rw [e2]; exact hlast))
+        (by rw [hk]; exact pairUp_getElem?_pair H M _ c sr (by rw [e1]; exact hc) (by rw [e2]; exact hMlast))
+        hM64' hMl'
+      refine ⟨c :: cs, ?_, ?_⟩
+      · intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact hc64
+        · exact hcs x hx
+      · have hk1 : (pairUp H [] N).length - 1 = (N.length - 1) / 2 := by omega
+        have hk2 : (pairUp H [] M).length - 1 = (M.length - 1) / 2 := by omega
+        rw [hk1, hk2, ← rN, ← rM] at hfold
+        have c1 : ¬ ((M.length - 1 == 0) = true) := by simpa using (by omega : M.length - 1 ≠ 0)
+        have c2 : ((N.length - 1) % 2 == 1 || (N.length - 1) == (M.length - 1)) = true := by simp [hodd]
+        have c3 : ((N.length - 1) % 2 == 1) = true := by simpa using hodd
+        rw [consFold, if_neg c1, if_pos c2, if_pos c3]
+        exact hfold
+    · have hev : (N.length - 1) % 2 = 0 := by omega
+      by_cases heq : N.length - 1 = M.length - 1
+      · -- old and new tips coincide: a carry; the proof reads on one level up
+        have hNM : N.length = M.length := by omega
+        have hk0 : N.length - 1 ≠ 0 := by omega
+        have hk : (pairUp H [] N).length - 1 = (N.length - 1) / 2 := by omega
+        have e1 : 2 * ((N.length - 1) / 2) = N.length - 1 := by omega
+        obtain ⟨cs, hcs, hfold⟩ := ih (by omega) (pairUp H [] N) (pairUp H [] M) fr sr hN' (by omega)
+          (cc_pair_inv H N M hinv)
+          (by rw [hk]; exact pairUp_getElem?_carry H N _ fr (by omega) (by rw [e1]; exact hlast))
+          (by rw [hk]; exact pairUp_getElem?_carry H M _ sr (by omega) (by rw [e1]; exact hMlast))
+          hM64' hMl'
+        have hk2 : (pairUp H [] M).length - 1 = (N.length - 1) / 2 := by omega
+        rw [hk, hk2, ← rN, ← rM] at hfold
+        rcases cs with _ | ⟨c, cs'⟩
+        · simp only [consFold, Option.some.injEq, Prod.mk.injEq] at hfold
+          obtain ⟨_, _, h3⟩ := hfold
+          omega
+        · refine ⟨c :: cs', hcs, ?_⟩
+          rw [← heq, cc_carry _ _ _ _ _ hev hk0 (by omega)]
+          exact hfold
+      · -- the old tip is a left child: its right sibling `c` exists in the new tree only
+        have hlt : N.length < M.length := by omega
+        obtain ⟨c, hc⟩ : ∃ c, M[N.length]? = some c := ⟨M[N.length], List.getElem?_eq_getElem hlt⟩
+        have hc64 : c.length = 64 := hM64 c (List.mem_of_getElem? hc)
+        have hk : (pairUp H [] N).length - 1 = (N.length - 1) / 2 := by omega
+        have e1 : 2 * ((N.length - 1) / 2) = N.length - 1 := by omega
+        have e2 : 2 * ((N.length - 1) / 2) + 1 = N.length := by omega
+        obtain ⟨cs, hcs, hfold⟩ := ih (by omega) (pairUp H [] N) (pairUp H [] M) fr (nodeHash H [] sr c)
+          hN' (by omega)
+          (cc_pair_inv H N M hinv)
+          (by rw [hk]; exact pairUp_getElem?_carry H N _ fr (by omega) (by rw [e1]; exact hlast))
+          (by rw [hk]; exact pairUp_getElem?_pair H M _ sr c (by rw [e1]; exact hMlast) (by rw [e2]; exact hc))
+          hM64' hMl'
+        refine ⟨c :: cs, ?_, ?_⟩
+        · intro x hx
+          rcases List.mem_cons.mp hx with rfl | hx
+          · exact hc64
+          · exact hcs x hx
+        · have hk2 : (pairUp H [] M).length - 1 = (M.length - 1) / 2 := by omega
+          rw [hk, hk2, ← rN, ← rM] at hfold
+          have c1 : ¬ ((M.length - 1 == 0) = true) := by simpa using (by omega : M.length - 1 ≠ 0)
+          have c2 : ¬ (((N.length - 1) % 2 == 1 || (N.length - 1) == (M.length - 1)) = true) := by
+            simp only [Bool.or_eq_true, beq_iff_eq, not_or]
+            exact ⟨by omega, heq⟩
+          rw [consFold, if_neg c1, if_neg c2]
+          exact hfold
+
+theorem cc_start {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) :
+    ∀ f, f ≤ 63 → ∀ (N M : List Bytes), N ≠ [] → N.length < M.length →
+      (∀ i, i < N.length → N[i]? = M[i]?) → (∀ x ∈ M, x.length = 64) → M.length ≤ 2 ^ f →
+      ∃ (cs : List Bytes) (p0 : Bytes) (ps : List Bytes) (fn sn : Nat),
+        (∀ c ∈ cs, c.length = 64) ∧ cs ≠ [] ∧
+        shiftWhileOdd logFuel (N.length - 1) (M.length - 1) = (fn, sn) ∧
+        (if (N.length &&& (N.length - 1)) == 0 then treeRoot H [] (f + 1) N :: cs else cs) = p0 :: ps ∧
+        consFold H fn sn p0 p0 ps = some (treeRoot H [] (f + 1) N, treeRoot H [] (f + 1) M, 0) := by
+  intro f
+  induction f with
+  | zero =>
+    intro _ N M hN hlt _ _ hMl
+    have := List.length_pos_iff.mpr hN
+    simp at hMl
+    omega
+  | succ f ih =>
+    intro hf N M hN hlt hpre hM64 hMl
+    have hNpos : 0 < N.length := List.length_pos_iff.mpr hN
+    have hM0 : M ≠ [] := List.length_pos_iff.mp (by omega)
+    have hpow : 2 ^ (f + 1) = 2 ^ f * 2 := Nat.pow_succ ..
+    have hpow63 : 2 ^ (f + 1) ≤ 2 ^ 63 := Nat.pow_le_pow_right (by decide) hf
+    by_cases hev : N.length % 2 = 0
+    · -- an even number of old leaves: every old node is complete, so pair both levels up
+      have hlN := pairUp_length H N
+      have hlM := pairUp_length H M
+      have hM64' := pairUp_len64 hl hM64
+      obtain ⟨cs, p0, ps, fn, sn, hcs, hne, hsh, hpath, hfold⟩ := ih (by omega) (pairUp H [] N) (pairUp H [] M)
+        (List.length_pos_iff.mp (by rw [hlN]; omega)) (by omega) (cc_pair_full H N M hpre hev) hM64' (by omega)
+      have rN := cc_treeRoot_pairUp H (f + 1) N hN
+      have rM := cc_treeRoot_pairUp H (f + 1) M hM0
+      have hl1 : (pairUp H [] N).length = N.length / 2 := by omega
+      have hl2 : (pairUp H [] M).length - 1 = (M.length - 1) / 2 := by omega
+      have hl3 : (pairUp H [] N).length - 1 = (N.length - 1) / 2 := by omega
+      have hsw : shiftWhileOdd logFuel (N.length - 1) (M.length - 1) =
+          shiftWhileOdd logFuel ((N.length - 1) / 2) ((M.length - 1) / 2) := by
+        have e1 : shiftWhileOdd logFuel (N.length - 1) (M.length - 1) =
+            shiftWhileOdd 63 ((N.length - 1) / 2) ((M.length - 1) / 2) := cc_swo_pos _ (by omega)
+        rw [e1]
+        exact (cc_swo_fuel 63 _ _ (by omega)).symm
+      have hb : ((N.length &&& (N.length - 1)) == 0) = ((N.length / 2 &&& (N.length / 2 - 1)) == 0) := by
+        rw [Bool.eq_iff_iff]
+        simp only [beq_iff_eq]
+        rw [cc_pow2 N.length hNpos]
+        constructor
+        · rintro (⟨h, _⟩ | ⟨_, h⟩)
+          · omega
+          · exact h
+        · intro h
+          exact Or.inr ⟨hev, h⟩
+      refine ⟨cs, p0, ps, fn, sn, hcs, hne, ?_, ?_, ?_⟩
+      · rw [hsw]
+        rw [hl3, hl2] at hsh
+        exact hsh
+      · rw [hl1] at hpath
+        rw [rN, hb]
+        exact hpath
+      · rw [← rN, ← rM] at hfold
+        exact hfold
+    · -- an odd number: the old tip is a lone node, and the proof starts there
+      have hsh0 : shiftWhileOdd logFuel (N.length - 1) (M.length - 1) = (N.length - 1, M.length - 1) :=
+        cc_swo_neg (F := 63) _ (by omega)
+      by_cases h1 : N.length = 1
+      · obtain ⟨a, rfl⟩ := List.length_eq_one_iff.mp h1
+        have hMa : M[0]? = some a := by
+          have := hpre 0 (by simp)
+          simpa using this.symm
+        obtain ⟨cs, hcs, hfold⟩ := cc_main hl (f + 1) hf [a] M a a (by simp) (by omega)
+          (by intro i hi; simp at hi) (by simp) (by simpa using hMa) hM64 hMl
+        have hne : cs ≠ [] := by
+          rintro rfl
+          simp only [consFold, Option.some.injEq, Prod.mk.injEq] at hfold
+          obtain ⟨_, _, h3⟩ := hfold
+          omega
+        refine ⟨cs, a, cs, 0, M.length - 1, hcs, hne, hsh0, ?_, hfold⟩
+        simp [treeRoot]
+      · have ha : ∃ a, N[N.length - 1]? = some a := ⟨N[N.length - 1], List.getElem?_eq_getElem (by omega)⟩
+        obtain ⟨a, ha⟩ := ha
+        have hMa : M[N.length - 1]? = some a := (hpre _ (by omega)).symm.trans ha
+        have ha64 : a.length = 64 := hM64 a (List.mem_of_getElem? hMa)
+        obtain ⟨cs, hcs, hfold⟩ := cc_main hl (f + 1) hf N M a a hN (by omega)
+          (fun i hi => hpre i (by omega)) ha hMa hM64 hMl
+        have hnp : ¬ ((N.length &&& (N.length - 1)) == 0) = true := by
+          intro h
+          have h' : N.length &&& (N.length - 1) = 0 := by simpa using h
+          rcases (cc_pow2 N.length hNpos).mp h' with ⟨_, h⟩ | ⟨h, _⟩ <;> omega
+        refine ⟨a :: cs, a, cs, N.length - 1, M.length - 1, ?_, by simp, hsh0, ?_, hfold⟩
+        · intro x hx
+          rcases List.mem_cons.mp hx with rfl | hx
+          · exact ha64
+          · exact hcs x hx
+        · rw [if_neg hnp]
+
+theorem logConsistency_complete {H : Bytes → Bytes} (hl : HashLen H) (xs zs : List Bytes)
+    (hn : (xs ++ zs).length ≤ maxSize) :
     ∃ p, verifyConsistency H xs.length (xs ++ zs).length (logRoot H xs) (logRoot H (xs ++ zs)) p = true := by
-  sorry
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  by_cases hx0 : xs = []
+  · subst hx0
+    exact ⟨[], by simp [verifyConsistency, logRoot]⟩
+  have hm : 0 < xs.length := List.length_pos_iff.mpr hx0
+  by_cases hz0 : zs = []
+  · subst hz0
+    refine ⟨[], ?_⟩
+    have hm0 : ¬ (xs.length == 0) = true := by simpa using Nat.pos_iff_ne_zero.mp hm
+    simp [verifyConsistency, hm0]
+  have hzl : 0 < zs.length := List.length_pos_iff.mpr hz0
+  have hlen : (xs ++ zs).length = xs.length + zs.length := List.length_append ..
+  have hn63 : (xs ++ zs).length ≤ 2 ^ 63 := by
+    have : maxSize < 2 ^ 63 := by unfold maxSize; decide
+    omega
+  have hNe : xs.map (logLeaf H) ≠ [] := by simpa using hx0
+  have hM64 : ∀ x ∈ (xs ++ zs).map (logLeaf H), x.length = 64 := by
+    intro x hx
+    obtain ⟨e, _, rfl⟩ := List.mem_map.mp hx
+    exact hl64 _
+  have hpre : ∀ i, i < (xs.map (logLeaf H)).length → (xs.map (logLeaf H))[i]? = ((xs ++ zs).map (logLeaf H))[i]? := by
+    intro i hi
+    rw [List.length_map] at hi
+    rw [List.getElem?_map, List.getElem?_map, List.getElem?_append_left hi]
+  obtain ⟨cs, p0, ps, fn, sn, hcs, hne, hsh, hpath, hfold⟩ := cc_start hl64 63 (by omega) (xs.map (logLeaf H))
+    ((xs ++ zs).map (logLeaf H)) hNe (by rw [List.length_map, List.length_map]; omega) hpre hM64 (by rw [List.length_map]; exact hn63)
+  simp only [List.length_map] at hsh hpath
+  have hne' : xs.isEmpty = false := List.isEmpty_eq_false_iff.mpr hx0
+  have hr1 : logRoot H xs = treeRoot H [] (63 + 1) (xs.map (logLeaf H)) := by simp [logRoot, hne', logFuel]
+  have hr2 : logRoot H (xs ++ zs) = treeRoot H [] (63 + 1) ((xs ++ zs).map (logLeaf H)) := by
+    have : (xs ++ zs).isEmpty = false := List.isEmpty_eq_false_iff.mpr (by simp [hx0])
+    simp [logRoot, this, logFuel]
+  refine ⟨cs, ?_⟩
+  unfold verifyConsistency
+  dsimp only
+  have hm0 : ¬ (xs.length == 0) = true := by simpa using Nat.pos_iff_ne_zero.mp hm
+  have hmn : ¬ (xs.length == (xs ++ zs).length) = true := by simpa using (by omega : xs.length ≠ (xs ++ zs).length)
+  have hbad : ¬ (((xs ++ zs).length < xs.length || cs.isEmpty || cs.any (·.length != 64)) = true) := by
+    simp only [Bool.or_eq_true, decide_eq_true_eq, not_or]
+    refine ⟨⟨by omega, by simpa using hne⟩, ?_⟩
+    simp only [List.any_eq_true, not_exists, not_and]
+    intro c hc
+    simpa using hcs c hc
+  rw [if_neg hm0, if_neg hmn, if_neg hbad, hr1, hr2, hpath, hsh]
+  simp [hfold]
 
 /-- Exports and the sweep: entries whose log root equals the head's are exactly the log. -/
 theorem logRoot_binding {H : Bytes → Bytes} (hl : HashLen H) (xs ys : List Bytes)
