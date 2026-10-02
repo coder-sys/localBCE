@@ -1,10 +1,11 @@
-import BlindLedger.Sha3
+import BlindLedger.Sha3Fast
 
 /-! ML-DSA-87 verification, written from FIPS 204 (Algorithm 8, `ML-DSA.Verify_internal`) and independent of the
     AWS-LC signer: nothing here is derived from that code.  Parameters: q = 8380417, d = 13, tau = 60,
     lambda = 256 (so c~ is 64 bytes), gamma1 = 2^19, gamma2 = (q-1)/32, (k, l) = (8, 7), beta = 120, omega = 75.
     Not proved, only checked: `tests/gate_vectors/mldsa87_acvp.vectors` (NIST ACVP sigVer) and the differential
-    test against AWS-LC.  Callers pass M' whole (`00 00 ‖ message` for a pure signature with an empty context). -/
+    test against AWS-LC.  Callers pass M' whole (`00 00 ‖ message` for a pure signature with an empty context).
+    SHAKE runs as `Sha3Fast`; `Sha3FastEq.shake128_eq` and `shake256_eq` bridge it to FIPS 202. -/
 namespace BlindLedger.Gate.MlDsa87
 
 open BlindLedger.Semantic
@@ -95,7 +96,7 @@ def rejNttFrom (s : ByteArray) : Option Poly :=
   if out.size = 256 then some out else none
 
 /-- RejNTTPoly (Algorithm 30) with FIPS 204 Table 3's XOF bound: none past 894 bytes of SHAKE128. -/
-def rejNtt (seed : ByteArray) : Option Poly := rejNttFrom (shake128 seed rejNttBytes)
+def rejNtt (seed : ByteArray) : Option Poly := rejNttFrom (shake128Fast seed rejNttBytes)
 
 /-- The next byte at or after `p` that is at most `i`, and the position after it. -/
 def drawAtMost (s : ByteArray) (i p : Nat) : Option (Nat × Nat) :=
@@ -115,7 +116,7 @@ def sampleInBallFrom (s : ByteArray) : Option Poly := do
   return c
 
 /-- SampleInBall (Algorithm 29) with FIPS 204 Table 3's XOF bound: none past 221 bytes of SHAKE256. -/
-def sampleInBall (seed : ByteArray) : Option Poly := sampleInBallFrom (shake256 seed sampleInBallBytes)
+def sampleInBall (seed : ByteArray) : Option Poly := sampleInBallFrom (shake256Fast seed sampleInBallBytes)
 
 /-- ExpandA (Algorithm 32): none if any entry exceeds the Table 3 bound. -/
 def expandA (rho : ByteArray) : Option (Array (Array Poly)) :=
@@ -149,8 +150,8 @@ def verify (pk msg sig : ByteArray) : Bool :=
       (invNtt w).zipIdx.map fun (x, j) => useHint h[r]![j]! x
     let enc := w1.foldl (fun (out : ByteArray) p =>
       (Array.range 128).foldl (fun out i => out.push (UInt8.ofNat (p[2 * i]! + 16 * p[2 * i + 1]!))) out) ByteArray.empty
-    let mu := shake256 (shake256 pk 64 ++ msg) 64
-    (sig.extract 0 64).data == (shake256 (mu ++ enc) 64).data
+    let mu := shake256Fast (shake256Fast pk 64 ++ msg) 64
+    (sig.extract 0 64).data == (shake256Fast (mu ++ enc) 64).data
     | _, _ => false
 
 end BlindLedger.Gate.MlDsa87

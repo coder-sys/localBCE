@@ -64,3 +64,6 @@
 'BlindLedger.Gate.installCert_certs' depends on axioms: [propext]
 'BlindLedger.Gate.storeCheckpoint_signed' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.storeCheckpoint_not_root' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Semantic.sha3_512_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Semantic.shake128_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Semantic.shake256_eq' depends on axioms: [propext, Classical.choice, Quot.sound]

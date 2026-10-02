@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Anchor
 import BlindLedger.Gate.Rules.Fast
+import BlindLedger.Sha3Fast
 import BlindLedger.Sha3
 
 /-! The test-only vector runner: decides with `Fast.decideBatchF` (= `decideBatch`, `FastEq.decideBatchF_eq`; no reversed re-run, `decideBatchF_reverse`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
@@ -47,7 +48,7 @@ def hexOf (b : ByteArray) : String :=
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
   include_str "Fast.lean", include_str "Run.lean",  -- FAST
   include_str "../Anchor.lean", include_str "../Spec.lean",
-  include_str "../../Sha3.lean", include_str "../../../lakefile.toml",
+  include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
 
 /-- The six pinned inputs, parsed and pin-checked once per declaration.  -- FAST -/
@@ -86,7 +87,7 @@ def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option
     else "RR/GATE/SNAPSHOT/v1"
   let kinds := ["dmf", "pdeath", "excl", "span", "released", "unresolved"]
   let bytes ← Fast.pinBytes domain (kinds.idxOf kind + 1) fields s   -- FAST: `pin_run_eq`
-  guard (hexOf (BlindLedger.Semantic.sha3_512 bytes) == pin)
+  guard (hexOf (BlindLedger.Semantic.sha3_512Fast bytes) == pin)
   pure s
 
 def parseLine : List String → Option Line
@@ -151,7 +152,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
   -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
-  if !st.anchor.all fun a => Gate.anchored (fun x => (BlindLedger.Semantic.sha3_512 x.toByteArray).toList)
+  if !st.anchor.all fun a => Gate.anchored (fun x => (BlindLedger.Semantic.sha3_512Fast x.toByteArray).toList)
       { c with anchor := a } then
     ({ st with pinned := some p, anchor := none, batch := #[], redo := [], pays := [],
                checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },

@@ -1,4 +1,5 @@
 import BlindLedger.Gate.MlDsa87
+import BlindLedger.Sha3
 
 /-! Laws of the bounded ML-DSA-87 samplers (lean-partials-v1, section 2.2).  Not in any executable's closure. -/
 namespace BlindLedger.Gate.MlDsa87

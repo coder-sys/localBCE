@@ -2,6 +2,7 @@ import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
 import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.AnchorTheorems
+import BlindLedger.Sha3FastEq
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -139,3 +140,9 @@ import BlindLedger.Gate.AnchorTheorems
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_signed
 /-- info: 'BlindLedger.Gate.storeCheckpoint_not_root' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_not_root
+/-- info: 'BlindLedger.Semantic.sha3_512_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.sha3_512_eq
+/-- info: 'BlindLedger.Semantic.shake128_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.shake128_eq
+/-- info: 'BlindLedger.Semantic.shake256_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.shake256_eq

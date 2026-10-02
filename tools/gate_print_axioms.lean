@@ -2,6 +2,7 @@ import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
 import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.AnchorTheorems
+import BlindLedger.Sha3FastEq
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -68,3 +69,6 @@ import BlindLedger.Gate.AnchorTheorems
 #print axioms BlindLedger.Gate.installCert_certs
 #print axioms BlindLedger.Gate.storeCheckpoint_signed
 #print axioms BlindLedger.Gate.storeCheckpoint_not_root
+#print axioms BlindLedger.Semantic.sha3_512_eq
+#print axioms BlindLedger.Semantic.shake128_eq
+#print axioms BlindLedger.Semantic.shake256_eq
