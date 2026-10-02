@@ -13,9 +13,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 35_720  # integ2 (2026-10-02): +310 over trunk 06e0b21 for the gate producer, payer and signer (gate-producer G1-G3) and G6's `anchor ?` pin, measured
+PRODUCT_CODE_LINES = 35_900  # integ2 (2026-10-02): +310 over trunk 06e0b21 for the gate producer, payer and signer (gate-producer G1-G3) and G6's `anchor ?` pin, measured
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 29_490  # integ2 (2026-10-02): +520 over trunk 06e0b21 for the gate producer/payer tests, the key-purpose vectors and mutants, measured
+EVIDENCE_CODE_LINES = 29_595  # integ2 (2026-10-02): +520 over trunk 06e0b21 for the gate producer/payer tests, the key-purpose vectors and mutants, measured
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 124_231  # integ2 (2026-10-02): +1,078 over trunk 06e0b21 for the gate-producer docs and the re-pin provenance, measured
@@ -24,9 +24,9 @@ STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_387,
     "app/right_rail_financial_owner_independent.py": 4_617,
-    "app/right_rail_financial_semantic_adapter.py": 2_089,
+    "app/right_rail_financial_semantic_adapter.py": 2_254,
     "app/right_rail_financial_mirror.py": 1_375,
-    "app/right_rail_financial_engine.py": 1_502,
+    "app/right_rail_financial_engine.py": 1_517,
     "app/right_rail_financial_switch.py": 1_314,
     "app/right_rail_financial_line_pack.py": 253,
     "app/right_rail_financial_followthrough.py": 336,

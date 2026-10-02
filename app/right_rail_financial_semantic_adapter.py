@@ -340,6 +340,8 @@ def _require_validated_snapshot(snapshot: object, label: str = "snapshot_type") 
 
 BLFIN02_MAGIC: Final[bytes] = b"BLFIN02"
 BLFRES02_MAGIC: Final[bytes] = b"BLFRES02"
+PAYMENT_MAGIC: Final[bytes] = b"BLFPAY01"
+PAYMENT_ANSWER_MAGIC: Final[bytes] = b"BLFPRS01"
 MAX_WIRE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_WIRE_LIST: Final[int] = 10_000
 _U64_MAX: Final[int] = (1 << 64) - 1
@@ -1041,6 +1043,127 @@ def decode_live_result(payload: bytes, data: Mapping[str, Any]) -> DecodedLeanRe
         raise
     except (KeyError, TypeError, ValueError, UnicodeError, OverflowError):
         _fail(SemanticAdapterCodecError, "result_record_shape")
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentOutcome:
+    """What Lean decided for one payment command (BLFPRS01), bound to the command it answered."""
+
+    status: str  # RECORDED, REVERSED, CONFLICT_RECORDED, CONFLICT_UNCHANGED, ALIAS, DUPLICATE or REFUSED
+    reason: int | None = None  # a refusal's code, 1..16
+    payment_id: str | None = None
+    conflict_id: str | None = None
+    evidence: dict[str, Any] | None = None
+    payment_row: dict[str, Any] | None = None
+    conflict_row: dict[str, Any] | None = None
+    requests: tuple[tuple[str, int, int, int, bool], ...] = ()  # (action_id, amount, paid, revision, counted) after the step
+    decided: DecodedLeanResult | None = None
+    event_kind: str | None = None
+    event_payload: dict[str, Any] | None = None
+
+    def answer(self, projection: Mapping[str, Any]) -> dict[str, Any]:
+        if self.status.startswith("CONFLICT"):
+            return {"status": "CONFLICT", "conflict_id": self.conflict_id, **projection}
+        status = self.status if self.status in ("RECORDED", "REVERSED") else "DUPLICATE"
+        return {"status": status, **({} if self.payment_id is None else {"payment_id": self.payment_id}), **projection}
+
+
+_PAYMENT_ROW = (("payment_id", "identifier"), ("obligation_id", "identifier"), ("item_id", "identifier"), ("evidence_id", "identifier"),
+                ("common_origin_id", "identifier"), ("amount_cents", "nat"), ("event_at_ms", "nat"), ("reversed_by_evidence_id", "option_identifier"))
+_EVIDENCE_ROW = (("evidence_id", "identifier"), ("obligation_id", "identifier"), ("item_id", "identifier"), ("kind", "string"),
+                 ("common_origin_id", "identifier"), ("source_id", "string"), ("source_version", "string"), ("local_ref", "string"),
+                 ("applicable_at_ms", "nat"), ("event_at_ms", "nat"), ("received_at_ms", "nat"), ("amount_cents", "option_nat"),
+                 ("reversal_of", "option_identifier"), ("supersedes", "option_identifier"))
+_CONFLICT_ROW = (("conflict_id", "identifier"), ("obligation_id", "identifier"), ("common_origin_id", "identifier"), ("existing_payment_id", "identifier"),
+                 ("candidate_evidence_id", "identifier"), ("existing_amount_cents", "nat"), ("candidate_amount_cents", "nat"), ("reason", "string"), ("visible_at_ms", "nat"))
+
+
+def _read_image(reader: _WireReader, spec: Any, encode: Any, context: object = None, *, skip: int = 0) -> dict[str, Any]:
+    """One record, read field by field and re-encoded with the writer the input used: the slice must be byte-equal."""
+    start = reader._offset
+    row = {key: getattr(reader, kind)(key) for key, kind in spec}
+    if spec is _PAYMENT_ROW:
+        row["active"] = int(_read_tag(reader, _PAYMENT_STATUS_TAGS, "status") == "ACTIVE")
+    writer = _WireWriter()
+    encode(writer, row, "image", context)
+    if bytes(writer._buffer)[skip:] != reader._payload[start : reader._offset]:
+        _fail(SemanticAdapterCodecError, "payment_response")
+    if "obligation_id" in row and spec is _EVIDENCE_ROW:
+        del row["obligation_id"]
+    return row
+
+
+def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapping[str, Any]) -> PaymentOutcome:
+    """Decode the worker's BLFPRS01 answer to ``live_payment_input`` and bind it to that command."""
+
+    pre = _wire_mapping(data["pre_evaluation"], "pre_evaluation")
+    reader = _WireReader(answer, max_bytes=MAX_WIRE_BYTES)
+    evidence_row = lambda: _read_image(reader, _EVIDENCE_ROW, _encode_evidence, pre["obligation_id"])  # noqa: E731
+
+    def bind(holds: object) -> None:
+        if not holds:
+            _fail(SemanticAdapterIntegrityError, "payment_binding")
+
+    try:
+        if reader.take(len(PAYMENT_ANSWER_MAGIC), "payment_magic") != PAYMENT_ANSWER_MAGIC:
+            _fail(SemanticAdapterCodecError, "payment_response")
+        tag = reader.byte("payment_tag")
+        if 1 <= tag <= 3:
+            evidence = evidence_row() if reader.boolean("evidence") else None
+            payment = _read_image(reader, _PAYMENT_ROW, _encode_payment) if reader.boolean("payment") else None
+            conflict = _read_image(reader, _CONFLICT_ROW, lambda w, v, _l, _c: _write_conflicts(w, [v]), skip=2) if reader.boolean("conflict") else None
+            receipt = (reader.identifier("receipt"), reader.nat("receipt"), reader.option_identifier("receipt")) if reader.boolean("receipt") else None
+            for _ in range(4):  # the new ItemState (Codec.lean readItemState): read strictly, only the request balances are kept
+                reader.nat("state")
+            reader.list("contributions", lambda label: (reader.nat(label), reader.string(label), reader.nat(label)))
+            _read_tag(reader, _CASE_STATUS_TAGS, "case_status")
+            _read_tag(reader, _DELIVERY_STATUS_TAGS, "delivery_status")
+            reader.take(2, "conflict_count")
+            reader.list("evidence_ids", reader.identifier)
+            requests = reader.list("requests", lambda label: (reader.identifier(label), reader.nat(label), reader.nat(label), reader.nat(label), reader.boolean(label)))
+            reader.take(4, "anchor_bytes")
+            result = reader.take(int.from_bytes(reader.take(4, "result_size"), "big"), "result")
+            reader.finish()
+            bind(evidence is None or evidence["evidence_id"] == command["evidence_id"])
+            bind(all(row is None or row["obligation_id"] == pre["obligation_id"] for row in (payment, conflict)))
+            bind(payment is None or payment["item_id"] == pre["item_id"])
+            post = {row["evidence_id"]: row for row in data["evidence"]} | ({} if evidence is None else {evidence["evidence_id"]: evidence})
+            fields: dict[str, Any] = {"evidence": evidence, "payment_row": payment, "conflict_row": conflict, "requests": tuple(requests),
+                                      "decided": decode_live_result(result, {**data, "evidence": [post[key] for key in sorted(post)]})}
+            if tag == 1:
+                bind(payment and receipt and not conflict and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None)
+                bind(all(payment[key] == command[key] for key in ("payment_id", "evidence_id", "amount_cents", "common_origin_id", "event_at_ms")))
+                bind(receipt == (command["payment_id"], pre["revision"], command["pays_action_id"]))
+                fields |= {"payment_id": payment["payment_id"], "event_kind": "PAYMENT_RECEIVED", "event_payload": {
+                    **{key: payment[key] for key in ("payment_id", "evidence_id", "amount_cents", "common_origin_id")},
+                    **({} if receipt[2] is None else {"pays_action_id": receipt[2]})}}
+            elif tag == 2:
+                bind(payment and not conflict and payment["payment_id"] == command["payment_id"] and payment["active"] == 0 and payment["reversed_by_evidence_id"] == command["evidence_id"])
+                fields |= {"payment_id": payment["payment_id"], "event_kind": "PAYMENT_REVERSED", "event_payload": {"payment_id": payment["payment_id"], "evidence_id": command["evidence_id"]}}
+            else:
+                bind(conflict and not payment and conflict["candidate_evidence_id"] == command["evidence_id"])
+                fields |= {"conflict_id": conflict["conflict_id"], "event_kind": "PAYMENT_CONFLICT_VISIBLE", "event_payload": {
+                    key: conflict[key] for key in ("conflict_id", "candidate_evidence_id", "existing_payment_id", "common_origin_id")}}
+            return PaymentOutcome(("RECORDED", "REVERSED", "CONFLICT_RECORDED")[tag - 1], **fields)
+        if tag == 4:
+            outcome = PaymentOutcome("CONFLICT_UNCHANGED", conflict_id=reader.identifier("conflict_id"))
+        elif tag == 5:
+            payment_id, evidence = reader.identifier("payment_id"), evidence_row()
+            bind(evidence["evidence_id"] == command["evidence_id"])
+            outcome = PaymentOutcome("ALIAS", payment_id=payment_id, evidence=evidence, event_kind="PAYMENT_DUPLICATE_EVIDENCE", event_payload={
+                "candidate_evidence_id": evidence["evidence_id"], "existing_payment_id": payment_id, "common_origin_id": evidence["common_origin_id"]})
+        elif tag == 6:
+            outcome = PaymentOutcome("DUPLICATE", payment_id=reader.option_identifier("payment_id"))
+        elif tag == 7 and 1 <= (code := reader.byte("refusal")) <= 16:
+            outcome = PaymentOutcome("REFUSED", reason=code)
+        else:
+            _fail(SemanticAdapterCodecError, "payment_response")
+        reader.finish()
+        return outcome
+    except SemanticAdapterError:
+        raise
+    except (KeyError, TypeError, ValueError, UnicodeError, OverflowError):
+        _fail(SemanticAdapterCodecError, "payment_response")
 
 
 def _verify_owner_connection(
@@ -1932,6 +2055,48 @@ def live_evaluation_input(
         _fail(SemanticAdapterIntegrityError, "database_read")
     except (TypeError, ValueError, KeyError, IndexError):
         _fail(SemanticAdapterIntegrityError, "record_shape")
+
+
+def encode_payment_item(*, blfin02: bytes, receipts: Any, foreign: tuple[bool, bool], expected_revision: int | None, command: Mapping[str, Any]) -> bytes:
+    """One BLFPAY01 form-A item (Codec.lean encodePaymentRequest): the BLFIN02 input, the payment receipts, the two
+    foreign-id flags, the expected revision and the command."""
+
+    writer = _WireWriter()
+    writer.raw(PAYMENT_MAGIC + b"\x01" + len(blfin02).to_bytes(4, "big") + blfin02, "payment_input")
+    writer.list(receipts, "receipts", lambda row, label: (writer.identifier(row[0], label), writer.nat(row[1], label), writer.option_identifier(row[2], label)))
+    writer.byte(int(foreign[0]) + 2 * int(foreign[1]), "foreign")
+    writer.option_nat(expected_revision, "expected_revision")
+    if command["kind"] == "record":
+        writer.byte(1, "command")
+        for key in ("payment_id", "evidence_id", "common_origin_id", "source_id"):
+            writer.identifier(command[key], key)
+        writer.string(command["source_version"], "source_version")
+        writer.byte(int(command["local_ref"] is not None), "local_ref")
+        if command["local_ref"] is not None:
+            writer.string(command["local_ref"], "local_ref")
+        writer.nat(command["amount_cents"], "amount")
+        writer.nat(command["event_at_ms"], "event_at")
+        writer.option_identifier(command["pays_action_id"], "pays_action_id")
+    elif command["kind"] == "reverse":
+        writer.byte(2, "command")
+        writer.identifier(command["payment_id"], "payment_id")
+        writer.identifier(command["evidence_id"], "evidence_id")
+        writer.option_identifier(command["common_origin_id"], "common_origin_id")
+        writer.option_nat(command["event_at_ms"], "event_at")
+    else:
+        _fail(SemanticAdapterInputError, "payment_command")
+    return writer.finish(label="payment_size")
+
+
+def live_payment_input(connection: sqlite3.Connection, *, obligation_id: str, authority_context: TrustedAuthorityContext, now_ms: int, verification: Mapping[str, object],
+                       expected_revision: int | None, command: Mapping[str, Any], receipts: Any) -> tuple[bytes, dict[str, Any]]:
+    """The BLFPAY01 item for the owner's payment command, read inside the writer's own transaction."""
+
+    wire, data = live_evaluation_input(connection, obligation_id=obligation_id, authority_context=authority_context, evaluation_time_ms=now_ms, verification=verification)
+    foreign = (connection.execute("SELECT 1 FROM payments WHERE payment_id=? AND obligation_id<>?", (command["payment_id"], obligation_id)).fetchone() is not None,
+               connection.execute("SELECT 1 FROM evidence WHERE evidence_id=? AND item_id<>?", (command["evidence_id"], data["pre_evaluation"]["item_id"])).fetchone() is not None)
+    item = encode_payment_item(blfin02=wire, receipts=receipts, foreign=foreign, expected_revision=expected_revision, command=command)
+    return item, {**data, "blfin02": wire, "receipts": receipts, "foreign": foreign}
 
 
 def _make_snapshot(body: dict[str, Any]) -> LockedSemanticSnapshot:
