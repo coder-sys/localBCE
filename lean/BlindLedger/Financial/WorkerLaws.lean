@@ -27,7 +27,7 @@ private theorem nat8Wire {value bound : Nat} (h : value ≤ bound) (hBound : bou
   Nat.lt_of_le_of_lt h hBound
 
 /-- Every well-formed result whose canonical bytes fit the cap is wire-admissible. -/
-private theorem resultWire_of_wellFormed {result : FinancialResult}
+theorem resultWire_of_wellFormed {result : FinancialResult}
     (hWell : financialResultWellFormed result = true)
     (hLen : (rawEncodeFinancialResult result).length ≤ maxTotalEncodedBytes) :
     financialResultWireAdmissible result := by
