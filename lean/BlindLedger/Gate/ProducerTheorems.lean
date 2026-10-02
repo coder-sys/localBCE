@@ -490,4 +490,162 @@ theorem firstFailure_none {c : Crypto} {s : PayerState} {p : Payment} {bytes : B
       revert b1 b2 b3 b4 b5 b6 b7 b8 b9 b10
       decide
 
+/-! ### Key purposes (M4): the root never certifies itself, and a checkpoint header is never a certificate body -/
+
+theorem realCrypto_cert_not_root (t pk : Bytes) (e : EpochCert)
+    (h : (realCrypto [(t, pk)]).certChainOk e = true) : e.publicKey ≠ pk := by
+  intro hp
+  simp [realCrypto, hp] at h
+
+theorem accepts_cert_not_root {rootPk cert cp : Bytes} {e : EpochCert}
+    (ha : accepts rootPk cert cp = true) (he : decodeKeyCert cert = some e) : e.publicKey ≠ rootPk := by
+  unfold accepts at ha
+  cases hx : decodeCheckpoint cp with
+  | none => simp [hx] at ha
+  | some x =>
+    cases hi : installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e with
+    | mk s ok =>
+      cases ok with
+      | false => simp [hx, he, hi] at ha
+      | true =>
+        refine realCrypto_cert_not_root x.checkpoint.tenantId rootPk e ?_
+        cases hc : (realCrypto [(x.checkpoint.tenantId, rootPk)]).certChainOk e
+        · simp [installCert, hc] at hi
+        · rfl
+
+/-- A parser leaves a suffix of its input. -/
+def Eats {α : Type} (p : P α) : Prop := ∀ b a s, p.run b = some (a, s) → ∃ c, b = c ++ s
+
+theorem eats_bind {α β : Type} {p : P α} {f : α → P β} (hp : Eats p) (hf : ∀ a, Eats (f a)) : Eats (p >>= f) := by
+  intro b y s h
+  simp only [StateT.run_bind] at h
+  obtain ⟨⟨a, m⟩, h1, h2⟩ := bind_some h
+  obtain ⟨c1, rfl⟩ := hp b a m h1
+  obtain ⟨c2, rfl⟩ := hf a m y s h2
+  exact ⟨c1 ++ c2, by simp⟩
+
+theorem eats_take (n : Nat) : Eats (take n) := by
+  intro b a s h
+  by_cases hn : n ≤ b.length
+  · simp only [StateT.run, take, hn, if_true, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨_, (List.take_append_drop n b).symm⟩
+  · simp [StateT.run, take, hn] at h
+
+theorem eats_need (ok : Bool) : Eats (need ok) := by
+  intro b a s h
+  by_cases hok : ok = true
+  · simp only [StateT.run, need, hok, if_true, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨-, rfl⟩ := h
+    exact ⟨[], rfl⟩
+  · simp [StateT.run, need, hok] at h
+
+theorem eats_pure {α : Type} (a : α) : Eats (pure a : P α) := by
+  intro b y s h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨-, rfl⟩ := h
+  exact ⟨[], rfl⟩
+
+theorem expect_run {d b m : Bytes} {u : Unit} (h : (expect d).run b = some (u, m)) : b = d ++ m := by
+  simp only [expect, StateT.run_bind] at h
+  obtain ⟨⟨x, m0⟩, h1, h2⟩ := bind_some h
+  have hok := need_ok h2
+  simp only [StateT.run, take] at h1
+  by_cases hn : d.length ≤ b.length
+  · simp only [hn, if_true, Option.some.injEq, Prod.mk.injEq] at h1
+    obtain ⟨rfl, rfl⟩ := h1
+    simp only [beq_iff_eq] at hok
+    simp only [StateT.run, need, hok, beq_self_eq_true, if_true, Option.some.injEq, Prod.mk.injEq] at h2
+    obtain ⟨-, rfl⟩ := h2
+    calc b = b.take d.length ++ b.drop d.length := (List.take_append_drop _ _).symm
+      _ = d ++ b.drop d.length := by rw [hok]
+  · simp [hn] at h1
+
+/-- What `consumed` hands back is the input up to what was left. -/
+theorem consumed_take {α : Type} {p : P α} {b : Bytes} {r : (α × Bytes) × Bytes}
+    (h : (consumed p).run b = some r) : r.1.2 = b.take (b.length - r.2.length) := by
+  have h' : (match p.run b with
+      | some (x, rest) => some ((x, b.take (b.length - rest.length)), rest)
+      | none => none) = some r := h
+  rcases hp : p.run b with _ | ⟨x, q⟩
+  · rw [hp] at h'
+    simp at h'
+  · rw [hp] at h'
+    simp only [Option.some.injEq] at h'
+    subst h'
+    rfl
+
+/-- A parser that opens with `expect d` and then only eats consumes `d` first. -/
+theorem consumed_starts {α : Type} {d : Bytes} {q : Unit → P α} (hq : ∀ u, Eats (q u)) {b : Bytes}
+    {r : (α × Bytes) × Bytes} (h : (consumed (expect d >>= q)).run b = some r) : ∃ t, r.1.2 = d ++ t := by
+  have h1 := consumed_take h
+  have h2 := consumed_run h
+  simp only [StateT.run_bind] at h2
+  obtain ⟨⟨u, m⟩, he, hr⟩ := bind_some h2
+  obtain ⟨c, rfl⟩ := hq u m _ _ hr
+  have hb := expect_run he
+  refine ⟨c, ?_⟩
+  rw [h1, hb]
+  have : (d ++ (c ++ r.2)).length - r.2.length = (d ++ c).length := by simp; omega
+  rw [this, ← List.append_assoc, List.take_left' rfl]
+
+theorem parse_run {α : Type} {p : P α} {l : Nat} {b : Bytes} {x : α} (h : parse p l b = some x) :
+    p.run b = some (x, []) := by
+  unfold parse at h
+  by_cases hl : b.length > l
+  · simp [hl] at h
+  · simp only [hl, if_false] at h
+    rcases hr : p.run b with _ | ⟨y, rest⟩
+    · simp [hr] at h
+    · cases rest <;> simp_all
+
+theorem checkpoint_header_domain {b : Bytes} {x : SignedCheckpoint} (hx : decodeCheckpoint b = some x) :
+    ∃ t, x.header = domain "CHECKPOINT" ++ t := by
+  have hr := parse_run hx
+  simp only [pSignedCheckpoint, StateT.run_bind] at hr
+  obtain ⟨c, hc, h⟩ := bind_some hr
+  obtain ⟨s, -, h⟩ := bind_some h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, -⟩ := h
+  refine consumed_starts ?_ hc
+  intro u
+  try dsimp only
+  repeat' first
+    | exact eats_pure _
+    | exact eats_need _
+    | exact eats_take _
+    | refine eats_bind ?_ fun _ => ?_
+
+theorem keyCert_signed_domain {c : Bytes} {e : EpochCert} (he : decodeKeyCert c = some e) :
+    ∃ t, e.signed = domain "KEY-CERT" ++ t := by
+  have hr := parse_run he
+  simp only [pKeyCert, StateT.run_bind] at hr
+  obtain ⟨⟨⟨⟨ep, tn, sc, pk⟩, sg⟩, m⟩, hc, h⟩ := bind_some hr
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, -⟩ := h
+  refine consumed_starts ?_ hc
+  intro u
+  try dsimp only
+  repeat' first
+    | exact eats_pure _
+    | exact eats_need _
+    | exact eats_take _
+    | refine eats_bind ?_ fun _ => ?_
+
+theorem checkpoint_header_ne_keycert_body {b c : Bytes} {x : SignedCheckpoint} {e : EpochCert}
+    (hx : decodeCheckpoint b = some x) (he : decodeKeyCert c = some e) :
+    x.header ≠ e.signed.take (e.signed.length - 2 - mlDsa87Signature) := by
+  obtain ⟨t, ht⟩ := checkpoint_header_domain hx
+  obtain ⟨u, hu⟩ := keyCert_signed_domain he
+  intro h
+  have h8 := congrArg (fun l => l[8]?) h
+  have g1 : (domain "CHECKPOINT")[8]? = some 67 := by first | decide +kernel | rfl | simp [domain]
+  have g2 : (domain "KEY-CERT")[8]? = some 75 := by first | decide +kernel | rfl | simp [domain]
+  obtain ⟨b1, -⟩ := List.getElem?_eq_some_iff.mp g1
+  obtain ⟨b2, -⟩ := List.getElem?_eq_some_iff.mp g2
+  have d1 : (domain "CHECKPOINT" ++ t)[8]? = some 67 := by rw [List.getElem?_append_left b1]; exact g1
+  have d2 : (domain "KEY-CERT" ++ u)[8]? = some 75 := by rw [List.getElem?_append_left b2]; exact g2
+  simp only [ht, hu, List.getElem?_take, d1, d2] at h8
+  split at h8 <;> simp at h8
+
 end BlindLedger.Gate

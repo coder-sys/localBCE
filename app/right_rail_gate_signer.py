@@ -12,6 +12,12 @@ with its SHA-256 pin before every run, so the file that runs is the file that
 was checked.  A pin mismatch, a missing binary, a timeout, an OS error or
 output of the wrong size raises ``GateSignerError``.  There is no other
 implementation and no fallback.  Synthetic, activation=false.
+
+Key purposes: one key per purpose.  The tenant root (offline) signs only KEY-CERT; an epoch key only
+CHECKPOINT; a custody key only its own financial records.  ``gate_verify`` refuses a certificate that
+certifies the root key itself.  Custody-versus-gate separation is policy: ``gate_verify`` never sees the
+custody key.  Every signed format starts with its own NUL-terminated ``RR/<AREA>/<NAME>/vN`` tag, and no
+tag may be a prefix of another.
 """
 
 from __future__ import annotations

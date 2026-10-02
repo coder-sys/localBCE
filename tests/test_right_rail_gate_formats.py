@@ -12,7 +12,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import replace
 import hashlib
-from itertools import count
+from itertools import count, permutations
 from pathlib import Path
 import re
 import subprocess
@@ -22,6 +22,7 @@ import unittest
 from unittest import mock
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_payer as payer
 from app import right_rail_gate_signer as signer
 from tools import gate_rules_data
 
@@ -709,6 +710,12 @@ def _list(items) -> bytes:
     return _u16(len(items)) + b"".join(items)
 
 
+def _publish(root_pk: bytes, cert: bytes, signed: bytes, tokens: list[bytes]) -> str:
+    """``gate_verify`` PUBLISH of a shard's first checkpoint: the frame ``seal`` builds."""
+    return signer.gate_verify(1, root_pk + signer.framed(cert) + signer.framed(b"") + signer.framed(signed)
+                              + _u16(len(tokens)) + b"".join(map(signer.framed, tokens)))
+
+
 class GateVerifyModeTests(unittest.TestCase):
     """``gate_verify``'s four modes, each with an accepting and a refusing frame; ``seal`` is mode PUBLISH."""
 
@@ -739,6 +746,40 @@ class GateVerifyModeTests(unittest.TestCase):
             with mock.patch.object(signer, "sign", lambda h, m: _flip(real(h, m), 100)), \
                     self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
                 signer.seal(handle, root_pk, cert, None, header, tokens)
+
+    def test_a_self_certified_root_is_never_installed(self) -> None:
+        """A certificate for the root key itself, with a checkpoint the root key signed: refused to publish and to store."""
+        name, root_pk = f"root-{TENANT}", keypair(f"root-{TENANT}")[0]
+        body = gate.encode_key_cert(TENANT, EPOCH, SHARDS, root_pk)
+        cert = gate.attach_signature(body, det_sign(name, body))
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        signed = gate.attach_signature(header, det_sign(name, header))
+        self.assertEqual(_publish(root_pk, cert, signed, tokens), "GATE_VERIFY=REJECT")
+        with tempfile.TemporaryDirectory() as tmp, contextlib.closing(
+                payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={TENANT: root_pk}, grants=())) as store:
+            store.install_cert(cert)
+            with self.assertRaisesRegex(payer.GatePayerError, "checkpoint_rejected"):
+                store.store_checkpoint(signed)
+            self.assertEqual(store._db.execute("SELECT count(*) FROM checkpoints").fetchone()[0], 0)
+
+    def test_a_signature_for_one_purpose_is_refused_for_every_other(self) -> None:
+        """One key signs a KEY-CERT body, a checkpoint header and both financial custody records; no signature
+        verifies as another purpose, and no tag is a prefix of another."""
+        name, root_pk = f"root-{TENANT}", keypair(f"root-{TENANT}")[0]
+        d = bytes(range(64))
+        tags = (gate.KEY_CERT, gate.CHECKPOINT, b"RR/FINANCIAL/CUSTODY-SIGNED/v1\x00", b"RR/FINANCIAL/PACK-SIGNED/v1\x00")
+        self.assertFalse(any(b.startswith(a) for a, b in permutations(tags, 2)))
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        good = key_cert("e7"), gate.attach_signature(header, det_sign("e7", header))
+        self.assertEqual(_publish(root_pk, *good, tokens), "GATE_VERIFY=ACCEPT")  # control: the proper pair verifies
+        messages = (gate.encode_key_cert(TENANT, EPOCH, SHARDS, keypair("e7")[0]), header, tags[2] + d, tags[3] + d)
+        signed = [gate.attach_signature(m, det_sign(name, m)) for m in messages]
+        for i, one in enumerate(signed):
+            with self.subTest(i):
+                if i != 0:  # in the certificate's place
+                    self.assertEqual(_publish(root_pk, one, good[1], tokens), "GATE_VERIFY=REJECT")
+                if i != 1:  # in the checkpoint's place
+                    self.assertEqual(signer.gate_verify(2, signer.framed(one)), "GATE_VERIFY=REJECT")
 
     def test_a_malformed_frame_is_not_an_answer(self) -> None:
         for mode, frame in ((1, b""), (2, b"\x00\x00\x00\x05abc"), (3, bytes(2592)), (4, b"\x00"), (9, b"")):
@@ -844,7 +885,7 @@ class AxiomRecordTests(unittest.TestCase):
                   if (m := re.match(r"'BlindLedger\.Gate\.(\S+)' depends", line))}
         for name in ("storedOf_wf", "forks_comm", "chain_no_fork", "follows_twice_forks", "publishOk_sound",
                      "publish_payer_local", "verifyToken_slice", "storeCheckpoint_slice", "firstFailure_none",
-                     "anchored_binding", "anchored_binding_witness", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
+                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
             with self.subTest(name):
                 self.assertIn(name, record)
                 self.assertNotIn("sorryAx", record[name])

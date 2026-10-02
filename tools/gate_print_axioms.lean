@@ -60,3 +60,6 @@ import BlindLedger.Gate.AnchorTheorems
 #print axioms BlindLedger.Gate.load_ok
 #print axioms BlindLedger.Gate.step_ok
 #print axioms BlindLedger.Gate.natBE_beNat
+#print axioms BlindLedger.Gate.realCrypto_cert_not_root
+#print axioms BlindLedger.Gate.accepts_cert_not_root
+#print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body

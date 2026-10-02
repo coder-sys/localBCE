@@ -123,3 +123,9 @@ import BlindLedger.Gate.AnchorTheorems
 #guard_msgs in #print axioms BlindLedger.Gate.step_ok
 /-- info: 'BlindLedger.Gate.natBE_beNat' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.natBE_beNat
+/-- info: 'BlindLedger.Gate.realCrypto_cert_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.realCrypto_cert_not_root
+/-- info: 'BlindLedger.Gate.accepts_cert_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.accepts_cert_not_root
+/-- info: 'BlindLedger.Gate.checkpoint_header_ne_keycert_body' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body

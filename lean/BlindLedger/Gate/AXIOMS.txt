@@ -56,3 +56,6 @@
 'BlindLedger.Gate.load_ok' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.step_ok' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.natBE_beNat' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.realCrypto_cert_not_root' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.accepts_cert_not_root' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.checkpoint_header_ne_keycert_body' depends on axioms: [propext, Classical.choice, Quot.sound]
