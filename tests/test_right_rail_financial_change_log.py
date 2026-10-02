@@ -1,13 +1,10 @@
 """The cash-file checker's change log (lean-live-m3-v1.md 12.5, XI.2 record D): a write inside the file transaction that the file does not name
-is refused by CashFileCheck.finish itself, and the log refuses at least what the two whole-table snapshots refused. ChangeLogCompareTests are
-rr-core's, copied unchanged from branch hist-inc."""
+is refused by CashFileCheck.finish itself, however the log or the TEMP schema is tampered with."""
 
-import subprocess
 import re
 import sqlite3
 import unittest
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import patch
 
 from app import right_rail_financial_cash_file_independent as check
@@ -16,6 +13,8 @@ from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_cash_file as cash_tests
 
 H = expected.H_ITEM_ID
+OTHER = f"(SELECT obligation_id FROM main.obligations WHERE item_id<>'{H}' ORDER BY rowid LIMIT 1)"
+WRITE = f"UPDATE main.obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={OTHER}"  # only the log shows finish this row
 
 
 class ChangeLogCompareTests(unittest.TestCase):
@@ -42,6 +41,9 @@ class ChangeLogCompareTests(unittest.TestCase):
             self.files._unchanged(lambda: self.files._apply(), "^cash_file_failed$")
         self.assertEqual(refused, [True])
 
+    def _run(self, *statements):
+        self._inject(lambda connection: [connection.execute(sql) for sql in statements])
+
     @staticmethod
     def _replace_sql(table, where, column=None, value=None):
         """REPLACE one row by itself (it gets a new rowid), with ``column`` set to the SQL ``value`` if given."""
@@ -55,19 +57,18 @@ class ChangeLogCompareTests(unittest.TestCase):
         return (f'DROP TRIGGER temp."rr_track_{table}_DELETE"', cls._replace_sql(table, where, column, value))
 
     def test_writes_the_file_does_not_name_are_refused(self):  # green on trunk (the snapshot compare); must stay green
-        other = f"(SELECT obligation_id FROM obligations WHERE item_id<>'{H}' ORDER BY rowid LIMIT 1)"
         for label, statements in (
-            ("an untouched obligation's row", (f"UPDATE obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}",)),
-            ("an untouched obligation's case", (f"UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}",)),
+            ("an untouched obligation's row", (WRITE,)),
+            ("an untouched obligation's case", (f"UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={OTHER}",)),
             ("an earlier evaluation row", ("UPDATE evaluations SET evaluated_at_ms=evaluated_at_ms+1 WHERE rowid=(SELECT min(rowid) FROM evaluations)",)),
             ("an evidence row replaced with other content (REPLACE skips the UPDATE trigger)",
              self._past_the_owner("evidence", "rowid=(SELECT min(rowid) FROM evidence)", "received_at_ms", "received_at_ms+1")),
         ):
             with self.subTest(write=label):
-                self._inject(lambda connection, statements=statements: [connection.execute(sql) for sql in statements])
+                self._run(*statements)
 
     def test_an_identical_replace_that_moves_a_row_is_refused(self):  # RED: the snapshot compare is keyed by content, not rowid
-        self._inject(lambda connection: [connection.execute(sql) for sql in self._past_the_owner("evidence", "rowid=(SELECT min(rowid) FROM evidence)")])
+        self._run(*self._past_the_owner("evidence", "rowid=(SELECT min(rowid) FROM evidence)"))
 
     def test_the_owner_refuses_a_replace_itself(self):  # with recursive_triggers ON the REPLACE's delete reaches the owner's guard
         def replace_then_bypass(connection):
@@ -78,71 +79,57 @@ class ChangeLogCompareTests(unittest.TestCase):
             connection.execute(replace)
         self._inject(replace_then_bypass)
 
-    def test_finish_takes_no_whole_table_snapshot(self):  # RED: trunk reads every package table twice (937 ms at E=8,500)
-        with patch.object(check, "_snapshot", side_effect=AssertionError("whole-table snapshot"), create=True):
+    def test_finish_takes_no_whole_table_snapshot(self):  # every SELECT finish runs over a package table is filtered; COUNT(*) returns no row, control_packs is configuration the ledger reads whole
+        real, statements = check.CashFileCheck.finish, []
+
+        def finish(instance, connection, results):
+            connection.set_trace_callback(statements.append)
+            try:
+                return real(instance, connection, results)
+            finally:
+                connection.set_trace_callback(None)
+        with patch.object(check.CashFileCheck, "finish", finish):
             self.assertEqual(self.files._apply()["recorded_count"], 2)
+        tables = check.ledger.PACKAGE_TABLES - {"control_packs"}
+        scans = [sql for sql in statements if re.match(r"\s*SELECT\b(?!\s+COUNT\(\*\)\s+FROM)", sql) and not re.search(r"\bWHERE\b", sql)
+                 and tables & set(re.findall(r"\b(?:FROM|JOIN)\s+(?:main\.)?(\w+)", sql))]
+        self.assertIn("FROM main.obligations WHERE rowid=", "\n".join(statements))  # the trace saw finish's own reads
+        self.assertEqual(scans, [])
 
     def _log_triggers(self, connection):
         names = [row[0] for row in connection.execute("SELECT name FROM sqlite_temp_master WHERE type='trigger' AND name LIKE 'rr_cfc_%'")]
-        self.assertEqual(len(names), 3 * len(check.ledger.PACKAGE_TABLES), "one checker log trigger per package table and operation")
+        self.assertEqual(len(names), 3 * len(check.ledger.PACKAGE_TABLES) + 3, "one log trigger per package table and operation, three guarding the log")
         return names
 
-    def test_a_dropped_log_trigger_or_recursive_triggers_off_is_refused(self):  # RED: no rr_cfc_* triggers on trunk
+    def test_a_dropped_log_trigger_or_an_unlogged_replace_delete_is_refused(self):  # recursive_triggers OFF: the REPLACE's delete is unlogged, the count refuses it
         self._inject(lambda connection: connection.execute(f"DROP TRIGGER temp.{self._log_triggers(connection)[0]}"))
-        self._inject(lambda connection: (self._log_triggers(connection), connection.execute("PRAGMA recursive_triggers=OFF")))
+        self._run("PRAGMA recursive_triggers=OFF", self._replace_sql("evidence", "rowid=(SELECT min(rowid) FROM evidence)"))
 
-    def test_the_owner_never_bypasses_triggers(self):  # green on trunk; the change log's premise (R24)
+    def test_a_rewritten_log_is_refused(self):  # bypass (a): the log is append-only, whatever recursive_triggers is
+        h = f"(SELECT min(rowid) FROM main.obligations WHERE item_id='{H}')"
+        for label, statements in (
+            ("deleted", ("DELETE FROM temp.rr_cfc_log WHERE tbl='obligations'",)),
+            ("replaced", ("PRAGMA recursive_triggers=OFF", f"REPLACE INTO temp.rr_cfc_log SELECT id,tbl,op,{h},{h} FROM temp.rr_cfc_log WHERE tbl='obligations'", "PRAGMA recursive_triggers=ON")),
+        ):
+            with self.subTest(entry=label):
+                self._run(WRITE, *statements)
+
+    def test_a_log_trigger_dropped_and_recreated_is_refused(self):  # bypass (b): the TEMP schema cookie moves even when the SQL is identical
+        def drop_write_recreate(connection):
+            sql = connection.execute("SELECT sql FROM sqlite_temp_master WHERE name='rr_cfc_obligations_UPDATE'").fetchone()[0]
+            for statement in ("DROP TRIGGER temp.rr_cfc_obligations_UPDATE", WRITE, sql.replace("CREATE TRIGGER", "CREATE TEMP TRIGGER", 1)):
+                connection.execute(statement)
+        self._inject(drop_write_recreate)
+
+    def test_a_foreign_trigger_on_the_log_is_refused(self):  # bypass (c): any new TEMP object moves the cookie, whatever its name
+        self._run("CREATE TEMP TRIGGER mute BEFORE INSERT ON rr_cfc_log BEGIN SELECT RAISE(IGNORE); END", WRITE)
+
+    def test_a_temp_shadow_of_a_package_table_is_refused(self):  # bypass (d): finish reads main.<table>, and the new TEMP table moves the cookie
+        columns = ",".join(check.ledger.TABLE_COLUMNS["obligations"])
+        self._run("CREATE TEMP TABLE obligations AS SELECT * FROM main.obligations WHERE 0",
+                  f"INSERT INTO temp.obligations(rowid,{columns}) SELECT rowid,{columns} FROM main.obligations", WRITE)
+
+    def test_the_owner_never_bypasses_triggers(self):  # green on trunk; the change log's premises (R24), and the TEMP schema cookie finish compares is never reset
         for path in sorted(Path(owner.__file__).parent.rglob("*.py")):
             with self.subTest(path=path.name):
-                self.assertIsNone(re.search(r"blobopen|writable_schema|\bVACUUM\b", path.read_text(encoding="utf-8"), re.IGNORECASE))
-
-
-class ChangeLogDifferentialTests(unittest.TestCase):
-    """TEMPORARY (delete once the lead has merged and reviewed the change log): on a corpus of writes a file does not name, the change log
-    refuses with the same verdict as the two whole-table snapshots it replaced, read from commit 731421a (the trunk the change started on)."""
-
-    def setUp(self):
-        self.files = cash_tests.ReceiverCashFileTests("test_preview_apply_retry_restart_and_reversal")
-        self.files.setUp()
-        self.addCleanup(self.files.doCleanups)
-        source = subprocess.run(["git", "show", "731421a:app/right_rail_financial_cash_file_independent.py"], cwd=Path(owner.__file__).parents[1], capture_output=True, check=True).stdout
-        self.snapshots = ModuleType("snapshot_checker")
-        exec(compile(source, "snapshot_checker", "exec"), self.snapshots.__dict__)
-
-    def _verdict(self, module, sql):
-        """What apply does when ``sql`` runs after every command wrote and before the checker's finish."""
-        real = module.CashFileCheck.finish
-
-        def finish(instance, connection, results):
-            for statement in sql:
-                connection.execute(statement)
-            return real(instance, connection, results)
-        with patch.object(check, "CashFileCheck", module.CashFileCheck), patch.object(module.CashFileCheck, "finish", finish):
-            try:
-                self.files._apply(self.prepared)
-            except Exception as error:
-                return type(error).__name__, str(error)
-        return None
-
-    def test_the_change_log_refuses_every_write_the_snapshots_refused(self):
-        self.prepared = self.files._prepare()
-        other = f"(SELECT obligation_id FROM obligations WHERE item_id<>'{H}' ORDER BY rowid LIMIT 1)"
-        first = lambda table: f"rowid=(SELECT min(rowid) FROM {table})"
-        replace = ChangeLogCompareTests._replace_sql
-        refused = {  # both refuse, with the same verdict
-            "obligation": f"UPDATE obligations SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}",
-            "case": f"UPDATE cases SET updated_at_ms=updated_at_ms+1 WHERE obligation_id={other}",
-            "evaluation": f"UPDATE evaluations SET evaluated_at_ms=evaluated_at_ms+1 WHERE {first('evaluations')}",
-            "payment": f"UPDATE payments SET amount_cents=amount_cents+1 WHERE {first('payments')}",
-            "meta": "UPDATE financial_meta SET updated_at_ms=updated_at_ms+1",
-            "evidence replaced": replace("evidence", first("evidence"), "received_at_ms", "received_at_ms+1"),
-            "payment replaced": replace("payments", first("payments"), "amount_cents", "amount_cents+1"),
-            "evidence inserted": f"INSERT INTO evidence SELECT 'evidence:extra',{','.join(check.ledger.TABLE_COLUMNS['evidence'][1:])} FROM evidence WHERE {first('evidence')}",
-        }
-        for label, sql in refused.items():
-            with self.subTest(write=label):
-                old = self._verdict(self.snapshots, [sql])
-                self.assertIsNotNone(old, "the whole-table snapshots refuse it")
-                self.assertEqual(self._verdict(check, [sql]), old)
-        with self.subTest(write="an identical replace that moves a row"):  # the snapshots compare content and accept it; with recursive_triggers ON the owner's delete guard refuses it first
-            self.assertEqual(self._verdict(check, [replace("evidence", first("evidence"))]), ("IntegrityError", "history_row_delete"))
+                self.assertIsNone(re.search(r"blobopen|writable_schema|\bVACUUM\b|PRAGMA\s+(\w+\.)?schema_version\s*=", path.read_text(encoding="utf-8"), re.IGNORECASE))

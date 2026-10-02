@@ -134,11 +134,11 @@ def _source(raw: bytes) -> dict[str, object]:
 _INSERTS = ("payments", "evidence", "evaluations", "financial_events")
 _UPDATES = ("financial_meta", "obligations", "cases")
 _LOGGED = frozenset({(table, "INSERT") for table in _INSERTS} | {(table, "UPDATE") for table in _UPDATES})  # every other write to a package table is refused
-_OBJECTS = "SELECT name,sql FROM sqlite_temp_master WHERE name LIKE 'rr_cfc_%' ORDER BY name"
+_SCHEMA = "PRAGMA temp.schema_version"  # moved by every CREATE or DROP in temp, an identical re-create included
 
 
 def _counts(connection: sqlite3.Connection) -> dict[str, int]:
-    counts = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ledger.PACKAGE_TABLES}
+    counts = {table: connection.execute(f"SELECT COUNT(*) FROM main.{table}").fetchone()[0] for table in ledger.PACKAGE_TABLES}
     _require(max(counts.values()) <= ledger.MAX_ROWS, "cash_file_failed")
     return counts
 
@@ -148,7 +148,7 @@ def _table(connection: sqlite3.Connection, table: str, rowids: list[int] | None 
     cursor = connection.cursor()
     cursor.row_factory = None
     columns = ledger.TABLE_COLUMNS[table]
-    sql = f"SELECT rowid,{','.join(columns)} FROM {table}"
+    sql = f"SELECT rowid,{','.join(columns)} FROM main.{table}"
     stored = cursor.execute(sql + " ORDER BY rowid").fetchall() if rowids is None else [row for rowid in rowids for row in cursor.execute(sql + " WHERE rowid=?", (rowid,))]
     return {row[0]: dict(zip(columns, row[1:])) for row in stored}
 
@@ -254,19 +254,20 @@ class CashFileCheck:
         }
 
     def _arm(self, connection: sqlite3.Connection) -> None:
-        """TEMP triggers log every row write to a package table: with recursive_triggers ON a REPLACE's delete fires too. They are dropped by finish and die with the connection."""
+        """TEMP triggers log every row write to a package table; the log's own skip an UPDATE, DELETE or REPLACE of an entry. All die with finish or the connection."""
         connection.execute("CREATE TEMP TABLE rr_cfc_log(id INTEGER PRIMARY KEY, tbl TEXT NOT NULL, op TEXT NOT NULL, old_rowid INTEGER, new_rowid INTEGER)")
+        for op, when in (("INSERT", " WHEN EXISTS (SELECT 1 FROM rr_cfc_log WHERE id=NEW.id)"), ("UPDATE", ""), ("DELETE", "")):
+            connection.execute(f"CREATE TEMP TRIGGER rr_cfc_log_{op} BEFORE {op} ON temp.rr_cfc_log{when} BEGIN SELECT RAISE(IGNORE); END")
         for table in sorted(ledger.PACKAGE_TABLES):
             for op, old, new in (("INSERT", "NULL", "NEW.rowid"), ("UPDATE", "OLD.rowid", "NEW.rowid"), ("DELETE", "OLD.rowid", "NULL")):
                 connection.execute(f"CREATE TEMP TRIGGER rr_cfc_{table}_{op} AFTER {op} ON main.{table} BEGIN INSERT INTO rr_cfc_log(tbl,op,old_rowid,new_rowid) VALUES ('{table}','{op}',{old},{new}); END")
-        self._objects = tuple(map(tuple, connection.execute(_OBJECTS)))
+        self._schema = connection.execute(_SCHEMA).fetchone()[0]
 
     def _log(self, connection: sqlite3.Connection) -> dict[tuple[str, str], list[tuple]]:
-        """The writes this file made, once the premises hold: the log objects are as begin left them, recursive_triggers is still ON, every write is one a file may make,
-        and each table holds exactly its starting rows plus the logged inserts."""
-        _require(tuple(map(tuple, connection.execute(_OBJECTS))) == self._objects and connection.execute("PRAGMA recursive_triggers").fetchone()[0] == 1, "cash_file_failed")
+        """The writes this file made, once the TEMP schema is as begin left it, every write is one a file may make, and each count is start plus logged inserts (no deletes)."""
+        _require(connection.execute(_SCHEMA).fetchone()[0] == self._schema, "cash_file_failed")
         log: dict[tuple[str, str], list] = {}
-        for table, op, old, new in connection.execute("SELECT tbl,op,old_rowid,new_rowid FROM rr_cfc_log ORDER BY id"):
+        for table, op, old, new in connection.execute("SELECT tbl,op,old_rowid,new_rowid FROM temp.rr_cfc_log ORDER BY id"):
             log.setdefault((table, op), []).append((old, new))
         after = _counts(connection)
         _require(set(log) <= _LOGGED and all(after[table] == self._counts[table] + len(log.get((table, "INSERT"), ())) for table in after)
@@ -274,20 +275,19 @@ class CashFileCheck:
         return log
 
     def _disarm(self, connection: sqlite3.Connection) -> None:
-        for name, _ in self._objects:
-            connection.execute(f"DROP {'TABLE' if name == 'rr_cfc_log' else 'TRIGGER'} temp.{name}")
+        for kind, name in connection.execute("SELECT type,name FROM sqlite_temp_master WHERE name LIKE 'rr_cfc_%' ORDER BY type DESC").fetchall():  # triggers, then the log
+            connection.execute(f"DROP {kind} temp.{name}")
 
     @_fixed_errors
     def begin(self, connection: sqlite3.Connection) -> None:
-        _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction
-                 and connection.execute("PRAGMA recursive_triggers").fetchone()[0] == 1, "cash_file_failed")
+        _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_failed")
         self._counts = _counts(connection)
         stored = {table: _table(connection, table) for table in ("financial_identity", "financial_meta", "financial_events", "payments", "evidence", "actions", "obligations", "cases")}  # what classification and finish compare against
         rows = {table: list(values.values()) for table, values in stored.items()}
         identity, sequence, head, count, last = self._anchor
         meta = rows["financial_meta"][0]
         ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
-        sealed = connection.execute("SELECT last_sequence,segment_digest FROM history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
+        sealed = connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
         _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
         self._stale = meta["sequence"] != sequence
         self._received, self._aliases = _payment_events(rows["financial_events"])
