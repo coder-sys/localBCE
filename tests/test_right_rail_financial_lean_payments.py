@@ -121,6 +121,28 @@ class LeanPaymentFrameTests(unittest.TestCase):
         print("FINANCIAL_M3_FRAME_PROFILE", timings)
         self.assertLessEqual(timings["payment"], 2.0 * timings["evaluate"] + 2.0)
 
+    def test_many_payment_frames_keep_the_worker_flat(self) -> None:
+        """One worker, recycling off: 1,000 payment items interleaved with 1,000 evaluations, then 8 items at the 8 MiB bound.
+        From each phase's second request the commit stays in a 16 MB band; a leaked 32 MiB segment per request fails this."""
+        small, data, command = self._frame({})
+        evaluate = small[13:13 + int.from_bytes(small[9:13], "big")]
+        # A valid 8 MiB pre-state takes longer than the 5 s evaluator bound, so the large items carry trailing bytes: Lean
+        # reads the whole 8 MB input and refuses it at once.
+        large = adapter.encode_payment_item(blfin02=evaluate + bytes(8_100_000), receipts=data["receipts"], foreign=(False, False),
+                                            expected_revision=None, command=command)
+        self.assertGreater(len(large), 8_000_000)
+        with patch.object(engine, "EVALUATOR_RECYCLE_COMMIT_BYTES", 1 << 40), patch.object(engine, "EVALUATOR_RECYCLE_REQUESTS", 1 << 40):
+            for frames in ([small, evaluate] * 1000, [large] * 8):
+                answers, commits = {}, []
+                for wire in frames:
+                    try:
+                        answers.setdefault(wire, set()).add(engine._evaluate_wire(wire))
+                    except engine.FinancialEngineResultError as error:  # the large item is refused
+                        answers.setdefault(wire, set()).add(str(error))
+                    commits.append(engine._evaluator[0].commit_bytes())
+                self.assertTrue(all(len(a) == 1 for a in answers.values()))
+                self.assertLess(max(commits[1:]) - commits[1], 16_000_000, [round(c / 1e6) for c in commits[:40]])
+
 
 class LeanPaymentOwnerTests(unittest.TestCase):
     """The owner with the flag on: Lean's answer is written as the rows it names, and anything else fails closed."""
