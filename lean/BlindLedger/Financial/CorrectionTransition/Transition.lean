@@ -57,7 +57,7 @@ structure CorrectionActionPayload where
   canonicalJson : String
 deriving DecidableEq, Repr
 
-def canonicalActionPayload (request : CorrectionTransitionRequest)
+def offsetActionPayload (kind : String) (request : CorrectionTransitionRequest)
     (determinationId : String) (resultingRevision amountCents : Nat) : CorrectionActionPayload :=
   let command := request.command
   let input := request.currentInput
@@ -72,9 +72,13 @@ def canonicalActionPayload (request : CorrectionTransitionRequest)
         ",\"dispatch\":" ++ jsonId dispatchMode.wireValue ++
         ",\"input_evaluation_id\":" ++ jsonId command.evaluationId ++
         ",\"input_evaluation_result_digest\":" ++ jsonId (digestHex command.evaluationResultDigest) ++
-        ",\"kind\":\"CORRECTION_PAYMENT_REQUEST\"" ++
+        ",\"kind\":" ++ jsonId kind ++
         ",\"obligation_id\":" ++ jsonId input.context.obligationId ++
         ",\"revision\":" ++ toString resultingRevision ++ "}" }
+
+def canonicalActionPayload (request : CorrectionTransitionRequest)
+    (determinationId : String) (resultingRevision amountCents : Nat) : CorrectionActionPayload :=
+  offsetActionPayload "CORRECTION_PAYMENT_REQUEST" request determinationId resultingRevision amountCents
 
 /-- The Owner's storage digest of the action payload. The Owner recomputes it
     from the row it writes and refuses any difference (`correction_digest_binding`). -/
@@ -1066,6 +1070,176 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
             (some request.command.actionId)
             (some ("determination:" ++ request.command.actionId))
             (some mutation)
+
+-- NEW. Python `_ensure_case`: an outstanding correction keeps its case; anything else is replaced or inserted.
+def upsertOffsetCase (cases : List CaseRecord) (record : CaseRecord) : List CaseRecord × Bool :=
+  match findCase cases record.caseId with
+  | some existing => if existing.status = .CORRECTION_REQUIRED then (cases, false)
+                     else upsertCorrectionCase cases record
+  | none => upsertCorrectionCase cases record
+
+-- NEW. The writes of today's Python `authorize_offset`, decided in Lean. Same frame as `buildAccepted`
+-- (time, ids, capacity, provisional input, case-status fixed point); differences are marked.
+def buildAuthorized (request : CorrectionTransitionRequest) (currentResult : FinancialResult)
+    (claim : Claim) (paid : List CorrectionPaid) : Except TransitionRejectReason CorrectionMutation := do
+  let command := request.command
+  let input := request.currentInput
+  let mutationTime := max command.decisionAtMs command.ownerNowMs
+  let afterRevision := command.expectedRevision + 1
+  let determinationId := "determination:" ++ command.actionId
+  let some inputSnapshotDigest := request.currentReceipt.inputSnapshotDigest
+    | throw .INPUT_SNAPSHOT_MISSING
+  let determination : OffsetDetermination := {
+    determinationId := determinationId
+    obligationId := input.context.obligationId
+    claimId := command.claimId
+    actorId := command.actorId
+    actorRole := command.actorRole
+    authorityId := input.authority.authorityId
+    authorityEpoch := input.authority.epoch
+    authorityDigest := input.authority.digest
+    decision := .OFFSET_AUTHORIZED                                     -- differs
+    amountCents := claim.amountCents
+    supportingEvidenceIds := request.currentReceipt.evidenceBindings.map EvidenceBinding.evidenceId
+    expectedRevision := command.expectedRevision
+    resultingRevision := afterRevision
+    decidedAt := command.decisionAtMs }
+  let action : ActionRecord := {
+    actionId := command.actionId
+    obligationId := input.context.obligationId
+    determinationId := some determinationId
+    kind := "OFFSET_AUTHORIZATION"                                     -- differs
+    amountCents := claim.amountCents                                   -- differs: the whole claim
+    currency := input.context.currency
+    revision := afterRevision
+    status := .READY
+    payloadDigest := correctionActionPayloadDigest
+      (offsetActionPayload "OFFSET_AUTHORIZATION" request determinationId afterRevision claim.amountCents)
+    createdAt := mutationTime }
+  let newClaims := input.claims.map (fun existing =>
+    if existing.claimId = command.claimId then { claim with status := .AUTHORIZED } else existing)  -- differs
+  let newDeterminations := insertDeterminationSorted determination input.determinations
+  let newActions := insertActionSorted action input.actions
+  let caseId := "case:" ++ input.context.obligationId
+  let requestedCase : CaseRecord := {
+    caseId := caseId
+    obligationId := input.context.obligationId
+    reason := "OFFSET_AUTHORIZED"                                      -- differs
+    nextActionOwner := "CASE_OWNER"
+    dueAt := claim.deadlineAt
+    status := .AUTHORIZED                                              -- differs
+    updatedAt := mutationTime }
+  let (casesWithDecision, inserted) := upsertOffsetCase input.cases requestedCase  -- differs
+  if newDeterminations.length > maxRows || newActions.length > maxRows ||
+      casesWithDecision.length > maxRows || afterRevision > maxRevision ||
+      command.currentEventSequence ≥ maxRows then
+    throw .CAPACITY
+  let provisional : FinancialInput := {
+    input with
+    beforeRevision := command.expectedRevision
+    evaluatedAt := mutationTime
+    claims := newClaims
+    determinations := newDeterminations
+    cases := casesWithDecision
+    actions := newActions }
+  if !financialInputWellFormed provisional then throw .INVALID_INPUT
+  let some provisionalResult := evaluate provisional | throw .INVALID_INPUT
+  let resultingInput := { provisional with
+    cases := updateAllCaseStatus provisional.cases provisionalResult.caseStatus mutationTime }
+  if !financialInputWellFormed resultingInput then throw .INVALID_INPUT
+  -- `evaluate_after_case_status_update_fixedPoint`: re-evaluating `resultingInput` gives this result.
+  if provisionalResult.afterRevision ≠ afterRevision then throw .REVISION_CONFLICT
+  let some updatedCase := findCase resultingInput.cases caseId | throw .INVALID_INPUT
+  if currentResult.afterRevision ≠ command.expectedRevision then throw .REVISION_CONFLICT
+  let nextEventSequence := command.currentEventSequence + 1
+  pure {
+    transition := .OFFSET_AUTHORIZED
+    orderedEffects := [ .DETERMINATION_RECORDED, .CLAIM_AUTHORIZED, .CASE_UPSERTED,
+      .ACTION_CREATED, .OUTBOX_CREATED, .PROJECTION_RECOMPUTED, .EVENT_APPENDED ]
+    dependencies := {
+      artifactContract := correctionTransitionContract
+      artifactVersion := 1
+      authorityId := input.authority.authorityId
+      authorityEpoch := input.authority.epoch
+      authorityDigest := input.authority.digest
+      controlPackId := input.pack.packId
+      controlPackVersion := input.pack.version
+      controlPackDigest := input.pack.digest
+      inputEvaluationId := command.evaluationId
+      inputEvaluationResultDigest := command.evaluationResultDigest
+      inputEvaluationRevision := command.expectedRevision
+      inputEvaluationEvaluatedAtMs := request.currentReceipt.result.evaluatedAtMs
+      inputEvaluationSnapshotDigest := inputSnapshotDigest
+      inputShortfallCents := currentResult.shortfallCents
+      decisionAtMs := command.decisionAtMs
+      ownerNowMs := command.ownerNowMs
+      claimBefore := claim
+      supportingEvidence := request.currentReceipt.evidenceBindings
+      queryObservations := command.queryObservations
+      currentEventSequence := command.currentEventSequence
+      previousHistoryHead := command.previousHistoryHead
+      correctionPaid := paid }
+    followUps := {
+      actionId := command.actionId
+      outboxActionId := command.actionId
+      caseId := caseId
+      resultingEvaluationId := "evaluation:" ++ input.context.obligationId ++ ":r" ++ toString afterRevision
+      eventSequence := nextEventSequence }
+    resultingInput := resultingInput
+    resultingResult := provisionalResult
+    determination := determination
+    action := action
+    caseDelta := {
+      record := updatedCase
+      contractualAccountability := "PROGRAM_ACCOUNTABILITY"
+      completionConditionsAmountSatisfied := true
+      completionConditionsReportingComplete := true
+      completionConditionsDeliveryAcknowledgedOrNotRequired := true
+      inserted := inserted }
+    outbox := {
+      actionId := command.actionId
+      status := .READY
+      attempt := 0
+      acknowledgmentReference := none
+      updatedAtMs := mutationTime }
+    event := {
+      sequence := nextEventSequence
+      previousHead := command.previousHistoryHead
+      aggregateType := "OBLIGATION"
+      aggregateId := input.context.obligationId
+      kind := "OFFSET_AUTHORIZED"                                       -- differs
+      beforeRevision := command.expectedRevision
+      afterRevision := afterRevision
+      committedAtMs := mutationTime } }
+
+-- NEW. `duplicate` with the transition kind as a parameter.
+def duplicateOf (kind : TransitionKind) (command : CorrectionCommand) : CorrectionTransitionResult :=
+  { duplicate command with explanation := { (duplicate command).explanation with transition := some kind } }
+
+-- NEW. Served for BLFOFA01 frames.
+def applyOffsetAuthorization (request : CorrectionTransitionRequest) : CorrectionTransitionResult :=
+  match preflightOffsetDecision .OFFSET_AUTHORIZED request with
+  | .error reason => reject request.command reason
+  | .ok .duplicate => duplicateOf .OFFSET_AUTHORIZED request.command
+  | .ok (.ready currentResult claim _ _ paid _) =>
+      match buildAuthorized request currentResult claim paid with
+      | .error reason => reject request.command reason
+      | .ok mutation =>
+          { status := .ACCEPTED
+            rejectReason := none
+            explanation := {
+              code := .OFFSET_AUTHORIZED
+              transition := some .OFFSET_AUTHORIZED
+              rejectReason := none
+              unresolvedRequirement := none
+              claimId := some request.command.claimId
+              actionId := some request.command.actionId
+              inputEvaluationId := some request.command.evaluationId
+              expectedRevision := some request.command.expectedRevision
+              resultingRevision := some mutation.resultingResult.afterRevision }
+            actionId := some request.command.actionId
+            determinationId := some ("determination:" ++ request.command.actionId)
+            mutation := some mutation }
 
 /-- The case found after the upsert and the status update is the requested case with the
     new status and time. -/
