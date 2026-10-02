@@ -654,8 +654,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       result.explanation.transition, result.explanation.rejectReason,
       result.explanation.unresolvedRequirement, result.actionId,
       result.determinationId, result.mutation with
-  | .ACCEPTED, none, .CORRECTION_AUTHORIZED, some .OFFSET_REJECTED_CORRECTION_AUTHORIZED,
-      none, none, some actionId, some determinationId, some mutation =>
+  -- One arm for both accepted kinds; the authorize differences (design 3.3) test `kind`.
+  | .ACCEPTED, none, code, some kind, none, none, some actionId, some determinationId, some mutation =>
       idWellFormed actionId && idWellFormed determinationId &&
       result.explanation.claimId = some mutation.determination.claimId &&
       result.explanation.actionId = some actionId &&
@@ -671,8 +671,9 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.resultingResult.packId = mutation.resultingInput.pack.packId &&
       mutation.resultingResult.packDigest = mutation.resultingInput.pack.digest &&
       mutation.resultingResult.afterRevision = mutation.resultingInput.beforeRevision + 1 &&
-      mutation.transition = .OFFSET_REJECTED_CORRECTION_AUTHORIZED &&
-      mutation.orderedEffects = [ .DETERMINATION_RECORDED, .CLAIM_REJECTED, .CASE_UPSERTED,
+      mutation.transition = kind &&
+      mutation.orderedEffects = [ .DETERMINATION_RECORDED,
+        if kind = .OFFSET_AUTHORIZED then .CLAIM_AUTHORIZED else .CLAIM_REJECTED, .CASE_UPSERTED,
         .ACTION_CREATED, .OUTBOX_CREATED, .PROJECTION_RECOMPUTED, .EVENT_APPENDED ] &&
       mutation.determination.determinationId = determinationId &&
       idWellFormed mutation.determination.determinationId &&
@@ -681,7 +682,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       idWellFormed mutation.determination.actorId &&
       roleWellFormed mutation.determination.actorRole &&
       idWellFormed mutation.determination.authorityId &&
-      mutation.determination.decision = .OFFSET_REJECTED_CORRECTION_AUTHORIZED &&
+      mutation.determination.decision = (if kind = .OFFSET_AUTHORIZED then .OFFSET_AUTHORIZED
+        else .OFFSET_REJECTED_CORRECTION_AUTHORIZED) &&
       mutation.determination.amountCents > 0 && mutation.determination.amountCents ≤ maxCents &&
       revisionWellFormed mutation.determination.expectedRevision &&
       revisionWellFormed mutation.determination.resultingRevision &&
@@ -691,16 +693,18 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.action.actionId = actionId && digestWellFormed mutation.action.payloadDigest &&
       mutation.action.obligationId = mutation.determination.obligationId &&
       mutation.action.determinationId = some determinationId &&
-      mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" &&
-      mutation.dependencies.inputShortfallCents > 0 &&
+      mutation.action.kind = (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZATION"
+        else "CORRECTION_PAYMENT_REQUEST") &&
+      (kind = .OFFSET_AUTHORIZED || mutation.dependencies.inputShortfallCents > 0) &&
       mutation.dependencies.inputShortfallCents ≤ maxCents &&
-      -- Only the balance that earlier correction requests, less what was paid
-      -- against them, do not already ask for.
+      -- An authorization covers the whole claim. A correction asks only for the balance that
+      -- earlier correction requests, less what was paid against them, do not already ask for.
       correctionPaidWellFormed mutation.dependencies.correctionPaid &&
-      mutation.action.amountCents =
-        min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
+      mutation.action.amountCents = (if kind = .OFFSET_AUTHORIZED
+        then mutation.determination.amountCents
+        else min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
           outstandingCorrectionCents mutation.dependencies.correctionPaid
-            (mutation.resultingInput.actions.filter (fun action => action.actionId ≠ actionId))) &&
+            (mutation.resultingInput.actions.filter (fun action => action.actionId ≠ actionId)))) &&
       mutation.action.currency = mutation.resultingInput.context.currency &&
       mutation.action.revision = mutation.determination.resultingRevision &&
       mutation.action.status = .READY &&
@@ -714,7 +718,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.event.sequence = mutation.dependencies.currentEventSequence + 1 &&
       mutation.event.aggregateType = "OBLIGATION" &&
       mutation.event.aggregateId = mutation.resultingInput.context.obligationId &&
-      mutation.event.kind = "OFFSET_REJECTED_CORRECTION_AUTHORIZED" &&
+      mutation.event.kind = (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZED"
+        else "OFFSET_REJECTED_CORRECTION_AUTHORIZED") &&
       mutation.event.committedAtMs = mutation.outbox.updatedAtMs &&
       mutation.event.previousHead = mutation.dependencies.previousHistoryHead &&
       mutation.event.previousHead.length = digestBytes &&
@@ -722,9 +727,16 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.followUps.caseId = mutation.caseDelta.record.caseId &&
       mutation.caseDelta.record.caseId = "case:" ++ mutation.resultingInput.context.obligationId &&
       mutation.caseDelta.record.obligationId = mutation.resultingInput.context.obligationId &&
-      mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" &&
-      mutation.caseDelta.record.nextActionOwner = "CASE_OWNER" &&
-      mutation.caseDelta.record.dueAt = mutation.dependencies.claimBefore.deadlineAt &&
+      -- An authorization keeps an existing CORRECTION_REQUIRED case as it was (not inserted).
+      (mutation.caseDelta.record.reason =
+          (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZED" else "CORRECTION_REQUIRED") ||
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          idWellFormed mutation.caseDelta.record.reason) &&
+      (mutation.caseDelta.record.nextActionOwner = "CASE_OWNER" ||
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          roleWellFormed mutation.caseDelta.record.nextActionOwner) &&
+      (mutation.caseDelta.record.dueAt = mutation.dependencies.claimBefore.deadlineAt ||
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted) &&
       mutation.caseDelta.record.status = mutation.resultingResult.caseStatus &&
       mutation.caseDelta.record.updatedAt = mutation.event.committedAtMs &&
       mutation.caseDelta.contractualAccountability = "PROGRAM_ACCOUNTABILITY" &&
@@ -767,7 +779,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.dependencies.supportingEvidence.all (fun binding =>
         idWellFormed binding.evidenceId && digestWellFormed binding.recordDigest) &&
       mutation.resultingInput.claims.any (fun claim =>
-        claim = { mutation.dependencies.claimBefore with status := .REJECTED }) &&
+        claim = { mutation.dependencies.claimBefore with
+          status := if kind = .OFFSET_AUTHORIZED then .AUTHORIZED else .REJECTED }) &&
       mutation.dependencies.supportingEvidence.map EvidenceBinding.evidenceId =
         mutation.determination.supportingEvidenceIds &&
       mutation.dependencies.inputEvaluationSnapshotDigest.length = digestBytes &&
@@ -791,8 +804,9 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.dependencies.queryObservations.evaluationConsumed.resultIdentity.isNone &&
       correctionQueryObservationsAt mutation.dependencies.queryObservations
         mutation.dependencies.currentEventSequence mutation.dependencies.previousHistoryHead &&
-      correctionQueryObservationsWellFormed mutation.dependencies.queryObservations
-  | .DUPLICATE, none, .EXACT_RETRY, some .OFFSET_REJECTED_CORRECTION_AUTHORIZED,
+      correctionQueryObservationsWellFormed mutation.dependencies.queryObservations &&
+      code = if kind = .OFFSET_AUTHORIZED then .OFFSET_AUTHORIZED else .CORRECTION_AUTHORIZED
+  | .DUPLICATE, none, .EXACT_RETRY, some _,
       none, none, some actionId, some determinationId, none =>
       idWellFormed actionId && determinationId = "determination:" ++ actionId &&
       result.explanation.claimId.isSome &&

@@ -154,6 +154,8 @@ def unboundKatRequest : CorrectionTransitionRequest :=
       m.action.amountCents == 300_000 && m.determination.decision == .OFFSET_AUTHORIZED &&
       m.caseDelta.inserted && m.caseDelta.record.reason == "OFFSET_AUTHORIZED"
   | none => false
+#guard (encodeCorrectionTransitionResult (applyOffsetAuthorization correctionKatRequest)).isSome
+#guard (encodeCorrectionTransitionResult (duplicateOf .OFFSET_AUTHORIZED correctionKatRequest.command)).isSome
 #guard match preflightOffsetDecision .OFFSET_AUTHORIZED
     { correctionKatRequest with currentInput := { correctionKatRequest.currentInput with
         pack := { correctionKatRequest.currentInput.pack with

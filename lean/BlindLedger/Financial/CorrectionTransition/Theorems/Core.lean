@@ -333,7 +333,8 @@ theorem applyCorrectionTransition_resultWellFormed (bytes : Bytes)
         cases links
         unfold resultWellFormed
         simp only [Bool.and_eq_true, decide_eq_true_eq, timeWellFormed, revisionWellFormed,
-          digestWellFormed]
+          digestWellFormed, reduceCtorEq, ↓reduceIte, decide_false, Bool.false_and, Bool.or_false,
+          Bool.false_or]
         repeat' apply And.intro
         all_goals first | assumption | rfl | grind
 
@@ -398,6 +399,13 @@ private theorem estr_le {s : String} (h : s.utf8ByteSize ≤ 200) : (encodeStrin
 
 private theorem sz_id {s : String} (h : idWellFormed s = true) : (encodeString s).length ≤ 202 :=
   estr_le (Nat.le_trans (id_size h) (by omega))
+
+private theorem sz_role {s : String} (h : roleWellFormed s = true) : (encodeString s).length ≤ 202 := by
+  unfold roleWellFormed tokenWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  have hLen := h.1.2
+  have := ulen s
+  exact estr_le (by omega)
 
 private theorem sz_lit (s : String) (h : s.toList.length ≤ 50) : (encodeString s).length ≤ 202 :=
   estr_le (Nat.le_trans (lit_size s 50 h) (by omega))
@@ -578,13 +586,19 @@ private theorem mut_facts {res : CorrectionTransitionResult} (hWf : resultWellFo
       have h := Option.some.inj (c37.symm.trans hs)
       subst h
       exact Nat.le_trans (id_size c2) (by omega)
-    · rw [c38]; exact sz_lit _ (by first | decide | simp)
+    · rw [c38]; split <;> exact sz_lit _ (by first | decide | simp)
     · rw [c43, ctx_parts c8]; exact sz_lit _ (by first | decide | simp)
     · exact dig_len c35
     · rw [c64]; exact estr_le (sz_case hOid)
     · rw [c65]; exact sz_id hOid
-    · rw [c66]; exact sz_lit _ (by first | decide | simp)
-    · rw [c67]; exact sz_lit _ (by first | decide | simp)
+    · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at c66
+      rcases c66 with h | h
+      · rw [h]; split <;> exact sz_lit _ (by first | decide | simp)
+      · exact sz_id h.2
+    · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at c67
+      rcases c67 with h | h
+      · rw [h]; exact sz_lit _ (by first | decide | simp)
+      · exact sz_role h.2
     · rw [c71]; exact sz_lit _ (by first | decide | simp)
     · rw [c47]; exact sz_id c1
     · refine eopt_le fun s hs => ?_
@@ -595,7 +609,7 @@ private theorem mut_facts {res : CorrectionTransitionResult} (hWf : resultWellFo
       unfold digestBytes at h
       omega
     · rw [c56]; exact sz_id hOid
-    · rw [c57]; exact sz_lit _ (by first | decide | simp)
+    · rw [c57]; split <;> exact sz_lit _ (by first | decide | simp)
   · intro m hm
     exact nomatch hm.symm.trans ‹res.mutation = none›
   · intro m hm
