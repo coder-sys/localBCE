@@ -1,7 +1,7 @@
 import BlindLedger.Financial.FastEncode
 import BlindLedger.Financial.Evaluation
 import BlindLedger.Financial.ReadUpTo
-import BlindLedger.Financial.Payment.Codec
+import BlindLedger.Financial.Payment.Cursor
 import BlindLedger.Financial.CursorCorrection
 import BlindLedger.Financial.CorrectionTransition.Transition
 
@@ -105,7 +105,7 @@ def correctionRespondBA (wire : ByteArray) : Bytes :=
     bytes of the array, so an evaluator or correction frame is never copied into a list. -/
 def workerRespondBA (wire : ByteArray) : Bytes :=
   if Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList then
-    Payment.paymentRespond wire.toList
+    Payment.paymentRespondBA wire
   else if CorrectionTransition.correctionTransitionInputMagic.isPrefixOf
       (wire.extract 0 CorrectionTransition.correctionTransitionInputMagic.length).toList then
     correctionRespondBA wire
@@ -142,7 +142,7 @@ theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRes
   unfold workerRespondBA workerRespond evaluateWire
   rw [magic_prefix_extract, isPrefixOf_extract]
   split
-  · rfl
+  · exact Payment.paymentRespondBA_eq wire
   split
   · exact correctionRespondBA_eq wire
   rw [Fast.decodeFinancialInputBA₂_eq]
