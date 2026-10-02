@@ -367,7 +367,7 @@ theorem applyOffsetAuthorization_resultWellFormed (bytes : Bytes)
       | ok mutation =>
         dsimp only
         obtain ⟨-, -, -, -, -, -, -, -, hFind, hStatus, hEvId, hCover, hChron, hFresh, hQA, hQD, hQC,
-          hAt⟩ := preflightOffsetDecision_ready_facts hP
+          hAt, -⟩ := preflightOffsetDecision_ready_facts hP
         have hShortMax : cr.shortfallCents ≤ maxCents := by
           have h := evaluate_resultWellFormed b
           unfold financialResultWellFormed at h
@@ -424,7 +424,7 @@ theorem applyOffsetAuthorization_resultWellFormed (bytes : Bytes)
               obtain ⟨-, hDets, hActs⟩ := wf_parts hWf
               have hDetWf := hDets _ ((insertDeterminationSorted_perm _ _).mem_iff.2 List.mem_cons_self)
               have hActWf := hActs _ ((insertActionSorted_perm _ _).mem_iff.2 List.mem_cons_self)
-              obtain ⟨hMem, hCid, hCst, hCupd, hIns⟩ := offsetCase_found hC
+              obtain ⟨hMem, hCid, hCst, hCupd, hIns, hKept⟩ := offsetCase_found hC
               have hCaseWf := case_wf hWf hMem
               unfold commandWellFormed at hCmd
               unfold determinationWellFormed at hDetWf
@@ -435,8 +435,8 @@ theorem applyOffsetAuthorization_resultWellFormed (bytes : Bytes)
                 decide_eq_true_eq, positiveAmountWellFormed, amountWellFormed, timeWellFormed,
                 revisionWellFormed, digestWellFormed] at hCmd hDetWf hActWf hClaimWf hCaseWf
               clear hRec hCur hDecode hActs hDets hClaims hB hP hE hMem hC hEvAll0
-              generalize (upsertOffsetCase _ _).2 = inserted at hIns ⊢
-              cases inserted
+              generalize (upsertOffsetCase _ _).2 = inserted at hIns hKept ⊢
+              cases inserted <;> (try rcases hKept rfl with ⟨hR1, hR2, hR3⟩ | hR1)
               all_goals
                 unfold resultWellFormed
                 simp only [Bool.and_eq_true, decide_eq_true_eq, timeWellFormed, revisionWellFormed,
@@ -701,7 +701,7 @@ private theorem mut_facts {res : CorrectionTransitionResult} (hWf : resultWellFo
     · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at c66
       rcases c66 with h | h
       · rw [h]; split <;> exact sz_lit _ (by first | decide | simp)
-      · exact sz_id h.2
+      · rw [h.2]; exact sz_lit _ (by first | decide | simp)
     · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at c67
       rcases c67 with h | h
       · rw [h]; exact sz_lit _ (by first | decide | simp)

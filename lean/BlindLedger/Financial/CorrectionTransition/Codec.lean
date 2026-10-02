@@ -280,6 +280,7 @@ def encodeRejectReason : TransitionRejectReason → UInt8
   | .INPUT_SNAPSHOT_MISSING => UInt8.ofNat 19
   | .NO_SHORTFALL => UInt8.ofNat 20
   | .NO_REQUESTABLE_BALANCE => UInt8.ofNat 21
+  | .DECISION_BACKDATED_PAST_DUE => UInt8.ofNat 22
 
 def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   match byte.toNat with
@@ -304,6 +305,7 @@ def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   | 19 => some .INPUT_SNAPSHOT_MISSING
   | 20 => some .NO_SHORTFALL
   | 21 => some .NO_REQUESTABLE_BALANCE
+  | 22 => some .DECISION_BACKDATED_PAST_DUE
   | _ => none
 
 def encodeOptionalRejectReason : Option TransitionRejectReason → Bytes
@@ -391,6 +393,7 @@ def encodeTransitionRequirement : TransitionRequirement → UInt8
   | .INPUT_SNAPSHOT_DIGEST_AVAILABLE => UInt8.ofNat 19
   | .POSITIVE_SHORTFALL => UInt8.ofNat 20
   | .UNREQUESTED_SHORTFALL => UInt8.ofNat 21
+  | .DECISION_NOT_BACKDATED_PAST_DUE => UInt8.ofNat 22
 
 def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -416,6 +419,7 @@ def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement ×
     | 19 => some .INPUT_SNAPSHOT_DIGEST_AVAILABLE
     | 20 => some .POSITIVE_SHORTFALL
     | 21 => some .UNREQUESTED_SHORTFALL
+    | 22 => some .DECISION_NOT_BACKDATED_PAST_DUE
     | _ => none
   pure (requirement, rest)
 
@@ -727,16 +731,20 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.followUps.caseId = mutation.caseDelta.record.caseId &&
       mutation.caseDelta.record.caseId = "case:" ++ mutation.resultingInput.context.obligationId &&
       mutation.caseDelta.record.obligationId = mutation.resultingInput.context.obligationId &&
-      -- An authorization keeps an existing CORRECTION_REQUIRED case as it was (not inserted).
+      -- An authorization keeps an outstanding correction case (reason CORRECTION_REQUIRED, not
+      -- inserted) with its owner and due date; an inserted or replaced case is checked in full.
       (mutation.caseDelta.record.reason =
           (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZED" else "CORRECTION_REQUIRED") ||
         kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
-          idWellFormed mutation.caseDelta.record.reason) &&
+          mutation.caseDelta.record.reason = "CORRECTION_REQUIRED") &&
       (mutation.caseDelta.record.nextActionOwner = "CASE_OWNER" ||
         kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" &&
           roleWellFormed mutation.caseDelta.record.nextActionOwner) &&
       (mutation.caseDelta.record.dueAt = mutation.dependencies.claimBefore.deadlineAt ||
-        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted) &&
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" &&
+          timeWellFormed mutation.caseDelta.record.dueAt) &&
       mutation.caseDelta.record.status = mutation.resultingResult.caseStatus &&
       mutation.caseDelta.record.updatedAt = mutation.event.committedAtMs &&
       mutation.caseDelta.contractualAccountability = "PROGRAM_ACCOUNTABILITY" &&

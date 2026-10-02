@@ -167,6 +167,19 @@ def unboundKatRequest : CorrectionTransitionRequest :=
         ownerNowMs := correctionKatRequest.command.decisionAtMs - 1 } } with
   | .error .CHRONOLOGY => true
   | _ => false
+-- Evaluated before the due date, decided on it, written after it: refused as back-dated.
+#guard match preflightOffsetDecision .OFFSET_AUTHORIZED
+    { correctionKatRequest with
+      command := { correctionKatRequest.command with
+        decisionAtMs := correctionKatRequest.currentInput.obligation.dueAt
+        ownerNowMs := correctionKatRequest.currentInput.obligation.dueAt + 1 }
+      currentInput := { correctionKatRequest.currentInput with
+        evaluatedAt := correctionKatRequest.currentInput.obligation.dueAt - 100 }
+      currentReceipt := { correctionKatRequest.currentReceipt with
+        result := { correctionKatRequest.currentReceipt.result with
+          evaluatedAtMs := correctionKatRequest.currentInput.obligation.dueAt - 100 } } } with
+  | .error .DECISION_BACKDATED_PAST_DUE => true
+  | _ => false
 
 def correctionKatAccepted: CorrectionTransitionResult :=
   applyCorrectionTransition correctionKatRequest

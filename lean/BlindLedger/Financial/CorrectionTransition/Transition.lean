@@ -1021,6 +1021,11 @@ def preflightOffsetDecision (decision : DeterminationDecision) (request : Correc
       throw .CHRONOLOGY
     -- M4: a decision is never dated after the owner's clock.
     if command.decisionAtMs > command.ownerNowMs then throw .CHRONOLOGY
+    -- Python `decision_time_backdated_past_due`: an authorization dated on or before the due
+    -- date is never written after it.
+    if decision = .OFFSET_AUTHORIZED ∧ command.decisionAtMs ≤ input.obligation.dueAt ∧
+        input.obligation.dueAt < max command.decisionAtMs command.ownerNowMs then
+      throw .DECISION_BACKDATED_PAST_DUE
     if command.queryObservations.evaluationConsumed.matchCount ≠ 0 ||
         command.queryObservations.evaluationConsumed.resultIdentity.isSome then
       throw .EVALUATION_CONSUMED
@@ -1071,10 +1076,12 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
             (some ("determination:" ++ request.command.actionId))
             (some mutation)
 
--- NEW. Python `_ensure_case`: an outstanding correction keeps its case; anything else is replaced or inserted.
+-- NEW. Python `_ensure_case`: an outstanding correction keeps its case; anything else is replaced or
+-- inserted. Python writes status CORRECTION_REQUIRED only with reason CORRECTION_REQUIRED.
 def upsertOffsetCase (cases : List CaseRecord) (record : CaseRecord) : List CaseRecord × Bool :=
   match findCase cases record.caseId with
-  | some existing => if existing.status = .CORRECTION_REQUIRED then (cases, false)
+  | some existing => if existing.status = .CORRECTION_REQUIRED ∧ existing.reason = "CORRECTION_REQUIRED"
+                     then (cases, false)
                      else upsertCorrectionCase cases record
   | none => upsertCorrectionCase cases record
 
@@ -1261,10 +1268,33 @@ theorem offsetCase_found {cases : List CaseRecord} {requested record : CaseRecor
     record ∈ updateAllCaseStatus (upsertOffsetCase cases requested).1 status updatedAt ∧
       record.caseId = requested.caseId ∧ record.status = status ∧ record.updatedAt = updatedAt ∧
       ((upsertOffsetCase cases requested).2 = true → record.reason = requested.reason ∧
-        record.nextActionOwner = requested.nextActionOwner ∧ record.dueAt = requested.dueAt) := by
+        record.nextActionOwner = requested.nextActionOwner ∧ record.dueAt = requested.dueAt) ∧
+      ((upsertOffsetCase cases requested).2 = false → (record.reason = requested.reason ∧
+        record.nextActionOwner = requested.nextActionOwner ∧ record.dueAt = requested.dueAt) ∨
+        record.reason = "CORRECTION_REQUIRED") := by
   obtain ⟨hMem, hId⟩ := findCase_some hFound
   obtain ⟨original, -, rfl⟩ := List.mem_map.1 hMem
-  refine ⟨hMem, hId, rfl, rfl, fun hInserted => ?_⟩
+  refine ⟨hMem, hId, rfl, rfl, fun hInserted => ?_, fun _ => ?_⟩
+  rotate_left
+  · unfold upsertOffsetCase at hFound
+    cases hF : findCase cases requested.caseId with
+    | none =>
+      simp only [hF] at hFound
+      rw [correctionCase_found_eq hFound]
+      exact Or.inl ⟨rfl, rfl, rfl⟩
+    | some existing =>
+      simp only [hF] at hFound
+      by_cases hK : existing.status = .CORRECTION_REQUIRED ∧ existing.reason = "CORRECTION_REQUIRED"
+      · rw [if_pos hK] at hFound
+        unfold findCase updateAllCaseStatus at hFound
+        unfold findCase at hF
+        simp only [List.find?_map, Function.comp_def] at hFound
+        rw [hF] at hFound
+        have hR := congrArg (Option.map CaseRecord.reason) hFound
+        exact Or.inr (by simpa [hK.2] using hR.symm)
+      · rw [if_neg hK] at hFound
+        rw [correctionCase_found_eq hFound]
+        exact Or.inl ⟨rfl, rfl, rfl⟩
   have hUpsert : upsertOffsetCase cases requested = upsertCorrectionCase cases requested := by
     unfold upsertOffsetCase at hInserted ⊢
     split at hInserted <;> (try split at hInserted) <;> simp_all
@@ -1411,7 +1441,11 @@ theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
         request.command.queryObservations.evaluationConsumed.matchCount = 0 ∧
         request.command.queryObservations.evaluationConsumed.resultIdentity = none) ∧
       correctionQueryObservationsAt request.command.queryObservations
-        request.command.currentEventSequence request.command.previousHistoryHead = true := by
+        request.command.currentEventSequence request.command.previousHistoryHead = true ∧
+      (decision = .OFFSET_AUTHORIZED →
+        request.command.decisionAtMs ≤ request.currentInput.obligation.dueAt →
+        max request.command.decisionAtMs request.command.ownerNowMs ≤
+          request.currentInput.obligation.dueAt) := by
   delta preflightOffsetDecision at h
   obtain ⟨-, h⟩ := ite_error_ok h
   obtain ⟨hQ, h⟩ := ite_error_ok h
@@ -1447,6 +1481,7 @@ theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
             obtain ⟨hCover, h⟩ := ite_error_ok h
             obtain ⟨hChron, h⟩ := ite_error_ok h
             obtain ⟨hNow, h⟩ := ite_error_ok h
+            obtain ⟨hBack, h⟩ := ite_error_ok h
             obtain ⟨hConsumed, h⟩ := ite_error_ok h
             obtain ⟨-, h⟩ := ite_error_ok h
             obtain ⟨hFresh, h⟩ := ite_error_ok h
@@ -1476,7 +1511,8 @@ theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
             refine ⟨by simpa using hDig, by omega, by omega, hShadow, by simpa using hWf, by simpa using hAuth, hAct.1, hAct.2,
               by first | rfl | assumption, by simpa using hStatus, hEv, by simpa using hCover,
               by omega, ?_, ⟨pa, sa, qa, hA0, hA1⟩, ⟨pd, sd, qd, hD0, hD1⟩,
-              ⟨pc, sc, qc, hC0, hC1⟩, qat⟩
+              ⟨pc, sc, qc, hC0, hC1⟩, qat,
+              fun hd hle => Nat.not_lt.1 fun hlt => hBack ⟨hd, hle, hlt⟩⟩
             intro x hx hEq
             apply hFresh
             simp only [Bool.or_eq_true, decide_eq_true_eq]
@@ -1547,7 +1583,9 @@ theorem preflightCorrectionTransition_ready_facts {request : CorrectionTransitio
         request.command.queryObservations.evaluationConsumed.resultIdentity = none) ∧
       correctionQueryObservationsAt request.command.queryObservations
         request.command.currentEventSequence request.command.previousHistoryHead = true := by
-  exact (preflightOffsetDecision_ready_facts (preflightCorrectionTransition_shared h)).2.2.2
+  obtain ⟨a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, -⟩ :=
+    (preflightOffsetDecision_ready_facts (preflightCorrectionTransition_shared h)).2.2.2
+  exact ⟨a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15⟩
 
 end
 
@@ -1582,7 +1620,8 @@ theorem buildAuthorized_spec {request : CorrectionTransitionRequest}
         else existing) ∧
       mutation.resultingInput.payments = request.currentInput.payments ∧
       mutation.resultingInput.obligation = request.currentInput.obligation ∧
-      evaluate mutation.resultingInput = some mutation.resultingResult := by
+      evaluate mutation.resultingInput = some mutation.resultingResult ∧
+      mutation.action.createdAt = max request.command.decisionAtMs request.command.ownerNowMs := by
   delta buildAuthorized at h
   generalize request.currentReceipt.inputSnapshotDigest = D at h
   cases D with
@@ -1605,7 +1644,7 @@ theorem buildAuthorized_spec {request : CorrectionTransitionRequest}
         cases Except.ok.inj h
         have hF := evaluate_after_case_status_update_fixedPoint _ provisionalResult
           (max request.command.decisionAtMs request.command.ownerNowMs) hE (by simpa using hWf)
-        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hF⟩
+        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hF, rfl⟩
 
 end
 

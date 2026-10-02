@@ -435,3 +435,9 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAuthorized_spec
 /-- info: 'BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_agrees_v0' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_agrees_v0
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_not_backdated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_not_backdated
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_transition_kind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_transition_kind
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_transition_kind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_transition_kind

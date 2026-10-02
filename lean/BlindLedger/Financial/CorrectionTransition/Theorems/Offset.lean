@@ -146,7 +146,7 @@ theorem applyOffsetAuthorization_adds_lawful (request : CorrectionTransitionRequ
   obtain ⟨cr, claim, a, b, paid, c, hP, hB⟩ := offsetAuth_ready hMutation
   obtain ⟨-, -, -, -, hWf, -, -, -, hFind, hSt, -⟩ := preflightOffsetDecision_ready_facts hP
   obtain ⟨hcMem, hcId⟩ := findClaim_mem _ _ _ hFind
-  obtain ⟨-, -, -, -, -, -, -, -, -, hAmtD, -, -, hAmtA, -, -, hClaims, hPay, hObl, hEval⟩ :=
+  obtain ⟨-, -, -, -, -, -, -, -, -, hAmtD, -, -, hAmtA, -, -, hClaims, hPay, hObl, hEval, -⟩ :=
     buildAuthorized_spec hB
   obtain ⟨-, cash0, claimed0, lawful0, hp0, hc0, hl0, -, hr0⟩ := evaluate_facts b
   obtain ⟨-, cash1, claimed1, lawful1, hp1, hc1, hl1, -, hr1⟩ := evaluate_facts hEval
@@ -217,6 +217,49 @@ theorem applyOffsetAuthorization_shortfall_le (request : CorrectionTransitionReq
   obtain ⟨before, claim, hb, -, -, -, -, -, -, -, -, hS, -, -⟩ :=
     applyOffsetAuthorization_adds_lawful request mutation hMutation
   exact ⟨before, hb, by omega⟩
+
+/-- An accepted authorization dated on or before the due date is written on or before it
+    (Python `decision_time_backdated_past_due`, checker `action:backdated-past-due`). -/
+theorem applyOffsetAuthorization_not_backdated (request : CorrectionTransitionRequest)
+    (mutation : CorrectionMutation)
+    (hMutation : (applyOffsetAuthorization request).mutation = some mutation) :
+    mutation.determination.decidedAt ≤ request.currentInput.obligation.dueAt →
+      mutation.action.createdAt ≤ request.currentInput.obligation.dueAt := by
+  obtain ⟨cr, claim, a, b, paid, c, hP, hB⟩ := offsetAuth_ready hMutation
+  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, -, hBack⟩ :=
+    preflightOffsetDecision_ready_facts hP
+  obtain ⟨-, -, -, -, -, -, -, -, hDecided, -, -, -, -, -, -, -, -, -, -, hCreated⟩ :=
+    buildAuthorized_spec hB
+  intro hle
+  rw [hCreated]
+  exact hBack rfl (hDecided ▸ hle)
+
+/-- Each entry point reports only its own transition kind: a correction retry never comes back as
+    an authorization, nor an authorization retry as a correction. -/
+theorem applyOffsetAuthorization_transition_kind (request : CorrectionTransitionRequest) :
+    (applyOffsetAuthorization request).explanation.transition = none ∨
+      (applyOffsetAuthorization request).explanation.transition = some .OFFSET_AUTHORIZED := by
+  unfold applyOffsetAuthorization
+  cases preflightOffsetDecision .OFFSET_AUTHORIZED request with
+  | error r => simp [reject]
+  | ok p =>
+    cases p with
+    | duplicate => simp [duplicateOf]
+    | ready cr claim a b paid c =>
+      rcases hB : buildAuthorized request cr claim paid with r | m <;> simp [hB, reject]
+
+theorem applyCorrectionTransition_transition_kind (request : CorrectionTransitionRequest) :
+    (applyCorrectionTransition request).explanation.transition = none ∨
+      (applyCorrectionTransition request).explanation.transition =
+        some .OFFSET_REJECTED_CORRECTION_AUTHORIZED := by
+  unfold applyCorrectionTransition
+  cases preflightCorrectionTransition request with
+  | error r => simp [reject]
+  | ok p =>
+    cases p with
+    | duplicate => simp [duplicate]
+    | ready cr claim a b paid c d =>
+      rcases hB : buildAccepted request cr claim b paid c d with r | m <;> simp [hB, reject]
 
 private theorem bind_ite' {ε α β : Type} (c : Prop) [Decidable c] (a b : Except ε α) (k : α → Except ε β) :
     (ite c a b >>= k) = ite c (a >>= k) (b >>= k) := by split <;> rfl
