@@ -1,9 +1,9 @@
-manifest  de3c26c131a3b363bc78efdc78584628ed5606dd74de99ec9d245faa14fc47ad
+manifest  4f2e6dc84ff144a35fe12d3f6421273887a11f5652860f0e1cf865516f188ac8
 gate  15fb84774c4db423821e7cd50a1865f12717ce9a3fe0d093f53050c9c2fee688
-exe blind_financial_worker  58cda012a47b82eb23bc600e9a5cc1afa808e491a1ce33d73379e86b15dbcfd2
+exe blind_financial_worker  8eb77363e6e89fd63f0646028d3cd2b23c99cf270af7644cffae1fde769d1080
 exe gate_verify  724de1bd9a1c24b8f0c34ba2ce0cfa000df7910410d49c1f003b91d02b90e66c
 toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
-blind_financial_worker: 9277 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+blind_financial_worker: 9281 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
   csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
   allowlist Init.* x185: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
