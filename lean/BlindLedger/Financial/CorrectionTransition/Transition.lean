@@ -1531,4 +1531,62 @@ theorem preflightCorrectionTransition_ready_facts {request : CorrectionTransitio
 
 end
 
+section
+attribute [local irreducible] findCase
+
+/-- What `buildAuthorized` writes: the claim flips to AUTHORIZED, the determination and action carry
+    the whole claim, and the money-bearing frame is unchanged. -/
+theorem buildAuthorized_spec {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {paid : List CorrectionPaid}
+    {mutation : CorrectionMutation}
+    (h : buildAuthorized request currentResult claim paid = .ok mutation) :
+    mutation.dependencies.claimBefore = claim ∧
+      mutation.determination.determinationId = "determination:" ++ request.command.actionId ∧
+      mutation.determination.decision = .OFFSET_AUTHORIZED ∧
+      mutation.determination.actorId = request.command.actorId ∧
+      mutation.determination.actorRole = request.command.actorRole ∧
+      mutation.determination.authorityId = request.currentInput.authority.authorityId ∧
+      mutation.determination.authorityEpoch = request.currentInput.authority.epoch ∧
+      mutation.determination.authorityDigest = request.currentInput.authority.digest ∧
+      mutation.determination.decidedAt = request.command.decisionAtMs ∧
+      mutation.determination.amountCents = claim.amountCents ∧
+      mutation.action.kind = "OFFSET_AUTHORIZATION" ∧
+      mutation.action.actionId = request.command.actionId ∧
+      mutation.action.amountCents = claim.amountCents ∧
+      mutation.action.revision = request.command.expectedRevision + 1 ∧
+      mutation.action.payloadDigest = correctionActionPayloadDigest
+        (offsetActionPayload "OFFSET_AUTHORIZATION" request mutation.determination.determinationId
+          mutation.action.revision mutation.action.amountCents) ∧
+      mutation.resultingInput.claims = request.currentInput.claims.map (fun existing =>
+        if existing.claimId = request.command.claimId then { claim with status := .AUTHORIZED }
+        else existing) ∧
+      mutation.resultingInput.payments = request.currentInput.payments ∧
+      mutation.resultingInput.obligation = request.currentInput.obligation ∧
+      evaluate mutation.resultingInput = some mutation.resultingResult := by
+  delta buildAuthorized at h
+  generalize request.currentReceipt.inputSnapshotDigest = D at h
+  cases D with
+  | none => cases h
+  | some digest =>
+    dsimp only at h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    generalize hE : evaluate _ = E at h
+    cases E with
+    | none => cases h
+    | some provisionalResult =>
+      obtain ⟨hWf, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      generalize findCase _ _ = C at h
+      cases C with
+      | none => cases h
+      | some updatedCase =>
+        obtain ⟨-, h⟩ := ite_error_ok h
+        cases Except.ok.inj h
+        have hF := evaluate_after_case_status_update_fixedPoint _ provisionalResult
+          (max request.command.decisionAtMs request.command.ownerNowMs) hE (by simpa using hWf)
+        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hF⟩
+
+end
+
 end BlindLedger.Financial.CorrectionTransition
