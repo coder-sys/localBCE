@@ -165,14 +165,14 @@ def Pipe.read (n : USize) : StateM Pipe ByteArray := fun p =>
 
 def Pipe.write (b : ByteArray) : StateM Pipe Unit := fun p => ((), { p with output := p.output ++ b.toList })
 
-private theorem toList_toByteArray (l : List UInt8) : l.toByteArray.toList = l :=
+theorem toList_toByteArray (l : List UInt8) : l.toByteArray.toList = l :=
   ((Fast.toByteArray_eq_iff l l.toByteArray).1 rfl).symm
 
-private theorem toList_append (a b : ByteArray) : (a ++ b).toList = a.toList ++ b.toList :=
+theorem toList_append (a b : ByteArray) : (a ++ b).toList = a.toList ++ b.toList :=
   ((Fast.toByteArray_eq_iff (a.toList ++ b.toList) (a ++ b)).1
     (by rw [List.toByteArray_append, Fast.toByteArray_toList, Fast.toByteArray_toList])).symm
 
-private theorem run_bind' {σ α β : Type} (x : StateM σ α) (f : α → StateM σ β) (s : σ) :
+theorem run_bind' {σ α β : Type} (x : StateM σ α) (f : α → StateM σ β) (s : σ) :
     (x >>= f).run s = (f (x.run s).1).run (x.run s).2 := rfl
 
 theorem readUpTo_pipe (n : Nat) (acc : ByteArray) (p : Pipe) :
@@ -235,7 +235,7 @@ theorem readUpTo_pipe (n : Nat) (acc : ByteArray) (p : Pipe) :
     rw [if_neg h, StateT.run_pure]
     exact ⟨by simp; rfl, rfl, rfl, rfl⟩
 
-private theorem readNatBE_length {w : Nat} {l : Bytes} {v : Nat} {rest : Bytes}
+theorem readNatBE_length {w : Nat} {l : Bytes} {v : Nat} {rest : Bytes}
     (h : readNatBE w l = some (v, rest)) : l.length = rest.length + w := by
   induction w generalizing v rest with
   | zero =>
@@ -257,17 +257,17 @@ private theorem readNatBE_length {w : Nat} {l : Bytes} {v : Nat} {rest : Bytes}
         simp only [List.length_cons] at this
         omega
 
-private theorem readNatBE_none {w : Nat} {l : Bytes} (h : l.length < w) : readNatBE w l = none := by
+theorem readNatBE_none {w : Nat} {l : Bytes} (h : l.length < w) : readNatBE w l = none := by
   cases hr : readNatBE w l with
   | none => rfl
   | some r => have := readNatBE_length hr; omega
 
-private theorem natBE_length (w n : Nat) : (natBE w n).length = w := by
+theorem natBE_length (w n : Nat) : (natBE w n).length = w := by
   induction w generalizing n with
   | zero => rfl
   | succ w ih => simp [natBE, ih]
 
-private theorem readNatBE_append {w : Nat} {x y : Bytes} {v : Nat} {r : Bytes}
+theorem readNatBE_append {w : Nat} {x y : Bytes} {v : Nat} {r : Bytes}
     (h : readNatBE w x = some (v, r)) : readNatBE w (x ++ y) = some (v, r ++ y) := by
   induction w generalizing v r with
   | zero => simp only [readNatBE, Option.some.injEq, Prod.mk.injEq] at h ⊢; obtain ⟨h1, rfl⟩ := h; simp [h1]
@@ -282,7 +282,7 @@ private theorem readNatBE_append {w : Nat} {x y : Bytes} {v : Nat} {r : Bytes}
       | nil => simp [hr, readByte] at h
       | cons b t => simpa [hr, readByte] using h
 
-private theorem readNatBE_some {w : Nat} {l : Bytes} (h : w ≤ l.length) :
+theorem readNatBE_some {w : Nat} {l : Bytes} (h : w ≤ l.length) :
     ∃ v, readNatBE w l = some (v, l.drop w) := by
   induction w with
   | zero => exact ⟨0, rfl⟩
@@ -296,7 +296,7 @@ private theorem readNatBE_some {w : Nat} {l : Bytes} (h : w ≤ l.length) :
       have : l.drop (w + 1) = t := by rw [← List.drop_drop, hd]; rfl
       rw [this]
 
-private theorem readNatBE_natBE {w n : Nat} (h : n < 256 ^ w) (r : Bytes) : readNatBE w (natBE w n ++ r) = some (n, r) := by
+theorem readNatBE_natBE {w n : Nat} (h : n < 256 ^ w) (r : Bytes) : readNatBE w (natBE w n ++ r) = some (n, r) := by
   induction w generalizing n r with
   | zero => simp at h; subst h; rfl
   | succ w ih =>
@@ -428,7 +428,7 @@ theorem workerRun_truncated (frames : List Bytes) (h : ∀ f ∈ frames, f.lengt
     simp only [List.flatMap_cons, List.map_cons, List.append_assoc]
     rw [workerRun_frame hg, ih (fun x hx => h x (by simp [hx]))]
 
-private theorem readNatBE_take {w : Nat} {l : Bytes} (h : w ≤ l.length) :
+theorem readNatBE_take {w : Nat} {l : Bytes} (h : w ≤ l.length) :
     ∃ v, readNatBE w (l.take w) = some (v, []) ∧ readNatBE w l = some (v, l.drop w) := by
   obtain ⟨v, hv⟩ := readNatBE_some (w := w) (l := l.take w) (by simp; omega)
   have hd : (l.take w).drop w = [] := List.drop_of_length_le (by simp; omega)
