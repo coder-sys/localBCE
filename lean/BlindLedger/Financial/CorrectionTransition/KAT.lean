@@ -148,8 +148,25 @@ def unboundKatRequest : CorrectionTransitionRequest :=
 #guard match preflightCorrectionTransition correctionKatRequest with
   | .ok (.ready ..) => true
   | _ => false
+#guard (applyOffsetAuthorization correctionKatRequest).status == .ACCEPTED
+#guard match (applyOffsetAuthorization correctionKatRequest).mutation with
+  | some m => m.resultingResult.lawfulAdjustmentCents == 300_000 && m.resultingResult.shortfallCents == 0 &&
+      m.action.amountCents == 300_000 && m.determination.decision == .OFFSET_AUTHORIZED &&
+      m.caseDelta.inserted && m.caseDelta.record.reason == "OFFSET_AUTHORIZED"
+  | none => false
+#guard match preflightOffsetDecision .OFFSET_AUTHORIZED
+    { correctionKatRequest with currentInput := { correctionKatRequest.currentInput with
+        pack := { correctionKatRequest.currentInput.pack with
+          approvedAt := correctionKatRequest.command.decisionAtMs + 1 } } } with
+  | .error .CONTROL_PACK_REJECTED => true
+  | _ => false
+#guard match preflightOffsetDecision .OFFSET_AUTHORIZED
+    { correctionKatRequest with command := { correctionKatRequest.command with
+        ownerNowMs := correctionKatRequest.command.decisionAtMs - 1 } } with
+  | .error .CHRONOLOGY => true
+  | _ => false
 
-def correctionKatAccepted : CorrectionTransitionResult :=
+def correctionKatAccepted: CorrectionTransitionResult :=
   applyCorrectionTransition correctionKatRequest
 
 def correctionKatStoredIdentity : ExistingCorrectionIdentity := {

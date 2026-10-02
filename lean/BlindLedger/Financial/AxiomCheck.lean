@@ -413,3 +413,21 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.record_link_within_open
 /-- info: 'BlindLedger.Financial.Payment.linkRefusal_implies_r1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.linkRefusal_implies_r1
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_authority_bound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_authority_bound
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_mutation_authorized' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_mutation_authorized
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_adds_lawful' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_adds_lawful
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_claim_authorized' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_claim_authorized
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_needs_claimed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_needs_claimed
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_shortfall_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_shortfall_le
+/-- info: 'BlindLedger.Financial.CorrectionTransition.preflightOffsetDecision_ready_facts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightOffsetDecision_ready_facts
+/-- info: 'BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_shared' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_shared
+/-- info: 'BlindLedger.Financial.CorrectionTransition.buildAuthorized_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAuthorized_spec
