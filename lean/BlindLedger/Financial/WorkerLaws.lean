@@ -98,14 +98,57 @@ theorem evaluateWire_evaluated {wire result : Bytes}
               exact ⟨input, decided, rfl, hEval, evaluate_satisfies_specification input decided hEval,
                 decodeFinancialResult_of_encodeFinancialResult decided hAdm.1 output hEnc, hAdm.2⟩
 
-/-- Evaluator frames answer as before the payment frames existed. -/
-theorem workerRespond_evaluator_unchanged (w : Bytes) (h : Payment.paymentMagic.isPrefixOf w = false) :
+private theorem prefix_exclusive {a b w : Bytes} (hab : a.isPrefixOf b = false) (hba : b.isPrefixOf a = false)
+    (ha : a.isPrefixOf w = true) : b.isPrefixOf w = false := by
+  cases hb : b.isPrefixOf w
+  · rfl
+  · rw [List.isPrefixOf_iff_prefix] at hb ha
+    rcases List.prefix_or_prefix_of_prefix ha hb with h | h
+    · rw [← List.isPrefixOf_iff_prefix] at h; simp [h] at hab
+    · rw [← List.isPrefixOf_iff_prefix] at h; simp [h] at hba
+
+private theorem magics_apart : Payment.paymentMagic.isPrefixOf CorrectionTransition.correctionTransitionInputMagic = false ∧
+    CorrectionTransition.correctionTransitionInputMagic.isPrefixOf Payment.paymentMagic = false := by decide +kernel
+
+/-- Every BLFIN02 frame is answered by the evaluator, whatever item kinds the worker also serves
+    (E1: replaces `workerRespond_evaluator_unchanged`, which a second item kind falsifies). -/
+theorem workerRespond_evaluator_frames (w : Bytes) (h : financialCodecMagic.isPrefixOf w = true) :
     workerRespond w = encodeWorkerOutcome (evaluateWire w) := by
-  simp [workerRespond, h]
+  have hp := prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h
+  have hc := prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel) (by decide +kernel) h
+  simp [workerRespond, hp, hc]
+
+/-- E1: the same conclusion; the hypothesis names every item magic. -/
+theorem workerRespond_evaluator_unchanged₂ (w : Bytes)
+    (h : itemMagics.all (fun m => !m.isPrefixOf w) = true) :
+    workerRespond w = encodeWorkerOutcome (evaluateWire w) := by
+  simp only [itemMagics, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true,
+    Bool.not_eq_true'] at h
+  simp [workerRespond, h.1, h.2]
 
 theorem workerRespond_payment (w : Bytes) (h : Payment.paymentMagic.isPrefixOf w = true) :
     workerRespond w = Payment.paymentRespond w := by
   simp [workerRespond, h]
+
+theorem workerRespond_correction (w : Bytes)
+    (h : CorrectionTransition.correctionTransitionInputMagic.isPrefixOf w = true) :
+    workerRespond w = correctionRespond w := by
+  simp [workerRespond, prefix_exclusive magics_apart.2 magics_apart.1 h, h]
+
+/-- A correction answer is a BLFCRES3 result whenever its request decodes and the result fits (N2 on the worker frame). -/
+theorem correctionRespond_decoded (w : Bytes) (request : CorrectionTransition.CorrectionTransitionRequest)
+    (h : CorrectionTransition.decodeCorrectionTransitionRequest w = some request) :
+    correctionRespond w = [UInt8.ofNat 3] ∨
+      ∃ b, CorrectionTransition.encodeCorrectionTransitionResult
+          (CorrectionTransition.applyCorrectionTransition request) = some b ∧
+        correctionRespond w = UInt8.ofNat 0 :: b := by
+  unfold correctionRespond
+  rw [h]
+  dsimp only
+  cases hres : CorrectionTransition.encodeCorrectionTransitionResult
+      (CorrectionTransition.applyCorrectionTransition request) with
+  | none => exact Or.inl rfl
+  | some b => exact Or.inr ⟨b, rfl, rfl⟩
 
 private theorem Payment.encodeStepOutcome_length_le {o : Payment.StepOutcome} {b : Bytes}
     (h : Payment.encodeStepOutcome o = some b) : b.length ≤ maxTotalEncodedBytes := by
@@ -128,11 +171,41 @@ theorem paymentRespond_length_le (w : Bytes) :
       simp only [hE, List.length_cons]
       omega
 
+private theorem correctionResult_length_le {r : CorrectionTransition.CorrectionTransitionResult} {b : Bytes}
+    (h : CorrectionTransition.encodeCorrectionTransitionResult r = some b) : b.length ≤ maxTotalEncodedBytes := by
+  unfold CorrectionTransition.encodeCorrectionTransitionResult at h
+  dsimp only at h
+  split at h
+  · simp at h
+  · cases hm : CorrectionTransition.encodeOptionalMutation r.mutation <;> simp [hm] at h
+    split at h <;>
+    · obtain ⟨h1, rfl⟩ := h
+      simp only [List.length_append, List.length_cons]
+      unfold CorrectionTransition.maxCorrectionTransitionBytes at h1
+      omega
+
+theorem correctionRespond_length_le (w : Bytes) :
+    (correctionRespond w).length ≤ maxWorkerFrameBytes := by
+  unfold correctionRespond maxWorkerFrameBytes
+  cases CorrectionTransition.decodeCorrectionTransitionRequest w with
+  | none => simp
+  | some request =>
+    cases hE : CorrectionTransition.encodeCorrectionTransitionResult
+        (CorrectionTransition.applyCorrectionTransition request) with
+    | none => simp [hE]
+    | some b =>
+      have := correctionResult_length_le hE
+      simp only [hE, List.length_cons]
+      omega
+
 theorem workerRespond_length_le (wire : Bytes) :
     (workerRespond wire).length ≤ maxWorkerFrameBytes := by
   by_cases hm : Payment.paymentMagic.isPrefixOf wire = true
   · rw [workerRespond_payment wire hm]; exact paymentRespond_length_le wire
-  rw [workerRespond_evaluator_unchanged wire (Bool.not_eq_true _ ▸ hm)]
+  by_cases hc : CorrectionTransition.correctionTransitionInputMagic.isPrefixOf wire = true
+  · rw [workerRespond_correction wire hc]; exact correctionRespond_length_le wire
+  rw [workerRespond_evaluator_unchanged₂ wire
+    (by simp [itemMagics, hm, hc])]
   unfold maxWorkerFrameBytes
   cases hOut : evaluateWire wire with
   | evaluated result =>
@@ -520,6 +593,10 @@ private def runPipe (input : Bytes) (cut : Nat → Nat) : UInt32 × Bytes × Byt
   let r := (serveWorker Pipe.read Pipe.write).run ⟨input, [], 0, cut⟩
   (r.1, r.2.output, r.2.input)
 #guard workerRespond [] == [1]                                                   -- empty frame: decode rejected
+#guard workerRespond CorrectionTransition.correctionTransitionInputMagic == [1]             -- bare BLFCMD03: decode rejected
+#guard itemMagics.all (·.length == 8)
+#guard (itemMagics.map fun m => (itemMagics.filter (· == m)).length).all (· == 1)
+#guard itemMagics.all fun m => !(m.isPrefixOf financialCodecMagic || financialCodecMagic.isPrefixOf m)
 #guard runPipe [] (fun _ => 1) == (0, [], [])                                    -- EOF at a frame boundary
 #guard runPipe (frame [] ++ frame []) (fun _ => 1) == (0, frame [1] ++ frame [1], [])   -- one byte per read
 #guard runPipe (frame [] ++ [0, 0]) (fun _ => 1) == (workerExitFrame, frame [1], [])    -- short header
