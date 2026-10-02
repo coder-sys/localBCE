@@ -42,6 +42,7 @@
       "BlindLedger/Financial/CodecLaws/PaymentLinks.lean",
       "BlindLedger/Financial/CodecLaws/Primitives.lean",
       "BlindLedger/Financial/CodecLaws/Records.lean",
+      "BlindLedger/Financial/CorrectionFast.lean",
       "BlindLedger/Financial/CorrectionTransition.lean",
       "BlindLedger/Financial/CorrectionTransition/Codec.lean",
       "BlindLedger/Financial/CorrectionTransition/KAT.lean",

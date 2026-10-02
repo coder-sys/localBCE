@@ -113,7 +113,8 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA₂_eq
 #print axioms BlindLedger.Financial.financialInputWellFormed_of_decodeFinancialInput
 #print axioms BlindLedger.Financial.evaluate_eq_evaluateWellFormed
-#print axioms BlindLedger.Financial.workerRespondBA_eq
+/-- info: 'BlindLedger.Financial.workerRespondBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespondBA_eq
 /-- info: 'BlindLedger.Financial.evaluateWire_evaluated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWire_evaluated
 /-- info: 'BlindLedger.Financial.workerRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
