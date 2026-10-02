@@ -1104,6 +1104,23 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
         if not holds:
             _fail(SemanticAdapterIntegrityError, "payment_binding")
 
+    pid, origin = command["payment_id"], command["common_origin_id"]
+    stored = {row["payment_id"]: row for row in data["payments"]}
+    by_origin = {row["common_origin_id"]: row["payment_id"] for row in data["payments"]}
+
+    def bind_evidence(row: Mapping[str, Any] | None) -> None:
+        """Every field Lean builds for the command's evidence row, from the command and the pre-state (Types.lean confirmation, reversalRecord)."""
+        if command["kind"] == "record":
+            time = command["event_at_ms"]
+            want = {"kind": "PAYMENT_CONFIRMATION", "common_origin_id": origin, "source_id": command["source_id"], "source_version": command["source_version"],
+                    "local_ref": command["local_ref"] or f"payment:{pid}", "amount_cents": command["amount_cents"], "reversal_of": None}
+        else:
+            time = data["evaluation_time_ms"] if command["event_at_ms"] is None else command["event_at_ms"]
+            want = {"kind": "PAYMENT_REVERSAL", "common_origin_id": origin or f"reversal:{pid}", "source_id": "synthetic-payment-source", "source_version": "fixture-v1",
+                    "local_ref": f"reversal:{pid}", "amount_cents": stored.get(pid, {}).get("amount_cents"), "reversal_of": pid}
+        want |= {"evidence_id": command["evidence_id"], "item_id": pre["item_id"], "supersedes": None, "applicable_at_ms": time, "event_at_ms": time}
+        bind(row is not None and all(row[key] == value for key, value in want.items()))
+
     try:
         if reader.take(len(PAYMENT_ANSWER_MAGIC), "payment_magic") != PAYMENT_ANSWER_MAGIC:
             _fail(SemanticAdapterCodecError, "payment_response")
@@ -1124,7 +1141,8 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
             reader.take(4, "anchor_bytes")
             result = reader.take(int.from_bytes(reader.take(4, "result_size"), "big"), "result")
             reader.finish()
-            bind(evidence is None or evidence["evidence_id"] == command["evidence_id"])
+            if tag != 3 or evidence is not None:  # a conflict may leave an evidence row that is already stored
+                bind_evidence(evidence)
             bind(all(row is None or row["obligation_id"] == pre["obligation_id"] for row in (payment, conflict)))
             bind(payment is None or payment["item_id"] == pre["item_id"])
             post = {row["evidence_id"]: row for row in data["evidence"]} | ({} if evidence is None else {evidence["evidence_id"]: evidence})
@@ -1149,11 +1167,14 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
             outcome = PaymentOutcome("CONFLICT_UNCHANGED", conflict_id=reader.identifier("conflict_id"))
         elif tag == 5:
             payment_id, evidence = reader.identifier("payment_id"), evidence_row()
-            bind(evidence["evidence_id"] == command["evidence_id"])
+            bind_evidence(evidence)
+            bind(payment_id == by_origin.get(origin))
             outcome = PaymentOutcome("ALIAS", payment_id=payment_id, evidence=evidence, event_kind="PAYMENT_DUPLICATE_EVIDENCE", event_payload={
                 "candidate_evidence_id": evidence["evidence_id"], "existing_payment_id": payment_id, "common_origin_id": evidence["common_origin_id"]})
         elif tag == 6:
-            outcome = PaymentOutcome("DUPLICATE", payment_id=reader.option_identifier("payment_id"))
+            duplicate_of = reader.option_identifier("payment_id")
+            bind(duplicate_of == ((pid if pid in stored else by_origin.get(origin)) if command["kind"] == "record" else None))
+            outcome = PaymentOutcome("DUPLICATE", payment_id=duplicate_of)
         elif tag == 7 and 1 <= (code := reader.byte("refusal")) <= 16:
             outcome = PaymentOutcome("REFUSED", reason=code)
         else:

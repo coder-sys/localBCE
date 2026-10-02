@@ -41,7 +41,8 @@ ROW_COLUMNS = {
 }
 LEAN_ROWS = {"payments": "payment_row", "evidence": "evidence", "financial_conflicts": "conflict_row"}
 _DECIDED_STATUS = {"PAYMENT_RECEIVED": "RECORDED", "PAYMENT_REVERSED": "REVERSED", "PAYMENT_CONFLICT_VISIBLE": "CONFLICT"}
-EXISTING_FLOOR, CORPUS_FLOOR = 12049, 716
+POST_DECISION = ("evaluation_evidence", "evaluation_verification", "open_verification", "event_", "history_")  # the layers both paths run after the decision's rows; lean_evaluation:* is the step the flag-on path skips
+EXISTING_FLOOR, CORPUS_FLOOR = 12048, 716
 
 
 @dataclasses.dataclass
@@ -99,7 +100,7 @@ class _Harness:
     def __enter__(self):
         cls = owner_module.FinancialOwner
         real = {name: getattr(cls, name) for name in ("record_payment_evidence", "reverse_payment", "_get_obligation_row", "_recompute_and_record", "_append_event")}
-        harness, correction_paid = self, owner_module._correction_paid
+        harness, correction_paid, evaluate_live = self, owner_module._correction_paid, engine.evaluate_live
 
         def command(kind, name):
             signature = inspect.signature(real[name])
@@ -126,7 +127,7 @@ class _Harness:
                         harness.hits["S2"] += 1
                     lean_made = type(error) is owner_module.FinancialIntegrityError and code.startswith(("lean_", "semantic", "evaluation"))
                     call.python, call.error = ("REFUSED", "INTEGRITY" if lean_made else code), f"{type(error).__name__}:{code}"
-                    if type(error) is owner_module.FinancialIntegrityError and "kind" in call.rows and call.lean != call.python:  # a later layer refused after the decision was written: compare the decision
+                    if type(error) is owner_module.FinancialIntegrityError and "kind" in call.rows and code.startswith(POST_DECISION) and call.lean != call.python:  # a later layer refused after the decision was written: compare the decision
                         call.python = harness._python_view(call, {"status": _DECIDED_STATUS.get(call.rows["kind"], "ALIAS")})
                     raise
                 finally:
@@ -139,7 +140,7 @@ class _Harness:
             call = getattr(harness.local, "call", None)
             if call is None or call.lean is not None:
                 return row
-            if owner_module._correction_paid is not correction_paid:  # the test swapped in a wrong Python decider (cash_file S4); Lean never reads it
+            if owner_module._correction_paid is not correction_paid or engine.evaluate_live is not evaluate_live:  # the test swapped in a wrong Python decider or evaluator (cash_file S4); Lean never reads them
                 harness.hits["decider-patched"] += 1
                 print("FINANCIAL_M3_SKIPPED decider-patched", call.command)
                 return row
@@ -250,8 +251,8 @@ class _Harness:
             return "D1"  # an exact retry of a visible conflict is CONFLICT at any revision (III.3)
         if py and py[0] == "REFUSED" and lean[0] == "REFUSED" and (any(call.foreign) or "INTEGRITY" in (py[1], lean[1])):
             return "D3" if call.out is not None and call.out.reason == 14 else "D2"  # both refuse and write nothing; only the reported code differs (D3: capacity)
-        if py[0] == "DUPLICATE" and lean == ("REFUSED", "INTEGRITY") and call.clock_behind:
-            return "D4"  # an exact retry while the owner clock is behind the obligation's last update: Python returns DUPLICATE unread, the live path fails closed; both write nothing
+        if py[0] == "DUPLICATE" and lean == ("REFUSED", "INTEGRITY") and call.clock_behind and call.lean_error.endswith("obligation_after_evaluation"):
+            return "D4"  # an exact retry while the owner clock is behind the obligation's last update: Python returns DUPLICATE unread, the live path refuses obligation_after_evaluation; both write nothing
         return None
 
 
