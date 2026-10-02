@@ -42,7 +42,7 @@ structure ReleaseRun where
 
 /-- The installed certificates: `installCert` on each that decodes, in order.  Replaces `VerifyCli.certState`,
     which refused the whole frame on one undecodable certificate; such a certificate can never pass
-    `certChainOk`, so skipping it is exactly an `installCert` that refuses. -/
+    `rootSigned`, so skipping it is exactly an `installCert` that refuses. -/
 def certsInstalled (c : Crypto) (certs : List Bytes) : PayerState :=
   (certs.filterMap decodeKeyCert).foldl (fun s e => (installCert c s e).1) emptyState
 
@@ -125,7 +125,7 @@ private theorem verified_some {c : Crypto} {s0 : PayerState} {b : Bytes} {st : S
     (h : verified c s0 b = some st) :
     ∃ x, decodeCheckpoint b = some x ∧ st = ⟨c.hash x.header, x.checkpoint, b⟩ ∧
       ∃ e ∈ s0.certs, e.tenantId = x.checkpoint.tenantId ∧ e.epoch = x.checkpoint.epoch ∧
-        c.sigOk e.publicKey x.header x.signature = true := by
+        c.keyUsable e = true ∧ c.sigOk e.publicKey x.header x.signature = true := by
   unfold verified storeCheckpoint at h
   rcases hd : decodeCheckpoint b with _ | x
   · simp [hd] at h
@@ -307,7 +307,7 @@ theorem releaseBatch_cp_isolation {c : Crypto} {r r' : ReleaseRun} {items : List
   simp only [releaseOne, itemState, e1, e2, e3, e4]
 
 private theorem foldl_certs (c : Crypto) : ∀ (es : List EpochCert) (s : PayerState) (e : EpochCert),
-    e ∈ (es.foldl (fun s e => (installCert c s e).1) s).certs → e ∈ s.certs ∨ (e ∈ es ∧ c.certChainOk e = true)
+    e ∈ (es.foldl (fun s e => (installCert c s e).1) s).certs → e ∈ s.certs ∨ (e ∈ es ∧ c.rootSigned e = true)
   | [], s, e, h => Or.inl h
   | e' :: es, s, e, h => by
     rcases foldl_certs c es (installCert c s e').1 e h with h1 | h1
@@ -323,10 +323,10 @@ private theorem foldl_certs (c : Crypto) : ∀ (es : List EpochCert) (s : PayerS
       · exact Or.inl h1
     · exact Or.inr ⟨List.mem_cons_of_mem _ h1.1, h1.2⟩
 
-/-- Every installed certificate came from the frame and its chain verified in this call. -/
+/-- Every installed certificate came from the frame and its root signature verified in this call. -/
 theorem certsInstalled_mem {c : Crypto} {certs : List Bytes} {e : EpochCert}
     (h : e ∈ (certsInstalled c certs).certs) :
-    c.certChainOk e = true ∧ ∃ b ∈ certs, decodeKeyCert b = some e := by
+    c.rootSigned e = true ∧ ∃ b ∈ certs, decodeKeyCert b = some e := by
   rcases foldl_certs c _ emptyState e h with h1 | h1
   · simp [emptyState] at h1
   · exact ⟨h1.2, List.mem_filterMap.1 h1.1⟩
@@ -355,8 +355,9 @@ theorem releaseBatch_accept_verified {c : Crypto} {r : ReleaseRun} {items : List
       have hdig := List.find?_some hb
       simp only [itemState, verifiedAll, List.mem_filterMap] at hmem
       obtain ⟨b, hbm, hvb⟩ := hmem
-      obtain ⟨x, hx, hst, e, he, het, hee, hes⟩ := verified_some hvb
-      obtain ⟨hchain, cb, hcb, hdec⟩ := certsInstalled_mem he
+      obtain ⟨x, hx, hst, e, he, het, hee, hku, hes⟩ := verified_some hvb
+      obtain ⟨hroot, cb, hcb, hdec⟩ := certsInstalled_mem he
+      have hchain : c.certChainOk e = true := by simp [Crypto.certChainOk, hroot, hku]
       refine ⟨t, b, x, e, rfl, hbm, hx, ?_, ⟨cb, hcb, hdec⟩, hchain, het, hee, hes⟩
       subst hst
       simpa using hdig
