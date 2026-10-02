@@ -354,13 +354,13 @@ class ReceiverCashFileTests(unittest.TestCase):
         # verifies every touched obligation there, on the live rows. Red until U1 builds S1; then ratchet to 1.5x the measured median.
         def planned(prepared):
             plan = self._plan(prepared)
-            return lambda: self.store.commit_cash_plan(plan)
+            return lambda: cash.commit_cash_plan(self.store, plan)
         self.assertLess(self._quarter_end("CASH_S1_QUARTER_END", planned), 2.5)
 
     # S1 plan-then-commit (cash-batch-speed-v1 §9, U1's seam). These fail with "S1 NOT BUILT" until U1 lands.
     def _plan(self, prepared=None, clock=None):
-        if not (hasattr(cash, "plan_cash_file") and hasattr(owner.FinancialOwner, "commit_cash_plan")):
-            self.fail("S1 NOT BUILT: cash.plan_cash_file and FinancialOwner.commit_cash_plan are U1's seam (cash-batch-speed-v1 §9)")
+        if not (hasattr(cash, "plan_cash_file") and hasattr(cash, "commit_cash_plan")):
+            self.fail("S1 NOT BUILT: cash.plan_cash_file and cash.commit_cash_plan are U1's seam (cash-batch-speed-v1 §9)")
         return cash.plan_cash_file(*(self._prepare() if prepared is None else prepared), path=self.store.path,
                                    trusted_authority=self.fixture.authority, clock=self.store.clock if clock is None else clock)
 
@@ -386,7 +386,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         plan = self._plan(prepared, clock)
         self.assertEqual(_tables(self.store.path), before, "planning writes nothing live")
         self.store.clock.value = clock.value  # the live clock reads at or after the plan's readings
-        self.assertEqual(self.store.commit_cash_plan(plan), expected_receipt)
+        self.assertEqual(cash.commit_cash_plan(self.store, plan), expected_receipt)
         self.assertEqual(_tables(self.store.path), _tables(path))
 
     def test_planned_commit_refuses_rows_unlike_the_plan_in_any_table(self):
@@ -396,23 +396,23 @@ class ReceiverCashFileTests(unittest.TestCase):
         for name, (count, high) in plan.tables.items():
             for shape in ((count + 1, high),) + (() if high is None else ((count, high + 1),)):
                 with self.subTest(table=name, shape=shape):
-                    self._refused(lambda: self.store.commit_cash_plan(dataclasses.replace(plan, tables={**plan.tables, name: shape})), "cash_file_failed", "cash_plan_rows")
+                    self._refused(lambda: cash.commit_cash_plan(self.store, dataclasses.replace(plan, tables={**plan.tables, name: shape})), "cash_file_failed", "cash_plan_rows")
         dropped = next(index for index, write in enumerate(plan.writes) if write[0] == "payments")  # a write the capture missed
-        self._refused(lambda: self.store.commit_cash_plan(dataclasses.replace(plan, writes=plan.writes[:dropped] + plan.writes[dropped + 1:])), "cash_file_failed", "cash_plan_rows")
-        self.assertEqual(self.store.commit_cash_plan(plan)["recorded_count"], 2)
+        self._refused(lambda: cash.commit_cash_plan(self.store, dataclasses.replace(plan, writes=plan.writes[:dropped] + plan.writes[dropped + 1:])), "cash_file_failed", "cash_plan_rows")
+        self.assertEqual(cash.commit_cash_plan(self.store, plan)["recorded_count"], 2)
 
     def test_a_stale_plan_is_refused_and_a_current_one_commits(self):
         plan = self._plan()
         for label, value in (("behind the plan's own times", plan.last_ms - 2), ("past the window", plan.last_ms + cash.PLAN_WINDOW_MS)):
             self.store.clock.value = value
             with self.subTest(label):
-                self._refused(lambda: self.store.commit_cash_plan(plan), "cash_file_stale", "cash_plan_stale")
+                self._refused(lambda: cash.commit_cash_plan(self.store, plan), "cash_file_stale", "cash_plan_stale")
         self.store.clock.value = plan.last_ms
-        self.assertEqual(self.store.commit_cash_plan(plan)["recorded_count"], 2)
+        self.assertEqual(cash.commit_cash_plan(self.store, plan)["recorded_count"], 2)
         self.baseline = self._manifest()
         later = self._plan(self._prepare({**self.value, "rows": [self._row(3, 100, 2), self._row(4, 200, 3)]}))
         self.store.run_batch(cash._propose(canonical({**self.value, "rows": [self._row(1, 50, 2, "other")], "row_count": 1, "total_cents": 50}), self.baseline))
-        self._refused(lambda: self.store.commit_cash_plan(later), "cash_file_stale", "cash_plan_stale")  # another writer moved the store first
+        self._refused(lambda: cash.commit_cash_plan(self.store, later), "cash_file_stale", "cash_plan_stale")  # another writer moved the store first
 
     def test_planned_commit_runs_the_checker_on_the_live_rows_inside_the_lock(self):
         plan, seen, finish = self._plan(), [], check.CashFileCheck.finish
@@ -424,9 +424,9 @@ class ReceiverCashFileTests(unittest.TestCase):
             spy(instance, connection, results)
             raise check.CashFileError("cash_file_failed")
         with patch.object(check.CashFileCheck, "finish", refuse):
-            self._refused(lambda: self.store.commit_cash_plan(plan), "cash_file_failed")
+            self._refused(lambda: cash.commit_cash_plan(self.store, plan), "cash_file_failed")
         with patch.object(check.CashFileCheck, "finish", spy):
-            self.store.commit_cash_plan(plan)
+            cash.commit_cash_plan(self.store, plan)
         self.assertEqual(seen, [(True, True, plan.tables["payments"][0])] * 2)
 
     def test_a_planned_commit_failing_mid_copy_writes_nothing(self):
@@ -439,9 +439,9 @@ class ReceiverCashFileTests(unittest.TestCase):
                                "THEN rr_test_fired() ELSE 0 END BEGIN SELECT RAISE(ABORT, 'injected_mid_copy'); END")
             return connection
         with patch.object(owner.FinancialOwner, "_begin", failing):
-            self._refused(lambda: self.store.commit_cash_plan(plan), "cash_file_failed")
+            self._refused(lambda: cash.commit_cash_plan(self.store, plan), "cash_file_failed")
         self.assertEqual(fired, [1])
-        self.assertEqual(self.store.commit_cash_plan(plan)["recorded_count"], 2)
+        self.assertEqual(cash.commit_cash_plan(self.store, plan)["recorded_count"], 2)
 
     def test_an_owner_write_without_a_checker_verifies_every_evaluated_obligation(self):
         verified, real = [], independent._verify_evaluation_row
@@ -814,24 +814,29 @@ from contextlib import contextmanager
 sys.path.insert(0, sys.argv[1])
 from app.right_rail_financial_owner import FinancialOwner
 from tools.right_rail_financial_cli import main
-phase = sys.argv[2]
+phase, live, marker = sys.argv[2:5]
 original = FinancialOwner._write
 @contextmanager
 def crashing(self, **kwargs):
-    outer = getattr(self._batch, "connection", None) is None
+    outer = getattr(self._batch, "connection", None) is None and os.path.abspath(self.path) == live
     with original(self, **kwargs) as connection:
         yield connection
         if outer and phase == "before":
+            open(marker, "w").write(phase)
             os._exit(73)
     if outer and phase == "after":
+        open(marker, "w").write(phase)
         os._exit(74)
 FinancialOwner._write = crashing
-raise SystemExit(main(sys.argv[3:]))
+raise SystemExit(main(sys.argv[5:]))
 '''
         for phase, code in (("before", 73), ("after", 74)):
+            marker = directory / ("crashed-" + phase)  # written only when the LIVE store's write was the one that crashed
             result = subprocess.run([sys.executable, "-I", "-c", script, str(Path(__file__).resolve().parents[1]),
-                                     phase, *args, "--apply"], capture_output=True, timeout=45)
+                                     phase, os.path.abspath(self.store.path), str(marker), *args, "--apply"],
+                                    capture_output=True, timeout=45)
             self.assertEqual((result.returncode, result.stdout, result.stderr), (code, b"", b""))
+            self.assertEqual(marker.read_text(), phase)
             restarted = self.fixture._make_owner(path=self.store.path, clock=self.store.clock)
             if phase == "before":
                 self.assertEqual(restarted.export_continuity(), self.package)
