@@ -425,10 +425,353 @@ theorem path_exists (H : Bytes → Bytes) : ∀ (f : Nat) (M : List Bytes) (i : 
             rw [this]; simp [nodeHash, stepInput, he1]
           exact ⟨b0 :: p', by rw [pathRoot_step h1 hc, ← hh]; exact hp'⟩
 
+/-! ### Frontier helpers -/
+
+theorem list_snoc_induction {α : Type} {P : List α → Prop} (h0 : P []) (hs : ∀ l a, P l → P (l ++ [a])) :
+    ∀ l, P l := by
+  intro l
+  have : ∀ r : List α, P r.reverse := by
+    intro r
+    induction r with
+    | nil => exact h0
+    | cons a r ih => simpa using hs _ a ih
+  simpa using this l.reverse
+
+theorem pairUp_append_even (H : Bytes → Bytes) : ∀ (A B : List Bytes), A.length % 2 = 0 →
+    pairUp H [] (A ++ B) = pairUp H [] A ++ pairUp H [] B
+  | [], B, _ => by simp [pairUp]
+  | [_], _, h => by simp at h
+  | a :: b :: rest, B, h => by
+    have := pairUp_append_even H rest B (by simp at h; omega)
+    simp [pairUp, this]
+
+/-- The frontier's peaks, level by level: an odd level's last node is a peak, the rest pairs up. -/
+def peaksOf (H : Bytes → Bytes) (M : List Bytes) : List Bytes :=
+  if M.length = 0 then []
+  else if M.length % 2 = 1 then M.getLastD [] :: peaksOf H (pairUp H [] M.dropLast)
+  else peaksOf H (pairUp H [] M)
+termination_by M.length
+decreasing_by
+  all_goals
+    have h1 := pairUp_length H M.dropLast
+    have h2 : M.dropLast.length = M.length - 1 := by simp
+    have h3 := pairUp_length H M
+    omega
+
+theorem peaksOf_nil (H : Bytes → Bytes) : peaksOf H [] = [] := by
+  rw [peaksOf]; simp
+
+theorem peaksOf_odd (H : Bytes → Bytes) (M : List Bytes) (y : Bytes) (he : M.length % 2 = 0) :
+    peaksOf H (M ++ [y]) = y :: peaksOf H (pairUp H [] M) := by
+  have h1 : ¬ (M ++ [y]).length = 0 := by simp
+  have h2 : (M ++ [y]).length % 2 = 1 := by simp; omega
+  rw [peaksOf, if_neg h1, if_pos h2]
+  simp
+
+theorem peaksOf_even (H : Bytes → Bytes) (M : List Bytes) (he : M.length % 2 = 0) :
+    peaksOf H M = peaksOf H (pairUp H [] M) := by
+  by_cases h0 : M.length = 0
+  · have : M = [] := List.length_eq_zero_iff.mp h0
+    subst this
+    simp [peaksOf_nil, pairUp]
+  · rw [peaksOf, if_neg h0, if_neg (by omega)]
+
+theorem mergePeaks_peaksOf (H : Bytes → Bytes) : ∀ (n : Nat) (M : List Bytes) (h : Bytes), M.length = n →
+    mergePeaks H n h (peaksOf H M) = peaksOf H (M ++ [h]) := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | _ n ih =>
+    intro M h hM
+    by_cases hp : n % 2 = 0
+    · rw [peaksOf_odd H M h (by omega), peaksOf_even H M (by omega)]
+      generalize peaksOf H (pairUp H [] M) = ps
+      cases ps with
+      | nil => simp [mergePeaks]
+      | cons p ps => simp [mergePeaks, hp]
+    · obtain ⟨M', y, rfl⟩ : ∃ M' y, M = M' ++ [y] := by
+        rcases List.eq_nil_or_concat M with h0 | ⟨L, b, hb⟩
+        · subst h0; simp at hM; omega
+        · exact ⟨L, b, by rw [hb, List.concat_eq_append]⟩
+      have hM' : M'.length % 2 = 0 := by simp at hM; omega
+      rw [peaksOf_odd H M' y hM']
+      have hlen := pairUp_length H M'
+      have := ih (n / 2) (by omega) (pairUp H [] M') (nodeHash H [] y h) (by simp at hM; omega)
+      have e : M' ++ [y] ++ [h] = M' ++ [y, h] := by simp
+      have hp1 : n % 2 = 1 := by omega
+      rw [e, peaksOf_even H (M' ++ [y, h]) (by simp only [List.length_append, List.length_cons, List.length_nil]; omega),
+        pairUp_append_even H M' [y, h] hM']
+      simp [mergePeaks, hp1, this, pairUp]
+
+theorem foldAcc_peaksOf (H : Bytes → Bytes) : ∀ (f : Nat) (M : List Bytes) (x : Bytes),
+    M.length + 1 ≤ 2 ^ f →
+    (peaksOf H M).foldl (fun acc q => nodeHash H [] q acc) x = treeRoot H [] f (M ++ [x]) := by
+  intro f
+  induction f with
+  | zero =>
+    intro M x hM
+    have : M = [] := List.length_eq_zero_iff.mp (by simpa using hM)
+    subst this
+    simp [peaksOf_nil, treeRoot]
+  | succ f ih =>
+    intro M x hM
+    have hpow : 2 ^ (f + 1) = 2 * 2 ^ f := by rw [Nat.pow_succ]; omega
+    by_cases hM0 : M = []
+    · subst hM0; simp [peaksOf_nil, treeRoot]
+    rcases Nat.mod_two_eq_zero_or_one M.length with he | ho
+    · have hlen := pairUp_length H M
+      have hpos : 0 < M.length := List.length_pos_iff.mpr hM0
+      rw [peaksOf_even H M he, treeRoot_succ H (by simp only [List.length_append, List.length_cons, List.length_nil]; omega) f,
+        pairUp_append_even H M [x] he]
+      have := ih (pairUp H [] M) x (by omega)
+      simpa [pairUp] using this
+    · obtain ⟨M', y, rfl⟩ : ∃ M' y, M = M' ++ [y] := by
+        rcases List.eq_nil_or_concat M with h0 | ⟨L, b, hb⟩
+        · exact absurd h0 hM0
+        · exact ⟨L, b, by rw [hb, List.concat_eq_append]⟩
+      have hM' : M'.length % 2 = 0 := by simp at ho; omega
+      have hlen := pairUp_length H M'
+      rw [peaksOf_odd H M' y hM', List.foldl_cons]
+      have e : M' ++ [y] ++ [x] = M' ++ [y, x] := by simp
+      rw [e, treeRoot_succ H (by simp only [List.length_append, List.length_cons, List.length_nil]; omega) f,
+        pairUp_append_even H M' [y, x] hM']
+      have := ih (pairUp H [] M') (nodeHash H [] y x) (by simp at hM; omega)
+      simpa [pairUp] using this
+
+theorem root_peaksOf (H : Bytes → Bytes) : ∀ (f : Nat) (M : List Bytes), M ≠ [] → M.length ≤ 2 ^ f →
+    Frontier.root H ⟨M.length, peaksOf H M⟩ = treeRoot H [] f M := by
+  intro f
+  induction f with
+  | zero =>
+    intro M hne hM
+    obtain ⟨x, rfl⟩ := List.length_eq_one_iff.mp (show M.length = 1 from by
+      have := List.length_pos_iff.mpr hne; simp at hM; omega)
+    have e : peaksOf H [x] = [x] := by
+      have := peaksOf_odd H [] x rfl
+      simpa [pairUp, peaksOf_nil] using this
+    simp [Frontier.root, e, treeRoot]
+  | succ f ih =>
+    intro M hne hM
+    have hpow : 2 ^ (f + 1) = 2 * 2 ^ f := by rw [Nat.pow_succ]; omega
+    have hpos : 0 < M.length := List.length_pos_iff.mpr hne
+    rcases Nat.mod_two_eq_zero_or_one M.length with he | ho
+    · have hlen := pairUp_length H M
+      rw [treeRoot_succ H (by omega) f, ← ih (pairUp H [] M) (by
+        intro h0; have := congrArg List.length h0; rw [hlen, List.length_nil] at this; omega) (by omega)]
+      simp only [Frontier.root, peaksOf_even H M he]
+    · obtain ⟨M', y, rfl⟩ : ∃ M' y, M = M' ++ [y] := by
+        rcases List.eq_nil_or_concat M with h0 | ⟨L, b, hb⟩
+        · exact absurd h0 hne
+        · exact ⟨L, b, by rw [hb, List.concat_eq_append]⟩
+      have hM' : M'.length % 2 = 0 := by simp at ho; omega
+      have := foldAcc_peaksOf H (f + 1) M' y (by simp at hM; omega)
+      rw [peaksOf_even H M' hM'] at this
+      simp only [Frontier.root, peaksOf_odd H M' y hM']
+      exact this
+
+/-! ### Level trees: the hash tree behind `treeRoot`, with its leaves kept -/
+
+inductive LT where
+  | leaf (e : Bytes)
+  | node (l r : LT)
+
+def LT.root (H : Bytes → Bytes) : LT → Bytes
+  | .leaf e => H (0 :: e)
+  | .node l r => H (1 :: (l.root H ++ r.root H))
+
+def LT.inputs (H : Bytes → Bytes) : LT → List Bytes
+  | .leaf e => [0 :: e]
+  | .node l r => (1 :: (l.root H ++ r.root H)) :: (l.inputs H ++ r.inputs H)
+
+def LT.leaves : LT → List Bytes
+  | .leaf e => [e]
+  | .node l r => l.leaves ++ r.leaves
+
+def pairT : List LT → List LT
+  | a :: b :: rest => .node a b :: pairT rest
+  | xs => xs
+
+def treeT : Nat → List LT → Option LT
+  | _, [t] => some t
+  | 0, _ => none
+  | f + 1, ts => treeT f (pairT ts)
+
+theorem treeT_single (f : Nat) (a : LT) : treeT f [a] = some a := by
+  cases f <;> rfl
+
+theorem pairT_root (H : Bytes → Bytes) : ∀ ts : List LT,
+    (pairT ts).map (LT.root H) = pairUp H [] (ts.map (LT.root H))
+  | [] => rfl
+  | [_] => rfl
+  | a :: b :: rest => by
+    simp only [pairT, pairUp, List.map_cons, pairT_root H rest]
+    try rfl
+
+theorem pairT_leaves : ∀ ts : List LT, (pairT ts).flatMap LT.leaves = ts.flatMap LT.leaves
+  | [] => rfl
+  | [_] => rfl
+  | a :: b :: rest => by
+    simp [pairT, LT.leaves, pairT_leaves rest]
+
+theorem pairT_inputs {H : Bytes → Bytes} {L : List Bytes} : ∀ ts : List LT,
+    (∀ t ∈ ts, ∀ x ∈ t.inputs H, x ∈ L) → (∀ x ∈ pairUp id [] (ts.map (LT.root H)), x ∈ L) →
+    ∀ t ∈ pairT ts, ∀ x ∈ t.inputs H, x ∈ L
+  | [], _, _ => by simp [pairT]
+  | [a], h, _ => by simpa [pairT] using h
+  | a :: b :: rest, h, h2 => by
+    intro t ht x hx
+    simp only [pairT, List.mem_cons] at ht
+    rcases ht with rfl | ht
+    · simp only [LT.inputs, List.mem_cons, List.mem_append] at hx
+      rcases hx with rfl | hx | hx
+      · exact h2 _ (by simp [pairUp, nodeHash, LT.root])
+      · exact h a (by simp) x hx
+      · exact h b (by simp) x hx
+    · exact pairT_inputs rest (fun t ht => h t (by simp [ht]))
+        (fun x hx => h2 x (by simp [pairUp, hx])) t ht x hx
+
+theorem treeT_nil : ∀ f, treeT f [] = none
+  | 0 => rfl
+  | f + 1 => by
+    show treeT f (pairT []) = none
+    exact treeT_nil f
+
+theorem treeT_leaves : ∀ (f : Nat) (ts : List LT) (t : LT), treeT f ts = some t → t.leaves = ts.flatMap LT.leaves
+  | f, [], t, h => by rw [treeT_nil] at h; simp at h
+  | f, [a], t, h => by
+    have : a = t := Option.some.inj (by rw [← treeT_single f a]; exact h)
+    simp [this]
+  | 0, a :: b :: rest, t, h => by simp [treeT] at h
+  | f + 1, a :: b :: rest, t, h => by
+    have h' : treeT f (pairT (a :: b :: rest)) = some t := h
+    rw [treeT_leaves f _ t h', pairT_leaves]
+
+theorem treeT_root {H : Bytes → Bytes} : ∀ (f : Nat) (ts : List LT) (t : LT), treeT f ts = some t →
+    treeRoot H [] f (ts.map (LT.root H)) = t.root H
+  | f, [], t, h => by rw [treeT_nil] at h; simp at h
+  | f, [a], t, h => by
+    have : a = t := Option.some.inj (by rw [← treeT_single f a]; exact h)
+    simp [this, treeRoot]
+  | 0, a :: b :: rest, t, h => by simp [treeT] at h
+  | f + 1, a :: b :: rest, t, h => by
+    have h' : treeT f (pairT (a :: b :: rest)) = some t := h
+    have := treeT_root (H := H) f _ t h'
+    rw [pairT_root] at this
+    rw [treeRoot_succ H (by simp only [List.length_map, List.length_cons]; omega) f]
+    exact this
+
+theorem treeT_inputs {H : Bytes → Bytes} {L : List Bytes} : ∀ (f : Nat) (ts : List LT) (t : LT),
+    treeT f ts = some t → (∀ t ∈ ts, ∀ x ∈ t.inputs H, x ∈ L) →
+    (∀ x ∈ levelInputs H f (ts.map (LT.root H)), x ∈ L) → ∀ x ∈ t.inputs H, x ∈ L
+  | f, [], t, h, _, _ => by rw [treeT_nil] at h; simp at h
+  | f, [a], t, h, hI, _ => by
+    have : a = t := Option.some.inj (by rw [← treeT_single f a]; exact h)
+    subst this
+    exact hI _ (by simp)
+  | 0, a :: b :: rest, t, h, _, _ => by simp [treeT] at h
+  | f + 1, a :: b :: rest, t, h, hI, hL => by
+    have h' : treeT f (pairT (a :: b :: rest)) = some t := h
+    have hL' : ∀ x ∈ pairUp id [] ((a :: b :: rest).map (LT.root H)), x ∈ L :=
+      fun x hx => hL x (List.mem_append_left _ hx)
+    refine treeT_inputs f _ t h' (pairT_inputs _ hI hL') ?_
+    rw [pairT_root]
+    exact fun x hx => hL x (List.mem_append_right _ hx)
+
+theorem treeT_exists : ∀ (f : Nat) (ts : List LT), ts ≠ [] → ts.length ≤ 2 ^ f → ∃ t, treeT f ts = some t
+  | f, [a], _, _ => ⟨a, treeT_single f a⟩
+  | 0, a :: b :: rest, _, h => by simp at h
+  | f + 1, a :: b :: rest, _, h => by
+    have hlen : (pairT (a :: b :: rest)).length = ((a :: b :: rest).length + 1) / 2 := by
+      have := congrArg List.length (pairT_root (H := fun x => x) (a :: b :: rest))
+      simpa [pairUp_length] using this
+    have hpow : 2 ^ (f + 1) = 2 * 2 ^ f := by rw [Nat.pow_succ]; omega
+    have hne : pairT (a :: b :: rest) ≠ [] := by
+      intro h0; rw [h0] at hlen; simp only [List.length_nil, List.length_cons] at hlen; omega
+    exact treeT_exists f _ hne (by omega)
+  | f, [], h, _ => absurd rfl h
+
+theorem LT.root_len {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) (t : LT) : (t.root H).length = 64 := by
+  cases t <;> exact hl _
+
+theorem LT.root_spec (H : Bytes → Bytes) (t : LT) : ∃ y ∈ t.inputs H, t.root H = H y ∧ y ≠ [] := by
+  cases t with
+  | leaf e => exact ⟨0 :: e, by simp [LT.inputs], rfl, by simp⟩
+  | node l r => exact ⟨1 :: (l.root H ++ r.root H), by simp [LT.inputs], rfl, by simp⟩
+
+theorem LT.inj {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) {L : List Bytes} (hg : breakIn H L = none) :
+    ∀ (t1 t2 : LT), (∀ x ∈ t1.inputs H, x ∈ L) → (∀ x ∈ t2.inputs H, x ∈ L) → t1.root H = t2.root H → t1 = t2
+  | .leaf e1, .leaf e2, h1, h2, hr => by
+    have := inj_of_none hg (x := 0 :: e1) (y := 0 :: e2) (h1 _ (by simp [LT.inputs])) (h2 _ (by simp [LT.inputs])) hr
+    simp at this
+    rw [this]
+  | .leaf e1, .node l r, h1, h2, hr => by
+    have := inj_of_none hg (x := 0 :: e1) (y := 1 :: (l.root H ++ r.root H))
+      (h1 _ (by simp [LT.inputs])) (h2 _ (by simp [LT.inputs])) hr
+    simp at this
+  | .node l r, .leaf e2, h1, h2, hr => by
+    have := inj_of_none hg (x := 1 :: (l.root H ++ r.root H)) (y := 0 :: e2)
+      (h1 _ (by simp [LT.inputs])) (h2 _ (by simp [LT.inputs])) hr
+    simp at this
+  | .node a b, .node c d, h1, h2, hr => by
+    have := inj_of_none hg (x := 1 :: (a.root H ++ b.root H)) (y := 1 :: (c.root H ++ d.root H))
+      (h1 _ (by simp [LT.inputs])) (h2 _ (by simp [LT.inputs])) hr
+    have hcons := (List.cons.inj this).2
+    have hs := List.append_inj hcons (by rw [LT.root_len hl, LT.root_len hl])
+    have e1 := LT.inj hl hg a c (fun x hx => h1 x (by simp [LT.inputs, hx])) (fun x hx => h2 x (by simp [LT.inputs, hx])) hs.1
+    have e2 := LT.inj hl hg b d (fun x hx => h1 x (by simp [LT.inputs, hx])) (fun x hx => h2 x (by simp [LT.inputs, hx])) hs.2
+    rw [e1, e2]
+
+theorem log_tree {H : Bytes → Bytes} {L : List Bytes} (zs : List Bytes) (hne : zs ≠ [])
+    (hlen : zs.length ≤ maxSize) (hsub : ∀ x ∈ logInputs H zs, x ∈ L) :
+    ∃ t : LT, t.root H = logRoot H zs ∧ t.leaves = zs ∧ ∀ x ∈ t.inputs H, x ∈ L := by
+  have hzne : zs.isEmpty = false := by
+    cases zs with
+    | nil => exact absurd rfl hne
+    | cons => rfl
+  have hne' : zs.map LT.leaf ≠ [] := by simpa using hne
+  have hlen' : zs.length ≤ 2 ^ 63 - 1 := hlen
+  obtain ⟨t, ht⟩ := treeT_exists 64 (zs.map LT.leaf) hne' (by simp; omega)
+  have hm : (zs.map LT.leaf).map (LT.root H) = zs.map (logLeaf H) := by
+    rw [List.map_map]; exact List.map_congr_left (fun e _ => rfl)
+  have hfl : ∀ zs : List Bytes, (zs.map LT.leaf).flatMap LT.leaves = zs := by
+    intro zs; induction zs with
+    | nil => rfl
+    | cons a r ih => simp [LT.leaves, ih]
+  refine ⟨t, ?_, ?_, ?_⟩
+  · have := treeT_root (H := H) 64 _ t ht
+    rw [hm] at this
+    rw [← this]; simp [logRoot, hzne, logFuel]
+  · rw [treeT_leaves 64 _ t ht, hfl]
+  · refine treeT_inputs 64 _ t ht ?_ ?_
+    · intro t' ht' x hx
+      obtain ⟨e, he, rfl⟩ := List.mem_map.mp ht'
+      simp only [LT.inputs, List.mem_singleton] at hx
+      subst hx
+      exact hsub _ (List.mem_append_left _ (List.mem_cons_of_mem _ (List.mem_map.mpr ⟨e, he, rfl⟩)))
+    · rw [hm]
+      exact fun x hx => hsub x (List.mem_append_right _ hx)
+
 /-- Log update correctness: the O(1)-amortized frontier gives the RFC 9162 root. -/
 theorem frontier_root {H : Bytes → Bytes} (es : List Bytes) (hn : es.length ≤ maxSize) :
     (es.foldl (Frontier.push H) Frontier.empty).root H = logRoot H es := by
-  sorry
+  have hf : ∀ es : List Bytes, es.foldl (Frontier.push H) Frontier.empty =
+      ⟨es.length, peaksOf H (es.map (logLeaf H))⟩ := by
+    refine list_snoc_induction (P := fun es : List Bytes => es.foldl (Frontier.push H) Frontier.empty =
+      ⟨es.length, peaksOf H (es.map (logLeaf H))⟩) ?_ ?_
+    · simp [Frontier.empty, peaksOf_nil]
+    · intro es e ih
+      rw [List.foldl_append, ih]
+      have := mergePeaks_peaksOf H es.length (es.map (logLeaf H)) (logLeaf H e) (List.length_map _)
+      simp [Frontier.push, this]
+  rw [hf]
+  by_cases h0 : es = []
+  · subst h0; simp [Frontier.root, peaksOf_nil, logRoot]
+  · have hne : es.isEmpty = false := by
+      cases es with
+      | nil => exact absurd rfl h0
+      | cons => rfl
+    have hn' : es.length ≤ 2 ^ 63 - 1 := hn
+    have := root_peaksOf H 64 (es.map (logLeaf H)) (by simpa using h0) (by simp; omega)
+    simpa [logRoot, hne, logFuel] using this
 
 /-- Inclusion soundness. -/
 theorem logInclusion_sound {H : Bytes → Bytes} (hl : HashLen H) (es : List Bytes) (i : Nat) (e : Bytes)
@@ -871,6 +1214,33 @@ theorem insertAll_correct {H : Bytes → Bytes} (hl : HashLen H) (base kvs : Lis
 theorem logRoot_binding {H : Bytes → Bytes} (hl : HashLen H) (xs ys : List Bytes)
     (hx : xs.length ≤ maxSize) (hy : ys.length ≤ maxSize) (h : logRoot H xs = logRoot H ys) :
     xs = ys ∨ breakIn H (logInputs H xs ++ logInputs H ys) ≠ none := by
-  sorry
+  by_cases hg : breakIn H (logInputs H xs ++ logInputs H ys) = none
+  case neg => exact Or.inr hg
+  left
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  have hxL : ∀ x ∈ logInputs H xs, x ∈ logInputs H xs ++ logInputs H ys := fun x hx => List.mem_append_left _ hx
+  have hyL : ∀ x ∈ logInputs H ys, x ∈ logInputs H xs ++ logInputs H ys := fun x hx => List.mem_append_right _ hx
+  have emp : ∀ zs : List Bytes, zs ≠ [] → zs.length ≤ maxSize →
+      (∀ x ∈ logInputs H zs, x ∈ logInputs H xs ++ logInputs H ys) →
+      ([] : Bytes) ∈ logInputs H xs ++ logInputs H ys → logRoot H zs = H [] → False := by
+    intro zs hne hlen hsub hnil hr
+    obtain ⟨t, htr, _, hti⟩ := log_tree zs hne hlen hsub
+    obtain ⟨y0, hy0m, hy0e, hy0ne⟩ := LT.root_spec H t
+    have := inj_of_none hg (x := y0) (y := []) (hti _ hy0m) hnil (by rw [← hy0e, htr, hr])
+    exact hy0ne this
+  have hnx : ([] : Bytes) ∈ logInputs H xs ++ logInputs H ys :=
+    List.mem_append_left _ (List.mem_append_left _ (List.mem_cons_self ..))
+  by_cases hx0 : xs = []
+  · by_cases hy0 : ys = []
+    · rw [hx0, hy0]
+    · subst hx0
+      exact (emp ys hy0 hy hyL hnx (by rw [← h]; simp [logRoot])).elim
+  · by_cases hy0 : ys = []
+    · subst hy0
+      exact (emp xs hx0 hx hxL hnx (by rw [h]; simp [logRoot])).elim
+    · obtain ⟨tx, htxr, htxl, htxi⟩ := log_tree xs hx0 hx hxL
+      obtain ⟨ty, htyr, htyl, htyi⟩ := log_tree ys hy0 hy hyL
+      have := LT.inj hl64 hg tx ty htxi htyi (by rw [htxr, htyr, h])
+      rw [← htxl, ← htyl, this]
 
 end BlindLedger.Gate.Auth
