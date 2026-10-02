@@ -2,7 +2,7 @@ import BlindLedger.Gate.Spec
 import BlindLedger.Gate.MlDsa87
 
 /-! The real `Crypto` of the gate: SHA3-512, ML-DSA-87 (pure, empty context, so M' = `00 00 ‖ message`) and a
-    KEY-CERT that decodes and carries a valid signature from the tenant's root key; a root key never verifies a checkpoint.  `accepts` is the whole
+    KEY-CERT that decodes and carries a valid signature from the tenant's root key; no checkpoint verifies under its own tenant's root key (known limit: tenant A's root key certified as tenant B's epoch key).  `accepts` is the whole
     decision of the `gate_verify` executable (`VerifyCli`): under a root key, install the certificate, then
     store the checkpoint, on an empty payer state. -/
 namespace BlindLedger.Gate
