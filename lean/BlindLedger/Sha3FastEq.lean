@@ -200,3 +200,10 @@ theorem shake128_eq : shake128 = shake128Fast := funext fun d => funext fun n =>
 theorem shake256_eq : shake256 = shake256Fast := funext fun d => funext fun n => sponge_eq 136 (by omega) _ d n
 
 end BlindLedger.Semantic
+
+/-- info: 'BlindLedger.Semantic.sha3_512_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.sha3_512_eq
+/-- info: 'BlindLedger.Semantic.shake128_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.shake128_eq
+/-- info: 'BlindLedger.Semantic.shake256_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Semantic.shake256_eq
