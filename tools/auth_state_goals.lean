@@ -1798,6 +1798,292 @@ theorem gateHead_binding {H : Bytes → Bytes} (hl : HashLen H) (E E' : List Ent
         logInputs H (E'.map fun e => (entryBytes e).getD [])) ≠ none := by
   sorry
 
+/-! ### §D helpers: a proof tree is a pruning of the canonical tree, and inserts keep that -/
+
+def Dead (p : PTree) : Prop := ∀ k v d, p.insert k v d = none
+
+inductive Pr (H : Bytes → Bytes) : PTree → PTree → Prop where
+  | stub (h : Bytes) (q : PTree) : h = q.hash H → Pr H (.stub h) q
+  | empty : Pr H .empty .empty
+  | leaf (k v : Bytes) : Pr H (.leaf k v) (.leaf k v)
+  | node {l r ql qr : PTree} : Pr H l ql → Pr H r qr → Pr H (.node l r) (.node ql qr)
+  | dead (p q : PTree) : p.hash H = q.hash H → Dead p → Pr H p q
+
+theorem Pr.hash_eq {H : Bytes → Bytes} {p q : PTree} (h : Pr H p q) : p.hash H = q.hash H := by
+  induction h with
+  | stub h q e => exact e
+  | empty => rfl
+  | leaf k v => rfl
+  | node _ _ ihl ihr => simp only [PTree.hash, ihl, ihr]
+  | dead p q e _ => exact e
+
+theorem Pr.refl (H : Bytes → Bytes) : ∀ p : PTree, Pr H p p
+  | .empty => Pr.empty
+  | .stub h => Pr.stub h _ rfl
+  | .leaf k v => Pr.leaf k v
+  | .node l r => Pr.node (Pr.refl H l) (Pr.refl H r)
+
+theorem Pr.empty_inv {H : Bytes → Bytes} {q : PTree} (h : Pr H .empty q) : q = .empty ∨ Dead .empty := by
+  cases h with
+  | empty => exact Or.inl rfl
+  | dead _ _ _ hd => exact Or.inr hd
+
+theorem Pr.leaf_inv {H : Bytes → Bytes} {a b : Bytes} {q : PTree} (h : Pr H (.leaf a b) q) :
+    q = .leaf a b ∨ Dead (.leaf a b) := by
+  cases h with
+  | leaf => exact Or.inl rfl
+  | dead _ _ _ hd => exact Or.inr hd
+
+theorem Pr.node_inv {H : Bytes → Bytes} {l r q : PTree} (h : Pr H (.node l r) q) :
+    (∃ ql qr, q = .node ql qr ∧ Pr H l ql ∧ Pr H r qr) ∨ Dead (.node l r) := by
+  cases h with
+  | node hl hr => exact Or.inl ⟨_, _, rfl, hl, hr⟩
+  | dead _ _ _ hd => exact Or.inr hd
+
+def Sep (d : Nat) (kvs : List (Bytes × Bytes)) : Prop :=
+  ∀ a ∈ kvs, ∀ b ∈ kvs, ∀ i < d, bitAt a.1 i = bitAt b.1 i
+
+theorem Sep.agree {d : Nat} {kvs : List (Bytes × Bytes)} (h : Sep d kvs) : ∃ k, Agree k d kvs := by
+  rcases kvs with _ | ⟨a, rest⟩
+  · exact ⟨[], fun kv hkv => by simp at hkv⟩
+  · exact ⟨a.1, fun kv hkv i hi => h kv hkv a (by simp) i hi⟩
+
+theorem Sep.filter_bit {d : Nat} {kvs : List (Bytes × Bytes)} (h : Sep d kvs) (p : Bytes × Bytes → Bool)
+    (b : Bool) (hp : ∀ kv, p kv = true → bitAt kv.1 d = b) : Sep (d + 1) (kvs.filter p) := by
+  intro a ha c hc i hi
+  obtain ⟨hma, hpa⟩ := List.mem_filter.mp ha
+  obtain ⟨hmc, hpc⟩ := List.mem_filter.mp hc
+  by_cases h' : i < d
+  · exact h a hma c hmc i h'
+  · have : i = d := by omega
+    subst this
+    rw [hp a hpa, hp c hpc]
+
+theorem mapTree_hash_len2 {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) (fuel d : Nat)
+    (kvs : List (Bytes × Bytes)) (hd : d + fuel = 512) (hw : MapWf kvs) (hs : Sep d kvs) :
+    ((mapTree fuel d kvs).hash H).length = 64 := by
+  obtain ⟨k, hk⟩ := hs.agree
+  exact mapTree_hash_len hl k fuel d kvs hd hw.1 (fun kv h => (hw.2 kv h).1) hk
+
+theorem mapTree_cases2 (fuel d : Nat) (kvs : List (Bytes × Bytes)) (hd : d + fuel = 512) (hw : MapWf kvs)
+    (hs : Sep d kvs) : kvs = [] ∨ (∃ a, kvs = [a]) ∨ (∃ f, fuel = f + 1 ∧ 2 ≤ kvs.length) := by
+  obtain ⟨k, hk⟩ := hs.agree
+  exact mapTree_cases k fuel d kvs hd hw.1 (fun kv h => (hw.2 kv h).1) hk
+
+theorem dead_leaf {k v : Bytes} (h : sized k v = false) : Dead (.leaf k v) := by
+  intro k' v' d
+  have hi2 : PTree.insert k' v' d (PTree.leaf k v) = (if (!(sized k' v' && sized k v)) = true then none else
+      if (k == k') = true then some (PTree.leaf k' v') else splitLeaves (512 - d) d k v k' v') := rfl
+  rw [hi2]
+  simp [h]
+
+theorem dead_node_stubs {a b : Bytes} : Dead (.node (.stub a) (.stub b)) := by
+  intro k v d
+  simp [PTree.insert]
+
+theorem pr_of_hash {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) {L : List Bytes} (hg : breakIn H L = none) :
+    ∀ (p : PTree) (fuel d : Nat) (kvs : List (Bytes × Bytes)), d + fuel = 512 → MapWf kvs → Sep d kvs →
+    (∀ x ∈ p.inputs H, x ∈ L) → (∀ x ∈ (mapTree fuel d kvs).inputs H, x ∈ L) →
+    p.hash H = (mapTree fuel d kvs).hash H → Pr H p (mapTree fuel d kvs) := by
+  have key : ∀ t : PTree, (∀ s, t ≠ .stub s) → (t.hash H).length = 64 := by
+    intro t ht
+    cases t with
+    | stub s => exact absurd rfl (ht s)
+    | empty => simp [PTree.hash, zeroDigest, digestBytes]
+    | leaf _ _ => exact hl _
+    | node _ _ => exact hl _
+  intro p
+  induction p with
+  | stub s => intro fuel d kvs _ _ _ _ _ hh; exact Pr.stub s _ hh
+  | empty =>
+    intro fuel d kvs hd hw hs hp hq hh
+    rcases mapTree_cases2 fuel d kvs hd hw hs with h | ⟨⟨a1, a2⟩, h⟩ | ⟨f, hf, h2⟩
+    · subst h; rw [mapTree_nil]; exact Pr.empty
+    · exfalso; subst h; rw [mapTree_single] at hh hq; exact leaf_nz hg hq hh.symm
+    · exfalso; subst hf; rw [mapTree_node f d kvs h2] at hh hq; exact node_nz hg hq hh.symm
+  | leaf k0 v0 =>
+    intro fuel d kvs hd hw hs hp hq hh
+    rcases mapTree_cases2 fuel d kvs hd hw hs with h | ⟨⟨a1, a2⟩, h⟩ | ⟨f, hf, h2⟩
+    · exfalso; subst h; rw [mapTree_nil] at hh; exact leaf_nz hg hp hh
+    · subst h
+      have hw1 : a1.length = 64 ∧ a2.length = 64 := hw.2 (a1, a2) (by simp)
+      rw [mapTree_single] at hh hq ⊢
+      have hxy := inj_of_none hg (hp _ (mem_leaf_inputs k0 v0)) (hq _ (mem_leaf_inputs a1 a2)) hh
+      have hc := (List.cons.inj hxy).2
+      by_cases hk0 : k0.length = 64
+      · obtain ⟨e1, e2⟩ := List.append_inj hc (by rw [hk0, hw1.1])
+        subst e1; subst e2
+        exact Pr.leaf _ _
+      · refine Pr.dead _ _ hh (dead_leaf ?_)
+        simp [sized, hk0]
+    · exfalso; subst hf; rw [mapTree_node f d kvs h2] at hh hq; exact leaf_node_ne hg hp hq hh
+  | node l r ihl ihr =>
+    intro fuel d kvs hd hw hs hp hq hh
+    rcases mapTree_cases2 fuel d kvs hd hw hs with h | ⟨⟨a1, a2⟩, h⟩ | ⟨f, hf, h2⟩
+    · exfalso; subst h; rw [mapTree_nil] at hh; exact node_nz hg hp hh
+    · exfalso; subst h; rw [mapTree_single] at hh hq; exact leaf_node_ne hg hq hp hh.symm
+    · subst hf
+      rw [mapTree_node f d kvs h2] at hh hq ⊢
+      have hxy := inj_of_none hg (hp _ (mem_node_inputs _ _)) (hq _ (mem_node_inputs _ _)) hh
+      have hc := (List.cons.inj hxy).2
+      have hwl := hw.filter (fun kv => !bitAt kv.1 d)
+      have hwr := hw.filter (fun kv => bitAt kv.1 d)
+      have hsl := hs.filter_bit (fun kv => !bitAt kv.1 d) false (fun kv h => by simpa using h)
+      have hsr := hs.filter_bit (fun kv => bitAt kv.1 d) true (fun kv h => h)
+      have hql := mapTree_hash_len2 hl f (d + 1) _ (by omega) hwl hsl
+      have hqr := mapTree_hash_len2 hl f (d + 1) _ (by omega) hwr hsr
+      by_cases hl64 : (l.hash H).length = 64
+      · have hs' := List.append_inj hc (by rw [hl64, hql])
+        exact Pr.node
+          (ihl f (d + 1) _ (by omega) hwl hsl (fun x hx => hp x (inp_l hx)) (fun x hx => hq x (inp_l hx)) hs'.1)
+          (ihr f (d + 1) _ (by omega) hwr hsr (fun x hx => hp x (inp_r hx)) (fun x hx => hq x (inp_r hx)) hs'.2)
+      · obtain ⟨a, rfl⟩ : ∃ a, l = .stub a := by
+          refine Classical.byContradiction fun hne => ?_
+          exact hl64 (key l (fun s hs => hne ⟨s, hs⟩))
+        obtain ⟨b, rfl⟩ : ∃ b, r = .stub b := by
+          refine Classical.byContradiction fun hne => ?_
+          have hr64 := key r (fun s hs => hne ⟨s, hs⟩)
+          have hlen := congrArg List.length hc
+          simp only [List.length_append, hql, hqr, hr64] at hlen
+          exact hl64 (by omega)
+        exact Pr.dead _ _ hh dead_node_stubs
+
+theorem pr_insert {H : Bytes → Bytes} (k v : Bytes) (hsk : sized k v = true) :
+    ∀ (p p' : PTree) (fuel d : Nat) (kvs : List (Bytes × Bytes)),
+    d + fuel = 512 → MapWf kvs → Agree k d kvs → Pr H p (mapTree fuel d kvs) → p.insert k v d = some p' →
+    Pr H p' (mapTree fuel d (upsert kvs k v)) := by
+  intro p
+  induction p with
+  | stub s =>
+    intro p' fuel d kvs hd hw hag hpr hi
+    have hi2 : (none : Option PTree) = some p' := hi
+    cases hi2
+  | empty =>
+    intro p' fuel d kvs hd hw hag hpr hi
+    rcases mapTree_cases k fuel d kvs hd hw.1 (fun kv h => (hw.2 kv h).1) hag with h | ⟨⟨a1, a2⟩, h⟩ | ⟨f, hf, h2⟩
+    · subst h
+      rcases Pr.empty_inv hpr with _ | hdead
+      · have hi2 : (if sized k v = true then some (PTree.leaf k v) else none) = some p' := hi
+        rw [if_pos hsk] at hi2
+        cases hi2
+        rw [upsert_nil, mapTree_single]; exact Pr.leaf _ _
+      · rw [hdead k v d] at hi; cases hi
+    · subst h
+      rcases Pr.empty_inv hpr with hq | hdead
+      · rw [mapTree_single] at hq; cases hq
+      · rw [hdead k v d] at hi; cases hi
+    · subst hf
+      rcases Pr.empty_inv hpr with hq | hdead
+      · rw [mapTree_node f d kvs h2] at hq; cases hq
+      · rw [hdead k v d] at hi; cases hi
+  | leaf k0 v0 =>
+    intro p' fuel d kvs hd hw hag hpr hi
+    rcases mapTree_cases k fuel d kvs hd hw.1 (fun kv h => (hw.2 kv h).1) hag with h | ⟨⟨a1, a2⟩, h⟩ | ⟨f, hf, h2⟩
+    · subst h
+      rcases Pr.leaf_inv hpr with hq | hdead
+      · rw [mapTree_nil] at hq; cases hq
+      · rw [hdead k v d] at hi; cases hi
+    · subst h
+      rcases Pr.leaf_inv hpr with hq | hdead
+      · rw [mapTree_single] at hq
+        obtain ⟨e1, e2⟩ := PTree.leaf.inj hq
+        subst e1; subst e2
+        have hi2 : (if (!(sized k v && sized a1 a2)) = true then none else
+            if (a1 == k) = true then some (PTree.leaf k v) else splitLeaves (512 - d) d a1 a2 k v) = some p' := hi
+        by_cases hs : (!(sized k v && sized a1 a2)) = true
+        · rw [if_pos hs] at hi2; cases hi2
+        · rw [if_neg hs] at hi2
+          by_cases hkk : (a1 == k) = true
+          · rw [if_pos hkk] at hi2; cases hi2
+            have e : a1 = k := beq_iff_eq.mp hkk
+            subst e
+            simp only [upsert, List.filter, bne_self_eq_false]
+            rw [List.nil_append, mapTree_single]
+            exact Pr.leaf _ _
+          · rw [if_neg hkk] at hi2
+            have hne : a1 ≠ k := fun e => hkk (by simp [e])
+            have hu : upsert [(a1, a2)] k v = [(a1, a2), (k, v)] := by simp [upsert, hne]
+            have hf : fuel = 512 - d := by omega
+            rw [hu, hf, splitLeaves_eq _ _ _ _ _ _ _ hi2]
+            exact Pr.refl H _
+      · rw [hdead k v d] at hi; cases hi
+    · subst hf
+      rcases Pr.leaf_inv hpr with hq | hdead
+      · rw [mapTree_node f d kvs h2] at hq; cases hq
+      · rw [hdead k v d] at hi; cases hi
+  | node l r ihl ihr =>
+    intro p' fuel d kvs hd hw hag hpr hi
+    rcases mapTree_cases k fuel d kvs hd hw.1 (fun kv h => (hw.2 kv h).1) hag with h | ⟨⟨a1, a2⟩, h⟩ | ⟨f, hf, h2⟩
+    · subst h
+      rcases Pr.node_inv hpr with ⟨ql, qr, hq, _⟩ | hdead
+      · rw [mapTree_nil] at hq; cases hq
+      · rw [hdead k v d] at hi; cases hi
+    · subst h
+      rcases Pr.node_inv hpr with ⟨ql, qr, hq, _⟩ | hdead
+      · rw [mapTree_single] at hq; cases hq
+      · rw [hdead k v d] at hi; cases hi
+    · subst hf
+      rcases Pr.node_inv hpr with ⟨ql, qr, hq, hl', hr'⟩ | hdead
+      · rw [mapTree_node f d kvs h2] at hq
+        obtain ⟨e1, e2⟩ := PTree.node.inj hq
+        rw [← e1] at hl'
+        rw [← e2] at hr'
+        have hwl := hw.filter (fun kv => !bitAt kv.1 d)
+        have hwr := hw.filter (fun kv => bitAt kv.1 d)
+        have hi2 : (if bitAt k d = true then (r.insert k v (d + 1)).map (fun t => PTree.node l t)
+            else (l.insert k v (d + 1)).map (fun t => PTree.node t r)) = some p' := hi
+        rw [mapTree_node f d _ (upsert_len hw h2 k v)]
+        by_cases hkb : bitAt k d = true
+        · rw [if_pos hkb] at hi2
+          rcases hr : r.insert k v (d + 1) with _ | r'
+          · rw [hr] at hi2; simp at hi2
+          · rw [hr] at hi2
+            have hi' : PTree.node l r' = p' := by simpa using hi2
+            subst hi'
+            have ih := ihr r' f (d + 1) _ (by omega) hwr (hag.filter _ (hp_right hkb)) hr' hr
+            have e1 : (upsert kvs k v).filter (fun kv => !bitAt kv.1 d) = kvs.filter (fun kv => !bitAt kv.1 d) :=
+              uf_out (fun b => !bitAt b d) (by simp [hkb]) kvs
+            have e2 : (upsert kvs k v).filter (fun kv => bitAt kv.1 d) =
+                upsert (kvs.filter fun kv => bitAt kv.1 d) k v := uf_in (fun b => bitAt b d) hkb kvs
+            rw [e1, e2]
+            exact Pr.node hl' ih
+        · have hkb' : bitAt k d = false := by simpa using hkb
+          rw [if_neg hkb] at hi2
+          rcases hr : l.insert k v (d + 1) with _ | l'
+          · rw [hr] at hi2; simp at hi2
+          · rw [hr] at hi2
+            have hi' : PTree.node l' r = p' := by simpa using hi2
+            subst hi'
+            have ih := ihl l' f (d + 1) _ (by omega) hwl (hag.filter _ (hp_left hkb')) hl' hr
+            have e1 : (upsert kvs k v).filter (fun kv => bitAt kv.1 d) = kvs.filter (fun kv => bitAt kv.1 d) :=
+              uf_out (fun b => bitAt b d) hkb' kvs
+            have e2 : (upsert kvs k v).filter (fun kv => !bitAt kv.1 d) =
+                upsert (kvs.filter fun kv => !bitAt kv.1 d) k v := uf_in (fun b => !bitAt b d) (by simp [hkb']) kvs
+            rw [e1, e2]
+            exact Pr.node ih hr'
+      · rw [hdead k v d] at hi; cases hi
+
+theorem upsert_wf {base : List (Bytes × Bytes)} (hw : MapWf base) {k v : Bytes} (hk : k.length = 64)
+    (hv : v.length = 64) : MapWf (upsert base k v) := by
+  refine ⟨?_, ?_⟩
+  · have e : (upsert base k v).map (·.1) = (base.filter (·.1 != k)).map (·.1) ++ [k] := by simp [upsert]
+    rw [e]
+    refine List.nodup_append.mpr ⟨?_, (List.nodup_cons.mpr ⟨by simp, List.nodup_nil⟩), ?_⟩
+    · exact List.Nodup.sublist (List.Sublist.map _ (List.filter_sublist ..)) hw.1
+    · intro a ha b hb
+      obtain ⟨kv, hkv, rfl⟩ := List.mem_map.mp ha
+      have hne := (List.mem_filter.mp hkv).2
+      have hb' : b = k := by simpa using hb
+      subst hb'
+      simpa using hne
+  · intro kv hkv
+    unfold upsert at hkv
+    rcases List.mem_append.mp hkv with h | h
+    · exact hw.2 kv (List.mem_filter.mp h).1
+    · have : kv = (k, v) := by simpa using h
+      subst this
+      exact ⟨hk, hv⟩
+
 /-! ## §D  Verify-on-read (owner addendum, `auth-state-owner-addendum-v1.md`)
 
     A decision reads the store one key at a time; each answer arrives with the map proof against the root held in
@@ -1835,6 +2121,73 @@ def readInputs (H : Bytes → Bytes) (d : Bytes) (rows : List (Bytes × Bytes)) 
   p.inputs H ++ (mapTree 512 0 (rowIndex H d rows)).inputs H ++
     rows.flatMap fun kr => (d ++ kr.2) :: ((sup kr.1).map (d ++ ·)).toList
 
+theorem lookup_rowIndex (H : Bytes → Bytes) (d : Bytes) (rows : List (Bytes × Bytes)) (k : Bytes) :
+    lookup (rowIndex H d rows) k = (lookup rows k).map (fun r => H (d ++ r)) := by
+  induction rows with
+  | nil => rfl
+  | cons a rest ih =>
+    by_cases h : (a.1 == k) = true
+    · simp [lookup, rowIndex, List.find?_cons, h]
+    · simp only [lookup, rowIndex, List.map_cons, List.find?_cons, h] at ih ⊢
+      simpa [h] using ih
+
+theorem rts_aux {α : Type} {H : Bytes → Bytes} (hl : HashLen H) (d : Bytes)
+    (rows : List (Bytes × Bytes)) (hw : MapWf (rowIndex H d rows)) (p : PTree)
+    (sup : Bytes → Option Bytes) (hg : breakIn H (readInputs H d rows p sup) = none) :
+    ∀ (q : Query α) (a : α), q.evalProved H d (mapRoot H (rowIndex H d rows)) p sup = some a →
+      a = q.eval (lookup rows) := by
+  intro q
+  induction q with
+  | done a0 =>
+    intro a h
+    simp only [Query.evalProved, Option.some.injEq] at h
+    simp [Query.eval, h]
+  | ask k next ih =>
+    intro a h
+    have hm : ∀ r, verifyMap H (mapRoot H (rowIndex H d rows)) k p = some r →
+        r = lookup (rowIndex H d rows) k := by
+      intro r hr
+      rcases map_sound hl _ k p r hw hr with e | e
+      · exact e
+      · exact absurd (none_mono hg (fun x hx => List.mem_append_left _ hx)) e
+    simp only [Query.evalProved] at h
+    rcases hv : verifyMap H (mapRoot H (rowIndex H d rows)) k p with _ | _ | v
+    · simp [hv] at h
+    · simp only [hv] at h
+      have e := hm _ hv
+      rw [lookup_rowIndex] at e
+      rcases hh : lookup rows k with _ | r0
+      · simp only [Query.eval, hh]
+        exact ih none a h
+      · rw [hh] at e; simp at e
+    · have e := hm _ hv
+      rw [lookup_rowIndex] at e
+      rcases hh : lookup rows k with _ | r0
+      · rw [hh] at e; simp at e
+      · rw [hh] at e
+        have e' : H (d ++ r0) = v := by simpa using e.symm
+        rcases hs : sup k with _ | r
+        · simp [hv, hs] at h
+        · simp only [hv, hs] at h
+          by_cases hc : (H (d ++ r) == v) = true
+          · rw [if_pos hc] at h
+            have hc' : H (d ++ r) = v := beq_iff_eq.mp hc
+            have hm0 : (k, r0) ∈ rows := lookup_some hh
+            have i0 : d ++ r0 ∈ readInputs H d rows p sup := by
+              unfold readInputs
+              refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨(k, r0), hm0, ?_⟩)
+              simp
+            have i1 : d ++ r ∈ readInputs H d rows p sup := by
+              unfold readInputs
+              refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨(k, r0), hm0, ?_⟩)
+              simp [hs]
+            have hr := inj_of_none hg i1 i0 (hc'.trans e'.symm)
+            have hr' : r = r0 := List.append_cancel_left hr
+            subst hr'
+            simp only [Query.eval, hh]
+            exact ih (some r) a h
+          · rw [if_neg hc] at h; cases h
+
 /-- THE verify-on-read theorem: an accepted proof-checked run answers exactly as the full store would.
     No assumption about the file (no T-A); only SHA3-512 collision resistance and the root in memory. -/
 theorem read_through_sound {α : Type} {H : Bytes → Bytes} (hl : HashLen H) (d : Bytes)
@@ -1842,7 +2195,9 @@ theorem read_through_sound {α : Type} {H : Bytes → Bytes} (hl : HashLen H) (d
     (sup : Bytes → Option Bytes) (a : α)
     (h : q.evalProved H d (mapRoot H (rowIndex H d rows)) p sup = some a) :
     a = q.eval (lookup rows) ∨ breakIn H (readInputs H d rows p sup) ≠ none := by
-  sorry
+  by_cases hg : breakIn H (readInputs H d rows p sup) = none
+  case neg => exact Or.inr hg
+  exact Or.inl (rts_aux hl d rows hw p sup hg q a h)
 
 /-- The owner form: if the decision's keyed reads determine the full-store decision `F`, then the decision made
     from proof-checked rows equals `F` of the whole store.  For a payment, `hf` is IH `fold_evaluate_eq_full`
@@ -1853,19 +2208,52 @@ theorem decide_on_read {α : Type} {H : Bytes → Bytes} (hl : HashLen H) (d : B
     (rows : List (Bytes × Bytes)) (hw : MapWf (rowIndex H d rows)) (p : PTree) (sup : Bytes → Option Bytes)
     (a : α) (h : q.evalProved H d (mapRoot H (rowIndex H d rows)) p sup = some a) :
     a = F rows ∨ breakIn H (readInputs H d rows p sup) ≠ none := by
-  sorry
+  by_cases hg : breakIn H (readInputs H d rows p sup) = none
+  case neg => exact Or.inr hg
+  exact Or.inl ((rts_aux hl d rows hw p sup hg q a h).trans (hf rows hw))
 
 /-- A write's index update: upserts applied to an accepted multiproof give the canonical new root, so the
     in-memory root advances only to the index of the committed rows. -/
 def PTree.insertAll (kvs : List (Bytes × Bytes)) (t : PTree) : Option PTree :=
   kvs.foldlM (fun t kv => t.insert kv.1 kv.2 0) t
 
+theorem pr_insertAll {H : Bytes → Bytes} : ∀ (kvs : List (Bytes × Bytes)) (p p' : PTree)
+    (base : List (Bytes × Bytes)), MapWf base → (∀ kv ∈ kvs, kv.1.length = 64 ∧ kv.2.length = 64) →
+    Pr H p (mapTree 512 0 base) → p.insertAll kvs = some p' →
+    Pr H p' (mapTree 512 0 (kvs.foldl (fun m kv => upsert m kv.1 kv.2) base)) := by
+  intro kvs
+  induction kvs with
+  | nil =>
+    intro p p' base hw hk hp hi
+    have hi2 : (some p : Option PTree) = some p' := hi
+    cases hi2
+    exact hp
+  | cons kv kvs ih =>
+    intro p p' base hw hk hp hi
+    have hi' : (p.insert kv.1 kv.2 0).bind (fun t => t.insertAll kvs) = some p' := hi
+    rcases h1 : p.insert kv.1 kv.2 0 with _ | p1
+    · rw [h1] at hi'; simp at hi'
+    · rw [h1] at hi'
+      have hi'' : p1.insertAll kvs = some p' := hi'
+      have hkv := hk kv (by simp)
+      have hsk : sized kv.1 kv.2 = true := by simp [sized, hkv.1, hkv.2]
+      have hp1 := pr_insert kv.1 kv.2 hsk p p1 512 0 base (by omega) hw
+        (fun _ _ i hi => absurd hi (Nat.not_lt_zero i)) hp h1
+      exact ih p1 p' (upsert base kv.1 kv.2) (upsert_wf hw hkv.1 hkv.2)
+        (fun x hx => hk x (List.mem_cons_of_mem _ hx)) hp1 hi''
+
 theorem insertAll_correct {H : Bytes → Bytes} (hl : HashLen H) (base kvs : List (Bytes × Bytes)) (p p' : PTree)
     (hw : MapWf base) (hk : ∀ kv ∈ kvs, kv.1.length = 64 ∧ kv.2.length = 64)
     (hp : p.hash H = mapRoot H base) (hi : p.insertAll kvs = some p') :
     p'.hash H = mapRoot H (kvs.foldl (fun m kv => upsert m kv.1 kv.2) base) ∨
       breakIn H (p.inputs H ++ (mapTree 512 0 base).inputs H) ≠ none := by
-  sorry
+  by_cases hg : breakIn H (p.inputs H ++ (mapTree 512 0 base).inputs H) = none
+  case neg => exact Or.inr hg
+  left
+  have hp' : Pr H p (mapTree 512 0 base) :=
+    pr_of_hash hl hg p 512 0 base (by omega) hw (fun a _ b _ i hi => absurd hi (Nat.not_lt_zero i))
+      (fun x hx => List.mem_append_left _ hx) (fun x hx => List.mem_append_right _ hx) hp
+  exact (pr_insertAll kvs p p' base hw hk hp' hi).hash_eq
 
 /-- Exports and the sweep: entries whose log root equals the head's are exactly the log. -/
 theorem logRoot_binding {H : Bytes → Bytes} (hl : HashLen H) (xs ys : List Bytes)
