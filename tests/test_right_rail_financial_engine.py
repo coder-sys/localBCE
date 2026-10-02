@@ -39,6 +39,11 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(engine.FinancialEngineError):
                 engine.run_correction_transition_v1(request=mutant)
 
+    def test_result_decoder_has_reject_reason_tag_22(self) -> None:  # Lean Codec.lean:283, wire row 22; the unbound result's reason and requirement tags 5 -> 22
+        result = (REPO_ROOT / "artifacts" / "engine-correction" / "vectors" / "result_unbound.expected.bin").read_bytes()
+        decoded = engine.decode_correction_transition_result(result.replace(bytes.fromhex("0105030001050105"), bytes.fromhex("0116030001160116")))
+        self.assertEqual((decoded["reject_reason"], decoded["explanation"]["unresolved_requirement"]), ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE"))
+
     def test_one_worker_pin_is_shared_by_engine_checker_and_service_kit(self) -> None:
         self.assertEqual(independent.CORRECTION_TRANSITION_ARTIFACT_SHA256, engine.EVALUATOR_ARTIFACT_SHA256.hex().upper())
         source = (REPO_ROOT / "app" / "right_rail_financial_engine.py").read_bytes()

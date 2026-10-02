@@ -18,10 +18,10 @@ from tests import test_right_rail_financial_semantic_adapter as adapter_tests
 _VECTORS = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
 
 
-def _correction_corpus() -> dict[str, bytes]:
-    """The M4 P1 equivalence corpus: the retired exe's KAT request (zero authority digest, kept as request_unbound.bin),
-    its truncations, bit flips, +-1 numeric fields and header edits."""
-    request = (_VECTORS / "request_unbound.bin").read_bytes()
+def _correction_corpus(vector: str) -> dict[str, bytes]:
+    """The M4 P1 equivalence corpus over one KAT request (request_unbound.bin: the retired exe's, zero authority digest;
+    request.bin: the bound one): its truncations, bit flips, +-1 numeric fields and header edits."""
+    request = (_VECTORS / vector).read_bytes()
     link_list = request.index(b"BLFIN02") - 6
     corpus = {"vector": request, "empty": b"", "zeros-limit": bytes(4_000_000), "trailing-byte": request + b"\x00",
               "old-magic": b"BLFCMD02" + request[8:], "old-version": request[:8] + b"\x00\x02" + request[10:],
@@ -240,43 +240,38 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(self._exchange(request[:-1]), b"\x01")  # the exe's exit 72: decode refused
 
     def test_worker_answers_the_retired_exes_answers_over_the_corpus(self) -> None:
-        """Retired exe 874E2A37... (git 99ec957, artifacts/engine-correction/blind_financial_correction.exe), run on each
-        corpus input: worker form is 00 + stdout (exit 0), 01 (exit 72), 03 (exit 73; no corpus input produced one). The
-        fixture holds the SHA-256 over the per-input answer digests in corpus order; 991 exit 0, 567 exit 72.  The corpus
-        is built from the retired exe's own (zero authority digest) request.  The worker now binds the answer to the
-        authority digest (M3/M4 L2), so exactly the 361 inputs in "authority_stale" are answered AUTHORITY_STALE where the
-        exe decided otherwise (172 EVALUATION_CONFLICT, 126 ACCEPTED, 44 ACTOR_UNAUTHORIZED, 13 CLAIM_MISSING, 4 CHRONOLOGY,
-        2 REVISION_CONFLICT); the fixture keeps their old digests, and with those restored the combined hash is the exe's,
-        so the other 1,197 answers are byte-identical to it (guarded run m4q-1)."""
-        recorded = json.loads((Path(__file__).with_name("fixtures") / "correction_exe_answers.json").read_text(encoding="utf-8"))
-        corpus = _correction_corpus()
-        raw = [self._exchange(data) if data else b"\x01" for data in corpus.values()]
-        self.assertEqual(len(corpus), recorded["cases"])
-        stale, digests, new_digests = recorded["authority_stale"], [], []
-        for name, answer in zip(corpus, raw):
-            digest = hashlib.sha256(answer).digest()
-            if name in stale:
-                self.assertEqual(answer[:1], b"\x00", name)
-                result = engine.decode_correction_transition_result(answer[1:])
-                self.assertEqual((result["status"], result["reject_reason"]), ("REJECTED", "AUTHORITY_STALE"), name)
-                new_digests.append(digest)
-                digest = bytes.fromhex(stale[name])
-            digests.append(digest)
-        self.assertEqual(len(new_digests), len(stale))
-        self.assertEqual(hashlib.sha256(b"".join(new_digests)).hexdigest(), recorded["authority_stale_sha256"])
-        self.assertEqual(hashlib.sha256(b"".join(digests)).hexdigest(), recorded["combined_sha256"])
-        for data, answer in zip(corpus.values(), raw):  # and the engine entry point maps each answer as the worker gave it
-            with self.subTest(size=len(data), head=data[:10]):
-                if not data.startswith(b"BLFCMD03"):  # refused by the engine before the worker (exe: exit 72)
-                    with self.assertRaises(engine.FinancialEngineInputError):
-                        engine.run_correction_transition_v1(request=data)
-                elif answer[:1] == b"\x00":
-                    self.assertEqual(engine.run_correction_transition_v1(request=data), engine.decode_correction_transition_result(answer[1:]))
-                else:
-                    self.assertEqual(answer, b"\x01")
-                    with self.assertRaises(engine.FinancialEngineResultError) as raised:
-                        engine.run_correction_transition_v1(request=data)
-                    self.assertEqual(str(raised.exception), "evaluator_input_rejected")
+        """Retired exe 874E2A37... (git 99ec957; its answers are the trunk worker 8EB77363's, guarded runs m4q-1 and m4f-40) on each
+        corpus input: worker form is 00 + stdout (exit 0), 01 (exit 72), 03 (exit 73; none here).  The fixture holds, per corpus
+        (unbound = the exe's zero-digest request, bound = request.bin, which reaches the decision logic and the ACCEPTED encoder),
+        the inputs the worker answers differently, by new reason with their old digests and why, and the hash over all old answers."""
+        fixture = json.loads((Path(__file__).with_name("fixtures") / "correction_exe_answers.json").read_text(encoding="utf-8"))
+        for vector, name in (("request_unbound.bin", "unbound"), ("request.bin", "bound")):
+            recorded, corpus = fixture[name], _correction_corpus(vector)
+            raw = [self._exchange(data) if data else b"\x01" for data in corpus.values()]
+            moved = {key: (reason, old) for reason, group in recorded["changed"].items() for key, old in group.items()}
+            digests, new_digests = [], []
+            for key, answer in zip(corpus, raw):
+                digest = hashlib.sha256(answer).digest()
+                if key in moved:
+                    result = engine.decode_correction_transition_result(answer[1:]) if answer[:1] == b"\x00" else {}
+                    self.assertEqual((result.get("status"), result.get("reject_reason")), ("REJECTED", moved[key][0]), key)
+                    new_digests.append(digest)
+                    digest = bytes.fromhex(moved[key][1])
+                digests.append(digest)
+            self.assertEqual((len(corpus), hashlib.sha256(b"".join(new_digests)).hexdigest(), hashlib.sha256(b"".join(digests)).hexdigest()),
+                             (recorded["cases"], recorded["changed_sha256"], recorded["combined_sha256"]), name)
+            for data, answer in zip(corpus.values(), raw):  # and the engine entry point maps each answer as the worker gave it
+                with self.subTest(name, size=len(data), head=data[:10]):
+                    if not data.startswith(b"BLFCMD03"):  # refused by the engine before the worker (exe: exit 72)
+                        with self.assertRaises(engine.FinancialEngineInputError):
+                            engine.run_correction_transition_v1(request=data)
+                    elif answer[:1] == b"\x00":
+                        self.assertEqual(engine.run_correction_transition_v1(request=data), engine.decode_correction_transition_result(answer[1:]))
+                    else:
+                        self.assertEqual(answer, b"\x01")
+                        with self.assertRaises(engine.FinancialEngineResultError) as raised:
+                            engine.run_correction_transition_v1(request=data)
+                        self.assertEqual(str(raised.exception), "evaluator_input_rejected")
 
     def test_correction_frame_at_the_cap_is_answered_inside_the_worker_bound(self) -> None:
         """Both 9,900-row frames are decided REJECTED / SCOPE_MISMATCH (a 158-byte result) by one worker that stays live and
