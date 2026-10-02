@@ -261,8 +261,13 @@ class EvaluatorWorkerTests(unittest.TestCase):
                     self.assertEqual(str(raised.exception), "evaluator_input_rejected")
 
     def test_correction_frame_at_the_cap_is_answered_inside_the_worker_bound(self) -> None:
-        """OPEN CAPACITY LIMIT (M4 P1 finding 3; table in its commit record): the worker commits ~190 B per frame byte, so the
-        largest valid frame (7,150,826 B) needs 1.38 GB and fails closed at the 1 GB cap; W=63 (5,002,526 B) fits at 964 MB."""
+        """Both 9,900-row frames are decided REJECTED / SCOPE_MISMATCH (a 158-byte result) by one worker that stays live and
+        flat.  Pin 8EB77363, guarded run cc-cap-1 (2026-10-02), fresh worker, seconds / commit after: W=63 (5,002,526 B)
+        0.70 s / 104.5 MB; the largest valid frame (7,150,826 B) 0.96 s / 138.2 MB.  The bound of 250 MB is ~1.8x that
+        and under the 400 MB recycle bound.  Pin 58CDA012 committed ~190 B per frame byte: 964 MB, then 1.38 GB, failing
+        closed at the 1 GB cap (M4 P1 finding 3).  OPEN RESULT-CAP LIMIT (rr-core design question): these rejections never
+        reach it, but an accepted correction near 7 MB is answered 03, result encoding failed (evaluator_result_rejected)
+        on both pins, because its BLFCRES3 result embeds the input (lead measure2, runs cc-m2-new-*)."""
         request, data = (_VECTORS / "request.bin").read_bytes(), self._wires()[0][1]
         at = request.index(b"BLFIN02")  # the KAT's sized input (4-byte length before it) is swapped for a 9,900-row one
         rest = request[at + int.from_bytes(request[at - 4:at], "big"):]
@@ -275,18 +280,17 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertLessEqual(len(largest), engine.MAX_CORRECTION_TRANSITION_BYTES)
         for wire in (fits, largest):
             engine._close_evaluator()
-            worker, workspace = engine._running_evaluator(), engine._evaluator[1]
-            started = timeit.default_timer()
-            if wire is fits:  # decided (an 01 or 03 answer raises), and the worker that now holds ~1 GB is recycled
-                engine.run_correction_transition_v1(request=wire)
-            else:
-                with self.assertRaises(engine.FinancialEngineContainmentError) as raised:
-                    engine.run_correction_transition_v1(request=wire)
-                self.assertEqual(str(raised.exception), "evaluator_containment")
-            self.assertLess(timeit.default_timer() - started, engine.EVALUATOR_TIMEOUT_SECONDS)  # memory, not time
-            self.assertFalse(worker.alive)
-            self.assertEqual(engine._evaluator, [])
-            self.assertFalse(workspace.exists())
+            worker, commits = engine._running_evaluator(), []
+            for _ in range(3):
+                started = timeit.default_timer()
+                result = engine.run_correction_transition_v1(request=wire)
+                self.assertLess(timeit.default_timer() - started, engine.EVALUATOR_TIMEOUT_SECONDS)
+                self.assertEqual((result["status"], result["reject_reason"]), ("REJECTED", "SCOPE_MISMATCH"))
+                commits.append(worker.commit_bytes())
+            self.assertEqual(engine._evaluator[:1], [worker])  # not recycled
+            self.assertTrue(worker.alive)
+            self.assertLess(max(commits), 250_000_000, commits)
+            self.assertLess(max(commits[1:]) - commits[1], 16_000_000, commits)
 
     def test_payment_frames_keep_the_worker_flat(self) -> None:
         frames = self._frames()

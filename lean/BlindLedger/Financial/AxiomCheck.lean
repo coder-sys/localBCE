@@ -114,7 +114,8 @@ namespace BlindLedger.Financial
 #print axioms BlindLedger.Financial.Fast.decodeFinancialInputBA₂_eq
 #print axioms BlindLedger.Financial.financialInputWellFormed_of_decodeFinancialInput
 #print axioms BlindLedger.Financial.evaluate_eq_evaluateWellFormed
-#print axioms BlindLedger.Financial.workerRespondBA_eq
+/-- info: 'BlindLedger.Financial.workerRespondBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespondBA_eq
 /-- info: 'BlindLedger.Financial.evaluateWire_evaluated' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.evaluateWire_evaluated
 /-- info: 'BlindLedger.Financial.workerRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
@@ -413,6 +414,30 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.record_link_within_open
 /-- info: 'BlindLedger.Financial.Payment.linkRefusal_implies_r1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.linkRefusal_implies_r1
+/-- info: 'BlindLedger.Financial.Fast.size_toByteArray' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.size_toByteArray
+/-- info: 'BlindLedger.Financial.Fast.encodeFinancialInputBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeFinancialInputBA_eq
+/-- info: 'BlindLedger.Financial.Fast.sizedBA_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.sizedBA_eq
+/-- info: 'BlindLedger.Financial.Fast.sizedBA_eq_append' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.sizedBA_eq_append
+/-- info: 'BlindLedger.Financial.Fast.encodeInputBody_head' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeInputBody_head
+/-- info: 'BlindLedger.Financial.Fast.encodeCorrectionTransitionRequestBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeCorrectionTransitionRequestBA_eq
+/-- info: 'BlindLedger.Financial.Fast.beq_toByteArray_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.beq_toByteArray_iff
+/-- info: 'BlindLedger.Financial.Fast.decodeCorrectionTransitionRequestBA₂_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.decodeCorrectionTransitionRequestBA₂_eq
+/-- info: 'BlindLedger.Financial.Fast.encodeOptionalMutation_head' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeOptionalMutation_head
+/-- info: 'BlindLedger.Financial.Fast.encodeOptionalMutationBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeOptionalMutationBA_eq
+/-- info: 'BlindLedger.Financial.Fast.encodeCorrectionTransitionResultBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeCorrectionTransitionResultBA_eq
+/-- info: 'BlindLedger.Financial.correctionRespondBA₂_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.correctionRespondBA₂_eq
 /-- info: 'BlindLedger.Financial.Offset.decideClaim_claimed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.decideClaim_claimed
 /-- info: 'BlindLedger.Financial.Offset.decideClaim_adds_claimed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
