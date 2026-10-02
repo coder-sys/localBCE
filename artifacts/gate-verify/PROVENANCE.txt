@@ -12,8 +12,8 @@ and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FR
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,311,552 bytes
-- SHA-256: 316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea
+- Size: 4,359,680 bytes
+- SHA-256: 724de1bd9a1c24b8f0c34ba2ce0cfa000df7910410d49c1f003b91d02b90e66c
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
@@ -33,7 +33,13 @@ Re-pin (2026-10-02, branch integ-20261002, merge of gate-producer and lean-publi
 gate_axioms blind_financial_axioms`, exit 0) and the in-tree build (i2-full2) are byte-identical; an earlier pair at 99b8b06 (i2-stagea, i2-stageb) gave the same bytes
 (the later commits changed one doc comment, tests and tools only). The pinned worker (`36D3FE0C...`) did not move.
 
+Re-pin (2026-10-02, branch gate-sha3, commit 96d744d): `gate_verify` moved from 316689f5... to the SHA-256 above (code only: the gate's
+SHA3 call sites now run the proved-equal fast sponge, Sha3Fast.lean; the three equalities were already proved; no decision changes, see the
+differential in the commit body). Two fresh `git archive 96d744d lean` stage builds (C:\Users\neers\rrb\le\stage-gs3-a and -b; guard suffixes
+gs3r-stagea2, gs3r-stageb; `lake build gate_verify gate_rules gate_axioms`, exit 0) and the in-tree build (gs3-b) are byte-identical. The pinned worker did not move.
+
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea (4,311,552 bytes; before the gate's SHA3 call sites moved to the proved-equal fast sponge; replaced by the SHA-256 above).
 - gate_verify SHA-256 47ba66f6b6fc30f7769d5c48a2e42a83dd9d9e91cf07532a77e7e18a1a63fc8c (4,311,040 bytes; before the root-key/usable-key split of the
   M4 review fix and the merge with lean-public's Sha3 lemmas; recoverable at 97d8e7b; replaced by the SHA-256 above).
 - gate_verify SHA-256 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916 (4,205,568 bytes; before the four mode frames and the
