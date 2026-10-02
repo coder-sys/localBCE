@@ -1,6 +1,6 @@
 # Felt-value scorecard: Hospital H
 
-CONSTITUTION Art. XII says the demo is the scorecard. `tools/right_rail_scorecard.py`
+CONSTITUTION Art. XII says the demo is the scorecard. `tests/instruments/right_rail_scorecard.py`
 runs the Hospital H journey through the real staff server and workspace page, one
 fresh page per role, into `scorecard/hospital_h.json`. `tests/test_right_rail_scorecard.py`
 fails if any unit gets worse; after an improvement, rewrite the file with

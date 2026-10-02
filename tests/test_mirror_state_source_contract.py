@@ -11,6 +11,7 @@ from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import nc_medicaid_fhir_independent as nc_fhir
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
+from tests.instruments.trust_graph_demo import demo_input
 from app.mirror.source_admission import (
     EvidenceMode,
     SourceAdmissionError,
@@ -61,7 +62,7 @@ class SyntheticTestSourceVerifier:
         value = self._parse(adapter_bytes)
         case = value["case"]
         assert isinstance(case, str)
-        graph_input_value = graph.demo_input(case)
+        graph_input_value = demo_input(case)
         graph_input = graph.canonical_input(graph_input_value)
         sources = graph_input_value["sources"]
         assert isinstance(sources, list)
@@ -131,11 +132,6 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         self.assertEqual(VERIFIER_ID, admission.verifier_id)
         self.assertEqual(VERIFIER_EPOCH, admission.verifier_epoch)
         self.assertFalse(admission.production_source_authentication)
-        telemetry = dict(admission.telemetry)
-        self.assertEqual(5, len(admission.telemetry))
-        self.assertEqual(len(admission.graph_artifact), telemetry["artifact_bytes"])
-        self.assertFalse(telemetry["proof_performance_claim"])
-        self.assertNotIn("SYNTH_", repr(admission.telemetry))
         self.assertFalse(receipt["production_source_authentication"])
         self.assertEqual("synthetic_test_only", receipt["evidence_mode"])
         self.assertEqual(
@@ -340,7 +336,7 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         class StaleGraphVerifier(SyntheticTestSourceVerifier):
             def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
                 result = super().verify(adapter_bytes)
-                value = graph.demo_input("confirmed")
+                value = demo_input("confirmed")
                 value["sources"][0]["coverage_effective_end"] = 6_999
                 return replace(result, graph_input=graph.canonical_input(value))
 

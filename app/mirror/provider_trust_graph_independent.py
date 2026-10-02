@@ -11,11 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-import os
-from pathlib import Path
 import re
-import sys
-import stat
 from typing import Mapping, Sequence
 
 from app.mirror.error_boundary import raise_redacted
@@ -591,51 +587,6 @@ def _validate_sources(
     return items
 
 
-def verify_file(path: str | Path) -> dict[str, object]:
-    try:
-        file_path = Path(path)
-    except Exception:
-        raise_redacted(IndependentProviderTrustGraphError, "file:read")
-    descriptor = -1
-    try:
-        before_stat = os.lstat(os.fspath(file_path))
-        if stat.S_ISLNK(before_stat.st_mode) or not stat.S_ISREG(before_stat.st_mode):
-            raise_redacted(IndependentProviderTrustGraphError, "file:read")
-        if before_stat.st_size > MAX_ARTIFACT_BYTES:
-            raise_redacted(IndependentProviderTrustGraphError, "file:byte-cap")
-        before = (int(before_stat.st_dev), int(before_stat.st_ino), int(before_stat.st_nlink), int(before_stat.st_size), int(before_stat.st_mtime_ns))
-        descriptor = os.open(os.fspath(file_path), os.O_RDONLY | getattr(os, "O_BINARY", 0))
-        opened_stat = os.fstat(descriptor)
-        opened = (int(opened_stat.st_dev), int(opened_stat.st_ino), int(opened_stat.st_nlink), int(opened_stat.st_size), int(opened_stat.st_mtime_ns))
-        if stat.S_ISLNK(opened_stat.st_mode) or not stat.S_ISREG(opened_stat.st_mode) or opened != before:
-            raise_redacted(IndependentProviderTrustGraphError, "file:changed")
-        raw = os.read(descriptor, MAX_ARTIFACT_BYTES + 1)
-        closed_stat = os.fstat(descriptor)
-        closed = (int(closed_stat.st_dev), int(closed_stat.st_ino), int(closed_stat.st_nlink), int(closed_stat.st_size), int(closed_stat.st_mtime_ns))
-        if closed != opened:
-            raise_redacted(IndependentProviderTrustGraphError, "file:changed")
-    except IndependentProviderTrustGraphError:
-        raise
-    except Exception:
-        raise_redacted(IndependentProviderTrustGraphError, "file:read")
-    finally:
-        if descriptor != -1:
-            try:
-                os.close(descriptor)
-            except Exception:
-                raise_redacted(IndependentProviderTrustGraphError, "file:read")
-    try:
-        final_stat = os.lstat(os.fspath(file_path))
-    except Exception:
-        raise_redacted(IndependentProviderTrustGraphError, "file:read")
-    final = (int(final_stat.st_dev), int(final_stat.st_ino), int(final_stat.st_nlink), int(final_stat.st_size), int(final_stat.st_mtime_ns))
-    if stat.S_ISLNK(final_stat.st_mode) or not stat.S_ISREG(final_stat.st_mode) or final != before:
-        raise_redacted(IndependentProviderTrustGraphError, "file:changed")
-    if len(raw) > MAX_ARTIFACT_BYTES:
-        raise_redacted(IndependentProviderTrustGraphError, "file:byte-cap")
-    return verify_bytes(raw)
-
-
 _NEW_OUTPUT_KEYS_V1 = {"schema", "subject", "observation_snapshot", "source_coverage", "findings", "discrepancies", "report", "authority"}
 _NEW_OUTPUT_KEYS_V2 = _NEW_OUTPUT_KEYS_V1 | {"profile"}
 _NEW_IDENTITY_KEYS_V1 = {"provider_graph_subject", "scope", "observation_time", "snapshot_id", "snapshot_root", "source_coverage_root", "findings_root", "discrepancies_root"}
@@ -785,19 +736,3 @@ def verify_artifact_v2(raw: bytes, profile_registry: Mapping[str, object]) -> _V
 def verify_bytes_v2(raw: bytes, profile_registry: Mapping[str, object]) -> dict[str, object]:
     return dict(_new_graph_checked(raw, profile_registry).summary)
 
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("usage: python -m app.mirror.provider_trust_graph_independent ARTIFACT.json", file=sys.stderr)
-        return 2
-    try:
-        print(json.dumps(verify_file(args[0]), sort_keys=True, separators=(",", ":")))
-        return 0
-    except (OSError, IndependentProviderTrustGraphError):
-        print("REJECT input", file=sys.stderr)
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

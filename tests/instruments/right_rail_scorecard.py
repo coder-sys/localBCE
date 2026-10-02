@@ -14,7 +14,7 @@ fixes; "manual_before" is an assumption with its source, or unknown.
 Standing claims: synthetic, non-PHI, nonpayment, proofSuiteId=null,
 production_usable=false, activation=false.
 
-    python tools/right_rail_scorecard.py [--write]   # --write rewrites docs/scorecard/hospital_h.json
+    python tests/instruments/right_rail_scorecard.py [--write]   # --write rewrites docs/scorecard/hospital_h.json
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import tempfile
 import threading
 from typing import Any
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 

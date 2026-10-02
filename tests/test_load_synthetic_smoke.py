@@ -1,4 +1,4 @@
-"""Smoke test for tools/load_synthetic.py: a tiny real run of each path, its history round trip, and its bounds."""
+"""Smoke test for tests/instruments/load_synthetic.py: a tiny real run of each path, its history round trip, and its bounds."""
 
 import tempfile
 import unittest
@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from app import minimal_clearance_verifier_process as process
-from tools.load_synthetic import run
+from tests.instruments.load_synthetic import run
 
 
 class LoadSyntheticSmokeTest(unittest.TestCase):

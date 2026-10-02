@@ -18,7 +18,7 @@ import app.right_rail_financial_owner_independent as checker_module
 from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority
 from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database
 from tests.test_right_rail_financial_acceptance import _Clock, _image
-from tools import load_synthetic as harness
+from tests.instruments import load_synthetic as harness
 
 _AUTHORITY = SyntheticTrustedAuthority()
 _CRASH_CHILD = """

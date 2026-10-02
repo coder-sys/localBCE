@@ -13,30 +13,30 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 36_933
+PRODUCT_CODE_LINES = 35_410
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 27_912
-MARKDOWN_FILES = 20
+EVIDENCE_CODE_LINES = 28_970
+MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 125_196
+MARKDOWN_BYTES = 123_153
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_387,
     "app/right_rail_financial_owner_independent.py": 4_617,
-    "app/right_rail_financial_semantic_adapter.py": 2_097,
-    "app/right_rail_financial_mirror.py": 1_497,
+    "app/right_rail_financial_semantic_adapter.py": 2_089,
+    "app/right_rail_financial_mirror.py": 1_375,
     "app/right_rail_financial_engine.py": 1_502,
     "app/right_rail_financial_switch.py": 1_314,
     "app/right_rail_financial_line_pack.py": 253,
-    "app/right_rail_financial_followthrough.py": 337,
+    "app/right_rail_financial_followthrough.py": 336,
 }
 FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Copy-paste: repeated 6-line windows (>=120 chars) across product Python.
 # Independent checkers may restate a small shared schema by design; the rest
 # is duplication to delete.
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
-DUPLICATED_WINDOWS = 410
+DUPLICATED_WINDOWS = 350
 
 
 def _live_files():

@@ -4933,7 +4933,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         return execution
                     wrong = replace(mutation["resulting_result"], **change(mutation["resulting_result"], mutation))
                     mutation["resulting_result"] = wrong
-                    mutation["resulting_result_wire"] = semantic.encode_blfres02_result(wrong)
+                    mutation["resulting_result_wire"] = semantic._encode_blfres02_result(wrong)
                     mutation["case_delta"]["record"]["status"] = wrong.case_status
                     financial_engine._validate_correction_result_shape(execution.result)
                     return execution
@@ -4980,7 +4980,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     else:
                         result = mutation["resulting_result"]
                         mutation["resulting_result"] = replace(result, **{field: change(getattr(result, field))})
-                        mutation["resulting_result_wire"] = semantic.encode_blfres02_result(mutation["resulting_result"])
+                        mutation["resulting_result_wire"] = semantic._encode_blfres02_result(mutation["resulting_result"])
                     financial_engine._validate_correction_result_shape(execution.result)
                     return execution
 

@@ -17,7 +17,7 @@ import app.right_rail_financial_owner as owner_module
 from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority, _checker_authority
 from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
 from tests.test_right_rail_financial_acceptance import _image
-from tools.load_synthetic import _SCOPE as SCOPE, _setup
+from tests.instruments.load_synthetic import _SCOPE as SCOPE, _setup
 
 AUTHORITY = SyntheticTrustedAuthority()
 CONFIG = FinancialOwnerConfig(**SCOPE)

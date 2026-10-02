@@ -264,7 +264,6 @@ class SourceAdmission:
     receipt: bytes
     report_id: str
     production_source_authentication: bool
-    telemetry: tuple[tuple[str, int | bool | str | None], ...]
     profile_version: int = 1
     source_contract_digest: str | None = None
     envelope_digest: str | None = None
@@ -550,9 +549,9 @@ class SourceAdmissionService:
         effective_profile = result.graph_profile or self.profile
         try:
             if _v2_profile(effective_profile):
-                graph_artifact, graph_telemetry = graph.build_report(result.graph_input, profile=effective_profile)
+                graph_artifact = graph.build_report(result.graph_input, profile=effective_profile)
             else:
-                graph_artifact, graph_telemetry = graph.build_report(result.graph_input)
+                graph_artifact = graph.build_report(result.graph_input)
         except Exception:
             raise_redacted(SourceAdmissionError, "graph:producer-reject")
         try:
@@ -617,16 +616,6 @@ class SourceAdmissionService:
         verification_receipt = _canonical(verification_receipt_value)
         if expected_receipt is not None and (type(expected_receipt) is not bytes or expected_receipt != source_receipt):
             raise SourceAdmissionError("retry:conflict")
-        telemetry = tuple(
-            (key, graph_telemetry[key])
-            for key in (
-                "artifact_bytes",
-                "wall_time_ns",
-                "process_tree_peak_bytes",
-                "process_tree_scope",
-                "proof_performance_claim",
-            )
-        )
         return SourceAdmission(
             profile_id=effective_profile.profile_id,
             profile_digest=effective_profile.profile_digest,
@@ -637,7 +626,6 @@ class SourceAdmissionService:
             receipt=source_receipt,
             report_id=report_id,
             production_source_authentication=False,
-            telemetry=telemetry,
             profile_version=effective_profile.version,
             source_contract_digest=result.source_contract_digest,
             envelope_digest=_raw_digest("envelope", adapter_bytes),

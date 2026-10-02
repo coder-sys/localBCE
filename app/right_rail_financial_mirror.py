@@ -22,7 +22,6 @@ from typing import Any, Final
 from app import right_rail_financial_engine as engine
 from app.right_rail_financial_owner import (
     CONTINUITY_ERROR_CODES,
-    FinancialDispatchError,
     FinancialError,
     FinancialOwner,
     ProgramFundingReceipt,
@@ -240,10 +239,6 @@ class FinancialMirrorInputError(FinancialMirrorError):
 
 
 class FinancialMirrorContinuityError(FinancialMirrorError):
-    pass
-
-
-class FinancialMirrorDispatchError(FinancialMirrorError):
     pass
 
 
@@ -1220,80 +1215,14 @@ class FinancialMirror:
     def _command_result(self, value: Mapping[str, Any]) -> dict[str, Any]:
         return {**_project(value, _COMMAND), "schema": MIRROR_SCHEMA, "resource": "command_result"}
 
-    def authorize_offset(
-        self,
-        *,
-        item_id: str,
-        claim_id: str,
-        actor_id: str = "synthetic-official",
-        actor_role: str = "FINANCE_DECISION",
-        expected_revision: int | None = None,
-        action_id: str | None = None,
-        decision_at_ms: int | None = None,
-        evaluation_id: str | None = None,
-        evaluation_result_digest: str | bytes | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.authorize_offset(
-                item_id=item_id,
-                claim_id=claim_id,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                expected_revision=expected_revision,
-                action_id=action_id,
-                decision_at_ms=decision_at_ms,
-                evaluation_id=evaluation_id,
-                evaluation_result_digest=evaluation_result_digest,
-            )
-        )
+    def authorize_offset(self, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.authorize_offset(**fields))
 
-    def reject_offset_and_authorize_correction(
-        self,
-        *,
-        item_id: str,
-        claim_id: str,
-        actor_id: str = "synthetic-official",
-        actor_role: str = "FINANCE_DECISION",
-        expected_revision: int | None = None,
-        action_id: str | None = None,
-        decision_at_ms: int | None = None,
-        evaluation_id: str | None = None,
-        evaluation_result_digest: str | bytes | None = None,
-        staff_read_binding: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.reject_offset_and_authorize_correction(
-                item_id=item_id,
-                claim_id=claim_id,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                expected_revision=expected_revision,
-                action_id=action_id,
-                decision_at_ms=decision_at_ms,
-                evaluation_id=evaluation_id,
-                evaluation_result_digest=evaluation_result_digest,
-                staff_read_binding=staff_read_binding,
-            )
-        )
+    def reject_offset_and_authorize_correction(self, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.reject_offset_and_authorize_correction(**fields))
 
-    def acknowledge_action(
-        self,
-        action_id: str,
-        acknowledgment_ref: str,
-        *,
-        actor_id: str = "synthetic-receiver",
-        actor_role: str = "RECEIVER",
-        expected_revision: int | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.acknowledge_action(
-                action_id,
-                acknowledgment_ref,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                expected_revision=expected_revision,
-            )
-        )
+    def acknowledge_action(self, *args: Any, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.acknowledge_action(*args, **fields))
 
     def retry_action(self, action_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         return self._command_result(self.owner.retry_action(action_id, payload=payload))
@@ -1301,65 +1230,14 @@ class FinancialMirror:
     def record_payment_evidence(self, **fields: Any) -> dict[str, Any]:
         return self._command_result(self.owner.record_payment_evidence(**fields))
 
-    def record_reporting_correction(
-        self,
-        *,
-        item_id: str,
-        report_id: str,
-        evidence_id: str | None = None,
-        actor_id: str = "synthetic-reporter",
-        actor_role: str = "REPORTING_EDITOR",
-        expected_revision: int | None = None,
-        event_at_ms: int | None = None,
-        supersedes: str | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.record_reporting_correction(
-                item_id=item_id,
-                report_id=report_id,
-                evidence_id=evidence_id,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                expected_revision=expected_revision,
-                event_at_ms=event_at_ms,
-                supersedes=supersedes,
-            )
-        )
+    def record_reporting_correction(self, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.record_reporting_correction(**fields))
 
-    def record_reporting_evidence(
-        self,
-        *,
-        item_id: str,
-        report_id: str,
-        evidence_id: str | None = None,
-        actor_id: str = "synthetic-reporter",
-        actor_role: str = "REPORTING_EDITOR",
-        expected_revision: int | None = None,
-        event_at_ms: int | None = None,
-    ) -> dict[str, Any]:
-        return self._command_result(
-            self.owner.record_reporting_evidence(
-                item_id=item_id,
-                report_id=report_id,
-                evidence_id=evidence_id,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                expected_revision=expected_revision,
-                event_at_ms=event_at_ms,
-            )
-        )
+    def record_reporting_evidence(self, **fields: Any) -> dict[str, Any]:
+        return self._command_result(self.owner.record_reporting_evidence(**fields))
 
     def verify_integrity(self) -> dict[str, Any]:
         return {**_project(self.owner.verify_integrity(), _INTEGRITY), "mirror_schema": MIRROR_SCHEMA, "integrity": "VERIFIED"}
-
-    def dispatch_outbox(self, *args: Any, **kwargs: Any) -> None:
-        """Keep corporate egress and live dispatch permanently disabled."""
-
-        try:
-            self.owner.dispatch_outbox(*args, **kwargs)
-        except FinancialDispatchError:
-            _fail(FinancialMirrorDispatchError, "dispatch_disabled")
-        _fail(FinancialMirrorDispatchError, "dispatch_disabled")
 
     @staticmethod
     def validate_continuity_package(
