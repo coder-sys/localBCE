@@ -229,11 +229,12 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         before = _rows(self.store)
         self.assertEqual(self._pay("m3-p2", common_origin_id="o-m3-p1", evidence_id="e-m3-p1", local_ref="payment:m3-p1")["status"], "DUPLICATE")
         again = self._pay("m3-c1", common_origin_id="o-m3-p1", amount_cents=101)  # the owner reports CONFLICT for recorded and unchanged alike
+        self.assertEqual(_rows(self.store), before)
         self.assertEqual((again["status"], again["conflict_id"]), ("CONFLICT", conflict["conflict_id"]))
         for evidence_id in ("e-m3-p1", "e-m3-c1"):
             with self.assertRaisesRegex(owner_module.FinancialConflictError, "^evidence_identity_conflict$"):
                 self._pay("m3-p3", evidence_id=evidence_id)
-        self.assertEqual([_rows(self.store)[i] for i in (0, 1, 4)], [before[i] for i in (0, 1, 4)])
+        self.assertEqual(_rows(self.store), before)
 
     def test_a_tampered_answer_is_refused_closes_the_worker_and_writes_nothing(self) -> None:
         """Each answer below is well framed and byte-exact with one field changed, so only the adapter's binding to the command and the stored rows can stop it."""
@@ -260,6 +261,39 @@ class LeanPaymentOwnerTests(unittest.TestCase):
             with self.subTest(name, field=field), patch.object(engine, "_evaluate_wire", lambda wire: _swap(real(wire), obligation_id, field, value)):
                 with self.assertRaisesRegex(owner_module.FinancialIntegrityError, "^lean_payment:payment_binding$"):
                     acts[name]()
+                self.assertEqual((_rows(self.store), engine._evaluator), (before, []))
+
+    def test_a_duplicate_or_alias_answer_lean_would_not_give_is_refused_and_writes_nothing(self) -> None:
+        """Lean answers DUPLICATE only for a stored evidence id (a fresh record's twin is a stored payment of the same amount) and ALIAS only for a
+        record of a stored payment's amount; each forged answer below passed the origin check alone."""
+        self._pay()
+        with self.store._connect() as connection:
+            obligation_id = connection.execute("SELECT obligation_id FROM obligations").fetchone()[0]
+        reverse = lambda evidence_id: lambda: self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id=evidence_id, common_origin_id="o-m3-p1", event_at_ms=self.at)  # noqa: E731
+        cases = [("no twin for a fresh origin", 6, None, lambda: self._pay("m3-p2", evidence_id="e-m3-p1", common_origin_id="o-new")),
+                 ("another amount", 6, "m3-p1", lambda: self._pay("m3-p2", evidence_id="e-m3-p1", amount_cents=101, common_origin_id="o-m3-p1")),
+                 ("unstored evidence", 6, "m3-p1", lambda: self._pay("m3-p2", common_origin_id="o-m3-p1")),
+                 ("reversal, unstored evidence", 6, None, reverse("r-m3-p1")),
+                 ("alias of another amount", 5, "m3-p1", lambda: self._pay("m3-p2", amount_cents=101, common_origin_id="o-m3-p1")),
+                 ("alias of a reversal", 5, "m3-p1", reverse("r-m3-p1"))]
+        before, real = _rows(self.store), engine._evaluate_wire
+
+        def forge(answer: bytes, tag: int, lead: str | None) -> bytes:
+            writer = adapter._WireWriter()
+            writer.option_identifier(lead, "payment_id")
+            body = bytes(writer._buffer)
+            if tag == 5:  # the real answer's own evidence row, so only the alias binding is left to refuse
+                reader = adapter._WireReader(answer, max_bytes=adapter.MAX_WIRE_BYTES)
+                reader.take(8, "magic"), reader.byte("tag"), reader.boolean("evidence")
+                start = reader._offset
+                adapter._read_image(reader, adapter._EVIDENCE_ROW, adapter._encode_evidence, obligation_id)
+                body = body[1:] + answer[start:reader._offset]
+            return adapter.PAYMENT_ANSWER_MAGIC + bytes([tag]) + body
+
+        for name, tag, lead, act in cases:
+            with self.subTest(name), patch.object(engine, "_evaluate_wire", lambda wire: forge(real(wire), tag, lead)):
+                with self.assertRaisesRegex(owner_module.FinancialIntegrityError, "^lean_payment:payment_binding$"):
+                    act()
                 self.assertEqual((_rows(self.store), engine._evaluator), (before, []))
 
     def test_a_wrong_total_in_leans_answer_is_refused_before_commit_and_the_worker_stays_open(self) -> None:

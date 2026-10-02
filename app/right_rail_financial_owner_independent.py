@@ -1244,6 +1244,7 @@ def _verify_correction_followup_records(
     """Independently bind durable correction work to its committed source rows."""
 
     seen_work_ids: set[str] = set()
+    engines: dict[str, tuple[int, str]] | None = None
     for event_value in events:
         event = dict(event_value)
         if (
@@ -1303,7 +1304,7 @@ def _verify_correction_followup_records(
         if (
             artifact["contract"] != CORRECTION_TRANSITION_OPERATION
             or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
-            or str(artifact["sha256"]) not in correction_engines()
+            or str(artifact["sha256"]) not in (engines := engines or correction_engines())
         ):
             _fail("history:correction-followup-artifact-binding")
 
@@ -2978,6 +2979,8 @@ def _verify_conflicts(
         candidate = evidence.get(candidate_id)
         if candidate is None or candidate["kind"] != "PAYMENT_CONFIRMATION" or candidate["common_origin_id"] != common_origin_id:
             _fail("conflict:candidate")
+        if conflict_id != f"conflict:{candidate['item_id']}:{common_origin_id}:{candidate_id}":
+            _fail("conflict:id-form")
         existing_id = row["existing_payment_id"]
         if existing_id is None or str(existing_id) not in payments:
             _fail("conflict:existing-payment")

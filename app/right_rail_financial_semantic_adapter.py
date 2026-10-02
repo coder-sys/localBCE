@@ -1177,12 +1177,14 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
         elif tag == 5:
             payment_id, evidence = reader.identifier("payment_id"), evidence_row()
             bind_evidence(evidence)
-            bind(payment_id == by_origin.get(origin))
+            bind(command["kind"] == "record" and payment_id == by_origin.get(origin) and stored[payment_id]["amount_cents"] == command["amount_cents"])
             outcome = PaymentOutcome("ALIAS", payment_id=payment_id, evidence=evidence, event_kind="PAYMENT_DUPLICATE_EVIDENCE", event_payload={
                 "candidate_evidence_id": evidence["evidence_id"], "existing_payment_id": payment_id, "common_origin_id": evidence["common_origin_id"]})
         elif tag == 6:
             duplicate_of = reader.option_identifier("payment_id")
-            bind(duplicate_of == ((pid if pid in stored else by_origin.get(origin)) if command["kind"] == "record" else None))
+            record = command["kind"] == "record"  # Lean answers DUPLICATE only for a stored evidence id; a fresh record's twin must be a stored payment of that amount
+            bind(command["evidence_id"] in known and duplicate_of == ((pid if pid in stored else by_origin.get(origin)) if record else None)
+                 and (not record or duplicate_of is not None and (pid in stored or stored[duplicate_of]["amount_cents"] == command["amount_cents"])))
             outcome = PaymentOutcome("DUPLICATE", payment_id=duplicate_of)
         elif tag == 7 and 1 <= (code := reader.byte("refusal")) <= 16:
             outcome = PaymentOutcome("REFUSED", reason=code)
