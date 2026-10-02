@@ -836,6 +836,39 @@ theorem logConsistency_complete {H : Bytes → Bytes} (xs zs : List Bytes) (hn :
     ∃ p, verifyConsistency H xs.length (xs ++ zs).length (logRoot H xs) (logRoot H (xs ++ zs)) p = true := by
   sorry
 
+/-- Exports and the sweep: entries whose log root equals the head's are exactly the log. -/
+theorem logRoot_binding {H : Bytes → Bytes} (hl : HashLen H) (xs ys : List Bytes)
+    (hx : xs.length ≤ maxSize) (hy : ys.length ≤ maxSize) (h : logRoot H xs = logRoot H ys) :
+    xs = ys ∨ breakIn H (logInputs H xs ++ logInputs H ys) ≠ none := by
+  by_cases hg : breakIn H (logInputs H xs ++ logInputs H ys) = none
+  case neg => exact Or.inr hg
+  left
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  have hxL : ∀ x ∈ logInputs H xs, x ∈ logInputs H xs ++ logInputs H ys := fun x hx => List.mem_append_left _ hx
+  have hyL : ∀ x ∈ logInputs H ys, x ∈ logInputs H xs ++ logInputs H ys := fun x hx => List.mem_append_right _ hx
+  have emp : ∀ zs : List Bytes, zs ≠ [] → zs.length ≤ maxSize →
+      (∀ x ∈ logInputs H zs, x ∈ logInputs H xs ++ logInputs H ys) →
+      ([] : Bytes) ∈ logInputs H xs ++ logInputs H ys → logRoot H zs = H [] → False := by
+    intro zs hne hlen hsub hnil hr
+    obtain ⟨t, htr, _, hti⟩ := log_tree zs hne hlen hsub
+    obtain ⟨y0, hy0m, hy0e, hy0ne⟩ := LT.root_spec H t
+    have := inj_of_none hg (x := y0) (y := []) (hti _ hy0m) hnil (by rw [← hy0e, htr, hr])
+    exact hy0ne this
+  have hnx : ([] : Bytes) ∈ logInputs H xs ++ logInputs H ys :=
+    List.mem_append_left _ (List.mem_append_left _ (List.mem_cons_self ..))
+  by_cases hx0 : xs = []
+  · by_cases hy0 : ys = []
+    · rw [hx0, hy0]
+    · subst hx0
+      exact (emp ys hy0 hy hyL hnx (by rw [← h]; simp [logRoot])).elim
+  · by_cases hy0 : ys = []
+    · subst hy0
+      exact (emp xs hx0 hx hxL hnx (by rw [h]; simp [logRoot])).elim
+    · obtain ⟨tx, htxr, htxl, htxi⟩ := log_tree xs hx0 hx hxL
+      obtain ⟨ty, htyr, htyl, htyi⟩ := log_tree ys hy0 hy hyL
+      have := LT.inj hl64 hg tx ty htxi htyi (by rw [htxr, htyr, h])
+      rw [← htxl, ← htyl, this]
+
 /-! ## §B  The map: binary sparse Merkle tree over 512-bit keys, a lone key's leaf lifted to its subtree root
 
     Empty subtree = `zeroDigest`; leaf = `H (0x02 ‖ K ‖ V)`; node = `H (0x03 ‖ L ‖ R)`; bit `i` of `K` is
@@ -1752,12 +1785,594 @@ def applyBatch (H : Bytes → Bytes) (h : Hydration) (base : Nat) (new : List En
       t.insert K (bucketDigest H (bucketItems H (all.filter (hasKey k)))) 0)
     h.tree
 
+/-! ### §C helpers: the rule engine's decision list (this file's own) -/
+
+theorem bnot_eq {b : Bool} : ((!b) = true) ↔ b = false := by cases b <;> simp
+
+theorem not_contains {α : Type} [BEq α] [LawfulBEq α] {l : List α} {a : α} : l.contains a = false ↔ a ∉ l := by
+  constructor
+  · intro h hm
+    have := List.contains_iff_mem.mpr hm
+    rw [h] at this
+    cases this
+  · intro h
+    cases hc : l.contains a
+    · rfl
+    · exact absurd (List.contains_iff_mem.mp hc) h
+
+theorem filter_sub_filter {α : Type} (p q : α → Bool) :
+    ∀ l : List α, (∀ a ∈ l, p a = true → q a = true) → List.Sublist (l.filter p) (l.filter q)
+  | [], _ => by simp
+  | a :: l, h => by
+    have ih := filter_sub_filter p q l (fun x hx => h x (List.mem_cons_of_mem _ hx))
+    have ha := h a (List.mem_cons_self ..)
+    by_cases hp : p a = true
+    · rw [List.filter_cons_of_pos hp, List.filter_cons_of_pos (ha hp)]
+      exact ih.cons₂ a
+    · rw [List.filter_cons_of_neg hp]
+      by_cases hq : q a = true
+      · rw [List.filter_cons_of_pos hq]; exact ih.cons a
+      · rw [List.filter_cons_of_neg hq]; exact ih
+
+theorem inj_of_nodup_map {α β : Type} (f : α → β) :
+    ∀ (l : List α), (l.map f).Nodup → ∀ x ∈ l, ∀ y ∈ l, f x = f y → x = y
+  | [], _, x, hx, _, _, _ => by simp at hx
+  | a :: l, h, x, hx, y, hy, hxy => by
+    rw [List.map_cons, List.nodup_cons] at h
+    by_cases hxa : x = a
+    · by_cases hya : y = a
+      · rw [hxa, hya]
+      · exfalso
+        have hy' : y ∈ l := (List.mem_cons.mp hy).resolve_left hya
+        apply h.1
+        rw [← hxa, hxy]
+        exact List.mem_map_of_mem hy'
+    · have hx' : x ∈ l := (List.mem_cons.mp hx).resolve_left hxa
+      by_cases hya : y = a
+      · exfalso
+        apply h.1
+        rw [← hya, ← hxy]
+        exact List.mem_map_of_mem hx'
+      · exact inj_of_nodup_map f l h.2 x hx' y ((List.mem_cons.mp hy).resolve_left hya) hxy
+
+theorem idKey_mem_claim (c : Rules.Ctx) (l : Rules.Line) : Rules.idKey l ∈ Rules.claim c l := by
+  unfold Rules.claim
+  split <;> simp [Rules.keys]
+
+theorem decideAll_mem (c : Rules.Ctx) : ∀ (ls : List Rules.Line) (seen : List Rules.Key),
+    ∀ d ∈ Rules.decideAll c seen ls,
+      d.line ∈ ls ∧ d.outcome = Rules.outcomeOf d.reasons ∧ ∃ s, d = Rules.decideLine c s d.line := by
+  intro ls
+  induction ls with
+  | nil => intro seen d hd; simp [Rules.decideAll] at hd
+  | cons l ls ih =>
+    intro seen d hd
+    simp only [Rules.decideAll, List.mem_cons] at hd
+    rcases hd with rfl | hd
+    · exact ⟨List.mem_cons_self .., rfl, seen, rfl⟩
+    · obtain ⟨h1, h2, h3⟩ := ih _ d hd
+      exact ⟨List.mem_cons_of_mem _ h1, h2, h3⟩
+
+theorem AD_of_seen (c : Rules.Ctx) (s : List Rules.Key) (l : Rules.Line) (h : s.contains (Rules.idKey l) = true) :
+    Rules.Reason.ALREADY_DECIDED ∈ (Rules.decideLine c s l).reasons := by
+  show _ ∈ Rules.reasons.filter (Rules.fires c s l)
+  refine List.mem_filter.mpr ⟨by simp [Rules.reasons], ?_⟩
+  have hm := List.contains_iff_mem.mp h
+  simp [Rules.fires, hm]
+
+theorem AD_of_pending (c : Rules.Ctx) (s : List Rules.Key) (l : Rules.Line)
+    (h : (Rules.pending c).contains (Rules.idKey l) = true) :
+    Rules.Reason.ALREADY_DECIDED ∈ (Rules.decideLine c s l).reasons := by
+  show _ ∈ Rules.reasons.filter (Rules.fires c s l)
+  refine List.mem_filter.mpr ⟨by simp [Rules.reasons], ?_⟩
+  have hm := List.contains_iff_mem.mp h
+  simp [Rules.fires, hm]
+
+theorem decideAll_AD (c : Rules.Ctx) : ∀ (ls : List Rules.Line) (seen : List Rules.Key) (i : Nat), [4, i] ∈ seen →
+    ∀ d ∈ Rules.decideAll c seen ls, d.line.id = i → Rules.Reason.ALREADY_DECIDED ∈ d.reasons := by
+  intro ls
+  induction ls with
+  | nil => intro seen i _ d hd; simp [Rules.decideAll] at hd
+  | cons l ls ih =>
+    intro seen i hi d hd hdi
+    simp only [Rules.decideAll, List.mem_cons] at hd
+    rcases hd with rfl | hd
+    · have hdi' : l.id = i := hdi
+      have hk : Rules.idKey l = [4, i] := by
+        show [4, l.id] = [4, i]
+        rw [hdi']
+      exact AD_of_seen c seen l (List.contains_iff_mem.mpr (by rw [hk]; exact hi))
+    · exact ih _ i (List.mem_append_right _ hi) d hd hdi
+
+theorem decideAll_pairwise (c : Rules.Ctx) : ∀ (ls : List Rules.Line) (seen : List Rules.Key),
+    List.Pairwise (fun d1 d2 : Rules.Decision => d2.line.id = d1.line.id →
+      Rules.Reason.ALREADY_DECIDED ∈ d2.reasons) (Rules.decideAll c seen ls)
+  | [], _ => List.Pairwise.nil
+  | l :: ls, seen => by
+    simp only [Rules.decideAll]
+    refine List.pairwise_cons.mpr ⟨?_, decideAll_pairwise c ls _⟩
+    intro d2 hd2 hid
+    exact decideAll_AD c ls (Rules.claim c l ++ seen) l.id
+      (List.mem_append_left _ (idKey_mem_claim c l)) d2 hd2 hid
+
+def seenAfter (c : Rules.Ctx) : List Rules.Line → List Rules.Key → List Rules.Key
+  | [], s => s
+  | l :: ls, s => seenAfter c ls (Rules.claim c l ++ s)
+
+theorem decideAll_append (c : Rules.Ctx) : ∀ (A B : List Rules.Line) (s : List Rules.Key),
+    Rules.decideAll c s (A ++ B) = Rules.decideAll c s A ++ Rules.decideAll c (seenAfter c A s) B
+  | [], B, s => rfl
+  | l :: A, B, s => by
+    simp only [List.cons_append, Rules.decideAll, seenAfter, decideAll_append c A B]
+
+theorem seenAfter_sub (c : Rules.Ctx) : ∀ (A : List Rules.Line) (s : List Rules.Key) (k : Rules.Key),
+    k ∈ s → k ∈ seenAfter c A s
+  | [], s, k, h => h
+  | l :: A, s, k, h => seenAfter_sub c A _ k (List.mem_append_right _ h)
+
+theorem seenAfter_claim (c : Rules.Ctx) : ∀ (A : List Rules.Line) (s : List Rules.Key) (l : Rules.Line)
+    (k : Rules.Key), l ∈ A → k ∈ Rules.claim c l → k ∈ seenAfter c A s
+  | [], _, l, k, h, _ => by simp at h
+  | a :: A, s, l, k, h, hk => by
+    rcases List.mem_cons.mp h with rfl | h
+    · exact seenAfter_sub c A _ k (List.mem_append_left _ hk)
+    · exact seenAfter_claim c A _ l k h hk
+
+theorem outcomeOf_allow {rs : List Rules.Reason} (h : Rules.outcomeOf rs = .ALLOW) : rs = [] := by
+  unfold Rules.outcomeOf at h
+  by_cases hr : rs.isEmpty = true
+  · simpa using hr
+  · rw [if_neg hr] at h
+    split at h <;> cases h
+
+theorem releasedSet_v2 (c : Rules.Ctx) (E : List Entry) : Rules.releasedSet (v2Ctx c E) = setOf E 1 := by
+  unfold Rules.releasedSet Rules.view
+  split <;> rfl
+
+theorem unresolvedSet_v2 (c : Rules.Ctx) (E : List Entry) : Rules.unresolvedSet (v2Ctx c E) = setOf E 2 := by
+  unfold Rules.unresolvedSet Rules.view
+  split <;> rfl
+
+theorem mem_setOf {E : List Entry} {e : Entry} (he : e ∈ E) {s : Nat} (h : e.set = s) : e.line ∈ setOf E s :=
+  List.mem_map.mpr ⟨e, List.mem_filter.mpr ⟨he, by simp [h]⟩, rfl⟩
+
+theorem mem_released {c : Rules.Ctx} {ds : List Rules.Decision} {l : Rules.Line}
+    (h : l ∈ Rules.releasedLines c ds) :
+    ∃ d ∈ ds, d.line = l ∧ d.outcome = .ALLOW ∧ Rules.own c l = false := by
+  unfold Rules.releasedLines Rules.allowedLines at h
+  obtain ⟨hm, hF⟩ := List.mem_filter.mp h
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hm
+  obtain ⟨hdm, hA⟩ := List.mem_filter.mp hd
+  refine ⟨d, hdm, rfl, beq_iff_eq.mp hA, ?_⟩
+  have h1 := (Bool.and_eq_true _ _ |>.mp hF).1
+  have h2 := bnot_eq.mp h1
+  unfold Rules.own
+  rw [h2]
+  rfl
+
+theorem mem_unres {c : Rules.Ctx} {ds : List Rules.Decision} {l : Rules.Line} (h : l ∈ Rules.unresolvedLines c ds) :
+    ∃ d ∈ ds, d.line = l ∧ d.outcome ≠ .ALLOW ∧ Rules.Reason.ALREADY_DECIDED ∉ d.reasons ∧
+      Rules.own c l = false := by
+  unfold Rules.unresolvedLines at h
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+  obtain ⟨hdm, hc⟩ := List.mem_filter.mp hd
+  obtain ⟨hc12, hc3⟩ := (Bool.and_eq_true _ _).mp hc
+  obtain ⟨hc1, hc2⟩ := (Bool.and_eq_true _ _).mp hc12
+  exact ⟨d, hdm, rfl, bne_iff_ne.mp hc1, not_contains.mp (bnot_eq.mp hc2), bnot_eq.mp hc3⟩
+
+theorem nodup_of_idok (q : Rules.Decision → Bool) (hq : ∀ d, q d = true → Rules.Reason.ALREADY_DECIDED ∉ d.reasons) :
+    ∀ ds : List Rules.Decision, List.Pairwise (fun d1 d2 : Rules.Decision => d2.line.id = d1.line.id →
+      Rules.Reason.ALREADY_DECIDED ∈ d2.reasons) ds → ((ds.filter q).map (·.line.id)).Nodup
+  | [], _ => by simp
+  | d :: ds, hp => by
+    obtain ⟨h1, h2⟩ := List.pairwise_cons.mp hp
+    have ih := nodup_of_idok q hq ds h2
+    by_cases hqd : q d = true
+    · rw [List.filter_cons_of_pos hqd, List.map_cons, List.nodup_cons]
+      refine ⟨?_, ih⟩
+      intro hm
+      obtain ⟨x, hx, hxe⟩ := List.mem_map.mp hm
+      obtain ⟨hxd, hqx⟩ := List.mem_filter.mp hx
+      exact hq x hqx (h1 x hxd hxe)
+    · rw [List.filter_cons_of_neg hqd]
+      exact ih
+
+theorem fresh_E {c' : Rules.Ctx} {E : List Entry} {b : List Rules.Line}
+    (hR : Rules.releasedSet c' = setOf E 1) (hU : Rules.unresolvedSet c' = setOf E 2) (hw : EntriesWf E) :
+    ∀ d ∈ Rules.decideAll c' (Rules.seen0 c' b) (Rules.order c' b), Rules.own c' d.line = false →
+      ∀ e ∈ E, e.line.id = d.line.id → Rules.Reason.ALREADY_DECIDED ∈ d.reasons := by
+  intro d hd hown e he hid
+  have hord : Rules.order c' b = Rules.canonical (b.filter (Rules.own c')) ++
+      Rules.canonical (b.filter fun x => !Rules.own c' x) := rfl
+  rw [hord, decideAll_append] at hd
+  rcases List.mem_append.mp hd with hd | hd
+  · exfalso
+    have := (decideAll_mem c' _ _ d hd).1
+    simp only [Rules.canonical, List.mem_mergeSort, List.mem_filter] at this
+    rw [hown] at this
+    simp at this
+  · obtain ⟨_, _, s, hs⟩ := decideAll_mem c' _ _ d hd
+    rcases (hw.1 e he).1 with h1 | h2
+    · have hy : e.line ∈ Rules.releasedSet c' := by rw [hR]; exact mem_setOf he h1
+      have hk : [4, d.line.id] ∈ seenAfter c' (Rules.canonical (b.filter (Rules.own c'))) (Rules.seen0 c' b) := by
+        by_cases hb : (Rules.own c' e.line && b.contains e.line) = true
+        · have hb' := (Bool.and_eq_true _ _).mp hb
+          have hyA : e.line ∈ Rules.canonical (b.filter (Rules.own c')) := by
+            simp only [Rules.canonical, List.mem_mergeSort, List.mem_filter]
+            exact ⟨List.contains_iff_mem.mp hb'.2, hb'.1⟩
+          refine seenAfter_claim c' _ _ e.line _ hyA ?_
+          have := idKey_mem_claim c' e.line
+          simpa [Rules.idKey, hid] using this
+        · refine seenAfter_sub c' _ _ _ ?_
+          simp only [Rules.seen0, List.mem_flatMap]
+          refine ⟨e.line, List.mem_filter.mpr ⟨hy, bnot_eq.mpr (Bool.eq_false_iff.mpr hb)⟩, ?_⟩
+          simp [Rules.keys, Rules.idKey, hid]
+      exact decideAll_AD c' _ _ d.line.id hk d hd rfl
+    · have hy : e.line ∈ Rules.unresolvedSet c' := by rw [hU]; exact mem_setOf he h2
+      rw [hs]
+      refine AD_of_pending c' s d.line (List.contains_iff_mem.mpr ?_)
+      unfold Rules.pending
+      refine List.mem_flatMap.mpr ⟨e.line, hy, ?_⟩
+      have := idKey_mem_claim c' e.line
+      simpa [Rules.idKey, hid] using this
+
+theorem ids_fresh_aux (c' : Rules.Ctx) (E : List Entry) (b : List Rules.Line)
+    (hR : Rules.releasedSet c' = setOf E 1) (hU : Rules.unresolvedSet c' = setOf E 2)
+    (hw : EntriesWf E) (hb : ∀ l ∈ b, (rowBytes l).isSome) : EntriesWf (E ++ adds c' b) := by
+  obtain ⟨ds, hds⟩ : ∃ ds, ds = (Rules.decideBatch c' b).decisions := ⟨_, rfl⟩
+  have hds' : ds = Rules.decideAll c' (Rules.seen0 c' b) (Rules.order c' b) := hds
+  have hadds : adds c' b = (Rules.releasedLines c' ds).map (Entry.mk 1) ++
+      (Rules.unresolvedLines c' ds).map (Entry.mk 2) := by rw [hds]; rfl
+  have hdb : ∀ d ∈ ds, d.line ∈ b := by
+    intro d hd
+    have := (decideAll_mem c' _ _ d (hds' ▸ hd)).1
+    simp only [Rules.order, Rules.canonical, List.mem_append, List.mem_mergeSort, List.mem_filter] at this
+    rcases this with h | h
+    · exact h.1
+    · exact h.1
+  have hq0 : ∀ d : Rules.Decision, ((!d.reasons.contains .ALREADY_DECIDED) = true) → Rules.Reason.ALREADY_DECIDED ∉ d.reasons :=
+    fun d h => not_contains.mp (bnot_eq.mp h)
+  have hNd := nodup_of_idok (fun d : Rules.Decision => !d.reasons.contains .ALREADY_DECIDED) hq0 ds (hds' ▸ decideAll_pairwise c' _ _)
+  have hAq : ∀ d ∈ ds, d.outcome = .ALLOW → ((!d.reasons.contains .ALREADY_DECIDED) = true) := by
+    intro d hd ho
+    have := outcomeOf_allow (ho ▸ (decideAll_mem c' _ _ d (hds' ▸ hd)).2.1.symm)
+    simp [this]
+  refine ⟨?_, ?_⟩
+  · intro e he
+    rcases List.mem_append.mp he with he | he
+    · exact hw.1 e he
+    · rw [hadds] at he
+      rcases List.mem_append.mp he with he | he
+      · obtain ⟨l, hl, rfl⟩ := List.mem_map.mp he
+        obtain ⟨d, hd, rfl, _⟩ := mem_released hl
+        exact ⟨Or.inl rfl, by simpa [entryBytes] using hb _ (hdb d hd)⟩
+      · obtain ⟨l, hl, rfl⟩ := List.mem_map.mp he
+        obtain ⟨d, hd, rfl, _⟩ := mem_unres hl
+        exact ⟨Or.inr rfl, by simpa [entryBytes] using hb _ (hdb d hd)⟩
+  · have hmap : (E ++ adds c' b).map (·.line.id) = E.map (·.line.id) ++
+        ((Rules.releasedLines c' ds).map (·.id) ++ (Rules.unresolvedLines c' ds).map (·.id)) := by
+      rw [hadds, List.map_append, List.map_append, List.map_map, List.map_map]
+      rfl
+    rw [hmap]
+    have hrel : ((Rules.releasedLines c' ds).map (·.id)).Nodup := by
+      have hsub : List.Sublist (Rules.releasedLines c' ds) ((ds.filter fun d : Rules.Decision => !d.reasons.contains .ALREADY_DECIDED).map (·.line)) := by
+        unfold Rules.releasedLines Rules.allowedLines
+        refine List.filter_sublist.trans ((filter_sub_filter _ _ ds ?_).map _)
+        intro d hd h
+        exact hAq d hd (beq_iff_eq.mp h)
+      have hsub2 := hsub.map (fun l : Rules.Line => l.id)
+      rw [List.map_map] at hsub2
+      exact List.Nodup.sublist hsub2 hNd
+    have hun : ((Rules.unresolvedLines c' ds).map (·.id)).Nodup := by
+      have hsub : List.Sublist (Rules.unresolvedLines c' ds) ((ds.filter fun d : Rules.Decision => !d.reasons.contains .ALREADY_DECIDED).map (·.line)) := by
+        unfold Rules.unresolvedLines
+        refine (filter_sub_filter _ _ ds ?_).map _
+        intro d _ h
+        exact ((Bool.and_eq_true _ _).mp ((Bool.and_eq_true _ _).mp h).1).2
+      have hsub2 := hsub.map (fun l : Rules.Line => l.id)
+      rw [List.map_map] at hsub2
+      exact List.Nodup.sublist hsub2 hNd
+    refine List.nodup_append.mpr ⟨hw.2, List.nodup_append.mpr ⟨hrel, hun, ?_⟩, ?_⟩
+    · intro a ha b hb heq
+      obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hb
+      obtain ⟨dx, hdx, rfl, hAx, _⟩ := mem_released hx
+      obtain ⟨dy, hdy, rfl, hAy, hADy, _⟩ := mem_unres hy
+      have := inj_of_nodup_map (fun d : Rules.Decision => d.line.id) _ hNd dx
+        (List.mem_filter.mpr ⟨hdx, hAq dx hdx hAx⟩) dy
+        (List.mem_filter.mpr ⟨hdy, bnot_eq.mpr (not_contains.mpr hADy)⟩) heq
+      subst this
+      exact hAy hAx
+    · intro a ha b hb heq
+      obtain ⟨e, he, rfl⟩ := List.mem_map.mp ha
+      rcases List.mem_append.mp hb with hb | hb
+      · obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hb
+        obtain ⟨dx, hdx, rfl, hAx, hown⟩ := mem_released hx
+        have hAD := fresh_E hR hU hw dx (hds' ▸ hdx) hown e he heq
+        exact not_contains.mp (bnot_eq.mp (hAq dx hdx hAx)) hAD
+      · obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hb
+        obtain ⟨dy, hdy, rfl, hAy, hADy, hown⟩ := mem_unres hy
+        exact hADy (fresh_E hR hU hw dy (hds' ▸ hdy) hown e he heq)
+
+/-! ### §C helpers: the slice of the state a batch can see decides like the whole state -/
+
+def shares (Q : List Rules.Key) (x : Rules.Line) : Bool := (Rules.keys x).any Q.contains
+
+theorem shares_of_mem {Q : List Rules.Key} {x : Rules.Line} {k : Rules.Key} (hk : k ∈ Rules.keys x) (hq : k ∈ Q) :
+    shares Q x = true :=
+  List.any_eq_true.mpr ⟨k, hk, List.contains_iff_mem.mpr hq⟩
+
+theorem contains_congr {l₁ l₂ : List Rules.Key} {k : Rules.Key} (h : k ∈ l₁ ↔ k ∈ l₂) :
+    l₁.contains k = l₂.contains k :=
+  Bool.eq_iff_iff.mpr (by rw [List.contains_iff_mem, List.contains_iff_mem]; exact h)
+
+theorem setOf_slice (Q : List Rules.Key) (s : Nat) (E : List Entry) :
+    setOf (sliceOf E Q) s = (setOf E s).filter (shares Q) := by
+  unfold setOf sliceOf
+  rw [List.filter_map, List.filter_filter, List.filter_filter]
+  congr 2
+  funext a
+  simp [Function.comp, shares, Bool.and_comm]
+
+theorem own_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) {x : Rules.Line}
+    (hx : shares Q x = true) :
+    Rules.own (v2Ctx c (sliceOf E Q)) x = Rules.own (v2Ctx c E) x := by
+  have hc : ((setOf E 1).filter (shares Q)).contains x = (setOf E 1).contains x := by
+    apply Bool.eq_iff_iff.mpr
+    rw [List.contains_iff_mem, List.contains_iff_mem, List.mem_filter]
+    exact ⟨fun h => h.1, fun h => ⟨h, hx⟩⟩
+  unfold Rules.own
+  rw [releasedSet_v2, releasedSet_v2, setOf_slice, hc]
+  rfl
+
+theorem claim_sub (c : Rules.Ctx) (x : Rules.Line) : ∀ k ∈ Rules.claim c x, k ∈ Rules.keys x := by
+  intro k hk
+  unfold Rules.claim at hk
+  split at hk
+  · simp only [Rules.keys, List.mem_cons, List.not_mem_nil, or_false] at hk ⊢
+    rcases hk with rfl | rfl <;> simp
+  · exact hk
+
+theorem claim_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) {x : Rules.Line}
+    (hx : shares Q x = true) :
+    Rules.claim (v2Ctx c (sliceOf E Q)) x = Rules.claim (v2Ctx c E) x := by
+  unfold Rules.claim
+  rw [own_slice c E Q hx]
+  rfl
+
+theorem pending_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) {k : Rules.Key} (hk : k ∈ Q) :
+    k ∈ Rules.pending (v2Ctx c (sliceOf E Q)) ↔ k ∈ Rules.pending (v2Ctx c E) := by
+  unfold Rules.pending
+  rw [unresolvedSet_v2, unresolvedSet_v2, setOf_slice]
+  simp only [List.mem_flatMap, List.mem_filter]
+  constructor
+  · rintro ⟨x, ⟨hx, hs⟩, hc⟩
+    exact ⟨x, hx, by rw [← claim_slice c E Q hs]; exact hc⟩
+  · rintro ⟨x, hx, hc⟩
+    have hs : shares Q x = true := shares_of_mem (claim_sub _ _ _ hc) hk
+    exact ⟨x, ⟨hx, hs⟩, by rw [claim_slice c E Q hs]; exact hc⟩
+
+theorem seen0_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) (b : List Rules.Line) {k : Rules.Key}
+    (hk : k ∈ Q) :
+    k ∈ Rules.seen0 (v2Ctx c (sliceOf E Q)) b ↔ k ∈ Rules.seen0 (v2Ctx c E) b := by
+  unfold Rules.seen0
+  rw [releasedSet_v2, releasedSet_v2, setOf_slice]
+  simp only [List.mem_flatMap, List.mem_filter]
+  constructor
+  · rintro ⟨x, ⟨⟨hx, hs⟩, hp⟩, hkx⟩
+    refine ⟨x, ⟨hx, ?_⟩, hkx⟩
+    rw [← own_slice c E Q hs]; exact hp
+  · rintro ⟨x, ⟨hx, hp⟩, hkx⟩
+    have hs : shares Q x = true := shares_of_mem hkx hk
+    exact ⟨x, ⟨⟨hx, hs⟩, by rw [own_slice c E Q hs]; exact hp⟩, hkx⟩
+
+theorem chained_self (t : Nat) (r : List Rules.Line) :
+    Rules.chained t ⟨t, r.length, r⟩ (some ⟨t, r.length, r⟩) = Rules.validDate t := by
+  have h : r.all r.contains = true := List.all_eq_true.mpr fun x hx => List.contains_iff_mem.mpr hx
+  show (r.length == r.length && Rules.validDate t && decide (t ≤ t) && decide (t ≤ t) && r.all r.contains) =
+    Rules.validDate t
+  rw [h]
+  simp
+
+theorem loose_self (t : Nat) (r : List Rules.Line) :
+    Rules.loose t ⟨t, r.length, r⟩ (some ⟨t, r.length, r⟩) = [] := by
+  unfold Rules.loose
+  split
+  · rfl
+  · apply List.filter_eq_nil_iff.mpr
+    intro a ha
+    have ha' : a ∈ r := ha
+    simpa using ha'
+
+theorem looseKeys_v2 (c : Rules.Ctx) (E : List Entry) : Rules.looseKeys (v2Ctx c E) = [] := by
+  have h1 : Rules.loose (v2Ctx c E).today (v2Ctx c E).releasedPrior (v2Ctx c E).released = [] := loose_self _ _
+  have h2 : Rules.loose (v2Ctx c E).today (v2Ctx c E).unresolvedPrior (v2Ctx c E).unresolved = [] := loose_self _ _
+  unfold Rules.looseKeys
+  rw [h1, h2]
+  rfl
+
+theorem chained_v2r (c : Rules.Ctx) (E : List Entry) :
+    Rules.chained (v2Ctx c E).today (v2Ctx c E).releasedPrior (v2Ctx c E).released = Rules.validDate c.today :=
+  chained_self _ _
+
+theorem chained_v2u (c : Rules.Ctx) (E : List Entry) :
+    Rules.chained (v2Ctx c E).today (v2Ctx c E).unresolvedPrior (v2Ctx c E).unresolved = Rules.validDate c.today :=
+  chained_self _ _
+
+theorem fires_v2 (c : Rules.Ctx) (E₁ E₂ : List Entry) (seen₁ seen₂ : List Rules.Key) (l : Rules.Line)
+    (hs : ∀ k ∈ Rules.keys l, seen₁.contains k = seen₂.contains k)
+    (hp : ∀ k ∈ Rules.keys l, (Rules.pending (v2Ctx c E₁)).contains k = (Rules.pending (v2Ctx c E₂)).contains k)
+    (r : Rules.Reason) : Rules.fires (v2Ctx c E₁) seen₁ l r = Rules.fires (v2Ctx c E₂) seen₂ l r := by
+  have kx : Rules.exactKey l ∈ Rules.keys l := by simp [Rules.keys]
+  have kn : Rules.nearKey l ∈ Rules.keys l := by simp [Rules.keys]
+  have ki : Rules.idKey l ∈ Rules.keys l := by simp [Rules.keys]
+  have lk : Rules.looseKeys (v2Ctx c E₁) = Rules.looseKeys (v2Ctx c E₂) := by rw [looseKeys_v2, looseKeys_v2]
+  cases r <;> (try simp only [Rules.fires, hs _ kx, hs _ kn, hs _ ki, hp _ kx, hp _ kn, hp _ ki, lk,
+    chained_v2r, chained_v2u]) <;> rfl
+
+def cpOf (c : Rules.Ctx) (l : Rules.Line) : List Nat :=
+  ((Rules.releasedSet c ++ Rules.loose c.today c.releasedPrior c.released).filter
+      (fun x => (Rules.keys l).any (Rules.keys x).contains) ++
+    (Rules.unresolvedSet c ++ Rules.loose c.today c.unresolvedPrior c.unresolved).filter
+      fun x => (Rules.keys l).any (Rules.claim c x).contains).map (·.id)
+
+theorem filter_shares (Q : List Rules.Key) (R : List Rules.Line) (P : Rules.Line → Bool)
+    (hP : ∀ x ∈ R, P x = true → shares Q x = true) : (R.filter (shares Q)).filter P = R.filter P := by
+  rw [List.filter_filter]
+  apply List.filter_congr
+  intro x hx
+  by_cases h : P x = true
+  · rw [h, hP x hx h]; rfl
+  · have : P x = false := by simpa using h
+    rw [this]; simp
+
+theorem cp_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) (l : Rules.Line)
+    (hl : ∀ k ∈ Rules.keys l, k ∈ Q) : cpOf (v2Ctx c (sliceOf E Q)) l = cpOf (v2Ctx c E) l := by
+  have h1 : Rules.loose (v2Ctx c E).today (v2Ctx c E).releasedPrior (v2Ctx c E).released = [] := loose_self _ _
+  have h2 : Rules.loose (v2Ctx c E).today (v2Ctx c E).unresolvedPrior (v2Ctx c E).unresolved = [] := loose_self _ _
+  have h3 : Rules.loose (v2Ctx c (sliceOf E Q)).today (v2Ctx c (sliceOf E Q)).releasedPrior
+      (v2Ctx c (sliceOf E Q)).released = [] := loose_self _ _
+  have h4 : Rules.loose (v2Ctx c (sliceOf E Q)).today (v2Ctx c (sliceOf E Q)).unresolvedPrior
+      (v2Ctx c (sliceOf E Q)).unresolved = [] := loose_self _ _
+  unfold cpOf
+  rw [h1, h2, h3, h4, List.append_nil, List.append_nil, List.append_nil, List.append_nil,
+    releasedSet_v2, releasedSet_v2, unresolvedSet_v2, unresolvedSet_v2, setOf_slice, setOf_slice]
+  congr 2
+  · apply filter_shares
+    intro x _ hx
+    obtain ⟨k, hk, hkx⟩ := List.any_eq_true.mp hx
+    exact shares_of_mem (List.contains_iff_mem.mp hkx) (hl k hk)
+  · rw [List.filter_filter]
+    apply List.filter_congr
+    intro x _
+    by_cases hs : shares Q x = true
+    · rw [claim_slice c E Q hs, hs, Bool.and_true]
+    · have hs' : shares Q x = false := by simpa using hs
+      rw [hs', Bool.and_false]
+      symm
+      cases hh : (Rules.keys l).any (Rules.claim (v2Ctx c E) x).contains
+      · rfl
+      · exfalso
+        obtain ⟨k, hk, hkx⟩ := List.any_eq_true.mp hh
+        exact hs (shares_of_mem (claim_sub _ _ _ (List.contains_iff_mem.mp hkx)) (hl k hk))
+
+theorem decideLine_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) (s1 s2 : List Rules.Key)
+    (l : Rules.Line) (hl : ∀ k ∈ Rules.keys l, k ∈ Q) (hs : ∀ k ∈ Q, (k ∈ s1 ↔ k ∈ s2)) :
+    Rules.decideLine (v2Ctx c (sliceOf E Q)) s1 l = Rules.decideLine (v2Ctx c E) s2 l := by
+  have hrs : Rules.reasons.filter (Rules.fires (v2Ctx c (sliceOf E Q)) s1 l) =
+      Rules.reasons.filter (Rules.fires (v2Ctx c E) s2 l) :=
+    List.filter_congr fun r _ => fires_v2 c _ _ s1 s2 l
+      (fun k hk => contains_congr (hs k (hl k hk)))
+      (fun k hk => contains_congr (pending_slice c E Q (hl k hk))) r
+  show Rules.Decision.mk l (Rules.outcomeOf (Rules.reasons.filter (Rules.fires (v2Ctx c (sliceOf E Q)) s1 l)))
+      (Rules.reasons.filter (Rules.fires (v2Ctx c (sliceOf E Q)) s1 l)) (cpOf (v2Ctx c (sliceOf E Q)) l) =
+    Rules.Decision.mk l (Rules.outcomeOf (Rules.reasons.filter (Rules.fires (v2Ctx c E) s2 l)))
+      (Rules.reasons.filter (Rules.fires (v2Ctx c E) s2 l)) (cpOf (v2Ctx c E) l)
+  rw [hrs, cp_slice c E Q l hl]
+
+theorem decideAll_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) :
+    ∀ (ls : List Rules.Line) (s1 s2 : List Rules.Key), (∀ l ∈ ls, ∀ k ∈ Rules.keys l, k ∈ Q) →
+      (∀ k ∈ Q, (k ∈ s1 ↔ k ∈ s2)) →
+      Rules.decideAll (v2Ctx c (sliceOf E Q)) s1 ls = Rules.decideAll (v2Ctx c E) s2 ls
+  | [], _, _, _, _ => rfl
+  | l :: ls, s1, s2, hl, hs => by
+    have hlq := hl l (List.mem_cons_self ..)
+    have hsh : shares Q l = true := shares_of_mem (k := Rules.idKey l) (by simp [Rules.keys]) (hlq _ (by simp [Rules.keys]))
+    simp only [Rules.decideAll]
+    rw [decideLine_slice c E Q s1 s2 l hlq hs, claim_slice c E Q hsh]
+    congr 1
+    exact decideAll_slice c E Q ls _ _ (fun l' hl' => hl l' (List.mem_cons_of_mem _ hl'))
+      (fun k hk => by rw [List.mem_append, List.mem_append, hs k hk])
+
+theorem all_congr_mem {α : Type} (f g : α → Bool) : ∀ l : List α, (∀ x ∈ l, f x = g x) → l.all f = l.all g
+  | [], _ => rfl
+  | a :: l, h => by
+    simp only [List.all_cons]
+    rw [h a (List.mem_cons_self ..), all_congr_mem f g l (fun x hx => h x (List.mem_cons_of_mem _ hx))]
+
+theorem dec_line_mem (c : Rules.Ctx) (b : List Rules.Line) : ∀ d ∈ (Rules.decideBatch c b).decisions, d.line ∈ b := by
+  intro d hd
+  have := (decideAll_mem c (Rules.order c b) (Rules.seen0 c b) d hd).1
+  simp only [Rules.order, Rules.canonical, List.mem_append, List.mem_mergeSort, List.mem_filter] at this
+  rcases this with h | h <;> exact h.1
+
+theorem payOutcome_slice (c : Rules.Ctx) (E : List Entry) (Q : List Rules.Key) (ds : List Rules.Decision)
+    (h : ∀ d ∈ ds, shares Q d.line = true) (p : Nat) :
+    Rules.payOutcome (v2Ctx c (sliceOf E Q)) ds p = Rules.payOutcome (v2Ctx c E) ds p := by
+  have hall := all_congr_mem
+    (fun d : Rules.Decision => d.outcome == .ALLOW && (!(v2Ctx c (sliceOf E Q)).redo.contains p ||
+      Rules.own (v2Ctx c (sliceOf E Q)) d.line))
+    (fun d : Rules.Decision => d.outcome == .ALLOW && (!(v2Ctx c E).redo.contains p ||
+      Rules.own (v2Ctx c E) d.line)) (ds.filter (·.line.pay == p))
+    (fun d hd => by
+      have := own_slice c E Q (h d (List.mem_filter.mp hd).1)
+      show (d.outcome == .ALLOW && (!c.redo.contains p || Rules.own (v2Ctx c (sliceOf E Q)) d.line)) =
+        (d.outcome == .ALLOW && (!c.redo.contains p || Rules.own (v2Ctx c E) d.line))
+      rw [this])
+  unfold Rules.payOutcome
+  dsimp only
+  rw [hall]
+
+theorem decideBatch_slice_aux (c : Rules.Ctx) (E : List Entry) (b : List Rules.Line) :
+    batchOutcome (v2Ctx c (sliceOf E (querySet b))) b = batchOutcome (v2Ctx c E) b := by
+  have hq : ∀ l ∈ b, ∀ k ∈ Rules.keys l, k ∈ querySet b := fun l hl k hk => List.mem_flatMap.mpr ⟨l, hl, hk⟩
+  have hsh : ∀ l ∈ b, shares (querySet b) l = true := fun l hl =>
+    shares_of_mem (k := Rules.idKey l) (by simp [Rules.keys]) (hq l hl _ (by simp [Rules.keys]))
+  have hown : ∀ l ∈ b, Rules.own (v2Ctx c (sliceOf E (querySet b))) l = Rules.own (v2Ctx c E) l :=
+    fun l hl => own_slice c E _ (hsh l hl)
+  have hord : Rules.order (v2Ctx c (sliceOf E (querySet b))) b = Rules.order (v2Ctx c E) b := by
+    have e1 : b.filter (Rules.own (v2Ctx c (sliceOf E (querySet b)))) = b.filter (Rules.own (v2Ctx c E)) :=
+      List.filter_congr hown
+    have e2 : b.filter (fun x => !Rules.own (v2Ctx c (sliceOf E (querySet b))) x) =
+        b.filter (fun x => !Rules.own (v2Ctx c E) x) :=
+      List.filter_congr (fun x hx => by rw [hown x hx])
+    unfold Rules.order
+    rw [e1, e2]
+  have hordb : ∀ l ∈ Rules.order (v2Ctx c E) b, l ∈ b := by
+    intro l hl
+    simp only [Rules.order, Rules.canonical, List.mem_append, List.mem_mergeSort, List.mem_filter] at hl
+    rcases hl with h | h <;> exact h.1
+  have hds : (Rules.decideBatch (v2Ctx c (sliceOf E (querySet b))) b).decisions =
+      (Rules.decideBatch (v2Ctx c E) b).decisions := by
+    change Rules.decideAll (v2Ctx c (sliceOf E (querySet b))) (Rules.seen0 (v2Ctx c (sliceOf E (querySet b))) b)
+        (Rules.order (v2Ctx c (sliceOf E (querySet b))) b) =
+      Rules.decideAll (v2Ctx c E) (Rules.seen0 (v2Ctx c E) b) (Rules.order (v2Ctx c E) b)
+    rw [hord]
+    exact decideAll_slice c E _ _ _ _ (fun l hl => hq l (hordb l hl)) (fun k hk => seen0_slice c E _ b hk)
+  have hdsh : ∀ d ∈ (Rules.decideBatch (v2Ctx c E) b).decisions, shares (querySet b) d.line = true :=
+    fun d hd => hsh _ (dec_line_mem _ _ d hd)
+  have hrel : Rules.releasedLines (v2Ctx c (sliceOf E (querySet b))) (Rules.decideBatch (v2Ctx c E) b).decisions =
+      Rules.releasedLines (v2Ctx c E) (Rules.decideBatch (v2Ctx c E) b).decisions := by
+    unfold Rules.releasedLines
+    apply List.filter_congr
+    intro l _
+    show (!c.redo.contains l.pay &&
+        Rules.payOutcome (v2Ctx c (sliceOf E (querySet b))) (Rules.decideBatch (v2Ctx c E) b).decisions l.pay ==
+          Rules.Outcome.ALLOW) =
+      (!c.redo.contains l.pay &&
+        Rules.payOutcome (v2Ctx c E) (Rules.decideBatch (v2Ctx c E) b).decisions l.pay == Rules.Outcome.ALLOW)
+    rw [payOutcome_slice c E _ _ hdsh]
+  have hunr : Rules.unresolvedLines (v2Ctx c (sliceOf E (querySet b))) (Rules.decideBatch (v2Ctx c E) b).decisions =
+      Rules.unresolvedLines (v2Ctx c E) (Rules.decideBatch (v2Ctx c E) b).decisions := by
+    unfold Rules.unresolvedLines
+    congr 1
+    apply List.filter_congr
+    intro d hd
+    show (d.outcome != Rules.Outcome.ALLOW && !d.reasons.contains Rules.Reason.ALREADY_DECIDED &&
+        !Rules.own (v2Ctx c (sliceOf E (querySet b))) d.line) =
+      (d.outcome != Rules.Outcome.ALLOW && !d.reasons.contains Rules.Reason.ALREADY_DECIDED &&
+        !Rules.own (v2Ctx c E) d.line)
+    rw [hown d.line (dec_line_mem _ _ d hd)]
+  unfold batchOutcome
+  dsimp only
+  rw [hds, hrel, hunr]
+
 /-- THE dedup/ALREADY_DECIDED theorem, rules level: deciding on the slice equals deciding on the whole state.
     The only premise is the identity invariant `ids_fresh` maintains. -/
 theorem decideBatch_slice (c : Rules.Ctx) (E : List Entry) (b : List Rules.Line)
     (hid : (E.map (·.line.id)).Nodup) :
-    batchOutcome (v2Ctx c (sliceOf E (querySet b))) b = batchOutcome (v2Ctx c E) b := by
-  sorry
+    batchOutcome (v2Ctx c (sliceOf E (querySet b))) b = batchOutcome (v2Ctx c E) b :=
+  decideBatch_slice_aux c E b
 
 /-- An accepted hydration is exactly the slice, with its true log indices. -/
 theorem hydrate_slice {H : Bytes → Bytes} (hl : HashLen H) (E : List Entry) (b : List Rules.Line)
@@ -1778,7 +2393,7 @@ theorem decide_from_proof {H : Bytes → Bytes} (hl : HashLen H) (c : Rules.Ctx)
 /-- The decided additions keep every identity unique (so no runtime check is needed for it). -/
 theorem ids_fresh (c : Rules.Ctx) (E : List Entry) (b : List Rules.Line) (hw : EntriesWf E)
     (hb : ∀ l ∈ b, (rowBytes l).isSome) : EntriesWf (E ++ adds (v2Ctx c E) b) := by
-  sorry
+  exact ids_fresh_aux (v2Ctx c E) E b (releasedSet_v2 c E) (unresolvedSet_v2 c E) hw hb
 
 /-- The batch's map update is the canonical index of the appended log. -/
 theorem applyBatch_correct {H : Bytes → Bytes} (hl : HashLen H) (E new : List Entry) (b : List Rules.Line)
@@ -1789,6 +2404,33 @@ theorem applyBatch_correct {H : Bytes → Bytes} (hl : HashLen H) (E new : List 
     t.hash H = mapRoot H (gateMap H (E ++ new)) ∨ breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
   sorry
 
+theorem logRoot_len {H : Bytes → Bytes} (hl : HashLen H) (zs : List Bytes) (hn : zs.length ≤ maxSize) :
+    (logRoot H zs).length = 64 := by
+  by_cases h : zs = []
+  · subst h
+    have hl64 : ∀ x, (H x).length = 64 := hl
+    simpa [logRoot] using hl64 []
+  · obtain ⟨t, htr, _, _⟩ := log_tree (H := H) (L := logInputs H zs) zs h hn (fun x hx => hx)
+    rw [← htr]
+    exact LT.root_len hl t
+
+theorem natBE_length (w v : Nat) : (natBE w v).length = w := by simp [natBE]
+
+theorem map_getD_inj : ∀ (E E' : List Entry), (∀ e ∈ E, (entryBytes e).isSome) → (∀ e ∈ E', (entryBytes e).isSome) →
+    E.map (fun e => (entryBytes e).getD []) = E'.map (fun e => (entryBytes e).getD []) →
+    E.map entryBytes = E'.map entryBytes
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h => by simp at h
+  | _ :: _, [], _, _, h => by simp at h
+  | a :: as, b :: bs, h1, h2, h => by
+    simp only [List.map_cons, List.cons.injEq] at h ⊢
+    refine ⟨?_, map_getD_inj as bs (fun e he => h1 e (List.mem_cons_of_mem _ he))
+      (fun e he => h2 e (List.mem_cons_of_mem _ he)) h.2⟩
+    obtain ⟨x, hx⟩ := Option.isSome_iff_exists.mp (h1 a (List.mem_cons_self ..))
+    obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp (h2 b (List.mem_cons_self ..))
+    rw [hx, hy] at h ⊢
+    simpa using h.1
+
 /-- The head binds the whole state: equal head digests give equal entry lists. -/
 theorem gateHead_binding {H : Bytes → Bytes} (hl : HashLen H) (E E' : List Entry) (hw : EntriesWf E)
     (hw' : EntriesWf E') (hn : E.length ≤ maxSize) (hn' : E'.length ≤ maxSize)
@@ -1796,7 +2438,25 @@ theorem gateHead_binding {H : Bytes → Bytes} (hl : HashLen H) (E E' : List Ent
     E.map entryBytes = E'.map entryBytes ∨
       breakIn H (gateHead H E :: gateHead H E' :: logInputs H (E.map fun e => (entryBytes e).getD []) ++
         logInputs H (E'.map fun e => (entryBytes e).getD [])) ≠ none := by
-  sorry
+  by_cases hg : breakIn H (gateHead H E :: gateHead H E' :: logInputs H (E.map fun e => (entryBytes e).getD []) ++
+        logInputs H (E'.map fun e => (entryBytes e).getD [])) = none
+  case neg => exact Or.inr hg
+  left
+  have hh : gateHead H E = gateHead H E' :=
+    inj_of_none hg (List.mem_cons_self ..) (List.mem_cons_of_mem _ (List.mem_cons_self ..)) h
+  have hlx := logRoot_len hl (E.map fun e => (entryBytes e).getD []) (by simpa using hn)
+  have hly := logRoot_len hl (E'.map fun e => (entryBytes e).getD []) (by simpa using hn')
+  unfold gateHead headBytes at hh
+  have hp1 := List.append_inj (hh : (domainV "STATE" 2 ++ natBE 8 E.length ++
+      logRoot H (E.map fun e => (entryBytes e).getD [])) ++ mapRoot H (gateMap H E) =
+    (domainV "STATE" 2 ++ natBE 8 E'.length ++ logRoot H (E'.map fun e => (entryBytes e).getD [])) ++
+      mapRoot H (gateMap H E')) (by simp only [List.length_append, natBE_length, hlx, hly])
+  have hp2 := List.append_inj hp1.1 (by simp only [List.length_append, natBE_length])
+  have hroot : logRoot H (E.map fun e => (entryBytes e).getD []) = logRoot H (E'.map fun e => (entryBytes e).getD []) :=
+    hp2.2
+  rcases logRoot_binding hl _ _ (by simpa using hn) (by simpa using hn') hroot with e | e
+  · exact map_getD_inj E E' (fun e he => (hw.1 e he).2) (fun e he => (hw'.1 e he).2) e
+  · exact absurd (none_mono hg (fun x hx => List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hx))) e
 
 /-! ### §D helpers: a proof tree is a pruning of the canonical tree, and inserts keep that -/
 
@@ -2254,38 +2914,5 @@ theorem insertAll_correct {H : Bytes → Bytes} (hl : HashLen H) (base kvs : Lis
     pr_of_hash hl hg p 512 0 base (by omega) hw (fun a _ b _ i hi => absurd hi (Nat.not_lt_zero i))
       (fun x hx => List.mem_append_left _ hx) (fun x hx => List.mem_append_right _ hx) hp
   exact (pr_insertAll kvs p p' base hw hk hp' hi).hash_eq
-
-/-- Exports and the sweep: entries whose log root equals the head's are exactly the log. -/
-theorem logRoot_binding {H : Bytes → Bytes} (hl : HashLen H) (xs ys : List Bytes)
-    (hx : xs.length ≤ maxSize) (hy : ys.length ≤ maxSize) (h : logRoot H xs = logRoot H ys) :
-    xs = ys ∨ breakIn H (logInputs H xs ++ logInputs H ys) ≠ none := by
-  by_cases hg : breakIn H (logInputs H xs ++ logInputs H ys) = none
-  case neg => exact Or.inr hg
-  left
-  have hl64 : ∀ x, (H x).length = 64 := hl
-  have hxL : ∀ x ∈ logInputs H xs, x ∈ logInputs H xs ++ logInputs H ys := fun x hx => List.mem_append_left _ hx
-  have hyL : ∀ x ∈ logInputs H ys, x ∈ logInputs H xs ++ logInputs H ys := fun x hx => List.mem_append_right _ hx
-  have emp : ∀ zs : List Bytes, zs ≠ [] → zs.length ≤ maxSize →
-      (∀ x ∈ logInputs H zs, x ∈ logInputs H xs ++ logInputs H ys) →
-      ([] : Bytes) ∈ logInputs H xs ++ logInputs H ys → logRoot H zs = H [] → False := by
-    intro zs hne hlen hsub hnil hr
-    obtain ⟨t, htr, _, hti⟩ := log_tree zs hne hlen hsub
-    obtain ⟨y0, hy0m, hy0e, hy0ne⟩ := LT.root_spec H t
-    have := inj_of_none hg (x := y0) (y := []) (hti _ hy0m) hnil (by rw [← hy0e, htr, hr])
-    exact hy0ne this
-  have hnx : ([] : Bytes) ∈ logInputs H xs ++ logInputs H ys :=
-    List.mem_append_left _ (List.mem_append_left _ (List.mem_cons_self ..))
-  by_cases hx0 : xs = []
-  · by_cases hy0 : ys = []
-    · rw [hx0, hy0]
-    · subst hx0
-      exact (emp ys hy0 hy hyL hnx (by rw [← h]; simp [logRoot])).elim
-  · by_cases hy0 : ys = []
-    · subst hy0
-      exact (emp xs hx0 hx hxL hnx (by rw [h]; simp [logRoot])).elim
-    · obtain ⟨tx, htxr, htxl, htxi⟩ := log_tree xs hx0 hx hxL
-      obtain ⟨ty, htyr, htyl, htyi⟩ := log_tree ys hy0 hy hyL
-      have := LT.inj hl64 hg tx ty htxi htyi (by rw [htxr, htyr, h])
-      rw [← htxl, ← htyl, this]
 
 end BlindLedger.Gate.Auth
