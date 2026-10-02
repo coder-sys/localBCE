@@ -422,13 +422,6 @@ offset len field value
 
 Here the action amount is min(300000, 300000 − 0) = 300000.
 
-`reuse-result.expected.bin` (complete):
-
-```
-424C4643525630320002 0020 52522F...2F7631 BLFCRV02, v2, contract (34 bytes, to offset 44)
-01 00 | 01 00 | 01 00 | 02 | 00 | 00 VALID, -, VALID, -, ALLOWED, -, DEADLINE_REACHED, false, false
-```
-
 ## Open discrepancies
 
 Found by reading the code; none has been run.
@@ -492,8 +485,8 @@ fail closed).
    19 cannot occur for Owner-built requests.
 
 **D. Spec gaps.**
-10. Python has no reuse (`BLFCRU02`/`BLFCRV02`) codec; a test compares the
-    reuse vector bytes only — one implementation exists.
+10. Python has no reuse (`BLFCRU02`/`BLFCRV02`) codec and no reuse vector file
+    (retired with the one-shot exe, M4 P1) — one implementation exists.
 11. `ARCHITECTURE.md` records codec round-trip and trailing-byte laws
     proved only for admissible values; nothing yet proves every value Lean
     emits is admissible.

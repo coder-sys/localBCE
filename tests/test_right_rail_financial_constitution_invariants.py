@@ -53,8 +53,12 @@ from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 import hashlib
 import json
+import os
+from pathlib import Path
+import shutil
 import sqlite3
 import tempfile
+import time
 from typing import Any, TypeVar
 import unittest
 from unittest.mock import MagicMock, patch
@@ -222,6 +226,11 @@ def _accepted_without_mutation(*, action_id: str, claim_id: str, evaluation_id: 
 # (reason, reason tag, requirement tag, owner error class, owner error code).
 # Tags and the owner mapping are written out independently of the engine's
 # private tables (V.4: expected answers are not derived from the code under test).
+# Failure modes after which the engine recycles the live worker; a decodable-but-refused answer leaves it running.
+_RECYCLED_FAILURES = frozenset({
+    "containment_error", "worker_timeout", "worker_stderr", "worker_exchange_or_job_cap_kill", "worker_response_cap",
+    "worker_frame_cap", "worker_unavailable", "timeout_raised", "unexpected_exception",
+})
 _LEAN_REJECTIONS: tuple[tuple[str, int, int, type[FinancialError], str], ...] = (
     ("SCOPE_MISMATCH", 4, 4, FinancialIntegrityError, "correction_scope_mismatch"),
     ("AUTHORITY_STALE", 5, 5, FinancialAuthorityError, "determination_authority_stale"),
@@ -316,12 +325,16 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         claim_id: str,
         receipt: dict[str, Any],
         *,
-        worker: MagicMock,
+        worker: MagicMock | None = None,
+        launch_error: Exception | None = None,
+        closed: bool = False,
         error_type: type[FinancialError],
         error_code: str,
     ) -> None:
         before = self._durable_state(store)
-        with patch.object(financial_engine, "_running_evaluator", return_value=worker):
+        live = financial_engine._running_evaluator()  # the real worker the failure may recycle
+        workspace = financial_engine._evaluator[1]
+        with patch.object(financial_engine, "_running_evaluator", return_value=worker, side_effect=launch_error):
             with self._python_decision_paths_forbidden(store):
                 with self.assertRaises(FinancialError) as raised:
                     self._reject(store, claim_id, receipt)
@@ -329,8 +342,13 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         self.assertIs(type(raised.exception), error_type)
         self.assertEqual(str(raised.exception), error_code)
         # The owner really consulted the pinned Lean worker exactly once.
-        self.assertEqual(worker.exchange.call_count, 1)
-        self.assertTrue(worker.exchange.call_args.args[0].startswith(b"BLFCMD03"))
+        if worker is not None:
+            self.assertEqual(worker.exchange.call_count, 1)
+            self.assertTrue(worker.exchange.call_args.args[0].startswith(b"BLFCMD03"))
+        # A failure that may leave the worker out of step recycles it; either way no workspace outlives its worker (III.5).
+        self.assertEqual(live.alive, not closed)
+        self.assertEqual(workspace.exists(), not closed)
+        self.assertEqual(financial_engine._evaluator == [], closed)
         # No partial change of any kind (III.5).
         self.assertEqual(self._durable_state(store), before)
         self.assertEqual(self._correction_evidence(store), (0, 0))
@@ -384,6 +402,8 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
             "worker_response_cap": self._worker(side_effect=process.VerifierProcessError("worker_response_cap")),
             "worker_frame_cap": self._worker(side_effect=process.VerifierProcessError("worker_frame_cap")),
             "worker_unavailable": self._worker(side_effect=process.VerifierProcessError("worker_unavailable")),
+            "timeout_raised": self._worker(side_effect=TimeoutError("synthetic_timeout")),
+            "unexpected_exception": self._worker(side_effect=OSError("synthetic_os_error")),
             "answer_not_bytes": self._worker(return_value="not bytes"),
             "decode_refused": self._worker(return_value=b"\x01"),
             "evaluation_rejected_tag": self._worker(return_value=b"\x02"),
@@ -401,9 +421,15 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                     claim_id,
                     receipt,
                     worker=worker,
+                    closed=name in _RECYCLED_FAILURES or name.startswith("malformed_"),
                     error_type=FinancialIntegrityError,
                     error_code="correction_transition_failed",
                 )
+        with self.subTest(failure_mode="launcher_os_error"):  # %TEMP% full or access denied while a worker is (re)launched
+            self._assert_engine_failure_is_closed(
+                store, claim_id, receipt, launch_error=OSError("synthetic_launch_failure"), closed=True,
+                error_type=FinancialIntegrityError, error_code="correction_transition_failed",
+            )
 
         # Lean reports DUPLICATE although the owner holds no action: never
         # treated as success.
@@ -443,12 +469,14 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         store, claim_id, receipt = self._prepare_h_claim()
         self.addCleanup(financial_engine._close_evaluator)
         dead = financial_engine._running_evaluator()
+        dead_workspace = financial_engine._evaluator[1]
         dead.close()
         self.assertFalse(dead.alive)
         self._assert_engine_failure_is_closed(
-            store, claim_id, receipt, worker=MagicMock(wraps=dead),
+            store, claim_id, receipt, worker=MagicMock(wraps=dead), closed=True,
             error_type=FinancialIntegrityError, error_code="correction_transition_failed",
         )
+        self.assertFalse(dead_workspace.exists())  # the dead worker's workspace is reaped when it is replaced
         with patch.object(financial_engine, "EVALUATOR_RECYCLE_COMMIT_BYTES", 0):  # measured over the bound: recycled, closed
             committed = self._reject(store, claim_id, receipt)
         self.assertEqual(committed["status"], "CORRECTION_AUTHORIZED")
@@ -485,8 +513,18 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         store, claim_id, receipt = self._prepare_h_claim()
         clock_value = max(store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)  # type: ignore[attr-defined]  # not before the decision
 
-        with self._commits(store, True):
-            crashed = self._run_process_boundary(store=store, claim_id=claim_id, fault="process_postcommit", clock_value=clock_value)
+        with tempfile.TemporaryDirectory() as child_temp:
+            with patch.dict(os.environ, {"TMP": child_temp, "TEMP": child_temp}), self._commits(store, True):
+                crashed = self._run_process_boundary(store=store, claim_id=claim_id, fault="process_postcommit", clock_value=clock_value)
+            # os._exit ran no cleanup: the child's worker died with its job (so its workspace is removable) and wrote nothing there.
+            (workspace,) = Path(child_temp).glob("rr-evaluator-*")
+            self.assertEqual(list(workspace.iterdir()), [])
+            for _ in range(50):
+                shutil.rmtree(workspace, ignore_errors=True)
+                if not workspace.exists():
+                    break
+                time.sleep(0.1)
+            self.assertFalse(workspace.exists(), "the crashed child's worker is still running")
         # The child committed, then died before returning or draining anything.
         self.assertEqual(crashed.returncode, 74)
         self.assertEqual(crashed.stdout, "PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n")

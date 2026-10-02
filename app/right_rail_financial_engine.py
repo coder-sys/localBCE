@@ -16,7 +16,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from app import minimal_clearance_verifier_process as process
@@ -1130,7 +1130,7 @@ def run_correction_transition_v1(*, request: bytes) -> dict[str, Any]:
 
     if type(request) is not bytes or not request.startswith(b"BLFCMD03") or not 0 < len(request) <= MAX_CORRECTION_TRANSITION_BYTES:
         raise FinancialEngineInputError("engine_correction_request_contract")
-    return decode_correction_transition_result(_evaluate_wire(request))
+    return _decoded_or_closed(decode_correction_transition_result, _evaluate_wire(request, _CORRECTION_REJECTIONS))
 
 
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
@@ -1149,6 +1149,7 @@ _EVALUATOR_REJECTIONS: Final[dict[int, str]] = {
     2: "evaluator_evaluation_rejected",
     3: "evaluator_result_rejected",
 }
+_CORRECTION_REJECTIONS: Final[dict[int, str]] = {tag: code for tag, code in _EVALUATOR_REJECTIONS.items() if tag != 2}  # the worker never answers a frame with 02
 _evaluator_lock = threading.Lock()
 _evaluator: list[Any] = []  # [ContainedWorker, workspace] while one is running
 _evaluator_requests = 0
@@ -1189,9 +1190,8 @@ def _running_evaluator() -> process.ContainedWorker:
 atexit.register(_close_evaluator)
 
 
-def _evaluate_wire(wire: bytes) -> bytes:
-    """Lean ``evaluate`` on one BLFIN02 input: the BLFRES02 answer.  Any rejection or transport
-    failure is an error; a failed worker is replaced on the next use, never retried here."""
+def _evaluate_wire(wire: bytes, rejections: Mapping[int, str] = _EVALUATOR_REJECTIONS) -> bytes:
+    """One BLFIN02 or BLFCMD03 frame on the worker: its answer after tag 00.  Any other answer or failure is an error, never retried."""
 
     global _evaluator_requests
     with _evaluator_lock:
@@ -1203,13 +1203,23 @@ def _evaluate_wire(wire: bytes) -> bytes:
             _evaluator_requests += 1
             if _evaluator_requests >= EVALUATOR_RECYCLE_REQUESTS or worker.commit_bytes() > EVALUATOR_RECYCLE_COMMIT_BYTES:
                 _close_evaluator()
-        except process.VerifierProcessError:
+        except Exception:  # a timeout or an OS error (full %TEMP%, access denied) is containment too, never an untyped escape
+            _close_evaluator()
             raise FinancialEngineContainmentError("evaluator_containment") from None
-    if response[0] in _EVALUATOR_REJECTIONS and len(response) == 1:
-        raise FinancialEngineResultError(_EVALUATOR_REJECTIONS[response[0]])
+    if response[0] in rejections and len(response) == 1:
+        raise FinancialEngineResultError(rejections[response[0]])
     if response[0] != 0:
         raise FinancialEngineResultError("evaluator_response")
     return response[1:]
+
+
+def _decoded_or_closed(decode: Callable[..., Any], answer: bytes, *args: object) -> Any:
+    try:
+        return decode(answer, *args)
+    except BaseException:
+        with _evaluator_lock:  # an answer that does not decode or bind to its request may mean the worker is out of step
+            _close_evaluator()
+        raise
 
 
 def evaluate_live(
@@ -1222,17 +1232,6 @@ def evaluate_live(
 ) -> semantic.DecodedLeanResult:
     """The owner's live decision: BLFIN02 from its transaction, Lean decides, BLFRES02 bound back."""
 
-    wire, data = semantic.live_evaluation_input(
-        connection,
-        obligation_id=obligation_id,
-        authority_context=authority_context,
-        evaluation_time_ms=evaluation_time_ms,
-        verification=verification,
-    )
-    answer = _evaluate_wire(wire)
-    try:
-        return semantic.decode_live_result(answer, data)
-    except BaseException:
-        with _evaluator_lock:  # an answer that does not bind to this request may mean the worker is out of step
-            _close_evaluator()
-        raise
+    wire, data = semantic.live_evaluation_input(connection, obligation_id=obligation_id, authority_context=authority_context,
+                                                evaluation_time_ms=evaluation_time_ms, verification=verification)
+    return _decoded_or_closed(semantic.decode_live_result, _evaluate_wire(wire), data)
