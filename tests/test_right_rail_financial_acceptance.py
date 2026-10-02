@@ -5503,7 +5503,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             wire, data = semantic.live_evaluation_input(
                 connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(store.trusted_authority),
                 evaluation_time_ms=store.clock.value + 1, verification={"scope": store._scope_value(), "owner_id": store.owner_id, "mode": store.mode})
-            links = {row["payment_id"]: row["action_id"] for row in owner._payment_links(connection, obligation_id)}
+            links = {p: a for p, _r, a in owner._payment_receipts(connection, obligation_id) if a is not None}
             connection.execute("ROLLBACK")
         receipts = b"".join(
             text(row["payment_id"]) + (0).to_bytes(8, "big") + (b"\x01" + text(links[row["payment_id"]]) if row["payment_id"] in links else b"\x00")

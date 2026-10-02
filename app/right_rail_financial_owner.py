@@ -463,9 +463,9 @@ def _open_requests(connection: sqlite3.Connection, obligation_id: str, shortfall
     return open_
 
 
-def _payment_links(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
-    """Which correction request each payment row of the obligation pays, by payment id."""
-    return [{"payment_id": payment, "action_id": action} for payment, action in connection.execute("SELECT json_extract(payload_json,'$.payment_id'),json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.pays_action_id') IS NOT NULL ORDER BY 1", (obligation_id,))]
+def _payment_receipts(connection: sqlite3.Connection, obligation_id: str) -> list[tuple[str, int, str | None]]:
+    """Each payment row's PAYMENT_RECEIVED event: the revision it was recorded at and the request it pays."""
+    return connection.execute("SELECT json_extract(payload_json,'$.payment_id'),before_revision,json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' ORDER BY 1", (obligation_id,)).fetchall()
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -5298,7 +5298,7 @@ class FinancialOwner:
                     query_observations=query_observations,
                     current_event_sequence=current_event_sequence,
                     previous_history_head=previous_history_head,
-                    payment_links=_payment_links(connection, str(obligation["obligation_id"])),
+                    payment_links=[{"payment_id": p, "action_id": a} for p, _r, a in _payment_receipts(connection, str(obligation["obligation_id"])) if a is not None],
                 )
                 execution = financial_engine.run_correction_transition_v1(
                     configured_release,
