@@ -12,6 +12,7 @@ import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.CodecLaws
 import BlindLedger.Financial.Payment.KAT
 import BlindLedger.Financial.Payment.OpenLaws
+import BlindLedger.Financial.Offset.ClaimLaws
 import BlindLedger.Financial.DecisionPackage.Laws
 
 namespace BlindLedger.Financial
@@ -437,3 +438,15 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Fast.encodeCorrectionTransitionResultBA_eq
 /-- info: 'BlindLedger.Financial.correctionRespondBA₂_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.correctionRespondBA₂_eq
+/-- info: 'BlindLedger.Financial.Offset.decideClaim_claimed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.decideClaim_claimed
+/-- info: 'BlindLedger.Financial.Offset.decideClaim_adds_claimed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.decideClaim_adds_claimed
+/-- info: 'BlindLedger.Financial.Offset.decideClaim_duplicate' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.decideClaim_duplicate
+/-- info: 'BlindLedger.Financial.Offset.decodeClaimRequest_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.decodeClaimRequest_encode
+/-- info: 'BlindLedger.Financial.Offset.encodeClaimAnswer_some_unless_oversize' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.encodeClaimAnswer_some_unless_oversize
+/-- info: 'BlindLedger.Financial.Offset.claimRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.claimRespond_length_le
