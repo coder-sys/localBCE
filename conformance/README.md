@@ -14,12 +14,11 @@ each one (verify from the repository root with
 - **Correction transition** `.../CORRECTION-TRANSITION/v1` (`BLFCMD03`→
  `BLFCRES3`): vectors `artifacts/engine-correction/vectors/{request,
  result.expected}.bin`; spec [CORRECTION_TRANSITION_WIRE.md](CORRECTION_TRANSITION_WIRE.md);
- impl `blind_financial_correction.exe --apply-correction-transition`, pins
- in [PROVENANCE.md](../artifacts/engine-correction/PROVENANCE.md).
+ impl the evaluator worker, pins in
+ [PROVENANCE.md](../artifacts/engine-evaluator/PROVENANCE.md).
 - **Correction reuse** `.../CORRECTION-REUSE/v1` (`BLFCRU02`→`BLFCRV02`):
- vectors `.../vectors/reuse-{request,result.expected}.bin`; spec
- [§7](CORRECTION_TRANSITION_WIRE.md#7-reuse-blfcru02-request-and-blfcrv02-assessment);
- same exe, `--assess-correction-reuse` (Lean only, no Python codec).
+ RETIRED 2026-10-02 with the one-shot exe (vectors in git 99ec957); spec
+ [§7](CORRECTION_TRANSITION_WIRE.md#7-reuse-blfcru02-request-and-blfcrv02-assessment).
 - **Gate rules v1**: vectors `tests/gate_rules/{rules_v1,demo_zz}.vectors`;
  **no written spec** (header comment per file; digests/pins in
  `tools/gate_rules_data.py`); impl Lake exe `gate_rules`
@@ -37,13 +36,10 @@ each one (verify from the repository root with
  impl `app/right_rail_financial_owner_independent.py`,
  `tests/test_right_rail_financial_history_segments.py`.
 
-`vectors/result.actual.bin` (build output) and `run-vectors.cmd` (launcher)
-are not vectors and are not in the manifest.
-
 ## Running the binary vectors
 
-Feed each request on stdin; stdout must match `*.expected.bin` byte-for-byte,
-exit 0 (`.../vectors/run-vectors.cmd EXE REQUEST OUTPUT`). A conforming
+Feed each request as one worker frame; the answer, after tag 00, must match
+`*.expected.bin` byte-for-byte. A conforming
 decoder must also reject every input the wire spec marks rejected; negative
 vectors aren't published yet. Report `<sha256>  <path>  PASS|FAIL` per
 vector plus the implementation's name, version, SHA-256 — a result is only

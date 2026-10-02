@@ -69,13 +69,11 @@ digests and the whole store.
  existing transaction. A zero shortfall is rejected with no mutation; the
  action amount is exactly the lesser of the claim and the unpaid balance
  that earlier correction requests, less what linked payments paid on them,
- do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_linked`). The release is an
- explicit immutable `FinancialCorrectionTransitionRelease`; without one, the
- command fails closed. There is no Python fallback decision.
-- **Pinned executable:** `artifacts/engine-correction/`, built from the exact
- source its `PROVENANCE.md` records (commit and file manifest; the release
- producer is parked and frozen, below); a later `lean/` change is not covered. Engines a re-pin
- retired are in its digest-pinned `RETIRED_PINS` (rules in its `PROVENANCE.md`): only
+ do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_linked`). The evaluator
+ worker decides it; if the worker fails, the command fails closed. There is no
+ Python fallback decision.
+- **Pinned executable:** the evaluator worker (`artifacts/engine-evaluator/`) decides corrections as well; engines a
+ re-pin retired are in the digest-pinned `artifacts/engine-correction/RETIRED_PINS` (rules in its `PROVENANCE.md`): only
  the current pin decides new work.
 - **Evaluation:** Lean decides. `evaluate_live` (`app/right_rail_financial_engine.py`)
  sends `BLFIN02` to the pinned worker (`artifacts/engine-evaluator/`); its `BLFRES02`

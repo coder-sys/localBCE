@@ -33,15 +33,14 @@ VERSION = (LEAN / "lean-toolchain").read_text("utf-8").strip().split(":v")[1]
 TOOLCHAIN = Path.home() / ".elan" / "toolchains" / f"leanprover--lean4---v{VERSION}"
 BUILT = LEAN / ".lake" / "build" / "lib" / "lean"
 LIVE = unittest.skipUnless(os.environ.get("RR_TCB_LIVE") == "1", "live TCB gate: run tools/tcb_pin.ps1 (RR_TCB_LIVE=1)")
-# The committed pins of the three executables: the exes the report must be about.
+# The committed pins of the two executables: the exes the report must be about.
 EXE_PINS = {
     "blind_financial_worker": engine.EVALUATOR_ARTIFACT_SHA256.hex(),
-    "blind_financial_correction": engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex(),
     "gate_verify": signer.VERIFY_PIN.read_text("utf-8").strip(),
 }
 # The open items: a new one changes this set (and STATUS.md).  serve/readExact/readFinancialBounded, rejNtt and sampleInBall
 # are closed by lean-partials-v1.
-EXPECTED_TODO = {"blind_financial_worker": set(), "blind_financial_correction": set(), "gate_verify": set()}
+EXPECTED_TODO = {"blind_financial_worker": set(), "gate_verify": set()}
 
 
 def _sha256(path: Path) -> str:

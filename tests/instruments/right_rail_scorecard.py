@@ -1,7 +1,7 @@
 """Felt-value scorecard for the Hospital H synthetic journey (Constitution Art. XII).
 
 Runs the Hospital H journey end to end through what staff actually use: the real
-loopback staff server (Owner, Mirror, pinned Lean correction release) over HTTP,
+loopback staff server (Owner, Mirror, pinned Lean evaluator worker) over HTTP,
 and the real served page in an isolated Edge browser driven by Playwright. Each role
 opens a fresh page, reads what is on it, opens H's record only if the answer is not
 there, and clicks the same buttons.
@@ -38,12 +38,10 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app import right_rail_financial_engine as financial_engine  # noqa: E402
 from app import right_rail_financial_staff_server as staff  # noqa: E402
 
 SCHEMA = "RR/FINANCIAL/FELT-VALUE-SCORECARD/v1"
 SCORECARD_PATH = _ROOT / "docs" / "scorecard" / "hospital_h.json"
-ENGINE_PATH = _ROOT / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
 _MODEL = json.loads((_ROOT / "app" / "staff_workspace" / "interaction-model.json").read_text(encoding="utf-8"))
 HOUR_MS = 3_600_000
 # Screens in the order a person reaches them: the page as it opens, then H's record if H is not already up.
@@ -723,16 +721,13 @@ DEMO_BASELINE: dict[str, int] = {
 
 def measure() -> dict[str, Any]:
     """Run the journey once on a fresh synthetic Owner; return units and journey detail."""
-    if not ENGINE_PATH.is_file():
-        raise HarnessUnavailable("correction_engine_artifact_absent")
     _node_path()
     with ExitStack() as stack:
         temp = lambda prefix: Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=prefix))).resolve()  # noqa: E731
-        owner_dir, engine_dir, driver_dir = temp("rr-scorecard-owner-"), temp("rr-scorecard-engine-"), temp("rr-scorecard-driver-")
+        owner_dir, driver_dir = temp("rr-scorecard-owner-"), temp("rr-scorecard-driver-")
         driver = driver_dir / "browser.js"
         driver.write_text(DRIVER_JS, encoding="utf-8")
-        release = financial_engine.load_correction_transition_release(ENGINE_PATH.resolve(), engine_dir)
-        workflow = staff.StaffWorkflow(owner_dir, correction_transition_release=release)
+        workflow = staff.StaffWorkflow(owner_dir)
         stack.callback(workflow.close)
         meter = _Meter()
         server = staff._LoopbackServer(("127.0.0.1", 0), _metered_handler(workflow, meter))

@@ -1038,7 +1038,7 @@ class FinancialMirror:
             rule_version={key: pack.get(key) for key in _PACK_REF} if type(pack) is dict else "NONE",
             adapter_versions={"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
             work_ref_count=int(status != "CURRENT"), reproduction=engine.CORRECTION_TRANSITION_REPRODUCTION
-            if artifact and artifact["sha256"] == engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper() else "NONE",
+            if artifact and artifact["sha256"] == engine.EVALUATOR_ARTIFACT_SHA256.hex().upper() else "NONE",
         )
         # the Owner's raw package, so an extra key is refused instead of projected away; JSON, so 1 is not True
         if json.dumps(raw["corporate_support"], sort_keys=True, default=str) != json.dumps(approved, sort_keys=True):
@@ -1347,7 +1347,6 @@ class FinancialMirror:
                         recovered_path=recovered_path,
                         trusted_authority=self.owner.trusted_authority,
                         restore_mode=restore_mode,
-                        correction_transition_release=self.owner.correction_transition_release,
                     )
                     summary = restored_owner.summary()
                     integrity = restored_owner.verify_integrity()

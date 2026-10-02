@@ -2,6 +2,8 @@ import BlindLedger.Financial.FastEncode
 import BlindLedger.Financial.Evaluation
 import BlindLedger.Financial.ReadUpTo
 import BlindLedger.Financial.Payment.Codec
+import BlindLedger.Financial.CursorCorrection
+import BlindLedger.Financial.CorrectionTransition.Transition
 
 namespace BlindLedger.Financial
 
@@ -45,10 +47,26 @@ def decodeWorkerOutcome : Bytes → Option WorkerOutcome
       else if tag.toNat = 3 then some .encodingRejected
       else none
 
-/-- The worker's whole policy, one frame in and one answer out: a frame that starts with the payment
-    magic is one payment step; any other is one BLFIN02 input. -/
+open CorrectionTransition in
+/-- The retired exe's `--apply-correction-transition` as one worker frame: exe stdout is this answer
+    without its leading 0; exe exit 72 is `[1]`; exe exit 73 is `[3]`. -/
+def correctionRespond (w : Bytes) : Bytes :=
+  match decodeCorrectionTransitionRequest w with
+  | none => [UInt8.ofNat 1]
+  | some request =>
+    match encodeCorrectionTransitionResult (applyCorrectionTransition request) with
+    | none => [UInt8.ofNat 3]
+    | some b => UInt8.ofNat 0 :: b
+
+/-- Every item magic the worker dispatches on, in dispatch order. A later item is added here and in
+    `workerRespond`; `workerRespond_evaluator_unchanged₂` keeps its text. -/
+def itemMagics : List Bytes := [Payment.paymentMagic, CorrectionTransition.correctionTransitionInputMagic]
+
+/-- The worker's whole policy, one frame in and one answer out: a frame that starts with an item magic
+    is one item decision; any other is one BLFIN02 input. -/
 def workerRespond (wire : Bytes) : Bytes :=
   if Payment.paymentMagic.isPrefixOf wire then Payment.paymentRespond wire
+  else if CorrectionTransition.correctionTransitionInputMagic.isPrefixOf wire then correctionRespond wire
   else encodeWorkerOutcome (evaluateWire wire)
 
 theorem financialInputWellFormed_of_decodeFinancialInput {bytes : Bytes} {input : FinancialInput}
@@ -71,13 +89,26 @@ theorem evaluate_eq_evaluateWellFormed {input : FinancialInput}
     (h : financialInputWellFormed input = true) : evaluate input = evaluateWellFormed input := by
   simp [evaluate, h]
 
+/-- `correctionRespond` on the array: the cursor decoder reads the frame in place. -/
+def correctionRespondBA (wire : ByteArray) : Bytes :=
+  match Cursor.decodeCorrectionTransitionRequest wire with
+  | none => [UInt8.ofNat 1]
+  | some request =>
+    match CorrectionTransition.encodeCorrectionTransitionResult
+        (CorrectionTransition.applyCorrectionTransition request) with
+    | none => [UInt8.ofNat 3]
+    | some b => UInt8.ofNat 0 :: b
+
 /-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA₂` is proved equal to the list
     decoder on `wire.toList`, and its input is already well-formed, so this is `workerRespond`
-    with one well-formedness pass and no second large list. The payment test reads only the first
-    bytes of the array, so an evaluator frame is never copied into a list. -/
+    with one well-formedness pass and no second large list. The magic tests read only the first
+    bytes of the array, so an evaluator or correction frame is never copied into a list. -/
 def workerRespondBA (wire : ByteArray) : Bytes :=
   if Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList then
     Payment.paymentRespond wire.toList
+  else if CorrectionTransition.correctionTransitionInputMagic.isPrefixOf
+      (wire.extract 0 CorrectionTransition.correctionTransitionInputMagic.length).toList then
+    correctionRespondBA wire
   else
     encodeWorkerOutcome
       (match Fast.decodeFinancialInputBA₂ wire with
@@ -90,21 +121,30 @@ def workerRespondBA (wire : ByteArray) : Bytes :=
                 | none => .encodingRejected
                 | some output => .evaluated output)
 
-theorem magic_prefix_extract (wire : ByteArray) :
-    Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList =
-      Payment.paymentMagic.isPrefixOf wire.toList := by
-  have hx : (wire.extract 0 Payment.paymentMagic.length).toList =
-      wire.toList.take Payment.paymentMagic.length := by
+theorem isPrefixOf_extract (m : Bytes) (wire : ByteArray) :
+    m.isPrefixOf (wire.extract 0 m.length).toList = m.isPrefixOf wire.toList := by
+  have hx : (wire.extract 0 m.length).toList = wire.toList.take m.length := by
     rw [Fast.toList_eq, ByteArray.data_extract, Array.toList_extract, Fast.toList_eq]
     simp
   rw [hx, Bool.eq_iff_iff, List.isPrefixOf_iff_prefix, List.isPrefixOf_iff_prefix, List.prefix_take_iff]
   exact ⟨fun h => h.1, fun h => ⟨h, Nat.le_refl _⟩⟩
 
+theorem magic_prefix_extract (wire : ByteArray) :
+    Payment.paymentMagic.isPrefixOf (wire.extract 0 Payment.paymentMagic.length).toList =
+      Payment.paymentMagic.isPrefixOf wire.toList :=
+  isPrefixOf_extract _ wire
+
+theorem correctionRespondBA_eq (wire : ByteArray) : correctionRespondBA wire = correctionRespond wire.toList := by
+  unfold correctionRespondBA correctionRespond
+  rw [Cursor.decodeCorrectionTransitionRequest_eq]
+
 theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRespond wire.toList := by
   unfold workerRespondBA workerRespond evaluateWire
-  rw [magic_prefix_extract]
+  rw [magic_prefix_extract, isPrefixOf_extract]
   split
   · rfl
+  split
+  · exact correctionRespondBA_eq wire
   rw [Fast.decodeFinancialInputBA₂_eq]
   cases hd : Fast.decodeFinancialInput wire.toList with
   | none => rfl

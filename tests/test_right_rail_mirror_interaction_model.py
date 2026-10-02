@@ -89,13 +89,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        if not scorecard.ENGINE_PATH.is_file():
-            raise unittest.SkipTest("correction_engine_artifact_absent")
         scorecard._node_path()
         cls.temp = tempfile.TemporaryDirectory(prefix="rr-mirror-xiii-crawl-")
         cls.addClassCleanup(cls.temp.cleanup)
-        (engine_dir := Path(cls.temp.name) / "engine-work").mkdir()
-        cls.release = scorecard.financial_engine.load_correction_transition_release(scorecard.ENGINE_PATH.resolve(), engine_dir)
         cls.driver_path = Path(cls.temp.name) / "browser.js"
         cls.driver_path.write_text(scorecard.DRIVER_JS, encoding="utf-8")
         cls.browser = scorecard._Browser(0, cls.driver_path)
@@ -106,7 +102,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
     @classmethod
     def _start_workflow(cls, owner_dir: Path):
         owner_dir.mkdir()
-        workflow = scorecard.staff.StaffWorkflow(owner_dir, correction_transition_release=cls.release)
+        workflow = scorecard.staff.StaffWorkflow(owner_dir)
         server = scorecard.staff._LoopbackServer(("127.0.0.1", 0), _response_handler(workflow))
         server.fault, server.fault_requests, server.rewrite = None, [], None
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)

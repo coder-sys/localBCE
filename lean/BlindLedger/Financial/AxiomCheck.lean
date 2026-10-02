@@ -119,8 +119,20 @@ namespace BlindLedger.Financial
 /-- info: 'BlindLedger.Financial.workerRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_length_le
 
-/-- info: 'BlindLedger.Financial.workerRespond_evaluator_unchanged' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_evaluator_unchanged
+/-- info: 'BlindLedger.Financial.workerRespond_evaluator_frames' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_evaluator_frames
+
+/-- info: 'BlindLedger.Financial.workerRespond_evaluator_unchanged₂' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_evaluator_unchanged₂
+
+/-- info: 'BlindLedger.Financial.workerRespond_correction' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_correction
+
+/-- info: 'BlindLedger.Financial.correctionRespond_decoded' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.correctionRespond_decoded
+
+/-- info: 'BlindLedger.Financial.correctionRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.correctionRespond_length_le
 
 /-- info: 'BlindLedger.Financial.workerRespond_payment' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_payment

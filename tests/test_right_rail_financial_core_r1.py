@@ -127,7 +127,7 @@ class CoreR1aMarkTests(unittest.TestCase):
         store = fixture._build_base_for_correction()
         fixture._record_cash(store)
         fixture._record_claim(store)
-        reopened = fixture._make_owner(path=store.path, clock=store.clock, correction_transition_release=store.correction_transition_release)
+        reopened = fixture._make_owner(path=store.path, clock=store.clock)
         _foreign(store.path, TAMPER)
         with self.assertRaises(owner.FinancialIntegrityError):  # its own snapshot check finds it first (decision 1)
             fixture._reject(reopened, CLAIM)

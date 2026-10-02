@@ -71,7 +71,6 @@
         "correction_input_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "correction_read_set_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "correction_input_snapshot_missing": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
-        "correction_transition_unavailable": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "correction_transition_failed": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "correction_query_cardinality": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
         "correction_duplicate_without_action": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },

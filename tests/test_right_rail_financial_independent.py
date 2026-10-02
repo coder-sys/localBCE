@@ -561,7 +561,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
         tampered_owner._initialize(
             path=target, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE",
-            owner_id="financial-owner-v1", correction_transition_release=None, identity_contract=None,
+            owner_id="financial-owner-v1", identity_contract=None,
         )
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
             independent.verify_continuity_package(
@@ -835,7 +835,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 clock=_Clock(),
                 mode="LIVE",
                 owner_id="financial-owner-v1",
-                correction_transition_release=None,
                 identity_contract=None,
             )
             tampered_package = _unverified_export(tampered_owner)

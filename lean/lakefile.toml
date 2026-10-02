@@ -24,11 +24,6 @@ name = "blind_financial"
 root = "BlindLedger.Financial.Cli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
-[[lean_exe]]
-name = "blind_financial_correction"
-root = "BlindLedger.Financial.CorrectionTransitionCli"
-moreLinkArgs = ["-Wl,--no-insert-timestamp"]
-
 # The long-lived evaluator worker (docs/CORE_REDESIGN.md, Lean-live M1): one BLFIN02 frame in, one outcome out.
 [[lean_exe]]
 name = "blind_financial_worker"
