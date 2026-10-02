@@ -3,6 +3,7 @@ import BlindLedger.Financial.Evaluation
 import BlindLedger.Financial.ReadUpTo
 import BlindLedger.Financial.Payment.Cursor
 import BlindLedger.Financial.CursorCorrection
+import BlindLedger.Financial.CorrectionFast
 import BlindLedger.Financial.CorrectionTransition.Transition
 
 namespace BlindLedger.Financial
@@ -99,6 +100,16 @@ def correctionRespondBA (wire : ByteArray) : Bytes :=
     | none => [UInt8.ofNat 3]
     | some b => UInt8.ofNat 0 :: b
 
+/-- `correctionRespondBA` with the canonical re-encode and the result encoder on the array twins
+    of `Fast/CorrectionFast.lean`, so the embedded input is never copied once per field. -/
+def correctionRespondBA₂ (wire : ByteArray) : Bytes :=
+  match Fast.decodeCorrectionTransitionRequestBA₂ wire with
+  | none => [UInt8.ofNat 1]
+  | some request =>
+    match Fast.encodeCorrectionTransitionResultBA (CorrectionTransition.applyCorrectionTransition request) with
+    | none => [UInt8.ofNat 3]
+    | some b => UInt8.ofNat 0 :: b.toList
+
 /-- The frame arrives as a `ByteArray`; `Fast.decodeFinancialInputBA₂` is proved equal to the list
     decoder on `wire.toList`, and its input is already well-formed, so this is `workerRespond`
     with one well-formedness pass and no second large list. The magic tests read only the first
@@ -108,7 +119,7 @@ def workerRespondBA (wire : ByteArray) : Bytes :=
     Payment.paymentRespondBA wire
   else if CorrectionTransition.correctionTransitionInputMagic.isPrefixOf
       (wire.extract 0 CorrectionTransition.correctionTransitionInputMagic.length).toList then
-    correctionRespondBA wire
+    correctionRespondBA₂ wire
   else
     encodeWorkerOutcome
       (match Fast.decodeFinancialInputBA₂ wire with
@@ -138,13 +149,24 @@ theorem correctionRespondBA_eq (wire : ByteArray) : correctionRespondBA wire = c
   unfold correctionRespondBA correctionRespond
   rw [Cursor.decodeCorrectionTransitionRequest_eq]
 
+theorem correctionRespondBA₂_eq (wire : ByteArray) : correctionRespondBA₂ wire = correctionRespondBA wire := by
+  unfold correctionRespondBA₂ correctionRespondBA
+  rw [Fast.decodeCorrectionTransitionRequestBA₂_eq]
+  cases Cursor.decodeCorrectionTransitionRequest wire with
+  | none => rfl
+  | some request =>
+    simp only [Fast.encodeCorrectionTransitionResultBA_eq]
+    cases CorrectionTransition.encodeCorrectionTransitionResult (CorrectionTransition.applyCorrectionTransition request) with
+    | none => rfl
+    | some b => exact congrArg (UInt8.ofNat 0 :: ·) ((Fast.toByteArray_eq_iff b _).1 rfl).symm
+
 theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRespond wire.toList := by
   unfold workerRespondBA workerRespond evaluateWire
   rw [magic_prefix_extract, isPrefixOf_extract]
   split
   · exact Payment.paymentRespondBA_eq wire
   split
-  · exact correctionRespondBA_eq wire
+  · exact (correctionRespondBA₂_eq wire).trans (correctionRespondBA_eq wire)
   rw [Fast.decodeFinancialInputBA₂_eq]
   cases hd : Fast.decodeFinancialInput wire.toList with
   | none => rfl
