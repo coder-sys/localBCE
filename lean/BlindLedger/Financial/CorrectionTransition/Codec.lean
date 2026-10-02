@@ -319,16 +319,22 @@ def readOptionalRejectReason (bytes : Bytes) : Option (Option TransitionRejectRe
     pure (some reason, tail)
   else none
 
-def encodeTransitionKind (_ : TransitionKind) : UInt8 := UInt8.ofNat 1
+def encodeTransitionKind : TransitionKind → UInt8
+  | .OFFSET_REJECTED_CORRECTION_AUTHORIZED => UInt8.ofNat 1
+  | .OFFSET_AUTHORIZED => UInt8.ofNat 2
 
 def readTransitionKind (bytes : Bytes) : Option (TransitionKind × Bytes) := do
   let (tag, rest) ← readByte bytes
-  if tag.toNat = 1 then some (.OFFSET_REJECTED_CORRECTION_AUTHORIZED, rest) else none
+  match tag.toNat with
+  | 1 => some (.OFFSET_REJECTED_CORRECTION_AUTHORIZED, rest)
+  | 2 => some (.OFFSET_AUTHORIZED, rest)
+  | _ => none
 
 def encodeExplanationCode : ExplanationCode → UInt8
   | .CORRECTION_AUTHORIZED => UInt8.ofNat 1
   | .EXACT_RETRY => UInt8.ofNat 2
   | .REJECTED => UInt8.ofNat 3
+  | .OFFSET_AUTHORIZED => UInt8.ofNat 4
 
 def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -336,6 +342,7 @@ def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Bytes) := d
   | 1 => some (.CORRECTION_AUTHORIZED, rest)
   | 2 => some (.EXACT_RETRY, rest)
   | 3 => some (.REJECTED, rest)
+  | 4 => some (.OFFSET_AUTHORIZED, rest)
   | _ => none
 
 def encodeCorrectionEffect : CorrectionEffect → UInt8
@@ -346,6 +353,7 @@ def encodeCorrectionEffect : CorrectionEffect → UInt8
   | .OUTBOX_CREATED => UInt8.ofNat 5
   | .PROJECTION_RECOMPUTED => UInt8.ofNat 6
   | .EVENT_APPENDED => UInt8.ofNat 7
+  | .CLAIM_AUTHORIZED => UInt8.ofNat 8
 
 def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -357,6 +365,7 @@ def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × Bytes) :=
     | 5 => some .OUTBOX_CREATED
     | 6 => some .PROJECTION_RECOMPUTED
     | 7 => some .EVENT_APPENDED
+    | 8 => some .CLAIM_AUTHORIZED
     | _ => none
   pure (effect, rest)
 

@@ -19,12 +19,14 @@ deriving DecidableEq, Repr
 
 inductive TransitionKind where
   | OFFSET_REJECTED_CORRECTION_AUTHORIZED
+  | OFFSET_AUTHORIZED
 deriving DecidableEq, Repr
 
 inductive ExplanationCode where
   | CORRECTION_AUTHORIZED
   | EXACT_RETRY
   | REJECTED
+  | OFFSET_AUTHORIZED
 deriving DecidableEq, Repr
 
 inductive CorrectionEffect where
@@ -35,6 +37,7 @@ inductive CorrectionEffect where
   | OUTBOX_CREATED
   | PROJECTION_RECOMPUTED
   | EVENT_APPENDED
+  | CLAIM_AUTHORIZED
 deriving DecidableEq, Repr
 
 inductive TransitionRejectReason where

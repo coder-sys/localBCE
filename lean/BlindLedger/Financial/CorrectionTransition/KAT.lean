@@ -46,8 +46,11 @@ private def correctionKatRetryQueries (sequence head : Nat) : CorrectionQueryObs
     katCorrectionEvaluationId sequence head
     (some ("determination:" ++ katCorrectionActionId)) }
 
+def boundKatDigest : Bytes := authorityDigestOf katAuthority
+
 def correctionKatInput : FinancialInput := {
   katBase with
+  authority := { katAuthority with digest := boundKatDigest }
   beforeRevision := 3
   evaluatedAt := katEvalAt
   payments := [katPayment]
@@ -81,7 +84,7 @@ def correctionKatCurrentReceipt : EvaluationReceipt := {
   inputSnapshotDigest := some (correctionKatDigest 91)
   authority := {
     authorityEpoch := katAuthority.epoch
-    authorityDigest := katAuthority.digest }
+    authorityDigest := boundKatDigest }
   result := {
     evaluationId := katCorrectionEvaluationId
     obligationId := katContext.obligationId
@@ -115,7 +118,7 @@ def correctionKatCommand : CorrectionCommand := {
   actorRole := "FINANCE_DECISION"
   currentAuthorityId := katAuthority.authorityId
   currentAuthorityEpoch := katAuthority.epoch
-  currentAuthorityDigest := katAuthority.digest
+  currentAuthorityDigest := boundKatDigest
   expectedRevision := 4
   evaluationId := katCorrectionEvaluationId
   evaluationResultDigest := correctionKatDigest 165
@@ -131,6 +134,21 @@ def correctionKatRequest : CorrectionTransitionRequest := {
   currentInput := correctionKatInput
   currentReceipt := correctionKatCurrentReceipt }
 
+def unboundKatRequest : CorrectionTransitionRequest :=
+  { command := { correctionKatCommand with currentAuthorityDigest := katDigest }
+    currentInput := { correctionKatInput with authority := katAuthority }
+    currentReceipt := { correctionKatCurrentReceipt with
+      authority := { correctionKatCurrentReceipt.authority with authorityDigest := katDigest } } }
+
+#guard digestHex boundKatDigest ==
+  "BF620150B21060DDFBA787A7DC8F2A38499294F3DD57DBFFC267FC4072031151831E9E083F0A0BA20EC10F7CFBCDAA85E764A17A09F6873EB93CD7D632DDFE99"
+#guard match preflightCorrectionTransition unboundKatRequest with
+  | .error .AUTHORITY_STALE => true
+  | _ => false
+#guard match preflightCorrectionTransition correctionKatRequest with
+  | .ok (.ready ..) => true
+  | _ => false
+
 def correctionKatAccepted : CorrectionTransitionResult :=
   applyCorrectionTransition correctionKatRequest
 
@@ -145,7 +163,7 @@ def correctionKatStoredIdentity : ExistingCorrectionIdentity := {
   actorRole := "FINANCE_DECISION"
   authorityId := katAuthority.authorityId
   authorityEpoch := katAuthority.epoch
-  authorityDigest := katAuthority.digest
+  authorityDigest := boundKatDigest
   decision := .OFFSET_REJECTED_CORRECTION_AUTHORIZED
   inputEvaluationId := katCorrectionEvaluationId
   inputEvaluationResultDigest := correctionKatDigest 165

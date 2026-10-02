@@ -116,7 +116,7 @@ theorem readQueryPredicate_cons (value : CorrectionQueryPredicate) (rest : Bytes
 
 theorem readTransitionKind_cons (value : TransitionKind) (rest : Bytes) :
     readTransitionKind (encodeTransitionKind value :: rest) = some (value, rest) := by
-  cases value; simp [readTransitionKind, encodeTransitionKind, readByte]
+  cases value <;> simp [readTransitionKind, encodeTransitionKind, readByte]
 
 theorem readExplanationCode_cons (value : ExplanationCode) (rest : Bytes) :
     readExplanationCode (encodeExplanationCode value :: rest) = some (value, rest) := by
