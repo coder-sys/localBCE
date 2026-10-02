@@ -1,5 +1,6 @@
 import BlindLedger.Financial.Worker
 import BlindLedger.Financial.CodecLaws.CorrectionRecords
+import BlindLedger.Financial.CorrectionTransition.KAT
 import BlindLedger.Financial.Theorems.Correspondence
 
 namespace BlindLedger.Financial
@@ -594,6 +595,9 @@ private def runPipe (input : Bytes) (cut : Nat → Nat) : UInt32 × Bytes × Byt
   (r.1, r.2.output, r.2.input)
 #guard workerRespond [] == [1]                                                   -- empty frame: decode rejected
 #guard workerRespond CorrectionTransition.correctionTransitionInputMagic == [1]             -- bare BLFCMD03: decode rejected
+-- The KAT request: the worker answers 00 + BLFCRES3, the evaluator alone would answer 01 (compiled check, not a kernel proof)
+#guard let w := (CorrectionTransition.encodeCorrectionTransitionRequest CorrectionTransition.correctionKatRequest).getD []
+  workerRespond w != encodeWorkerOutcome (evaluateWire w)
 #guard itemMagics.all (·.length == 8)
 #guard (itemMagics.map fun m => (itemMagics.filter (· == m)).length).all (· == 1)
 #guard itemMagics.all fun m => !(m.isPrefixOf financialCodecMagic || financialCodecMagic.isPrefixOf m)

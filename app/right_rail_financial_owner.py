@@ -1978,7 +1978,6 @@ class FinancialOwner:
         clock: FinancialClock | None = None,
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
-        correction_transition_release: object | None = None,
         existing_only: bool = False,
         custody: Any = None,
     ) -> None:
@@ -1990,7 +1989,6 @@ class FinancialOwner:
             clock=clock,
             mode=mode,
             owner_id=owner_id,
-            correction_transition_release=correction_transition_release,
             identity_contract=None,
             existing_only=existing_only,
         )
@@ -2029,7 +2027,6 @@ class FinancialOwner:
         mode: str,
         owner_id: str,
         identity_contract: Mapping[str, Any],
-        correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
         """Create a fresh restore target; only ``restore_continuity`` may call this.
 
@@ -2047,7 +2044,6 @@ class FinancialOwner:
             clock=clock,
             mode=mode,
             owner_id=owner_id,
-            correction_transition_release=correction_transition_release,
             identity_contract=identity_contract,
         )
         return owner
@@ -2061,7 +2057,6 @@ class FinancialOwner:
         clock: FinancialClock | None,
         mode: str,
         owner_id: str,
-        correction_transition_release: object | None,
         identity_contract: Mapping[str, Any] | None,
         existing_only: bool = False,
     ) -> None:
@@ -2082,7 +2077,6 @@ class FinancialOwner:
         self._tables = _PACKAGE_TABLES
         self._table_columns = _TABLE_COLUMNS
         self.trusted_authority = trusted_authority
-        self.correction_transition_release = correction_transition_release
         self.clock: FinancialClock = clock if clock is not None else _SystemClock()
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
@@ -4937,7 +4931,7 @@ class FinancialOwner:
             "artifact": {
                 "contract": str(dependencies["artifact_contract"]),
                 "version": int(dependencies["artifact_version"]),
-                "sha256": _hex(financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256),
+                "sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256),
             },
             "control_pack": {
                 "pack_id": pack.pack_id,
@@ -5209,9 +5203,6 @@ class FinancialOwner:
             from app import right_rail_financial_semantic_adapter as semantic
 
             try:
-                configured_release = financial_engine.require_correction_transition_v1(
-                    self.correction_transition_release
-                )
                 owner_now_ms = self._now()
                 snapshot = semantic.build_locked_semantic_snapshot(
                     connection,
@@ -5300,18 +5291,12 @@ class FinancialOwner:
                     previous_history_head=previous_history_head,
                     payment_links=_payment_links(connection, str(obligation["obligation_id"])),
                 )
-                execution = financial_engine.run_correction_transition_v1(
-                    configured_release,
-                    request=request,
-                )
-            except financial_engine.FinancialEngineTransitionUnavailable:
-                _fail(FinancialIntegrityError, "correction_transition_unavailable")
+                transition_result = financial_engine.run_correction_transition_v1(request=request)
             except financial_engine.FinancialEngineError:
                 _fail(FinancialIntegrityError, "correction_transition_failed")
             except semantic.SemanticAdapterError:
                 _fail(FinancialIntegrityError, "correction_snapshot_invalid")
 
-            transition_result = execution.result
             if transition_result["status"] == "REJECTED":
                 rejected_errors: dict[str, tuple[type[FinancialError], str]] = {
                     "INVALID_REQUEST": (FinancialInputError, "correction_request_invalid"),
@@ -6296,7 +6281,7 @@ class FinancialOwner:
             "adapter_versions": {"population": _POPULATION_MANIFEST_CONTRACT, "trust_graph_source_profile": "NONE"},
             "artifact": artifact, "failure_stage": failure_stage, "error_class": error_class, "work_ref_count": int(status != "CURRENT"),
             "reproduction": dict(financial_engine.CORRECTION_TRANSITION_REPRODUCTION)
-            if artifact and artifact["sha256"] == _hex(financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256) else "NONE",
+            if artifact and artifact["sha256"] == _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256) else "NONE",
         }
         result = {
             "followup_status": status,
@@ -7156,7 +7141,6 @@ class FinancialOwner:
         trusted_authority: SyntheticTrustedAuthority | None,
         clock: FinancialClock | None = None,
         restore_mode: str = "SHADOW",
-        correction_transition_release: object | None = None,
     ) -> "FinancialOwner":
         """Restore into a new SHADOW or explicitly approved TEST owner, from a package or by replaying a history export."""
         from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
@@ -7264,8 +7248,7 @@ class FinancialOwner:
                 mode=restore_mode,
                 owner_id=restored_owner_id,
                 identity_contract=identity_contract,
-                correction_transition_release=correction_transition_release,
-            )
+                )
             insertion_order = (
                 "control_packs", "population_imports", "population_items", "obligations", "evidence",
                 "payments", "claimed_adjustments", "cases", "determinations", "actions", "action_outbox",

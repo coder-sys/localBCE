@@ -58,22 +58,6 @@ from tests import rightrail_financial_expected_cases as expected
 from tests.financial_decision_package_oracle import verify_decision_package
 
 
-_CORRECTION_ENGINE_PATH = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
-)
-_CORRECTION_VECTOR_DIR = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
-)
-_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES = 6_433_792
-_EXPECTED_CORRECTION_ARTIFACT_SHA256 = bytes.fromhex(
-    "874E2A37123E3B3EA5AD6E96DEE9DD066C596029D5268EF9FE6F3AF6A278323F"
-)
-_EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256 = bytes.fromhex(
-    "234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666"
-)
-_EXPECTED_CORRECTION_RESULT_VECTOR_SHA256 = bytes.fromhex(
-    "83BB53D184B0B7D9268B565B844ECE9D6943C37DD022E2D361F735A4C835E0D6"
-)
 _RETIRED_CORRECTION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
 _B2_CORRECTION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
 _ACTION_B = "action:obligation-item-h:correction-b"
@@ -134,56 +118,6 @@ _EXPECTED_PRIVATE_INDEXES = (
         "CREATE INDEX rr_financial_v3_events_kind ON financial_events(kind,aggregate_type)",
     ),
 )
-
-
-def _correction_transition_test_release(
-    *,
-    workspace: Path,
-) -> financial_engine.FinancialCorrectionTransitionRelease:
-    if financial_engine.CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES != _EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES:
-        raise AssertionError("correction_transition_artifact_size_pin_mismatch")
-    if financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256 != _EXPECTED_CORRECTION_ARTIFACT_SHA256:
-        raise AssertionError("correction_transition_artifact_pin_mismatch")
-    if financial_engine.CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256 != _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256:
-        raise AssertionError("correction_transition_request_pin_mismatch")
-    if financial_engine.CORRECTION_TRANSITION_RESULT_VECTOR_SHA256 != _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256:
-        raise AssertionError("correction_transition_result_pin_mismatch")
-
-    artifact_path = Path(os.environ.get("RR_FINANCIAL_CORRECTION_ENGINE_PATH", _CORRECTION_ENGINE_PATH))
-    vector_dir = Path(os.environ.get("RR_FINANCIAL_CORRECTION_VECTOR_DIR", _CORRECTION_VECTOR_DIR))
-    artifact = artifact_path.read_bytes()
-    if (
-        len(artifact) != _EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES
-        or hashlib.sha256(artifact).digest() != _EXPECTED_CORRECTION_ARTIFACT_SHA256
-    ):
-        raise AssertionError("correction_transition_artifact_bytes_mismatch")
-
-    request = (vector_dir / "request.bin").read_bytes()
-    expected_result = (vector_dir / "result.expected.bin").read_bytes()
-    actual_result = (vector_dir / "result.actual.bin").read_bytes()
-    if hashlib.sha256(request).digest() != _EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256:
-        raise AssertionError("correction_transition_request_vector_bytes_mismatch")
-    if hashlib.sha256(expected_result).digest() != _EXPECTED_CORRECTION_RESULT_VECTOR_SHA256:
-        raise AssertionError("correction_transition_result_vector_bytes_mismatch")
-    if actual_result != expected_result:
-        raise AssertionError("correction_transition_result_vector_not_byte_equal")
-    workspace.mkdir(parents=True, exist_ok=True)
-    if any(workspace.iterdir()):
-        raise AssertionError("correction_transition_test_workspace_not_empty")
-
-    return financial_engine.FinancialCorrectionTransitionRelease(
-        executable=artifact_path,
-        executable_size_bytes=_EXPECTED_CORRECTION_ARTIFACT_SIZE_BYTES,
-        executable_sha256=_EXPECTED_CORRECTION_ARTIFACT_SHA256,
-        request_vector_sha256=_EXPECTED_CORRECTION_REQUEST_VECTOR_SHA256,
-        result_vector_sha256=_EXPECTED_CORRECTION_RESULT_VECTOR_SHA256,
-        timeout_seconds=30.0,
-        input_max_bytes=financial_engine.MAX_CORRECTION_TRANSITION_BYTES,
-        output_max_bytes=financial_engine.MAX_CORRECTION_TRANSITION_BYTES,
-        stderr_max_bytes=financial_engine.process.MAX_STDERR_BYTES,
-        workspace=workspace,
-        job_memory_cap_bytes=1_000_000_000,
-    )
 
 
 class _Clock:
@@ -304,7 +238,6 @@ class _WriteBoundaryOwner(FinancialOwner):
         trusted_authority: SyntheticTrustedAuthority,
         clock: _Clock,
         fault: str,
-        correction_transition_release: object | None = None,
     ) -> None:
         self._fault = fault
         super().__init__(
@@ -312,7 +245,6 @@ class _WriteBoundaryOwner(FinancialOwner):
             config=config,
             trusted_authority=trusted_authority,
             clock=clock,
-            correction_transition_release=correction_transition_release,
         )
 
     @contextmanager
@@ -342,7 +274,7 @@ from pathlib import Path
 
 from app.right_rail_financial_owner import FinancialOwnerConfig, SyntheticTrustedAuthority
 from tests import rightrail_financial_expected_cases as expected
-from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner, _correction_transition_test_release
+from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner
 
 path = Path(sys.argv[1])
 claim_id = sys.argv[2]
@@ -361,9 +293,6 @@ store = _WriteBoundaryOwner(
     trusted_authority=SyntheticTrustedAuthority(),
     clock=clock,
     fault=fault,
-    correction_transition_release=_correction_transition_test_release(
-        workspace=path.parent / "correction-engine-workspace",
-    ),
 )
 receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
 revision = receipt["revision"]
@@ -676,7 +605,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         path: Path | None = None,
         clock: _Clock | None = None,
         schema_version: int = 8,
-        correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -691,7 +619,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             config=config,
             trusted_authority=self.authority,
             clock=clock or _Clock(),
-            correction_transition_release=correction_transition_release,
         )
         self.addCleanup(owner.close)  # R1a: the writer holds the file open until closed
         return owner
@@ -704,7 +631,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         path: Path,
         clock: _Clock | None = None,
         schema_version: int = 8,
-        correction_transition_release: object | None = None,
     ) -> _WriteBoundaryOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -720,7 +646,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=clock or _Clock(),
             fault=fault,
-            correction_transition_release=correction_transition_release,
         )
         self.addCleanup(owner.close)
         return owner
@@ -864,13 +789,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         population_id: str = expected.POPULATION_ONE_ID,
         clock: _Clock | None = None,
         schema_version: int = 8,
-        correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         owner = self._make_owner(
             period_id=period_id,
             clock=clock,
             schema_version=schema_version,
-            correction_transition_release=correction_transition_release,
         )
         pack_expectation = expected.CONTROL_PACK_V1 if period_id == expected.PERIOD_ONE_ID else expected.CONTROL_PACK_V2
         pack = self._pack(pack_expectation)
@@ -894,23 +817,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._record_support(owner, evidence)
         return owner
 
-    def _build_base_for_correction(
-        self,
-        *,
-        period_id: str = expected.PERIOD_ONE_ID,
-        population_id: str = expected.POPULATION_ONE_ID,
-        clock: _Clock | None = None,
-        schema_version: int = 8,
-    ) -> FinancialOwner:
-        return self._build_base(
-            period_id=period_id,
-            population_id=population_id,
-            clock=clock,
-            schema_version=schema_version,
-            correction_transition_release=_correction_transition_test_release(
-                workspace=Path(self.temp_dir.name) / "correction-engine-workspace",
-            ),
-        )
+    _build_base_for_correction = _build_base
 
     @staticmethod
     def _record_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
@@ -1428,9 +1335,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_10_interrupted_import_restart_and_disabled_dispatch(self) -> None:
         self.assertEqual(expected.CASE_10.number, 10)
-        correction_release = _correction_transition_test_release(
-            workspace=Path(self.temp_dir.name) / "correction-engine-workspace",
-        )
         store = self._build_base_for_correction()
         self._prepare_rejected(store)
         self._assert_snapshot(store, expected.H_REJECTED_CORRECTION)
@@ -1485,7 +1389,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             path=precommit_store.path,
             fault="precommit",
             clock=precommit_store.clock,
-            correction_transition_release=correction_release,
         )
         with self.assertRaisesRegex(RuntimeError, "synthetic_financial_precommit_interrupt"):
             self._reject(precommit_fault, precommit_claim, precommit_receipt)
@@ -1493,7 +1396,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_precommit = self._make_owner(
             path=precommit_store.path,
             clock=precommit_store.clock,
-            correction_transition_release=correction_release,
         )
         self.assertEqual(reopened_precommit.summary(), precommit_summary)
         self.assertEqual(reopened_precommit.export_continuity(), precommit_package)
@@ -1524,7 +1426,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             path=postcommit_store.path,
             fault="postcommit",
             clock=postcommit_store.clock,
-            correction_transition_release=correction_release,
         )
         with self.assertRaisesRegex(RuntimeError, "synthetic_financial_result_lost_after_commit"):
             self._reject(postcommit_fault, postcommit_claim, postcommit_receipt)
@@ -1532,7 +1433,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_postcommit = self._make_owner(
             path=postcommit_store.path,
             clock=postcommit_store.clock,
-            correction_transition_release=correction_release,
         )
         self._assert_snapshot(reopened_postcommit, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened_postcommit)
@@ -1572,7 +1472,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_process_precommit = self._make_owner(
             path=process_precommit_store.path,
             clock=_Clock(process_precommit_clock + 1),
-            correction_transition_release=correction_release,
         )
         self.assertEqual(reopened_process_precommit.summary(), process_precommit_summary)
         self.assertEqual(reopened_process_precommit.export_continuity(), process_precommit_package)
@@ -1615,7 +1514,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         reopened_process_postcommit = self._make_owner(
             path=process_postcommit_store.path,
             clock=_Clock(process_postcommit_clock + 1),
-            correction_transition_release=correction_release,
         )
         self._assert_snapshot(reopened_process_postcommit, expected.H_REJECTED_CORRECTION)
         self._assert_verified(reopened_process_postcommit)
@@ -2704,7 +2602,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         full = self._make_owner(
             path=full_path,
             clock=_Clock(initial=store.clock.value),
-            correction_transition_release=_correction_transition_test_release(workspace=Path(self.temp_dir.name) / "history-full-engine"),
         )
         fill(owner._MAX_ROWS, full)
         before = _image(full.path)
@@ -2841,7 +2738,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
 
         # The journey authorizes a correction, which runs only through the pinned
-        # Lean release (Art. V.2); an owner without one fails closed.
+        # Lean worker (Art. V.2).
         store = self._build_base_for_correction(schema_version=8)
         mirror = FinancialMirror(store)
         funding_fixture = expected.PROGRAM_FUNDING_RECEIPT
@@ -4917,9 +4814,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         declared["mutation"]["resulting_input_wire"] = wire
                     return wire
 
-                def run(release: object, *, request: bytes, change: object = change) -> object:
-                    execution = real_run(release, request=request)
-                    mutation = declared["mutation"] = execution.result["mutation"]
+                def run(*, request: bytes, change: object = change) -> object:
+                    decoded = real_run(request=request)
+                    mutation = declared["mutation"] = decoded["mutation"]
                     if change is None:
                         action, deps = mutation["action"], mutation["dependencies"]
                         action["amount_cents"] -= 1
@@ -4929,14 +4826,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                             "input_evaluation_id": deps["input_evaluation_id"], "input_evaluation_result_digest": owner._hex(deps["input_evaluation_result_digest"]),
                             "kind": "CORRECTION_PAYMENT_REQUEST", "obligation_id": action["obligation_id"], "revision": action["revision"],
                         }))
-                        financial_engine._validate_correction_result_shape(execution.result)
-                        return execution
+                        financial_engine._validate_correction_result_shape(decoded)
+                        return decoded
                     wrong = replace(mutation["resulting_result"], **change(mutation["resulting_result"], mutation))
                     mutation["resulting_result"] = wrong
                     mutation["resulting_result_wire"] = semantic._encode_blfres02_result(wrong)
                     mutation["case_delta"]["record"]["status"] = wrong.case_status
-                    financial_engine._validate_correction_result_shape(execution.result)
-                    return execution
+                    financial_engine._validate_correction_result_shape(decoded)
+                    return decoded
 
                 with patch.object(financial_engine, "run_correction_transition_v1", run), patch.object(semantic, "encode_blfin02_input", encode):
                     with self.assertRaises(FinancialIntegrityError) as caught:
@@ -4972,17 +4869,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 claim_id = self._record_claim(store)
                 before = _image(store.path)
 
-                def run(release: object, *, request: bytes, field: str = field, change: object = change) -> object:
-                    execution = real_run(release, request=request)
-                    mutation = execution.result["mutation"]
+                def run(*, request: bytes, field: str = field, change: object = change) -> object:
+                    decoded = real_run(request=request)
+                    mutation = decoded["mutation"]
                     if field == wire:
                         mutation[wire] = change(mutation[wire])
                     else:
                         result = mutation["resulting_result"]
                         mutation["resulting_result"] = replace(result, **{field: change(getattr(result, field))})
                         mutation["resulting_result_wire"] = semantic._encode_blfres02_result(mutation["resulting_result"])
-                    financial_engine._validate_correction_result_shape(execution.result)
-                    return execution
+                    financial_engine._validate_correction_result_shape(decoded)
+                    return decoded
 
                 with patch.object(financial_engine, "run_correction_transition_v1", run):
                     with self.assertRaises(FinancialIntegrityError) as caught:
@@ -5175,7 +5072,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_a_malformed_retired_pin_registry_is_refused_even_when_pinned(self) -> None:
         store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
-        current = financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper().encode("ascii")
+        current = financial_engine.EVALUATOR_ARTIFACT_SHA256.hex().upper().encode("ascii")
         original = independent.RETIRED_PINS_PATH.read_bytes()
         for name, content in (
             ("four-fields", original + b"AB" * 32 + b"\t2026-09-26\tforged\tb2-v1\n"),
@@ -5193,19 +5090,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                         self._assert_verified(store)
                     with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
                         self._make_owner(path=store.path)
-
-    def test_a_retired_engine_pin_never_decides_a_new_correction(self) -> None:
-        store = self._build_base_for_correction()
-        self._record_cash(store)
-        claim_id = self._record_claim(store)
-        retired = replace(
-            _correction_transition_test_release(workspace=Path(self.temp_dir.name) / "correction-engine-workspace"),
-            executable_sha256=bytes.fromhex(_RETIRED_CORRECTION_ARTIFACT_SHA256),
-        )
-        counts = self._durable_counts(store.path)
-        with self.assertRaisesRegex(FinancialIntegrityError, "^correction_transition_failed$"):
-            self._reject(self._make_owner(path=store.path, correction_transition_release=retired), claim_id)
-        self.assertEqual(self._durable_counts(store.path), counts)
 
     def _as_decided(self, path: Path, sha256: str, requested_cents: int, action_id: str = expected.ACTION_CORRECTION_ID) -> None:
         """Rewrite correction ``action_id`` as engine ``sha256`` decided it, requesting ``requested_cents``: rows, row images, chain."""
@@ -5245,7 +5129,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
         )
         self._reject(store, self._record_claim(store))
-        current = financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper()
+        current = financial_engine.EVALUATOR_ARTIFACT_SHA256.hex().upper()
         for name, sha256, requested_cents, refusal in (
             ("e911-whole-claim", _RETIRED_CORRECTION_ARTIFACT_SHA256, 300_000, "action:requestable"),
             ("e911-unpaid-balance", _RETIRED_CORRECTION_ARTIFACT_SHA256, 100_000, "action:payload-binding"),
@@ -5679,10 +5563,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             seen["request"] = real_encode(**options)
             return seen["request"]
 
-        def run(release: object, *, request: bytes) -> object:
-            execution = real_run(release, request=request)
-            seen["result"] = execution.result
-            return execution
+        def run(*, request: bytes) -> object:
+            decoded = real_run(request=request)
+            seen["result"] = decoded
+            return decoded
 
         with patch.object(financial_engine, "encode_correction_transition_request", encode), patch.object(financial_engine, "run_correction_transition_v1", run):
             yield seen

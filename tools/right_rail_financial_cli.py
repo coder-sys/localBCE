@@ -6,9 +6,6 @@ commands accept a verified SHADOW package and result records without opening
 an Owner database. The CLI has no network, payment, or direct-SQLite path.
 Every command takes its trusted authority (including the actor roster) from an
 explicit ``--authority-file``; there is no built-in default authority.
-Correction commands run only through the pinned Engine release named by
-``--correction-transition-executable`` and ``--correction-transition-workspace``;
-without both, the Owner fails closed with ``correction_transition_unavailable``.
 """
 
 from __future__ import annotations
@@ -72,12 +69,6 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="trusted authority JSON: authority_id, epoch, digest and actors roster (required)",
     )
-    parser.add_argument(
-        "--correction-transition-executable",
-        type=Path,
-        help="pinned correction Engine executable; without it correction commands fail closed",
-    )
-    parser.add_argument("--correction-transition-workspace", type=Path, help="empty Engine workspace directory")
     parser.add_argument("--custody-dir", type=Path, help="H2 custody log directory, outside the store's; with --custody-key, Owner commands check and extend it and packs are signed")
     parser.add_argument("--custody-key", help="ML-DSA-87 custody key file (a gate signer handle)")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -293,18 +284,6 @@ def _trusted_authority(args: argparse.Namespace) -> SyntheticTrustedAuthority:
     return authority
 
 
-def _correction_release(args: argparse.Namespace) -> object | None:
-    """The explicit correction release, or None (the Owner then fails closed)."""
-
-    executable = args.correction_transition_executable
-    workspace = args.correction_transition_workspace
-    if executable is None and workspace is None:
-        return None
-    if executable is None or workspace is None:
-        raise ValueError("correction_transition_paths")
-    return financial_engine.load_correction_transition_release(executable, workspace)
-
-
 def _owner(args: argparse.Namespace) -> FinancialOwner:
     database = _existing_database(args.database)
     config = FinancialOwnerConfig(**_scope(args))
@@ -312,7 +291,6 @@ def _owner(args: argparse.Namespace) -> FinancialOwner:
         path=database,
         config=config,
         trusted_authority=_trusted_authority(args),
-        correction_transition_release=_correction_release(args),
         custody=None if args.command == "custody-resolve" else _custody(args),  # an operator act opens unchecked, then resolves
         **({"mode": args.mode, "owner_id": args.owner_id, "existing_only": True}
            if args.command in ("receiver-cash-file", "export-history") else {}),

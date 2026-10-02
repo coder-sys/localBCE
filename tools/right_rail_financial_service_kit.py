@@ -1,7 +1,7 @@
 """Assemble, verify, extract, run and serve the offline synthetic Financial service kit.
 
 The kit bundles no third-party Python code. Assembly needs a separate Engine
-build receipt binding the exact Lean source manifest to the correction
+build receipt binding the exact Lean source manifest to the evaluator worker
 executable; this command never creates that receipt or infers provenance.
 
 Where each safety property lives:
@@ -45,7 +45,7 @@ from typing import Any, BinaryIO, Callable
 KIT_SCHEMA = "RR/FINANCIAL/SERVICE-KIT-MANIFEST/v2"
 BUILD_RECEIPT_SCHEMA = "RR/LEAN-ENGINE/BUILD-RECEIPT/v2"
 SOURCE_MANIFEST_SCHEMA = "RR/LEAN-ENGINE/SOURCE-MANIFEST/v1"
-ENGINE_TARGET = "blind_financial_correction"
+ENGINE_TARGET = "blind_financial_worker"
 EXPECTED_PYTHON_VERSION = "3.11.15"
 EXPECTED_PYTHON_EXE_SHA256 = "F1D8D2AA2A8AD7C74B6C6300B29CFDBCB484FC7FFAD99B7FBFE1E31C048343B9"
 GUARD_SHA256 = "57F9EC8AEFE1D0E281B3BB0D76F2F057C8295F99AFDD04305DFC777703ED99FB"
@@ -131,18 +131,17 @@ STATE_FILES = (
 ENGINE_SOURCE_PREFIX = "engine/source/"
 LEAN_CONFIG_FILES = ("lakefile.toml", "lake-manifest.json", "lean-toolchain")
 REQUIRED_LEAN_FILES = (
-    "BlindLedger/Financial/CorrectionTransition/Transition.lean",
-    "BlindLedger/Financial/CorrectionTransition/Runtime.lean",
-    "BlindLedger/Financial/CorrectionTransitionCli.lean",
+    "BlindLedger/Financial/Worker.lean",
+    "BlindLedger/Financial/WorkerCli.lean",
     *LEAN_CONFIG_FILES,
 )
-ENGINE_EXE = "engine/artifacts/blind_financial_correction.exe"
+ENGINE_EXE = "artifacts/engine-evaluator/blind_financial_worker.exe"  # where the Engine adapter looks for it
 VECTORS = "engine/vectors/"
 PROVENANCE = "engine/provenance/"
 PRODUCER = "engine/producer/build_financial_correction_release.ps1"
 # Engine release directory (exact inventory) -> archive path.
 RELEASE_FILES = {
-    "blind_financial_correction.exe": ENGINE_EXE,
+    "blind_financial_worker.exe": ENGINE_EXE,
     "source-manifest.json": PROVENANCE + "source-manifest.json",
     "provenance/engine-build-receipt.json": PROVENANCE + "engine-build-receipt.json",
     **{f"logs/{name}": PROVENANCE + name for name in (
@@ -150,7 +149,6 @@ RELEASE_FILES = {
     )},
     **{f"vectors/{name}": VECTORS + name for name in (
         "request.bin", "result.expected.bin", "result.actual.bin",
-        "reuse-request.bin", "reuse-result.expected.bin", "reuse-result.actual.bin",
     )},
 }
 RELEASE_DIRECTORIES = {"vectors", "logs", "provenance"}
@@ -159,12 +157,12 @@ RUNTIME_EXE = RUNTIME_PREFIX + "python.exe"
 RECEIPT_FIELDS = frozenset({
     "schema", "status", "target", "engine_source_manifest_sha256", "lean_toolchain",
     "lean_toolchain_sha256", "lakefile_sha256", "lake_manifest_sha256", "executable_size_bytes",
-    "executable_sha256", "request_vector_sha256", "result_vector_sha256", "reuse_request_vector_sha256",
-    "reuse_result_vector_sha256", "stdout_sha256", "stderr_sha256", "producer_script_sha256",
+    "executable_sha256", "request_vector_sha256", "result_vector_sha256",
+    "stdout_sha256", "stderr_sha256", "producer_script_sha256",
     "guard_stdout_sha256", "guard_stderr_sha256", "guard_wrapper_sha256", "guard_outer_exit_code",
     "guard_child_exit_code", "guard_self_test_exit7", "guard_self_test_exit0",
     "guard_minimum_start_free_bytes", "guard_minimum_free_bytes", "guard_cleanup", "guard_mutex",
-    "lake_build_exit_code", "transition_vector_exit_code", "reuse_vector_exit_code", "engine_git_head",
+    "lake_build_exit_code", "transition_vector_exit_code", "engine_git_head",
     "engine_git_tree", "engine_git_status_sha256", "lake_version", "lake_executable_sha256",
     "lean_executable_sha256", "direct_lane_grant_reference",
 })
@@ -418,8 +416,8 @@ def _engine_pins(engine_adapter: bytes) -> dict[str, object]:
     text = engine_adapter.decode("utf-8")
     hex_pin = r"\s*:\s*Final\[bytes\]\s*=\s*bytes\.fromhex\(\s*\"([0-9A-F]{64})\""
     patterns = {
-        "size": r"CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES\s*:\s*Final\[int\]\s*=\s*([0-9_]+)",
-        ENGINE_EXE: "CORRECTION_TRANSITION_ARTIFACT_SHA256" + hex_pin,
+        "size": r"EVALUATOR_ARTIFACT_SIZE_BYTES\s*:\s*Final\[int\]\s*=\s*([0-9_]+)",
+        ENGINE_EXE: "EVALUATOR_ARTIFACT_SHA256" + hex_pin,
         "request": "CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256" + hex_pin,
         "result": "CORRECTION_TRANSITION_RESULT_VECTOR_SHA256" + hex_pin,
     }
@@ -455,7 +453,6 @@ def _check_receipt(members: Members, read: Callable[[str], bytes], expected: dic
         "guard_mutex": "RELEASED",
         "lake_build_exit_code": 0,
         "transition_vector_exit_code": 0,
-        "reuse_vector_exit_code": 0,
     }
     for key, value in expected.items():
         if type(receipt[key]) is not type(value) or receipt[key] != value:
@@ -640,12 +637,12 @@ def _check_retired_pins(read: Callable[[str], bytes]) -> None:
 def _check_contents(members: Members, read: Callable[[str], bytes]) -> dict[str, Any]:
     """Exact inventory, engine pins, closed Lean dependencies and the guarded build receipt."""
     paths = set(members)
-    if {path for path in paths if not path.startswith(("engine/", "runtime/"))} != set(STATE_FILES):
+    if {path for path in paths if not path.startswith(("engine/", "runtime/"))} != {*STATE_FILES, ENGINE_EXE}:
         raise KitError("kit_state_source_inventory")
     _check_retired_pins(read)
     if {path for path in paths if path.startswith("engine/") and not path.startswith(ENGINE_SOURCE_PREFIX)} != {
         *RELEASE_FILES.values(), PRODUCER,
-    }:
+    } - {ENGINE_EXE}:
         raise KitError("kit_engine_inventory")
     engine_sources = sorted(path for path in paths if path.startswith(ENGINE_SOURCE_PREFIX))
     if any(not (path.endswith(".lean") or path.removeprefix(ENGINE_SOURCE_PREFIX) in LEAN_CONFIG_FILES) for path in engine_sources):
@@ -678,8 +675,6 @@ def _check_contents(members: Members, read: Callable[[str], bytes]) -> dict[str,
             raise KitError(f"engine_artifact_pin_mismatch:{path}")
     if members[ENGINE_EXE][0] != pins["size"]:
         raise KitError(f"engine_artifact_size_mismatch:{ENGINE_EXE}")
-    if members[VECTORS + "reuse-result.actual.bin"] != members[VECTORS + "reuse-result.expected.bin"]:
-        raise KitError("engine_reuse_result_vector_not_byte_equal")
 
     try:
         toolchain = read(ENGINE_SOURCE_PREFIX + "lean-toolchain").decode("utf-8").rstrip("\r\n")
@@ -693,7 +688,7 @@ def _check_contents(members: Members, read: Callable[[str], bytes]) -> dict[str,
         raise KitError("lean_external_dependencies_not_closed")
     targets = lakefile.get("lean_exe", [])
     if type(targets) is not list or not any(type(item) is dict and item.get("name") == ENGINE_TARGET for item in targets):
-        raise KitError("lean_correction_target_missing")
+        raise KitError("lean_engine_target_missing")
 
     return _check_receipt(members, read, {
         "engine_source_manifest_sha256": _sha256(source_manifest),
@@ -705,8 +700,6 @@ def _check_contents(members: Members, read: Callable[[str], bytes]) -> dict[str,
         "executable_sha256": pins[ENGINE_EXE],
         "request_vector_sha256": pins["request"],
         "result_vector_sha256": pins["result"],
-        "reuse_request_vector_sha256": members[VECTORS + "reuse-request.bin"][1],
-        "reuse_result_vector_sha256": members[VECTORS + "reuse-result.expected.bin"][1],
     })
 
 
@@ -959,8 +952,6 @@ def _run_scenario(args: argparse.Namespace) -> int:
         work = Path(temporary)
         (work / "owner-workspace").mkdir()
         environment = _runtime_environment(work)
-        environment["RR_FINANCIAL_CORRECTION_ENGINE_PATH"] = str(root / ENGINE_EXE)
-        environment["RR_FINANCIAL_CORRECTION_VECTOR_DIR"] = str(root / VECTORS)
         environment["RR_FINANCIAL_SERVICE_KIT_TEST_WORKSPACE"] = str(work / "owner-workspace")
         print(f"RUNNING scenario={SERVICE_SCENARIO}", flush=True)
         code = _launch(
@@ -1020,23 +1011,15 @@ def _path_is_within(path: Path, root: Path) -> bool:
 def _serve(args: argparse.Namespace) -> int:
     root, members = _verified_kit(args)
     owner = _absolute(args.owner_workspace, "owner_workspace_must_be_absolute")
-    engine = _absolute(args.engine_workspace, "engine_workspace_must_be_absolute")
     owner_identity = _directory_identity(owner, "owner")
-    engine_identity = _directory_identity(engine, "engine")
-    if not _is_empty(engine, "engine_workspace_unreadable"):
-        raise KitError("engine_workspace_must_be_empty")
-    resolved_root, resolved_owner, resolved_engine = (path.resolve(strict=True) for path in (root, owner, engine))
-    if _path_is_within(resolved_owner, resolved_engine) or _path_is_within(resolved_engine, resolved_owner):
-        raise KitError("owner_engine_workspaces_must_be_disjoint")
-    if _path_is_within(resolved_owner, resolved_root) or _path_is_within(resolved_engine, resolved_root):
+    resolved_root, resolved_owner = (path.resolve(strict=True) for path in (root, owner))
+    if _path_is_within(resolved_owner, resolved_root):
         raise KitError("service_workspace_inside_extracted_kit")
     database = _owner_database(owner)
     command = [
         str(root / RUNTIME_EXE), "-I", "-B", "-S", str(root / "tools/service_kit/run_server.py"),
         "--port", str(args.port),
         "--workspace", str(owner),
-        "--correction-transition-executable", str(root / ENGINE_EXE),
-        "--correction-transition-workspace", str(engine),
     ]
     if database is not None:
         command.append("--resume-existing-workspace")
@@ -1048,13 +1031,11 @@ def _serve(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="rightrail-financial-service-temp-") as temporary:
         code = _launch(command, root, _runtime_environment(Path(temporary)), "service_server_launch_failed")
     print(f"SERVICE_SERVER_EXIT={code}", flush=True)
-    if _directory_identity(owner, "owner") != owner_identity or _directory_identity(engine, "engine") != engine_identity:
+    if _directory_identity(owner, "owner") != owner_identity:
         raise KitError("service_workspace_identity_changed")
     after = _owner_database(owner)
     if (database is not None and after != database) or (code == 0 and after is None):
         raise KitError("owner_database_identity_changed_after_service")
-    if not _is_empty(engine, "engine_workspace_unreadable_after_service"):
-        raise KitError("engine_workspace_not_empty_after_service")
     _verify_tree(root, members)
     return code
 
@@ -1099,7 +1080,6 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--extraction-root", type=Path)
         if name == "serve":
             command.add_argument("--owner-workspace", required=True, type=Path)
-            command.add_argument("--engine-workspace", required=True, type=Path)
             command.add_argument("--port", type=int, default=8765)
         command.set_defaults(function=function)
     return parser

@@ -1,4 +1,4 @@
-"""The pinned worker and correction exes' I/O loops: same bytes out, same exit codes (lean-partials-v1)."""
+"""The pinned worker exe's I/O loop: same bytes out, same exit codes (lean-partials-v1)."""
 
 import hashlib
 import os
@@ -11,8 +11,6 @@ from app import right_rail_financial_semantic_adapter as adapter
 from tests import test_right_rail_financial_semantic_adapter as adapter_tests
 
 ROOT = Path(__file__).resolve().parent.parent
-CORRECTION = ROOT / "artifacts" / "engine-correction" / "blind_financial_correction.exe"
-VECTORS = CORRECTION.parent / "vectors"
 ENV = {"SystemRoot": os.environ.get("SystemRoot", r"C:\Windows")}
 MAX_FRAME = adapter.MAX_WIRE_BYTES + 1  # Lean maxWorkerFrameBytes
 REJECT = b"\x00\x00\x00\x01\x01"  # frame(workerRespond(b"")): decode rejected
@@ -93,42 +91,6 @@ class WorkerLoopTests(unittest.TestCase):
             proc.stdin.flush()
         out, err = proc.communicate(timeout=120)
         self.assertEqual((proc.returncode, out, err), (0, self.single[self.a] + REJECT + self.single[self.b], b""))
-
-
-@unittest.skipUnless(os.name == "nt", "pinned Windows exes")
-class CorrectionReadTests(unittest.TestCase):
-    APPLY = engine.CORRECTION_TRANSITION_ARGUMENTS
-    REUSE = ("--assess-correction-reuse",)
-    LIMIT = engine.MAX_CORRECTION_TRANSITION_BYTES
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        assert hashlib.sha256(CORRECTION.read_bytes()).digest() == engine.CORRECTION_TRANSITION_ARTIFACT_SHA256
-
-    def test_vector_whole_and_streamed(self) -> None:
-        request = (VECTORS / "request.bin").read_bytes()
-        expected = (VECTORS / "result.expected.bin").read_bytes()
-        self.assertEqual(run(CORRECTION, request, *self.APPLY), (0, expected, b""))
-        proc = subprocess.Popen([CORRECTION, *self.APPLY], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=ENV)
-        for i in range(0, len(request), 997):
-            proc.stdin.write(request[i:i + 997])
-            proc.stdin.flush()
-        out, err = proc.communicate(timeout=120)
-        self.assertEqual((proc.returncode, out, err), (0, expected, b""))
-
-    def test_transition_bounds(self) -> None:
-        for data, reason in ((b"", "decode"), (bytes(self.LIMIT), "decode"),
-                             (bytes(self.LIMIT + 1), "too-large"), (bytes(self.LIMIT + 70_000), "too-large")):
-            code, out, err = run(CORRECTION, data, *self.APPLY)
-            self.assertEqual((code, out), (72, b""), len(data))
-            self.assertIn(f"FINANCIAL_ERROR=correction-transition-input-{reason}".encode(), err)
-
-    def test_reuse_bounds(self) -> None:
-        for data, reason in ((b"", "decode"), (bytes(3 * self.LIMIT + 1), "too-large")):
-            code, out, err = run(CORRECTION, data, *self.REUSE)
-            self.assertEqual((code, out), (75, b""), len(data))
-            self.assertIn(f"FINANCIAL_ERROR=correction-reuse-input-{reason}".encode(), err)
 
 
 class TotalModelTests(unittest.TestCase):

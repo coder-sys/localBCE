@@ -45,13 +45,11 @@ its five dependencies. Changing any means re-pinning hashes and updating
 **Staff workspace** (loopback only, synthetic TEST owner):
 
 ```powershell
-python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir> `
-  --correction-transition-executable <absolute path to artifacts\engine-correction\blind_financial_correction.exe> `
-  --correction-transition-workspace <absolute empty dir>
+python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir>
 ```
 
-Both correction paths must be absolute; without them correction commands fail
-closed. `--resume-existing-workspace` reopens and re-verifies an existing TEST
+Corrections run on the pinned evaluator worker (`artifacts/engine-evaluator/`).
+`--resume-existing-workspace` reopens and re-verifies an existing TEST
 database instead of reseeding it.
 
 **CLI** over an existing owner database:

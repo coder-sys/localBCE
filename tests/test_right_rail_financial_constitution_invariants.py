@@ -36,12 +36,11 @@ and the standing claims ``proofSuiteId=null``, ``production_usable=false``,
 ``activation=false`` are unchanged.
 
 Pinned Engine artifact.  Every test here builds its owner through
-``_build_base_for_correction``, which requires the pinned correction Engine in
-``artifacts/engine-correction`` (built from the current ``lean/`` source;
-see its ``PROVENANCE.md``).  The ``_requires_pinned_correction_engine`` marker on each
-test states whether the binary is actually executed or only its identity is
-hashed.  A missing or mismatched artifact is a hard failure, never a skip
-(VI.3).
+``_build_base_for_correction``, and corrections run on the pinned evaluator
+worker in ``artifacts/engine-evaluator`` (since M4 P1 the one-shot correction
+exe is retired).  The ``_requires_pinned_correction_engine`` marker on each
+test states whether the worker is actually executed or its answer stubbed.  A
+missing or mismatched artifact is a hard failure, never a skip (VI.3).
 
 The fixtures are reused unchanged from ``tests.test_right_rail_financial_acceptance``.
 That test class is deliberately never bound to a name in this module so that
@@ -79,9 +78,9 @@ _TestMethod = TypeVar("_TestMethod", bound=Callable[..., Any])
 
 
 def _requires_pinned_correction_engine(usage: str) -> Callable[[_TestMethod], _TestMethod]:
-    """Mark a test that needs ``artifacts/engine-correction``.
+    """Mark a test that needs the pinned evaluator worker.
 
-    ``usage`` says whether the pinned binary is executed or only hashed.  The
+    ``usage`` says whether the pinned worker is executed or only hashed.  The
     marker never skips: a missing artifact fails the test (VI.3).
     """
 
@@ -281,27 +280,11 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         detail = store.obligation_detail(expected.H_ITEM_ID)
         return len(detail["determinations"]), len(detail["actions"])
 
-    def _contained(self, store: FinancialOwner, stdout: bytes, **overrides: object) -> process.ContainedVerifierResult:
-        """A containment result that passes every check unless overridden."""
+    @staticmethod
+    def _worker(**exchange: object) -> MagicMock:
+        """A stand-in for the live evaluator worker whose one exchange answers, or fails, as given."""
 
-        release = store.correction_transition_release
-        assert isinstance(release, financial_engine.FinancialCorrectionTransitionRelease)
-        values: dict[str, object] = {
-            "exit_code": 0,
-            "stdout": stdout,
-            "stderr": b"",
-            "peak_job_commit_bytes": 1,
-            "cap_bytes": release.job_memory_cap_bytes,
-            "cap_enforced": True,
-            "active_process_limit": process.ACTIVE_PROCESS_LIMIT,
-            "timed_out": False,
-            "child_process_count": 1,
-            "process_tree_complete": True,
-            "measurement_complete": True,
-            "cleanup_complete": True,
-        }
-        values.update(overrides)
-        return process.ContainedVerifierResult(**values)  # type: ignore[arg-type]
+        return MagicMock(exchange=MagicMock(**exchange), commit_bytes=MagicMock(return_value=1))
 
     @contextmanager
     def _python_decision_paths_forbidden(self, store: FinancialOwner) -> Iterator[None]:
@@ -333,31 +316,25 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         claim_id: str,
         receipt: dict[str, Any],
         *,
-        containment: MagicMock,
+        worker: MagicMock,
         error_type: type[FinancialError],
         error_code: str,
     ) -> None:
-        release = store.correction_transition_release
-        assert isinstance(release, financial_engine.FinancialCorrectionTransitionRelease)
         before = self._durable_state(store)
-        with patch.object(process, "run_contained_verifier_stream", containment):
+        with patch.object(financial_engine, "_running_evaluator", return_value=worker):
             with self._python_decision_paths_forbidden(store):
                 with self.assertRaises(FinancialError) as raised:
                     self._reject(store, claim_id, receipt)
         # Typed, stable, and never the untyped base class.
         self.assertIs(type(raised.exception), error_type)
         self.assertEqual(str(raised.exception), error_code)
-        # The owner really consulted the pinned Lean transition exactly once.
-        self.assertEqual(containment.call_count, 1)
-        call = containment.call_args
-        self.assertEqual(call.args[0], release.executable)
-        self.assertEqual(call.args[1], financial_engine.CORRECTION_TRANSITION_ARGUMENTS)
-        self.assertTrue(bytes(call.args[2]).startswith(b"BLFCMD03"))
+        # The owner really consulted the pinned Lean worker exactly once.
+        self.assertEqual(worker.exchange.call_count, 1)
+        self.assertTrue(worker.exchange.call_args.args[0].startswith(b"BLFCMD03"))
         # No partial change of any kind (III.5).
         self.assertEqual(self._durable_state(store), before)
         self.assertEqual(self._correction_evidence(store), (0, 0))
         self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID), receipt)
-        self.assertEqual(list(release.workspace.iterdir()), [])
 
     # --- 1. Lean failure never falls back ---------------------------------------
 
@@ -399,41 +376,31 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                     financial_engine.decode_correction_transition_result(payload)
 
         failure_modes: dict[str, MagicMock] = {
-            "containment_error": MagicMock(
-                side_effect=process.VerifierProcessError("synthetic_containment_failure"),
-            ),
-            "timeout_raised": MagicMock(side_effect=TimeoutError("synthetic_engine_timeout")),
-            "unexpected_exception": MagicMock(side_effect=OSError("synthetic_engine_io_failure")),
-            "timed_out_result": MagicMock(
-                return_value=self._contained(store, b"", exit_code=1, timed_out=True),
-            ),
-            "nonzero_exit_with_valid_bytes": MagicMock(
-                return_value=self._contained(store, valid_rejection, exit_code=2),
-            ),
-            "stderr_output": MagicMock(
-                return_value=self._contained(store, valid_rejection, stderr=b"lean: panic"),
-            ),
-            "cap_not_enforced": MagicMock(
-                return_value=self._contained(store, valid_rejection, cap_enforced=False),
-            ),
-            "cleanup_incomplete": MagicMock(
-                return_value=self._contained(store, valid_rejection, cleanup_complete=False),
-            ),
-            "measurement_incomplete": MagicMock(
-                return_value=self._contained(store, valid_rejection, measurement_complete=False),
-            ),
-            "not_a_contained_result": MagicMock(return_value=valid_rejection),
+            "containment_error": self._worker(side_effect=process.VerifierProcessError("synthetic_containment_failure")),
+            # The retired exe's timed-out, stderr, cap, cleanup and measurement modes, as the live worker reports them.
+            "worker_timeout": self._worker(side_effect=process.VerifierProcessError("worker_timeout")),
+            "worker_stderr": self._worker(side_effect=process.VerifierProcessError("worker_stderr")),
+            "worker_exchange_or_job_cap_kill": self._worker(side_effect=process.VerifierProcessError("worker_exchange")),
+            "worker_response_cap": self._worker(side_effect=process.VerifierProcessError("worker_response_cap")),
+            "worker_frame_cap": self._worker(side_effect=process.VerifierProcessError("worker_frame_cap")),
+            "worker_unavailable": self._worker(side_effect=process.VerifierProcessError("worker_unavailable")),
+            "answer_not_bytes": self._worker(return_value="not bytes"),
+            "decode_refused": self._worker(return_value=b"\x01"),
+            "evaluation_rejected_tag": self._worker(return_value=b"\x02"),
+            "encoding_failed": self._worker(return_value=b"\x03"),
+            "unknown_answer_tag": self._worker(return_value=b"\x09"),
+            "refusal_with_a_body": self._worker(return_value=b"\x01" + valid_rejection),
         }
         for name, payload in malformed_payloads.items():
-            failure_modes[f"malformed_{name}"] = MagicMock(return_value=self._contained(store, payload))
+            failure_modes[f"malformed_{name}"] = self._worker(return_value=b"\x00" + payload)
 
-        for name, containment in failure_modes.items():
+        for name, worker in failure_modes.items():
             with self.subTest(failure_mode=name):
                 self._assert_engine_failure_is_closed(
                     store,
                     claim_id,
                     receipt,
-                    containment=containment,
+                    worker=worker,
                     error_type=FinancialIntegrityError,
                     error_code="correction_transition_failed",
                 )
@@ -455,7 +422,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                 store,
                 claim_id,
                 receipt,
-                containment=MagicMock(return_value=self._contained(store, forged_duplicate)),
+                worker=self._worker(return_value=b"\x00" + forged_duplicate),
                 error_type=FinancialIntegrityError,
                 error_code="correction_duplicate_without_action",
             )
@@ -467,6 +434,26 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         self.assertEqual(self._correction_evidence(store), (1, 1))
         self._assert_snapshot(store, expected.H_REJECTED_CORRECTION)
         self._assert_verified(store)
+
+    @_requires_pinned_correction_engine("the pinned worker is launched and killed")
+    def test_a_dead_live_worker_fails_closed_and_is_replaced_by_a_clean_one(self) -> None:
+        """The process-level modes on the real worker process: a gone worker is a typed failure with no change (it was the
+        retired exe's cleanup/measurement/cap failures), and the next use is a fresh, accepted worker."""
+
+        store, claim_id, receipt = self._prepare_h_claim()
+        self.addCleanup(financial_engine._close_evaluator)
+        dead = financial_engine._running_evaluator()
+        dead.close()
+        self.assertFalse(dead.alive)
+        self._assert_engine_failure_is_closed(
+            store, claim_id, receipt, worker=MagicMock(wraps=dead),
+            error_type=FinancialIntegrityError, error_code="correction_transition_failed",
+        )
+        with patch.object(financial_engine, "EVALUATOR_RECYCLE_COMMIT_BYTES", 0):  # measured over the bound: recycled, closed
+            committed = self._reject(store, claim_id, receipt)
+        self.assertEqual(committed["status"], "CORRECTION_AUTHORIZED")
+        self.assertEqual(financial_engine._evaluator, [])
+        self.assertEqual(self._correction_evidence(store), (1, 1))
 
     @_requires_pinned_correction_engine("artifact identity is hashed; the binary is never executed")
     def test_lean_rejected_results_map_to_typed_errors_without_mutation(self) -> None:
@@ -482,7 +469,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                     store,
                     claim_id,
                     receipt,
-                    containment=MagicMock(return_value=self._contained(store, payload)),
+                    worker=self._worker(return_value=b"\x00" + payload),
                     error_type=error_type,
                     error_code=error_code,
                 )
@@ -496,8 +483,6 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
     @_requires_pinned_correction_engine("the binary is executed once, in the crashing child process")
     def test_crash_after_correction_commit_before_followup_drains_once(self) -> None:
         store, claim_id, receipt = self._prepare_h_claim()
-        release = store.correction_transition_release
-        assert isinstance(release, financial_engine.FinancialCorrectionTransitionRelease)
         clock_value = max(store.clock.value + 1_000_000, expected.CORRECTION_AUTH_MS)  # type: ignore[attr-defined]  # not before the decision
 
         with self._commits(store, True):
@@ -506,13 +491,8 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         self.assertEqual(crashed.returncode, 74)
         self.assertEqual(crashed.stdout, "PHASE=BEFORE_REJECT\nPHASE=POSTCOMMIT_AFTER_COMMIT\n")
         self.assertEqual(crashed.stderr, "")
-        self.assertEqual(list(release.workspace.iterdir()), [])
 
-        reopened = self._make_owner(
-            path=store.path,
-            clock=acceptance._Clock(clock_value + 1),
-            correction_transition_release=release,
-        )
+        reopened = self._make_owner(path=store.path, clock=acceptance._Clock(clock_value + 1))
         # III.2: determination, action, outbox, projection and event are all present.
         counts = self._durable_counts(reopened.path)
         self.assertEqual(counts["determinations"], 1)
@@ -545,7 +525,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         # III.3: the exact retry of the lost-response command is a DUPLICATE,
         # decided from durable identity without re-running the Engine.
         engine_guard = MagicMock(side_effect=AssertionError("engine_invoked_for_exact_retry"))
-        with patch.object(process, "run_contained_verifier_stream", engine_guard):
+        with patch.object(financial_engine, "_evaluate_wire", engine_guard):
             duplicate = self._reject(reopened, claim_id, receipt)
         engine_guard.assert_not_called()
         self.assertEqual(duplicate["status"], "DUPLICATE")
@@ -639,7 +619,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         for name, expected_revision, evaluation_id, result_digest, error_code in attempts:
             with self.subTest(attempt=name):
                 engine_guard = MagicMock(side_effect=AssertionError("engine_invoked_for_stale_reference"))
-                with patch.object(process, "run_contained_verifier_stream", engine_guard):
+                with patch.object(financial_engine, "_evaluate_wire", engine_guard):
                     with self._python_decision_paths_forbidden(store):
                         with self.assertRaises(FinancialError) as raised:
                             store.reject_offset_and_authorize_correction(

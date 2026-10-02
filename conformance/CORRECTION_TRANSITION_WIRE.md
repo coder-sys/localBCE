@@ -8,7 +8,7 @@ Normative source: Lean codec at base commit `d5853b1`,
 `lean/BlindLedger/Financial/CorrectionTransition/{Types,Codec,ReuseCodec,Runtime}.lean`,
 primitives in `lean/BlindLedger/Financial/Codec.lean`, receipt codec in
 `lean/BlindLedger/Financial/DecisionPackage/Codec.lean`. Pinned engine:
-`artifacts/engine-correction/PROVENANCE.md`. Where this page and Lean
+`artifacts/engine-evaluator/PROVENANCE.md`. Where this page and Lean
 disagree, Lean wins. Python consumer: `app/right_rail_financial_engine.py`;
 divergences in [Open discrepancies](#open-discrepancies).
 
@@ -47,11 +47,10 @@ blob; (4) value well-formed: re-encode it and require the same bytes (the
 encoder refuses values failing the predicate, so every predicate below is a
 rejection rule).
 
-Process: `blind_financial_correction.exe --apply-correction-transition` /
-`--assess-correction-reuse`. Request on stdin; result on stdout, exit 0. On
-failure: no stdout, stderr `FINANCIAL_ERROR=<reason>`. Exit 72 = transition
-too large/decode fail, 73 = transition encode fail, 75/76 = same for reuse,
-64 = usage.
+Process: the evaluator worker (`artifacts/engine-evaluator/`), one frame in,
+tag byte then body out: 00 + `BLFCRES3`; 01 = too large/decode fail; 03 =
+encode fail. The retired one-shot exe (git 99ec957) answered the same on stdin
+and stdout, exit 0, 72 or 73, and also served reuse (75/76, retired with it).
 
 ## 3. `BLFCMD03` request
 
@@ -332,7 +331,8 @@ VALID, VALID, ALLOWED. `externalDispatchPermitted` MUST be false.
 The offsets below were decoded by hand from the pinned files, using only the
 layout above. All four pinned files parse to the end, with nothing left
 over: the request (3,359 bytes), the result (5,099), the reuse request
-(9,204) and the reuse result (53). Notation: `NNx64` means a digest of 64
+(9,204) and the reuse result (53); the reuse files left the tree with the exe
+(git 99ec957). Notation: `NNx64` means a digest of 64
 bytes, all equal to 0xNN. Verified against `artifacts/engine-correction/vectors/`.
 
 `request.bin`:

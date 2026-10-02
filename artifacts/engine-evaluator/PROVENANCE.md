@@ -7,7 +7,9 @@ Lake build of `lean/` at commit `0cd7a28` (M4 L1; lean tree `29784be72a0fb7e4a84
   `m4l1-stageb-a1-L2`), each `lake build blind_financial_worker blind_financial_correction gate_verify gate_axioms blind_financial_axioms`, 115 jobs, exit 0. Both workers are byte-identical; the correction exe (`874E2A37...`) and gate_verify (`316689F5...`) did not move.
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: the XI.2 section of the `0cd7a28` commit message.
 - Why it moved: the worker also answers a BLFCMD03 request as the retired exe did (`00` then the BLFCRES3 body, `01` undecodable, `03` over the size bound);
-  every BLFIN02 frame still gets the evaluator. Python sends no BLFCMD03 frame yet.
+  every BLFIN02 frame still gets the evaluator. Python sends BLFCMD03 frames since M4 P1, which retired the correction exe
+  and its CLI target. The old law "bare BLFCMD03 differs from the evaluator" was never true (both answer `01`); the true witness
+  is the KAT request (`#guard` in `WorkerLaws.lean`: worker `00`+BLFCRES3, evaluator `01`).
 
 Retired pins, not deleted: `36D3FE0C8CF7397808C39A808D46BF8B5206583BA01B534AE96EC8C01E1B1AEA`, 6,020,608 bytes
 (lean commit `1168909`, tree `3cf4adb420ce25197fdfb7a419055e62408af34e`; stage logs `m3s2-stagea`, `m3s2-stageb`; before correction frames); `86299A0D8925C52692F936C18C9E4A2CED7118FA32FA6B864C4A745421A1712B`, 5,724,160 bytes

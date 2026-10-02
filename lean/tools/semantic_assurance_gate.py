@@ -59,7 +59,7 @@ COMMAND_TIMEOUT_SECONDS = 180.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "50b39088cd5779d9a1f086d95fb5468a99d4d741b7cf0e967640ca7d2d4b8fbf"
+REQUIRED_MANIFEST_SHA256 = "a722aef0f95407c4b8aa8ca2f43437c819ea1c61444a85fd31031ea3f749d933"
 
 # The only axioms a manifest may allow: the ones Lean's own logic rests on.
 STANDARD_LEAN_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
@@ -72,7 +72,7 @@ AXIOM_LINE_RE = re.compile(
 )
 # A pinned executable's import closure holds no proof-side module (theorems, KATs, vectors, axiom checks), so a proof
 # edit never changes its bytes. The roots are those executables' `root` entries in lakefile.toml.
-PINNED_EXES = ("blind_financial_correction", "blind_financial_worker")
+PINNED_EXES = ("blind_financial_worker",)
 PROOF_MODULE_RE = re.compile(r"(?:^|\.)(?:Theorems|KAT|Vectors|CodecLaws\w*|\w*Check)(?:\.|$)")
 PROOF_COMMAND_RE = re.compile(r"(?m)^\s*(?:#print\s+axioms|#guard_msgs)\b")
 LEAN_TOKEN_RE = re.compile(r"/-|-/|--[^\n]*|(?:(?!/-|-/|--)\S)+")

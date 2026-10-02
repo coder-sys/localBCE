@@ -1,6 +1,6 @@
-"""Differential test of the Python BLFCRES3 decoder against results the pinned Lean engine really emits.
+"""Differential test of the Python BLFCRES3 decoder against results the pinned Lean worker really emits.
 
-Lean output is the oracle: it comes from the pinned executable run on the shipped request and on
+Lean output is the oracle: it comes from the pinned evaluator worker run on the shipped request and on
 variants of it (one header field changed at a time), never from a Python encoder. A decoder that
 skips or misreads a field cannot pass the byte-sensitivity check: flipping any single byte of a
 Lean result must either be refused or change the decoded value."""
@@ -8,12 +8,9 @@ Lean result must either be refused or change the decoded value."""
 from __future__ import annotations
 
 from pathlib import Path
-import tempfile
 import unittest
-from unittest import mock
 
 from app import right_rail_financial_engine as engine
-from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
 VECTORS = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
 
@@ -57,15 +54,15 @@ class LeanDifferentialTests(unittest.TestCase):
                 value = int.from_bytes(request[offset:offset + 8], "big") + delta
                 if value >= 0:
                     variants.append(request[:offset] + value.to_bytes(8, "big") + request[offset + 8:])
-        with tempfile.TemporaryDirectory(prefix="rr-lean-differential-") as workspace:
-            release = _correction_transition_test_release(workspace=Path(workspace))
-            with mock.patch.object(engine, "_validate_contained_result", lambda result, _release: result):  # keep exit codes visible
-                runs = [engine._run_pinned(release, engine.CORRECTION_TRANSITION_ARGUMENTS, body, failure_code="differential") for body in variants]
-        self.assertEqual(len(runs), 9)  # the shipped request and each of four header numbers plus and minus one
-        for run in runs:  # a timeout, memory-cap kill or leaked process fails here; only Lean's own decode refusal is tolerated below
-            self.assertEqual((run.timed_out, run.cap_enforced, run.process_tree_complete, run.cleanup_complete), (False, True, True, True))
-        self.assertEqual([(run.exit_code, run.stderr) for run in runs if run.exit_code], [(72, b"FINANCIAL_ERROR=correction-transition-input-decode\n")])
-        outputs = {run.stdout for run in runs if run.exit_code == 0}
+        answers, refusals = [], []
+        for body in variants:
+            try:
+                answers.append(engine._evaluate_wire(body))
+            except engine.FinancialEngineResultError as error:  # only Lean's own decode refusal is tolerated
+                refusals.append(str(error))
+        self.assertEqual(len(variants), 9)  # the shipped request and each of four header numbers plus and minus one
+        self.assertEqual(refusals, ["evaluator_input_rejected"])
+        outputs = set(answers)
         self.assertIn((VECTORS / "result.expected.bin").read_bytes(), outputs)
         seen = set()
         for payload in outputs:

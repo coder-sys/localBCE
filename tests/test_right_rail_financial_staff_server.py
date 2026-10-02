@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from contextlib import closing, contextmanager
 import http.client
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,7 +18,6 @@ import unittest
 from unittest.mock import patch
 
 from app import right_rail_financial_owner_independent as independent
-from app import right_rail_financial_engine as financial_engine
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorContinuityError,
@@ -35,7 +33,6 @@ from app.right_rail_financial_owner import (
     FinancialRevisionError,
 )
 from app.right_rail_financial_followthrough import build_followthrough_pack
-from tests.test_right_rail_financial_acceptance import _correction_transition_test_release
 
 from app.right_rail_financial_staff_server import (
     CASH_CORRECTION_COMMAND,
@@ -59,67 +56,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory(prefix="rightrail-staff-workspace-test-")
         self.addCleanup(self.temp_dir.cleanup)
 
-    def _workflow(
-        self,
-        *,
-        with_correction_release: bool = False,
-        workspace_dir: Path | None = None,
-    ) -> StaffWorkflow:
-        workspace = workspace_dir or Path(self.temp_dir.name)
-        release = None
-        if with_correction_release:
-            release = _correction_transition_test_release(
-                workspace=workspace / "correction-engine-workspace"
-            )
-        workflow = StaffWorkflow(
-            workspace,
-            correction_transition_release=release,
-        )
+    def _workflow(self, *, workspace_dir: Path | None = None) -> StaffWorkflow:
+        workflow = StaffWorkflow(workspace_dir or Path(self.temp_dir.name))
         self.addCleanup(workflow.close)
         return workflow
-
-    def test_server_cli_loads_only_an_explicit_exact_engine_artifact(self) -> None:
-        from app import right_rail_financial_staff_server as staff_server
-
-        artifact = b"synthetic pinned engine artifact"
-        executable = Path(self.temp_dir.name) / "blind_financial_correction.exe"
-        executable.write_bytes(artifact)
-        engine_workspace = Path(self.temp_dir.name) / "engine-work"
-        engine_workspace.mkdir()
-        owner_workspace = Path(self.temp_dir.name) / "owner-work"
-        owner_workspace.mkdir()
-        artifact_digest = hashlib.sha256(artifact).digest()
-
-        with (
-            patch.object(financial_engine, "CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES", len(artifact)),
-            patch.object(financial_engine, "CORRECTION_TRANSITION_ARTIFACT_SHA256", artifact_digest),
-            patch.object(staff_server, "serve") as serve,
-        ):
-            self.assertEqual(
-                staff_server.main([
-                    "--port", "0",
-                    "--workspace", str(owner_workspace),
-                    "--correction-transition-executable", str(executable),
-                    "--correction-transition-workspace", str(engine_workspace),
-                ]),
-                0,
-            )
-
-        release = serve.call_args.kwargs["correction_transition_release"]
-        self.assertIs(type(release), financial_engine.FinancialCorrectionTransitionRelease)
-        self.assertEqual(release.executable, executable)
-        self.assertEqual(release.executable_sha256, artifact_digest)
-        self.assertEqual(release.request_vector_sha256, financial_engine.CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256)
-        self.assertEqual(release.result_vector_sha256, financial_engine.CORRECTION_TRANSITION_RESULT_VECTOR_SHA256)
-        self.assertEqual(serve.call_args.kwargs["workspace_dir"], owner_workspace)
-
-    def test_server_cli_rejects_partial_engine_configuration(self) -> None:
-        from app import right_rail_financial_staff_server as staff_server
-
-        with patch.object(staff_server, "serve") as serve:
-            with self.assertRaises(SystemExit):
-                staff_server.main(["--correction-transition-executable", "C:\\fixture\\engine.exe"])
-        serve.assert_not_called()
 
     def _http_json(self, port: int, path: str, body: dict[str, object] | None = None, *, timeout: float = 5) -> dict[str, object]:
         host = f"127.0.0.1:{port}"
@@ -166,7 +106,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_service_kit_correction_lost_response_retry_and_shadow_restore(self) -> None:
         run_workspace = Path(os.environ.get("RR_FINANCIAL_SERVICE_KIT_TEST_WORKSPACE", self.temp_dir.name))
-        workflow = self._workflow(with_correction_release=True, workspace_dir=run_workspace)
+        workflow = self._workflow(workspace_dir=run_workspace)
         owner = workflow.mirror.owner
         self.assertEqual(owner.mode, "TEST")
         handler_type = _handler_for(workflow)
@@ -309,7 +249,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(package["reporting"]["complete"], False)
 
     def test_ack_cash_reporting_and_test_restore_remain_separate(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         decision = workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         self.assertEqual(decision["command"]["status"], "CORRECTION_AUTHORIZED")
 
@@ -352,7 +292,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(restored["workspace"]["h"]["obligation"]["shortfall_cents"], 0)
 
     def test_h_store_followthrough_chain(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         owner = workflow.mirror.owner
         rules = (Path(__file__).resolve().parents[1] / "app" / "fixtures" / "h_followthrough_rules_v1.json").read_bytes()
         scope = {key: getattr(owner.config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
@@ -385,7 +325,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(len(done), 20)
 
     def test_decision_leaves_correction_followup_current(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         owner = workflow.mirror.owner
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         workflow.acknowledge_correction_action(self._revision_body(workflow))
@@ -422,7 +362,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual((support["rule_version"], support["adapter_versions"]["population"], support["work_ref_count"]), ("NONE", "NONE", 0))
 
     def test_ack_cash_effect_is_measured_before_and_after_the_command(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         reviewed = self._revision_body(workflow)
         with patch.object(
@@ -439,13 +379,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_same_workspace_reopens_verified_owner_and_durable_followup(self) -> None:
         workspace = Path(self.temp_dir.name)
-        release = _correction_transition_test_release(
-            workspace=workspace / "correction-engine-workspace"
-        )
-        workflow = StaffWorkflow(
-            workspace,
-            correction_transition_release=release,
-        )
+        workflow = StaffWorkflow(workspace)
         self.addCleanup(workflow.close)
         owner_path = workflow.mirror.owner.path
         command = workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
@@ -454,11 +388,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(workflow.correction_followup()["status"], "AVAILABLE")
         workflow.close()
 
-        resumed = StaffWorkflow(
-            workspace,
-            correction_transition_release=release,
-            resume_existing=True,
-        )
+        resumed = StaffWorkflow(workspace, resume_existing=True)
         self.addCleanup(resumed.close)
         self.assertEqual(resumed.mirror.owner.path, owner_path)
         resumed_integrity = resumed.mirror.owner.verify_integrity()
@@ -474,8 +404,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
     def test_staff_server_process_restart_reopens_same_owner_without_reseed(self) -> None:
         workspace = Path(self.temp_dir.name) / "process-restart-owner"
         workspace.mkdir()
-        engine_workspace = Path(self.temp_dir.name) / "process-restart-engine"
-        release = _correction_transition_test_release(workspace=engine_workspace)
         repository_root = Path(__file__).resolve().parents[1]
 
         def reserve_port() -> int:
@@ -494,10 +422,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 str(port),
                 "--workspace",
                 str(workspace),
-                "--correction-transition-executable",
-                str(release.executable),
-                "--correction-transition-workspace",
-                str(engine_workspace),
             ]
             if resume_existing:
                 command.append("--resume-existing-workspace")
@@ -613,7 +537,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(resumed["integrity"]["status"], "VERIFIED")
 
     def test_cash_exact_postcommit_retry_is_inert(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         owner = workflow.mirror.owner
         body = self._cash_body(workflow)
@@ -633,7 +557,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(owner.export_continuity(), committed_bytes)
 
     def test_http_cash_lost_response_retries_original_revision_once(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         owner = workflow.mirror.owner
         handler_type = _handler_for(workflow)
@@ -772,7 +696,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(owner.export_continuity(), moved)
 
     def test_accepting_the_offset_resends_to_the_same_result_and_shuts_out_the_other_outcome(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         owner = workflow.mirror.owner
         handler_type = _handler_for(workflow)
         lost = self._lose_first_response(handler_type, "/api/decision/authorize-offset")
@@ -811,7 +735,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(owner.export_continuity(), before)
 
     def test_workspace_uses_one_verified_snapshot_and_has_no_item_detail_fanout(self) -> None:
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         first_owner = workflow.mirror.owner
         writer = self._second_owner(first_owner)
         self.assertEqual((writer.mode, writer.owner_id), ("TEST", "continuity-test-owner-v1"))
@@ -914,7 +838,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
     def test_unrelated_owner_write_does_not_conflict_with_reviewed_ack_and_retry_order_is_preserved(self) -> None:
         # The correction runs only through the pinned Lean release (Art. V.2).
-        workflow = self._workflow(with_correction_release=True)
+        workflow = self._workflow()
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         reviewed = self._revision_body(workflow)
         owner = workflow.mirror.owner

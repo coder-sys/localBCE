@@ -178,19 +178,10 @@ class StaffWorkflow:
         self,
         workspace_dir: Path | None = None,
         *,
-        correction_transition_release: object | None = None,
         resume_existing: bool = False,
     ) -> None:
         if type(resume_existing) is not bool or (resume_existing and workspace_dir is None):
             raise ValueError("workspace_resume_configuration")
-        if resume_existing and correction_transition_release is None:
-            raise ValueError("workspace_resume_requires_correction_release")
-        if correction_transition_release is not None:
-            correction_transition_release = financial_engine.require_correction_transition_v1(
-                correction_transition_release
-            )
-            if type(correction_transition_release) is not financial_engine.FinancialCorrectionTransitionRelease:
-                raise ValueError("correction_transition_release")
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         if workspace_dir is None:
             self._temporary_directory = tempfile.TemporaryDirectory(prefix="rightrail-staff-demo-")
@@ -232,7 +223,6 @@ class StaffWorkflow:
                 clock=self._clock,
                 mode="TEST",
                 owner_id="continuity-test-owner-v1",
-                correction_transition_release=correction_transition_release,
             )
         )
         self._continuity = {
@@ -991,20 +981,16 @@ def serve(
     port: int = 8765,
     *,
     workspace_dir: Path | None = None,
-    correction_transition_release: object | None = None,
     resume_existing: bool = False,
 ) -> None:
     if type(port) is not int or not 0 <= port <= 65535:
         raise ValueError("port")
-    if resume_existing and correction_transition_release is None:
-        raise ValueError("workspace_resume_requires_correction_release")
     workspace_dir = _validate_workspace_directory(
         workspace_dir,
         resume_existing=resume_existing,
     )
     with StaffWorkflow(
         workspace_dir,
-        correction_transition_release=correction_transition_release,
         resume_existing=resume_existing,
     ) as workflow:
         server = _LoopbackServer(("127.0.0.1", port), _handler_for(workflow))
@@ -1014,8 +1000,6 @@ def serve(
         print("No State credentials, authenticated source, production role map, payment movement, or dispatch.")
         if resume_existing:
             print("Reopened the caller-owned synthetic TEST Owner workspace after integrity verification.")
-        if correction_transition_release is None:
-            print("Correction transition is unavailable; correction commands fail closed.")
         try:
             server.serve_forever(poll_interval=0.25)
         except KeyboardInterrupt:
@@ -1033,30 +1017,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="reopen and independently verify an existing TEST Owner database without reseeding it",
     )
-    parser.add_argument("--correction-transition-executable", type=Path)
-    parser.add_argument("--correction-transition-workspace", type=Path)
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
-    has_executable = args.correction_transition_executable is not None
-    has_engine_workspace = args.correction_transition_workspace is not None
-    if has_executable != has_engine_workspace:
-        parser.error("--correction-transition-executable and --correction-transition-workspace must be supplied together")
     if args.resume_existing_workspace and not args.workspace:
         parser.error("--resume-existing-workspace requires --workspace")
-    if args.resume_existing_workspace and not has_executable:
-        parser.error("--resume-existing-workspace requires the explicit correction Engine release")
     try:
-        release = None
-        if has_executable and has_engine_workspace:
-            release = financial_engine.load_correction_transition_release(
-                args.correction_transition_executable,
-                args.correction_transition_workspace,
-            )
         serve(
             args.port,
             workspace_dir=args.workspace,
-            correction_transition_release=release,
             resume_existing=args.resume_existing_workspace,
         )
     except (OSError, ValueError, financial_engine.FinancialEngineError) as error:

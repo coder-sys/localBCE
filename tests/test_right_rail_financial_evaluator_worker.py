@@ -15,6 +15,29 @@ from app import right_rail_financial_semantic_adapter as adapter
 from tests import test_right_rail_financial_semantic_adapter as adapter_tests
 
 
+_VECTORS = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
+
+
+def _correction_corpus() -> dict[str, bytes]:
+    """The M4 P1 equivalence corpus: the KAT request, its truncations, bit flips, +-1 numeric fields and header edits."""
+    request = (_VECTORS / "request.bin").read_bytes()
+    link_list = request.index(b"BLFIN02") - 6
+    corpus = {"vector": request, "empty": b"", "zeros-limit": bytes(4_000_000), "trailing-byte": request + b"\x00",
+              "old-magic": b"BLFCMD02" + request[8:], "old-version": request[:8] + b"\x00\x02" + request[10:],
+              "phantom-link": request[:link_list] + b"\x00\x01" + request[link_list + 2:]}
+    for i in range(len(request)):  # every header byte, then a stride through the embedded input and receipt
+        if i < 795 or i % 5 == 0:
+            corpus[f"flip-{i}"] = request[:i] + bytes([request[i] ^ 1]) + request[i + 1:]
+    for i in range(0, len(request), 61):
+        corpus[f"cut-{i}"] = request[:i]
+    for off in range(10, 795, 8):  # +-1 on every aligned 8-byte window of the header
+        for d in (1, -1):
+            v = int.from_bytes(request[off:off + 8], "big") + d
+            if v >= 0:
+                corpus[f"num-{off}{d:+d}"] = request[:off] + v.to_bytes(8, "big") + request[off + 8:]
+    return corpus
+
+
 class EvaluatorWorkerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.addCleanup(engine._close_evaluator)
@@ -211,10 +234,34 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(engine._evaluate_wire(self._wires()[0][0])).hexdigest(), old)
 
     def test_correction_request_is_decided_by_the_worker_as_by_the_retired_exe(self) -> None:
-        vectors = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
-        request, expected = (vectors / "request.bin").read_bytes(), (vectors / "result.expected.bin").read_bytes()
+        request, expected = (_VECTORS / "request.bin").read_bytes(), (_VECTORS / "result.expected.bin").read_bytes()
         self.assertEqual(self._exchange(request), b"\x00" + expected)  # the exe's stdout behind tag 0
         self.assertEqual(self._exchange(request[:-1]), b"\x01")  # the exe's exit 72: decode refused
+
+    def test_worker_answers_the_retired_exes_answers_over_the_corpus(self) -> None:
+        """Retired exe 874E2A37... (git 99ec957, artifacts/engine-correction/blind_financial_correction.exe), run on each
+        corpus input: worker form is 00 + stdout (exit 0), 01 (exit 72), 03 (exit 73; no corpus input produced one). The
+        fixture holds the SHA-256 over the per-input answer digests in corpus order; 991 exit 0, 567 exit 72."""
+        recorded = json.loads((Path(__file__).with_name("fixtures") / "correction_exe_answers.json").read_text(encoding="utf-8"))
+        corpus = _correction_corpus()
+        for data in corpus.values():
+            if not data:  # the exe's exit 72; the engine refuses an empty frame before it reaches the worker
+                with self.assertRaises(engine.FinancialEngineInputError):
+                    engine.run_correction_transition_v1(request=data)
+        answers = [hashlib.sha256(self._exchange(data) if data else b"\x01").digest() for data in corpus.values()]
+        self.assertEqual(len(corpus), recorded["cases"])
+        self.assertEqual(hashlib.sha256(b"".join(answers)).hexdigest(), recorded["combined_sha256"])
+
+    def test_correction_frame_at_the_cap_is_answered_inside_the_worker_bound(self) -> None:
+        request = (_VECTORS / "request.bin").read_bytes()
+        frame = request + bytes(engine.MAX_CORRECTION_TRANSITION_BYTES - len(request))  # the KAT, then padding to the 8 MiB cap
+        self.assertEqual(len(frame), engine.MAX_CORRECTION_TRANSITION_BYTES)
+        started = timeit.default_timer()
+        answer = self._exchange(frame)
+        elapsed = timeit.default_timer() - started
+        self.assertEqual(answer, b"\x01")  # trailing bytes: decode refused, after the whole frame is read
+        self.assertLess(elapsed, engine.EVALUATOR_TIMEOUT_SECONDS)
+        self.assertLess(engine._evaluator[0].commit_bytes(), engine.EVALUATOR_JOB_MEMORY_CAP_BYTES // 2, elapsed)
 
     def test_payment_frames_keep_the_worker_flat(self) -> None:
         frames = self._frames()

@@ -17,6 +17,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from app import minimal_clearance_verifier_process as process
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_semantic_adapter as adapter
@@ -28,7 +29,6 @@ from app.right_rail_financial_owner import (
 from tests import rightrail_financial_expected_cases as expected
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
-    _correction_transition_test_release,
     _image,
     _items_from_fixture,
     _population_manifest_from_fixture,
@@ -71,7 +71,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         clock: _Clock | None = None,
         mode: str = "LIVE",
         owner_id: str = "financial-owner-v1",
-        correction_transition_release: object | None = None,
     ) -> FinancialOwner:
         config = FinancialOwnerConfig(
             state_id=expected.STATE_ID,
@@ -87,25 +86,12 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             clock=clock or _Clock(),
             mode=mode,
             owner_id=owner_id,
-            correction_transition_release=correction_transition_release,
         )
         self.addCleanup(owner.close)  # R1a: the owner's writer holds the file open until closed
         return owner
 
-    def _correction_release(self) -> financial_engine.FinancialCorrectionTransitionRelease:
-        # The Owner fails closed without a release (Art. V.2); success-path
-        # correction histories run the pinned correction release, each in its own
-        # empty workspace, exactly like the acceptance fixtures.
-        self.path_counter += 1
-        return _correction_transition_test_release(
-            workspace=Path(self.temp_dir.name) / f"correction-engine-workspace-{self.path_counter}",
-        )
-
-    def _build_base(self, *, path: Path | None = None, correction: bool = False) -> FinancialOwner:
-        store = self._make_owner(
-            path=path,
-            correction_transition_release=self._correction_release() if correction else None,
-        )
+    def _build_base(self, *, path: Path | None = None) -> FinancialOwner:
+        store = self._make_owner(path=path)
         pack_expectation = expected.CONTROL_PACK_V1
         pack = _control_pack_from_fixture(pack_expectation)
         store.publish_control_pack(pack)
@@ -464,7 +450,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(authorized_data["obligation"]["received_cash_cents"], EXPECTED_H_CASH_CENTS)
         self.assertEqual(authorized_data["obligation"]["lawful_adjustment_cents"], EXPECTED_OFFSET_CENTS)
 
-        rejected = self._build_base(correction=True)
+        rejected = self._build_base()
         self._record_cash(rejected)
         rejected_claim = self._record_claim(rejected)
         self._reject(rejected, rejected_claim)
@@ -475,7 +461,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertEqual(rejected_data["cases"][-1]["status"], "CORRECTION_REQUIRED")
         self.assertEqual(rejected_data["obligation"]["lawful_adjustment_cents"], 0)
 
-        acknowledged = self._build_base(correction=True)
+        acknowledged = self._build_base()
         self._prepare_acknowledged(acknowledged)
         acknowledged_data = self._snapshot(acknowledged).data
         self.assertEqual(acknowledged_data["actions"][0]["status"], "ACKNOWLEDGED")
@@ -484,7 +470,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertNotIn("evidence:correction-h:cash", {row["evidence_id"] for row in acknowledged_data["evidence"]})
 
     def test_delivery_projection_uses_latest_action_creation_time_not_action_id(self) -> None:
-        store = self._build_base(correction=True)
+        store = self._build_base()
         self._record_cash(store)
         first_claim = self._record_claim(store)
         self._record_h_support(store)
@@ -610,7 +596,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         )
 
     def test_duplicate_conflict_reversal_replacement_and_reporting_are_real_facts(self) -> None:
-        store = self._build_base(correction=True)
+        store = self._build_base()
         self._prepare_final(store)
         self._record_duplicate_conflict_reversal_replacement(store)
 
@@ -670,7 +656,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             completion_at_ms=expected.OFFSET_DECISION_MS,
         )
 
-        acknowledged = self._build_base(correction=True)
+        acknowledged = self._build_base()
         self._prepare_acknowledged(acknowledged)
         self._assert_fresh_engine_history_result(
             acknowledged,
@@ -678,7 +664,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             completion_at_ms=None,
         )
 
-        final = self._build_base(correction=True)
+        final = self._build_base()
         self._prepare_final(final)
         self._record_duplicate_conflict_reversal_replacement(final)
         self._assert_fresh_engine_history_result(
@@ -687,7 +673,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             completion_at_ms=expected.P3_EVENT_MS,
         )
 
-    def test_correction_refuses_missing_or_bypassed_transition_without_mutation(self) -> None:
+    def test_correction_refuses_an_unavailable_worker_without_mutation(self) -> None:
         store = self._build_base()
         self._record_cash(store)
         claim_id = self._record_claim(store)
@@ -707,19 +693,13 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         }
         self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
 
-        with self.assertRaisesRegex(
-            owner.FinancialIntegrityError,
-            "correction_transition_unavailable",
-        ):
-            store.reject_offset_and_authorize_correction(**command)
-
         with (
-            patch.object(financial_engine, "require_correction_transition_v1", return_value=None),
+            patch.object(financial_engine, "_running_evaluator", side_effect=process.VerifierProcessError("worker_unavailable")),
             patch.object(financial_engine, "evaluate_live", return_value=object()) as projection_bypass,
         ):
             with self.assertRaisesRegex(
                 owner.FinancialIntegrityError,
-                "correction_transition_unavailable",
+                "correction_transition_failed",
             ):
                 store.reject_offset_and_authorize_correction(**command)
             projection_bypass.assert_not_called()

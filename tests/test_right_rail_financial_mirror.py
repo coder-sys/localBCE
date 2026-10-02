@@ -37,7 +37,6 @@ from tests.rightrail_financial_expected_cases import (
 from tests.instruments.privacy_artifact_scan import scan_artifacts
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
-    _correction_transition_test_release,
     _items_from_fixture,
     _population_manifest_from_fixture,
 )
@@ -70,9 +69,6 @@ class FinancialMirrorTests(unittest.TestCase):
             config=self.config,
             trusted_authority=self.authority,
             clock=self.clock,
-            correction_transition_release=_correction_transition_test_release(
-                workspace=self.root / "correction-engine-workspace"
-            ),
         )
         self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
@@ -196,7 +192,7 @@ class FinancialMirrorTests(unittest.TestCase):
             "adapter_versions": {"population": "RR/FINANCIAL/POPULATION-MANIFEST/v1", "trust_graph_source_profile": "NONE"},
             "artifact": {
                 "contract": financial_engine.CORRECTION_TRANSITION_OPERATION, "version": 1,
-                "sha256": financial_engine.CORRECTION_TRANSITION_ARTIFACT_SHA256.hex().upper(),
+                "sha256": financial_engine.EVALUATOR_ARTIFACT_SHA256.hex().upper(),
             },
             "failure_stage": "NONE", "error_class": "NONE", "work_ref_count": 0,
             "reproduction": financial_engine.CORRECTION_TRANSITION_REPRODUCTION,
@@ -791,13 +787,9 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(cli_receipt["evaluation_id"], receipt["evaluation_id"])
         self.assertEqual(cli_receipt["result_digest"], receipt["result_digest"])
 
-        cli_engine_workspace = self.root / "cli-correction-engine-workspace"
-        cli_engine_workspace.mkdir()
         status, command, stderr = self._invoke_cli_json(
             common
             + [
-                "--correction-transition-executable", str(self.store.correction_transition_release.executable),
-                "--correction-transition-workspace", str(cli_engine_workspace),
                 "reject-offset-and-authorize-correction",
                 "--item-id", H_ITEM_ID,
                 "--claim-id", "claim:offset:h",
@@ -1000,15 +992,13 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(reopened.verify_integrity()["mode"], "SHADOW")
 
     def test_restore_test_continuity_keeps_the_correction_engine_binding(self) -> None:
-        """A TEST restore must not disable reject-offset: the restored Owner keeps
-        the same Lean correction-transition release as the Owner it was restored
-        from, so a correction attempted after restore-test still succeeds."""
+        """A TEST restore must not disable reject-offset: a correction attempted
+        on the restored Owner still succeeds."""
         self._prepare_claim()
         package = self.mirror.export_continuity()
         destination = self.root / "test-restore-then-reject.sqlite"
         restored = self.mirror.restore_test_continuity(package, destination)
         self.addCleanup(restored.owner.close)
-        self.assertIsNotNone(restored.owner.correction_transition_release)
         receipt = restored.current_evaluation_receipt(H_ITEM_ID)
         decision = restored.reject_offset_and_authorize_correction(
             item_id=H_ITEM_ID,

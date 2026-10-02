@@ -1,19 +1,15 @@
-"""Owner-side adapter for the pinned financial Engine executable.
+"""Owner-side adapter for the pinned financial evaluator worker.
 
-Lean decides; this module only moves bytes (Constitution V.1).  One path for
-both lanes: encode request -> run the pinned executable under the Windows
-Job Object lane (``minimal_clearance_verifier_process``, which is the single
-place the executable is opened, hashed and bound to the launched image) ->
-strictly parse the result -> return a typed value.  It never opens, commits,
-rolls back or closes a database connection and never reads release identity
-from the environment.
+Lean decides; this module only moves bytes (Constitution V.1).  Encode request
+-> one frame to the long-lived worker, which ``minimal_clearance_verifier_process``
+opens, hashes and binds to the launched image -> strictly parse the answer ->
+return a typed value.  It never opens, commits, rolls back or closes a database
+connection and never reads release identity from the environment.
 """
 
 from __future__ import annotations
 
 import atexit
-from dataclasses import dataclass
-import hashlib
 import math
 from pathlib import Path
 import shutil
@@ -27,14 +23,8 @@ from app import minimal_clearance_verifier_process as process
 from app import right_rail_financial_semantic_adapter as semantic
 
 
-MAX_ENGINE_JOB_MEMORY_CAP_BYTES: Final[int] = 2_000_000_000
 CORRECTION_TRANSITION_OPERATION: Final[str] = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARGUMENTS: Final[tuple[str, ...]] = ("--apply-correction-transition",)
 MAX_CORRECTION_TRANSITION_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
-CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES: Final[int] = 6_433_792
-CORRECTION_TRANSITION_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "874E2A37123E3B3EA5AD6E96DEE9DD066C596029D5268EF9FE6F3AF6A278323F"
-)
 CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
     "234FDF65E630E41D38E1ECA1CC674845969ED35B409AEB12CB41E3116487E666"
 )
@@ -45,7 +35,6 @@ CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
 CORRECTION_TRANSITION_REPRODUCTION: Final[dict[str, str]] = {
     "vector_file_digest": CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256.hex().upper(), "case_id": "case:obligation:item-h:period-01",
 }
-_SHA256_BYTES: Final[int] = 32
 _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
 
 
@@ -71,163 +60,6 @@ class FinancialEngineContainmentError(FinancialEngineError):
 
 class FinancialEngineResultError(FinancialEngineError):
     pass
-
-
-class FinancialEngineTransitionUnavailable(FinancialEngineError):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class FinancialCorrectionTransitionRelease:
-    """Explicit release identity for the correction transition."""
-
-    executable: Path
-    executable_size_bytes: int
-    executable_sha256: bytes
-    request_vector_sha256: bytes
-    result_vector_sha256: bytes
-    timeout_seconds: float
-    input_max_bytes: int
-    output_max_bytes: int
-    stderr_max_bytes: int
-    workspace: Path
-    job_memory_cap_bytes: int
-
-    def __post_init__(self) -> None:
-        def require(condition: bool, field: str) -> None:
-            if not condition:
-                raise FinancialEngineConfigError(f"engine_correction_{field}")
-
-        require(isinstance(self.executable, Path) and self.executable.is_absolute(), "executable_path")
-        require(isinstance(self.workspace, Path) and self.workspace.is_absolute(), "workspace_path")
-        require(type(self.executable_size_bytes) is int and self.executable_size_bytes > 0, "executable_size")
-        require(
-            type(self.executable_sha256) is bytes and len(self.executable_sha256) == _SHA256_BYTES,
-            "executable_hash",
-        )
-        for field in ("request_vector_sha256", "result_vector_sha256"):
-            value = getattr(self, field)
-            require(type(value) is bytes and len(value) == _SHA256_BYTES, field.replace("_sha256", "_hash"))
-        require(
-            type(self.timeout_seconds) is float and math.isfinite(self.timeout_seconds) and 0 < self.timeout_seconds <= 30.0,
-            "timeout",
-        )
-        for field, cap in (("input", MAX_CORRECTION_TRANSITION_BYTES), ("output", MAX_CORRECTION_TRANSITION_BYTES)):
-            value = getattr(self, f"{field}_max_bytes")
-            require(type(value) is int and 0 < value <= cap, f"{field}_limit")
-        require(
-            type(self.stderr_max_bytes) is int and 0 < self.stderr_max_bytes <= process.MAX_STDERR_BYTES,
-            "stderr_limit",
-        )
-        require(
-            type(self.job_memory_cap_bytes) is int
-            and 0 < self.job_memory_cap_bytes <= MAX_ENGINE_JOB_MEMORY_CAP_BYTES
-            and self.job_memory_cap_bytes <= process.ADMISSION_CAP_BYTES,
-            "memory_cap",
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class FinancialCorrectionTransitionExecution:
-    """One contained and artifact-bound correction transition response."""
-
-    result: dict[str, Any]
-    input_size_bytes: int
-    input_sha256: bytes
-    output_size_bytes: int
-    output_sha256: bytes
-    executable_size_bytes: int
-    executable_sha256: bytes
-    exit_code: int
-    job_memory_cap_bytes: int
-    peak_job_commit_bytes: int
-    cap_enforced: bool
-    active_process_limit: int
-    child_process_count: int
-
-
-def _validate_contained_result(
-    result: object,
-    release: FinancialCorrectionTransitionRelease,
-) -> process.ContainedVerifierResult:
-    if type(result) is not process.ContainedVerifierResult:
-        raise FinancialEngineContainmentError("engine_containment")
-    if (
-        type(result.exit_code) is not int
-        or result.exit_code != 0
-        or result.stderr != b""
-        or result.timed_out is not False
-        or type(result.cap_bytes) is not int
-        or result.cap_bytes != release.job_memory_cap_bytes
-        or result.cap_enforced is not True
-        or type(result.active_process_limit) is not int
-        or result.active_process_limit != process.ACTIVE_PROCESS_LIMIT
-        or type(result.child_process_count) is not int
-        or result.child_process_count < 1
-        or result.process_tree_complete is not True
-        or result.measurement_complete is not True
-        or result.cleanup_complete is not True
-        or type(result.peak_job_commit_bytes) is not int
-        or result.peak_job_commit_bytes < 0
-        or result.peak_job_commit_bytes > release.job_memory_cap_bytes
-        or type(result.stdout) is not bytes
-        or type(result.stderr) is not bytes
-        or len(result.stdout) > release.output_max_bytes
-        or len(result.stderr) > release.stderr_max_bytes
-    ):
-        raise FinancialEngineContainmentError("engine_containment")
-    return result
-
-
-def _run_pinned(
-    release: FinancialCorrectionTransitionRelease,
-    arguments: tuple[str, ...],
-    frame: bytes,
-    *,
-    failure_code: str,
-) -> process.ContainedVerifierResult:
-    """The single launch: pinned executable, Job Object limits, bounded I/O."""
-
-    try:
-        contained = process.run_contained_verifier_stream(
-            release.executable,
-            arguments,
-            frame,
-            workspace=release.workspace,
-            timeout_seconds=release.timeout_seconds,
-            job_memory_cap_bytes=release.job_memory_cap_bytes,
-            expected_executable_size_bytes=release.executable_size_bytes,
-            expected_executable_sha256=release.executable_sha256,
-            stdout_cap_bytes=release.output_max_bytes,
-            stderr_cap_bytes=release.stderr_max_bytes,
-            stdout_ascii=False,
-            stderr_ascii=False,
-            expected_input_bytes=len(frame),
-        )
-    except Exception:
-        raise FinancialEngineContainmentError(failure_code) from None
-    return _validate_contained_result(contained, release)
-
-
-def _execution_fields(
-    release: FinancialCorrectionTransitionRelease,
-    frame: bytes,
-    contained: process.ContainedVerifierResult,
-) -> dict[str, Any]:
-    return {
-        "input_size_bytes": len(frame),
-        "input_sha256": hashlib.sha256(frame).digest(),
-        "output_size_bytes": len(contained.stdout),
-        "output_sha256": hashlib.sha256(contained.stdout).digest(),
-        "executable_size_bytes": release.executable_size_bytes,
-        "executable_sha256": release.executable_sha256,
-        "exit_code": contained.exit_code,
-        "job_memory_cap_bytes": contained.cap_bytes,
-        "peak_job_commit_bytes": contained.peak_job_commit_bytes,
-        "cap_enforced": contained.cap_enforced,
-        "active_process_limit": contained.active_process_limit,
-        "child_process_count": contained.child_process_count,
-    }
 
 
 def _transition_digest(value: object, label: str) -> bytes:
@@ -498,77 +330,6 @@ def _is_reparse_path(path: Path) -> bool:
         return True
     is_junction = getattr(path, "is_junction", None)
     return bool(is_junction()) if callable(is_junction) else False
-
-
-def load_correction_transition_release(
-    executable_path: Path,
-    workspace_path: Path,
-) -> FinancialCorrectionTransitionRelease:
-    """Bind an operator-named executable and workspace to the pinned v1 release.
-
-    The one loader for the operator entry points (staff server, CLI).  The
-    caller names the paths; identity comes only from the pins in this module,
-    never from the environment.  Any mismatch raises ``ValueError``.
-    """
-
-    if (
-        not isinstance(executable_path, Path)
-        or not executable_path.is_absolute()
-        or _is_reparse_path(executable_path)
-        or not executable_path.is_file()
-        or not isinstance(workspace_path, Path)
-        or not workspace_path.is_absolute()
-        or _is_reparse_path(workspace_path)
-        or not workspace_path.is_dir()
-    ):
-        raise ValueError("correction_transition_paths")
-    try:
-        executable_size = executable_path.stat().st_size
-        digest = hashlib.sha256()
-        with executable_path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError as error:
-        raise ValueError("correction_transition_artifact_unavailable") from error
-    executable_sha256 = digest.digest()
-    if (
-        executable_size != CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES
-        or executable_sha256 != CORRECTION_TRANSITION_ARTIFACT_SHA256
-    ):
-        raise ValueError("correction_transition_artifact_identity")
-    release = FinancialCorrectionTransitionRelease(
-        executable=executable_path,
-        executable_size_bytes=executable_size,
-        executable_sha256=executable_sha256,
-        request_vector_sha256=CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256,
-        result_vector_sha256=CORRECTION_TRANSITION_RESULT_VECTOR_SHA256,
-        timeout_seconds=30.0,
-        input_max_bytes=MAX_CORRECTION_TRANSITION_BYTES,
-        output_max_bytes=MAX_CORRECTION_TRANSITION_BYTES,
-        stderr_max_bytes=process.MAX_STDERR_BYTES,
-        workspace=workspace_path,
-        job_memory_cap_bytes=min(MAX_ENGINE_JOB_MEMORY_CAP_BYTES, process.ADMISSION_CAP_BYTES),
-    )
-    return require_correction_transition_v1(release)
-
-
-def require_correction_transition_v1(release: object | None) -> FinancialCorrectionTransitionRelease:
-    """Require the immutable v1 release bound to the pinned artifact and vectors."""
-
-    if release is None:
-        raise FinancialEngineTransitionUnavailable("engine_correction_transition_release_required")
-    if type(release) is not FinancialCorrectionTransitionRelease:
-        raise FinancialEngineConfigError("engine_correction_transition_release_type")
-    if (
-        release.executable_size_bytes != CORRECTION_TRANSITION_ARTIFACT_SIZE_BYTES
-        or release.executable_sha256 != CORRECTION_TRANSITION_ARTIFACT_SHA256
-    ):
-        raise FinancialEngineArtifactError("engine_correction_transition_artifact_identity")
-    if release.request_vector_sha256 != CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256:
-        raise FinancialEngineArtifactError("engine_correction_transition_request_vector_identity")
-    if release.result_vector_sha256 != CORRECTION_TRANSITION_RESULT_VECTOR_SHA256:
-        raise FinancialEngineArtifactError("engine_correction_transition_result_vector_identity")
-    return release
 
 
 _PREDICATE_TAGS: Final[dict[int, str]] = {1: "ACTION_ID", 2: "DETERMINATION_ID", 3: "EVALUATION_CONSUMED"}
@@ -1364,37 +1125,12 @@ def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
         raise FinancialEngineResultError("engine_correction_result_shape") from None
 
 
-def run_correction_transition_v1(
-    release: object | None,
-    *,
-    request: bytes,
-) -> FinancialCorrectionTransitionExecution:
-    """Run only the fully pinned transition through the contained lane."""
+def run_correction_transition_v1(*, request: bytes) -> dict[str, Any]:
+    """One BLFCMD03 frame on the evaluator worker: the decoded BLFCRES3 answer."""
 
-    configured = require_correction_transition_v1(release)
-    # The launcher dereferences the release, so it fails closed here on
-    # anything that is not the pinned release type, even if the gate above was
-    # bypassed; never an AttributeError (Art. V.2, XI.10).
-    if configured is None:
-        raise FinancialEngineTransitionUnavailable("engine_correction_transition_release_required")
-    if type(configured) is not FinancialCorrectionTransitionRelease:
-        raise FinancialEngineConfigError("engine_correction_transition_release_type")
-    if (
-        type(request) is not bytes
-        or not request.startswith(b"BLFCMD03")
-        or not 0 < len(request) <= configured.input_max_bytes
-    ):
+    if type(request) is not bytes or not request.startswith(b"BLFCMD03") or not 0 < len(request) <= MAX_CORRECTION_TRANSITION_BYTES:
         raise FinancialEngineInputError("engine_correction_request_contract")
-    contained = _run_pinned(
-        configured,
-        CORRECTION_TRANSITION_ARGUMENTS,
-        request,
-        failure_code="engine_correction_containment",
-    )
-    return FinancialCorrectionTransitionExecution(
-        result=decode_correction_transition_result(contained.stdout),
-        **_execution_fields(configured, request, contained),
-    )
+    return decode_correction_transition_result(_evaluate_wire(request))
 
 
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---

@@ -801,7 +801,7 @@ class SourceFilesCoverImportClosureTests(unittest.TestCase):
     def test_source_files_cover_the_import_closure(self) -> None:
         lean = Path(gate.__file__).resolve().parents[1]
         manifest = gate.json.loads(gate.MANIFEST_PATH.read_text(encoding="utf-8"))["candidate"]
-        exe_root = {e["name"]: e["root"] for e in gate.tomllib.loads((lean / "lakefile.toml").read_text(encoding="utf-8"))["lean_exe"]}["blind_financial_correction"]
+        exe_root = {e["name"]: e["root"] for e in gate.tomllib.loads((lean / "lakefile.toml").read_text(encoding="utf-8"))["lean_exe"]}["blind_financial_worker"]
         for root in (manifest["module"], exe_root):
             seen, pending = set(), [root]
             while pending:
