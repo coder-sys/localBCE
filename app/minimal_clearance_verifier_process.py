@@ -263,6 +263,18 @@ def _win_error(label: str) -> VerifierProcessError:
     return VerifierProcessError(f"{label}:{ctypes.get_last_error()}")
 
 
+def _set_job_limits(kernel32: object, job: object, job_memory_cap_bytes: int) -> None:
+    limits = _JobObjectExtendedLimitInformation()
+    limits.BasicLimitInformation.LimitFlags = _JOB_LIMIT_FLAGS
+    limits.BasicLimitInformation.ActiveProcessLimit = ACTIVE_PROCESS_LIMIT
+    limits.JobMemoryLimit = job_memory_cap_bytes
+    if not kernel32.SetInformationJobObject(
+        job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+        ctypes.byref(limits), ctypes.sizeof(limits)
+    ):
+        raise _win_error("verifier_job_limits")
+
+
 def _handle_number(handle: object) -> int:
     value = getattr(handle, "value", handle)
     if value is None:
@@ -1370,15 +1382,7 @@ def run_contained_verifier(
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
             raise _win_error("verifier_job_create")
-        limits = _JobObjectExtendedLimitInformation()
-        limits.BasicLimitInformation.LimitFlags = _JOB_LIMIT_FLAGS
-        limits.BasicLimitInformation.ActiveProcessLimit = ACTIVE_PROCESS_LIMIT
-        limits.JobMemoryLimit = job_memory_cap_bytes
-        if not kernel32.SetInformationJobObject(
-            job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            ctypes.byref(limits), ctypes.sizeof(limits)
-        ):
-            raise _win_error("verifier_job_limits")
+        _set_job_limits(kernel32, job, job_memory_cap_bytes)
 
         startup = _StartupInfoEx()
         startup.StartupInfo.cb = ctypes.sizeof(startup)
@@ -2004,15 +2008,7 @@ def launch_contained_worker(
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
             raise _win_error("verifier_job_create")
-        limits = _JobObjectExtendedLimitInformation()
-        limits.BasicLimitInformation.LimitFlags = _JOB_LIMIT_FLAGS
-        limits.BasicLimitInformation.ActiveProcessLimit = ACTIVE_PROCESS_LIMIT
-        limits.JobMemoryLimit = job_memory_cap_bytes
-        if not kernel32.SetInformationJobObject(
-            job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            ctypes.byref(limits), ctypes.sizeof(limits)
-        ):
-            raise _win_error("verifier_job_limits")
+        _set_job_limits(kernel32, job, job_memory_cap_bytes)
         stdout_read, stdout_write, stdout_handle = _create_output_pipe()
         owned += [stdout_read, stdout_write]
         stderr_read, stderr_write, stderr_handle = _create_output_pipe()

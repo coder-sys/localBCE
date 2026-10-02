@@ -14,6 +14,7 @@ import time
 import types
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import app.minimal_clearance_verifier_process as process
@@ -759,100 +760,91 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                         os.fstat(descriptor)
                 self.assertEqual(tuple(workspace.iterdir()), ())
 
-    def test_stream_verifier_exception_is_preserved_after_stream_cleanup(self):
-        real_pipe = os.pipe
-        real_write = os.write
-        descriptors: list[int] = []
-        write_descriptor: int | None = None
-        write_complete = threading.Event()
-        executable = Path(sys.executable)
-        payload = executable.read_bytes()
+    def _run_stream(self, outcome, *, frame=b"frame", sees="end", fail_close=None, error=None, extra=(), **call):
+        """Run the stream verifier over recording pipes and check every stream descriptor and the workspace end up released."""
+        rig = types.SimpleNamespace(descriptors=[], read=None, write=None, closes={})
+        real_pipe, real_write, real_close = os.pipe, os.write, os.close
+        seen = threading.Event()
 
         def pipe_factory():
-            nonlocal write_descriptor
             pair = real_pipe()
-            descriptors.extend(pair)
-            write_descriptor = pair[1]
+            rig.descriptors.extend(pair)
+            rig.read, rig.write = pair
             return pair
 
         def write_wrapper(descriptor, data):
+            if sees == "start" and descriptor == rig.write:
+                seen.set()
             count = real_write(descriptor, data)
-            if descriptor == write_descriptor:
-                write_complete.set()
+            if sees == "end" and descriptor == rig.write:
+                seen.set()
             return count
 
+        def close_wrapper(descriptor):
+            rig.closes[descriptor] = rig.closes.get(descriptor, 0) + 1
+            if descriptor == getattr(rig, fail_close):
+                raise OSError(f"{fail_close} release unknown")
+            return real_close(descriptor)
+
         def runner(*args: object, **kwargs: object):
-            if not write_complete.wait(2):
+            if not seen.wait(2):
                 raise AssertionError("writer did not finish")
-            raise process.VerifierProcessError("verifier_runner_failure")
+            return outcome()
 
-        with tempfile.TemporaryDirectory() as root_name:
-            workspace = Path(root_name)
-            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
-                 patch.object(process.os, "write", side_effect=write_wrapper), \
-                 patch.object(process, "run_contained_verifier", side_effect=runner):
-                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_runner_failure"):
-                    process.run_contained_verifier_stream(
-                        executable,
-                        (),
-                        b"frame",
-                        workspace=workspace,
-                        timeout_seconds=1.0,
-                        expected_executable_size_bytes=len(payload),
-                        expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    )
-            for descriptor in descriptors:
-                with self.assertRaises(OSError):
-                    os.fstat(descriptor)
-            self.assertEqual(tuple(workspace.iterdir()), ())
-
-    def test_stream_timeout_precedes_broken_pipe_writer_failure(self):
-        real_pipe = os.pipe
-        real_write = os.write
-        descriptors: list[int] = []
-        write_descriptor: int | None = None
-        write_started = threading.Event()
         executable = Path(sys.executable)
         payload = executable.read_bytes()
-        frame = b"x" * (256 * 1024)
-
-        def pipe_factory():
-            nonlocal write_descriptor
-            pair = real_pipe()
-            descriptors.extend(pair)
-            write_descriptor = pair[1]
-            return pair
-
-        def write_wrapper(descriptor, data):
-            if descriptor == write_descriptor:
-                write_started.set()
-            return real_write(descriptor, data)
-
-        def runner(*args: object, **kwargs: object):
-            if not write_started.wait(2):
-                raise AssertionError("writer did not start")
-            return self._contained_result(timed_out=True)
-
-        with tempfile.TemporaryDirectory() as root_name:
+        with tempfile.TemporaryDirectory() as root_name, ExitStack() as patches:
             workspace = Path(root_name)
-            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
-                 patch.object(process.os, "write", side_effect=write_wrapper), \
-                 patch.object(process, "run_contained_verifier", side_effect=runner):
-                result = process.run_contained_verifier_stream(
-                    executable,
-                    (),
-                    frame,
-                    workspace=workspace,
-                    timeout_seconds=1.0,
+            patches.enter_context(patch.object(process.os, "pipe", side_effect=pipe_factory))
+            patches.enter_context(patch.object(process.os, "write", side_effect=write_wrapper))
+            patches.enter_context(patch.object(process, "run_contained_verifier", side_effect=runner))
+            if fail_close:
+                patches.enter_context(patch.object(process.os, "close", side_effect=close_wrapper))
+            for patcher in extra:
+                patches.enter_context(patcher)
+
+            def invoke():
+                return process.run_contained_verifier_stream(
+                    executable, (), frame, workspace=workspace, timeout_seconds=1.0,
                     expected_executable_size_bytes=len(payload),
-                    expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    expected_input_bytes=len(frame),
+                    expected_executable_sha256=hashlib.sha256(payload).digest(), **call,
                 )
-            self.assertTrue(result.timed_out)
-            for descriptor in descriptors:
-                with self.assertRaises(OSError):
-                    os.fstat(descriptor)
+
+            result = None
+            if error:
+                with self.assertRaisesRegex(process.VerifierProcessError, error):
+                    invoke()
+            else:
+                result = invoke()
+            failed = getattr(rig, fail_close) if fail_close else None
+            if fail_close:
+                self.assertEqual(rig.closes.get(failed), 1)
+                self.assertIsNotNone(failed)
+                try:
+                    os.fstat(failed)
+                except OSError:
+                    pass
+                else:
+                    real_close(failed)
+            for descriptor in rig.descriptors:
+                if descriptor != failed:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
             self.assertEqual(tuple(workspace.iterdir()), ())
+        return result
+
+    def _stream_runner_raises(self):
+        raise process.VerifierProcessError("verifier_runner_failure")
+
+    def test_stream_verifier_exception_is_preserved_after_stream_cleanup(self):
+        self._run_stream(self._stream_runner_raises, error="verifier_runner_failure")
+
+    def test_stream_timeout_precedes_broken_pipe_writer_failure(self):
+        frame = b"x" * (256 * 1024)
+        result = self._run_stream(
+            lambda: self._contained_result(timed_out=True), frame=frame, sees="start", expected_input_bytes=len(frame)
+        )
+        self.assertTrue(result.timed_out)
 
     def test_stream_blocked_writer_is_bounded_when_read_release_is_unknown(self):
         real_pipe = os.pipe
@@ -927,179 +919,17 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertEqual(close_counts.get(read_descriptor), 1)
 
     def test_stream_write_descriptor_close_failure_never_returns_success_or_retries(self):
-        real_pipe = os.pipe
-        real_close = os.close
-        real_write = os.write
-        descriptors: list[int] = []
-        write_descriptor: int | None = None
-        write_complete = threading.Event()
-        close_counts: dict[int, int] = {}
-        executable = Path(sys.executable)
-        payload = executable.read_bytes()
-
-        def pipe_factory():
-            nonlocal write_descriptor
-            pair = real_pipe()
-            descriptors.extend(pair)
-            write_descriptor = pair[1]
-            return pair
-
-        def write_wrapper(descriptor, data):
-            count = real_write(descriptor, data)
-            if descriptor == write_descriptor:
-                write_complete.set()
-            return count
-
-        def close_wrapper(descriptor):
-            close_counts[descriptor] = close_counts.get(descriptor, 0) + 1
-            if descriptor == write_descriptor:
-                raise OSError("write release unknown")
-            return real_close(descriptor)
-
-        def runner(*args: object, **kwargs: object):
-            if not write_complete.wait(2):
-                raise AssertionError("writer did not finish")
-            return self._contained_result()
-
-        with tempfile.TemporaryDirectory() as root_name:
-            workspace = Path(root_name)
-            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
-                 patch.object(process.os, "write", side_effect=write_wrapper), \
-                 patch.object(process.os, "close", side_effect=close_wrapper), \
-                 patch.object(process, "run_contained_verifier", side_effect=runner):
-                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
-                    process.run_contained_verifier_stream(
-                        executable,
-                        (),
-                        b"frame",
-                        workspace=workspace,
-                        timeout_seconds=1.0,
-                        expected_executable_size_bytes=len(payload),
-                        expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    )
-            self.assertEqual(close_counts.get(write_descriptor), 1)
-            self.assertIsNotNone(write_descriptor)
-            try:
-                os.fstat(write_descriptor)
-            except OSError:
-                pass
-            else:
-                real_close(write_descriptor)
-            for descriptor in descriptors:
-                if descriptor == write_descriptor:
-                    continue
-                with self.assertRaises(OSError):
-                    os.fstat(descriptor)
-            self.assertEqual(tuple(workspace.iterdir()), ())
+        self._run_stream(self._contained_result, fail_close="write", error="verifier_stream_cleanup")
 
     def test_stream_read_descriptor_close_failure_never_returns_success_or_retries(self):
-        real_pipe = os.pipe
-        real_close = os.close
-        real_write = os.write
-        descriptors: list[int] = []
-        read_descriptor: int | None = None
-        write_descriptor: int | None = None
-        write_complete = threading.Event()
-        close_counts: dict[int, int] = {}
-        executable = Path(sys.executable)
-        payload = executable.read_bytes()
-
-        def pipe_factory():
-            nonlocal read_descriptor, write_descriptor
-            pair = real_pipe()
-            descriptors.extend(pair)
-            read_descriptor, write_descriptor = pair
-            return pair
-
-        def write_wrapper(descriptor, data):
-            count = real_write(descriptor, data)
-            if descriptor == write_descriptor:
-                write_complete.set()
-            return count
-
-        def close_wrapper(descriptor):
-            close_counts[descriptor] = close_counts.get(descriptor, 0) + 1
-            if descriptor == read_descriptor:
-                raise OSError("read release unknown")
-            return real_close(descriptor)
-
-        def runner(*args: object, **kwargs: object):
-            if not write_complete.wait(2):
-                raise AssertionError("writer did not finish")
-            return self._contained_result()
-
-        with tempfile.TemporaryDirectory() as root_name:
-            workspace = Path(root_name)
-            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
-                 patch.object(process.os, "write", side_effect=write_wrapper), \
-                 patch.object(process.os, "close", side_effect=close_wrapper), \
-                 patch.object(process, "run_contained_verifier", side_effect=runner):
-                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
-                    process.run_contained_verifier_stream(
-                        executable,
-                        (),
-                        b"frame",
-                        workspace=workspace,
-                        timeout_seconds=1.0,
-                        expected_executable_size_bytes=len(payload),
-                        expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    )
-            self.assertEqual(close_counts.get(read_descriptor), 1)
-            self.assertIsNotNone(read_descriptor)
-            try:
-                os.fstat(read_descriptor)
-            except OSError:
-                pass
-            else:
-                real_close(read_descriptor)
-            self.assertEqual(tuple(workspace.iterdir()), ())
+        self._run_stream(self._contained_result, fail_close="read", error="verifier_stream_cleanup")
 
     def test_stream_cleanup_exception_is_fixed_and_never_returns_success(self):
-        real_pipe = os.pipe
-        real_write = os.write
-        descriptors: list[int] = []
-        write_descriptor: int | None = None
-        write_complete = threading.Event()
-        executable = Path(sys.executable)
-        payload = executable.read_bytes()
-
-        def pipe_factory():
-            nonlocal write_descriptor
-            pair = real_pipe()
-            descriptors.extend(pair)
-            write_descriptor = pair[1]
-            return pair
-
-        def write_wrapper(descriptor, data):
-            count = real_write(descriptor, data)
-            if descriptor == write_descriptor:
-                write_complete.set()
-            return count
-
-        def runner(*args: object, **kwargs: object):
-            if not write_complete.wait(2):
-                raise AssertionError("writer did not finish")
-            return self._contained_result()
-
-        with tempfile.TemporaryDirectory() as root_name:
-            workspace = Path(root_name)
-            with patch.object(process.os, "pipe", side_effect=pipe_factory), \
-                 patch.object(process.os, "write", side_effect=write_wrapper), \
-                 patch.object(process, "run_contained_verifier", side_effect=runner), \
-                 patch.object(process, "_cleanup_verifier_workspace", side_effect=RuntimeError("cleanup fault")):
-                with self.assertRaisesRegex(process.VerifierProcessError, "verifier_stream_cleanup"):
-                    process.run_contained_verifier_stream(
-                        executable,
-                        (),
-                        b"frame",
-                        workspace=workspace,
-                        timeout_seconds=1.0,
-                        expected_executable_size_bytes=len(payload),
-                        expected_executable_sha256=hashlib.sha256(payload).digest(),
-                    )
-            for descriptor in descriptors:
-                with self.assertRaises(OSError):
-                    os.fstat(descriptor)
+        self._run_stream(
+            self._contained_result,
+            error="verifier_stream_cleanup",
+            extra=[patch.object(process, "_cleanup_verifier_workspace", side_effect=RuntimeError("cleanup fault"))],
+        )
 
     def test_resource_limit_contract_rejects_five_gib_and_keeps_five_gib_minus_one(self):
         payload = b"resource-limited-verifier"
