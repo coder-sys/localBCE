@@ -109,6 +109,7 @@
         "history_capacity": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
         "history_segment_size": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
         "determination_revision_binding": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "decision_time_backdated_past_due": { "screen": "decision", "message": "Nothing was saved: the due date has passed, so this decision can't be dated on or before it. Decide again; it will be recorded as late." },
         "invalid_request": { "screen": "decision", "message": "The decision could not be sent. Reload this page and try again." },
         "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
         "owner_command_unavailable": { "screen": "unavailable", "message": "We can't confirm your decision was saved. Reload this page to check again." },
