@@ -210,6 +210,12 @@ class EvaluatorWorkerTests(unittest.TestCase):
         old = "4989cc7d8f1ec95ffeef2a4a3a6e1f7504ade818803213815935b711a3d40cc5"
         self.assertEqual(hashlib.sha256(engine._evaluate_wire(self._wires()[0][0])).hexdigest(), old)
 
+    def test_correction_request_is_decided_by_the_worker_as_by_the_retired_exe(self) -> None:
+        vectors = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correction" / "vectors"
+        request, expected = (vectors / "request.bin").read_bytes(), (vectors / "result.expected.bin").read_bytes()
+        self.assertEqual(self._exchange(request), b"\x00" + expected)  # the exe's stdout behind tag 0
+        self.assertEqual(self._exchange(request[:-1]), b"\x01")  # the exe's exit 72: decode refused
+
     def test_payment_frames_keep_the_worker_flat(self) -> None:
         frames = self._frames()
         sent = [frames["c1"], frames["c2"], frames["s1_refused"]]
