@@ -536,11 +536,11 @@ theorem evaluate_after_case_status_update_fixedPoint (input : FinancialInput)
         exact absurd hUpdatedWellFormed' hNotWellFormed
 
 /-- Returns the same value as `value`, paired with the equation that produced it. -/
-private def optionWithProof {α : Type} : (value : Option α) → Option { item : α // value = some item }
+def optionWithProof {α : Type} : (value : Option α) → Option { item : α // value = some item }
   | none => none
   | some item => some ⟨item, rfl⟩
 
-private def evaluateWithProof (input : FinancialInput) :
+def evaluateWithProof (input : FinancialInput) :
     Option { result : FinancialResult // evaluate input = some result } :=
   optionWithProof (evaluate input)
 

@@ -218,4 +218,42 @@ theorem applyOffsetAuthorization_shortfall_le (request : CorrectionTransitionReq
     applyOffsetAuthorization_adds_lawful request mutation hMutation
   exact ⟨before, hb, by omega⟩
 
+private theorem bind_ite' {ε α β : Type} (c : Prop) [Decidable c] (a b : Except ε α) (k : α → Except ε β) :
+    (ite c a b >>= k) = ite c (a >>= k) (b >>= k) := by split <;> rfl
+private theorem bind_dite' {ε α β : Type} (c : Prop) [Decidable c] (a : c → Except ε α)
+    (b : ¬c → Except ε α) (k : α → Except ε β) :
+    (dite c a b >>= k) = dite c (fun h => a h >>= k) (fun h => b h >>= k) := by split <;> rfl
+private theorem throw_bind' {ε α β : Type} (e : ε) (k : α → Except ε β) :
+    ((throw e : Except ε α) >>= k) = throw e := rfl
+private theorem map_throw' {ε α β : Type} (e : ε) (f : α → β) :
+    (f <$> (throw e : Except ε α)) = throw e := rfl
+
+/-- Once a request passes the three M4 checks (roster digest, control-pack date, owner clock),
+    the M4 correction preflight returns exactly what the pre-M4 one returned. -/
+theorem preflightCorrectionTransition_agrees_v0 (request : CorrectionTransitionRequest)
+    (hDigest : authorityDigestOf request.currentInput.authority = request.command.currentAuthorityDigest)
+    (hPack : request.currentInput.pack.approvedAt ≤ request.command.decisionAtMs)
+    (hNow : request.command.decisionAtMs ≤ request.command.ownerNowMs) :
+    (preflightCorrectionTransition request).toOption.isSome =
+        (preflightCorrectionTransitionV0 request).toOption.isSome ∧
+      (match preflightCorrectionTransition request, preflightCorrectionTransitionV0 request with
+        | .error a, .error b => a = b
+        | .ok _, .ok _ => True
+        | _, _ => False) := by
+  have h1 := Nat.not_lt.2 hPack
+  have h2 := Nat.not_lt.2 hNow
+  have hEq : preflightCorrectionTransition request = preflightCorrectionTransitionV0 request := by
+    unfold preflightCorrectionTransition preflightOffsetDecision preflightCorrectionTransitionV0
+    cases hal : request.command.actionLookup <;>
+      simp [bind_ite', throw_bind', pure_bind, hDigest, h1, h2, hal]
+    all_goals (try rfl)
+    cases optionWithProof (derivedCorrectionPaid request.currentInput.payments
+        request.currentInput.actions request.command.paymentLinks) <;>
+      cases findClaim request.currentInput.claims request.command.claimId <;>
+      cases evaluateWithProof request.currentInput <;>
+      (try simp [bind_ite', bind_dite', throw_bind', map_throw', pure_bind]) <;> rfl
+  rw [hEq]
+  exact ⟨rfl, by cases preflightCorrectionTransitionV0 request <;> simp⟩
+
+
 end BlindLedger.Financial.CorrectionTransition

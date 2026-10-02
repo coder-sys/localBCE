@@ -431,3 +431,5 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_shared
 /-- info: 'BlindLedger.Financial.CorrectionTransition.buildAuthorized_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAuthorized_spec
+/-- info: 'BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_agrees_v0' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.preflightCorrectionTransition_agrees_v0
