@@ -824,13 +824,163 @@ theorem logInclusion_complete {H : Bytes → Bytes} (es : List Bytes) (i : Nat) 
   simp only [verifyInclusion, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
   exact ⟨hi, by simpa [logRoot, hne, logFuel] using hp⟩
 
+/-! ### consistency soundness: an accepted proof is tree surgery that keeps the old leaves as a prefix -/
+
+theorem LT.node_inv {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) {L : List Bytes} (hg : breakIn H L = none)
+    (u : LT) (hu : ∀ x ∈ u.inputs H, x ∈ L) (x y : Bytes) (hxy : x.length = 64 ∨ y.length = 64)
+    (hx : (1 :: (x ++ y)) ∈ L) (hr : u.root H = H (1 :: (x ++ y))) :
+    ∃ a b : LT, u = .node a b ∧ a.root H = x ∧ b.root H = y := by
+  cases u with
+  | leaf e =>
+    have := inj_of_none hg (x := 0 :: e) (y := 1 :: (x ++ y)) (hu _ (by simp [LT.inputs])) hx hr
+    simp at this
+  | node a b =>
+    have := inj_of_none hg (x := 1 :: (a.root H ++ b.root H)) (y := 1 :: (x ++ y))
+      (hu _ (by simp [LT.inputs])) hx hr
+    have hcons := (List.cons.inj this).2
+    have hs : a.root H = x ∧ b.root H = y := by
+      rcases hxy with h64 | h64
+      · exact List.append_inj hcons (by rw [LT.root_len hl, h64])
+      · exact List.append_inj' hcons (by rw [LT.root_len hl, h64])
+    exact ⟨a, b, rfl, hs.1, hs.2⟩
+
+theorem consFold_tree {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) {L : List Bytes} (hg : breakIn H L = none) :
+    ∀ (cs : List Bytes) (fn sn : Nat) (fr sr r1 r2 : Bytes) (tx ty : LT),
+      (∀ c ∈ cs, c.length = 64) →
+      consFold H fn sn fr sr cs = some (r1, r2, 0) →
+      (∀ x ∈ consInputs.go H fn sn fr sr cs, x ∈ L) →
+      tx.root H = r1 → ty.root H = r2 → (∀ x ∈ tx.inputs H, x ∈ L) → (∀ x ∈ ty.inputs H, x ∈ L) →
+      ∃ ux uy : LT, ux.root H = fr ∧ uy.root H = sr ∧ (∀ x ∈ ux.inputs H, x ∈ L) ∧ (∀ x ∈ uy.inputs H, x ∈ L) ∧
+        ∃ P S, tx.leaves = P ++ ux.leaves ∧ ty.leaves = P ++ uy.leaves ++ S := by
+  intro cs
+  induction cs with
+  | nil =>
+    intro fn sn fr sr r1 r2 tx ty _ hf _ hrx hry hix hiy
+    simp only [consFold, Option.some.injEq, Prod.mk.injEq] at hf
+    obtain ⟨h1, h2, _⟩ := hf
+    exact ⟨tx, ty, by rw [hrx, h1], by rw [hry, h2], hix, hiy, [], [], by simp, by simp⟩
+  | cons c cs ih =>
+    intro fn sn fr sr r1 r2 tx ty hc hf hin hrx hry hix hiy
+    have hc64 : c.length = 64 := hc c (List.mem_cons_self ..)
+    have hcs : ∀ c ∈ cs, c.length = 64 := fun x hx => hc x (List.mem_cons_of_mem _ hx)
+    rw [consFold] at hf
+    by_cases hs0 : (sn == 0) = true
+    · rw [if_pos hs0] at hf; cases hf
+    rw [if_neg hs0] at hf
+    rw [consInputs.go] at hin
+    by_cases hc1 : (fn % 2 == 1 || fn == sn) = true
+    · rw [if_pos hc1] at hf
+      rw [if_pos hc1] at hin
+      rcases hab : (if fn % 2 == 1 then (fn, sn) else shiftWhileEven logFuel fn sn) with ⟨a, b⟩
+      simp only [hab] at hf hin
+      have m1 : (1 :: (c ++ fr)) ∈ L := hin _ (List.mem_cons_self ..)
+      have m2 : (1 :: (c ++ sr)) ∈ L := hin _ (List.mem_cons_of_mem _ (List.mem_cons_self ..))
+      obtain ⟨ux', uy', hux', huy', hiux', hiuy', P, S, hP, hS⟩ :=
+        ih (a / 2) (b / 2) (nodeHash H [] c fr) (nodeHash H [] c sr) r1 r2 tx ty hcs hf
+          (fun x hx => hin x (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ hx))) hrx hry hix hiy
+      obtain ⟨l1, r1', e1, hl1, hr1⟩ := LT.node_inv hl hg ux' hiux' c fr (Or.inl hc64) m1 hux'
+      obtain ⟨l2, r2', e2, hl2, hr2⟩ := LT.node_inv hl hg uy' hiuy' c sr (Or.inl hc64) m2 huy'
+      subst e1 e2
+      have hlr : l1 = l2 := LT.inj hl hg l1 l2 (fun x hx => hiux' x (by simp [LT.inputs, hx]))
+        (fun x hx => hiuy' x (by simp [LT.inputs, hx])) (hl1.trans hl2.symm)
+      subst hlr
+      exact ⟨r1', r2', hr1, hr2, fun x hx => hiux' x (by simp [LT.inputs, hx]),
+        fun x hx => hiuy' x (by simp [LT.inputs, hx]), P ++ l1.leaves, S,
+        by rw [hP]; simp [LT.leaves], by rw [hS]; simp [LT.leaves]⟩
+    · rw [if_neg hc1] at hf
+      rw [if_neg hc1] at hin
+      have m : (1 :: (sr ++ c)) ∈ L := hin _ (List.mem_cons_self ..)
+      obtain ⟨ux, uy', hux, huy', hiux, hiuy', P, S, hP, hS⟩ :=
+        ih (fn / 2) (sn / 2) fr (nodeHash H [] sr c) r1 r2 tx ty hcs hf
+          (fun x hx => hin x (List.mem_cons_of_mem _ hx)) hrx hry hix hiy
+      obtain ⟨a, b, e, ha, hb⟩ := LT.node_inv hl hg uy' hiuy' sr c (Or.inr hc64) m huy'
+      subst e
+      exact ⟨ux, a, hux, ha, hiux, fun x hx => hiuy' x (by simp [LT.inputs, hx]), P, b.leaves ++ S, hP,
+        by rw [hS]; simp [LT.leaves]⟩
+
+theorem cons_prefix {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) {L : List Bytes} (hg : breakIn H L = none)
+    (xs ys : List Bytes) (hx0 : xs ≠ []) (hy0 : ys ≠ []) (hnx : xs.length ≤ maxSize) (hny : ys.length ≤ maxSize)
+    (hsx : ∀ x ∈ logInputs H xs, x ∈ L) (hsy : ∀ x ∈ logInputs H ys, x ∈ L)
+    (p0 : Bytes) (ps : List Bytes) (fn sn : Nat) (hps : ∀ c ∈ ps, c.length = 64)
+    (hf : consFold H fn sn p0 p0 ps = some (logRoot H xs, logRoot H ys, 0))
+    (hin : ∀ x ∈ consInputs.go H fn sn p0 p0 ps, x ∈ L) : xs <+: ys := by
+  obtain ⟨tx, hrx, hlx, hix⟩ := log_tree xs hx0 hnx hsx
+  obtain ⟨ty, hry, hly, hiy⟩ := log_tree ys hy0 hny hsy
+  obtain ⟨ux, uy, hux, huy, hiux, hiuy, P, S, hP, hS⟩ :=
+    consFold_tree hl hg ps fn sn p0 p0 _ _ tx ty hps hf hin hrx hry hix hiy
+  have hu : ux = uy := LT.inj hl hg ux uy hiux hiuy (hux.trans huy.symm)
+  subst hu
+  exact ⟨S, by rw [← hlx, ← hly, hP, hS]⟩
+
 /-- Consistency soundness: an accepted proof means the old log is a prefix of the new (append-only). -/
 theorem logConsistency_sound {H : Bytes → Bytes} (hl : HashLen H) (xs ys p : List Bytes)
     (hn : ys.length ≤ maxSize)
     (h : verifyConsistency H xs.length ys.length (logRoot H xs) (logRoot H ys) p = true) :
     xs <+: ys ∨
       breakIn H (consInputs H xs.length ys.length (logRoot H xs) p ++ logInputs H xs ++ logInputs H ys) ≠ none := by
-  sorry
+  by_cases hg : breakIn H (consInputs H xs.length ys.length (logRoot H xs) p ++ logInputs H xs ++ logInputs H ys) = none
+  case neg => exact Or.inr hg
+  left
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  by_cases hx0 : xs = []
+  · subst hx0; exact List.nil_prefix
+  have hxl : 0 < xs.length := List.length_pos_iff.mpr hx0
+  have hsx : ∀ x ∈ logInputs H xs, x ∈ consInputs H xs.length ys.length (logRoot H xs) p ++ logInputs H xs ++ logInputs H ys :=
+    fun x hx => List.mem_append_left _ (List.mem_append_right _ hx)
+  have hsy : ∀ x ∈ logInputs H ys, x ∈ consInputs H xs.length ys.length (logRoot H xs) p ++ logInputs H xs ++ logInputs H ys :=
+    fun x hx => List.mem_append_right _ hx
+  have hci : ∀ x ∈ consInputs H xs.length ys.length (logRoot H xs) p, x ∈ consInputs H xs.length ys.length (logRoot H xs) p ++ logInputs H xs ++ logInputs H ys :=
+    fun x hx => List.mem_append_left _ (List.mem_append_left _ hx)
+  generalize consInputs H xs.length ys.length (logRoot H xs) p ++ logInputs H xs ++ logInputs H ys = L at hg hsx hsy hci
+  unfold verifyConsistency at h
+  have hm0 : ¬ (xs.length == 0) = true := by simpa using Nat.pos_iff_ne_zero.mp hxl
+  rw [if_neg hm0] at h
+  by_cases hmn : (xs.length == ys.length) = true
+  · rw [if_pos hmn] at h
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    have hlen : xs.length = ys.length := by simpa using hmn
+    have hy0 : ys ≠ [] := List.length_pos_iff.mp (by omega)
+    obtain ⟨tx, hrx, hlx, hix⟩ := log_tree xs hx0 (by omega) hsx
+    obtain ⟨ty, hry, hly, hiy⟩ := log_tree ys hy0 hn hsy
+    have := LT.inj hl64 hg tx ty hix hiy (hrx.trans (h.2.trans hry.symm))
+    have hxy : xs = ys := by rw [← hlx, ← hly, this]
+    rw [hxy]; exact List.prefix_refl _
+  rw [if_neg hmn] at h
+  by_cases hbad : (ys.length < xs.length || p.isEmpty || p.any (·.length != 64)) = true
+  · rw [if_pos hbad] at h; cases h
+  rw [if_neg hbad] at h
+  simp only [Bool.or_eq_true, decide_eq_true_eq, not_or] at hbad
+  have hlt : xs.length ≤ ys.length := by omega
+  have hlen : xs.length ≠ ys.length := by simpa using hmn
+  have hy0 : ys ≠ [] := List.length_pos_iff.mp (by omega)
+  have hp64 : ∀ c ∈ p, c.length = 64 := fun c hc =>
+    Classical.byContradiction fun hne => hbad.2 (List.any_eq_true.mpr ⟨c, hc, by simpa using hne⟩)
+  unfold consInputs at hci
+  dsimp only at h hci
+  generalize hpath : (if xs.length &&& (xs.length - 1) == 0 then logRoot H xs :: p else p) = path at h hci
+  rcases path with _ | ⟨p0, ps⟩
+  · exact absurd h (by simp)
+  have hps : ∀ c ∈ ps, c.length = 64 := by
+    by_cases hpow : (xs.length &&& (xs.length - 1) == 0) = true
+    · rw [if_pos hpow] at hpath
+      intro c hc
+      apply hp64
+      rw [(List.cons.inj hpath).2]
+      exact hc
+    · rw [if_neg hpow] at hpath
+      intro c hc
+      apply hp64
+      rw [hpath]
+      exact List.mem_cons_of_mem _ hc
+  rcases hsh : shiftWhileOdd logFuel (xs.length - 1) (ys.length - 1) with ⟨fn, sn⟩
+  simp only [hsh] at h hci
+  rcases hcf : consFold H fn sn p0 p0 ps with _ | ⟨fr, sr, s⟩
+  · rw [hcf] at h; exact absurd h (by simp)
+  rw [hcf] at h
+  simp only [Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨⟨h1, h2⟩, h3⟩ := h
+  rw [h1, h2, h3] at hcf
+  exact cons_prefix hl64 hg xs ys hx0 hy0 (by omega) hn hsx hsy p0 ps fn sn hps hcf hci
 
 theorem logConsistency_complete {H : Bytes → Bytes} (xs zs : List Bytes) (hn : (xs ++ zs).length ≤ maxSize) :
     ∃ p, verifyConsistency H xs.length (xs ++ zs).length (logRoot H xs) (logRoot H (xs ++ zs)) p = true := by
@@ -2374,35 +2524,10 @@ theorem decideBatch_slice (c : Rules.Ctx) (E : List Entry) (b : List Rules.Line)
     batchOutcome (v2Ctx c (sliceOf E (querySet b))) b = batchOutcome (v2Ctx c E) b :=
   decideBatch_slice_aux c E b
 
-/-- An accepted hydration is exactly the slice, with its true log indices. -/
-theorem hydrate_slice {H : Bytes → Bytes} (hl : HashLen H) (E : List Entry) (b : List Rules.Line)
-    (h : Hydration) (hw : EntriesWf E) (hn : E.length ≤ maxSize) (hb : ∀ l ∈ b, (rowBytes l).isSome)
-    (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true) :
-    h.rows = (indexed 0 E).filter (fun r => (Rules.keys r.2.line).any (querySet b).contains) ∨
-      breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
-  sorry
-
-/-- THE end-to-end statement: the decision made from proofs equals the decision from the full state. -/
-theorem decide_from_proof {H : Bytes → Bytes} (hl : HashLen H) (c : Rules.Ctx) (E : List Entry)
-    (b : List Rules.Line) (h : Hydration) (hw : EntriesWf E) (hn : E.length ≤ maxSize)
-    (hb : ∀ l ∈ b, (rowBytes l).isSome) (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true) :
-    batchOutcome (v2Ctx c (h.rows.map (·.2))) b = batchOutcome (v2Ctx c E) b ∨
-      breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
-  sorry
-
 /-- The decided additions keep every identity unique (so no runtime check is needed for it). -/
 theorem ids_fresh (c : Rules.Ctx) (E : List Entry) (b : List Rules.Line) (hw : EntriesWf E)
     (hb : ∀ l ∈ b, (rowBytes l).isSome) : EntriesWf (E ++ adds (v2Ctx c E) b) := by
   exact ids_fresh_aux (v2Ctx c E) E b (releasedSet_v2 c E) (unresolvedSet_v2 c E) hw hb
-
-/-- The batch's map update is the canonical index of the appended log. -/
-theorem applyBatch_correct {H : Bytes → Bytes} (hl : HashLen H) (E new : List Entry) (b : List Rules.Line)
-    (h : Hydration) (t : PTree) (hw : EntriesWf (E ++ new)) (hn : (E ++ new).length ≤ maxSize)
-    (hq : ∀ e ∈ new, (Rules.keys e.line).all (querySet b).contains)
-    (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true)
-    (ht : applyBatch H h E.length new = some t) :
-    t.hash H = mapRoot H (gateMap H (E ++ new)) ∨ breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
-  sorry
 
 theorem logRoot_len {H : Bytes → Bytes} (hl : HashLen H) (zs : List Bytes) (hn : zs.length ≤ maxSize) :
     (logRoot H zs).length = 64 := by
@@ -2914,5 +3039,862 @@ theorem insertAll_correct {H : Bytes → Bytes} (hl : HashLen H) (base kvs : Lis
     pr_of_hash hl hg p 512 0 base (by omega) hw (fun a _ b _ i hi => absurd hi (Nat.not_lt_zero i))
       (fun x hx => List.mem_append_left _ hx) (fun x hx => List.mem_append_right _ hx) hp
   exact (pr_insertAll kvs p p' base hw hk hp' hi).hash_eq
+
+/-! ### §C helpers: the byte encodings are injective -/
+
+theorem natBE_succ (w n : Nat) : natBE (w + 1) n = UInt8.ofNat (n / 256 ^ w % 256) :: natBE w n := by
+  simp [natBE, List.range_succ]
+
+theorem natBE_mod (w : Nat) : ∀ n m : Nat, natBE w n = natBE w m → n % 256 ^ w = m % 256 ^ w := by
+  induction w with
+  | zero => intro n m _; rw [Nat.pow_zero, Nat.mod_one, Nat.mod_one]
+  | succ w ih =>
+    intro n m h
+    rw [natBE_succ, natBE_succ, List.cons.injEq] at h
+    have h2 : n / 256 ^ w % 256 = m / 256 ^ w % 256 := by
+      have := congrArg UInt8.toNat h.1
+      simpa using this
+    rw [Nat.pow_succ, Nat.mod_mul, Nat.mod_mul, ih n m h.2, h2]
+
+theorem natBE_inj {w n m : Nat} (hn : n < 256 ^ w) (hm : m < 256 ^ w) (h : natBE w n = natBE w m) : n = m := by
+  have := natBE_mod w n m h
+  rwa [Nat.mod_eq_of_lt hn, Nat.mod_eq_of_lt hm] at this
+
+theorem be_some {w n : Nat} {b : Bytes} (h : Rules.be w n = some b) : n < 256 ^ w ∧ b = natBE w n := by
+  unfold Rules.be at h
+  split at h
+  · rename_i hlt
+    cases h
+    exact ⟨hlt, rfl⟩
+  · cases h
+
+theorem be_len {w n : Nat} {b : Bytes} (h : Rules.be w n = some b) : b.length = w := by
+  rw [(be_some h).2]; exact natBE_length w n
+
+theorem flat_inj : ∀ (ws fs gs : List Nat) (ps qs : List Bytes),
+    (ws.zip fs).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) = some ps →
+    (ws.zip gs).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) = some qs →
+    ps.flatten = qs.flatten → ws.length = fs.length → ws.length = gs.length → fs = gs
+  | [], [], [], _, _, _, _, _, _, _ => rfl
+  | [], _ :: _, _, _, _, _, _, _, h, _ => by simp at h
+  | [], [], _ :: _, _, _, _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, _, _, _, h, _ => by simp at h
+  | _ :: _, _ :: _, [], _, _, _, _, _, _, h => by simp at h
+  | w :: ws, f :: fs, g :: gs, ps, qs, hp, hq, hf, h1, h2 => by
+    simp only [List.zip_cons_cons, List.mapM_cons] at hp hq
+    rcases hb : Rules.be w f with _ | b
+    · simp [hb] at hp
+    rcases hc : Rules.be w g with _ | c
+    · simp [hc] at hq
+    rcases hr : (ws.zip fs).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) with _ | ys
+    · simp [hb, hr] at hp
+    rcases hs : (ws.zip gs).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) with _ | zs
+    · simp [hc, hs] at hq
+    simp [hb, hr] at hp
+    simp [hc, hs] at hq
+    subst hp hq
+    simp only [List.flatten_cons] at hf
+    obtain ⟨e1, e2⟩ := List.append_inj hf (by rw [be_len hb, be_len hc])
+    have hfg : f = g :=
+      natBE_inj (be_some hb).1 (be_some hc).1 (by rw [← (be_some hb).2, ← (be_some hc).2]; exact e1)
+    have := flat_inj ws fs gs ys zs hr hs e2 (by simpa using h1) (by simpa using h2)
+    rw [hfg, this]
+
+theorem keyBytes_some {a : Nat} {fs : List Nat} {x : Bytes} (h : keyBytes (a :: fs) = some x) :
+    ∃ ws parts, keyWidths a = some ws ∧ ws.length = fs.length ∧
+      (ws.zip fs).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) = some parts ∧ x = a.toUInt8 :: parts.flatten := by
+  unfold keyBytes at h
+  rcases hw : keyWidths a with _ | ws
+  · simp [hw] at h
+  by_cases hl : ws.length = fs.length
+  · rcases hp : (ws.zip fs).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) with _ | parts
+    · simp [guard, hw, hl, hp] at h
+    · simp [guard, hw, hl, hp] at h
+      exact ⟨ws, parts, rfl, hl, hp, by first | exact h.symm | exact (Option.some.inj h).symm | simpa using h.symm⟩
+  · simp [guard, hw, hl] at h
+    first | (change (none : Option Bytes) = some x at h; cases h) | simp [failure] at h
+
+theorem keyBytes_inj {k k' : Rules.Key} {x : Bytes} (h : keyBytes k = some x) (h' : keyBytes k' = some x) :
+    k = k' := by
+  rcases k with _ | ⟨a, fs⟩
+  · simp [keyBytes] at h
+  rcases k' with _ | ⟨a', gs⟩
+  · simp [keyBytes] at h'
+  obtain ⟨ws, ps, hw, hl, hp, hx⟩ := keyBytes_some h
+  obtain ⟨ws', qs, hw', hl', hq, hx'⟩ := keyBytes_some h'
+  have hxx := hx.symm.trans hx'
+  rw [List.cons.injEq] at hxx
+  have ha : a = a' := by
+    have hk : ∀ c ws, keyWidths c = some ws → c < 5 := by
+      intro c ws h
+      rcases c with _ | _ | _ | _ | _ | c
+      all_goals first | omega | simp [keyWidths] at h
+    have h1 := hk a ws hw
+    have h2 := hk a' ws' hw'
+    have := congrArg UInt8.toNat hxx.1
+    simp only [UInt8.toNat_ofNat'] at this
+    omega
+  subst ha
+  have hws : ws = ws' := Option.some.inj (hw.symm.trans hw')
+  subst hws
+  have := flat_inj ws fs gs ps qs hp hq hxx.2 hl hl'
+  rw [this]
+
+theorem flow_tag_inj {a b : Rules.Flow} (h : a.tag = b.tag) : a = b := by
+  cases a <;> cases b <;> simp_all [Rules.Flow.tag]
+
+theorem rowBytes_inj {l l' : Rules.Line} {x : Bytes} (h : rowBytes l = some x) (h' : rowBytes l' = some x) :
+    l = l' := by
+  unfold rowBytes at h h'
+  rcases hp : (Rules.Line.fields l).mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) with _ | ps
+  · simp [hp] at h
+  rcases hq : (Rules.Line.fields l').mapM (fun (p : Nat × Nat) => Rules.be p.1 p.2) with _ | qs
+  · simp [hq] at h'
+  simp [hp] at h
+  simp [hq] at h'
+  have hf := flat_inj [Rules.idWidth, Rules.payWidth, 1, Rules.idWidth, Rules.idWidth, Rules.idWidth, 4,
+      Rules.idWidth, 4, 8] [l.id, l.pay, l.flow.tag, l.member, l.payee, l.rendering, l.date, l.proc, l.units, l.cents]
+    [l'.id, l'.pay, l'.flow.tag, l'.member, l'.payee, l'.rendering, l'.date, l'.proc, l'.units, l'.cents] ps qs hp hq
+    (h.trans h'.symm) rfl rfl
+  simp only [List.cons.injEq, and_true] at hf
+  obtain ⟨e1, e2, e3, e4, e5, e6, e7, e8, e9, e10⟩ := hf
+  have hfl := flow_tag_inj e3
+  cases l; cases l'
+  subst e1 e2 hfl e4 e5 e6 e7 e8 e9 e10
+  rfl
+
+theorem entryBytes_inj {e e' : Entry} {x : Bytes} (h : entryBytes e = some x) (h' : entryBytes e' = some x)
+    (hs : (e.set = 1 ∨ e.set = 2)) (hs' : (e'.set = 1 ∨ e'.set = 2)) : e = e' := by
+  unfold entryBytes at h h'
+  rcases hr : rowBytes e.line with _ | r
+  · simp [hr] at h
+  rcases hr' : rowBytes e'.line with _ | r'
+  · simp [hr'] at h'
+  simp [hr] at h
+  simp [hr'] at h'
+  have hx := h.trans h'.symm
+  have hx2 := List.append_cancel_left hx
+  rw [List.cons.injEq] at hx2
+  have hset : e.set = e'.set := by
+    have := congrArg UInt8.toNat hx2.1
+    simp only [UInt8.toNat_ofNat'] at this
+    omega
+  have hline : e.line = e'.line := rowBytes_inj hr (hx2.2 ▸ hr')
+  cases e; cases e'
+  simp_all
+
+theorem stateKey_pre {H : Bytes → Bytes} {k : Rules.Key} {K : Bytes} (e : stateKey H k = some K) :
+    ∃ b, keyBytes k = some b ∧ stateKey id k = some (domainV "STATE-KEY" 2 ++ b) ∧
+      K = H (domainV "STATE-KEY" 2 ++ b) := by
+  unfold stateKey at e
+  rcases hb : keyBytes k with _ | b
+  · simp [hb] at e
+  · rw [hb] at e
+    refine ⟨b, rfl, by simp [stateKey, hb], ?_⟩
+    simpa using e.symm
+
+theorem stateKey_inj {H : Bytes → Bytes} {L : List Bytes} (hg : breakIn H L = none) {k1 k2 : Rules.Key} {K : Bytes}
+    (m1 : ∀ p, stateKey id k1 = some p → p ∈ L) (m2 : ∀ p, stateKey id k2 = some p → p ∈ L)
+    (e1 : stateKey H k1 = some K) (e2 : stateKey H k2 = some K) : k1 = k2 := by
+  obtain ⟨b1, hb1, s1, r1⟩ := stateKey_pre e1
+  obtain ⟨b2, hb2, s2, r2⟩ := stateKey_pre e2
+  have h := inj_of_none hg (m1 _ s1) (m2 _ s2) (r1.symm.trans r2)
+  have hbb : b1 = b2 := List.append_cancel_left h
+  exact keyBytes_inj hb1 (by rw [hb2, hbb])
+
+theorem nodup_eraseDups {α : Type} [BEq α] [LawfulBEq α] : ∀ (n : Nat) (l : List α), l.length ≤ n → l.eraseDups.Nodup
+  | 0, l, h => by
+    have : l = [] := List.length_eq_zero_iff.mp (Nat.le_zero.mp h)
+    subst this
+    simp
+  | n + 1, [], _ => by simp
+  | n + 1, a :: as, h => by
+    rw [List.eraseDups_cons, List.nodup_cons]
+    have hlen : (as.filter fun b => !b == a).length ≤ n :=
+      Nat.le_trans (List.length_filter_le _ as) (by simpa using h)
+    refine ⟨?_, nodup_eraseDups n _ hlen⟩
+    intro hm
+    rw [List.mem_eraseDups, List.mem_filter] at hm
+    simp at hm
+
+theorem nodup_fm {β : Type} (sk : Rules.Key → Option Bytes) (g : Rules.Key → β) :
+    ∀ ks : List Rules.Key, ks.Nodup →
+      (∀ k ∈ ks, ∀ k' ∈ ks, ∀ K, sk k = some K → sk k' = some K → k = k') →
+      ((ks.filterMap fun k => (sk k).map fun K => (K, g k)).map (·.1)).Nodup
+  | [], _, _ => by simp
+  | k :: ks, hn, hi => by
+    have hn' := List.nodup_cons.mp hn
+    have ih := nodup_fm sk g ks hn'.2
+      (fun a ha b hb K => hi a (List.mem_cons_of_mem _ ha) b (List.mem_cons_of_mem _ hb) K)
+    rcases hs : sk k with _ | K
+    · simpa [hs] using ih
+    · simp only [List.filterMap_cons, hs, Option.map_some, List.map_cons]
+      rw [List.nodup_cons]
+      refine ⟨?_, ih⟩
+      intro hm
+      obtain ⟨⟨K', v⟩, hm', e⟩ := List.mem_map.mp hm
+      obtain ⟨k', hk', hf⟩ := List.mem_filterMap.mp hm'
+      rcases hs' : sk k' with _ | K''
+      · rw [hs'] at hf; simp at hf
+      · rw [hs'] at hf
+        simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hf
+        have e' : K' = K := e
+        have := hi k (List.mem_cons_self ..) k' (List.mem_cons_of_mem _ hk') K hs
+          (by rw [hs', hf.1, e'])
+        exact hn'.1 (this ▸ hk')
+
+theorem mem_gateMap {H : Bytes → Bytes} {E : List Entry} {K v : Bytes} :
+    (K, v) ∈ gateMap H E ↔ ∃ k ∈ E.flatMap (fun e => Rules.keys e.line), stateKey H k = some K ∧
+      v = bucketDigest H (bucketItems H ((indexed 0 E).filter (hasKey k))) := by
+  unfold gateMap
+  rw [List.mem_filterMap]
+  constructor
+  · rintro ⟨k, hk, hs⟩
+    rw [List.mem_eraseDups] at hk
+    rcases hsk : stateKey H k with _ | K'
+    · rw [hsk] at hs; simp at hs
+    · rw [hsk] at hs
+      simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
+      exact ⟨k, hk, by rw [hsk, hs.1], hs.2.symm⟩
+  · rintro ⟨k, hk, hs, hv⟩
+    exact ⟨k, List.mem_eraseDups.mpr hk, by rw [hs, hv]; rfl⟩
+
+theorem gateMap_wf {H : Bytes → Bytes} (hl : HashLen H) (E : List Entry)
+    (hinj : ∀ k1 ∈ E.flatMap (fun e => Rules.keys e.line), ∀ k2 ∈ E.flatMap (fun e => Rules.keys e.line), ∀ K,
+      stateKey H k1 = some K → stateKey H k2 = some K → k1 = k2) : MapWf (gateMap H E) := by
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  refine ⟨?_, ?_⟩
+  · unfold gateMap
+    exact nodup_fm (stateKey H) (fun k => bucketDigest H (bucketItems H ((indexed 0 E).filter (hasKey k))))
+      _ (nodup_eraseDups _ _ (Nat.le_refl _))
+      (fun a ha b hb K => hinj a (List.mem_eraseDups.mp ha) b (List.mem_eraseDups.mp hb) K)
+  · intro kv hkv
+    obtain ⟨K, v⟩ := kv
+    obtain ⟨k, _, hs, hv⟩ := mem_gateMap.mp hkv
+    obtain ⟨b, _, _, hK⟩ := stateKey_pre hs
+    refine ⟨?_, ?_⟩
+    · show K.length = 64
+      rw [hK]; exact hl64 _
+    · show v.length = 64
+      rw [hv]; exact hl64 _
+
+theorem flatItems_inj : ∀ (A B : List (Nat × Bytes)), (∀ a ∈ A, a.1 < 256 ^ 8 ∧ a.2.length = 64) →
+    (∀ b ∈ B, b.1 < 256 ^ 8 ∧ b.2.length = 64) →
+    A.flatMap (fun p : Nat × Bytes => natBE 8 p.1 ++ p.2) = B.flatMap (fun p : Nat × Bytes => natBE 8 p.1 ++ p.2) →
+    A = B
+  | [], [], _, _, _ => rfl
+  | [], b :: B, _, _, h => by
+    exfalso
+    have := congrArg List.length h
+    simp only [List.flatMap_nil, List.flatMap_cons, List.length_append, natBE_length, List.length_nil] at this
+    omega
+  | a :: A, [], _, _, h => by
+    exfalso
+    have := congrArg List.length h
+    simp only [List.flatMap_nil, List.flatMap_cons, List.length_append, natBE_length, List.length_nil] at this
+    omega
+  | a :: A, b :: B, hA, hB, h => by
+    simp only [List.flatMap_cons, List.append_assoc] at h
+    have ha := hA a (List.mem_cons_self ..)
+    have hb := hB b (List.mem_cons_self ..)
+    obtain ⟨e1, e2⟩ := List.append_inj h (by rw [natBE_length, natBE_length])
+    obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [ha.2, hb.2])
+    have hi : a.1 = b.1 := natBE_inj ha.1 hb.1 e1
+    have ih := flatItems_inj A B (fun x hx => hA x (List.mem_cons_of_mem _ hx))
+      (fun x hx => hB x (List.mem_cons_of_mem _ hx)) e4
+    rw [Prod.ext hi e3, ih]
+
+theorem bucket_aux {H : Bytes → Bytes} {L : List Bytes} (hg : breakIn H L = none) :
+    ∀ (A B : List (Nat × Entry)),
+    (∀ r ∈ A, (r.2.set = 1 ∨ r.2.set = 2) ∧ (entryBytes r.2).isSome = true ∧ leafOf id r.2 ∈ L) →
+    (∀ r ∈ B, (r.2.set = 1 ∨ r.2.set = 2) ∧ (entryBytes r.2).isSome = true ∧ leafOf id r.2 ∈ L) →
+    bucketItems H A = bucketItems H B → A = B
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h => by simp [bucketItems] at h
+  | _ :: _, [], _, _, h => by simp [bucketItems] at h
+  | r :: A, s :: B, hA, hB, h => by
+    simp only [bucketItems, List.map_cons, List.cons.injEq, Prod.mk.injEq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    have hr := hA r (List.mem_cons_self ..)
+    have hs := hB s (List.mem_cons_self ..)
+    have h4 : leafOf id r.2 = leafOf id s.2 := inj_of_none hg hr.2.2 hs.2.2 h2
+    simp only [leafOf, logLeaf, leafHash, id_eq, List.nil_append, List.cons.injEq, true_and] at h4
+    obtain ⟨x, hx⟩ := Option.isSome_iff_exists.mp hr.2.1
+    obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp hs.2.1
+    rw [hx, hy] at h4
+    simp only [Option.getD_some] at h4
+    subst h4
+    have he : r.2 = s.2 := entryBytes_inj hx hy hr.1 hs.1
+    have ih := bucket_aux hg A B (fun q hq => hA q (List.mem_cons_of_mem _ hq))
+      (fun q hq => hB q (List.mem_cons_of_mem _ hq)) (by simpa [bucketItems] using h3)
+    rw [Prod.ext h1 he, ih]
+
+theorem bucket_eq {H : Bytes → Bytes} (hl : HashLen H) {L : List Bytes} (hg : breakIn H L = none)
+    (A B : List (Nat × Entry))
+    (hA : ∀ r ∈ A, r.1 < 256 ^ 8 ∧ (r.2.set = 1 ∨ r.2.set = 2) ∧ (entryBytes r.2).isSome = true ∧
+      leafOf id r.2 ∈ L)
+    (hB : ∀ r ∈ B, r.1 < 256 ^ 8 ∧ (r.2.set = 1 ∨ r.2.set = 2) ∧ (entryBytes r.2).isSome = true ∧
+      leafOf id r.2 ∈ L)
+    (pa : bucketDigest id (bucketItems H A) ∈ L) (pb : bucketDigest id (bucketItems H B) ∈ L)
+    (h : bucketDigest H (bucketItems H A) = bucketDigest H (bucketItems H B)) : A = B := by
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  have h1 : bucketDigest id (bucketItems H A) = bucketDigest id (bucketItems H B) := inj_of_none hg pa pb h
+  unfold bucketDigest at h1
+  simp only [id_eq, List.append_assoc] at h1
+  have h2 := List.append_cancel_left h1
+  obtain ⟨_, h3⟩ := List.append_inj h2 (by rw [natBE_length, natBE_length])
+  have hAi : ∀ a ∈ bucketItems H A, a.1 < 256 ^ 8 ∧ a.2.length = 64 := by
+    intro a ha
+    obtain ⟨r, hr, rfl⟩ := List.mem_map.mp ha
+    exact ⟨(hA r hr).1, hl64 _⟩
+  have hBi : ∀ a ∈ bucketItems H B, a.1 < 256 ^ 8 ∧ a.2.length = 64 := by
+    intro a ha
+    obtain ⟨r, hr, rfl⟩ := List.mem_map.mp ha
+    exact ⟨(hB r hr).1, hl64 _⟩
+  have h4 : bucketItems H A = bucketItems H B := flatItems_inj _ _ hAi hBi h3
+  exact bucket_aux hg A B (fun r hr => ⟨(hA r hr).2.1, (hA r hr).2.2⟩)
+    (fun r hr => ⟨(hB r hr).2.1, (hB r hr).2.2⟩) h4
+
+theorem mem_indexed {α : Type} : ∀ (n : Nat) (l : List α) (r : Nat × α), r ∈ indexed n l →
+    r.2 ∈ l ∧ n ≤ r.1 ∧ r.1 < n + l.length
+  | n, [], r, h => by simp [indexed] at h
+  | n, a :: l, r, h => by
+    simp only [indexed, List.mem_cons] at h
+    rcases h with rfl | h
+    · exact ⟨List.mem_cons_self .., Nat.le_refl _, by rw [List.length_cons]; omega⟩
+    · obtain ⟨h1, h2, h3⟩ := mem_indexed (n + 1) l r h
+      exact ⟨List.mem_cons_of_mem _ h1, by omega, by rw [List.length_cons]; omega⟩
+
+theorem indexed_pairwise {α : Type} : ∀ (n : Nat) (l : List α), (indexed n l).Pairwise (fun a b => a.1 < b.1)
+  | n, [] => List.Pairwise.nil
+  | n, a :: l => by
+    simp only [indexed]
+    refine List.pairwise_cons.mpr ⟨?_, indexed_pairwise (n + 1) l⟩
+    intro b hb
+    exact (mem_indexed (n + 1) l b hb).2.1
+
+
+theorem asc_pairwise : ∀ (a : Nat) (l : List Nat), ascending (a :: l) = true → (a :: l).Pairwise (· < ·)
+  | a, [], _ => by simp
+  | a, b :: l, h => by
+    simp only [ascending, Bool.and_eq_true, decide_eq_true_eq] at h
+    have ih := asc_pairwise b l h.2
+    refine List.pairwise_cons.mpr ⟨?_, ih⟩
+    intro x hx
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact h.1
+    · exact Nat.lt_trans h.1 ((List.pairwise_cons.mp ih).1 x hx)
+
+theorem nodup_of_lt {α : Type} {l : List (Nat × α)} (h : l.Pairwise (fun a b => a.1 < b.1)) : l.Nodup :=
+  h.imp fun {a b} hab e => by subst e; exact Nat.lt_irrefl _ hab
+
+theorem lookup_of_mem : ∀ (kvs : List (Bytes × Bytes)) (k v : Bytes), (kvs.map (·.1)).Nodup →
+    (k, v) ∈ kvs → lookup kvs k = some v
+  | [], _, _, _, h => by simp at h
+  | a :: rest, k, v, hn, h => by
+    rcases List.mem_cons.mp h with rfl | h
+    · simp [lookup]
+    · have hn' : a.1 ∉ rest.map (·.1) ∧ (rest.map (·.1)).Nodup := by simpa using hn
+      by_cases hk : (a.1 == k) = true
+      · exfalso
+        exact hn'.1 (List.mem_map.mpr ⟨(k, v), h, (beq_iff_eq.mp hk).symm⟩)
+      · have ih := lookup_of_mem rest k v hn'.2 h
+        simpa [lookup, List.find?_cons, hk] using ih
+
+theorem indexed_filter_snd (P : Entry → Bool) : ∀ (n : Nat) (l : List Entry),
+    ((indexed n l).filter (fun r => P r.2)).map (·.2) = l.filter P
+  | n, [] => rfl
+  | n, a :: l => by
+    simp only [indexed]
+    by_cases hp : P a = true
+    · rw [List.filter_cons_of_pos (by simpa using hp), List.filter_cons_of_pos hp, List.map_cons,
+        indexed_filter_snd P (n + 1) l]
+    · rw [List.filter_cons_of_neg (by simpa using hp), List.filter_cons_of_neg hp,
+        indexed_filter_snd P (n + 1) l]
+
+theorem mem_hi_tree {H : Bytes → Bytes} {E : List Entry} {Q : List Rules.Key} {h : Hydration} {x : Bytes}
+    (hx : x ∈ h.tree.inputs H) : x ∈ hydrateInputs H E Q h :=
+  List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl hx)))))
+
+theorem mem_hi_map {H : Bytes → Bytes} {E : List Entry} {Q : List Rules.Key} {h : Hydration} {x : Bytes}
+    (hx : x ∈ (mapTree 512 0 (gateMap H E)).inputs H) : x ∈ hydrateInputs H E Q h :=
+  List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr hx)))))
+
+theorem mem_hi_Q {H : Bytes → Bytes} {E : List Entry} {Q : List Rules.Key} {h : Hydration} {x : Bytes}
+    (hx : x ∈ indexInputs H Q h.rows) : x ∈ hydrateInputs H E Q h :=
+  List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr hx)))
+
+theorem mem_hi_E {H : Bytes → Bytes} {E : List Entry} {Q : List Rules.Key} {h : Hydration} {x : Bytes}
+    (hx : x ∈ indexInputs H (E.flatMap fun e => Rules.keys e.line) (indexed 0 E)) : x ∈ hydrateInputs H E Q h :=
+  List.mem_append.mpr (Or.inr hx)
+
+theorem mem_ii_key {H : Bytes → Bytes} {Q : List Rules.Key} {rows : List (Nat × Entry)} {k : Rules.Key} {p : Bytes}
+    (hk : k ∈ Q) (hp : stateKey id k = some p) : p ∈ indexInputs H Q rows :=
+  List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl (List.mem_filterMap.mpr ⟨k, hk, hp⟩))))
+
+theorem mem_ii_leaf {H : Bytes → Bytes} {Q : List Rules.Key} {rows : List (Nat × Entry)} {r : Nat × Entry}
+    (hr : r ∈ rows) : leafOf id r.2 ∈ indexInputs H Q rows :=
+  List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr (List.mem_map.mpr ⟨r, hr, rfl⟩))))
+
+theorem mem_ii_bucket {H : Bytes → Bytes} {Q : List Rules.Key} {rows : List (Nat × Entry)} {k : Rules.Key}
+    (hk : k ∈ Q) : bucketDigest id (bucketItems H (rows.filter (hasKey k))) ∈ indexInputs H Q rows :=
+  List.mem_append.mpr (Or.inr (List.mem_map.mpr ⟨k, hk, rfl⟩))
+
+theorem hi_key_mem {H : Bytes → Bytes} {E : List Entry} {Q : List Rules.Key} {h : Hydration} {k : Rules.Key}
+    (hk : k ∈ E.flatMap (fun e => Rules.keys e.line) ∨ k ∈ Q) :
+    ∀ p, stateKey id k = some p → p ∈ hydrateInputs H E Q h := by
+  intro p hp
+  rcases hk with hk | hk
+  · exact mem_hi_E (mem_ii_key hk hp)
+  · exact mem_hi_Q (mem_ii_key hk hp)
+
+theorem hydrateOk_parts {H : Bytes → Bytes} {root : Bytes} {Q : List Rules.Key} {h : Hydration}
+    (hok : hydrateOk H root Q h = true) :
+    h.tree.hash H = root ∧ ascending (h.rows.map (·.1)) = true ∧
+    (∀ r ∈ h.rows, r.1 ≤ maxSize ∧ (Rules.keys r.2.line).any Q.contains = true ∧ (r.2.set = 1 ∨ r.2.set = 2) ∧
+      (entryBytes r.2).isSome = true) ∧
+    (∀ k ∈ Q, ∃ K, stateKey H k = some K ∧
+      ((h.tree.find K 0 = some none ∧ (h.rows.filter (hasKey k)).isEmpty = true) ∨
+       ∃ v, h.tree.find K 0 = some (some v) ∧ v = bucketDigest H (bucketItems H (h.rows.filter (hasKey k))))) := by
+  unfold hydrateOk at hok
+  simp only [Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at hok
+  obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hok
+  refine ⟨h1, h2, ?_, ?_⟩
+  · intro r hr
+    have := h3 r hr
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true, beq_iff_eq] at this
+    obtain ⟨⟨⟨a, b⟩, c⟩, d⟩ := this
+    exact ⟨a, b, c, d⟩
+  · intro k hk
+    have := h4 k hk
+    rcases hs : stateKey H k with _ | K
+    · simp [hs] at this
+    · rw [hs] at this
+      refine ⟨K, rfl, ?_⟩
+      rcases hf : h.tree.find K 0 with _ | _ | v
+      · simp [hf] at this
+      · simp [hf] at this
+        exact Or.inl ⟨rfl, by
+          rw [List.isEmpty_iff, List.filter_eq_nil_iff]
+          exact fun r hr => by rw [Bool.not_eq_true]; exact this r.1 r.2 hr⟩
+      · simp [hf] at this
+        exact Or.inr ⟨v, rfl, this⟩
+
+/-- The accepted hydration, with no break among its hash inputs, is the true slice. -/
+theorem hydrate_core {H : Bytes → Bytes} (hl : HashLen H) (E : List Entry) (Q : List Rules.Key) (h : Hydration)
+    (hw : EntriesWf E) (hn : E.length ≤ maxSize)
+    (hok : hydrateOk H (mapRoot H (gateMap H E)) Q h = true)
+    (hg : breakIn H (hydrateInputs H E Q h) = none) :
+    MapWf (gateMap H E) ∧
+      h.rows = (indexed 0 E).filter (fun r => (Rules.keys r.2.line).any Q.contains) := by
+  obtain ⟨hroot, hasc, hrows, hQ⟩ := hydrateOk_parts hok
+  have hm8 : maxSize < 256 ^ 8 := by unfold maxSize; decide
+  have hmem : ∀ k, (k ∈ E.flatMap (fun e => Rules.keys e.line) ∨ k ∈ Q) → ∀ p, stateKey id k = some p →
+      p ∈ hydrateInputs H E Q h := fun k hk => hi_key_mem hk
+  have hwG : MapWf (gateMap H E) :=
+    gateMap_wf hl E (fun k1 h1 k2 h2 K e1 e2 => stateKey_inj hg (hmem k1 (Or.inl h1)) (hmem k2 (Or.inl h2)) e1 e2)
+  refine ⟨hwG, ?_⟩
+  have hbk : ∀ k ∈ Q, h.rows.filter (hasKey k) = (indexed 0 E).filter (hasKey k) := by
+    intro k hk
+    obtain ⟨K, hsK, hcase⟩ := hQ k hk
+    have hfind : ∀ r, h.tree.find K 0 = some r → r = lookup (gateMap H E) K := by
+      intro r hr
+      have hq := find_mapTree K 512 0 (gateMap H E) (by omega) hwG
+        (fun kv _ i hi => absurd hi (Nat.not_lt_zero i))
+      rcases map_binding hl h.tree (mapTree 512 0 (gateMap H E)) K r (lookup (gateMap H E) K) hroot hr hq with e | e
+      · exact e
+      · refine absurd (none_mono hg ?_) e
+        intro y hy
+        rcases List.mem_append.mp hy with hy | hy
+        · exact mem_hi_tree hy
+        · exact mem_hi_map hy
+    rcases hcase with ⟨hf0, hemp⟩ | ⟨v, hfv, hv⟩
+    · have hnone := hfind _ hf0
+      have h1 : (indexed 0 E).filter (hasKey k) = [] := by
+        apply List.filter_eq_nil_iff.mpr
+        intro r hr hk'
+        obtain ⟨hrE, _, _⟩ := mem_indexed 0 E r hr
+        have hkr : k ∈ Rules.keys r.2.line := List.contains_iff_mem.mp hk'
+        have hkK : k ∈ E.flatMap (fun e => Rules.keys e.line) := List.mem_flatMap.mpr ⟨r.2, hrE, hkr⟩
+        have hmg := mem_gateMap.mpr ⟨k, hkK, hsK, rfl⟩
+        rw [lookup_of_mem _ _ _ hwG.1 hmg] at hnone
+        cases hnone
+      rw [h1]
+      exact List.isEmpty_iff.mp hemp
+    · have hlk := hfind _ hfv
+      obtain ⟨k', hk'K, hsk', hvv⟩ := mem_gateMap.mp (lookup_some hlk.symm)
+      have hkk : k' = k := stateKey_inj hg (hmem k' (Or.inl hk'K)) (hmem k (Or.inr hk)) hsk' hsK
+      subst hkk
+      refine bucket_eq hl hg _ _ ?_ ?_ (mem_hi_Q (mem_ii_bucket hk)) (mem_hi_E (mem_ii_bucket hk'K))
+        (by rw [← hv, ← hvv])
+      · intro r hr
+        have hr' := (List.mem_filter.mp hr).1
+        have := hrows r hr'
+        exact ⟨Nat.lt_of_le_of_lt this.1 hm8, this.2.2.1, this.2.2.2, mem_hi_Q (mem_ii_leaf hr')⟩
+      · intro r hr
+        have hr' := (List.mem_filter.mp hr).1
+        obtain ⟨hrE, _, hlt⟩ := mem_indexed 0 E r hr'
+        have hr2 := hw.1 r.2 hrE
+        exact ⟨Nat.lt_of_lt_of_le (by omega) (Nat.le_trans hn (Nat.le_of_lt hm8)), hr2.1, hr2.2,
+          mem_hi_E (mem_ii_leaf hr')⟩
+  have hpr : h.rows.Pairwise (fun a b => a.1 < b.1) := by
+    have : (h.rows.map (·.1)).Pairwise (· < ·) := by
+      generalize h.rows.map (·.1) = ml at hasc ⊢
+      cases ml with
+      | nil => exact List.Pairwise.nil
+      | cons a l => exact asc_pairwise a l hasc
+    exact List.pairwise_map.mp this
+  have hpi : ((indexed 0 E).filter (fun r => (Rules.keys r.2.line).any Q.contains)).Pairwise (fun a b => a.1 < b.1) :=
+    (indexed_pairwise 0 E).filter _
+  refine List.Perm.eq_of_pairwise (fun a b _ _ h1 h2 => absurd (Nat.lt_trans h1 h2) (Nat.lt_irrefl _)) hpr hpi ?_
+  rw [List.perm_ext_iff_of_nodup (nodup_of_lt hpr) (nodup_of_lt hpi)]
+  intro r
+  constructor
+  · intro hr
+    obtain ⟨_, hany, _, _⟩ := hrows r hr
+    obtain ⟨k, hkm, hkq⟩ := List.any_eq_true.mp hany
+    have hkQ : k ∈ Q := List.contains_iff_mem.mp hkq
+    have hhk : hasKey k r = true := List.contains_iff_mem.mpr hkm
+    have : r ∈ (indexed 0 E).filter (hasKey k) := by
+      rw [← hbk k hkQ]; exact List.mem_filter.mpr ⟨hr, hhk⟩
+    exact List.mem_filter.mpr ⟨(List.mem_filter.mp this).1, hany⟩
+  · intro hr
+    obtain ⟨hrI, hany⟩ := List.mem_filter.mp hr
+    obtain ⟨k, hkm, hkq⟩ := List.any_eq_true.mp hany
+    have hkQ : k ∈ Q := List.contains_iff_mem.mp hkq
+    have hhk : hasKey k r = true := List.contains_iff_mem.mpr hkm
+    have : r ∈ h.rows.filter (hasKey k) := by
+      rw [hbk k hkQ]; exact List.mem_filter.mpr ⟨hrI, hhk⟩
+    exact (List.mem_filter.mp this).1
+
+theorem hydrate_slice_proof {H : Bytes → Bytes} (hl : HashLen H) (E : List Entry) (b : List Rules.Line)
+    (h : Hydration) (hw : EntriesWf E) (hn : E.length ≤ maxSize)
+    (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true) :
+    h.rows = (indexed 0 E).filter (fun r => (Rules.keys r.2.line).any (querySet b).contains) ∨
+      breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
+  by_cases hg : breakIn H (hydrateInputs H E (querySet b) h) = none
+  case neg => exact Or.inr hg
+  exact Or.inl (hydrate_core hl E _ h hw hn hok hg).2
+
+theorem decide_from_proof_proof {H : Bytes → Bytes} (hl : HashLen H) (c : Rules.Ctx) (E : List Entry)
+    (b : List Rules.Line) (h : Hydration) (hw : EntriesWf E) (hn : E.length ≤ maxSize)
+    (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true) :
+    batchOutcome (v2Ctx c (h.rows.map (·.2))) b = batchOutcome (v2Ctx c E) b ∨
+      breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
+  by_cases hg : breakIn H (hydrateInputs H E (querySet b) h) = none
+  case neg => exact Or.inr hg
+  left
+  have hrows := (hydrate_core hl E _ h hw hn hok hg).2
+  have hs : h.rows.map (·.2) = sliceOf E (querySet b) := by
+    rw [hrows]
+    exact indexed_filter_snd (fun e => (Rules.keys e.line).any (querySet b).contains) 0 E
+  rw [hs]
+  exact decideBatch_slice c E b hw.2
+
+/-! ### §C helpers: the batch's map update is the canonical index of the appended log -/
+
+theorem mapTree_perm : ∀ (f d : Nat) (l1 l2 : List (Bytes × Bytes)), l1.Perm l2 → mapTree f d l1 = mapTree f d l2
+  | f, d, [], l2, hp => by
+    have : l2 = [] := List.perm_nil.mp hp.symm
+    subst this
+    rfl
+  | f, d, [(a, b)], l2, hp => by
+    have : l2 = [(a, b)] := List.perm_singleton.mp hp.symm
+    subst this
+    rfl
+  | 0, d, a :: b :: rest, l2, hp => by
+    have h2 : 2 ≤ l2.length := by
+      have := hp.length_eq
+      simp only [List.length_cons] at this
+      omega
+    match l2, h2 with
+    | x :: y :: r, _ => rfl
+  | f + 1, d, a :: b :: rest, l2, hp => by
+    have h2 : 2 ≤ l2.length := by
+      have := hp.length_eq
+      simp only [List.length_cons] at this
+      omega
+    rw [mapTree_node f d _ (by simp), mapTree_node f d l2 h2]
+    rw [mapTree_perm f (d + 1) _ (l2.filter fun kv => !bitAt kv.1 d) (hp.filter _),
+      mapTree_perm f (d + 1) _ (l2.filter fun kv => bitAt kv.1 d) (hp.filter _)]
+
+theorem mem_upsert {base : List (Bytes × Bytes)} {k v K w : Bytes} :
+    (K, w) ∈ upsert base k v ↔ (K = k ∧ w = v) ∨ ((K, w) ∈ base ∧ K ≠ k) := by
+  unfold upsert
+  simp only [List.mem_append, List.mem_filter, List.mem_singleton, Prod.mk.injEq, bne_iff_ne, ne_eq]
+  exact Or.comm
+
+theorem mem_foldl_upsert : ∀ (kvs : List (Bytes × Bytes)) (base : List (Bytes × Bytes)),
+    (kvs.map (·.1)).Nodup → ∀ K w, (K, w) ∈ kvs.foldl (fun m kv => upsert m kv.1 kv.2) base ↔
+      (K, w) ∈ kvs ∨ ((K, w) ∈ base ∧ K ∉ kvs.map (·.1))
+  | [], base, _, K, w => by simp
+  | kv :: rest, base, hn, K, w => by
+    have hn' : kv.1 ∉ rest.map (·.1) ∧ (rest.map (·.1)).Nodup := by simpa using hn
+    simp only [List.foldl_cons]
+    rw [mem_foldl_upsert rest _ hn'.2, mem_upsert]
+    simp only [List.mem_cons, List.map_cons]
+    constructor
+    · rintro (h | ⟨(⟨h1, h2⟩ | ⟨hb, hne⟩), h3⟩)
+      · exact Or.inl (Or.inr h)
+      · exact Or.inl (Or.inl (Prod.ext h1 h2))
+      · exact Or.inr ⟨hb, fun hh => hh.elim hne h3⟩
+    · rintro ((h | h) | ⟨hb, hh⟩)
+      · have h1 : K = kv.1 := congrArg Prod.fst h
+        have h2 : w = kv.2 := congrArg Prod.snd h
+        exact Or.inr ⟨Or.inl ⟨h1, h2⟩, by rw [h1]; exact hn'.1⟩
+      · exact Or.inl h
+      · exact Or.inr ⟨Or.inr ⟨hb, fun e => hh (Or.inl e)⟩, fun m => hh (Or.inr m)⟩
+
+theorem foldl_upsert_wf : ∀ (kvs base : List (Bytes × Bytes)), MapWf base →
+    (∀ kv ∈ kvs, kv.1.length = 64 ∧ kv.2.length = 64) → MapWf (kvs.foldl (fun m kv => upsert m kv.1 kv.2) base)
+  | [], base, hw, _ => hw
+  | kv :: rest, base, hw, hk => by
+    simp only [List.foldl_cons]
+    have hkv := hk kv (List.mem_cons_self ..)
+    exact foldl_upsert_wf rest _ (upsert_wf hw hkv.1 hkv.2) (fun x hx => hk x (List.mem_cons_of_mem _ hx))
+
+theorem foldlM_insert {H : Bytes → Bytes} (g : Rules.Key → Bytes) : ∀ (ks : List Rules.Key) (t t' : PTree),
+    ks.foldlM (fun (t : PTree) (k : Rules.Key) => do
+      let K ← stateKey H k
+      t.insert K (g k) 0) t = some t' →
+    (∀ k ∈ ks, (stateKey H k).isSome = true) ∧
+    PTree.insertAll (ks.filterMap fun k => (stateKey H k).map fun K => (K, g k)) t = some t'
+  | [], t, t', h => by
+    have h' : (some t : Option PTree) = some t' := h
+    cases h'
+    exact ⟨fun k hk => by simp at hk, rfl⟩
+  | k :: ks, t, t', h => by
+    rw [List.foldlM_cons] at h
+    rcases hs : stateKey H k with _ | K
+    · rw [hs] at h
+      exact absurd h (by simp)
+    · rw [hs] at h
+      rcases hi : t.insert K (g k) 0 with _ | t1
+      · have e1 : (do let K ← some K; PTree.insert K (g k) 0 t : Option PTree) = none := hi
+        rw [e1] at h
+        exact absurd h (by simp)
+      · have e1 : (do let K ← some K; PTree.insert K (g k) 0 t : Option PTree) = some t1 := hi
+        rw [e1] at h
+        obtain ⟨h1, h2⟩ := foldlM_insert g ks t1 t' h
+        refine ⟨fun x hx => ?_, ?_⟩
+        · rcases List.mem_cons.mp hx with rfl | hx
+          · simp [hs]
+          · exact h1 x hx
+        · simp only [List.filterMap_cons, hs, Option.map_some]
+          show List.foldlM _ _ _ = some t'
+          rw [List.foldlM_cons]
+          show (t.insert K (g k) 0).bind _ = _
+          rw [hi]
+          exact h2
+
+theorem indexed_append {α : Type} : ∀ (n : Nat) (l1 l2 : List α),
+    indexed n (l1 ++ l2) = indexed n l1 ++ indexed (n + l1.length) l2
+  | n, [], l2 => by simp [indexed]
+  | n, a :: l1, l2 => by
+    simp only [List.cons_append, indexed, List.length_cons]
+    rw [indexed_append (n + 1) l1 l2]
+    have : n + 1 + l1.length = n + (l1.length + 1) := by omega
+    rw [this]
+
+theorem filter_slice (Q : List Rules.Key) (IE : List (Nat × Entry)) (k : Rules.Key) (hk : k ∈ Q) :
+    (IE.filter (fun r => (Rules.keys r.2.line).any Q.contains)).filter (hasKey k) = IE.filter (hasKey k) := by
+  rw [List.filter_filter]
+  apply List.filter_congr
+  intro r _
+  by_cases hh : hasKey k r = true
+  · have : (Rules.keys r.2.line).any Q.contains = true :=
+      List.any_eq_true.mpr ⟨k, List.contains_iff_mem.mp hh, List.contains_iff_mem.mpr hk⟩
+    simp [this, hh]
+  · have : hasKey k r = false := by simpa using hh
+    simp [this]
+
+theorem nodup_of_map_fst (l : List (Bytes × Bytes)) (h : (l.map (·.1)).Nodup) : l.Nodup :=
+  List.Pairwise.of_map (R := (· ≠ ·)) (S := (· ≠ ·)) (·.1) (fun _ _ hh hab => hh (congrArg _ hab)) h
+
+theorem upsert_perm {H : Bytes → Bytes} (hl : HashLen H) (E new : List Entry) (Q : List Rules.Key)
+    (hq : ∀ k ∈ new.flatMap (fun e => Rules.keys e.line), k ∈ Q)
+    (hinj : ∀ k1 k2 K, (k1 ∈ E.flatMap (fun e => Rules.keys e.line) ∨ k1 ∈ Q) →
+      (k2 ∈ E.flatMap (fun e => Rules.keys e.line) ∨ k2 ∈ Q) →
+      stateKey H k1 = some K → stateKey H k2 = some K → k1 = k2)
+    (hwG : MapWf (gateMap H E)) (ks : List Rules.Key)
+    (hks : ∀ k, k ∈ ks ↔ k ∈ new.flatMap (fun e => Rules.keys e.line)) (hnd : ks.Nodup)
+    (g : Rules.Key → Bytes)
+    (hgk : ∀ k ∈ Q, g k = bucketDigest H (bucketItems H ((indexed 0 (E ++ new)).filter (hasKey k)))) :
+    ((ks.filterMap fun k => (stateKey H k).map fun K => (K, g k)).foldl
+      (fun m kv => upsert m kv.1 kv.2) (gateMap H E)).Perm (gateMap H (E ++ new)) := by
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  have hnk : ∀ k ∈ ks, k ∈ Q := fun k hk => hq k ((hks k).mp hk)
+  have hwG' : MapWf (gateMap H (E ++ new)) := by
+    refine gateMap_wf hl _ (fun k1 h1 k2 h2 K e1 e2 => hinj k1 k2 K ?_ ?_ e1 e2)
+    · rw [List.flatMap_append] at h1
+      rcases List.mem_append.mp h1 with h | h
+      · exact Or.inl h
+      · exact Or.inr (hq _ h)
+    · rw [List.flatMap_append] at h2
+      rcases List.mem_append.mp h2 with h | h
+      · exact Or.inl h
+      · exact Or.inr (hq _ h)
+  have mem_kvs : ∀ K v, (K, v) ∈ (ks.filterMap fun k => (stateKey H k).map fun K => (K, g k)) ↔
+      ∃ k ∈ ks, stateKey H k = some K ∧ v = g k := by
+    intro K v
+    rw [List.mem_filterMap]
+    constructor
+    · rintro ⟨k, hk, hf⟩
+      obtain ⟨K', hK', e⟩ := Option.map_eq_some_iff.mp hf
+      have e' := Prod.mk.inj e
+      exact ⟨k, hk, by rw [hK', e'.1], e'.2.symm⟩
+    · rintro ⟨k, hk, hs, hv⟩
+      exact ⟨k, hk, by simp [hs, hv]⟩
+  have mem_keys : ∀ K, K ∈ (ks.filterMap fun k => (stateKey H k).map fun K => (K, g k)).map (·.1) ↔
+      ∃ k ∈ ks, stateKey H k = some K := by
+    intro K
+    rw [List.mem_map]
+    constructor
+    · rintro ⟨⟨K', v'⟩, hm, e⟩
+      obtain ⟨k, hk, hs, _⟩ := (mem_kvs K' v').mp hm
+      exact ⟨k, hk, by rw [hs]; exact congrArg some e⟩
+    · rintro ⟨k, hk, hs⟩
+      exact ⟨(K, g k), (mem_kvs K (g k)).mpr ⟨k, hk, hs, rfl⟩, rfl⟩
+  have hnodupK : ((ks.filterMap fun k => (stateKey H k).map fun K => (K, g k)).map (·.1)).Nodup :=
+    nodup_fm (stateKey H) g ks hnd
+      (fun a ha b hb K e1 e2 => hinj a b K (Or.inr (hnk a ha)) (Or.inr (hnk b hb)) e1 e2)
+  have hwk : ∀ kv ∈ (ks.filterMap fun k => (stateKey H k).map fun K => (K, g k)),
+      kv.1.length = 64 ∧ kv.2.length = 64 := by
+    intro kv hkv
+    obtain ⟨k, hk, hf⟩ := List.mem_filterMap.mp hkv
+    obtain ⟨K, hK, rfl⟩ := Option.map_eq_some_iff.mp hf
+    obtain ⟨b, _, _, hKb⟩ := stateKey_pre hK
+    refine ⟨by show K.length = 64; rw [hKb]; exact hl64 _, ?_⟩
+    show (g k).length = 64
+    rw [hgk k (hnk k hk)]
+    exact hl64 _
+  have hwU := foldl_upsert_wf _ _ hwG hwk
+  have F2 : ∀ k, k ∉ new.flatMap (fun e => Rules.keys e.line) →
+      (indexed 0 (E ++ new)).filter (hasKey k) = (indexed 0 E).filter (hasKey k) := by
+    intro k hk
+    have : (indexed (0 + E.length) new).filter (hasKey k) = [] := by
+      apply List.filter_eq_nil_iff.mpr
+      intro r hr hh
+      obtain ⟨hrn, _, _⟩ := mem_indexed _ new r hr
+      exact hk (List.mem_flatMap.mpr ⟨r.2, hrn, List.contains_iff_mem.mp hh⟩)
+    rw [indexed_append, List.filter_append, this, List.append_nil]
+  refine (List.perm_ext_iff_of_nodup (nodup_of_map_fst _ hwU.1) (nodup_of_map_fst _ hwG'.1)).mpr ?_
+  rintro ⟨K, v⟩
+  constructor
+  · intro hmU
+    rcases (mem_foldl_upsert _ _ hnodupK K v).mp hmU with hk | ⟨hG, hKn⟩
+    · obtain ⟨k, hk, hs, hv⟩ := (mem_kvs K v).mp hk
+      refine mem_gateMap.mpr ⟨k, ?_, hs, hv.trans (hgk k (hnk k hk))⟩
+      rw [List.flatMap_append]
+      exact List.mem_append_right _ ((hks k).mp hk)
+    · obtain ⟨k, hkKs, hs, hv⟩ := mem_gateMap.mp hG
+      have hkn : k ∉ new.flatMap (fun e => Rules.keys e.line) :=
+        fun hkn => hKn ((mem_keys K).mpr ⟨k, (hks k).mpr hkn, hs⟩)
+      refine mem_gateMap.mpr ⟨k, ?_, hs, ?_⟩
+      · rw [List.flatMap_append]
+        exact List.mem_append_left _ hkKs
+      · rw [F2 k hkn]
+        exact hv
+  · intro hm
+    obtain ⟨k, hkK', hs, hv⟩ := mem_gateMap.mp hm
+    rw [List.flatMap_append] at hkK'
+    by_cases hkn : k ∈ new.flatMap (fun e => Rules.keys e.line)
+    · refine (mem_foldl_upsert _ _ hnodupK K v).mpr
+        (Or.inl ((mem_kvs K v).mpr ⟨k, (hks k).mpr hkn, hs, ?_⟩))
+      rw [hv, hgk k (hq k hkn)]
+    · have hkKs : k ∈ E.flatMap (fun e => Rules.keys e.line) := (List.mem_append.mp hkK').resolve_right hkn
+      refine (mem_foldl_upsert _ _ hnodupK K v).mpr
+        (Or.inr ⟨mem_gateMap.mpr ⟨k, hkKs, hs, ?_⟩, fun hKm => ?_⟩)
+      · rw [← F2 k hkn]
+        exact hv
+      · obtain ⟨k'', hk'', hs''⟩ := (mem_keys K).mp hKm
+        have := hinj k'' k K (Or.inr (hnk k'' hk'')) (Or.inl hkKs) hs'' hs
+        exact hkn (this ▸ (hks k'').mp hk'')
+
+theorem applyBatch_core {H : Bytes → Bytes} (hl : HashLen H) (E new : List Entry) (Q : List Rules.Key)
+    (h : Hydration) (t : PTree) (hw : EntriesWf (E ++ new)) (hn : (E ++ new).length ≤ maxSize)
+    (hq : ∀ e ∈ new, ∀ k ∈ Rules.keys e.line, k ∈ Q)
+    (hok : hydrateOk H (mapRoot H (gateMap H E)) Q h = true) (ht : applyBatch H h E.length new = some t)
+    (hg : breakIn H (hydrateInputs H E Q h) = none) :
+    t.hash H = mapRoot H (gateMap H (E ++ new)) := by
+  have hl64 : ∀ x, (H x).length = 64 := hl
+  have hwE : EntriesWf E := ⟨fun e he => hw.1 e (List.mem_append_left _ he), by
+    have := hw.2
+    rw [List.map_append, List.nodup_append] at this
+    exact this.1⟩
+  have hnE : E.length ≤ maxSize := by
+    have := hn
+    rw [List.length_append] at this
+    omega
+  obtain ⟨hwG, hrows⟩ := hydrate_core hl E Q h hwE hnE hok hg
+  have hroot := (hydrateOk_parts hok).1
+  have hmem : ∀ k, (k ∈ E.flatMap (fun e => Rules.keys e.line) ∨ k ∈ Q) → ∀ p, stateKey id k = some p →
+      p ∈ hydrateInputs H E Q h := fun k hk => hi_key_mem hk
+  have hnewQ : ∀ k ∈ new.flatMap (fun e => Rules.keys e.line), k ∈ Q := by
+    intro k hk
+    obtain ⟨e, he, hke⟩ := List.mem_flatMap.mp hk
+    exact hq e he k hke
+  -- the applied inserts
+  unfold applyBatch at ht
+  dsimp only at ht
+  obtain ⟨hsome, hins⟩ := foldlM_insert (H := H)
+    (fun k => bucketDigest H (bucketItems H (List.filter (hasKey k) (h.rows ++ indexed E.length new))))
+    _ _ _ ht
+  have hkvs : ∀ kv ∈ ((new.flatMap fun e => Rules.keys e.line).eraseDups.filterMap fun k =>
+      (stateKey H k).map fun K =>
+        (K, bucketDigest H (bucketItems H (List.filter (hasKey k) (h.rows ++ indexed E.length new))))),
+      kv.1.length = 64 ∧ kv.2.length = 64 := by
+    intro kv hkv
+    obtain ⟨k, _, hf⟩ := List.mem_filterMap.mp hkv
+    obtain ⟨K, hK, rfl⟩ := Option.map_eq_some_iff.mp hf
+    obtain ⟨b, _, _, hKb⟩ := stateKey_pre hK
+    exact ⟨by rw [hKb]; exact hl64 _, hl64 _⟩
+  rcases insertAll_correct hl (gateMap H E) _ h.tree t hwG hkvs hroot hins with hU | hU
+  rotate_left
+  · refine absurd (none_mono hg ?_) hU
+    intro y hy
+    rcases List.mem_append.mp hy with hy | hy
+    · exact mem_hi_tree hy
+    · exact mem_hi_map hy
+  have hgk : ∀ k ∈ Q, bucketDigest H (bucketItems H (List.filter (hasKey k) (h.rows ++ indexed E.length new))) =
+      bucketDigest H (bucketItems H ((indexed 0 (E ++ new)).filter (hasKey k))) := by
+    intro k hk
+    rw [indexed_append, List.filter_append, Nat.zero_add, List.filter_append, hrows, filter_slice Q _ k hk]
+  have hperm := upsert_perm hl E new Q hnewQ
+    (fun k1 k2 K h1 h2 e1 e2 => stateKey_inj hg (hmem k1 h1) (hmem k2 h2) e1 e2) hwG _
+    (fun k => List.mem_eraseDups) (nodup_eraseDups _ _ (Nat.le_refl _))
+    (fun k => bucketDigest H (bucketItems H (List.filter (hasKey k) (h.rows ++ indexed E.length new)))) hgk
+  rw [hU]
+  unfold mapRoot
+  rw [mapTree_perm 512 0 _ _ hperm]
+
+
+/-- An accepted hydration is exactly the slice, with its true log indices. -/
+theorem hydrate_slice {H : Bytes → Bytes} (hl : HashLen H) (E : List Entry) (b : List Rules.Line)
+    (h : Hydration) (hw : EntriesWf E) (hn : E.length ≤ maxSize) (hb : ∀ l ∈ b, (rowBytes l).isSome)
+    (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true) :
+    h.rows = (indexed 0 E).filter (fun r => (Rules.keys r.2.line).any (querySet b).contains) ∨
+      breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
+  exact hydrate_slice_proof hl E b h hw hn hok
+
+/-- THE end-to-end statement: the decision made from proofs equals the decision from the full state. -/
+theorem decide_from_proof {H : Bytes → Bytes} (hl : HashLen H) (c : Rules.Ctx) (E : List Entry)
+    (b : List Rules.Line) (h : Hydration) (hw : EntriesWf E) (hn : E.length ≤ maxSize)
+    (hb : ∀ l ∈ b, (rowBytes l).isSome) (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true) :
+    batchOutcome (v2Ctx c (h.rows.map (·.2))) b = batchOutcome (v2Ctx c E) b ∨
+      breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
+  exact decide_from_proof_proof hl c E b h hw hn hok
+
+/-- The batch's map update is the canonical index of the appended log. -/
+theorem applyBatch_correct {H : Bytes → Bytes} (hl : HashLen H) (E new : List Entry) (b : List Rules.Line)
+    (h : Hydration) (t : PTree) (hw : EntriesWf (E ++ new)) (hn : (E ++ new).length ≤ maxSize)
+    (hq : ∀ e ∈ new, (Rules.keys e.line).all (querySet b).contains)
+    (hok : hydrateOk H (mapRoot H (gateMap H E)) (querySet b) h = true)
+    (ht : applyBatch H h E.length new = some t) :
+    t.hash H = mapRoot H (gateMap H (E ++ new)) ∨ breakIn H (hydrateInputs H E (querySet b) h) ≠ none := by
+  by_cases hg : breakIn H (hydrateInputs H E (querySet b) h) = none
+  case neg => exact Or.inr hg
+  exact Or.inl (applyBatch_core hl E new _ h t hw hn
+    (fun e he k hk => List.contains_iff_mem.mp (List.all_eq_true.mp (hq e he) k hk)) hok ht hg)
 
 end BlindLedger.Gate.Auth
