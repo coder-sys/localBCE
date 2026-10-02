@@ -88,8 +88,7 @@ MUTANTS = [
      "| some _ => .ok { s with pins := (p.key, p.memberKey) :: s.pins }"),
     ("install: cert chain", "if c.rootSigned e then", "if true then"),
     ("install: usable key demanded (07fe98b fail-open)", "if c.rootSigned e then", "if c.certChainOk e then"),
-    # Equivalent, so not listed: dropping `fits`'s `0 < e.shardCount` or `e.shardCount < 2 ^ 32`.  Every
-    # certificate is decoded by `pKeyCert`, whose `nat 4 1` already gives 1 ≤ shard count < 2 ^ 32.
+    # Equivalent, so not listed: dropping `fits`'s shard count bounds; every cert comes from `pKeyCert`'s `nat 4 1`.
     ("install: shard count fixed per tenant", "x.shardCount == e.shardCount && ", ""),
     ("install: one certificate per tenant and epoch", " && x.epoch != e.epoch", ""),
     ("install: equivocation unrecorded", "(s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&\n"
