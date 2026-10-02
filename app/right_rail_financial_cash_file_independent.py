@@ -1,6 +1,6 @@
 """Independent, transaction-local acceptance of fictional receiver cash files.
 
-This module never imports the producer or financial writer, and never writes SQL.
+This module never imports the producer or financial writer, and writes no package row: its only writes are its own TEMP log and triggers.
 The owner calls begin under its write lock and finish after sealing, before COMMIT.
 """
 
@@ -131,24 +131,26 @@ def _source(raw: bytes) -> dict[str, object]:
     return value
 
 
-def _snapshot(connection: sqlite3.Connection) -> dict[str, list[tuple]]:
-    """Every package table as plain tuples in rowid order, so equal tuples are equal rows and a dict is built only for a row that is read."""
+_INSERTS = ("payments", "evidence", "evaluations", "financial_events")
+_UPDATES = ("financial_meta", "obligations", "cases")
+_LOGGED = frozenset({(table, "INSERT") for table in _INSERTS} | {(table, "UPDATE") for table in _UPDATES})  # every other write to a package table is refused
+_SCHEMA = "PRAGMA temp.schema_version"  # moved by every CREATE or DROP in temp, an identical re-create included
+
+
+def _counts(connection: sqlite3.Connection) -> dict[str, int]:
+    counts = {table: connection.execute(f"SELECT COUNT(*) FROM main.{table}").fetchone()[0] for table in ledger.PACKAGE_TABLES}
+    _require(max(counts.values()) <= ledger.MAX_ROWS, "cash_file_failed")
+    return counts
+
+
+def _table(connection: sqlite3.Connection, table: str, rowids: list[int] | None = None) -> dict[int, dict]:
+    """{rowid: row} for every row of one package table in rowid order, or for the given rowids: read from the table's own b-tree, never an index."""
     cursor = connection.cursor()
     cursor.row_factory = None
-    rows = {}
-    for table in ledger.PACKAGE_TABLES:
-        _require(cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] <= ledger.MAX_ROWS, "cash_file_failed")
-        rows[table] = cursor.execute(f"SELECT {','.join(ledger.TABLE_COLUMNS[table])} FROM {table} ORDER BY rowid").fetchall()
-    return rows
-
-
-def _row(table: str, row: tuple | None) -> dict | None:
-    return None if row is None else dict(zip(ledger.TABLE_COLUMNS[table], row))
-
-
-def _keyed(rows: Mapping, table: str, key: str) -> dict:
-    at = ledger.TABLE_COLUMNS[table].index(key)
-    return {row[at]: row for row in rows[table]}
+    columns = ledger.TABLE_COLUMNS[table]
+    sql = f"SELECT rowid,{','.join(columns)} FROM main.{table}"
+    stored = cursor.execute(sql + " ORDER BY rowid").fetchall() if rowids is None else [row for rowid in rowids for row in cursor.execute(sql + " WHERE rowid=?", (rowid,))]
+    return {row[0]: dict(zip(columns, row[1:])) for row in stored}
 
 
 def _index(rows: Mapping, table: str, key: str) -> dict:
@@ -251,20 +253,49 @@ class CashFileCheck:
             "expected_continuity_epoch": self._epoch,
         }
 
+    def _arm(self, connection: sqlite3.Connection) -> None:
+        """TEMP triggers log every row write to a package table; the log's own skip an UPDATE, DELETE or REPLACE of an entry. All die with finish or the connection."""
+        connection.execute("CREATE TEMP TABLE rr_cfc_log(id INTEGER PRIMARY KEY, tbl TEXT NOT NULL, op TEXT NOT NULL, old_rowid INTEGER, new_rowid INTEGER)")
+        for op, when in (("INSERT", " WHEN EXISTS (SELECT 1 FROM rr_cfc_log WHERE id=NEW.id)"), ("UPDATE", ""), ("DELETE", "")):
+            connection.execute(f"CREATE TEMP TRIGGER rr_cfc_log_{op} BEFORE {op} ON temp.rr_cfc_log{when} BEGIN SELECT RAISE(IGNORE); END")
+        for table in sorted(ledger.PACKAGE_TABLES):
+            for op, old, new in (("INSERT", "NULL", "NEW.rowid"), ("UPDATE", "OLD.rowid", "NEW.rowid"), ("DELETE", "OLD.rowid", "NULL")):
+                connection.execute(f"CREATE TEMP TRIGGER rr_cfc_{table}_{op} AFTER {op} ON main.{table} BEGIN INSERT INTO rr_cfc_log(tbl,op,old_rowid,new_rowid) VALUES ('{table}','{op}',{old},{new}); END")
+        self._schema = connection.execute(_SCHEMA).fetchone()[0]
+
+    def _log(self, connection: sqlite3.Connection) -> dict[tuple[str, str], list[tuple]]:
+        """The writes this file made, once the TEMP schema is as begin left it, every write is one a file may make, and each count is start plus logged inserts (no deletes)."""
+        _require(connection.execute(_SCHEMA).fetchone()[0] == self._schema, "cash_file_failed")
+        log: dict[tuple[str, str], list] = {}
+        for table, op, old, new in connection.execute("SELECT tbl,op,old_rowid,new_rowid FROM temp.rr_cfc_log ORDER BY id"):
+            log.setdefault((table, op), []).append((old, new))
+        after = _counts(connection)
+        _require(set(log) <= _LOGGED and all(after[table] == self._counts[table] + len(log.get((table, "INSERT"), ())) for table in after)
+                 and all(old == new for table in _UPDATES for old, new in log.get((table, "UPDATE"), ())), "cash_file_failed")
+        return log
+
+    def _disarm(self, connection: sqlite3.Connection) -> None:
+        for kind, name in connection.execute("SELECT type,name FROM sqlite_temp_master WHERE name LIKE 'rr_cfc_%' ORDER BY type DESC").fetchall():  # triggers, then the log
+            connection.execute(f"DROP {kind} temp.{name}")
+
     @_fixed_errors
     def begin(self, connection: sqlite3.Connection) -> None:
         _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_failed")
-        snapshot = _snapshot(connection)
-        rows = {table: [_row(table, row) for row in snapshot[table]] for table in ("financial_identity", "financial_meta", "financial_events", "payments", "evidence", "actions", "obligations")}  # dicts only for what classification reads
+        self._counts = _counts(connection)
+        stored = {table: _table(connection, table) for table in ("financial_identity", "financial_meta", "financial_events", "payments", "evidence", "actions", "obligations", "cases")}  # what classification and finish compare against
+        rows = {table: list(values.values()) for table, values in stored.items()}
         identity, sequence, head, count, last = self._anchor
         meta = rows["financial_meta"][0]
         ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
-        sealed = connection.execute("SELECT last_sequence,segment_digest FROM history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
+        sealed = connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
         _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
         self._stale = meta["sequence"] != sequence
         self._received, self._aliases = _payment_events(rows["financial_events"])
         self._plan = self._classify(rows)
-        self._before, self._changes, self._connection = snapshot, connection.total_changes, connection
+        self._meta, self._obligations, self._cases = next(iter(stored["financial_meta"].items())), stored["obligations"], stored["cases"]
+        self._payments, self._actions = _index(rows, "payments", "payment_id"), _index(rows, "actions", "action_id")
+        self._arm(connection)
+        self._changes, self._connection = connection.total_changes, connection
 
     def _classify(self, rows: Mapping) -> tuple[tuple[str, str], ...]:
         """Per row, before any write, (kind, the payment_id the owner must answer): RETRY of this row's own payment,
@@ -298,25 +329,24 @@ class CashFileCheck:
     def finish(self, connection: sqlite3.Connection, results: object) -> set[str]:
         _require(connection is self._connection and connection.in_transaction and not self._finished and type(results) is list and len(results) == len(self.commands), "cash_file_failed")
         self._finished = True
-        before, rows = self._before, _snapshot(connection)
-        payments, evidence, events = (_keyed(rows, table, key) for table, key in (("payments", "payment_id"), ("evidence", "evidence_id"), ("financial_events", "event_sequence")))
-        actions = {row["action_id"]: row for row in (_row("actions", stored) for stored in rows["actions"])}
-        old_meta, new_meta = (_row("financial_meta", snapshot["financial_meta"][0]) for snapshot in (before, rows))
+        log = self._log(connection)
+        added = {table: _table(connection, table, [new for _, new in log.get((table, "INSERT"), ())]) for table in _INSERTS}  # the rows this file inserted
+        payments = {**self._payments, **{row["payment_id"]: row for row in added["payments"].values()}}
+        evidence, events = ({row[key]: row for row in added[table].values()} for table, key in (("evidence", "evidence_id"), ("financial_events", "event_sequence")))
+        actions, old_meta = self._actions, self._meta[1]
         first = sequence = old_meta["sequence"]
         head = old_meta["history_head"]
-        old_obligations, obligations = (_keyed(snapshot, "obligations", "obligation_id") for snapshot in (before, rows))
-        revision, cash = (ledger.TABLE_COLUMNS["obligations"].index(name) for name in ("revision", "received_cash_cents"))
-        revisions = {key: row[revision] for key, row in old_obligations.items()}
+        revisions = {row["obligation_id"]: row["revision"] for row in self._obligations.values()}
         recorded, new_evidence, new_evaluations, deltas, touched = set(), set(), set(), {}, set()
         for (_, argument), (kind, answer), result in zip(self.commands, self._plan, results):
             _require(type(result) is dict and result.get("status") == ("RECORDED" if kind == "NEW" else "DUPLICATE") and result.get("payment_id") == answer, "cash_file_failed")
             if kind in ("RETRY", "ALIAS"):
-                continue  # wrote nothing: the table comparisons and total_changes below prove it
+                continue  # wrote nothing: the log and total_changes below prove it
             sequence += 1  # each NEW or OVERLAP row appends exactly the next event, verified onto the chain
-            event, obligation = _row("financial_events", events[sequence]), _row("payments", payments[answer])["obligation_id"]
+            event, obligation = events[sequence], payments[answer]["obligation_id"]
             head = ledger._verify_event(event, sequence, head)
             payload = json.loads(event["payload_json"])
-            _require(event["before_revision"] == argument["expected_revision"] == revisions[obligation] and _matches(_row("evidence", evidence.get(argument["evidence_id"])), _fact(argument)), "cash_file_failed")
+            _require(event["before_revision"] == argument["expected_revision"] == revisions[obligation] and _matches(evidence.get(argument["evidence_id"]), _fact(argument)), "cash_file_failed")
             new_evidence.add(argument["evidence_id"])
             touched.add(obligation)
             if kind == "OVERLAP":  # exactly the alias label _verify_duplicate_evidence accepts; the repeated payment is unchanged
@@ -324,37 +354,36 @@ class CashFileCheck:
                 _require((event["kind"], event["aggregate_type"], event["aggregate_id"], event["after_revision"]) == ("PAYMENT_DUPLICATE_EVIDENCE", "OBLIGATION", obligation, revisions[obligation])
                          and {key: value for key, value in payload.items() if key != "rows"} == alias, "cash_file_failed")
                 continue
-            payment = _row("payments", payments[answer])
-            _require(event["kind"] == "PAYMENT_RECEIVED" and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None and _recorded(argument, payment, _row("evidence", evidence[argument["evidence_id"]]), event, payload, actions), "cash_file_failed")
+            payment = payments[answer]
+            _require(event["kind"] == "PAYMENT_RECEIVED" and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None and _recorded(argument, payment, evidence[argument["evidence_id"]], event, payload, actions), "cash_file_failed")
             revisions[obligation] += 1
             deltas[obligation] = deltas.get(obligation, 0) + argument["amount_cents"]
             recorded.add(answer)
             new_evaluations.add(payload["evaluation_id"])
+        new_meta = _table(connection, "financial_meta", [self._meta[0]])[self._meta[0]]
         _require((new_meta["sequence"], new_meta["history_head"]) == (sequence, head), "cash_file_failed")
-        for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1)))):
-            old, new = _keyed(before, table, key), _keyed(rows, table, key)
-            _require(set(new) == set(old) | additions and all(new[key] == value for key, value in old.items()), "cash_file_failed")
-        _require(set(old_obligations) == set(obligations), "cash_file_failed")
-        changed = {"revision", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "verification_status", "case_status", "current_evaluation_id", "updated_at_ms"}
-        for key, stored in old_obligations.items():
-            if stored != obligations[key] or key in deltas:  # an unchanged row of an untouched obligation passes every check below
-                old, new = _row("obligations", stored), _row("obligations", obligations[key])
-                _unchanged(old, new, changed if key in deltas else frozenset())
-                _require(new["received_cash_cents"] - old["received_cash_cents"] == deltas.get(key, 0) and new["revision"] == revisions[key], "cash_file_failed")
-        old_cases, cases = _keyed(before, "cases", "case_id"), _keyed(rows, "cases", "case_id")
-        _require(set(old_cases) == set(cases), "cash_file_failed")
-        for key, stored in old_cases.items():
-            if stored != cases[key]:
-                old = _row("cases", stored)
-                _unchanged(old, _row("cases", cases[key]), {"status", "updated_at_ms"} if old["obligation_id"] in deltas else frozenset())
-        variable = {"payments", "evidence", "evaluations", "financial_events", "financial_meta", "obligations", "cases"}
-        for table in set(rows) - variable:
-            _require(rows[table] == before[table], "cash_file_failed")
         _unchanged(old_meta, new_meta, {"sequence", "history_head"})
+        for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1)))):
+            keys = [row[key] for row in added[table].values()]
+            _require(len(keys) == len(additions) and set(keys) == additions, "cash_file_failed")  # exactly the rows the file names: the log shows no other write to these tables
+        changed = {"revision", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "verification_status", "case_status", "current_evaluation_id", "updated_at_ms"}
+        rowids = {old for old, _ in log.get(("obligations", "UPDATE"), ())} | {rowid for rowid, row in self._obligations.items() if row["obligation_id"] in deltas}  # a row of an untouched obligation that was not written passes every check below
+        now = _table(connection, "obligations", sorted(rowids))
+        for rowid in rowids:
+            old, new = self._obligations[rowid], now[rowid]
+            key = old["obligation_id"]
+            _unchanged(old, new, changed if key in deltas else frozenset())
+            _require(new["received_cash_cents"] - old["received_cash_cents"] == deltas.get(key, 0) and new["revision"] == revisions[key], "cash_file_failed")
+        rowids = [old for old, _ in log.get(("cases", "UPDATE"), ())]
+        now = _table(connection, "cases", rowids)
+        for rowid in rowids:
+            old = self._cases[rowid]
+            _unchanged(old, now[rowid], {"status", "updated_at_ms"} if old["obligation_id"] in deltas else frozenset())
         ledger.verify_obligation_connection(connection, *sorted(touched), **self._expectations())  # schema and meta once, then each touched obligation
         _require(bool(new_evidence) or connection.total_changes == self._changes, "cash_file_failed")  # a file of repeats writes nothing (III.3)
+        self._disarm(connection)
         recorded_cents = sum(deltas.values())
-        cash_before = sum(row[cash] for row in old_obligations.values())
+        cash_before = sum(row["received_cash_cents"] for row in self._obligations.values())
         self.receipt = {
             "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2",
             "mode": "PREVIEW" if self._preview else "APPLIED",

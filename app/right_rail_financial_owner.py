@@ -2174,6 +2174,7 @@ class FinancialOwner:
             connection = sqlite3.connect(location, uri=self._existing_only, timeout=5.0, isolation_level=None, check_same_thread=False)  # the writer serves any thread, under _lock
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA recursive_triggers=ON")
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("PRAGMA synchronous=FULL")  # R0.5: with WAL, an acknowledged commit survives power loss
             connection.execute("PRAGMA cache_size=-65536")
