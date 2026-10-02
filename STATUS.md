@@ -2,7 +2,7 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `70f9606`.
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `9571578`.
 
 ## Product and standing claims
 
@@ -11,21 +11,23 @@ Blind Ledger, Mirror, Continuity and Switch share the financial owner; Provider 
 level within that product. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
 `production_usable=false`, `activation=false`. Guarded local runs are merge evidence, not release qualification.
 
-## What landed on trunk 70f9606 (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
+## What landed on trunk 9571578 (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
+
+- **Correction frames as ByteArray.** Corrections re-encode through proved-equal byte-array twins (`CorrectionFast.lean`, `_eq`
+  theorems pinned). Accepted 5 MB: 3.73 s / 846 MB before, 1.83 s / 259 MB now; the 7 MB cap frame 2.58 s / 164 MB. The worker
+  stays flat within 16 MB across requests. Worker re-pinned `58CDA012` -> `8EB77363`.
+- **M4 claim item laws.** BLFOFC01 request, BLFOCR01 answer and `decideClaim`, with the six section F theorems proved and pinned.
 
 - **Gate fast SHA3.** The gate's SHA3 call sites run the proved-equal fast sponge (`Sha3Fast.lean`; `sha3_512_eq`, `shake128_eq`,
   `shake256_eq` hold for all inputs on `propext`, `Classical.choice`, `Quot.sound` only). No gate theorem's axioms changed. Rules
   decide went from 99.5 to 251.6 lines/s on 20,000 lines.
-- **Worker payments as ByteArray.** Payment frames (BLFPAY01) are read from the byte array, not a `List UInt8`. The held-memory leak
-  is fixed: an 8.1 MB item grew the worker from 650 to 952 MB (then hit the 1 GB cap at item 6); it now stays flat near 62 MB. Old
-  and new workers answered 51,539 frames identically.
-- **M3 step 3, flag off.** Lean-side payment decision path with a differential against the current path; the flag stays off, so no
-  live behaviour moved. T2 passes (Lean 23.05 ms against a 23.76 ms bound).
-- **M4 P1 corrections on the worker.** The one-shot correction exe is retired; corrections run on the evaluator worker. Its answers
-  over 1,558 inputs equal the retired exe's (`tests/fixtures/correction_exe_answers.json`).
-- **Pins.** Worker `58CDA012...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
-  8/8. Superseded pins are in each PROVENANCE file and `RETIRED_PINS`. Last full suite `i6-full2`: 725 run, 713 pass, 1 fail
-  (`test_quarter_end_file_within_writer_timeout`, advisory), 11 skipped.
+- **Worker payments as ByteArray.** BLFPAY01 frames are read as a byte array; an 8.1 MB item now holds the worker near 62 MB (was
+  952 MB). Corrections run on the evaluator worker (one-shot exe retired; 1,558 answers equal).
+- **M3 step 3, flag off.** Lean-side payment decision path with a differential; the flag stays off, so no live behaviour moved.
+- **Pins.** Worker `8EB77363...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
+  8/8. Superseded pins are in each PROVENANCE file and `RETIRED_PINS`. Merged tree: full lake build `cc-int-1` exit 0 with both
+  built exes byte-identical to the pins; full suite `cc-int-2` plus rerun `cc-int-3`: every module passes except
+  `test_quarter_end_file_within_writer_timeout` (fails on trunk too).
 
 ## Standing design
 
@@ -41,10 +43,12 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 ## Open items
 
-- **Correction capacity** is about quadratic in rows: 2,000 rows take 2.6 s; 5,000 rows give a 3.65 MB frame over the 5 s bound.
-  Refusal 14 is unreachable, so no capacity test exists. A profiler and byte-array encoders are in work.
-- **Quarter-end advisory timing:** the twelfth cash file's writer lock is about 5.5 s against a 5 s bound; the test fails and is
-  advisory. A fresh worktree also shows errors from missing ignored build outputs.
+- **Correction result cap:** a BLFCRES3 result embeds its input, so an accepted correction near 7 MB is refused (tag 3) at the
+  result cap. Request cap against result cap is an open design question.
+- **Quarter-end timing fails:** the twelfth cash file's writer lock is 5.9-6.1 s against a 5 s bound (`cash-trunk-2`, `cash-cc-1`).
+  A fresh worktree also needs the ignored `rr_gate_mldsa87.exe` copied in, or the signer tests error.
+- **Real-world data:** a seeded dirty Medicaid corpus (branch `dirty-corpus`, not on trunk) shows six unrepresentable cases:
+  advance payments, member crosswalk, PLB balances, death after release, upward retro rates, one bad cash row refusing a file.
 - **M3 binding fixes** from the integ6 review (one Medium, two Low, all on the flag-off path) must land before the step-4 flag flip.
   The D4 live behaviour and a crash test belong to step 4.
 - **Rules throughput:** 252 lines/s against a 2,000 lines/s target.
