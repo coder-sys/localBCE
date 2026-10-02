@@ -203,6 +203,26 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         self.assertEqual(_rows(self.store), before)
         self.assertEqual(self._pay("m3-p2")["status"], "RECORDED")  # and the honest carry is accepted
 
+    def test_a_tampered_answer_is_refused_closes_the_worker_and_writes_nothing(self) -> None:
+        """Each answer below is well framed and byte-exact with one field changed, so only the adapter's binding to the command and the stored rows can stop it."""
+        first = self._pay()
+        with self.store._connect() as connection:
+            obligation_id = connection.execute("SELECT obligation_id FROM obligations").fetchone()[0]
+        acts = {"record": lambda: self._pay("m3-p2"),
+                "alias": lambda: self._pay("m3-p3", common_origin_id="o-m3-p1"),  # the first payment's origin and amount, a new evidence id
+                "retry": lambda: self._pay("m3-p1", expected_revision=first["revision"] - 1),
+                "reverse": lambda: self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)}
+        evidence = {"kind": "PAYMENT_X", "amount_cents": 101, "source_id": "other-source", "source_version": "v9", "local_ref": "other-ref", "applicable_at_ms": self.at + 1,
+                    "event_at_ms": self.at + 1, "common_origin_id": "o-other", "reversal_of": "m3-px", "supersedes": "e-x", "item_id": "other-item"}
+        cases = [(name, field, value) for name in ("record", "reverse") for field, value in evidence.items()]
+        cases += [("alias", "common_origin_id", "o-other"), ("alias", "payment_id", "m3-px"), ("retry", "payment_id", "m3-px"), ("record", "evidence", None)]
+        before, real = _rows(self.store), engine._evaluate_wire
+        for name, field, value in cases:
+            with self.subTest(name, field=field), patch.object(engine, "_evaluate_wire", lambda wire: _swap(real(wire), obligation_id, field, value)):
+                with self.assertRaisesRegex(owner_module.FinancialIntegrityError, "^lean_payment:payment_binding$"):
+                    acts[name]()
+                self.assertEqual((_rows(self.store), engine._evaluator), (before, []))
+
     def test_an_exact_retry_costs_no_more_than_a_record(self) -> None:
         """T3: a retry builds a snapshot and asks Lean; it must not cost more than recording."""
         record, retry = [], []
@@ -221,6 +241,26 @@ class LeanPaymentOwnerTests(unittest.TestCase):
 def _rows(store) -> tuple:
     with store._connect() as connection:
         return tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("payments", "evidence", "financial_events", "evaluations"))
+
+
+def _swap(answer: bytes, obligation_id: str, field: str, value) -> bytes:
+    """The BLFPRS01 answer with one field replaced (or, for value None, the evidence row dropped) and re-encoded."""
+    reader = adapter._WireReader(answer, max_bytes=adapter.MAX_WIRE_BYTES)
+    reader.take(8, "magic")
+    tag, start = reader.byte("tag"), reader._offset
+    if field == "payment_id":  # the leading id of ALIAS (5) and DUPLICATE (6)
+        (reader.identifier if tag == 5 else reader.option_identifier)("payment_id")
+        writer = adapter._WireWriter()
+        (writer.identifier if tag == 5 else writer.option_identifier)(value, "payment_id")
+        return answer[:start] + bytes(writer._buffer) + answer[reader._offset:]
+    reader.identifier("payment_id") if tag == 5 else reader.boolean("evidence")
+    start = reader._offset
+    row = adapter._read_image(reader, adapter._EVIDENCE_ROW, adapter._encode_evidence, obligation_id)
+    if value is None:
+        return answer[:start - 1] + b"\x00" + answer[reader._offset:]
+    writer = adapter._WireWriter()
+    adapter._encode_evidence(writer, {**row, field: value}, "image", obligation_id)
+    return answer[:start] + bytes(writer._buffer) + answer[reader._offset:]
 
 
 def _open_state(requests, shortfall: int) -> dict[str, int]:

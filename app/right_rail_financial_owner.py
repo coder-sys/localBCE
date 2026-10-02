@@ -4035,7 +4035,8 @@ class FinancialOwner:
         if out.status == "RECORDED":
             connection.execute("INSERT INTO payments VALUES (:payment_id,:obligation_id,:item_id,:evidence_id,:common_origin_id,:amount_cents,:event_at_ms,:active,:reversed_by_evidence_id)", out.payment_row)
         elif out.status == "REVERSED":
-            connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=:reversed_by_evidence_id WHERE payment_id=:payment_id AND active=1", out.payment_row)
+            if connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=:reversed_by_evidence_id WHERE payment_id=:payment_id AND obligation_id=:obligation_id AND active=1", out.payment_row).rowcount != 1:
+                _fail(FinancialIntegrityError, "payment_reversal_rows")
         if out.conflict_row is not None:
             connection.execute("INSERT INTO financial_conflicts VALUES (:conflict_id,:obligation_id,:common_origin_id,:existing_payment_id,:candidate_evidence_id,:existing_amount_cents,:candidate_amount_cents,:reason,:visible_at_ms)", out.conflict_row)
         if out.decided is not None:
