@@ -53,7 +53,7 @@ theorem installCert_raises_fence (c : Crypto) (s : PayerState) (e : EpochCert) :
   split
   · exact ⟨fun x => raiseFence_ge x, fun _ => raiseFence_self _ _ _⟩
   · rename_i hc
-    exact ⟨fun _ => Nat.le_refl _, fun h => absurd h hc⟩
+    exact ⟨fun _ => Nat.le_refl _, fun h => absurd ((Bool.and_eq_true _ _).mp h).1 hc⟩
 
 /-- The payer invariant: each tenant's fence is at or above every installed
     certificate's epoch, and every stored checkpoint was verified under an
@@ -512,11 +512,15 @@ theorem Steps.at_most_once {c : Crypto} {s s' s'' : PayerState} {p p' : Payment}
     · simp [hu]
   · simp at h
 
-/-- A second chain-valid certificate for an installed one's tenant and
-    epoch with another public key or shard count is recorded with it and
-    blocks that tenant and epoch; a re-signature of the same body is not one. -/
-theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
-    (hc : c.certChainOk e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
+/-- M4: installing depends on the root signature only, never on whether the key is usable, so a root-signed
+    certificate of the root key itself raises its tenant's fence, is installed when it fits and equivocates
+    exactly as any other root-signed certificate. -/
+theorem installCert_fence (c : Crypto) (s : PayerState) (e : EpochCert) :
+    (installCert c s e).1.fence = if c.rootSigned e then raiseFence s.fence e.tenantId e.epoch else s.fence := by
+  unfold installCert; split <;> simp_all
+
+theorem installCert_equivocation_signed {c : Crypto} {s : PayerState} {e x : EpochCert}
+    (hc : c.rootSigned e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
     (he : x.epoch = e.epoch) (hne : x.publicKey ≠ e.publicKey ∨ x.shardCount ≠ e.shardCount) :
     (x, e) ∈ (installCert c s e).1.equivocations ∧ blocked (installCert c s e).1 e.tenantId e.epoch = true := by
   have hb : (x.tenantId == e.tenantId && x.epoch == e.epoch &&
@@ -531,6 +535,15 @@ theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
   refine Or.inr (List.any_eq_true.mpr ⟨_, hm, ?_⟩)
   rw [Bool.and_eq_true, beq_iff_eq, beq_iff_eq]
   exact ⟨ht, he⟩
+
+/-- A second chain-valid certificate for an installed one's tenant and
+    epoch with another public key or shard count is recorded with it and
+    blocks that tenant and epoch; a re-signature of the same body is not one. -/
+theorem installCert_equivocation {c : Crypto} {s : PayerState} {e x : EpochCert}
+    (hc : c.certChainOk e = true) (hx : x ∈ s.certs) (ht : x.tenantId = e.tenantId)
+    (he : x.epoch = e.epoch) (hne : x.publicKey ≠ e.publicKey ∨ x.shardCount ≠ e.shardCount) :
+    (x, e) ∈ (installCert c s e).1.equivocations ∧ blocked (installCert c s e).1 e.tenantId e.epoch = true :=
+  installCert_equivocation_signed ((Bool.and_eq_true _ _).mp hc).1 hx ht he hne
 
 /-- Frozen statement (LM1): every step sequence preserves `Coherent`. -/
 theorem Steps.coherent {c : Crypto} {s s' : PayerState} (h : Steps c s s') (hs : Coherent s) :

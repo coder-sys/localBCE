@@ -27,7 +27,7 @@ import tempfile
 import threading
 from typing import Final, Sequence
 
-from app.right_rail_gate_codec import ML_DSA_87_PUBLIC_KEY, ML_DSA_87_SIGNATURE, CheckedSigner, attach_signature
+from app.right_rail_gate_codec import ML_DSA_87_PUBLIC_KEY, ML_DSA_87_SIGNATURE, attach_signature
 
 ROOT: Final = Path(__file__).resolve().parents[1]
 CRATE: Final = ROOT / "rust" / "gate_mldsa87"
@@ -35,7 +35,7 @@ BINARY: Final = CRATE / "target" / "release" / "rr_gate_mldsa87.exe"
 PIN: Final = CRATE / "rr_gate_mldsa87.sha256"
 VERIFY: Final = ROOT / "artifacts" / "gate-verify" / "gate_verify.exe"
 VERIFY_PIN: Final = VERIFY.with_suffix(".sha256")
-ACCEPT: Final = b"GATE_VERIFY=ACCEPT\n"
+ACCEPT: Final = "GATE_VERIFY=ACCEPT"
 
 
 class GateSignerError(RuntimeError):
@@ -71,8 +71,8 @@ def _private_copy(binary: Path) -> tuple[Path, bytes]:
         return held
 
 
-def _run(binary: Path, pin: Path, args: Sequence[str], data: bytes, size: int) -> bytes:
-    """Run the private copy of a pinned executable; it must exit 0 with exactly ``size`` bytes of output."""
+def _exec(binary: Path, pin: Path, args: Sequence[str], data: bytes) -> subprocess.CompletedProcess[bytes]:
+    """Run the private copy of a pinned executable."""
     name = binary.stem
     if type(data) is not bytes or any(type(arg) is not str for arg in args):
         raise GateSignerError(f"{name}_input")
@@ -80,11 +80,16 @@ def _run(binary: Path, pin: Path, args: Sequence[str], data: bytes, size: int) -
         copy, digest = _private_copy(binary)
         if digest != pin.read_bytes().strip():
             raise GateSignerError(f"{name}_pin_mismatch")
-        done = subprocess.run([str(copy), *args], input=data, capture_output=True, timeout=30, check=False)
+        return subprocess.run([str(copy), *args], input=data, capture_output=True, timeout=30, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise GateSignerError(f"{name}_failed") from error
+
+
+def _run(binary: Path, pin: Path, args: Sequence[str], data: bytes, size: int) -> bytes:
+    """A pinned executable must exit 0 with exactly ``size`` bytes of output."""
+    done = _exec(binary, pin, args, data)
     if done.returncode != 0 or len(done.stdout) != size:
-        raise GateSignerError(f"{name}_failed")
+        raise GateSignerError(f"{binary.stem}_failed")
     return done.stdout
 
 
@@ -109,16 +114,27 @@ def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
     return _run(BINARY, PIN, ("kat-verify",), public_key + signature + b"\x00\x00" + message, 1) == b"\x01"
 
 
-def checked(handle: str, root_pk: bytes, key_cert: bytes) -> CheckedSigner:
-    """The ``sign`` callback of ``sign_batch``: sign the header through custody, then run the pinned Lean
-    ``gate_verify`` on ``root_pk || u32 len || key_cert || signed checkpoint``.  The signature is returned
-    only on ``GATE_VERIFY=ACCEPT`` (exit 0); any other answer raises, so a faulty signature never leaves."""
+def framed(data: bytes) -> bytes:
+    """``u32 length || data``, the ``gate_verify`` frame's field."""
+    return len(data).to_bytes(4, "big") + data
 
-    def sign_header(header: bytes) -> bytes:
-        signature = sign(handle, header)
-        framed = root_pk + len(key_cert).to_bytes(4, "big") + key_cert + attach_signature(header, signature)
-        if _run(VERIFY, VERIFY_PIN, (), framed, len(ACCEPT)) != ACCEPT:
-            raise GateSignerError("gate_verify_refused")
-        return signature
 
-    return CheckedSigner(sign_header)
+def gate_verify(mode: int, frame: bytes) -> str:
+    """The one answer line of the pinned Lean ``gate_verify`` for ``mode`` and its frame (REJECT and HOLD are
+    answers, exit 1); a malformed frame or any other failure raises."""
+    done = _exec(VERIFY, VERIFY_PIN, (), bytes([mode]) + frame)
+    if done.returncode not in (0, 1):
+        raise GateSignerError("gate_verify_failed")
+    return done.stdout.decode("ascii").strip()
+
+
+def seal(handle: str, root_pk: bytes, cert: bytes, last: bytes | None, header: bytes, tokens: Sequence[bytes]) -> bytes:
+    """Sign ``header`` through custody and release the signature only if Lean ``publishOk`` accepts the signed
+    checkpoint as the successor of ``last`` (None: the shard's first) with exactly ``tokens``: a faulty or
+    unpublishable signature never leaves."""
+    signature = sign(handle, header)
+    frame = (root_pk + framed(cert) + framed(last or b"") + framed(attach_signature(header, signature))
+             + len(tokens).to_bytes(2, "big") + b"".join(map(framed, tokens)))
+    if gate_verify(1, frame) != ACCEPT:
+        raise GateSignerError("gate_verify_refused")
+    return signature

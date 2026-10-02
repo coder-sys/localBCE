@@ -1,5 +1,7 @@
 import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
+import BlindLedger.Gate.ProducerTheorems
+import BlindLedger.Gate.AnchorTheorems
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -42,3 +44,27 @@ import BlindLedger.Gate.MlDsa87Laws
 #print axioms BlindLedger.Gate.MlDsa87.sampleInBallFrom_append
 #print axioms BlindLedger.Gate.MlDsa87.verify_rejects_sampleInBall_none
 #print axioms BlindLedger.Gate.MlDsa87.verify_rejects_rejNtt_none
+#print axioms BlindLedger.Gate.storedOf_wf
+#print axioms BlindLedger.Gate.forks_comm
+#print axioms BlindLedger.Gate.chain_no_fork
+#print axioms BlindLedger.Gate.follows_twice_forks
+#print axioms BlindLedger.Gate.publishOk_sound
+#print axioms BlindLedger.Gate.publish_payer_local
+#print axioms BlindLedger.Gate.verifyToken_slice
+#print axioms BlindLedger.Gate.storeCheckpoint_slice
+#print axioms BlindLedger.Gate.firstFailure_none
+#print axioms BlindLedger.Gate.anchored_binding
+#print axioms BlindLedger.Gate.anchored_binding_witness
+#print axioms BlindLedger.Gate.pinInput_lines
+#print axioms BlindLedger.Gate.decideAnchored_some
+#print axioms BlindLedger.Gate.load_ok
+#print axioms BlindLedger.Gate.step_ok
+#print axioms BlindLedger.Gate.natBE_beNat
+#print axioms BlindLedger.Gate.realCrypto_cert_not_root
+#print axioms BlindLedger.Gate.accepts_cert_not_root
+#print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body
+#print axioms BlindLedger.Gate.installCert_fence
+#print axioms BlindLedger.Gate.installCert_equivocation_signed
+#print axioms BlindLedger.Gate.installCert_certs
+#print axioms BlindLedger.Gate.storeCheckpoint_signed
+#print axioms BlindLedger.Gate.storeCheckpoint_not_root

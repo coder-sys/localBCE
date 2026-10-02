@@ -101,11 +101,10 @@ shard the member key routes to; outcome is ALLOW; `rule_version` and
 already been released; no fork or equivocation is recorded for the tenant and epoch; and
 the payer sent a command for the payment and the member key is the one its
 first command pinned (a changed key is refused as `member_key_changed` until
-an official determination, not in v1). Unbuilt precondition of any payer
-adapter (none exists): the pin is durably persisted before the first command
-leaves the payer, and every command path (retry, new command key, another
-flow) checks the same pin store; required test: a kill between pin-persist
-and send leaves a pin and no command, never the reverse. These twelve checks are one Lean predicate
+an official determination, not in v1). Built (`right_rail_gate_payer`): the pin is durably persisted
+before the first command leaves the payer, and every command path (retry, new command key, another
+flow) checks the same pin store; tested: a kill between pin-persist and send leaves a pin and no
+command, never the reverse. These twelve checks are one Lean predicate
 (`verifyToken`), proved to accept only when all twelve hold, and published to
 payers as a reference verifier with conformance vectors. A release with no
 token and no bypass is a payer-side violation visible in Mirror.
@@ -127,20 +126,18 @@ range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
 projection roots, a never-zero state digest over the rules' released and
 unresolved pins, count, time), signed with the epoch's ML-DSA-87 key. Pins
 hash sorted fixed-width big-endian rows after a count. The rules extend the
-sets of the payment's shard's latest signed checkpoint; unbuilt: the runtime
+sets of the payment's shard's latest signed checkpoint; unbuilt (STATE/v1 limit): the runtime
 verifier that the priors hash to its `state_digest`.
 There is one sequence counter per (tenant, shard, epoch), shared by all of
 the tenant's programs and starting at 0 in each epoch: no two checkpoints in
 that scope share a sequence, whatever their program, each names the
 checkpoint ending just before it as its previous, and an epoch's first
 checkpoint has an all-zero previous digest; a previous link to a
-non-adjacent checkpoint is a fork. Unbuilt preconditions (the codec's
-`sign_batch` is stateless; no producer exists): the producer
-serializes checkpoints per (tenant, shard), persists each before publishing
-it, and checks it against its own stored checkpoints for a fork before
-publishing, with the required test that a crash between sign and persist
-never publishes the unpersisted checkpoint nor reuses its sequence with
-other bytes. The KEY-CERT (v1, built) signs every field, the shard count
+non-adjacent checkpoint is a fork. Built (`ShardProducer`): the producer
+serializes checkpoints per (tenant, shard), persists each before signing, and checks it against its
+own stored checkpoints for a fork before publishing; tested: a crash between sign and persist never
+publishes the unpersisted checkpoint nor reuses its sequence with other bytes. The KEY-CERT (v1,
+built) signs every field, the shard count
 included; a payer accepts one certificate per (tenant, epoch); a second with another
 key or shard count is recorded as equivocation and blocks it (a re-signature of
 the same body is not one).

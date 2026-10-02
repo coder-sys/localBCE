@@ -3,15 +3,16 @@
 ``tests/gate_vectors/gate_v1.vectors`` is produced by ``build_vectors`` with the
 worker's deterministic known-answer signer (``python -m tests.test_right_rail_gate_formats``: every key is
 a test-only seed, every signature has rnd = 0) and judged by the Lean ``gate_vectors`` executable, the only
-decoder and verifier.  Here Python must reproduce every byte of it, Lean must accept it, and ``checked`` must
+decoder and verifier.  Here Python must reproduce every byte of it, Lean must accept it, and ``seal`` must
 release a signature only when the pinned Lean ``gate_verify`` accepts.  Synthetic, non-PHI.
 """
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 import hashlib
-from itertools import count
+from itertools import count, permutations
 from pathlib import Path
 import re
 import subprocess
@@ -21,6 +22,7 @@ import unittest
 from unittest import mock
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_payer as payer
 from app import right_rail_gate_signer as signer
 from tools import gate_rules_data
 
@@ -113,10 +115,9 @@ def _leaf(n: int, seq: int, outcome: str = "ALLOW", flow: str = "", shard: int =
 
 
 def _batch(leaves, sign, prev: bytes = D[0]) -> tuple[gate.Checkpoint, bytes, list[gate.Token]]:
-    return gate.sign_batch(leaves, prev_checkpoint_digest=prev, event_head=D[1], evidence_root=D[2],
-                           state_digest=STATE, shard_count=SHARDS if leaves and leaves[0].tenant_id == TENANT
-                           else OTHER_SHARDS, created_at=NOW,
-                           sign=sign if isinstance(sign, gate.CheckedSigner) else gate.CheckedSigner(sign))
+    cp, tokens = gate.build_batch(leaves, prev_checkpoint_digest=prev, event_head=D[1], evidence_root=D[2],
+                                  state_digest=STATE, created_at=NOW)
+    return cp, sign(gate.encode_checkpoint_header(cp)), tokens
 
 
 def _flip(data: bytes, at: int, bit: int = 0x80) -> bytes:
@@ -270,10 +271,9 @@ def build_vectors() -> str:
     checkpoint_line("cross-flow", rogue_cp, signed(rogue_cp))
     # Shard 7 decides pay-0004 again under a mistyped member key that routes
     # there, and signs pay-0001 although its member routes to shard 3 (a gate
-    # without sign_batch's shard check)
+    # whose producer skipped the publish check)
     typo_leaves = [_leaf(4, 1, shard=7, member_key=member(4, 7)), _leaf(1, 2, shard=7)]
-    with mock.patch.object(gate, "shard_of", lambda *_: 7):
-        typo_cp, _, typo = _batch(typo_leaves, lambda m: sign("e7", m))
+    typo_cp, _, typo = _batch(typo_leaves, lambda m: sign("e7", m))
     checkpoint_line("shard-7", typo_cp, signed(typo_cp))
     # A gate-signed batch of seqs 90-91 whose first leaf claims seq 92: its
     # path folds to the root at position 2 too, so only index < count refuses it
@@ -615,7 +615,7 @@ class GoldenVectorTests(unittest.TestCase):
             for name, value, refusal in (("PIN", wrong, "rr_gate_mldsa87_pin_mismatch"), ("BINARY", absent, "absent_failed"),
                                          ("VERIFY_PIN", wrong, "gate_verify_pin_mismatch"), ("VERIFY", absent, "absent_failed")):
                 with self.subTest(name), mock.patch.object(signer, name, value), self.assertRaisesRegex(signer.GateSignerError, refusal):
-                    signer.checked(handle, bytes(2592), b"")(b"header")
+                    signer.seal(handle, bytes(2592), b"", None, b"header", [])
 
     def test_the_hashed_copy_cannot_be_written_or_deleted(self) -> None:
         copy = signer._private_copy(signer.BINARY)[0]
@@ -628,15 +628,6 @@ class GoldenVectorTests(unittest.TestCase):
         built = signer.ROOT / "lean" / ".lake" / "build" / "bin" / "gate_verify.exe"  # this tree's build is the pinned exe; the sources it came from are tools/tcb_report.txt's manifest line
         self.assertEqual(hashlib.sha256(built.read_bytes()).hexdigest(), signer.VERIFY_PIN.read_text("ascii").strip())
 
-    def test_only_the_signer_makes_a_checked_signer(self) -> None:
-        for source in (signer.ROOT / "app").rglob("*.py"):
-            self.assertEqual(source.read_text("utf-8").count("CheckedSigner("), int(source.name == "right_rail_gate_signer.py"), source.name)
-
-    def test_sign_batch_takes_only_a_checked_signer(self) -> None:
-        with self.assertRaisesRegex(gate.GateCodecError, "signer"):
-            gate.sign_batch([_leaf(0, 40)], prev_checkpoint_digest=D[0], event_head=D[1], evidence_root=D[2],
-                            state_digest=STATE, shard_count=SHARDS, created_at=NOW, sign=lambda m: bytes(gate.ML_DSA_87_SIGNATURE))
-
     def test_signing_is_hedged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handle = str(Path(tmp) / "k")
@@ -647,28 +638,90 @@ class GoldenVectorTests(unittest.TestCase):
                 self.assertEqual(_kat("kat-verify", pk + sig + b"\x00\x00same message", 1), b"\x01")
 
 
-class CheckedSigningTests(unittest.TestCase):
-    """The ``checked`` callback signs through custody and releases the signature only on GATE_VERIFY=ACCEPT."""
+class Scratch(unittest.TestCase):
+    """A temp directory whose tracked stores close first (Windows will not delete an open SQLite file)."""
 
-    @staticmethod
-    def _custody(tmp: str, name: str, cert_name: str = "e7", root: str = "") -> tuple[str, bytes, bytes]:
-        """A fresh epoch key file, the root public key, and the certificate for that key."""
-        handle = str(Path(tmp) / f"{name}.key")
-        epoch, tenant, shards = CERTS[cert_name]
-        body = gate.encode_key_cert(tenant, epoch, shards, signer.keygen(handle))
-        return handle, keypair(f"root-{tenant}")[0], gate.attach_signature(body, det_sign(f"root-{root or tenant}", body))
+    def setUp(self) -> None:
+        self._stores: list = []
+
+    def track(self, store):
+        self._stores.append(store)
+        return store
+
+    @contextlib.contextmanager
+    def scratch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                yield tmp
+            finally:
+                for store in self._stores:
+                    store.close()
+
+
+def custody(tmp: str, name: str = "e7") -> tuple[str, bytes, bytes]:
+    """A fresh epoch key file, the tenant's test-only root public key, and the root-signed certificate for it."""
+    handle = str(Path(tmp) / f"{name}.key")
+    epoch, tenant, shards = CERTS[name]
+    body = gate.encode_key_cert(tenant, epoch, shards, signer.keygen(handle))
+    return handle, keypair(f"root-{tenant}")[0], gate.attach_signature(body, det_sign(f"root-{tenant}", body))
+
+
+def batch_leaves(first_seq: int, n: int, start: int = 0) -> list[gate.TokenLeaf]:
+    """``n`` leaves of the main shard, payment ids ascending, seq consecutive from ``first_seq``."""
+    return sorted((_leaf(start + k, first_seq + k) for k in range(n)), key=lambda leaf: leaf.payment_id.encode())
+
+
+def payment_request(n: int) -> gate.DecideRequest:
+    """The payer's own request for payment ``n``, exactly as ``_leaf(n, ...)`` decided it."""
+    flow = "FFS_CLAIM" if n % 4 else "FFS_CYCLE"
+    return _request(flow, n, _lines(n, flow))
+
+
+def build(leaves, prev: bytes = gate.ZERO_DIGEST, head: bytes = gate.ZERO_DIGEST):
+    """A batch of ``leaves`` (re-numbered from the first one's seq) linked to ``prev`` and ``head``."""
+    leaves = [replace(leaf, seq=leaves[0].seq + i) for i, leaf in enumerate(leaves)]
+    return gate.build_batch(leaves, prev_checkpoint_digest=prev, event_head=head, evidence_root=gate.ZERO_DIGEST,
+                            state_digest=STATE, created_at=NOW)
+
+
+def _genesis(leaves) -> tuple[bytes, list[bytes]]:
+    """The header and encoded tokens of a shard's first batch."""
+    cp, tokens = build(leaves)
+    return gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
+
+
+def _u16(n: int) -> bytes:
+    return n.to_bytes(2, "big")
+
+
+def _blob(x: bytes) -> bytes:
+    return _u16(len(x)) + x
+
+
+def _list(items) -> bytes:
+    return _u16(len(items)) + b"".join(items)
+
+
+def _publish(root_pk: bytes, cert: bytes, signed: bytes, tokens: list[bytes]) -> str:
+    """``gate_verify`` PUBLISH of a shard's first checkpoint: the frame ``seal`` builds."""
+    return signer.gate_verify(1, root_pk + signer.framed(cert) + signer.framed(b"") + signer.framed(signed)
+                              + _u16(len(tokens)) + b"".join(map(signer.framed, tokens)))
+
+
+class GateVerifyModeTests(unittest.TestCase):
+    """``gate_verify``'s four modes, each with an accepting and a refusing frame; ``seal`` is mode PUBLISH."""
 
     def test_signature_leaves_only_when_gate_verify_accepts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            handle, root_pk, cert = self._custody(tmp, "e7")
-            cp, signature, tokens = _batch([_leaf(n, 40 + n) for n in range(5)], signer.checked(handle, root_pk, cert))
-            self.assertEqual(len(signature), gate.ML_DSA_87_SIGNATURE)
+            handle, root_pk, cert = custody(tmp)
+            header, tokens = _genesis([_leaf(n, n) for n in range(5)])
+            self.assertEqual(len(signer.seal(handle, root_pk, cert, None, header, tokens)), gate.ML_DSA_87_SIGNATURE)
             epoch_at = len(gate.KEY_CERT) + 1 + 2 + len(TENANT)
             body = cert[: -gate.ML_DSA_87_SIGNATURE - 2]
             by_epoch_key = gate.attach_signature(body, signer.sign(handle, body))
             epoch_edited = cert[:epoch_at] + (EPOCH + 1).to_bytes(8, "big") + cert[epoch_at + 8 :]
-            old = self._custody(tmp, "e6", "e6")
-            # Each case breaks one link; the verifier's own verdict is REJECT (exit 1) and no signature leaves
+            old = custody(tmp, "e6")
+            # Each case breaks one link; the verifier refuses and no signature leaves
             for name, key, chain, change in (
                 ("another tenant's root key", handle, (keypair(f"root-{OTHER}")[0], cert), {}),
                 ("a certificate whose signature bit was flipped", handle, (root_pk, _flip(cert, len(cert) - 1, 0x01)), {}),
@@ -679,18 +732,132 @@ class CheckedSigningTests(unittest.TestCase):
                 ("a header for another tenant", handle, (root_pk, cert), {"tenant_id": OTHER}),
                 ("an epoch 6 key and certificate on an epoch 7 header", old[0], old[1:], {}),
             ):
-                with self.subTest(name):
-                    headers: list[bytes] = []
-                    leaf = replace(_leaf(0, 1), **change)
-                    _, sig, _ = _batch([leaf], lambda m: headers.append(m) or signer.sign(key, m))
-                    framed = chain[0] + len(chain[1]).to_bytes(4, "big") + chain[1] + gate.attach_signature(headers[0], sig)
-                    done = subprocess.run([str(signer._private_copy(signer.VERIFY)[0])], input=framed, capture_output=True, check=False)
-                    self.assertEqual((done.returncode, done.stdout), (1, b"GATE_VERIFY=REJECT\n"))
-                    with self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
-                        _batch([leaf], signer.checked(key, *chain))
+                with self.subTest(name), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
+                    signer.seal(key, *chain, None, *_genesis([replace(_leaf(0, 0), **change)]))
             real = signer.sign  # a faulty signature never leaves
-            with mock.patch.object(signer, "sign", lambda h, m: _flip(real(h, m), 100)), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
-                _batch([_leaf(0, 1)], signer.checked(handle, root_pk, cert))
+            with mock.patch.object(signer, "sign", lambda h, m: _flip(real(h, m), 100)), \
+                    self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
+                signer.seal(handle, root_pk, cert, None, header, tokens)
+
+    def test_a_self_certified_root_is_never_installed(self) -> None:
+        """A certificate for the root key itself, with a checkpoint the root key signed: refused to publish and to store."""
+        name, root_pk = f"root-{TENANT}", keypair(f"root-{TENANT}")[0]
+        body = gate.encode_key_cert(TENANT, EPOCH, SHARDS, root_pk)
+        cert = gate.attach_signature(body, det_sign(name, body))
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        signed = gate.attach_signature(header, det_sign(name, header))
+        self.assertEqual(_publish(root_pk, cert, signed, tokens), "GATE_VERIFY=REJECT")
+        with tempfile.TemporaryDirectory() as tmp, contextlib.closing(
+                payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={TENANT: root_pk}, grants=())) as store:
+            store.install_cert(cert)
+            with self.assertRaisesRegex(payer.GatePayerError, "checkpoint_rejected"):
+                store.store_checkpoint(signed)
+            self.assertEqual(store._db.execute("SELECT count(*) FROM checkpoints").fetchone()[0], 0)
+
+    def test_a_signature_for_one_purpose_is_refused_for_every_other(self) -> None:
+        """One key signs a KEY-CERT body, a checkpoint header and both financial custody records; no signature
+        verifies as another purpose, and no tag is a prefix of another."""
+        name, root_pk = f"root-{TENANT}", keypair(f"root-{TENANT}")[0]
+        d = bytes(range(64))
+        tags = (gate.KEY_CERT, gate.CHECKPOINT, b"RR/FINANCIAL/CUSTODY-SIGNED/v1\x00", b"RR/FINANCIAL/PACK-SIGNED/v1\x00")
+        self.assertFalse(any(b.startswith(a) for a, b in permutations(tags, 2)))
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        good = key_cert("e7"), gate.attach_signature(header, det_sign("e7", header))
+        self.assertEqual(_publish(root_pk, *good, tokens), "GATE_VERIFY=ACCEPT")  # control: the proper pair verifies
+        messages = (gate.encode_key_cert(TENANT, EPOCH, SHARDS, keypair("e7")[0]), header, tags[2] + d, tags[3] + d)
+        signed = [gate.attach_signature(m, det_sign(name, m)) for m in messages]
+        for i, one in enumerate(signed):
+            with self.subTest(i):
+                if i != 0:  # in the certificate's place
+                    self.assertEqual(_publish(root_pk, one, good[1], tokens), "GATE_VERIFY=REJECT")
+                if i != 1:  # in the checkpoint's place
+                    self.assertEqual(signer.gate_verify(2, signer.framed(one)), "GATE_VERIFY=REJECT")
+
+    def test_a_malformed_frame_is_not_an_answer(self) -> None:
+        for mode, frame in ((1, b""), (2, b"\x00\x00\x00\x05abc"), (3, bytes(2592)), (4, b"\x00"), (9, b"")):
+            with self.subTest(mode), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                signer.gate_verify(mode, frame)
+
+    def test_index_prints_the_decoded_checkpoint(self) -> None:
+        header = _genesis([_leaf(n, n) for n in range(3)])[0]
+        signed = gate.attach_signature(header, det_sign("e7", header))
+        self.assertEqual(signer.gate_verify(2, signer.framed(signed)),
+                         f"GATE_VERIFY=INDEX {TENANT.encode().hex()} {SHARD} {EPOCH} 0 2 {gate.sha3_512(header).hex()} {'00' * 64}")
+        self.assertEqual(signer.gate_verify(2, signer.framed(signed[:-1])), "GATE_VERIFY=REJECT")
+
+    def test_store_stores_a_batch_and_names_the_checkpoint_a_second_one_forks(self) -> None:
+        root, cert = keypair(f"root-{TENANT}")[0], key_cert("e7")
+        first, second = (_genesis([_leaf(n + k, n) for n in range(2)])[0] for k in (0, 5))
+        sign = lambda header: gate.attach_signature(header, det_sign("e7", header))
+
+        def store(candidates: list[bytes], new: bytes, certs: tuple[bytes, ...] = (cert,)) -> str:
+            frame = root + _list([signer.framed(c) for c in certs]) + _list([signer.framed(c) for c in candidates])
+            return signer.gate_verify(3, frame + _u16(0) + signer.framed(new))
+
+        self.assertEqual(store([], sign(first)), "GATE_VERIFY=STORED")
+        self.assertEqual(store([sign(first)], sign(second)), f"GATE_VERIFY=FORK {gate.sha3_512(first).hex()}")
+        self.assertEqual(store([], _flip(sign(first), len(first) + 100)), "GATE_VERIFY=REJECT")
+        self.assertEqual(store([], sign(first), ()), "GATE_VERIFY=REJECT")  # no installed certificate
+
+    def test_release_accepts_a_payer_state_and_holds_with_the_first_failure(self) -> None:
+        root, cert = keypair(f"root-{TENANT}")[0], key_cert("e7")
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        signed, request = gate.attach_signature(header, det_sign("e7", header)), gate.encode_decide_request(payment_request(0))
+        grant = _blob(D[3]) + _list([_blob(D[4])]) + _list([_blob(D[6])])
+
+        def release(pinned: bool = True, released: bool = False, token: bytes = tokens[0]) -> str:
+            frame = root + _list([signer.framed(cert)]) + _u16(0) + signer.framed(signed) + NOW.to_bytes(8, "big")
+            frame += _list([grant]) + bytes([released, pinned]) + (member(0) if pinned else b"")
+            return signer.gate_verify(4, frame + signer.framed(request) + signer.framed(token))
+
+        self.assertEqual(release(), "GATE_VERIFY=ACCEPT")
+        self.assertEqual(release(pinned=False), "GATE_VERIFY=HOLD pin")
+        self.assertEqual(release(released=True), "GATE_VERIFY=HOLD released")
+        self.assertEqual(release(token=tokens[0][:-1]), "GATE_VERIFY=HOLD parse")
+
+    def test_stateless_signing_path_is_gone(self) -> None:
+        for name in ("sign_batch", "CheckedSigner"):
+            self.assertFalse(hasattr(gate, name), name)
+        self.assertFalse(hasattr(signer, "checked"))
+        for source in (signer.ROOT / "app").rglob("*.py"):
+            self.assertNotIn("sign_batch(", source.read_text("utf-8"), source.name)
+
+    def test_seal_releases_a_signature_only_for_a_publishable_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            checkpoint, tokens = build(batch_leaves(0, 5))
+            header, encoded = gate.encode_checkpoint_header(checkpoint), [gate.encode_token(t) for t in tokens]
+            signature = signer.seal(handle, root_pk, cert, None, header, encoded)
+            first = gate.attach_signature(header, signature)
+            self.assertEqual(len(signature), gate.ML_DSA_87_SIGNATURE)
+            nxt, nxt_tokens = build(batch_leaves(5, 3, 5), prev=gate.checkpoint_digest(checkpoint),
+                                     head=gate.checkpoint_digest(checkpoint))
+            nxt_header, nxt_encoded = gate.encode_checkpoint_header(nxt), [gate.encode_token(t) for t in nxt_tokens]
+            signer.seal(handle, root_pk, cert, first, nxt_header, nxt_encoded)  # the chain extends
+            refused = {
+                "a token missing": (first, nxt_header, nxt_encoded[:-1]),
+                "tokens out of seq order": (first, nxt_header, nxt_encoded[::-1]),
+                "a token of another batch": (first, nxt_header, nxt_encoded[:-1] + encoded[:1]),
+                "a fresh genesis after a published checkpoint": (first, header, encoded),
+                "a successor with no predecessor": (None, nxt_header, nxt_encoded),
+                "a last checkpoint that does not decode": (first[:-1], nxt_header, nxt_encoded),
+            }
+            back, back_tokens = build(batch_leaves(3, 2, 7), prev=gate.checkpoint_digest(checkpoint),
+                                       head=gate.checkpoint_digest(checkpoint))  # overlaps seq 3-4: a fork
+            refused["a fork of the last checkpoint"] = (first, gate.encode_checkpoint_header(back),
+                                                       [gate.encode_token(t) for t in back_tokens])
+            for name, (last, head, toks) in refused.items():
+                with self.subTest(name), self.assertRaisesRegex(signer.GateSignerError, "gate_verify"):
+                    signer.seal(handle, root_pk, cert, last, head, toks)
+
+    def test_payment_ids_ascend_within_a_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            leaves = batch_leaves(0, 3)
+            checkpoint, tokens = build([leaves[0], leaves[2], leaves[1]])
+            with self.assertRaisesRegex(signer.GateSignerError, "gate_verify"):
+                signer.seal(handle, root_pk, cert, None, gate.encode_checkpoint_header(checkpoint),
+                            [gate.encode_token(t) for t in tokens])
 
 
 class AxiomRecordTests(unittest.TestCase):
@@ -703,6 +870,21 @@ class AxiomRecordTests(unittest.TestCase):
         self.assertEqual(re.findall(r"^#guard_msgs in #print axioms (\S+)$", check, re.M), printed)
         self.assertEqual(re.findall(r"^/-- info: (.*) -/$", check, re.M),
                          (root / "lean" / "BlindLedger" / "Gate" / "AXIOMS.txt").read_text("utf-8").splitlines())
+
+    def test_the_producer_payer_and_anchor_goals_are_proved(self) -> None:
+        gate_dir = VECTORS.parents[2] / "lean" / "BlindLedger" / "Gate"
+        record = {m.group(1): line for line in (gate_dir / "AXIOMS.txt").read_text("utf-8").splitlines()
+                  if (m := re.match(r"'BlindLedger\.Gate\.(\S+)' depends", line))}
+        for name in ("storedOf_wf", "forks_comm", "chain_no_fork", "follows_twice_forks", "publishOk_sound",
+                     "publish_payer_local", "verifyToken_slice", "storeCheckpoint_slice", "firstFailure_none",
+                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
+            with self.subTest(name):
+                self.assertIn(name, record)
+                self.assertNotIn("sorryAx", record[name])
+        # The pinned verifier decides no rule: only the anchor, which runs in the decide runtime, imports them
+        self.assertNotIn("Rules", (gate_dir / "Producer.lean").read_text("utf-8"))
+        self.assertIn("import BlindLedger.Gate.Rules.Spec", (gate_dir / "Anchor.lean").read_text("utf-8"))
+
 
 def _fold(index: int, count: int, node: bytes, path: list[bytes]) -> bytes:
     """Test-only reference fold of a token-tree path (the verifier is Lean's)."""
@@ -750,10 +932,6 @@ class EncoderLawTests(unittest.TestCase):
                        replace(cp, state_digest=gate.ZERO_DIGEST)):
             with self.subTest(header), self.assertRaises(gate.GateCodecError):
                 gate.encode_checkpoint_header(header)
-        for broken in ([_leaf(0, 40), _leaf(1, 42)], [_leaf(0, 40), replace(_leaf(1, 41), epoch=8)],
-                       [_leaf(0, 40), _leaf(0, 41, flow="CAP_820")], [_leaf(0, 40, shard=5)], []):
-            with self.assertRaises(gate.GateCodecError):
-                _batch(broken, calls.append)
 
     def test_merkle_paths_fold_to_root_with_bounded_depth(self) -> None:
         for count in [*range(1, 34), 999, 1000]:

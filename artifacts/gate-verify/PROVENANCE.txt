@@ -1,14 +1,19 @@
-gate_verify.exe: the signer's self-check for gate checkpoints (PQ signing M1); the payer's verifier is M2 and is not built
+gate_verify.exe: the gate's Lean decisions for the producer's publish check and the payer's index, fork and release checks
 
 Lean/Lake executable `gate_verify` (root BlindLedger.Gate.VerifyCli), built from the
 `lean/` sources whose manifest is recorded in tools/tcb_report.txt.
-Stateless: input `root_pk (2592) || u32 BE cert length || KEY-CERT || signed checkpoint`;
-output `GATE_VERIFY=ACCEPT` (exit 0) or `REJECT` (exit 1); exit 2 for malformed input.
+One exe, four mode-byte frames (the stateless frame is deleted); exit 0 for ACCEPT, INDEX, STORED
+and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FRAME`):
+- 0x01 PUBLISH: `root_pk || u32|cert || u32|last (0 = genesis) || u32|signed new || u16 k || (u32|token)^k`.
+- 0x02 INDEX: `u32|signed checkpoint`; prints `GATE_VERIFY=INDEX <tenant hex> shard epoch from to <digest hex> <prev hex>`.
+- 0x03 STORE: `root_pk || u16 m || certs || u16 j || candidates || u16 f || fork evidence || u32|new`.
+- 0x04 RELEASE: `root_pk || u16 m || certs || u16 f || fork evidence || u32|checkpoint || u64 now || u16 g || grants ||
+  u8 released || u8 pinned [|| 32-byte key] || u32|DECIDE-REQUEST || u32|token`; answers ACCEPT or HOLD <first failure>.
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,205,568 bytes
-- SHA-256: 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916
+- Size: 4,311,040 bytes
+- SHA-256: 47ba66f6b6fc30f7769d5c48a2e42a83dd9d9e91cf07532a77e7e18a1a63fc8c
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
@@ -23,6 +28,8 @@ both with the in-tree build (a reproduced pair). When only the manifest moves (n
 commit tools/tcb_report.txt (it requires the in-tree build to equal the pins).
 
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916 (4,205,568 bytes; before the four mode frames and the
+  stateless frame's removal; replaced by the SHA-256 above).
 - gate_verify SHA-256 b9696f2ea715a775d93947025a0510cdec1432b5a4ab05bf3d8a75eafa4d171c (4,205,056 bytes; before the one-Keccak dedupe; replaced by the SHA-256 above).
 - gate_verify SHA-256 fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06 (4,207,616 bytes; before the bounded
   samplers and range loops of lean-partials-v1 commit B; replaced by the SHA-256 above).
