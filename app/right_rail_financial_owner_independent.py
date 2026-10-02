@@ -2785,10 +2785,7 @@ def _verify_determinations(
         if input_result_digest != bytes(input_evaluation["result_digest"]):
             _fail("determination:evaluation-digest")
         supporting = _evaluation_bindings_json(row["supporting_evidence_json"], "determination:evidence")
-        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")):
-            _fail("determination:evidence-binding")
-        supporting_ids = [binding["evidence_id"] for binding in supporting]
-        if str(claims[str(claim_id)]["evidence_id"]) not in supporting_ids:
+        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")) or str(claims[str(claim_id)]["evidence_id"]) not in [binding["evidence_id"] for binding in supporting]:
             _fail("determination:evidence-binding")
         for binding in supporting:
             if binding["evidence_id"] not in evidence or binding["record_digest"] != bytes(evidence[binding["evidence_id"]]["record_digest"]).hex().upper():
@@ -2797,6 +2794,8 @@ def _verify_determinations(
         if amount != claim["amount_cents"] or (decision == "OFFSET_AUTHORIZED" and claim["status"] != "AUTHORIZED") or (decision == "OFFSET_REJECTED_CORRECTION_AUTHORIZED" and claim["status"] != "REJECTED"):
             _fail("determination:claim-binding")
         decided = _time(row["decided_at_ms"], "determination:time")
+        if decided < _time(pack["approved_at_ms"], "pack:approved"):  # no authority before the pack's approval (Lean preflightOffsetDecision)
+            _fail("determination:pack-not-approved")
         if int(input_evaluation["evaluated_at_ms"]) > decided:
             _fail("determination:evaluation-chronology")
         kind = "OFFSET_AUTHORIZATION" if decision == "OFFSET_AUTHORIZED" else "CORRECTION_PAYMENT_REQUEST"

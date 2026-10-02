@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from contextlib import closing
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
@@ -637,6 +638,16 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                         self.assertEqual(changed, 1)
 
                 self._assert_rejected_without_repair(target, tamper, "determination:actor-role")
+
+    def test_determination_dated_before_its_pack_approval_fails_closed_without_repair(self) -> None:
+        # A raw row edit trips evaluation:input-determination first; a writer skipping its approval rule and pre-commit check stores a digest-consistent decision at 2_000 under a pack approved at 2_500.
+        self.db, self.clock = Path(self.temp_dir.name) / "late-pack.sqlite", _Clock()
+        self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
+        self.addCleanup(self.store.close)
+        real = owner.FinancialOwner._authority_action
+        with patch.object(self, "_fixture_pack", return_value=replace(self._fixture_pack(), approved_at_ms=2_500)), patch.object(owner.FinancialOwner, "_authority_action", lambda *args: replace(real(*args), approved_at_ms=2)), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+            self._populate_owner()
+        self._assert_rejected_without_repair(self._copy_database("before-approval.sqlite"), lambda _path: None, "determination:pack-not-approved")
 
     def test_database_verification_requires_digest_bound_authority_roster(self) -> None:
         without_roster = {key: value for key, value in self.authority_binding.items() if key != "actors"}

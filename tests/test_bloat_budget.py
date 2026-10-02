@@ -15,7 +15,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
 PRODUCT_CODE_LINES = 35_635
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 30_089
+EVIDENCE_CODE_LINES = 30_100
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 105_290
