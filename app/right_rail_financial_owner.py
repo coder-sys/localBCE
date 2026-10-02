@@ -468,6 +468,19 @@ def _payment_receipts(connection: sqlite3.Connection, obligation_id: str) -> lis
     return connection.execute("SELECT json_extract(payload_json,'$.payment_id'),before_revision,json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' ORDER BY 1", (obligation_id,)).fetchall()
 
 
+_LEAN_DECIDES_PAYMENTS: Final[bool] = False  # M3 steps 3-4 only (lean-live-m3 section 8); step 5 deletes it and the Python decider
+
+_PAYMENT_REFUSALS: Final = (None,  # Lean `refusals` order (Codec.lean), codes 1..16
+    (FinancialInputError, "payment_amount_zero"), (FinancialConflictError, "payment_request_conflict"),
+    (FinancialConflictError, "payment_origin_reversed"), (FinancialRevisionError, "obligation_revision_conflict"),
+    (FinancialConflictError, "evidence_identity_conflict"), (FinancialInputError, "evidence_chronology"),
+    (FinancialConflictError, "payment_request_unknown"), (FinancialConflictError, "payment_exceeds_unpaid_balance"),
+    (FinancialIntegrityError, "payment_missing"), (FinancialConflictError, "payment_already_reversed"),
+    (FinancialInputError, "common_origin_id"), (FinancialInputError, "local_ref"),
+    (FinancialIntegrityError, "conflict_id_form"), (FinancialIntegrityError, "payment_capacity"),
+    (FinancialIntegrityError, "lean_payment:post_rejected"), (FinancialDispatchError, "shadow_owner_read_only"))
+
+
 def _canonical(value: Mapping[str, Any]) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
@@ -2896,10 +2909,11 @@ class FinancialOwner:
         kind: str,
         payload: Mapping[str, Any],
         now_ms: int,
+        decided: Any = None,
     ) -> dict[str, Any]:
         """Recompute one obligation and append its event, bound to the new evaluation."""
 
-        before, after, evaluation = self._recompute_obligation(connection, obligation_id, now_ms=now_ms)
+        before, after, evaluation = self._recompute_obligation(connection, obligation_id, now_ms=now_ms, decided=decided)
         self._append_event(
             connection,
             aggregate_type="OBLIGATION",
@@ -2912,7 +2926,7 @@ class FinancialOwner:
         )
         return evaluation
 
-    def _recompute_obligation(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int) -> tuple[int, int, dict[str, Any]]:
+    def _recompute_obligation(self, connection: sqlite3.Connection, obligation_id: str, *, now_ms: int, decided: Any = None) -> tuple[int, int, dict[str, Any]]:
         """Lean ``evaluate`` decides; this only binds its declared result to the three writes (V.1)."""
 
         from app import right_rail_financial_engine as financial_engine
@@ -2920,7 +2934,7 @@ class FinancialOwner:
 
         pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, obligation_id)
         try:
-            decided = financial_engine.evaluate_live(
+            decided = decided or financial_engine.evaluate_live(  # M3: a payment command arrives with its Lean decision
                 connection,
                 obligation_id=obligation_id,
                 authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority),
@@ -4004,6 +4018,39 @@ class FinancialOwner:
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision != int(row["revision"])):
             _fail(FinancialRevisionError, "obligation_revision_conflict")
 
+    def _decide_payment(self, connection: sqlite3.Connection, obligation: sqlite3.Row, expected_revision: int | None, command: dict[str, Any]) -> dict[str, Any]:
+        """M3: Lean decides one payment command (BLFPAY01); this writes exactly the rows it names (V.1)."""
+
+        from app import right_rail_financial_engine as financial_engine
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        if expected_revision is not None and (type(expected_revision) is not int or not 0 <= expected_revision < 1 << 63):
+            _fail(FinancialRevisionError, "obligation_revision_conflict")
+        obligation_id, now = str(obligation["obligation_id"]), self._now()
+        try:
+            out = financial_engine.decide_payment_live(
+                connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority), now_ms=now,
+                verification={"scope": self._scope_value(), "owner_id": self.owner_id, "mode": self.mode}, expected_revision=expected_revision,
+                command=command, receipts=_payment_receipts(connection, obligation_id))
+        except (FinancialError, financial_engine.FinancialEngineError) as error:
+            _fail(FinancialIntegrityError, f"lean_payment:{error}")
+        if out.reason is not None:
+            _fail(*_PAYMENT_REFUSALS[out.reason])
+        if out.evidence is not None:
+            self._insert_evidence(connection, self._new_evidence(**out.evidence))
+        if out.status == "RECORDED":
+            connection.execute("INSERT INTO payments VALUES (:payment_id,:obligation_id,:item_id,:evidence_id,:common_origin_id,:amount_cents,:event_at_ms,:active,:reversed_by_evidence_id)", out.payment_row)
+        elif out.status == "REVERSED":
+            connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=:reversed_by_evidence_id WHERE payment_id=:payment_id AND active=1", out.payment_row)
+        if out.conflict_row is not None:
+            connection.execute("INSERT INTO financial_conflicts VALUES (:conflict_id,:obligation_id,:common_origin_id,:existing_payment_id,:candidate_evidence_id,:existing_amount_cents,:candidate_amount_cents,:reason,:visible_at_ms)", out.conflict_row)
+        if out.decided is not None:
+            self._recompute_and_record(connection, obligation_id, kind=out.event_kind, payload=out.event_payload, now_ms=now, decided=out.decided)
+        elif out.event_kind is not None:  # a confirmation of a recorded origin: an event, no new revision
+            revision = int(obligation["revision"])
+            self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=obligation_id, kind=out.event_kind, before_revision=revision, after_revision=revision, payload=out.event_payload, committed_at_ms=now)
+        return out.answer(self._current_projection(connection, obligation_id))
+
     def _projection_for_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "obligation_id": str(row["obligation_id"]),
@@ -4091,6 +4138,15 @@ class FinancialOwner:
         _id(common_origin_id, "common_origin_id")
         _id(source_id, "source_id")
         _text(source_version, "source_version")
+        if _LEAN_DECIDES_PAYMENTS:
+            _id(evidence_id, "evidence_id")
+            _id(source_version, "source_version")
+            if local_ref:
+                _id(local_ref, "local_ref")
+            with self._write() as connection:
+                return self._decide_payment(connection, self._get_obligation_row(connection, item_id), expected_revision, {
+                    "kind": "record", "payment_id": payment_id, "evidence_id": evidence_id, "common_origin_id": common_origin_id, "source_id": source_id,
+                    "source_version": source_version, "local_ref": local_ref or None, "amount_cents": amount_cents, "event_at_ms": event_at_ms, "pays_action_id": pays_action_id})
         normalized_local_ref = local_ref or f"payment:{payment_id}"
         evidence_fields = {
             "evidence_id": evidence_id,
@@ -4225,6 +4281,11 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         self._assert_actionable()
         _id(payment_id, "payment_id")
+        if _LEAN_DECIDES_PAYMENTS:
+            _id(evidence_id, "evidence_id")
+            with self._write() as connection:
+                return self._decide_payment(connection, self._get_obligation_row(connection, item_id), expected_revision, {
+                    "kind": "reverse", "payment_id": payment_id, "evidence_id": evidence_id, "common_origin_id": common_origin_id or None, "event_at_ms": event_at_ms})
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             payment = connection.execute("SELECT * FROM payments WHERE payment_id=? AND obligation_id=?", (payment_id, obligation["obligation_id"])).fetchone()
