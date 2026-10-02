@@ -8,6 +8,7 @@ import BlindLedger.Financial.BatchLaws
 import BlindLedger.Financial.CursorDifferential
 import BlindLedger.Financial.Theorems.Conservation
 import BlindLedger.Financial.CorrectionTransition.Theorems.Core
+import BlindLedger.Financial.CorrectionTransition.Theorems.Offset
 import BlindLedger.Financial.Payment.Bridge
 import BlindLedger.Financial.Payment.CodecLaws
 import BlindLedger.Financial.Payment.KAT
