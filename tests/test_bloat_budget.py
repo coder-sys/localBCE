@@ -15,7 +15,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
 PRODUCT_CODE_LINES = 35_716  # integ2 (2026-10-02): +306 over trunk 06e0b21 for the gate producer, payer and signer (gate-producer G1-G3), measured
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 28_970
+EVIDENCE_CODE_LINES = 29_490  # integ2 (2026-10-02): +520 over trunk 06e0b21 for the gate producer/payer tests, the key-purpose vectors and mutants, measured
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 124_231  # integ2 (2026-10-02): +1,078 over trunk 06e0b21 for the gate-producer docs and the re-pin provenance, measured
