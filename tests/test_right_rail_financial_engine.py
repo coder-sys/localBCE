@@ -27,6 +27,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         links_at = request.index(b"BLFIN02") - 6  # the vector's empty link list sits right before the sized input
         self.assertEqual(request[links_at:links_at + 2], b"\x00\x00")
         self.assertEqual(engine._evaluate_wire(request), expected_result)
+        self.assertEqual(engine._evaluate_wire((vectors / "request_unbound.bin").read_bytes()), (vectors / "result_unbound.expected.bin").read_bytes())  # zero roster digest: AUTHORITY_STALE
         mutants = {
             "old-magic": b"BLFCMD02" + request[8:],
             "old-version": request[:8] + b"\x00\x02" + request[10:],

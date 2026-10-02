@@ -224,6 +224,7 @@ differ).
 | 19 | INPUT_SNAPSHOT_MISSING | INPUT_SNAPSHOT_DIGEST_AVAILABLE |
 | 20 | NO_SHORTFALL | POSITIVE_SHORTFALL |
 | 21 | NO_REQUESTABLE_BALANCE | UNREQUESTED_SHORTFALL |
+| 22 | DECISION_BACKDATED_PAST_DUE | DECISION_NOT_BACKDATED_PAST_DUE |
 
 | Enumeration | Tags |
 |---|---|
@@ -334,6 +335,10 @@ over: the request (3,359 bytes), the result (5,099), the reuse request
 (9,204) and the reuse result (53); the reuse files left the tree with the exe
 (git 99ec957). Notation: `NNx64` means a digest of 64
 bytes, all equal to 0xNN. Verified against `artifacts/engine-correction/vectors/`.
+The request binds the real authority roster digest (`BF62...DDFE99`, also inside `currentInput` at offset 1016 and in the
+receipt at 2874), so the worker answers ACCEPTED. `request_unbound.bin` is the same request with every authority digest
+00x64 (the pre-M4 L2 `request.bin`, SHA-256 `234fdf65...e666`); `result_unbound.expected.bin` (157 bytes) is the worker's
+answer, REJECTED with AUTHORITY_STALE (tag 5).
 
 `request.bin`:
 
@@ -349,7 +354,7 @@ offset len field value
 117 18 actorRole 'FINANCE_DECISION'
 135 24 currentAuthorityId 'synthetic-authority-v1'
 159 8 currentAuthorityEpoch 1
-167 64 currentAuthorityDigest 00x64
+167 64 currentAuthorityDigest BF62...DDFE99 (the roster digest of 'synthetic-authority-v1', epoch 1)
 231 8 expectedRevision 4
 239 43 evaluationId 'evaluation:obligation:item-h:period-01:r4'
 282 64 evaluationResultDigest a5x64
@@ -377,7 +382,7 @@ offset len field value
 2534 105 receipt.pack 'control-pack:fixture-2026-01:v1', 1, 00x64
 2639 162 receipt.evidenceBindings 2: evidence:cash 44x64, evidence:offset 44x64
 2801 65 receipt.inputSnapshotDigest present, 5bx64
-2866 72 receipt.authority epoch 1, 00x64
+2866 72 receipt.authority epoch 1, BF62...DDFE99
 2938 229 receipt.result r4, rule 1, owed 10000000, claimed 300000, received 9700000,
   shortfall 300000, SUPPORTED / OPEN / NONE
 3167 192 receipt digests result a5x64, receipt 5ax64, evaluationResult a5x64

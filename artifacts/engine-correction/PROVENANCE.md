@@ -7,6 +7,7 @@ per-re-pin history of this file (full text there). The worker's answers over 1,5
 (`tests/fixtures/correction_exe_answers.json`).
 
 `vectors/request.bin` and `vectors/result.expected.bin` stay as the worker's known answer (`conformance/MANIFEST.sha256`).
+`request.bin` binds the real authority roster digest (ACCEPTED); `request_unbound.bin` is the old all-zero-digest request, whose answer in `result_unbound.expected.bin` is AUTHORITY_STALE.
 The independent checker's correction-engine constant is now the worker's SHA-256.
 
 ## Retired pins
