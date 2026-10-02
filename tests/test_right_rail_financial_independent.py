@@ -1301,3 +1301,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     finally:
                         connection.execute("ROLLBACK")
             self.assertGreater(len(verdicts), 2, verdicts)
+
+    def test_a_conflict_id_must_be_the_owners_canonical_form(self) -> None:
+        """A forged id that also rewrites its evaluation's snapshot passes every earlier check; only the id's form names the item, origin and evidence."""
+        evidence = {"e": {"kind": "PAYMENT_CONFIRMATION", "common_origin_id": "o", "item_id": "i"}}
+        for conflict_id, code in (("conflict:i:o:e", "conflict:existing-payment"), ("conflict:i:o:x", "conflict:id-form"), ("other", "conflict:id-form")):
+            with self.subTest(conflict_id), closing(sqlite3.connect(":memory:")) as connection:
+                connection.row_factory = sqlite3.Row
+                connection.execute("CREATE TABLE financial_conflicts (conflict_id, obligation_id, common_origin_id, candidate_evidence_id, existing_payment_id)")
+                connection.execute("CREATE TABLE financial_events (aggregate_type, kind, payload_json, committed_at_ms, event_sequence)")
+                connection.execute("INSERT INTO financial_conflicts VALUES (?,'ob','o','e',NULL)", (conflict_id,))
+                with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                    independent._verify_conflicts(connection, {}, evidence, {})

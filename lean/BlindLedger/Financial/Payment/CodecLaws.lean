@@ -10,10 +10,10 @@ open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
 /-! Form-A laws (design 5.1).  Well-formed BLFIN02 inputs are wire-admissible, so the
     existing BLFIN02 round trip applies to them. -/
 
-private theorem lenWire {v : String} (h : v.toUTF8.toList.length ≤ 512) : stringWireAdmissible v :=
+theorem lenWire {v : String} (h : v.toUTF8.toList.length ≤ 512) : stringWireAdmissible v :=
   stringWireAdmissible_of_length v (Nat.lt_of_le_of_lt h (by decide))
 
-private theorem idWire {v : String} (h : idWellFormed v = true) : stringWireAdmissible v := by
+theorem idWire {v : String} (h : idWellFormed v = true) : stringWireAdmissible v := by
   unfold idWellFormed maxIdBytes at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
   exact lenWire (Nat.le_trans h.1.2 (by decide))
@@ -23,7 +23,7 @@ private theorem textWire {v : String} (h : textWellFormed v = true) : stringWire
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
   exact lenWire h.1.2
 
-private theorem tokenWire {v : String} (h : tokenWellFormed v = true) : stringWireAdmissible v := by
+theorem tokenWire {v : String} (h : tokenWellFormed v = true) : stringWireAdmissible v := by
   unfold tokenWellFormed at h
   simp only [Bool.and_eq_true, decide_eq_true_eq] at h
   exact lenWire (Nat.le_trans h.1.2 (by decide))
@@ -34,11 +34,11 @@ private theorem usdWire : stringWireAdmissible "USD" := by
   have hChars : "USD".toList.length = 3 := by decide
   omega
 
-private theorem nat8Wire {v b : Nat} (h : v ≤ b) (hb : b < 256 ^ 8) : nat8WireAdmissible v :=
+theorem nat8Wire {v b : Nat} (h : v ≤ b) (hb : b < 256 ^ 8) : nat8WireAdmissible v :=
   Nat.lt_of_le_of_lt h hb
 
-private theorem cents8 {v : Nat} (h : v ≤ maxCents) : nat8WireAdmissible v := nat8Wire h maxCents_fits_u64
-private theorem time8 {v : Nat} (h : v ≤ maxTime) : nat8WireAdmissible v := nat8Wire h maxTime_fits_u64
+theorem cents8 {v : Nat} (h : v ≤ maxCents) : nat8WireAdmissible v := nat8Wire h maxCents_fits_u64
+theorem time8 {v : Nat} (h : v ≤ maxTime) : nat8WireAdmissible v := nat8Wire h maxTime_fits_u64
 private theorem rev8 {v : Nat} (h : v ≤ maxRevision) : nat8WireAdmissible v :=
   nat8Wire h maxRevision_fits_u64
 
@@ -46,7 +46,7 @@ private theorem listWire {α : Type} {vs : List α} {P : α → Prop} (h : vs.le
     (hP : ∀ x ∈ vs, P x) : wireListAdmissible vs P :=
   ⟨⟨h, Nat.lt_of_le_of_lt h (by decide)⟩, hP⟩
 
-private theorem optIdWire {o : Option String} (h : optionalIdWellFormed o = true) :
+theorem optIdWire {o : Option String} (h : optionalIdWellFormed o = true) :
     optionStringWireAdmissible o := by
   cases o with
   | none => trivial
@@ -111,7 +111,7 @@ private theorem paymentWire {c : FinancialContext} {p : Payment}
   exact ⟨idWire (hI _ (by simp)), idWire (hI _ (by simp)), idWire (hI _ (by simp)),
     idWire (hI _ (by simp)), idWire (hI _ (by simp)), cents8 hAmt, time8 hTime, optIdWire hRev⟩
 
-private theorem claimWire {c : FinancialContext} {x : Claim} (h : claimWellFormed c x = true) :
+theorem claimWire {c : FinancialContext} {x : Claim} (h : claimWellFormed c x = true) :
     claimWireAdmissible x := by
   unfold claimWellFormed positiveAmountWellFormed amountWellFormed timeWellFormed at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
@@ -130,7 +130,7 @@ private theorem detWire {i : FinancialInput} {d : OffsetDetermination}
     idWire (hI _ (by simp)), tokenWire hRole, idWire (hI _ (by simp)), hEq ▸ hEp, digestWire hDig,
     cents8 hAmt, listWire hSLen fun s hs => idWire (hSAll s hs), rev8 hExp, rev8 hRes, time8 hTime⟩
 
-private theorem evidenceWire {c : FinancialContext} {e : EvidenceRecord}
+theorem evidenceWire {c : FinancialContext} {e : EvidenceRecord}
     (h : evidenceWellFormed c e = true) : evidenceWireAdmissible e := by
   unfold evidenceWellFormed timeWellFormed at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
@@ -151,7 +151,7 @@ private theorem conflictWire {i : FinancialInput} {x : FinancialConflict}
     idWire (hI _ (by simp)), idWire (hI _ (by simp)), cents8 hEx, cents8 hCa,
     idWire (hI _ (by simp)), time8 hTime⟩
 
-private theorem caseWire {i : FinancialInput} {x : CaseRecord} (h : caseWellFormed i x = true) :
+theorem caseWire {i : FinancialInput} {x : CaseRecord} (h : caseWellFormed i x = true) :
     caseWireAdmissible x := by
   unfold caseWellFormed timeWellFormed at h
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, and_assoc] at h
@@ -220,7 +220,7 @@ theorem inputWire_of_wellFormed {i : FinancialInput} (h : financialInputWellForm
 
 /-! Reader round trips (one `do` step at a time, as in `CodecLaws/Correction.lean`). -/
 
-private theorem bind_step {α β : Type} {x : Option α} {a : α} {f : α → Option β} {y : Option β}
+theorem bind_step {α β : Type} {x : Option α} {a : α} {f : α → Option β} {y : Option β}
     (hx : x = some a) (hf : f a = y) : (x >>= f) = y := by
   subst hx; exact hf
 
@@ -402,7 +402,7 @@ private theorem drop_hdr {α : Type} (l : List α) (a : α) (b : List α) :
   have h := List.drop_left (l₁ := l ++ [a]) (l₂ := b)
   simpa [List.length_append] using h
 
-private theorem readOpt_append {α : Type} {f : Bytes → Option (α × Bytes)} {g : α → Bytes}
+theorem readOpt_append {α : Type} {f : Bytes → Option (α × Bytes)} {g : α → Bytes}
     {o : Option α} (rest : Bytes) (h : ∀ a, o = some a → ∀ t, f (g a ++ t) = some (a, t)) :
     readOpt f (encodeOpt g o ++ rest) = some (o, rest) := by
   cases o with

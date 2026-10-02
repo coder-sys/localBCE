@@ -66,7 +66,7 @@ CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARTIFACT_SHA256 = "C063E4AC3D440D9392470E4546C2D324CC93569D0778E36B86B7853FDAC1EDC9"  # the evaluator worker
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "0b40c44926bd1002e8bf14868c7cd591687002b7cb26266e2a836584b6f2ce96"
+RETIRED_PINS_SHA256 = "d651234edd68de2dc2aded76056f9f7c786a13cfb3087436bc9c514da001ea3d"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -2979,6 +2979,8 @@ def _verify_conflicts(
         candidate = evidence.get(candidate_id)
         if candidate is None or candidate["kind"] != "PAYMENT_CONFIRMATION" or candidate["common_origin_id"] != common_origin_id:
             _fail("conflict:candidate")
+        if conflict_id != f"conflict:{candidate['item_id']}:{common_origin_id}:{candidate_id}":
+            _fail("conflict:id-form")
         existing_id = row["existing_payment_id"]
         if existing_id is None or str(existing_id) not in payments:
             _fail("conflict:existing-payment")
