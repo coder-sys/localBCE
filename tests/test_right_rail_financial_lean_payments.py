@@ -1,5 +1,7 @@
 """Lean-live M3 step 3: the payment item and its answer on the live worker, fail closed (lean-live-m3 sections 3 and 7.2)."""
 
+import statistics
+import time
 import unittest
 from unittest.mock import patch
 
@@ -104,6 +106,21 @@ class LeanPaymentFrameTests(unittest.TestCase):
             out = self._decide(item, data, command)
             self.assertEqual((out.status, out.reason), ("REFUSED", code))
 
+    def test_a_payment_frame_costs_about_one_evaluation(self) -> None:
+        """T1: the payment frame replaces the evaluation frame one for one, so its cost must stay near it."""
+        pay, _data, _command = self._frame({})
+        timings = {}
+        for name, wire in (("evaluate", pay[13:13 + int.from_bytes(pay[9:13], "big")]), ("payment", pay)):
+            engine._evaluate_wire(wire)
+            samples = []
+            for _ in range(30):
+                started = time.perf_counter()
+                engine._evaluate_wire(wire)
+                samples.append((time.perf_counter() - started) * 1000)
+            timings[name] = statistics.median(samples)
+        print("FINANCIAL_M3_FRAME_PROFILE", timings)
+        self.assertLessEqual(timings["payment"], 2.0 * timings["evaluate"] + 2.0)
+
 
 class LeanPaymentOwnerTests(unittest.TestCase):
     """The owner with the flag on: Lean's answer is written as the rows it names, and anything else fails closed."""
@@ -163,6 +180,20 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "lean_payment:evaluator_input_rejected")
         self.assertEqual(_rows(self.store), before)
         self.assertEqual(self._pay("m3-p2")["status"], "RECORDED")  # and the honest carry is accepted
+
+    def test_an_exact_retry_costs_no_more_than_a_record(self) -> None:
+        """T3: a retry builds a snapshot and asks Lean; it must not cost more than recording."""
+        record, retry = [], []
+        for n in range(20):
+            kwargs = dict(expected_revision=self.store.obligation_detail(self.item_id)["revision"])
+            started = time.perf_counter()
+            self._pay(f"m3-t{n}", **kwargs)
+            record.append(time.perf_counter() - started)
+            started = time.perf_counter()
+            self.assertEqual(self._pay(f"m3-t{n}", **kwargs)["status"], "DUPLICATE")
+            retry.append(time.perf_counter() - started)
+        print("FINANCIAL_M3_RETRY_PROFILE", statistics.median(record), statistics.median(retry))
+        self.assertLessEqual(statistics.median(retry[3:]), 1.25 * statistics.median(record[3:]))
 
 
 def _rows(store) -> tuple:
