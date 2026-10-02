@@ -36,10 +36,11 @@ gate_axioms blind_financial_axioms`, exit 0) and the in-tree build (i2-full2) ar
 Re-pin (2026-10-02, branch gate-sha3, commit 96d744d): `gate_verify` moved from 316689f5... to the SHA-256 above (code only: the gate's
 SHA3 call sites now run the proved-equal fast sponge, Sha3Fast.lean; the three equalities were already proved; no decision changes, see the
 differential in the commit body). Two fresh `git archive 96d744d lean` stage builds (C:\Users\neers\rrb\le\stage-gs3-a and -b; guard suffixes
-gs3r-stagea2, gs3r-stageb; `lake build gate_verify gate_rules gate_axioms`, exit 0) and the in-tree build (gs3-b) are byte-identical. The pinned worker did not move.
+gs3r-stagea2, gs3r-stageb; `lake build gate_verify gate_rules gate_axioms`, exit 0) and the in-tree build (gs3-b) are byte-identical.
+Trunk 70f9606 pins worker 58CDA012 (artifacts/engine-evaluator) with this gate_verify 724de1bd (cold build and tcb_pin on the merged tree).
 
 Retired pins, not deleted (each replaced by the pin file named):
-- gate_verify SHA-256 316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea (4,311,552 bytes; before the gate's SHA3 call sites moved to the proved-equal fast sponge; replaced by the SHA-256 above).
+- gate_verify SHA-256 316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea (4,311,552 bytes; before the gate's SHA3 call sites moved to the proved-equal fast sponge; replaced by the SHA-256 above; recoverable at 1e061a5).
 - gate_verify SHA-256 47ba66f6b6fc30f7769d5c48a2e42a83dd9d9e91cf07532a77e7e18a1a63fc8c (4,311,040 bytes; before the root-key/usable-key split of the
   M4 review fix and the merge with lean-public's Sha3 lemmas; recoverable at 97d8e7b; replaced by the SHA-256 above).
 - gate_verify SHA-256 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916 (4,205,568 bytes; before the four mode frames and the
