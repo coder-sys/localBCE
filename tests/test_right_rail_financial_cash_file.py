@@ -38,6 +38,24 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest().upper()
 
 
+class _FixedClock:
+    def __init__(self, value):
+        self.value = value
+
+    def now_ms(self):
+        return self.value
+
+
+def _tables(path):
+    """Every row of every main table, rowid and value types included, and the schema: what a reader of the store sees."""
+    with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+        image = {"": connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY name").fetchall()}
+        for name, sql in connection.execute("SELECT name,sql FROM sqlite_schema WHERE type='table'").fetchall():
+            rows = connection.execute(f'SELECT {"" if "WITHOUT ROWID" in sql.upper() else "rowid,"}* FROM "{name}"').fetchall()
+            image[name] = sorted((tuple((type(value).__name__, value) for value in row) for row in rows), key=repr)
+        return image
+
+
 class ReceiverCashFileTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.RightRailFinancialAcceptanceTests()
@@ -225,8 +243,8 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.baseline = self._manifest()
         return ids
 
-    def _timed_apply(self, prepared):
-        """Apply; return the receipt and the seconds the outer write held the lock (connect, BEGIN IMMEDIATE .. COMMIT)."""
+    def _timed(self, write):
+        """Run ``write``; return its receipt and the seconds its outer write held the lock (connect, BEGIN IMMEDIATE .. COMMIT)."""
         seconds, original = [], self.store._write
         @contextmanager
         def timed(**kwargs):
@@ -239,7 +257,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 if outer:
                     seconds.append(time.perf_counter() - start)
         with patch.object(self.store, "_write", timed):
-            receipt = self._apply(prepared)
+            receipt = write()
         return receipt, seconds[0]
 
     def _grammar_file(self, count, per_item):
@@ -282,7 +300,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 previewed = time.perf_counter() - start
                 self.assertLess(previewed, 15.0)
                 self.assertEqual((preview["recorded_count"], fixtures._image(self.store.path)), (check.MAX_ROWS, live))
-                receipt, seconds = self._timed_apply(prepared)
+                receipt, seconds = self._timed(lambda: self._apply(prepared))
                 print(f"CASH1B_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
                 self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
                 self.assertLess(seconds, 5.0)
@@ -309,23 +327,121 @@ class ReceiverCashFileTests(unittest.TestCase):
             with self.subTest(given=sorted(given)), self.assertRaisesRegex(owner.FinancialIntegrityError, "evaluation_evidence_source"):
                 self.store._insert_evaluation(None, result={}, pack=None, authority_epoch=0, authority_digest=b"", **given)
 
-    def test_quarter_end_file_within_writer_timeout(self):
-        # A quarter's last file on 5,500 earlier payments (6,000 in all), applied through an already-open owner: the lock of a warm apply,
-        # not of a fresh CLI open (its verify adds seconds, docs/CORE_REDESIGN.md "Cash-file capacity") or of one 84-item history.
-        # If it fails, MAX_ROWS drops again (docs/CORE_REDESIGN.md "Cash-file capacity").
+    def _quarter_end(self, label, writer):
+        """A quarter's last file on 5,500 earlier payments (6,000 in all), written through an already-open owner by the callable
+        ``writer(prepared)`` returns: the lock of a warm apply, not of a fresh CLI open (its verify adds seconds,
+        docs/CORE_REDESIGN.md "Cash-file capacity") or of one 84-item history. Returns the seconds the lock was held."""
         ids = self._wide_store()
         shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
         for number in range(6_000 // check.MAX_ROWS - 1):
             self.store.run_batch(cash._propose(canonical(self._file_of(shapes[number % 2], check.MAX_ROWS, prefix=f"seed-{number}")), self.baseline))
         self.baseline = self._manifest()
-        prepared, verified, real = self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end")), [], independent._verify_evaluation_row
+        write, verified, real = writer(self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end"))), [], independent._verify_evaluation_row
         with patch.object(independent, "_verify_evaluation_row", lambda *args, **kwargs: verified.append(args[2]["obligation_id"]) or real(*args, **kwargs)):
-            receipt, seconds = self._timed_apply(prepared)
-        print(f"CASH1B_QUARTER_END rows={check.MAX_ROWS} lock_seconds={seconds:.2f}", flush=True)
+            receipt, seconds = self._timed(write)
+        print(f"{label} rows={check.MAX_ROWS} lock_seconds={seconds:.2f}", flush=True)
         self.assertEqual(receipt["recorded_count"], check.MAX_ROWS)
         self.assertEqual(len(verified), len(set(verified)), "each touched obligation is verified once per write, not by both the checker and the owner")
         self.assertEqual(len(verified), len(shapes[1]))
-        self.assertLess(seconds, 5.0)
+        return seconds
+
+    def test_quarter_end_file_within_writer_timeout(self):
+        # If it fails, MAX_ROWS drops again (docs/CORE_REDESIGN.md "Cash-file capacity").
+        self.assertLess(self._quarter_end("CASH1B_QUARTER_END", lambda prepared: lambda: self._apply(prepared)), 5.0)
+
+    def test_quarter_end_planned_commit_within_s1_bound(self):
+        # S1 (cash-batch-speed-v1 §6): planned on a private copy outside the lock, then only the commit holds it, and the checker
+        # verifies every touched obligation there, on the live rows. Red until U1 builds S1; then ratchet to 1.5x the measured median.
+        def planned(prepared):
+            plan = self._plan(prepared)
+            return lambda: self.store.commit_cash_plan(plan)
+        self.assertLess(self._quarter_end("CASH_S1_QUARTER_END", planned), 2.5)
+
+    # S1 plan-then-commit (cash-batch-speed-v1 §9, U1's seam). These fail with "S1 NOT BUILT" until U1 lands.
+    def _plan(self, prepared=None, clock=None):
+        if not (hasattr(cash, "plan_cash_file") and hasattr(owner.FinancialOwner, "commit_cash_plan")):
+            self.fail("S1 NOT BUILT: cash.plan_cash_file and FinancialOwner.commit_cash_plan are U1's seam (cash-batch-speed-v1 §9)")
+        return cash.plan_cash_file(*(self._prepare() if prepared is None else prepared), path=self.store.path,
+                                   trusted_authority=self.fixture.authority, clock=self.store.clock if clock is None else clock)
+
+    def _refused(self, callback, refusal, error=None):
+        before = _tables(self.store.path)
+        with self.assertRaises(Exception) as caught:
+            callback()
+        self.assertEqual(cash.refusal(caught.exception), refusal)
+        if error is not None:
+            self.assertEqual(str(caught.exception), error)
+        self.assertEqual(_tables(self.store.path), before)
+
+    def test_planned_commit_writes_the_store_and_receipt_a_direct_apply_writes(self):
+        ids = self._wide_store(count=8)
+        prepared, clock = self._prepare(self._file_of(ids, 24)), _FixedClock(self.store.clock.value + 1)
+        path = Path(tempfile.mkdtemp(dir=self.fixture.temp_dir.name)) / "direct.sqlite"
+        with closing(sqlite3.connect(self.store.path.resolve().as_uri() + "?mode=ro", uri=True)) as live, closing(sqlite3.connect(path)) as target:
+            live.backup(target)
+        with owner.FinancialOwner(path=path, config=self.store.config, trusted_authority=self.fixture.authority, clock=clock,
+                                  mode=self.store.mode, owner_id=self.store.owner_id, existing_only=True) as direct:
+            expected_receipt = direct.run_batch(prepared[0], cash_file_context=prepared[1])  # today's path, the reference
+        before = _tables(self.store.path)
+        plan = self._plan(prepared, clock)
+        self.assertEqual(_tables(self.store.path), before, "planning writes nothing live")
+        self.store.clock.value = clock.value  # the live clock reads at or after the plan's readings
+        self.assertEqual(self.store.commit_cash_plan(plan), expected_receipt)
+        self.assertEqual(_tables(self.store.path), _tables(path))
+
+    def test_planned_commit_refuses_rows_unlike_the_plan_in_any_table(self):
+        plan = self._plan()
+        with closing(sqlite3.connect(self.store.path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            self.assertEqual(set(plan.tables), {name for (name,) in connection.execute("SELECT name FROM sqlite_schema WHERE type='table'")})
+        for name, (count, high) in plan.tables.items():
+            for shape in ((count + 1, high),) + (() if high is None else ((count, high + 1),)):
+                with self.subTest(table=name, shape=shape):
+                    self._refused(lambda: self.store.commit_cash_plan(dataclasses.replace(plan, tables={**plan.tables, name: shape})), "cash_file_failed", "cash_plan_rows")
+        dropped = next(index for index, write in enumerate(plan.writes) if write[0] == "payments")  # a write the capture missed
+        self._refused(lambda: self.store.commit_cash_plan(dataclasses.replace(plan, writes=plan.writes[:dropped] + plan.writes[dropped + 1:])), "cash_file_failed", "cash_plan_rows")
+        self.assertEqual(self.store.commit_cash_plan(plan)["recorded_count"], 2)
+
+    def test_a_stale_plan_is_refused_and_a_current_one_commits(self):
+        plan = self._plan()
+        for label, value in (("behind the plan's own times", plan.last_ms - 2), ("past the window", plan.last_ms + cash.PLAN_WINDOW_MS)):
+            self.store.clock.value = value
+            with self.subTest(label):
+                self._refused(lambda: self.store.commit_cash_plan(plan), "cash_file_stale", "cash_plan_stale")
+        self.store.clock.value = plan.last_ms
+        self.assertEqual(self.store.commit_cash_plan(plan)["recorded_count"], 2)
+        self.baseline = self._manifest()
+        later = self._plan(self._prepare({**self.value, "rows": [self._row(3, 100, 2), self._row(4, 200, 3)]}))
+        self.store.run_batch(cash._propose(canonical({**self.value, "rows": [self._row(1, 50, 2, "other")], "row_count": 1, "total_cents": 50}), self.baseline))
+        self._refused(lambda: self.store.commit_cash_plan(later), "cash_file_stale", "cash_plan_stale")  # another writer moved the store first
+
+    def test_planned_commit_runs_the_checker_on_the_live_rows_inside_the_lock(self):
+        plan, seen, finish = self._plan(), [], check.CashFileCheck.finish
+        def spy(instance, connection, results):
+            seen.append((connection.in_transaction, os.path.samefile(connection.execute("PRAGMA database_list").fetchone()[2], self.store.path),
+                         connection.execute("SELECT count(*) FROM payments").fetchone()[0]))
+            return finish(instance, connection, results)
+        def refuse(instance, connection, results):
+            spy(instance, connection, results)
+            raise check.CashFileError("cash_file_failed")
+        with patch.object(check.CashFileCheck, "finish", refuse):
+            self._refused(lambda: self.store.commit_cash_plan(plan), "cash_file_failed")
+        with patch.object(check.CashFileCheck, "finish", spy):
+            self.store.commit_cash_plan(plan)
+        self.assertEqual(seen, [(True, True, plan.tables["payments"][0])] * 2)
+
+    def test_a_planned_commit_failing_mid_copy_writes_nothing(self):
+        plan, fired, begin = self._plan(), [], owner.FinancialOwner._begin
+        paid = self._query("SELECT count(*) FROM payments")[0][0]
+        def failing(instance, statement):  # the second replayed payment aborts, after the first is written
+            connection = begin(instance, statement)
+            connection.create_function("rr_test_fired", 0, lambda: fired.append(1) or 1)
+            connection.execute(f"CREATE TEMP TRIGGER IF NOT EXISTS rr_test_mid_copy BEFORE INSERT ON main.payments WHEN CASE WHEN (SELECT count(*) FROM main.payments) > {paid} "
+                               "THEN rr_test_fired() ELSE 0 END BEGIN SELECT RAISE(ABORT, 'injected_mid_copy'); END")
+            return connection
+        with patch.object(owner.FinancialOwner, "_begin", failing):
+            self._refused(lambda: self.store.commit_cash_plan(plan), "cash_file_failed")
+        self.assertEqual(fired, [1])
+        self.assertEqual(self.store.commit_cash_plan(plan)["recorded_count"], 2)
 
     def test_an_owner_write_without_a_checker_verifies_every_evaluated_obligation(self):
         verified, real = [], independent._verify_evaluation_row
