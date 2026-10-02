@@ -66,6 +66,7 @@
       "BlindLedger/Financial/FastEncode.lean",
       "BlindLedger/Financial/Payment/Chain.lean",
       "BlindLedger/Financial/Payment/Codec.lean",
+      "BlindLedger/Financial/Payment/Cursor.lean",
       "BlindLedger/Financial/Payment/Open.lean",
       "BlindLedger/Financial/Payment/Transition.lean",
       "BlindLedger/Financial/Payment/Types.lean",

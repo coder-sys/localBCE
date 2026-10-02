@@ -235,6 +235,8 @@ namespace BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Cursor.decodeFinancialInput_eq
 /-- info: 'BlindLedger.Financial.Cursor.decodeCorrectionTransitionRequest_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Cursor.decodeCorrectionTransitionRequest_eq
+/-- info: 'BlindLedger.Financial.Payment.paymentRespondBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.paymentRespondBA_eq
 /-- info: 'BlindLedger.Financial.Batch.parseBatchRequestBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Batch.parseBatchRequestBA_eq
 /-- info: 'BlindLedger.Financial.Batch.respondBatchBA_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
