@@ -818,6 +818,8 @@ class FinancialMirrorTests(unittest.TestCase):
 
     def test_cli_authorize_offset_success_retry_and_binding_conflict(self) -> None:
         self._prepare_claim()
+        self.clock.value = 1_774_864_800_000  # recorded when decided, not at today's wall time (S2: no backdating past due)
+        self.enterContext(mock.patch.object(owner._SystemClock, "now_ms", lambda _clock: self.clock.now_ms()))
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         common = self._cli_prefix() + [
             "authorize-offset",
