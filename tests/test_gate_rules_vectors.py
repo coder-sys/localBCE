@@ -11,7 +11,7 @@ LEAN = os.path.join(ROOT, "lean")
 EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name == "nt" else "gate_rules")
 # The files the runner embeds (`Run.source`); Theorems.lean is checked by the build, not linked.
 SOURCES = ["BlindLedger/Gate/Rules/Spec.lean", "BlindLedger/Gate/Rules/Fast.lean", "BlindLedger/Gate/Rules/Run.lean",
-           "BlindLedger/Sha3.lean", "lakefile.toml", "lean-toolchain"]
+           "BlindLedger/Gate/Anchor.lean", "BlindLedger/Gate/Spec.lean", "BlindLedger/Sha3.lean", "lakefile.toml", "lean-toolchain"]
 # The twin's equality proof and the Spec's theorems; the runner does not import them, so only this test notices a stale proof.
 PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Theorems"]
 

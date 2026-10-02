@@ -156,6 +156,28 @@ commit
 line 59 FFS_CLAIM 1001 7002 7001 20270305 99213 1 12500 HOLD DUPLICATE_OF_UNRESOLVED,FFS_NEAR_DUPLICATE with=57,58
 commit
 
+# `anchor` is the latest signed checkpoint's state digest, here of the latest released and
+# unresolved snaps.  That checkpoint released 261, but the store lost it: the sets the empty
+# commit sealed differ from the anchor by that row alone, so 262 is refused, not paid as new
+case lost_released_row_unanchored
+commit
+snap released 20270315 1 594304cf9a1910b5749301fd4fcca39edf4c842c00017bdd3a621aaa1d1efc7804abe8c2e405168259d7729b9ec5add8c38d71b3b975efec08d85d9277f34a9f
+released 261 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+anchor e643421a3005d9340b03a365d419ae3870ff5b654a22a1aafe202c605882fec34c7e611a7a3d43ba7ae4c43d3b5c24a20dc1251dc31fb1a1a57b151a7654ed94
+snap released 20270315 0 139c11d0c7e51ce29e17f4847cffe19627faf14b37c0c703692cdecc518e2c5f9c913e757d75ab5e668b3365c0eae2f084e2658529d9f09686445677605652b4
+line 262 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+commit UNANCHORED
+
+# The same checkpoint over intact sets: the batch decides, and 262 duplicates 261
+case anchored_sets_decide
+snap released 20270315 1 594304cf9a1910b5749301fd4fcca39edf4c842c00017bdd3a621aaa1d1efc7804abe8c2e405168259d7729b9ec5add8c38d71b3b975efec08d85d9277f34a9f
+released 261 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+commit
+anchor e643421a3005d9340b03a365d419ae3870ff5b654a22a1aafe202c605882fec34c7e611a7a3d43ba7ae4c43d3b5c24a20dc1251dc31fb1a1a57b151a7654ed94
+line 262 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD FFS_DUPLICATE_LINE with=261
+commit
+snap released 20270315 0 139c11d0c7e51ce29e17f4847cffe19627faf14b37c0c703692cdecc518e2c5f9c913e757d75ab5e668b3365c0eae2f084e2658529d9f09686445677605652b4
+
 # Once a person releases a line, the state moves it to the released set: a
 # copy is a HOLD duplicate, and the same identity is also ALREADY_DECIDED
 case released_by_a_person
@@ -1042,4 +1064,4 @@ dmf 9001 19991201
 line 203 FFS_CLAIM 1001 7001 7001 20000301 99213 1 12500 HUMAN_REVIEW STALE_DMF
 commit
 
-end 274
+end 276
