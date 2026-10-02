@@ -32,6 +32,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             "old-version": request[:8] + b"\x00\x02" + request[10:],
             "trailing-byte": request + b"\x00",
             "phantom-link": request[:links_at] + b"\x00\x01" + request[links_at + 2:],
+            "cap-plus-one": request + bytes(engine.MAX_CORRECTION_TRANSITION_BYTES + 1 - len(request)),  # refused before the worker
         }
         for name, mutant in mutants.items():
             with self.subTest(name), self.assertRaises(engine.FinancialEngineError):

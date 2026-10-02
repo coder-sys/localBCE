@@ -244,24 +244,49 @@ class EvaluatorWorkerTests(unittest.TestCase):
         fixture holds the SHA-256 over the per-input answer digests in corpus order; 991 exit 0, 567 exit 72."""
         recorded = json.loads((Path(__file__).with_name("fixtures") / "correction_exe_answers.json").read_text(encoding="utf-8"))
         corpus = _correction_corpus()
-        for data in corpus.values():
-            if not data:  # the exe's exit 72; the engine refuses an empty frame before it reaches the worker
-                with self.assertRaises(engine.FinancialEngineInputError):
-                    engine.run_correction_transition_v1(request=data)
-        answers = [hashlib.sha256(self._exchange(data) if data else b"\x01").digest() for data in corpus.values()]
+        raw = [self._exchange(data) if data else b"\x01" for data in corpus.values()]
         self.assertEqual(len(corpus), recorded["cases"])
-        self.assertEqual(hashlib.sha256(b"".join(answers)).hexdigest(), recorded["combined_sha256"])
+        self.assertEqual(hashlib.sha256(b"".join(hashlib.sha256(answer).digest() for answer in raw)).hexdigest(), recorded["combined_sha256"])
+        for data, answer in zip(corpus.values(), raw):  # and the engine entry point maps each answer as the worker gave it
+            with self.subTest(size=len(data), head=data[:10]):
+                if not data.startswith(b"BLFCMD03"):  # refused by the engine before the worker (exe: exit 72)
+                    with self.assertRaises(engine.FinancialEngineInputError):
+                        engine.run_correction_transition_v1(request=data)
+                elif answer[:1] == b"\x00":
+                    self.assertEqual(engine.run_correction_transition_v1(request=data), engine.decode_correction_transition_result(answer[1:]))
+                else:
+                    self.assertEqual(answer, b"\x01")
+                    with self.assertRaises(engine.FinancialEngineResultError) as raised:
+                        engine.run_correction_transition_v1(request=data)
+                    self.assertEqual(str(raised.exception), "evaluator_input_rejected")
 
     def test_correction_frame_at_the_cap_is_answered_inside_the_worker_bound(self) -> None:
-        request = (_VECTORS / "request.bin").read_bytes()
-        frame = request + bytes(engine.MAX_CORRECTION_TRANSITION_BYTES - len(request))  # the KAT, then padding to the 8 MiB cap
-        self.assertEqual(len(frame), engine.MAX_CORRECTION_TRANSITION_BYTES)
-        started = timeit.default_timer()
-        answer = self._exchange(frame)
-        elapsed = timeit.default_timer() - started
-        self.assertEqual(answer, b"\x01")  # trailing bytes: decode refused, after the whole frame is read
-        self.assertLess(elapsed, engine.EVALUATOR_TIMEOUT_SECONDS)
-        self.assertLess(engine._evaluator[0].commit_bytes(), engine.EVALUATOR_JOB_MEMORY_CAP_BYTES // 2, elapsed)
+        """OPEN CAPACITY LIMIT (M4 P1 finding 3; table in its commit record): the worker commits ~190 B per frame byte, so the
+        largest valid frame (7,150,826 B) needs 1.38 GB and fails closed at the 1 GB cap; W=63 (5,002,526 B) fits at 964 MB."""
+        request, data = (_VECTORS / "request.bin").read_bytes(), self._wires()[0][1]
+        at = request.index(b"BLFIN02")  # the KAT's sized input (4-byte length before it) is swapped for a 9,900-row one
+        rest = request[at + int.from_bytes(request[at - 4:at], "big"):]
+
+        def frame(width: int, key: str = "0" * 110) -> bytes:
+            padded = self._padded(data, 9_900, "x" * width, key)
+            return request[:at - 4] + len(padded).to_bytes(4, "big") + padded + rest
+
+        fits, largest = frame(63), frame(128, "0" * 121)  # an ID is at most 128 bytes (maxIdBytes)
+        self.assertLessEqual(len(largest), engine.MAX_CORRECTION_TRANSITION_BYTES)
+        for wire in (fits, largest):
+            engine._close_evaluator()
+            worker, workspace = engine._running_evaluator(), engine._evaluator[1]
+            started = timeit.default_timer()
+            if wire is fits:  # decided (an 01 or 03 answer raises), and the worker that now holds ~1 GB is recycled
+                engine.run_correction_transition_v1(request=wire)
+            else:
+                with self.assertRaises(engine.FinancialEngineContainmentError) as raised:
+                    engine.run_correction_transition_v1(request=wire)
+                self.assertEqual(str(raised.exception), "evaluator_containment")
+            self.assertLess(timeit.default_timer() - started, engine.EVALUATOR_TIMEOUT_SECONDS)  # memory, not time
+            self.assertFalse(worker.alive)
+            self.assertEqual(engine._evaluator, [])
+            self.assertFalse(workspace.exists())
 
     def test_payment_frames_keep_the_worker_flat(self) -> None:
         frames = self._frames()
