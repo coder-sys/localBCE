@@ -142,4 +142,61 @@ theorem absorb_phase (rate : Nat) (hr : rate = 72 ∨ rate = 136 ∨ rate = 168)
   simp only [List.foldl_cons, List.foldl_nil, Nat.zero_add, Nat.one_mul]
   exact absorb_blk rate hr _ (padByte data suffix ((F + 1) * rate)) P F fun j h1 h2 => hP j (by omega)
 
+theorem lane_ofSt (s : St) (i : Nat) (h : i < 25) : (ofSt s)[i]! = lane s i := by
+  match i, h with
+  | 0, _ | 1, _ | 2, _ | 3, _ | 4, _ | 5, _ | 6, _ | 7, _ | 8, _ | 9, _ | 10, _ | 11, _ | 12, _ | 13, _ | 14, _ | 15, _ | 16, _ | 17, _ | 18, _ | 19, _ | 20, _ | 21, _ | 22, _ | 23, _ | 24, _ => rfl
+  | _ + 25, h => omega
+
+/-- Squeeze one block of `rate` bytes from lanes `K`, stopping at `n` bytes. -/
+def sqOut (n rate : Nat) (K : Array UInt64) (o : ByteArray) : ByteArray :=
+  (List.range' 0 rate).foldl (fun b a => if b.size < n then b.push (K[a / 8]! >>> UInt64.ofNat (8 * (a % 8))).toUInt8 else b) o
+
+def sqOutF (n rate : Nat) (s : St) (o : ByteArray) : ByteArray :=
+  (List.range' 0 rate).foldl (fun b a => if b.size < n then b.push (lane s (a / 8) >>> UInt64.ofNat (8 * (a % 8))).toUInt8 else b) o
+
+theorem sqOut_eq (n rate : Nat) (hr : rate ≤ 168) (s : St) (o : ByteArray) : sqOut n rate (ofSt s) o = sqOutF n rate s o :=
+  foldl_rel (· = ·) _ _ _ _ _ rfl (fun a ha b c hbc => by
+    subst hbc
+    have := List.mem_range'_1.1 ha
+    simp only [lane_ofSt s (a / 8) (by omega)])
+
+def sqSlow (n rate : Nat) (b : Array UInt64 × ByteArray) (a : Nat) : Array UInt64 × ByteArray :=
+  if a > 0 then ((priv% keccakF) b.fst, sqOut n rate ((priv% keccakF) b.fst) b.snd) else (b.fst, sqOut n rate b.fst b.snd)
+
+def sqFast (n rate : Nat) (b : St × ByteArray) (a : Nat) : St × ByteArray :=
+  if a > 0 then (Fast.keccakF b.fst, sqOutF n rate (Fast.keccakF b.fst) b.snd) else (b.fst, sqOutF n rate b.fst b.snd)
+
+theorem sq_step (n rate : Nat) (hr : rate ≤ 168) (a : Nat) (b : Array UInt64 × ByteArray) (c : St × ByteArray)
+    (h : b.1 = ofSt c.1 ∧ b.2 = c.2) : (sqSlow n rate b a).1 = ofSt (sqFast n rate c a).1 ∧ (sqSlow n rate b a).2 = (sqFast n rate c a).2 := by
+  obtain ⟨h1, h2⟩ := h
+  unfold sqSlow sqFast
+  split
+  · simp only [h1, h2, keccakF_eq, sqOut_eq n rate hr, and_self]
+  · simp only [h1, h2, sqOut_eq n rate hr, and_self]
+
+theorem ite_yield {β : Type} (c : Prop) [Decidable c] (x y : β) :
+    (if c then (pure (ForInStep.yield x) : Id (ForInStep β)) else pure (ForInStep.yield y)) = pure (ForInStep.yield (if c then x else y)) := by
+  split <;> rfl
+
+theorem sponge_eq (rate : Nat) (hr : rate = 72 ∨ rate = 136 ∨ rate = 168) (suffix : UInt8) (data : ByteArray) (n : Nat) :
+    (priv% sponge) rate suffix data n = Fast.sponge rate suffix data n := by
+  have hpos : 0 < rate := by omega
+  have h1 : data.size / rate * rate ≤ data.size := Nat.div_mul_le_self ..
+  have h2 : data.size < (data.size / rate + 1) * rate := by
+    have := Nat.lt_div_mul_add (a := data.size) hpos
+    rw [Nat.succ_mul]; omega
+  unfold_priv sponge
+  unfold Fast.sponge
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size, Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one,
+    pure_bind, ite_yield, List.forIn_pure_yield_eq_foldl, List.range_eq_range']
+  rw [Nat.mul_div_cancel _ hpos]
+  exact (foldl_rel (fun (a : Array UInt64 × ByteArray) (c : St × ByteArray) => a.1 = ofSt c.1 ∧ a.2 = c.2) _
+    (sqSlow n rate) (sqFast n rate) _ _
+    ⟨absorb_phase rate hr data suffix _ _ h1 h2 (fun j hj => pad_get data suffix _ h2 j hj), rfl⟩
+    (fun a _ b c h => sq_step n rate (by omega) a b c h)).2
+
+theorem sha3_512_eq : sha3_512 = sha3_512Fast := funext fun d => sponge_eq 72 (by omega) _ d 64
+theorem shake128_eq : shake128 = shake128Fast := funext fun d => funext fun n => sponge_eq 168 (by omega) _ d n
+theorem shake256_eq : shake256 = shake256Fast := funext fun d => funext fun n => sponge_eq 136 (by omega) _ d n
+
 end BlindLedger.Semantic
