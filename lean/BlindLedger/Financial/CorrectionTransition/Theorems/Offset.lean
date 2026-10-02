@@ -107,12 +107,12 @@ private theorem authorized_sum_flip (c : Claim) (hc : c.status = .CLAIMED) :
         have this : ∀ y ∈ xs, y.claimId ≠ x.claimId :=
           fun y hy h => hn.1 (h ▸ List.mem_map.2 ⟨y, hy, rfl⟩)
         exact (List.map_congr_left (fun y hy => by simp [this y hy])).trans (List.map_id xs)
-      simp [List.filter_cons, hc, hmap]
+      simp [hc, hmap]
       omega
     · have hmx : c ∈ xs := (List.mem_cons.1 hmem).resolve_left (Ne.symm hx)
       have hxid : x.claimId ≠ c.claimId := fun h => hn.1 (h ▸ List.mem_map.2 ⟨c, hmx, rfl⟩)
       have ih := authorized_sum_flip c hc xs hmx hn.2
-      by_cases hs : x.status = .AUTHORIZED <;> simp [List.filter_cons, hxid, hs, ih] <;> omega
+      by_cases hs : x.status = .AUTHORIZED <;> simp [hxid, hs, ih] <;> omega
 
 /-- The same flip leaves the claimed sum alone. -/
 private theorem claimed_sum_flip (c : Claim) (hc : c.status = .CLAIMED) :
@@ -125,7 +125,7 @@ private theorem claimed_sum_flip (c : Claim) (hc : c.status = .CLAIMED) :
     by_cases hx : x.claimId = c.claimId
     · have := h x (List.mem_cons_self ..) hx
       subst this
-      simp [List.map_cons, evalClaimedSum, ih, hx, hc]
+      simp [List.map_cons, evalClaimedSum, ih, hc]
     · simp [List.map_cons, evalClaimedSum, ih, hx]
 
 /-- RESTATED (evaluator-v1 5.4 `stepAuthorizeOffset_adds_lawful`): authorizing moves the claim's cents
@@ -174,5 +174,48 @@ theorem applyOffsetAuthorization_adds_lawful (request : CorrectionTransitionRequ
   refine ⟨_, claim, b, hcMem, hcId, hSt, hEval, ?_, ?_, ?_, ?_, ?_, hAmtD, hAmtA⟩ <;>
     rw [hr1] <;> simp only [evaluateResult, hObl, hCash, hLawful, hClaimed]
   split <;> split <;> omega
+
+/-- The claim row becomes AUTHORIZED and nothing else about it changes; the action is the authorization. -/
+theorem applyOffsetAuthorization_claim_authorized (request : CorrectionTransitionRequest)
+    (mutation : CorrectionMutation)
+    (hMutation : (applyOffsetAuthorization request).mutation = some mutation) :
+    { mutation.dependencies.claimBefore with status := .AUTHORIZED } ∈ mutation.resultingInput.claims ∧
+      mutation.dependencies.claimBefore.claimId = request.command.claimId ∧
+      mutation.action.kind = "OFFSET_AUTHORIZATION" ∧
+      mutation.action.actionId = request.command.actionId ∧
+      mutation.action.payloadDigest = correctionActionPayloadDigest
+        (offsetActionPayload "OFFSET_AUTHORIZATION" request mutation.determination.determinationId
+          mutation.action.revision mutation.action.amountCents) := by
+  obtain ⟨cr, claim, a, b, paid, c, hP, hB⟩ := offsetAuth_ready hMutation
+  obtain ⟨-, -, -, -, -, -, -, -, hFind, -⟩ := preflightOffsetDecision_ready_facts hP
+  obtain ⟨hcMem, hcId⟩ := findClaim_mem _ _ _ hFind
+  obtain ⟨hCB, -, -, -, -, -, -, -, -, -, hK, hAid, -, -, hPay, hClaims, -⟩ := buildAuthorized_spec hB
+  rw [hCB, hClaims]
+  exact ⟨List.mem_map.2 ⟨claim, hcMem, by simp [hcId]⟩, hcId, hK, hAid, hPay⟩
+
+/-- At most once: a claim that is not CLAIMED is never authorized. -/
+theorem applyOffsetAuthorization_needs_claimed (request : CorrectionTransitionRequest)
+    (h : ∀ claim, findClaim request.currentInput.claims request.command.claimId = some claim →
+      claim.status ≠ .CLAIMED) :
+    (applyOffsetAuthorization request).mutation = none := by
+  unfold applyOffsetAuthorization
+  cases hP : preflightOffsetDecision .OFFSET_AUTHORIZED request with
+  | error r => simp [hP, reject]
+  | ok p =>
+    cases p with
+    | duplicate => simp [hP, duplicateOf, duplicate]
+    | ready cr claim a b paid c =>
+      obtain ⟨-, -, -, -, -, -, -, -, hFind, hSt, -⟩ := preflightOffsetDecision_ready_facts hP
+      exact absurd hSt (h claim hFind)
+
+/-- Authorization moves no cash and creates no debt: shortfall never grows. -/
+theorem applyOffsetAuthorization_shortfall_le (request : CorrectionTransitionRequest)
+    (mutation : CorrectionMutation)
+    (hMutation : (applyOffsetAuthorization request).mutation = some mutation) :
+    ∃ before, evaluate request.currentInput = some before ∧
+      mutation.resultingResult.shortfallCents ≤ before.shortfallCents := by
+  obtain ⟨before, claim, hb, -, -, -, -, -, -, -, -, hS, -, -⟩ :=
+    applyOffsetAuthorization_adds_lawful request mutation hMutation
+  exact ⟨before, hb, by omega⟩
 
 end BlindLedger.Financial.CorrectionTransition
