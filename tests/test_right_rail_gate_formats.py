@@ -28,7 +28,7 @@ from tools import gate_rules_data
 
 VECTORS = Path(__file__).resolve().parent / "gate_vectors" / "gate_v1.vectors"
 RULES = VECTORS.parents[1] / "gate_rules" / "rules_v1.vectors"
-TENANT, OTHER, STANDBY, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "nc-standby", "medicaid-ffs", "2026-09"
+TENANT, OTHER, STANDBY, SELF, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "nc-standby", "nc-self", "medicaid-ffs", "2026-09"
 EPOCH, NOW, EXPIRES = 7, 1_790_000_000, 1_790_086_400
 DECIDED = NOW - 3600
 D = [gate.sha3_512(bytes([i])) for i in range(17)]
@@ -38,7 +38,8 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "bad": (EPOCH, TENANT, SHARDS), "reshard": (EPOCH - 2, TENANT, 2 * SHARDS), "other8": (EPOCH + 1, OTHER, OTHER_SHARDS),
          "e8": (EPOCH + 1, TENANT, SHARDS), "reshard-e9": (EPOCH + 2, TENANT, 2 * SHARDS),
          "reshard-other9": (EPOCH + 2, OTHER, 2 * OTHER_SHARDS), "twin": (EPOCH + 1, OTHER, OTHER_SHARDS),
-         "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS)}
+         "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS),
+         "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
            "decision-id", "input", "lines-root", "state")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
@@ -532,6 +533,33 @@ def build_vectors() -> str:
     eq5_cp = _batch([standby(44, 0, 5)], lambda m: sign("eq5", m), gate.ZERO_DIGEST)[0]
     add(f"checkpoint reject eq5-after-shard-count-equivocation {h(signed(eq5_cp, 'eq5'))}")
 
+    # A self-certified root (the tenant's root key certified as its own epoch key) is root-signed, so it fences and
+    # equivocates like any certificate, but its key never verifies a checkpoint (one key per purpose)
+    root_sf = f"root-{SELF}"
+    add(f"root {SELF} {h(keypair(root_sf)[0])}")
+
+    def self_cert(epoch: int) -> bytes:
+        body = gate.encode_key_cert(SELF, epoch, OTHER_SHARDS, keypair(root_sf)[0])
+        return gate.attach_signature(body, det_sign(root_sf, body))
+
+    member_sf = next(k for i in count() if (k := gate.sha3_512(b"RR/GATE/TEST-ONLY-MEMBER/v1\x00sf" + bytes([i]))[:gate.MEMBER_KEY])
+                     and gate.shard_of(SELF, k, OTHER_SHARDS) == 0)
+
+    def self_leaf(n: int, epoch: int) -> gate.TokenLeaf:
+        return replace(_leaf(n, 0, shard=0, member_key=member_sf), tenant_id=SELF, epoch=epoch)
+
+    f1_cp, _, (f1_t,) = _batch([self_leaf(51, 1)], lambda m: sign("sf1", m), gate.ZERO_DIGEST)
+    cert("sf1")
+    checkpoint_line("self-e1", f1_cp, signed(f1_cp, "sf1"))
+    payment_line("p51", f1_t.leaf)
+    token("accept", "self-before-fence", "p51", f1_t)
+    add(f"cert accept {h(self_cert(2))}")
+    token("reject", "self-cert-fences-e1", "p51", f1_t)
+    cert("sf2", "reject")  # another key at the self-certificate's epoch: equivocation
+    add(f"cert accept {h(self_cert(3))}")
+    f3_cp = _batch([self_leaf(52, 3)], lambda m: b"", gate.ZERO_DIGEST)[0]
+    add(f"checkpoint reject self-e3-signed-by-root {h(signed(f3_cp, root_sf))}")
+
     # #2 DECIDE-RESPONSE/v1, each judged against the request it answers
     requests = {"r0": _request("FFS_CYCLE", 0, _lines(0, "FFS_CYCLE")), "r1": _request("FFS_CLAIM", 1, _lines(1)),
                 "r0-new-key": _request("FFS_CYCLE", 0, _lines(0, "FFS_CYCLE"), key=100),
@@ -771,7 +799,7 @@ class GateVerifyModeTests(unittest.TestCase):
                 if i != 0:  # in the certificate's place
                     self.assertEqual(_publish(root_pk, one, good[1], tokens), "GATE_VERIFY=REJECT")
                 if i != 1:  # in the checkpoint's place
-                    self.assertEqual(signer.gate_verify(2, signer.framed(one)), "GATE_VERIFY=REJECT")
+                    self.assertEqual(_publish(root_pk, good[0], one, tokens), "GATE_VERIFY=REJECT")
 
     def test_a_malformed_frame_is_not_an_answer(self) -> None:
         for mode, frame in ((1, b""), (2, b"\x00\x00\x00\x05abc"), (3, bytes(2592)), (4, b"\x00"), (9, b"")):
