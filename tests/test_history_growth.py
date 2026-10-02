@@ -54,7 +54,7 @@ GROWS = {  # operation: (counters that grow, owner branch, listed, strength of t
     "gate_state_pin": ("hashed peak_kib", "auth-state STATE/v2", "2026-10-01", "EXACT: decideBatch_slice"),
 }
 SQLITE = "3.53.1"  # sql_ops counts this library's VM steps; another version changes them, so re-measure
-PINNED = {  # operation: (small-history work, large-history work) on trunk b180c97 (run hgfix-measure); lower it when an operation gets cheaper
+PINNED = {  # operation: (small-history work, large-history work) on trunk 70f9606 (run hy-growth4); lower it when an operation gets cheaper
     "decision": ((11777, 32313, 1939, 119, 0), (31560, 32313, 1939, 116, 0)),
     "reverse": ((11985, 34012, 2208, 128, 0), (31768, 34012, 2208, 131, 0)),
     "evaluate": ((11738, 37428, 2208, 141, 0), (31521, 37428, 2208, 134, 0)),
@@ -62,7 +62,7 @@ PINNED = {  # operation: (small-history work, large-history work) on trunk b180c
     "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
     "continuity": ((32004, 2226225, 0, 10760, 0), (229802, 44523292, 0, 141728, 1)),
     "package": ((3152, 18608, 0, 112, 0), (3152, 18608, 0, 112, 0)),
-    "audit": ((10050, 25186, 0, 126, 0), (29833, 25186, 0, 126, 0)),
+    "audit": ((18364, 55862, 0, 182, 0), (38147, 55862, 0, 181, 0)),
     "summary": ((2796, 0, 0, 11, 0), (2796, 0, 0, 11, 0)),
     "history": ((2306, 0, 0, 328, 0), (2306, 0, 0, 328, 0)),
     "open": ((257358, 3924859, 0, 6039, 0), (2442549, 83604988, 0, 96729, 0)),
@@ -107,8 +107,8 @@ def _hooks():
         connection.set_progress_handler(_step, 1)
         return connection
 
-    def counted_wire(frame):
-        answer = wire(frame)
+    def counted_wire(frame, *rest):
+        answer = wire(frame, *rest)
         _work["frame"] += len(frame) + len(answer)
         return answer
     hashes = [(f"hashlib.{name}", functools.partial(_Hashed, getattr(hashlib, name))) for name in ("sha3_512", "sha256")]
@@ -158,6 +158,12 @@ class HistoryGrowthTests(unittest.TestCase):
         cls.addClassCleanup(fx.doCleanups)
         ids = fx._wide_store(100)
         deep, fresh, cls.seeded, cls.work = ids[-5], ids[-4:], 0, {}
+        acceptance = fx.fixture
+        cls.corrected = acceptance._build_base_for_correction()  # its own small store, so the audit also checks one correction follow-up against the engine registry
+        acceptance._record_cash(cls.corrected)
+        acceptance._reject(cls.corrected, acceptance._record_claim(cls.corrected))
+        with cls.corrected._read_snapshot() as connection:
+            cls.corrected_obligation = connection.execute("SELECT obligation_id FROM obligations WHERE item_id=?", (expected.H_ITEM_ID,)).fetchone()[0]
         folder = Path(tempfile.mkdtemp(dir=fx.fixture.temp_dir.name))
         sizes = {}
         for index, (size, tag) in enumerate(zip(SIZES["store"], "SL")):
@@ -206,8 +212,9 @@ class HistoryGrowthTests(unittest.TestCase):
         yield "package", lambda: store.decision_package(item)
 
         def audit():
-            with store._read_snapshot() as connection:
-                independent.verify_obligation_connection(connection, obligation, **store._checker_expectations())
+            for owner_store, audited in ((store, obligation), (cls.corrected, cls.corrected_obligation)):
+                with owner_store._read_snapshot() as connection:
+                    independent.verify_obligation_connection(connection, audited, **owner_store._checker_expectations())
         yield "audit", audit
         yield "summary", store.summary
         yield "history", store.history

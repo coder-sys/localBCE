@@ -4,7 +4,8 @@ Lake build of `lean/` at commit `c3239c0` (worker perf; lean tree `26203703021c5
 
 - 6,439,936 bytes; SHA-256 `58CDA012A47B82EB23BC600E9A5CC1AFA808E491A1CE33D73379E86B15DBCFD2`; the engine module pins both.
 - Two guarded fresh stage builds, each in a `git archive` of that commit: `wp-c4stagea` and `wp-c4stageb` (guard logs `wp-c4stagea-a3-L1`,
-  `wp-c4stageb-a1-L1`), each `lake build blind_financial_worker gate_verify gate_axioms blind_financial_axioms`, exit 0. Both workers are byte-identical; gate_verify (`316689F5...`) is byte-identical to its pin in both.
+  `wp-c4stageb-a1-L1`), each `lake build blind_financial_worker gate_verify gate_axioms blind_financial_axioms`, exit 0. Both workers are byte-identical.
+  Trunk 70f9606 pins this worker (`58CDA012...`) with gate_verify `724de1bd...` (`artifacts/gate-verify/PROVENANCE.txt`).
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: the XI.2 section of the re-pin commit message.
 - Why it moved: payment frames (BLFPAY01) are read from the byte array (`Payment/Cursor.lean`, `paymentRespondBA_eq`), not through a
   `List UInt8` of the whole frame: held memory per 8.1 MB item was +75 MB, now flat. No decision changes: old and new workers answered
