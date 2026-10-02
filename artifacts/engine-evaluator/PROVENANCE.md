@@ -1,16 +1,15 @@
 # Provenance: blind_financial_worker.exe
 
-Lake build of `lean/` at commit `92f34ca` (lean tree `e93a9d79643a0dd869b950774a5c446efdd1771c`), toolchain `leanprover/lean4:v4.33.1`.
+Lake build of `lean/` at commit `98df3c9` (lean tree `00a6f26e207dbb47e3c21468b6640dee18f67975`), toolchain `leanprover/lean4:v4.33.1`.
 
-- 6,418,432 bytes; SHA-256 `C063E4AC3D440D9392470E4546C2D324CC93569D0778E36B86B7853FDAC1EDC9`; the engine module pins both.
-- Two guarded fresh stage builds, each in a `git archive` of that commit: `m4p-1a` and `m4p-1b` (guard logs `m4p-1a-a1-L1`,
-  `m4p-1b-a1-L2`), each `lake build blind_financial_worker gate_verify gate_axioms blind_financial_axioms`, exit 0. Both workers are
-  byte-identical, gate_verify (`724de1bd...`, unchanged) too. A warm build in the worktree (`m4p-3`) gives the same worker.
-- Worker laws use `propext`, `Classical.choice`, `Quot.sound` only (no sorryAx, no native_decide in either stage log). Record: the XI.2 section of the re-pin commit message.
-- Why it moved: M4 L2 decides offset authorization in Lean (OFFSET_AUTHORIZED, tag 22 DECISION_BACKDATED_PAST_DUE). A command now binds the
-  authority roster digest (a zero digest is refused AUTHORITY_STALE) and a decision dated before its control pack's approval is refused.
+- 6,417,408 bytes; SHA-256 `3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B`; the engine module pins both.
+- Two guarded fresh stage builds, each in a `git archive` of that tree: `m4r-5a`, `m4r-5b`, each `lake build` of the four pin targets, exit 0. Both workers are byte-identical; `gate_verify` is still `724de1bd...`; a warm build (`m4r-6`) agrees.
+- Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: the XI.2 section of the re-pin commit message.
+- Why it moved: 98df3c9 merges M4 L2 (offset authorization, bound authority digest, tag 22) with trunk's correction-capacity work; no earlier worker had both.
 
-Retired pins, not deleted: `58CDA012A47B82EB23BC600E9A5CC1AFA808E491A1CE33D73379E86B15DBCFD2`, 6,439,936 bytes
+Retired pins, not deleted: `C063E4AC3D440D9392470E4546C2D324CC93569D0778E36B86B7853FDAC1EDC9`, 6,418,432 bytes
+(lean `92f34ca`; M4 L2 without the capacity fix); `8EB77363E6E89FD63F0646028D3CD2B23C99CF270AF7644CFFAE1FDE769D1080`, 6,438,400 bytes
+(trunk `5e500db`; capacity fix without M4 L2); `58CDA012A47B82EB23BC600E9A5CC1AFA808E491A1CE33D73379E86B15DBCFD2`, 6,439,936 bytes
 (lean commit `c3239c0`, tree `26203703021c55fa42fb3b7409dda6a519fa914d`; stage logs `wp-c4stagea`, `wp-c4stageb`; before offset authorization); `5CA5A67CD5D80F4A2D0EAED7F3EDB75D21F2470F0C07C8558FC21079EBFFA097`, 6,460,416 bytes
 (lean commit `0cd7a28`, tree `29784be72a0fb7e4a843f7d3d683edb305406389`; stage logs `m4l1-stagea`, `m4l1-stageb`; before the byte-array payment path); `36D3FE0C8CF7397808C39A808D46BF8B5206583BA01B534AE96EC8C01E1B1AEA`, 6,020,608 bytes
 (lean commit `1168909`, tree `3cf4adb420ce25197fdfb7a419055e62408af34e`; stage logs `m3s2-stagea`, `m3s2-stageb`; before correction frames); `86299A0D8925C52692F936C18C9E4A2CED7118FA32FA6B864C4A745421A1712B`, 5,724,160 bytes
