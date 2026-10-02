@@ -13,12 +13,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 35_410
+PRODUCT_CODE_LINES = 35_716  # integ2 (2026-10-02): +306 over trunk 06e0b21 for the gate producer, payer and signer (gate-producer G1-G3), measured
 # Test code and the Python gate tools under lean/; Lean files are not counted.
 EVIDENCE_CODE_LINES = 28_970
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 123_153
+MARKDOWN_BYTES = 124_231  # integ2 (2026-10-02): +1,078 over trunk 06e0b21 for the gate-producer docs and the re-pin provenance, measured
 CONFORMANCE_MARKDOWN_BYTES = 30_000
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
