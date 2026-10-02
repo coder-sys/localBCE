@@ -1,8 +1,8 @@
-manifest  c22e6daaae2a59dc8c26fe420aa184e231c6b843f8f4171bf2fd29ebc9ae17ec
+manifest  7e356b91963d53f49d354cd4e1f527184fd1e0fcb68556a6383f5e07cd7dacc3
 gate  15fb84774c4db423821e7cd50a1865f12717ce9a3fe0d093f53050c9c2fee688
-exe blind_financial_correction  c617735511364625bd0ff790f1fe662e8f96f70c38211928ddc7d39f99012dcc
+exe blind_financial_correction  874e2a37123e3b3ea5ad6e96dee9dd066c596029d5268ef9fe6f3af6a278323f
 exe blind_financial_worker  36d3fe0c8cf7397808c39a808d46bf8b5206583ba01b534ae96ec8c01e1b1aea
-exe gate_verify  9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916
+exe gate_verify  316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea
 toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files
 blind_financial_correction: 9020 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
@@ -16,8 +16,8 @@ blind_financial_worker: 8206 constants walked; axioms [lcProof, propext, Classic
   allowlist BlindLedger.Financial.WorkerCli.reserveArena x2: the worker's mimalloc arena reservation, one C call, no decision logic
   allowlist BlindLedger.Financial.serveWorker x1: the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless
   0 violations
-gate_verify: 6979 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
+gate_verify: 7310 constants walked; axioms [lcProof, propext, Classical.choice, Quot.sound]
   startup initializers: 1, 0 in BlindLedger []
   csimp: 57 theorems walked; replaced constants still called by compiled code: [List.range', Nat.all, Nat.any]
-  allowlist Init.* x193: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
+  allowlist Init.* x194: toolchain `Init`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)
   0 violations
