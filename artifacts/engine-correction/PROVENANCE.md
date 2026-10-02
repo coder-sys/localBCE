@@ -1,12 +1,17 @@
 # Provenance: blind_financial_correction.exe
 
-`blind_financial_correction.exe` is the Lean/Lake executable of the m3-step2 re-pin below: two fresh `git archive` stage builds of `lean/` at `1168909`
-(lean tree `3cf4adb420ce25197fdfb7a419055e62408af34e`), byte-identical. The release producer has NOT run on this tree; its last receipts are on the partials tree, below.
+`blind_financial_correction.exe` is the Lean/Lake executable of the integ2 re-pin below: two fresh `git archive ee97ca0 lean` stage builds
+(lean tree `e0751fe4887d4e69e020479101e4b8b7df78a7b7`), byte-identical. The release producer has NOT run on this tree; its last receipts are on the partials tree, below.
 
 - Size: 6,433,792 bytes
-- SHA-256: `C617735511364625BD0FF790F1FE662E8F96F70C38211928DDC7D39F99012DCC`
+- SHA-256: `874E2A37123E3B3EA5AD6E96DEE9DD066C596029D5268EF9FE6F3AF6A278323F`
 - Toolchain: `leanprover/lean4:v4.33.1` (Lake, no package dependencies).
-- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`. `FB659DA3...A785`, 6,300,160 bytes, recoverable at `84f3044`; `2CD5822D...1E58B`, 6,298,624 bytes, recoverable at `6326b9d` (retired 2026-10-01). `441EB3E8...F4A8A`, 6,431,232 bytes, recoverable at `a62906f` (retired 2026-10-01).
+- Retired (2026-09-30, rule `h1-v1`, in `RETIRED_PINS`): `1A5821FA...DDBE`, 6,298,112 bytes, recoverable at `3ff5c9e`; `D5A06E9F...0CBB`, 6,298,624 bytes, recoverable at `824280b`. `FB659DA3...A785`, 6,300,160 bytes, recoverable at `84f3044`; `2CD5822D...1E58B`, 6,298,624 bytes, recoverable at `6326b9d` (retired 2026-10-01). `441EB3E8...F4A8A`, 6,431,232 bytes, recoverable at `a62906f` (retired 2026-10-01). `C6177355...12DCC`, 6,433,792 bytes, recoverable at `06e0b21` (retired 2026-10-02).
+
+## integ2 re-pin (2026-10-02, rule `h1-v1`, no money or format change)
+
+Why it moved: `Sha3.lean` gained private fill/size lemmas and `sha3_512_toList_length` (proofs, no code) and `WorkerLaws.lean` changed theorems only; the correction closure imports `Sha3`; the exe has the same size and a different layout (not attributed further). The worker did not move (`36D3FE0C...1AEA`).
+Evidence: two fresh `git archive ee97ca0 lean` stage builds (`C:\Users\neers\rrb\le\stage-i2-c` and `-d`; guard suffixes `i2-stagec`, `i2-staged`, five targets, exit 0) gave this exe byte for byte, equal to the in-tree build (`i2-full2`); an earlier pair at 99b8b06 (`i2-stagea`, `i2-stageb`) gave the same bytes. Differential `bench/correction_repin_diff.py` (suffix `i2-rdiff`), `C6177355...12DCC` against this exe on the 52 requests the acceptance and constitution suites send, each with a trailing byte, truncations, bit flips, 0xFF overwrites, insertions, deletions and 0xC0 in strings: `SUMMARY captured=52 runs=11646 mismatches=0`. The vectors below are unchanged. No release-producer receipt was made for this pin.
 
 ## m3-step2 re-pin (2026-10-01, rule `h1-v1`, no money or format change)
 

@@ -2,7 +2,8 @@
 
 ``pin FILE`` replaces each ``snap KIND ASOF COUNT ?`` with the pin of the KIND
 rows after it (``pinInput`` in ``lean/BlindLedger/Gate/Rules/Spec.lean``); the
-author declares COUNT.  ``demo FILE`` writes the state-ZZ scenario with its
+author declares COUNT.  Each ``anchor ?`` becomes the state digest (``stateDigest``
+in ``lean/BlindLedger/Gate/Spec.lean``) of the latest released and unresolved snaps.  ``demo FILE`` writes the state-ZZ scenario with its
 pins and prints what it seeded.  No rule is evaluated here: each line's
 expected outcome is the reason it was seeded with (ALLOW when none), and the
 Lean runner decides and compares every line.
@@ -42,6 +43,9 @@ def pin(lines):
             head = b"".join(int(v).to_bytes(4, "big") for v in (KINDS.index(f[1]) + 1, f[2], f[3]))
             data = domain.encode() + b"\0" + head + b"".join(sorted(rows))
             out[i] = " ".join(f[:4] + [hashlib.sha3_512(data).hexdigest()])
+        elif f == ["anchor", "?"]:
+            pins = {g[1]: bytes.fromhex(g[4]) for g in map(str.split, out[:i]) if g[:1] == ["snap"]}
+            out[i] = "anchor " + hashlib.sha3_512(b"RR/GATE/STATE/v1\0" + pins["released"] + pins["unresolved"]).hexdigest()
     return out
 
 

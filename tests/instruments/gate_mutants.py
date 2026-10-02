@@ -86,9 +86,9 @@ MUTANTS = [
     ("send: pins", "| none => .ok { s with pins := (p.key, p.memberKey) :: s.pins }", "| none => .ok s"),
     ("send: write-once", "| some m => if m == p.memberKey then .ok s else .error .member_key_changed",
      "| some _ => .ok { s with pins := (p.key, p.memberKey) :: s.pins }"),
-    ("install: cert chain", "if c.certChainOk e then", "if true then"),
-    ("install: shard count >= 1", "0 < e.shardCount && ", ""),
-    ("install: shard count u32", " && e.shardCount < 2 ^ 32", ""),
+    ("install: cert chain", "if c.rootSigned e then", "if true then"),
+    ("install: usable key demanded (07fe98b fail-open)", "if c.rootSigned e then", "if c.certChainOk e then"),
+    # Equivalent, so not listed: dropping `fits`'s shard count bounds; every cert comes from `pKeyCert`'s `nat 4 1`.
     ("install: shard count fixed per tenant", "x.shardCount == e.shardCount && ", ""),
     ("install: one certificate per tenant and epoch", " && x.epoch != e.epoch", ""),
     ("install: equivocation unrecorded", "(s.certs.filter fun x => x.tenantId == e.tenantId && x.epoch == e.epoch &&\n"
@@ -109,7 +109,8 @@ MUTANTS = [
      "fence := if fits s e then s.fence else raiseFence s.fence e.tenantId e.epoch,"),
     ("store: cert tenant", "e.tenantId == x.checkpoint.tenantId && ", ""),
     ("store: cert epoch", "e.epoch == x.checkpoint.epoch &&", ""),
-    ("store: signature", " &&\n        c.sigOk e.publicKey x.header x.signature", ""),
+    ("store: signature", "(c.keyUsable e && c.sigOk e.publicKey x.header x.signature)", "c.keyUsable e"),
+    ("store: usable key", "(c.keyUsable e && c.sigOk e.publicKey x.header x.signature)", "c.sigOk e.publicKey x.header x.signature"),
     ("store: fork recorded, not stored", "| some old => some { s with forked := (old, new) :: s.forked }",
      "| some _ => some { s with checkpoints := new :: s.checkpoints }"),
     ("store: blocked epoch refused", "if blocked s x.checkpoint.tenantId x.checkpoint.epoch then none\n        else ", ""),

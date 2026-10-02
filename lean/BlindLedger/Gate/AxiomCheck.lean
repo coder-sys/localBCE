@@ -1,5 +1,7 @@
 import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
+import BlindLedger.Gate.ProducerTheorems
+import BlindLedger.Gate.AnchorTheorems
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -89,3 +91,51 @@ import BlindLedger.Gate.MlDsa87Laws
 #guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.verify_rejects_sampleInBall_none
 /-- info: 'BlindLedger.Gate.MlDsa87.verify_rejects_rejNtt_none' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.MlDsa87.verify_rejects_rejNtt_none
+/-- info: 'BlindLedger.Gate.storedOf_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storedOf_wf
+/-- info: 'BlindLedger.Gate.forks_comm' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.forks_comm
+/-- info: 'BlindLedger.Gate.chain_no_fork' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.chain_no_fork
+/-- info: 'BlindLedger.Gate.follows_twice_forks' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.follows_twice_forks
+/-- info: 'BlindLedger.Gate.publishOk_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOk_sound
+/-- info: 'BlindLedger.Gate.publish_payer_local' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publish_payer_local
+/-- info: 'BlindLedger.Gate.verifyToken_slice' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_slice
+/-- info: 'BlindLedger.Gate.storeCheckpoint_slice' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_slice
+/-- info: 'BlindLedger.Gate.firstFailure_none' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.firstFailure_none
+/-- info: 'BlindLedger.Gate.anchored_binding' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.anchored_binding
+/-- info: 'BlindLedger.Gate.anchored_binding_witness' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.anchored_binding_witness
+/-- info: 'BlindLedger.Gate.pinInput_lines' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.pinInput_lines
+/-- info: 'BlindLedger.Gate.decideAnchored_some' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decideAnchored_some
+/-- info: 'BlindLedger.Gate.load_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.load_ok
+/-- info: 'BlindLedger.Gate.step_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.step_ok
+/-- info: 'BlindLedger.Gate.natBE_beNat' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.natBE_beNat
+/-- info: 'BlindLedger.Gate.realCrypto_cert_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.realCrypto_cert_not_root
+/-- info: 'BlindLedger.Gate.accepts_cert_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.accepts_cert_not_root
+/-- info: 'BlindLedger.Gate.checkpoint_header_ne_keycert_body' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body
+/-- info: 'BlindLedger.Gate.installCert_fence' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_fence
+/-- info: 'BlindLedger.Gate.installCert_equivocation_signed' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_equivocation_signed
+/-- info: 'BlindLedger.Gate.installCert_certs' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.installCert_certs
+/-- info: 'BlindLedger.Gate.storeCheckpoint_signed' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_signed
+/-- info: 'BlindLedger.Gate.storeCheckpoint_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_not_root

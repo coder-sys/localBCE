@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
-from typing import Callable, Final, Sequence
+from typing import Final, Sequence
 
 
 class GateCodecError(ValueError):
@@ -422,58 +422,26 @@ def encode_token(token: Token) -> bytes:
     return bytes(w.out)
 
 
-class CheckedSigner:
-    """A ``sign`` callback whose signatures leave only after the independent verifier accepted them
-    (``right_rail_gate_signer.checked``); ``sign_batch`` takes no other."""
-
-    def __init__(self, sign: Callable[[bytes], bytes]) -> None:
-        self._sign = sign
-
-    def __call__(self, header: bytes) -> bytes:
-        return self._sign(header)
-
-
-def sign_batch(
+def build_batch(
     leaves: Sequence[TokenLeaf],
     *,
     prev_checkpoint_digest: bytes,
     event_head: bytes,
     evidence_root: bytes,
     state_digest: bytes,
-    shard_count: int,
     created_at: int,
-    sign: CheckedSigner,
-) -> tuple[Checkpoint, bytes, list[Token]]:
-    """One checkpoint and one ML-DSA-87 signature for a whole batch (the batching
-    invariant); each payment's token is its leaf plus a Merkle path to token_root.
-    Leaves must be one shard writer's consecutive commits: same scope, shard
-    and epoch, seq increasing by one, and at most one leaf per payment id across
-    flows; each leaf's shard is its member's under ``shard_count``.  Each leaf
-    carries the engine release and decision time that decided it, so a
-    re-issued leaf keeps its own.  Stateless: the serial, persist-before-publish
-    and fork self-check producer rules are unbuilt (Lean checkpoint section).
-    ``sign`` is the only signing call and must be a ``CheckedSigner`` (see right_rail_gate_signer)."""
-    if not isinstance(sign, CheckedSigner):
-        _fail("signer")
-    if not 1 <= len(leaves) <= MAX_BATCH:
-        _fail("batch")
+) -> tuple[Checkpoint, list[Token]]:
+    """One checkpoint for a whole batch; each payment's token is its leaf plus a Merkle path to token_root.
+    No key and no judgement: the leaves are one shard writer's consecutive commits, and Lean ``publishOk``
+    (run by ``right_rail_gate_signer.seal`` before any signature leaves custody) is the only check."""
     first = leaves[0]
-    for index, leaf in enumerate(leaves):
-        if (leaf.tenant_id, leaf.program_id, leaf.shard_id, leaf.epoch, leaf.seq) != (
-                first.tenant_id, first.program_id, first.shard_id, first.epoch, first.seq + index):
-            _fail("batch")
-        if shard_of(leaf.tenant_id, leaf.member_key, shard_count) != leaf.shard_id:
-            _fail("batch_shard")
-    if len({leaf.payment_id for leaf in leaves}) != len(leaves):
-        _fail("batch_payment")
     root, paths = merkle_tree(MERKLE_NODE, [encode_token_leaf(leaf) for leaf in leaves])
     checkpoint = Checkpoint(
         first.tenant_id, first.program_id, first.shard_id, first.seq, first.seq + len(leaves) - 1, first.epoch,
         prev_checkpoint_digest, event_head, root, evidence_root, state_digest, len(leaves), created_at,
     )
     digest = checkpoint_digest(checkpoint)
-    signature = sign(encode_checkpoint_header(checkpoint))
-    return checkpoint, signature, [Token(leaf, tuple(path), digest) for leaf, path in zip(leaves, paths)]
+    return checkpoint, [Token(leaf, tuple(path), digest) for leaf, path in zip(leaves, paths)]
 
 
 # -------------------------------------------------------- #2 DECIDE-RESPONSE/v1

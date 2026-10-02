@@ -1,3 +1,4 @@
+import BlindLedger.Gate.Anchor
 import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Sha3
 
@@ -21,7 +22,11 @@ open BlindLedger.Gate.Rules
     batch, `redo PAY` makes the batch re-decide that payment and `pay PAY
     OUTCOME` expects its `payOutcome`; `commit` decides the batch, checks the
     expectations (all lines or none), adds its released and unresolved lines
-    to those sets, and takes the result's checkpoints (`advance`).  Arrival
+    to those sets, and takes the result's checkpoints (`advance`).  `anchor
+    HEX` names the latest sealed checkpoint's state digest for the next commit,
+    which then decides only if the checkpoints it extends hash to it
+    (`Gate.decideAnchored`); without one, the runner's own last commit is that
+    checkpoint.  `commit UNANCHORED` expects the refusal.  Arrival
     order cannot change a decision (`Fast.decideBatchF_reverse`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
@@ -41,6 +46,7 @@ def hexOf (b : ByteArray) : String :=
     it from the files, so a stale runner fails that test whatever its file times. -/
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
   include_str "Fast.lean", include_str "Run.lean",  -- FAST
+  include_str "../Anchor.lean", include_str "../Spec.lean",
   include_str "../../Sha3.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
 
@@ -63,6 +69,7 @@ structure St where
   held : List Line := []
   rprior : Snapshot Line := ⟨0, 0, []⟩
   uprior : Snapshot Line := ⟨0, 0, []⟩
+  anchor : Option Nat := none
   batch : Array (Line × Option String) := #[]          -- FAST
   redo : List Nat := []
   pays : List (Nat × String) := []
@@ -140,9 +147,16 @@ def tally (ds : List Decision) : String :=
   let c := ds.foldl (· + ·.line.cents) 0
   s!"lines={ds.length} cents={c} ({money c})"
 
-def commit (st : St) : St × List String :=
+def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
+  -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
+  if !st.anchor.all fun a => Gate.anchored (fun x => (BlindLedger.Semantic.sha3_512 x.toByteArray).toList)
+      { c with anchor := a } then
+    ({ st with pinned := some p, anchor := none, batch := #[], redo := [], pays := [],
+               checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },
+     if unanchored then [] else ["RULES_UNANCHORED commit"])
+  else
   let lines := st.batch.toList.map (·.1)
   let x := Fast.Ix.build c lines                        -- FAST
   let r := x.run lines                                  -- FAST: = decideBatch c lines
@@ -153,9 +167,10 @@ def commit (st : St) : St × List String :=
     if exp.isEmpty then (true, 0, [])                   -- FAST: no reversed re-run
     else if exp.length == lines.length && sorted exp == sorted got then (true, lines.length, [])
     else (false, 0, ((sorted got).filter (!exp.contains ·)).map ("RULES_GOT " ++ ·))
-  let ok := ok && bad.isEmpty
-  let msg := msg ++ bad.map fun (q, o) => s!"RULES_PAY {q} expected={o}"
-  ({ st with pinned := some p,
+  let ok := ok && bad.isEmpty && !unanchored
+  let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
+    (if unanchored then ["RULES_ANCHORED commit"] else [])
+  ({ st with pinned := some p, anchor := none,
              extra := st.extra ++ r.released.entries.drop x.relN,     -- FAST: `run_relN`
              held := st.held ++ r.unresolved.entries.drop x.unrN,
              rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], pays := [],
@@ -165,7 +180,10 @@ def commit (st : St) : St × List String :=
 
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
-                                   batch := #[], redo := [], pays := [], done := [] }, [])
+                                   anchor := none, batch := #[], redo := [], pays := [], done := [] }, [])
+  | ["anchor", h] => do
+    guard (h.length == 128)
+    pure ({ st with anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
@@ -180,7 +198,8 @@ def step (st : St) : List String → Option (St × List String)
     pure ({ st with batch := st.batch.push (l, if e.isEmpty then none else some (" ".intercalate (lineText l :: e))) }, [])
   | ["redo", p] => do pure ({ st with redo := (← p.toNat?) :: st.redo }, [])
   | ["pay", p, o] => do pure ({ st with pays := st.pays ++ [(← p.toNat?, o)] }, [])
-  | ["commit"] => pure (commit st)
+  | ["commit"] => pure (commit st false)
+  | ["commit", "UNANCHORED"] => pure (commit st true)
   | ["report"] =>
     let by_ (p : Decision → Bool) := tally (st.done.filter p)
     pure (st, s!"REPORT all {by_ fun _ => true}" ::
