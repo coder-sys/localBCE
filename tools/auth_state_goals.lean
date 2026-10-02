@@ -177,7 +177,7 @@ where
 
 theorem pairUp_length (H : Bytes → Bytes) : ∀ xs : List Bytes, (pairUp H [] xs).length = (xs.length + 1) / 2
   | [] => rfl
-  | [_] => rfl
+  | [_] => by simp [pairUp]
   | _ :: _ :: rest => by
     have := pairUp_length H rest
     simp only [pairUp, List.length_cons]
@@ -235,12 +235,13 @@ theorem treeRoot_succ (H : Bytes → Bytes) {xs : List Bytes} (h : 2 ≤ xs.leng
 
 theorem pathRoot_small {H : Bytes → Bytes} {f i count : Nat} {node : Bytes} {path : List Bytes}
     (h : count ≤ 1) : pathRoot H [] (f + 1) i count node path = if path.isEmpty then some node else none := by
-  rw [pathRoot, if_pos h]
+  cases path <;> simp [pathRoot, h]
 
 theorem pathRoot_carry {H : Bytes → Bytes} {f i count : Nat} {node : Bytes} {path : List Bytes}
     (h1 : ¬ count ≤ 1) (hc : (i % 2 == 0 && i + 1 == count) = true) :
     pathRoot H [] (f + 1) i count node path = pathRoot H [] f (i / 2) ((count + 1) / 2) node path := by
-  rw [pathRoot, if_neg h1, if_pos hc]
+  have hc' : i % 2 = 0 ∧ i + 1 = count := by simpa using hc
+  cases path <;> simp [pathRoot, h1, hc']
 
 theorem pathRoot_step {H : Bytes → Bytes} {f i count : Nat} {node s : Bytes} {rest : List Bytes}
     (h1 : ¬ count ≤ 1) (hc : ¬ (i % 2 == 0 && i + 1 == count) = true) :
@@ -293,7 +294,7 @@ theorem path_descent {H : Bytes → Bytes} (hl : ∀ x, (H x).length = 64) {L : 
       subst hi0
       rw [pathRoot_small h1] at hp
       split at hp
-      · have hax : a = r := (Option.some.inj hp).symm
+      · have hax : a = r := (Option.some.inj hp)
         have hxr : x = r := by simpa [treeRoot] using hr
         simp [hax, hxr]
       · simp at hp
@@ -435,8 +436,7 @@ theorem logInclusion_sound {H : Bytes → Bytes} (hl : HashLen H) (es : List Byt
     es[i]? = some e ∨
       breakIn H (logLeaf id e :: pathInputs H logFuel i es.length (logLeaf H e) p ++ logInputs H es) ≠ none := by
   by_cases hg : breakIn H (logLeaf id e :: pathInputs H logFuel i es.length (logLeaf H e) p ++ logInputs H es) = none
-  swap
-  · exact Or.inr hg
+  case neg => exact Or.inr hg
   left
   have hl64 : ∀ x, (H x).length = 64 := hl
   unfold verifyInclusion at h
@@ -479,7 +479,7 @@ theorem logInclusion_complete {H : Bytes → Bytes} (es : List Bytes) (i : Nat) 
   rw [hMl] at hp
   refine ⟨p, ?_⟩
   simp only [verifyInclusion, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
-  exact ⟨hi, by simpa [logRoot, hne] using hp⟩
+  exact ⟨hi, by simpa [logRoot, hne, logFuel] using hp⟩
 
 /-- Consistency soundness: an accepted proof means the old log is a prefix of the new (append-only). -/
 theorem logConsistency_sound {H : Bytes → Bytes} (hl : HashLen H) (xs ys p : List Bytes)
