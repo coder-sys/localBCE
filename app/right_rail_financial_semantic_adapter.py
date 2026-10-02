@@ -1107,9 +1107,14 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
     pid, origin = command["payment_id"], command["common_origin_id"]
     stored = {row["payment_id"]: row for row in data["payments"]}
     by_origin = {row["common_origin_id"]: row["payment_id"] for row in data["payments"]}
+    known = {row["evidence_id"]: row for row in data["evidence"]}
+    conflict_id = f"conflict:{pre['item_id']}:{origin}:{command['evidence_id']}"
+    conflict_ids = {row["conflict_id"] for row in data["conflicts"]}
 
     def bind_evidence(row: Mapping[str, Any] | None) -> None:
-        """Every field Lean builds for the command's evidence row, from the command and the pre-state (Types.lean confirmation, reversalRecord)."""
+        """Every field Lean builds for the command's evidence row, from the command and the pre-state (Types.lean confirmation, reversalRecord).
+        Lean writes the row only when its id is not stored (evidenceSlot fresh). A stored id never reaches tags 1-3 or 5: one store holds one
+        period, so an item's evidence is its one obligation's, and a stored confirmation always has a payment of its origin (tag 4 or 6)."""
         if command["kind"] == "record":
             time = command["event_at_ms"]
             want = {"kind": "PAYMENT_CONFIRMATION", "common_origin_id": origin, "source_id": command["source_id"], "source_version": command["source_version"],
@@ -1118,8 +1123,9 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
             time = data["evaluation_time_ms"] if command["event_at_ms"] is None else command["event_at_ms"]
             want = {"kind": "PAYMENT_REVERSAL", "common_origin_id": origin or f"reversal:{pid}", "source_id": "synthetic-payment-source", "source_version": "fixture-v1",
                     "local_ref": f"reversal:{pid}", "amount_cents": stored.get(pid, {}).get("amount_cents"), "reversal_of": pid}
-        want |= {"evidence_id": command["evidence_id"], "item_id": pre["item_id"], "supersedes": None, "applicable_at_ms": time, "event_at_ms": time}
-        bind(row is not None and all(row[key] == value for key, value in want.items()))
+        want |= {"evidence_id": command["evidence_id"], "item_id": pre["item_id"], "supersedes": None, "applicable_at_ms": time, "event_at_ms": time,
+                 "received_at_ms": data["evaluation_time_ms"]}
+        bind(row is not None and command["evidence_id"] not in known and all(row[key] == value for key, value in want.items()))
 
     try:
         if reader.take(len(PAYMENT_ANSWER_MAGIC), "payment_magic") != PAYMENT_ANSWER_MAGIC:
@@ -1141,11 +1147,9 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
             reader.take(4, "anchor_bytes")
             result = reader.take(int.from_bytes(reader.take(4, "result_size"), "big"), "result")
             reader.finish()
-            if tag != 3 or evidence is not None:  # a conflict may leave an evidence row that is already stored
-                bind_evidence(evidence)
-            bind(all(row is None or row["obligation_id"] == pre["obligation_id"] for row in (payment, conflict)))
-            bind(payment is None or payment["item_id"] == pre["item_id"])
-            post = {row["evidence_id"]: row for row in data["evidence"]} | ({} if evidence is None else {evidence["evidence_id"]: evidence})
+            bind_evidence(evidence)
+            bind(payment is None or (payment["obligation_id"], payment["item_id"]) == (pre["obligation_id"], pre["item_id"]))
+            post = known | ({} if evidence is None else {evidence["evidence_id"]: evidence})
             fields: dict[str, Any] = {"evidence": evidence, "payment_row": payment, "conflict_row": conflict, "requests": tuple(requests),
                                       "decided": decode_live_result(result, {**data, "evidence": [post[key] for key in sorted(post)]})}
             if tag == 1:
@@ -1156,15 +1160,20 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
                     **{key: payment[key] for key in ("payment_id", "evidence_id", "amount_cents", "common_origin_id")},
                     **({} if receipt[2] is None else {"pays_action_id": receipt[2]})}}
             elif tag == 2:
-                bind(payment and not conflict and payment["payment_id"] == command["payment_id"] and payment["active"] == 0 and payment["reversed_by_evidence_id"] == command["evidence_id"])
+                bind(evidence and payment and not conflict and payment["payment_id"] == command["payment_id"] and payment["active"] == 0 and payment["reversed_by_evidence_id"] == command["evidence_id"])
                 fields |= {"payment_id": payment["payment_id"], "event_kind": "PAYMENT_REVERSED", "event_payload": {"payment_id": payment["payment_id"], "evidence_id": command["evidence_id"]}}
             else:
-                bind(conflict and not payment and conflict["candidate_evidence_id"] == command["evidence_id"])
+                existing = by_origin.get(origin)  # Transition.lean conflictImage, a new conflict id
+                bind(command["kind"] == "record" and not payment and conflict_id not in conflict_ids and conflict == {
+                    "conflict_id": conflict_id, "obligation_id": pre["obligation_id"], "common_origin_id": origin, "existing_payment_id": existing,
+                    "candidate_evidence_id": command["evidence_id"], "existing_amount_cents": stored.get(existing, {}).get("amount_cents"),
+                    "candidate_amount_cents": command["amount_cents"], "reason": "CONFLICTING_COMMON_ORIGIN_AMOUNT", "visible_at_ms": data["evaluation_time_ms"]})
                 fields |= {"conflict_id": conflict["conflict_id"], "event_kind": "PAYMENT_CONFLICT_VISIBLE", "event_payload": {
                     key: conflict[key] for key in ("conflict_id", "candidate_evidence_id", "existing_payment_id", "common_origin_id")}}
             return PaymentOutcome(("RECORDED", "REVERSED", "CONFLICT_RECORDED")[tag - 1], **fields)
         if tag == 4:
             outcome = PaymentOutcome("CONFLICT_UNCHANGED", conflict_id=reader.identifier("conflict_id"))
+            bind(command["kind"] == "record" and outcome.conflict_id == conflict_id and conflict_id in conflict_ids)
         elif tag == 5:
             payment_id, evidence = reader.identifier("payment_id"), evidence_row()
             bind_evidence(evidence)
