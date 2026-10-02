@@ -200,7 +200,8 @@ def build_vectors() -> str:
     for name, data in (
         ("shard-count-zero", key_cert("e7", edit=lambda b: b[: epoch_at + 8] + bytes(4) + b[epoch_at + 12 :])),
         ("epoch-over-2^63", key_cert("e7", edit=lambda b: b[:epoch_at] + (2**63).to_bytes(8, "big") + b[epoch_at + 8 :])),
-        ("other-algorithm", key_cert("e7", edit=lambda b: b[: len(gate.KEY_CERT)] + b"\x02" + b[len(gate.KEY_CERT) + 1 :])),
+        # e8 is not installed yet, so the algorithm byte is this certificate's only defect
+        ("other-algorithm", key_cert("e8", edit=lambda b: b[: len(gate.KEY_CERT)] + b"\x02" + b[len(gate.KEY_CERT) + 1 :])),
         ("trailing", good + b"\x00"),
         ("short-signature", good[: -gate.ML_DSA_87_SIGNATURE - 2] + (gate.ML_DSA_87_SIGNATURE - 1).to_bytes(2, "big") + good[-gate.ML_DSA_87_SIGNATURE : -1]),
         ("wrong-domain", gate.CHECKPOINT + good[len(gate.KEY_CERT) :]),
