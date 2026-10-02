@@ -1500,3 +1500,18 @@ def evaluate_live(
         with _evaluator_lock:  # an answer that does not bind to this request may mean the worker is out of step
             _close_evaluator()
         raise
+
+
+def decide_payment_live(connection: sqlite3.Connection, *, obligation_id: str, authority_context: semantic.TrustedAuthorityContext, now_ms: int,
+                        verification: Mapping[str, object], expected_revision: int | None, command: Mapping[str, Any], receipts: Any) -> semantic.PaymentOutcome:
+    """Lean decides one payment command on the owner's locked transaction (M3); the answer is bound back to it."""
+
+    item, data = semantic.live_payment_input(connection, obligation_id=obligation_id, authority_context=authority_context, now_ms=now_ms,
+                                             verification=verification, expected_revision=expected_revision, command=command, receipts=receipts)
+    answer = _evaluate_wire(item)
+    try:
+        return semantic.decode_payment_outcome(answer, data, command)
+    except BaseException:
+        with _evaluator_lock:
+            _close_evaluator()
+        raise
