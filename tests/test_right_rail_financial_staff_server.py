@@ -23,7 +23,6 @@ from app import right_rail_financial_engine as financial_engine
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorContinuityError,
-    FinancialMirrorDispatchError,
 )
 from app.right_rail_financial_owner import (
     FinancialBusyError,
@@ -227,9 +226,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                 common_origin_id="origin:shadow-write-must-fail",
             )
         self.assertEqual(str(read_only.exception), "shadow_owner_read_only")
-        with self.assertRaises(FinancialMirrorDispatchError) as dispatch:
-            shadow.dispatch_outbox()
-        self.assertEqual(str(dispatch.exception), "dispatch_disabled")
         self.assertEqual(shadow.export_continuity(), shadow_package_before_write)
 
         restored_bytes = shadow_path.read_bytes()

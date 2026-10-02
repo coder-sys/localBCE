@@ -8,7 +8,7 @@ With --history DIR the run also exports, restores by replay and checks its histo
 one flipped segment byte is refused. Standing claims: synthetic, non-PHI, nonpayment,
 proofSuiteId=null, production_usable=false, activation=false.
 
-Usage: python tools/load_synthetic.py --n 600 --seed 1 --batch 100 [--history DIR]
+Usage: python tests/instruments/load_synthetic.py --n 600 --seed 1 --batch 100 [--history DIR]
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.right_rail_financial_owner import (  # noqa: E402
     ControlPack, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, PopulationItem, PopulationManifest,

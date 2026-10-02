@@ -19,7 +19,6 @@ from app import right_rail_financial_owner as owner
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorContinuityError,
-    FinancialMirrorDispatchError,
     FinancialMirrorInputError,
     MAX_PACKAGE_BYTES,
 )
@@ -857,7 +856,7 @@ class FinancialMirrorTests(unittest.TestCase):
     def test_cli_payment_link_reaches_the_owner(self) -> None:
         sequence = self.mirror.summary()["sequence"]
         status, _output, stderr = self._invoke_cli(self._cli_prefix() + [
-            "record-payment", "--item-id", H_ITEM_ID, "--payment-id", "payment:cli:h", "--common-origin-id", "origin:cli:h",
+            "record-payment-evidence", "--item-id", H_ITEM_ID, "--payment-id", "payment:cli:h", "--common-origin-id", "origin:cli:h",
             "--amount-cents", "1", "--evidence-id", "evidence:cli:h", "--event-at-ms", "1",
             "--expected-revision", str(self.mirror.obligation_detail(H_ITEM_ID)["revision"]), "--pays-action-id", "action:cli:none",
         ])
@@ -1046,10 +1045,6 @@ class FinancialMirrorTests(unittest.TestCase):
             self.mirror.restore_continuity(package, existing)
         self.assertEqual(existing.read_bytes(), b"existing-destination")
 
-    def test_dispatch_remains_rejected(self) -> None:
-        with self.assertRaisesRegex(FinancialMirrorDispatchError, "dispatch_disabled"):
-            self.mirror.dispatch_outbox()
-
     def test_continuity_validation_requires_caller_trusted_authority(self) -> None:
         package = self.mirror.export_continuity()
         scope = {
@@ -1119,8 +1114,8 @@ class FinancialMirrorTests(unittest.TestCase):
         }
         scope = [text for key in ("state_id", "deployment_id", "program_id", "period_id") for text in (f"--{key.replace('_', '-')}", getattr(self.config, key))]
         base = ["--database", str(self.db), "--authority-file", str(self._authority_file()), *scope]
-        cli_reads = (["summary"], ["list-obligations", "--status", "ALL"], ["detail", "--item-id", H_ITEM_ID],
-                     ["evaluation-receipt", "--item-id", H_ITEM_ID], ["history", "--limit", "200"], ["verify-integrity"])
+        cli_reads = (["summary"], ["list-obligations", "--status", "ALL"], ["obligation-detail", "--item-id", H_ITEM_ID],
+                     ["current-evaluation-receipt", "--item-id", H_ITEM_ID], ["history", "--limit", "200"], ["verify-integrity"])
         with ExitStack() as patches:
             for name in ("summary", "list_obligations", "obligation_detail", "current_evaluation_receipt", "decision_package", "history",
                          "correction_followup_outputs", "program_funding_summary", "verify_integrity", "acknowledge_action"):

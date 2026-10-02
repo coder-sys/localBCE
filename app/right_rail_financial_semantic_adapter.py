@@ -1043,14 +1043,6 @@ def decode_live_result(payload: bytes, data: Mapping[str, Any]) -> DecodedLeanRe
         _fail(SemanticAdapterCodecError, "result_record_shape")
 
 
-def encode_blfres02_result(result: DecodedLeanResult) -> bytes:
-    """Encode a fully typed result for deterministic vectors and round trips."""
-
-    if type(result) is not DecodedLeanResult:
-        _fail(SemanticAdapterInputError, "result_type")
-    return _encode_blfres02_result(result)
-
-
 def _verify_owner_connection(
     connection: sqlite3.Connection,
     *,

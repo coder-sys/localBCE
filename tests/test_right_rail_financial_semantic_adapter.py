@@ -926,7 +926,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             case_status="OPEN",
             delivery_status="NONE",
         )
-        encoded = adapter.encode_blfres02_result(result)
+        encoded = adapter._encode_blfres02_result(result)
         self.assertEqual(encoded[: len(adapter.BLFRES02_MAGIC)], adapter.BLFRES02_MAGIC)
         decoded = adapter.decode_live_result(encoded, data)
         self.assertEqual(decoded, result)
@@ -937,7 +937,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             adapter.decode_live_result(encoded + b"\x00", data)
         with self.assertRaisesRegex(adapter.SemanticAdapterAuthorityError, "result_authority_binding"):
             adapter.decode_live_result(
-                adapter.encode_blfres02_result(replace(result, authority_epoch=result.authority_epoch + 1)), data
+                adapter._encode_blfres02_result(replace(result, authority_epoch=result.authority_epoch + 1)), data
             )
         bad_tag = bytearray(encoded)
         bad_tag[-1] = 0x7F

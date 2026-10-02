@@ -4,7 +4,7 @@ Each mutant weakens one conjunct of ``BlindLedger/Gate/Spec.lean``, rebuilds
 ``gate_vectors`` and must make the vectors FAIL; the spec is then restored
 byte for byte and must PASS.  The optional ``start:stop`` slices the list,
 for batches.  Run only under the guard:
-``python tools/gate_mutants.py <lean dir> <vectors file> <lake.exe> [start:stop]``.
+``python tests/instruments/gate_mutants.py <lean dir> <vectors file> <lake.exe> [start:stop]``.
 """
 
 import hashlib

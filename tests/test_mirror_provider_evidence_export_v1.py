@@ -84,7 +84,7 @@ def _selection_for_graph_profile(admission, graph_profile) -> producer.ProviderE
             source,
             profile=graph_profile,
         )
-    graph_artifact, _telemetry = graph_producer.build_report(
+    graph_artifact = graph_producer.build_report(
         graph_producer.canonical_input(value),
         profile=graph_profile,
     )
@@ -126,7 +126,7 @@ def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
             source,
             profile=profile.NC_MEDICAID_GRAPH_PROFILE,
         )
-    graph_artifact, _telemetry = graph_producer.build_report(
+    graph_artifact = graph_producer.build_report(
         graph_producer.canonical_input(value),
         profile=profile.NC_MEDICAID_GRAPH_PROFILE,
     )

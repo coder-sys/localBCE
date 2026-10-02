@@ -3,7 +3,7 @@
 Reruns the Hospital H journey through the real staff server and staff.js and
 fails if any measured unit is worse than docs/scorecard/hospital_h.json in its
 direction. An improvement passes but is printed so the file gets rewritten with
-`python tools/right_rail_scorecard.py --write`.
+`python tests/instruments/right_rail_scorecard.py --write`.
 """
 
 import http.server
@@ -13,7 +13,7 @@ import tempfile
 import threading
 import unittest
 
-from tools import right_rail_scorecard as scorecard
+from tests.instruments import right_rail_scorecard as scorecard
 
 _ROWS = "".join(f'<a class="row"><span class="dot {"need" if n == 20 else "ok"}"></span></a>' for n in range(1, 21))
 _PAGE = f'<!doctype html><p id="connection-status"></p><div id="qlist">{_ROWS}</div>'.encode()

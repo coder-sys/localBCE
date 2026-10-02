@@ -11,24 +11,16 @@ carried in the artifact.
 from __future__ import annotations
 
 from copy import deepcopy
-import ctypes
 from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import sys
 import stat
-import time
 from typing import Mapping, Sequence
 
 from app.mirror.error_boundary import raise_redacted
-
-try:
-    import resource
-except ImportError:  # pragma: no cover - Windows does not ship resource.
-    resource = None  # type: ignore[assignment]
 
 
 class ProviderTrustGraphError(ValueError):
@@ -759,91 +751,6 @@ def _evaluate(
     return [_finding(FINDING_CONTINUITY, snapshot_id, refs, profile=view)], []
 
 
-def _source_for_demo(source_id: str, source_kind: str, *, observation_time: int, records: list[dict[str, object]], complete: bool = True, nonmembership: list[str] | None = None, end: int = 9_000) -> dict[str, object]:
-    is_credential = source_kind == SOURCE_CREDENTIAL_KIND
-    source: dict[str, object] = {
-        "source_id": source_id,
-        "source_kind": source_kind,
-        "coverage_scope": SCOPE,
-        "coverage_observation_time": observation_time,
-        "coverage_effective_start": 6_000,
-        "coverage_effective_end": end,
-        "coverage_complete": complete,
-        "coverage_authority_id": AUTH_CREDENTIAL_ID if is_credential else AUTH_ENROLLMENT_ID,
-        "nonmembership_keys": [] if nonmembership is None else nonmembership,
-        "records": records,
-        "provenance": {
-            "provenance_id": PROVENANCE_CREDENTIAL_ID if is_credential else PROVENANCE_ENROLLMENT_ID,
-            "integrity_digest": "0" * 128,
-        },
-    }
-    source["provenance"]["integrity_digest"] = source_integrity_digest(source)  # type: ignore[index]
-    return source
-
-
-def _demo_record(kind: str, *, record_number: int = 1, observation_time: int = 7_000, valid_until: int = 9_000, status: str = STATUS_ACTIVE, terminated_at: int = 0) -> dict[str, object]:
-    prefix = "CREDENTIAL" if kind == "CREDENTIAL" else "ENROLLMENT"
-    return {
-        "record_id": f"SYNTH_{prefix}_RECORD_{record_number:03d}",
-        "record_kind": kind,
-        "provider_id": PROVIDER_GRAPH_SUBJECT,
-        "credential_id": CREDENTIAL_ID,
-        "enrollment_id": ENROLLMENT_ID,
-        "subject_key": SUBJECT_KEY,
-        "observed_at": observation_time,
-        "issued_at": 6_000,
-        "valid_from": 6_000,
-        "valid_until": valid_until,
-        "terminated_at": terminated_at,
-        "status": status,
-    }
-
-
-def demo_input(case: str = "confirmed") -> dict[str, object]:
-    """Build one canonical synthetic input vector for tests and operators."""
-
-    observation_time = 7_000
-    credential_record = _demo_record("CREDENTIAL", observation_time=observation_time)
-    enrollment_record = _demo_record("ENROLLMENT", observation_time=observation_time)
-    credential_records = [credential_record]
-    enrollment_records = [enrollment_record]
-    credential_complete = True
-    enrollment_complete = True
-    credential_nonmembership: list[str] = []
-    enrollment_nonmembership: list[str] = []
-    credential_end = 9_000
-    enrollment_end = 9_000
-    if case == "expired":
-        credential_record["valid_until"] = 6_500
-        credential_record["status"] = STATUS_EXPIRED
-    elif case == "terminated":
-        enrollment_record["terminated_at"] = 6_500
-        enrollment_record["status"] = STATUS_TERMINATED
-    elif case == "incomplete":
-        enrollment_complete = False
-    elif case == "absent":
-        credential_records = []
-        enrollment_records = []
-        credential_nonmembership = [SUBJECT_KEY]
-        enrollment_nonmembership = [SUBJECT_KEY]
-    elif case == "conflict":
-        credential_records = [credential_record, _demo_record("CREDENTIAL", record_number=2, observation_time=observation_time)]
-    elif case == "stale":
-        credential_end = 6_999
-    elif case != "confirmed":
-        raise ProviderTrustGraphError("demo:unknown-case")
-    return {
-        "schema": INPUT_SCHEMA,
-        "provider_graph_subject": PROVIDER_GRAPH_SUBJECT,
-        "scope": SCOPE,
-        "observation_time": observation_time,
-        "sources": [
-            _source_for_demo(SOURCE_CREDENTIAL_ID, SOURCE_CREDENTIAL_KIND, observation_time=observation_time, records=credential_records, complete=credential_complete, nonmembership=credential_nonmembership, end=credential_end),
-            _source_for_demo(SOURCE_ENROLLMENT_ID, SOURCE_ENROLLMENT_KIND, observation_time=observation_time, records=enrollment_records, complete=enrollment_complete, nonmembership=enrollment_nonmembership, end=enrollment_end),
-        ],
-    }
-
-
 def _snapshot(
     sources: Sequence[Mapping[str, object]],
     observation_time: int,
@@ -862,42 +769,6 @@ def _snapshot(
         profile=view,
     )
     return _digest("snapshot-id", {"snapshot_root": root, "observation_time": observation_time}, profile=view), root
-
-
-def _process_peak_bytes() -> int | None:
-    if os.name == "nt":
-        try:
-            class Counters(ctypes.Structure):
-                _fields_ = [
-                    ("cb", ctypes.c_ulong),
-                    ("page_fault_count", ctypes.c_ulong),
-                    ("peak_working_set_size", ctypes.c_size_t),
-                    ("working_set_size", ctypes.c_size_t),
-                    ("quota_peak_paged_pool_usage", ctypes.c_size_t),
-                    ("quota_paged_pool_usage", ctypes.c_size_t),
-                    ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
-                    ("quota_non_paged_pool_usage", ctypes.c_size_t),
-                    ("pagefile_usage", ctypes.c_size_t),
-                    ("peak_pagefile_usage", ctypes.c_size_t),
-                ]
-            counters = Counters()
-            counters.cb = ctypes.sizeof(Counters)
-            process = ctypes.windll.kernel32.GetCurrentProcess()
-            get_memory = ctypes.windll.psapi.GetProcessMemoryInfo
-            get_memory.argtypes = [ctypes.c_void_p, ctypes.POINTER(Counters), ctypes.c_ulong]
-            get_memory.restype = ctypes.c_int
-            if not get_memory(process, ctypes.byref(counters), counters.cb):
-                return None
-            return int(counters.peak_working_set_size)
-        except (AttributeError, OSError):
-            return None
-    try:
-        if resource is None:
-            return None
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        return int(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024))
-    except (AttributeError, OSError):
-        return None
 
 
 def _validate_output(value: object, *, profile: _GraphProfile | None = None) -> dict[str, object]:
@@ -972,10 +843,8 @@ def _validate_output(value: object, *, profile: _GraphProfile | None = None) -> 
     return item
 
 
-def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[bytes, dict[str, object]]:
+def build_report(raw_input: bytes, *, profile: object | None = None) -> bytes:
     """Build only derived observation/findings evidence; no caller lifecycle."""
-    start = time.perf_counter_ns()
-    before = _process_peak_bytes()
     view = profile if isinstance(profile, _GraphProfile) else _profile_view(profile)
     validated = _validate_input(parse_canonical(raw_input, artifact=False), profile=view)
     observation_time = validated["observation_time"]
@@ -1017,9 +886,7 @@ def build_report(raw_input: bytes, *, profile: object | None = None) -> tuple[by
     raw = _canonical(artifact)
     if len(raw) > MAX_ARTIFACT_BYTES:
         raise ProviderTrustGraphError("artifact:byte-cap")
-    after = _process_peak_bytes()
-    peak_values = [value for value in (before, after) if value is not None]
-    return raw, {"artifact_bytes": len(raw), "wall_time_ns": time.perf_counter_ns() - start, "process_tree_peak_bytes": max(peak_values) if peak_values else None, "process_tree_scope": "single-process; no child processes", "proof_performance_claim": False}
+    return raw
 
 
 def _read_bounded(path: str | Path, maximum: int) -> bytes:
@@ -1066,20 +933,3 @@ def _read_bounded(path: str | Path, maximum: int) -> bytes:
         raise_redacted(ProviderTrustGraphError, "file:byte-cap")
     return raw
 
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("usage: python -m app.mirror.provider_trust_graph INPUT.json", file=sys.stderr)
-        return 2
-    try:
-        raw, telemetry = build_report(_read_bounded(args[0], MAX_INPUT_BYTES))
-        print(json.dumps({"accepted": True, "artifact_bytes": len(raw), "process_tree_peak_bytes": telemetry["process_tree_peak_bytes"]}, sort_keys=True))
-        return 0
-    except (OSError, ProviderTrustGraphError):
-        print("REJECT input", file=sys.stderr)
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

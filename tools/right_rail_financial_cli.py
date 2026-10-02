@@ -24,7 +24,6 @@ from app import right_rail_financial_engine as financial_engine
 from app import right_rail_financial_cash_file as cash_file
 from app.right_rail_financial_mirror import (
     FinancialMirror,
-    FinancialMirrorDispatchError,
     FinancialMirrorError,
     MAX_PACKAGE_BYTES,
 )
@@ -85,37 +84,37 @@ def _parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("summary")
 
-    obligations = subparsers.add_parser("list-obligations", aliases=("obligations",))
+    obligations = subparsers.add_parser("list-obligations")
     obligations.add_argument("--status", choices=("OPEN", "ALL", "SATISFIED", "CASH_UNSATISFIED"), default="OPEN")
     obligations.add_argument("--limit", type=int, default=100)
     obligations.add_argument("--offset", type=int, default=0)
 
-    detail = subparsers.add_parser("obligation-detail", aliases=("detail",))
+    detail = subparsers.add_parser("obligation-detail")
     detail.add_argument("--item-id", required=True)
     detail.add_argument("--limit", type=int, default=100)
 
-    receipt = subparsers.add_parser("current-evaluation-receipt", aliases=("evaluation-receipt", "evaluation"))
+    receipt = subparsers.add_parser("current-evaluation-receipt")
     receipt.add_argument("--item-id", required=True)
 
     history = subparsers.add_parser("history")
     history.add_argument("--limit", type=int, default=100)
     history.add_argument("--offset", type=int, default=0)
 
-    action = subparsers.add_parser("action-payload", aliases=("action",))
+    action = subparsers.add_parser("action-payload")
     action.add_argument("--action-id", required=True)
 
     authorize = subparsers.add_parser("authorize-offset")
     _add_offset_arguments(authorize)
 
-    reject = subparsers.add_parser("reject-offset-and-authorize-correction", aliases=("reject-offset",))
+    reject = subparsers.add_parser("reject-offset-and-authorize-correction")
     _add_offset_arguments(reject)
 
-    acknowledge = subparsers.add_parser("acknowledge-action", aliases=("acknowledge",))
+    acknowledge = subparsers.add_parser("acknowledge-action")
     acknowledge.add_argument("--action-id", required=True)
     acknowledge.add_argument("--acknowledgment-ref", required=True)
     _add_actor_and_revision(acknowledge)
 
-    payment = subparsers.add_parser("record-payment-evidence", aliases=("record-payment",))
+    payment = subparsers.add_parser("record-payment-evidence")
     payment.add_argument("--item-id", required=True)
     payment.add_argument("--payment-id", required=True)
     payment.add_argument("--common-origin-id", required=True)
@@ -139,7 +138,7 @@ def _parser() -> argparse.ArgumentParser:
     cash.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
     cash.add_argument("--apply", action="store_true", help="record checked evidence; default is isolated preview")
 
-    report = subparsers.add_parser("record-reporting-correction", aliases=("reporting-correction",))
+    report = subparsers.add_parser("record-reporting-correction")
     report.add_argument("--item-id", required=True)
     report.add_argument("--report-id", required=True)
     report.add_argument("--evidence-id")
@@ -165,7 +164,7 @@ def _parser() -> argparse.ArgumentParser:
     restore.add_argument("--destination", type=Path, required=True)
 
     switch_prepare = subparsers.add_parser("switch-prepare", help="write one canonical Switch replay input; runs no evaluator")
-    _add_switch_files(switch_prepare, required=True)
+    _add_switch_files(switch_prepare)
     switch_prepare.add_argument("--output", type=Path, required=True, help="new replay-input file; existing paths are never replaced")
 
     switch_compare = subparsers.add_parser("switch-compare", help="compare supplied reference and candidate result records")
@@ -206,16 +205,14 @@ def _parser() -> argparse.ArgumentParser:
     resolve.add_argument("--reason-ref", required=True)
     resolve.add_argument("--expect-store-sequence", type=int, required=True, help="the store state the operator verified (verify-integrity)")
     resolve.add_argument("--expect-store-head", required=True, help="that state's history head, hex")
-
-    subparsers.add_parser("dispatch-outbox")
     return parser
 
 
-def _add_switch_files(parser: argparse.ArgumentParser, *, required: bool) -> None:
+def _add_switch_files(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--package", type=Path, required=True, help="exact Continuity SHADOW package bytes")
-    parser.add_argument("--cohort-approval", type=Path, required=required)
-    parser.add_argument("--reference-spec", type=Path, required=required)
-    parser.add_argument("--candidate-spec", type=Path, required=required)
+    parser.add_argument("--cohort-approval", type=Path, required=True)
+    parser.add_argument("--reference-spec", type=Path, required=True)
+    parser.add_argument("--candidate-spec", type=Path, required=True)
 
 
 def _add_actor_and_revision(parser: argparse.ArgumentParser) -> None:
@@ -671,17 +668,17 @@ def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
 
     if command == "summary":
         return mirror.summary()
-    if command in {"list-obligations", "obligations"}:
+    if command == "list-obligations":
         return mirror.list_obligations(status=args.status, limit=args.limit, offset=args.offset)
-    if command in {"obligation-detail", "detail"}:
+    if command == "obligation-detail":
         return mirror.obligation_detail(args.item_id, limit=args.limit)
-    if command in {"current-evaluation-receipt", "evaluation-receipt", "evaluation"}:
+    if command == "current-evaluation-receipt":
         return mirror.current_evaluation_receipt(args.item_id)
     if command == "history":
         return mirror.history(limit=args.limit, offset=args.offset)
-    if command in {"action-payload", "action"}:
+    if command == "action-payload":
         return mirror.action_payload(args.action_id)
-    if command in {"authorize-offset", "reject-offset-and-authorize-correction", "reject-offset"}:
+    if command in {"authorize-offset", "reject-offset-and-authorize-correction"}:
         decide = mirror.authorize_offset if command == "authorize-offset" else mirror.reject_offset_and_authorize_correction
         return decide(
             item_id=args.item_id,
@@ -694,7 +691,7 @@ def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
             evaluation_id=args.evaluation_id,
             evaluation_result_digest=args.evaluation_result_digest,
         )
-    if command in {"acknowledge-action", "acknowledge"}:
+    if command == "acknowledge-action":
         return mirror.acknowledge_action(
             args.action_id,
             args.acknowledgment_ref,
@@ -702,7 +699,7 @@ def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
             actor_role=args.actor_role,
             expected_revision=args.expected_revision,
         )
-    if command in {"record-payment-evidence", "record-payment"}:
+    if command == "record-payment-evidence":
         return mirror.record_payment_evidence(
             item_id=args.item_id,
             payment_id=args.payment_id,
@@ -716,7 +713,7 @@ def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
             pays_action_id=args.pays_action_id,
             expected_revision=args.expected_revision,
         )
-    if command in {"record-reporting-correction", "reporting-correction"}:
+    if command == "record-reporting-correction":
         return mirror.record_reporting_correction(
             item_id=args.item_id,
             report_id=args.report_id,
@@ -741,9 +738,6 @@ def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
     if command == "restore-continuity":
         shadow = mirror.restore_continuity(_read_package(args.package), args.destination)
         return {"status": "RESTORED_SHADOW", "destination": str(args.destination), "integrity": shadow.verify_integrity()}
-    if command == "dispatch-outbox":
-        mirror.dispatch_outbox()
-        raise FinancialMirrorDispatchError("dispatch_disabled")
     raise FinancialMirrorError("unknown_command")
 
 
@@ -752,9 +746,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = _run(args)
-    except FinancialMirrorDispatchError as error:
-        print(f"ERROR:{error}", file=sys.stderr)
-        return 3
     except (
         FinancialMirrorError,
         FinancialSwitchError,

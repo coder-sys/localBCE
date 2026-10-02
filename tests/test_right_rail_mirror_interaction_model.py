@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.right_rail_financial_owner import FinancialBusyError
-from tools import right_rail_scorecard as scorecard
+from tests.instruments import right_rail_scorecard as scorecard
 
 _WORKSPACE = Path(__file__).resolve().parents[1] / "app" / "staff_workspace"
 _MODEL = json.loads((_WORKSPACE / "interaction-model.json").read_text(encoding="utf-8"))

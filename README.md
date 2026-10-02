@@ -56,8 +56,8 @@ database instead of reseeding it.
 
 **CLI** over an existing owner database:
 `python -m tools.right_rail_financial_cli --database <db> summary` (also
-`list-obligations`, `obligation-detail`, `history`, `reject-offset`,
-`acknowledge`, `record-payment` and more; see `--help`).
+`list-obligations`, `obligation-detail`, `history`, `reject-offset-and-authorize-correction`,
+`acknowledge-action`, `record-payment-evidence` and more; see `--help`).
 
 **Offline service kit:** `python -m tools.right_rail_financial_service_kit`
 with `assemble`, `verify`, `extract`, `run` (the one end-to-end scenario) and

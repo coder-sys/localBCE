@@ -77,7 +77,7 @@ def _stale_artifact(admission) -> bytes:
             source,
             profile=profile.NC_MEDICAID_GRAPH_PROFILE,
         )
-    artifact, _telemetry = graph_producer.build_report(
+    artifact = graph_producer.build_report(
         graph_producer.canonical_input(value),
         profile=profile.NC_MEDICAID_GRAPH_PROFILE,
     )
