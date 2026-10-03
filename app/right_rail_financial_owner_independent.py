@@ -2149,7 +2149,8 @@ def _verify_populations(
             item_by_id[item_id] = row
         _text(row["display_label"], "item:label", max_bytes=128)
         _cents(row["owed_cents"], "item:owed", positive=True)
-        _time(row["due_at_ms"], "item:due")
+        if _time(row["due_at_ms"], "item:due") < packs[str(populations[population_id]["pack_id"])]["effective_start_ms"]:  # item 4: nothing falls due before its pack takes effect
+            _fail("item:due-before-pack")
         if row["currency"] != scope["currency"]:
             _fail("item:currency")
         items_by_population[population_id].append(row)
@@ -2803,6 +2804,8 @@ def _verify_determinations(
         decided = _time(row["decided_at_ms"], "determination:time")
         if decided < _time(pack["approved_at_ms"], "pack:approved"):  # no authority before the pack's approval (Lean preflightOffsetDecision)
             _fail("determination:pack-not-approved")
+        if decided < pack["effective_start_ms"]:  # item 4: no decision before its pack takes effect; none capped at its end
+            _fail("determination:pack-not-effective")
         if int(input_evaluation["evaluated_at_ms"]) > decided:
             _fail("determination:evaluation-chronology")
         kind = "OFFSET_AUTHORIZATION" if decision == "OFFSET_AUTHORIZED" else "CORRECTION_PAYMENT_REQUEST"

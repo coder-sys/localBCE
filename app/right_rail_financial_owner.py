@@ -3344,8 +3344,8 @@ class FinancialOwner:
             _fail(FinancialConflictError, "population_manifest_already_bound")
         return manifest, row
 
-    def _ensure_population_import(self, connection: sqlite3.Connection, *, population_id: str, pack_id: str, cutoff_ms: int, inclusion_rules: tuple[str, ...], expected_count: int, now_ms: int, create: bool) -> tuple[sqlite3.Row, bool]:
-        """Return the staged import row and whether this call inserted it.
+    def _ensure_population_import(self, connection: sqlite3.Connection, *, population_id: str, pack_id: str, cutoff_ms: int, inclusion_rules: tuple[str, ...], expected_count: int, now_ms: int, create: bool) -> tuple[sqlite3.Row, bool, sqlite3.Row]:
+        """Return the staged import row, whether this call inserted it, and its approved control pack.
 
         Only ``stage_population``'s opening transaction may create the row
         (``create=True``); it appends the matching POPULATION_IMPORT_OPENED
@@ -3364,14 +3364,14 @@ class FinancialOwner:
             imported = existing["imported_count"]
             if type(imported) is not int or imported < 0 or imported != connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0]:
                 _fail(FinancialIntegrityError, "population_manifest_imported_count")
-            return existing, False
+            return existing, False, pack
         if not create:
             _fail(FinancialIntegrityError, "population_import_missing")
         connection.execute(
             "INSERT INTO population_imports VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (population_id, pack_id, cutoff_ms, encoded_rules, expected_count, 0, 0, 0, None, "STAGED", now_ms, now_ms),
         )
-        return connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone(), True
+        return connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone(), True, pack
 
     def _stage_population_chunk(
         self,
@@ -3388,7 +3388,7 @@ class FinancialOwner:
             return
         with self._write() as connection:
             now_ms = self._now()
-            population, _created = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms, create=False)
+            population, _created, pack = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms, create=False)
             manifest, manifest_row = self._bind_population_manifest(
                 connection,
                 population_id=population_id,
@@ -3405,6 +3405,8 @@ class FinancialOwner:
             for item in chunk:
                 if item.population_id != population_id:
                     _fail(FinancialInputError, "population_item_id")
+                if item.due_at_ms < int(pack["effective_start_ms"]):  # item 4: nothing falls due before the pack that governs it takes effect
+                    _fail(FinancialInputError, "population_item_due_before_pack")
                 if item.item_id not in manifest_members:
                     _fail(FinancialIntegrityError, "population_manifest_extra_member")
                 expected = (item.display_label, item.owed_cents, item.due_at_ms, item.currency)
@@ -3483,7 +3485,7 @@ class FinancialOwner:
                 expected_count=expected_count,
             )
             opened_at_ms = self._now()
-            population, created = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=opened_at_ms, create=True)
+            population, created, _pack = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=opened_at_ms, create=True)
             manifest, manifest_row = self._bind_population_manifest(
                 connection,
                 population_id=population_id,
@@ -5085,6 +5087,7 @@ class FinancialOwner:
         if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
             _fail(FinancialInputError, "decision_time_future")
         if decision_time < pack.approved_at_ms: _fail(FinancialIntegrityError, "control_pack_not_approved")  # Lean preflightOffsetDecision
+        if decision_time < pack.effective_start_ms: _fail(FinancialIntegrityError, "control_pack_not_effective")  # item 4: none before the pack takes effect; none capped at its end (late corrections are lawful)
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,

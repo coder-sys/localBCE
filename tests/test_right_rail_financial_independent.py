@@ -105,7 +105,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             period_id=self.config.period_id,
             currency=self.config.currency,
             pack_id="pack:test",
-            cutoff_ms=4,
+            cutoff_ms=self._fixture_pack().effective_start_ms + 3,
             inclusion_rules=("INCLUDED",),
             source_owner_id=source_owner_id,
             authority_id=self.authority.authority_id,
@@ -163,7 +163,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             population_id="population:test",
             manifest_id=manifest.manifest_id,
             pack_id=pack.pack_id,
-            cutoff_ms=4,
+            cutoff_ms=pack.effective_start_ms + 3,
             inclusion_rules=("INCLUDED",),
             expected_count=1,
             items=(item,),
@@ -639,15 +639,23 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
                 self._assert_rejected_without_repair(target, tamper, "determination:actor-role")
 
-    def test_determination_dated_before_its_pack_approval_fails_closed_without_repair(self) -> None:
-        # A raw row edit trips evaluation:input-determination first; a writer skipping its approval rule and pre-commit check stores a digest-consistent decision at 2_000 under a pack approved at 2_500.
-        self.db, self.clock = Path(self.temp_dir.name) / "late-pack.sqlite", _Clock()
-        self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
-        self.addCleanup(self.store.close)
-        real = owner.FinancialOwner._authority_action
-        with patch.object(self, "_fixture_pack", return_value=replace(self._fixture_pack(), approved_at_ms=2_500)), patch.object(owner.FinancialOwner, "_authority_action", lambda *args: replace(real(*args), approved_at_ms=2)), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
-            self._populate_owner()
-        self._assert_rejected_without_repair(self._copy_database("before-approval.sqlite"), lambda _path: None, "determination:pack-not-approved")
+    def test_determination_dated_before_its_pack_approval_or_effect_fails_closed_without_repair(self) -> None:
+        # A raw row edit trips evaluation:input-determination first; a writer skipping its pack rule and pre-commit check stores a digest-consistent decision at 2_000 under a pack approved, or in effect, from 2_500.
+        real, fixture = owner.FinancialOwner._authority_action, self._fixture_pack()
+        for field, code in (("approved_at_ms", "determination:pack-not-approved"), ("effective_start_ms", "determination:pack-not-effective")):
+            self.db, self.clock = Path(self.temp_dir.name) / f"{field}.sqlite", _Clock()
+            self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
+            self.addCleanup(self.store.close)
+            with patch.object(self, "_fixture_pack", return_value=replace(fixture, **{field: 2_500})), patch.object(owner.FinancialOwner, "_authority_action", lambda *args: replace(real(*args), **{field: getattr(fixture, field)})), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+                self._populate_owner()
+            self._assert_rejected_without_repair(self._copy_database(f"before-{field}.sqlite"), lambda _path: None, code)
+
+    def test_item_due_before_its_pack_takes_effect_fails_closed_without_repair(self) -> None:
+        def tamper(path: Path) -> None:
+            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                self.assertEqual(connection.execute("UPDATE population_items SET due_at_ms=0").rowcount, 1)
+
+        self._assert_rejected_without_repair(self._copy_database("due-before-pack.sqlite"), tamper, "item:due-before-pack")
 
     def test_authorization_above_its_input_shortfall_fails_closed_without_repair(self) -> None:
         # M1: 9,800,000 paid leaves 200,000 unpaid; a writer told the shortfall equals the 300,000 claim, with no pre-commit check, stores a digest-consistent over-authorization.

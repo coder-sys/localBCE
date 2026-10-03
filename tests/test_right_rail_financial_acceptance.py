@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import closing, contextmanager, nullcontext, redirect_stderr, redirect_stdout
-from dataclasses import replace
+from dataclasses import fields, replace
 import hashlib
 import inspect
 import io
@@ -820,6 +820,16 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     _build_base_for_correction = _build_base
 
     @staticmethod
+    @contextmanager
+    def _one_period_later() -> Iterator[None]:
+        """Item 4: period two replays the period-one dates at the same offsets one period later, where pack v2 is in effect."""
+        delta = expected.PERIOD_TWO_START_MS - expected.PERIOD_ONE_START_MS
+        later = lambda value: value + delta if isinstance(value, int) else tuple(map(later, value)) if isinstance(value, tuple) else replace(value, **{field.name: getattr(value, field.name) + delta for field in fields(value) if field.name.endswith("_ms")})
+        names = ("PROGRAM_ITEMS", "OTHER_SUPPORT_EVIDENCE", "H_CASH_EVIDENCE", "OFFSET_CLAIM_EVIDENCE", "H_DUE_AT_MS", "CASH_EVENT_MS", "CORRECTION_AUTH_MS", "P2_PAYMENT_EVIDENCE", "REPORT_ORIGINAL_EVIDENCE", "REPORT_CORRECTION_EVIDENCE", "P2_CONFIRMATION_EVIDENCE", "P2_CONFLICT_EVIDENCE", "P2_REVERSAL_EVIDENCE", "P3_REPLACEMENT_EVIDENCE")
+        with patch.multiple(expected, **{name: later(getattr(expected, name)) for name in names}):
+            yield
+
+    @staticmethod
     def _record_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
         _record_fixture_support(store, evidence)
 
@@ -1323,11 +1333,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_09_second_period_rule_change_isolated_and_complete(self) -> None:
         self.assertEqual(expected.CASE_09.number, 9)
-        store = self._build_base_for_correction(
-            period_id=expected.PERIOD_TWO_ID,
-            population_id=expected.POPULATION_TWO_ID,
-        )
-        self._prepare_final(store)
+        with self._one_period_later():
+            store = self._build_base_for_correction(
+                period_id=expected.PERIOD_TWO_ID,
+                population_id=expected.POPULATION_TWO_ID,
+            )
+            self._prepare_final(store)
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         result = self._assert_verified(store)
         self.assertEqual(result["scope"]["period_id"], expected.PERIOD_TWO_ID)
@@ -2995,7 +3006,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(v1_receipt_before_rule_change["rule_version"], 1)
         self.assertEqual(expected.CONTROL_PACK_V1.effective_end_ms, expected.CONTROL_PACK_V2.effective_start_ms)
 
-        period_two = self._build_base(period_id=expected.PERIOD_TWO_ID, population_id=expected.POPULATION_TWO_ID)
+        with self._one_period_later():
+            period_two = self._build_base(period_id=expected.PERIOD_TWO_ID, population_id=expected.POPULATION_TWO_ID)
         period_two_mirror = FinancialMirror(period_two)
         v2_receipt = period_two_mirror.current_evaluation_receipt(expected.H_ITEM_ID)
         self.assertEqual(v2_receipt["control_pack"]["pack_id"], expected.CONTROL_PACK_V2.pack_id)
@@ -3174,6 +3186,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store.register_population_manifest(manifest)
         expected_items = self._items(population_id)
         substituted_items = (*expected_items[:-1], replace(expected_items[-1], item_id="item-z"))
+        with self.assertRaisesRegex(FinancialInputError, "^population_item_due_before_pack$"):  # item 4: refused before any item is stored
+            store.stage_population(population_id=population_id, manifest_id=manifest.manifest_id, pack_id=pack.pack_id, cutoff_ms=pack.effective_start_ms, inclusion_rules=("included:synthetic",), expected_count=len(expected.PROGRAM_ITEMS), items=(replace(expected_items[0], due_at_ms=pack.effective_start_ms - 1),))
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_extra_member"):
             store.stage_population(
                 population_id=population_id,
@@ -4122,12 +4136,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         return store, request, int(receipt["evaluated_at_ms"])
 
-    def test_a_decision_dated_before_its_control_pack_approval_is_refused(self) -> None:
+    def test_a_decision_dated_before_its_control_pack_approval_or_effective_start_is_refused(self) -> None:
         store, request, _evaluated_at = self._s2_offset_request(_Clock())
         before = store.export_continuity()
         for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):
-            with self.assertRaisesRegex(FinancialIntegrityError, "^control_pack_not_approved$"):
-                decide(**request, decision_at_ms=expected.CONTROL_PACK_V1.approved_at_ms - 1)
+            for at_ms, reason in ((expected.CONTROL_PACK_V1.approved_at_ms - 1, "control_pack_not_approved"), (expected.CONTROL_PACK_V1.effective_start_ms - 1, "control_pack_not_effective")):
+                with self.assertRaisesRegex(FinancialIntegrityError, f"^{reason}$"):
+                    decide(**request, decision_at_ms=at_ms)
         self.assertEqual(store.export_continuity(), before)
 
     def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
