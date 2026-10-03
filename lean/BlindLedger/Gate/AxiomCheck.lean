@@ -3,6 +3,7 @@ import BlindLedger.Gate.MlDsa87Laws
 import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.CheckpointV2Theorems
+import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Sha3FastEq
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
@@ -225,3 +226,21 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Semantic.shake128_eq
 /-- info: 'BlindLedger.Semantic.shake256_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Semantic.shake256_eq
+/-- info: 'BlindLedger.Gate.Rules.carried_sets' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.carried_sets
+/-- info: 'BlindLedger.Gate.Rules.carried_append' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.carried_append
+/-- info: 'BlindLedger.Gate.Rules.replay_addsOf' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.replay_addsOf
+/-- info: 'BlindLedger.Gate.Rules.carried_sealB' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.carried_sealB
+/-- info: 'BlindLedger.Gate.Rules.carried_resend_held' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.carried_resend_held
+/-- info: 'BlindLedger.Gate.Rules.settleFreeInc_carried' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.settleFreeInc_carried
+/-- info: 'BlindLedger.Gate.decide_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decide_ok
+/-- info: 'BlindLedger.Gate.decide_run_fold' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decide_run_fold
+/-- info: 'BlindLedger.Gate.loadAdds_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.loadAdds_binds

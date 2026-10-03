@@ -500,4 +500,37 @@ def pendingOf (k : Nat) (os : List Owner) : List Nat := (os.filter fun o => o.sh
 def decideReg (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
   decideBatchIn c (foreignOf k os (ready k os b)) (ready k os b)
 
+/-- A shard decides with its own checkpoints as both the sets read and the priors; this is gate-rules-resident's
+    `next c₀ r` (= `carried c₀ r.released r.unresolved`; one def, not two). -/
+def carried (c₀ : Ctx) (rel unr : Snapshot Line) : Ctx :=
+  { c₀ with released := some rel, releasedPrior := rel, unresolved := some unr, unresolvedPrior := unr }
+
+/-- One batch of a shard, as the decide layer receives it: snapshots, today, redo and the frame's anchor (in
+    `ctx`; its set fields are ignored), the registry's answers, the lines. -/
+structure Batch where
+  ctx : Ctx
+  owners : List Owner
+  lines : List Line
+
+/-- The rows a batch appends to each set (multi-shard §C, unchanged text). -/
+def batchFresh (c : Ctx) (r : Result) : List Line × List Line :=
+  (r.released.entries.drop (releasedSet c).length, r.unresolved.entries.drop (unresolvedSet c).length)
+
+/-- Spec of the carried state: the fold of `decideReg` over all of shard k's prior batches. -/
+def shardSets (k : Nat) (g : Snapshot Line × Snapshot Line) (ts : List Batch) : Snapshot Line × Snapshot Line :=
+  ts.foldl (fun s t => let r := decideReg (carried t.ctx s.1 s.2) k t.owners t.lines; (r.released, r.unresolved)) g
+
+/-- What the store persists: each batch's appended rows. -/
+def addsOf (k : Nat) (g : Snapshot Line × Snapshot Line) : List Batch → List (List Line × List Line)
+  | [] => []
+  | t :: ts => let c := carried t.ctx g.1 g.2; let r := decideReg c k t.owners t.lines
+               batchFresh c r :: addsOf k (r.released, r.unresolved) ts
+
+/-- Replay of stored rows onto genesis (the load path's spec). -/
+def replay (g : Snapshot Line × Snapshot Line) (as : List (List Line × List Line)) : Snapshot Line × Snapshot Line :=
+  as.foldl (fun s a => (⟨s.1.asOf, s.1.entries.length + a.1.length, s.1.entries ++ a.1⟩,
+                        ⟨s.2.asOf, s.2.entries.length + a.2.length, s.2.entries ++ a.2⟩)) g
+
+def settleFreeInc (fresh : List Line) (p : List Nat) : List Nat := p.filter fun i => !(fresh.map (·.id)).contains i
+
 end BlindLedger.Gate.Rules

@@ -57,4 +57,15 @@ def ShardState.stepReg (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (
 def idRegStep (H : Bytes → Bytes) (prev : Bytes) (kind id shard : Nat) : Bytes :=
   H (("RR/GATE/ID-REG/v2").toUTF8.toList ++ [0] ++ prev ++ natBE 1 kind ++ natBE 129 id ++ natBE 4 shard)
 
+/-- The decide layer's step: `stepReg` on the state's own sets as the sets read. -/
+def ShardState.decide (H : Bytes → Bytes) (st : ShardState) (c₀ : Rules.Ctx) (k : Nat) (os : List Rules.Owner)
+    (b : List Rules.Line) : Option (Rules.Result × ShardState) :=
+  st.stepReg H (Rules.carried c₀ st.released st.unresolved) k os b
+
+/-- Load: replay stored rows, refuse unless they hash to the signed anchor. -/
+def ShardState.loadAdds (H : Bytes → Bytes) (g : Rules.Snapshot Rules.Line × Rules.Snapshot Rules.Line)
+    (as : List (List Rules.Line × List Rules.Line)) (anchor : Nat) : Option ShardState :=
+  let s := Rules.replay g as
+  (ShardState.load H s.1 s.2).filter (·.digest == natBE digestBytes anchor)
+
 end BlindLedger.Gate

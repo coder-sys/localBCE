@@ -112,3 +112,12 @@ import BlindLedger.Sha3FastEq
 #print axioms BlindLedger.Semantic.sha3_512_eq
 #print axioms BlindLedger.Semantic.shake128_eq
 #print axioms BlindLedger.Semantic.shake256_eq
+#print axioms BlindLedger.Gate.Rules.carried_sets
+#print axioms BlindLedger.Gate.Rules.carried_append
+#print axioms BlindLedger.Gate.Rules.replay_addsOf
+#print axioms BlindLedger.Gate.Rules.carried_sealB
+#print axioms BlindLedger.Gate.Rules.carried_resend_held
+#print axioms BlindLedger.Gate.Rules.settleFreeInc_carried
+#print axioms BlindLedger.Gate.decide_ok
+#print axioms BlindLedger.Gate.decide_run_fold
+#print axioms BlindLedger.Gate.loadAdds_binds
