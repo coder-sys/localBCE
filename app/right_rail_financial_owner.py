@@ -4673,10 +4673,11 @@ class FinancialOwner:
             tuple(values[column] for column in columns),
         )
 
-    def _apply_accepted_correction_transition(
+    def _apply_accepted_transition(
         self,
         connection: sqlite3.Connection,
         *,
+        offset: bool,
         obligation: sqlite3.Row,
         claim: sqlite3.Row,
         command: Mapping[str, Any],
@@ -4691,7 +4692,7 @@ class FinancialOwner:
         semantic: Any,
         snapshot: Any,
     ) -> dict[str, Any]:
-        """Bind and atomically apply one accepted Engine correction delta.
+        """Bind and atomically apply one accepted Engine offset or correction delta.
 
         ``decode_correction_transition_result`` already enforces the result's
         internal consistency (effect order, explanation, action/outbox/case/event
@@ -4706,6 +4707,8 @@ class FinancialOwner:
                 _fail(FinancialIntegrityError, code)
 
         mutation = transition_result["mutation"]
+        decision = "OFFSET_AUTHORIZED" if offset else "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+        action_kind = "OFFSET_AUTHORIZATION" if offset else "CORRECTION_PAYMENT_REQUEST"
         dependencies = mutation["dependencies"]
         determination = mutation["determination"]
         action = mutation["action"]
@@ -4732,7 +4735,7 @@ class FinancialOwner:
         control_pack = input_receipt["control_pack"]
         authority = self.trusted_authority
 
-        require_binding(transition_result["action_id"] == action_id, "correction_result_identity")
+        require_binding(transition_result["action_id"] == action_id and mutation["transition"] == decision, "correction_result_identity")
         require_binding(
             dependencies["authority_id"] == authority.authority_id
             and dependencies["authority_epoch"] == authority.epoch
@@ -4785,9 +4788,9 @@ class FinancialOwner:
             action_id=action_id,
             determination_id=determination_id,
             obligation_id=obligation_id,
-            kind="CORRECTION_PAYMENT_REQUEST",
+            kind=action_kind,
             claim_id=str(command["claim_id"]),
-            decision="OFFSET_REJECTED_CORRECTION_AUTHORIZED",
+            decision=decision,
             amount_cents=expected_claim["amount_cents"],
             input_evaluation_id=str(command["evaluation_id"]),
             input_evaluation_result_digest=input_result_digest,
@@ -4811,7 +4814,7 @@ class FinancialOwner:
             "dispatch": "SYNTHETIC_RECORD_ONLY",
             "input_evaluation_id": str(command["evaluation_id"]),
             "input_evaluation_result_digest": _hex(input_result_digest),
-            "kind": "CORRECTION_PAYMENT_REQUEST",
+            "kind": action_kind,
             "obligation_id": obligation_id,
             "revision": resulting_revision,
         }
@@ -4833,7 +4836,7 @@ class FinancialOwner:
             "authority_id": authority.authority_id,
             "authority_epoch": authority.epoch,
             "authority_digest": authority.digest,
-            "decision": "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
+            "decision": decision,
             "amount_cents": expected_claim["amount_cents"],
             "supporting_evidence_json": _canonical({"bindings": evidence_bindings}).decode("ascii"),
             "expected_revision": expected_revision,
@@ -4844,9 +4847,9 @@ class FinancialOwner:
             "input_evaluation_result_digest": input_result_digest,
         })
         changed_claim = connection.execute(
-            "UPDATE claimed_adjustments SET status='REJECTED',updated_at_ms=? "
+            "UPDATE claimed_adjustments SET status=?,updated_at_ms=? "
             "WHERE claim_id=? AND obligation_id=? AND status='CLAIMED'",
-            (mutation_time, str(command["claim_id"]), obligation_id),
+            ("AUTHORIZED" if offset else "REJECTED", mutation_time, str(command["claim_id"]), obligation_id),
         )
         require_binding(changed_claim.rowcount == 1, "correction_claim_update")
 
@@ -4896,7 +4899,7 @@ class FinancialOwner:
             "action_id": action_id,
             "obligation_id": obligation_id,
             "determination_id": determination_id,
-            "kind": "CORRECTION_PAYMENT_REQUEST",
+            "kind": action_kind,
             "status": "READY",
             "revision": resulting_revision,
             "payload_json": _canonical(action_payload).decode("ascii"),
@@ -4984,60 +4987,64 @@ class FinancialOwner:
         )
         require_binding(projection_update.rowcount == 1, "correction_projection_update")
 
-        query_observations_wire = {
-            key: {
-                **dict(value),
-                "version_head": _hex(bytes(value["version_head"])),
-            }
-            for key, value in dependencies["query_observations"].items()
-        }
-        correction_followup = {
-            "contract": _CORRECTION_FOLLOWUP_CONTRACT,
-            "work_id": action_id,
-            "determination_id": determination_id,
-            "source": dict(followups),
-            "artifact": {
-                "contract": str(dependencies["artifact_contract"]),
-                "version": int(dependencies["artifact_version"]),
-                "sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256),
-            },
-            "control_pack": {
-                "pack_id": pack.pack_id,
-                "version": pack.version,
-                "digest": _hex(pack.digest),
-            },
-            "authority": {
-                "authority_id": authority.authority_id,
-                "epoch": authority.epoch,
-                "digest": _hex(authority.digest),
-            },
-            "input_evaluation": {
-                "evaluation_id": str(input_receipt["evaluation_id"]),
-                "revision": int(input_receipt["revision"]),
-                "result_digest": _hex(input_result_digest),
-                "receipt_digest": str(input_receipt["receipt_digest"]),
-            },
-            "result_evaluation": {
-                "evaluation_id": str(evaluation_receipt["evaluation_id"]),
-                "revision": int(evaluation_receipt["revision"]),
-                "result_digest": str(evaluation_receipt["evaluation_result_digest"]),
-                "receipt_digest": str(evaluation_receipt["receipt_digest"]),
-            },
-            "determination_digest": _hex(expected_determination_digest),
-            "case_status": str(case_record["status"]),
-            "action_status": "READY",
-            "outbox_status": "READY",
-            "supporting_evidence": [
-                {
-                    "evidence_id": str(value["evidence_id"]),
-                    "record_digest": str(value["record_digest"]),
+        payload = {"action_id": action_id, "amount_cents": expected_claim["amount_cents"], "determination_id": determination_id, "evaluation_id": evaluation_id}
+        if offset:
+            payload["artifact"] = {"sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256)}
+        else:
+            query_observations_wire = {
+                key: {
+                    **dict(value),
+                    "version_head": _hex(bytes(value["version_head"])),
                 }
-                for value in evidence_bindings
-            ],
-            "dependency_families": list(_CORRECTION_FOLLOWUP_DEPENDENCIES),
-            "read_observations": query_observations_wire,
-            "outputs": ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"],
-        }
+                for key, value in dependencies["query_observations"].items()
+            }
+            payload["correction_followup"] = {
+                "contract": _CORRECTION_FOLLOWUP_CONTRACT,
+                "work_id": action_id,
+                "determination_id": determination_id,
+                "source": dict(followups),
+                "artifact": {
+                    "contract": str(dependencies["artifact_contract"]),
+                    "version": int(dependencies["artifact_version"]),
+                    "sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256),
+                },
+                "control_pack": {
+                    "pack_id": pack.pack_id,
+                    "version": pack.version,
+                    "digest": _hex(pack.digest),
+                },
+                "authority": {
+                    "authority_id": authority.authority_id,
+                    "epoch": authority.epoch,
+                    "digest": _hex(authority.digest),
+                },
+                "input_evaluation": {
+                    "evaluation_id": str(input_receipt["evaluation_id"]),
+                    "revision": int(input_receipt["revision"]),
+                    "result_digest": _hex(input_result_digest),
+                    "receipt_digest": str(input_receipt["receipt_digest"]),
+                },
+                "result_evaluation": {
+                    "evaluation_id": str(evaluation_receipt["evaluation_id"]),
+                    "revision": int(evaluation_receipt["revision"]),
+                    "result_digest": str(evaluation_receipt["evaluation_result_digest"]),
+                    "receipt_digest": str(evaluation_receipt["receipt_digest"]),
+                },
+                "determination_digest": _hex(expected_determination_digest),
+                "case_status": str(case_record["status"]),
+                "action_status": "READY",
+                "outbox_status": "READY",
+                "supporting_evidence": [
+                    {
+                        "evidence_id": str(value["evidence_id"]),
+                        "record_digest": str(value["record_digest"]),
+                    }
+                    for value in evidence_bindings
+                ],
+                "dependency_families": list(_CORRECTION_FOLLOWUP_DEPENDENCIES),
+                "read_observations": query_observations_wire,
+                "outputs": ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"],
+            }
         self._append_event(
             connection,
             aggregate_type=str(event["aggregate_type"]),
@@ -5045,18 +5052,12 @@ class FinancialOwner:
             kind=str(event["kind"]),
             before_revision=int(event["before_revision"]),
             after_revision=int(event["after_revision"]),
-            payload={
-                "action_id": action_id,
-                "amount_cents": expected_claim["amount_cents"],
-                "determination_id": determination_id,
-                "evaluation_id": evaluation_id,
-                "correction_followup": correction_followup,
-            },
+            payload=payload,
             committed_at_ms=int(event["committed_at_ms"]),
         )
         self._verify_before_commit(connection, "correction", obligation_id)
         return {
-            "status": "CORRECTION_AUTHORIZED",
+            "status": "AUTHORIZED" if offset else "CORRECTION_AUTHORIZED",
             "action_id": action_id,
             "determination_id": determination_id,
             **self._current_projection(connection, obligation_id),
@@ -5076,8 +5077,8 @@ class FinancialOwner:
         evaluation_result_digest: str | bytes | None,
         expected_revision: int | None,
     ) -> tuple[sqlite3.Row, int, dict[str, Any], bytes]:
-        """Authority, claim, decision time and current-evaluation checks shared by both offset decisions."""
-        pack = self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
+        """Authority, claim lookup, decision time and current-evaluation reference for both served decisions."""
+        self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
         claim = connection.execute("SELECT * FROM claimed_adjustments WHERE claim_id=? AND obligation_id=?", (claim_id, obligation["obligation_id"])).fetchone()
         if claim is None:
             _fail(FinancialIntegrityError, "offset_claim_missing")
@@ -5086,8 +5087,6 @@ class FinancialOwner:
         decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
         if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
             _fail(FinancialInputError, "decision_time_future")
-        if decision_time < pack.approved_at_ms: _fail(FinancialIntegrityError, "control_pack_not_approved")  # Lean preflightOffsetDecision
-        if decision_time < pack.effective_start_ms: _fail(FinancialIntegrityError, "control_pack_not_effective")  # item 4: none before the pack takes effect; none capped at its end (late corrections are lawful)
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,
@@ -5097,8 +5096,6 @@ class FinancialOwner:
             expected_revision=expected_revision,
             decision_time=decision_time,
         )
-        if str(claim["status"]) != "CLAIMED":
-            _fail(FinancialConflictError, "offset_claim_not_claimed")
         return claim, decision_time, evaluation_receipt, input_result_digest
 
     def authorize_offset(
@@ -5134,68 +5131,11 @@ class FinancialOwner:
                     expected_revision=expected_revision,
                     decision_at_ms=decision_at_ms,
                 )
-            claim, decision_time, evaluation_receipt, input_result_digest = self._claim_decision_inputs(
-                connection,
-                obligation,
-                claim_id=claim_id,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                decision_at_ms=decision_at_ms,
-                decision_time_required=False,
-                evaluation_id=evaluation_id,
-                evaluation_result_digest=evaluation_result_digest,
-                expected_revision=expected_revision,
+            return self._served_decision(
+                connection, obligation, offset=True, item_id=item_id, claim_id=claim_id, action_ref=action_ref, actor_id=actor_id,
+                actor_role=actor_role, expected_revision=expected_revision, decision_at_ms=decision_at_ms,
+                evaluation_id=evaluation_id, evaluation_result_digest=evaluation_result_digest,
             )
-            mutation_time = max(decision_time, self._now())
-            if decision_time <= int(obligation["due_at_ms"]) < mutation_time:
-                _fail(FinancialInputError, "decision_time_backdated_past_due")
-            if int(claim["amount_cents"]) + sum(_open_requests(connection, str(obligation["obligation_id"]), shortfall := int(evaluation_receipt["shortfall_cents"])).values()) > shortfall:  # M1: with the open correction requests, refused, never capped (decided here; Lean's CLAIM_EXCEEDS_SHORTFALL is spec only)
-                _fail(FinancialConflictError, "offset_exceeds_shortfall")
-            before_revision = int(obligation["revision"])
-            resulting_revision = before_revision + 1
-            determination_id = f"determination:{action_ref}"
-            evidence_bindings = list(evaluation_receipt["evidence_bindings"])
-            determination_payload = _determination_digest_payload(
-                action_id=action_ref,
-                determination_id=determination_id,
-                obligation_id=str(obligation["obligation_id"]),
-                kind="OFFSET_AUTHORIZATION",
-                claim_id=claim_id,
-                decision="OFFSET_AUTHORIZED",
-                amount_cents=int(claim["amount_cents"]),
-                input_evaluation_id=str(evaluation_receipt["evaluation_id"]),
-                input_evaluation_result_digest=input_result_digest,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                authority_id=self.trusted_authority.authority_id,
-                authority_epoch=self.trusted_authority.epoch,
-                authority_digest=self.trusted_authority.digest,
-                supporting_evidence=evidence_bindings,
-                expected_revision=before_revision,
-                resulting_revision=resulting_revision,
-                decided_at_ms=decision_time,
-            )
-            determination_digest = _digest(_ACTION_DOMAIN, _canonical(determination_payload))
-            connection.execute(
-                "INSERT INTO determinations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    determination_id, obligation["obligation_id"], claim_id, actor_id, actor_role,
-                    self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest,
-                    "OFFSET_AUTHORIZED", int(claim["amount_cents"]),
-                    _canonical({"bindings": evidence_bindings}).decode("ascii"), before_revision,
-                    resulting_revision, decision_time, determination_digest,
-                    str(evaluation_receipt["evaluation_id"]), input_result_digest,
-                ),
-            )
-            connection.execute("UPDATE claimed_adjustments SET status='AUTHORIZED',updated_at_ms=? WHERE claim_id=? AND status='CLAIMED'", (mutation_time, claim_id))
-            self._ensure_case(connection, obligation_id=str(obligation["obligation_id"]), reason="OFFSET_AUTHORIZED", owner="CASE_OWNER", due_at_ms=int(claim["deadline_ms"]), status="AUTHORIZED", now_ms=mutation_time)
-            action_payload = {"action_id": action_ref, "obligation_id": str(obligation["obligation_id"]), "determination_id": determination_id, "kind": "OFFSET_AUTHORIZATION", "claim_id": claim_id, "amount_cents": int(claim["amount_cents"]), "currency": self.config.currency, "revision": resulting_revision, "input_evaluation_id": str(evaluation_receipt["evaluation_id"]), "input_evaluation_result_digest": _hex(input_result_digest), "dispatch": "SYNTHETIC_RECORD_ONLY"}
-            self._create_action(connection, action_id=action_ref, obligation_id=str(obligation["obligation_id"]), determination_id=determination_id, kind="OFFSET_AUTHORIZATION", revision=resulting_revision, payload=action_payload, now_ms=mutation_time)
-            before, after, evaluation = self._recompute_obligation(connection, str(obligation["obligation_id"]), now_ms=mutation_time)
-            if (before, after) != (before_revision, resulting_revision):
-                _fail(FinancialRevisionError, "determination_revision_binding")
-            self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="OFFSET_AUTHORIZED", before_revision=before, after_revision=after, payload={"determination_id": determination_id, "action_id": action_ref, "amount_cents": int(claim["amount_cents"]), "evaluation_id": evaluation["evaluation_id"]}, committed_at_ms=mutation_time)
-            return {"status": "AUTHORIZED", "action_id": action_ref, "determination_id": determination_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
 
     def reject_offset_and_authorize_correction(
         self,
@@ -5251,170 +5191,191 @@ class FinancialOwner:
                     expected_revision=expected_revision,
                     decision_at_ms=decision_at_ms,
                 )
-            deterministic_determination_id = f"determination:{action_ref}"
-            existing_determination = connection.execute(
+            return self._served_decision(
+                connection, obligation, offset=False, item_id=item_id, claim_id=claim_id, action_ref=action_ref, actor_id=actor_id,
+                actor_role=actor_role, expected_revision=expected_revision, decision_at_ms=decision_at_ms,
+                evaluation_id=evaluation_id, evaluation_result_digest=evaluation_result_digest,
+            )
+
+    def _served_decision(
+        self,
+        connection: sqlite3.Connection,
+        obligation: sqlite3.Row,
+        *,
+        offset: bool,
+        item_id: str,
+        claim_id: str,
+        action_ref: str,
+        actor_id: str,
+        actor_role: str,
+        expected_revision: int | None,
+        decision_at_ms: int | None,
+        evaluation_id: str | None,
+        evaluation_result_digest: str | bytes | None,
+    ) -> dict[str, Any]:
+        """The pinned worker decides an offset authorization, or its rejection with a correction; the owner binds and applies its answer."""
+        claim, decision_time, evaluation_receipt, input_result_digest = self._claim_decision_inputs(
+            connection,
+            obligation,
+            claim_id=claim_id,
+            actor_id=actor_id,
+            actor_role=actor_role,
+            decision_at_ms=decision_at_ms,
+            decision_time_required=not offset,
+            evaluation_id=evaluation_id,
+            evaluation_result_digest=evaluation_result_digest,
+            expected_revision=expected_revision,
+        )
+        deterministic_determination_id = f"determination:{action_ref}"
+        from app import right_rail_financial_engine as financial_engine
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        try:
+            owner_now_ms = self._now()
+            snapshot = semantic.build_locked_semantic_snapshot(
+                connection,
+                obligation_id=str(obligation["obligation_id"]),
+                authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority),
+                evaluation_time_ms=owner_now_ms,
+                expected_config=self.config,
+                expected_scope=self._scope_value(),
+                expected_mode=self.mode,
+                expected_owner_id=self.owner_id,
+            )
+            pack, _calculation_rule, _adjustment_rule = self._control_pack_for_obligation(
+                connection,
+                str(obligation["obligation_id"]),
+            )
+            meta = self._meta(connection)
+            current_event_sequence = int(meta["sequence"])
+            previous_history_head = bytes(meta["history_head"])
+            action_rows = connection.execute(
+                "SELECT action_id FROM actions WHERE action_id=?",
+                (action_ref,),
+            ).fetchall()
+            determination_rows = connection.execute(
                 "SELECT determination_id FROM determinations WHERE determination_id=?",
                 (deterministic_determination_id,),
-            ).fetchone()
-            if existing_determination is not None:
+            ).fetchall()
+            consumed_rows = connection.execute(
+                "SELECT determination_id FROM determinations WHERE input_evaluation_id=?",
+                (str(evaluation_receipt["evaluation_id"]),),
+            ).fetchall()
+            if any(len(rows) > 1 for rows in (action_rows, determination_rows, consumed_rows)):
+                _fail(FinancialIntegrityError, "correction_query_cardinality")
+            query_version = {
+                "version_sequence": current_event_sequence,
+                "version_head": previous_history_head,
+            }
+            query_observations = {
+                "action_id": {
+                    "predicate": "ACTION_ID",
+                    "subject": action_ref,
+                    "complete": True,
+                    "match_count": len(action_rows),
+                    "result_identity": None if not action_rows else str(action_rows[0]["action_id"]),
+                    **query_version,
+                },
+                "determination_id": {
+                    "predicate": "DETERMINATION_ID",
+                    "subject": deterministic_determination_id,
+                    "complete": True,
+                    "match_count": len(determination_rows),
+                    "result_identity": None if not determination_rows else str(determination_rows[0]["determination_id"]),
+                    **query_version,
+                },
+                "evaluation_consumed": {
+                    "predicate": "EVALUATION_CONSUMED",
+                    "subject": str(evaluation_receipt["evaluation_id"]),
+                    "complete": True,
+                    "match_count": len(consumed_rows),
+                    "result_identity": None if not consumed_rows else str(consumed_rows[0]["determination_id"]),
+                    **query_version,
+                },
+            }
+            if action_rows or determination_rows or consumed_rows:
                 _fail(FinancialConflictError, "determination_request_conflict")
-            claim, decision_time, evaluation_receipt, input_result_digest = self._claim_decision_inputs(
-                connection,
-                obligation,
-                claim_id=claim_id,
-                actor_id=actor_id,
-                actor_role=actor_role,
-                decision_at_ms=decision_at_ms,
-                decision_time_required=True,
-                evaluation_id=evaluation_id,
-                evaluation_result_digest=evaluation_result_digest,
-                expected_revision=expected_revision,
-            )
-            from app import right_rail_financial_engine as financial_engine
-            from app import right_rail_financial_semantic_adapter as semantic
-
-            try:
-                owner_now_ms = self._now()
-                snapshot = semantic.build_locked_semantic_snapshot(
-                    connection,
-                    obligation_id=str(obligation["obligation_id"]),
-                    authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority),
-                    evaluation_time_ms=owner_now_ms,
-                    expected_config=self.config,
-                    expected_scope=self._scope_value(),
-                    expected_mode=self.mode,
-                    expected_owner_id=self.owner_id,
-                )
-                pack, _calculation_rule, _adjustment_rule = self._control_pack_for_obligation(
-                    connection,
-                    str(obligation["obligation_id"]),
-                )
-                meta = self._meta(connection)
-                current_event_sequence = int(meta["sequence"])
-                previous_history_head = bytes(meta["history_head"])
-                action_rows = connection.execute(
-                    "SELECT action_id FROM actions WHERE action_id=?",
-                    (action_ref,),
-                ).fetchall()
-                determination_rows = connection.execute(
-                    "SELECT determination_id FROM determinations WHERE determination_id=?",
-                    (deterministic_determination_id,),
-                ).fetchall()
-                consumed_rows = connection.execute(
-                    "SELECT determination_id FROM determinations WHERE input_evaluation_id=?",
-                    (str(evaluation_receipt["evaluation_id"]),),
-                ).fetchall()
-                if any(len(rows) > 1 for rows in (action_rows, determination_rows, consumed_rows)):
-                    _fail(FinancialIntegrityError, "correction_query_cardinality")
-                query_version = {
-                    "version_sequence": current_event_sequence,
-                    "version_head": previous_history_head,
-                }
-                query_observations = {
-                    "action_id": {
-                        "predicate": "ACTION_ID",
-                        "subject": action_ref,
-                        "complete": True,
-                        "match_count": len(action_rows),
-                        "result_identity": None if not action_rows else str(action_rows[0]["action_id"]),
-                        **query_version,
-                    },
-                    "determination_id": {
-                        "predicate": "DETERMINATION_ID",
-                        "subject": deterministic_determination_id,
-                        "complete": True,
-                        "match_count": len(determination_rows),
-                        "result_identity": None if not determination_rows else str(determination_rows[0]["determination_id"]),
-                        **query_version,
-                    },
-                    "evaluation_consumed": {
-                        "predicate": "EVALUATION_CONSUMED",
-                        "subject": str(evaluation_receipt["evaluation_id"]),
-                        "complete": True,
-                        "match_count": len(consumed_rows),
-                        "result_identity": None if not consumed_rows else str(consumed_rows[0]["determination_id"]),
-                        **query_version,
-                    },
-                }
-                if action_rows or determination_rows or consumed_rows:
-                    _fail(FinancialConflictError, "determination_request_conflict")
-                command = {
-                    "item_id": item_id,
-                    "claim_id": claim_id,
-                    "action_id": action_ref,
-                    "actor_id": actor_id,
-                    "actor_role": actor_role,
-                    "current_authority_id": self.trusted_authority.authority_id,
-                    "current_authority_epoch": self.trusted_authority.epoch,
-                    "current_authority_digest": self.trusted_authority.digest,
-                    "expected_revision": expected_revision,
-                    "evaluation_id": str(evaluation_receipt["evaluation_id"]),
-                    "evaluation_result_digest": input_result_digest,
-                    "decision_at_ms": decision_time,
-                    "owner_now_ms": owner_now_ms,
-                }
-                request = financial_engine.encode_correction_transition_request(
-                    snapshot=snapshot,
-                    command=command,
-                    action_lookup={"kind": "absent"},
-                    query_observations=query_observations,
-                    current_event_sequence=current_event_sequence,
-                    previous_history_head=previous_history_head,
-                    payment_links=[{"payment_id": p, "action_id": a} for p, _r, a in _payment_receipts(connection, str(obligation["obligation_id"])) if a is not None],
-                )
-                transition_result = financial_engine.run_correction_transition_v1(request=request)
-            except financial_engine.FinancialEngineError:
-                _fail(FinancialIntegrityError, "correction_transition_failed")
-            except semantic.SemanticAdapterError:
-                _fail(FinancialIntegrityError, "correction_snapshot_invalid")
-
-            if transition_result["status"] == "REJECTED":
-                rejected_errors: dict[str, tuple[type[FinancialError], str]] = {
-                    "INVALID_REQUEST": (FinancialInputError, "correction_request_invalid"),
-                    "INVALID_INPUT": (FinancialIntegrityError, "correction_input_invalid"),
-                    "SHADOW_READ_ONLY": (FinancialDispatchError, "shadow_owner_read_only"),
-                    "SCOPE_MISMATCH": (FinancialIntegrityError, "correction_scope_mismatch"),
-                    "AUTHORITY_STALE": (FinancialAuthorityError, "determination_authority_stale"),
-                    "ACTOR_UNAUTHORIZED": (FinancialAuthorityError, "authority_actor_not_authorized"),
-                    "CONTROL_PACK_REJECTED": (FinancialIntegrityError, "control_pack_not_approved"),
-                    "REVISION_CONFLICT": (FinancialRevisionError, "obligation_revision_conflict"),
-                    "EVALUATION_CONFLICT": (FinancialRevisionError, "evaluation_revision_conflict"),
-                    "EVALUATION_CONSUMED": (FinancialConflictError, "evaluation_already_consumed"),
-                    "EVIDENCE_COVERAGE": (FinancialIntegrityError, "evaluation_evidence_coverage"),
-                    "CLAIM_MISSING": (FinancialIntegrityError, "offset_claim_missing"),
-                    "CLAIM_NOT_CLAIMED": (FinancialConflictError, "offset_claim_not_claimed"),
-                    "ACTION_CONFLICT": (FinancialConflictError, "determination_request_conflict"),
-                    "DETERMINATION_CONFLICT": (FinancialConflictError, "determination_request_conflict"),
-                    "CHRONOLOGY": (FinancialIntegrityError, "evaluation_chronology"),
-                    "QUERY_OBSERVATION_INVALID": (FinancialIntegrityError, "correction_read_set_invalid"),
-                    "INPUT_SNAPSHOT_MISSING": (FinancialIntegrityError, "correction_input_snapshot_missing"),
-                    "NO_SHORTFALL": (FinancialConflictError, "correction_no_shortfall"),
-                    "NO_REQUESTABLE_BALANCE": (FinancialConflictError, "correction_no_requestable_balance"),
-                    "CAPACITY": (FinancialIntegrityError, "history_capacity"),
-                }
-                error_type, error_code = rejected_errors.get(
-                    str(transition_result["reject_reason"]),
-                    (FinancialIntegrityError, "correction_transition_rejected"),
-                )
-                _fail(error_type, error_code)
-            if transition_result["status"] != "ACCEPTED":
-                _fail(FinancialIntegrityError, "correction_duplicate_without_action")
-            return self._apply_accepted_correction_transition(
-                connection,
-                obligation=obligation,
-                claim=claim,
+            command = {
+                "item_id": item_id,
+                "claim_id": claim_id,
+                "action_id": action_ref,
+                "actor_id": actor_id,
+                "actor_role": actor_role,
+                "current_authority_id": self.trusted_authority.authority_id,
+                "current_authority_epoch": self.trusted_authority.epoch,
+                "current_authority_digest": self.trusted_authority.digest,
+                "expected_revision": expected_revision,
+                "evaluation_id": str(evaluation_receipt["evaluation_id"]),
+                "evaluation_result_digest": input_result_digest,
+                "decision_at_ms": decision_time,
+                "owner_now_ms": owner_now_ms,
+            }
+            request = financial_engine.encode_correction_transition_request(
+                snapshot=snapshot,
                 command=command,
-                input_receipt=evaluation_receipt,
-                input_result_digest=input_result_digest,
-                pack=pack,
+                action_lookup={"kind": "absent"},
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
-                transition_result=transition_result,
-                financial_engine=financial_engine,
-                semantic=semantic,
-                snapshot=snapshot,
+                payment_links=[{"payment_id": p, "action_id": a} for p, _r, a in _payment_receipts(connection, str(obligation["obligation_id"])) if a is not None],
             )
+            transition_result = (financial_engine.run_offset_authorization_v1 if offset else financial_engine.run_correction_transition_v1)(request=request)
+        except financial_engine.FinancialEngineError:
+            _fail(FinancialIntegrityError, "correction_transition_failed")
+        except semantic.SemanticAdapterError:
+            _fail(FinancialIntegrityError, "correction_snapshot_invalid")
+
+        if transition_result["status"] == "REJECTED":
+            rejected_errors: dict[str, tuple[type[FinancialError], str]] = {
+                "INVALID_REQUEST": (FinancialInputError, "correction_request_invalid"),
+                "INVALID_INPUT": (FinancialIntegrityError, "correction_input_invalid"),
+                "SHADOW_READ_ONLY": (FinancialDispatchError, "shadow_owner_read_only"),
+                "SCOPE_MISMATCH": (FinancialIntegrityError, "correction_scope_mismatch"),
+                "AUTHORITY_STALE": (FinancialAuthorityError, "determination_authority_stale"),
+                "ACTOR_UNAUTHORIZED": (FinancialAuthorityError, "authority_actor_not_authorized"),
+                "CONTROL_PACK_REJECTED": (FinancialIntegrityError, "control_pack_not_approved"),
+                "REVISION_CONFLICT": (FinancialRevisionError, "obligation_revision_conflict"),
+                "EVALUATION_CONFLICT": (FinancialRevisionError, "evaluation_revision_conflict"),
+                "EVALUATION_CONSUMED": (FinancialConflictError, "evaluation_already_consumed"),
+                "EVIDENCE_COVERAGE": (FinancialIntegrityError, "evaluation_evidence_coverage"),
+                "CLAIM_MISSING": (FinancialIntegrityError, "offset_claim_missing"),
+                "CLAIM_NOT_CLAIMED": (FinancialConflictError, "offset_claim_not_claimed"),
+                "ACTION_CONFLICT": (FinancialConflictError, "determination_request_conflict"),
+                "DETERMINATION_CONFLICT": (FinancialConflictError, "determination_request_conflict"),
+                "CHRONOLOGY": (FinancialIntegrityError, "evaluation_chronology"),
+                "QUERY_OBSERVATION_INVALID": (FinancialIntegrityError, "correction_read_set_invalid"),
+                "INPUT_SNAPSHOT_MISSING": (FinancialIntegrityError, "correction_input_snapshot_missing"),
+                "NO_SHORTFALL": (FinancialConflictError, "correction_no_shortfall"),
+                "NO_REQUESTABLE_BALANCE": (FinancialConflictError, "correction_no_requestable_balance"),
+                "CAPACITY": (FinancialIntegrityError, "history_capacity"),
+                "DECISION_BACKDATED_PAST_DUE": (FinancialInputError, "decision_time_backdated_past_due"),
+                "CLAIM_EXCEEDS_SHORTFALL": (FinancialConflictError, "offset_exceeds_shortfall"),
+                "DECISION_BEFORE_PACK_EFFECTIVE": (FinancialIntegrityError, "control_pack_not_effective"),
+            }
+            error_type, error_code = rejected_errors.get(
+                str(transition_result["reject_reason"]),
+                (FinancialIntegrityError, "correction_transition_rejected"),
+            )
+            _fail(error_type, error_code)
+        if transition_result["status"] != "ACCEPTED":
+            _fail(FinancialIntegrityError, "correction_duplicate_without_action")
+        return self._apply_accepted_transition(
+            connection,
+            offset=offset,
+            obligation=obligation,
+            claim=claim,
+            command=command,
+            input_receipt=evaluation_receipt,
+            input_result_digest=input_result_digest,
+            pack=pack,
+            query_observations=query_observations,
+            current_event_sequence=current_event_sequence,
+            previous_history_head=previous_history_head,
+            transition_result=transition_result,
+            financial_engine=financial_engine,
+            semantic=semantic,
+            snapshot=snapshot,
+        )
 
     def acknowledge_action(
         self,

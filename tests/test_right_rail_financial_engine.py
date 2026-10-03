@@ -39,9 +39,9 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(engine.FinancialEngineError):
                 engine.run_correction_transition_v1(request=mutant)
 
-    def test_result_decoder_has_reject_reason_tags_22_and_23(self) -> None:  # Lean Codec.lean, wire rows 22-23; the unbound result's reason and requirement tags 5 -> tag
+    def test_result_decoder_has_reject_reason_tags_22_to_24(self) -> None:  # Lean Codec.lean, wire rows 22-24; the unbound result's reason and requirement tags 5 -> tag
         result = (REPO_ROOT / "artifacts" / "engine-correction" / "vectors" / "result_unbound.expected.bin").read_bytes()
-        for tag, names in ((22, ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE")), (23, ("CLAIM_EXCEEDS_SHORTFALL", "CLAIM_WITHIN_SHORTFALL"))):
+        for tag, names in ((22, ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE")), (23, ("CLAIM_EXCEEDS_SHORTFALL", "CLAIM_WITHIN_SHORTFALL")), (24, ("DECISION_BEFORE_PACK_EFFECTIVE", "PACK_IN_EFFECT"))):
             decoded = engine.decode_correction_transition_result(result.replace(bytes.fromhex("0105030001050105"), bytes([1, tag, 3, 0, 1, tag, 1, tag])))
             self.assertEqual((decoded["reject_reason"], decoded["explanation"]["unresolved_requirement"]), names)
 

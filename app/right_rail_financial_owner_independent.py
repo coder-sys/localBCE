@@ -2857,7 +2857,12 @@ def _verify_actions(
     engines: dict[str, tuple[int, str]] = {}  # correction action -> the engine that decided it, by its decision event
     decided: dict[str, object] = {}  # correction action -> the amount its decision event records
     newest = 0
-    for action_ref, sha, event_amount in connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,'$.correction_followup.artifact.sha256'),json_extract(payload_json,'$.amount_cents') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence"):
+    for action_ref, sha, event_amount, event_kind in connection.execute("SELECT json_extract(payload_json,'$.action_id'),COALESCE(json_extract(payload_json,'$.correction_followup.artifact.sha256'),json_extract(payload_json,'$.artifact.sha256')),json_extract(payload_json,'$.amount_cents'),kind FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind IN ('OFFSET_AUTHORIZED','OFFSET_REJECTED_CORRECTION_AUTHORIZED') ORDER BY event_sequence"):
+        if event_kind == "OFFSET_AUTHORIZED":
+            if sha is None:
+                continue
+            if sha not in registry:
+                _fail("action:engine")
         engines[action_ref] = engine = registry.get(sha, current)
         if engine[0] < newest:
             _fail("action:engine-order")  # a retired engine never decides after a newer one
