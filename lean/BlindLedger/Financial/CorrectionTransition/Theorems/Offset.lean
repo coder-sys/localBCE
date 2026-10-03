@@ -234,17 +234,21 @@ theorem applyOffsetAuthorization_not_backdated (request : CorrectionTransitionRe
   rw [hCreated]
   exact hBack rfl (hDecided ▸ hle)
 
-/-- M1: an accepted authorization never claims more than the shortfall it closes (Python
-    `offset_exceeds_shortfall`, checker `action:exceeds-shortfall`), so overage stays 0. -/
+/-- M1 (spec only; the Python owner's `offset_exceeds_shortfall` and the checker's
+    `action:exceeds-shortfall` decide served stores): an accepted authorization and the
+    correction requests still open never claim more than the shortfall. -/
 theorem applyOffsetAuthorization_within_shortfall (request : CorrectionTransitionRequest)
     (mutation : CorrectionMutation)
     (hMutation : (applyOffsetAuthorization request).mutation = some mutation) :
-    ∃ before, evaluate request.currentInput = some before ∧
-      mutation.determination.amountCents ≤ before.shortfallCents := by
+    ∃ before paid, evaluate request.currentInput = some before ∧
+      derivedCorrectionPaid request.currentInput.payments request.currentInput.actions
+        request.command.paymentLinks = some paid ∧
+      mutation.determination.amountCents +
+        outstandingCorrectionCents paid request.currentInput.actions ≤ before.shortfallCents := by
   obtain ⟨cr, claim, a, b, paid, c, hP, hB⟩ := offsetAuth_ready hMutation
   have hWithin := preflightOffsetDecision_ready_within_shortfall hP
   obtain ⟨-, -, -, -, -, -, -, -, -, hAmtD, -⟩ := buildAuthorized_spec hB
-  refine ⟨cr, b, ?_⟩
+  refine ⟨cr, paid, b, c, ?_⟩
   rw [hAmtD]
   exact hWithin rfl
 

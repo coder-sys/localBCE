@@ -5173,18 +5173,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def _two_claim_corrections(self, first_cents: int, second_cents: int, unpaid_cents: int = expected.UNAPPROVED_OFFSET_CENTS) -> tuple[FinancialOwner, object]:
         """``unpaid_cents`` unpaid with claims A and B; A is rejected with a correction; returns B's rejection to call."""
-        store = self._build_base_for_correction()
-        cash = expected.H_CASH_EVIDENCE
-        store.record_payment_evidence(
-            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
-            amount_cents=expected.H_OWED_CENTS - unpaid_cents, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
-            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
-        )
-        for suffix, cents in (("a", first_cents), ("b", second_cents)):
-            store.record_offset_claim(
-                item_id=expected.H_ITEM_ID, claim_id=f"claim:obligation-item-h:offset-{suffix}", amount_cents=cents,
-                evidence_id=f"evidence:offset-h:claim-{suffix}", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS,
-            )
+        store = self._two_claims(first_cents, second_cents, unpaid_cents)
         self._reject(store, "claim:obligation-item-h:offset-a")
         self.assertEqual(store.current_evaluation_receipt(expected.H_ITEM_ID)["shortfall_cents"], unpaid_cents)  # rejecting A leaves it unpaid
 
@@ -5198,6 +5187,55 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
 
         return store, reject_b
+
+    def _two_claims(self, first_cents: int, second_cents: int, unpaid_cents: int) -> FinancialOwner:
+        """``unpaid_cents`` unpaid with offset claims A and B recorded."""
+        store = self._build_base_for_correction()
+        cash = expected.H_CASH_EVIDENCE
+        store.record_payment_evidence(
+            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+            amount_cents=expected.H_OWED_CENTS - unpaid_cents, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+        )
+        for suffix, cents in (("a", first_cents), ("b", second_cents)):
+            store.record_offset_claim(
+                item_id=expected.H_ITEM_ID, claim_id=f"claim:obligation-item-h:offset-{suffix}", amount_cents=cents,
+                evidence_id=f"evidence:offset-h:claim-{suffix}", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS,
+            )
+        return store
+
+    def _offset_b_refused_then_forced(self, store: FinancialOwner, bypass: object) -> None:
+        """Offset B is refused and writes nothing; committed anyway with the owner rule bypassed, the checker fails it."""
+        def authorize_b() -> None:
+            receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
+            store.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"], action_id="action:offset-b",
+                                   decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+        before = store.export_continuity()
+        with self.assertRaisesRegex(FinancialConflictError, "^offset_exceeds_shortfall$"):
+            authorize_b()
+        self.assertEqual(store.export_continuity(), before)
+        self._assert_verified(store)
+        with bypass, patch.object(FinancialOwner, "_verify_before_commit", lambda *args: None):
+            authorize_b()
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "^action:exceeds-shortfall$"):
+            self._assert_verified(store)
+
+    def test_an_offset_counts_earlier_offsets_against_the_shortfall(self) -> None:
+        # M1: 600,000 unpaid; offset A (400,000) leaves 200,000, so offset B (300,000) is refused. Kills "shortfall := owed - cash" in owner and checker.
+        store = self._two_claims(400_000, 300_000, unpaid_cents=600_000)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)
+        store.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-a", expected_revision=receipt["revision"], action_id="action:offset-a",
+                               decision_at_ms=expected.CORRECTION_AUTH_MS + 1_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+        inputs = FinancialOwner._claim_decision_inputs
+        self._offset_b_refused_then_forced(store, patch.object(FinancialOwner, "_claim_decision_inputs", lambda *args, **kw: (lambda c, t, r, d: (c, t, {**r, "shortfall_cents": 600_000}, d))(*inputs(*args, **kw))))
+
+    def test_an_offset_counts_open_correction_requests_against_the_shortfall(self) -> None:
+        # M1 (review finding 1): 300,000 unpaid and correction request A (300,000) open: a 300,000 offset would let paying A recover twice.
+        # With nothing open, the same 300,000 offset is accepted (test_case_* H fixture).
+        store, _reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=300_000)
+        self._offset_b_refused_then_forced(store, patch.object(owner, "_open_requests", lambda *args: {}))
 
     @staticmethod
     def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True, action: str = expected.ACTION_CORRECTION_ID) -> dict[str, object]:
@@ -5509,7 +5547,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(seen, {_ACTION_B: ["NOT_SATISFIED", "SUPPORTED"], expected.ACTION_CORRECTION_ID: ["NOT_SATISFIED", "SUPPORTED"]})
 
     def test_delivery_matches_the_oracle_under_many_orderings_of_money_and_acks(self) -> None:
-        # Stale corrections: 600,000 unpaid, requests A and B (300,000 each) and a READY offset notice N (claim C, 100,000), so 500,000 is owed.
+        # Stale corrections: 700,000 unpaid, requests A and B (300,000 each) and a READY offset notice N (claim C, 100,000, within what A and B leave), so 600,000 is owed.
         # Four of seven moves in a fixed stride over all 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
         # oracle's recomputation (its own delivery rule), and a refused move is skipped. Both delivery verdicts must occur, or the sweep proves nothing.
         item, act_n, made, seen = expected.H_ITEM_ID, "action:obligation-item-h:offset-c", [], set()
@@ -5525,7 +5563,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "ack-n": lambda store: ack(store, act_n),
         }
         for order in list(itertools.permutations(moves, 4))[::30]:
-            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=700_000)
             reject_b()
             store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)
             receipt = store.current_evaluation_receipt(item)

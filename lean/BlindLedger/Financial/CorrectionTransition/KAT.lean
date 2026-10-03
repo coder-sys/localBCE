@@ -477,11 +477,12 @@ private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : 
 /-- H1: on the KAT obligation with `cashCents` received (by default 300,000
     unpaid), reject an offset claim of `firstCents`; record `paidCents` more
     cash as payment row `payment:h:p2` (later reversed when `reversed`), linked
-    to `target` when `linked`; then reject a second claim of `secondCents`.
+    to `target` when `linked`; then `decideSecond` (by default, reject) a second claim of `secondCents`.
     Lean derives what the first request was paid from the row and the link. -/
 private def correctionKatSequence (firstCents secondCents : Nat)
     (cashCents : Nat := 9_700_000) (paidCents : Nat := 0) (linked : Bool := true)
-    (reversed : Bool := false) (target : String := katCorrectionActionId) :
+    (reversed : Bool := false) (target : String := katCorrectionActionId)
+    (decideSecond : CorrectionTransitionRequest → CorrectionTransitionResult := applyCorrectionTransition) :
     CorrectionTransitionResult × Option CorrectionTransitionResult :=
   let secondClaimId := "claim:h:offset2"
   let paidEvidence := { katCashEvidence (some paidCents) with
@@ -513,7 +514,7 @@ private def correctionKatSequence (firstCents secondCents : Nat)
         evidence := mutation.resultingInput.evidence ++ [paidEvidence] ++
           (if reversed then [reversal] else []) }
     let second := correctionKatRequestOn after secondClaimId "action:correction:h:v2" 11
-    applyCorrectionTransition { second with command := { second.command with
+    decideSecond { second with command := { second.command with
       paymentLinks := if linked && paidCents > 0 then
         [{ paymentId := "payment:h:p2", actionId := target }] else [] } }))
 
@@ -527,6 +528,13 @@ def gateCorrectionSecondFullRequestRejected : Bool :=
   | (first, some second) => correctionKatActionAmount first = some 300_000 &&
       resultHasReason second .NO_REQUESTABLE_BALANCE
   | _ => false
+
+-- M1: 300,000 unpaid with a 300,000 correction request open, a 300,000 offset is refused;
+-- with none open, it is authorized.
+#guard match correctionKatSequence 300_000 300_000 (decideSecond := applyOffsetAuthorization) with
+  | (_, some second) => resultHasReason second .CLAIM_EXCEEDS_SHORTFALL
+  | _ => false
+#guard (applyOffsetAuthorization (correctionKatOwedRequest 10_000_000)).mutation.isSome
 
 /-- 300,000 unpaid, two 200,000 claims: 200,000, then the 100,000 left. -/
 def gateCorrectionSecondPartialRequest : Bool :=

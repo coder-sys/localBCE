@@ -1026,8 +1026,10 @@ def preflightOffsetDecision (decision : DeterminationDecision) (request : Correc
     if decision = .OFFSET_AUTHORIZED ∧ command.decisionAtMs ≤ input.obligation.dueAt ∧
         input.obligation.dueAt < max command.decisionAtMs command.ownerNowMs then
       throw .DECISION_BACKDATED_PAST_DUE
-    -- M1: an authorization never claims more than the shortfall it closes; refused, never capped.
-    if decision = .OFFSET_AUTHORIZED ∧ claim.amountCents > currentResult.shortfallCents then
+    -- M1: an authorization and the correction requests still open never claim more than the
+    -- shortfall; refused, never capped.
+    if decision = .OFFSET_AUTHORIZED ∧
+        claim.amountCents + outstandingCorrectionCents paid.val input.actions > currentResult.shortfallCents then
       throw .CLAIM_EXCEEDS_SHORTFALL
     if command.queryObservations.evaluationConsumed.matchCount ≠ 0 ||
         command.queryObservations.evaluationConsumed.resultIdentity.isSome then
@@ -1226,7 +1228,7 @@ def buildAuthorized (request : CorrectionTransitionRequest) (currentResult : Fin
 def duplicateOf (kind : TransitionKind) (command : CorrectionCommand) : CorrectionTransitionResult :=
   { duplicate command with explanation := { (duplicate command).explanation with transition := some kind } }
 
--- NEW. Served for BLFOFA01 frames.
+-- NEW. Spec only: no worker frame serves it yet; the Python owner decides offsets.
 def applyOffsetAuthorization (request : CorrectionTransitionRequest) : CorrectionTransitionResult :=
   match preflightOffsetDecision .OFFSET_AUTHORIZED request with
   | .error reason => reject request.command reason
@@ -1528,13 +1530,15 @@ theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
     · cases h
   · cases h
 
-/-- M1: a ready authorization preflight never claims more than the shortfall it closes. -/
+/-- M1: a ready authorization preflight and the correction requests still open never claim more
+    than the shortfall. -/
 theorem preflightOffsetDecision_ready_within_shortfall {decision : DeterminationDecision}
     {request : CorrectionTransitionRequest} {currentResult : FinancialResult} {claim : Claim}
     {a b paid c}
     (h : preflightOffsetDecision decision request = .ok
       (.ready currentResult claim a b paid c)) :
-    decision = .OFFSET_AUTHORIZED → claim.amountCents ≤ currentResult.shortfallCents := by
+    decision = .OFFSET_AUTHORIZED → claim.amountCents +
+      outstandingCorrectionCents paid request.currentInput.actions ≤ currentResult.shortfallCents := by
   delta preflightOffsetDecision at h
   obtain ⟨-, h⟩ := ite_error_ok h
   obtain ⟨-, h⟩ := ite_error_ok h

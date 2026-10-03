@@ -5142,7 +5142,7 @@ class FinancialOwner:
             mutation_time = max(decision_time, self._now())
             if decision_time <= int(obligation["due_at_ms"]) < mutation_time:
                 _fail(FinancialInputError, "decision_time_backdated_past_due")
-            if int(claim["amount_cents"]) > int(evaluation_receipt["shortfall_cents"]):  # M1, Lean CLAIM_EXCEEDS_SHORTFALL: refused, never capped
+            if int(claim["amount_cents"]) + sum(_open_requests(connection, str(obligation["obligation_id"]), shortfall := int(evaluation_receipt["shortfall_cents"])).values()) > shortfall:  # M1: with the open correction requests, refused, never capped (decided here; Lean's CLAIM_EXCEEDS_SHORTFALL is spec only)
                 _fail(FinancialConflictError, "offset_exceeds_shortfall")
             before_revision = int(obligation["revision"])
             resulting_revision = before_revision + 1
