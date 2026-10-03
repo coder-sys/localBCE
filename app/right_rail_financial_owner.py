@@ -48,6 +48,10 @@ class FinancialRevisionError(FinancialError):
     pass
 
 
+class FinancialStaleError(FinancialRevisionError):
+    """Raised inside ``_write`` before its first statement (a stale cash plan): rolled back, and the writer this begin checked is kept."""
+
+
 class FinancialContinuityError(FinancialError):
     pass
 
@@ -2571,8 +2575,8 @@ class FinancialOwner:
                     if self._custody is not None:
                         self._custody.mark(self.owner_id, self._high)  # only after COMMIT, so custody never names an uncommitted head
             except BaseException as error:
-                if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full
-                    self._discard_writer()
+                if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full. A stale refusal changed nothing: the next begin's mark check still guards it
+                    connection.execute("ROLLBACK") if type(error) is FinancialStaleError else self._discard_writer()
                 _raise_if_busy(error)
                 raise
             finally:

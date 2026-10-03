@@ -593,7 +593,7 @@ def _run(args: argparse.Namespace) -> Any:
         )
         if args.apply:
             with _owner(args) as owner:  # R1a: an owner holds the store open until closed, on success and on error
-                return owner.run_batch(commands, cash_file_context=context)
+                return cash_file.apply_cash_file(owner, commands, context)
         return cash_file.preview_cash_file(commands, context, path=_existing_database(args.database), trusted_authority=authority)
     if args.command == "switch-prepare":
         return _switch_prepare(args)
