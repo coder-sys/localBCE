@@ -118,7 +118,7 @@ class FinancialSwitchTests(unittest.TestCase):
             forbidden_differences=forbidden_differences,
         )
 
-    def _candidate(self, *, h_delta: int = 0, unknown_field: bool = False) -> CandidateSpec:
+    def _candidate(self, *, h_delta: int = 0) -> CandidateSpec:
         def evaluate(input_bytes: bytes) -> dict[str, object]:
             replay = decode_replay_input(input_bytes, **self.trust)
             package = json.loads(replay.snapshot_package_bytes.decode("ascii"))
@@ -132,7 +132,7 @@ class FinancialSwitchTests(unittest.TestCase):
                 item = population_items[item_id]
                 amount = item["owed_cents"] + (h_delta if item_id == expected.H_ITEM_ID else 0)
                 member_results.append({"member_id": item_id, "currency": item["currency"], "owed_cents": amount})
-            result: dict[str, object] = {
+            return {
                 **replay.output_binding(
                     producer_kind="CANDIDATE",
                     producer_id=replay.candidate_id,
@@ -147,9 +147,6 @@ class FinancialSwitchTests(unittest.TestCase):
                     "currency": replay.currency,
                 },
             }
-            if unknown_field:
-                result["invented_field"] = "unknown schema fields fail closed"
-            return result
 
         return CandidateSpec(
             operator_id="candidate:fixture",
@@ -227,19 +224,21 @@ class FinancialSwitchTests(unittest.TestCase):
                 self.assertEqual(calls, [])
                 self._assert_source_bytes_unchanged()
 
-    def test_unknown_candidate_fields_return_incomplete_unknown(self) -> None:
-        report = run_shadow_replay(
-            self.snapshot,
-            **self.trust,
-            cohort_approval=self.approval,
-            reference=self.reference,
-            candidate=self._candidate(unknown_field=True),
-        )
-
-        self.assertEqual(report["status"], "INCOMPLETE")
-        self.assertEqual(report["reasons"], ["candidate_result_invalid"])
-        self.assertTrue(any("unknown-result-fields:invented_field" in row["reason"] for row in report["unknowns"]))
-        self._assert_source_bytes_unchanged()
+    def test_candidate_unknown_field_or_float_or_bool_binding_is_incomplete(self) -> None:
+        records = self.facts.binding_records()  # 7.0 / True / False pass == for 7 / 1 / 0 but hash differently
+        cases = [(name, key, bad) for name in _RECORDS for key, held in records[name].items() if type(held) is int
+                 for bad in (float(held), *((bool(held),) if held in (0, 1) else ()))]
+        named = {repr(("owner", "sequence", float(self.facts.sequence))), repr(("authority", "epoch", True)), repr(("control_pack", "effective_start_ms", float(self.facts.control_pack_start_ms)))}
+        self.assertLessEqual(named, {repr(case) for case in cases})  # repr: a set's == would take 1.0 for True
+        for name, key, bad in [*cases, ("invented_field", None, "unknown schema fields fail closed")]:
+            with self.subTest(record=name, key=key, value=bad):
+                forge = {name: {**records[name], key: bad} if key else bad}
+                candidate = replace(self.candidate, evaluate=lambda raw, forge=forge: {**self.candidate.evaluate(raw), **forge})
+                report = run_shadow_replay(self.snapshot, **self.trust, cohort_approval=self.approval, reference=self.reference, candidate=candidate)
+                self.assertEqual((report["status"], report["reasons"]), ("INCOMPLETE", ["candidate_result_invalid"]))
+                reason = f"candidate:{name}-binding" if key else "candidate:unknown-result-fields:invented_field"
+                self.assertEqual(report["unknowns"], [{"class": "UNKNOWN", "reason": reason}])
+                self._assert_source_bytes_unchanged()
 
     def test_forbidden_difference_is_reported_as_blocking(self) -> None:
         reference = self._reference(

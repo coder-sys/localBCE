@@ -784,8 +784,8 @@ def _validate_output(
     for key, expected in expected_binding.items():
         if key == "contract" or key == "input_sha256":
             continue
-        if output.get(key) != expected:
-            errors.append(f"{label}:{key}-binding")
+        if _canonical_json(output.get(key), maximum=MAX_RESULT_BYTES) != _canonical_json(expected, maximum=MAX_RESULT_BYTES):
+            errors.append(f"{label}:{key}-binding")  # JSON text, not ==, which takes 7.0 and True for the ints 7 and 1
     member_results = output.get("member_results")
     if type(member_results) is not list or len(member_results) > MAX_ROWS:
         errors.append(f"{label}:member-results-shape")
