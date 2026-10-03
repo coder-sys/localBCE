@@ -1,6 +1,7 @@
 """The gate's checkpoint producer: one serial writer per (tenant, shard), synthetic, activation=false.
 
-``commit`` is reserve, sign and Lean-check, seal, mark, publish.  It needs the id registry's reply for the batch
+``commit`` is reserve, sign and Lean-check, seal, mark; the decide layer's ``commit`` then settles the registry and only
+then hands out the tokens.  It needs the id registry's reply for the batch
 (row n and head): the head is signed into the CHECKPOINT/v2 header, and n and the batch's ``free`` ids are stored so
 the next registry settle can be derived after a restart.  The header and tokens are stored before the key is used,
 so a crash re-signs the same header at the same seq and never reuses a seq with other bytes; ``signer.seal``

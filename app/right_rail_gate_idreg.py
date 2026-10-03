@@ -2,8 +2,8 @@
 
 One append-only chained log (store v2; a v1 store is refused): RESERVE gives a free id to a shard, FREE returns it,
 SETTLE marks the shard's unfreed reservations as in its sealed sets, BOOT names the process generation.  An id is in
-flight while its holder has no later SETTLE.  ``reserve`` settles the shard's previous batch, then reserves, in one
-transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
+flight while its holder has no later SETTLE.  The decide layer settles each sealed batch before its tokens leave
+(``decide.commit``); ``reserve`` settles it first if a crash came between, then reserves, in one transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
 carry this handle's nonce.  ``boot`` requires each shard's newest signed commitment (row n and head, the
 checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard after it, else
 ``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).

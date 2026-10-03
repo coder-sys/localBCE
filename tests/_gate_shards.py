@@ -62,7 +62,7 @@ class Cluster:
 
     def send(self, k: int, payments: dict[int, list[int]], bad=(), crash: str | None = None) -> dict[int, str]:
         """One batch on shard ``k``: payment number -> its line ids (a line in ``bad`` is for a deceased member).  Returns
-        id -> 'OUTCOME REASONS'.  With ``crash`` ('reserve', 'commit', 'seal' or 'after') a child runs it and dies there."""
+        id -> 'OUTCOME REASONS'.  With ``crash`` ('reserve', 'commit', 'seal', 'settle' or 'after') a child runs it and dies there."""
         self.lines.update({(k, n): ids for n, ids in payments.items()})
         if crash is None:
             return run_batch(self, k, payments, bad)
@@ -89,7 +89,7 @@ def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dic
         leaves = [fx._leaf(p, 0, "ALLOW" if set(o) == {"ALLOW"} else "HOLD", shard=k, member_key=fx.member(p, k))
                   for p, o in pay.items() if "WAIT" not in o]
         if leaves:
-            prod.commit(fx.PROGRAM, leaves, state_digest=ans.digest, created_at=fx.NOW, idreg=ans.idreg, free=ans.free, adds=ans.adds)
+            decider.commit(prod, reg, k, fx.PROGRAM, leaves, ans, fx.NOW)
         return status
     finally:
         prod.close()
@@ -169,6 +169,9 @@ def _main(argv: list[str]) -> None:
         idreg._Tail.add = add_then_die
     elif crash in ("commit", "seal"):
         setattr(producer.ShardProducer, "commit" if crash == "commit" else "_seal", die)
+    elif crash == "settle":  # sealed and marked; the registry not yet told, no token out
+        commit = producer.ShardProducer.commit
+        producer.ShardProducer.commit = lambda *a, **kw: (commit(*a, **kw), die())
     run_batch(c, k, {int(p): v for p, v in payments.items()}, bad)
     if crash == "after":
         die()

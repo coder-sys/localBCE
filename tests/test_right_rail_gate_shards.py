@@ -85,8 +85,7 @@ class ShardTests(fx.Scratch):
         with self.cluster() as c:
             first = c.send(0, {1: [10, 11]}, bad=(11,))
             self.assertEqual([first[10], first[11].split()[0]], ["ALLOW -", "HOLD"])  # 10 is an ALLOW line in a HOLD payment
-            c.send(0, NEXT)  # the next batch's settle frees 10 and records 11
-            second = c.send(1, {3: [10], 4: [11]})
+            second = c.send(1, {3: [10], 4: [11]})  # t's own settle freed 10 and recorded 11
             self.assertEqual((second[10], second[11]), ("ALLOW -", "HOLD ALREADY_DECIDED"))
             g.inv(self, c)
 
@@ -99,7 +98,6 @@ class ShardTests(fx.Scratch):
                 self.assertEqual(c.send(1, {2: [10]}), {10: "WAIT -"})  # unavailable, and no shard-1 leaf or row
             self.assertEqual(count(c, 0), before)
             self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})  # the retry frees and re-reserves 10
-            c.send(0, NEXT)  # its settle makes 10 recorded
             self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD ALREADY_DECIDED"})
             self.assertEqual([x for x in g.allowed(c) if x[2] == 10], [(0, 1, 10)])
             g.inv(self, c)
@@ -107,9 +105,8 @@ class ShardTests(fx.Scratch):
     def test_paid_line_is_never_freed_or_paid_again(self) -> None:
         with self.cluster() as c:
             self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
-            c.send(0, NEXT)  # its settle records 10, so 10 is not in this batch's RULES_FREE
             with contextlib.closing(c.producer(0)) as prod:
-                self.assertNotIn(10, prod.sealed_frees()[1])
+                self.assertNotIn(10, prod.sealed_frees()[1])  # batch 1's own free
             self.assertEqual(g.owned(c, self)[idreg._key(10)], 0)
             self.assertEqual(c.send(1, {4: [10]}), {10: "HOLD ALREADY_DECIDED"})
             g.inv(self, c)
@@ -131,7 +128,7 @@ class ShardTests(fx.Scratch):
             self.finish(c, T, NEXT)
 
     def test_k2_dies_after_row_a_and_k3_after_the_batch(self) -> None:
-        for point, torn in (("seal", False), ("seal", True), ("after", False)):
+        for point, torn in (("seal", False), ("seal", True), ("settle", False), ("after", False)):
             with self.subTest(point=point, torn=torn), self.cluster() as c:
                 c.send(0, T, BAD, crash=point)
                 if torn:
@@ -152,12 +149,12 @@ class ShardTests(fx.Scratch):
         with self.cluster() as c:
             c.send(0, T, BAD)
             frees, reserves = count(c, 1), count(c, 0)
+            self.assertGreater(frees, 0)  # t's own settle freed 11 before its tokens left
             c.send(0, NEXT, crash="reserve")
-            self.assertEqual((count(c, 1), count(c, 0)), (frees, reserves))  # t's frees and t+1's reserve are both absent
+            self.assertEqual((count(c, 1), count(c, 0)), (frees, reserves))  # t+1's reserve is absent
             c.boot()
             c.send(0, NEXT)
-            self.assertGreater(count(c, 1), frees)  # both present after the retry
-            self.assertGreater(count(c, 0), reserves)
+            self.assertGreater(count(c, 0), reserves)  # present after the retry
             self.finish(c)
 
     def test_voided_reservation_is_freed_on_retry(self) -> None:
@@ -202,19 +199,29 @@ class ShardTests(fx.Scratch):
             old = snapshot(c.store(0))
             c.send(0, NEXT)
             restore(c.store(0), old)
-            c.boot()  # the older commitment lies inside the chain
-            with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
-                c.producer(0)
-
-    def test_r3_store_restored_behind_a_settle_is_rewound(self) -> None:
-        with self.cluster() as c:
-            c.send(0, T, BAD)
-            old = snapshot(c.store(0))
-            c.send(0, NEXT)
-            c.send(0, {8: [30]})  # settles NEXT's 20 as recorded, then seals 30
-            restore(c.store(0), old)  # boot runs before any producer opens, so a restored mark would not help
             with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                c.boot()  # else the next settle would free the sealed 30 for shard 1 to ALLOW
+                c.boot()  # NEXT's settle follows its reserve
+            with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
+                c.producer(0)  # and the store is behind its mark
+
+    def test_r3_store_and_mark_restored_before_the_newest_batch(self) -> None:
+        """A batch's SETTLE is in the registry before its tokens leave, so a store restored with its mark to before it
+        is refused at boot.  Restored to before a batch that died before its settle (no token out), it boots and the
+        ids are decided again, once."""
+        for point in (None, "settle"):
+            with self.subTest(point=point), self.cluster() as c:
+                c.send(0, T, BAD)
+                old = {path: snapshot(path) for path in (c.store(0), c.dir / "s0.mark")}
+                c.send(0, NEXT, crash=point)
+                for path, files in old.items():
+                    restore(path, files)
+                if point is None:  # NEXT paid 20
+                    with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                        c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
+                    self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD ALREADY_DECIDED"})  # the refusal freed nothing
+                else:
+                    c.boot()  # the store is behind only a batch whose tokens never left
+                    self.finish(c, NEXT)  # 20 freed, decided again and paid once; inv holds
 
     def test_r4_a_swapped_registry_is_not_booted(self) -> None:
         with self.cluster() as c:
@@ -265,7 +272,6 @@ class ShardTests(fx.Scratch):
     def test_shard_of_only_resends_is_not_stuck(self) -> None:
         with self.cluster() as c:
             c.send(0, {1: [10]})
-            c.send(0, NEXT)
             self.assertEqual(c.send(1, {4: [10]}), {10: "HOLD ALREADY_DECIDED"})  # shard 1's first batch joins no set: empty adds
             self.assertEqual(c.send(1, {5: [30]}), {30: "ALLOW -"})
             g.inv(self, c)

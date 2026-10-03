@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 from typing import NamedTuple, Sequence
 
+from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
 from app import right_rail_gate_producer as producer
 
@@ -60,3 +61,15 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
         raise GateDecideError("state_mismatch" if "RULES_STATE_MISMATCH" in got else "rules_refused")
     return Answer(got.get("RULES_LINE", []), [int(i) for i in got["RULES_FREE"][0].split()], bytes.fromhex(got["RULES_DIGEST"][0]),
                   bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head))
+
+
+def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, k: int, program: str, leaves: Sequence[gate.TokenLeaf],
+           ans: Answer, created_at: int):
+    """Seal the decided batch, settle it in the registry, and only then return (checkpoint, signed, tokens).  The order is
+    the rollback check: before any token is out, a SETTLE follows the batch's RESERVE rows, so a store (with or without its
+    mark) restored to before the batch is ``registry_rewound`` at boot.  A crash between the two loses nothing: no token is
+    out, and the next ``decide`` settles the sealed batch first."""
+    out = prod.commit(program, leaves, state_digest=ans.digest, created_at=created_at, idreg=ans.idreg, free=ans.free,
+                      adds=ans.adds)
+    reg.reserve(k, [], sealed=(ans.idreg[0], ans.free))
+    return out
