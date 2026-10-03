@@ -54,19 +54,19 @@ GROWS = {  # operation: (counters that grow, owner branch, listed, strength of t
     "gate_state_pin": ("hashed peak_kib", "auth-state STATE/v2", "2026-10-01", "EXACT: decideBatch_slice"),
 }
 SQLITE = "3.53.1"  # sql_ops counts this library's VM steps; another version changes them, so re-measure
-PINNED = {  # operation: (small-history work, large-history work) on trunk 70f9606 (run hy-growth4); lower it when an operation gets cheaper
-    "decision": ((11777, 32313, 1939, 119, 0), (31560, 32313, 1939, 116, 0)),
-    "reverse": ((11985, 34012, 2208, 128, 0), (31768, 34012, 2208, 131, 0)),
-    "evaluate": ((11738, 37428, 2208, 141, 0), (31521, 37428, 2208, 134, 0)),
-    "cash_file": ((117792, 138208, 19248, 3091, 0), (266108, 137849, 18852, 29369, 0)),
+PINNED = {  # operation: (small-history work, large-history work) on trunk 70f9606 (run hy-growth4), deterministic counters lowered on m4-int (run m4int-4); lower it when an operation gets cheaper
+    "decision": ((11743, 30506, 1939, 119, 0), (31526, 30506, 1939, 116, 0)),
+    "reverse": ((11934, 32205, 2208, 128, 0), (31717, 32205, 2208, 131, 0)),
+    "evaluate": ((11670, 35621, 2208, 141, 0), (31453, 35621, 2208, 134, 0)),
+    "cash_file": ((117792, 133818, 19248, 3091, 0), (266108, 133459, 18852, 29369, 0)),
     "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
     "continuity": ((32004, 2226225, 0, 10760, 0), (229802, 44523292, 0, 141728, 1)),
     "package": ((3152, 18608, 0, 112, 0), (3152, 18608, 0, 112, 0)),
-    "audit": ((18364, 55862, 0, 182, 0), (38147, 55862, 0, 181, 0)),
+    "audit": ((18364, 46790, 0, 182, 0), (38147, 46790, 0, 181, 0)),
     "summary": ((2796, 0, 0, 11, 0), (2796, 0, 0, 11, 0)),
     "history": ((2306, 0, 0, 328, 0), (2306, 0, 0, 328, 0)),
-    "open": ((257358, 3924859, 0, 6039, 0), (2442549, 83604988, 0, 96729, 0)),
-    "item_decision": ((34055, 63415, 8364, 289, 0), (69911, 361982, 70428, 7852, 0)),
+    "open": ((257358, 3923052, 0, 6039, 0), (2442549, 83603181, 0, 96729, 0)),
+    "item_decision": ((33766, 61608, 8364, 289, 0), (67174, 360175, 70428, 7852, 0)),
     "gate_state_pin": ((0, 236354, 0, 706, 0), (0, 2362946, 0, 7046, 0)),
 }
 # Every public FinancialOwner method is measured or named here with the reason it is not (history-guard-v1.md, inventory).
