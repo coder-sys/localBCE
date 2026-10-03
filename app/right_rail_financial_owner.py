@@ -72,6 +72,17 @@ def _fail(error_type: type[FinancialError], code: str) -> None:
     raise error
 
 
+def _one(connection: sqlite3.Connection, code: str, sql: str, params: Any = ()) -> sqlite3.Row:
+    row = connection.execute(sql, params).fetchone()
+    if row is None:
+        _fail(FinancialIntegrityError, code)
+    return row
+
+
+def _cols(row: sqlite3.Row, convert: type, *names: str) -> dict[str, Any]:
+    return {name: convert(row[name]) for name in names}
+
+
 def _raise_if_busy(error: BaseException) -> None:
     """A lock held past the busy timeout is ``store_busy``, never an integrity finding or a raw sqlite error."""
     if isinstance(error, sqlite3.OperationalError) and getattr(error, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
@@ -2402,9 +2413,7 @@ class FinancialOwner:
             if no_migration and connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":  # R0.5: a pre-WAL header changes only in a migrating open
                 _fail(FinancialIntegrityError, "shadow_requires_migration")
             connection.execute("BEGIN IMMEDIATE")
-            meta = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-            if meta is None:
-                _fail(FinancialIntegrityError, "schema_meta")
+            meta = _one(connection, "schema_meta", "SELECT * FROM financial_meta WHERE id=1")
             if (meta["schema_version"], meta["schema"]) != (_SCHEMA_VERSION, _SCHEMA):
                 _fail(FinancialIntegrityError, "unsupported_store_version")
             migrated = False
@@ -2656,9 +2665,7 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "period_scope")
 
     def _meta(self, connection: sqlite3.Connection) -> sqlite3.Row:
-        row = connection.execute("SELECT * FROM financial_meta WHERE id=1").fetchone()
-        if row is None:
-            _fail(FinancialIntegrityError, "meta_missing")
+        row = _one(connection, "meta_missing", "SELECT * FROM financial_meta WHERE id=1")
         return row
 
     def _append_event(
@@ -2795,9 +2802,7 @@ class FinancialOwner:
 
     def _get_obligation_row(self, connection: sqlite3.Connection, item_id: str) -> sqlite3.Row:
         _id(item_id, "item_id")
-        row = connection.execute("SELECT * FROM obligations WHERE item_id=? AND period_id=?", (item_id, self.config.period_id)).fetchone()
-        if row is None:
-            _fail(FinancialIntegrityError, "obligation_missing")
+        row = _one(connection, "obligation_missing", "SELECT * FROM obligations WHERE item_id=? AND period_id=?", (item_id, self.config.period_id))
         return row
 
     def _population_binding_for_obligation(
@@ -3350,9 +3355,7 @@ class FinancialOwner:
         (``create=True``); it appends the matching POPULATION_IMPORT_OPENED
         event in that same transaction (Article III.2).
         """
-        pack = connection.execute("SELECT * FROM control_packs WHERE pack_id=? AND status='APPROVED'", (pack_id,)).fetchone()
-        if pack is None:
-            _fail(FinancialIntegrityError, "control_pack_missing")
+        pack = _one(connection, "control_pack_missing", "SELECT * FROM control_packs WHERE pack_id=? AND status='APPROVED'", (pack_id,))
         existing = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
         encoded_rules = _values_json(inclusion_rules)
         if existing is not None:
@@ -3554,9 +3557,7 @@ class FinancialOwner:
             ).fetchone()
             if binding is None or str(binding["manifest_id"]) != manifest_id or bytes(binding["manifest_digest"]) != manifest.digest:
                 _fail(FinancialConflictError, "population_manifest_binding_conflict")
-            row = connection.execute("SELECT expected_count,imported_count,source_complete FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "population_import_missing")
+            row = _one(connection, "population_import_missing", "SELECT expected_count,imported_count,source_complete FROM population_imports WHERE population_id=?", (population_id,))
             stored_members = self._population_member_ids(connection, population_id)
             persisted_imported_count = row["imported_count"]
             if (
@@ -3584,18 +3585,14 @@ class FinancialOwner:
                     committed_at_ms=now_ms,
                 )
         with self._read_snapshot() as connection:
-            row = connection.execute("SELECT imported_count,source_complete,status FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "population_import_missing")
+            row = _one(connection, "population_import_missing", "SELECT imported_count,source_complete,status FROM population_imports WHERE population_id=?", (population_id,))
             return {"status": str(row[2]), "population_id": population_id, "imported_count": int(row[0]), "expected_count": expected_count, "source_complete": bool(row[1])}
 
     def validate_population(self, population_id: str) -> dict[str, Any]:
         self._assert_actionable()
         _id(population_id, "population_id")
         with self._write() as connection:
-            row = connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "population_missing")
+            row = _one(connection, "population_missing", "SELECT * FROM population_imports WHERE population_id=?", (population_id,))
             manifest, manifest_row = self._bound_population_manifest(connection, row)
             if int(row["source_complete"]) != 1:
                 _fail(FinancialIntegrityError, "population_source_incomplete")
@@ -3654,9 +3651,7 @@ class FinancialOwner:
             base = {
                 "population_id": population_id,
                 "status": str(row["status"]),
-                "imported_count": int(row["imported_count"]),
-                "expected_count": int(row["expected_count"]),
-                "validated_count": int(row["validated_count"]),
+                **_cols(row, int, "imported_count", "expected_count", "validated_count"),
             }
             binding = connection.execute(
                 "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
@@ -3757,9 +3752,7 @@ class FinancialOwner:
             "payments": [
                 {
                     "payment_id": str(row["payment_id"]),
-                    "amount_cents": int(row["amount_cents"]),
-                    "event_at_ms": int(row["event_at_ms"]),
-                    "active": int(row["active"]),
+                    **_cols(row, int, "amount_cents", "event_at_ms", "active"),
                 }
                 for row in connection.execute(
                     "SELECT payment_id,amount_cents,event_at_ms,active FROM payments WHERE obligation_id=? ORDER BY payment_id",
@@ -3926,9 +3919,7 @@ class FinancialOwner:
             manifest, manifest_row = self._bound_population_manifest(connection, import_row)
             if connection.execute("SELECT 1 FROM obligations WHERE population_id=? LIMIT 1", (population_id,)).fetchone() is not None:
                 _fail(FinancialConflictError, "population_already_published")
-            pack = connection.execute("SELECT * FROM control_packs WHERE pack_id=?", (import_row["pack_id"],)).fetchone()
-            if pack is None:
-                _fail(FinancialIntegrityError, "control_pack_missing")
+            pack = _one(connection, "control_pack_missing", "SELECT * FROM control_packs WHERE pack_id=?", (import_row["pack_id"],))
             now_ms = self._now()
             items = connection.execute("SELECT item_id,display_label,owed_cents,due_at_ms,currency FROM population_items WHERE population_id=? ORDER BY item_id", (population_id,)).fetchall()
             stored_members = tuple(str(item[0]) for item in items)
@@ -4056,33 +4047,16 @@ class FinancialOwner:
 
     def _projection_for_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
-            "obligation_id": str(row["obligation_id"]),
-            "item_id": str(row["item_id"]),
-            "population_id": str(row["population_id"]),
-            "period_id": str(row["period_id"]),
-            "currency": str(row["currency"]),
-            "revision": int(row["revision"]),
-            "owed_cents": int(row["owed_cents"]),
-            "claimed_adjustment_cents": int(row["claimed_adjustment_cents"]),
-            "lawful_adjustment_cents": int(row["lawful_adjustment_cents"]),
-            "received_cash_cents": int(row["received_cash_cents"]),
-            "shortfall_cents": int(row["shortfall_cents"]),
-            "overage_cents": int(row["overage_cents"]),
-            "cash_satisfied": bool(row["cash_satisfied"]),
-            "amount_satisfied": bool(row["amount_satisfied"]),
-            "timely": bool(row["timely"]),
-            "reporting_complete": bool(row["reporting_complete"]),
-            "verification_status": str(row["verification_status"]),
-            "case_status": str(row["case_status"]),
-            "delivery_status": str(row["delivery_status"]),
+            **_cols(row, str, "obligation_id", "item_id", "population_id", "period_id", "currency"),
+            **_cols(row, int, "revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents"),
+            **_cols(row, bool, "cash_satisfied", "amount_satisfied", "timely", "reporting_complete"),
+            **_cols(row, str, "verification_status", "case_status", "delivery_status"),
             "current_evaluation_id": None if row["current_evaluation_id"] is None else str(row["current_evaluation_id"]),
             "due_at_ms": int(row["due_at_ms"]),
         }
 
     def _obligation_by_id(self, connection: sqlite3.Connection, obligation_id: str) -> sqlite3.Row:
-        row = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,)).fetchone()
-        if row is None:
-            _fail(FinancialIntegrityError, "obligation_missing")
+        row = _one(connection, "obligation_missing", "SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,))
         return row
 
     def _current_projection(self, connection: sqlite3.Connection, obligation_id: str) -> dict[str, Any]:
@@ -4201,19 +4175,6 @@ class FinancialOwner:
             self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="OFFSET_CLAIMED", payload={"claim_id": claim_id, "evidence_id": evidence_id, "amount_cents": amount_cents}, now_ms=now_ms)
             return {"status": "CLAIMED", "claim_id": claim_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
 
-    def _create_action(self, connection: sqlite3.Connection, *, action_id: str, obligation_id: str, determination_id: str, kind: str, revision: int, payload: Mapping[str, Any], now_ms: int) -> str:
-        payload_json = _canonical(payload).decode("ascii")
-        payload_digest = _digest(_ACTION_DOMAIN, payload_json.encode("ascii"))
-        existing = connection.execute("SELECT payload_digest FROM actions WHERE action_id=?", (action_id,)).fetchone()
-        if existing is not None:
-            if bytes(existing[0]) != payload_digest:
-                _fail(FinancialConflictError, "action_payload_immutable")
-            return "DUPLICATE"
-        idempotency_key = _digest(_IDEMPOTENCY_DOMAIN, action_id.encode("ascii"))
-        connection.execute("INSERT INTO actions VALUES (?,?,?,?,?,?,?,?,?,?)", (action_id, obligation_id, determination_id, kind, "READY", revision, payload_json, payload_digest, idempotency_key, now_ms))
-        connection.execute("INSERT INTO action_outbox VALUES (?,?,?,?,?,?)", (action_id, "READY", 0, payload_digest, None, now_ms))
-        return "CREATED"
-
     def retry_action(self, action_id: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Retry a state-owned action without permitting payload replacement."""
         self._assert_actionable()
@@ -4221,9 +4182,7 @@ class FinancialOwner:
         if payload is not None and not isinstance(payload, Mapping):
             _fail(FinancialInputError, "action_payload")
         with self._write() as connection:
-            action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_id,)).fetchone()
-            if action is None:
-                _fail(FinancialIntegrityError, "action_missing")
+            action = _one(connection, "action_missing", "SELECT * FROM actions WHERE action_id=?", (action_id,))
             stored_payload = _stored_object(action["payload_json"], "action_payload_integrity")
             if payload is not None and _canonical(dict(payload)) != _canonical(stored_payload):
                 _fail(FinancialConflictError, "action_payload_immutable")
@@ -4256,9 +4215,7 @@ class FinancialOwner:
             _fail(FinancialRevisionError, "obligation_revision_conflict")
         if str(obligation["current_evaluation_id"]) != evaluation_id:
             _fail(FinancialRevisionError, "evaluation_revision_conflict")
-        row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (evaluation_id, obligation["obligation_id"])).fetchone()
-        if row is None:
-            _fail(FinancialIntegrityError, "evaluation_reference_missing")
+        row = _one(connection, "evaluation_reference_missing", "SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (evaluation_id, obligation["obligation_id"]))
         if int(row["revision"]) != expected_revision or bytes(row["result_digest"]) != provided_digest:
             _fail(FinancialRevisionError, "evaluation_reference_conflict")
         receipt = self._evaluation_receipt_for_row(connection, row)
@@ -4939,9 +4896,7 @@ class FinancialOwner:
     ) -> tuple[sqlite3.Row, int, dict[str, Any], bytes]:
         """Authority, claim lookup, decision time and current-evaluation reference for both served decisions."""
         self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
-        claim = connection.execute("SELECT * FROM claimed_adjustments WHERE claim_id=? AND obligation_id=?", (claim_id, obligation["obligation_id"])).fetchone()
-        if claim is None:
-            _fail(FinancialIntegrityError, "offset_claim_missing")
+        claim = _one(connection, "offset_claim_missing", "SELECT * FROM claimed_adjustments WHERE claim_id=? AND obligation_id=?", (claim_id, obligation["obligation_id"]))
         if decision_at_ms is None and decision_time_required:
             _fail(FinancialInputError, "decision_time_required")
         decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
@@ -5251,14 +5206,10 @@ class FinancialOwner:
         _id(action_id, "action_id")
         _id(acknowledgment_ref, "acknowledgment_ref")
         with self._write() as connection:
-            action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_id,)).fetchone()
-            if action is None:
-                _fail(FinancialIntegrityError, "action_missing")
+            action = _one(connection, "action_missing", "SELECT * FROM actions WHERE action_id=?", (action_id,))
             obligation = self._obligation_by_id(connection, str(action["obligation_id"]))
             self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
-            outbox = connection.execute("SELECT * FROM action_outbox WHERE action_id=?", (action_id,)).fetchone()
-            if outbox is None:
-                _fail(FinancialIntegrityError, "action_outbox_missing")
+            outbox = _one(connection, "action_outbox_missing", "SELECT * FROM action_outbox WHERE action_id=?", (action_id,))
             if self._replayed_command(connection, "ACTION_ACKNOWLEDGMENT", action_id, {"acknowledgment_ref": acknowledgment_ref}, "acknowledgment_conflict"):
                 return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}
             self._check_revision(obligation, expected_revision)
@@ -5425,9 +5376,7 @@ class FinancialOwner:
                 received_at_ms=self._now(),
             )
             if correction:
-                prior = connection.execute("SELECT * FROM evidence WHERE evidence_id=?", (supersedes,)).fetchone()
-                if prior is None:
-                    _fail(FinancialIntegrityError, "report_supersedes_missing")
+                prior = _one(connection, "report_supersedes_missing", "SELECT * FROM evidence WHERE evidence_id=?", (supersedes,))
                 if str(prior["item_id"]) != item_id:
                     _fail(FinancialIntegrityError, "report_supersedes_item")
                 if str(prior["kind"]) not in {"REPORT", "REPORT_CORRECTION"}:
@@ -5497,9 +5446,7 @@ class FinancialOwner:
         input_snapshot_digest = bytes(row["input_snapshot_digest"])
         if input_snapshot_digest != _digest(_EVALUATION_INPUT_DOMAIN, _canonical(input_snapshot)):
             _fail(FinancialIntegrityError, "evaluation_input_digest")
-        obligation = connection.execute("SELECT * FROM obligations WHERE obligation_id=?", (row["obligation_id"],)).fetchone()
-        if obligation is None:
-            _fail(FinancialIntegrityError, "evaluation_obligation_missing")
+        obligation = _one(connection, "evaluation_obligation_missing", "SELECT * FROM obligations WHERE obligation_id=?", (row["obligation_id"],))
         pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, str(obligation["obligation_id"]))
         if str(row["control_pack_id"]) != pack.pack_id or int(row["control_pack_version"]) != pack.version or bytes(row["control_pack_digest"]) != pack.digest:
             _fail(FinancialIntegrityError, "evaluation_control_pack_binding")
@@ -5513,20 +5460,8 @@ class FinancialOwner:
             "rule_version": int(row["rule_version"]),
             "evidence_ids": evidence_ids,
             "authority_id": str(row["authority_id"]),
-            "evaluated_at_ms": int(row["evaluated_at_ms"]),
-            "owed_cents": int(row["owed_cents"]),
-            "claimed_adjustment_cents": int(row["claimed_adjustment_cents"]),
-            "lawful_adjustment_cents": int(row["lawful_adjustment_cents"]),
-            "received_cash_cents": int(row["received_cash_cents"]),
-            "shortfall_cents": int(row["shortfall_cents"]),
-            "overage_cents": int(row["overage_cents"]),
-            "cash_satisfied": int(row["cash_satisfied"]),
-            "amount_satisfied": int(row["amount_satisfied"]),
-            "timely": int(row["timely"]),
-            "reporting_complete": int(row["reporting_complete"]),
-            "verification_status": str(row["verification_status"]),
-            "case_status": str(row["case_status"]),
-            "delivery_status": str(row["delivery_status"]),
+            **_cols(row, int, "evaluated_at_ms", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete"),
+            **_cols(row, str, "verification_status", "case_status", "delivery_status"),
         }
         result_digest = bytes(row["result_digest"])
         if result_digest != _digest(_EVALUATION_RESULT_DOMAIN, _canonical(_evaluation_result_body(result))):
@@ -5626,16 +5561,8 @@ class FinancialOwner:
 
             def evidence_ref(row: sqlite3.Row) -> dict[str, Any]:
                 return {
-                    "evidence_id": str(row["evidence_id"]),
-                    "item_id": str(row["item_id"]),
-                    "kind": str(row["kind"]),
-                    "common_origin_id": str(row["common_origin_id"]),
-                    "source_id": str(row["source_id"]),
-                    "source_version": str(row["source_version"]),
-                    "local_ref": str(row["local_ref"]),
-                    "applicable_at_ms": int(row["applicable_at_ms"]),
-                    "event_at_ms": int(row["event_at_ms"]),
-                    "received_at_ms": int(row["received_at_ms"]),
+                    **_cols(row, str, "evidence_id", "item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref"),
+                    **_cols(row, int, "applicable_at_ms", "event_at_ms", "received_at_ms"),
                     "amount_cents": None if row["amount_cents"] is None else int(row["amount_cents"]),
                     "reversal_of": None if row["reversal_of"] is None else str(row["reversal_of"]),
                     "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
@@ -5655,9 +5582,7 @@ class FinancialOwner:
                 return {
                     "case_id": str(row["case_id"]),
                     "obligation_id": obligation_id,
-                    "reason": str(row["reason"]),
-                    "contractual_accountability": str(row["contractual_accountability"]),
-                    "next_action_owner": str(row["next_action_owner"]),
+                    **_cols(row, str, "reason", "contractual_accountability", "next_action_owner"),
                     "due_at_ms": int(row["due_at_ms"]),
                     "completion_conditions": {key: conditions[key] for key in sorted(conditions)},
                     "status": str(row["status"]),
@@ -5717,9 +5642,7 @@ class FinancialOwner:
                         {"evidence_id": value["evidence_id"], "record_digest": value["record_digest"]}
                         for value in bindings
                     ],
-                    "expected_revision": int(row["expected_revision"]),
-                    "resulting_revision": int(row["resulting_revision"]),
-                    "decided_at_ms": int(row["decided_at_ms"]),
+                    **_cols(row, int, "expected_revision", "resulting_revision", "decided_at_ms"),
                     "determination_digest": _hex(bytes(row["determination_digest"])),
                     "input_evaluation_id": str(row["input_evaluation_id"]),
                     "input_evaluation_result_digest": _hex(bytes(row["input_evaluation_result_digest"])),
@@ -5746,9 +5669,7 @@ class FinancialOwner:
                 return {
                     "action_id": str(row["action_id"]),
                     "obligation_id": obligation_id,
-                    "determination_id": str(row["determination_id"]),
-                    "kind": str(row["kind"]),
-                    "status": str(row["status"]),
+                    **_cols(row, str, "determination_id", "kind", "status"),
                     "revision": int(row["revision"]),
                     "payload_digest": _hex(bytes(row["payload_digest"])),
                     "payload_fields": payload_fields,
@@ -6751,9 +6672,7 @@ class FinancialOwner:
     def action_payload(self, action_id: str) -> dict[str, Any]:
         _id(action_id, "action_id")
         with self._read_snapshot() as connection:
-            row = connection.execute("SELECT payload_json,payload_digest FROM actions WHERE action_id=?", (action_id,)).fetchone()
-            if row is None:
-                _fail(FinancialIntegrityError, "action_missing")
+            row = _one(connection, "action_missing", "SELECT payload_json,payload_digest FROM actions WHERE action_id=?", (action_id,))
             return {"action_id": action_id, "payload": _stored_object(row[0], "action_payload_integrity"), "payload_digest": _hex(bytes(row[1]))}
 
     @staticmethod

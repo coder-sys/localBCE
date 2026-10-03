@@ -33,6 +33,10 @@ def _fail(code: str, caught: BaseException | None = None) -> NoReturn:
     raise error
 
 
+def _cols(row: sqlite3.Row, *names: str) -> dict[str, object]:
+    return {name: row[name] for name in names}
+
+
 # Stores and packages are verified at v8 only; every other version fails closed.
 SCHEMA_VERSION = 8
 SCHEMA = "RR/FINANCIAL/OWNER/v8"
@@ -1713,10 +1717,7 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
             _canonical(
                 {
                     "pack_id": pack_id,
-                    "state_id": row["state_id"],
-                    "deployment_id": row["deployment_id"],
-                    "program_id": row["program_id"],
-                    "period_id": row["period_id"],
+                    **_cols(row, "state_id", "deployment_id", "program_id", "period_id"),
                     "version": version,
                     "source_refs": source_refs,
                     "effective_start_ms": start,
@@ -2311,6 +2312,15 @@ def _verify_population_history(
         source_completed = False
         validated = False
         published = False
+
+        def payload_binds(payload: dict[str, object], tag: str, *fields: str) -> None:
+            if set(payload) != {"population_id", *fields} | set(manifest_fields):
+                _fail(f"history:population-{tag}-payload")
+            if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                _fail(f"history:population-{tag}-manifest")
+            if payload["population_id"] != population_id:
+                _fail(f"history:population-{tag}-population")
+
         for event in by_population[population_id]:
             event_sequence = _integer(
                 event["event_sequence"],
@@ -2346,12 +2356,7 @@ def _verify_population_history(
                     _fail("history:population-open-duplicate")
                 if imported or source_completed or validated or published:
                     _fail("history:population-open-order")
-                if set(payload) != {"population_id", "staging_digest"} | set(manifest_fields):
-                    _fail("history:population-open-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-open-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-open-population")
+                payload_binds(payload, "open", "staging_digest")
                 if before != 0 or after != 0:
                     _fail("history:population-open-revision")
                 expected_staging_digest = _digest(
@@ -2380,13 +2385,7 @@ def _verify_population_history(
             if kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _fail("history:population-stage-order")
-                stage_fields = {"population_id", "imported_count", "chunk_count"} | set(manifest_fields)
-                if set(payload) != stage_fields:
-                    _fail("history:population-stage-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-stage-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-stage-population")
+                payload_binds(payload, "stage", "imported_count", "chunk_count")
                 count = _integer(payload["imported_count"], "history:population-stage-imported", maximum=MAX_ROWS)
                 chunk_count = _integer(payload["chunk_count"], "history:population-stage-chunk", minimum=1, maximum=MAX_ROWS)
                 if before != imported or after != count or count != imported + chunk_count:
@@ -2401,13 +2400,7 @@ def _verify_population_history(
                     _fail("history:population-completion-duplicate")
                 if validated or published:
                     _fail("history:population-completion-order")
-                completion_fields = {"population_id", "imported_count", "expected_count"} | set(manifest_fields)
-                if set(payload) != completion_fields:
-                    _fail("history:population-completion-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-completion-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-completion-population")
+                payload_binds(payload, "completion", "imported_count", "expected_count")
                 completed_imported = _integer(payload["imported_count"], "history:population-completion-imported", maximum=MAX_ROWS)
                 completed_expected = _integer(payload["expected_count"], "history:population-completion-expected", minimum=1, maximum=MAX_ROWS)
                 if before != 0 or after != completed_imported:
@@ -2422,13 +2415,7 @@ def _verify_population_history(
                     _fail("history:population-completion-order")
                 if validated or published:
                     _fail("history:population-validation-order")
-                validation_fields = {"population_id", "validated_count", "validation_digest"} | set(manifest_fields)
-                if set(payload) != validation_fields:
-                    _fail("history:population-validation-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-validation-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-validation-population")
+                payload_binds(payload, "validation", "validated_count", "validation_digest")
                 validated_count = _integer(payload["validated_count"], "history:population-validation-count", minimum=1, maximum=MAX_ROWS)
                 validation_digest = _hex_digest(payload["validation_digest"], "history:population-validation-digest")
                 if before != 0 or after != validated_count:
@@ -2445,13 +2432,7 @@ def _verify_population_history(
                     _fail("history:population-validation-order")
                 if published:
                     _fail("history:population-publication-duplicate")
-                publication_fields = {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"} | set(manifest_fields)
-                if set(payload) != publication_fields:
-                    _fail("history:population-publication-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-publication-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-publication-population")
+                payload_binds(payload, "publication", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest")
                 item_count = _integer(payload["item_count"], "history:population-publication-count", minimum=1, maximum=MAX_ROWS)
                 pack_id = _id(payload["pack_id"], "history:population-publication-pack")
                 pack_version = _integer(payload["pack_version"], "history:population-publication-version", minimum=1, maximum=MAX_ROWS)
@@ -2532,11 +2513,7 @@ def _verify_evidence(
             EVIDENCE_DOMAIN,
             _canonical(
                 {
-                    "source_id": row["source_id"],
-                    "source_version": row["source_version"],
-                    "local_ref": row["local_ref"],
-                    "common_origin_id": row["common_origin_id"],
-                    "kind": row["kind"],
+                    **_cols(row, "source_id", "source_version", "local_ref", "common_origin_id", "kind"),
                 },
                 "evidence:content-input",
             ),
@@ -2549,11 +2526,7 @@ def _verify_evidence(
                 {
                     "evidence_id": evidence_id,
                     "item_id": item_id,
-                    "kind": row["kind"],
-                    "common_origin_id": row["common_origin_id"],
-                    "source_id": row["source_id"],
-                    "source_version": row["source_version"],
-                    "local_ref": row["local_ref"],
+                    **_cols(row, "kind", "common_origin_id", "source_id", "source_version", "local_ref"),
                     "applicable_at_ms": applicable,
                     "event_at_ms": event,
                     "received_at_ms": received,
@@ -3075,26 +3048,9 @@ def _evaluation_bindings_json(raw: object, code: str) -> list[dict[str, str]]:
 
 def _evaluation_result(row: sqlite3.Row, evidence_ids: list[str]) -> dict[str, object]:
     return {
-        "evaluation_id": row["evaluation_id"],
-        "obligation_id": row["obligation_id"],
-        "revision": row["revision"],
-        "rule_version": row["rule_version"],
+        **_cols(row, "evaluation_id", "obligation_id", "revision", "rule_version"),
         "evidence_ids": evidence_ids,
-        "authority_id": row["authority_id"],
-        "evaluated_at_ms": row["evaluated_at_ms"],
-        "owed_cents": row["owed_cents"],
-        "claimed_adjustment_cents": row["claimed_adjustment_cents"],
-        "lawful_adjustment_cents": row["lawful_adjustment_cents"],
-        "received_cash_cents": row["received_cash_cents"],
-        "shortfall_cents": row["shortfall_cents"],
-        "overage_cents": row["overage_cents"],
-        "cash_satisfied": row["cash_satisfied"],
-        "amount_satisfied": row["amount_satisfied"],
-        "timely": row["timely"],
-        "reporting_complete": row["reporting_complete"],
-        "verification_status": row["verification_status"],
-        "case_status": row["case_status"],
-        "delivery_status": row["delivery_status"],
+        **_cols(row, "authority_id", "evaluated_at_ms", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"),
     }
 
 
@@ -3115,9 +3071,7 @@ def _evaluation_receipt_body(
     return {
         "contract_version": EVALUATION_RECEIPT_CONTRACT,
         "scope": dict(scope),
-        "evaluation_id": row["evaluation_id"],
-        "obligation_id": row["obligation_id"],
-        "revision": row["revision"],
+        **_cols(row, "evaluation_id", "obligation_id", "revision"),
         "control_pack": {
             "pack_id": control_pack_id,
             "version": control_pack_version,

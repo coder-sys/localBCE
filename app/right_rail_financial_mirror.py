@@ -26,6 +26,7 @@ from app.right_rail_financial_owner import (
     FinancialOwner,
     ProgramFundingReceipt,
     SyntheticTrustedAuthority,
+    _fail,
 )
 
 
@@ -240,14 +241,6 @@ class FinancialMirrorInputError(FinancialMirrorError):
 
 class FinancialMirrorContinuityError(FinancialMirrorError):
     pass
-
-
-def _fail(error_type: type[FinancialMirrorError], code: str) -> None:
-    error = error_type(code)
-    error.__cause__ = None
-    error.__context__ = None
-    error.__suppress_context__ = True
-    raise error
 
 
 def _page_bounds(limit: object, offset: object, *, maximum: int, code: str) -> tuple[int, int]:
