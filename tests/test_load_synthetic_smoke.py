@@ -3,18 +3,15 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
-from app import minimal_clearance_verifier_process as process
 from tests.instruments.load_synthetic import run
 
 
 class LoadSyntheticSmokeTest(unittest.TestCase):
     def test_tiny_runs_complete_single_and_batched(self) -> None:
         for batch in (0, 5):
-            with self.subTest(batch=batch), tempfile.TemporaryDirectory() as tmp, mock.patch.object(process, "run_contained_verifier", wraps=process.run_contained_verifier) as lean_launch:
+            with self.subTest(batch=batch), tempfile.TemporaryDirectory() as tmp:
                 result = run(n=12, seed=7, batch=batch, history=Path(tmp) / "history")
-                self.assertEqual(lean_launch.call_count, 0)  # the module's only process launch, the stream wrapper's too: this mix never reaches Lean
                 self.assertEqual((result["evidence_class"], result["n_completed"], result["stopped_by"]), ("measured, local laptop, synthetic", 12, None))
                 self.assertGreater(result["commands_per_sec"], 0)
                 self.assertLessEqual(0, result["latency_ms"]["p50"], result["latency_ms"]["p99"])

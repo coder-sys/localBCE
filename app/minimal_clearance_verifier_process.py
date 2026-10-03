@@ -9,7 +9,6 @@ is a fail-closed error.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import ctypes
 from ctypes import wintypes
 import hashlib
@@ -24,7 +23,6 @@ import time
 from app.minimal_clearance_resource_limits import (
     ACTIVE_PROCESS_LIMIT,
     ADMISSION_CAP_BYTES,
-    PROCESS_TREE_PEAK_CAP_BYTES,
 )
 
 
@@ -32,9 +30,6 @@ class VerifierProcessError(RuntimeError):
     """The required Windows verifier containment boundary was not established."""
 
 
-MAX_STDOUT_BYTES = 65_536
-MAX_STDERR_BYTES = 262_144
-STREAM_MAX_AGGREGATE_BYTES = 2 * 1024 * 1024 * 1024
 
 _CREATE_SUSPENDED = 0x00000004
 _CREATE_NO_WINDOW = 0x08000000
@@ -42,7 +37,6 @@ _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _STARTF_USESTDHANDLES = 0x00000100
 _WAIT_OBJECT_0 = 0x00000000
-_WAIT_TIMEOUT = 0x00000102
 _INFINITE = 0xFFFFFFFF
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
@@ -109,22 +103,6 @@ class _FileIdInfo(ctypes.Structure):
     ]
 
 
-class _SystemInfo(ctypes.Structure):
-    _fields_ = [
-        ("wProcessorArchitecture", wintypes.WORD),
-        ("wReserved", wintypes.WORD),
-        ("dwPageSize", wintypes.DWORD),
-        ("lpMinimumApplicationAddress", wintypes.LPVOID),
-        ("lpMaximumApplicationAddress", wintypes.LPVOID),
-        ("dwActiveProcessorMask", ctypes.c_size_t),
-        ("dwNumberOfProcessors", wintypes.DWORD),
-        ("dwProcessorType", wintypes.DWORD),
-        ("dwAllocationGranularity", wintypes.DWORD),
-        ("wProcessorLevel", wintypes.WORD),
-        ("wProcessorRevision", wintypes.WORD),
-    ]
-
-
 class _JobObjectBasicLimitInformation(ctypes.Structure):
     _fields_ = [
         ("PerProcessUserTimeLimit", ctypes.c_longlong),
@@ -158,19 +136,6 @@ class _JobObjectExtendedLimitInformation(ctypes.Structure):
         ("JobMemoryLimit", ctypes.c_size_t),
         ("PeakProcessMemoryUsed", ctypes.c_size_t),
         ("PeakJobMemoryUsed", ctypes.c_size_t),
-    ]
-
-
-class _JobObjectBasicAccountingInformation(ctypes.Structure):
-    _fields_ = [
-        ("TotalUserTime", ctypes.c_longlong),
-        ("TotalKernelTime", ctypes.c_longlong),
-        ("ThisPeriodTotalUserTime", ctypes.c_longlong),
-        ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
-        ("TotalPageFaultCount", wintypes.DWORD),
-        ("TotalProcesses", wintypes.DWORD),
-        ("ActiveProcesses", wintypes.DWORD),
-        ("TotalTerminatedProcesses", wintypes.DWORD),
     ]
 
 
@@ -229,33 +194,6 @@ class _ProcessInformation(ctypes.Structure):
         ("dwProcessId", wintypes.DWORD),
         ("dwThreadId", wintypes.DWORD),
     ]
-
-
-@dataclass(frozen=True, slots=True)
-class ContainedVerifierResult:
-    exit_code: int
-    stdout: bytes = field(repr=False)
-    stderr: bytes = field(repr=False)
-    peak_job_commit_bytes: int
-    cap_bytes: int
-    cap_enforced: bool
-    active_process_limit: int
-    timed_out: bool
-    peak_working_set_bytes: int = 0
-    peak_private_commit_bytes: int = 0
-    parent_peak_working_set_bytes: int = 0
-    parent_peak_private_commit_bytes: int = 0
-    # This is a process-private-commit delta, not an OS pagefile or swap
-    # measurement.  OS-level pagefile growth is intentionally reported as
-    # unavailable by this containment primitive unless a separate attributed
-    # sampler establishes it.
-    private_commit_delta_bytes: int = 0
-    pagefile_growth_evidence: str = "unavailable"
-    scratch_peak_bytes: int = 0
-    child_process_count: int = 0
-    process_tree_complete: bool = False
-    measurement_complete: bool = False
-    cleanup_complete: bool = True
 
 
 def _win_error(label: str) -> VerifierProcessError:
@@ -417,30 +355,6 @@ def _validate_executable_pin(
         or len(expected_executable_sha256) != _SHA256_BYTES
     ):
         raise VerifierProcessError("verifier_executable_pin")
-
-
-def _validate_output_cap(value: int, label: str) -> None:
-    if type(value) is not int or not 0 < value <= STREAM_MAX_AGGREGATE_BYTES:
-        raise VerifierProcessError(label)
-
-
-def _validate_output_encoding(value: bool, label: str) -> None:
-    if type(value) is not bool:
-        raise VerifierProcessError(label)
-
-
-def _effective_job_memory_limit(requested: int, page_size: int) -> int:
-    if (
-        type(requested) is not int
-        or type(page_size) is not int
-        or page_size <= 0
-        or page_size & (page_size - 1)
-    ):
-        raise VerifierProcessError("verifier_job_page_size")
-    effective = requested - (requested % page_size)
-    if effective <= 0:
-        raise VerifierProcessError("verifier_job_page_size")
-    return effective
 
 
 def _open_executable_file_handle(
@@ -1090,52 +1004,17 @@ def _terminate_and_reap_child(
         raise _win_error(f"{label}_wait")
 
 
-def _drain_pipe(
-    descriptor: int,
-    limit: int,
-    label: str,
-    output: dict[str, bytes],
-    failure: dict[str, str],
-    overflow: threading.Event,
-    require_ascii: bool = True,
-) -> None:
-    data = bytearray()
-    try:
-        while len(data) <= limit:
-            chunk = os.read(descriptor, min(64 * 1024, limit + 1 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-            if len(data) > limit:
-                overflow.set()
-                failure.setdefault("code", f"{label}_cap")
-                break
-        if require_ascii and "code" not in failure:
-            try:
-                bytes(data).decode("ascii")
-            except UnicodeDecodeError:
-                failure["code"] = f"{label}_encoding"
-    except BaseException:
-        failure.setdefault("code", f"{label}_read")
-    finally:
-        output[label] = bytes(data[: limit + 1])
-        try:
-            os.close(descriptor)
-        except OSError:
-            failure.setdefault("code", f"{label}_close")
-
-
-def _launch_apis(with_stdin: bool) -> tuple[object, object]:
+def _launch_apis() -> tuple[object, object]:
     """kernel32 and psapi with every signature the suspended Job Object launch uses."""
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     required_apis = (
         "CreateJobObjectW", "SetInformationJobObject", "CreateProcessW",
         "AssignProcessToJobObject", "ResumeThread", "WaitForSingleObject",
-        "TerminateJobObject", "GetExitCodeProcess", "QueryInformationJobObject",
+        "TerminateJobObject",
         "CloseHandle", "SetHandleInformation", "InitializeProcThreadAttributeList",
         "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList",
-        "GetCurrentProcess", "GetSystemInfo", "CreateFileW", "GetFileType",
+        "GetCurrentProcess", "CreateFileW", "GetFileType",
         "GetFileInformationByHandle", "GetFinalPathNameByHandleW",
         "GetFileInformationByHandleEx", "QueryDosDeviceW",
         "CompareStringOrdinal", "K32GetProcessImageFileNameW", "ReadFile", "PeekNamedPipe",
@@ -1165,13 +1044,6 @@ def _launch_apis(with_stdin: bool) -> tuple[object, object]:
     kernel32.TerminateJobObject.restype = wintypes.BOOL
     kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel32.TerminateProcess.restype = wintypes.BOOL
-    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-    kernel32.QueryInformationJobObject.argtypes = [
-        wintypes.HANDLE, wintypes.INT, wintypes.LPVOID, wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     _configure_executable_pin_apis(kernel32)
     kernel32.PeekNamedPipe.argtypes = [
         wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
@@ -1180,8 +1052,6 @@ def _launch_apis(with_stdin: bool) -> tuple[object, object]:
     kernel32.PeekNamedPipe.restype = wintypes.BOOL
     kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-    kernel32.GetSystemInfo.argtypes = [ctypes.POINTER(_SystemInfo)]
-    kernel32.GetSystemInfo.restype = None
     try:
         psapi = ctypes.WinDLL("psapi", use_last_error=True)
     except OSError:
@@ -1192,15 +1062,14 @@ def _launch_apis(with_stdin: bool) -> tuple[object, object]:
         wintypes.HANDLE, ctypes.POINTER(_ProcessMemoryCountersEx), wintypes.DWORD
     ]
     psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
-    if with_stdin:
-        if not hasattr(kernel32, "DuplicateHandle"):
-            raise VerifierProcessError("verifier_api_missing:DuplicateHandle")
-        kernel32.DuplicateHandle.argtypes = [
-            wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
-            ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL,
-            wintypes.DWORD,
-        ]
-        kernel32.DuplicateHandle.restype = wintypes.BOOL
+    if not hasattr(kernel32, "DuplicateHandle"):
+        raise VerifierProcessError("verifier_api_missing:DuplicateHandle")
+    kernel32.DuplicateHandle.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL,
+        wintypes.DWORD,
+    ]
+    kernel32.DuplicateHandle.restype = wintypes.BOOL
     kernel32.InitializeProcThreadAttributeList.argtypes = [
         wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
         ctypes.POINTER(ctypes.c_size_t),
@@ -1214,404 +1083,6 @@ def _launch_apis(with_stdin: bool) -> tuple[object, object]:
     kernel32.DeleteProcThreadAttributeList.argtypes = [wintypes.LPVOID]
     kernel32.DeleteProcThreadAttributeList.restype = None
     return kernel32, psapi
-
-
-def run_contained_verifier(
-    executable: Path,
-    arguments: tuple[str, ...],
-    *,
-    workspace: Path,
-    timeout_seconds: float,
-    job_memory_cap_bytes: int = PROCESS_TREE_PEAK_CAP_BYTES,
-    _stdin_descriptor: int | None = None,
-    expected_executable_size_bytes: int | None = None,
-    expected_executable_sha256: bytes | None = None,
-    stdout_cap_bytes: int = MAX_STDOUT_BYTES,
-    stderr_cap_bytes: int = MAX_STDERR_BYTES,
-    stdout_ascii: bool = True,
-    stderr_ascii: bool = True,
-) -> ContainedVerifierResult:
-    """Run one native verifier form under the required suspended Job Object."""
-
-    if os.name != "nt":
-        raise VerifierProcessError("verifier_windows_only")
-    if not isinstance(executable, Path) or not executable.is_absolute():
-        raise VerifierProcessError("verifier_executable_path")
-    workspace_snapshot = _verifier_workspace_snapshot(workspace)
-    if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
-        raise VerifierProcessError("verifier_timeout")
-    if (
-        type(job_memory_cap_bytes) is not int
-        or not 0 < job_memory_cap_bytes <= PROCESS_TREE_PEAK_CAP_BYTES
-    ):
-        raise VerifierProcessError("verifier_memory_cap")
-    if any(type(argument) is not str for argument in arguments):
-        raise VerifierProcessError("verifier_argument_type")
-    if _stdin_descriptor is not None and (
-        type(_stdin_descriptor) is not int or _stdin_descriptor < 0
-    ):
-        raise VerifierProcessError("verifier_input_handle")
-    _validate_executable_pin(
-        expected_executable_size_bytes,
-        expected_executable_sha256,
-    )
-    _validate_output_cap(stdout_cap_bytes, "verifier_stdout_cap")
-    _validate_output_cap(stderr_cap_bytes, "verifier_stderr_cap")
-    _validate_output_encoding(stdout_ascii, "verifier_stdout_encoding")
-    _validate_output_encoding(stderr_ascii, "verifier_stderr_encoding")
-
-    kernel32, psapi = _launch_apis(_stdin_descriptor is not None)
-    system_info = _SystemInfo()
-    try:
-        kernel32.GetSystemInfo(ctypes.byref(system_info))
-    except BaseException:
-        raise VerifierProcessError("verifier_job_page_size") from None
-    effective_job_memory_limit = _effective_job_memory_limit(
-        job_memory_cap_bytes, int(system_info.dwPageSize)
-    )
-    process_info = _ProcessInformation()
-    job = wintypes.HANDLE()
-    timed_out = False
-    stdout_read: int | None = None
-    stderr_read: int | None = None
-    stdout_write: int | None = None
-    stderr_write: int | None = None
-    stdout_handle = 0
-    stderr_handle = 0
-    reader_threads: list[threading.Thread] = []
-    reader_failure: dict[str, str] = {}
-    reader_output: dict[str, bytes] = {}
-    reader_overflow = threading.Event()
-    peak_working_set = 0
-    peak_private_commit = 0
-    parent_peak_working_set = 0
-    parent_peak_private_commit = 0
-    initial_private_commit = 0
-    peak_combined_private_commit = 0
-    memory_sampled = False
-    child_process_count = 0
-    admission_exceeded = False
-    pinned_executable: _PinnedExecutable | None = None
-
-    def _release_pinned_executable() -> None:
-        nonlocal pinned_executable
-        pin = pinned_executable
-        pinned_executable = None
-        if pin is None:
-            return
-        pin.close()
-
-    def _read_memory(handle: wintypes.HANDLE) -> tuple[int, int] | None:
-        counters = _ProcessMemoryCountersEx()
-        counters.cb = ctypes.sizeof(counters)
-        if not psapi.GetProcessMemoryInfo(
-            handle, ctypes.byref(counters), ctypes.sizeof(counters)
-        ):
-            return None
-        return (
-            int(counters.PeakWorkingSetSize),
-            int(counters.PrivateUsage),
-        )
-
-    def _sample_memory() -> bool:
-        nonlocal peak_working_set, peak_private_commit
-        nonlocal parent_peak_working_set, parent_peak_private_commit
-        nonlocal initial_private_commit, peak_combined_private_commit
-        nonlocal memory_sampled, admission_exceeded
-        child = _read_memory(process_info.hProcess)
-        parent = _read_memory(kernel32.GetCurrentProcess())
-        if child is None or parent is None:
-            return False
-        peak_working_set = max(peak_working_set, child[0])
-        peak_private_commit = max(peak_private_commit, child[1])
-        parent_peak_working_set = max(parent_peak_working_set, parent[0])
-        parent_peak_private_commit = max(parent_peak_private_commit, parent[1])
-        combined_private_commit = child[1] + parent[1]
-        if not memory_sampled:
-            initial_private_commit = combined_private_commit
-            peak_combined_private_commit = combined_private_commit
-        else:
-            peak_combined_private_commit = max(
-                peak_combined_private_commit, combined_private_commit
-            )
-        memory_sampled = True
-        if job_memory_cap_bytes == ADMISSION_CAP_BYTES and (
-            child[1] + parent[1] > ADMISSION_CAP_BYTES
-            or child[0] + parent[0] > ADMISSION_CAP_BYTES
-        ):
-            admission_exceeded = True
-            return False
-        return True
-
-    try:
-        job = kernel32.CreateJobObjectW(None, None)
-        if not job:
-            raise _win_error("verifier_job_create")
-        _set_job_limits(kernel32, job, job_memory_cap_bytes)
-
-        startup = _StartupInfoEx()
-        startup.StartupInfo.cb = ctypes.sizeof(startup)
-        startup.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
-        startup.StartupInfo.hStdInput = wintypes.HANDLE(0)
-        environment = _environment_block(workspace)
-        creation_flags = (
-            _CREATE_SUSPENDED | _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT
-            | _EXTENDED_STARTUPINFO_PRESENT
-        )
-        try:
-            stdout_read, stdout_write, stdout_handle = _create_output_pipe()
-            stderr_read, stderr_write, stderr_handle = _create_output_pipe()
-        except BaseException:
-            for descriptor in (stdout_read, stdout_write, stderr_read, stderr_write):
-                if descriptor is not None:
-                    try:
-                        os.close(descriptor)
-                    except OSError:
-                        pass
-            stdout_read = stdout_write = stderr_read = stderr_write = None
-            raise
-        inherited_stdin: int | None = None
-        if _stdin_descriptor is not None:
-            try:
-                import msvcrt
-
-                inherited_stdin = int(msvcrt.get_osfhandle(_stdin_descriptor))
-            except (OSError, ValueError, ImportError, TypeError):
-                raise VerifierProcessError("verifier_input_handle") from None
-        try:
-            pinned_executable = _open_pinned_executable(
-                kernel32=kernel32,
-                executable=executable,
-                expected_executable_size_bytes=expected_executable_size_bytes,
-                expected_executable_sha256=expected_executable_sha256,  # type: ignore[arg-type]
-            )
-            launch_executable = pinned_executable.canonical_path
-            command_line = ctypes.create_unicode_buffer(
-                " ".join(
-                    [_quote_argument(launch_executable)]
-                    + [_quote_argument(argument) for argument in arguments]
-                )
-            )
-            if _verifier_workspace_snapshot(workspace) != workspace_snapshot:
-                raise VerifierProcessError("verifier_workspace_changed") from None
-            _create_process_with_owned_output_handles(
-                kernel32=kernel32,
-                executable=launch_executable,
-                current_directory=str(workspace),
-                output_handles=(stdout_handle, stderr_handle),
-                stdin_handle=inherited_stdin,
-                parent_descriptors=[stdout_write, stderr_write],  # type: ignore[list-item]
-                startup=startup,
-                environment=environment,
-                command_line=command_line,
-                creation_flags=creation_flags,
-                process_info=process_info,
-            )
-            _query_dos_device_mapping(
-                kernel32=kernel32,
-                drive=pinned_executable.dos_drive,
-                native_volume_prefix=pinned_executable.native_volume_prefix,
-            )
-            _verify_suspended_child_image(
-                kernel32=kernel32,
-                process_handle=process_info.hProcess,
-                expected_native_path=pinned_executable.nt_path,
-                native_volume_prefix=pinned_executable.native_volume_prefix,
-            )
-        except BaseException:
-            if process_info.hProcess:
-                _terminate_and_reap_child(
-                    kernel32=kernel32,
-                    process_handle=process_info.hProcess,
-                    job_handle=None,
-                    label="verifier_child_binding",
-                )
-            raise
-        finally:
-            # The helper owns and closes both parent descriptors on every path.
-            stdout_write = None
-            stderr_write = None
-        if not kernel32.AssignProcessToJobObject(job, process_info.hProcess):
-            _terminate_and_reap_child(
-                kernel32=kernel32,
-                process_handle=process_info.hProcess,
-                job_handle=None,
-                label="verifier_job_assign",
-            )
-            raise _win_error("verifier_job_assign")
-        if not _sample_memory():
-            _terminate_and_reap_child(
-                kernel32=kernel32,
-                process_handle=process_info.hProcess,
-                job_handle=job,
-                label="verifier_memory_sample",
-            )
-            if admission_exceeded:
-                raise VerifierProcessError("verifier_admission_cap")
-            raise VerifierProcessError("verifier_memory_sample")
-        if kernel32.ResumeThread(process_info.hThread) == 0xFFFFFFFF:
-            _terminate_and_reap_child(
-                kernel32=kernel32,
-                process_handle=process_info.hProcess,
-                job_handle=job,
-                label="verifier_process_resume",
-            )
-            raise _win_error("verifier_process_resume")
-        try:
-            _release_pinned_executable()
-        except BaseException:
-            if not kernel32.TerminateJobObject(job, 1):
-                raise _win_error("verifier_executable_close_terminate") from None
-            if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
-                raise _win_error("verifier_executable_close_wait") from None
-            raise
-        reader_threads = [
-            threading.Thread(target=_drain_pipe, args=(stdout_read, stdout_cap_bytes, "stdout", reader_output, reader_failure, reader_overflow, stdout_ascii), daemon=True),
-            threading.Thread(target=_drain_pipe, args=(stderr_read, stderr_cap_bytes, "stderr", reader_output, reader_failure, reader_overflow, stderr_ascii), daemon=True),
-        ]
-        for reader in reader_threads:
-            reader.start()
-        stdout_read = None
-        stderr_read = None
-        wait_ms = max(1, int(timeout_seconds * 1000))
-        deadline = time.monotonic() + (wait_ms / 1000.0)
-        while True:
-            if not _sample_memory():
-                if not kernel32.TerminateJobObject(job, 1):
-                    raise _win_error("verifier_memory_terminate")
-                if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
-                    raise _win_error("verifier_memory_wait")
-                if admission_exceeded:
-                    raise VerifierProcessError("verifier_admission_cap")
-                raise VerifierProcessError("verifier_memory_sample")
-            if reader_overflow.is_set() or "code" in reader_failure:
-                if not kernel32.TerminateJobObject(job, 1):
-                    raise _win_error("verifier_output_terminate")
-                if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
-                    raise _win_error("verifier_output_wait")
-                raise VerifierProcessError(reader_failure.get("code", "verifier_output_read"))
-            remaining = max(1, int((deadline - time.monotonic()) * 1000))
-            wait_result = kernel32.WaitForSingleObject(process_info.hProcess, min(50, remaining))
-            if wait_result == _WAIT_OBJECT_0:
-                break
-            if wait_result != _WAIT_TIMEOUT:
-                raise _win_error("verifier_wait")
-            if time.monotonic() >= deadline:
-                timed_out = True
-                if not kernel32.TerminateJobObject(job, 1):
-                    raise _win_error("verifier_timeout_terminate")
-                if kernel32.WaitForSingleObject(process_info.hProcess, _INFINITE) != _WAIT_OBJECT_0:
-                    raise _win_error("verifier_timeout_wait")
-                break
-        for reader in reader_threads:
-            reader.join(timeout=5)
-        if any(reader.is_alive() for reader in reader_threads):
-            raise VerifierProcessError("verifier_output_read")
-        if reader_overflow.is_set() or "code" in reader_failure:
-            raise VerifierProcessError(reader_failure.get("code", "verifier_output_read"))
-        if not _sample_memory():
-            if admission_exceeded:
-                raise VerifierProcessError("verifier_admission_cap")
-            raise VerifierProcessError("verifier_memory_sample")
-        exit_code = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(process_info.hProcess, ctypes.byref(exit_code)):
-            raise _win_error("verifier_exit_code")
-        observed = _JobObjectExtendedLimitInformation()
-        if not kernel32.QueryInformationJobObject(
-            job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(observed),
-            ctypes.sizeof(observed), None
-        ):
-            raise _win_error("verifier_job_query")
-        peak_commit = int(observed.PeakJobMemoryUsed)
-        observed_limits = _JobObjectExtendedLimitInformation()
-        if not kernel32.QueryInformationJobObject(
-            job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            ctypes.byref(observed_limits), ctypes.sizeof(observed_limits), None
-        ):
-            raise _win_error("verifier_job_limits_readback")
-        # Windows reports JobMemoryLimit at page granularity.  The requested
-        # cap remains the contract value; this readback must equal its exact
-        # platform-effective limit, not an arbitrary lower or higher value.
-        if (
-            int(observed_limits.BasicLimitInformation.LimitFlags) != _JOB_LIMIT_FLAGS
-            or int(observed_limits.BasicLimitInformation.ActiveProcessLimit)
-            != ACTIVE_PROCESS_LIMIT
-            or int(observed_limits.JobMemoryLimit) != effective_job_memory_limit
-        ):
-            raise VerifierProcessError("verifier_job_limits_readback")
-        stdout = reader_output.get("stdout", b"")
-        stderr = reader_output.get("stderr", b"")
-        if peak_commit > effective_job_memory_limit:
-            raise VerifierProcessError("verifier_job_memory_cap")
-        accounting = _JobObjectBasicAccountingInformation()
-        for attempt in range(101):
-            if attempt:
-                time.sleep(0.01)
-            if not kernel32.QueryInformationJobObject(
-                job, 1, ctypes.byref(accounting), ctypes.sizeof(accounting), None
-            ):
-                raise _win_error("verifier_job_accounting_query")
-            child_process_count = int(accounting.TotalProcesses)
-            active_process_count = int(accounting.ActiveProcesses)
-            if child_process_count >= 1 and active_process_count == 0:
-                break
-        # The waited root handle plus Job Object ActiveProcesses==0 proves the
-        # assigned tree is quiescent; TotalProcesses alone is not sufficient.
-        process_tree_complete = (
-            child_process_count >= 1
-            and active_process_count == 0
-        )
-        if not process_tree_complete:
-            raise VerifierProcessError("verifier_job_accounting")
-        return ContainedVerifierResult(
-            exit_code=int(exit_code.value), stdout=stdout, stderr=stderr,
-            peak_job_commit_bytes=peak_commit, cap_bytes=job_memory_cap_bytes,
-            cap_enforced=True, active_process_limit=ACTIVE_PROCESS_LIMIT,
-            timed_out=timed_out,
-            peak_working_set_bytes=peak_working_set,
-            peak_private_commit_bytes=peak_private_commit,
-            parent_peak_working_set_bytes=parent_peak_working_set,
-            parent_peak_private_commit_bytes=parent_peak_private_commit,
-            child_process_count=child_process_count,
-            measurement_complete=memory_sampled,
-            private_commit_delta_bytes=max(
-                0, peak_combined_private_commit - initial_private_commit
-            ),
-            process_tree_complete=process_tree_complete,
-        )
-    finally:
-        cleanup_errors: list[BaseException] = []
-        if pinned_executable is not None:
-            try:
-                _release_pinned_executable()
-            except BaseException as error:
-                cleanup_errors.append(error)
-                if job and process_info.hProcess:
-                    try:
-                        if not kernel32.TerminateJobObject(job, 1):
-                            cleanup_errors.append(_win_error("verifier_executable_close_terminate"))
-                    except BaseException:
-                        cleanup_errors.append(VerifierProcessError("verifier_executable_close_terminate"))
-        for reader in reader_threads:
-            if reader.is_alive():
-                reader.join(timeout=5)
-        for descriptor in (stdout_read, stderr_read, stdout_write, stderr_write):
-            if descriptor is not None:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
-        if process_info.hThread:
-            if not kernel32.CloseHandle(process_info.hThread):
-                cleanup_errors.append(_win_error("verifier_thread_close"))
-        if process_info.hProcess:
-            if not kernel32.CloseHandle(process_info.hProcess):
-                cleanup_errors.append(_win_error("verifier_process_close"))
-        if job:
-            if not kernel32.CloseHandle(job):
-                cleanup_errors.append(_win_error("verifier_job_close"))
-        if cleanup_errors:
-            raise VerifierProcessError("verifier_cleanup") from None
 
 
 WORKER_MAX_FRAME_BYTES = 64 * 1024 * 1024
@@ -1783,7 +1254,7 @@ def launch_contained_worker(
     ):
         raise VerifierProcessError("verifier_memory_cap")
     _validate_executable_pin(expected_executable_size_bytes, expected_executable_sha256)
-    kernel32, psapi = _launch_apis(True)
+    kernel32, psapi = _launch_apis()
     process_info = _ProcessInformation()
     job = wintypes.HANDLE()
     owned: list[int] = []
