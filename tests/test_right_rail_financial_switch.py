@@ -8,12 +8,15 @@ import unittest
 
 from app.right_rail_financial_owner import FinancialOwner
 from app.right_rail_financial_switch import (
+    _RECORDS,
     CandidateSpec,
     CohortApproval,
     DifferencePolicy,
+    FinancialSwitchError,
     ReferenceSpec,
     decode_replay_input,
     inspect_shadow_snapshot,
+    prepare_shadow_replay_input,
     run_shadow_replay,
 )
 from tests import rightrail_financial_expected_cases as expected
@@ -193,7 +196,6 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertEqual(report["reference_received_member_count"], len(expected.PROGRAM_ITEMS))
         self.assertEqual(report["candidate_received_member_count"], len(expected.PROGRAM_ITEMS))
         self.assertEqual(len(received_inputs), 2)
-        self.assertEqual(received_inputs[0], received_inputs[1])
         self.assertIs(received_inputs[0], received_inputs[1])
         self.assertEqual(report["isolation"]["evaluator_input"], "CANONICAL_REPLAY_BYTES_ONLY")
         self.assertEqual(report["isolation"]["evaluator_closure_isolation"], "UNVERIFIED")
@@ -204,79 +206,26 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertEqual(report["candidate_authority"], "NONE")
         self._assert_source_bytes_unchanged()
 
-    def test_missing_approval_or_reference_never_calls_evaluators(self) -> None:
+    def test_missing_or_bad_inputs_never_call_evaluators(self) -> None:
         calls: list[str] = []
-        reference = replace(self.reference, evaluate=lambda _raw: calls.append("reference"))
-        candidate = replace(self.candidate, evaluate=lambda _raw: calls.append("candidate"))
-
-        missing_approval = run_shadow_replay(
-            self.snapshot,
-            **self.trust,
-            cohort_approval=None,
-            reference=reference,
-            candidate=candidate,
-        )
-        missing_reference = run_shadow_replay(
-            self.snapshot,
-            **self.trust,
-            cohort_approval=self.approval,
-            reference=None,
-            candidate=candidate,
-        )
-
-        self.assertEqual(missing_approval["status"], "INCOMPLETE")
-        self.assertIn("cohort_approval_missing", missing_approval["reasons"])
-        self.assertEqual(missing_reference["status"], "INCOMPLETE")
-        self.assertIn("independent_reference_missing", missing_reference["reasons"])
-        self.assertEqual(calls, [])
-        self._assert_source_bytes_unchanged()
-
-    def test_tampered_snapshot_and_mismatched_approval_fail_before_evaluation(self) -> None:
-        calls: list[str] = []
-        reference = replace(self.reference, evaluate=lambda _raw: calls.append("reference"))
-        candidate = replace(self.candidate, evaluate=lambda _raw: calls.append("candidate"))
-        tampered = self.snapshot.replace(b'"mode":"SHADOW"', b'"mode":"LIVE"', 1)
-        bad_approval = replace(self.approval, binding_sha256="F" * 64)
-
-        invalid_snapshot = run_shadow_replay(
-            tampered,
-            **self.trust,
-            cohort_approval=self.approval,
-            reference=reference,
-            candidate=candidate,
-        )
-        invalid_approval = run_shadow_replay(
-            self.snapshot,
-            **self.trust,
-            cohort_approval=bad_approval,
-            reference=reference,
-            candidate=candidate,
-        )
-
-        self.assertEqual(invalid_snapshot["status"], "INVALID_SNAPSHOT")
-        self.assertEqual(invalid_approval["status"], "INCOMPLETE")
-        self.assertIn("cohort_approval_binding_mismatch", invalid_approval["reasons"])
-        self.assertEqual(calls, [])
-        self._assert_source_bytes_unchanged()
-
-    def test_snapshot_without_caller_trusted_authority_is_invalid_before_evaluation(self) -> None:
-        calls: list[str] = []
-        reference = replace(self.reference, evaluate=lambda _raw: calls.append("reference"))
-        candidate = replace(self.candidate, evaluate=lambda _raw: calls.append("candidate"))
-
-        report = run_shadow_replay(
-            self.snapshot,
-            trusted_authority=None,
-            expected_scope=self.trust["expected_scope"],
-            cohort_approval=self.approval,
-            reference=reference,
-            candidate=candidate,
-        )
-
-        self.assertEqual(report["status"], "INVALID_SNAPSHOT")
-        self.assertEqual(report["reasons"], ["switch:trusted-authority-required"])
-        self.assertEqual(calls, [])
-        self._assert_source_bytes_unchanged()
+        stubs = {"reference": replace(self.reference, evaluate=lambda _raw: calls.append("reference")),
+                 "candidate": replace(self.candidate, evaluate=lambda _raw: calls.append("candidate"))}
+        for changes, status, reasons in (  # a str must be among the reasons; a list is all of them
+            ({"cohort_approval": None}, "INCOMPLETE", "cohort_approval_missing"),
+            ({"reference": None}, "INCOMPLETE", "independent_reference_missing"),
+            ({"snapshot_bytes": self.snapshot.replace(b'"mode":"SHADOW"', b'"mode":"LIVE"', 1)}, "INVALID_SNAPSHOT", None),
+            ({"cohort_approval": replace(self.approval, binding_sha256="F" * 64)}, "INCOMPLETE", "cohort_approval_binding_mismatch"),
+            ({"trusted_authority": None}, "INVALID_SNAPSHOT", ["switch:trusted-authority-required"]),
+        ):
+            with self.subTest(changes=sorted(changes)):
+                report = run_shadow_replay(**{"snapshot_bytes": self.snapshot, **self.trust, "cohort_approval": self.approval, **stubs, **changes})
+                self.assertEqual(report["status"], status)
+                if type(reasons) is str:
+                    self.assertIn(reasons, report["reasons"])
+                elif reasons is not None:
+                    self.assertEqual(report["reasons"], reasons)
+                self.assertEqual(calls, [])
+                self._assert_source_bytes_unchanged()
 
     def test_unknown_candidate_fields_return_incomplete_unknown(self) -> None:
         report = run_shadow_replay(
@@ -316,6 +265,20 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertEqual(report["comparison_status"], "FORBIDDEN_DIFFERENCES")
         self.assertEqual(differences[f"members.{expected.H_ITEM_ID}.owed_cents"]["classification"], "FORBIDDEN")
         self._assert_source_bytes_unchanged()
+
+    def test_replay_input_refuses_a_float_or_bool_for_an_integer_field(self) -> None:
+        raw = prepare_shadow_replay_input(self.snapshot, **self.trust, cohort_approval=self.approval, reference=self.reference, candidate=self.candidate)
+        self.assertEqual(decode_replay_input(raw, **self.trust).sequence, self.facts.sequence)
+        value = json.loads(raw)  # 7 -> 7.0 everywhere; 0/1 -> False/True too (Python's == takes both as the int)
+        cases = [(name, key, bad) for name in _RECORDS for key, held in value[name].items() if type(held) is int
+                 for bad in (float(held), *((bool(held),) if held in (0, 1) else ()))]
+        self.assertIn(("owner", "sequence", float(self.facts.sequence)), cases)
+        self.assertTrue(any(type(bad) is bool for *_, bad in cases))
+        for name, key, bad in cases:
+            with self.subTest(record=name, key=key, value=bad):
+                forged = {**value, name: {**value[name], key: bad}}
+                with self.assertRaisesRegex(FinancialSwitchError, "^switch:replay-binding$"):
+                    decode_replay_input(json.dumps(forged, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("ascii"), **self.trust)
 
 
 if __name__ == "__main__":
