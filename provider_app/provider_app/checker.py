@@ -32,14 +32,9 @@ _RULES = (
     ("SYN-PRE-004", "CHARGE_CENTS_BETWEEN"),
     ("SYN-PRE-005", "SOURCE_COMPLETE_AND_FRESH"),
 )
-_FACT_ORDER = (
-    "service_date",
-    "service_category",
-    "support_reference",
-    "charge_cents",
-    "source_binding",
-    "source_effective_at",
-    "source_received_at",
+_FACT_ORDER = tuple(
+    "service_date service_category support_reference charge_cents source_binding source_effective_at "
+    "source_received_at".split()
 )
 _REQUEST_KEYS = {"contract", "mode", "scope", "evaluatedAt", "facts"}
 _FACT_KEYS = {

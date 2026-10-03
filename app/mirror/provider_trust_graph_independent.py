@@ -66,35 +66,16 @@ MAX_STRING_BYTES = 512
 MAX_NODES = 4_096
 MAX_DEPTH = 16
 MAX_TIMESTAMP = 2_147_483_647
-SOURCE_INPUT_KEYS = {
-    "source_id",
-    "source_kind",
-    "coverage_scope",
-    "coverage_observation_time",
-    "coverage_effective_start",
-    "coverage_effective_end",
-    "coverage_complete",
-    "coverage_authority_id",
-    "nonmembership_keys",
-    "records",
-    "provenance",
-}
+SOURCE_INPUT_KEYS = set(
+    "source_id source_kind coverage_scope coverage_observation_time coverage_effective_start "
+    "coverage_effective_end coverage_complete coverage_authority_id nonmembership_keys records provenance".split()
+)
 SOURCE_OUTPUT_KEYS = SOURCE_INPUT_KEYS | {"source_root"}
 PROVENANCE_KEYS = {"provenance_id", "integrity_digest"}
-RECORD_KEYS = {
-    "record_id",
-    "record_kind",
-    "provider_id",
-    "credential_id",
-    "enrollment_id",
-    "subject_key",
-    "observed_at",
-    "issued_at",
-    "valid_from",
-    "valid_until",
-    "terminated_at",
-    "status",
-}
+RECORD_KEYS = set(
+    "record_id record_kind provider_id credential_id enrollment_id subject_key observed_at issued_at "
+    "valid_from valid_until terminated_at status".split()
+)
 FINDING_KEYS = {
     "finding_id", "kind", "subject_key", "observation_snapshot_id", "evidence_refs",
 }

@@ -24,39 +24,16 @@ CONSUMER_DOMAIN = "BLIND/PROVIDER_GOVERNANCE_EVIDENCE"
 EVIDENCE_PROFILE = "provider-continuity-aggregate"
 EVIDENCE_PROFILE_VERSION = 1
 QUALIFICATION_STATUS = "SYNTHETIC_ONLY"
-OUTCOME_KINDS = (
-    "CONTINUITY_CONFIRMED",
-    "CREDENTIAL_EXPIRED",
-    "ENROLLMENT_TERMINATED",
-    "EVIDENCE_INCOMPLETE",
-    "AUTHORITATIVE_RECORD_ABSENT",
-    "SOURCE_CONFLICT",
-    "COVERAGE_STALE",
+OUTCOME_KINDS = tuple(
+    "CONTINUITY_CONFIRMED CREDENTIAL_EXPIRED ENROLLMENT_TERMINATED EVIDENCE_INCOMPLETE "
+    "AUTHORITATIVE_RECORD_ABSENT SOURCE_CONFLICT COVERAGE_STALE".split()
 )
-RESPONSE_KEYS = {
-    "domain",
-    "version",
-    "operation_ref",
-    "consumer_domain",
-    "evidence_profile",
-    "evidence_profile_version",
-    "issued_at",
-    "expires_at",
-    "outcome",
-    "source_count",
-    "complete_source_count",
-    "record_count",
-    "finding_count",
-    "discrepancy_count",
-    "qualification_status",
-    "synthetic_only",
-    "production_usable",
-    "activation",
-    "clearance_authority",
-    "payment_authority",
-    "economic_mutation",
-    "proofSuiteId",
-}
+RESPONSE_KEYS = set(
+    "domain version operation_ref consumer_domain evidence_profile evidence_profile_version issued_at "
+    "expires_at outcome source_count complete_source_count record_count finding_count discrepancy_count "
+    "qualification_status synthetic_only production_usable activation clearance_authority "
+    "payment_authority economic_mutation proofSuiteId".split()
+)
 MAX_BYTES = 4_096
 MAX_TIME = 10**12
 MAX_WINDOW_SECONDS = 300
