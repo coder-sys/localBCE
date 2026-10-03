@@ -27,6 +27,10 @@ def _drop_history_triggers(connection: sqlite3.Connection) -> None:
         connection.execute(f"DROP TRIGGER {name}")
 
 
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
 def _restore_history_triggers(connection: sqlite3.Connection) -> None:
     for name in _HISTORY_TRIGGERS:
         connection.execute(independent._TRIGGER_DEFS[name])
@@ -732,20 +736,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         self.assertEqual(verified["authority"]["authority_id"], self.authority.authority_id)
 
-    def test_event_payload_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("event-payload-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                _drop_history_triggers(connection)
-                connection.execute(
-                    "UPDATE financial_events SET payload_json=? WHERE event_sequence=1",
-                    ('{"tampered":true}',),
-                )
-                _restore_history_triggers(connection)
-
-        self._assert_rejected_without_repair(target, tamper, "history:payload-digest")
-
     def test_event_header_tamper_fails_owner_verification_without_repair(self) -> None:
         target = self._copy_database("event-header-tamper.sqlite")
         with closing(sqlite3.connect(target, isolation_level=None)) as connection:
@@ -766,6 +756,42 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 clock=self.clock,
             )
         self.assertEqual(target.read_bytes(), tampered_bytes)
+
+    def test_stored_row_edits_fail_closed_without_repair(self) -> None:
+        # Each edit models an attacker with file access, so only the checker can refuse it; the named immutability triggers are dropped for the edit and restored after.
+        for label, code, triggers, *steps in (
+            ("event-payload", "history:payload-digest", _HISTORY_TRIGGERS, ("UPDATE financial_events SET payload_json=? WHERE event_sequence=1", ('{"tampered":true}',))),
+            ("event-head", "history:", _HISTORY_TRIGGERS, ("UPDATE financial_events SET head=? WHERE event_sequence=(SELECT MAX(event_sequence) FROM financial_events)", (b"\xff" * 64,))),
+            ("action-payload", "action:payload", ("action_payload_immutable",), "action_payload"),
+            ("projection", "projection:received_cash_cents", (), ("UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE obligation_id=?", ("obligation:item:H:period:test",))),
+            ("evidence-record", "evidence:record-digest", ("evidence_record_immutable",), ("UPDATE evidence SET record_digest=? WHERE evidence_id=?", (b"\x00" * 64, "evidence:support:H"))),
+            ("evaluation-receipt", "evaluation:receipt-digest", (), ("UPDATE evaluations SET receipt_digest=? WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id=?)", (b"\x00" * 64, "item:H"))),
+            ("evaluation-authority", "evaluation:authority", (), ("UPDATE evaluations SET authority_id=? WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id=?)", ("stale-authority-v1", "item:H"))),
+            ("evaluation-input", "evaluation:input-digest", (), "evaluation_input"),
+            # The declared foreign key (evidence.supersedes) refuses a deleted report target before any per-table check.
+            ("report-target-missing", "foreign-keys:evidence", (), ("DELETE FROM evidence WHERE evidence_id=?", ("evidence:report:H:original",))),
+            ("population-completion", "history:population-completion-binding", (), ("UPDATE population_imports SET source_complete=0,status='STAGED',validated_count=0,validation_digest=NULL WHERE population_id=?", ("population:test",))),
+        ):
+            with self.subTest(label):
+                def tamper(path: Path) -> None:
+                    with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                        for name in triggers:
+                            connection.execute(f"DROP TRIGGER {name}")
+                        for step in steps:
+                            if step == "action_payload":
+                                action_id, raw = connection.execute("SELECT action_id, payload_json FROM actions LIMIT 1").fetchone()
+                                connection.execute("UPDATE actions SET payload_json=? WHERE action_id=?", (_canonical_json({**json.loads(raw), "tampered": True}), action_id))
+                            elif step == "evaluation_input":
+                                evaluation_id, raw = connection.execute("SELECT evaluation_id, input_snapshot_json FROM evaluations WHERE revision=(SELECT MAX(revision) FROM evaluations) LIMIT 1").fetchone()
+                                snapshot = json.loads(raw)
+                                snapshot["obligation"]["owed_cents"] += 1
+                                connection.execute("UPDATE evaluations SET input_snapshot_json=? WHERE evaluation_id=?", (_canonical_json(snapshot), evaluation_id))
+                            else:
+                                connection.execute(*step)
+                        for name in triggers:
+                            connection.execute(independent._TRIGGER_DEFS[name])
+
+                self._assert_rejected_without_repair(self._copy_database(f"{label}-tamper.sqlite"), tamper, code)
 
     def test_rehashed_population_history_rejects_invalid_completion_lifecycle(self) -> None:
         population_id = "population:history"
@@ -898,126 +924,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             self.assertFalse(rejected_restore.exists())
             tampered_owner.close()
 
-    def test_event_head_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("event-head-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                _drop_history_triggers(connection)
-                connection.execute(
-                    "UPDATE financial_events SET head=? WHERE event_sequence=(SELECT MAX(event_sequence) FROM financial_events)",
-                    (b"\xff" * 64,),
-                )
-                _restore_history_triggers(connection)
-
-        self._assert_rejected_without_repair(target, tamper, "history:")
-
-    def test_action_payload_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("action-payload-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                action_id = connection.execute("SELECT action_id FROM actions LIMIT 1").fetchone()[0]
-                raw = connection.execute("SELECT payload_json FROM actions WHERE action_id=?", (action_id,)).fetchone()[0]
-                payload = json.loads(raw)
-                payload["tampered"] = True
-                connection.execute("DROP TRIGGER action_payload_immutable")
-                connection.execute(
-                    "UPDATE actions SET payload_json=? WHERE action_id=?",
-                    (json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")), action_id),
-                )
-                connection.execute(
-                    "CREATE TRIGGER action_payload_immutable BEFORE UPDATE OF action_id,obligation_id,determination_id,kind,revision,payload_json,payload_digest,idempotency_key,created_at_ms ON actions BEGIN SELECT RAISE(ABORT,'action_payload_immutable'); END"
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "action:payload")
-
-    def test_projection_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("projection-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                connection.execute(
-                    "UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE obligation_id=?",
-                    ("obligation:item:H:period:test",),
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "projection:received_cash_cents")
-
-    def test_evidence_record_digest_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("evidence-record-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                connection.execute("DROP TRIGGER evidence_record_immutable")
-                connection.execute(
-                    "UPDATE evidence SET record_digest=? WHERE evidence_id=?",
-                    (b"\x00" * 64, "evidence:support:H"),
-                )
-                connection.execute(
-                    "CREATE TRIGGER evidence_record_immutable BEFORE UPDATE OF evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,content_digest,record_digest,amount_cents,reversal_of,supersedes ON evidence BEGIN SELECT RAISE(ABORT,'evidence_record_immutable'); END"
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "evidence:record-digest")
-
-    def test_evaluation_receipt_digest_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("evaluation-receipt-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                connection.execute(
-                    "UPDATE evaluations SET receipt_digest=? WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id=?)",
-                    (b"\x00" * 64, "item:H"),
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "evaluation:receipt-digest")
-
-    def test_evaluation_authority_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("evaluation-authority-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                connection.execute(
-                    "UPDATE evaluations SET authority_id=? WHERE evaluation_id=(SELECT current_evaluation_id FROM obligations WHERE item_id=?)",
-                    ("stale-authority-v1", "item:H"),
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "evaluation:authority")
-
-    def test_historical_evaluation_input_tamper_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("evaluation-input-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                evaluation_id = connection.execute(
-                    "SELECT evaluation_id FROM evaluations WHERE revision=(SELECT MAX(revision) FROM evaluations) LIMIT 1"
-                ).fetchone()[0]
-                raw = connection.execute(
-                    "SELECT input_snapshot_json FROM evaluations WHERE evaluation_id=?",
-                    (evaluation_id,),
-                ).fetchone()[0]
-                snapshot = json.loads(raw)
-                snapshot["obligation"]["owed_cents"] += 1
-                connection.execute(
-                    "UPDATE evaluations SET input_snapshot_json=? WHERE evaluation_id=?",
-                    (json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")), evaluation_id),
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "evaluation:input-digest")
-
-    def test_reporting_supersedes_missing_target_fails_closed_without_repair(self) -> None:
-        target = self._copy_database("reporting-lineage-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                connection.execute(
-                    "DELETE FROM evidence WHERE evidence_id=?",
-                    ("evidence:report:H:original",),
-                )
-
-        # The declared foreign key (evidence.supersedes) refuses it before any per-table check.
-        self._assert_rejected_without_repair(target, tamper, "foreign-keys:evidence")
-
     def test_reporting_supersedes_fork_fails_closed_without_repair(self) -> None:
         target = self._copy_database("reporting-lineage-fork.sqlite")
 
@@ -1070,18 +976,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             )
 
         self._assert_rejected_without_repair(target, tamper, "evidence:report-supersedes-chronology")
-
-    def test_population_completion_event_is_bound_to_source_flag(self) -> None:
-        target = self._copy_database("population-completion-tamper.sqlite")
-
-        def tamper(path: Path) -> None:
-            with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-                connection.execute(
-                    "UPDATE population_imports SET source_complete=0,status='STAGED',validated_count=0,validation_digest=NULL WHERE population_id=?",
-                    ("population:test",),
-                )
-
-        self._assert_rejected_without_repair(target, tamper, "history:population-completion-binding")
 
     def test_common_origin_duplicate_and_conflict_are_visible_without_cash_rewrite(self) -> None:
         duplicate = self.store.record_payment_evidence(
