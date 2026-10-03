@@ -523,8 +523,8 @@ def decode_replay_input(
         trusted_authority=trusted_authority,
         expected_scope=expected_scope,
     )
-    if records != facts.binding_records():
-        _fail("switch:replay-binding")
+    if _canonical_json(records, maximum=MAX_REPLAY_INPUT_BYTES) != _canonical_json(facts.binding_records(), maximum=MAX_REPLAY_INPUT_BYTES):
+        _fail("switch:replay-binding")  # JSON text, not ==, which takes 7.0 and True for the ints 7 and 1
     if snapshot.get("package_digest") != facts.package_digest:
         _fail("switch:replay-package-digest")
     if cohort.get("source_class") != "SYNTHETIC":
