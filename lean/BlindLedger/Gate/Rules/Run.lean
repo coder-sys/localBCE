@@ -46,12 +46,11 @@ def parse {α : Type} [Repr α] (all : List α) (s : String) : Option α := all.
 
 #guard (reasons.map name).zip ((reasons.map name).drop 1) |>.all fun (a, b) => decide (a < b)
 
-def h512 (x : List UInt8) : List UInt8 := (BlindLedger.Semantic.sha3_512Fast x.toByteArray).toList
+def hB (b : ByteArray) : List UInt8 := (BlindLedger.Semantic.sha3_512Fast b).toList
 
 def hexOf (b : ByteArray) : String :=
-  String.join (b.toList.map fun x =>
-    let h := Nat.toDigits 16 x.toNat
-    String.ofList (if h.length < 2 then '0' :: h else h))
+  let d (n : UInt8) : UInt8 := if n < 10 then 48 + n else 87 + n
+  String.fromUTF8! (b.foldl (fun a x => (a.push (d (x >>> 4))).push (d (x &&& 15))) (ByteArray.emptyWithCapacity (2 * b.size)))
 
 /-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
     it from the files, so a stale runner fails that test whatever its file times. -/
@@ -61,11 +60,14 @@ def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [includ
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
 
-/-- Hex to bytes, high digit first. -/
-def unhex (s : String) : Option (List UInt8) := do
-  let ds ← s.toList.mapM ("0123456789abcdef".toList.idxOf? ·)
-  guard (ds.length % 2 == 0)
-  pure ((List.range (ds.length / 2)).map fun i => (ds[2 * i]! * 16 + ds[2 * i + 1]!).toUInt8)
+/-- Hex to bytes, high digit first; linear in the input. -/
+def unhex (s : String) : Option ByteArray :=
+  let u := s.toUTF8
+  let nib (c : UInt8) : Option UInt8 :=
+    if 48 ≤ c && c ≤ 57 then some (c - 48) else if 97 ≤ c && c ≤ 102 then some (c - 87) else none
+  if u.size % 2 != 0 then none else
+  (List.range (u.size / 2)).foldlM (fun a i => do pure (a.push ((← nib u[2 * i]!) * 16 + (← nib u[2 * i + 1]!))))
+    (ByteArray.emptyWithCapacity (u.size / 2))
 
 /-- One `RULES_ADDS` row: the set tag, then the `Line.fields` row. -/
 def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
@@ -74,18 +76,19 @@ def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
 
 def rowWidths : List Nat := (Line.fields ⟨0, 0, .FFS_CYCLE, 0, 0, 0, 0, 0, 0, 0⟩).map (·.1)
 
-def parseRow (bs : List UInt8) : Option (UInt8 × Line) := do
-  let t :: bs := bs | none
-  match (rowWidths.foldl (fun (r, bs) w => (r ++ [Gate.beNat (bs.take w)], bs.drop w)) ([], bs)).1 with
+/-- The row at byte offset `o` of `b`: the set tag and the line. -/
+def parseRow (b : ByteArray) (o : Nat) : Option (UInt8 × Line) := do
+  let be (o w : Nat) : Nat := (List.range w).foldl (fun n i => n * 256 + (b.get! (o + i)).toNat) 0
+  match (rowWidths.foldl (fun (r, o) w => (r.push (be o w), o + w)) (#[], o + 1)).1.toList with
   | [i, y, f, m, p, r, d, c, u, a] =>
-    pure (t, ⟨i, y, ← [Flow.FFS_CYCLE, .FFS_CLAIM, .CAP_820].find? (·.tag == f), m, p, r, d, c, u, a⟩)
+    pure (b.get! o, ⟨i, y, ← [Flow.FFS_CYCLE, .FFS_CLAIM, .CAP_820].find? (·.tag == f), m, p, r, d, c, u, a⟩)
   | _ => none
 
 /-- `RULES_ADDS` back into the released and unresolved rows. -/
-def parseAdds (bs : List UInt8) : Option (List Line × List Line) := do
+def parseAdds (bs : ByteArray) : Option (List Line × List Line) := do
   let n := 1 + rowWidths.sum
-  guard (bs.length % n == 0)
-  let rows ← (List.range (bs.length / n)).mapM fun i => parseRow ((bs.drop (n * i)).take n)
+  guard (bs.size % n == 0)
+  let rows ← (List.range (bs.size / n)).mapM fun i => parseRow bs (n * i)
   guard (rows.all fun (t, _) => t == 1 || t == 2)
   pure ((rows.filter (·.1 == 1)).map (·.2), (rows.filter (·.1 == 2)).map (·.2))
 
@@ -205,7 +208,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
   -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
-  if !st.anchor.all fun a => Gate.anchored h512 { c with anchor := a } then
+  if !st.anchor.all fun a => Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior == some (Gate.natBE Gate.digestBytes a) then
     ({ st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], owners := none,
                free := none, pays := [],
                checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },
@@ -235,8 +238,10 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
   let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
   let adds := do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten
+  
+  
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
-    (Gate.setsDigest h512 r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
+    (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
     adds.toList.map fun b => s!"RULES_ADDS {hexOf b.toByteArray}"
   ({ st with pinned := some p, anchor := none,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
@@ -264,14 +269,16 @@ def step (st : St) : List String → Option (St × List String)
   | ["load", a, adds, h] => do
     guard (h.length == 128)
     let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
-    let anchor := Gate.beNat (← unhex h)
-    let bs ← if adds == "-" then pure [] else unhex adds   -- `-` is zero rows (the field cannot be empty)
-    match (parseAdds bs).bind fun ad => Gate.ShardState.loadAdds h512 (g, g) [ad] anchor with
+    let anchor := Gate.beNat (← unhex h).toList
+    let bs ← if adds == "-" then pure ByteArray.empty else unhex adds   -- `-` is zero rows (the field cannot be empty)
+    -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
+    match (parseAdds bs).bind fun ad => let s := Rules.replay (g, g) [ad]
+        (Fast.setsDigestF hB s.1 s.2).bind fun d => if d == Gate.natBE Gate.digestBytes anchor then some s else none with
     | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
     | some s => pure ({ st with
         snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
         rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-        extra := s.released.entries, held := s.unresolved.entries, rprior := s.released, uprior := s.unresolved }, [])
+        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2 }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),

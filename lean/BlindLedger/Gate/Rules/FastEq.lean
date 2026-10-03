@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.Fast
+import BlindLedger.Gate.Anchor
 
 /-! Proves `Fast.decideBatchF` equal to `Spec.decideBatch` (and `pinBytes` to `pinInput`), plus its order laws; not imported by the runner, so a mutant of `Fast.lean` still builds `gate_rules`. -/
 
@@ -723,6 +724,15 @@ theorem pin_run_eq {α : Type} {d : String} {k : Nat} {f : α → List (Nat × N
     (pinInput d k f s).map (fun bs => ByteArray.mk bs.toArray) = pinBytes d k f s := by
   rw [← pinBytes_eq]; cases pinBytes d k f s <;> simp
 
+/-- The runner's state digest equals the spec's `Gate.setsDigest` for every hash. -/
+theorem setsDigestF_eq (H : ByteArray → List UInt8) (r u : Snapshot Line) :
+    setsDigestF H r u = BlindLedger.Gate.setsDigest (fun x => H ⟨x.toArray⟩) r u := by
+  unfold setsDigestF BlindLedger.Gate.setsDigest BlindLedger.Gate.setPins
+  rw [← pin_run_eq, ← pin_run_eq]
+  cases pinInput "RR/GATE/RELEASED/v1" 5 Line.fields r <;> cases pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields u <;> simp
+
+/-- info: 'BlindLedger.Gate.Rules.Fast.setsDigestF_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms setsDigestF_eq
 /-- info: 'BlindLedger.Gate.Rules.Fast.decideBatchF_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideBatchF_eq
 /-- info: 'BlindLedger.Gate.Rules.Fast.decideBatchFIn_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/

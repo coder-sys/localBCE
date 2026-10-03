@@ -1,5 +1,6 @@
 import Std.Data.HashMap
 import Std.Data.HashSet
+import BlindLedger.Gate.Spec
 import BlindLedger.Gate.Rules.Spec
 
 /-! Indexed twin of `Spec.decideBatch` and `pinInput` (design rrb/designs/gate-rules-fast-v1.md); `FastEq.lean` proves it equal. -/
@@ -261,5 +262,11 @@ def pinBytes {α : Type} (domain : String) (kind : Nat) (fields : α → List (N
   let rows ← s.entries.mapM fun x => pushRow .empty (fields x)
   let out := ByteArray.emptyWithCapacity (rows.foldl (· + ·.size) head.size) ++ head
   pure ((rows.mergeSort baLe).foldl (· ++ ·) out)
+
+/-- `Gate.setsDigest` over `pinBytes` (`setsDigestF_eq`): the checkpoint state digest, without the spec's list sort. -/
+def setsDigestF (H : ByteArray → List UInt8) (r u : Snapshot Line) : Option (List UInt8) := do
+  let a ← pinBytes "RR/GATE/RELEASED/v1" 5 Line.fields r
+  let b ← pinBytes "RR/GATE/UNRESOLVED/v1" 6 Line.fields u
+  pure (BlindLedger.Gate.stateDigest (fun x => H ⟨x.toArray⟩) (H a) (H b))
 
 end BlindLedger.Gate.Rules.Fast
