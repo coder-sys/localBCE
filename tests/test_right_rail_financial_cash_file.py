@@ -473,6 +473,25 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.store.run_batch(cash._propose(canonical({**self.value, "rows": [self._row(1, 50, 2, "other")], "row_count": 1, "total_cents": 50}), self.baseline))
         self._refused(lambda: cash.commit_cash_plan(self.store, later), "cash_file_stale", "cash_plan_stale")  # another writer moved the store first
 
+    def _counting_verify(self):
+        """Patch the live owner's full open check to record each call in ``self.verified``."""
+        self.verified, real = [], self.store._verify_open_identity
+        return patch.object(self.store, "_verify_open_identity", lambda **keywords: self.verified.append(keywords) or real(**keywords))
+
+    def test_a_stale_refusal_keeps_the_writer_and_a_moved_store_is_verified_again(self):
+        plan, writer = self._plan(), self.store._writer
+        changes = writer.total_changes
+        with self._counting_verify():
+            self.store.clock.value = plan.last_ms + cash.PLAN_WINDOW_MS
+            self._refused(lambda: cash.commit_cash_plan(self.store, plan), "cash_file_stale", "cash_plan_stale")
+            self.assertEqual((self.store._writer, writer.total_changes, writer.in_transaction, self.verified), (writer, changes, False, []))  # rolled back before its first statement
+            with self.fixture._make_owner(path=self.store.path, clock=self.store.clock) as other:  # another connection commits: the live owner's mark moves
+                other.run_batch(cash._propose(canonical({**self.value, "rows": [self._row(1, 50, 0, "other")], "row_count": 1, "total_cents": 50}), self.baseline))
+            self.store.clock.value = plan.last_ms
+            self._refused(lambda: cash.commit_cash_plan(self.store, plan), "cash_file_stale", "cash_plan_stale")
+        self.assertEqual(self.verified, [{"verify_history": True}])  # the kept writer still verifies a moved store in full, before the stale check
+        self.assertIsNot(self.store._writer, writer)
+
     def test_a_plan_is_stale_when_a_deadline_fell_between_its_clock_and_the_commit(self):
         plan = self._plan()
         due = self._query("SELECT min(due_at_ms) FROM obligations")[0][0]
@@ -545,15 +564,55 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(self.spans, [])  # the plan's refusal is the answer: no live write lock is taken
 
     def test_a_stale_plan_is_made_again_and_commits_what_a_fresh_apply_commits(self):
-        prepared = self._prepare()
-        clock = _FixedClock(self.store.clock.value)  # one clock for both runs: a re-plan reads time again, and every table must still match
-        with self._copy_of_live(clock) as fresh:
-            expected_receipt = cash.apply_cash_file(fresh, *prepared)
-        with patch.object(self.store, "clock", clock):
+        prepared, clock, plan_file = self._prepare(), _FixedClock(self.store.clock.value), cash.plan_cash_file
+        def ticking(*arguments, **keywords):  # each plan reads a later clock: the three plans differ, so the store shows which one committed
+            clock.value += 1
+            return plan_file(*arguments, **keywords)
+        with self._copy_of_live(_FixedClock(clock.value + 3)) as direct:
+            expected_receipt = direct.run_batch(prepared[0], cash_file_context=prepared[1])  # the direct path at the third plan's clock
+        with patch.object(self.store, "clock", clock), patch.object(cash, "plan_cash_file", ticking), self._counting_verify():
             receipt, seconds = self._production_apply(prepared, stale=2)
-        self.assertEqual((receipt, len(self.plans), len(self.spans)), (expected_receipt, 3, 3))  # two stale commits roll back, the third plan commits
+        self.assertEqual((receipt, len(self.plans), len({plan.writes for plan in self.plans}), len(self.spans), self.verified), (expected_receipt, 3, 3, 3, []))  # two stale commits roll back and keep the writer
         self.assertLess(seconds, 2.5)
-        self.assertEqual(_tables(self.store.path), _tables(fresh.path))
+        self.assertEqual(_tables(self.store.path), _tables(direct.path))
+
+    def test_a_different_writer_between_plan_and_commit_is_planned_again(self):
+        ids = self._wide_store(count=8)
+        prepared, other = self._prepare(self._file_of(ids[:4], 8)), cash._propose(canonical(self._file_of(ids[4:], 8, prefix="other")), self.baseline)
+        clock, plan_file, calls = _FixedClock(self.store.clock.value), cash.plan_cash_file, []
+        with self._copy_of_live(clock) as direct:
+            direct.run_batch(other)
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_stale$"):  # the direct path after the other writer: new rows on a baseline it passed
+                direct.run_batch(prepared[0], cash_file_context=prepared[1])
+        def overtaken(*arguments, **keywords):
+            calls.append(len(calls))
+            plan = plan_file(*arguments, **keywords)
+            with self.fixture._make_owner(path=self.store.path, clock=clock) as writer:
+                writer.run_batch(other)
+            return plan
+        with patch.object(self.store, "clock", clock), patch.object(cash, "plan_cash_file", overtaken), self.assertRaisesRegex(check.CashFileError, "^cash_file_stale$"):
+            cash.apply_cash_file(self.store, *prepared)
+        self.assertEqual(len(calls), 2)  # the moved store refused the first plan's commit; the second plan, on the moved store, is the direct path's answer
+        self.assertEqual(_tables(self.store.path), _tables(direct.path))
+
+    def test_a_raw_sqlite_error_on_apply_is_cash_file_failed_and_writes_nothing(self):
+        _, _, args = self._cli_fixture()
+        connect, live, begin = sqlite3.connect, self.store.path, owner.FinancialOwner._begin
+        class Full(sqlite3.Connection):
+            def backup(self, *arguments, **keywords):
+                raise sqlite3.OperationalError("database or disk is full")
+        def failing_on_live(instance, statement):  # the live replay's first payment insert fails
+            connection = begin(instance, statement)
+            if os.path.samefile(instance.path, live):
+                connection.execute("CREATE TEMP TRIGGER IF NOT EXISTS rr_test_full BEFORE INSERT ON main.payments BEGIN SELECT RAISE(ABORT, 'injected_full'); END")
+            return connection
+        before = fixtures._image(live)
+        for label, patcher in (("plan backup", patch.object(sqlite3, "connect", lambda *a, **k: connect(*a, **k, factory=Full))), ("live commit", patch.object(owner.FinancialOwner, "_begin", failing_on_live))):
+            with self.subTest(label):
+                with patcher, redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                    code = cli.main(args + ["--apply"])
+                self.assertEqual((code, out.getvalue(), err.getvalue()), (2, "", "ERROR:receiver_cash_file_refused:cash_file_failed\n"))
+                self.assertEqual(fixtures._image(live), before)
 
     def test_three_stale_plans_are_cash_file_busy_and_write_nothing(self):
         before = fixtures._image(self.store.path)

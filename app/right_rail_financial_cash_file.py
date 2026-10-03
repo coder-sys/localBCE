@@ -12,7 +12,7 @@ import tempfile
 import time
 from typing import Any
 
-from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, _TABLE_COLUMNS, _checker_authority
+from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, FinancialStaleError, _TABLE_COLUMNS, _checker_authority
 from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError, CashFilePreview
 
 
@@ -193,8 +193,8 @@ def plan_cash_file(commands, context, *, path, trusted_authority, clock=None):
             seal = (tuple(tuple(row) for row in connection.execute("SELECT * FROM history_pending ORDER BY 1,2")), tuple(connection.execute("SELECT * FROM history_open").fetchone())) if any(op == "DELETE" for _, op, _ in log) else None
             writes = tuple((table, rowid, tuple(connection.execute(f'SELECT * FROM "{table}" WHERE rowid=?', (rowid,)).fetchone())) for table, rowid in dict.fromkeys((table, rowid) for table, op, rowid in log if op != "DELETE"))
             return CashPlan(tuple(commands), context, tuple(results), baseline, reading.last, writes, table_shapes(connection), seal)
-    except (CashFileError, FinancialBusyError, FinancialRevisionError, FinancialConflictError) as error:
-        raise CashFileError(refusal(error)) from None  # an integrity error is not a refusal: it propagates
+    except (CashFileError, FinancialBusyError, FinancialRevisionError, FinancialConflictError, sqlite3.Error) as error:
+        raise CashFileError(refusal(error)) from None  # an integrity error is not a refusal: it propagates; a raw sqlite error on the copy (disk full) is cash_file_failed
 
 
 def _baseline(connection):
@@ -215,7 +215,7 @@ def commit_cash_plan(owner, plan):
         now = owner._now()
         if plan.writes and (plan.last_ms is None or not plan.last_ms <= now < plan.last_ms + PLAN_WINDOW_MS or connection.execute(
                 "SELECT 1 FROM obligations WHERE due_at_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM claimed_adjustments WHERE deadline_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM cases WHERE due_at_ms BETWEEN ?1 AND ?2 LIMIT 1", (plan.last_ms, now)).fetchone()) or _baseline(connection) != plan.baseline:
-            raise FinancialRevisionError("cash_plan_stale")  # also stale: a deadline fell between the plan's clock and this one, so a direct run would decide it differently
+            raise FinancialStaleError("cash_plan_stale")  # before any statement, so the verified writer is kept; also stale: a deadline fell between the plan's clock and this one, so a direct run would decide it differently
         check.begin(connection)
         statements, order = {}, {}
         for table, rowid, values in sorted(plan.writes, key=lambda write: order.setdefault(write[0], len(order))):  # a table at a time: once a child row is in, SQLite scans every child table on each deferred-key parent insert
@@ -244,9 +244,10 @@ def apply_cash_file(owner, commands, context):
     for _ in range(3):
         try:
             return commit_cash_plan(owner, plan_cash_file(commands, context, path=owner.path, trusted_authority=owner.trusted_authority, clock=owner.clock))
-        except FinancialRevisionError as error:
-            if str(error) != "cash_plan_stale":
-                raise
+        except FinancialStaleError:
+            continue
+        except sqlite3.Error:
+            raise CashFileError("cash_file_failed") from None  # a raw error on the live write (disk full): rolled back, a fixed class
     raise CashFileError("cash_file_busy")  # nothing written: resend the same file
 
 
