@@ -2,7 +2,7 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `3e57957`.
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `694bd5a`.
 
 ## Product and standing claims
 
@@ -11,7 +11,7 @@ Blind Ledger, Mirror, Continuity and Switch share the financial owner; Provider 
 level within that product. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
 `production_usable=false`, `activation=false`. Guarded local runs are merge evidence, not release qualification.
 
-## What landed on trunk 3e57957 (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
+## What landed on trunk 694bd5a (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
 
 - **Cash file (design d).** Plan on a copy, commit under the lock; a stale plan re-plans (3 tries, then `cash_file_busy`).
   Quarter-end lock 1.44-1.65 s (was 5.9-6.1 s; bound 5 s). `cs8-full`: 734 pass, 0 fail, 17 skips needing a Lean build.
@@ -20,17 +20,16 @@ level within that product. Existing payment systems move money. Synthetic, state
 - **Correction frames as ByteArray.** Corrections re-encode through proved-equal byte-array twins (`CorrectionFast.lean`, `_eq`
   theorems pinned). Accepted 5 MB: 3.73 s / 846 MB before, 1.83 s / 259 MB now; the 7 MB cap frame 2.58 s / 164 MB. The worker
   stays flat within 16 MB across requests. Worker re-pinned `58CDA012` -> `8EB77363`.
-- **M4 claim item laws.** BLFOFC01 request, BLFOCR01 answer and `decideClaim`, with the six section F theorems proved and pinned.
+- **M4 claim and offset laws.** BLFOFC01/BLFOCR01 and `decideClaim` (section F theorems); offset authorization decided in Lean
+  with its laws; a decision dated before its pack's approval is refused by owner and checker. The checker verifies `RETIRED_PINS`
+  once per file state, so per-operation work no longer grows with each re-pin. `m4int-6`: 740 pass, 0 fail, 14 skips.
 
-- **Gate fast SHA3.** The gate's SHA3 call sites run the proved-equal fast sponge (`Sha3Fast.lean`; `sha3_512_eq`, `shake128_eq`,
-  `shake256_eq` hold for all inputs on `propext`, `Classical.choice`, `Quot.sound` only). No gate theorem's axioms changed. Rules
-  decide went from 99.5 to 251.6 lines/s on 20,000 lines (target 2,000).
+- **Gate fast SHA3.** Gate SHA3 runs the proved-equal fast sponge (`Sha3Fast.lean`, standard axioms only). Rules decide 99.5 ->
+  251.6 lines/s on 20,000 lines (target 2,000).
 - **Worker payments as ByteArray.** BLFPAY01 frames are read as a byte array; an 8.1 MB item now holds the worker near 62 MB (was
   952 MB). Corrections run on the evaluator worker (one-shot exe retired; 1,558 answers equal).
-- **Pins.** Worker `8EB77363...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
-  8/8. Superseded pins are in each PROVENANCE file and `RETIRED_PINS`. Merged tree: full lake build `cc-int-1` exit 0 with both
-  built exes byte-identical to the pins; full suite `cc-int-2` plus rerun `cc-int-3`: every module passes but
-  quarter-end timing (fixed since).
+- **Pins.** Worker `3AEC2F5E...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
+  8/8. Superseded pins are in each PROVENANCE file and `RETIRED_PINS`. Lake build `m4int-1` exit 0, `gate_verify` equal to its pin.
 
 ## Standing design
 
