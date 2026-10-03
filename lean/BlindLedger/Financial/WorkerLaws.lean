@@ -1,5 +1,5 @@
 import BlindLedger.Financial.Worker
-import BlindLedger.Financial.CodecLaws.CorrectionRecords
+import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.KAT
 import BlindLedger.Financial.Theorems.Correspondence
 
@@ -144,6 +144,50 @@ theorem workerRespond_offset (w : Bytes) (h : offsetAuthorizationMagic.isPrefixO
     prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h,
     prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel)
       (by decide +kernel) h]
+
+/-- BLFOFA01 round trip: the frame of an admissible request decodes back to it. -/
+theorem decodeOffsetAuthorizationRequest_of_encode (request : CorrectionTransition.CorrectionTransitionRequest)
+    (bytes : Bytes) (hRequest : CorrectionTransition.requestWireAdmissible request)
+    (hEncode : encodeOffsetAuthorizationRequest request = some bytes) :
+    decodeOffsetAuthorizationRequest bytes = some request := by
+  unfold encodeOffsetAuthorizationRequest at hEncode
+  cases hE : CorrectionTransition.encodeCorrectionTransitionRequest request with
+  | none => simp [hE] at hEncode
+  | some body =>
+    simp [hE] at hEncode
+    subst hEncode
+    unfold decodeOffsetAuthorizationRequest
+    rw [if_pos (List.isPrefixOf_iff_prefix.2 (List.prefix_append _ _)), List.drop_left]
+    exact CorrectionTransition.decodeCorrectionTransitionRequest_of_encode request body hRequest hE
+
+/-- BLFOFA01 round trip: a frame that decodes is exactly the frame of what it decodes to. -/
+theorem encodeOffsetAuthorizationRequest_of_decode (bytes : Bytes)
+    (request : CorrectionTransition.CorrectionTransitionRequest)
+    (hDecode : decodeOffsetAuthorizationRequest bytes = some request) :
+    encodeOffsetAuthorizationRequest request = some bytes := by
+  unfold decodeOffsetAuthorizationRequest at hDecode
+  split at hDecode
+  next hp =>
+    unfold encodeOffsetAuthorizationRequest
+    rw [CorrectionTransition.encodeCorrectionTransitionRequest_of_decode _ _ hDecode]
+    exact congrArg some (List.prefix_iff_eq_append.1 (List.isPrefixOf_iff_prefix.1 hp))
+  next => cases hDecode
+
+/-- The served offset answer is `applyOffsetAuthorization`'s BLFCRES3 result whenever the frame
+    decodes and the result fits. -/
+theorem offsetRespond_decoded (w : Bytes) (request : CorrectionTransition.CorrectionTransitionRequest)
+    (h : decodeOffsetAuthorizationRequest w = some request) :
+    offsetRespond w = [UInt8.ofNat 3] ∨
+      ∃ b, CorrectionTransition.encodeCorrectionTransitionResult
+          (CorrectionTransition.applyOffsetAuthorization request) = some b ∧
+        offsetRespond w = UInt8.ofNat 0 :: b := by
+  unfold offsetRespond
+  rw [h]
+  dsimp only
+  cases hres : CorrectionTransition.encodeCorrectionTransitionResult
+      (CorrectionTransition.applyOffsetAuthorization request) with
+  | none => exact Or.inl rfl
+  | some b => exact Or.inr ⟨b, rfl, rfl⟩
 
 /-- A correction answer is a BLFCRES3 result whenever its request decodes and the result fits (N2 on the worker frame). -/
 theorem correctionRespond_decoded (w : Bytes) (request : CorrectionTransition.CorrectionTransitionRequest)

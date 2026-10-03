@@ -136,6 +136,20 @@ namespace BlindLedger.Financial
 
 /-- info: 'BlindLedger.Financial.correctionRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.correctionRespond_length_le
+/-- info: 'BlindLedger.Financial.offsetRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.offsetRespond_length_le
+/-- info: 'BlindLedger.Financial.offsetRespond_decoded' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.offsetRespond_decoded
+/-- info: 'BlindLedger.Financial.workerRespond_offset' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_offset
+/-- info: 'BlindLedger.Financial.offsetRespondBA₂_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.offsetRespondBA₂_eq
+/-- info: 'BlindLedger.Financial.extract_drop_toList' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.extract_drop_toList
+/-- info: 'BlindLedger.Financial.decodeOffsetAuthorizationRequest_of_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.decodeOffsetAuthorizationRequest_of_encode
+/-- info: 'BlindLedger.Financial.encodeOffsetAuthorizationRequest_of_decode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.encodeOffsetAuthorizationRequest_of_decode
 
 /-- info: 'BlindLedger.Financial.workerRespond_payment' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.workerRespond_payment
@@ -441,6 +455,14 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_not_backdated
 /-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_within_shortfall' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_within_shortfall
+/-- info: 'BlindLedger.Financial.CorrectionTransition.buildAccepted_in_force' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAccepted_in_force
+/-- info: 'BlindLedger.Financial.CorrectionTransition.buildAuthorized_in_force' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.buildAuthorized_in_force
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_in_force' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_in_force
+/-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_in_force' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_in_force
 /-- info: 'BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_transition_kind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.CorrectionTransition.applyOffsetAuthorization_transition_kind
 /-- info: 'BlindLedger.Financial.CorrectionTransition.applyCorrectionTransition_transition_kind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
