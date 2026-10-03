@@ -46,8 +46,11 @@ private def correctionKatRetryQueries (sequence head : Nat) : CorrectionQueryObs
     katCorrectionEvaluationId sequence head
     (some ("determination:" ++ katCorrectionActionId)) }
 
+def boundKatDigest : Bytes := authorityDigestOf katAuthority
+
 def correctionKatInput : FinancialInput := {
   katBase with
+  authority := { katAuthority with digest := boundKatDigest }
   beforeRevision := 3
   evaluatedAt := katEvalAt
   payments := [katPayment]
@@ -81,7 +84,7 @@ def correctionKatCurrentReceipt : EvaluationReceipt := {
   inputSnapshotDigest := some (correctionKatDigest 91)
   authority := {
     authorityEpoch := katAuthority.epoch
-    authorityDigest := katAuthority.digest }
+    authorityDigest := boundKatDigest }
   result := {
     evaluationId := katCorrectionEvaluationId
     obligationId := katContext.obligationId
@@ -115,7 +118,7 @@ def correctionKatCommand : CorrectionCommand := {
   actorRole := "FINANCE_DECISION"
   currentAuthorityId := katAuthority.authorityId
   currentAuthorityEpoch := katAuthority.epoch
-  currentAuthorityDigest := katAuthority.digest
+  currentAuthorityDigest := boundKatDigest
   expectedRevision := 4
   evaluationId := katCorrectionEvaluationId
   evaluationResultDigest := correctionKatDigest 165
@@ -131,7 +134,54 @@ def correctionKatRequest : CorrectionTransitionRequest := {
   currentInput := correctionKatInput
   currentReceipt := correctionKatCurrentReceipt }
 
-def correctionKatAccepted : CorrectionTransitionResult :=
+def unboundKatRequest : CorrectionTransitionRequest :=
+  { command := { correctionKatCommand with currentAuthorityDigest := katDigest }
+    currentInput := { correctionKatInput with authority := katAuthority }
+    currentReceipt := { correctionKatCurrentReceipt with
+      authority := { correctionKatCurrentReceipt.authority with authorityDigest := katDigest } } }
+
+#guard digestHex boundKatDigest ==
+  "BF620150B21060DDFBA787A7DC8F2A38499294F3DD57DBFFC267FC4072031151831E9E083F0A0BA20EC10F7CFBCDAA85E764A17A09F6873EB93CD7D632DDFE99"
+#guard match preflightCorrectionTransition unboundKatRequest with
+  | .error .AUTHORITY_STALE => true
+  | _ => false
+#guard match preflightCorrectionTransition correctionKatRequest with
+  | .ok (.ready ..) => true
+  | _ => false
+#guard (applyOffsetAuthorization correctionKatRequest).status == .ACCEPTED
+#guard match (applyOffsetAuthorization correctionKatRequest).mutation with
+  | some m => m.resultingResult.lawfulAdjustmentCents == 300_000 && m.resultingResult.shortfallCents == 0 &&
+      m.action.amountCents == 300_000 && m.determination.decision == .OFFSET_AUTHORIZED &&
+      m.caseDelta.inserted && m.caseDelta.record.reason == "OFFSET_AUTHORIZED"
+  | none => false
+#guard (encodeCorrectionTransitionResult (applyOffsetAuthorization correctionKatRequest)).isSome
+#guard (encodeCorrectionTransitionResult (duplicateOf .OFFSET_AUTHORIZED correctionKatRequest.command)).isSome
+#guard match preflightOffsetDecision .OFFSET_AUTHORIZED
+    { correctionKatRequest with currentInput := { correctionKatRequest.currentInput with
+        pack := { correctionKatRequest.currentInput.pack with
+          approvedAt := correctionKatRequest.command.decisionAtMs + 1 } } } with
+  | .error .CONTROL_PACK_REJECTED => true
+  | _ => false
+#guard match preflightOffsetDecision .OFFSET_AUTHORIZED
+    { correctionKatRequest with command := { correctionKatRequest.command with
+        ownerNowMs := correctionKatRequest.command.decisionAtMs - 1 } } with
+  | .error .CHRONOLOGY => true
+  | _ => false
+-- Evaluated before the due date, decided on it, written after it: refused as back-dated.
+#guard match preflightOffsetDecision .OFFSET_AUTHORIZED
+    { correctionKatRequest with
+      command := { correctionKatRequest.command with
+        decisionAtMs := correctionKatRequest.currentInput.obligation.dueAt
+        ownerNowMs := correctionKatRequest.currentInput.obligation.dueAt + 1 }
+      currentInput := { correctionKatRequest.currentInput with
+        evaluatedAt := correctionKatRequest.currentInput.obligation.dueAt - 100 }
+      currentReceipt := { correctionKatRequest.currentReceipt with
+        result := { correctionKatRequest.currentReceipt.result with
+          evaluatedAtMs := correctionKatRequest.currentInput.obligation.dueAt - 100 } } } with
+  | .error .DECISION_BACKDATED_PAST_DUE => true
+  | _ => false
+
+def correctionKatAccepted: CorrectionTransitionResult :=
   applyCorrectionTransition correctionKatRequest
 
 def correctionKatStoredIdentity : ExistingCorrectionIdentity := {
@@ -145,7 +195,7 @@ def correctionKatStoredIdentity : ExistingCorrectionIdentity := {
   actorRole := "FINANCE_DECISION"
   authorityId := katAuthority.authorityId
   authorityEpoch := katAuthority.epoch
-  authorityDigest := katAuthority.digest
+  authorityDigest := boundKatDigest
   decision := .OFFSET_REJECTED_CORRECTION_AUTHORIZED
   inputEvaluationId := katCorrectionEvaluationId
   inputEvaluationResultDigest := correctionKatDigest 165
@@ -398,6 +448,9 @@ def gateCorrectionFullShortfallAmount : Bool :=
 def gateCorrectionShortfallAboveClaimAmount : Bool :=
   correctionKatOwedAction 10_500_000 = some (800_000, 300_000, 300_000)
 
+-- M1: authorizing a 300,000 offset against 100,000 unpaid is refused, never capped.
+#guard resultHasReason (applyOffsetAuthorization (correctionKatOwedRequest 9_800_000)) .CLAIM_EXCEEDS_SHORTFALL
+
 /-- A correction of `claimId` by `actionId` on `input`, decided 10 ms after
     `input` was evaluated at event `sequence`; the receipt is Lean's projection. -/
 private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : String)
@@ -424,11 +477,12 @@ private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : 
 /-- H1: on the KAT obligation with `cashCents` received (by default 300,000
     unpaid), reject an offset claim of `firstCents`; record `paidCents` more
     cash as payment row `payment:h:p2` (later reversed when `reversed`), linked
-    to `target` when `linked`; then reject a second claim of `secondCents`.
+    to `target` when `linked`; then `decideSecond` (by default, reject) a second claim of `secondCents`.
     Lean derives what the first request was paid from the row and the link. -/
 private def correctionKatSequence (firstCents secondCents : Nat)
     (cashCents : Nat := 9_700_000) (paidCents : Nat := 0) (linked : Bool := true)
-    (reversed : Bool := false) (target : String := katCorrectionActionId) :
+    (reversed : Bool := false) (target : String := katCorrectionActionId)
+    (decideSecond : CorrectionTransitionRequest → CorrectionTransitionResult := applyCorrectionTransition) :
     CorrectionTransitionResult × Option CorrectionTransitionResult :=
   let secondClaimId := "claim:h:offset2"
   let paidEvidence := { katCashEvidence (some paidCents) with
@@ -460,7 +514,7 @@ private def correctionKatSequence (firstCents secondCents : Nat)
         evidence := mutation.resultingInput.evidence ++ [paidEvidence] ++
           (if reversed then [reversal] else []) }
     let second := correctionKatRequestOn after secondClaimId "action:correction:h:v2" 11
-    applyCorrectionTransition { second with command := { second.command with
+    decideSecond { second with command := { second.command with
       paymentLinks := if linked && paidCents > 0 then
         [{ paymentId := "payment:h:p2", actionId := target }] else [] } }))
 
@@ -474,6 +528,13 @@ def gateCorrectionSecondFullRequestRejected : Bool :=
   | (first, some second) => correctionKatActionAmount first = some 300_000 &&
       resultHasReason second .NO_REQUESTABLE_BALANCE
   | _ => false
+
+-- M1: 300,000 unpaid with a 300,000 correction request open, a 300,000 offset is refused;
+-- with none open, it is authorized.
+#guard match correctionKatSequence 300_000 300_000 (decideSecond := applyOffsetAuthorization) with
+  | (_, some second) => resultHasReason second .CLAIM_EXCEEDS_SHORTFALL
+  | _ => false
+#guard (applyOffsetAuthorization (correctionKatOwedRequest 10_000_000)).mutation.isSome
 
 /-- 300,000 unpaid, two 200,000 claims: 200,000, then the 100,000 left. -/
 def gateCorrectionSecondPartialRequest : Bool :=

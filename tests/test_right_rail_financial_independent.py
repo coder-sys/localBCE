@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from contextlib import closing
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
@@ -637,6 +638,26 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                         self.assertEqual(changed, 1)
 
                 self._assert_rejected_without_repair(target, tamper, "determination:actor-role")
+
+    def test_determination_dated_before_its_pack_approval_fails_closed_without_repair(self) -> None:
+        # A raw row edit trips evaluation:input-determination first; a writer skipping its approval rule and pre-commit check stores a digest-consistent decision at 2_000 under a pack approved at 2_500.
+        self.db, self.clock = Path(self.temp_dir.name) / "late-pack.sqlite", _Clock()
+        self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
+        self.addCleanup(self.store.close)
+        real = owner.FinancialOwner._authority_action
+        with patch.object(self, "_fixture_pack", return_value=replace(self._fixture_pack(), approved_at_ms=2_500)), patch.object(owner.FinancialOwner, "_authority_action", lambda *args: replace(real(*args), approved_at_ms=2)), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+            self._populate_owner()
+        self._assert_rejected_without_repair(self._copy_database("before-approval.sqlite"), lambda _path: None, "determination:pack-not-approved")
+
+    def test_authorization_above_its_input_shortfall_fails_closed_without_repair(self) -> None:
+        # M1: 9,800,000 paid leaves 200,000 unpaid; a writer told the shortfall equals the 300,000 claim, with no pre-commit check, stores a digest-consistent over-authorization.
+        self.db, self.clock = Path(self.temp_dir.name) / "over-shortfall.sqlite", _Clock()
+        self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
+        self.addCleanup(self.store.close)
+        pay, inputs = owner.FinancialOwner.record_payment_evidence, owner.FinancialOwner._claim_decision_inputs
+        with patch.object(owner.FinancialOwner, "record_payment_evidence", lambda store, **kw: pay(store, **{**kw, "amount_cents": 9_800_000})), patch.object(owner.FinancialOwner, "_claim_decision_inputs", lambda *args, **kw: (lambda c, t, r, d: (c, t, {**r, "shortfall_cents": c["amount_cents"]}, d))(*inputs(*args, **kw))), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+            self._populate_owner()
+        self._assert_rejected_without_repair(self._copy_database("over-shortfall-copy.sqlite"), lambda _path: None, "^action:exceeds-shortfall$")
 
     def test_database_verification_requires_digest_bound_authority_roster(self) -> None:
         without_roster = {key: value for key, value in self.authority_binding.items() if key != "actors"}

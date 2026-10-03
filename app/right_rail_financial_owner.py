@@ -48,6 +48,10 @@ class FinancialRevisionError(FinancialError):
     pass
 
 
+class FinancialStaleError(FinancialRevisionError):
+    """Raised inside ``_write`` before its first statement (a stale cash plan): rolled back, and the writer this begin checked is kept."""
+
+
 class FinancialContinuityError(FinancialError):
     pass
 
@@ -2571,8 +2575,8 @@ class FinancialOwner:
                     if self._custody is not None:
                         self._custody.mark(self.owner_id, self._high)  # only after COMMIT, so custody never names an uncommitted head
             except BaseException as error:
-                if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full
-                    self._discard_writer()
+                if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full. A stale refusal changed nothing: the next begin's mark check still guards it
+                    connection.execute("ROLLBACK") if type(error) is FinancialStaleError else self._discard_writer()
                 _raise_if_busy(error)
                 raise
             finally:
@@ -4363,11 +4367,11 @@ class FinancialOwner:
                 _fail(FinancialConflictError, "action_payload_immutable")
             return {"status": "DUPLICATE", "action_id": action_id, **self._current_projection(connection, str(action["obligation_id"]))}
 
-    def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> None:
+    def _authority_action(self, connection: sqlite3.Connection, obligation_id: str, actor_id: str, actor_role: str) -> ControlPack:
         self.trusted_authority.require(actor_id, actor_role)
         pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, obligation_id)
-        if actor_role not in pack.authorized_roles:
-            _fail(FinancialAuthorityError, "control_pack_actor_role_not_authorized")
+        if actor_role not in pack.authorized_roles: _fail(FinancialAuthorityError, "control_pack_actor_role_not_authorized")
+        return pack
 
     def _validate_evaluation_reference(
         self,
@@ -5071,8 +5075,7 @@ class FinancialOwner:
         expected_revision: int | None,
     ) -> tuple[sqlite3.Row, int, dict[str, Any], bytes]:
         """Authority, claim, decision time and current-evaluation checks shared by both offset decisions."""
-
-        self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
+        pack = self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
         claim = connection.execute("SELECT * FROM claimed_adjustments WHERE claim_id=? AND obligation_id=?", (claim_id, obligation["obligation_id"])).fetchone()
         if claim is None:
             _fail(FinancialIntegrityError, "offset_claim_missing")
@@ -5081,6 +5084,7 @@ class FinancialOwner:
         decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
         if decision_time > self._now():  # a future decision would hold the clock ahead of every later write
             _fail(FinancialInputError, "decision_time_future")
+        if decision_time < pack.approved_at_ms: _fail(FinancialIntegrityError, "control_pack_not_approved")  # Lean preflightOffsetDecision
         _evaluation_row, evaluation_receipt, input_result_digest = self._validate_evaluation_reference(
             connection,
             obligation,
@@ -5142,6 +5146,8 @@ class FinancialOwner:
             mutation_time = max(decision_time, self._now())
             if decision_time <= int(obligation["due_at_ms"]) < mutation_time:
                 _fail(FinancialInputError, "decision_time_backdated_past_due")
+            if int(claim["amount_cents"]) + sum(_open_requests(connection, str(obligation["obligation_id"]), shortfall := int(evaluation_receipt["shortfall_cents"])).values()) > shortfall:  # M1: with the open correction requests, refused, never capped (decided here; Lean's CLAIM_EXCEEDS_SHORTFALL is spec only)
+                _fail(FinancialConflictError, "offset_exceeds_shortfall")
             before_revision = int(obligation["revision"])
             resulting_revision = before_revision + 1
             determination_id = f"determination:{action_ref}"

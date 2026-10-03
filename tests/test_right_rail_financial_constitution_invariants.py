@@ -121,6 +121,7 @@ class _AcceptanceFixtures:
     _assert_snapshot = _ACCEPTANCE["_assert_snapshot"]
     _assert_verified = _ACCEPTANCE["_assert_verified"]
     _assert_decision_package_verified = _ACCEPTANCE["_assert_decision_package_verified"]
+    _two_claims = _ACCEPTANCE["_two_claims"]
     _two_claim_corrections = _ACCEPTANCE["_two_claim_corrections"]
     _pay_a = _ACCEPTANCE["_pay_a"]
 

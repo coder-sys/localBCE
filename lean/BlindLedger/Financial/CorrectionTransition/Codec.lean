@@ -280,6 +280,8 @@ def encodeRejectReason : TransitionRejectReason → UInt8
   | .INPUT_SNAPSHOT_MISSING => UInt8.ofNat 19
   | .NO_SHORTFALL => UInt8.ofNat 20
   | .NO_REQUESTABLE_BALANCE => UInt8.ofNat 21
+  | .DECISION_BACKDATED_PAST_DUE => UInt8.ofNat 22
+  | .CLAIM_EXCEEDS_SHORTFALL => UInt8.ofNat 23
 
 def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   match byte.toNat with
@@ -304,6 +306,8 @@ def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   | 19 => some .INPUT_SNAPSHOT_MISSING
   | 20 => some .NO_SHORTFALL
   | 21 => some .NO_REQUESTABLE_BALANCE
+  | 22 => some .DECISION_BACKDATED_PAST_DUE
+  | 23 => some .CLAIM_EXCEEDS_SHORTFALL
   | _ => none
 
 def encodeOptionalRejectReason : Option TransitionRejectReason → Bytes
@@ -319,16 +323,22 @@ def readOptionalRejectReason (bytes : Bytes) : Option (Option TransitionRejectRe
     pure (some reason, tail)
   else none
 
-def encodeTransitionKind (_ : TransitionKind) : UInt8 := UInt8.ofNat 1
+def encodeTransitionKind : TransitionKind → UInt8
+  | .OFFSET_REJECTED_CORRECTION_AUTHORIZED => UInt8.ofNat 1
+  | .OFFSET_AUTHORIZED => UInt8.ofNat 2
 
 def readTransitionKind (bytes : Bytes) : Option (TransitionKind × Bytes) := do
   let (tag, rest) ← readByte bytes
-  if tag.toNat = 1 then some (.OFFSET_REJECTED_CORRECTION_AUTHORIZED, rest) else none
+  match tag.toNat with
+  | 1 => some (.OFFSET_REJECTED_CORRECTION_AUTHORIZED, rest)
+  | 2 => some (.OFFSET_AUTHORIZED, rest)
+  | _ => none
 
 def encodeExplanationCode : ExplanationCode → UInt8
   | .CORRECTION_AUTHORIZED => UInt8.ofNat 1
   | .EXACT_RETRY => UInt8.ofNat 2
   | .REJECTED => UInt8.ofNat 3
+  | .OFFSET_AUTHORIZED => UInt8.ofNat 4
 
 def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -336,6 +346,7 @@ def readExplanationCode (bytes : Bytes) : Option (ExplanationCode × Bytes) := d
   | 1 => some (.CORRECTION_AUTHORIZED, rest)
   | 2 => some (.EXACT_RETRY, rest)
   | 3 => some (.REJECTED, rest)
+  | 4 => some (.OFFSET_AUTHORIZED, rest)
   | _ => none
 
 def encodeCorrectionEffect : CorrectionEffect → UInt8
@@ -346,6 +357,7 @@ def encodeCorrectionEffect : CorrectionEffect → UInt8
   | .OUTBOX_CREATED => UInt8.ofNat 5
   | .PROJECTION_RECOMPUTED => UInt8.ofNat 6
   | .EVENT_APPENDED => UInt8.ofNat 7
+  | .CLAIM_AUTHORIZED => UInt8.ofNat 8
 
 def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -357,6 +369,7 @@ def readCorrectionEffect (bytes : Bytes) : Option (CorrectionEffect × Bytes) :=
     | 5 => some .OUTBOX_CREATED
     | 6 => some .PROJECTION_RECOMPUTED
     | 7 => some .EVENT_APPENDED
+    | 8 => some .CLAIM_AUTHORIZED
     | _ => none
   pure (effect, rest)
 
@@ -382,6 +395,8 @@ def encodeTransitionRequirement : TransitionRequirement → UInt8
   | .INPUT_SNAPSHOT_DIGEST_AVAILABLE => UInt8.ofNat 19
   | .POSITIVE_SHORTFALL => UInt8.ofNat 20
   | .UNREQUESTED_SHORTFALL => UInt8.ofNat 21
+  | .DECISION_NOT_BACKDATED_PAST_DUE => UInt8.ofNat 22
+  | .CLAIM_WITHIN_SHORTFALL => UInt8.ofNat 23
 
 def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -407,6 +422,8 @@ def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement ×
     | 19 => some .INPUT_SNAPSHOT_DIGEST_AVAILABLE
     | 20 => some .POSITIVE_SHORTFALL
     | 21 => some .UNREQUESTED_SHORTFALL
+    | 22 => some .DECISION_NOT_BACKDATED_PAST_DUE
+    | 23 => some .CLAIM_WITHIN_SHORTFALL
     | _ => none
   pure (requirement, rest)
 
@@ -645,8 +662,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       result.explanation.transition, result.explanation.rejectReason,
       result.explanation.unresolvedRequirement, result.actionId,
       result.determinationId, result.mutation with
-  | .ACCEPTED, none, .CORRECTION_AUTHORIZED, some .OFFSET_REJECTED_CORRECTION_AUTHORIZED,
-      none, none, some actionId, some determinationId, some mutation =>
+  -- One arm for both accepted kinds; the authorize differences (design 3.3) test `kind`.
+  | .ACCEPTED, none, code, some kind, none, none, some actionId, some determinationId, some mutation =>
       idWellFormed actionId && idWellFormed determinationId &&
       result.explanation.claimId = some mutation.determination.claimId &&
       result.explanation.actionId = some actionId &&
@@ -662,8 +679,9 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.resultingResult.packId = mutation.resultingInput.pack.packId &&
       mutation.resultingResult.packDigest = mutation.resultingInput.pack.digest &&
       mutation.resultingResult.afterRevision = mutation.resultingInput.beforeRevision + 1 &&
-      mutation.transition = .OFFSET_REJECTED_CORRECTION_AUTHORIZED &&
-      mutation.orderedEffects = [ .DETERMINATION_RECORDED, .CLAIM_REJECTED, .CASE_UPSERTED,
+      mutation.transition = kind &&
+      mutation.orderedEffects = [ .DETERMINATION_RECORDED,
+        if kind = .OFFSET_AUTHORIZED then .CLAIM_AUTHORIZED else .CLAIM_REJECTED, .CASE_UPSERTED,
         .ACTION_CREATED, .OUTBOX_CREATED, .PROJECTION_RECOMPUTED, .EVENT_APPENDED ] &&
       mutation.determination.determinationId = determinationId &&
       idWellFormed mutation.determination.determinationId &&
@@ -672,7 +690,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       idWellFormed mutation.determination.actorId &&
       roleWellFormed mutation.determination.actorRole &&
       idWellFormed mutation.determination.authorityId &&
-      mutation.determination.decision = .OFFSET_REJECTED_CORRECTION_AUTHORIZED &&
+      mutation.determination.decision = (if kind = .OFFSET_AUTHORIZED then .OFFSET_AUTHORIZED
+        else .OFFSET_REJECTED_CORRECTION_AUTHORIZED) &&
       mutation.determination.amountCents > 0 && mutation.determination.amountCents ≤ maxCents &&
       revisionWellFormed mutation.determination.expectedRevision &&
       revisionWellFormed mutation.determination.resultingRevision &&
@@ -682,16 +701,18 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.action.actionId = actionId && digestWellFormed mutation.action.payloadDigest &&
       mutation.action.obligationId = mutation.determination.obligationId &&
       mutation.action.determinationId = some determinationId &&
-      mutation.action.kind = "CORRECTION_PAYMENT_REQUEST" &&
-      mutation.dependencies.inputShortfallCents > 0 &&
+      mutation.action.kind = (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZATION"
+        else "CORRECTION_PAYMENT_REQUEST") &&
+      (kind = .OFFSET_AUTHORIZED || mutation.dependencies.inputShortfallCents > 0) &&
       mutation.dependencies.inputShortfallCents ≤ maxCents &&
-      -- Only the balance that earlier correction requests, less what was paid
-      -- against them, do not already ask for.
+      -- An authorization covers the whole claim. A correction asks only for the balance that
+      -- earlier correction requests, less what was paid against them, do not already ask for.
       correctionPaidWellFormed mutation.dependencies.correctionPaid &&
-      mutation.action.amountCents =
-        min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
+      mutation.action.amountCents = (if kind = .OFFSET_AUTHORIZED
+        then mutation.determination.amountCents
+        else min mutation.determination.amountCents (mutation.dependencies.inputShortfallCents -
           outstandingCorrectionCents mutation.dependencies.correctionPaid
-            (mutation.resultingInput.actions.filter (fun action => action.actionId ≠ actionId))) &&
+            (mutation.resultingInput.actions.filter (fun action => action.actionId ≠ actionId)))) &&
       mutation.action.currency = mutation.resultingInput.context.currency &&
       mutation.action.revision = mutation.determination.resultingRevision &&
       mutation.action.status = .READY &&
@@ -705,7 +726,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.event.sequence = mutation.dependencies.currentEventSequence + 1 &&
       mutation.event.aggregateType = "OBLIGATION" &&
       mutation.event.aggregateId = mutation.resultingInput.context.obligationId &&
-      mutation.event.kind = "OFFSET_REJECTED_CORRECTION_AUTHORIZED" &&
+      mutation.event.kind = (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZED"
+        else "OFFSET_REJECTED_CORRECTION_AUTHORIZED") &&
       mutation.event.committedAtMs = mutation.outbox.updatedAtMs &&
       mutation.event.previousHead = mutation.dependencies.previousHistoryHead &&
       mutation.event.previousHead.length = digestBytes &&
@@ -713,9 +735,20 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.followUps.caseId = mutation.caseDelta.record.caseId &&
       mutation.caseDelta.record.caseId = "case:" ++ mutation.resultingInput.context.obligationId &&
       mutation.caseDelta.record.obligationId = mutation.resultingInput.context.obligationId &&
-      mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" &&
-      mutation.caseDelta.record.nextActionOwner = "CASE_OWNER" &&
-      mutation.caseDelta.record.dueAt = mutation.dependencies.claimBefore.deadlineAt &&
+      -- An authorization keeps an outstanding correction case (reason CORRECTION_REQUIRED, not
+      -- inserted) with its owner and due date; an inserted or replaced case is checked in full.
+      (mutation.caseDelta.record.reason =
+          (if kind = .OFFSET_AUTHORIZED then "OFFSET_AUTHORIZED" else "CORRECTION_REQUIRED") ||
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          mutation.caseDelta.record.reason = "CORRECTION_REQUIRED") &&
+      (mutation.caseDelta.record.nextActionOwner = "CASE_OWNER" ||
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" &&
+          roleWellFormed mutation.caseDelta.record.nextActionOwner) &&
+      (mutation.caseDelta.record.dueAt = mutation.dependencies.claimBefore.deadlineAt ||
+        kind = .OFFSET_AUTHORIZED && !mutation.caseDelta.inserted &&
+          mutation.caseDelta.record.reason = "CORRECTION_REQUIRED" &&
+          timeWellFormed mutation.caseDelta.record.dueAt) &&
       mutation.caseDelta.record.status = mutation.resultingResult.caseStatus &&
       mutation.caseDelta.record.updatedAt = mutation.event.committedAtMs &&
       mutation.caseDelta.contractualAccountability = "PROGRAM_ACCOUNTABILITY" &&
@@ -758,7 +791,8 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.dependencies.supportingEvidence.all (fun binding =>
         idWellFormed binding.evidenceId && digestWellFormed binding.recordDigest) &&
       mutation.resultingInput.claims.any (fun claim =>
-        claim = { mutation.dependencies.claimBefore with status := .REJECTED }) &&
+        claim = { mutation.dependencies.claimBefore with
+          status := if kind = .OFFSET_AUTHORIZED then .AUTHORIZED else .REJECTED }) &&
       mutation.dependencies.supportingEvidence.map EvidenceBinding.evidenceId =
         mutation.determination.supportingEvidenceIds &&
       mutation.dependencies.inputEvaluationSnapshotDigest.length = digestBytes &&
@@ -782,8 +816,9 @@ def resultWellFormed (result : CorrectionTransitionResult) : Bool :=
       mutation.dependencies.queryObservations.evaluationConsumed.resultIdentity.isNone &&
       correctionQueryObservationsAt mutation.dependencies.queryObservations
         mutation.dependencies.currentEventSequence mutation.dependencies.previousHistoryHead &&
-      correctionQueryObservationsWellFormed mutation.dependencies.queryObservations
-  | .DUPLICATE, none, .EXACT_RETRY, some .OFFSET_REJECTED_CORRECTION_AUTHORIZED,
+      correctionQueryObservationsWellFormed mutation.dependencies.queryObservations &&
+      code = if kind = .OFFSET_AUTHORIZED then .OFFSET_AUTHORIZED else .CORRECTION_AUTHORIZED
+  | .DUPLICATE, none, .EXACT_RETRY, some _,
       none, none, some actionId, some determinationId, none =>
       idWellFormed actionId && determinationId = "determination:" ++ actionId &&
       result.explanation.claimId.isSome &&

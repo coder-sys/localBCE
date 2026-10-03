@@ -27,6 +27,7 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         links_at = request.index(b"BLFIN02") - 6  # the vector's empty link list sits right before the sized input
         self.assertEqual(request[links_at:links_at + 2], b"\x00\x00")
         self.assertEqual(engine._evaluate_wire(request), expected_result)
+        self.assertEqual(engine._evaluate_wire((vectors / "request_unbound.bin").read_bytes()), (vectors / "result_unbound.expected.bin").read_bytes())  # zero roster digest: AUTHORITY_STALE
         mutants = {
             "old-magic": b"BLFCMD02" + request[8:],
             "old-version": request[:8] + b"\x00\x02" + request[10:],
@@ -37,6 +38,12 @@ class RightRailFinancialEngineTests(unittest.TestCase):
         for name, mutant in mutants.items():
             with self.subTest(name), self.assertRaises(engine.FinancialEngineError):
                 engine.run_correction_transition_v1(request=mutant)
+
+    def test_result_decoder_has_reject_reason_tags_22_and_23(self) -> None:  # Lean Codec.lean, wire rows 22-23; the unbound result's reason and requirement tags 5 -> tag
+        result = (REPO_ROOT / "artifacts" / "engine-correction" / "vectors" / "result_unbound.expected.bin").read_bytes()
+        for tag, names in ((22, ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE")), (23, ("CLAIM_EXCEEDS_SHORTFALL", "CLAIM_WITHIN_SHORTFALL"))):
+            decoded = engine.decode_correction_transition_result(result.replace(bytes.fromhex("0105030001050105"), bytes([1, tag, 3, 0, 1, tag, 1, tag])))
+            self.assertEqual((decoded["reject_reason"], decoded["explanation"]["unresolved_requirement"]), names)
 
     def test_one_worker_pin_is_shared_by_engine_checker_and_service_kit(self) -> None:
         self.assertEqual(independent.CORRECTION_TRANSITION_ARTIFACT_SHA256, engine.EVALUATOR_ARTIFACT_SHA256.hex().upper())

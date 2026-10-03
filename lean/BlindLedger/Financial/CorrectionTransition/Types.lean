@@ -19,12 +19,14 @@ deriving DecidableEq, Repr
 
 inductive TransitionKind where
   | OFFSET_REJECTED_CORRECTION_AUTHORIZED
+  | OFFSET_AUTHORIZED
 deriving DecidableEq, Repr
 
 inductive ExplanationCode where
   | CORRECTION_AUTHORIZED
   | EXACT_RETRY
   | REJECTED
+  | OFFSET_AUTHORIZED
 deriving DecidableEq, Repr
 
 inductive CorrectionEffect where
@@ -35,6 +37,7 @@ inductive CorrectionEffect where
   | OUTBOX_CREATED
   | PROJECTION_RECOMPUTED
   | EVENT_APPENDED
+  | CLAIM_AUTHORIZED
 deriving DecidableEq, Repr
 
 inductive TransitionRejectReason where
@@ -59,6 +62,8 @@ inductive TransitionRejectReason where
   | CAPACITY
   | NO_SHORTFALL
   | NO_REQUESTABLE_BALANCE
+  | DECISION_BACKDATED_PAST_DUE
+  | CLAIM_EXCEEDS_SHORTFALL
 deriving DecidableEq, Repr
 
 inductive TransitionRequirement where
@@ -83,6 +88,8 @@ inductive TransitionRequirement where
   | HISTORY_CAPACITY_AVAILABLE
   | POSITIVE_SHORTFALL
   | UNREQUESTED_SHORTFALL
+  | DECISION_NOT_BACKDATED_PAST_DUE
+  | CLAIM_WITHIN_SHORTFALL
 deriving DecidableEq, Repr
 
 def requiredTransitionCondition : TransitionRejectReason → TransitionRequirement
@@ -107,6 +114,8 @@ def requiredTransitionCondition : TransitionRejectReason → TransitionRequireme
   | .CAPACITY => .HISTORY_CAPACITY_AVAILABLE
   | .NO_SHORTFALL => .POSITIVE_SHORTFALL
   | .NO_REQUESTABLE_BALANCE => .UNREQUESTED_SHORTFALL
+  | .DECISION_BACKDATED_PAST_DUE => .DECISION_NOT_BACKDATED_PAST_DUE
+  | .CLAIM_EXCEEDS_SHORTFALL => .CLAIM_WITHIN_SHORTFALL
 
 /-- What the payments linked to one correction request have paid against it. -/
 structure CorrectionPaid where

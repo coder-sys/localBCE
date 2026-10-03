@@ -25,7 +25,7 @@ private def ownerFramedDigest (domain : Bytes) (parts : List Bytes) : Bytes :=
 private def hexDigit (value : Nat) : Char :=
   Char.ofNat (if value < 10 then 48 + value else 55 + value)
 
-private def digestHex (value : Bytes) : String :=
+def digestHex (value : Bytes) : String :=
   String.ofList (value.foldr (fun byte output =>
     hexDigit (byte.toNat / 16) :: hexDigit (byte.toNat % 16) :: output) [])
 
@@ -33,6 +33,17 @@ private def digestHex (value : Bytes) : String :=
     Owner's ASCII identifier/role/kind grammar. That grammar excludes JSON
     quotation marks, backslashes, control bytes, and non-ASCII text. -/
 private def jsonId (value : String) : String := "\"" ++ value ++ "\""
+
+def evidenceDomain : Bytes := "RR/FINANCIAL/EVIDENCE/v1".toUTF8.toList ++ [UInt8.ofNat 0]
+
+def rosterJson (a : TrustedAuthority) : String :=
+  "{\"actors\":[" ++ ",".intercalate (a.actors.map fun x =>
+      "{\"actor_id\":" ++ jsonId x.actorId ++ ",\"roles\":[" ++ ",".intercalate (x.roles.map jsonId) ++ "]}") ++
+    "],\"authority_id\":" ++ jsonId a.authorityId ++ ",\"epoch\":" ++ toString a.epoch ++
+    ",\"synthetic_only\":" ++ (if a.syntheticOnly then "true" else "false") ++ "}"
+
+def authorityDigestOf (a : TrustedAuthority) : Bytes :=
+  ownerFramedDigest evidenceDomain [(rosterJson a).toUTF8.toList]
 
 inductive CorrectionActionDispatchMode where
   | SYNTHETIC_RECORD_ONLY
@@ -46,7 +57,7 @@ structure CorrectionActionPayload where
   canonicalJson : String
 deriving DecidableEq, Repr
 
-def canonicalActionPayload (request : CorrectionTransitionRequest)
+def offsetActionPayload (kind : String) (request : CorrectionTransitionRequest)
     (determinationId : String) (resultingRevision amountCents : Nat) : CorrectionActionPayload :=
   let command := request.command
   let input := request.currentInput
@@ -61,9 +72,13 @@ def canonicalActionPayload (request : CorrectionTransitionRequest)
         ",\"dispatch\":" ++ jsonId dispatchMode.wireValue ++
         ",\"input_evaluation_id\":" ++ jsonId command.evaluationId ++
         ",\"input_evaluation_result_digest\":" ++ jsonId (digestHex command.evaluationResultDigest) ++
-        ",\"kind\":\"CORRECTION_PAYMENT_REQUEST\"" ++
+        ",\"kind\":" ++ jsonId kind ++
         ",\"obligation_id\":" ++ jsonId input.context.obligationId ++
         ",\"revision\":" ++ toString resultingRevision ++ "}" }
+
+def canonicalActionPayload (request : CorrectionTransitionRequest)
+    (determinationId : String) (resultingRevision amountCents : Nat) : CorrectionActionPayload :=
+  offsetActionPayload "CORRECTION_PAYMENT_REQUEST" request determinationId resultingRevision amountCents
 
 /-- The Owner's storage digest of the action payload. The Owner recomputes it
     from the row it writes and refuses any difference (`correction_digest_binding`). -/
@@ -268,21 +283,28 @@ private def lookupAuthorityMatches (command : CorrectionCommand)
     identity.authorityEpoch = command.currentAuthorityEpoch &&
     identity.authorityDigest = command.currentAuthorityDigest
 
-private def existingIdentityMatches (request : CorrectionTransitionRequest)
+def decisionActionKind : DeterminationDecision → String
+  | .OFFSET_AUTHORIZED => "OFFSET_AUTHORIZATION"
+  | .OFFSET_REJECTED_CORRECTION_AUTHORIZED => "CORRECTION_PAYMENT_REQUEST"
+
+def offsetIdentityMatches (decision : DeterminationDecision) (request : CorrectionTransitionRequest)
     (identity : ExistingCorrectionIdentity) : Bool :=
   let command := request.command
-  let expectedDeterminationId := "determination:" ++ command.actionId
   identity.actionId = command.actionId &&
     identity.actionObligationId = request.currentInput.context.obligationId &&
     identity.determinationObligationId = request.currentInput.context.obligationId &&
-    identity.determinationId = expectedDeterminationId &&
-    identity.actionKind = actionKind && identity.claimId = command.claimId &&
+    identity.determinationId = "determination:" ++ command.actionId &&
+    identity.actionKind = decisionActionKind decision && identity.claimId = command.claimId &&
     identity.actorId = command.actorId && identity.actorRole = command.actorRole &&
-    identity.decision = correctionDecision &&
+    identity.decision = decision &&
     identity.inputEvaluationId = command.evaluationId &&
     identity.inputEvaluationResultDigest = command.evaluationResultDigest &&
     identity.expectedRevision = command.expectedRevision &&
     identity.decidedAtMs = command.decisionAtMs
+
+private def existingIdentityMatches (request : CorrectionTransitionRequest)
+    (identity : ExistingCorrectionIdentity) : Bool :=
+  offsetIdentityMatches correctionDecision request identity
 
 def reject (command : CorrectionCommand) (reason : TransitionRejectReason) : CorrectionTransitionResult :=
   let explanation : TransitionExplanation := {
@@ -343,7 +365,7 @@ private def insertActionSorted (record : ActionRecord) : List ActionRecord → L
       if record.actionId < first.actionId then record :: first :: rest
       else first :: insertActionSorted record rest
 
-private theorem insertActionSorted_perm (x : ActionRecord) :
+theorem insertActionSorted_perm (x : ActionRecord) :
     ∀ l, (insertActionSorted x l).Perm (x :: l)
   | [] => List.Perm.refl _
   | y :: ys => by
@@ -352,7 +374,7 @@ private theorem insertActionSorted_perm (x : ActionRecord) :
       · exact List.Perm.refl _
       · exact ((insertActionSorted_perm x ys).cons y).trans (List.Perm.swap x y ys)
 
-private theorem insertDeterminationSorted_perm (x : OffsetDetermination) :
+theorem insertDeterminationSorted_perm (x : OffsetDetermination) :
     ∀ l, (insertDeterminationSorted x l).Perm (x :: l)
   | [] => List.Perm.refl _
   | y :: ys => by
@@ -514,11 +536,11 @@ theorem evaluate_after_case_status_update_fixedPoint (input : FinancialInput)
         exact absurd hUpdatedWellFormed' hNotWellFormed
 
 /-- Returns the same value as `value`, paired with the equation that produced it. -/
-private def optionWithProof {α : Type} : (value : Option α) → Option { item : α // value = some item }
+def optionWithProof {α : Type} : (value : Option α) → Option { item : α // value = some item }
   | none => none
   | some item => some ⟨item, rfl⟩
 
-private def evaluateWithProof (input : FinancialInput) :
+def evaluateWithProof (input : FinancialInput) :
     Option { result : FinancialResult // evaluate input = some result } :=
   optionWithProof (evaluate input)
 
@@ -841,7 +863,7 @@ inductive CorrectionTransitionPreflight (request : CorrectionTransitionRequest) 
       (requestable : outstandingCorrectionCents paid request.currentInput.actions <
         currentResult.shortfallCents)
 
-def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
+def preflightCorrectionTransitionV0 (request : CorrectionTransitionRequest) :
     Except TransitionRejectReason (CorrectionTransitionPreflight request) := do
   let command := request.command
   if command.currentAuthorityId.isEmpty || command.currentAuthorityEpoch < 1 ||
@@ -923,6 +945,115 @@ def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
   else
     throw .REVISION_CONFLICT
 
+inductive OffsetDecisionPreflight (request : CorrectionTransitionRequest) where
+  | duplicate
+  | ready (currentResult : FinancialResult) (claim : Claim)
+      (inputRevisionMatches : request.currentInput.beforeRevision + 1 = request.command.expectedRevision)
+      (evaluates : evaluate request.currentInput = some currentResult)
+      (paid : List CorrectionPaid)
+      (derived : derivedCorrectionPaid request.currentInput.payments request.currentInput.actions
+        request.command.paymentLinks = some paid)
+
+def preflightOffsetDecision (decision : DeterminationDecision) (request : CorrectionTransitionRequest) :
+    Except TransitionRejectReason (OffsetDecisionPreflight request) := do
+  let command := request.command
+  if command.currentAuthorityId.isEmpty || command.currentAuthorityEpoch < 1 ||
+      command.currentAuthorityEpoch > maxAuthorityEpoch ||
+      !idWellFormed command.currentAuthorityId || !digestWellFormed command.currentAuthorityDigest ||
+      !idWellFormed command.itemId || !idWellFormed command.claimId ||
+      !idWellFormed command.actionId || !idWellFormed command.actorId ||
+      !roleWellFormed command.actorRole || !idWellFormed command.evaluationId ||
+      !digestWellFormed command.evaluationResultDigest ||
+      !revisionWellFormed command.expectedRevision || !timeWellFormed command.decisionAtMs ||
+      !timeWellFormed command.ownerNowMs || !digestWellFormed command.previousHistoryHead ||
+      !correctionQueryObservationsWellFormed command.queryObservations then
+    throw .INVALID_REQUEST
+  if !querySetCompleteAtCommand command then throw .QUERY_OBSERVATION_INVALID
+  match command.actionLookup with
+  | .conflicting => throw .ACTION_CONFLICT
+  | .existing identity =>
+      if querySetExactRetry command.queryObservations command &&
+          request.currentInput.context.itemId = command.itemId &&
+          offsetIdentityMatches decision request identity then
+        if lookupAuthorityMatches command identity then
+          return .duplicate
+        else
+          throw .AUTHORITY_STALE
+      else
+        throw .ACTION_CONFLICT
+  | .absent => pure ()
+  if command.queryObservations.actionId.matchCount ≠ 0 ||
+      command.queryObservations.actionId.resultIdentity.isSome then
+    throw .ACTION_CONFLICT
+  if command.queryObservations.determinationId.matchCount ≠ 0 ||
+      command.queryObservations.determinationId.resultIdentity.isSome then
+    throw .DETERMINATION_CONFLICT
+  let input := request.currentInput
+  if input.context.mode = .SHADOW then throw .SHADOW_READ_ONLY
+  if !financialInputWellFormed input then throw .INVALID_INPUT
+  let some paid := optionWithProof (derivedCorrectionPaid input.payments input.actions
+    command.paymentLinks) | throw .INVALID_INPUT
+  if input.context.itemId ≠ command.itemId || input.context.obligationId ≠ request.currentReceipt.result.obligationId then
+    throw .SCOPE_MISMATCH
+  if !sameAuthority input.authority command.currentAuthorityId
+      command.currentAuthorityEpoch command.currentAuthorityDigest then
+    throw .AUTHORITY_STALE
+  -- M4 (A1 closure): the digest is the digest of the roster the actor check below reads.
+  if authorityDigestOf input.authority ≠ command.currentAuthorityDigest then throw .AUTHORITY_STALE
+  if !authorityActorBindingWellFormed input.authority command.actorId command.actorRole ||
+      !input.pack.authorizedRoles.contains command.actorRole then
+    throw .ACTOR_UNAUTHORIZED
+  -- M4: a decision is never dated before its control pack was approved.
+  if command.decisionAtMs < input.pack.approvedAt then throw .CONTROL_PACK_REJECTED
+  let some claim := findClaim input.claims command.claimId | throw .CLAIM_MISSING
+  if claim.status ≠ .CLAIMED then throw .CLAIM_NOT_CLAIMED
+  if command.expectedRevision = 0 then throw .REVISION_CONFLICT
+  if hInputRevision : input.beforeRevision + 1 = command.expectedRevision then
+    let some currentCertificate := evaluateWithProof input | throw .INVALID_INPUT
+    let currentResult := currentCertificate.val
+    if request.currentReceipt.inputSnapshotDigest.isNone then
+      throw .INPUT_SNAPSHOT_MISSING
+    if !currentReceiptBound request currentResult then
+      throw .EVALUATION_CONFLICT
+    if !request.currentReceipt.evidenceBindings.any (fun binding => binding.evidenceId = claim.evidenceId) then
+      throw .EVIDENCE_COVERAGE
+    if request.currentReceipt.result.evaluatedAtMs > command.decisionAtMs then
+      throw .CHRONOLOGY
+    -- M4: a decision is never dated after the owner's clock.
+    if command.decisionAtMs > command.ownerNowMs then throw .CHRONOLOGY
+    -- Python `decision_time_backdated_past_due`: an authorization dated on or before the due
+    -- date is never written after it.
+    if decision = .OFFSET_AUTHORIZED ∧ command.decisionAtMs ≤ input.obligation.dueAt ∧
+        input.obligation.dueAt < max command.decisionAtMs command.ownerNowMs then
+      throw .DECISION_BACKDATED_PAST_DUE
+    -- M1: an authorization and the correction requests still open never claim more than the
+    -- shortfall; refused, never capped.
+    if decision = .OFFSET_AUTHORIZED ∧
+        claim.amountCents + outstandingCorrectionCents paid.val input.actions > currentResult.shortfallCents then
+      throw .CLAIM_EXCEEDS_SHORTFALL
+    if command.queryObservations.evaluationConsumed.matchCount ≠ 0 ||
+        command.queryObservations.evaluationConsumed.resultIdentity.isSome then
+      throw .EVALUATION_CONSUMED
+    if command.currentEventSequence ≥ maxRows then throw .CAPACITY
+    if command.actionId ∈ input.actions.map ActionRecord.actionId ||
+        ("determination:" ++ command.actionId) ∈ input.determinations.map OffsetDetermination.determinationId then
+      throw .ACTION_CONFLICT
+    pure (.ready currentResult claim hInputRevision currentCertificate.property paid.val paid.property)
+  else
+    throw .REVISION_CONFLICT
+
+def preflightCorrectionTransition (request : CorrectionTransitionRequest) :
+    Except TransitionRejectReason (CorrectionTransitionPreflight request) := do
+  match ← preflightOffsetDecision .OFFSET_REJECTED_CORRECTION_AUTHORIZED request with
+  | .duplicate => pure .duplicate
+  | .ready currentResult claim hRevision hEvaluates paid hDerived =>
+    if currentResult.shortfallCents = 0 then throw .NO_SHORTFALL
+    if hRequestable : outstandingCorrectionCents paid request.currentInput.actions <
+        currentResult.shortfallCents then
+      pure (.ready currentResult claim hRevision hEvaluates paid hDerived hRequestable)
+    else
+      throw .NO_REQUESTABLE_BALANCE
+
 def applyCorrectionTransition (request : CorrectionTransitionRequest) : CorrectionTransitionResult :=
   match preflightCorrectionTransition request with
   | .error reason => reject request.command reason
@@ -950,6 +1081,178 @@ def applyCorrectionTransition (request : CorrectionTransitionRequest) : Correcti
             (some ("determination:" ++ request.command.actionId))
             (some mutation)
 
+-- NEW. Python `_ensure_case`: an outstanding correction keeps its case; anything else is replaced or
+-- inserted. Python writes status CORRECTION_REQUIRED only with reason CORRECTION_REQUIRED.
+def upsertOffsetCase (cases : List CaseRecord) (record : CaseRecord) : List CaseRecord × Bool :=
+  match findCase cases record.caseId with
+  | some existing => if existing.status = .CORRECTION_REQUIRED ∧ existing.reason = "CORRECTION_REQUIRED"
+                     then (cases, false)
+                     else upsertCorrectionCase cases record
+  | none => upsertCorrectionCase cases record
+
+-- NEW. The writes of today's Python `authorize_offset`, decided in Lean. Same frame as `buildAccepted`
+-- (time, ids, capacity, provisional input, case-status fixed point); differences are marked.
+def buildAuthorized (request : CorrectionTransitionRequest) (currentResult : FinancialResult)
+    (claim : Claim) (paid : List CorrectionPaid) : Except TransitionRejectReason CorrectionMutation := do
+  let command := request.command
+  let input := request.currentInput
+  let mutationTime := max command.decisionAtMs command.ownerNowMs
+  let afterRevision := command.expectedRevision + 1
+  let determinationId := "determination:" ++ command.actionId
+  let some inputSnapshotDigest := request.currentReceipt.inputSnapshotDigest
+    | throw .INPUT_SNAPSHOT_MISSING
+  let determination : OffsetDetermination := {
+    determinationId := determinationId
+    obligationId := input.context.obligationId
+    claimId := command.claimId
+    actorId := command.actorId
+    actorRole := command.actorRole
+    authorityId := input.authority.authorityId
+    authorityEpoch := input.authority.epoch
+    authorityDigest := input.authority.digest
+    decision := .OFFSET_AUTHORIZED                                     -- differs
+    amountCents := claim.amountCents
+    supportingEvidenceIds := request.currentReceipt.evidenceBindings.map EvidenceBinding.evidenceId
+    expectedRevision := command.expectedRevision
+    resultingRevision := afterRevision
+    decidedAt := command.decisionAtMs }
+  let action : ActionRecord := {
+    actionId := command.actionId
+    obligationId := input.context.obligationId
+    determinationId := some determinationId
+    kind := "OFFSET_AUTHORIZATION"                                     -- differs
+    amountCents := claim.amountCents                                   -- differs: the whole claim
+    currency := input.context.currency
+    revision := afterRevision
+    status := .READY
+    payloadDigest := correctionActionPayloadDigest
+      (offsetActionPayload "OFFSET_AUTHORIZATION" request determinationId afterRevision claim.amountCents)
+    createdAt := mutationTime }
+  let newClaims := input.claims.map (fun existing =>
+    if existing.claimId = command.claimId then { claim with status := .AUTHORIZED } else existing)  -- differs
+  let newDeterminations := insertDeterminationSorted determination input.determinations
+  let newActions := insertActionSorted action input.actions
+  let caseId := "case:" ++ input.context.obligationId
+  let requestedCase : CaseRecord := {
+    caseId := caseId
+    obligationId := input.context.obligationId
+    reason := "OFFSET_AUTHORIZED"                                      -- differs
+    nextActionOwner := "CASE_OWNER"
+    dueAt := claim.deadlineAt
+    status := .AUTHORIZED                                              -- differs
+    updatedAt := mutationTime }
+  let (casesWithDecision, inserted) := upsertOffsetCase input.cases requestedCase  -- differs
+  if newDeterminations.length > maxRows || newActions.length > maxRows ||
+      casesWithDecision.length > maxRows || afterRevision > maxRevision ||
+      command.currentEventSequence ≥ maxRows then
+    throw .CAPACITY
+  let provisional : FinancialInput := {
+    input with
+    beforeRevision := command.expectedRevision
+    evaluatedAt := mutationTime
+    claims := newClaims
+    determinations := newDeterminations
+    cases := casesWithDecision
+    actions := newActions }
+  if !financialInputWellFormed provisional then throw .INVALID_INPUT
+  let some provisionalResult := evaluate provisional | throw .INVALID_INPUT
+  let resultingInput := { provisional with
+    cases := updateAllCaseStatus provisional.cases provisionalResult.caseStatus mutationTime }
+  if !financialInputWellFormed resultingInput then throw .INVALID_INPUT
+  -- `evaluate_after_case_status_update_fixedPoint`: re-evaluating `resultingInput` gives this result.
+  if provisionalResult.afterRevision ≠ afterRevision then throw .REVISION_CONFLICT
+  let some updatedCase := findCase resultingInput.cases caseId | throw .INVALID_INPUT
+  if currentResult.afterRevision ≠ command.expectedRevision then throw .REVISION_CONFLICT
+  let nextEventSequence := command.currentEventSequence + 1
+  pure {
+    transition := .OFFSET_AUTHORIZED
+    orderedEffects := [ .DETERMINATION_RECORDED, .CLAIM_AUTHORIZED, .CASE_UPSERTED,
+      .ACTION_CREATED, .OUTBOX_CREATED, .PROJECTION_RECOMPUTED, .EVENT_APPENDED ]
+    dependencies := {
+      artifactContract := correctionTransitionContract
+      artifactVersion := 1
+      authorityId := input.authority.authorityId
+      authorityEpoch := input.authority.epoch
+      authorityDigest := input.authority.digest
+      controlPackId := input.pack.packId
+      controlPackVersion := input.pack.version
+      controlPackDigest := input.pack.digest
+      inputEvaluationId := command.evaluationId
+      inputEvaluationResultDigest := command.evaluationResultDigest
+      inputEvaluationRevision := command.expectedRevision
+      inputEvaluationEvaluatedAtMs := request.currentReceipt.result.evaluatedAtMs
+      inputEvaluationSnapshotDigest := inputSnapshotDigest
+      inputShortfallCents := currentResult.shortfallCents
+      decisionAtMs := command.decisionAtMs
+      ownerNowMs := command.ownerNowMs
+      claimBefore := claim
+      supportingEvidence := request.currentReceipt.evidenceBindings
+      queryObservations := command.queryObservations
+      currentEventSequence := command.currentEventSequence
+      previousHistoryHead := command.previousHistoryHead
+      correctionPaid := paid }
+    followUps := {
+      actionId := command.actionId
+      outboxActionId := command.actionId
+      caseId := caseId
+      resultingEvaluationId := "evaluation:" ++ input.context.obligationId ++ ":r" ++ toString afterRevision
+      eventSequence := nextEventSequence }
+    resultingInput := resultingInput
+    resultingResult := provisionalResult
+    determination := determination
+    action := action
+    caseDelta := {
+      record := updatedCase
+      contractualAccountability := "PROGRAM_ACCOUNTABILITY"
+      completionConditionsAmountSatisfied := true
+      completionConditionsReportingComplete := true
+      completionConditionsDeliveryAcknowledgedOrNotRequired := true
+      inserted := inserted }
+    outbox := {
+      actionId := command.actionId
+      status := .READY
+      attempt := 0
+      acknowledgmentReference := none
+      updatedAtMs := mutationTime }
+    event := {
+      sequence := nextEventSequence
+      previousHead := command.previousHistoryHead
+      aggregateType := "OBLIGATION"
+      aggregateId := input.context.obligationId
+      kind := "OFFSET_AUTHORIZED"                                       -- differs
+      beforeRevision := command.expectedRevision
+      afterRevision := afterRevision
+      committedAtMs := mutationTime } }
+
+-- NEW. `duplicate` with the transition kind as a parameter.
+def duplicateOf (kind : TransitionKind) (command : CorrectionCommand) : CorrectionTransitionResult :=
+  { duplicate command with explanation := { (duplicate command).explanation with transition := some kind } }
+
+-- NEW. Spec only: no worker frame serves it yet; the Python owner decides offsets.
+def applyOffsetAuthorization (request : CorrectionTransitionRequest) : CorrectionTransitionResult :=
+  match preflightOffsetDecision .OFFSET_AUTHORIZED request with
+  | .error reason => reject request.command reason
+  | .ok .duplicate => duplicateOf .OFFSET_AUTHORIZED request.command
+  | .ok (.ready currentResult claim _ _ paid _) =>
+      match buildAuthorized request currentResult claim paid with
+      | .error reason => reject request.command reason
+      | .ok mutation =>
+          { status := .ACCEPTED
+            rejectReason := none
+            explanation := {
+              code := .OFFSET_AUTHORIZED
+              transition := some .OFFSET_AUTHORIZED
+              rejectReason := none
+              unresolvedRequirement := none
+              claimId := some request.command.claimId
+              actionId := some request.command.actionId
+              inputEvaluationId := some request.command.evaluationId
+              expectedRevision := some request.command.expectedRevision
+              resultingRevision := some mutation.resultingResult.afterRevision }
+            actionId := some request.command.actionId
+            determinationId := some ("determination:" ++ request.command.actionId)
+            mutation := some mutation }
+
 /-- The case found after the upsert and the status update is the requested case with the
     new status and time. -/
 private theorem correctionCase_found_eq {cases : List CaseRecord}
@@ -960,6 +1263,49 @@ private theorem correctionCase_found_eq {cases : List CaseRecord}
   obtain ⟨hMem, hId⟩ := findCase_some hFound
   obtain ⟨original, hOriginalMem, rfl⟩ := List.mem_map.1 hMem
   rw [upsertCorrectionCase_sameId hOriginalMem hId]
+
+/-- The case `buildAuthorized` finds: a row of the updated cases with the new status and time,
+    and, when the upsert inserted it, the requested case. -/
+theorem offsetCase_found {cases : List CaseRecord} {requested record : CaseRecord}
+    {status : CaseStatus} {updatedAt : Nat}
+    (hFound : findCase (updateAllCaseStatus (upsertOffsetCase cases requested).1 status updatedAt)
+      requested.caseId = some record) :
+    record ∈ updateAllCaseStatus (upsertOffsetCase cases requested).1 status updatedAt ∧
+      record.caseId = requested.caseId ∧ record.status = status ∧ record.updatedAt = updatedAt ∧
+      ((upsertOffsetCase cases requested).2 = true → record.reason = requested.reason ∧
+        record.nextActionOwner = requested.nextActionOwner ∧ record.dueAt = requested.dueAt) ∧
+      ((upsertOffsetCase cases requested).2 = false → (record.reason = requested.reason ∧
+        record.nextActionOwner = requested.nextActionOwner ∧ record.dueAt = requested.dueAt) ∨
+        record.reason = "CORRECTION_REQUIRED") := by
+  obtain ⟨hMem, hId⟩ := findCase_some hFound
+  obtain ⟨original, -, rfl⟩ := List.mem_map.1 hMem
+  refine ⟨hMem, hId, rfl, rfl, fun hInserted => ?_, fun _ => ?_⟩
+  rotate_left
+  · unfold upsertOffsetCase at hFound
+    cases hF : findCase cases requested.caseId with
+    | none =>
+      simp only [hF] at hFound
+      rw [correctionCase_found_eq hFound]
+      exact Or.inl ⟨rfl, rfl, rfl⟩
+    | some existing =>
+      simp only [hF] at hFound
+      by_cases hK : existing.status = .CORRECTION_REQUIRED ∧ existing.reason = "CORRECTION_REQUIRED"
+      · rw [if_pos hK] at hFound
+        unfold findCase updateAllCaseStatus at hFound
+        unfold findCase at hF
+        simp only [List.find?_map, Function.comp_def] at hFound
+        rw [hF] at hFound
+        have hR := congrArg (Option.map CaseRecord.reason) hFound
+        exact Or.inr (by simpa [hK.2] using hR.symm)
+      · rw [if_neg hK] at hFound
+        rw [correctionCase_found_eq hFound]
+        exact Or.inl ⟨rfl, rfl, rfl⟩
+  have hUpsert : upsertOffsetCase cases requested = upsertCorrectionCase cases requested := by
+    unfold upsertOffsetCase at hInserted ⊢
+    split at hInserted <;> (try split at hInserted) <;> simp_all
+  rw [hUpsert] at hFound
+  rw [correctionCase_found_eq hFound]
+  exact ⟨rfl, rfl, rfl⟩
 theorem ite_error_ok {c : Prop} [Decidable c] {ε α} {e : ε} {X : Except ε α} {r : α}
     (h : (if c then Except.error e else X) = Except.ok r) : ¬ c ∧ X = Except.ok r := by
   split at h <;> simp_all
@@ -1060,6 +1406,210 @@ private theorem no_match_observed {n : Nat} {r : Option String}
 /-- A ready preflight has passed the live-mode, well-formedness, authority and actor checks, and
     found the claim still claimed and covered by receipt evidence, against an unconsumed evaluation
     whose id, action id and determination id nothing has used. -/
+theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
+    {request : CorrectionTransitionRequest} {currentResult : FinancialResult} {claim : Claim}
+    {a b paid c}
+    (h : preflightOffsetDecision decision request = .ok
+      (.ready currentResult claim a b paid c)) :
+    authorityDigestOf request.currentInput.authority = request.command.currentAuthorityDigest ∧
+      request.currentInput.pack.approvedAt ≤ request.command.decisionAtMs ∧
+      request.command.decisionAtMs ≤ request.command.ownerNowMs ∧
+    request.currentInput.context.mode ≠ .SHADOW ∧
+      financialInputWellFormed request.currentInput = true ∧
+      sameAuthority request.currentInput.authority request.command.currentAuthorityId
+        request.command.currentAuthorityEpoch request.command.currentAuthorityDigest = true ∧
+      authorityActorBindingWellFormed request.currentInput.authority request.command.actorId
+        request.command.actorRole = true ∧
+      request.currentInput.pack.authorizedRoles.contains request.command.actorRole = true ∧
+      findClaim request.currentInput.claims request.command.claimId = some claim ∧
+      claim.status = .CLAIMED ∧
+      request.command.evaluationId = "evaluation:" ++ request.currentInput.context.obligationId ++
+        ":r" ++ toString request.command.expectedRevision ∧
+      request.currentReceipt.evidenceBindings.any
+        (fun binding => binding.evidenceId = claim.evidenceId) = true ∧
+      request.currentReceipt.result.evaluatedAtMs ≤ request.command.decisionAtMs ∧
+      (∀ x ∈ request.currentInput.actions, x.actionId ≠ request.command.actionId) ∧
+      (request.command.queryObservations.actionId.predicate = .ACTION_ID ∧
+        request.command.queryObservations.actionId.subject = request.command.actionId ∧
+        request.command.queryObservations.actionId.complete = true ∧
+        request.command.queryObservations.actionId.matchCount = 0 ∧
+        request.command.queryObservations.actionId.resultIdentity = none) ∧
+      (request.command.queryObservations.determinationId.predicate = .DETERMINATION_ID ∧
+        request.command.queryObservations.determinationId.subject =
+          "determination:" ++ request.command.actionId ∧
+        request.command.queryObservations.determinationId.complete = true ∧
+        request.command.queryObservations.determinationId.matchCount = 0 ∧
+        request.command.queryObservations.determinationId.resultIdentity = none) ∧
+      (request.command.queryObservations.evaluationConsumed.predicate = .EVALUATION_CONSUMED ∧
+        request.command.queryObservations.evaluationConsumed.subject = request.command.evaluationId ∧
+        request.command.queryObservations.evaluationConsumed.complete = true ∧
+        request.command.queryObservations.evaluationConsumed.matchCount = 0 ∧
+        request.command.queryObservations.evaluationConsumed.resultIdentity = none) ∧
+      correctionQueryObservationsAt request.command.queryObservations
+        request.command.currentEventSequence request.command.previousHistoryHead = true ∧
+      (decision = .OFFSET_AUTHORIZED →
+        request.command.decisionAtMs ≤ request.currentInput.obligation.dueAt →
+        max request.command.decisionAtMs request.command.ownerNowMs ≤
+          request.currentInput.obligation.dueAt) := by
+  delta preflightOffsetDecision at h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  obtain ⟨hQ, h⟩ := ite_error_ok h
+  generalize request.command.actionLookup = L at h
+  cases L
+  · obtain ⟨hA, h⟩ := ite_error_ok h
+    obtain ⟨hD, h⟩ := ite_error_ok h
+    obtain ⟨hShadow, h⟩ := ite_error_ok h
+    obtain ⟨hWf, h⟩ := ite_error_ok h
+    generalize optionWithProof (derivedCorrectionPaid request.currentInput.payments
+      request.currentInput.actions request.command.paymentLinks) = P at h
+    cases P with
+    | none => cases h
+    | some paid' =>
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨hAuth, h⟩ := ite_error_ok h
+      obtain ⟨hDig, h⟩ := ite_error_ok h
+      obtain ⟨hActor, h⟩ := ite_error_ok h
+      obtain ⟨hPack, h⟩ := ite_error_ok h
+      generalize hCl : findClaim request.currentInput.claims request.command.claimId = Cl at h
+      cases Cl with
+      | none => cases h
+      | some claim' =>
+        obtain ⟨hStatus, h⟩ := ite_error_ok h
+        obtain ⟨-, h⟩ := ite_error_ok h
+        rcases dite_cases h with ⟨hI, h⟩ | ⟨-, h⟩
+        · generalize evaluateWithProof request.currentInput = E at h
+          cases E with
+          | none => cases h
+          | some certificate =>
+            obtain ⟨hNone, h⟩ := ite_error_ok h
+            obtain ⟨hBound, h⟩ := ite_error_ok h
+            obtain ⟨hCover, h⟩ := ite_error_ok h
+            obtain ⟨hChron, h⟩ := ite_error_ok h
+            obtain ⟨hNow, h⟩ := ite_error_ok h
+            obtain ⟨hBack, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨hConsumed, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨hFresh, h⟩ := ite_error_ok h
+            cases Except.ok.inj h
+            have hQ' : querySetCompleteAtCommand request.command = true := by simpa using hQ
+            unfold querySetCompleteAtCommand querySubjectsMatch at hQ'
+            simp only [Bool.and_eq_true, decide_eq_true_eq] at hQ'
+            obtain ⟨⟨⟨⟨⟨-, qa⟩, qd⟩, qc⟩, ⟨⟨⟨⟨⟨pa, sa⟩, pd⟩, sd⟩, pc⟩, sc⟩⟩, qat⟩ := hQ'
+            have hB : currentReceiptBound request certificate.val = true := by simpa using hBound
+            have hDg : request.currentReceipt.inputSnapshotDigest.isSome = true := by
+              cases hD : request.currentReceipt.inputSnapshotDigest with
+              | none => exact absurd (by rw [hD]; try rfl) hNone
+              | some d => rfl
+            obtain ⟨d, hDd⟩ := Option.isSome_iff_exists.1 hDg
+            delta currentReceiptBound at hB
+            dsimp only at hB
+            rw [hDd] at hB
+            simp only [Bool.and_eq_true, decide_eq_true_eq] at hB
+            obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨-, -⟩, -⟩, hEv⟩, -⟩, -⟩, -⟩, -⟩, -⟩, -⟩ := hB
+            have hAct : authorityActorBindingWellFormed request.currentInput.authority
+                  request.command.actorId request.command.actorRole = true ∧
+                request.currentInput.pack.authorizedRoles.contains request.command.actorRole = true := by
+              simpa using hActor
+            obtain ⟨hA0, hA1⟩ := no_match_observed hA
+            obtain ⟨hD0, hD1⟩ := no_match_observed hD
+            obtain ⟨hC0, hC1⟩ := no_match_observed hConsumed
+            refine ⟨by simpa using hDig, by omega, by omega, hShadow, by simpa using hWf, by simpa using hAuth, hAct.1, hAct.2,
+              by first | rfl | assumption, by simpa using hStatus, hEv, by simpa using hCover,
+              by omega, ?_, ⟨pa, sa, qa, hA0, hA1⟩, ⟨pd, sd, qd, hD0, hD1⟩,
+              ⟨pc, sc, qc, hC0, hC1⟩, qat,
+              fun hd hle => Nat.not_lt.1 fun hlt => hBack ⟨hd, hle, hlt⟩⟩
+            intro x hx hEq
+            apply hFresh
+            simp only [Bool.or_eq_true, decide_eq_true_eq]
+            exact Or.inl (List.mem_map.2 ⟨x, hx, hEq⟩)
+        · cases h
+  · exfalso
+    rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩
+    · rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩ <;> cases h
+    · cases h
+  · cases h
+
+/-- M1: a ready authorization preflight and the correction requests still open never claim more
+    than the shortfall. -/
+theorem preflightOffsetDecision_ready_within_shortfall {decision : DeterminationDecision}
+    {request : CorrectionTransitionRequest} {currentResult : FinancialResult} {claim : Claim}
+    {a b paid c}
+    (h : preflightOffsetDecision decision request = .ok
+      (.ready currentResult claim a b paid c)) :
+    decision = .OFFSET_AUTHORIZED → claim.amountCents +
+      outstandingCorrectionCents paid request.currentInput.actions ≤ currentResult.shortfallCents := by
+  delta preflightOffsetDecision at h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  generalize request.command.actionLookup = L at h
+  cases L
+  · obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    generalize optionWithProof (derivedCorrectionPaid request.currentInput.payments
+      request.currentInput.actions request.command.paymentLinks) = P at h
+    cases P with
+    | none => cases h
+    | some paid' =>
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      generalize findClaim request.currentInput.claims request.command.claimId = Cl at h
+      cases Cl with
+      | none => cases h
+      | some claim' =>
+        obtain ⟨-, h⟩ := ite_error_ok h
+        obtain ⟨-, h⟩ := ite_error_ok h
+        rcases dite_cases h with ⟨hI, h⟩ | ⟨-, h⟩
+        · generalize evaluateWithProof request.currentInput = E at h
+          cases E with
+          | none => cases h
+          | some certificate =>
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨hWithin, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            cases Except.ok.inj h
+            exact fun hd => Nat.not_lt.1 fun hlt => hWithin ⟨hd, hlt⟩
+        · cases h
+  · exfalso
+    rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩
+    · rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩ <;> cases h
+    · cases h
+  · cases h
+
+
+theorem preflightCorrectionTransition_shared {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {a b paid c d}
+    (h : preflightCorrectionTransition request = .ok
+      (.ready currentResult claim a b paid c d)) :
+    preflightOffsetDecision .OFFSET_REJECTED_CORRECTION_AUTHORIZED request =
+      .ok (.ready currentResult claim a b paid c) := by
+  delta preflightCorrectionTransition at h
+  obtain ⟨r, hr, h⟩ := bind_ok h
+  cases r with
+  | duplicate => cases h
+  | ready cr cl a' b' p c' =>
+    obtain ⟨-, h⟩ := ite_error_ok h
+    dsimp only at h
+    split at h
+    · cases Except.ok.inj h
+      exact hr
+    · cases h
+
+/-- A ready preflight has passed the live-mode, well-formedness, authority and actor checks, and
+    found the claim still claimed and covered by receipt evidence, against an unconsumed evaluation
+    whose id, action id and determination id nothing has used. -/
 theorem preflightCorrectionTransition_ready_facts {request : CorrectionTransitionRequest}
     {currentResult : FinancialResult} {claim : Claim} {a b paid c d}
     (h : preflightCorrectionTransition request = .ok
@@ -1097,81 +1647,68 @@ theorem preflightCorrectionTransition_ready_facts {request : CorrectionTransitio
         request.command.queryObservations.evaluationConsumed.resultIdentity = none) ∧
       correctionQueryObservationsAt request.command.queryObservations
         request.command.currentEventSequence request.command.previousHistoryHead = true := by
-  delta preflightCorrectionTransition at h
-  obtain ⟨-, h⟩ := ite_error_ok h
-  obtain ⟨hQ, h⟩ := ite_error_ok h
-  generalize request.command.actionLookup = L at h
-  cases L
-  · obtain ⟨hA, h⟩ := ite_error_ok h
-    obtain ⟨hD, h⟩ := ite_error_ok h
-    obtain ⟨hShadow, h⟩ := ite_error_ok h
-    obtain ⟨hWf, h⟩ := ite_error_ok h
-    generalize optionWithProof (derivedCorrectionPaid request.currentInput.payments
-      request.currentInput.actions request.command.paymentLinks) = P at h
-    cases P with
+  obtain ⟨a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, -⟩ :=
+    (preflightOffsetDecision_ready_facts (preflightCorrectionTransition_shared h)).2.2.2
+  exact ⟨a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15⟩
+
+end
+
+section
+attribute [local irreducible] findCase
+
+/-- What `buildAuthorized` writes: the claim flips to AUTHORIZED, the determination and action carry
+    the whole claim, and the money-bearing frame is unchanged. -/
+theorem buildAuthorized_spec {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {paid : List CorrectionPaid}
+    {mutation : CorrectionMutation}
+    (h : buildAuthorized request currentResult claim paid = .ok mutation) :
+    mutation.dependencies.claimBefore = claim ∧
+      mutation.determination.determinationId = "determination:" ++ request.command.actionId ∧
+      mutation.determination.decision = .OFFSET_AUTHORIZED ∧
+      mutation.determination.actorId = request.command.actorId ∧
+      mutation.determination.actorRole = request.command.actorRole ∧
+      mutation.determination.authorityId = request.currentInput.authority.authorityId ∧
+      mutation.determination.authorityEpoch = request.currentInput.authority.epoch ∧
+      mutation.determination.authorityDigest = request.currentInput.authority.digest ∧
+      mutation.determination.decidedAt = request.command.decisionAtMs ∧
+      mutation.determination.amountCents = claim.amountCents ∧
+      mutation.action.kind = "OFFSET_AUTHORIZATION" ∧
+      mutation.action.actionId = request.command.actionId ∧
+      mutation.action.amountCents = claim.amountCents ∧
+      mutation.action.revision = request.command.expectedRevision + 1 ∧
+      mutation.action.payloadDigest = correctionActionPayloadDigest
+        (offsetActionPayload "OFFSET_AUTHORIZATION" request mutation.determination.determinationId
+          mutation.action.revision mutation.action.amountCents) ∧
+      mutation.resultingInput.claims = request.currentInput.claims.map (fun existing =>
+        if existing.claimId = request.command.claimId then { claim with status := .AUTHORIZED }
+        else existing) ∧
+      mutation.resultingInput.payments = request.currentInput.payments ∧
+      mutation.resultingInput.obligation = request.currentInput.obligation ∧
+      evaluate mutation.resultingInput = some mutation.resultingResult ∧
+      mutation.action.createdAt = max request.command.decisionAtMs request.command.ownerNowMs := by
+  delta buildAuthorized at h
+  generalize request.currentReceipt.inputSnapshotDigest = D at h
+  cases D with
+  | none => cases h
+  | some digest =>
+    dsimp only at h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    generalize hE : evaluate _ = E at h
+    cases E with
     | none => cases h
-    | some paid' =>
+    | some provisionalResult =>
+      obtain ⟨hWf, h⟩ := ite_error_ok h
       obtain ⟨-, h⟩ := ite_error_ok h
-      obtain ⟨hAuth, h⟩ := ite_error_ok h
-      obtain ⟨hActor, h⟩ := ite_error_ok h
-      generalize hCl : findClaim request.currentInput.claims request.command.claimId = Cl at h
-      cases Cl with
+      generalize findCase _ _ = C at h
+      cases C with
       | none => cases h
-      | some claim' =>
-        obtain ⟨hStatus, h⟩ := ite_error_ok h
+      | some updatedCase =>
         obtain ⟨-, h⟩ := ite_error_ok h
-        rcases dite_cases h with ⟨hI, h⟩ | ⟨-, h⟩
-        · generalize evaluateWithProof request.currentInput = E at h
-          cases E with
-          | none => cases h
-          | some certificate =>
-            obtain ⟨hNone, h⟩ := ite_error_ok h
-            obtain ⟨hBound, h⟩ := ite_error_ok h
-            obtain ⟨hCover, h⟩ := ite_error_ok h
-            obtain ⟨hChron, h⟩ := ite_error_ok h
-            obtain ⟨hConsumed, h⟩ := ite_error_ok h
-            obtain ⟨-, h⟩ := ite_error_ok h
-            obtain ⟨hFresh, h⟩ := ite_error_ok h
-            obtain ⟨-, h⟩ := ite_error_ok h
-            rcases dite_cases h with ⟨hR, h⟩ | ⟨-, h⟩
-            · cases Except.ok.inj h
-              have hQ' : querySetCompleteAtCommand request.command = true := by simpa using hQ
-              unfold querySetCompleteAtCommand querySubjectsMatch at hQ'
-              simp only [Bool.and_eq_true, decide_eq_true_eq] at hQ'
-              obtain ⟨⟨⟨⟨⟨-, qa⟩, qd⟩, qc⟩, ⟨⟨⟨⟨⟨pa, sa⟩, pd⟩, sd⟩, pc⟩, sc⟩⟩, qat⟩ := hQ'
-              have hB : currentReceiptBound request certificate.val = true := by simpa using hBound
-              have hDg : request.currentReceipt.inputSnapshotDigest.isSome = true := by
-                cases hD : request.currentReceipt.inputSnapshotDigest with
-                | none => exact absurd (by rw [hD]; try rfl) hNone
-                | some d => rfl
-              obtain ⟨d, hDd⟩ := Option.isSome_iff_exists.1 hDg
-              delta currentReceiptBound at hB
-              dsimp only at hB
-              rw [hDd] at hB
-              simp only [Bool.and_eq_true, decide_eq_true_eq] at hB
-              obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨-, -⟩, -⟩, hEv⟩, -⟩, -⟩, -⟩, -⟩, -⟩, -⟩ := hB
-              have hAct : authorityActorBindingWellFormed request.currentInput.authority
-                    request.command.actorId request.command.actorRole = true ∧
-                  request.currentInput.pack.authorizedRoles.contains request.command.actorRole = true := by
-                simpa using hActor
-              obtain ⟨hA0, hA1⟩ := no_match_observed hA
-              obtain ⟨hD0, hD1⟩ := no_match_observed hD
-              obtain ⟨hC0, hC1⟩ := no_match_observed hConsumed
-              refine ⟨hShadow, by simpa using hWf, by simpa using hAuth, hAct.1, hAct.2,
-                by first | rfl | assumption, by simpa using hStatus, hEv, by simpa using hCover,
-                by omega, ?_, ⟨pa, sa, qa, hA0, hA1⟩, ⟨pd, sd, qd, hD0, hD1⟩,
-                ⟨pc, sc, qc, hC0, hC1⟩, qat⟩
-              intro x hx hEq
-              apply hFresh
-              simp only [Bool.or_eq_true, decide_eq_true_eq]
-              exact Or.inl (List.mem_map.2 ⟨x, hx, hEq⟩)
-            · cases h
-        · cases h
-  · exfalso
-    rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩
-    · rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩ <;> cases h
-    · cases h
-  · cases h
+        cases Except.ok.inj h
+        have hF := evaluate_after_case_status_update_fixedPoint _ provisionalResult
+          (max request.command.decisionAtMs request.command.ownerNowMs) hE (by simpa using hWf)
+        exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hF, rfl⟩
 
 end
 

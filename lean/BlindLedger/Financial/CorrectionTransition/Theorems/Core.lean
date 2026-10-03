@@ -333,9 +333,117 @@ theorem applyCorrectionTransition_resultWellFormed (bytes : Bytes)
         cases links
         unfold resultWellFormed
         simp only [Bool.and_eq_true, decide_eq_true_eq, timeWellFormed, revisionWellFormed,
-          digestWellFormed]
+          digestWellFormed, reduceCtorEq, ↓reduceIte, decide_false, Bool.false_and, Bool.or_false,
+          Bool.false_or]
         repeat' apply And.intro
         all_goals first | assumption | rfl | grind
+
+private theorem case_wf {input : FinancialInput} {record : CaseRecord}
+    (h : financialInputWellFormed input = true) (hMem : record ∈ input.cases) :
+    caseWellFormed input record = true := by
+  unfold financialInputWellFormed at h
+  simp only [Bool.and_eq_true] at h
+  exact List.all_eq_true.1 (by grind) record hMem
+
+set_option maxHeartbeats 2000000 in
+/-- N2a for BLFOFA01: a request that decodes always produces a well-formed authorize result. A kept
+    case's reason and owner are well-formed because the case is a row of the resulting input. -/
+theorem applyOffsetAuthorization_resultWellFormed (bytes : Bytes)
+    (request : CorrectionTransitionRequest)
+    (hDecode : decodeCorrectionTransitionRequest bytes = some request) :
+    resultWellFormed (applyOffsetAuthorization request) = true := by
+  obtain ⟨hCmd, hCur, hRec⟩ := request_wellFormed hDecode
+  unfold applyOffsetAuthorization
+  cases hP : preflightOffsetDecision .OFFSET_AUTHORIZED request with
+  | error r => exact resultWellFormed_reject _ r
+  | ok p =>
+    cases p with
+    | duplicate =>
+      simpa [duplicateOf, duplicate, resultWellFormed] using resultWellFormed_duplicate hCmd
+    | ready cr claim a b paid c =>
+      dsimp only
+      cases hB : buildAuthorized request cr claim paid with
+      | error r => exact resultWellFormed_reject _ r
+      | ok mutation =>
+        dsimp only
+        obtain ⟨-, -, -, -, -, -, -, -, hFind, hStatus, hEvId, hCover, hChron, hFresh, hQA, hQD, hQC,
+          hAt, -⟩ := preflightOffsetDecision_ready_facts hP
+        have hShortMax : cr.shortfallCents ≤ maxCents := by
+          have h := evaluate_resultWellFormed b
+          unfold financialResultWellFormed at h
+          simp only [Bool.and_eq_true, amountWellFormed, decide_eq_true_eq] at h
+          grind
+        have hRecTime : request.currentReceipt.result.evaluatedAtMs ≤ maxTime := by
+          unfold evaluationReceiptWellFormed ownerEvaluationResultWellFormed at hRec
+          simp only [Bool.and_eq_true, decide_eq_true_eq] at hRec
+          grind
+        have hEvAll0 : request.currentReceipt.evidenceBindings.all (fun binding =>
+            boundedPackageId binding.evidenceId && packageDigestWellFormed binding.recordDigest) =
+            true := by
+          unfold evaluationReceiptWellFormed at hRec
+          simp only [Bool.and_eq_true] at hRec
+          grind
+        have hEvAll : request.currentReceipt.evidenceBindings.all (fun binding =>
+            idWellFormed binding.evidenceId && digestWellFormed binding.recordDigest) = true := hEvAll0
+        have hPaidWf := (derivedCorrectionPaid_sound _ _ _ _ c).1
+        obtain ⟨hClaims, -, -⟩ := wf_parts hCur
+        have hClaimWf := hClaims claim (findClaim_mem _ _ _ hFind).1
+        have hClaimId := (findClaim_mem _ _ _ hFind).2
+        have hAny : (request.currentInput.claims.map (fun existing =>
+            if existing.claimId = request.command.claimId then { claim with status := .AUTHORIZED }
+            else existing)).any (fun x => decide (x = { claim with status := .AUTHORIZED })) = true := by
+          rw [List.any_eq_true]
+          exact ⟨_, List.mem_map.2 ⟨claim, (findClaim_mem _ _ _ hFind).1, rfl⟩, by simp [hClaimId]⟩
+        delta buildAuthorized at hB
+        generalize hD : request.currentReceipt.inputSnapshotDigest = D at hB
+        cases D with
+        | none => cases hB
+        | some digest =>
+          have hRecDigest : digest.length = digestBytes := by
+            unfold evaluationReceiptWellFormed at hRec
+            simp only [Bool.and_eq_true, hD, optionalPackageDigestWellFormed, packageDigestWellFormed,
+              decide_eq_true_eq] at hRec
+            grind
+          dsimp only at hB
+          obtain ⟨-, hB⟩ := ite_error_ok hB
+          obtain ⟨-, hB⟩ := ite_error_ok hB
+          generalize hE : evaluate _ = E at hB
+          cases E with
+          | none => cases hB
+          | some pr =>
+            obtain ⟨hWf, hB⟩ := ite_error_ok hB
+            obtain ⟨hRev, hB⟩ := ite_error_ok hB
+            split at hB
+            · rename_i updatedCase hC
+              obtain ⟨-, hB⟩ := ite_error_ok hB
+              cases Except.ok.inj hB
+              simp only [Bool.not_eq_true', Bool.not_eq_false] at hWf
+              have hF := evaluate_after_case_status_update_fixedPoint _ pr _ hE hWf
+              obtain ⟨hFr1, hFr2, hFr3, hFr4, hFr5, hFr6, hFr7, hFr8⟩ := evaluate_frame hF
+              have hRRwf := evaluate_resultWellFormed hF
+              obtain ⟨-, hDets, hActs⟩ := wf_parts hWf
+              have hDetWf := hDets _ ((insertDeterminationSorted_perm _ _).mem_iff.2 List.mem_cons_self)
+              have hActWf := hActs _ ((insertActionSorted_perm _ _).mem_iff.2 List.mem_cons_self)
+              obtain ⟨hMem, hCid, hCst, hCupd, hIns, hKept⟩ := offsetCase_found hC
+              have hCaseWf := case_wf hWf hMem
+              unfold commandWellFormed at hCmd
+              unfold determinationWellFormed at hDetWf
+              unfold actionWellFormed at hActWf
+              unfold claimWellFormed at hClaimWf
+              unfold caseWellFormed at hCaseWf
+              simp only [Bool.and_eq_true, List.all_cons, List.all_nil, Bool.and_true,
+                decide_eq_true_eq, positiveAmountWellFormed, amountWellFormed, timeWellFormed,
+                revisionWellFormed, digestWellFormed] at hCmd hDetWf hActWf hClaimWf hCaseWf
+              clear hRec hCur hDecode hActs hDets hClaims hB hP hE hMem hC hEvAll0
+              generalize (upsertOffsetCase _ _).2 = inserted at hIns hKept ⊢
+              cases inserted <;> (try rcases hKept rfl with ⟨hR1, hR2, hR3⟩ | hR1)
+              all_goals
+                unfold resultWellFormed
+                simp only [Bool.and_eq_true, decide_eq_true_eq, timeWellFormed, revisionWellFormed,
+                  digestWellFormed, ↓reduceIte, decide_true, Bool.true_or, Bool.true_and, Bool.or_eq_true]
+                repeat' apply And.intro
+                all_goals first | assumption | rfl | grind
+            · cases hB
 
 /-! N2 sizes. Every string the wire carries outside the named parts is at most 200 bytes. -/
 
@@ -398,6 +506,13 @@ private theorem estr_le {s : String} (h : s.utf8ByteSize ≤ 200) : (encodeStrin
 
 private theorem sz_id {s : String} (h : idWellFormed s = true) : (encodeString s).length ≤ 202 :=
   estr_le (Nat.le_trans (id_size h) (by omega))
+
+private theorem sz_role {s : String} (h : roleWellFormed s = true) : (encodeString s).length ≤ 202 := by
+  unfold roleWellFormed tokenWellFormed at h
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+  have hLen := h.1.2
+  have := ulen s
+  exact estr_le (by omega)
 
 private theorem sz_lit (s : String) (h : s.toList.length ≤ 50) : (encodeString s).length ≤ 202 :=
   estr_le (Nat.le_trans (lit_size s 50 h) (by omega))
@@ -578,13 +693,19 @@ private theorem mut_facts {res : CorrectionTransitionResult} (hWf : resultWellFo
       have h := Option.some.inj (c37.symm.trans hs)
       subst h
       exact Nat.le_trans (id_size c2) (by omega)
-    · rw [c38]; exact sz_lit _ (by first | decide | simp)
+    · rw [c38]; split <;> exact sz_lit _ (by first | decide | simp)
     · rw [c43, ctx_parts c8]; exact sz_lit _ (by first | decide | simp)
     · exact dig_len c35
     · rw [c64]; exact estr_le (sz_case hOid)
     · rw [c65]; exact sz_id hOid
-    · rw [c66]; exact sz_lit _ (by first | decide | simp)
-    · rw [c67]; exact sz_lit _ (by first | decide | simp)
+    · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at c66
+      rcases c66 with h | h
+      · rw [h]; split <;> exact sz_lit _ (by first | decide | simp)
+      · rw [h.2]; exact sz_lit _ (by first | decide | simp)
+    · simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at c67
+      rcases c67 with h | h
+      · rw [h]; exact sz_lit _ (by first | decide | simp)
+      · exact sz_role h.2
     · rw [c71]; exact sz_lit _ (by first | decide | simp)
     · rw [c47]; exact sz_id c1
     · refine eopt_le fun s hs => ?_
@@ -595,7 +716,7 @@ private theorem mut_facts {res : CorrectionTransitionResult} (hWf : resultWellFo
       unfold digestBytes at h
       omega
     · rw [c56]; exact sz_id hOid
-    · rw [c57]; exact sz_lit _ (by first | decide | simp)
+    · rw [c57]; split <;> exact sz_lit _ (by first | decide | simp)
   · intro m hm
     exact nomatch hm.symm.trans ‹res.mutation = none›
   · intro m hm

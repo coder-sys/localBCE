@@ -64,9 +64,9 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; a writing Owner u
 PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind": ("financial_events", ("kind", "aggregate_type"))}
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "8EB77363E6E89FD63F0646028D3CD2B23C99CF270AF7644CFFAE1FDE769D1080"  # the evaluator worker
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309"  # the evaluator worker
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "d651234edd68de2dc2aded76056f9f7c786a13cfb3087436bc9c514da001ea3d"
+RETIRED_PINS_SHA256 = "cd1eb139a7d25828779207937290da258c8753af5dad1ebcf255596427ea64a6"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -76,6 +76,7 @@ _CORRECTION_AMOUNT_RULES = {
     "b2-v1": lambda claim, shortfall, unpaid: min(claim, shortfall),  # 88D8: the unpaid balance
     "h1-v1": lambda claim, shortfall, unpaid: min(claim, max(shortfall - unpaid, 0)),  # current: not yet requested
 }
+_ENGINES: dict[tuple[object, ...], dict[str, tuple[int, str]]] = {}  # verified once per (path, pins, size, mtime): per-op work must not grow with re-pins
 
 
 def correction_engines() -> dict[str, tuple[int, str]]:
@@ -83,9 +84,13 @@ def correction_engines() -> dict[str, tuple[int, str]]:
     valid for history, never for new work; generation is registry order and the current pin is newest
     (append-only, digest-pinned; line = sha, date, retiring commit, rule, reason). A malformed registry refuses."""
     try:
+        st = RETIRED_PINS_PATH.stat()
+        key: tuple[object, ...] | None = (RETIRED_PINS_PATH, RETIRED_PINS_SHA256, CORRECTION_TRANSITION_ARTIFACT_SHA256, st.st_size, st.st_mtime_ns)
+        if key in _ENGINES:
+            return dict(_ENGINES[key])
         registry = RETIRED_PINS_PATH.read_bytes()
     except OSError:
-        registry = b""
+        key, registry = None, b""
     if hashlib.sha256(registry).hexdigest() != RETIRED_PINS_SHA256:
         _fail("history:correction-retired-pins")
     engines: dict[str, tuple[int, str]] = {}
@@ -98,6 +103,8 @@ def correction_engines() -> dict[str, tuple[int, str]]:
     except ValueError:
         _fail("history:correction-retired-pins")
     engines[CORRECTION_TRANSITION_ARTIFACT_SHA256] = (len(engines), "h1-v1")
+    if key:
+        _ENGINES[key] = dict(engines)
     return engines
 
 
@@ -2785,10 +2792,7 @@ def _verify_determinations(
         if input_result_digest != bytes(input_evaluation["result_digest"]):
             _fail("determination:evaluation-digest")
         supporting = _evaluation_bindings_json(row["supporting_evidence_json"], "determination:evidence")
-        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")):
-            _fail("determination:evidence-binding")
-        supporting_ids = [binding["evidence_id"] for binding in supporting]
-        if str(claims[str(claim_id)]["evidence_id"]) not in supporting_ids:
+        if claim_id is None or len(supporting) != len(_evidence_ids_json(input_evaluation["evidence_ids_json"], "determination:evaluation-evidence")) or str(claims[str(claim_id)]["evidence_id"]) not in [binding["evidence_id"] for binding in supporting]:
             _fail("determination:evidence-binding")
         for binding in supporting:
             if binding["evidence_id"] not in evidence or binding["record_digest"] != bytes(evidence[binding["evidence_id"]]["record_digest"]).hex().upper():
@@ -2797,6 +2801,8 @@ def _verify_determinations(
         if amount != claim["amount_cents"] or (decision == "OFFSET_AUTHORIZED" and claim["status"] != "AUTHORIZED") or (decision == "OFFSET_REJECTED_CORRECTION_AUTHORIZED" and claim["status"] != "REJECTED"):
             _fail("determination:claim-binding")
         decided = _time(row["decided_at_ms"], "determination:time")
+        if decided < _time(pack["approved_at_ms"], "pack:approved"):  # no authority before the pack's approval (Lean preflightOffsetDecision)
+            _fail("determination:pack-not-approved")
         if int(input_evaluation["evaluated_at_ms"]) > decided:
             _fail("determination:evaluation-chronology")
         kind = "OFFSET_AUTHORIZATION" if decision == "OFFSET_AUTHORIZED" else "CORRECTION_PAYMENT_REQUEST"
@@ -2896,14 +2902,16 @@ def _verify_actions(
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
         amount = requestable = claims[str(claim_id)]["amount_cents"]
+        shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=kind == "CORRECTION_PAYMENT_REQUEST")
+        earlier = requests.setdefault(obligation_id, {})
+        unpaid = sum(max(cents - paid_at(ref, revision), 0) for ref, cents in earlier.items())
         if kind == "CORRECTION_PAYMENT_REQUEST":  # the input evaluation's unpaid balance, by the deciding engine's rule
             if decided.get(action_id) != amount:
                 _fail("action:event-amount")  # the decision event records the rejected claim
-            shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True)
-            earlier = requests.setdefault(obligation_id, {})
-            unpaid = sum(max(cents - paid_at(ref, revision), 0) for ref, cents in earlier.items())
             requestable = max(shortfall - unpaid, 0)
             amount = earlier[action_id] = _CORRECTION_AMOUNT_RULES[engines.get(action_id, current)[1]](amount, shortfall, unpaid)
+        elif amount + unpaid > shortfall:  # M1: an authorization and the open requests claim no more than the input evaluation's shortfall
+            _fail("action:exceeds-shortfall")
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,
