@@ -48,6 +48,7 @@ class GateProducerError(RuntimeError):
 class ShardProducer:
     def __init__(self, path: Path, *, mark_path: Path, tenant_id: str, shard_id: int, epoch: int, handle: str,
                  root_pk: bytes, key_cert: bytes) -> None:
+        self.shard = shard_id
         self._who, self._epoch, self._handle, self._root_pk, self._cert, self._mark = (tenant_id, shard_id), epoch, handle, root_pk, key_cert, mark_path
         self._db = sqlite3.connect(path, timeout=0, isolation_level=None)
         try:
@@ -173,8 +174,11 @@ class ShardProducer:
         return b"".join(row[0] for row in self._db.execute("SELECT adds FROM batches WHERE signature IS NOT NULL ORDER BY id"))
 
     def sealed_frees(self) -> tuple[int, bytes, list[int]] | None:
-        """The newest batch's (idreg_n, registry head, free), sealed or open: the next registry reserve's ``sealed``."""
-        row = self._db.execute("SELECT idreg_n, header, free FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+        """The newest batch's (idreg_n, registry head, free): the next registry reserve's ``sealed``.  An open newest row
+        is refused (``unsealed_reservation``): only a reopen reseals or voids it, so no reserve settles or frees it."""
+        row = self._db.execute("SELECT idreg_n, header, free, signature FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+        if row and row[3] is None:
+            raise GateProducerError("unsealed_reservation")
         return row and (row[0], row[1][-64:], [int(i) for i in row[2].split(",") if i])
 
     def close(self) -> None:
