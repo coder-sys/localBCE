@@ -7,7 +7,8 @@ so a crash re-signs the same header at the same seq and never reuses a seq with 
 releases a signature only when Lean ``publishOk`` accepts it, and only a sealed batch is published.  Seriality is
 the store's: one SQLite file opened EXCLUSIVE, WAL, synchronous FULL.  A checked mark file outside the database
 (``right_rail_gate_mark``) records the last sealed (epoch, seq_to + 1, digest), so a restored older database is
-refused; an old unchecked mark file is refused as corrupt.  The state digest comes from the decide layer.
+refused; an old unchecked mark file is refused as corrupt.  The state digest and ``adds`` (the set rows the batch
+appended, Lean's bytes, never decoded here) come from the decide layer and are stored in the header's row.
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS batches(
   id INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, seq_from INTEGER NOT NULL, seq_to INTEGER NOT NULL,
   digest BLOB NOT NULL UNIQUE, header BLOB NOT NULL, state_digest BLOB NOT NULL, tokens BLOB NOT NULL,
-  signature BLOB, idreg_n INTEGER NOT NULL, free TEXT NOT NULL, UNIQUE(epoch, seq_from));
+  signature BLOB, idreg_n INTEGER NOT NULL, free TEXT NOT NULL, adds BLOB NOT NULL, UNIQUE(epoch, seq_from));
 CREATE TRIGGER IF NOT EXISTS batches_fixed BEFORE UPDATE OF id, epoch, seq_from, seq_to, digest, header,
-  state_digest, tokens, idreg_n, free ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+  state_digest, tokens, idreg_n, free, adds ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_seal BEFORE UPDATE OF signature ON batches
   WHEN OLD.signature IS NOT NULL OR NEW.signature IS NULL BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_void BEFORE DELETE ON batches
@@ -52,8 +53,8 @@ class ShardProducer:
             for pragma in ("locking_mode=EXCLUSIVE", "journal_mode=WAL", "synchronous=FULL"):
                 self._db.execute(f"PRAGMA {pragma}")
             columns = [column[1] for column in self._db.execute("PRAGMA table_info(batches)")]
-            if columns and "idreg_n" not in columns:
-                raise GateProducerError("store_version")  # a pre-registry store: refused, never migrated
+            if columns and "adds" not in columns:
+                raise GateProducerError("store_version")  # a pre-decide store: refused, never migrated
             self._db.executescript(_SCHEMA)
         except sqlite3.OperationalError as error:
             self._db.close()
@@ -116,17 +117,17 @@ class ShardProducer:
         return sealed
 
     def commit(self, program: str, leaves: Sequence[gate.TokenLeaf], *, state_digest: bytes, created_at: int,
-               idreg: tuple[int, bytes], free: Sequence[int]):
+               idreg: tuple[int, bytes], free: Sequence[int], adds: bytes):
         """One batch of decided leaves (one program) -> (checkpoint, signed checkpoint, tokens); ``idreg`` is the
-        registry's (n, head) after the batch's reserve and ``free`` the ids Lean says the batch leaves free; a
-        database error is ``store_unavailable``."""
+        registry's (n, head) after the batch's reserve and ``free`` the ids Lean says the batch leaves free (``adds``
+        its set rows); a database error is ``store_unavailable``."""
         try:
-            return self._commit(program, leaves, state_digest, created_at, idreg, free)
+            return self._commit(program, leaves, state_digest, created_at, idreg, free, adds)
         except sqlite3.Error as error:
             raise GateProducerError("store_unavailable") from error
 
     def _commit(self, program: str, leaves: Sequence[gate.TokenLeaf], state_digest: bytes, created_at: int,
-                idreg: tuple[int, bytes], free: Sequence[int]):
+                idreg: tuple[int, bytes], free: Sequence[int], adds: bytes):
         if not leaves:
             raise GateProducerError("empty_batch")
         if any((leaf.tenant_id, leaf.shard_id) != self._who for leaf in leaves):
@@ -145,9 +146,9 @@ class ShardProducer:
         header = gate.encode_checkpoint_header(checkpoint)
         framed = b"".join(signer.framed(gate.encode_token(token)) for token in tokens)
         digest = gate.checkpoint_digest(checkpoint)
-        self._db.execute("INSERT INTO batches(epoch, seq_from, seq_to, digest, header, state_digest, tokens, idreg_n, free) VALUES(?,?,?,?,?,?,?,?,?)",
+        self._db.execute("INSERT INTO batches(epoch, seq_from, seq_to, digest, header, state_digest, tokens, idreg_n, free, adds) VALUES(?,?,?,?,?,?,?,?,?,?)",
                          (self._epoch, checkpoint.seq_from, checkpoint.seq_to, digest, header, state_digest, framed, idreg[0],
-                          ",".join(map(str, free))))
+                          ",".join(map(str, free)), adds))
         sealed = self._seal(self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE digest=?", (digest,)).fetchone(), last)
         return checkpoint, gate.attach_signature(sealed[4], sealed[7]), tokens
 
@@ -160,6 +161,10 @@ class ShardProducer:
         """The last sealed checkpoint's state digest (None at the shard's genesis): the decide layer's anchor."""
         last = self._sealed()
         return last and last[5]
+
+    def sealed_adds(self) -> bytes:
+        """The sealed batches' ``adds`` in id order: the rows the decide layer folds onto genesis to reach ``anchor``."""
+        return b"".join(row[0] for row in self._db.execute("SELECT adds FROM batches WHERE signature IS NOT NULL ORDER BY id"))
 
     def sealed_frees(self) -> tuple[int, list[int]] | None:
         """The newest batch's (idreg_n, free), sealed or open: the next registry settle's ``sealed`` argument."""

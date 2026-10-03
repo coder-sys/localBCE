@@ -1,6 +1,6 @@
-"""Test-only multi-shard scenario harness (multi-shard-runtime-v1 section B).  One batch per shard is: settle frees from
-the shard's newest checkpoint row, reserve in the registry, ``gate_rules`` with the registry's ``owners`` answer, commit.
-It holds no policy: line outcomes and the ids to free come from the ``gate_rules`` output.  A crash is a child
+"""Test-only multi-shard scenario harness (multi-shard-runtime-v1 section B).  One batch per shard is the decide layer
+(``right_rail_gate_decide``: settle, reserve, ``gate_rules`` on the shard's verified sets), then commit.  It holds no
+policy beyond the leaf (a payment ALLOWs when all its lines do, as Lean's ``payOutcome``).  A crash is a child
 process that exits at a monkeypatched point.  Synthetic, non-PHI."""
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_decide as decider
 from app import right_rail_gate_idreg as idreg
 from app import right_rail_gate_producer as producer
 from tests import test_gate_rules_vectors as rules
@@ -25,6 +26,7 @@ for _row in (ROOT / "tests" / "gate_rules" / "shards_v1.vectors").read_text("utf
     if _row.startswith(("#", "case")):
         break
     _HEAD.append(_row)
+ASOF = int(next(row for row in _HEAD if row.startswith("snap released")).split()[2])  # the genesis sets' date
 EXIT = 77
 
 
@@ -75,28 +77,19 @@ class Cluster:
 def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dict[int, str]:
     prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
     try:
-        ids = [i for v in payments.values() for i in v]
-        owners, n, head = reg.reserve(k, ids, sealed=prod.sealed_frees())
-        text = "\n".join([*_HEAD, "case batch", "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
-                          *(f"line {i}:{p} FFS_CLAIM {9001 if i in bad else 1001} 7001 7001 {20270301 + i % 14} 99213 1 {12500 + i}"
-                            for p, v in payments.items() for i in v), "commit", "end 0"])
-        (c.dir / f"batch{k}.vectors").write_text(text, "utf-8")
-        out = subprocess.run([rules.EXE, str(c.dir / f"batch{k}.vectors")], capture_output=True, text=True, timeout=600).stdout.splitlines()
-        if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out:
-            raise AssertionError("gate_rules refused the batch: " + "\n".join(out[-5:]))
-        status, pay, free = {}, {}, []
-        for row in out:
-            if row.startswith("RULES_LINE "):
-                f = row.split()
-                i, p = map(int, f[1].split(":"))
-                status[i] = " ".join(f[10:12])
-                pay.setdefault(p, []).append(f[10])
-            elif row.startswith("RULES_FREE"):
-                free = [int(i) for i in row.split()[1:]]
+        ans = decider.decide(rules.EXE, c.dir / f"batch{k}.vectors", _HEAD, ASOF, prod, reg, k, [i for v in payments.values() for i in v],
+                             [f"{i}:{p} FFS_CLAIM {9001 if i in bad else 1001} 7001 7001 {20270301 + i % 14} 99213 1 {12500 + i}"
+                              for p, v in payments.items() for i in v])
+        status, pay = {}, {}
+        for row in ans.lines:
+            f = row.split()
+            i, p = map(int, f[0].split(":"))
+            status[i] = " ".join(f[9:11])
+            pay.setdefault(p, []).append(f[9])
         leaves = [fx._leaf(p, 0, "ALLOW" if set(o) == {"ALLOW"} else "HOLD", shard=k, member_key=fx.member(p, k))
                   for p, o in pay.items() if "WAIT" not in o]
         if leaves:
-            prod.commit(fx.PROGRAM, leaves, state_digest=fx.STATE, created_at=fx.NOW, idreg=(n, head), free=free)
+            prod.commit(fx.PROGRAM, leaves, state_digest=ans.digest, created_at=fx.NOW, idreg=ans.idreg, free=ans.free, adds=ans.adds)
         return status
     finally:
         prod.close()
@@ -106,7 +99,7 @@ def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dic
 def allowed(c: Cluster) -> list[tuple[int, int, int]]:
     """(shard, payment number, line id) for every line of every ALLOW leaf in every sealed batch of every store."""
     found = []
-    for k in range(c.shards):
+    for k in filter(lambda k: c.store(k).exists(), range(c.shards)):  # a shard that never sent has no store
         db = sqlite3.connect(f"file:{c.store(k)}?mode=ro", uri=True)
         try:
             rows = db.execute("SELECT seq_from, tokens FROM batches WHERE signature IS NOT NULL ORDER BY id").fetchall()

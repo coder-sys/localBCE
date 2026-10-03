@@ -31,8 +31,8 @@ class ProducerTests(fx.Scratch):
     def test_chain_links_and_publishes_in_seq_order(self) -> None:
         with self.scratch() as tmp:
             p = self._open(tmp, fx.custody(tmp))
-            ca, sa, _ = p.commit(fx.PROGRAM, fx.batch_leaves(0, 3), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
-            cb, sb, tb = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 3), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=())
+            ca, sa, _ = p.commit(fx.PROGRAM, fx.batch_leaves(0, 3), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
+            cb, sb, tb = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 3), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=(), adds=b"")
             self.assertEqual((ca.seq_from, ca.seq_to, cb.seq_from, cb.seq_to), (0, 2, 3, 4))
             self.assertEqual((cb.prev_checkpoint_digest, cb.event_head), (gate.checkpoint_digest(ca),) * 2)
             self.assertEqual(ca.event_head, gate.ZERO_DIGEST)
@@ -44,7 +44,7 @@ class ProducerTests(fx.Scratch):
         with self.scratch() as tmp:
             p = self._open(tmp, fx.custody(tmp))
             with self.assertRaises(producer.GateProducerError):
-                p.commit(fx.PROGRAM, [], state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+                p.commit(fx.PROGRAM, [], state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             self.assertEqual(p.published(), [])
 
     def test_a_refused_batch_is_voided_and_the_next_one_takes_its_seq(self) -> None:
@@ -52,18 +52,18 @@ class ProducerTests(fx.Scratch):
             p = self._open(tmp, fx.custody(tmp))
             stray = fx._leaf(0, 0, member_key=fx.member(0, shard=5))  # a member key that routes to another shard
             with self.assertRaisesRegex(producer.GateProducerError, "publish_refused"):
-                p.commit(fx.PROGRAM, [stray], state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+                p.commit(fx.PROGRAM, [stray], state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             self.assertEqual((p.published(), p.anchor()), ([], None))
-            self.assertEqual(p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())[0].seq_from, 0)
+            self.assertEqual(p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")[0].seq_from, 0)
             foreign = fx._leaf(1, 1, shard=2)
             with self.assertRaisesRegex(producer.GateProducerError, "foreign_leaf"):
-                p.commit(fx.PROGRAM, [foreign], state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+                p.commit(fx.PROGRAM, [foreign], state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
 
     def test_crash_between_sign_and_persist_reseals_the_same_header(self) -> None:
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
             p = self._open(tmp, custody)
-            p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             reserved: list[bytes] = []
             real = signer.seal
 
@@ -73,7 +73,7 @@ class ProducerTests(fx.Scratch):
                 raise KeyboardInterrupt
 
             with mock.patch.object(signer, "seal", crash), self.assertRaises(KeyboardInterrupt):
-                p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=())
+                p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=(), adds=b"")
             self.assertEqual(len(p.published()), 1)  # nothing unsealed was published
             p.close()
             again = self._open(tmp, custody)  # opening re-seals the reserved batch before any new one
@@ -87,11 +87,11 @@ class ProducerTests(fx.Scratch):
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
             first = self._open(tmp, custody)
-            first.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+            first.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             before = first.published()
             first.close()
             again = self._open(tmp, custody)
-            again.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=())
+            again.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=(), adds=b"")
             self.assertEqual(again.published()[0], before[0])  # the signed position is untouched
             rows = again._db.execute("SELECT epoch, seq_from, count(*) FROM batches GROUP BY epoch, seq_from").fetchall()
             self.assertEqual([row[2] for row in rows], [1, 1])
@@ -105,11 +105,11 @@ class ProducerTests(fx.Scratch):
     def _two_batches(self, tmp: str, custody) -> tuple[Path, bytes]:
         """Seal two batches, closing between them; return the mark path and the store as it was after the first."""
         p = self._open(tmp, custody)
-        p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+        p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
         p.close()
         saved = (Path(tmp) / "shard.sqlite3").read_bytes()
         p = self._open(tmp, custody)
-        p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=())
+        p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=(), adds=b"")
         p.close()
         return Path(tmp) / "shard.mark", saved
 
@@ -174,7 +174,7 @@ class ProducerTests(fx.Scratch):
         with self.scratch() as tmp:
             custody = fx.custody(tmp, "e0")
             p = self._open(tmp, custody, epoch=0)
-            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             p.close()
             self.assertEqual(len(self._open(tmp, custody, epoch=0).published()), 1)
 
@@ -186,7 +186,7 @@ class ProducerTests(fx.Scratch):
             p = self._open(tmp, custody)
             p._db.close()
             with self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
-                p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+                p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
 
     def test_a_new_store_marks_position_zero_and_a_crash_before_the_first_mark_is_caught_up(self) -> None:
         with self.scratch() as tmp:
@@ -194,7 +194,7 @@ class ProducerTests(fx.Scratch):
             p = self._open(tmp, custody)
             mark = Path(tmp) / "shard.mark"
             self.assertEqual(len(mark.read_bytes()), _RECORD)  # position zero, before any seal
-            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             p.close()
             whole = mark.read_bytes()
             self.assertEqual(len(whole), 2 * _RECORD)
@@ -220,10 +220,10 @@ class ProducerTests(fx.Scratch):
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
             p = self._open(tmp, custody)
-            first = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())[0]
+            first = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")[0]
             p.close()
             p = self._open(tmp, fx.custody(tmp, "e8"), epoch=fx.EPOCH + 1)  # the producer sets epoch and seq
-            nxt = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=())[0]
+            nxt = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 2), state_digest=fx.STATE, created_at=fx.NOW + 1, idreg=IDREG, free=(), adds=b"")[0]
             self.assertEqual((nxt.epoch, nxt.seq_from, nxt.prev_checkpoint_digest, nxt.event_head),
                              (fx.EPOCH + 1, 0, gate.ZERO_DIGEST, gate.checkpoint_digest(first)))
 
@@ -231,7 +231,7 @@ class ProducerTests(fx.Scratch):
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
             p = self._open(tmp, custody)
-            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=())
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW, idreg=IDREG, free=(), adds=b"")
             p.close()
             with self.assertRaisesRegex(producer.GateProducerError, "epoch"):
                 self._open(tmp, fx.custody(tmp, "e6"), epoch=fx.EPOCH - 1)
@@ -244,7 +244,7 @@ class ProducerTests(fx.Scratch):
             p = self._open(tmp, fx.custody(tmp))
             self.assertIsNone(p.sealed_frees())
             cb, signed, _ = p.commit(fx.PROGRAM, fx.batch_leaves(0, 2), state_digest=fx.STATE, created_at=fx.NOW,
-                                     idreg=(n, head), free=[2])
+                                     idreg=(n, head), free=[2], adds=b"")
             header = signed[:-4629]
             self.assertTrue(header.startswith(gate.CHECKPOINT_V2))
             self.assertEqual(header[-64:], head)
@@ -254,10 +254,10 @@ class ProducerTests(fx.Scratch):
             self.assertEqual(producer.newest(Path(tmp) / "shard.sqlite3"), (n, head))
             self.assertEqual(cb.evidence_root, gate.ZERO_DIGEST)
 
-    def test_pre_v2_store_refused(self) -> None:
+    def test_pre_decide_store_refused(self) -> None:
         with self.scratch() as tmp:
             with sqlite3.connect(Path(tmp) / "shard.sqlite3") as db:
-                db.execute("CREATE TABLE batches(id INTEGER PRIMARY KEY, epoch INTEGER, signature BLOB)")
+                db.execute("CREATE TABLE batches(id INTEGER PRIMARY KEY, epoch INTEGER, signature BLOB, idreg_n INTEGER)")
             db.close()
             with self.assertRaisesRegex(producer.GateProducerError, "store_version"):
                 self._open(tmp, fx.custody(tmp))

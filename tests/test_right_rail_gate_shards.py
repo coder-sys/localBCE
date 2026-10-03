@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from app import right_rail_gate_decide as decider
 from app import right_rail_gate_idreg as idreg
 from app import right_rail_gate_producer as producer
 from app import right_rail_gate_signer as signer
@@ -71,8 +72,8 @@ class ShardTests(fx.Scratch):
             yield c
 
     def finish(self, c: g.Cluster, *again: dict) -> None:
-        """Restart, shard 0 sends ``again`` (the batches that left no checkpoint), shard 1 sends every id, then the
-        invariants.  A sealed batch is not resent: a repeat inside one shard is the decide layer's (unbuilt), not the registry's."""
+        """Restart, shard 0 sends ``again`` (sealed or not: a sealed batch's lines hold as already decided), shard 1
+        sends every id, then the invariants."""
         c.boot()
         for batch in again:
             c.send(0, batch, BAD)
@@ -145,7 +146,7 @@ class ShardTests(fx.Scratch):
                 if row:
                     self.assertEqual(newest_row(c, 0)[:2], row[:2])  # the same header bytes
                     self.assertIsNotNone(newest_row(c, 0)[2])
-                self.finish(c, *(() if row else (T,)), NEXT)
+                self.finish(c, T, NEXT)  # D3 resealed, D4 sealed: the resend pays nothing twice
 
     def test_k4_dies_in_the_next_transaction(self) -> None:
         with self.cluster() as c:
@@ -243,6 +244,16 @@ class ShardTests(fx.Scratch):
             handle, root_pk, cert = c.custody
             frame = root_pk + fx._list([signer.framed(cert)]) + fx._list([signer.framed(original)]) + fx._u16(0) + signer.framed(new)
             self.assertTrue(signer.gate_verify(3, frame).startswith("GATE_VERIFY=FORK"))
+
+    def test_d7_lost_adds_stop_the_shard(self) -> None:
+        with self.cluster() as c:
+            c.send(0, T, BAD)
+            with contextlib.closing(sqlite3.connect(c.store(0))) as db:  # an edit outside the producer drops a row
+                db.execute("DROP TRIGGER batches_fixed")
+                db.execute("UPDATE batches SET adds = substr(adds, 925)")
+                db.commit()
+            with self.assertRaisesRegex(decider.GateDecideError, "state_mismatch"):
+                c.send(0, T, BAD)
 
     def test_same_shard_resend_of_a_paid_line(self) -> None:
         with self.cluster() as c:
