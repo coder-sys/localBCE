@@ -87,16 +87,17 @@ class IdRegistry:
         """Inside a transaction: refuse a registry behind the mark (the row the newest verified record names is
         missing or has another head, or no record verifies for a non-empty registry) and a mark whose last two
         records are both unverifiable or whose n does not rise; catch the mark up to a registry ahead of
-        it, as after a crash between the commit and the mark."""
+        it, as after a crash between the commit and the mark.  After a torn tail the registry must be strictly ahead
+        of the newest verified record (a torn append always records more rows; equal is a restore)."""
         n, head = self._last()
         try:
-            tail, end = marks.read(self._mark, _MARK_DOMAIN, _MARK_BODY, 8)
+            tail, end, torn = marks.read(self._mark, _MARK_DOMAIN, _MARK_BODY, 8)
         except marks.MarkCorrupt as error:
             raise IdRegistryError("mark_corrupt") from error
         if tail:
             marked = int.from_bytes(tail[:8], "big")
             row = self._db.execute("SELECT head FROM ids WHERE n = ?", (marked,)).fetchone() if marked else (gate.ZERO_DIGEST,)
-            if not row or row[0] != tail[8:]:
+            if not row or row[0] != tail[8:] or (torn and n <= marked):
                 raise IdRegistryError("registry_rewound")
         elif n:
             raise IdRegistryError("registry_rewound")

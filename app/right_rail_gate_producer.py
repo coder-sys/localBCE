@@ -5,7 +5,7 @@ stored before the key is used, so a crash re-signs the same header at the same s
 with other bytes; ``signer.seal`` releases a signature only when Lean ``publishOk`` accepts it, and only a
 sealed batch is published.  Seriality is the store's: one SQLite file opened EXCLUSIVE, WAL, synchronous
 FULL.  A checked mark file outside the database (``right_rail_gate_mark``) records the last sealed (epoch,
-seq_to, digest), so a restored older database is refused; an old unchecked mark file is refused as corrupt, with
+seq_to + 1, digest), so a restored older database is refused; an old unchecked mark file is refused as corrupt, with
 no migration (synthetic, nothing deployed).  The batch's state digest comes from the decide layer; the producer computes no pin.
 """
 
@@ -39,7 +39,7 @@ _COLUMNS: Final = "id, epoch, seq_to, digest, header, state_digest, tokens, sign
 
 
 class GateProducerError(RuntimeError):
-    """The store is locked, rewound or from a newer epoch, or a batch was empty or refused."""
+    """The store is locked, unavailable, rewound or from a newer epoch, or a batch was empty or refused."""
 
 
 class ShardProducer:
@@ -73,20 +73,23 @@ class ShardProducer:
 
     def _check_mark(self, last) -> None:
         """Refuse a corrupt mark, a missing one for a store with sealed batches, or a store behind the mark (a lower
-        (epoch, seq), or the same with another digest); write the position-zero record for a new store, and catch the
-        mark up to a store one batch ahead, as after a crash between the seal and the mark."""
+        (epoch, seq), or the same with another digest, or, after a torn mark tail, the same as the newest verified
+        record); write the position-zero record for a new store, and catch the mark up to a store any distance ahead
+        (as trunk), as after a crash between the seal and the mark.  Mark file errors are ``store_unavailable``."""
         try:
-            tail, end = marks.read(self._mark, _MARK_DOMAIN, 80, 16)
+            tail, end, torn = marks.read(self._mark, _MARK_DOMAIN, 80, 16)
+            mine = last[1].to_bytes(8, "big") + (last[2] + 1).to_bytes(8, "big") + last[3] if last else _ZERO
+            if (tail is None and last) or (tail and (mine[:16] < tail[:16] or (mine[:16] == tail[:16] and (torn or mine != tail)))):
+                raise GateProducerError("store_rewound")
+            if mine != tail:
+                marks.append(self._mark, _MARK_DOMAIN, end, mine)
         except marks.MarkCorrupt as error:
             raise GateProducerError("mark_corrupt") from error
-        mine = last[1].to_bytes(8, "big") + (last[2] + 1).to_bytes(8, "big") + last[3] if last else _ZERO
-        if (tail is None and last) or (tail and (mine[:16] < tail[:16] or (mine[:16] == tail[:16] and mine != tail))):
-            raise GateProducerError("store_rewound")
-        if mine != tail:
-            marks.append(self._mark, _MARK_DOMAIN, end, mine)
+        except OSError as error:
+            raise GateProducerError("store_unavailable") from error
 
-    def _seal(self, row, last) -> None:
-        """Steps 3-6 for the reserved ``row``: sign and check, store the signature, mark."""
+    def _seal(self, row, last):
+        """Steps 3-6 for the reserved ``row``: sign and check, store the signature, mark; return the sealed row."""
         tokens, data = [], row[6]
         while data:
             size = int.from_bytes(data[:4], "big")
@@ -101,10 +104,19 @@ class ShardProducer:
                 raise GateProducerError("publish_refused") from error
             raise
         self._db.execute("UPDATE batches SET signature=? WHERE id=?", (signature, row[0]))
-        self._check_mark(self._sealed())
+        sealed = self._sealed()
+        self._check_mark(sealed)
+        return sealed
 
     def commit(self, program: str, leaves: Sequence[gate.TokenLeaf], *, state_digest: bytes, created_at: int):
-        """One batch of decided leaves (one program) -> (checkpoint, signed checkpoint, tokens)."""
+        """One batch of decided leaves (one program) -> (checkpoint, signed checkpoint, tokens); a database error is
+        ``store_unavailable``."""
+        try:
+            return self._commit(program, leaves, state_digest, created_at)
+        except sqlite3.Error as error:
+            raise GateProducerError("store_unavailable") from error
+
+    def _commit(self, program: str, leaves: Sequence[gate.TokenLeaf], state_digest: bytes, created_at: int):
         if not leaves:
             raise GateProducerError("empty_batch")
         if any((leaf.tenant_id, leaf.shard_id) != self._who for leaf in leaves):
@@ -125,8 +137,8 @@ class ShardProducer:
         digest = gate.checkpoint_digest(checkpoint)
         self._db.execute("INSERT INTO batches(epoch, seq_from, seq_to, digest, header, state_digest, tokens) VALUES(?,?,?,?,?,?,?)",
                          (self._epoch, checkpoint.seq_from, checkpoint.seq_to, digest, header, state_digest, framed))
-        self._seal(self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE digest=?", (digest,)).fetchone(), last)
-        return checkpoint, self.published()[-1], tokens
+        sealed = self._seal(self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE digest=?", (digest,)).fetchone(), last)
+        return checkpoint, gate.attach_signature(sealed[4], sealed[7]), tokens
 
     def published(self) -> list[bytes]:
         """The sealed signed checkpoints in seq order."""

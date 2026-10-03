@@ -20,9 +20,9 @@ _RECORD = 80 + marks.CHECK  # one producer mark record
 class ProducerTests(fx.Scratch):
     """One serial producer per (tenant, shard): reserve, sign, Lean publish check, seal, mark, publish."""
 
-    def _open(self, tmp: str, custody, epoch: int = fx.EPOCH):
+    def _open(self, tmp: str, custody, epoch: int = fx.EPOCH, mark: str = "shard.mark"):
         handle, root_pk, cert = custody
-        return self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / "shard.mark",
+        return self.track(producer.ShardProducer(Path(tmp) / "shard.sqlite3", mark_path=Path(tmp) / mark,
                                       tenant_id=fx.TENANT, shard_id=fx.SHARD, epoch=epoch, handle=handle,
                                       root_pk=root_pk, key_cert=cert))
 
@@ -134,41 +134,57 @@ class ProducerTests(fx.Scratch):
                 with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
                     self._open(tmp, custody)
 
-    def test_a_torn_last_mark_record_is_dropped_and_the_mark_caught_up(self) -> None:
+    def test_after_a_torn_last_mark_record_the_store_must_be_strictly_ahead_of_the_one_before(self) -> None:
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
-            mark = self._two_batches(tmp, custody)[0]
+            mark, saved = self._two_batches(tmp, custody)  # the store as it was after the first batch
             whole = mark.read_bytes()
-            for torn in (whole[:-50], whole[:-40] + bytes(40)):  # cut short, or its second page never written
+            torns = (whole[:-50], whole[:-40] + bytes(40))  # cut short; its second page never written
+            for torn in torns:
                 mark.write_bytes(torn)
-                self._open(tmp, custody).close()
-                self.assertEqual(mark.read_bytes(), whole)  # the torn bytes gone, the second batch marked again
-
-    def test_both_of_the_last_two_mark_records_bad_or_not_rising_is_refused(self) -> None:
-        with self.scratch() as tmp:
-            custody = fx.custody(tmp)
-            mark = self._two_batches(tmp, custody)[0]
-            whole = bytearray(mark.read_bytes())
-            both_bad = bytearray(whole)
-            both_bad[-_RECORD + 20] ^= 1  # inside the last record
-            both_bad[-2 * _RECORD + 20] ^= 1  # and the one before
-            for refused in (both_bad, whole[:-2 * _RECORD] + whole[-_RECORD:] + whole[-2 * _RECORD:-_RECORD]):  # the second is also bad; or the keys fall
-                mark.write_bytes(refused)
-                with self.assertRaisesRegex(producer.GateProducerError, "mark_corrupt"):
+                self._open(tmp, custody).close()  # ahead of the record before: the torn bytes go, batch 2 is marked again
+                self.assertEqual(mark.read_bytes(), whole)
+            for torn in torns:
+                mark.write_bytes(torn)
+                self._restore(tmp, saved)  # restored to exactly the record before the damaged one
+                with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
                     self._open(tmp, custody)
+                self.assertEqual(mark.read_bytes(), torn)  # refused, not re-marked
+            damaged = bytearray(whole)
+            damaged[-1] ^= 1
+            damaged[-_RECORD - 1] ^= 1  # the last two records both bad
+            mark.write_bytes(damaged)
+            with self.assertRaisesRegex(producer.GateProducerError, "mark_corrupt"):
+                self._open(tmp, custody)
 
-    def test_a_bad_mark_record_deeper_in_the_file_is_not_read(self) -> None:
+    def test_a_new_store_whose_only_mark_record_is_torn_opens_and_repairs(self) -> None:
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
-            mark = self._two_batches(tmp, custody)[0]
-            p = self._open(tmp, custody)
-            p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 4), state_digest=fx.STATE, created_at=fx.NOW + 2)
-            p.close()
-            whole = bytearray(mark.read_bytes())
-            whole[20] ^= 1
-            mark.write_bytes(whole)
             self._open(tmp, custody).close()
-            self.assertEqual(mark.read_bytes(), whole)  # opens fine, and nothing is rewritten
+            mark = Path(tmp) / "shard.mark"
+            whole = mark.read_bytes()
+            mark.write_bytes(whole[:50])
+            self._open(tmp, custody).close()
+            self.assertEqual(mark.read_bytes(), whole)
+
+    def test_the_first_one_leaf_batch_of_epoch_zero_seals_and_reopens(self) -> None:
+        """Position zero's key is (0, 0); the batch's key is (epoch, seq_to + 1), so (0, 0) + 1 still rises."""
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp, "e0")
+            p = self._open(tmp, custody, epoch=0)
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW)
+            p.close()
+            self.assertEqual(len(self._open(tmp, custody, epoch=0).published()), 1)
+
+    def test_mark_file_and_database_errors_are_typed(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            with self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
+                self._open(tmp, custody, mark="missing/shard.mark")  # the mark's directory is gone
+            p = self._open(tmp, custody)
+            p._db.close()
+            with self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
+                p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW)
 
     def test_a_new_store_marks_position_zero_and_a_crash_before_the_first_mark_is_caught_up(self) -> None:
         with self.scratch() as tmp:
@@ -217,7 +233,6 @@ class ProducerTests(fx.Scratch):
             p.close()
             with self.assertRaisesRegex(producer.GateProducerError, "epoch"):
                 self._open(tmp, fx.custody(tmp, "e6"), epoch=fx.EPOCH - 1)
-
 
 
 if __name__ == "__main__":
