@@ -65,5 +65,5 @@ Full suite `os-full-2` on this tree: 785 pass, 0 fail, 14 skips (logs: `native/g
   verdict; core size targets unmet (owner 7,441 lines against about 3,000, checker 4,631 against about 1,800);
   isolated TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`).
 
-Next: runtime multi-shard, M3 step 4; connector and browser work paused by the founder.
+Next: M3 step 4; connector and browser work paused by the founder.
 A local commit, not a qualified release; no local check activates production.
