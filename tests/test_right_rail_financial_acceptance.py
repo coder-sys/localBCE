@@ -4244,6 +4244,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
             self._assert_verified(store)
 
+    def test_the_checker_refuses_an_offset_committed_one_millisecond_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS  # the next tick commits at due + 1 ms
+        with lean_without_one_rule(store, stale_owner_now=True), patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
+            self._assert_verified(store)
+
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
         package = store.decision_package(expected.H_ITEM_ID)

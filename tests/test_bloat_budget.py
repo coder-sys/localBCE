@@ -15,11 +15,11 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
 PRODUCT_CODE_LINES = 36_024
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 31_262
+EVIDENCE_CODE_LINES = 31_274
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 106_031
-CONFORMANCE_MARKDOWN_BYTES = 30_663
+CONFORMANCE_MARKDOWN_BYTES = 31_137
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 7_402,

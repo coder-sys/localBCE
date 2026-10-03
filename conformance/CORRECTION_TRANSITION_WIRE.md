@@ -56,8 +56,7 @@ Offset authorization frame `BLFOFA01`: the 8 ASCII bytes `BLFOFA01`, then one
 unchanged `BLFCMD03` request (same cap, same decoding). The worker answers it
 like a correction frame (00 + `BLFCRES3`, 01, 03) with the result of
 `applyOffsetAuthorization` instead of `applyCorrectionTransition`. The worker
-frame cap is 8,388,608 + 8 bytes. Lean source only: the pinned engine and the
-Python owner do not use it until the re-pin.
+frame cap is 8,388,608 + 8 bytes.
 
 ## 3. `BLFCMD03` request
 
@@ -202,6 +201,14 @@ combination rejected):
   order, subjects actionId/determinationId/inputEvaluationId, each complete,
   matchCount 0, no resultIdentity, each at currentEventSequence/
   previousHistoryHead; dependencies.correctionPaid is Lean's derived list, a canonical id list with positive amounts.
+- **ACCEPTED, offset** (`BLFOFA01`): the ACCEPTED rules, except: code 4,
+  transition 2; determination decision 1; action kind `OFFSET_AUTHORIZATION`
+  with amount = determination.amountCents (no shortfall formula;
+  inputShortfallCents 0..2^63-1, zero allowed); event kind `OFFSET_AUTHORIZED`;
+  the same claim is AUTHORIZED, not REJECTED, in the resulting input; case
+  reason `OFFSET_AUTHORIZED`, or, if the case was not inserted, its kept
+  `CORRECTION_REQUIRED` with any well-formed owner role and dueAt instead of
+  `CASE_OWNER` and claimBefore.deadlineAt.
 
 ## 5. Tag tables
 
