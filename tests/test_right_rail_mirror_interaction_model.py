@@ -64,6 +64,8 @@ class InteractionModelStructureTests(unittest.TestCase):
         for method, control in (("reject_offset_and_authorize_correction", "reject-offset"), ("authorize_offset", "authorize-offset")):
             start = owner_src.index(f"def {method}")
             body = owner_src[start:owner_src.index("\n    def ", start + 40)]
+            served = owner_src.index("def _served_decision")  # the Lean reject map both methods route through
+            body += owner_src[served:owner_src.index("\n    def ", served + 40)]
             codes = set(re.findall(r'_fail\(\s*\w+\s*,\s*"([a-z_]+)"', body))
             codes |= set(re.findall(r'"[A-Z_]+":\s*\([A-Za-z]+,\s*"([a-z_]+)"\)', body))
             self.assertTrue(codes, "scanner found nothing: check the source has moved")
