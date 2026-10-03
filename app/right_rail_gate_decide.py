@@ -25,7 +25,8 @@ class GateDecideError(RuntimeError):
     body holds a line break (it could add directives after the real ``load``); ``genesis_sets``: the registry settled
     ids for a shard with no sealed batch (``genesis()`` starting sets, which load cannot carry until L4);
     ``rules_refused``: any other refusal, timeout included.  ``frame_injection`` and ``genesis_sets`` come before the
-    registry reserve, so they write nothing."""
+    registry reserve, so they write nothing.  ``commit``: ``already_sealed``, the answer's batch is sealed;
+    ``settle_pending``, sealed but not settled (no token out; the next ``decide`` settles it, never re-commit)."""
 
 
 class Answer(NamedTuple):
@@ -67,9 +68,16 @@ def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, k: int, program:
            ans: Answer, created_at: int):
     """Seal the decided batch, settle it in the registry, and only then return (checkpoint, signed, tokens).  The order is
     the rollback check: before any token is out, a SETTLE follows the batch's RESERVE rows, so a store (with or without its
-    mark) restored to before the batch is ``registry_rewound`` at boot.  A crash between the two loses nothing: no token is
-    out, and the next ``decide`` settles the sealed batch first."""
+    mark) restored to before the batch is ``registry_rewound`` at boot and at each ``decide``.  A crash or a refused
+    settle between the two loses nothing: no token is out, and the next ``decide`` settles the sealed batch first.  An
+    answer with adds reserved rows ending at its own n, so a newest batch sealed at that n is this answer: a second seal
+    would put its ids in two token sets and its adds twice into the load."""
+    if ans.adds and (prod.sealed_frees() or (0,))[0] == ans.idreg[0]:
+        raise GateDecideError("already_sealed")
     out = prod.commit(program, leaves, state_digest=ans.digest, created_at=created_at, idreg=ans.idreg, free=ans.free,
                       adds=ans.adds)
-    reg.reserve(k, [], sealed=(ans.idreg[0], ans.free))
+    try:
+        reg.settle(k, ans.idreg[0], ans.free)
+    except idreg.IdRegistryError as error:
+        raise GateDecideError("settle_pending") from error
     return out

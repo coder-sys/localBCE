@@ -4,9 +4,9 @@ One append-only chained log (store v2; a v1 store is refused): RESERVE gives a f
 SETTLE marks the shard's unfreed reservations as in its sealed sets, BOOT names the process generation.  An id is in
 flight while its holder has no later SETTLE.  The decide layer settles each sealed batch before its tokens leave
 (``decide.commit``); ``reserve`` settles it first if a crash came between, then reserves, in one transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
-carry this handle's nonce.  ``boot`` requires each shard's newest signed commitment (row n and head, the
-checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard after it, else
-``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).
+carry this handle's nonce.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
+(row n and head, the checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard
+after it, else ``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).
 """
 
 from __future__ import annotations
@@ -125,6 +125,15 @@ def _pending(db: sqlite3.Connection, shard: int) -> list[tuple[int, bytes]]:
         "AND NOT EXISTS (SELECT 1 FROM log f WHERE f.id = r.id AND f.n > r.n AND f.kind < 2) ORDER BY n", (shard,)).fetchall()
 
 
+def _rewound(db: sqlite3.Connection, shard: int, n: int, head: bytes) -> bool:
+    """Whether the shard's newest signed commitment ``(n, head)`` is not row n of the chain, or a SETTLE of the shard
+    follows a RESERVE of it past n (a newer batch's settle: the shard's store is behind)."""
+    row = db.execute("SELECT head FROM log WHERE n = ?", (n,)).fetchone() if n else (gate.ZERO_DIGEST,)
+    return not row or row[0] != head or db.execute(
+        "SELECT 1 FROM log WHERE kind = 0 AND shard = ?1 AND n > ?2 AND n < "
+        "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (shard, n)).fetchone() is not None
+
+
 def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
     """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
     0..count-1; a shard with rows needs a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n
@@ -140,12 +149,8 @@ def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
             if set(commitments) != set(range(len(commitments))) or any(
                     not commitments.get(s, (0,))[0] for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
                 raise IdRegistryError("commitment_missing")
-            for s, (n, head) in commitments.items():
-                row = db.execute("SELECT head FROM log WHERE n = ?", (n,)).fetchone() if n else (gate.ZERO_DIGEST,)
-                if not row or row[0] != head or db.execute(  # a settle of a batch newer than n: the shard's store is behind
-                        "SELECT 1 FROM log WHERE kind = 0 AND shard = ?1 AND n > ?2 AND n < "
-                        "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (s, n)).fetchone():
-                    raise IdRegistryError("registry_rewound")
+            if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
+                raise IdRegistryError("registry_rewound")
             nonce = os.urandom(32)
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
         return nonce
@@ -160,30 +165,47 @@ class IdRegistry:
     def close(self) -> None:
         self._db.close()
 
-    def reserve(self, shard: int, ids: Sequence[int], *, sealed: tuple[int, Sequence[int]] | None
+    def reserve(self, shard: int, ids: Sequence[int], *, sealed: tuple[int, bytes, Sequence[int]] | None
                 ) -> tuple[list[tuple[int, int, bool]], int, bytes]:
-        """Settle the shard's in-flight ids, then reserve ``ids``, in one durable transaction; return one
-        ``(id, owner shard, settled)`` per id in request order, then the row count n and head after.  Settle: when
-        ``sealed = (n, free)`` names the pending reserve's n, free ``free`` (each must be in flight for the shard,
-        else ``settle_mismatch``, nothing written) and keep the rest recorded; otherwise (no seal, or an older batch)
-        free all of them."""
-        ids, frees = _check(shard, ids), _check(shard, sealed[1] if sealed else ())
+        """Check the shard's newest sealed commitment ``sealed = (n, head, free)`` as ``boot`` does (each batch: a store
+        restored after boot is ``registry_rewound`` too), settle the shard's in-flight ids, then reserve ``ids``, in one
+        durable transaction; return one ``(id, owner shard, settled)`` per id in request order, then the row count n
+        and head after.  Settle: when n is the pending reserve's, free ``free`` (each must be in flight for the shard,
+        else ``settle_mismatch``, nothing written) and keep the rest recorded; otherwise (no seal, or an older batch
+        whose successor died before its seal) free all of them."""
+        ids = _check(shard, ids)
         with _txn(self._db, self._boot):
-            tail, pend = _Tail(self._db), _pending(self._db, shard)
-            held = {key for _, key in pend}
-            for key in [_key(i) for i in frees] if sealed and pend and sealed[0] == pend[-1][0] else [key for _, key in pend]:
-                if key not in held:
-                    raise IdRegistryError("settle_mismatch")
-                held.remove(key)
-                tail.add(_FREE, key, shard)
-            if held:
-                tail.add(_SETTLE, bytes(ID_LEN), shard)
+            if sealed and _rewound(self._db, shard, sealed[0], sealed[1]):
+                raise IdRegistryError("registry_rewound")
+            tail = self._settle(shard, sealed and (sealed[0], sealed[2]), False)
             owners = []
             for i in ids:
                 row = tail.take(_key(i), shard)
                 owners.append((i, shard, False) if row is None else (i, row[1], self._db.execute(
                     "SELECT 1 FROM log WHERE kind = 2 AND shard = ? AND n > ?", (row[1], row[2])).fetchone() is not None))
             return owners, tail.n, tail.head
+
+    def settle(self, shard: int, n: int, free: Sequence[int]) -> None:
+        """Settle the batch whose reserve ended at row ``n`` (``decide.commit``, after the seal): ``settle_mismatch``,
+        nothing written, unless the shard's in-flight ids end at n (or none are in flight and ``free`` is empty)."""
+        with _txn(self._db, self._boot):
+            self._settle(shard, (n, free), True)
+
+    def _settle(self, shard: int, sealed: tuple[int, Sequence[int]] | None, exact: bool) -> _Tail:
+        frees = _check(shard, sealed[1] if sealed else ())
+        tail, pend = _Tail(self._db), _pending(self._db, shard)
+        held = {key for _, key in pend}
+        match = bool(sealed and pend and sealed[0] == pend[-1][0])
+        if exact and not match and (pend or frees):
+            raise IdRegistryError("settle_mismatch")
+        for key in [_key(i) for i in frees] if match else [key for _, key in pend]:
+            if key not in held:
+                raise IdRegistryError("settle_mismatch")
+            held.remove(key)
+            tail.add(_FREE, key, shard)
+        if held:
+            tail.add(_SETTLE, bytes(ID_LEN), shard)
+        return tail
 
     def settled(self, shard: int) -> bool:
         """Whether the shard has a SETTLE row: a sealed batch's, or ``genesis()``'s."""

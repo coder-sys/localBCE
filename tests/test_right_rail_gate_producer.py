@@ -249,7 +249,7 @@ class ProducerTests(fx.Scratch):
             self.assertTrue(header.startswith(gate.CHECKPOINT_V2))
             self.assertEqual(header[-64:], head)
             self.assertNotEqual(head, gate.ZERO_DIGEST)
-            self.assertEqual(p.sealed_frees(), (n, [2]))
+            self.assertEqual(p.sealed_frees(), (n, head, [2]))
             p.close()  # the store is EXCLUSIVE while a shard runs: ``newest`` is for boot, before any shard starts
             self.assertEqual(producer.newest(Path(tmp) / "shard.sqlite3"), (n, head))
             self.assertEqual(cb.evidence_root, gate.ZERO_DIGEST)

@@ -107,35 +107,43 @@ class IdRegistryTests(unittest.TestCase):
 
     def test_settle_guard(self) -> None:
         self.reg.genesis({0: [7], 1: [8]})
-        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
+        _, n, head = self.reg.reserve(0, [1, 2], sealed=None)
         self.reg.reserve(1, [], sealed=None)
         before = self.tail()
         for name, bad in (("other shard's id", 8), ("recorded id", 7), ("unknown id", 99)):
             with self.subTest(name), self.assertRaisesRegex(idreg.IdRegistryError, "settle_mismatch"):
-                self.reg.reserve(0, [5], sealed=(n, [bad]))
+                self.reg.reserve(0, [5], sealed=(n, head, [bad]))
             self.assertEqual(self.tail(), before)
 
     def test_settle_frees_and_keeps(self) -> None:
-        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
-        self.reg.reserve(0, [], sealed=(n, [1]))
+        _, n, head = self.reg.reserve(0, [1, 2], sealed=None)
+        self.reg.reserve(0, [], sealed=(n, head, [1]))
         self.assertEqual(self.reg.reserve(1, [1, 2], sealed=None)[0], [(1, 1, False), (2, 0, True)])
 
     def test_settle_then_reserve_in_one_call(self) -> None:
-        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
-        owners = self.reg.reserve(0, [1, 2], sealed=(n, [1]))[0]  # settle frees 1 and records 2, then reserves both
+        _, n, head = self.reg.reserve(0, [1, 2], sealed=None)
+        owners = self.reg.reserve(0, [1, 2], sealed=(n, head, [1]))[0]  # settle frees 1 and records 2, then reserves both
         self.assertEqual(owners, [(1, 0, False), (2, 0, True)])  # 1 in flight again, 2 recorded
         self.assertEqual(self.reg._db.execute("SELECT kind FROM log WHERE n > ?", (n,)).fetchall(), [(1,), (2,), (0,)])
 
     def test_settle_stale_frees_all(self) -> None:
         n = self.reg.reserve(0, [1, 2], sealed=None)[1]
-        self.reg.reserve(0, [], sealed=(n - 1, []))
+        self.reg.reserve(0, [], sealed=(n - 1, *self.reg._db.execute("SELECT head FROM log WHERE n = ?", (n - 1,)).fetchone(), []))
         self.assertEqual(self.reg.reserve(1, [1, 2], sealed=None)[0], [(1, 1, False), (2, 1, False)])
 
     def test_settle_atomic_with_reserve(self) -> None:
-        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
+        _, n, head = self.reg.reserve(0, [1, 2], sealed=None)
         before = self.tail()
         with self.assertRaisesRegex(idreg.IdRegistryError, "id"):
-            self.reg.reserve(0, [-1], sealed=(n, [1]))
+            self.reg.reserve(0, [-1], sealed=(n, head, [1]))
+        self.assertEqual(self.tail(), before)
+
+    def test_settle_refuses_a_newer_reserve(self) -> None:  # decide B1, decide B2, commit B1: B2's ids stay in flight
+        n = self.reg.reserve(0, [1], sealed=None)[1]
+        self.reg.reserve(0, [2], sealed=None)
+        before = self.tail()
+        with self.assertRaisesRegex(idreg.IdRegistryError, "settle_mismatch"):
+            self.reg.settle(0, n, [])
         self.assertEqual(self.tail(), before)
 
     def test_boot_nonce(self) -> None:

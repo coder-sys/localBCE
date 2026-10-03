@@ -167,10 +167,10 @@ class ShardProducer:
         """The sealed batches' ``adds`` in id order: the rows the decide layer folds onto genesis to reach ``anchor``."""
         return b"".join(row[0] for row in self._db.execute("SELECT adds FROM batches WHERE signature IS NOT NULL ORDER BY id"))
 
-    def sealed_frees(self) -> tuple[int, list[int]] | None:
-        """The newest batch's (idreg_n, free), sealed or open: the next registry settle's ``sealed`` argument."""
-        row = self._db.execute("SELECT idreg_n, free FROM batches ORDER BY id DESC LIMIT 1").fetchone()
-        return row and (row[0], [int(i) for i in row[1].split(",") if i])
+    def sealed_frees(self) -> tuple[int, bytes, list[int]] | None:
+        """The newest batch's (idreg_n, registry head, free), sealed or open: the next registry reserve's ``sealed``."""
+        row = self._db.execute("SELECT idreg_n, header, free FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+        return row and (row[0], row[1][-64:], [int(i) for i in row[2].split(",") if i])
 
     def close(self) -> None:
         self._db.close()

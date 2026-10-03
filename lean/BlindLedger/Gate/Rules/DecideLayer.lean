@@ -178,15 +178,22 @@ private theorem setsDigest_pins {H : Bytes → Bytes} {r u : Snapshot Line} {d :
   | none => simp [hA, hB] at h
   | some B => exact ⟨A, B, rfl, rfl⟩
 
-/-- LOAD BINDS: a load that passed equals, up to row order, the sets whose digest the header signed, or H has an
-    explicit collision (as `anchored_binding`, AnchorTheorems, with `pinInput_lines`). Axioms: three; hypothesis
-    `hl` only. -/
+/-- LOAD BINDS: a load that passed equals, up to row order, the sets whose digest the header signed, or H collides
+    on a named pair: the loaded and signed sets' pin inputs `A A'` or `B B'`, or their two STATE inputs (as
+    `anchored_binding_witness`, AnchorTheorems, with `pinInput_lines`; a bare `∃ x y, x ≠ y ∧ H x = H y` would hold
+    by pigeonhole alone). Axioms: three; hypothesis `hl` only. -/
 theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestBytes)
     {g : Snapshot Line × Snapshot Line} {as : List (List Line × List Line)} {a : Nat} {st : ShardState}
     {r u : Snapshot Line} (h : ShardState.loadAdds H g as a = some st)
     (hd : setsDigest H r u = some (natBE digestBytes a)) :
     (st.released.entries.Perm r.entries ∧ st.unresolved.entries.Perm u.entries ∧ st.released.count = r.count ∧
-      st.unresolved.count = u.count) ∨ ∃ x y, x ≠ y ∧ H x = H y := by
+      st.unresolved.count = u.count) ∨
+    ∃ A B A' B', pinInput "RR/GATE/RELEASED/v1" 5 Line.fields st.released = some A ∧
+      pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields st.unresolved = some B ∧
+      pinInput "RR/GATE/RELEASED/v1" 5 Line.fields r = some A' ∧
+      pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields u = some B' ∧
+      ∃ x y, x ≠ y ∧ H x = H y ∧ ((x, y) = (A, A') ∨ (x, y) = (B, B') ∨
+        (x, y) = (Gate.domain "STATE" ++ H A ++ H B, Gate.domain "STATE" ++ H A' ++ H B')) := by
   unfold ShardState.loadAdds at h
   rw [Option.filter_eq_some_iff] at h
   obtain ⟨hld, hdg⟩ := h
@@ -201,7 +208,7 @@ theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestB
   have h2 : anchored H (mk r u) = true := by unfold anchored; simp [mk, hd]
   obtain ⟨A, B, hA, hB⟩ := setsDigest_pins hs
   obtain ⟨A', B', hA', hB'⟩ := setsDigest_pins hd
-  rcases anchored_binding hl h1 h2 rfl with ⟨e1, e2⟩ | hc
+  rcases anchored_binding_witness hl h1 h2 rfl hA hB hA' hB' with ⟨e1, e2⟩ | ⟨x, y, hc⟩
   · refine .inl ?_
     have eA : some A = some A' := by rw [← hA, ← hA']; exact e1
     have eB : some B = some B' := by rw [← hB, ← hB']; exact e2
@@ -210,6 +217,6 @@ theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestB
     obtain ⟨-, c1, p1⟩ := pinInput_lines hA hA'
     obtain ⟨-, c2, p2⟩ := pinInput_lines hB hB'
     exact ⟨p1, p2, c1, c2⟩
-  · exact .inr hc
+  · exact .inr ⟨A, B, A', B', hA, hB, hA', hB', x, y, hc⟩
 
 end BlindLedger.Gate

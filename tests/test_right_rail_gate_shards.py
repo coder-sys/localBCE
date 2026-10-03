@@ -106,7 +106,7 @@ class ShardTests(fx.Scratch):
         with self.cluster() as c:
             self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
             with contextlib.closing(c.producer(0)) as prod:
-                self.assertNotIn(10, prod.sealed_frees()[1])  # batch 1's own free
+                self.assertNotIn(10, prod.sealed_frees()[2])  # batch 1's own free
             self.assertEqual(g.owned(c, self)[idreg._key(10)], 0)
             self.assertEqual(c.send(1, {4: [10]}), {10: "HOLD ALREADY_DECIDED"})
             g.inv(self, c)
@@ -147,15 +147,29 @@ class ShardTests(fx.Scratch):
 
     def test_k4_dies_in_the_next_transaction(self) -> None:
         with self.cluster() as c:
-            c.send(0, T, BAD)
-            frees, reserves = count(c, 1), count(c, 0)
-            self.assertGreater(frees, 0)  # t's own settle freed 11 before its tokens left
+            c.send(0, T, BAD, crash="settle")  # t sealed, its settle left to t+1's reserve transaction
+            c.boot()
+            rows = [count(c, kind) for kind in range(3)]
             c.send(0, NEXT, crash="reserve")
-            self.assertEqual((count(c, 1), count(c, 0)), (frees, reserves))  # t+1's reserve is absent
+            self.assertEqual([count(c, kind) for kind in range(3)], rows)  # t's settle and t+1's reserve are both absent
             c.boot()
             c.send(0, NEXT)
-            self.assertGreater(count(c, 0), reserves)  # present after the retry
+            self.assertGreater(count(c, 1), rows[1])  # present after the retry: t's settle freed 11
             self.finish(c)
+
+    def test_settle_failure_after_the_seal_is_never_recommitted(self) -> None:
+        commit, seen = decider.commit, []
+
+        def twice(*args):
+            for _ in range(2):
+                with self.assertRaises(decider.GateDecideError) as caught:
+                    commit(*args)
+                seen.append(str(caught.exception))
+        with self.cluster() as c:
+            with mock.patch.object(idreg.IdRegistry, "settle", side_effect=idreg.IdRegistryError("registry_unavailable")),                     mock.patch.object(decider, "commit", twice):
+                c.send(0, T, BAD)
+            self.assertEqual(seen, ["settle_pending", "already_sealed"])
+            self.finish(c, T, NEXT)  # the next reserve settles t; 10 is in one sealed batch
 
     def test_voided_reservation_is_freed_on_retry(self) -> None:
         with self.cluster() as c:
@@ -218,6 +232,8 @@ class ShardTests(fx.Scratch):
                 if point is None:  # NEXT paid 20
                     with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
                         c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
+                    with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                        c.send(0, {9: [20]})  # each batch too: the old BOOT nonce still opens the registry
                     self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD ALREADY_DECIDED"})  # the refusal freed nothing
                 else:
                     c.boot()  # the store is behind only a batch whose tokens never left
