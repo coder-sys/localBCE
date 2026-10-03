@@ -1343,7 +1343,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             receipt, before = store.current_evaluation_receipt(expected.H_ITEM_ID), store.export_continuity()
             request = {"item_id": expected.H_ITEM_ID, "claim_id": claim_id, "expected_revision": receipt["revision"], "action_id": expected.ACTION_OFFSET_ID, "evaluation_id": receipt["evaluation_id"], "evaluation_result_digest": receipt["result_digest"]}
             for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):  # the retrospective boundary: no v2 decision before v2 takes effect
-                with self.assertRaisesRegex(FinancialIntegrityError, "^control_pack_not_effective$"):
+                with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_chronology$"):  # also before its evaluation: Lean's chronology answer comes first
                     decide(**request, decision_at_ms=expected.CONTROL_PACK_V2.effective_start_ms - 1)
             self.assertEqual(store.export_continuity(), before)
             self._reject(store, claim_id)
@@ -4150,8 +4150,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store, request, _evaluated_at = self._s2_offset_request(_Clock())
         before = store.export_continuity()
         for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):
-            for at_ms, reason in ((expected.CONTROL_PACK_V1.approved_at_ms - 1, "control_pack_not_approved"), (expected.CONTROL_PACK_V1.effective_start_ms - 1, "control_pack_not_effective")):
-                with self.assertRaisesRegex(FinancialIntegrityError, f"^{reason}$"):
+            for at_ms in (expected.CONTROL_PACK_V1.approved_at_ms - 1, expected.CONTROL_PACK_V1.effective_start_ms - 1):  # also before the evaluation: Lean's chronology answer comes first
+                with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_chronology$"):
                     decide(**request, decision_at_ms=at_ms)
         self.assertEqual(store.export_continuity(), before)
 
@@ -4229,17 +4229,26 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         restored.verify_integrity()
 
     def test_the_checker_refuses_an_offset_backdated_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
-        # S2: a writer that misreads the due date is stopped before COMMIT; one that also skips that check
-        # (or predates the rule) leaves a store the whole-store check refuses
+        # S2: Lean refuses a late write that names a time at or before the due date. A writer whose Lean request carries a stale
+        # owner clock gets an OFFSET_AUTHORIZED answer and stops before COMMIT; one that also skips that check (or predates the
+        # rule) leaves a store the whole-store check refuses
         clock = _Clock()
         store, request, evaluated_at = self._s2_offset_request(clock)
         clock.value = expected.H_DUE_AT_MS + 172_800_000
-        read = FinancialOwner._get_obligation_row
+        encode, run, real_now = financial_engine.encode_correction_transition_request, financial_engine.run_offset_authorization_v1, []
 
-        def due_misread(owner_self: FinancialOwner, connection: sqlite3.Connection, item_id: str) -> dict[str, object]:
-            return {**dict(read(owner_self, connection, item_id)), "due_at_ms": 2**62}
+        def stale_encode(**kwargs: Any) -> bytes:
+            real_now.append(kwargs["command"]["owner_now_ms"])
+            return encode(**{**kwargs, "command": {**kwargs["command"], "owner_now_ms": kwargs["command"]["decision_at_ms"]}})
 
-        with patch.object(FinancialOwner, "_get_obligation_row", due_misread):
+        def answer_for_real_now(*, request: bytes) -> dict[str, Any]:
+            answer = run(request=request)
+            answer["mutation"]["dependencies"]["owner_now_ms"] = real_now[-1]
+            return answer
+
+        from app import right_rail_financial_semantic_adapter as semantic
+
+        with patch.object(financial_engine, "encode_correction_transition_request", stale_encode), patch.object(financial_engine, "run_offset_authorization_v1", answer_for_real_now), patch.object(semantic, "bind_resulting_state", lambda *_args, **_kwargs: None):
             with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_verification:action:backdated-past-due$"):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
             with patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):

@@ -4673,7 +4673,7 @@ class FinancialOwner:
             tuple(values[column] for column in columns),
         )
 
-    def _apply_accepted_transition(
+    def _apply_accepted_correction_transition(
         self,
         connection: sqlite3.Connection,
         *,
@@ -5359,7 +5359,7 @@ class FinancialOwner:
             _fail(error_type, error_code)
         if transition_result["status"] != "ACCEPTED":
             _fail(FinancialIntegrityError, "correction_duplicate_without_action")
-        return self._apply_accepted_transition(
+        return self._apply_accepted_correction_transition(
             connection,
             offset=offset,
             obligation=obligation,
