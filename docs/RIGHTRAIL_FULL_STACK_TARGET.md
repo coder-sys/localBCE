@@ -129,21 +129,20 @@ hash sorted fixed-width big-endian rows after a count. The rules extend the
 sets of the payment's shard's latest signed checkpoint; unbuilt (STATE/v1 limit): the runtime
 verifier that the priors hash to its `state_digest`.
 There is one sequence counter per (tenant, shard, epoch), shared by all of
-the tenant's programs and starting at 0 in each epoch: no two checkpoints in
-that scope share a sequence, whatever their program, each names the
+the tenant's programs and starting at 0 in each epoch: each checkpoint names the
 checkpoint ending just before it as its previous, and an epoch's first
 checkpoint has an all-zero previous digest; a previous link to a
 non-adjacent checkpoint is a fork. Built (`ShardProducer`): the producer
-serializes checkpoints per (tenant, shard), persists each before signing, and checks it against its
-own stored checkpoints for a fork before publishing; tested: a crash between sign and persist never
-publishes the unpersisted checkpoint nor reuses its sequence with other bytes. The KEY-CERT (v1,
+serializes checkpoints per (tenant, shard), persists each before signing, checks its own stored
+checkpoints for a fork before publishing; tested: a crash between sign and persist never
+publishes an unpersisted one nor reuses its sequence with other bytes. The KEY-CERT (v1,
 built) signs every field, the shard count
 included; a payer accepts one certificate per (tenant, epoch); a second with another
 key or shard count is recorded as equivocation and blocks it (a re-signature of
 the same body is not one).
 
-Every `RR/GATE` hash or signature input starts with its name, `/v1` and a
-NUL byte:
+Every `RR/GATE` hash or signature input starts with its name, `/v1` (unless
+shown) and a NUL byte:
 
 | Name | Covers |
 |---|---|
@@ -153,6 +152,7 @@ NUL byte:
 | STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
 | SEGMENT | financial history segments |
 | KEY-CERT | epoch key certificate (v1, built) |
+| CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 
 Checkpoints stream to an independent witness — a separate
