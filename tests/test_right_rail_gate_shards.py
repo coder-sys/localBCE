@@ -244,6 +244,13 @@ class ShardTests(fx.Scratch):
             frame = root_pk + fx._list([signer.framed(cert)]) + fx._list([signer.framed(original)]) + fx._u16(0) + signer.framed(new)
             self.assertTrue(signer.gate_verify(3, frame).startswith("GATE_VERIFY=FORK"))
 
+    def test_same_shard_resend_of_a_paid_line(self) -> None:
+        with self.cluster() as c:
+            c.send(0, {1: [10]})
+            c.send(0, NEXT)
+            self.assertEqual(c.send(0, {8: [10]})[10].split()[0], "HOLD")
+            g.inv(self, c)
+
 
 if __name__ == "__main__":
     unittest.main()
