@@ -20,7 +20,11 @@ open BlindLedger.Gate.Rules
     `pinInput`; a snapshot whose pin does not match or with a row that does
     not parse is treated as missing, as is one after `drop KIND`.
     `line ...row fields... [OUTCOME REASONS [with=IDS]]` adds a line to the
-    batch, `foreign ID...` names ids another shard owns (`decideBatchIn`; cleared by `commit`), `redo PAY` makes the batch re-decide that payment and `pay PAY
+    batch, `foreign ID...` names ids another shard owns (`decideBatchIn`; cleared by `commit`), `owners K ID:SHARD:0|1 ...` gives the id
+    registry's answers to shard K for the next commit, which then decides `decideReg` (twin
+    `Fast.decideRegF`): a payment with an id neither K's nor recorded elsewhere waits (expected `WAIT -`),
+    and the commit prints each line (`RULES_LINE`) and the ids the registry frees (`RULES_FREE`,
+    `settleFree` of `pendingOf`; `free ID...` expects them), `redo PAY` makes the batch re-decide that payment and `pay PAY
     OUTCOME` expects its `payOutcome`; `commit` decides the batch, checks the
     expectations (all lines or none), adds its released and unresolved lines
     to those sets, and takes the result's checkpoints (`advance`).  `anchor
@@ -75,6 +79,9 @@ structure St where
   redo : List Nat := []
   /-- Ids the tenant's id registry gives another shard, for the next commit. -/
   foreign : List Nat := []
+  /-- The id registry's answers to shard K, and the expected freed ids, for the next commit. -/
+  owners : Option (Nat × List Owner) := none
+  free : Option (List Nat) := none
   pays : List (Nat × String) := []
   done : List Decision := []
   checked : Nat := 0
@@ -156,34 +163,54 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
   if !st.anchor.all fun a => Gate.anchored (fun x => (BlindLedger.Semantic.sha3_512Fast x.toByteArray).toList)
       { c with anchor := a } then
-    ({ st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], pays := [],
+    ({ st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], owners := none,
+               free := none, pays := [],
                checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },
      if unanchored then [] else ["RULES_UNANCHORED commit"])
   else
   let lines := st.batch.toList.map (·.1)
-  let x := Fast.Ix.build c lines                        -- FAST
-  let r := x.runIn st.foreign lines                     -- FAST: = decideBatchIn c st.foreign lines
+  -- `owners`: `Fast.decideRegF` (= `decideReg`, `decideRegF_eq`) with the waiting lines left out.
+  let (b, f, wait) := match st.owners with
+    | some (k, os) =>
+      let b := Fast.readyF k os lines
+      let ps := Std.HashSet.ofList (b.map (·.pay))
+      (b, Fast.foreignOfF k os b, lines.filter fun l => !ps.contains l.pay)
+    | none => (lines, st.foreign, [])
+  let x := Fast.Ix.build c b                            -- FAST
+  let r := x.runIn f b                                  -- FAST: = decideBatchIn c f b
   let exp := st.batch.toList.filterMap (·.2)
-  let got := r.decisions.map render
+  let got := r.decisions.map render ++ wait.map (lineText · ++ " WAIT -")
+  let fr := st.owners.map fun (k, os) => Fast.settleFreeF r.released.entries r.unresolved.entries (pendingOf k os)
+  let frOk := st.free.all (some · == fr)
   let bad := st.pays.filter fun (q, o) => name (x.payOutcome r.decisions q) != o
   let (ok, n, msg) :=
     if exp.isEmpty then (true, 0, [])                   -- FAST: no reversed re-run
     else if exp.length == lines.length && sorted exp == sorted got then (true, lines.length, [])
     else (false, 0, ((sorted got).filter (!exp.contains ·)).map ("RULES_GOT " ++ ·))
-  let ok := ok && bad.isEmpty && !unanchored
+  let ok := ok && bad.isEmpty && !unanchored && frOk
   let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
-    (if unanchored then ["RULES_ANCHORED commit"] else [])
+    (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
+  let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)]
   ({ st with pinned := some p, anchor := none,
              extra := st.extra ++ r.released.entries.drop x.relN,     -- FAST: `run_relN`
              held := st.held ++ r.unresolved.entries.drop x.unrN,
-             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], pays := [],
+             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], owners := none,
+             free := none, pays := [],
              done := st.done ++ r.decisions, checked := st.checked + (if ok then n + st.pays.length else 0),
              failed := st.failed + (if ok then 0 else 1) },
-   if ok then [] else "RULES_VECTOR_MISMATCH commit" :: msg)
+   shown ++ if ok then [] else "RULES_VECTOR_MISMATCH commit" :: msg)
+
+/-- `ID:SHARD:0|1`, the last field whether the shard's batch since sealed. -/
+def parseOwner (o : String) : Option Owner := match o.splitOn ":" with
+  | [i, s, b] => do
+    guard (b == "0" || b == "1")
+    pure ⟨← i.toNat?, ← s.toNat?, b == "1"⟩
+  | _ => none
 
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
-                                   anchor := none, batch := #[], redo := [], foreign := [], pays := [], done := [] }, [])
+                                   anchor := none, batch := #[], redo := [], foreign := [], owners := none, free := none,
+                                   pays := [], done := [] }, [])
   | ["anchor", h] => do
     guard (h.length == 128)
     pure ({ st with anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
@@ -201,6 +228,8 @@ def step (st : St) : List String → Option (St × List String)
     pure ({ st with batch := st.batch.push (l, if e.isEmpty then none else some (" ".intercalate (lineText l :: e))) }, [])
   | ["redo", p] => do pure ({ st with redo := (← p.toNat?) :: st.redo }, [])
   | "foreign" :: ids => do pure ({ st with foreign := ← ids.mapM String.toNat? }, [])
+  | "owners" :: k :: os => do pure ({ st with owners := some (← k.toNat?, ← os.mapM parseOwner) }, [])
+  | "free" :: ids => do pure ({ st with free := some (← ids.mapM String.toNat?) }, [])
   | ["pay", p, o] => do pure ({ st with pays := st.pays ++ [(← p.toNat?, o)] }, [])
   | ["commit"] => pure (commit st false)
   | ["commit", "UNANCHORED"] => pure (commit st true)

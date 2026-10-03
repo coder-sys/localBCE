@@ -493,6 +493,9 @@ def foreignOf (k : Nat) (os : List Owner) (b : List Line) : List Nat := (b.map (
 def settleFree (rel unr : List Line) (p : List Nat) : List Nat :=
   p.filter fun i => !((rel ++ unr).map (·.id)).contains i
 
+/-- Shard `k`'s ids in flight in a registry answer: reserved by `k`, not yet recorded (`pendingOf_fair`). -/
+def pendingOf (k : Nat) (os : List Owner) : List Nat := (os.filter fun o => o.shard == k && !o.settled).map (·.id)
+
 /-- One batch of shard `k` against the registry's answers `os`. -/
 def decideReg (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
   decideBatchIn c (foreignOf k os (ready k os b)) (ready k os b)
