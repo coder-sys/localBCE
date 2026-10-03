@@ -130,6 +130,14 @@ class _Clock:
         return self.value
 
 
+def _owner_config(**overrides: object) -> FinancialOwnerConfig:
+    scope = dict(
+        state_id=expected.STATE_ID, deployment_id=expected.DEPLOYMENT_ID, program_id=expected.PROGRAM_ID,
+        period_id=expected.PERIOD_ONE_ID, currency=expected.CURRENCY,
+    )
+    return FinancialOwnerConfig(**{**scope, **overrides})
+
+
 def _image(path: Path) -> bytes:
     """A store's committed content whichever connection closed last (R0.5: under WAL the main file can lag its -wal)."""
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
@@ -269,32 +277,21 @@ class _WriteBoundaryOwner(FinancialOwner):
             os._exit(74)
 
 
+def _boundary_owner(path: str, fault: str, clock_ms: str) -> _WriteBoundaryOwner:
+    return _WriteBoundaryOwner(
+        path=Path(path), config=_owner_config(), trusted_authority=SyntheticTrustedAuthority(),
+        clock=_Clock(int(clock_ms)), fault=fault,
+    )
+
+
 _PROCESS_BOUNDARY_CHILD = """
 import sys
-from pathlib import Path
 
-from app.right_rail_financial_owner import FinancialOwnerConfig, SyntheticTrustedAuthority
 from tests import rightrail_financial_expected_cases as expected
-from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner
+from tests.test_right_rail_financial_acceptance import _boundary_owner
 
-path = Path(sys.argv[1])
 claim_id = sys.argv[2]
-fault = sys.argv[3]
-clock = _Clock(int(sys.argv[4]))
-config = FinancialOwnerConfig(
-    state_id=expected.STATE_ID,
-    deployment_id=expected.DEPLOYMENT_ID,
-    program_id=expected.PROGRAM_ID,
-    period_id=expected.PERIOD_ONE_ID,
-    currency=expected.CURRENCY,
-)
-store = _WriteBoundaryOwner(
-    path=path,
-    config=config,
-    trusted_authority=SyntheticTrustedAuthority(),
-    clock=clock,
-    fault=fault,
-)
+store = _boundary_owner(sys.argv[1], sys.argv[3], sys.argv[4])
 receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
 revision = receipt["revision"]
 print("PHASE=BEFORE_REJECT", flush=True)
@@ -313,29 +310,12 @@ raise SystemExit(99)
 
 _PROCESS_FUNDING_BOUNDARY_CHILD = """
 import sys
-from pathlib import Path
 
-from app.right_rail_financial_owner import FinancialOwnerConfig, ProgramFundingReceipt, SyntheticTrustedAuthority
+from app.right_rail_financial_owner import ProgramFundingReceipt
 from tests import rightrail_financial_expected_cases as expected
-from tests.test_right_rail_financial_acceptance import _Clock, _WriteBoundaryOwner
+from tests.test_right_rail_financial_acceptance import _boundary_owner
 
-path = Path(sys.argv[1])
-fault = sys.argv[2]
-clock = _Clock(int(sys.argv[3]))
-config = FinancialOwnerConfig(
-    state_id=expected.STATE_ID,
-    deployment_id=expected.DEPLOYMENT_ID,
-    program_id=expected.PROGRAM_ID,
-    period_id=expected.PERIOD_ONE_ID,
-    currency=expected.CURRENCY,
-)
-store = _WriteBoundaryOwner(
-    path=path,
-    config=config,
-    trusted_authority=SyntheticTrustedAuthority(),
-    clock=clock,
-    fault=fault,
-)
+store = _boundary_owner(sys.argv[1], sys.argv[2], sys.argv[3])
 fixture = expected.PROGRAM_FUNDING_RECEIPT
 receipt = ProgramFundingReceipt(
     receipt_id=fixture.receipt_id,
@@ -606,49 +586,16 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         path: Path | None = None,
         clock: _Clock | None = None,
         schema_version: int = 8,
+        fault: str | None = None,
     ) -> FinancialOwner:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=period_id,
-            currency=expected.CURRENCY,
-            schema_version=schema_version,
-        )
-        owner = FinancialOwner(
+        kwargs = dict(
             path=path or self._path(),
-            config=config,
+            config=_owner_config(period_id=period_id, schema_version=schema_version),
             trusted_authority=self.authority,
             clock=clock or _Clock(),
         )
+        owner = _WriteBoundaryOwner(fault=fault, **kwargs) if fault else FinancialOwner(**kwargs)
         self.addCleanup(owner.close)  # R1a: the writer holds the file open until closed
-        return owner
-
-    def _make_write_boundary_owner(
-        self,
-        *,
-        fault: str,
-        period_id: str = expected.PERIOD_ONE_ID,
-        path: Path,
-        clock: _Clock | None = None,
-        schema_version: int = 8,
-    ) -> _WriteBoundaryOwner:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=period_id,
-            currency=expected.CURRENCY,
-            schema_version=schema_version,
-        )
-        owner = _WriteBoundaryOwner(
-            path=path,
-            config=config,
-            trusted_authority=self.authority,
-            clock=clock or _Clock(),
-            fault=fault,
-        )
-        self.addCleanup(owner.close)
         return owner
 
     @staticmethod
@@ -737,25 +684,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return _items_from_fixture(expected.PROGRAM_ITEMS, population_id)
 
     def _population_manifest(
-        self,
-        fixture: expected.PopulationManifestExpectation = expected.POPULATION_MANIFEST_V1,
-        *,
-        manifest_id: str | None = None,
-        source_owner_id: str | None = None,
-        member_ids: tuple[str, ...] | None = None,
-        manifest_version: int | None = None,
-        supersedes: PopulationManifest | None = None,
-        approved_by: str | None = None,
-        approval_ref: str | None = None,
-        inclusion_rules: tuple[str, ...] | None = None,
-        cutoff_ms: int | None = None,
+        self, fixture: expected.PopulationManifestExpectation = expected.POPULATION_MANIFEST_V1, **overrides: object,
     ) -> PopulationManifest:
-        return _population_manifest_from_fixture(
-            fixture, self.authority, manifest_id=manifest_id, source_owner_id=source_owner_id,
-            member_ids=member_ids, manifest_version=manifest_version, supersedes=supersedes,
-            approved_by=approved_by, approval_ref=approval_ref,
-            inclusion_rules=inclusion_rules, cutoff_ms=cutoff_ms,
-        )
+        return _population_manifest_from_fixture(fixture, self.authority, **overrides)
 
     @staticmethod
     def _funding_receipt(
@@ -1407,7 +1338,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         precommit_package = precommit_store.export_continuity()
         precommit_summary = precommit_store.summary()
         precommit_counts = self._durable_counts(precommit_store.path)
-        precommit_fault = self._make_write_boundary_owner(
+        precommit_fault = self._make_owner(
             path=precommit_store.path,
             fault="precommit",
             clock=precommit_store.clock,
@@ -1444,7 +1375,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_cash(postcommit_store)
         postcommit_claim = self._record_claim(postcommit_store)
         postcommit_receipt = postcommit_store.current_evaluation_receipt(expected.H_ITEM_ID)
-        postcommit_fault = self._make_write_boundary_owner(
+        postcommit_fault = self._make_owner(
             path=postcommit_store.path,
             fault="postcommit",
             clock=postcommit_store.clock,
@@ -2414,13 +2345,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
 
     def test_history_segment_migration_prevalidates_identity(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-        )
+        config = _owner_config()
         source = FinancialOwner(
             path=self._path("admission-migration-source.sqlite"),
             config=config,
@@ -2435,13 +2360,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             for table in ("history_segments", "history_pending", "history_open"):
                 connection.execute(f"DROP TABLE {table}")
         legacy_bytes = _image(legacy_path)
-        wrong_config = FinancialOwnerConfig(
-            state_id="state:wrong-admission-scope",
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-        )
+        wrong_config = _owner_config(state_id="state:wrong-admission-scope")
         with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
             FinancialOwner(
                 path=legacy_path,
@@ -2462,13 +2381,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(migrated)
 
     def test_per_write_cost_tracks_changed_work(self) -> None:
-        config = FinancialOwnerConfig(
-            state_id=expected.STATE_ID,
-            deployment_id=expected.DEPLOYMENT_ID,
-            program_id=expected.PROGRAM_ID,
-            period_id=expected.PERIOD_ONE_ID,
-            currency=expected.CURRENCY,
-        )
+        config = _owner_config()
         measurements: list[dict[str, object]] = []
 
         def receipt_for(index: int) -> ProgramFundingReceipt:
@@ -3147,13 +3060,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_control_pack_policy_and_wildcard_periods_fail_closed(self) -> None:
         with self.assertRaisesRegex(FinancialInputError, "period_scope_required"):
-            FinancialOwnerConfig(
-                state_id=expected.STATE_ID,
-                deployment_id=expected.DEPLOYMENT_ID,
-                program_id=expected.PROGRAM_ID,
-                period_id="PROGRAM",
-                currency=expected.CURRENCY,
-            )
+            _owner_config(period_id="PROGRAM")
         store = self._make_owner()
         unsupported_rule = replace(self._pack(expected.CONTROL_PACK_V1), calculation_rule_id="calculation:unsupported:v1")
         with self.assertRaisesRegex(FinancialIntegrityError, "control_pack_policy_unsupported"):

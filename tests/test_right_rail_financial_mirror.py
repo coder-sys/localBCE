@@ -574,59 +574,43 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(result["lawful_adjustment_cents"], UNAPPROVED_OFFSET_CENTS)
         self.assertEqual(result["received_cash_cents"], H_CASH_CENTS)
 
-    def test_mirror_offset_authorization_retry_keeps_stored_time_and_rejects_conflicts(self) -> None:
+    def _assert_decision_retry_keeps_stored_time(self, method: str, action_id: str, status: str, conflicting: dict[str, object]) -> None:
         self._prepare_claim()
         receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
         request = {
             "item_id": H_ITEM_ID,
             "claim_id": "claim:offset:h",
-            "action_id": "action:retry-offset:h",
+            "action_id": action_id,
             "expected_revision": receipt["revision"],
             "decision_at_ms": 1_774_922_400_000,
             "evaluation_id": receipt["evaluation_id"],
             "evaluation_result_digest": receipt["result_digest"],
         }
+        decide = getattr(self.mirror, method)
         self.clock.value = 1_774_922_400_000  # recorded when decided
-        first = self.mirror.authorize_offset(**request)
-        self.assertEqual(first["status"], "AUTHORIZED")
+        first = decide(**request)
+        self.assertEqual(first["status"], status)
         after_first = self.mirror.summary()
 
-        duplicate = self.mirror.authorize_offset(**request)
+        duplicate = decide(**request)
         self.assertEqual(duplicate["status"], "DUPLICATE")
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
 
-        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.authorize_offset(**{**request, "decision_at_ms": request["decision_at_ms"] - 1})
-        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.authorize_offset(**{**request, "evaluation_result_digest": "0" * 128})
+        for change in ({"decision_at_ms": request["decision_at_ms"] - 1}, conflicting):
+            with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
+                decide(**{**request, **change})
         self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+
+    def test_mirror_offset_authorization_retry_keeps_stored_time_and_rejects_conflicts(self) -> None:
+        self._assert_decision_retry_keeps_stored_time(
+            "authorize_offset", "action:retry-offset:h", "AUTHORIZED", {"evaluation_result_digest": "0" * 128},
+        )
 
     def test_mirror_correction_retry_keeps_stored_time_and_rejects_conflicts(self) -> None:
-        self._prepare_claim()
-        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
-        request = {
-            "item_id": H_ITEM_ID,
-            "claim_id": "claim:offset:h",
-            "action_id": "action:retry-correction:h",
-            "expected_revision": receipt["revision"],
-            "decision_at_ms": 1_774_922_400_000,
-            "evaluation_id": receipt["evaluation_id"],
-            "evaluation_result_digest": receipt["result_digest"],
-        }
-        self.clock.value = 1_774_922_400_000  # recorded when decided
-        first = self.mirror.reject_offset_and_authorize_correction(**request)
-        self.assertEqual(first["status"], "CORRECTION_AUTHORIZED")
-        after_first = self.mirror.summary()
-
-        duplicate = self.mirror.reject_offset_and_authorize_correction(**request)
-        self.assertEqual(duplicate["status"], "DUPLICATE")
-        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
-
-        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.reject_offset_and_authorize_correction(**{**request, "decision_at_ms": request["decision_at_ms"] - 1})
-        with self.assertRaisesRegex(owner.FinancialConflictError, "determination_request_conflict"):
-            self.mirror.reject_offset_and_authorize_correction(**{**request, "claim_id": "claim:changed:h"})
-        self.assertEqual(self.mirror.summary()["sequence"], after_first["sequence"])
+        self._assert_decision_retry_keeps_stored_time(
+            "reject_offset_and_authorize_correction", "action:retry-correction:h", "CORRECTION_AUTHORIZED",
+            {"claim_id": "claim:changed:h"},
+        )
 
     def test_correction_refuses_a_known_actor_without_the_decision_role_and_changes_nothing(self) -> None:
         self._prepare_claim()
