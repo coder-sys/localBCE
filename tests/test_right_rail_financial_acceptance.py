@@ -5510,8 +5510,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 for action_id, cents in self._open_cents(store).items() if cents is not None}
 
     def test_the_lean_link_rule_agrees_with_pythons_open_amounts(self) -> None:
-        # Python decides linked payments today (`_open_requests`); the Lean rule (`Payment.linkRefusal`, BLFPAY01) is the
-        # proved but unwired twin. For every request the R2 scenarios above leave, Lean records open_cents and refuses
+        # Lean decides linked payments (`Payment.linkRefusal`, BLFPAY01); the open amounts shown (`_open_requests`) must
+        # agree with it. For every request the R2 scenarios above leave, Lean records open_cents and refuses
         # open_cents + 1 with code 8 (LINK_EXCEEDS_UNPAID). A request with 0 open is refused at 1 cent (nothing to record at 0).
         recorded, refused = b"\x00BLFPRS01\x01", b"\x00BLFPRS01\x07\x08"
         seen: list[tuple[str, int]] = []
