@@ -83,6 +83,17 @@ def _cols(row: sqlite3.Row, convert: type, *names: str) -> dict[str, Any]:
     return {name: convert(row[name]) for name in names}
 
 
+def _opt(value: Any, convert: Any) -> Any:
+    return None if value is None else convert(value)
+
+
+def _attrs(source: object, *names: str) -> dict[str, Any]:
+    return {name: getattr(source, name) for name in names}
+
+
+_SCOPE_KEYS = ("state_id", "deployment_id", "program_id", "period_id", "currency")
+
+
 def _raise_if_busy(error: BaseException) -> None:
     """A lock held past the busy timeout is ``store_busy``, never an integrity finding or a raw sqlite error."""
     if isinstance(error, sqlite3.OperationalError) and getattr(error, "sqlite_errorcode", 0) & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
@@ -107,6 +118,7 @@ _MAX_CORRECTION_FOLLOWUP_BYTES: Final[int] = 3 * _MAX_DECISION_PACKAGE_BYTES + 6
 _VERIFIED_STAFF_SNAPSHOT_CONTRACT: Final[str] = "RR/FINANCIAL/OWNER-VERIFIED-STAFF-SNAPSHOT/v1"
 _STAFF_SNAPSHOT_ID_CONTRACT: Final[str] = "RR/FINANCIAL/STAFF-SNAPSHOT-ID/v1"
 _STAFF_WORKSPACE_QUERY: Final[str] = "workspace"
+_OBLIGATION_STATUS_CLAUSES: Final[dict[str, str]] = {"ALL": "1=1", "OPEN": "amount_satisfied=0", "SATISFIED": "amount_satisfied=1", "CASH_UNSATISFIED": "cash_satisfied=0"}
 _STAFF_DECISION_PACKAGE_QUERY: Final[str] = "decision_package"
 _MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
 # History segments (docs/CORE_REDESIGN.md "History segments"): one format with the gate.
@@ -619,6 +631,41 @@ def _is_upper_hex64(value: object) -> bool:
     return type(value) is str and _UPPER_HEX64.match(value) is not None
 
 
+def _is_str(value: object) -> bool:
+    return type(value) is str
+
+
+def _is_int(value: object) -> bool:
+    return type(value) is int
+
+
+def _shaped(value: object, spec: Mapping[str, Any]) -> bool:
+    """True when ``value`` is a dict with exactly ``spec``'s keys and each value passes its check."""
+    return type(value) is dict and set(value) == set(spec) and all(check(value[key]) for key, check in spec.items())
+
+
+def _row_authority(row: sqlite3.Row) -> dict[str, Any]:
+    return {"authority_id": str(row["authority_id"]), "epoch": int(row["authority_epoch"]), "digest": _hex(bytes(row["authority_digest"]))}
+
+
+_STAFF_SCOPE_SHAPE = dict.fromkeys(_SCOPE_KEYS, lambda value: type(value) is str and value != "")
+# snapshot_id is the SHA-256 staff snapshot identity (_staff_snapshot_id), 64 hex digits, recomputed and compared exactly.
+_STAFF_SNAPSHOT_SHAPE = {
+    "schema": _is_str, "schema_version": _is_int, "scope": lambda value: _shaped(value, _STAFF_SCOPE_SHAPE), "mode": _is_str,
+    "owner_id": _is_str, "continuity_epoch": _is_int, "sequence": lambda value: type(value) is int and value >= 0,
+    "history_head": _is_upper_hex128, "snapshot_id": _is_upper_hex64,
+}
+_STAFF_ITEM_BINDING_SHAPE = {
+    "item_id": _is_str, "obligation_id": _is_str, "revision": _is_int, "evaluation_id": _is_str,
+    "evaluation_result_digest": _is_upper_hex128, "control_pack_id": _is_str, "control_pack_version": _is_int,
+    "control_pack_digest": _is_upper_hex128,
+}
+_STAFF_AUTHORITY_SHAPE = {"authority_id": _is_str, "epoch": _is_int, "digest": _is_upper_hex128}
+# v2: the Mirror never shows staff the evaluation's input_snapshot_digest (Art. IV.2), so the binding carries the
+# receipt_digest, whose receipt body includes the input_snapshot_digest; v1 demanded the hidden field.
+_STAFF_INPUT_SHAPE = {"evaluation_id": _is_str, "evaluation_result_digest": _is_upper_hex128, "receipt_digest": _is_upper_hex128}
+
+
 def _staff_snapshot_id(fields: Mapping[str, Any]) -> str:
     """Versioned SHA-256 identity of one staff-visible Owner snapshot (fields exclude ``snapshot_id``).
 
@@ -860,14 +907,13 @@ class SyntheticTrustedAuthority:
         _fail(FinancialAuthorityError, "authority_actor_not_authorized")
 
 
+def _authority_ref(authority: SyntheticTrustedAuthority) -> dict[str, Any]:
+    return {"authority_id": authority.authority_id, "epoch": authority.epoch, "digest": _hex(authority.digest)}
+
+
 def _checker_authority(authority: SyntheticTrustedAuthority) -> dict[str, Any]:
     """Trusted authority binding for the independent checker, including its digest-bound roster."""
-    return {
-        "authority_id": authority.authority_id,
-        "epoch": authority.epoch,
-        "digest": _hex(authority.digest),
-        "actors": [{"actor_id": actor.actor_id, "roles": list(actor.roles)} for actor in authority.actors],
-    }
+    return {**_authority_ref(authority), "actors": [{"actor_id": actor.actor_id, "roles": list(actor.roles)} for actor in authority.actors]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -926,19 +972,9 @@ class ControlPack:
     def canonical_bytes(self) -> bytes:
         return _canonical(
             {
-                "pack_id": self.pack_id,
-                "state_id": self.state_id,
-                "deployment_id": self.deployment_id,
-                "program_id": self.program_id,
-                "period_id": self.period_id,
-                "version": self.version,
+                **_attrs(self, "pack_id", "state_id", "deployment_id", "program_id", "period_id", "version"),
                 "source_refs": list(self.source_refs),
-                "effective_start_ms": self.effective_start_ms,
-                "effective_end_ms": self.effective_end_ms,
-                "recorded_at_ms": self.recorded_at_ms,
-                "approved_at_ms": self.approved_at_ms,
-                "calculation_rule_id": self.calculation_rule_id,
-                "adjustment_rule_id": self.adjustment_rule_id,
+                **_attrs(self, "effective_start_ms", "effective_end_ms", "recorded_at_ms", "approved_at_ms", "calculation_rule_id", "adjustment_rule_id"),
                 "authorized_roles": list(self.authorized_roles),
                 "expected_tests": list(self.expected_tests),
             }
@@ -1031,6 +1067,25 @@ def _evaluation_result_body(value: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in _EVALUATION_RESULT_FIELDS}
 
 
+# Obligation projection columns an evaluation writes, in the order the UPDATE statements bind them.
+_PROJECTION_FIELDS: Final[tuple[str, ...]] = (*_DECIDED_VALUES[1:6], *_DECIDED_FLAGS, *_DECIDED_VALUES[6:])
+
+
+def _decided_evaluation(decided: Any, evaluation_id: str, obligation_id: str, revision: int) -> dict[str, Any]:
+    """Evaluation result fields from a decided outcome (batch decision or accepted correction)."""
+    return {
+        "evaluation_id": evaluation_id,
+        "obligation_id": obligation_id,
+        "revision": revision,
+        "rule_version": decided.rule_version,
+        "evidence_ids": list(decided.evidence_ids),
+        "authority_id": decided.authority_id,
+        "evaluated_at_ms": decided.evaluated_at_ms,
+        **{field: getattr(decided, field) for field in _DECIDED_VALUES},
+        **{field: int(getattr(decided, field)) for field in _DECIDED_FLAGS},
+    }
+
+
 def _evaluation_receipt_body(
     *,
     result: Mapping[str, Any],
@@ -1070,15 +1125,7 @@ def _evaluation_receipt_body(
 
 def _evaluation_binding_digest(bindings: Iterable[Mapping[str, Any]]) -> bytes:
     ordered = sorted(
-        (
-            {
-                "evaluation_id": str(binding["evaluation_id"]),
-                "input_snapshot_digest": str(binding["input_snapshot_digest"]),
-                "result_digest": str(binding["result_digest"]),
-                "receipt_digest": str(binding["receipt_digest"]),
-            }
-            for binding in bindings
-        ),
+        (_cols(binding, str, "evaluation_id", "input_snapshot_digest", "result_digest", "receipt_digest") for binding in bindings),
         key=lambda binding: binding["evaluation_id"],
     )
     return _digest(_EVALUATION_EVENT_DOMAIN, _canonical({"evaluations": ordered}))
@@ -1235,13 +1282,7 @@ class PopulationManifest:
             "contract": _POPULATION_MANIFEST_CONTRACT,
             "manifest_id": self.manifest_id,
             "manifest_version": self.manifest_version,
-            "scope": {
-                "state_id": self.state_id,
-                "deployment_id": self.deployment_id,
-                "program_id": self.program_id,
-                "period_id": self.period_id,
-                "currency": self.currency,
-            },
+            "scope": _attrs(self, *_SCOPE_KEYS),
             "pack_id": self.pack_id,
             "cutoff_ms": self.cutoff_ms,
             "inclusion_rules": list(self.inclusion_rules),
@@ -1323,20 +1364,9 @@ class EvidenceRecord:
     def canonical_bytes(self) -> bytes:
         return _canonical(
             {
-                "evidence_id": self.evidence_id,
-                "item_id": self.item_id,
-                "kind": self.kind,
-                "common_origin_id": self.common_origin_id,
-                "source_id": self.source_id,
-                "source_version": self.source_version,
-                "local_ref": self.local_ref,
-                "applicable_at_ms": self.applicable_at_ms,
-                "event_at_ms": self.event_at_ms,
-                "received_at_ms": self.received_at_ms,
+                **_attrs(self, "evidence_id", "item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref", "applicable_at_ms", "event_at_ms", "received_at_ms"),
                 "content_digest": _hex(self.content_digest),
-                "amount_cents": self.amount_cents,
-                "reversal_of": self.reversal_of,
-                "supersedes": self.supersedes,
+                **_attrs(self, "amount_cents", "reversal_of", "supersedes"),
             }
         )
 
@@ -1366,7 +1396,7 @@ class FinancialOwnerConfig:
 
     @property
     def canonical_bytes(self) -> bytes:
-        return _canonical({"state_id": self.state_id, "deployment_id": self.deployment_id, "program_id": self.program_id, "period_id": self.period_id, "currency": self.currency})
+        return _canonical(_attrs(self, *_SCOPE_KEYS))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1418,18 +1448,7 @@ class ProgramFundingReceipt:
     def as_record(self) -> dict[str, Any]:
         return {
             "schema": _PROGRAM_FUNDING_RECEIPT_SCHEMA,
-            "receipt_id": self.receipt_id,
-            "state_id": self.state_id,
-            "deployment_id": self.deployment_id,
-            "program_id": self.program_id,
-            "period_id": self.period_id,
-            "currency": self.currency,
-            "source_record_ref": self.source_record_ref,
-            "amount_cents": self.amount_cents,
-            "confirmation_class": self.confirmation_class,
-            "evidence_status": self.evidence_status,
-            "event_at_ms": self.event_at_ms,
-            "supersedes_receipt_id": self.supersedes_receipt_id,
+            **_attrs(self, "receipt_id", *_SCOPE_KEYS, "source_record_ref", "amount_cents", "confirmation_class", "evidence_status", "event_at_ms", "supersedes_receipt_id"),
         }
 
     @property
@@ -2817,35 +2836,9 @@ class FinancialOwner:
             "SELECT * FROM population_imports WHERE population_id=?",
             (population_id,),
         ).fetchone()
-        binding = connection.execute(
-            "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
-            (population_id,),
-        ).fetchone()
-        if population is None or binding is None:
+        if population is None:
             _fail(FinancialIntegrityError, "population_manifest_binding_missing")
-        if (
-            str(population["status"]) != "PUBLISHED"
-            or int(population["source_complete"]) != 1
-            or int(population["imported_count"]) != int(population["expected_count"])
-            or int(population["validated_count"]) != int(population["expected_count"])
-        ):
-            _fail(FinancialIntegrityError, "population_manifest_incomplete")
-        rules = _stored_values(population["inclusion_rules_json"], "population_manifest_integrity")
-        if any(type(value) is not str for value in rules):
-            _fail(FinancialIntegrityError, "population_manifest_integrity")
-        manifest, manifest_row = self._validate_population_manifest(
-            connection,
-            manifest_id=str(binding["manifest_id"]),
-            pack_id=str(population["pack_id"]),
-            cutoff_ms=int(population["cutoff_ms"]),
-            inclusion_rules=rules,
-            expected_count=int(population["expected_count"]),
-        )
-        if (
-            int(binding["manifest_version"]) != manifest.manifest_version
-            or bytes(binding["manifest_digest"]) != manifest.digest
-        ):
-            _fail(FinancialIntegrityError, "population_manifest_binding")
+        manifest, manifest_row = self._bound_population_manifest(connection, population, published=True)
         actual_members = self._population_member_ids(connection, population_id)
         if (
             actual_members != manifest.member_ids
@@ -2947,17 +2940,7 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, f"lean_evaluation:{error}")
         self._batch.evaluated.add(obligation_id)
         evaluation_id = f"evaluation:{obligation_id}:r{decided.after_revision}"
-        result = {
-            "evaluation_id": evaluation_id,
-            "obligation_id": obligation_id,
-            "revision": decided.after_revision,
-            "rule_version": decided.rule_version,
-            "evidence_ids": list(decided.evidence_ids),
-            "authority_id": decided.authority_id,
-            "evaluated_at_ms": decided.evaluated_at_ms,
-            **{field: getattr(decided, field) for field in _DECIDED_VALUES},
-            **{field: int(getattr(decided, field)) for field in _DECIDED_FLAGS},
-        }
+        result = _decided_evaluation(decided, evaluation_id, obligation_id, decided.after_revision)
         connection.execute("UPDATE cases SET status=?,updated_at_ms=? WHERE obligation_id=?", (decided.case_status, now_ms, obligation_id))
         stored_evaluation = self._insert_evaluation(
             connection,
@@ -2970,10 +2953,7 @@ class FinancialOwner:
         updated = connection.execute(
             "UPDATE obligations SET revision=?,claimed_adjustment_cents=?,lawful_adjustment_cents=?,received_cash_cents=?,shortfall_cents=?,overage_cents=?,cash_satisfied=?,amount_satisfied=?,timely=?,verification_status=?,case_status=?,delivery_status=?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?",
             (
-                decided.after_revision, decided.claimed_adjustment_cents, decided.lawful_adjustment_cents,
-                decided.received_cash_cents, decided.shortfall_cents, decided.overage_cents,
-                result["cash_satisfied"], result["amount_satisfied"], result["timely"],
-                decided.verification_status, decided.case_status, decided.delivery_status,
+                decided.after_revision, *(result[field] for field in _PROJECTION_FIELDS if field != "reporting_complete"),
                 evaluation_id, now_ms, obligation_id, decided.before_revision,
             ),
         )
@@ -3134,8 +3114,10 @@ class FinancialOwner:
         self,
         connection: sqlite3.Connection,
         population: sqlite3.Row,
+        *,
+        published: bool = False,
     ) -> tuple[PopulationManifest, sqlite3.Row]:
-        """Validate the current manifest bound to one population import row."""
+        """Validate the current manifest bound to one population import row; ``published`` also requires a complete, published import."""
 
         binding = connection.execute(
             "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
@@ -3143,12 +3125,22 @@ class FinancialOwner:
         ).fetchone()
         if binding is None:
             _fail(FinancialIntegrityError, "population_manifest_binding_missing")
+        if published and (
+            str(population["status"]) != "PUBLISHED"
+            or int(population["source_complete"]) != 1
+            or int(population["imported_count"]) != int(population["expected_count"])
+            or int(population["validated_count"]) != int(population["expected_count"])
+        ):
+            _fail(FinancialIntegrityError, "population_manifest_incomplete")
+        rules = _stored_values(population["inclusion_rules_json"], "population_manifest_integrity")
+        if published and any(type(value) is not str for value in rules):
+            _fail(FinancialIntegrityError, "population_manifest_integrity")
         manifest, manifest_row = self._validate_population_manifest(
             connection,
             manifest_id=str(binding["manifest_id"]),
             pack_id=str(population["pack_id"]),
             cutoff_ms=int(population["cutoff_ms"]),
-            inclusion_rules=_stored_values(population["inclusion_rules_json"], "population_manifest_integrity"),
+            inclusion_rules=rules,
             expected_count=int(population["expected_count"]),
         )
         if int(binding["manifest_version"]) != manifest.manifest_version or bytes(binding["manifest_digest"]) != manifest.digest:
@@ -3167,8 +3159,7 @@ class FinancialOwner:
     ) -> tuple[PopulationManifest, sqlite3.Row]:
         manifest, row = self._load_population_manifest(connection, manifest_id)
         if (
-            (manifest.state_id, manifest.deployment_id, manifest.program_id, manifest.period_id, manifest.currency)
-            != (self.config.state_id, self.config.deployment_id, self.config.program_id, self.config.period_id, self.config.currency)
+            _attrs(manifest, *_SCOPE_KEYS) != _attrs(self.config, *_SCOPE_KEYS)
             or manifest.pack_id != pack_id
             or manifest.cutoff_ms != cutoff_ms
             or manifest.inclusion_rules != inclusion_rules
@@ -3194,21 +3185,21 @@ class FinancialOwner:
         self._assert_actionable()
         if type(manifest) is not PopulationManifest:
             _fail(FinancialInputError, "population_manifest_type")
-        if (
-            (manifest.state_id, manifest.deployment_id, manifest.program_id, manifest.period_id, manifest.currency)
-            != (self.config.state_id, self.config.deployment_id, self.config.program_id, self.config.period_id, self.config.currency)
-        ):
+        if _attrs(manifest, *_SCOPE_KEYS) != _attrs(self.config, *_SCOPE_KEYS):
             _fail(FinancialInputError, "population_manifest_scope")
-        if (
-            manifest.authority_id != self.trusted_authority.authority_id
-            or manifest.authority_epoch != self.trusted_authority.epoch
-            or manifest.authority_digest != self.trusted_authority.digest
-        ):
+        authority = self.trusted_authority
+        if (manifest.authority_id, manifest.authority_epoch, manifest.authority_digest) != (authority.authority_id, authority.epoch, authority.digest):
             _fail(FinancialAuthorityError, "population_manifest_authority")
-        self.trusted_authority.require(manifest.approved_by, "FINANCE_DECISION")
+        authority.require(manifest.approved_by, "FINANCE_DECISION")
         encoded_rules = _values_json(manifest.inclusion_rules)
         manifest_digest = manifest.digest
         member_digest = manifest.member_digest
+        receipt = {
+            "manifest_id": manifest.manifest_id,
+            "manifest_version": manifest.manifest_version,
+            "manifest_digest": _hex(manifest_digest),
+            "member_count": len(manifest.member_ids),
+        }
         scope_key = (
             manifest.state_id, manifest.deployment_id, manifest.program_id, manifest.period_id,
             manifest.pack_id, manifest.cutoff_ms, manifest.source_owner_id,
@@ -3222,13 +3213,7 @@ class FinancialOwner:
                 stored_manifest, _stored_row = self._load_population_manifest(connection, manifest.manifest_id)
                 if stored_manifest.member_ids != manifest.member_ids:
                     _fail(FinancialIntegrityError, "population_manifest_integrity")
-                return {
-                    "status": "DUPLICATE",
-                    "manifest_id": manifest.manifest_id,
-                    "manifest_version": manifest.manifest_version,
-                    "manifest_digest": _hex(manifest_digest),
-                    "member_count": len(manifest.member_ids),
-                }
+                return {"status": "DUPLICATE", **receipt}
             if head is None:
                 if manifest.manifest_version != 1 or manifest.supersedes_manifest_id is not None:
                     _fail(FinancialConflictError, "population_manifest_supersedes_missing")
@@ -3300,33 +3285,11 @@ class FinancialOwner:
                 },
                 committed_at_ms=now_ms,
             )
-            return {
-                "status": "REGISTERED" if head is None else "SUPERSEDED",
-                "manifest_id": manifest.manifest_id,
-                "manifest_version": manifest.manifest_version,
-                "manifest_digest": _hex(manifest_digest),
-                "member_count": len(manifest.member_ids),
-            }
+            return {"status": "REGISTERED" if head is None else "SUPERSEDED", **receipt}
 
-    def _bind_population_manifest(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        population_id: str,
-        manifest_id: str,
-        pack_id: str,
-        cutoff_ms: int,
-        inclusion_rules: tuple[str, ...],
-        expected_count: int,
-    ) -> tuple[PopulationManifest, sqlite3.Row]:
-        manifest, row = self._validate_population_manifest(
-            connection,
-            manifest_id=manifest_id,
-            pack_id=pack_id,
-            cutoff_ms=cutoff_ms,
-            inclusion_rules=inclusion_rules,
-            expected_count=expected_count,
-        )
+    def _bind_population_manifest(self, connection: sqlite3.Connection, *, population_id: str, manifest_id: str, **identity: Any) -> tuple[PopulationManifest, sqlite3.Row]:
+        """``identity`` is the import's pack_id, cutoff_ms, inclusion_rules and expected_count."""
+        manifest, row = self._validate_population_manifest(connection, manifest_id=manifest_id, **identity)
         existing = connection.execute(
             "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
             (population_id,),
@@ -3375,31 +3338,13 @@ class FinancialOwner:
         )
         return connection.execute("SELECT * FROM population_imports WHERE population_id=?", (population_id,)).fetchone(), True, pack
 
-    def _stage_population_chunk(
-        self,
-        *,
-        population_id: str,
-        manifest_id: str,
-        pack_id: str,
-        cutoff_ms: int,
-        inclusion_rules: tuple[str, ...],
-        expected_count: int,
-        chunk: tuple[PopulationItem, ...],
-    ) -> None:
+    def _stage_population_chunk(self, *, population_id: str, manifest_id: str, identity: dict[str, Any], chunk: tuple[PopulationItem, ...]) -> None:
         if not chunk:
             return
         with self._write() as connection:
             now_ms = self._now()
-            population, _created, pack = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=now_ms, create=False)
-            manifest, manifest_row = self._bind_population_manifest(
-                connection,
-                population_id=population_id,
-                manifest_id=manifest_id,
-                pack_id=pack_id,
-                cutoff_ms=cutoff_ms,
-                inclusion_rules=inclusion_rules,
-                expected_count=expected_count,
-            )
+            population, _created, pack = self._ensure_population_import(connection, population_id=population_id, **identity, now_ms=now_ms, create=False)
+            manifest, manifest_row = self._bind_population_manifest(connection, population_id=population_id, manifest_id=manifest_id, **identity)
             manifest_members = set(manifest.member_ids)
             current_count = population["imported_count"]  # its item count (_ensure_population_import)
             seen: dict[str, tuple[str, int, int, str]] = {}
@@ -3424,7 +3369,7 @@ class FinancialOwner:
                 new_items.append(item)
             if new_items and str(population["status"]) != "STAGED":
                 _fail(FinancialConflictError, "population_not_staged")
-            if current_count + len(new_items) > expected_count:
+            if current_count + len(new_items) > identity["expected_count"]:
                 _fail(FinancialIntegrityError, "population_count_exceeded")
             if not new_items:
                 return
@@ -3477,26 +3422,12 @@ class FinancialOwner:
         if type(chunk_size) is not int or not 1 <= chunk_size <= 1000:
             _fail(FinancialInputError, "population_chunk_size")
         iterator = iter(items)
+        identity = {"pack_id": pack_id, "cutoff_ms": cutoff_ms, "inclusion_rules": inclusion_rules, "expected_count": expected_count}
         with self._write() as connection:
-            self._validate_population_manifest(
-                connection,
-                manifest_id=manifest_id,
-                pack_id=pack_id,
-                cutoff_ms=cutoff_ms,
-                inclusion_rules=inclusion_rules,
-                expected_count=expected_count,
-            )
+            self._validate_population_manifest(connection, manifest_id=manifest_id, **identity)
             opened_at_ms = self._now()
-            population, created, _pack = self._ensure_population_import(connection, population_id=population_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, now_ms=opened_at_ms, create=True)
-            manifest, manifest_row = self._bind_population_manifest(
-                connection,
-                population_id=population_id,
-                manifest_id=manifest_id,
-                pack_id=pack_id,
-                cutoff_ms=cutoff_ms,
-                inclusion_rules=inclusion_rules,
-                expected_count=expected_count,
-            )
+            population, created, _pack = self._ensure_population_import(connection, population_id=population_id, **identity, now_ms=opened_at_ms, create=True)
+            manifest, manifest_row = self._bind_population_manifest(connection, population_id=population_id, manifest_id=manifest_id, **identity)
             if created:
                 # Article III.2: the staged import row and its manifest binding
                 # commit together with their history event, exactly once.
@@ -3538,19 +3469,12 @@ class FinancialOwner:
             seen_input_ids.add(item.item_id)
             chunk.append(item)
             if len(chunk) >= chunk_size:
-                self._stage_population_chunk(population_id=population_id, manifest_id=manifest_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, chunk=tuple(chunk))
+                self._stage_population_chunk(population_id=population_id, manifest_id=manifest_id, identity=identity, chunk=tuple(chunk))
                 chunk.clear()
         if chunk:
-            self._stage_population_chunk(population_id=population_id, manifest_id=manifest_id, pack_id=pack_id, cutoff_ms=cutoff_ms, inclusion_rules=inclusion_rules, expected_count=expected_count, chunk=tuple(chunk))
+            self._stage_population_chunk(population_id=population_id, manifest_id=manifest_id, identity=identity, chunk=tuple(chunk))
         with self._write() as connection:
-            manifest, manifest_row = self._validate_population_manifest(
-                connection,
-                manifest_id=manifest_id,
-                pack_id=pack_id,
-                cutoff_ms=cutoff_ms,
-                inclusion_rules=inclusion_rules,
-                expected_count=expected_count,
-            )
+            manifest, manifest_row = self._validate_population_manifest(connection, manifest_id=manifest_id, **identity)
             binding = connection.execute(
                 "SELECT manifest_id,manifest_version,manifest_digest FROM population_manifest_bindings WHERE population_id=?",
                 (population_id,),
@@ -3702,13 +3626,7 @@ class FinancialOwner:
             }
 
     def _scope_value(self) -> dict[str, str]:
-        return {
-            "state_id": self.config.state_id,
-            "deployment_id": self.config.deployment_id,
-            "program_id": self.config.program_id,
-            "period_id": self.config.period_id,
-            "currency": self.config.currency,
-        }
+        return _attrs(self.config, *_SCOPE_KEYS)
 
     def _evaluation_input_snapshot(
         self,
@@ -3731,11 +3649,7 @@ class FinancialOwner:
             "obligation": {
                 "obligation_id": str(obligation["obligation_id"]),
                 "item_id": item_id,
-                "revision": int(obligation["revision"]),
-                "rule_version": int(obligation["rule_version"]),
-                "owed_cents": int(obligation["owed_cents"]),
-                "due_at_ms": int(obligation["due_at_ms"]),
-                "reporting_complete": int(obligation["reporting_complete"]),
+                **_cols(obligation, int, "revision", "rule_version", "owed_cents", "due_at_ms", "reporting_complete"),
             },
             "evidence": [
                 {
@@ -4051,7 +3965,7 @@ class FinancialOwner:
             **_cols(row, int, "revision", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents"),
             **_cols(row, bool, "cash_satisfied", "amount_satisfied", "timely", "reporting_complete"),
             **_cols(row, str, "verification_status", "case_status", "delivery_status"),
-            "current_evaluation_id": None if row["current_evaluation_id"] is None else str(row["current_evaluation_id"]),
+            "current_evaluation_id": _opt(row["current_evaluation_id"], str),
             "due_at_ms": int(row["due_at_ms"]),
         }
 
@@ -4265,76 +4179,12 @@ class FinancialOwner:
         } or binding.get("contract") != "RR/FINANCIAL/STAFF-COMMAND-BINDING/v2":
             malformed()
         snapshot = binding["snapshot"]
-        snapshot_fields = (
-            "schema", "schema_version", "scope", "mode", "owner_id",
-            "continuity_epoch", "sequence", "history_head", "snapshot_id",
-        )
-        if type(snapshot) is not dict or set(snapshot) != set(snapshot_fields):
+        if not _shaped(snapshot, _STAFF_SNAPSHOT_SHAPE):
             malformed()
-        scope = snapshot["scope"]
-        if type(scope) is not dict or set(scope) != {
-            "state_id", "deployment_id", "program_id", "period_id", "currency",
-        } or any(type(value) is not str or not value for value in scope.values()):
-            malformed()
-        if (
-            type(snapshot["schema"]) is not str
-            or type(snapshot["schema_version"]) is not int
-            or type(snapshot["mode"]) is not str
-            or type(snapshot["owner_id"]) is not str
-            or type(snapshot["continuity_epoch"]) is not int
-            or type(snapshot["sequence"]) is not int
-            or snapshot["sequence"] < 0
-            or not _is_upper_hex128(snapshot["history_head"])
-            # snapshot_id is the SHA-256 staff snapshot identity (_staff_snapshot_id),
-            # 64 hex digits; it is recomputed and compared exactly below.
-            or not _is_upper_hex64(snapshot["snapshot_id"])
-        ):
-            malformed()
-        if snapshot["snapshot_id"] != _staff_snapshot_id({key: snapshot[key] for key in snapshot_fields if key != "snapshot_id"}):
+        if snapshot["snapshot_id"] != _staff_snapshot_id({key: value for key, value in snapshot.items() if key != "snapshot_id"}):
             conflict()
-
-        item_binding = binding["item_binding"]
-        item_fields = {
-            "item_id", "obligation_id", "revision", "evaluation_id",
-            "evaluation_result_digest", "control_pack_id", "control_pack_version",
-            "control_pack_digest",
-        }
-        if (
-            type(item_binding) is not dict
-            or set(item_binding) != item_fields
-            or type(item_binding.get("item_id")) is not str
-            or type(item_binding.get("obligation_id")) is not str
-            or type(item_binding.get("revision")) is not int
-            or type(item_binding.get("evaluation_id")) is not str
-            or not _is_upper_hex128(item_binding.get("evaluation_result_digest"))
-            or type(item_binding.get("control_pack_id")) is not str
-            or type(item_binding.get("control_pack_version")) is not int
-            or not _is_upper_hex128(item_binding.get("control_pack_digest"))
-        ):
-            malformed()
-        authority = binding["authority"]
-        if (
-            type(authority) is not dict
-            or set(authority) != {"authority_id", "epoch", "digest"}
-            or type(authority.get("authority_id")) is not str
-            or type(authority.get("epoch")) is not int
-            or not _is_upper_hex128(authority.get("digest"))
-        ):
-            malformed()
-        # v2: the Mirror never shows staff the evaluation's input_snapshot_digest
-        # (Art. IV.2), so the binding carries the receipt_digest, whose receipt
-        # body includes the input_snapshot_digest; v1 demanded the hidden field
-        # and could never be satisfied.
-        input_binding = binding["input"]
-        if (
-            type(input_binding) is not dict
-            or set(input_binding) != {"evaluation_id", "evaluation_result_digest", "receipt_digest"}
-            or type(input_binding.get("evaluation_id")) is not str
-            or not all(
-                _is_upper_hex128(input_binding.get(key))
-                for key in ("evaluation_result_digest", "receipt_digest")
-            )
-        ):
+        item_binding, authority, input_binding = binding["item_binding"], binding["authority"], binding["input"]
+        if not (_shaped(item_binding, _STAFF_ITEM_BINDING_SHAPE) and _shaped(authority, _STAFF_AUTHORITY_SHAPE) and _shaped(input_binding, _STAFF_INPUT_SHAPE)):
             malformed()
         if (
             expected_revision is None
@@ -4356,31 +4206,20 @@ class FinancialOwner:
         ).fetchone()
         if evaluation is None:
             conflict()
+        result_hex = _hex(bytes(evaluation["result_digest"]))
         expected_item_binding = {
             "item_id": item_id,
             "obligation_id": str(obligation["obligation_id"]),
             "revision": int(evaluation["revision"]),
             "evaluation_id": str(evaluation["evaluation_id"]),
-            "evaluation_result_digest": _hex(bytes(evaluation["result_digest"])),
+            "evaluation_result_digest": result_hex,
             "control_pack_id": str(evaluation["control_pack_id"]),
             "control_pack_version": int(evaluation["control_pack_version"]),
             "control_pack_digest": _hex(bytes(evaluation["control_pack_digest"])),
         }
-        expected_authority = {
-            "authority_id": str(evaluation["authority_id"]),
-            "epoch": int(evaluation["authority_epoch"]),
-            "digest": _hex(bytes(evaluation["authority_digest"])),
-        }
-        expected_input = {
-            "evaluation_id": str(evaluation["evaluation_id"]),
-            "evaluation_result_digest": _hex(bytes(evaluation["result_digest"])),
-            "receipt_digest": _hex(bytes(evaluation["receipt_digest"])),
-        }
-        if (
-            item_binding != expected_item_binding
-            or authority != expected_authority
-            or input_binding != expected_input
-        ):
+        expected_authority = _row_authority(evaluation)
+        expected_input = {"evaluation_id": str(evaluation["evaluation_id"]), "evaluation_result_digest": result_hex, "receipt_digest": _hex(bytes(evaluation["receipt_digest"]))}
+        if item_binding != expected_item_binding or authority != expected_authority or input_binding != expected_input:
             conflict()
 
         meta = self._meta(connection)
@@ -4415,11 +4254,9 @@ class FinancialOwner:
                 "AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence DESC",
                 (obligation["obligation_id"],),
             ).fetchall()
-            matched_event = None
             for event in events:
                 event_payload = _stored_object(event["payload_json"], "staff_command_binding_event")
                 if event_payload.get("action_id") == action_id:
-                    matched_event = event
                     # The event's own ``evaluation_id`` is the result evaluation
                     # the transition created; the reviewed input evaluation is
                     # recorded in ``correction_followup.input_evaluation``.
@@ -4437,8 +4274,6 @@ class FinancialOwner:
                     ):
                         return
                     break
-            if matched_event is None:
-                conflict()
             conflict()
 
         meta_sequence = int(meta["sequence"])
@@ -4551,12 +4386,11 @@ class FinancialOwner:
         ]
         control_pack = input_receipt["control_pack"]
         authority = self.trusted_authority
+        authority_fields = {"authority_id": authority.authority_id, "authority_epoch": authority.epoch, "authority_digest": authority.digest}
 
         require_binding(transition_result["action_id"] == action_id and mutation["transition"] == decision, "correction_result_identity")
         require_binding(
-            dependencies["authority_id"] == authority.authority_id
-            and dependencies["authority_epoch"] == authority.epoch
-            and dependencies["authority_digest"] == authority.digest
+            all(dependencies[key] == value for key, value in authority_fields.items())
             and dependencies["control_pack_id"] == pack.pack_id == control_pack["pack_id"]
             and dependencies["control_pack_version"] == pack.version == control_pack["version"]
             and dependencies["control_pack_digest"] == pack.digest == bytes.fromhex(control_pack["digest"])
@@ -4574,9 +4408,7 @@ class FinancialOwner:
             "correction_dependency_binding",
         )
         expected_claim = {
-            "claim_id": str(claim["claim_id"]),
-            "obligation_id": str(claim["obligation_id"]),
-            "evidence_id": str(claim["evidence_id"]),
+            **_cols(claim, str, "claim_id", "obligation_id", "evidence_id"),
             "amount_cents": int(claim["amount_cents"]),
             "owner_role": str(claim["owner_role"]),
             "deadline_at_ms": int(claim["deadline_ms"]),
@@ -4587,9 +4419,7 @@ class FinancialOwner:
             and determination["obligation_id"] == obligation_id
             and determination["actor_id"] == command["actor_id"]
             and determination["actor_role"] == command["actor_role"]
-            and determination["authority_id"] == authority.authority_id
-            and determination["authority_epoch"] == authority.epoch
-            and determination["authority_digest"] == authority.digest
+            and all(determination[key] == value for key, value in authority_fields.items())
             and determination["expected_revision"] == expected_revision
             and determination["decided_at_ms"] == command["decision_at_ms"],
             "correction_determination_binding",
@@ -4601,26 +4431,20 @@ class FinancialOwner:
         )
         action_amount = int(action["amount_cents"])
 
-        determination_payload = _determination_digest_payload(
-            action_id=action_id,
-            determination_id=determination_id,
-            obligation_id=obligation_id,
-            kind=action_kind,
-            claim_id=str(command["claim_id"]),
-            decision=decision,
-            amount_cents=expected_claim["amount_cents"],
-            input_evaluation_id=str(command["evaluation_id"]),
-            input_evaluation_result_digest=input_result_digest,
-            actor_id=str(command["actor_id"]),
-            actor_role=str(command["actor_role"]),
-            authority_id=authority.authority_id,
-            authority_epoch=authority.epoch,
-            authority_digest=authority.digest,
-            supporting_evidence=evidence_bindings,
-            expected_revision=expected_revision,
-            resulting_revision=resulting_revision,
-            decided_at_ms=int(command["decision_at_ms"]),
-        )
+        determination_fields = {
+            "determination_id": determination_id,
+            "obligation_id": obligation_id,
+            **_cols(command, str, "claim_id", "actor_id", "actor_role"),
+            **authority_fields,
+            "decision": decision,
+            "amount_cents": expected_claim["amount_cents"],
+            "expected_revision": expected_revision,
+            "resulting_revision": resulting_revision,
+            "decided_at_ms": int(command["decision_at_ms"]),
+            "input_evaluation_id": str(command["evaluation_id"]),
+            "input_evaluation_result_digest": input_result_digest,
+        }
+        determination_payload = _determination_digest_payload(action_id=action_id, kind=action_kind, supporting_evidence=evidence_bindings, **determination_fields)
         expected_determination_digest = _digest(_ACTION_DOMAIN, _canonical(determination_payload))
         action_payload = {
             "action_id": action_id,
@@ -4645,23 +4469,9 @@ class FinancialOwner:
         require_binding((prior_case is None) is case_delta["inserted"], "correction_case_inserted_binding")
 
         self._insert_row(connection, "determinations", {
-            "determination_id": determination_id,
-            "obligation_id": obligation_id,
-            "claim_id": str(command["claim_id"]),
-            "actor_id": str(command["actor_id"]),
-            "actor_role": str(command["actor_role"]),
-            "authority_id": authority.authority_id,
-            "authority_epoch": authority.epoch,
-            "authority_digest": authority.digest,
-            "decision": decision,
-            "amount_cents": expected_claim["amount_cents"],
+            **determination_fields,
             "supporting_evidence_json": _canonical({"bindings": evidence_bindings}).decode("ascii"),
-            "expected_revision": expected_revision,
-            "resulting_revision": resulting_revision,
-            "decided_at_ms": int(command["decision_at_ms"]),
             "determination_digest": expected_determination_digest,
-            "input_evaluation_id": str(command["evaluation_id"]),
-            "input_evaluation_result_digest": input_result_digest,
         })
         changed_claim = connection.execute(
             "UPDATE claimed_adjustments SET status=?,updated_at_ms=? "
@@ -4678,13 +4488,7 @@ class FinancialOwner:
             "next_action_owner": str(case_record["next_action_owner"]),
             "due_at_ms": int(case_record["due_at_ms"]),
             "completion_conditions_json": _canonical(
-                {
-                    "amount_satisfied": case_delta["completion_conditions_amount_satisfied"],
-                    "reporting_complete": case_delta["completion_conditions_reporting_complete"],
-                    "delivery_acknowledged_or_not_required": case_delta[
-                        "completion_conditions_delivery_acknowledged_or_not_required"
-                    ],
-                }
+                {key: case_delta[f"completion_conditions_{key}"] for key in ("amount_satisfied", "reporting_complete", "delivery_acknowledged_or_not_required")}
             ).decode("ascii"),
             "status": str(case_record["status"]),
             "updated_at_ms": mutation_time,
@@ -4696,15 +4500,8 @@ class FinancialOwner:
                 "UPDATE cases SET reason=?,contractual_accountability=?,next_action_owner=?,due_at_ms=?,"
                 "completion_conditions_json=?,status=?,updated_at_ms=? WHERE case_id=? AND obligation_id=?",
                 (
-                    case_values["reason"],
-                    case_values["contractual_accountability"],
-                    case_values["next_action_owner"],
-                    case_values["due_at_ms"],
-                    case_values["completion_conditions_json"],
-                    case_values["status"],
-                    mutation_time,
-                    case_values["case_id"],
-                    obligation_id,
+                    *(case_values[key] for key in ("reason", "contractual_accountability", "next_action_owner", "due_at_ms", "completion_conditions_json", "status")),
+                    mutation_time, case_values["case_id"], obligation_id,
                 ),
             )
         connection.execute(
@@ -4746,30 +4543,10 @@ class FinancialOwner:
         except (semantic.SemanticAdapterError, financial_engine.FinancialEngineError) as error:
             _fail(FinancialIntegrityError, f"correction_post_state:{error}")
 
+        result = _decided_evaluation(financial_result, evaluation_id, obligation_id, resulting_revision)
         evaluation_receipt = self._insert_evaluation(
             connection,
-            result={
-                "evaluation_id": evaluation_id,
-                "obligation_id": obligation_id,
-                "revision": resulting_revision,
-                "rule_version": financial_result.rule_version,
-                "evidence_ids": list(financial_result.evidence_ids),
-                "authority_id": financial_result.authority_id,
-                "evaluated_at_ms": financial_result.evaluated_at_ms,
-                "owed_cents": financial_result.owed_cents,
-                "claimed_adjustment_cents": financial_result.claimed_adjustment_cents,
-                "lawful_adjustment_cents": financial_result.lawful_adjustment_cents,
-                "received_cash_cents": financial_result.received_cash_cents,
-                "shortfall_cents": financial_result.shortfall_cents,
-                "overage_cents": financial_result.overage_cents,
-                "cash_satisfied": int(financial_result.cash_satisfied),
-                "amount_satisfied": int(financial_result.amount_satisfied),
-                "timely": int(financial_result.timely),
-                "reporting_complete": int(financial_result.reporting_complete),
-                "verification_status": financial_result.verification_status,
-                "case_status": financial_result.case_status,
-                "delivery_status": financial_result.delivery_status,
-            },
+            result=result,
             pack=pack,
             evidence_bindings=evidence_bindings,
             authority_epoch=authority.epoch,
@@ -4782,24 +4559,8 @@ class FinancialOwner:
             "current_evaluation_id=?,updated_at_ms=? "
             "WHERE obligation_id=? AND revision=? AND current_evaluation_id=?",
             (
-                resulting_revision,
-                financial_result.claimed_adjustment_cents,
-                financial_result.lawful_adjustment_cents,
-                financial_result.received_cash_cents,
-                financial_result.shortfall_cents,
-                financial_result.overage_cents,
-                int(financial_result.cash_satisfied),
-                int(financial_result.amount_satisfied),
-                int(financial_result.timely),
-                int(financial_result.reporting_complete),
-                financial_result.verification_status,
-                financial_result.case_status,
-                financial_result.delivery_status,
-                evaluation_id,
-                mutation_time,
-                obligation_id,
-                expected_revision,
-                str(command["evaluation_id"]),
+                resulting_revision, *(result[field] for field in _PROJECTION_FIELDS),
+                evaluation_id, mutation_time, obligation_id, expected_revision, str(command["evaluation_id"]),
             ),
         )
         require_binding(projection_update.rowcount == 1, "correction_projection_update")
@@ -4825,16 +4586,8 @@ class FinancialOwner:
                     "version": int(dependencies["artifact_version"]),
                     "sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256),
                 },
-                "control_pack": {
-                    "pack_id": pack.pack_id,
-                    "version": pack.version,
-                    "digest": _hex(pack.digest),
-                },
-                "authority": {
-                    "authority_id": authority.authority_id,
-                    "epoch": authority.epoch,
-                    "digest": _hex(authority.digest),
-                },
+                "control_pack": {**_attrs(pack, "pack_id", "version"), "digest": _hex(pack.digest)},
+                "authority": _authority_ref(authority),
                 "input_evaluation": {
                     "evaluation_id": str(input_receipt["evaluation_id"]),
                     "revision": int(input_receipt["revision"]),
@@ -4851,24 +4604,15 @@ class FinancialOwner:
                 "case_status": str(case_record["status"]),
                 "action_status": "READY",
                 "outbox_status": "READY",
-                "supporting_evidence": [
-                    {
-                        "evidence_id": str(value["evidence_id"]),
-                        "record_digest": str(value["record_digest"]),
-                    }
-                    for value in evidence_bindings
-                ],
+                "supporting_evidence": [_cols(value, str, "evidence_id", "record_digest") for value in evidence_bindings],
                 "dependency_families": list(_CORRECTION_FOLLOWUP_DEPENDENCIES),
                 "read_observations": query_observations_wire,
                 "outputs": ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"],
             }
         self._append_event(
             connection,
-            aggregate_type=str(event["aggregate_type"]),
-            aggregate_id=str(event["aggregate_id"]),
-            kind=str(event["kind"]),
-            before_revision=int(event["before_revision"]),
-            after_revision=int(event["after_revision"]),
+            **_cols(event, str, "aggregate_type", "aggregate_id", "kind"),
+            **_cols(event, int, "before_revision", "after_revision"),
             payload=payload,
             committed_at_ms=int(event["committed_at_ms"]),
         )
@@ -4929,28 +4673,13 @@ class FinancialOwner:
         self._assert_actionable()
         action_ref = action_id or f"action:offset:{claim_id}"
         _id(action_ref, "action_id")
+        request = {"claim_id": claim_id, "actor_id": actor_id, "actor_role": actor_role, "expected_revision": expected_revision, "decision_at_ms": decision_at_ms, "evaluation_id": evaluation_id, "evaluation_result_digest": evaluation_result_digest}
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             existing_action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_ref,)).fetchone()
             if existing_action is not None:
-                return self._duplicate_action_or_conflict(
-                    connection,
-                    action=existing_action,
-                    obligation=obligation,
-                    claim_id=claim_id,
-                    actor_id=actor_id,
-                    actor_role=actor_role,
-                    decision="OFFSET_AUTHORIZED",
-                    evaluation_id=evaluation_id,
-                    evaluation_result_digest=evaluation_result_digest,
-                    expected_revision=expected_revision,
-                    decision_at_ms=decision_at_ms,
-                )
-            return self._served_decision(
-                connection, obligation, offset=True, item_id=item_id, claim_id=claim_id, action_ref=action_ref, actor_id=actor_id,
-                actor_role=actor_role, expected_revision=expected_revision, decision_at_ms=decision_at_ms,
-                evaluation_id=evaluation_id, evaluation_result_digest=evaluation_result_digest,
-            )
+                return self._duplicate_action_or_conflict(connection, action=existing_action, obligation=obligation, decision="OFFSET_AUTHORIZED", **request)
+            return self._served_decision(connection, obligation, offset=True, item_id=item_id, action_ref=action_ref, **request)
 
     def reject_offset_and_authorize_correction(
         self,
@@ -4969,6 +4698,7 @@ class FinancialOwner:
         self._assert_actionable()
         action_ref = action_id or f"action:correction:{claim_id}"
         _id(action_ref, "action_id")
+        request = {"claim_id": claim_id, "actor_id": actor_id, "actor_role": actor_role, "expected_revision": expected_revision, "decision_at_ms": decision_at_ms, "evaluation_id": evaluation_id, "evaluation_result_digest": evaluation_result_digest}
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             existing_action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_ref,)).fetchone()
@@ -4993,24 +4723,8 @@ class FinancialOwner:
                     or str(existing_action["determination_id"]) != f"determination:{action_ref}"
                 ):
                     _fail(FinancialConflictError, "determination_request_conflict")
-                return self._duplicate_action_or_conflict(
-                    connection,
-                    action=existing_action,
-                    obligation=obligation,
-                    claim_id=claim_id,
-                    actor_id=actor_id,
-                    actor_role=actor_role,
-                    decision="OFFSET_REJECTED_CORRECTION_AUTHORIZED",
-                    evaluation_id=evaluation_id,
-                    evaluation_result_digest=evaluation_result_digest,
-                    expected_revision=expected_revision,
-                    decision_at_ms=decision_at_ms,
-                )
-            return self._served_decision(
-                connection, obligation, offset=False, item_id=item_id, claim_id=claim_id, action_ref=action_ref, actor_id=actor_id,
-                actor_role=actor_role, expected_revision=expected_revision, decision_at_ms=decision_at_ms,
-                evaluation_id=evaluation_id, evaluation_result_digest=evaluation_result_digest,
-            )
+                return self._duplicate_action_or_conflict(connection, action=existing_action, obligation=obligation, decision="OFFSET_REJECTED_CORRECTION_AUTHORIZED", **request)
+            return self._served_decision(connection, obligation, offset=False, item_id=item_id, action_ref=action_ref, **request)
 
     def _served_decision(
         self,
@@ -5064,51 +4778,26 @@ class FinancialOwner:
             meta = self._meta(connection)
             current_event_sequence = int(meta["sequence"])
             previous_history_head = bytes(meta["history_head"])
-            action_rows = connection.execute(
-                "SELECT action_id FROM actions WHERE action_id=?",
-                (action_ref,),
-            ).fetchall()
-            determination_rows = connection.execute(
-                "SELECT determination_id FROM determinations WHERE determination_id=?",
-                (deterministic_determination_id,),
-            ).fetchall()
-            consumed_rows = connection.execute(
-                "SELECT determination_id FROM determinations WHERE input_evaluation_id=?",
-                (str(evaluation_receipt["evaluation_id"]),),
-            ).fetchall()
-            if any(len(rows) > 1 for rows in (action_rows, determination_rows, consumed_rows)):
+            input_evaluation_id = str(evaluation_receipt["evaluation_id"])
+            lookups = [
+                (name, predicate, subject, column, connection.execute(sql, (subject,)).fetchall())
+                for name, predicate, subject, column, sql in (
+                    ("action_id", "ACTION_ID", action_ref, "action_id", "SELECT action_id FROM actions WHERE action_id=?"),
+                    ("determination_id", "DETERMINATION_ID", deterministic_determination_id, "determination_id", "SELECT determination_id FROM determinations WHERE determination_id=?"),
+                    ("evaluation_consumed", "EVALUATION_CONSUMED", input_evaluation_id, "determination_id", "SELECT determination_id FROM determinations WHERE input_evaluation_id=?"),
+                )
+            ]
+            if any(len(rows) > 1 for *_, rows in lookups):
                 _fail(FinancialIntegrityError, "correction_query_cardinality")
-            query_version = {
-                "version_sequence": current_event_sequence,
-                "version_head": previous_history_head,
-            }
             query_observations = {
-                "action_id": {
-                    "predicate": "ACTION_ID",
-                    "subject": action_ref,
-                    "complete": True,
-                    "match_count": len(action_rows),
-                    "result_identity": None if not action_rows else str(action_rows[0]["action_id"]),
-                    **query_version,
-                },
-                "determination_id": {
-                    "predicate": "DETERMINATION_ID",
-                    "subject": deterministic_determination_id,
-                    "complete": True,
-                    "match_count": len(determination_rows),
-                    "result_identity": None if not determination_rows else str(determination_rows[0]["determination_id"]),
-                    **query_version,
-                },
-                "evaluation_consumed": {
-                    "predicate": "EVALUATION_CONSUMED",
-                    "subject": str(evaluation_receipt["evaluation_id"]),
-                    "complete": True,
-                    "match_count": len(consumed_rows),
-                    "result_identity": None if not consumed_rows else str(consumed_rows[0]["determination_id"]),
-                    **query_version,
-                },
+                name: {
+                    "predicate": predicate, "subject": subject, "complete": True, "match_count": len(rows),
+                    "result_identity": None if not rows else str(rows[0][column]),
+                    "version_sequence": current_event_sequence, "version_head": previous_history_head,
+                }
+                for name, predicate, subject, column, rows in lookups
             }
-            if action_rows or determination_rows or consumed_rows:
+            if any(rows for *_, rows in lookups):
                 _fail(FinancialConflictError, "determination_request_conflict")
             command = {
                 "item_id": item_id,
@@ -5120,7 +4809,7 @@ class FinancialOwner:
                 "current_authority_epoch": self.trusted_authority.epoch,
                 "current_authority_digest": self.trusted_authority.digest,
                 "expected_revision": expected_revision,
-                "evaluation_id": str(evaluation_receipt["evaluation_id"]),
+                "evaluation_id": input_evaluation_id,
                 "evaluation_result_digest": input_result_digest,
                 "decision_at_ms": decision_time,
                 "owner_now_ms": owner_now_ms,
@@ -5563,9 +5252,9 @@ class FinancialOwner:
                 return {
                     **_cols(row, str, "evidence_id", "item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref"),
                     **_cols(row, int, "applicable_at_ms", "event_at_ms", "received_at_ms"),
-                    "amount_cents": None if row["amount_cents"] is None else int(row["amount_cents"]),
-                    "reversal_of": None if row["reversal_of"] is None else str(row["reversal_of"]),
-                    "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
+                    "amount_cents": _opt(row["amount_cents"], int),
+                    "reversal_of": _opt(row["reversal_of"], str),
+                    "supersedes": _opt(row["supersedes"], str),
                     "record_digest": _hex(bytes(row["record_digest"])),
                     "obligation_id": obligation_id,
                 }
@@ -5593,12 +5282,10 @@ class FinancialOwner:
                 return {
                     "payment_id": str(row["payment_id"]),
                     "obligation_id": obligation_id,
-                    "evidence_id": str(row["evidence_id"]),
-                    "common_origin_id": str(row["common_origin_id"]),
-                    "amount_cents": int(row["amount_cents"]),
-                    "event_at_ms": int(row["event_at_ms"]),
+                    **_cols(row, str, "evidence_id", "common_origin_id"),
+                    **_cols(row, int, "amount_cents", "event_at_ms"),
                     "active": bool(row["active"]),
-                    "reversed_by_evidence_id": None if row["reversed_by_evidence_id"] is None else str(row["reversed_by_evidence_id"]),
+                    "reversed_by_evidence_id": _opt(row["reversed_by_evidence_id"], str),
                 }
 
             def claim_ref(row: sqlite3.Row) -> dict[str, Any]:
@@ -5610,38 +5297,23 @@ class FinancialOwner:
                     "owner_role": str(row["owner_role"]),
                     "deadline_ms": int(row["deadline_ms"]),
                     "status": str(row["status"]),
-                    "created_at_ms": int(row["created_at_ms"]),
-                    "updated_at_ms": int(row["updated_at_ms"]),
+                    **_cols(row, int, "created_at_ms", "updated_at_ms"),
                 }
 
             def determination_ref(row: sqlite3.Row) -> dict[str, Any]:
                 supporting = _stored_object(row["supporting_evidence_json"], "decision_package_determination")
                 bindings = supporting.get("bindings") if set(supporting) == {"bindings"} else None
-                if type(bindings) is not list or any(
-                    type(value) is not dict
-                    or set(value) != {"evidence_id", "record_digest"}
-                    or type(value["evidence_id"]) is not str
-                    or type(value["record_digest"]) is not str
-                    for value in bindings
-                ):
+                if type(bindings) is not list or any(not _shaped(value, {"evidence_id": _is_str, "record_digest": _is_str}) for value in bindings):
                     _fail(FinancialIntegrityError, "decision_package_determination")
                 return {
                     "determination_id": str(row["determination_id"]),
                     "obligation_id": obligation_id,
-                    "claim_id": None if row["claim_id"] is None else str(row["claim_id"]),
-                    "actor_id": str(row["actor_id"]),
-                    "actor_role": str(row["actor_role"]),
-                    "authority": {
-                        "authority_id": str(row["authority_id"]),
-                        "epoch": int(row["authority_epoch"]),
-                        "digest": _hex(bytes(row["authority_digest"])),
-                    },
+                    "claim_id": _opt(row["claim_id"], str),
+                    **_cols(row, str, "actor_id", "actor_role"),
+                    "authority": _row_authority(row),
                     "decision": str(row["decision"]),
                     "amount_cents": int(row["amount_cents"]),
-                    "supporting_evidence": [
-                        {"evidence_id": value["evidence_id"], "record_digest": value["record_digest"]}
-                        for value in bindings
-                    ],
+                    "supporting_evidence": [_cols(value, str, "evidence_id", "record_digest") for value in bindings],
                     **_cols(row, int, "expected_revision", "resulting_revision", "decided_at_ms"),
                     "determination_digest": _hex(bytes(row["determination_digest"])),
                     "input_evaluation_id": str(row["input_evaluation_id"]),
@@ -5677,7 +5349,7 @@ class FinancialOwner:
                     "created_at_ms": int(row["created_at_ms"]),
                     "acknowledgment": {
                         "status": str(row["outbox_status"]),
-                        "reference": None if row["acknowledgment_ref"] is None else str(row["acknowledgment_ref"]),
+                        "reference": _opt(row["acknowledgment_ref"], str),
                         "attempt": int(row["attempt"]),
                         "updated_at_ms": int(row["outbox_updated_at_ms"]),
                         "cash_effect_cents": 0,
@@ -5689,102 +5361,49 @@ class FinancialOwner:
                     "conflict_id": str(row["conflict_id"]),
                     "obligation_id": obligation_id,
                     "common_origin_id": str(row["common_origin_id"]),
-                    "existing_payment_id": None if row["existing_payment_id"] is None else str(row["existing_payment_id"]),
+                    "existing_payment_id": _opt(row["existing_payment_id"], str),
                     "candidate_evidence_id": str(row["candidate_evidence_id"]),
-                    "existing_amount_cents": None if row["existing_amount_cents"] is None else int(row["existing_amount_cents"]),
-                    "candidate_amount_cents": None if row["candidate_amount_cents"] is None else int(row["candidate_amount_cents"]),
+                    **{key: _opt(row[key], int) for key in ("existing_amount_cents", "candidate_amount_cents")},
                     "reason": str(row["reason"]),
                     "visible_at_ms": int(row["visible_at_ms"]),
                 }
 
-            case_page = page(
-                "SELECT * FROM cases WHERE obligation_id=? ORDER BY case_id",
-                "SELECT COUNT(*) FROM cases WHERE obligation_id=?",
-                (obligation_id,),
-                case_ref,
-            )
-            evidence_page = page(
-                "SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes,record_digest FROM evidence WHERE item_id=? ORDER BY evidence_id",
-                "SELECT COUNT(*) FROM evidence WHERE item_id=?",
-                (str(obligation["item_id"]),),
-                evidence_ref,
-            )
-            payment_page = page(
-                "SELECT * FROM payments WHERE obligation_id=? ORDER BY payment_id",
-                "SELECT COUNT(*) FROM payments WHERE obligation_id=?",
-                (obligation_id,),
-                payment_ref,
-            )
-            claim_page = page(
-                "SELECT * FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id",
-                "SELECT COUNT(*) FROM claimed_adjustments WHERE obligation_id=?",
-                (obligation_id,),
-                claim_ref,
-            )
-            determination_page = page(
-                "SELECT * FROM determinations WHERE obligation_id=? ORDER BY determination_id",
-                "SELECT COUNT(*) FROM determinations WHERE obligation_id=?",
-                (obligation_id,),
-                determination_ref,
-            )
+            def owned_page(table: str, key: str, project: Any) -> dict[str, Any]:
+                return page(f"SELECT * FROM {table} WHERE obligation_id=? ORDER BY {key}", f"SELECT COUNT(*) FROM {table} WHERE obligation_id=?", (obligation_id,), project)
+
+            def latest(sql: str, project: Any) -> dict[str, Any] | None:
+                return _opt(connection.execute(sql, (obligation_id,)).fetchone(), project)
+
+            evidence_select = "SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes,record_digest FROM evidence WHERE item_id=?"
+            reports_only = " AND kind IN ('REPORT','REPORT_CORRECTION')"
+            item_args = (str(obligation["item_id"]),)
             action_query = """
                 SELECT a.*,o.status AS outbox_status,o.attempt,o.acknowledgment_ref,
                        o.updated_at_ms AS outbox_updated_at_ms
                 FROM actions a JOIN action_outbox o ON o.action_id=a.action_id
                 WHERE a.obligation_id=? ORDER BY a.action_id
             """
-            action_page = page(
-                action_query,
-                "SELECT COUNT(*) FROM actions WHERE obligation_id=?",
-                (obligation_id,),
-                action_ref,
-            )
-            conflict_page = page(
-                "SELECT * FROM financial_conflicts WHERE obligation_id=? ORDER BY conflict_id",
-                "SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?",
-                (obligation_id,),
-                conflict_ref,
-            )
-            reporting_page = page(
-                "SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes,record_digest FROM evidence WHERE item_id=? AND kind IN ('REPORT','REPORT_CORRECTION') ORDER BY evidence_id",
-                "SELECT COUNT(*) FROM evidence WHERE item_id=? AND kind IN ('REPORT','REPORT_CORRECTION')",
-                (str(obligation["item_id"]),),
-                evidence_ref,
-            )
+            case_page = owned_page("cases", "case_id", case_ref)
+            evidence_page = page(f"{evidence_select} ORDER BY evidence_id", "SELECT COUNT(*) FROM evidence WHERE item_id=?", item_args, evidence_ref)
+            payment_page = owned_page("payments", "payment_id", payment_ref)
+            claim_page = owned_page("claimed_adjustments", "claim_id", claim_ref)
+            determination_page = owned_page("determinations", "determination_id", determination_ref)
+            action_page = page(action_query, "SELECT COUNT(*) FROM actions WHERE obligation_id=?", (obligation_id,), action_ref)
+            conflict_page = owned_page("financial_conflicts", "conflict_id", conflict_ref)
+            reporting_page = page(f"{evidence_select}{reports_only} ORDER BY evidence_id", f"SELECT COUNT(*) FROM evidence WHERE item_id=?{reports_only}", item_args, evidence_ref)
 
-            case_row = connection.execute(
-                "SELECT * FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1",
-                (obligation_id,),
-            ).fetchone()
-            current_case = None if case_row is None else case_ref(case_row)
-            current_action_row = connection.execute(
-                f"{action_query.rsplit('ORDER BY', 1)[0]}ORDER BY a.revision DESC,a.action_id DESC LIMIT 1",
-                (obligation_id,),
-            ).fetchone()
-            current_action = None if current_action_row is None else action_ref(current_action_row)
-            determination_row = connection.execute(
-                "SELECT * FROM determinations WHERE obligation_id=? ORDER BY resulting_revision DESC,determination_id DESC LIMIT 1",
-                (obligation_id,),
-            ).fetchone()
-            current_determination = None if determination_row is None else determination_ref(determination_row)
+            current_case = latest("SELECT * FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1", case_ref)
+            current_action = latest(f"{action_query.rsplit('ORDER BY', 1)[0]}ORDER BY a.revision DESC,a.action_id DESC LIMIT 1", action_ref)
+            current_determination = latest("SELECT * FROM determinations WHERE obligation_id=? ORDER BY resulting_revision DESC,determination_id DESC LIMIT 1", determination_ref)
 
-            active_payment_count = int(connection.execute(
-                "SELECT COUNT(*) FROM payments WHERE obligation_id=? AND active=1", (obligation_id,)
-            ).fetchone()[0])
-            active_payment_rows = connection.execute(
-                "SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1 ORDER BY payment_id",
-                (obligation_id,),
-            ).fetchall()
-            authorized_claim_count = int(connection.execute(
-                "SELECT COUNT(*) FROM claimed_adjustments WHERE obligation_id=? AND status='AUTHORIZED'", (obligation_id,)
-            ).fetchone()[0])
-            adjustment_rows = connection.execute(
-                "SELECT amount_cents,status FROM claimed_adjustments WHERE obligation_id=? AND status IN ('CLAIMED','AUTHORIZED') ORDER BY claim_id",
-                (obligation_id,),
-            ).fetchall()
-            conflict_count = int(connection.execute(
-                "SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?", (obligation_id,)
-            ).fetchone()[0])
+            def rows(sql: str) -> list[sqlite3.Row]:
+                return connection.execute(sql, (obligation_id,)).fetchall()
+
+            active_payment_count = int(rows("SELECT COUNT(*) FROM payments WHERE obligation_id=? AND active=1")[0][0])
+            active_payment_rows = rows("SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1 ORDER BY payment_id")
+            authorized_claim_count = int(rows("SELECT COUNT(*) FROM claimed_adjustments WHERE obligation_id=? AND status='AUTHORIZED'")[0][0])
+            adjustment_rows = rows("SELECT amount_cents,status FROM claimed_adjustments WHERE obligation_id=? AND status IN ('CLAIMED','AUTHORIZED') ORDER BY claim_id")
+            conflict_count = int(rows("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?")[0][0])
             report_count = int(reporting_page["total"])
             active_payment_ids = [row["evidence_id"] for row in payment_page["items"] if row["active"]]
             authorized_evidence_ids = [row["evidence_id"] for row in claim_page["items"] if row["status"] == "AUTHORIZED"]
@@ -5867,17 +5486,12 @@ class FinancialOwner:
                 "population_binding": population_binding,
                 "evaluation_receipt": receipt,
                 "control_pack": {
-                    "pack_id": pack.pack_id,
-                    "version": pack.version,
+                    **_attrs(pack, "pack_id", "version"),
                     "digest": _hex(pack.digest),
-                    "calculation_rule_id": pack.calculation_rule_id,
-                    "adjustment_rule_id": pack.adjustment_rule_id,
+                    **_attrs(pack, "calculation_rule_id", "adjustment_rule_id"),
                     "source_refs": list(pack.source_refs),
                     "authorized_roles": list(pack.authorized_roles),
-                    "effective_start_ms": pack.effective_start_ms,
-                    "effective_end_ms": pack.effective_end_ms,
-                    "recorded_at_ms": pack.recorded_at_ms,
-                    "approved_at_ms": pack.approved_at_ms,
+                    **_attrs(pack, "effective_start_ms", "effective_end_ms", "recorded_at_ms", "approved_at_ms"),
                 },
                 "case": current_case,
                 "current_determination": current_determination,
@@ -6350,11 +5964,7 @@ class FinancialOwner:
             totals = connection.execute("SELECT COUNT(*),COALESCE(SUM(owed_cents),0),COALESCE(SUM(received_cash_cents),0),COALESCE(SUM(lawful_adjustment_cents),0),COALESCE(SUM(shortfall_cents),0) FROM obligations").fetchone()
             return {
                 "schema": self.schema,
-                "state_id": str(meta["state_id"]),
-                "deployment_id": str(meta["deployment_id"]),
-                "program_id": str(meta["program_id"]),
-                "period_id": str(meta["period_id"]),
-                "currency": str(meta["currency"]),
+                **_cols(meta, str, *_SCOPE_KEYS),
                 "sequence": int(meta["sequence"]),
                 "population_count": int(connection.execute("SELECT COUNT(*) FROM population_imports WHERE status='PUBLISHED'").fetchone()[0]),
                 "obligation_count": int(totals[0]),
@@ -6380,13 +5990,12 @@ class FinancialOwner:
         offset: int = 0,
         _connection: sqlite3.Connection | None = None,
     ) -> list[dict[str, Any]]:
-        if status not in {"OPEN", "ALL", "SATISFIED", "CASH_UNSATISFIED"}:
+        if status not in _OBLIGATION_STATUS_CLAUSES:
             _fail(FinancialInputError, "obligation_status")
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= _MAX_ROWS:
             _fail(FinancialInputError, "obligation_page")
         with self._read_snapshot(_connection=_connection) as connection:
-            clause = "1=1" if status == "ALL" else ("amount_satisfied=0" if status == "OPEN" else ("amount_satisfied=1" if status == "SATISFIED" else "cash_satisfied=0"))
-            return [self._projection_for_row(row) for row in connection.execute(f"SELECT * FROM obligations WHERE {clause} ORDER BY obligation_id LIMIT ? OFFSET ?", (limit, offset)).fetchall()]
+            return [self._projection_for_row(row) for row in connection.execute(f"SELECT * FROM obligations WHERE {_OBLIGATION_STATUS_CLAUSES[status]} ORDER BY obligation_id LIMIT ? OFFSET ?", (limit, offset)).fetchall()]
 
     def obligation_detail(
         self,
@@ -6444,55 +6053,21 @@ class FinancialOwner:
             _fail(FinancialInputError, "staff_read_query")
         query_value = dict(query)
         resource = query_value.get("resource")
-        if resource == _STAFF_WORKSPACE_QUERY:
-            required = {
-                "resource", "item_id", "population_id", "status", "limit", "offset",
-                "detail_limit", "history_limit",
-            }
-            if set(query_value) != required:
-                _fail(FinancialInputError, "staff_read_query")
-            item_id = _id(query_value["item_id"], "item_id")
-            population_id = _id(query_value["population_id"], "population_id")
-            status = query_value["status"]
-            limit = query_value["limit"]
-            offset = query_value["offset"]
-            detail_limit = query_value["detail_limit"]
-            history_limit = query_value["history_limit"]
-            if (
-                status not in {"ALL", "OPEN", "SATISFIED", "CASH_UNSATISFIED"}
-                or type(limit) is not int or not 1 <= limit <= 100
-                or type(offset) is not int or not 0 <= offset <= _MAX_ROWS
-                or type(detail_limit) is not int or not 1 <= detail_limit <= 200
-                or type(history_limit) is not int or not 1 <= history_limit <= 200
-            ):
-                _fail(FinancialInputError, "staff_read_query")
-            query_value = {
-                "resource": resource,
-                "item_id": item_id,
-                "population_id": population_id,
-                "status": status,
-                "limit": limit,
-                "offset": offset,
-                "detail_limit": detail_limit,
-                "history_limit": history_limit,
-            }
-        elif resource == _STAFF_DECISION_PACKAGE_QUERY:
-            if set(query_value) != {"resource", "item_id", "limit", "offset"}:
-                _fail(FinancialInputError, "staff_read_query")
-            item_id = _id(query_value["item_id"], "item_id")
-            limit = query_value["limit"]
-            offset = query_value["offset"]
-            if (
-                type(limit) is not int or not 1 <= limit <= 200
-                or type(offset) is not int or not 0 <= offset <= _MAX_ROWS
-            ):
-                _fail(FinancialInputError, "staff_read_query")
-            query_value = {"resource": resource, "item_id": item_id, "limit": limit, "offset": offset}
-            population_id = None
-            status = None
-            detail_limit = None
-            history_limit = 200
-        else:
+        workspace = resource == _STAFF_WORKSPACE_QUERY
+        fields = ("resource", "item_id", "population_id", "status", "limit", "offset", "detail_limit", "history_limit") if workspace else ("resource", "item_id", "limit", "offset")
+        if not (workspace or resource == _STAFF_DECISION_PACKAGE_QUERY) or set(query_value) != set(fields):
+            _fail(FinancialInputError, "staff_read_query")
+        query_value = {key: query_value[key] for key in fields}
+        item_id = _id(query_value["item_id"], "item_id")
+        population_id = _id(query_value["population_id"], "population_id") if workspace else None
+        status, detail_limit, history_limit = (query_value[key] for key in ("status", "detail_limit", "history_limit")) if workspace else (None, None, 200)
+        limit, offset = query_value["limit"], query_value["offset"]
+        if (
+            workspace and status not in _OBLIGATION_STATUS_CLAUSES
+            or type(limit) is not int or not 1 <= limit <= (100 if workspace else 200)
+            or type(offset) is not int or not 0 <= offset <= _MAX_ROWS
+            or workspace and (type(detail_limit) is not int or not 1 <= detail_limit <= 200 or type(history_limit) is not int or not 1 <= history_limit <= 200)
+        ):
             _fail(FinancialInputError, "staff_read_query")
 
         statement_counts = {"owner": 0, "independent_verifier": 0}
@@ -6510,13 +6085,7 @@ class FinancialOwner:
             snapshot_fields = {
                 "schema": str(meta["schema"]),
                 "schema_version": int(meta["schema_version"]),
-                "scope": {
-                    "state_id": str(meta["state_id"]),
-                    "deployment_id": str(meta["deployment_id"]),
-                    "program_id": str(meta["program_id"]),
-                    "period_id": str(meta["period_id"]),
-                    "currency": str(meta["currency"]),
-                },
+                "scope": _cols(meta, str, *_SCOPE_KEYS),
                 "mode": str(meta["mode"]),
                 "owner_id": str(meta["owner_id"]),
                 "continuity_epoch": int(meta["continuity_epoch"]),
@@ -6525,7 +6094,7 @@ class FinancialOwner:
             }
             snapshot_fields["snapshot_id"] = _staff_snapshot_id(snapshot_fields)
 
-            if resource == _STAFF_WORKSPACE_QUERY:
+            if workspace:
                 summary = self.summary(_connection=connection)
                 population = self.population_status(population_id, _connection=connection)
                 items = self.list_obligations(
@@ -6534,14 +6103,8 @@ class FinancialOwner:
                     offset=offset,
                     _connection=connection,
                 )
-                count_clause = {
-                    "ALL": "1=1",
-                    "OPEN": "amount_satisfied=0",
-                    "SATISFIED": "amount_satisfied=1",
-                    "CASH_UNSATISFIED": "cash_satisfied=0",
-                }[status]
                 total_count = int(connection.execute(
-                    f"SELECT COUNT(*) FROM obligations WHERE {count_clause}"
+                    f"SELECT COUNT(*) FROM obligations WHERE {_OBLIGATION_STATUS_CLAUSES[status]}"
                 ).fetchone()[0])
                 next_offset = offset + len(items) if offset + len(items) < total_count else None
                 detail = self.obligation_detail(item_id, limit=detail_limit, _connection=connection)
@@ -6608,20 +6171,14 @@ class FinancialOwner:
                 if (
                     row["current_evaluation_id"] is None
                     or int(row["evaluation_revision"]) != int(row["revision"])
-                    or row["result_digest"] is None
-                    or row["control_pack_id"] is None
-                    or row["control_pack_version"] is None
-                    or row["control_pack_digest"] is None
+                    or any(row[key] is None for key in ("result_digest", "control_pack_id", "control_pack_version", "control_pack_digest"))
+                    or len(result_digest := bytes(row["result_digest"])) != 64
+                    or len(pack_digest := bytes(row["control_pack_digest"])) != 64
                 ):
-                    _fail(FinancialIntegrityError, "staff_snapshot_evaluation_binding")
-                result_digest = bytes(row["result_digest"])
-                pack_digest = bytes(row["control_pack_digest"])
-                if len(result_digest) != 64 or len(pack_digest) != 64:
                     _fail(FinancialIntegrityError, "staff_snapshot_evaluation_binding")
                 item_bindings.append(
                     {
-                        "item_id": str(row["item_id"]),
-                        "obligation_id": str(row["obligation_id"]),
+                        **_cols(row, str, "item_id", "obligation_id"),
                         "revision": int(row["revision"]),
                         "evaluation_id": str(row["current_evaluation_id"]),
                         "evaluation_result_digest": _hex(result_digest),
@@ -6636,18 +6193,9 @@ class FinancialOwner:
 
             verification = verify_database_connection(connection, **self._checker_expectations())
             verifier_microseconds = (time.perf_counter_ns() - verifier_started_ns) // 1_000
-            if (
-                verification.get("owner_id") != snapshot_fields["owner_id"]
-                or verification.get("schema") != snapshot_fields["schema"]
-                or verification.get("schema_version") != snapshot_fields["schema_version"]
-                or verification.get("scope") != snapshot_fields["scope"]
-                or verification.get("mode") != snapshot_fields["mode"]
-                or verification.get("continuity_epoch") != snapshot_fields["continuity_epoch"]
-                or verification.get("sequence") != snapshot_fields["sequence"]
-                or verification.get("history_head") != snapshot_fields["history_head"]
-            ):
+            if any(verification.get(key) != snapshot_fields[key] for key in ("owner_id", "schema", "schema_version", "scope", "mode", "continuity_epoch", "sequence", "history_head")):
                 _fail(FinancialIntegrityError, "staff_snapshot_verification_binding")
-            if resource == _STAFF_WORKSPACE_QUERY and int(summary["sequence"]) != snapshot_fields["sequence"]:
+            if workspace and int(summary["sequence"]) != snapshot_fields["sequence"]:
                 _fail(FinancialIntegrityError, "staff_snapshot_sequence_binding")
             bundle = {
                 "contract": _VERIFIED_STAFF_SNAPSHOT_CONTRACT,
@@ -6719,9 +6267,9 @@ class FinancialOwner:
         if package["schema"] != _CONTINUITY_SCHEMA:
             _fail(FinancialContinuityError, "continuity_package_schema")
         scope = package["scope"]
-        if type(scope) is not dict or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
+        if type(scope) is not dict or set(scope) != set(_SCOPE_KEYS):
             _fail(FinancialContinuityError, "continuity_package_scope")
-        for key in ("state_id", "deployment_id", "program_id", "period_id"):
+        for key in _SCOPE_KEYS[:4]:
             _id(scope[key], f"continuity_scope_{key}")
         if scope["currency"] != _CURRENCY:
             _fail(FinancialContinuityError, "continuity_scope_currency")
@@ -6744,11 +6292,6 @@ class FinancialOwner:
         for field in ("history_head", "package_digest"):
             value = package[field]
             if type(value) is not str or re.fullmatch(r"[0-9A-Fa-f]{128}", value) is None:
-                _fail(FinancialContinuityError, f"continuity_{field}")
-            try:
-                if len(bytes.fromhex(value)) != 64:
-                    _fail(FinancialContinuityError, f"continuity_{field}")
-            except ValueError:
                 _fail(FinancialContinuityError, f"continuity_{field}")
         if package["dispatch_enabled"] is not False or package["egress_enabled"] is not False or package["mode"] not in _MODES:
             _fail(FinancialContinuityError, "continuity_package_binding")
@@ -6779,11 +6322,7 @@ class FinancialOwner:
         expected_meta = {
             "schema_version": _SCHEMA_VERSION,
             "schema": _SCHEMA,
-            "state_id": scope["state_id"],
-            "deployment_id": scope["deployment_id"],
-            "program_id": scope["program_id"],
-            "period_id": scope["period_id"],
-            "currency": scope["currency"],
+            **scope,
             "sequence": package["sequence"],
             "history_head": bytes.fromhex(str(package["history_head"])),
             "continuity_epoch": package["continuity_epoch"],
@@ -6833,7 +6372,7 @@ class FinancialOwner:
             "schema": self.continuity_schema,
             "version": self.schema_version,
             "scope": self._scope_value(),
-            "authority": {"authority_id": self.trusted_authority.authority_id, "epoch": self.trusted_authority.epoch, "digest": _hex(self.trusted_authority.digest)},
+            "authority": _authority_ref(self.trusted_authority),
             "continuity_epoch": int(meta["continuity_epoch"]),
             "sequence": int(meta["sequence"]),
             "history_head": _hex(bytes(meta["history_head"])),
@@ -6976,8 +6515,7 @@ class FinancialOwner:
         authority = package["authority"]
         if (str(authority.get("authority_id")), int(authority.get("epoch", 0)), str(authority.get("digest"))) != (trusted_authority.authority_id, trusted_authority.epoch, _hex(trusted_authority.digest)):
             _fail(FinancialAuthorityError, "continuity_authority_mismatch")
-        config_map = package["scope"]
-        config = FinancialOwnerConfig(state_id=str(config_map["state_id"]), deployment_id=str(config_map["deployment_id"]), program_id=str(config_map["program_id"]), period_id=str(config_map["period_id"]), currency=str(config_map["currency"]))
+        config = FinancialOwnerConfig(**_cols(package["scope"], str, *_SCOPE_KEYS))
         restored_owner_id = _SHADOW_OWNER_ID if restore_mode == "SHADOW" else _TEST_OWNER_ID
         source_identity_rows = package["tables"]["financial_identity"]
         if len(source_identity_rows) != 1:
@@ -7021,10 +6559,8 @@ class FinancialOwner:
                 cleanup_failures.append(f"{path}:{cleanup_error.__class__.__name__}")
 
         def cleanup_attempt() -> None:
-            if attempt_path is not None:
-                cleanup_path(attempt_path)
-                cleanup_path(Path(f"{attempt_path}-wal"))
-                cleanup_path(Path(f"{attempt_path}-shm"))
+            for path in () if attempt_path is None else (attempt_path, Path(f"{attempt_path}-wal"), Path(f"{attempt_path}-shm")):
+                cleanup_path(path)
             if attempt_directory is not None:
                 try:
                     attempt_directory.rmdir()
@@ -7077,8 +6613,6 @@ class FinancialOwner:
                     _fail(FinancialContinuityError, "continuity_meta_rows")
                 meta_columns = owner._table_columns["financial_meta"]
                 meta_values = [owner._import_value(meta_rows[0][column]) for column in meta_columns]
-                if len(meta_values) != len(meta_columns):
-                    _fail(FinancialContinuityError, "continuity_meta_columns")
                 overrides = {"mode": restore_mode, "dispatch_enabled": 0, "egress_enabled": 0, "owner_id": restored_owner_id}
                 meta_values = [overrides.get(column, value) for column, value in zip(meta_columns, meta_values)]
                 assignments = ",".join(f"{column}=?" for column in meta_columns)
@@ -7089,8 +6623,6 @@ class FinancialOwner:
                     placeholders = ",".join("?" for _ in columns)
                     for raw_row in rows:
                         values = [owner._import_value(raw_row[column]) for column in columns]
-                        if len(values) != len(columns):
-                            _fail(FinancialContinuityError, "continuity_columns")
                         connection.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", tuple(values))
                 connection.execute("DELETE FROM temp.rr_captured_rows")  # the imported history already carries them
                 owner._derive_command_log(connection)
