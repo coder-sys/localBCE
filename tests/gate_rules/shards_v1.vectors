@@ -68,4 +68,43 @@ foreign 903
 line 903 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED
 commit
 
-end 8
+# `commit` clears `foreign`: the same line, fresh in a later batch, decides on its own
+case foreign_cleared_by_commit
+foreign 940
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED
+commit
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# A `foreign` left open at the end of a case does not carry into the next case
+case foreign_left_open
+foreign 950
+
+case foreign_not_carried
+line 950 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# A refused (unanchored) commit clears `foreign` too
+case foreign_cleared_by_refusal
+foreign 960
+anchor 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+line 960 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+commit UNANCHORED
+line 960 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# One payment with a foreign line: that line holds, so the whole payment holds
+case foreign_line_in_payment
+foreign 970
+line 970:970 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 HOLD ALREADY_DECIDED
+line 971:970 FFS_CLAIM 1002 7001 7001 20270307 99214 1 13100 ALLOW -
+pay 970 HOLD
+commit
+
+# ALREADY_DECIDED sits with the line's other reasons
+case foreign_with_other_reason
+foreign 980
+line 980 FFS_CLAIM 9001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED,MEMBER_DECEASED
+commit
+
+end 17

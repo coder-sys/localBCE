@@ -31,8 +31,8 @@ REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DAT
           "  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true")
 # A mutant the vectors miss is still killed if these proofs no longer build: the Spec's order independence
 # (the runner no longer re-decides each batch in reverse) and the twin's equality with the Spec.
-PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq")
-PROOF_FILES = ("Theorems.lean", "FastEq.lean")
+PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Shards")
+PROOF_FILES = ("Theorems.lean", "FastEq.lean", "Shards.lean")
 KEPT = "d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED"
 # Fast.lean text.
 R2 = "x.seen s (exactKey l) || x.seen s (nearKey l) || x.spanOk && validDate l.date && x.overlap l"
@@ -41,25 +41,6 @@ CHAINED = ("| some s => s.entries.length == s.count && validDate s.asOf && s.asO
            "      prior.entries.all (HashSet.ofList s.entries).contains")
 REL_ROW = "released := ⟨x.relV.asOf, x.relN + ra.length, x.relV.entries ++ ra⟩,"
 UNR_ROW = "unresolved := ⟨x.unrV.asOf, x.unrN + ua.length, x.unrV.entries ++ ua⟩ }"
-# `Ix.run` and `Ix.runIn` share their last lines: the same six mutants anchor on the whole of each body.
-BODY = ("let ds := x.decideAll %s(x.order b)\n  let ra := x.releasedLines ds\n"
-        "  let ua := x.unresolvedLines ds\n  { decisions := ds, " + REL_ROW + "\n    " + UNR_ROW)
-RUN = "def Ix.run (x : Ix) (b : List Line) : Result :=\n  " + BODY % "∅ "
-RUNIN = BODY % "(HashSet.ofList (idSeen f)) "
-
-
-def edit(base, *edits):
-    new = base
-    for old, repl in edits:
-        assert old in new, old
-        new = new.replace(old, repl)
-    return base, new
-
-
-def runin(*edits):
-    return edit(RUNIN, *edits)
-
-
 LOOSE_KEYS = "HashSet.ofList ((ra.drop rv.entries.length ++ ua.drop uv.entries.length).map exactKey)"
 FFS_UNVERIFIED = "| .FFS_DUPLICATE_UNVERIFIED => !isCap l && x.looseKeys.contains (exactKey l)"
 # The four snapshot checks: tag, the fact each fires on.
@@ -218,19 +199,19 @@ FAST = [
     ("re-decided lines not first", "canonical (b.filter x.own) ++ canonical (b.filter fun y => !x.own y)", "canonical b"),
     ("re-decided capitation line claims no member-month", "x.notEnrolled l && !x.own l", "x.notEnrolled l"),
     ("re-decided lines unresolved", " && !x.own d.line", ""),
-    ("nothing released", *runin(("let ra := x.releasedLines ds", "let ra : List Line := []"))),
-    ("held lines released", *runin(("let ra := x.releasedLines ds", "let ra := ds.map (·.line)"))),
+    ("nothing released", "let ra := x.releasedLines ds", "let ra : List Line := []"),
+    ("held lines released", "let ra := x.releasedLines ds", "let ra := ds.map (·.line)"),
     ("held payment's ALLOW lines released", " && x.payOutcome ds l.pay == .ALLOW", ""),
     ("re-decision released again", "!x.redo.contains l.pay && x.payOutcome", "x.payOutcome"),
     ("payment HOLD ignored", "if ls.any (·.outcome == .HOLD) then .HOLD\n  else ", ""),
     ("payment without a line ALLOW", "!ls.isEmpty && ", ""),
     ("re-decision of an unreleased line ALLOW", "(!x.redo.contains p || x.own d.line)", "true"),
-    ("checkpoint drops the batch's additions", *runin((REL_ROW, "released := x.relV,"), (UNR_ROW, "unresolved := x.unrV }"))),
+    ("checkpoint drops the batch's additions", (REL_ROW, UNR_ROW), ("released := x.relV,", "unresolved := x.unrV }")),
     ("checkpoint advances only when chained",
-     *runin((REL_ROW, REL_ROW.replace("released := ", "released := if !x.relChained then x.relV else ")),
-            (UNR_ROW, UNR_ROW.replace("unresolved := ", "unresolved := if !x.unrChained then x.unrV else ")))),
+     (REL_ROW, UNR_ROW), (REL_ROW.replace("released := ", "released := if !x.relChained then x.relV else "),
+                          UNR_ROW.replace("unresolved := ", "unresolved := if !x.unrChained then x.unrV else "))),
     ("checkpoint forgets the view's rows",
-     *runin((REL_ROW, "released := ⟨x.relV.asOf, ra.length, ra⟩,"), (UNR_ROW, "unresolved := ⟨x.unrV.asOf, ua.length, ua⟩ }"))),
+     (REL_ROW, UNR_ROW), ("released := ⟨x.relV.asOf, ra.length, ra⟩,", "unresolved := ⟨x.unrV.asOf, ua.length, ua⟩ }")),
     ("unchained set read as is", "if ch then o.getD prior else prior", "o.getD prior"),
     ("set read ignored", "if ch then o.getD prior else prior", "prior"),
     ("reviewed payments ALLOW", "d.outcome == .ALLOW && (", "d.outcome != .HOLD && ("),
@@ -282,7 +263,7 @@ FAST = [
      "let p := HashSet.ofList prior.entries\n  (entries o)"),
     ("loose rows of the released set ignored", LOOSE_KEYS, "HashSet.ofList ((ua.drop uv.entries.length).map exactKey)"),
     ("loose rows of the unresolved set ignored", LOOSE_KEYS, "HashSet.ofList ((ra.drop rv.entries.length).map exactKey)"),
-    ("gate leaves nothing unresolved", *runin(("let ua := x.unresolvedLines ds", "let ua : List Line := []"))),
+    ("gate leaves nothing unresolved", "let ua := x.unresolvedLines ds", "let ua : List Line := []"),
     ("not-enrolled lines left out of the unresolved set", KEPT, KEPT + " && !d.reasons.contains .MEMBER_NOT_ENROLLED"),
     ("already decided lines unresolved", KEPT, "d.outcome != .ALLOW"),
     ("ALLOW lines unresolved", KEPT, "!d.reasons.contains .ALREADY_DECIDED"),
@@ -299,26 +280,28 @@ RUN_MUTANTS = [
     ("commit keeps the released checkpoint", "rprior := r.released", "rprior := st.rprior"),
     ("commit keeps the unresolved checkpoint", "uprior := r.unresolved", "uprior := st.uprior"),
     ("commit ignores the foreign ids", "x.runIn st.foreign lines", "x.runIn [] lines"),
+    ("commit keeps the foreign ids", "uprior := r.unresolved, batch := #[], redo := [], foreign := [],",
+     "uprior := r.unresolved, batch := #[], redo := [],"),
+    ("unanchored commit keeps the foreign ids", "pinned := some p, anchor := none, batch := #[], redo := [], foreign := [],",
+     "pinned := some p, anchor := none, batch := #[], redo := [],"),
+    ("case keeps the foreign ids", "anchor := none, batch := #[], redo := [], foreign := [], pays := [], done := []",
+     "anchor := none, batch := #[], redo := [], pays := [], done := []"),
 ]
 
 # Shard uniqueness: only shards_v1.vectors sees these (a foreign id must be ALREADY_DECIDED).
+DIN = ("def decideBatchIn (c : Ctx) (f : List Nat) (batch : List Line) : Result :=\n"
+       "  let ds := decideAll c (idSeen f ++ seen0 c batch) (order c batch)\n"
+       "  { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),\n"
+       "    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }")
 SHARD_MUTANTS = [
     ("foreign ids ignored by the twin", "x.decideAll (HashSet.ofList (idSeen f)) (x.order b)", "x.decideAll ∅ (x.order b)"),
     ("foreign ids are none", "f.map fun i => [4, i]", "([] : List Nat).map fun i => [4, i]"),
+    ("decideBatchIn forgets the foreign ids", DIN, DIN.replace("idSeen f ++ seen0 c batch", "seen0 c batch")),
+    ("decideBatchIn sees only the foreign ids", DIN, DIN.replace("idSeen f ++ seen0 c batch", "idSeen f")),
+    ("decideBatchIn releases nothing", DIN, DIN.replace("(releasedLines c ds)", "[]")),
+    ("decideBatchIn leaves nothing unresolved", DIN, DIN.replace("(unresolvedLines c ds)", "[]")),
+    ("decideBatchIn reads arrival order", DIN, DIN.replace("(order c batch)\n", "batch\n")),
 ]
-
-# The six `runIn` mutants of FAST again, on the `Ix.run` body that `decideBatchF` uses.
-RUN_BODY = [(n + " (Ix.run)", *edit(RUN, *e)) for n, *e in [
-    ("nothing released", ("let ra := x.releasedLines ds", "let ra : List Line := []")),
-    ("held lines released", ("let ra := x.releasedLines ds", "let ra := ds.map (·.line)")),
-    ("checkpoint drops the batch's additions", (REL_ROW, "released := x.relV,"), (UNR_ROW, "unresolved := x.unrV }")),
-    ("checkpoint advances only when chained",
-     (REL_ROW, REL_ROW.replace("released := ", "released := if !x.relChained then x.relV else ")),
-     (UNR_ROW, UNR_ROW.replace("unresolved := ", "unresolved := if !x.unrChained then x.unrV else "))),
-    ("checkpoint forgets the view's rows", (REL_ROW, "released := ⟨x.relV.asOf, ra.length, ra⟩,"),
-     (UNR_ROW, "unresolved := ⟨x.unrV.asOf, ua.length, ua⟩ }")),
-    ("gate leaves nothing unresolved", ("let ua := x.unresolvedLines ds", "let ua : List Line := []"))]]
-
 
 def swap_reasons(lines):
     """Swap the reasons of the first two held lines with different reasons."""
@@ -384,7 +367,7 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
             print(f"MUTANT {name}: {result}", flush=True)
         chosen = ([("Spec.lean", *m) for m in SPEC] + [("Fast.lean", *m) for m in FAST] +
                   [("Run.lean", *m) for m in RUN_MUTANTS] + [("Fast.lean", *SHARD_MUTANTS[0])] +
-                  [("Spec.lean", *m) for m in SHARD_MUTANTS[1:]] + [("Fast.lean", *m) for m in RUN_BODY])[
+                  [("Spec.lean", *m) for m in SHARD_MUTANTS[1:]])[
             slice(*(int(x) if x else None for x in part.split(":")))]
         for file, name, old, new in chosen:
             src = lean / "BlindLedger" / "Gate" / "Rules" / file

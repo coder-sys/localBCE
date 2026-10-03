@@ -1,6 +1,5 @@
 import BlindLedger.Gate.Anchor
 import BlindLedger.Gate.ProducerTheorems
-import BlindLedger.Gate.Rules.Shards
 
 /-! Theorems of the prior-digest check (gate-producer-v1 §4).  Statements: rr-core's
     `gate-producer-goals.lean`, fixed. -/
@@ -368,10 +367,5 @@ theorem pinInput_lines {d : String} {k : Nat} {s s' : Rules.Snapshot Rules.Line}
     exact hperm _
   · simp only [not_or] at hm
     rw [List.count_eq_zero_of_not_mem hm.1, List.count_eq_zero_of_not_mem hm.2]
-
-/-- With no foreign id the registry-aware step is today's step. -/
-theorem stepIn_nil (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (b : List Rules.Line) :
-    st.stepIn H c [] b = st.step H c b := by
-  simp only [ShardState.stepIn, ShardState.step, Rules.decideBatchIn_nil]
 
 end BlindLedger.Gate

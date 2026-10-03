@@ -3,13 +3,13 @@ import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Sha3Fast
 import BlindLedger.Sha3
 
-/-! The test-only vector runner: decides with `Fast.decideBatchF` (= `decideBatch`, `FastEq.decideBatchF_eq`; no reversed re-run, `decideBatchF_reverse`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
+/-! The test-only vector runner: decides with `Fast.decideBatchFIn` (= `decideBatchIn`, `FastEq.decideBatchFIn_eq`; no reversed re-run, order independence `Theorems.decideBatchIn_perm`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
 
 namespace BlindLedger.Gate.Rules.Run
 
 open BlindLedger.Gate.Rules
 
-/-! Runs a rules vector file through `decideBatch` (its proved twin `Fast.decideBatchF`).  Directives,
+/-! Runs a rules vector file through `decideBatchIn` (its proved twin `Fast.decideBatchFIn`).  Directives,
     one per line: `case NAME` clears the batch, the totals, the lines earlier commits
     released or left unresolved and the gate's checkpoints; `today D`;
     `snap KIND ASOF COUNT PIN` (re)declares a snapshot (`dmf`, `pdeath`,
@@ -28,7 +28,7 @@ open BlindLedger.Gate.Rules
     which then decides only if the checkpoints it extends hash to it
     (`Gate.decideAnchored`); without one, the runner's own last commit is that
     checkpoint.  `commit UNANCHORED` expects the refusal.  Arrival
-    order cannot change a decision (`Fast.decideBatchF_reverse`).  `report`
+    order cannot change a decision (`decideBatchIn_perm`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
 

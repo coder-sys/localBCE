@@ -1,6 +1,5 @@
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.Fast
-import BlindLedger.Gate.Rules.Shards
 
 /-! Proves `Fast.decideBatchF` equal to `Spec.decideBatch` (and `pinBytes` to `pinInput`), plus its order laws; not imported by the runner, so a mutant of `Fast.lean` still builds `gate_rules`. -/
 
@@ -532,16 +531,7 @@ end
 
 /-! ## The batch -/
 
-/-- THE equality: the twin's decisions, released and unresolved checkpoints equal the Spec's. -/
-theorem decideBatchF_eq (c : Ctx) (b : List Line) : decideBatchF c b = decideBatch c b := by
-  have hds : (Ix.build c b).decideAll ∅ ((Ix.build c b).order b) = decideAll c (seen0 c b) (order c b) := by
-    rw [order_eq]
-    exact decideAll_eq _ _ _ fun k => by simp [Ix.seen, seen0_eq]
-  unfold decideBatchF Ix.run decideBatch
-  simp only [hds, releasedLines_eq, unresolvedLines_eq, advance, build_relV, build_unrV, build_relN,
-    build_unrN, releasedSet, unresolvedSet]
-
-/-- The twin with foreign ids equals `decideBatchIn`. -/
+/-- THE equality: the twin's decisions, released and unresolved checkpoints equal the Spec's, with `f` the ids another shard owns. -/
 theorem decideBatchFIn_eq (c : Ctx) (f : List Nat) (b : List Line) : decideBatchFIn c f b = decideBatchIn c f b := by
   have hds : (Ix.build c b).decideAll (HashSet.ofList (idSeen f)) ((Ix.build c b).order b) =
       decideAll c (idSeen f ++ seen0 c b) (order c b) := by
@@ -550,6 +540,9 @@ theorem decideBatchFIn_eq (c : Ctx) (f : List Nat) (b : List Line) : decideBatch
   unfold decideBatchFIn Ix.runIn decideBatchIn
   simp only [hds, releasedLines_eq, unresolvedLines_eq, advance, build_relV, build_unrV, build_relN,
     build_unrN, releasedSet, unresolvedSet]
+
+theorem decideBatchF_eq (c : Ctx) (b : List Line) : decideBatchF c b = decideBatch c b :=
+  decideBatchFIn_eq c [] b
 
 /-- Replaces the runner's reversed-order re-run: `decideBatchF_eq` and `deterministic`. -/
 theorem decideBatchF_perm {c : Ctx} {b₁ b₂ : List Line} (h : b₁.Perm b₂) :
