@@ -1204,6 +1204,8 @@ def _evaluate_wire(wire: bytes, rejections: Mapping[int, str] = _EVALUATOR_REJEC
     """One BLFIN02 or BLFCMD03 frame on the worker: its answer after tag 00.  Any other answer or failure is an error, never retried."""
 
     global _evaluator_requests
+    if len(wire) > semantic.MAX_WIRE_BYTES + 8:  # Lean maxWorkerFrameBytes: past it the worker exits 65, a containment kill, not a refusal
+        raise FinancialEngineInputError("evaluator_frame_size")
     with _evaluator_lock:
         try:
             worker = _running_evaluator()
