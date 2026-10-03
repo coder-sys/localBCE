@@ -2,7 +2,7 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `694bd5a`.
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `34e12be`.
 
 ## Product and standing claims
 
@@ -11,25 +11,25 @@ Blind Ledger, Mirror, Continuity and Switch share the financial owner; Provider 
 level within that product. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
 `production_usable=false`, `activation=false`. Guarded local runs are merge evidence, not release qualification.
 
-## What landed on trunk 694bd5a (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
+## What landed on trunk 34e12be (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
 
 - **Cash file (design d).** Plan on a copy, commit under the lock; a stale plan re-plans (3 tries, then `cash_file_busy`).
-  Quarter-end lock 1.44-1.65 s (was 5.9-6.1 s; bound 5 s). `cs8-full`: 734 pass, 0 fail, 17 skips needing a Lean build.
+  Quarter-end lock 1.44-1.65 s (was 5.9-6.1 s; bound 5 s).
 - **M3 answer binding (flag off).** Every payment-answer evidence and conflict field, DUPLICATE and ALIAS included, is bound;
-  closes the integ6 review. `mb-int-1`: all pass but quarter-end timing; gate `mb-int-6` 29/29.
+  `mb-int-1`: all pass but quarter-end timing; gate `mb-int-6` 29/29.
 - **Correction frames as ByteArray.** Corrections re-encode through proved-equal byte-array twins (`CorrectionFast.lean`, `_eq`
   theorems pinned). Accepted 5 MB: 3.73 s / 846 MB before, 1.83 s / 259 MB now; the 7 MB cap frame 2.58 s / 164 MB. The worker
   stays flat within 16 MB across requests. Worker re-pinned `58CDA012` -> `8EB77363`.
-- **M4 claim and offset laws.** BLFOFC01/BLFOCR01 and `decideClaim` (section F theorems); offset authorization decided in Lean
-  with its laws; a decision dated before its pack's approval is refused by owner and checker. The checker verifies `RETIRED_PINS`
-  once per file state, so per-operation work no longer grows with each re-pin. `m4int-6`: 740 pass, 0 fail, 14 skips.
-
-- **Gate fast SHA3.** Gate SHA3 runs the proved-equal fast sponge (`Sha3Fast.lean`, standard axioms only). Rules decide 99.5 ->
+- **M4 claim and offset laws.** BLFOFC01/BLFOCR01 and `decideClaim` (section F theorems); offset laws stated in Lean (not yet served;
+  Python decides); a decision dated before its pack's approval is refused. The checker verifies `RETIRED_PINS` once per file state,
+  so per-operation work no longer grows with each re-pin. `m4int-6`: 740 pass, 0 fail, 14 skips.
+- **M1 offset cap.** Offset plus unpaid open requests <= shortfall. `m1-17`: 744 pass, 0 fail, 14 skips.
+- **Gate fast SHA3.** The proved-equal fast sponge (`Sha3Fast.lean`, standard axioms only). Rules decide 99.5 ->
   251.6 lines/s on 20,000 lines (target 2,000).
 - **Worker payments as ByteArray.** BLFPAY01 frames are read as a byte array; an 8.1 MB item now holds the worker near 62 MB (was
   952 MB). Corrections run on the evaluator worker (one-shot exe retired; 1,558 answers equal).
-- **Pins.** Worker `3AEC2F5E...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
-  8/8. Superseded pins are in each PROVENANCE file and `RETIRED_PINS`. Lake build `m4int-1` exit 0, `gate_verify` equal to its pin.
+- **Pins.** Worker `8BB1C646...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
+  8/8. Superseded pins are in each PROVENANCE file and `RETIRED_PINS`. Stage builds `m1-9a`/`m1-9b` byte-identical.
 
 ## Standing design
 
@@ -58,8 +58,9 @@ level within that product. Existing payment systems move money. Synthetic, state
 - **Unbuilt:** financial file adapters (MCO reports, X12 820/835, MMIS extracts), payee-identity consumption, a second synthetic state,
   a Lean seal codec. The NC capture path is synthetic file intake.
 - **Carried from earlier, not re-measured:** staff roles are UI-only (no authentication or refusal logging); no cancel or reduce command for stale
-  corrections; the receipt's `delivery_status` is the newest action's, not the verdict; core size targets unmet (owner 7,327 lines
-  against about 3,000, checker 4,594 against about 1,800); isolated TEST restore uses the system clock.
+  corrections (so an unpaid request blocks offsetting that amount); the receipt's `delivery_status` is the newest action's, not the
+  verdict; core size targets unmet (owner 7,327 lines against about 3,000, checker 4,594 against about 1,800);
+  isolated TEST restore uses the system clock.
 
 Next: the M3 step-4 flag flip; connector and browser completion is paused at the founder's request. This
 candidate is a local commit, not a qualified release; no local check activates production.
