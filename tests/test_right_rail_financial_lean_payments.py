@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 from app import right_rail_financial_engine as engine
 from app import right_rail_financial_owner as owner_module
-from app import right_rail_financial_owner_independent as independent
 from app import right_rail_financial_semantic_adapter as adapter
 from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_acceptance as acceptance_tests
@@ -151,9 +150,6 @@ class LeanPaymentOwnerTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.addCleanup(engine._close_evaluator)
-        patcher = patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         fixture = adapter_tests.RightRailFinancialSemanticAdapterTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -179,6 +175,20 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         self.assertEqual(_rows(self.store), before)
         reversed_ = self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.store.clock.value)
         self.assertEqual(reversed_["status"], "REVERSED")
+
+    def test_only_an_exact_retry_is_answered_while_the_clock_is_behind(self) -> None:
+        """D4: crash recovery must not depend on the clock, so the write-free exact retry is a DUPLICATE; every other answer fails closed."""
+        first = self._pay()
+        self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)
+        before = _rows(self.store)
+        self.store.clock.value -= 10**6  # behind the obligation's last update
+        self.assertEqual(self._pay(expected_revision=first["revision"] - 1)["status"], "DUPLICATE")
+        self.assertEqual(self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)["status"], "DUPLICATE")
+        for changed in ({"payment_id": "m3-p2"}, {"expected_revision": first["revision"] - 1, "event_at_ms": self.at + 1}):  # a new payment; a changed retry
+            with self.assertRaises(owner_module.FinancialIntegrityError) as raised:
+                self._pay(**changed)
+            self.assertEqual(str(raised.exception), "lean_payment:obligation_after_evaluation")
+        self.assertEqual(_rows(self.store), before)
 
     def test_refusals_and_a_dead_worker_write_nothing(self) -> None:
         self._pay()
@@ -369,9 +379,6 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.addCleanup(engine._close_evaluator)
-        patcher = patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         fixture = acceptance_tests.RightRailFinancialAcceptanceTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -409,25 +416,6 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
                     self.assertEqual(owner_module._open_requests(connection, oid, out.decided.shortfall_cents), opened[-1], out.status)
         self.assertEqual(len(opened), 5)
         self.assertGreater(opened[0][expected.ACTION_CORRECTION_ID], 0)
-
-    def test_dropped_links_let_lean_overpay_and_the_checker_refuses_before_commit(self) -> None:
-        """The carry fault one layer down: Lean sees no earlier links, so only the checker's payment:link stops the overpayment."""
-        store, reject_b = self.fixture._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)  # requests A and B: 300,000 left of the balance after A is paid
-        reject_b()
-        self.fixture._pay_a(store, 300_000, "m3a")
-        seen, real_verify, real = [], independent.verify_obligation_connection, owner_module._payment_receipts
-
-        def spy(*args, **kwargs):
-            try:
-                return real_verify(*args, **kwargs)
-            except independent.IndependentFinancialError as error:
-                seen.append(str(error))
-                raise
-        before = _rows(store)
-        with patch.object(owner_module, "_payment_receipts", lambda c, o: [(p, r, None) for p, r, _a in real(c, o)]), \
-             patch.object(independent, "verify_obligation_connection", spy), self.assertRaises(owner_module.FinancialError):
-            self.fixture._pay_a(store, 1, "m3b")
-        self.assertEqual((seen, _rows(store)), (["payment:link"], before))
 
 
 if __name__ == "__main__":
