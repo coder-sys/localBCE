@@ -52,6 +52,13 @@ def _blob(data: bytes) -> bytes:
     return len(data).to_bytes(2, "big") + data
 
 
+# A RELEASE frame's tail after its certs: no forks, no checkpoint, now 0, no grants, unreleased and unpinned, a
+# canonical request and no token.  Lean decodes all of it and then each cert, so only a cert it cannot decode fails it.
+_CERT_PROBE: Final = (_list([]) + signer.framed(b"") + bytes(8) + _list([]) + bytes(2) + signer.framed(
+    gate.encode_decide_request(gate.DecideRequest("probe", "probe", "SDP", "probe", "probe", bytes(gate.MEMBER_KEY),
+                                                  "probe", 0, "probe", (), ()))) + signer.framed(b""))
+
+
 class PayerStore:
     def __init__(self, path: Path | str, *, root_keys: Mapping[str, bytes],
                  grants: Sequence[tuple[bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
@@ -106,7 +113,10 @@ class PayerStore:
             self._deliver(key, data, transmit)
 
     def install_cert(self, cert: bytes) -> None:
-        """Keep a KEY-CERT as received; Lean installs it, or ignores it, wherever it is used."""
+        """Keep a KEY-CERT that Lean decodes (one it cannot would fail every later frame): the check is a RELEASE frame
+        holding only this cert, which Lean answers unless the cert does not decode.  Lean installs a kept cert, or
+        ignores it, wherever it is used."""
+        signer.gate_verify(4, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
         self._db.execute("INSERT OR IGNORE INTO certs VALUES(?)", (cert,))
 
     def _all(self, column: str, table: str) -> bytes:
@@ -138,14 +148,15 @@ class PayerStore:
 
     def _decide(self, request: gate.DecideRequest, token: bytes, now: int) -> str | None:
         """None when Lean RELEASE accepts, else why not."""
-        key = (request.tenant_id, request.program_id, request.payment_id)
+        data = gate.encode_decide_request(request)  # before any lookup: refuses, typed, what SQLite cannot bind
+        key =(request.tenant_id, request.program_id, request.payment_id)
         pin = self._db.execute("SELECT member_key FROM pins WHERE tenant=? AND program=? AND payment_id=?", key).fetchone()
         released = self._db.execute("SELECT 1 FROM releases WHERE tenant=? AND program=? AND payment_id=?", key).fetchone()
         checkpoint = self._db.execute("SELECT signed FROM checkpoints WHERE digest=?", (token[-gate.DIGEST :],)).fetchone()
         frame = (self._roots.get(request.tenant_id, bytes(gate.ML_DSA_87_PUBLIC_KEY)) + self._all("cert", "certs")
                  + self._all("stored", "forks") + signer.framed(checkpoint[0] if checkpoint else b"") + now.to_bytes(8, "big")
                  + self._grants + bytes([bool(released), bool(pin)]) + (pin[0] if pin else b"")
-                 + signer.framed(gate.encode_decide_request(request)) + signer.framed(token))
+                 + signer.framed(data) + signer.framed(token))
         try:
             answer = signer.gate_verify(4, frame)
         except signer.GateSignerError:
@@ -157,7 +168,9 @@ class PayerStore:
     def release(self, request: gate.DecideRequest, token: bytes, *, now: int) -> str | None:
         """Release the payment (its instruction is the ``releases`` row) if Lean accepts; else record a hold and
         return its reason.  Both signatures are re-verified here, at every release."""
-        reason = self._decide(request, token, now)
+        if not 0 <= now <= gate.MAX_NAT:  # the frame's u64 and the store's INTEGER both hold it
+            raise GatePayerError("now_out_of_range")
+        reason =self._decide(request, token, now)
         with self._tx():
             if reason is None:
                 self._db.execute("INSERT INTO releases VALUES(?,?,?,?,?,?,?,?)", (
