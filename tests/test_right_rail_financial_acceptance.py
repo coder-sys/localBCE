@@ -1338,7 +1338,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 period_id=expected.PERIOD_TWO_ID,
                 population_id=expected.POPULATION_TWO_ID,
             )
-            self._prepare_final(store)
+            self._record_cash(store)
+            claim_id = self._record_claim(store)
+            receipt, before = store.current_evaluation_receipt(expected.H_ITEM_ID), store.export_continuity()
+            request = {"item_id": expected.H_ITEM_ID, "claim_id": claim_id, "expected_revision": receipt["revision"], "action_id": expected.ACTION_OFFSET_ID, "evaluation_id": receipt["evaluation_id"], "evaluation_result_digest": receipt["result_digest"]}
+            for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):  # the retrospective boundary: no v2 decision before v2 takes effect
+                with self.assertRaisesRegex(FinancialIntegrityError, "^control_pack_not_effective$"):
+                    decide(**request, decision_at_ms=expected.CONTROL_PACK_V2.effective_start_ms - 1)
+            self.assertEqual(store.export_continuity(), before)
+            self._reject(store, claim_id)
+            self._ack(store)
+            self._finish_after_acknowledgment(store)
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         result = self._assert_verified(store)
         self.assertEqual(result["scope"]["period_id"], expected.PERIOD_TWO_ID)

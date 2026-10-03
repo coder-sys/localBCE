@@ -651,11 +651,21 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             self._assert_rejected_without_repair(self._copy_database(f"before-{field}.sqlite"), lambda _path: None, code)
 
     def test_item_due_before_its_pack_takes_effect_fails_closed_without_repair(self) -> None:
+        # A STAGED population has no validation digest to trip first, so only the checker's due-date line can refuse this edit.
+        self.db, self.clock = Path(self.temp_dir.name) / "staged.sqlite", _Clock()
+        self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
+        self.addCleanup(self.store.close)
+        pack = self._fixture_pack()
+        self.store.publish_control_pack(pack)
+        manifest = self._register_manifest(manifest_id="population-manifest:staged:v1", member_ids=("item:H",))
+        item = owner.PopulationItem(population_id="population:test", item_id="item:H", display_label="Fixture H", owed_cents=10_000_000, due_at_ms=10_000)
+        self.store.stage_population(population_id="population:test", manifest_id=manifest.manifest_id, pack_id=pack.pack_id, cutoff_ms=pack.effective_start_ms + 3, inclusion_rules=("INCLUDED",), expected_count=1, items=(item,))
+
         def tamper(path: Path) -> None:
             with closing(sqlite3.connect(path, isolation_level=None)) as connection:
                 self.assertEqual(connection.execute("UPDATE population_items SET due_at_ms=0").rowcount, 1)
 
-        self._assert_rejected_without_repair(self._copy_database("due-before-pack.sqlite"), tamper, "item:due-before-pack")
+        self._assert_rejected_without_repair(self._copy_database("staged-due-before-pack.sqlite"), tamper, "item:due-before-pack")
 
     def test_authorization_above_its_input_shortfall_fails_closed_without_repair(self) -> None:
         # M1: 9,800,000 paid leaves 200,000 unpaid; a writer told the shortfall equals the 300,000 claim, with no pre-commit check, stores a digest-consistent over-authorization.
