@@ -4143,6 +4143,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertFalse(store.obligation_detail(expected.H_ITEM_ID)["timely"])
         self._assert_verified(store)
 
+    def test_an_offset_claim_above_the_shortfall_is_refused_never_capped(self) -> None:
+        # M1 (Lean CLAIM_EXCEEDS_SHORTFALL): a 300,000 claim against 100,000 unpaid is refused and writes nothing.
+        store, cash = self._build_base_for_correction(), expected.H_CASH_EVIDENCE
+        store.record_payment_evidence(
+            item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
+            amount_cents=expected.H_OWED_CENTS - 100_000, evidence_id=cash.evidence_id, event_at_ms=cash.event_at_ms,
+            source_id=cash.source_id, source_version=cash.source_version, local_ref=cash.local_ref,
+        )
+        claim_id = self._record_claim(store)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        before = store.export_continuity()
+        with self.assertRaisesRegex(FinancialConflictError, "^offset_exceeds_shortfall$"):
+            store.authorize_offset(item_id=expected.H_ITEM_ID, claim_id=claim_id, expected_revision=int(receipt["revision"]), action_id=expected.ACTION_OFFSET_ID,
+                                   evaluation_id=str(receipt["evaluation_id"]), evaluation_result_digest=str(receipt["result_digest"]))
+        self.assertEqual(store.export_continuity(), before)
+
     def test_an_offset_committed_one_ms_after_the_due_date_cannot_name_the_due_date(self) -> None:
         clock = _Clock()
         store, request, _evaluated_at = self._s2_offset_request(clock)

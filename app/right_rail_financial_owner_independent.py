@@ -2895,14 +2895,16 @@ def _verify_actions(
             _fail("action:payload-object")
         claim_id = determination["claim_id"]
         amount = requestable = claims[str(claim_id)]["amount_cents"]
+        shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=kind == "CORRECTION_PAYMENT_REQUEST")
         if kind == "CORRECTION_PAYMENT_REQUEST":  # the input evaluation's unpaid balance, by the deciding engine's rule
             if decided.get(action_id) != amount:
                 _fail("action:event-amount")  # the decision event records the rejected claim
-            shortfall = _cents(next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["evaluation_id"] == determination["input_evaluation_id"]), None), "action:input-shortfall", positive=True)
             earlier = requests.setdefault(obligation_id, {})
             unpaid = sum(max(cents - paid_at(ref, revision), 0) for ref, cents in earlier.items())
             requestable = max(shortfall - unpaid, 0)
             amount = earlier[action_id] = _CORRECTION_AMOUNT_RULES[engines.get(action_id, current)[1]](amount, shortfall, unpaid)
+        elif amount > shortfall:  # M1: an authorization claims no more than the input evaluation's shortfall
+            _fail("action:exceeds-shortfall")
         expected_payload = {
             "action_id": action_id,
             "obligation_id": obligation_id,

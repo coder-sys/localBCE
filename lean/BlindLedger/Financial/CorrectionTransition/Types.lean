@@ -63,6 +63,7 @@ inductive TransitionRejectReason where
   | NO_SHORTFALL
   | NO_REQUESTABLE_BALANCE
   | DECISION_BACKDATED_PAST_DUE
+  | CLAIM_EXCEEDS_SHORTFALL
 deriving DecidableEq, Repr
 
 inductive TransitionRequirement where
@@ -88,6 +89,7 @@ inductive TransitionRequirement where
   | POSITIVE_SHORTFALL
   | UNREQUESTED_SHORTFALL
   | DECISION_NOT_BACKDATED_PAST_DUE
+  | CLAIM_WITHIN_SHORTFALL
 deriving DecidableEq, Repr
 
 def requiredTransitionCondition : TransitionRejectReason → TransitionRequirement
@@ -113,6 +115,7 @@ def requiredTransitionCondition : TransitionRejectReason → TransitionRequireme
   | .NO_SHORTFALL => .POSITIVE_SHORTFALL
   | .NO_REQUESTABLE_BALANCE => .UNREQUESTED_SHORTFALL
   | .DECISION_BACKDATED_PAST_DUE => .DECISION_NOT_BACKDATED_PAST_DUE
+  | .CLAIM_EXCEEDS_SHORTFALL => .CLAIM_WITHIN_SHORTFALL
 
 /-- What the payments linked to one correction request have paid against it. -/
 structure CorrectionPaid where

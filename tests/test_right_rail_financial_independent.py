@@ -649,6 +649,16 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             self._populate_owner()
         self._assert_rejected_without_repair(self._copy_database("before-approval.sqlite"), lambda _path: None, "determination:pack-not-approved")
 
+    def test_authorization_above_its_input_shortfall_fails_closed_without_repair(self) -> None:
+        # M1: 9,800,000 paid leaves 200,000 unpaid; a writer told the shortfall equals the 300,000 claim, with no pre-commit check, stores a digest-consistent over-authorization.
+        self.db, self.clock = Path(self.temp_dir.name) / "over-shortfall.sqlite", _Clock()
+        self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
+        self.addCleanup(self.store.close)
+        pay, inputs = owner.FinancialOwner.record_payment_evidence, owner.FinancialOwner._claim_decision_inputs
+        with patch.object(owner.FinancialOwner, "record_payment_evidence", lambda store, **kw: pay(store, **{**kw, "amount_cents": 9_800_000})), patch.object(owner.FinancialOwner, "_claim_decision_inputs", lambda *args, **kw: (lambda c, t, r, d: (c, t, {**r, "shortfall_cents": c["amount_cents"]}, d))(*inputs(*args, **kw))), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+            self._populate_owner()
+        self._assert_rejected_without_repair(self._copy_database("over-shortfall-copy.sqlite"), lambda _path: None, "^action:exceeds-shortfall$")
+
     def test_database_verification_requires_digest_bound_authority_roster(self) -> None:
         without_roster = {key: value for key, value in self.authority_binding.items() if key != "actors"}
         widened_roster = dict(self.authority_binding)

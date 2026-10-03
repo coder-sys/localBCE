@@ -39,10 +39,11 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(engine.FinancialEngineError):
                 engine.run_correction_transition_v1(request=mutant)
 
-    def test_result_decoder_has_reject_reason_tag_22(self) -> None:  # Lean Codec.lean:283, wire row 22; the unbound result's reason and requirement tags 5 -> 22
+    def test_result_decoder_has_reject_reason_tags_22_and_23(self) -> None:  # Lean Codec.lean, wire rows 22-23; the unbound result's reason and requirement tags 5 -> tag
         result = (REPO_ROOT / "artifacts" / "engine-correction" / "vectors" / "result_unbound.expected.bin").read_bytes()
-        decoded = engine.decode_correction_transition_result(result.replace(bytes.fromhex("0105030001050105"), bytes.fromhex("0116030001160116")))
-        self.assertEqual((decoded["reject_reason"], decoded["explanation"]["unresolved_requirement"]), ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE"))
+        for tag, names in ((22, ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE")), (23, ("CLAIM_EXCEEDS_SHORTFALL", "CLAIM_WITHIN_SHORTFALL"))):
+            decoded = engine.decode_correction_transition_result(result.replace(bytes.fromhex("0105030001050105"), bytes([1, tag, 3, 0, 1, tag, 1, tag])))
+            self.assertEqual((decoded["reject_reason"], decoded["explanation"]["unresolved_requirement"]), names)
 
     def test_one_worker_pin_is_shared_by_engine_checker_and_service_kit(self) -> None:
         self.assertEqual(independent.CORRECTION_TRANSITION_ARTIFACT_SHA256, engine.EVALUATOR_ARTIFACT_SHA256.hex().upper())

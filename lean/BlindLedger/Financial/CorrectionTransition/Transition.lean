@@ -1026,6 +1026,9 @@ def preflightOffsetDecision (decision : DeterminationDecision) (request : Correc
     if decision = .OFFSET_AUTHORIZED ∧ command.decisionAtMs ≤ input.obligation.dueAt ∧
         input.obligation.dueAt < max command.decisionAtMs command.ownerNowMs then
       throw .DECISION_BACKDATED_PAST_DUE
+    -- M1: an authorization never claims more than the shortfall it closes; refused, never capped.
+    if decision = .OFFSET_AUTHORIZED ∧ claim.amountCents > currentResult.shortfallCents then
+      throw .CLAIM_EXCEEDS_SHORTFALL
     if command.queryObservations.evaluationConsumed.matchCount ≠ 0 ||
         command.queryObservations.evaluationConsumed.resultIdentity.isSome then
       throw .EVALUATION_CONSUMED
@@ -1482,6 +1485,7 @@ theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
             obtain ⟨hChron, h⟩ := ite_error_ok h
             obtain ⟨hNow, h⟩ := ite_error_ok h
             obtain ⟨hBack, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
             obtain ⟨hConsumed, h⟩ := ite_error_ok h
             obtain ⟨-, h⟩ := ite_error_ok h
             obtain ⟨hFresh, h⟩ := ite_error_ok h
@@ -1517,6 +1521,62 @@ theorem preflightOffsetDecision_ready_facts {decision : DeterminationDecision}
             apply hFresh
             simp only [Bool.or_eq_true, decide_eq_true_eq]
             exact Or.inl (List.mem_map.2 ⟨x, hx, hEq⟩)
+        · cases h
+  · exfalso
+    rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩
+    · rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩ <;> cases h
+    · cases h
+  · cases h
+
+/-- M1: a ready authorization preflight never claims more than the shortfall it closes. -/
+theorem preflightOffsetDecision_ready_within_shortfall {decision : DeterminationDecision}
+    {request : CorrectionTransitionRequest} {currentResult : FinancialResult} {claim : Claim}
+    {a b paid c}
+    (h : preflightOffsetDecision decision request = .ok
+      (.ready currentResult claim a b paid c)) :
+    decision = .OFFSET_AUTHORIZED → claim.amountCents ≤ currentResult.shortfallCents := by
+  delta preflightOffsetDecision at h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  generalize request.command.actionLookup = L at h
+  cases L
+  · obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    generalize optionWithProof (derivedCorrectionPaid request.currentInput.payments
+      request.currentInput.actions request.command.paymentLinks) = P at h
+    cases P with
+    | none => cases h
+    | some paid' =>
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      generalize findClaim request.currentInput.claims request.command.claimId = Cl at h
+      cases Cl with
+      | none => cases h
+      | some claim' =>
+        obtain ⟨-, h⟩ := ite_error_ok h
+        obtain ⟨-, h⟩ := ite_error_ok h
+        rcases dite_cases h with ⟨hI, h⟩ | ⟨-, h⟩
+        · generalize evaluateWithProof request.currentInput = E at h
+          cases E with
+          | none => cases h
+          | some certificate =>
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨hWithin, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            cases Except.ok.inj h
+            exact fun hd => Nat.not_lt.1 fun hlt => hWithin ⟨hd, hlt⟩
         · cases h
   · exfalso
     rcases ite_cases h with ⟨-, h⟩ | ⟨-, h⟩

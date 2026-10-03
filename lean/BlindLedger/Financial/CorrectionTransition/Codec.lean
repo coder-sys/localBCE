@@ -281,6 +281,7 @@ def encodeRejectReason : TransitionRejectReason → UInt8
   | .NO_SHORTFALL => UInt8.ofNat 20
   | .NO_REQUESTABLE_BALANCE => UInt8.ofNat 21
   | .DECISION_BACKDATED_PAST_DUE => UInt8.ofNat 22
+  | .CLAIM_EXCEEDS_SHORTFALL => UInt8.ofNat 23
 
 def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   match byte.toNat with
@@ -306,6 +307,7 @@ def decodeRejectReason (byte : UInt8) : Option TransitionRejectReason :=
   | 20 => some .NO_SHORTFALL
   | 21 => some .NO_REQUESTABLE_BALANCE
   | 22 => some .DECISION_BACKDATED_PAST_DUE
+  | 23 => some .CLAIM_EXCEEDS_SHORTFALL
   | _ => none
 
 def encodeOptionalRejectReason : Option TransitionRejectReason → Bytes
@@ -394,6 +396,7 @@ def encodeTransitionRequirement : TransitionRequirement → UInt8
   | .POSITIVE_SHORTFALL => UInt8.ofNat 20
   | .UNREQUESTED_SHORTFALL => UInt8.ofNat 21
   | .DECISION_NOT_BACKDATED_PAST_DUE => UInt8.ofNat 22
+  | .CLAIM_WITHIN_SHORTFALL => UInt8.ofNat 23
 
 def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement × Bytes) := do
   let (tag, rest) ← readByte bytes
@@ -420,6 +423,7 @@ def readTransitionRequirement (bytes : Bytes) : Option (TransitionRequirement ×
     | 20 => some .POSITIVE_SHORTFALL
     | 21 => some .UNREQUESTED_SHORTFALL
     | 22 => some .DECISION_NOT_BACKDATED_PAST_DUE
+    | 23 => some .CLAIM_WITHIN_SHORTFALL
     | _ => none
   pure (requirement, rest)
 

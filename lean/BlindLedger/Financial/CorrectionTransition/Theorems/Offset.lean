@@ -234,6 +234,20 @@ theorem applyOffsetAuthorization_not_backdated (request : CorrectionTransitionRe
   rw [hCreated]
   exact hBack rfl (hDecided ▸ hle)
 
+/-- M1: an accepted authorization never claims more than the shortfall it closes (Python
+    `offset_exceeds_shortfall`, checker `action:exceeds-shortfall`), so overage stays 0. -/
+theorem applyOffsetAuthorization_within_shortfall (request : CorrectionTransitionRequest)
+    (mutation : CorrectionMutation)
+    (hMutation : (applyOffsetAuthorization request).mutation = some mutation) :
+    ∃ before, evaluate request.currentInput = some before ∧
+      mutation.determination.amountCents ≤ before.shortfallCents := by
+  obtain ⟨cr, claim, a, b, paid, c, hP, hB⟩ := offsetAuth_ready hMutation
+  have hWithin := preflightOffsetDecision_ready_within_shortfall hP
+  obtain ⟨-, -, -, -, -, -, -, -, -, hAmtD, -⟩ := buildAuthorized_spec hB
+  refine ⟨cr, b, ?_⟩
+  rw [hAmtD]
+  exact hWithin rfl
+
 /-- Each entry point reports only its own transition kind: a correction retry never comes back as
     an authorization, nor an authorization retry as a correction. -/
 theorem applyOffsetAuthorization_transition_kind (request : CorrectionTransitionRequest) :

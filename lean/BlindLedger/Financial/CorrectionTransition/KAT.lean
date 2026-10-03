@@ -448,6 +448,9 @@ def gateCorrectionFullShortfallAmount : Bool :=
 def gateCorrectionShortfallAboveClaimAmount : Bool :=
   correctionKatOwedAction 10_500_000 = some (800_000, 300_000, 300_000)
 
+-- M1: authorizing a 300,000 offset against 100,000 unpaid is refused, never capped.
+#guard resultHasReason (applyOffsetAuthorization (correctionKatOwedRequest 9_800_000)) .CLAIM_EXCEEDS_SHORTFALL
+
 /-- A correction of `claimId` by `actionId` on `input`, decided 10 ms after
     `input` was evaluated at event `sequence`; the receipt is Lean's projection. -/
 private def correctionKatRequestOn (input : FinancialInput) (claimId actionId : String)
