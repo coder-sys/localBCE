@@ -132,18 +132,20 @@ class PaymentCrashTests(unittest.TestCase):
                     self._verify(path)
 
     def _kill_worker(self, when: str):
-        """Patch the worker so its process is killed just before a frame is written, or just after its answer is read."""
-        real = process.ContainedWorker.exchange
+        """Patch the worker so its process is killed just before a frame is written, or just after the engine has read its answer and its memory.
+
+        "after" kills inside commit_bytes once the real reading is taken, so the engine's recycle check never sees a dead process and the dead worker stays in place."""
+        real_exchange, real_commit = process.ContainedWorker.exchange, process.ContainedWorker.commit_bytes
 
         def exchange(worker, *args, **kwargs):
-            if when == "before":
-                worker._kernel32.TerminateJobObject(worker._job, 1)
-            try:
-                return real(worker, *args, **kwargs)
-            finally:
-                if when == "after":
-                    worker._kernel32.TerminateJobObject(worker._job, 1)
-        return patch.object(process.ContainedWorker, "exchange", exchange)
+            worker._kernel32.TerminateJobObject(worker._job, 1)
+            return real_exchange(worker, *args, **kwargs)
+
+        def commit_bytes(worker):
+            reading = real_commit(worker)
+            worker._kernel32.TerminateJobObject(worker._job, 1)
+            return reading
+        return patch.object(process.ContainedWorker, "exchange" if when == "before" else "commit_bytes", exchange if when == "before" else commit_bytes)
 
     def _fresh(self, kind: str, name: str):
         store = self.fixture._build_base(path=self.directory / name)
@@ -170,6 +172,7 @@ class PaymentCrashTests(unittest.TestCase):
     def test_the_worker_killed_after_its_answer_still_commits_once_and_a_retry_is_the_same_payment(self) -> None:
         for kind in ("record", "reverse"):
             with self.subTest(kind=kind):
+                engine._close_evaluator()  # a fresh worker and a zero request count: the recycle backstop cannot fire
                 clean = self._fresh(kind, f"clean-{kind}.sqlite")
                 revision = _state(Path(clean.path))["revision"]
                 clean_answer, store = self._run(clean, kind, revision), self._fresh(kind, f"killed-{kind}.sqlite")
