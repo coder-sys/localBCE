@@ -1,0 +1,110 @@
+today 20270315
+snap released 20270315 0 139c11d0c7e51ce29e17f4847cffe19627faf14b37c0c703692cdecc518e2c5f9c913e757d75ab5e668b3365c0eae2f084e2658529d9f09686445677605652b4
+snap unresolved 20270315 0 f13bedf365fc4133b5d2324c727354fc9f06a6e3b14420e0f40f83e305409b212553cf4353d7d4c7f08a9f03bf1efdc691b06edc0cc8195de4a970d30768ddd6
+snap dmf 20270301 2 7f5e1d6b949e3b0abc295556c15ace9b515af3d55110d2612b16a0ab2b0b9da5104ff56dc8877b8399789fa8aba7540544a78515ff69b8fb789e6445935f8de4
+dmf 9001 20270110
+dmf 9002 20261120
+snap pdeath 20270301 1 e61974fe9abbed49ea72aa76d51abbd98b1176ee812d8a6ad5ebe3883b28f816845dee20bad0802f9f70b50117e4517b845cc89e2b38000f7ff74ba39d6c766e
+pdeath 7701 20270120
+snap excl 20270310 3 059d1318aa77348cc487039f269ba93a910c20ed08cf3cb6a73f0e94d22e72a33f44d8aa81b3127b583750f02b03101db2103ed3a31239bbb89a817664ff404d
+excl 504 20260101 99991231
+excl 7801 20260101 99991231
+excl 7802 20260101 20270131
+snap span 20270314 11 d5fa4f3d047eb518daa4d02f61e8865551875a0a0195efc1df8148a310d428535ae1d257697a39d63096e8e8acf48e658897c6b57ad9341e78b20ae094da5510
+span 1001 501 20260101 20271231
+span 1002 501 20260101 20271231
+span 1002 502 20260101 20271231
+span 1003 501 20260101 20270131
+span 1005 501 20270301 20271231
+span 1006 501 20260101 20271231
+span 1006 502 20270331 20271231
+span 1007 504 20260101 20271231
+span 1009 501 20260101 20271231
+span 1009 502 20260101 20261231
+span 9001 501 20260101 20271231
+
+
+# Shard uniqueness vectors (gate-shard-uniqueness-v1): a `foreign` directive names ids the tenant's
+# id registry gives another shard; the rules add ALREADY_DECIDED to those ids and change nothing else.
+# Without `foreign` the same batch is ALLOW: only the registry, not these rules, stops a second shard.
+# Synthetic IDs, no PHI.  Header (snapshots) copied from rules_v1.vectors.
+
+# T1 shard 0: line 901 is new to the registry and ALLOW
+case shard0_first
+line 901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# T1 shard 1: the registry says shard 0 owns 901, so shard 1 holds it (another member, same id)
+case shard1_foreign_id
+foreign 901
+line 901 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 HOLD ALREADY_DECIDED
+commit
+
+# The unfixed case: shard 1 with no registry answer allows the same id again
+case shard1_without_registry
+line 901 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 ALLOW -
+commit
+
+# Only the foreign id is held; its neighbour in the batch decides as before
+case foreign_id_only
+foreign 910
+line 910 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 HOLD ALREADY_DECIDED
+line 911 FFS_CLAIM 1002 7001 7001 20270307 99214 1 13100 ALLOW -
+commit
+
+# A foreign id that is not in the batch changes nothing
+case foreign_id_absent
+foreign 999
+line 920 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# T1 swapped roles: shard 1 decides 903 first, then shard 0 holds it
+case swap_first
+line 903 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 ALLOW -
+commit
+
+case swap_second
+foreign 903
+line 903 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED
+commit
+
+# `commit` clears `foreign`: the same line, fresh in a later batch, decides on its own
+case foreign_cleared_by_commit
+foreign 940
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED
+commit
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# A `foreign` left open at the end of a case does not carry into the next case
+case foreign_left_open
+foreign 950
+
+case foreign_not_carried
+line 950 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# A refused (unanchored) commit clears `foreign` too
+case foreign_cleared_by_refusal
+foreign 960
+anchor 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+line 960 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500
+commit UNANCHORED
+line 960 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+commit
+
+# One payment with a foreign line: that line holds, so the whole payment holds
+case foreign_line_in_payment
+foreign 970
+line 970:970 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 HOLD ALREADY_DECIDED
+line 971:970 FFS_CLAIM 1002 7001 7001 20270307 99214 1 13100 ALLOW -
+pay 970 HOLD
+commit
+
+# ALREADY_DECIDED sits with the line's other reasons
+case foreign_with_other_reason
+foreign 980
+line 980 FFS_CLAIM 9001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED,MEMBER_DECEASED
+commit
+
+end 17

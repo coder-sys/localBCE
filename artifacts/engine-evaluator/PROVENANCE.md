@@ -5,7 +5,7 @@ Lake build of `lean/` at commit `1828dd1` (lean tree `ba2805cd7226fde5eb4090f326
 - 6,462,464 bytes; SHA-256 `7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2`; the engine module pins both.
 - Two guarded fresh stage builds, each in a `git archive` of that tree: `os-9a`, `os-9b`, each `lake build` of the four pin targets, exit 0. Both workers are byte-identical; `gate_verify` is still `724de1bd...`; a warm build (`os-10`) agrees.
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: the XI.2 section of the re-pin commit message.
-- Why it moved: offsets are served. A `BLFOFA01` frame carries a `BLFCMD03` request and Lean decides the offset authorization (`applyOffsetAuthorization`: the shortfall and open-requests bound, backdating, approval and effective start, reasons 22 to 24); the owner and checker no longer decide it.
+- Why it moved: offsets are served. A `BLFOFA01` frame carries a `BLFCMD03` request and Lean decides the offset authorization (`applyOffsetAuthorization`: the shortfall and open-requests bound, backdating, approval and effective start, reasons 22 to 24); the owner no longer decides it; the checker still re-checks it independently.
 
 Retired pins, not deleted: `8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309`, 6,420,480 bytes
 (lean `662dc18`, tree `b64dc5cb020d172abc47be4f1c416397c36440a0`; before offsets were served: the Lean offset rule was spec only); `84F8DCFC618D557838D15BFF5AFCA29CDB244F80DE47A57AAE4A633F0C571CE1`, 6,421,504 bytes

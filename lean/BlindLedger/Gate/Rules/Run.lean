@@ -3,13 +3,13 @@ import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Sha3Fast
 import BlindLedger.Sha3
 
-/-! The test-only vector runner: decides with `Fast.decideBatchF` (= `decideBatch`, `FastEq.decideBatchF_eq`; no reversed re-run, `decideBatchF_reverse`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
+/-! The test-only vector runner: decides with `Fast.decideBatchFIn` (= `decideBatchIn`, `FastEq.decideBatchFIn_eq`; no reversed re-run, order independence `Theorems.decideBatchIn_perm`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
 
 namespace BlindLedger.Gate.Rules.Run
 
 open BlindLedger.Gate.Rules
 
-/-! Runs a rules vector file through `decideBatch` (its proved twin `Fast.decideBatchF`).  Directives,
+/-! Runs a rules vector file through `decideBatchIn` (its proved twin `Fast.decideBatchFIn`).  Directives,
     one per line: `case NAME` clears the batch, the totals, the lines earlier commits
     released or left unresolved and the gate's checkpoints; `today D`;
     `snap KIND ASOF COUNT PIN` (re)declares a snapshot (`dmf`, `pdeath`,
@@ -20,7 +20,7 @@ open BlindLedger.Gate.Rules
     `pinInput`; a snapshot whose pin does not match or with a row that does
     not parse is treated as missing, as is one after `drop KIND`.
     `line ...row fields... [OUTCOME REASONS [with=IDS]]` adds a line to the
-    batch, `redo PAY` makes the batch re-decide that payment and `pay PAY
+    batch, `foreign ID...` names ids another shard owns (`decideBatchIn`; cleared by `commit`), `redo PAY` makes the batch re-decide that payment and `pay PAY
     OUTCOME` expects its `payOutcome`; `commit` decides the batch, checks the
     expectations (all lines or none), adds its released and unresolved lines
     to those sets, and takes the result's checkpoints (`advance`).  `anchor
@@ -28,7 +28,7 @@ open BlindLedger.Gate.Rules
     which then decides only if the checkpoints it extends hash to it
     (`Gate.decideAnchored`); without one, the runner's own last commit is that
     checkpoint.  `commit UNANCHORED` expects the refusal.  Arrival
-    order cannot change a decision (`Fast.decideBatchF_reverse`).  `report`
+    order cannot change a decision (`decideBatchIn_perm`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
 
@@ -73,6 +73,8 @@ structure St where
   anchor : Option Nat := none
   batch : Array (Line × Option String) := #[]          -- FAST
   redo : List Nat := []
+  /-- Ids the tenant's id registry gives another shard, for the next commit. -/
+  foreign : List Nat := []
   pays : List (Nat × String) := []
   done : List Decision := []
   checked : Nat := 0
@@ -154,13 +156,13 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
   if !st.anchor.all fun a => Gate.anchored (fun x => (BlindLedger.Semantic.sha3_512Fast x.toByteArray).toList)
       { c with anchor := a } then
-    ({ st with pinned := some p, anchor := none, batch := #[], redo := [], pays := [],
+    ({ st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], pays := [],
                checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },
      if unanchored then [] else ["RULES_UNANCHORED commit"])
   else
   let lines := st.batch.toList.map (·.1)
   let x := Fast.Ix.build c lines                        -- FAST
-  let r := x.run lines                                  -- FAST: = decideBatch c lines
+  let r := x.runIn st.foreign lines                     -- FAST: = decideBatchIn c st.foreign lines
   let exp := st.batch.toList.filterMap (·.2)
   let got := r.decisions.map render
   let bad := st.pays.filter fun (q, o) => name (x.payOutcome r.decisions q) != o
@@ -174,14 +176,14 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   ({ st with pinned := some p, anchor := none,
              extra := st.extra ++ r.released.entries.drop x.relN,     -- FAST: `run_relN`
              held := st.held ++ r.unresolved.entries.drop x.unrN,
-             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], pays := [],
+             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], pays := [],
              done := st.done ++ r.decisions, checked := st.checked + (if ok then n + st.pays.length else 0),
              failed := st.failed + (if ok then 0 else 1) },
    if ok then [] else "RULES_VECTOR_MISMATCH commit" :: msg)
 
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
-                                   anchor := none, batch := #[], redo := [], pays := [], done := [] }, [])
+                                   anchor := none, batch := #[], redo := [], foreign := [], pays := [], done := [] }, [])
   | ["anchor", h] => do
     guard (h.length == 128)
     pure ({ st with anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
@@ -198,6 +200,7 @@ def step (st : St) : List String → Option (St × List String)
     guard ([0, 2, 3].contains e.length)
     pure ({ st with batch := st.batch.push (l, if e.isEmpty then none else some (" ".intercalate (lineText l :: e))) }, [])
   | ["redo", p] => do pure ({ st with redo := (← p.toNat?) :: st.redo }, [])
+  | "foreign" :: ids => do pure ({ st with foreign := ← ids.mapM String.toNat? }, [])
   | ["pay", p, o] => do pure ({ st with pays := st.pays ++ [(← p.toNat?, o)] }, [])
   | ["commit"] => pure (commit st false)
   | ["commit", "UNANCHORED"] => pure (commit st true)

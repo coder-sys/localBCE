@@ -316,13 +316,14 @@ theorem decideAll_append (c : Ctx) : ∀ (seen : List Key) (l₁ l₂ : List Lin
 
 /-- A line that is not a re-decision's own is decided after its own lines, so it has seen every
     key of the released view. -/
-theorem seen_all {c b e} (he : e ∈ (decideBatch c b).decisions) (ho : own c e.line = false) :
+theorem seen_all_in {c f b e} (he : e ∈ (decideBatchIn c f b).decisions) (ho : own c e.line = false) :
     ∃ seen, e = decideLine c seen e.line ∧ ∀ x ∈ releasedSet c, ∀ k ∈ keys x, k ∈ seen := by
-  change e ∈ decideAll c (seen0 c b) (order c b) at he
+  change e ∈ decideAll c (idSeen f ++ seen0 c b) (order c b) at he
   rw [order, decideAll_append, List.mem_append] at he
   rcases he with he | he
   · have hl : e.line ∈ canonical (b.filter (own c)) := by
-      rw [← lines_decideAll c (seen0 c b) (canonical (b.filter (own c)))]; exact List.mem_map.mpr ⟨e, he, rfl⟩
+      rw [← lines_decideAll c (idSeen f ++ seen0 c b) (canonical (b.filter (own c)))]
+      exact List.mem_map.mpr ⟨e, he, rfl⟩
     have := (List.mem_filter.mp ((List.mergeSort_perm _ _).mem_iff.mp hl)).2
     rw [ho] at this; cases this
   · obtain ⟨pre, l, rfl⟩ := mem_decideAll he
@@ -332,7 +333,12 @@ theorem seen_all {c b e} (he : e ∈ (decideBatch c b).decisions) (ho : own c e.
         ((List.mergeSort_perm _ _).mem_iff.mpr (List.mem_filter.mpr ⟨hob.2, hob.1⟩)), ?_⟩)
       have hc : claim c x = keys x := by simp [claim, hob.1]
       rwa [hc]
-    · exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨x, List.mem_filter.mpr ⟨hx, not_own_mem hob⟩, hk⟩)
+    · exact List.mem_append_right _ (List.mem_append_right _
+        (List.mem_flatMap.mpr ⟨x, List.mem_filter.mpr ⟨hx, not_own_mem hob⟩, hk⟩))
+
+theorem seen_all {c b e} (he : e ∈ (decideBatch c b).decisions) (ho : own c e.line = false) :
+    ∃ seen, e = decideLine c seen e.line ∧ ∀ x ∈ releasedSet c, ∀ k ∈ keys x, k ∈ seen :=
+  seen_all_in (f := []) he ho
 
 /-- Every line of the batch is in the next checkpoint of the released or the
     unresolved set, unless its identity was already decided (release is by
@@ -669,10 +675,13 @@ theorem canonical_perm {b₁ b₂ : List Line} (h : b₁.Perm b₂) : canonical 
     line (`later_allow_clear`), and `allowed_decideAll` holds in each batch,
     so no key is paid twice.  The split statement itself is argued here, not
     proved. -/
-theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = decideBatch c b₂ := by
+theorem decideBatchIn_perm {c f b₁ b₂} (h : b₁.Perm b₂) : decideBatchIn c f b₁ = decideBatchIn c f b₂ := by
   have hs : seen0 c b₁ = seen0 c b₂ := by
     simp only [seen0]; congr 1; exact List.filter_congr fun x _ => by simp [h.mem_iff]
-  simp only [decideBatch, order, canonical_perm (h.filter (own c)), canonical_perm (h.filter fun x => !own c x), hs]
+  simp only [decideBatchIn, order, canonical_perm (h.filter (own c)), canonical_perm (h.filter fun x => !own c x), hs]
+
+theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = decideBatch c b₂ :=
+  decideBatchIn_perm (f := []) h
 
 /-- The released set after a batch: the view plus each line whose payment is
     ALLOW and not a re-decision (M-B). -/
@@ -782,6 +791,8 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms monotone
 /-- info: 'BlindLedger.Gate.Rules.deterministic' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms deterministic
+/-- info: 'BlindLedger.Gate.Rules.decideBatchIn_perm' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms decideBatchIn_perm
 /-- info: 'BlindLedger.Gate.Rules.fail_closed' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms fail_closed
 /-- info: 'BlindLedger.Gate.Rules.later_allow_clear' depends on axioms: [propext, Quot.sound] -/
