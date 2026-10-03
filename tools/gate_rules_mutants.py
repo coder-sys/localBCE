@@ -294,8 +294,18 @@ DIN = ("def decideBatchIn (c : Ctx) (f : List Nat) (batch : List Line) : Result 
        "  let ds := decideAll c (idSeen f ++ seen0 c batch) (order c batch)\n"
        "  { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),\n"
        "    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }")
-SHARD_MUTANTS = [
+SHARD_FAST = [
     ("foreign ids ignored by the twin", "x.decideAll (HashSet.ofList (idSeen f)) (x.order b)", "x.decideAll ∅ (x.order b)"),
+    ("ready ignores settled", "(os.filter fun o => o.shard == k || o.settled)", "(os.filter fun o => o.shard == k)"),
+    ("foreignOf keeps mine", "fun o => o.shard != k && o.settled", "fun o => o.settled"),
+    ("settleFree keeps nothing", "p.filter fun i => !s.contains i", "p.filter fun _ => false"),
+    ("settleFree keeps everything", "p.filter fun i => !s.contains i", "p.filter fun _ => true"),
+]
+SHARD_MUTANTS = [
+    ("okId ignores settled", "(o.shard == k || o.settled)", "o.shard == k"),
+    ("taken keeps mine", "(o.shard != k && o.settled)", "o.settled"),
+    ("Spec settleFree keeps nothing", "p.filter fun i => !((rel ++ unr).map (·.id)).contains i", "p.filter fun _ => false"),
+    ("Spec settleFree keeps everything", "p.filter fun i => !((rel ++ unr).map (·.id)).contains i", "p.filter fun _ => true"),
     ("foreign ids are none", "f.map fun i => [4, i]", "([] : List Nat).map fun i => [4, i]"),
     ("decideBatchIn forgets the foreign ids", DIN, DIN.replace("idSeen f ++ seen0 c batch", "seen0 c batch")),
     ("decideBatchIn sees only the foreign ids", DIN, DIN.replace("idSeen f ++ seen0 c batch", "idSeen f")),
@@ -367,8 +377,8 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
             killed += result.startswith("RULES_VECTORS=FAIL")
             print(f"MUTANT {name}: {result}", flush=True)
         chosen = ([("Spec.lean", *m) for m in SPEC] + [("Fast.lean", *m) for m in FAST] +
-                  [("Run.lean", *m) for m in RUN_MUTANTS] + [("Fast.lean", *SHARD_MUTANTS[0])] +
-                  [("Spec.lean", *m) for m in SHARD_MUTANTS[1:]])[
+                  [("Run.lean", *m) for m in RUN_MUTANTS] + [("Fast.lean", *m) for m in SHARD_FAST] +
+                  [("Spec.lean", *m) for m in SHARD_MUTANTS])[
             slice(*(int(x) if x else None for x in part.split(":")))]
         for file, name, old, new in chosen:
             src = lean / "BlindLedger" / "Gate" / "Rules" / file
