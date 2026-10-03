@@ -689,10 +689,6 @@ def build_v2_vectors() -> str:
     return "\n".join(out) + "\n"
 
 
-def _records() -> list[list[str]]:
-    return [line.split(" ") for line in VECTORS.read_text("ascii").splitlines() if not line.startswith("#")]
-
-
 V2_VECTORS = VECTORS.with_name("checkpoint_v2.vectors")
 LEAN_VECTORS = signer.ROOT / "lean" / ".lake" / "build" / "bin" / "gate_vectors.exe"
 

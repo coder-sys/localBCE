@@ -329,10 +329,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         target.write_bytes(_image(store.path))
         return target
 
-    def _snapshot_on_path(self, path: Path, *, context: adapter.TrustedAuthorityContext | None = None) -> adapter.LockedSemanticSnapshot:
-        store = self._make_owner(path=path)
-        return self._snapshot(store, context=context)
-
     def _snapshot_on_tampered_path(self, path: Path, source: FinancialOwner) -> None:
         # Layer 1: Owner open replays the history against the projections and
         # refuses the tampered facts before any read or write.

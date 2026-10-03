@@ -10,7 +10,6 @@ connection and never reads release identity from the environment.
 from __future__ import annotations
 
 import atexit
-import math
 from pathlib import Path
 import shutil
 import sqlite3
@@ -40,14 +39,6 @@ _MAX_SQLITE_INTEGER: Final[int] = 2**63 - 1
 
 class FinancialEngineError(Exception):
     """Base error for this fail-closed application boundary."""
-
-
-class FinancialEngineConfigError(FinancialEngineError):
-    pass
-
-
-class FinancialEngineArtifactError(FinancialEngineError):
-    pass
 
 
 class FinancialEngineInputError(FinancialEngineError):
