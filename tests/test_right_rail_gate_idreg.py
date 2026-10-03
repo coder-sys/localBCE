@@ -15,8 +15,10 @@ import unittest
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
+from app import right_rail_gate_mark as marks
 
 ROOT = Path(__file__).resolve().parents[1]
+_RECORD = idreg._MARK_BODY + marks.CHECK  # one mark record
 
 
 def _run(code: str, *args: str) -> subprocess.Popen:
@@ -265,9 +267,9 @@ class IdRegistryTests(unittest.TestCase):
         reg = self.open()
         reg.reserve(0, [1])
         mark = Path(f"{self.path}.mark")
-        mark.write_bytes(mark.read_bytes()[: idreg._MARK_SIZE])  # only the first (empty-registry) record survived
+        mark.write_bytes(mark.read_bytes()[: _RECORD])  # only the first (empty-registry) record survived
         reg.reserve(0, [2])
-        self.assertEqual(mark.read_bytes()[-idreg._MARK_SIZE:][:8], (2).to_bytes(8, "big"))  # caught up to 1, then marked 2
+        self.assertEqual(mark.read_bytes()[-_RECORD:][:8], (2).to_bytes(8, "big"))  # caught up to 1, then marked 2
 
     def test_a_zero_filled_mark_tail_does_not_hide_a_restored_older_database(self) -> None:
         reg = self.open()
@@ -293,7 +295,7 @@ class IdRegistryTests(unittest.TestCase):
         reg.reserve(0, [2])
         mark = Path(f"{self.path}.mark")
         whole = mark.read_bytes()
-        good, last = whole[:-idreg._MARK_SIZE], whole[-idreg._MARK_SIZE:]
+        good, last = whole[:-_RECORD], whole[-_RECORD:]
         for torn in (last[:50], last[:-40] + bytes(40)):  # cut short, or its second page never written
             mark.write_bytes(good + torn)
             self.open()
@@ -305,8 +307,8 @@ class IdRegistryTests(unittest.TestCase):
         reg.reserve(0, [2])
         reg.close()
         mark = Path(f"{self.path}.mark")
-        size, whole = idreg._MARK_SIZE, mark.read_bytes()
-        zero, one, two = (whole[at:at + size] for at in range(0, len(whole), size))
+        whole = mark.read_bytes()
+        zero, one, two = (whole[at:at + _RECORD] for at in range(0, len(whole), _RECORD))
         bad = one[:20] + bytes([one[20] ^ 1]) + one[21:]
         for records in (zero + bad + two, zero + two + one + two):
             mark.write_bytes(records)

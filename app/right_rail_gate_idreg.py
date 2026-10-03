@@ -15,18 +15,17 @@ No decide layer calls ``reserve`` yet; runtime multi-shard safety is the open #3
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import os
 from pathlib import Path
 import sqlite3
 from typing import Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_mark as marks
 
 ID_LEN: Final = 129  # the Line.fields id field
 _DOMAIN: Final = b"RR/GATE/ID-REG/v1\x00"
 _MARK_DOMAIN: Final = b"RR/GATE/ID-MARK/v1\x00"
-_MARK_SIZE: Final = 104  # a mark record: n (8 bytes, big-endian), head (64), SHA3-256(_MARK_DOMAIN, n, head) (32)
+_MARK_BODY: Final = 72  # a mark record body (right_rail_gate_mark): n (8 bytes, big-endian) and head (64)
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS ids(
   n INTEGER PRIMARY KEY, id BLOB NOT NULL UNIQUE, shard INTEGER NOT NULL, head BLOB NOT NULL);
@@ -55,31 +54,6 @@ def _check(shard: int, ids: Iterable[int]) -> list[int]:
 def _key(id_: int) -> bytes:
     """Lean ``be idWidth id``, the Line.id field bytes: the one place an id becomes bytes."""
     return id_.to_bytes(ID_LEN, "big")
-
-
-def _record(n: int, head: bytes) -> bytes:
-    body = n.to_bytes(8, "big") + head
-    return body + hashlib.sha3_256(_MARK_DOMAIN + body).digest()
-
-
-def _verified(record: bytes) -> bool:
-    return record == _record(int.from_bytes(record[:8], "big"), record[8:72])  # a short record never matches
-
-
-def _replace(path: Path, data: bytes) -> None:
-    """Write ``data`` over ``path`` all or nothing: a temporary file, fsynced, renamed over it."""
-    temporary = path.with_name(f"{path.name}.tmp")
-    with open(temporary, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
-    with contextlib.suppress(OSError):  # best effort: Windows cannot open a directory to sync it
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
 
 
 class IdRegistry:
@@ -115,26 +89,18 @@ class IdRegistry:
         unverifiable record before its last or an n that does not rise; catch the mark up to a registry ahead of
         it, as after a crash between the commit and the mark."""
         n, head = self._last()
-        data = self._mark.read_bytes() if self._mark.exists() else b""
-        records = [data[at:at + _MARK_SIZE] for at in range(0, len(data), _MARK_SIZE)]
-        if records and not _verified(records[-1]):  # a torn last write: never fsynced, so never replied to
-            records.pop()
-        if not all(map(_verified, records)) or any(a[:8] >= b[:8] for a, b in zip(records, records[1:])):
+        bodies = marks.read(self._mark, _MARK_DOMAIN, _MARK_BODY, 8)
+        if bodies is None:
             raise IdRegistryError("mark_corrupt")
-        if records:
-            marked = int.from_bytes(records[-1][:8], "big")
+        if bodies:
+            marked = int.from_bytes(bodies[-1][:8], "big")
             row = self._db.execute("SELECT head FROM ids WHERE n = ?", (marked,)).fetchone() if marked else (gate.ZERO_DIGEST,)
-            if not row or row[0] != records[-1][8:72]:
+            if not row or row[0] != bodies[-1][8:]:
                 raise IdRegistryError("registry_rewound")
         elif n:
             raise IdRegistryError("registry_rewound")
-        if len(data) != len(records) * _MARK_SIZE:
-            _replace(self._mark, data[:len(records) * _MARK_SIZE])
-        if not records or records[-1] != _record(n, head):
-            with open(self._mark, "ab") as mark:
-                mark.write(_record(n, head))
-                mark.flush()
-                os.fsync(mark.fileno())
+        if not bodies or bodies[-1] != n.to_bytes(8, "big") + head:
+            marks.append(self._mark, _MARK_DOMAIN, bodies, n.to_bytes(8, "big") + head)
 
     @contextlib.contextmanager
     def _lock(self):

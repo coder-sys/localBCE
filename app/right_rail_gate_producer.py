@@ -4,24 +4,24 @@
 stored before the key is used, so a crash re-signs the same header at the same seq and never reuses a seq
 with other bytes; ``signer.seal`` releases a signature only when Lean ``publishOk`` accepts it, and only a
 sealed batch is published.  Seriality is the store's: one SQLite file opened EXCLUSIVE, WAL, synchronous
-FULL.  A mark file outside the database records the last sealed (epoch, seq_to, digest), so a restored
-older database is refused.  The batch's state digest comes from the decide layer; the producer computes no pin.
+FULL.  A checked mark file outside the database (``right_rail_gate_mark``) records the last sealed (epoch,
+seq_to, digest), so a restored older database is refused; an old unchecked mark file is refused as corrupt, with
+no migration (synthetic, nothing deployed).  The batch's state digest comes from the decide layer; the producer computes no pin.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
-import os
 from pathlib import Path
 import sqlite3
-import struct
 from typing import Final, Sequence
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_mark as marks
 from app import right_rail_gate_signer as signer
 
 LIFETIME: Final = 7 * 86_400  # maxTokenLifetime; the decision's age stays the payer's check 5
-_MARK: Final = struct.Struct(">QQ64s")
+_MARK_DOMAIN: Final = b"RR/GATE/PRODUCER-MARK/v1\x00"  # bodies: epoch, seq_to (8 bytes each, big-endian), digest
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS batches(
   id INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, seq_from INTEGER NOT NULL, seq_to INTEGER NOT NULL,
@@ -71,24 +71,17 @@ class ShardProducer:
         return self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE signature IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
 
     def _check_mark(self, last) -> None:
-        """Refuse a store behind the mark (a lower seq, or the same seq with another digest); catch the mark up
-        to a store one batch ahead, as after a crash between the seal and the mark."""
-        self._mark.touch()
-        size = self._mark.stat().st_size // _MARK.size * _MARK.size  # a torn tail was never fsynced
-        with open(self._mark, "r+b") as mark:
-            tail = None
-            if size:
-                mark.seek(size - _MARK.size)
-                tail = _MARK.unpack(mark.read(_MARK.size))
-            mine = last and (last[1], last[2], last[3])
-            if tail and (not mine or mine[:2] < tail[:2] or (mine[:2] == tail[:2] and mine != tail)):
-                raise GateProducerError("store_rewound")
-            if mine and mine != tail:
-                mark.truncate(size)
-                mark.seek(size)
-                mark.write(_MARK.pack(*mine))
-                mark.flush()
-                os.fsync(mark.fileno())
+        """Refuse a corrupt mark or a store behind the mark (a lower (epoch, seq), or the same with another digest);
+        catch the mark up to a store one batch ahead, as after a crash between the seal and the mark."""
+        bodies = marks.read(self._mark, _MARK_DOMAIN, 80, 16)
+        if bodies is None:
+            raise GateProducerError("mark_corrupt")
+        tail = bodies[-1] if bodies else None
+        mine = last and last[1].to_bytes(8, "big") + last[2].to_bytes(8, "big") + last[3]
+        if tail and (not mine or mine[:16] < tail[:16] or (mine[:16] == tail[:16] and mine != tail)):
+            raise GateProducerError("store_rewound")
+        if mine and mine != tail:
+            marks.append(self._mark, _MARK_DOMAIN, bodies, mine)
 
     def _seal(self, row, last) -> None:
         """Steps 3-6 for the reserved ``row``: sign and check, store the signature, mark."""
