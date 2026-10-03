@@ -472,7 +472,7 @@ def _payment_receipts(connection: sqlite3.Connection, obligation_id: str) -> lis
     return connection.execute("SELECT json_extract(payload_json,'$.payment_id'),before_revision,json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' ORDER BY 1", (obligation_id,)).fetchall()
 
 
-_LEAN_DECIDES_PAYMENTS: Final[bool] = False  # M3 steps 3-4 only (lean-live-m3 section 8); step 5 deletes it and the Python decider
+_LEAN_DECIDES_PAYMENTS: Final[bool] = True  # M3 steps 3-4 only (lean-live-m3 section 8); step 5 deletes it and the Python decider
 
 _PAYMENT_REFUSALS: Final = (None,  # Lean `refusals` order (Codec.lean), codes 1..16
     (FinancialInputError, "payment_amount_zero"), (FinancialConflictError, "payment_request_conflict"),
@@ -4027,13 +4027,16 @@ class FinancialOwner:
         if expected_revision is not None and (type(expected_revision) is not int or not 0 <= expected_revision < 1 << 63):
             _fail(FinancialRevisionError, "obligation_revision_conflict")
         obligation_id, now = str(obligation["obligation_id"]), self._now()
+        asked = max(now, int(obligation["updated_at_ms"]))  # D4: a clock behind the last update is asked at that update, and only an exact retry is answered
         try:
             out = financial_engine.decide_payment_live(
-                connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority), now_ms=now,
+                connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority), now_ms=asked,
                 verification={"scope": self._scope_value(), "owner_id": self.owner_id, "mode": self.mode}, expected_revision=expected_revision,
                 command=command, receipts=_payment_receipts(connection, obligation_id))
         except (FinancialError, financial_engine.FinancialEngineError) as error:
             _fail(FinancialIntegrityError, f"lean_payment:{error}")
+        if asked > now and out.status != "DUPLICATE":  # a DUPLICATE writes nothing; any other answer fails closed as before
+            _fail(FinancialIntegrityError, "lean_payment:obligation_after_evaluation")
         if out.reason is not None:
             _fail(*_PAYMENT_REFUSALS[out.reason])
         if out.evidence is not None:

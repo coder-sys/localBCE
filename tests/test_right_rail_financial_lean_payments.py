@@ -121,7 +121,7 @@ class LeanPaymentFrameTests(unittest.TestCase):
                 samples.append((time.perf_counter() - started) * 1000)
             timings[name] = statistics.median(samples)
         print("FINANCIAL_M3_FRAME_PROFILE", timings)
-        self.assertLessEqual(timings["payment"], 2.0 * timings["evaluate"] + 2.0)
+        self.assertLessEqual(timings["payment"], 2.0 * timings["evaluate"] + 0.5)  # step 4 measured 0.62 ms against 0.31 ms (m3s4-1)
 
     def test_many_payment_frames_keep_the_worker_flat(self) -> None:
         """One worker, recycling off: 1,000 payment items interleaved with 1,000 evaluations, then 8 items at the 8 MiB bound.
@@ -151,9 +151,6 @@ class LeanPaymentOwnerTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.addCleanup(engine._close_evaluator)
-        patcher = patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         fixture = adapter_tests.RightRailFinancialSemanticAdapterTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -179,6 +176,20 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         self.assertEqual(_rows(self.store), before)
         reversed_ = self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.store.clock.value)
         self.assertEqual(reversed_["status"], "REVERSED")
+
+    def test_only_an_exact_retry_is_answered_while_the_clock_is_behind(self) -> None:
+        """D4: crash recovery must not depend on the clock, so the write-free exact retry is a DUPLICATE; every other answer fails closed."""
+        first = self._pay()
+        self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)
+        before = _rows(self.store)
+        self.store.clock.value -= 10**6  # behind the obligation's last update
+        self.assertEqual(self._pay(expected_revision=first["revision"] - 1)["status"], "DUPLICATE")
+        self.assertEqual(self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)["status"], "DUPLICATE")
+        for changed in ({"payment_id": "m3-p2"}, {"expected_revision": first["revision"] - 1, "event_at_ms": self.at + 1}):  # a new payment; a changed retry
+            with self.assertRaises(owner_module.FinancialIntegrityError) as raised:
+                self._pay(**changed)
+            self.assertEqual(str(raised.exception), "lean_payment:obligation_after_evaluation")
+        self.assertEqual(_rows(self.store), before)
 
     def test_refusals_and_a_dead_worker_write_nothing(self) -> None:
         self._pay()
@@ -369,9 +380,6 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.addCleanup(engine._close_evaluator)
-        patcher = patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         fixture = acceptance_tests.RightRailFinancialAcceptanceTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
