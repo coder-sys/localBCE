@@ -157,6 +157,11 @@ def tally (ds : List Decision) : String :=
   let c := ds.foldl (· + ·.line.cents) 0
   s!"lines={ds.length} cents={c} ({money c})"
 
+/-- Each id once, first occurrence first: an `owners` line may carry an id once per request, `settleFree` keeps each. -/
+def uniq (ids : List Nat) : List Nat :=
+  (ids.foldl (fun (s, r) i => if s.contains i then (s, r) else (s.insert i, i :: r))
+    ((∅ : Std.HashSet Nat), ([] : List Nat))).2.reverse
+
 def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
@@ -180,7 +185,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let r := x.runIn f b                                  -- FAST: = decideBatchIn c f b
   let exp := st.batch.toList.filterMap (·.2)
   let got := r.decisions.map render ++ wait.map (lineText · ++ " WAIT -")
-  let fr := st.owners.map fun (k, os) => Fast.settleFreeF r.released.entries r.unresolved.entries (pendingOf k os)
+  let fr := st.owners.map fun (k, os) => uniq (Fast.settleFreeF r.released.entries r.unresolved.entries (pendingOf k os))
   let frOk := st.free.all (some · == fr)
   let bad := st.pays.filter fun (q, o) => name (x.payOutcome r.decisions q) != o
   let (ok, n, msg) :=

@@ -139,6 +139,28 @@ theorem decodeCheckpoint2_wf {b : Bytes} {y : SignedCheckpoint} {head : Bytes}
 
 theorem storedOf_wf {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h : storedOf H b = some x) : Wf x := by
   unfold storedOf at h
+  cases hd : decodeCheckpoint b with
+  | none => simp [hd] at h
+  | some y =>
+    simp only [hd, Option.map_some, Option.some.injEq] at h
+    subst h
+    unfold decodeCheckpoint parse at hd
+    by_cases hl : b.length > maxCheckpointBytes
+    · simp [hl] at hd
+    · simp only [hl, if_false] at hd
+      cases hr : pSignedCheckpoint.run b with
+      | none => simp [hr] at hd
+      | some r =>
+        obtain ⟨z, rest⟩ := r
+        cases rest with
+        | nil =>
+          simp [hr] at hd
+          subst hd
+          exact pSigned_wf hr
+        | cons a l => simp [hr] at hd
+
+theorem storedOfAny_wf {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h : storedOfAny H b = some x) : Wf x := by
+  unfold storedOfAny at h
   cases hd : decodeAnyCheckpoint b with
   | none => simp [hd] at h
   | some y =>
@@ -379,9 +401,9 @@ theorem publishOk_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens 
 /-- `publishOk_sound` for any checkpoint version. -/
 theorem publishOkAny_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
     (h : publishOkAny rootPk cert last new tokens = true) :
-    acceptsAny rootPk cert new = true ∧ (last.all fun b => (storedOf sha3 b).isSome) = true ∧
-    ∃ e n, decodeKeyCert cert = some e ∧ storedOf sha3 new = some n ∧
-      follows (last.bind (storedOf sha3)) n = true ∧ tokens.length = n.checkpoint.count ∧
+    acceptsAny rootPk cert new = true ∧ (last.all fun b => (storedOfAny sha3 b).isSome) = true ∧
+    ∃ e n, decodeKeyCert cert = some e ∧ storedOfAny sha3 new = some n ∧
+      follows (last.bind (storedOfAny sha3)) n = true ∧ tokens.length = n.checkpoint.count ∧
       (∀ i (hi : i < tokens.length),
         tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i tokens[i] = true) ∧
       ((tokens.filterMap decodeToken).map payKey).Nodup := by
@@ -389,17 +411,32 @@ theorem publishOkAny_sound {rootPk cert new : Bytes} {last : Option Bytes} {toke
   cases hk : decodeKeyCert cert with
   | none => simp [hk] at h
   | some e =>
-    cases hn : storedOf sha3 new with
+    cases hn : storedOfAny sha3 new with
     | none => simp [hk, hn] at h
     | some n =>
       simp only [hk, hn, Bool.and_eq_true, beq_iff_eq] at h
-      obtain ⟨⟨⟨⟨⟨ha, hl⟩, hf⟩, hlen⟩, hall⟩, hasc⟩ := h
+      obtain ⟨⟨⟨⟨⟨⟨ha, hl⟩, hf⟩, hlen⟩, hall⟩, hasc⟩, -⟩ := h
       refine ⟨ha, hl, e, n, rfl, rfl, hf, hlen, ?_, ?_⟩
       · intro i hi
         have hm : (tokens[i], i) ∈ tokens.zipIdx := List.mk_mem_zipIdx_iff_getElem?.mpr (by simp [hi])
         exact (List.all_eq_true.mp hall) _ hm
       · have hnd := ascending_nodup _ hasc
         exact nodup_of_map (fun k : PayKey => k.2.2) (by rw [List.map_map]; exact hnd)
+
+/-- No downgrade: once a shard's last published checkpoint is v2, only a v2 publishes after it. -/
+theorem publishOkAny_no_downgrade {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {b : Bytes}
+    (h : publishOkAny rootPk cert last new tokens = true) (hb : last = some b) (hv : isV2 b = true) :
+    isV2 new = true := by
+  unfold publishOkAny at h
+  cases hk : decodeKeyCert cert with
+  | none => simp [hk] at h
+  | some e =>
+    cases hn : storedOfAny sha3 new with
+    | none => simp [hk, hn] at h
+    | some n =>
+      simp only [hk, hn, Bool.and_eq_true] at h
+      subst hb
+      simpa [hv] using h.2
 
 /-- A published token never fails a payer on parse, batch, Merkle path or route: at any payer that stored
     its checkpoint under the same shard count, `verifyToken` is exactly the payment-dependent checks. -/

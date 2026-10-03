@@ -844,7 +844,7 @@ class GateVerifyModeTests(unittest.TestCase):
                     self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
                 signer.seal(handle, root_pk, cert, None, header, tokens)
 
-    def test_publish_accepts_a_v2_after_a_v1_and_refuses_a_v2_that_does_not_link(self) -> None:
+    def test_publish_accepts_a_v2_after_a_v1_and_refuses_an_unlinked_v2_and_a_v1_after_a_v2(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handle, root_pk, cert = custody(tmp)
             first, first_tokens = _genesis([_leaf(n, n) for n in range(2)])
@@ -858,6 +858,19 @@ class GateVerifyModeTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(signer.GateSignerError, outcome):
                             signer.seal(handle, root_pk, cert, last, header, raw)
+            second = build([_leaf(2, 2)], gate.sha3_512(first), gate.sha3_512(first), D[12])
+            second_header = gate.encode_checkpoint_header(second[0])
+            last2 = gate.attach_signature(second_header, signer.seal(
+                handle, root_pk, cert, last, second_header, [gate.encode_token(t) for t in second[1]]))
+            for registry_head, outcome in ((D[12], None), (None, "gate_verify_refused")):  # a v1 never follows a v2
+                cp, tokens = build([_leaf(3, 3)], gate.sha3_512(second_header), gate.sha3_512(second_header), registry_head)
+                header, raw = gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
+                with self.subTest(registry_head=registry_head is not None):
+                    if outcome is None:
+                        self.assertEqual(len(signer.seal(handle, root_pk, cert, last2, header, raw)), gate.ML_DSA_87_SIGNATURE)
+                    else:
+                        with self.assertRaisesRegex(signer.GateSignerError, outcome):
+                            signer.seal(handle, root_pk, cert, last2, header, raw)
 
     def test_a_self_certified_root_is_never_installed(self) -> None:
         """A certificate for the root key itself, with a checkpoint the root key signed: refused to publish and to store."""

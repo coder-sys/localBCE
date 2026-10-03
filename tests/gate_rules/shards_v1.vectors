@@ -148,4 +148,11 @@ line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
 free
 commit
 
-end 26
+# An id the registry answers twice (once per request) is freed once
+case owners_free_once
+owners 0 940:0:0 941:0:0 941:0:0
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+free 941
+commit
+
+end 27

@@ -151,8 +151,12 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.decodeAnyCheckpoint_cases
 /-- info: 'BlindLedger.Gate.decodeCheckpoint2_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint2_wf
+/-- info: 'BlindLedger.Gate.storedOfAny_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storedOfAny_wf
 /-- info: 'BlindLedger.Gate.publishOkAny_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkAny_sound
+/-- info: 'BlindLedger.Gate.publishOkAny_no_downgrade' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkAny_no_downgrade
 /-- info: 'BlindLedger.Gate.storeCheckpointAny_slice' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_slice
 /-- info: 'BlindLedger.Gate.storeCheckpointAny_signed' depends on axioms: [propext, Quot.sound] -/

@@ -5,9 +5,16 @@ import BlindLedger.Gate.Verify
     last published one and its tokens are exactly the batch.  Theorems: `ProducerTheorems`. -/
 namespace BlindLedger.Gate
 
-/-- A checkpoint as the payer stores it (`storeCheckpointAny` builds the same triple). -/
+/-- A checkpoint as the payer stores it (`storeCheckpoint` builds the same triple). -/
 def storedOf (H : Bytes → Bytes) (b : Bytes) : Option Stored :=
+  (decodeCheckpoint b).map fun x => ⟨H x.header, x.checkpoint, b⟩
+
+/-- `storedOf` for every checkpoint version (`decodeAnyCheckpoint`; `storeCheckpointAny` builds the same triple). -/
+def storedOfAny (H : Bytes → Bytes) (b : Bytes) : Option Stored :=
   (decodeAnyCheckpoint b).map fun x => ⟨H x.header, x.checkpoint, b⟩
+
+/-- `b` is a CHECKPOINT/v2 record. -/
+def isV2 (b : Bytes) : Bool := (decodeCheckpoint2 b).isSome
 
 /-- `n` is the next checkpoint of the shard after `last` (none: the shard's first ever).  Same tenant and
     shard; `eventHead` is the digest of the shard's previous checkpoint in any epoch (zero only at the shard's
@@ -54,14 +61,15 @@ def publishOk (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens 
       ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId))
   | _, _ => false
 
-/-- `publishOk` for any checkpoint version: the same decision with `acceptsAny`. -/
+/-- `publishOk` for any checkpoint version: the same decision with `acceptsAny`, and a v1 never follows a v2
+    (no downgrade). -/
 def publishOkAny (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes) : Bool :=
-  match decodeKeyCert cert, storedOf sha3 new with
+  match decodeKeyCert cert, storedOfAny sha3 new with
   | some e, some n =>
-    acceptsAny rootPk cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
-      follows (last.bind (storedOf sha3)) n && tokens.length == n.checkpoint.count &&
+    acceptsAny rootPk cert new && last.all (fun b => (storedOfAny sha3 b).isSome) &&
+      follows (last.bind (storedOfAny sha3)) n && tokens.length == n.checkpoint.count &&
       (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b) &&
-      ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId))
+      ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId)) && (!last.any isV2 || isV2 new)
   | _, _ => false
 
 end BlindLedger.Gate

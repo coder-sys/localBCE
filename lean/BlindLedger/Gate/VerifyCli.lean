@@ -49,7 +49,7 @@ def publish : P (String × UInt32) := do
   pure (accept (publishOkAny rootPk cert (if last.isEmpty then none else some last) new tokens))
 
 def index : P (String × UInt32) := do
-  match storedOf sha3 (← pBytes) with
+  match storedOfAny sha3 (← pBytes) with
   | none => pure (accept false)
   | some x =>
     let c := x.checkpoint
@@ -64,8 +64,8 @@ def store : P (String × UInt32) := do
   let some x := decodeAnyCheckpoint new | pure (accept false)
   let c := realCrypto [(x.checkpoint.tenantId, rootPk)]
   let some s := certState c certs | fail
-  let some old := candidates.mapM (storedOf sha3) | fail
-  let some forks := evidence.mapM (storedOf sha3) | fail
+  let some old := candidates.mapM (storedOfAny sha3) | fail
+  let some forks := evidence.mapM (storedOfAny sha3) | fail
   match storeCheckpointAny c { s with checkpoints := old, forked := forks.map fun f => (f, f) } new with
   | none => pure (accept false)
   | some s' =>
@@ -92,7 +92,7 @@ def release : P (String × UInt32) := do
                        period := r.period, lines := r.lines }
   let c := realCrypto [(p.tenantId, rootPk)]
   let some s0 := certState c certs | fail
-  let some forks := evidence.mapM (storedOf sha3) | fail
+  let some forks := evidence.mapM (storedOfAny sha3) | fail
   let s1 := (storeCheckpointAny c { s0 with equivocations := [], forked := [] } checkpoint).getD s0
   let s := { s1 with equivocations := s0.equivocations, forked := forks.map fun f => (f, f), now, grants,
                      released := if released == 1 then [p.key] else [],

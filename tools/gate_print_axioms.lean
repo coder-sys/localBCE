@@ -75,7 +75,9 @@ import BlindLedger.Sha3FastEq
 #print axioms BlindLedger.Gate.parse_run
 #print axioms BlindLedger.Gate.decodeAnyCheckpoint_cases
 #print axioms BlindLedger.Gate.decodeCheckpoint2_wf
+#print axioms BlindLedger.Gate.storedOfAny_wf
 #print axioms BlindLedger.Gate.publishOkAny_sound
+#print axioms BlindLedger.Gate.publishOkAny_no_downgrade
 #print axioms BlindLedger.Gate.storeCheckpointAny_slice
 #print axioms BlindLedger.Gate.storeCheckpointAny_signed
 #print axioms BlindLedger.Gate.storeCheckpointAny_not_root
