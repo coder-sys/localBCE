@@ -4,6 +4,7 @@ import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Sha3FastEq
+import BlindLedger.Gate.Rules.DecideLayer
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge

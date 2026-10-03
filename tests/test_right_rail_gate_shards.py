@@ -270,6 +270,33 @@ class ShardTests(fx.Scratch):
             self.assertEqual(c.send(1, {5: [30]}), {30: "ALLOW -"})
             g.inv(self, c)
 
+    def refused(self, c: g.Cluster, k: int, i: int, line: str, code: str) -> None:
+        """``decide`` refuses with ``code`` and neither the registry nor shard ``k``'s store gains a row."""
+        before = [count(c, kind) for kind in range(4)], newest_row(c, k) if c.store(k).exists() else None
+        prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
+        try:
+            with self.assertRaisesRegex(decider.GateDecideError, code):
+                decider.decide(g.rules.EXE, c.dir / f"batch{k}.vectors", g._HEAD, g.ASOF, prod, reg, k, [i], [line])
+        finally:
+            prod.close()
+            reg.close()
+        self.assertEqual(([count(c, kind) for kind in range(4)], newest_row(c, k)), before)
+
+    def test_a_line_break_in_a_line_is_refused_before_the_reserve(self) -> None:
+        with self.cluster() as c:
+            c.send(0, T, BAD)
+            line = f"10:9 FFS_CLAIM 1001 7001 7001 {20270301 + 10 % 14} 99213 1 12510"
+            for injected in (f"{line}\nload {g.ASOF} - {'00' * 64}", f"{line}\rredo 9"):
+                with self.subTest(injected=injected):
+                    self.refused(c, 0, 10, injected, "frame_injection")
+
+    def test_genesis_sets_are_refused_until_load_carries_them(self) -> None:
+        with self.cluster() as c:  # L4: load replays onto empty sets, so a resend of a genesis id would be ALLOWed
+            reg = idreg.IdRegistry(c.reg, boot=c.nonce)
+            reg.genesis({1: [40]})
+            reg.close()
+            self.refused(c, 1, 40, f"40:1 FFS_CLAIM 1001 7001 7001 {20270301 + 40 % 14} 99213 1 12540", "genesis_sets")
+
 
 if __name__ == "__main__":
     unittest.main()

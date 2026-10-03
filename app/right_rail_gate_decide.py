@@ -20,7 +20,11 @@ from app import right_rail_gate_producer as producer
 
 
 class GateDecideError(RuntimeError):
-    """``state_mismatch``: the sealed adds do not hash to the signed anchor; ``rules_refused``: any other refusal."""
+    """``state_mismatch``: the sealed adds do not hash to the signed anchor; ``frame_injection``: a head line or line
+    body holds a line break (it could add directives after the real ``load``); ``genesis_sets``: the registry settled
+    ids for a shard with no sealed batch (``genesis()`` starting sets, which load cannot carry until L4);
+    ``rules_refused``: any other refusal, timeout included.  ``frame_injection`` and ``genesis_sets`` come before the
+    registry reserve, so they write nothing."""
 
 
 class Answer(NamedTuple):
@@ -35,17 +39,24 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
            k: int, ids: Sequence[int], lines: Sequence[str]) -> Answer:
     """Settle shard ``k``'s previous batch and reserve ``ids`` (the registry transaction), then decide ``lines`` (the
     ``line`` directive bodies) against the shard's verified sets."""
-    owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
+    if any("\n" in s or "\r" in s for s in [*head, *lines]):
+        raise GateDecideError("frame_injection")
     anchor = prod.anchor()
+    if anchor is None and reg.settled(k):
+        raise GateDecideError("genesis_sets")
+    owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
     frame.write_text("\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
                                 "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
                                 *(f"line {line}" for line in lines), "commit", "end 0"]), "utf-8")
-    out = subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()
+    try:
+        out = subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()
+    except subprocess.TimeoutExpired as e:
+        raise GateDecideError("rules_refused") from e
     got: dict[str, list[str]] = {}
     for row in out:
         tag, _, body = row.partition(" ")
         got.setdefault(tag, []).append(body)
-    if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out or "RULES_DIGEST" not in got:
+    if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out or {"RULES_FREE", "RULES_DIGEST", "RULES_ADDS"} - got.keys():
         raise GateDecideError("state_mismatch" if "RULES_STATE_MISMATCH" in got else "rules_refused")
     return Answer(got.get("RULES_LINE", []), [int(i) for i in got["RULES_FREE"][0].split()], bytes.fromhex(got["RULES_DIGEST"][0]),
                   bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head))

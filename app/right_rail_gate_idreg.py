@@ -185,6 +185,10 @@ class IdRegistry:
                     "SELECT 1 FROM log WHERE kind = 2 AND shard = ? AND n > ?", (row[1], row[2])).fetchone() is not None))
             return owners, tail.n, tail.head
 
+    def settled(self, shard: int) -> bool:
+        """Whether the shard has a SETTLE row: a sealed batch's, or ``genesis()``'s."""
+        return self._db.execute("SELECT 1 FROM log WHERE kind = 2 AND shard = ?", (shard,)).fetchone() is not None
+
     def genesis(self, shard_ids: Mapping[int, Sequence[int]]) -> tuple[int, bytes]:
         """Reserve and settle each shard's starting-set ids; refuse, writing nothing, if two shards' sets share an id
         (an existing double acceptance that needs a person).  Returns (n, head)."""

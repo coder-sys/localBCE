@@ -67,14 +67,19 @@ theorem carried_sealB {w : World} {k : Nat} {c₀ : Ctx} {rel unr : Snapshot Lin
       ∀ o ∈ os, o.shard = k → w.reg o.id = some k := ⟨h1.trans hr.symm, h2.trans hu.symm, hos⟩
   exact ⟨_, if_pos hg, by simp, by simp⟩
 
-/-- The acceptance test as a theorem: a line id already in the carried released set is ALREADY_DECIDED. If the
-    proof needs a stronger hypothesis than `hnr` (`seen0` drops own lines the batch carries), state the minimal one
-    and report it. -/
+/-- The acceptance test as a theorem: a ready line whose id is already in the carried released set (and whose
+    payment is not a re-decision, `hnr`: `seen0` drops own lines) is decided, and every decision of it is HOLD
+    ALREADY_DECIDED. -/
 theorem carried_resend_held (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os : List Owner) (b : List Line)
     (l : Line) (hl : l ∈ ready k os b) (hin : ∃ x ∈ rel.entries, x.id = l.id)
     (hnr : ¬ c₀.redo.contains l.pay) :
-    ∀ d ∈ (decideReg (carried c₀ rel unr) k os b).decisions, d.line = l → Reason.ALREADY_DECIDED ∈ d.reasons := by
-  intro d hd hdl
+    (∃ d ∈ (decideReg (carried c₀ rel unr) k os b).decisions, d.line = l) ∧
+      ∀ d ∈ (decideReg (carried c₀ rel unr) k os b).decisions, d.line = l →
+        Reason.ALREADY_DECIDED ∈ d.reasons ∧ d.outcome = .HOLD := by
+  have hm : l ∈ (decideReg (carried c₀ rel unr) k os b).decisions.map (·.line) := by
+    show l ∈ (decideAll _ _ (order _ (ready k os b))).map (·.line)
+    rw [lines_decideAll]; exact (order_perm _ _).mem_iff.mpr hl
+  refine ⟨List.mem_map.mp hm, fun d hd hdl => ?_⟩
   have hown : own (carried c₀ rel unr) l = false := by
     have : c₀.redo.contains l.pay = false := by simpa using hnr
     show (c₀.redo.contains l.pay && (releasedSet (carried c₀ rel unr)).contains l) = false
@@ -89,8 +94,11 @@ theorem carried_resend_held (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os
     rwa [this] at hmem
   have hf : fires (carried c₀ rel unr) seen l .ALREADY_DECIDED = true := by
     simp [fires, hk]
-  rw [hseen, hdl]
-  exact List.mem_filter.mpr ⟨mem_all _, hf⟩
+  have hr : Reason.ALREADY_DECIDED ∈ d.reasons := by
+    rw [hseen, hdl]
+    exact List.mem_filter.mpr ⟨mem_all _, hf⟩
+  have ho : d.outcome = outcomeOf d.reasons := by rw [hseen]; rfl
+  exact ⟨hr, ho.trans (outcomeOf_certain hr rfl)⟩
 
 /-- Settle from the batch (§C, restated against carried): the frees computed at decide time are the spec's. -/
 theorem settleFreeInc_carried (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os : List Owner) (b : List Line)
@@ -170,15 +178,15 @@ private theorem setsDigest_pins {H : Bytes → Bytes} {r u : Snapshot Line} {d :
   | none => simp [hA, hB] at h
   | some B => exact ⟨A, B, rfl, rfl⟩
 
-/-- LOAD BINDS: a load that passed equals, up to row order, the sets whose digest the header signed. From
-    `anchored_binding` and `pinInput_lines` (both proved, AnchorTheorems). Axioms: three; hypotheses `hl` and
-    H injective. -/
-theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestBytes) (hinj : Function.Injective H)
+/-- LOAD BINDS: a load that passed equals, up to row order, the sets whose digest the header signed, or H has an
+    explicit collision (as `anchored_binding`, AnchorTheorems, with `pinInput_lines`). Axioms: three; hypothesis
+    `hl` only. -/
+theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestBytes)
     {g : Snapshot Line × Snapshot Line} {as : List (List Line × List Line)} {a : Nat} {st : ShardState}
     {r u : Snapshot Line} (h : ShardState.loadAdds H g as a = some st)
     (hd : setsDigest H r u = some (natBE digestBytes a)) :
-    st.released.entries.Perm r.entries ∧ st.unresolved.entries.Perm u.entries ∧ st.released.count = r.count ∧
-      st.unresolved.count = u.count := by
+    (st.released.entries.Perm r.entries ∧ st.unresolved.entries.Perm u.entries ∧ st.released.count = r.count ∧
+      st.unresolved.count = u.count) ∨ ∃ x y, x ≠ y ∧ H x = H y := by
   unfold ShardState.loadAdds at h
   rw [Option.filter_eq_some_iff] at h
   obtain ⟨hld, hdg⟩ := h
@@ -193,14 +201,15 @@ theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestB
   have h2 : anchored H (mk r u) = true := by unfold anchored; simp [mk, hd]
   obtain ⟨A, B, hA, hB⟩ := setsDigest_pins hs
   obtain ⟨A', B', hA', hB'⟩ := setsDigest_pins hd
-  rcases anchored_binding hl h1 h2 rfl with ⟨e1, e2⟩ | ⟨x, y, hne, hxy⟩
-  · have eA : some A = some A' := by rw [← hA, ← hA']; exact e1
+  rcases anchored_binding hl h1 h2 rfl with ⟨e1, e2⟩ | hc
+  · refine .inl ?_
+    have eA : some A = some A' := by rw [← hA, ← hA']; exact e1
     have eB : some B = some B' := by rw [← hB, ← hB']; exact e2
     obtain rfl := Option.some.inj eA
     obtain rfl := Option.some.inj eB
     obtain ⟨-, c1, p1⟩ := pinInput_lines hA hA'
     obtain ⟨-, c2, p2⟩ := pinInput_lines hB hB'
     exact ⟨p1, p2, c1, c2⟩
-  · exact absurd (hinj hxy) hne
+  · exact .inr hc
 
 end BlindLedger.Gate
