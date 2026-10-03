@@ -339,10 +339,10 @@ _ACTION_STATUS_TAGS: Final[dict[int, str]] = {1: "READY", 2: "ACKNOWLEDGED", 3: 
 _CASE_STATUS_TAGS: Final[dict[int, str]] = {1: "OPEN", 2: "AUTHORIZED", 3: "CORRECTION_REQUIRED", 4: "ACTIONED", 5: "RESOLVED"}
 _EFFECT_TAGS: Final[dict[int, str]] = {
     1: "DETERMINATION_RECORDED", 2: "CLAIM_REJECTED", 3: "CASE_UPSERTED", 4: "ACTION_CREATED",
-    5: "OUTBOX_CREATED", 6: "PROJECTION_RECOMPUTED", 7: "EVENT_APPENDED",
+    5: "OUTBOX_CREATED", 6: "PROJECTION_RECOMPUTED", 7: "EVENT_APPENDED", 8: "CLAIM_AUTHORIZED",
 }
-_EXPLANATION_CODE_TAGS: Final[dict[int, str]] = {1: "CORRECTION_AUTHORIZED", 2: "EXACT_RETRY", 3: "REJECTED"}
-_TRANSITION_KIND_TAGS: Final[dict[int, str]] = {1: "OFFSET_REJECTED_CORRECTION_AUTHORIZED"}
+_EXPLANATION_CODE_TAGS: Final[dict[int, str]] = {1: "CORRECTION_AUTHORIZED", 2: "EXACT_RETRY", 3: "REJECTED", 4: "OFFSET_AUTHORIZED"}
+_TRANSITION_KIND_TAGS: Final[dict[int, str]] = {1: "OFFSET_REJECTED_CORRECTION_AUTHORIZED", 2: "OFFSET_AUTHORIZED"}
 _RESULT_STATUS_TAGS: Final[dict[int, str]] = {1: "ACCEPTED", 2: "DUPLICATE", 3: "REJECTED"}
 
 
@@ -630,8 +630,8 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
         return None
     if tag != 1:
         raise FinancialEngineResultError("engine_correction_mutation_tag")
-    transition_tag = reader.byte("correction_transition_kind")
-    if transition_tag != 1:
+    transition = _TRANSITION_KIND_TAGS.get(reader.byte("correction_transition_kind"))
+    if transition is None:
         raise FinancialEngineResultError("engine_correction_transition_kind")
     def read_effect(_label: str) -> str:
         value = _EFFECT_TAGS.get(reader.byte("correction_effect"))
@@ -704,7 +704,7 @@ def _read_correction_mutation(reader: Any) -> dict[str, Any] | None:
         "committed_at_ms": event_committed_at_ms,
     }
     return {
-        "transition": "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
+        "transition": transition,
         "ordered_effects": ordered_effects,
         "dependencies": dependencies,
         "followups": followups,
@@ -741,6 +741,7 @@ _CORRECTION_REJECT_REASON_TAGS: Final[dict[int, str]] = {
     19: "INPUT_SNAPSHOT_MISSING",
     20: "NO_SHORTFALL",
     21: "NO_REQUESTABLE_BALANCE", 22: "DECISION_BACKDATED_PAST_DUE", 23: "CLAIM_EXCEEDS_SHORTFALL",
+    24: "DECISION_BEFORE_PACK_EFFECTIVE",
 }
 _CORRECTION_REQUIREMENT_TAGS: Final[dict[int, str]] = {
     1: "VALID_COMMAND",
@@ -764,6 +765,7 @@ _CORRECTION_REQUIREMENT_TAGS: Final[dict[int, str]] = {
     19: "INPUT_SNAPSHOT_DIGEST_AVAILABLE",
     20: "POSITIVE_SHORTFALL",
     21: "UNREQUESTED_SHORTFALL", 22: "DECISION_NOT_BACKDATED_PAST_DUE", 23: "CLAIM_WITHIN_SHORTFALL",
+    24: "PACK_IN_EFFECT",
 }
 # Lean's requiredTransitionCondition pairs each reject reason with the requirement of the same tag.
 _CORRECTION_REJECT_REQUIREMENTS: Final[dict[str, str]] = {
@@ -893,7 +895,8 @@ def _encode_correction_transition_result(result: Mapping[str, Any]) -> bytes:
     if mutation is None:
         writer.byte(0, "correction_mutation_tag")
         return writer.finish(label="correction_result_size")
-    writer.raw(b"\x01\x01", "correction_mutation_tag")  # present, and the one transition kind
+    writer.byte(1, "correction_mutation_tag")
+    writer.byte(_tag_of(_TRANSITION_KIND_TAGS, mutation["transition"]), "correction_transition_kind")
     writer.list(mutation["ordered_effects"], "correction_effects", lambda value, label: writer.byte(_tag_of(_EFFECT_TAGS, value), label))
     dependencies = mutation["dependencies"]
     _put(writer, dependencies, _DEPENDENCY_FIELDS)
@@ -937,10 +940,12 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
     mutation = result["mutation"]
     reject_reason = result["reject_reason"]
     if status == "ACCEPTED":
+        kind = explanation["transition"]
+        offset = kind == "OFFSET_AUTHORIZED"
         if (
             reject_reason is not None
-            or explanation["code"] != "CORRECTION_AUTHORIZED"
-            or explanation["transition"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or explanation["code"] != ("OFFSET_AUTHORIZED" if offset else "CORRECTION_AUTHORIZED")
+            or kind is None
             or explanation["reject_reason"] is not None
             or explanation["unresolved_requirement"] is not None
             or action_id is None
@@ -948,8 +953,8 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or mutation is None
         ):
             raise FinancialEngineResultError("engine_correction_accepted_shape")
-        if mutation["ordered_effects"] != [
-            "DETERMINATION_RECORDED", "CLAIM_REJECTED", "CASE_UPSERTED", "ACTION_CREATED",
+        if mutation["transition"] != kind or mutation["ordered_effects"] != [
+            "DETERMINATION_RECORDED", "CLAIM_AUTHORIZED" if offset else "CLAIM_REJECTED", "CASE_UPSERTED", "ACTION_CREATED",
             "OUTBOX_CREATED", "PROJECTION_RECOMPUTED", "EVENT_APPENDED",
         ]:
             raise FinancialEngineResultError("engine_correction_effect_order")
@@ -962,17 +967,18 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
         followups = mutation["followups"]
         transition_id = f"determination:{action_id}"
         observations = deps["query_observations"]
+        kept = offset and not case_delta["inserted"] and case_delta["record"]["reason"] == "CORRECTION_REQUIRED"
         if (
             determination_id != transition_id
             or det["determination_id"] != determination_id
-            or det["decision"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or det["decision"] != kind
             or det["amount_cents"] <= 0
             or det["resulting_revision"] != det["expected_revision"] + 1
             or action["action_id"] != action_id
             or action["determination_id"] != determination_id
-            or action["kind"] != "CORRECTION_PAYMENT_REQUEST"
+            or action["kind"] != ("OFFSET_AUTHORIZATION" if offset else "CORRECTION_PAYMENT_REQUEST")
             or action["status"] != "READY"
-            or deps["input_shortfall_cents"] <= 0
+            or (not offset and deps["input_shortfall_cents"] <= 0)
             or outbox["action_id"] != action_id
             or outbox["status"] != "READY"
             or outbox["attempt"] != 0
@@ -983,16 +989,16 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
             or not case_delta["completion_conditions_delivery_acknowledged_or_not_required"]
             or case_delta["record"]["case_id"] != f"case:{det['obligation_id']}"
             or case_delta["record"]["obligation_id"] != det["obligation_id"]
-            or case_delta["record"]["reason"] != "CORRECTION_REQUIRED"
-            or case_delta["record"]["next_action_owner"] != "CASE_OWNER"
-            or case_delta["record"]["due_at_ms"] != deps["claim_before"]["deadline_at_ms"]
+            or (case_delta["record"]["reason"] != ("OFFSET_AUTHORIZED" if offset else "CORRECTION_REQUIRED") and not kept)
+            or (case_delta["record"]["next_action_owner"] != "CASE_OWNER" and not kept)
+            or (case_delta["record"]["due_at_ms"] != deps["claim_before"]["deadline_at_ms"] and not kept)
             or case_delta["record"]["status"] != mutation["resulting_result"].case_status
             or case_delta["record"]["updated_at_ms"] != event["committed_at_ms"]
             or event["sequence"] != deps["current_event_sequence"] + 1
             or event["previous_head"] != deps["previous_history_head"]
             or event["aggregate_type"] != "OBLIGATION"
             or event["aggregate_id"] != det["obligation_id"]
-            or event["kind"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or event["kind"] != kind
             or event["before_revision"] != det["expected_revision"]
             or event["after_revision"] != det["resulting_revision"]
             or event["committed_at_ms"] != outbox["updated_at_ms"]
@@ -1055,7 +1061,7 @@ def _validate_correction_result_shape(result: Mapping[str, Any]) -> None:
         if (
             reject_reason is not None
             or explanation["code"] != "EXACT_RETRY"
-            or explanation["transition"] != "OFFSET_REJECTED_CORRECTION_AUTHORIZED"
+            or explanation["transition"] is None
             or explanation["reject_reason"] is not None
             or explanation["unresolved_requirement"] is not None
             or action_id is None
@@ -1125,20 +1131,24 @@ def decode_correction_transition_result(payload: bytes) -> dict[str, Any]:
         raise FinancialEngineResultError("engine_correction_result_shape") from None
 
 
-def run_correction_transition_v1(*, request: bytes) -> dict[str, Any]:
-    """One BLFCMD03 frame on the evaluator worker: the decoded BLFCRES3 answer."""
+def run_correction_transition_v1(*, request: bytes, frame: bytes = b"") -> dict[str, Any]:
+    """One BLFCMD03 frame on the evaluator worker: the decoded BLFCRES3 answer (``frame`` selects the served decision)."""
 
     if type(request) is not bytes or not request.startswith(b"BLFCMD03") or not 0 < len(request) <= MAX_CORRECTION_TRANSITION_BYTES:
         raise FinancialEngineInputError("engine_correction_request_contract")
-    return _decoded_or_closed(decode_correction_transition_result, _evaluate_wire(request, _CORRECTION_REJECTIONS))
+    return _decoded_or_closed(decode_correction_transition_result, _evaluate_wire(frame + request, _CORRECTION_REJECTIONS))
+
+
+def run_offset_authorization_v1(*, request: bytes) -> dict[str, Any]:
+    return run_correction_transition_v1(request=request, frame=b"BLFOFA01")
 
 
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
 
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
-EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_420_480
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_462_464
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309"
+    "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0

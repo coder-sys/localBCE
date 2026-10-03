@@ -12,7 +12,7 @@ from tests import test_right_rail_financial_semantic_adapter as adapter_tests
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV = {"SystemRoot": os.environ.get("SystemRoot", r"C:\Windows")}
-MAX_FRAME = adapter.MAX_WIRE_BYTES + 1  # Lean maxWorkerFrameBytes
+MAX_FRAME = adapter.MAX_WIRE_BYTES + 8  # Lean maxWorkerFrameBytes
 REJECT = b"\x00\x00\x00\x01\x01"  # frame(workerRespond(b"")): decode rejected
 
 

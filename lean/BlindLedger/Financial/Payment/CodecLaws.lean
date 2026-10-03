@@ -314,6 +314,7 @@ private theorem parse_encode (r : PaymentRequest) (h : requestWellFormed r = tru
     have := hfit
     simp only [encodePaymentRequest, List.length_append, length_natBE, List.length_singleton] at this
     unfold maxWorkerFrameBytes at this
+    have : paymentMagic.length = 8 := by decide +kernel
     omega
   unfold requestWellFormed at h
   simp only [Bool.and_eq_true, and_assoc] at h

@@ -1,5 +1,5 @@
 import BlindLedger.Financial.Worker
-import BlindLedger.Financial.CodecLaws.CorrectionRecords
+import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.KAT
 import BlindLedger.Financial.Theorems.Correspondence
 
@@ -117,7 +117,8 @@ theorem workerRespond_evaluator_frames (w : Bytes) (h : financialCodecMagic.isPr
     workerRespond w = encodeWorkerOutcome (evaluateWire w) := by
   have hp := prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h
   have hc := prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel) (by decide +kernel) h
-  simp [workerRespond, hp, hc]
+  have ho := prefix_exclusive (b := offsetAuthorizationMagic) (by decide +kernel) (by decide +kernel) h
+  simp [workerRespond, hp, hc, ho]
 
 /-- E1: the same conclusion; the hypothesis names every item magic. -/
 theorem workerRespond_evaluator_unchanged₂ (w : Bytes)
@@ -125,7 +126,7 @@ theorem workerRespond_evaluator_unchanged₂ (w : Bytes)
     workerRespond w = encodeWorkerOutcome (evaluateWire w) := by
   simp only [itemMagics, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true,
     Bool.not_eq_true'] at h
-  simp [workerRespond, h.1, h.2]
+  simp [workerRespond, h.1, h.2.1, h.2.2]
 
 theorem workerRespond_payment (w : Bytes) (h : Payment.paymentMagic.isPrefixOf w = true) :
     workerRespond w = Payment.paymentRespond w := by
@@ -135,6 +136,58 @@ theorem workerRespond_correction (w : Bytes)
     (h : CorrectionTransition.correctionTransitionInputMagic.isPrefixOf w = true) :
     workerRespond w = correctionRespond w := by
   simp [workerRespond, prefix_exclusive magics_apart.2 magics_apart.1 h, h]
+
+/-- A BLFOFA01 frame is answered by `offsetRespond`. -/
+theorem workerRespond_offset (w : Bytes) (h : offsetAuthorizationMagic.isPrefixOf w = true) :
+    workerRespond w = offsetRespond w := by
+  simp [workerRespond, h,
+    prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h,
+    prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel)
+      (by decide +kernel) h]
+
+/-- BLFOFA01 round trip: the frame of an admissible request decodes back to it. -/
+theorem decodeOffsetAuthorizationRequest_of_encode (request : CorrectionTransition.CorrectionTransitionRequest)
+    (bytes : Bytes) (hRequest : CorrectionTransition.requestWireAdmissible request)
+    (hEncode : encodeOffsetAuthorizationRequest request = some bytes) :
+    decodeOffsetAuthorizationRequest bytes = some request := by
+  unfold encodeOffsetAuthorizationRequest at hEncode
+  cases hE : CorrectionTransition.encodeCorrectionTransitionRequest request with
+  | none => simp [hE] at hEncode
+  | some body =>
+    simp [hE] at hEncode
+    subst hEncode
+    unfold decodeOffsetAuthorizationRequest
+    rw [if_pos (List.isPrefixOf_iff_prefix.2 (List.prefix_append _ _)), List.drop_left]
+    exact CorrectionTransition.decodeCorrectionTransitionRequest_of_encode request body hRequest hE
+
+/-- BLFOFA01 round trip: a frame that decodes is exactly the frame of what it decodes to. -/
+theorem encodeOffsetAuthorizationRequest_of_decode (bytes : Bytes)
+    (request : CorrectionTransition.CorrectionTransitionRequest)
+    (hDecode : decodeOffsetAuthorizationRequest bytes = some request) :
+    encodeOffsetAuthorizationRequest request = some bytes := by
+  unfold decodeOffsetAuthorizationRequest at hDecode
+  split at hDecode
+  next hp =>
+    unfold encodeOffsetAuthorizationRequest
+    rw [CorrectionTransition.encodeCorrectionTransitionRequest_of_decode _ _ hDecode]
+    exact congrArg some (List.prefix_iff_eq_append.1 (List.isPrefixOf_iff_prefix.1 hp))
+  next => cases hDecode
+
+/-- The served offset answer is `applyOffsetAuthorization`'s BLFCRES3 result whenever the frame
+    decodes and the result fits. -/
+theorem offsetRespond_decoded (w : Bytes) (request : CorrectionTransition.CorrectionTransitionRequest)
+    (h : decodeOffsetAuthorizationRequest w = some request) :
+    offsetRespond w = [UInt8.ofNat 3] ∨
+      ∃ b, CorrectionTransition.encodeCorrectionTransitionResult
+          (CorrectionTransition.applyOffsetAuthorization request) = some b ∧
+        offsetRespond w = UInt8.ofNat 0 :: b := by
+  unfold offsetRespond
+  rw [h]
+  dsimp only
+  cases hres : CorrectionTransition.encodeCorrectionTransitionResult
+      (CorrectionTransition.applyOffsetAuthorization request) with
+  | none => exact Or.inl rfl
+  | some b => exact Or.inr ⟨b, rfl, rfl⟩
 
 /-- A correction answer is a BLFCRES3 result whenever its request decodes and the result fits (N2 on the worker frame). -/
 theorem correctionRespond_decoded (w : Bytes) (request : CorrectionTransition.CorrectionTransitionRequest)
@@ -199,14 +252,29 @@ theorem correctionRespond_length_le (w : Bytes) :
       simp only [hE, List.length_cons]
       omega
 
+theorem offsetRespond_length_le (w : Bytes) : (offsetRespond w).length ≤ maxWorkerFrameBytes := by
+  unfold offsetRespond maxWorkerFrameBytes
+  cases decodeOffsetAuthorizationRequest w with
+  | none => simp
+  | some request =>
+    cases hE : CorrectionTransition.encodeCorrectionTransitionResult
+        (CorrectionTransition.applyOffsetAuthorization request) with
+    | none => simp [hE]
+    | some b =>
+      have := correctionResult_length_le hE
+      simp only [hE, List.length_cons]
+      omega
+
 theorem workerRespond_length_le (wire : Bytes) :
     (workerRespond wire).length ≤ maxWorkerFrameBytes := by
   by_cases hm : Payment.paymentMagic.isPrefixOf wire = true
   · rw [workerRespond_payment wire hm]; exact paymentRespond_length_le wire
   by_cases hc : CorrectionTransition.correctionTransitionInputMagic.isPrefixOf wire = true
   · rw [workerRespond_correction wire hc]; exact correctionRespond_length_le wire
+  by_cases ho : offsetAuthorizationMagic.isPrefixOf wire = true
+  · rw [workerRespond_offset wire ho]; exact offsetRespond_length_le wire
   rw [workerRespond_evaluator_unchanged₂ wire
-    (by simp [itemMagics, hm, hc])]
+    (by simp [itemMagics, hm, hc, ho])]
   unfold maxWorkerFrameBytes
   cases hOut : evaluateWire wire with
   | evaluated result =>

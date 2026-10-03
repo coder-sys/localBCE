@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import closing, contextmanager, nullcontext, redirect_stderr, redirect_stdout
-from dataclasses import replace
+from dataclasses import fields, replace
 import hashlib
 import inspect
 import io
@@ -55,6 +55,7 @@ from app.right_rail_financial_owner_independent import (
     verify_obligation_connection,
 )
 from tests import rightrail_financial_expected_cases as expected
+from tests.lean_without_one_rule import lean_without_one_rule
 from tests.financial_decision_package_oracle import verify_decision_package
 
 
@@ -820,6 +821,16 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     _build_base_for_correction = _build_base
 
     @staticmethod
+    @contextmanager
+    def _one_period_later() -> Iterator[None]:
+        """Item 4: period two replays the period-one dates at the same offsets one period later, where pack v2 is in effect."""
+        delta = expected.PERIOD_TWO_START_MS - expected.PERIOD_ONE_START_MS
+        later = lambda value: value + delta if isinstance(value, int) else tuple(map(later, value)) if isinstance(value, tuple) else replace(value, **{field.name: getattr(value, field.name) + delta for field in fields(value) if field.name.endswith("_ms")})
+        names = ("PROGRAM_ITEMS", "OTHER_SUPPORT_EVIDENCE", "H_CASH_EVIDENCE", "OFFSET_CLAIM_EVIDENCE", "H_DUE_AT_MS", "CASH_EVENT_MS", "CORRECTION_AUTH_MS", "P2_PAYMENT_EVIDENCE", "REPORT_ORIGINAL_EVIDENCE", "REPORT_CORRECTION_EVIDENCE", "P2_CONFIRMATION_EVIDENCE", "P2_CONFLICT_EVIDENCE", "P2_REVERSAL_EVIDENCE", "P3_REPLACEMENT_EVIDENCE")
+        with patch.multiple(expected, **{name: later(getattr(expected, name)) for name in names}):
+            yield
+
+    @staticmethod
     def _record_support(store: FinancialOwner, evidence: expected.EvidenceExpectation) -> None:
         _record_fixture_support(store, evidence)
 
@@ -1323,11 +1334,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_case_09_second_period_rule_change_isolated_and_complete(self) -> None:
         self.assertEqual(expected.CASE_09.number, 9)
-        store = self._build_base_for_correction(
-            period_id=expected.PERIOD_TWO_ID,
-            population_id=expected.POPULATION_TWO_ID,
-        )
-        self._prepare_final(store)
+        with self._one_period_later():
+            store = self._build_base_for_correction(
+                period_id=expected.PERIOD_TWO_ID,
+                population_id=expected.POPULATION_TWO_ID,
+            )
+            self._record_cash(store)
+            claim_id = self._record_claim(store)
+            receipt, before = store.current_evaluation_receipt(expected.H_ITEM_ID), store.export_continuity()
+            request = {"item_id": expected.H_ITEM_ID, "claim_id": claim_id, "expected_revision": receipt["revision"], "action_id": expected.ACTION_OFFSET_ID, "evaluation_id": receipt["evaluation_id"], "evaluation_result_digest": receipt["result_digest"]}
+            for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):  # the retrospective boundary: no v2 decision before v2 takes effect
+                with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_chronology$"):  # also before its evaluation: Lean's chronology answer comes first
+                    decide(**request, decision_at_ms=expected.CONTROL_PACK_V2.effective_start_ms - 1)
+            self.assertEqual(store.export_continuity(), before)
+            self._reject(store, claim_id)
+            self._ack(store)
+            self._finish_after_acknowledgment(store)
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         result = self._assert_verified(store)
         self.assertEqual(result["scope"]["period_id"], expected.PERIOD_TWO_ID)
@@ -2995,7 +3017,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(v1_receipt_before_rule_change["rule_version"], 1)
         self.assertEqual(expected.CONTROL_PACK_V1.effective_end_ms, expected.CONTROL_PACK_V2.effective_start_ms)
 
-        period_two = self._build_base(period_id=expected.PERIOD_TWO_ID, population_id=expected.POPULATION_TWO_ID)
+        with self._one_period_later():
+            period_two = self._build_base(period_id=expected.PERIOD_TWO_ID, population_id=expected.POPULATION_TWO_ID)
         period_two_mirror = FinancialMirror(period_two)
         v2_receipt = period_two_mirror.current_evaluation_receipt(expected.H_ITEM_ID)
         self.assertEqual(v2_receipt["control_pack"]["pack_id"], expected.CONTROL_PACK_V2.pack_id)
@@ -3174,6 +3197,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store.register_population_manifest(manifest)
         expected_items = self._items(population_id)
         substituted_items = (*expected_items[:-1], replace(expected_items[-1], item_id="item-z"))
+        with self.assertRaisesRegex(FinancialInputError, "^population_item_due_before_pack$"):  # item 4: refused before any item is stored
+            store.stage_population(population_id=population_id, manifest_id=manifest.manifest_id, pack_id=pack.pack_id, cutoff_ms=pack.effective_start_ms, inclusion_rules=("included:synthetic",), expected_count=len(expected.PROGRAM_ITEMS), items=(replace(expected_items[0], due_at_ms=pack.effective_start_ms - 1),))
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_extra_member"):
             store.stage_population(
                 population_id=population_id,
@@ -4122,12 +4147,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         }
         return store, request, int(receipt["evaluated_at_ms"])
 
-    def test_a_decision_dated_before_its_control_pack_approval_is_refused(self) -> None:
+    def test_a_decision_dated_before_its_control_pack_approval_or_effective_start_is_refused(self) -> None:
         store, request, _evaluated_at = self._s2_offset_request(_Clock())
         before = store.export_continuity()
         for decide in (store.authorize_offset, store.reject_offset_and_authorize_correction):
-            with self.assertRaisesRegex(FinancialIntegrityError, "^control_pack_not_approved$"):
-                decide(**request, decision_at_ms=expected.CONTROL_PACK_V1.approved_at_ms - 1)
+            for at_ms in (expected.CONTROL_PACK_V1.approved_at_ms - 1, expected.CONTROL_PACK_V1.effective_start_ms - 1):  # also before the evaluation: Lean's chronology answer comes first
+                with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_chronology$"):
+                    decide(**request, decision_at_ms=at_ms)
         self.assertEqual(store.export_continuity(), before)
 
     def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
@@ -4204,21 +4230,26 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         restored.verify_integrity()
 
     def test_the_checker_refuses_an_offset_backdated_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
-        # S2: a writer that misreads the due date is stopped before COMMIT; one that also skips that check
-        # (or predates the rule) leaves a store the whole-store check refuses
+        # S2: Lean refuses a late write that names a time at or before the due date. A writer whose Lean request carries a stale
+        # owner clock gets an OFFSET_AUTHORIZED answer and stops before COMMIT; one that also skips that check (or predates the
+        # rule) leaves a store the whole-store check refuses
         clock = _Clock()
         store, request, evaluated_at = self._s2_offset_request(clock)
         clock.value = expected.H_DUE_AT_MS + 172_800_000
-        read = FinancialOwner._get_obligation_row
-
-        def due_misread(owner_self: FinancialOwner, connection: sqlite3.Connection, item_id: str) -> dict[str, object]:
-            return {**dict(read(owner_self, connection, item_id)), "due_at_ms": 2**62}
-
-        with patch.object(FinancialOwner, "_get_obligation_row", due_misread):
-            with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_verification:action:backdated-past-due$"):
+        with lean_without_one_rule(store, stale_owner_now=True):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^correction_verification:action:backdated-past-due$"):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
             with patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
+            self._assert_verified(store)
+
+    def test_the_checker_refuses_an_offset_committed_one_millisecond_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        clock.value = expected.H_DUE_AT_MS  # the next tick commits at due + 1 ms
+        with lean_without_one_rule(store, stale_owner_now=True), patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
         with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
             self._assert_verified(store)
 
@@ -5204,8 +5235,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         return store
 
-    def _offset_b_refused_then_forced(self, store: FinancialOwner, bypass: object) -> None:
-        """Offset B is refused and writes nothing; committed anyway with the owner rule bypassed, the checker fails it."""
+    def _offset_b_refused_then_forced(self, store: FinancialOwner) -> None:
+        """Offset B is refused and writes nothing; committed anyway by a writer whose Lean misses the rule, the checker fails it."""
         def authorize_b() -> None:
             receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
             self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
@@ -5216,7 +5247,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             authorize_b()
         self.assertEqual(store.export_continuity(), before)
         self._assert_verified(store)
-        with bypass, patch.object(FinancialOwner, "_verify_before_commit", lambda *args: None):
+        with lean_without_one_rule(store, exceeds_shortfall=True), patch.object(FinancialOwner, "_verify_before_commit", lambda *args: None):
             authorize_b()
         with self.assertRaisesRegex(independent.IndependentFinancialError, "^action:exceeds-shortfall$"):
             self._assert_verified(store)
@@ -5228,14 +5259,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)
         store.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-a", expected_revision=receipt["revision"], action_id="action:offset-a",
                                decision_at_ms=expected.CORRECTION_AUTH_MS + 1_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
-        inputs = FinancialOwner._claim_decision_inputs
-        self._offset_b_refused_then_forced(store, patch.object(FinancialOwner, "_claim_decision_inputs", lambda *args, **kw: (lambda c, t, r, d: (c, t, {**r, "shortfall_cents": 600_000}, d))(*inputs(*args, **kw))))
+        self._offset_b_refused_then_forced(store)
 
     def test_an_offset_counts_open_correction_requests_against_the_shortfall(self) -> None:
-        # M1 (review finding 1): 300,000 unpaid and correction request A (300,000) open: a 300,000 offset would let paying A recover twice.
-        # With nothing open, the same 300,000 offset is accepted (test_case_* H fixture).
-        store, _reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=300_000)
-        self._offset_b_refused_then_forced(store, patch.object(owner, "_open_requests", lambda *args: {}))
+        # M1 (review finding 1): 400,000 unpaid and correction request A (300,000) open leaves 100,000: a 200,000 offset would let paying A recover twice.
+        # With nothing open, a 300,000 offset on 300,000 unpaid is accepted (test_case_* H fixture).
+        store, _reject_b = self._two_claim_corrections(300_000, 200_000, unpaid_cents=400_000)
+        self._offset_b_refused_then_forced(store)
 
     def test_an_offset_counts_only_the_unpaid_part_of_an_open_request(self) -> None:
         # M1 re-review LOW: 400,000 unpaid and request A (300,000) with 100,000 paid against it: 300,000 unpaid, 200,000 still asked, so a
@@ -5797,6 +5827,47 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._as_decided(path, _RETIRED_CORRECTION_ARTIFACT_SHA256, 200_000)
         verify_database(path, expected_config=store.config, expected_authority=self.authority)
         self._make_owner(path=path)
+
+    def _retag_events(self, store: FinancialOwner, name: str, action_id: str, edit) -> Path:
+        path = self._path(f"{name}.sqlite")
+        path.write_bytes(_image(store.path))
+        self.assertEqual(self._rehash_history(path, lambda payload: payload.get("action_id") == action_id and ("artifact" in payload or "correction_followup" in payload) and (edit(payload) or True)), 1)
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:  # a changed payload size changes its pending and open byte counts
+            connection.row_factory = sqlite3.Row
+            for key in [key for (key,) in connection.execute("SELECT row_key FROM history_pending WHERE table_name='financial_events'")]:
+                row = connection.execute("SELECT * FROM financial_events WHERE rowid=?", (key,)).fetchone()
+                connection.execute("UPDATE history_pending SET record_bytes=? WHERE table_name='financial_events' AND row_key=?", (independent._record_bytes("financial_events", row), key))
+            connection.execute("UPDATE history_open SET byte_count=(SELECT SUM(record_bytes) FROM history_pending)")
+        return path
+
+    def test_a_served_offset_names_the_serving_engine_or_a_newer_one(self) -> None:
+        # rr-review offset-served MED 1: a sha-less offset is legacy only before any event names the serving engine (7C1EAB94);
+        # an offset naming a pre-serving engine is refused. LOW 2 is the last case.
+        store = self._build_base_for_correction()
+        self._authorize(store, self._record_claim(store))
+        retired = "8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309"
+        path = self._retag_events(store, "offset-retired", expected.ACTION_OFFSET_ID, lambda payload: payload["artifact"].update(sha256=retired))
+        with self.subTest("retired"), self.assertRaisesRegex(IndependentFinancialError, "^action:engine$"):
+            verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        path = self._retag_events(store, "offset-legacy", expected.ACTION_OFFSET_ID, lambda payload: payload.pop("artifact"))
+        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+
+        after_serving, _reject_b = self._two_claim_corrections(300_000, 100_000, unpaid_cents=400_000)
+        self._pay_a(after_serving, 100_000)
+        receipt = after_serving.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(after_serving, expected.CORRECTION_AUTH_MS + 2_000)
+        after_serving.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"], action_id="action:offset-b",
+                                       decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+        path = self._retag_events(after_serving, "offset-after-serving", "action:offset-b", lambda payload: payload.pop("artifact"))
+        with self.subTest("after-serving"), self.assertRaisesRegex(IndependentFinancialError, "^action:engine$"):
+            verify_database(path, expected_config=after_serving.config, expected_authority=self.authority)
+
+        # LOW 2: a correction without a follow-up never reads a top-level artifact; read, E911 after A's current engine would be action:engine-order.
+        order_only, reject_b = self._two_claim_corrections(200_000, 100_000)
+        reject_b()
+        path = self._retag_events(order_only, "correction-top-level-sha", _ACTION_B, lambda payload: (payload.pop("correction_followup"), payload.update(artifact={"sha256": _RETIRED_CORRECTION_ARTIFACT_SHA256})))
+        with self.subTest("top-level-sha"):
+            verify_database(path, expected_config=order_only.config, expected_authority=self.authority)
 
     def test_a_cancelled_correction_or_changed_decision_amount_is_refused(self) -> None:
         store = self._build_base_for_correction()

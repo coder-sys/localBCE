@@ -234,7 +234,40 @@ theorem applyOffsetAuthorization_not_backdated (request : CorrectionTransitionRe
   rw [hCreated]
   exact hBack rfl (hDecided ▸ hle)
 
-/-- M1 (spec only; the Python owner's `offset_exceeds_shortfall` and the checker's
+/-- Item 4: an accepted correction is decided only once its control pack is in effect. -/
+theorem applyCorrectionTransition_in_force (request : CorrectionTransitionRequest)
+    (mutation : CorrectionMutation)
+    (hMutation : (applyCorrectionTransition request).mutation = some mutation) :
+    request.currentInput.pack.effectiveStart ≤ mutation.determination.decidedAt := by
+  unfold applyCorrectionTransition at hMutation
+  cases hP : preflightCorrectionTransition request with
+  | error r => simp [hP, reject] at hMutation
+  | ok p =>
+    cases p with
+    | duplicate => simp [hP, duplicate] at hMutation
+    | ready cr claim a b paid c d =>
+      dsimp only at hMutation
+      cases hB : buildAccepted request cr claim b paid c d with
+      | error r => simp [hP, hB, reject] at hMutation
+      | ok certified =>
+        obtain ⟨m, links⟩ := certified
+        simp [hP, hB] at hMutation
+        subst hMutation
+        obtain ⟨-, -, -, -, hDecided, -⟩ := buildAccepted_facts hB
+        rw [hDecided]
+        exact buildAccepted_in_force hB
+
+/-- Item 4: an accepted offset authorization is decided only once its control pack is in effect. -/
+theorem applyOffsetAuthorization_in_force (request : CorrectionTransitionRequest)
+    (mutation : CorrectionMutation)
+    (hMutation : (applyOffsetAuthorization request).mutation = some mutation) :
+    request.currentInput.pack.effectiveStart ≤ mutation.determination.decidedAt := by
+  obtain ⟨cr, claim, a, b, paid, c, -, hB⟩ := offsetAuth_ready hMutation
+  obtain ⟨-, -, -, -, -, -, -, -, hDecided, -⟩ := buildAuthorized_spec hB
+  rw [hDecided]
+  exact buildAuthorized_in_force hB
+
+/-- M1 (the BLFOFA01 frame serves this; until the re-pin, the Python owner's `offset_exceeds_shortfall` and the checker's
     `action:exceeds-shortfall` decide served stores): an accepted authorization and the
     correction requests still open never claim more than the shortfall. -/
 theorem applyOffsetAuthorization_within_shortfall (request : CorrectionTransitionRequest)

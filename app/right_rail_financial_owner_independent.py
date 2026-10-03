@@ -64,9 +64,10 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; a writing Owner u
 PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind": ("financial_events", ("kind", "aggregate_type"))}
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309"  # the evaluator worker
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the evaluator worker
+OFFSET_SERVING_ENGINE_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the first engine whose Lean serves offset authorizations; fixed, unlike the current pin
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "cd1eb139a7d25828779207937290da258c8753af5dad1ebcf255596427ea64a6"
+RETIRED_PINS_SHA256 = "3030519fbf180128c59efc64fc94d4916f4a35fcf289d704043a78d685d5b1fd"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -2149,7 +2150,8 @@ def _verify_populations(
             item_by_id[item_id] = row
         _text(row["display_label"], "item:label", max_bytes=128)
         _cents(row["owed_cents"], "item:owed", positive=True)
-        _time(row["due_at_ms"], "item:due")
+        if _time(row["due_at_ms"], "item:due") < packs[str(populations[population_id]["pack_id"])]["effective_start_ms"]:  # item 4: nothing falls due before its pack takes effect
+            _fail("item:due-before-pack")
         if row["currency"] != scope["currency"]:
             _fail("item:currency")
         items_by_population[population_id].append(row)
@@ -2803,6 +2805,8 @@ def _verify_determinations(
         decided = _time(row["decided_at_ms"], "determination:time")
         if decided < _time(pack["approved_at_ms"], "pack:approved"):  # no authority before the pack's approval (Lean preflightOffsetDecision)
             _fail("determination:pack-not-approved")
+        if decided < pack["effective_start_ms"]:  # item 4: no decision before its pack takes effect; none capped at its end
+            _fail("determination:pack-not-effective")
         if int(input_evaluation["evaluated_at_ms"]) > decided:
             _fail("determination:evaluation-chronology")
         kind = "OFFSET_AUTHORIZATION" if decision == "OFFSET_AUTHORIZED" else "CORRECTION_PAYMENT_REQUEST"
@@ -2853,9 +2857,15 @@ def _verify_actions(
     current = registry[CORRECTION_TRANSITION_ARTIFACT_SHA256]
     engines: dict[str, tuple[int, str]] = {}  # correction action -> the engine that decided it, by its decision event
     decided: dict[str, object] = {}  # correction action -> the amount its decision event records
-    newest = 0
-    for action_ref, sha, event_amount in connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,'$.correction_followup.artifact.sha256'),json_extract(payload_json,'$.amount_cents') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='OFFSET_REJECTED_CORRECTION_AUTHORIZED' ORDER BY event_sequence"):
+    newest, serving, served = 0, registry[OFFSET_SERVING_ENGINE_SHA256][0], False  # served: an event has named the serving engine or a newer one
+    for action_ref, sha, event_amount, event_kind in connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,CASE kind WHEN 'OFFSET_AUTHORIZED' THEN '$.artifact.sha256' ELSE '$.correction_followup.artifact.sha256' END),json_extract(payload_json,'$.amount_cents'),kind FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind IN ('OFFSET_AUTHORIZED','OFFSET_REJECTED_CORRECTION_AUTHORIZED') ORDER BY event_sequence"):
+        if event_kind == "OFFSET_AUTHORIZED":
+            if sha is None and not served:
+                continue  # a legacy store: its offsets were committed before any engine served them
+            if sha not in registry or registry[sha][0] < serving:
+                _fail("action:engine")
         engines[action_ref] = engine = registry.get(sha, current)
+        served = served or sha is not None and engine[0] >= serving
         if engine[0] < newest:
             _fail("action:engine-order")  # a retired engine never decides after a newer one
         newest = engine[0]

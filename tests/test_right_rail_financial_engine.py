@@ -39,9 +39,20 @@ class RightRailFinancialEngineTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(engine.FinancialEngineError):
                 engine.run_correction_transition_v1(request=mutant)
 
-    def test_result_decoder_has_reject_reason_tags_22_and_23(self) -> None:  # Lean Codec.lean, wire rows 22-23; the unbound result's reason and requirement tags 5 -> tag
+    def test_offset_frame_answers_the_pinned_offset_vector_and_a_truncated_frame_is_refused(self) -> None:
+        vectors = REPO_ROOT / "artifacts" / "engine-correction" / "vectors"
+        request, expected = (vectors / "request.bin").read_bytes(), (vectors / "result_offset.expected.bin").read_bytes()
+        self.assertEqual(engine._evaluate_wire(b"BLFOFA01" + request), expected)
+        self.assertEqual(hashlib.sha256(expected).hexdigest(), "a61f426ddf3f90e69cea8bc28f75f8c79311755ad380305cf6d529d39d85288e")
+        decoded = engine.run_offset_authorization_v1(request=request)
+        self.assertEqual((decoded["status"], decoded["explanation"]["code"], decoded["explanation"]["transition"]), ("ACCEPTED", "OFFSET_AUTHORIZED", "OFFSET_AUTHORIZED"))
+        self.assertNotEqual(expected, (vectors / "result.expected.bin").read_bytes())  # the same request, decided as a correction, answers differently
+        with self.assertRaises(engine.FinancialEngineError):
+            engine.run_offset_authorization_v1(request=request[:-1])
+
+    def test_result_decoder_has_reject_reason_tags_22_to_24(self) -> None:  # Lean Codec.lean, wire rows 22-24; the unbound result's reason and requirement tags 5 -> tag
         result = (REPO_ROOT / "artifacts" / "engine-correction" / "vectors" / "result_unbound.expected.bin").read_bytes()
-        for tag, names in ((22, ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE")), (23, ("CLAIM_EXCEEDS_SHORTFALL", "CLAIM_WITHIN_SHORTFALL"))):
+        for tag, names in ((22, ("DECISION_BACKDATED_PAST_DUE", "DECISION_NOT_BACKDATED_PAST_DUE")), (23, ("CLAIM_EXCEEDS_SHORTFALL", "CLAIM_WITHIN_SHORTFALL")), (24, ("DECISION_BEFORE_PACK_EFFECTIVE", "PACK_IN_EFFECT"))):
             decoded = engine.decode_correction_transition_result(result.replace(bytes.fromhex("0105030001050105"), bytes([1, tag, 3, 0, 1, tag, 1, tag])))
             self.assertEqual((decoded["reject_reason"], decoded["explanation"]["unresolved_requirement"]), names)
 

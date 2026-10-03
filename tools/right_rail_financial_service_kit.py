@@ -119,6 +119,7 @@ STATE_FILES = (
     RETIRED_PIN_REGISTRY,
     "tests/__init__.py",
     "tests/financial_decision_package_oracle.py",
+    "tests/lean_without_one_rule.py",
     "tests/rightrail_financial_expected_cases.py",
     "tests/test_right_rail_financial_acceptance.py",
     "tests/test_right_rail_financial_staff_server.py",
