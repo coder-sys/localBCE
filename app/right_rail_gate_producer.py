@@ -1,14 +1,13 @@
 """The gate's checkpoint producer: one serial writer per (tenant, shard), synthetic, activation=false.
 
 ``commit`` is reserve, sign and Lean-check, seal, mark, publish.  It needs the id registry's reply for the batch
-(row n and head): the head is signed into the CHECKPOINT/v2 header and n and the batch's ``free`` ids are stored, so
-no checkpoint exists without a reservation and the next registry settle can be derived after a restart.  The batch's header bytes and tokens are
-stored before the key is used, so a crash re-signs the same header at the same seq and never reuses a seq
-with other bytes; ``signer.seal`` releases a signature only when Lean ``publishOk`` accepts it, and only a
-sealed batch is published.  Seriality is the store's: one SQLite file opened EXCLUSIVE, WAL, synchronous
-FULL.  A checked mark file outside the database (``right_rail_gate_mark``) records the last sealed (epoch,
-seq_to + 1, digest), so a restored older database is refused; an old unchecked mark file is refused as corrupt, with
-no migration (synthetic, nothing deployed).  The batch's state digest comes from the decide layer; the producer computes no pin.
+(row n and head): the head is signed into the CHECKPOINT/v2 header, and n and the batch's ``free`` ids are stored so
+the next registry settle can be derived after a restart.  The header and tokens are stored before the key is used,
+so a crash re-signs the same header at the same seq and never reuses a seq with other bytes; ``signer.seal``
+releases a signature only when Lean ``publishOk`` accepts it, and only a sealed batch is published.  Seriality is
+the store's: one SQLite file opened EXCLUSIVE, WAL, synchronous FULL.  A checked mark file outside the database
+(``right_rail_gate_mark``) records the last sealed (epoch, seq_to + 1, digest), so a restored older database is
+refused; an old unchecked mark file is refused as corrupt.  The state digest comes from the decide layer.
 """
 
 from __future__ import annotations

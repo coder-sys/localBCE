@@ -1,13 +1,12 @@
 """The gate's per-tenant line-id registry (multi-shard-runtime-v1), synthetic, activation=false.
 
-One append-only chained log (store v2; a v1 store is refused, nothing was deployed): RESERVE gives a free id to a
-shard, FREE returns it, SETTLE is the shard's recorded marker (its unfreed reservations are now in its sealed
-sets), BOOT names the process generation.  An id is in flight while its holder has no later SETTLE, recorded after.
-``reserve`` settles the shard's previous batch, then reserves, in one transaction, and returns the raw answer per
-id; Lean decides from it.  Every transaction requires the newest BOOT row to carry this handle's nonce.  ``boot``
-replays the chain and requires each shard's newest signed commitment (row n and head, the checkpoint's
-registryHead) to lie in it: a registry restored alone or rolled back is refused ``registry_rewound``.  A whole
-directory restored together is not detectable here (design 9, R5).
+One append-only chained log (store v2; a v1 store is refused): RESERVE gives a free id to a shard, FREE returns it,
+SETTLE marks the shard's unfreed reservations as in its sealed sets, BOOT names the process generation.  An id is in
+flight while its holder has no later SETTLE.  ``reserve`` settles the shard's previous batch, then reserves, in one
+transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
+carry this handle's nonce.  ``boot`` requires each shard's newest signed commitment (row n and head, the
+checkpoint's registryHead) to lie in the chain, else ``registry_rewound``; a whole directory restored together is
+not detectable here (design 9, R5).
 """
 
 from __future__ import annotations
@@ -54,8 +53,6 @@ def _check(shard: int, ids: Iterable[int]) -> list[int]:
 def _key(id_: int) -> bytes:
     """Lean ``be idWidth id``, the Line.id field bytes: the one place an id becomes bytes."""
     return id_.to_bytes(ID_LEN, "big")
-
-
 
 
 def _open(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
@@ -110,9 +107,13 @@ class _Tail:
         self.n += 1
         self.db.execute("INSERT INTO log VALUES (?, ?, ?, ?, ?)", (self.n, kind, key, shard, self.head))
 
-    def owner(self, key: bytes):
-        """(kind, shard, n) of the id's newest RESERVE or FREE row, or None."""
-        return self.db.execute("SELECT kind, shard, n FROM log WHERE id = ? AND kind < 2 ORDER BY n DESC LIMIT 1", (key,)).fetchone()
+    def take(self, key: bytes, shard: int):
+        """RESERVE the id for ``shard`` if it is unowned or freed (returns None); else its owner row (kind, shard, n)."""
+        row = self.db.execute("SELECT kind, shard, n FROM log WHERE id = ? AND kind < 2 ORDER BY n DESC LIMIT 1", (key,)).fetchone()
+        if row is None or row[0] == _FREE:
+            self.add(_RESERVE, key, shard)
+            return None
+        return row
 
 
 def _pending(db: sqlite3.Connection, shard: int) -> list[tuple[int, bytes]]:
@@ -191,13 +192,9 @@ class IdRegistry:
                 tail.add(_SETTLE, bytes(ID_LEN), shard)
             owners = []
             for i in ids:
-                row = tail.owner(_key(i))
-                if row is None or row[0] == _FREE:
-                    tail.add(_RESERVE, _key(i), shard)
-                    owners.append((i, shard, False))
-                else:
-                    owners.append((i, row[1], self._db.execute("SELECT 1 FROM log WHERE kind = 2 AND shard = ? AND n > ?",
-                                                                 (row[1], row[2])).fetchone() is not None))
+                row = tail.take(_key(i), shard)
+                owners.append((i, shard, False) if row is None else (i, row[1], self._db.execute(
+                    "SELECT 1 FROM log WHERE kind = 2 AND shard = ? AND n > ?", (row[1], row[2])).fetchone() is not None))
             return owners, tail.n, tail.head
 
     def genesis(self, shard_ids: Mapping[int, Sequence[int]]) -> tuple[int, bytes]:
@@ -208,10 +205,8 @@ class IdRegistry:
             tail = _Tail(self._db)
             for shard, ids in groups:
                 for i in ids:
-                    row = tail.owner(_key(i))
-                    if row is None or row[0] == _FREE:
-                        tail.add(_RESERVE, _key(i), shard)
-                    elif row[1] != shard:
+                    row = tail.take(_key(i), shard)
+                    if row and row[1] != shard:
                         raise IdRegistryError("genesis_double_acceptance")
                 if ids:
                     tail.add(_SETTLE, bytes(ID_LEN), shard)
