@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from app import right_rail_financial_engine as engine
 from app import right_rail_financial_owner as owner_module
+from app import right_rail_financial_owner_independent as independent
 from app import right_rail_financial_semantic_adapter as adapter
 from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_acceptance as acceptance_tests
@@ -416,6 +417,25 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
                     self.assertEqual(owner_module._open_requests(connection, oid, out.decided.shortfall_cents), opened[-1], out.status)
         self.assertEqual(len(opened), 5)
         self.assertGreater(opened[0][expected.ACTION_CORRECTION_ID], 0)
+
+    def test_dropped_links_let_lean_overpay_and_the_checker_refuses_before_commit(self) -> None:
+        """The carry fault one layer down: Lean sees no earlier links, so only the checker's payment:link stops the overpayment."""
+        store, reject_b = self.fixture._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)  # requests A and B: 300,000 left of the balance after A is paid
+        reject_b()
+        self.fixture._pay_a(store, 300_000, "m3a")
+        seen, real_verify, real = [], independent.verify_obligation_connection, owner_module._payment_receipts
+
+        def spy(*args, **kwargs):
+            try:
+                return real_verify(*args, **kwargs)
+            except independent.IndependentFinancialError as error:
+                seen.append(str(error))
+                raise
+        before = _rows(store)
+        with patch.object(owner_module, "_payment_receipts", lambda c, o: [(p, r, None) for p, r, _a in real(c, o)]), \
+             patch.object(independent, "verify_obligation_connection", spy), self.assertRaises(owner_module.FinancialError):
+            self.fixture._pay_a(store, 1, "m3b")
+        self.assertEqual((seen, _rows(store)), (["payment:link"], before))
 
 
 if __name__ == "__main__":

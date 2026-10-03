@@ -160,16 +160,16 @@ class EvaluatorWorkerTests(unittest.TestCase):
 
     def test_payment_is_decided_by_lean_and_stored_as_decided(self) -> None:
         decisions = []
-        real = engine.evaluate_live
+        real = engine.decide_payment_live
 
         def spy(*args, **kwargs):
             decisions.append(real(*args, **kwargs))
             return decisions[-1]
 
-        with patch.object(engine, "evaluate_live", spy):
+        with patch.object(engine, "decide_payment_live", spy):
             self.fixture._record_cash(self.store)
         self.assertEqual(len(decisions), 1)
-        decided = decisions[0]
+        decided = decisions[0].decided
         connection = sqlite3.connect(self.store.path)
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -191,7 +191,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
         with patch.object(process, "launch_contained_worker", side_effect=process.VerifierProcessError("worker_down")):
             with self.assertRaises(owner_module.FinancialIntegrityError) as raised:
                 self.fixture._record_cash(self.store)
-        self.assertEqual(str(raised.exception), "lean_evaluation:evaluator_containment")
+        self.assertEqual(str(raised.exception), "lean_payment:evaluator_containment")
         self.assertEqual(self._counts(), before)
         self.store.verify_integrity()
         self.fixture._record_cash(self.store)  # the same write succeeds once the worker can start
@@ -203,7 +203,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
         before = self._counts()
         with patch.object(engine, "_evaluate_wire", return_value=foreign):
             with self.assertRaises(owner_module.FinancialIntegrityError) as raised:
-                self.fixture._record_cash(self.store)
+                self.store.evaluate_obligation(adapter_tests.expected.H_ITEM_ID)  # payments bind Lean's answer in lean_payments
         self.assertEqual(str(raised.exception), "lean_evaluation:result_context_binding")
         self.assertEqual((self._counts(), engine._evaluator), (before, []))  # and the worker that gave it is not reused
 
