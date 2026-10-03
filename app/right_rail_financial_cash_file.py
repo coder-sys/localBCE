@@ -213,8 +213,8 @@ def commit_cash_plan(owner, plan):
         return done
     with owner._write(before_commit=finished) as connection:
         now = owner._now()
-        if not plan.writes or plan.last_ms is None or not plan.last_ms <= now < plan.last_ms + PLAN_WINDOW_MS or _baseline(connection) != plan.baseline or connection.execute(
-                "SELECT 1 FROM obligations WHERE due_at_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM claimed_adjustments WHERE deadline_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM cases WHERE due_at_ms BETWEEN ?1 AND ?2 LIMIT 1", (plan.last_ms, now)).fetchone():
+        if plan.writes and (plan.last_ms is None or not plan.last_ms <= now < plan.last_ms + PLAN_WINDOW_MS or connection.execute(
+                "SELECT 1 FROM obligations WHERE due_at_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM claimed_adjustments WHERE deadline_ms BETWEEN ?1 AND ?2 UNION ALL SELECT 1 FROM cases WHERE due_at_ms BETWEEN ?1 AND ?2 LIMIT 1", (plan.last_ms, now)).fetchone()) or _baseline(connection) != plan.baseline:
             raise FinancialRevisionError("cash_plan_stale")  # also stale: a deadline fell between the plan's clock and this one, so a direct run would decide it differently
         check.begin(connection)
         statements, order = {}, {}
@@ -237,6 +237,17 @@ def commit_cash_plan(owner, plan):
             raise FinancialIntegrityError("cash_plan_captured")  # a replayed row no event carries
         connection.execute("DELETE FROM temp.rr_captured_rows")  # the replayed events carry what these triggers captured
     return check.receipt
+
+
+def apply_cash_file(owner, commands, context):
+    """The one production apply (design (d)): plan on a private copy, commit the plan under the live lock; a stale plan is made again, 3 plans at most."""
+    for _ in range(3):
+        try:
+            return commit_cash_plan(owner, plan_cash_file(commands, context, path=owner.path, trusted_authority=owner.trusted_authority, clock=owner.clock))
+        except FinancialRevisionError as error:
+            if str(error) != "cash_plan_stale":
+                raise
+    raise CashFileError("cash_file_busy")  # nothing written: resend the same file
 
 
 def refusal(error):
