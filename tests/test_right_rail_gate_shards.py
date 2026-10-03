@@ -158,18 +158,44 @@ class ShardTests(fx.Scratch):
             self.finish(c)
 
     def test_settle_failure_after_the_seal_is_never_recommitted(self) -> None:
-        commit, seen = decider.commit, []
+        commit = decider.commit
 
         def twice(*args):
             for _ in range(2):
                 with self.assertRaises(decider.GateDecideError) as caught:
                     commit(*args)
                 seen.append(str(caught.exception))
-        with self.cluster() as c:
-            with mock.patch.object(idreg.IdRegistry, "settle", side_effect=idreg.IdRegistryError("registry_unavailable")),                     mock.patch.object(decider, "commit", twice):
-                c.send(0, T, BAD)
-            self.assertEqual(seen, ["settle_pending", "already_sealed"])
-            self.finish(c, T, NEXT)  # the next reserve settles t; 10 is in one sealed batch
+        for batch in (T, {8: [30]}):  # with adds, and without (30 is shard 1's paid id)
+            seen = []
+            with self.subTest(batch=batch), self.cluster() as c:
+                if 8 in batch:
+                    c.send(1, {9: [30]})
+                with mock.patch.object(idreg.IdRegistry, "settle", side_effect=idreg.IdRegistryError("registry_unavailable")),                         mock.patch.object(decider, "commit", twice):
+                    c.send(0, batch, BAD)
+                self.assertEqual(seen, ["settle_pending", "stale_answer"])
+                self.finish(c, T, NEXT)  # the next reserve settles t; 10 is in one sealed batch
+
+    def test_a_stale_answer_is_refused_before_the_seal(self) -> None:
+        # B2's reserve frees B1's in-flight 10.  HIGH: B2 (a resend of shard 1's paid 30, no fresh row) seals first, so
+        # B1's seal would ALLOW 10 that shard 1 then pays again.  MED: B2 reserves 11, so B1's seal could never settle.
+        for second, b2_first in (({8: [30]}, True), ({2: [11]}, False)):
+            with self.subTest(second=second), self.cluster() as c:
+                c.send(1, {9: [30]})
+                prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
+                try:
+                    b1, b2 = [g.decide_batch(c, prod, reg, 0, p) for p in ({1: [10]}, second)]
+                    commit = lambda b: decider.commit(prod, reg, 0, fx.PROGRAM, b[1], b[0], fx.NOW)
+                    if b2_first:
+                        commit(b2)
+                    with self.assertRaisesRegex(decider.GateDecideError, "stale_answer"):
+                        commit(b1)
+                    if not b2_first:
+                        commit(b2)
+                finally:
+                    prod.close()
+                    reg.close()
+                self.assertEqual(c.send(1, {7: [10]}), {10: "ALLOW -"})
+                g.inv(self, c)
 
     def test_voided_reservation_is_freed_on_retry(self) -> None:
         with self.cluster() as c:

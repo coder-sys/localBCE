@@ -25,8 +25,9 @@ class GateDecideError(RuntimeError):
     body holds a line break (it could add directives after the real ``load``); ``genesis_sets``: the registry settled
     ids for a shard with no sealed batch (``genesis()`` starting sets, which load cannot carry until L4);
     ``rules_refused``: any other refusal, timeout included.  ``frame_injection`` and ``genesis_sets`` come before the
-    registry reserve, so they write nothing.  ``commit``: ``already_sealed``, the answer's batch is sealed;
-    ``settle_pending``, sealed but not settled (no token out; the next ``decide`` settles it, never re-commit)."""
+    registry reserve, so they write nothing.  ``commit``: ``stale_answer``, a batch was sealed or the shard's in-flight
+    rows changed since the answer (nothing sealed; decide again); ``settle_pending``, sealed but not settled (no token
+    out; the next ``decide`` settles it, never re-commit)."""
 
 
 class Answer(NamedTuple):
@@ -35,6 +36,8 @@ class Answer(NamedTuple):
     digest: bytes  # the state digest after the batch: the next header's ``state_digest``
     adds: bytes
     idreg: tuple[int, bytes]  # the registry's (n, head) after the reserve
+    seen: bytes | None  # the shard's last sealed checkpoint digest before the reserve
+    rows: list[int]  # the registry rows the reserve wrote: the shard's whole in-flight set after it
 
 
 def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer.ShardProducer, reg: idreg.IdRegistry,
@@ -46,7 +49,9 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
     anchor = prod.anchor()
     if anchor is None and reg.settled(k):
         raise GateDecideError("genesis_sets")
+    seen = prod.tip()
     owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
+    f = len({i for i, s, w in owners if s == k and not w})  # fresh RESERVE rows: the reserve's last f, nothing before in flight
     frame.write_text("\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
                                 "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
                                 *(f"line {line}" for line in lines), "commit", "end 0"]), "utf-8")
@@ -61,7 +66,7 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
     if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out or {"RULES_FREE", "RULES_DIGEST", "RULES_ADDS"} - got.keys():
         raise GateDecideError("state_mismatch" if "RULES_STATE_MISMATCH" in got else "rules_refused")
     return Answer(got.get("RULES_LINE", []), [int(i) for i in got["RULES_FREE"][0].split()], bytes.fromhex(got["RULES_DIGEST"][0]),
-                  bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head))
+                  bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head), seen, list(range(n - f + 1, n + 1)))
 
 
 def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, k: int, program: str, leaves: Sequence[gate.TokenLeaf],
@@ -69,15 +74,16 @@ def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, k: int, program:
     """Seal the decided batch, settle it in the registry, and only then return (checkpoint, signed, tokens).  The order is
     the rollback check: before any token is out, a SETTLE follows the batch's RESERVE rows, so a store (with or without its
     mark) restored to before the batch is ``registry_rewound`` at boot and at each ``decide``.  A crash or a refused
-    settle between the two loses nothing: no token is out, and the next ``decide`` settles the sealed batch first.  An
-    answer with adds reserved rows ending at its own n, so a newest batch sealed at that n is this answer: a second seal
-    would put its ids in two token sets and its adds twice into the load."""
-    if ans.adds and (prod.sealed_frees() or (0,))[0] == ans.idreg[0]:
-        raise GateDecideError("already_sealed")
+    settle between the two loses nothing: no token is out, and the next ``decide`` settles the sealed batch first.  The
+    answer is sealed only while the shard's last seal and in-flight rows are those it saw: a later decide's reserve
+    frees its ids (a seal would pay them while another shard may reserve them), and a re-commit of a sealed answer would
+    put its ids in two token sets."""
+    if prod.tip() != ans.seen or reg.in_flight(k) != ans.rows:
+        raise GateDecideError("stale_answer")
     out = prod.commit(program, leaves, state_digest=ans.digest, created_at=created_at, idreg=ans.idreg, free=ans.free,
                       adds=ans.adds)
     try:
-        reg.settle(k, ans.idreg[0], ans.free)
+        reg.settle(k, ans.rows, ans.free)
     except idreg.IdRegistryError as error:
         raise GateDecideError("settle_pending") from error
     return out

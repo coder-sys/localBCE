@@ -177,7 +177,8 @@ class IdRegistry:
         with _txn(self._db, self._boot):
             if sealed and _rewound(self._db, shard, sealed[0], sealed[1]):
                 raise IdRegistryError("registry_rewound")
-            tail = self._settle(shard, sealed and (sealed[0], sealed[2]), False)
+            pend, frees = _pending(self._db, shard), _check(shard, sealed[2] if sealed else ())
+            tail = self._settle(shard, pend, frees if sealed and pend and sealed[0] == pend[-1][0] else None)
             owners = []
             for i in ids:
                 row = tail.take(_key(i), shard)
@@ -185,20 +186,23 @@ class IdRegistry:
                     "SELECT 1 FROM log WHERE kind = 2 AND shard = ? AND n > ?", (row[1], row[2])).fetchone() is not None))
             return owners, tail.n, tail.head
 
-    def settle(self, shard: int, n: int, free: Sequence[int]) -> None:
-        """Settle the batch whose reserve ended at row ``n`` (``decide.commit``, after the seal): ``settle_mismatch``,
-        nothing written, unless the shard's in-flight ids end at n (or none are in flight and ``free`` is empty)."""
-        with _txn(self._db, self._boot):
-            self._settle(shard, (n, free), True)
+    def in_flight(self, shard: int) -> list[int]:
+        """The row numbers of the shard's in-flight reservations."""
+        return [n for n, _ in _pending(self._db, shard)]
 
-    def _settle(self, shard: int, sealed: tuple[int, Sequence[int]] | None, exact: bool) -> _Tail:
-        frees = _check(shard, sealed[1] if sealed else ())
-        tail, pend = _Tail(self._db), _pending(self._db, shard)
-        held = {key for _, key in pend}
-        match = bool(sealed and pend and sealed[0] == pend[-1][0])
-        if exact and not match and (pend or frees):
-            raise IdRegistryError("settle_mismatch")
-        for key in [_key(i) for i in frees] if match else [key for _, key in pend]:
+    def settle(self, shard: int, rows: list[int], free: Sequence[int]) -> None:
+        """Settle the batch that reserved exactly ``rows`` (``decide.commit``, after the seal): ``settle_mismatch``,
+        nothing written, unless they are the shard's in-flight rows."""
+        with _txn(self._db, self._boot):
+            pend = _pending(self._db, shard)
+            if [n for n, _ in pend] != rows:
+                raise IdRegistryError("settle_mismatch")
+            self._settle(shard, pend, _check(shard, free))
+
+    def _settle(self, shard: int, pend: list[tuple[int, bytes]], free: list[int] | None) -> _Tail:
+        """Free ``free`` (each must be in flight; None: all of ``pend``) and SETTLE the rest."""
+        tail, held = _Tail(self._db), {key for _, key in pend}
+        for key in [key for _, key in pend] if free is None else [_key(i) for i in free]:
             if key not in held:
                 raise IdRegistryError("settle_mismatch")
             held.remove(key)

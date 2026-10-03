@@ -163,6 +163,11 @@ class ShardProducer:
         last = self._sealed()
         return last and last[5]
 
+    def tip(self) -> bytes | None:
+        """The last sealed checkpoint's digest (None at the shard's genesis): a decide answer is stale once it moves."""
+        last = self._sealed()
+        return last and last[3]
+
     def sealed_adds(self) -> bytes:
         """The sealed batches' ``adds`` in id order: the rows the decide layer folds onto genesis to reach ``anchor``."""
         return b"".join(row[0] for row in self._db.execute("SELECT adds FROM batches WHERE signature IS NOT NULL ORDER BY id"))

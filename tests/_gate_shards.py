@@ -63,9 +63,9 @@ class Cluster:
     def send(self, k: int, payments: dict[int, list[int]], bad=(), crash: str | None = None) -> dict[int, str]:
         """One batch on shard ``k``: payment number -> its line ids (a line in ``bad`` is for a deceased member).  Returns
         id -> 'OUTCOME REASONS'.  With ``crash`` ('reserve', 'commit', 'seal', 'settle' or 'after') a child runs it and dies there."""
-        self.lines.update({(k, n): ids for n, ids in payments.items()})
         if crash is None:
             return run_batch(self, k, payments, bad)
+        self.lines.update({(k, n): ids for n, ids in payments.items()})
         args = json.dumps([str(self.dir), [self.custody[0], self.custody[1].hex(), self.custody[2].hex()], self.shards,
                            self.nonce.hex(), k, payments, list(bad), crash])
         done = subprocess.run([sys.executable, "-m", "tests._gate_shards", args], cwd=ROOT, capture_output=True, timeout=900)
@@ -74,20 +74,26 @@ class Cluster:
         return {}
 
 
+def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], bad=()):
+    """Decide one batch on shard ``k`` without committing it: (answer, leaves, id -> 'OUTCOME REASONS')."""
+    c.lines.update({(k, n): ids for n, ids in payments.items()})
+    ans = decider.decide(rules.EXE, c.dir / f"batch{k}.vectors", _HEAD, ASOF, prod, reg, k, [i for v in payments.values() for i in v],
+                         [f"{i}:{p} FFS_CLAIM {9001 if i in bad else 1001} 7001 7001 {20270301 + i % 14} 99213 1 {12500 + i}"
+                          for p, v in payments.items() for i in v])
+    status, pay = {}, {}
+    for row in ans.lines:
+        f = row.split()
+        i, p = map(int, f[0].split(":"))
+        status[i] = " ".join(f[9:11])
+        pay.setdefault(p, []).append(f[9])
+    return ans, [fx._leaf(p, 0, "ALLOW" if set(o) == {"ALLOW"} else "HOLD", shard=k, member_key=fx.member(p, k))
+                 for p, o in pay.items() if "WAIT" not in o], status
+
+
 def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dict[int, str]:
     prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
     try:
-        ans = decider.decide(rules.EXE, c.dir / f"batch{k}.vectors", _HEAD, ASOF, prod, reg, k, [i for v in payments.values() for i in v],
-                             [f"{i}:{p} FFS_CLAIM {9001 if i in bad else 1001} 7001 7001 {20270301 + i % 14} 99213 1 {12500 + i}"
-                              for p, v in payments.items() for i in v])
-        status, pay = {}, {}
-        for row in ans.lines:
-            f = row.split()
-            i, p = map(int, f[0].split(":"))
-            status[i] = " ".join(f[9:11])
-            pay.setdefault(p, []).append(f[9])
-        leaves = [fx._leaf(p, 0, "ALLOW" if set(o) == {"ALLOW"} else "HOLD", shard=k, member_key=fx.member(p, k))
-                  for p, o in pay.items() if "WAIT" not in o]
+        ans, leaves, status = decide_batch(c, prod, reg, k, payments, bad)
         if leaves:
             decider.commit(prod, reg, k, fx.PROGRAM, leaves, ans, fx.NOW)
         return status

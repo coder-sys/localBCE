@@ -138,13 +138,15 @@ class IdRegistryTests(unittest.TestCase):
             self.reg.reserve(0, [-1], sealed=(n, head, [1]))
         self.assertEqual(self.tail(), before)
 
-    def test_settle_refuses_a_newer_reserve(self) -> None:  # decide B1, decide B2, commit B1: B2's ids stay in flight
-        n = self.reg.reserve(0, [1], sealed=None)[1]
-        self.reg.reserve(0, [2], sealed=None)
-        before = self.tail()
-        with self.assertRaisesRegex(idreg.IdRegistryError, "settle_mismatch"):
-            self.reg.settle(0, n, [])
-        self.assertEqual(self.tail(), before)
+    def test_settle_refuses_a_newer_reserve(self) -> None:  # decide B1, decide B2 (frees B1's 1), commit B1
+        for newer in ([2], []):  # B2's 2 in flight, or nothing in flight
+            with self.subTest(newer=newer):
+                n = self.reg.reserve(0, [1], sealed=None)[1]
+                self.reg.reserve(0, newer, sealed=None)
+                before = self.tail()
+                with self.assertRaisesRegex(idreg.IdRegistryError, "settle_mismatch"):
+                    self.reg.settle(0, [n], [])
+                self.assertEqual(self.tail(), before)
 
     def test_boot_nonce(self) -> None:
         stale = self.open(b"\x01" * 32)
