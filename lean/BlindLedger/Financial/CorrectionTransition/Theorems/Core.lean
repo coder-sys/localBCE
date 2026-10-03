@@ -407,6 +407,7 @@ theorem applyOffsetAuthorization_resultWellFormed (bytes : Bytes)
           dsimp only at hB
           obtain ⟨-, hB⟩ := ite_error_ok hB
           obtain ⟨-, hB⟩ := ite_error_ok hB
+          obtain ⟨-, hB⟩ := ite_error_ok hB
           generalize hE : evaluate _ = E at hB
           cases E with
           | none => cases hB

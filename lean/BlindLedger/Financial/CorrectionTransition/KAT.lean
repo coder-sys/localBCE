@@ -415,7 +415,7 @@ private def correctionKatReceiptFor (base : EvaluationReceipt) (evaluationId : S
 
 /-- The KAT request with the obligation owed `owedCents` against the same 9,700,000
     cash and 300,000 claim; the receipt carries Lean's projection of that input. -/
-private def correctionKatOwedRequest (owedCents : Nat) : CorrectionTransitionRequest :=
+def correctionKatOwedRequest (owedCents : Nat) : CorrectionTransitionRequest :=
   let input := { correctionKatInput with
     obligation := { correctionKatInput.obligation with owedCents := owedCents } }
   match evaluate input with
@@ -450,6 +450,17 @@ def gateCorrectionShortfallAboveClaimAmount : Bool :=
 
 -- M1: authorizing a 300,000 offset against 100,000 unpaid is refused, never capped.
 #guard resultHasReason (applyOffsetAuthorization (correctionKatOwedRequest 9_800_000)) .CLAIM_EXCEEDS_SHORTFALL
+
+/-- The KAT request with its control pack taking effect 1 ms after the decision. -/
+def correctionKatBeforePackRequest : CorrectionTransitionRequest :=
+  { correctionKatRequest with currentInput := { correctionKatRequest.currentInput with
+      pack := { correctionKatRequest.currentInput.pack with
+        effectiveStart := correctionKatRequest.command.decisionAtMs + 1
+        effectiveEnd := correctionKatRequest.command.decisionAtMs + 2 } } }
+
+-- Item 4: neither builder decides before the pack takes effect.
+#guard resultHasReason (applyOffsetAuthorization correctionKatBeforePackRequest) .DECISION_BEFORE_PACK_EFFECTIVE
+#guard resultHasReason (applyCorrectionTransition correctionKatBeforePackRequest) .DECISION_BEFORE_PACK_EFFECTIVE
 
 /-- A correction of `claimId` by `actionId` on `input`, decided 10 ms after
     `input` was evaluated at event `sequence`; the receipt is Lean's projection. -/

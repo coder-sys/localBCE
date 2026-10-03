@@ -52,6 +52,13 @@ tag byte then body out: 00 + `BLFCRES3`; 01 = too large/decode fail; 03 =
 encode fail. The retired one-shot exe (git 99ec957) answered the same on stdin
 and stdout, exit 0, 72 or 73, and also served reuse (75/76, retired with it).
 
+Offset authorization frame `BLFOFA01`: the 8 ASCII bytes `BLFOFA01`, then one
+unchanged `BLFCMD03` request (same cap, same decoding). The worker answers it
+like a correction frame (00 + `BLFCRES3`, 01, 03) with the result of
+`applyOffsetAuthorization` instead of `applyCorrectionTransition`. The worker
+frame cap is 8,388,608 + 8 bytes. Lean source only: the pinned engine and the
+Python owner do not use it until the re-pin.
+
 ## 3. `BLFCMD03` request
 
 | # | Field | Encoding | Well-formed |
@@ -226,12 +233,13 @@ differ).
 | 21 | NO_REQUESTABLE_BALANCE | UNREQUESTED_SHORTFALL |
 | 22 | DECISION_BACKDATED_PAST_DUE | DECISION_NOT_BACKDATED_PAST_DUE |
 | 23 | CLAIM_EXCEEDS_SHORTFALL | CLAIM_WITHIN_SHORTFALL |
+| 24 | DECISION_BEFORE_PACK_EFFECTIVE | PACK_IN_EFFECT |
 
 | Enumeration | Tags |
 |---|---|
-| explanation code | 1 CORRECTION_AUTHORIZED, 2 EXACT_RETRY, 3 REJECTED |
-| transition kind | 1 OFFSET_REJECTED_CORRECTION_AUTHORIZED |
-| effect | 1 DETERMINATION_RECORDED, 2 CLAIM_REJECTED, 3 CASE_UPSERTED, 4 ACTION_CREATED, 5 OUTBOX_CREATED, 6 PROJECTION_RECOMPUTED, 7 EVENT_APPENDED |
+| explanation code | 1 CORRECTION_AUTHORIZED, 2 EXACT_RETRY, 3 REJECTED, 4 OFFSET_AUTHORIZED |
+| transition kind | 1 OFFSET_REJECTED_CORRECTION_AUTHORIZED, 2 OFFSET_AUTHORIZED |
+| effect | 1 DETERMINATION_RECORDED, 2 CLAIM_REJECTED, 3 CASE_UPSERTED, 4 ACTION_CREATED, 5 OUTBOX_CREATED, 6 PROJECTION_RECOMPUTED, 7 EVENT_APPENDED, 8 CLAIM_AUTHORIZED |
 | decision | 1 OFFSET_AUTHORIZED, 2 OFFSET_REJECTED_CORRECTION_AUTHORIZED |
 | claim status | 1 CLAIMED, 2 AUTHORIZED, 3 REJECTED |
 | action / outbox status | 1 READY, 2 ACKNOWLEDGED, 3 CANCELLED |

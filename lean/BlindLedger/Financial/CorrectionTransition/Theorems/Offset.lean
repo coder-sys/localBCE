@@ -234,7 +234,7 @@ theorem applyOffsetAuthorization_not_backdated (request : CorrectionTransitionRe
   rw [hCreated]
   exact hBack rfl (hDecided ▸ hle)
 
-/-- M1 (spec only; the Python owner's `offset_exceeds_shortfall` and the checker's
+/-- M1 (the BLFOFA01 frame serves this; until the re-pin, the Python owner's `offset_exceeds_shortfall` and the checker's
     `action:exceeds-shortfall` decide served stores): an accepted authorization and the
     correction requests still open never claim more than the shortfall. -/
 theorem applyOffsetAuthorization_within_shortfall (request : CorrectionTransitionRequest)

@@ -56,3 +56,22 @@ open BlindLedger.Financial.CorrectionTransition
 #guard (encodeCorrectionTransitionResult (applyCorrectionTransition { correctionKatRequest with
   currentInput := { correctionKatInput with
     context := { correctionKatInput.context with mode := .SHADOW } } })).isSome
+
+-- BLFOFA01: the worker answers a served frame with applyOffsetAuthorization's encoded result.
+private def servedOffset (request : CorrectionTransitionRequest) : Option Bytes :=
+  (encodeCorrectionTransitionRequest request).map fun b => workerRespond (offsetAuthorizationMagic ++ b)
+private def offsetAnswer (request : CorrectionTransitionRequest) : Option Bytes :=
+  (encodeCorrectionTransitionResult (applyOffsetAuthorization request)).map (UInt8.ofNat 0 :: ·)
+#guard (applyOffsetAuthorization correctionKatRequest).explanation.code == .OFFSET_AUTHORIZED
+#guard (offsetAnswer correctionKatRequest).isSome &&
+  servedOffset correctionKatRequest == offsetAnswer correctionKatRequest
+#guard (applyOffsetAuthorization (correctionKatOwedRequest 9_800_000)).rejectReason ==
+  some .CLAIM_EXCEEDS_SHORTFALL
+#guard (offsetAnswer (correctionKatOwedRequest 9_800_000)).isSome &&
+  servedOffset (correctionKatOwedRequest 9_800_000) == offsetAnswer (correctionKatOwedRequest 9_800_000)
+#guard (applyOffsetAuthorization correctionKatBeforePackRequest).rejectReason ==
+  some .DECISION_BEFORE_PACK_EFFECTIVE
+#guard (offsetAnswer correctionKatBeforePackRequest).isSome &&
+  servedOffset correctionKatBeforePackRequest == offsetAnswer correctionKatBeforePackRequest
+-- A truncated BLFOFA01 frame is a decode rejection.
+#guard workerRespond (offsetAuthorizationMagic ++ [UInt8.ofNat 1, UInt8.ofNat 2]) == [UInt8.ofNat 1]

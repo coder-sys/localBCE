@@ -640,6 +640,7 @@ def buildAccepted (request : CorrectionTransitionRequest)
   let supportingEvidenceIds := request.currentReceipt.evidenceBindings.map EvidenceBinding.evidenceId
   let some inputSnapshotDigest := request.currentReceipt.inputSnapshotDigest
     | throw .INPUT_SNAPSHOT_MISSING
+  if command.decisionAtMs < input.pack.effectiveStart then throw .DECISION_BEFORE_PACK_EFFECTIVE
   let determination := {
     determinationId := determinationId
     obligationId := input.context.obligationId
@@ -1101,6 +1102,7 @@ def buildAuthorized (request : CorrectionTransitionRequest) (currentResult : Fin
   let determinationId := "determination:" ++ command.actionId
   let some inputSnapshotDigest := request.currentReceipt.inputSnapshotDigest
     | throw .INPUT_SNAPSHOT_MISSING
+  if command.decisionAtMs < input.pack.effectiveStart then throw .DECISION_BEFORE_PACK_EFFECTIVE
   let determination : OffsetDetermination := {
     determinationId := determinationId
     obligationId := input.context.obligationId
@@ -1228,7 +1230,8 @@ def buildAuthorized (request : CorrectionTransitionRequest) (currentResult : Fin
 def duplicateOf (kind : TransitionKind) (command : CorrectionCommand) : CorrectionTransitionResult :=
   { duplicate command with explanation := { (duplicate command).explanation with transition := some kind } }
 
--- NEW. Spec only: no worker frame serves it yet; the Python owner decides offsets.
+-- Served by the BLFOFA01 worker frame (`offsetRespond`). The pinned engine predates it and the Python
+-- owner does not call it yet, so the owner still decides offsets until the re-pin.
 def applyOffsetAuthorization (request : CorrectionTransitionRequest) : CorrectionTransitionResult :=
   match preflightOffsetDecision .OFFSET_AUTHORIZED request with
   | .error reason => reject request.command reason
@@ -1375,6 +1378,7 @@ theorem buildAccepted_facts {request : CorrectionTransitionRequest}
   | some digest =>
     obtain ⟨-, h⟩ := ite_error_ok h
     obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
     generalize evaluateWithProof _ = A at h
     cases A with
     | none => cases h
@@ -1393,6 +1397,20 @@ theorem buildAccepted_facts {request : CorrectionTransitionRequest}
         refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
           hRes0.down, rfl⟩
         all_goals rfl
+
+/-- `buildAccepted` decides only once the control pack is in effect. -/
+theorem buildAccepted_in_force {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {hEvaluates paid hDerived hRequestable}
+    {r : { mutation : CorrectionMutation // CorrectionMutationLinkFacts request mutation }}
+    (h : buildAccepted request currentResult claim hEvaluates paid hDerived hRequestable = .ok r) :
+    request.currentInput.pack.effectiveStart ≤ request.command.decisionAtMs := by
+  delta buildAccepted at h
+  generalize request.currentReceipt.inputSnapshotDigest = D at h
+  cases D with
+  | none => cases h
+  | some digest =>
+    obtain ⟨hE, -⟩ := ite_error_ok h
+    exact Nat.not_lt.1 hE
 
 end
 
@@ -1694,6 +1712,7 @@ theorem buildAuthorized_spec {request : CorrectionTransitionRequest}
     dsimp only at h
     obtain ⟨-, h⟩ := ite_error_ok h
     obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
     generalize hE : evaluate _ = E at h
     cases E with
     | none => cases h
@@ -1709,6 +1728,21 @@ theorem buildAuthorized_spec {request : CorrectionTransitionRequest}
         have hF := evaluate_after_case_status_update_fixedPoint _ provisionalResult
           (max request.command.decisionAtMs request.command.ownerNowMs) hE (by simpa using hWf)
         exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, hF, rfl⟩
+
+/-- `buildAuthorized` decides only once the control pack is in effect. -/
+theorem buildAuthorized_in_force {request : CorrectionTransitionRequest}
+    {currentResult : FinancialResult} {claim : Claim} {paid : List CorrectionPaid}
+    {mutation : CorrectionMutation}
+    (h : buildAuthorized request currentResult claim paid = .ok mutation) :
+    request.currentInput.pack.effectiveStart ≤ request.command.decisionAtMs := by
+  delta buildAuthorized at h
+  generalize request.currentReceipt.inputSnapshotDigest = D at h
+  cases D with
+  | none => cases h
+  | some digest =>
+    dsimp only at h
+    obtain ⟨hE, -⟩ := ite_error_ok h
+    exact Nat.not_lt.1 hE
 
 end
 
