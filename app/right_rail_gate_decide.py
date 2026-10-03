@@ -41,12 +41,12 @@ class Answer(NamedTuple):
 
 
 def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer.ShardProducer, reg: idreg.IdRegistry,
-           k: int, ids: Sequence[int], lines: Sequence[str]) -> Answer:
-    """Settle shard ``k``'s previous batch and reserve ``ids`` (the registry transaction), then decide ``lines`` (the
+           ids: Sequence[int], lines: Sequence[str]) -> Answer:
+    """Settle the producer's shard's previous batch and reserve ``ids`` (the registry transaction), then decide ``lines`` (the
     ``line`` directive bodies) against the shard's verified sets."""
     if any("\n" in s or "\r" in s for s in [*head, *lines]):
         raise GateDecideError("frame_injection")
-    anchor = prod.anchor()
+    k, anchor = prod.shard, prod.anchor()
     if anchor is None and reg.settled(k):
         raise GateDecideError("genesis_sets")
     seen = prod.tip()
@@ -69,7 +69,7 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
                   bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head), seen, list(range(n - f + 1, n + 1)))
 
 
-def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, k: int, program: str, leaves: Sequence[gate.TokenLeaf],
+def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, program: str, leaves: Sequence[gate.TokenLeaf],
            ans: Answer, created_at: int):
     """Seal the decided batch, settle it in the registry, and only then return (checkpoint, signed, tokens).  The order is
     the rollback check: before any token is out, a SETTLE follows the batch's RESERVE rows, so a store (with or without its
@@ -78,12 +78,12 @@ def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, k: int, program:
     answer is sealed only while the shard's last seal and in-flight rows are those it saw: a later decide's reserve
     frees its ids (a seal would pay them while another shard may reserve them), and a re-commit of a sealed answer would
     put its ids in two token sets."""
-    if prod.tip() != ans.seen or reg.in_flight(k) != ans.rows:
+    if prod.tip() != ans.seen or reg.in_flight(prod.shard) != ans.rows:
         raise GateDecideError("stale_answer")
     out = prod.commit(program, leaves, state_digest=ans.digest, created_at=created_at, idreg=ans.idreg, free=ans.free,
                       adds=ans.adds)
     try:
-        reg.settle(k, ans.rows, ans.free)
+        reg.settle(prod.shard, ans.rows, ans.free)
     except idreg.IdRegistryError as error:
         raise GateDecideError("settle_pending") from error
     return out

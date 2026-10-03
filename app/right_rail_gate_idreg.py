@@ -4,7 +4,10 @@ One append-only chained log (store v2; a v1 store is refused): RESERVE gives a f
 SETTLE marks the shard's unfreed reservations as in its sealed sets, BOOT names the process generation.  An id is in
 flight while its holder has no later SETTLE.  The decide layer settles each sealed batch before its tokens leave
 (``decide.commit``); ``reserve`` settles it first if a crash came between, then reserves, in one transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
-carry this handle's nonce.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
+carry this handle's nonce.  One decider per shard: the handle that first writes for a shard (or reads its in-flight
+rows) holds the shard's lease, an exclusive lock on ``<path>-lease<shard>`` the OS drops when the handle closes or its
+process dies; any other handle is refused ``shard_busy``, so nothing reserves for the shard between a commit's stale
+check and its seal.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
 (row n and head, the checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard
 after it, else ``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).
 """
@@ -160,10 +163,23 @@ def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
 
 class IdRegistry:
     def __init__(self, path: Path, *, boot: bytes, timeout: float = 5.0) -> None:
-        self._db, self._boot = _open(path, timeout), boot.rjust(ID_LEN, b"\0")
+        self._db, self._boot, self._path, self._leases = _open(path, timeout), boot.rjust(ID_LEN, b"\0"), path, {}
 
     def close(self) -> None:
+        for lock in self._leases.values():
+            lock.close()
         self._db.close()
+
+    def _lease(self, shard: int) -> None:
+        """Hold ``shard``'s decider lease until ``close``, else ``shard_busy`` (another live handle holds it)."""
+        if shard not in self._leases:
+            lock = sqlite3.connect(f"{self._path}-lease{shard}", timeout=0, isolation_level=None)
+            try:
+                lock.execute("BEGIN EXCLUSIVE")
+            except sqlite3.Error as error:
+                lock.close()
+                raise IdRegistryError("shard_busy") from error
+            self._leases[shard] = lock
 
     def reserve(self, shard: int, ids: Sequence[int], *, sealed: tuple[int, bytes, Sequence[int]] | None
                 ) -> tuple[list[tuple[int, int, bool]], int, bytes]:
@@ -175,6 +191,7 @@ class IdRegistry:
         whose successor died before its seal) free all of them."""
         ids = _check(shard, ids)
         with _txn(self._db, self._boot):
+            self._lease(shard)
             if sealed and _rewound(self._db, shard, sealed[0], sealed[1]):
                 raise IdRegistryError("registry_rewound")
             pend, frees = _pending(self._db, shard), _check(shard, sealed[2] if sealed else ())
@@ -187,13 +204,15 @@ class IdRegistry:
             return owners, tail.n, tail.head
 
     def in_flight(self, shard: int) -> list[int]:
-        """The row numbers of the shard's in-flight reservations."""
+        """The row numbers of the shard's in-flight reservations, under its lease (a commit's check holds to its seal)."""
+        self._lease(shard)
         return [n for n, _ in _pending(self._db, shard)]
 
     def settle(self, shard: int, rows: list[int], free: Sequence[int]) -> None:
         """Settle the batch that reserved exactly ``rows`` (``decide.commit``, after the seal): ``settle_mismatch``,
         nothing written, unless they are the shard's in-flight rows."""
         with _txn(self._db, self._boot):
+            self._lease(shard)
             pend = _pending(self._db, shard)
             if [n for n, _ in pend] != rows:
                 raise IdRegistryError("settle_mismatch")
@@ -227,5 +246,6 @@ class IdRegistry:
                     if row and row[1] != shard:
                         raise IdRegistryError("genesis_double_acceptance")
                 if ids:
+                    self._lease(shard)
                     tail.add(_SETTLE, bytes(ID_LEN), shard)
             return tail.n, tail.head

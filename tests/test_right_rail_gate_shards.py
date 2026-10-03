@@ -184,7 +184,7 @@ class ShardTests(fx.Scratch):
                 prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
                 try:
                     b1, b2 = [g.decide_batch(c, prod, reg, 0, p) for p in ({1: [10]}, second)]
-                    commit = lambda b: decider.commit(prod, reg, 0, fx.PROGRAM, b[1], b[0], fx.NOW)
+                    commit = lambda b: decider.commit(prod, reg, fx.PROGRAM, b[1], b[0], fx.NOW)
                     if b2_first:
                         commit(b2)
                     with self.assertRaisesRegex(decider.GateDecideError, "stale_answer"):
@@ -196,6 +196,55 @@ class ShardTests(fx.Scratch):
                     reg.close()
                 self.assertEqual(c.send(1, {7: [10]}), {10: "ALLOW -"})
                 g.inv(self, c)
+
+    def test_a_second_decider_is_refused_inside_a_commit(self) -> None:
+        # A reserve between commit's stale check and its seal freed the answer's 10, which the seal then paid.
+        with self.cluster() as c:
+            prod, reg, other, got = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce), idreg.IdRegistry(c.reg, boot=c.nonce), []
+            commit = producer.ShardProducer.commit
+
+            def raced(*args, **kwargs):
+                try:
+                    other.reserve(0, [], sealed=None)
+                    got.append("reserved")
+                except idreg.IdRegistryError as error:
+                    got.append(str(error))
+                return commit(*args, **kwargs)
+            try:
+                ans, leaves, _ = g.decide_batch(c, prod, reg, 0, {1: [10]})
+                with mock.patch.object(producer.ShardProducer, "commit", raced), contextlib.suppress(decider.GateDecideError):
+                    decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+            finally:
+                for handle in (prod, reg, other):
+                    handle.close()
+            self.assertEqual(c.send(1, {7: [10]}), {10: "HOLD ALREADY_DECIDED"})
+            self.assertEqual(got, ["shard_busy"])
+            g.inv(self, c)
+
+    def test_an_open_row_is_never_settled_as_sealed(self) -> None:
+        # A seal that fails short of gate_verify_refused leaves an open row.  Settled as sealed by the next reserve, its
+        # void at reopen made every boot and reserve registry_rewound; freed instead, a reseal at reopen would pay twice.
+        for reseal in (False, True):
+            with self.subTest(reseal=reseal), self.cluster() as c:
+                prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
+                try:
+                    ans, leaves, _ = g.decide_batch(c, prod, reg, 0, T, BAD)
+                    with mock.patch.object(signer, "seal", side_effect=signer.GateSignerError("gate_verify_failed")), \
+                            self.assertRaises(signer.GateSignerError):
+                        decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+                    try:
+                        got = g.decide_batch(c, prod, reg, 0, NEXT) and "decided"
+                    except producer.GateProducerError as error:
+                        got = str(error)
+                finally:
+                    prod.close()
+                    reg.close()
+                if not reseal:
+                    with mock.patch.object(signer, "seal", side_effect=signer.GateSignerError("gate_verify_refused")), \
+                            self.assertRaisesRegex(producer.GateProducerError, "publish_refused"):
+                        c.producer(0)
+                self.finish(c, T, NEXT)
+                self.assertEqual(got, "unsealed_reservation")
 
     def test_voided_reservation_is_freed_on_retry(self) -> None:
         with self.cluster() as c:
@@ -324,7 +373,7 @@ class ShardTests(fx.Scratch):
         prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
         try:
             with self.assertRaisesRegex(decider.GateDecideError, code):
-                decider.decide(g.rules.EXE, c.dir / f"batch{k}.vectors", g._HEAD, g.ASOF, prod, reg, k, [i], [line])
+                decider.decide(g.rules.EXE, c.dir / f"batch{k}.vectors", g._HEAD, g.ASOF, prod, reg, [i], [line])
         finally:
             prod.close()
             reg.close()

@@ -77,7 +77,7 @@ class Cluster:
 def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], bad=()):
     """Decide one batch on shard ``k`` without committing it: (answer, leaves, id -> 'OUTCOME REASONS')."""
     c.lines.update({(k, n): ids for n, ids in payments.items()})
-    ans = decider.decide(rules.EXE, c.dir / f"batch{k}.vectors", _HEAD, ASOF, prod, reg, k, [i for v in payments.values() for i in v],
+    ans = decider.decide(rules.EXE, c.dir / f"batch{k}.vectors", _HEAD, ASOF, prod, reg, [i for v in payments.values() for i in v],
                          [f"{i}:{p} FFS_CLAIM {9001 if i in bad else 1001} 7001 7001 {20270301 + i % 14} 99213 1 {12500 + i}"
                           for p, v in payments.items() for i in v])
     status, pay = {}, {}
@@ -95,33 +95,37 @@ def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dic
     try:
         ans, leaves, status = decide_batch(c, prod, reg, k, payments, bad)
         if leaves:
-            decider.commit(prod, reg, k, fx.PROGRAM, leaves, ans, fx.NOW)
+            decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
         return status
     finally:
         prod.close()
         reg.close()
 
 
+def sealed_allows(c: Cluster, k: int) -> dict[bytes, list[tuple[int, int]]]:
+    """Checkpoint digest -> (payment number, line id) for every line of every ALLOW leaf of each sealed batch of shard k."""
+    db, found = sqlite3.connect(f"file:{c.store(k)}?mode=ro", uri=True), {}
+    try:
+        rows = db.execute("SELECT digest, seq_from, tokens FROM batches WHERE signature IS NOT NULL ORDER BY id").fetchall()
+    finally:
+        db.close()
+    for digest, first, data in rows:
+        i, found[digest] = 0, []
+        while data:
+            size = int.from_bytes(data[:4], "big")
+            token, data = data[4 : 4 + size], data[4 + size :]
+            p = next(p for (s, p) in c.lines if s == k and f"pay-{p:04d}".encode() in token[:200])
+            leaf = fx._leaf(p, first + i, "ALLOW", shard=k, member_key=fx.member(p, k))
+            if token.startswith(gate.encode_token_leaf(replace(leaf, issued_at=fx.NOW, expires_at=fx.NOW + producer.LIFETIME))):
+                found[digest] += [(p, line) for line in c.lines[(k, p)]]
+            i += 1
+    return found
+
+
 def allowed(c: Cluster) -> list[tuple[int, int, int]]:
     """(shard, payment number, line id) for every line of every ALLOW leaf in every sealed batch of every store."""
-    found = []
-    for k in filter(lambda k: c.store(k).exists(), range(c.shards)):  # a shard that never sent has no store
-        db = sqlite3.connect(f"file:{c.store(k)}?mode=ro", uri=True)
-        try:
-            rows = db.execute("SELECT seq_from, tokens FROM batches WHERE signature IS NOT NULL ORDER BY id").fetchall()
-        finally:
-            db.close()
-        for first, data in rows:
-            i = 0
-            while data:
-                size = int.from_bytes(data[:4], "big")
-                token, data = data[4 : 4 + size], data[4 + size :]
-                p = next(p for (s, p) in c.lines if s == k and f"pay-{p:04d}".encode() in token[:200])
-                leaf = fx._leaf(p, first + i, "ALLOW", shard=k, member_key=fx.member(p, k))
-                if token.startswith(gate.encode_token_leaf(replace(leaf, issued_at=fx.NOW, expires_at=fx.NOW + producer.LIFETIME))):
-                    found += [(k, p, line) for line in c.lines[(k, p)]]
-                i += 1
-    return found
+    return [(k, p, line) for k in range(c.shards) if c.store(k).exists()  # a shard that never sent has no store
+            for paid in sealed_allows(c, k).values() for p, line in paid]
 
 
 def owned(c: Cluster, t) -> dict[bytes, int]:
