@@ -85,22 +85,23 @@ class IdRegistry:
 
     def _sync(self) -> None:
         """Inside a transaction: refuse a registry behind the mark (the row the newest verified record names is
-        missing or has another head, or no record verifies for a non-empty registry) and a mark with an
-        unverifiable record before its last or an n that does not rise; catch the mark up to a registry ahead of
+        missing or has another head, or no record verifies for a non-empty registry) and a mark whose last two
+        records are both unverifiable or whose n does not rise; catch the mark up to a registry ahead of
         it, as after a crash between the commit and the mark."""
         n, head = self._last()
-        bodies = marks.read(self._mark, _MARK_DOMAIN, _MARK_BODY, 8)
-        if bodies is None:
-            raise IdRegistryError("mark_corrupt")
-        if bodies:
-            marked = int.from_bytes(bodies[-1][:8], "big")
+        try:
+            tail, end = marks.read(self._mark, _MARK_DOMAIN, _MARK_BODY, 8)
+        except marks.MarkCorrupt as error:
+            raise IdRegistryError("mark_corrupt") from error
+        if tail:
+            marked = int.from_bytes(tail[:8], "big")
             row = self._db.execute("SELECT head FROM ids WHERE n = ?", (marked,)).fetchone() if marked else (gate.ZERO_DIGEST,)
-            if not row or row[0] != bodies[-1][8:]:
+            if not row or row[0] != tail[8:]:
                 raise IdRegistryError("registry_rewound")
         elif n:
             raise IdRegistryError("registry_rewound")
-        if not bodies or bodies[-1] != n.to_bytes(8, "big") + head:
-            marks.append(self._mark, _MARK_DOMAIN, bodies, n.to_bytes(8, "big") + head)
+        if tail != n.to_bytes(8, "big") + head:
+            marks.append(self._mark, _MARK_DOMAIN, end, n.to_bytes(8, "big") + head)
 
     @contextlib.contextmanager
     def _lock(self):

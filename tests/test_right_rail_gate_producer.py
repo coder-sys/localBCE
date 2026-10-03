@@ -141,15 +141,46 @@ class ProducerTests(fx.Scratch):
                 self._open(tmp, custody).close()
                 self.assertEqual(mark.read_bytes(), whole)  # the torn bytes gone, the second batch marked again
 
-    def test_a_bad_mark_record_before_the_last_is_refused(self) -> None:
+    def test_both_of_the_last_two_mark_records_bad_or_not_rising_is_refused(self) -> None:
         with self.scratch() as tmp:
             custody = fx.custody(tmp)
             mark = self._two_batches(tmp, custody)[0]
             whole = bytearray(mark.read_bytes())
-            whole[20] ^= 1  # inside the first batch's record
+            half = len(whole) // 2
+            both_bad = bytearray(whole)
+            both_bad[20] ^= 1  # inside the first batch's record
+            both_bad[half + 20] ^= 1  # and the second's
+            for refused in (both_bad, whole[half:] + whole[:half]):  # the second is also bad; or the keys fall
+                mark.write_bytes(refused)
+                with self.assertRaisesRegex(producer.GateProducerError, "mark_corrupt"):
+                    self._open(tmp, custody)
+
+    def test_a_bad_mark_record_deeper_in_the_file_is_not_read(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            mark = self._two_batches(tmp, custody)[0]
+            p = self._open(tmp, custody)
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 4), state_digest=fx.STATE, created_at=fx.NOW + 2)
+            p.close()
+            whole = bytearray(mark.read_bytes())
+            whole[20] ^= 1  # the first of three records
             mark.write_bytes(whole)
-            with self.assertRaisesRegex(producer.GateProducerError, "mark_corrupt"):
-                self._open(tmp, custody)
+            self._open(tmp, custody).close()
+            self.assertEqual(mark.read_bytes(), whole)  # opens fine, and nothing is rewritten
+
+    def test_a_store_with_sealed_batches_and_no_mark_is_refused(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            mark = self._two_batches(tmp, custody)[0]
+            moved = mark.read_bytes()
+            for left in (None, b""):  # the mark moved away, or emptied
+                mark.unlink(missing_ok=True)
+                if left is not None:
+                    mark.write_bytes(left)
+                with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
+                    self._open(tmp, custody)
+            mark.write_bytes(moved)
+            self._open(tmp, custody).close()
 
     def test_epoch_change_restarts_seq_and_links_by_event_head(self) -> None:
         with self.scratch() as tmp:

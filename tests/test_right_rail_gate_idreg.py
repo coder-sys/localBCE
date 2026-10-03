@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
@@ -301,7 +302,7 @@ class IdRegistryTests(unittest.TestCase):
             self.open()
             self.assertEqual(mark.read_bytes(), whole)  # the torn bytes gone, row 2 marked again
 
-    def test_a_bad_record_before_the_last_or_a_falling_n_is_refused(self) -> None:
+    def test_both_of_the_last_two_records_bad_or_a_falling_n_is_refused(self) -> None:
         reg = self.open()
         reg.reserve(0, [1])
         reg.reserve(0, [2])
@@ -309,11 +310,52 @@ class IdRegistryTests(unittest.TestCase):
         mark = Path(f"{self.path}.mark")
         whole = mark.read_bytes()
         zero, one, two = (whole[at:at + _RECORD] for at in range(0, len(whole), _RECORD))
-        bad = one[:20] + bytes([one[20] ^ 1]) + one[21:]
-        for records in (zero + bad + two, zero + two + one + two):
+        bad = lambda record: record[:20] + bytes([record[20] ^ 1]) + record[21:]
+        for records in (zero + bad(one) + bad(two), zero + two + one):  # the last also bad; or the last two fall
             mark.write_bytes(records)
             with self.assertRaisesRegex(idreg.IdRegistryError, "mark_corrupt"):
                 idreg.IdRegistry(self.path)
+
+    def test_a_bad_record_deeper_in_the_file_is_not_read(self) -> None:
+        reg = self.open()
+        for id_ in (1, 2, 3):
+            reg.reserve(0, [id_])
+        reg.close()
+        mark = Path(f"{self.path}.mark")
+        whole = bytearray(mark.read_bytes())
+        whole[20] ^= 1  # the first of five records
+        mark.write_bytes(whole)
+        self.open().reserve(0, [4])  # opens and reserves
+        self.assertEqual(mark.read_bytes()[:len(whole)], whole)  # the records before the tail are never rewritten
+
+    def test_a_mark_read_costs_the_same_however_long_the_file(self) -> None:
+        domain, got = b"d|", []
+
+        class Counting:  # records each read's size over a real handle
+            def __init__(self, handle) -> None:
+                self.handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc) -> None:
+                self.handle.close()
+
+            def seek(self, *args):
+                return self.handle.seek(*args)
+
+            def read(self, size):
+                got.append(size)
+                return self.handle.read(size)
+
+        for count in (3, 10_000):
+            mark = self.path.with_name(f"long{count}.mark")
+            mark.write_bytes(b"".join(marks._record(domain, i.to_bytes(8, "big") + bytes(64)) for i in range(count)))
+            got.append(count)
+            with mock.patch.object(marks, "open", lambda path, mode: Counting(open(path, mode)), create=True):
+                tail, end = marks.read(mark, domain, idreg._MARK_BODY, 8)
+            self.assertEqual((int.from_bytes(tail[:8], "big"), end), (count - 1, count * _RECORD))
+        self.assertEqual(got, [3, _RECORD, _RECORD, 10_000, _RECORD, _RECORD])  # two records read, whatever the length
 
     def test_a_broken_database_or_rollback_is_a_typed_refusal(self) -> None:
         reg = self.open()
