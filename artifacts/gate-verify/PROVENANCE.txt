@@ -12,8 +12,8 @@ and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FR
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,359,680 bytes
-- SHA-256: 724de1bd9a1c24b8f0c34ba2ce0cfa000df7910410d49c1f003b91d02b90e66c
+- Size: 4,365,824 bytes
+- SHA-256: e3fc5fee34fb6356a1cddd1e3aed27b59b90f1b9bc8b2c9ab3c78a3fca6295c6
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
@@ -39,7 +39,15 @@ differential in the commit body). Two fresh `git archive 96d744d lean` stage bui
 gs3r-stagea2, gs3r-stageb; `lake build gate_verify gate_rules gate_axioms`, exit 0) and the in-tree build (gs3-b) are byte-identical.
 Trunk 70f9606 pins worker 58CDA012 (artifacts/engine-evaluator) with this gate_verify 724de1bd (cold build and tcb_pin on the merged tree).
 
+Re-pin (2026-10-03, branch multi-shard-runtime, lean tree fa60cf7e from commit 2828a24): `gate_verify` moved from 724de1bd... to the SHA-256 above
+(CHECKPOINT/v2: decodeCheckpoint2/decodeAnyCheckpoint, storeCheckpointAny, publishOkAny/acceptsAny; v1 meanings unchanged and still pinned).
+Two fresh `git archive 2828a24 lean` stage builds (C:\Users\neers\rrb\le\stage-ms1c-a and -b; guard suffixes ms1c-71a, ms1c-71b; `lake build gate_verify
+blind_financial_worker gate_rules`, 78 jobs, exit 0) and the in-tree build (ms1c-70, full `lake build`, 108 jobs, exit 0) are byte-identical for gate_verify.
+The pinned worker (`8BB1C646...`) is byte-identical in all three: it imports no BlindLedger.Gate module.
+
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 724de1bd9a1c24b8f0c34ba2ce0cfa000df7910410d49c1f003b91d02b90e66c (4,359,680 bytes; before CHECKPOINT/v2, a 64-byte registry head after createdAt (multi-shard-runtime-v1 section A): the exe now
+  decodes, stores, forks, publishes and releases both versions; recoverable at trunk 70f9606; replaced by the SHA-256 above).
 - gate_verify SHA-256 316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea (4,311,552 bytes; before the gate's SHA3 call sites moved to the proved-equal fast sponge; replaced by the SHA-256 above; recoverable at 1e061a5).
 - gate_verify SHA-256 47ba66f6b6fc30f7769d5c48a2e42a83dd9d9e91cf07532a77e7e18a1a63fc8c (4,311,040 bytes; before the root-key/usable-key split of the
   M4 review fix and the merge with lean-public's Sha3 lemmas; recoverable at 97d8e7b; replaced by the SHA-256 above).

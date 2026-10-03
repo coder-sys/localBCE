@@ -33,6 +33,7 @@ DECIDE_REQUEST: Final = b"RR/GATE/DECIDE-REQUEST/v1\x00"
 DECIDE_RESPONSE: Final = b"RR/GATE/DECIDE-RESPONSE/v1\x00"
 TOKEN: Final = b"RR/GATE/TOKEN/v1\x00"
 CHECKPOINT: Final = b"RR/GATE/CHECKPOINT/v1\x00"
+CHECKPOINT_V2: Final = b"RR/GATE/CHECKPOINT/v2\x00"
 KEY_CERT: Final = b"RR/GATE/KEY-CERT/v1\x00"
 DECISION_ID: Final = b"RR/GATE/DECISION-ID/v1\x00"
 INPUT: Final = b"RR/GATE/INPUT/v1\x00"
@@ -275,6 +276,7 @@ class Checkpoint:
     state_digest: bytes
     count: int
     created_at: int
+    registry_head: bytes | None = None  # set: CHECKPOINT/v2, which signs the tenant id-registry head too
 
 
 _CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "evidence_root", "state_digest")
@@ -282,7 +284,7 @@ _CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "ev
 
 def encode_checkpoint_header(cp: Checkpoint) -> bytes:
     """The exact bytes the epoch's ML-DSA-87 key signs."""
-    w = _Writer(CHECKPOINT)
+    w = _Writer(CHECKPOINT if cp.registry_head is None else CHECKPOINT_V2)
     w.int(SIG_ML_DSA_87_BATCH, 1, "sig_alg")
     w.ident(cp.tenant_id, "tenant_id")
     w.ident(cp.program_id, "program_id")
@@ -294,6 +296,8 @@ def encode_checkpoint_header(cp: Checkpoint) -> bytes:
         w.digest(getattr(cp, name), name)
     w.int(cp.count, 2, "count", low=1, high=MAX_BATCH)
     w.int(cp.created_at, 8, "created_at")
+    if cp.registry_head is not None:
+        w.digest(cp.registry_head, "registry_head")
     if cp.seq_to - cp.seq_from + 1 != cp.count:
         _fail("seq_range")
     if (cp.seq_from == 0) != (cp.prev_checkpoint_digest == ZERO_DIGEST):
@@ -430,6 +434,7 @@ def build_batch(
     evidence_root: bytes,
     state_digest: bytes,
     created_at: int,
+    registry_head: bytes | None = None,
 ) -> tuple[Checkpoint, list[Token]]:
     """One checkpoint for a whole batch; each payment's token is its leaf plus a Merkle path to token_root.
     No key and no judgement: the leaves are one shard writer's consecutive commits, and Lean ``publishOk``
@@ -438,7 +443,7 @@ def build_batch(
     root, paths = merkle_tree(MERKLE_NODE, [encode_token_leaf(leaf) for leaf in leaves])
     checkpoint = Checkpoint(
         first.tenant_id, first.program_id, first.shard_id, first.seq, first.seq + len(leaves) - 1, first.epoch,
-        prev_checkpoint_digest, event_head, root, evidence_root, state_digest, len(leaves), created_at,
+        prev_checkpoint_digest, event_head, root, evidence_root, state_digest, len(leaves), created_at, registry_head,
     )
     digest = checkpoint_digest(checkpoint)
     return checkpoint, [Token(leaf, tuple(path), digest) for leaf, path in zip(leaves, paths)]
