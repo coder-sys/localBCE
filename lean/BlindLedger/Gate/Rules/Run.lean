@@ -315,10 +315,9 @@ def runText (text : String) : Array String × Bool := Id.run do
   let mut st : St := {}
   let mut out : Array String := #[]
   let mut number := 0
-  for raw in text.splitOn "
-" do
+  for raw in text.splitOn "\n" do
     number := number + 1
-    let fields := ((String.ofList (raw.toList.filter (· ≠ ''))).splitOn " ").filter (· ≠ "")
+    let fields := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
     if fields.isEmpty || fields.head!.startsWith "#" then continue
     match step st fields with
     | none =>
@@ -359,8 +358,7 @@ partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit
   let f ← readN read n
   if f.size < n then return 65
   let some text := String.fromUTF8? f | return 65
-  let resp := (String.join ((runText text).1.toList.map (· ++ "
-"))).toUTF8
+  let resp := (String.join ((runText text).1.toList.map (· ++ "\n"))).toUTF8
   if resp.size > maxFrame then return 65
   write (ByteArray.mk #[(resp.size >>> 24).toUInt8, (resp.size >>> 16).toUInt8, (resp.size >>> 8).toUInt8, resp.size.toUInt8] ++ resp)
   serve read write

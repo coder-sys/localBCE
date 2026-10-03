@@ -61,6 +61,7 @@ class RulesWorker:
         worker, workspace, self._worker, self._workspace = self._worker, self._workspace, None, None
         if worker is not None:
             worker.close()
+        if workspace is not None:
             shutil.rmtree(workspace, ignore_errors=True)
 
     def run(self, data: bytes) -> list[str]:
