@@ -267,12 +267,6 @@ class IdRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             idreg.IdRegistry(Path(":memory:"))  # journal_mode stays 'memory'
 
-    def test_refuse_multi_shard(self) -> None:
-        with self.assertRaisesRegex(idreg.IdRegistryError, "multi_shard_without_registry"):
-            idreg.refuse_multi_shard(8)
-        idreg.refuse_multi_shard(1)
-        idreg.refuse_multi_shard(8, self.open())
-
 
 if __name__ == "__main__":
     unittest.main()

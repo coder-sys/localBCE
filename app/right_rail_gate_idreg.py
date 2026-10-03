@@ -5,8 +5,8 @@ registry gives each id to the first shard that reserves it and returns the ids a
 (``foreign``), which the decide layer passes to Lean ``decideBatchIn`` so they get ``ALREADY_DECIDED``.
 The reply is sent only after the commit is durable (SQLite WAL, synchronous FULL) and its (row count, head) is
 in an fsynced mark file beside the database, so a restored older database or a rewritten chain is refused
-(``registry_rewound``).  Append-only and hash-chained: ``verify`` replays the chain.  No multi-shard decide
-runtime exists yet; until the decide layer calls ``reserve``, ``refuse_multi_shard`` keeps a tenant at one shard.
+(``registry_rewound``).  Append-only and hash-chained: ``verify`` replays the chain.  No decide layer calls
+``reserve`` yet; runtime multi-shard safety is the open #3 design item.
 """
 
 from __future__ import annotations
@@ -33,12 +33,6 @@ CREATE TRIGGER IF NOT EXISTS ids_no_delete BEFORE DELETE ON ids BEGIN SELECT RAI
 
 class IdRegistryError(RuntimeError):
     """The registry is unavailable, rewound or inconsistent, or a start state is refused.  Callers decide nothing."""
-
-
-def refuse_multi_shard(shard_count: int, registry: "IdRegistry | None" = None) -> None:
-    """Interim rule: a tenant with more than one shard and no registry could accept one id in two shards."""
-    if shard_count > 1 and registry is None:
-        raise IdRegistryError("multi_shard_without_registry")
 
 
 def _head(prev: bytes, key: bytes, shard: int) -> bytes:
