@@ -3,26 +3,30 @@
 One line id is accepted in one shard only.  Before deciding, a shard reserves every id of its batch; the
 registry gives each id to the first shard that reserves it and returns the ids another shard owns
 (``foreign``), which the decide layer passes to Lean ``decideBatchIn`` so they get ``ALREADY_DECIDED``.
-The reply is sent only after the commit is durable (SQLite WAL, synchronous FULL) and its (row count, head) is
-in an fsynced mark file beside the database, so a restored older database or a rewritten chain is refused
-(``registry_rewound``).  Append-only and hash-chained: ``verify`` replays the chain.  No decide layer calls
-``reserve`` yet; runtime multi-shard safety is the open #3 design item.
+The reply is sent only after the commit is durable (SQLite WAL, synchronous FULL) and its (row count n, head)
+is in a checked, fsynced record of the mark file beside the database.  Open and ``reserve`` refuse
+(``registry_rewound``) a database whose row n is missing or has another head: a restored older copy, or lost
+newest rows.  They do not see an earlier row edited while row n's stored head is kept (only ``verify``, which
+replays the whole chain, does; ``reserve`` does not call it), nor a whole directory (database, WAL and mark)
+restored together.  A database copied without its mark stays refused: there is no re-adopt path, a person acts.
+No decide layer calls ``reserve`` yet; runtime multi-shard safety is the open #3 design item.
 """
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import contextlib
+import hashlib
 import os
 from pathlib import Path
 import sqlite3
-import struct
 from typing import Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
 
 ID_LEN: Final = 129  # the Line.fields id field
 _DOMAIN: Final = b"RR/GATE/ID-REG/v1\x00"
-_MARK: Final = struct.Struct(">Q64s")
+_MARK_DOMAIN: Final = b"RR/GATE/ID-MARK/v1\x00"
+_MARK_SIZE: Final = 104  # a mark record: n (8 bytes, big-endian), head (64), SHA3-256(_MARK_DOMAIN, n, head) (32)
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS ids(
   n INTEGER PRIMARY KEY, id BLOB NOT NULL UNIQUE, shard INTEGER NOT NULL, head BLOB NOT NULL);
@@ -53,6 +57,31 @@ def _key(id_: int) -> bytes:
     return id_.to_bytes(ID_LEN, "big")
 
 
+def _record(n: int, head: bytes) -> bytes:
+    body = n.to_bytes(8, "big") + head
+    return body + hashlib.sha3_256(_MARK_DOMAIN + body).digest()
+
+
+def _verified(record: bytes) -> bool:
+    return record == _record(int.from_bytes(record[:8], "big"), record[8:72])  # a short record never matches
+
+
+def _replace(path: Path, data: bytes) -> None:
+    """Write ``data`` over ``path`` all or nothing: a temporary file, fsynced, renamed over it."""
+    temporary = path.with_name(f"{path.name}.tmp")
+    with open(temporary, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    with contextlib.suppress(OSError):  # best effort: Windows cannot open a directory to sync it
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
 class IdRegistry:
     def __init__(self, path: Path, *, timeout: float = 5.0) -> None:
         self._mark = Path(f"{path}.mark")
@@ -81,45 +110,48 @@ class IdRegistry:
         return self._db.execute("SELECT n, head FROM ids ORDER BY n DESC LIMIT 1").fetchone() or (0, gate.ZERO_DIGEST)
 
     def _sync(self) -> None:
-        """Inside a transaction: refuse a registry behind the mark (the row the mark names is missing or has another
-        head, or the mark is missing for a non-empty registry); catch the mark up to a registry ahead of it, as
-        after a crash between the commit and the mark."""
+        """Inside a transaction: refuse a registry behind the mark (the row the newest verified record names is
+        missing or has another head, or no record verifies for a non-empty registry) and a mark with an
+        unverifiable record before its last or an n that does not rise; catch the mark up to a registry ahead of
+        it, as after a crash between the commit and the mark."""
         n, head = self._last()
-        size = self._mark.stat().st_size // _MARK.size * _MARK.size if self._mark.exists() else 0  # a torn tail was never fsynced
-        tail = None
-        if size:
-            with open(self._mark, "rb") as mark:
-                mark.seek(size - _MARK.size)
-                tail = _MARK.unpack(mark.read(_MARK.size))
-            row = self._db.execute("SELECT head FROM ids WHERE n = ?", (tail[0],)).fetchone() if tail[0] else (gate.ZERO_DIGEST,)
-            if not row or row[0] != tail[1]:
+        data = self._mark.read_bytes() if self._mark.exists() else b""
+        records = [data[at:at + _MARK_SIZE] for at in range(0, len(data), _MARK_SIZE)]
+        if records and not _verified(records[-1]):  # a torn last write: never fsynced, so never replied to
+            records.pop()
+        if not all(map(_verified, records)) or any(a[:8] >= b[:8] for a, b in zip(records, records[1:])):
+            raise IdRegistryError("mark_corrupt")
+        if records:
+            marked = int.from_bytes(records[-1][:8], "big")
+            row = self._db.execute("SELECT head FROM ids WHERE n = ?", (marked,)).fetchone() if marked else (gate.ZERO_DIGEST,)
+            if not row or row[0] != records[-1][8:72]:
                 raise IdRegistryError("registry_rewound")
         elif n:
             raise IdRegistryError("registry_rewound")
-        if not tail or tail[0] != n:
-            self._mark.touch()
-            with open(self._mark, "r+b") as mark:
-                mark.truncate(size)
-                mark.seek(size)
-                mark.write(_MARK.pack(n, head))
+        if len(data) != len(records) * _MARK_SIZE:
+            _replace(self._mark, data[:len(records) * _MARK_SIZE])
+        if not records or records[-1] != _record(n, head):
+            with open(self._mark, "ab") as mark:
+                mark.write(_record(n, head))
                 mark.flush()
                 os.fsync(mark.fileno())
 
-    @contextmanager
+    @contextlib.contextmanager
     def _lock(self):
         try:
             self._db.execute("BEGIN IMMEDIATE")
-            self._sync()
-            yield
-            self._db.execute("COMMIT")
-        except BaseException as error:
-            if self._db.in_transaction:
-                self._db.execute("ROLLBACK")
-            if isinstance(error, (sqlite3.Error, OSError)):
-                raise IdRegistryError("registry_unavailable") from None
-            raise
+            try:
+                self._sync()
+                yield
+                self._db.execute("COMMIT")
+            except BaseException:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                raise
+        except (sqlite3.Error, OSError):  # a failed ROLLBACK included
+            raise IdRegistryError("registry_unavailable") from None
 
-    @contextmanager
+    @contextlib.contextmanager
     def _txn(self):
         """A write transaction, then a second lock that records the committed state in the mark before any reply."""
         with self._lock():
@@ -160,8 +192,11 @@ class IdRegistry:
     def verify(self) -> bytes:
         """Replay the chain; return the head (the zero digest when empty) or raise on any broken link."""
         head = gate.ZERO_DIGEST
-        for key, shard, stored in self._db.execute("SELECT id, shard, head FROM ids ORDER BY n"):
-            head = _head(head, key, shard)
-            if head != stored:
-                raise IdRegistryError("chain_broken")
+        try:
+            for key, shard, stored in self._db.execute("SELECT id, shard, head FROM ids ORDER BY n"):
+                head = _head(head, key, shard)
+                if head != stored:
+                    raise IdRegistryError("chain_broken")
+        except sqlite3.Error:
+            raise IdRegistryError("registry_unavailable") from None
         return head

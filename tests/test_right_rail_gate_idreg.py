@@ -62,6 +62,15 @@ class _Dying:
         return getattr(self._real, name)
 
 
+class _NoRollback(_Dying):
+    """COMMIT fails, then ROLLBACK fails too."""
+
+    def execute(self, sql: str, *args):
+        if sql == "ROLLBACK":
+            raise sqlite3.OperationalError("injected failure at ROLLBACK")
+        return super().execute(sql, *args)
+
+
 class IdRegistryTests(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -256,9 +265,66 @@ class IdRegistryTests(unittest.TestCase):
         reg = self.open()
         reg.reserve(0, [1])
         mark = Path(f"{self.path}.mark")
-        mark.write_bytes(mark.read_bytes()[: idreg._MARK.size])  # only the first (empty-registry) record survived
+        mark.write_bytes(mark.read_bytes()[: idreg._MARK_SIZE])  # only the first (empty-registry) record survived
         reg.reserve(0, [2])
-        self.assertEqual(mark.read_bytes()[-idreg._MARK.size:][:8], (2).to_bytes(8, "big"))  # caught up to 1, then marked 2
+        self.assertEqual(mark.read_bytes()[-idreg._MARK_SIZE:][:8], (2).to_bytes(8, "big"))  # caught up to 1, then marked 2
+
+    def test_a_zero_filled_mark_tail_does_not_hide_a_restored_older_database(self) -> None:
+        reg = self.open()
+        reg.reserve(0, [1, 2])
+        reg.close()
+        old = self.path.with_name("old.sqlite3")
+        shutil.copyfile(self.path, old)
+        reg = idreg.IdRegistry(self.path)
+        reg.reserve(1, [3, 4])
+        reg.close()
+        mark = Path(f"{self.path}.mark")
+        marked = mark.read_bytes()
+        for zeros in (72, 104):  # power loss can leave the file longer with its new bytes zero
+            shutil.copyfile(old, self.path)
+            mark.write_bytes(marked + bytes(zeros))
+            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                idreg.IdRegistry(self.path)
+            self.assertEqual(mark.read_bytes(), marked + bytes(zeros))  # refused, not re-marked
+
+    def test_a_torn_last_mark_record_is_dropped_and_the_mark_caught_up(self) -> None:
+        reg = self.open()
+        reg.reserve(0, [1])
+        reg.reserve(0, [2])
+        mark = Path(f"{self.path}.mark")
+        whole = mark.read_bytes()
+        good, last = whole[:-idreg._MARK_SIZE], whole[-idreg._MARK_SIZE:]
+        for torn in (last[:50], last[:-40] + bytes(40)):  # cut short, or its second page never written
+            mark.write_bytes(good + torn)
+            self.open()
+            self.assertEqual(mark.read_bytes(), whole)  # the torn bytes gone, row 2 marked again
+
+    def test_a_bad_record_before_the_last_or_a_falling_n_is_refused(self) -> None:
+        reg = self.open()
+        reg.reserve(0, [1])
+        reg.reserve(0, [2])
+        reg.close()
+        mark = Path(f"{self.path}.mark")
+        size, whole = idreg._MARK_SIZE, mark.read_bytes()
+        zero, one, two = (whole[at:at + size] for at in range(0, len(whole), size))
+        bad = one[:20] + bytes([one[20] ^ 1]) + one[21:]
+        for records in (zero + bad + two, zero + two + one + two):
+            mark.write_bytes(records)
+            with self.assertRaisesRegex(idreg.IdRegistryError, "mark_corrupt"):
+                idreg.IdRegistry(self.path)
+
+    def test_a_broken_database_or_rollback_is_a_typed_refusal(self) -> None:
+        reg = self.open()
+        reg.reserve(0, [1])
+        live = reg._db
+        reg._db = _NoRollback(live, die=False)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+            reg.reserve(0, [2])
+        live.execute("ROLLBACK")
+        reg._db = live
+        self._edit("DROP TABLE ids")
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+            reg.verify()
 
     def test_durability_pragmas_are_set_and_a_rollback_journal_is_refused(self) -> None:
         reg = self.open()
