@@ -2312,6 +2312,15 @@ def _verify_population_history(
         source_completed = False
         validated = False
         published = False
+
+        def payload_binds(payload: dict[str, object], tag: str, *fields: str) -> None:
+            if set(payload) != {"population_id", *fields} | set(manifest_fields):
+                _fail(f"history:population-{tag}-payload")
+            if any(payload.get(key) != value for key, value in manifest_fields.items()):
+                _fail(f"history:population-{tag}-manifest")
+            if payload["population_id"] != population_id:
+                _fail(f"history:population-{tag}-population")
+
         for event in by_population[population_id]:
             event_sequence = _integer(
                 event["event_sequence"],
@@ -2347,12 +2356,7 @@ def _verify_population_history(
                     _fail("history:population-open-duplicate")
                 if imported or source_completed or validated or published:
                     _fail("history:population-open-order")
-                if set(payload) != {"population_id", "staging_digest"} | set(manifest_fields):
-                    _fail("history:population-open-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-open-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-open-population")
+                payload_binds(payload, "open", "staging_digest")
                 if before != 0 or after != 0:
                     _fail("history:population-open-revision")
                 expected_staging_digest = _digest(
@@ -2381,13 +2385,7 @@ def _verify_population_history(
             if kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _fail("history:population-stage-order")
-                stage_fields = {"population_id", "imported_count", "chunk_count"} | set(manifest_fields)
-                if set(payload) != stage_fields:
-                    _fail("history:population-stage-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-stage-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-stage-population")
+                payload_binds(payload, "stage", "imported_count", "chunk_count")
                 count = _integer(payload["imported_count"], "history:population-stage-imported", maximum=MAX_ROWS)
                 chunk_count = _integer(payload["chunk_count"], "history:population-stage-chunk", minimum=1, maximum=MAX_ROWS)
                 if before != imported or after != count or count != imported + chunk_count:
@@ -2402,13 +2400,7 @@ def _verify_population_history(
                     _fail("history:population-completion-duplicate")
                 if validated or published:
                     _fail("history:population-completion-order")
-                completion_fields = {"population_id", "imported_count", "expected_count"} | set(manifest_fields)
-                if set(payload) != completion_fields:
-                    _fail("history:population-completion-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-completion-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-completion-population")
+                payload_binds(payload, "completion", "imported_count", "expected_count")
                 completed_imported = _integer(payload["imported_count"], "history:population-completion-imported", maximum=MAX_ROWS)
                 completed_expected = _integer(payload["expected_count"], "history:population-completion-expected", minimum=1, maximum=MAX_ROWS)
                 if before != 0 or after != completed_imported:
@@ -2423,13 +2415,7 @@ def _verify_population_history(
                     _fail("history:population-completion-order")
                 if validated or published:
                     _fail("history:population-validation-order")
-                validation_fields = {"population_id", "validated_count", "validation_digest"} | set(manifest_fields)
-                if set(payload) != validation_fields:
-                    _fail("history:population-validation-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-validation-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-validation-population")
+                payload_binds(payload, "validation", "validated_count", "validation_digest")
                 validated_count = _integer(payload["validated_count"], "history:population-validation-count", minimum=1, maximum=MAX_ROWS)
                 validation_digest = _hex_digest(payload["validation_digest"], "history:population-validation-digest")
                 if before != 0 or after != validated_count:
@@ -2446,13 +2432,7 @@ def _verify_population_history(
                     _fail("history:population-validation-order")
                 if published:
                     _fail("history:population-publication-duplicate")
-                publication_fields = {"population_id", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest"} | set(manifest_fields)
-                if set(payload) != publication_fields:
-                    _fail("history:population-publication-payload")
-                if any(payload.get(key) != value for key, value in manifest_fields.items()):
-                    _fail("history:population-publication-manifest")
-                if payload["population_id"] != population_id:
-                    _fail("history:population-publication-population")
+                payload_binds(payload, "publication", "item_count", "pack_id", "pack_version", "evaluation_count", "evaluation_binding_digest")
                 item_count = _integer(payload["item_count"], "history:population-publication-count", minimum=1, maximum=MAX_ROWS)
                 pack_id = _id(payload["pack_id"], "history:population-publication-pack")
                 pack_version = _integer(payload["pack_version"], "history:population-publication-version", minimum=1, maximum=MAX_ROWS)
