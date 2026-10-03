@@ -9,9 +9,12 @@ import unittest
 from unittest import mock
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_mark as marks
 from app import right_rail_gate_producer as producer
 from app import right_rail_gate_signer as signer
 from tests import test_right_rail_gate_formats as fx
+
+_RECORD = 80 + marks.CHECK  # one producer mark record
 
 
 class ProducerTests(fx.Scratch):
@@ -146,11 +149,10 @@ class ProducerTests(fx.Scratch):
             custody = fx.custody(tmp)
             mark = self._two_batches(tmp, custody)[0]
             whole = bytearray(mark.read_bytes())
-            half = len(whole) // 2
             both_bad = bytearray(whole)
-            both_bad[20] ^= 1  # inside the first batch's record
-            both_bad[half + 20] ^= 1  # and the second's
-            for refused in (both_bad, whole[half:] + whole[:half]):  # the second is also bad; or the keys fall
+            both_bad[-_RECORD + 20] ^= 1  # inside the last record
+            both_bad[-2 * _RECORD + 20] ^= 1  # and the one before
+            for refused in (both_bad, whole[:-2 * _RECORD] + whole[-_RECORD:] + whole[-2 * _RECORD:-_RECORD]):  # the second is also bad; or the keys fall
                 mark.write_bytes(refused)
                 with self.assertRaisesRegex(producer.GateProducerError, "mark_corrupt"):
                     self._open(tmp, custody)
@@ -163,10 +165,24 @@ class ProducerTests(fx.Scratch):
             p.commit(fx.PROGRAM, fx.batch_leaves(0, 2, 4), state_digest=fx.STATE, created_at=fx.NOW + 2)
             p.close()
             whole = bytearray(mark.read_bytes())
-            whole[20] ^= 1  # the first of three records
+            whole[20] ^= 1
             mark.write_bytes(whole)
             self._open(tmp, custody).close()
             self.assertEqual(mark.read_bytes(), whole)  # opens fine, and nothing is rewritten
+
+    def test_a_new_store_marks_position_zero_and_a_crash_before_the_first_mark_is_caught_up(self) -> None:
+        with self.scratch() as tmp:
+            custody = fx.custody(tmp)
+            p = self._open(tmp, custody)
+            mark = Path(tmp) / "shard.mark"
+            self.assertEqual(len(mark.read_bytes()), _RECORD)  # position zero, before any seal
+            p.commit(fx.PROGRAM, fx.batch_leaves(0, 1), state_digest=fx.STATE, created_at=fx.NOW)
+            p.close()
+            whole = mark.read_bytes()
+            self.assertEqual(len(whole), 2 * _RECORD)
+            mark.write_bytes(whole[:_RECORD])  # the crash between the first seal and its mark
+            self._open(tmp, custody).close()
+            self.assertEqual(mark.read_bytes(), whole)
 
     def test_a_store_with_sealed_batches_and_no_mark_is_refused(self) -> None:
         with self.scratch() as tmp:

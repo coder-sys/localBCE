@@ -21,7 +21,8 @@ from app import right_rail_gate_mark as marks
 from app import right_rail_gate_signer as signer
 
 LIFETIME: Final = 7 * 86_400  # maxTokenLifetime; the decision's age stays the payer's check 5
-_MARK_DOMAIN: Final = b"RR/GATE/PRODUCER-MARK/v1\x00"  # bodies: epoch, seq_to (8 bytes each, big-endian), digest
+_MARK_DOMAIN: Final = b"RR/GATE/PRODUCER-MARK/v1\x00"  # bodies: epoch, seq_to + 1 (8 bytes each, big-endian), digest
+_ZERO: Final = bytes(80)  # position zero, a new store: its key sorts below any batch's (seq_to + 1 >= 1)
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS batches(
   id INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, seq_from INTEGER NOT NULL, seq_to INTEGER NOT NULL,
@@ -70,18 +71,18 @@ class ShardProducer:
     def _sealed(self):
         return self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE signature IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
 
-    def _check_mark(self, last, *, first: bool = False) -> None:
+    def _check_mark(self, last) -> None:
         """Refuse a corrupt mark, a missing one for a store with sealed batches, or a store behind the mark (a lower
-        (epoch, seq), or the same with another digest); catch the mark up to a store one batch ahead, as after a crash
-        between the seal and the mark.  ``first``: the store's first batch was just sealed, so no mark is expected yet."""
+        (epoch, seq), or the same with another digest); write the position-zero record for a new store, and catch the
+        mark up to a store one batch ahead, as after a crash between the seal and the mark."""
         try:
             tail, end = marks.read(self._mark, _MARK_DOMAIN, 80, 16)
         except marks.MarkCorrupt as error:
             raise GateProducerError("mark_corrupt") from error
-        mine = last and last[1].to_bytes(8, "big") + last[2].to_bytes(8, "big") + last[3]
-        if (tail is None and mine and not first) or (tail and (not mine or mine[:16] < tail[:16] or (mine[:16] == tail[:16] and mine != tail))):
+        mine = last[1].to_bytes(8, "big") + (last[2] + 1).to_bytes(8, "big") + last[3] if last else _ZERO
+        if (tail is None and last) or (tail and (mine[:16] < tail[:16] or (mine[:16] == tail[:16] and mine != tail))):
             raise GateProducerError("store_rewound")
-        if mine and mine != tail:
+        if mine != tail:
             marks.append(self._mark, _MARK_DOMAIN, end, mine)
 
     def _seal(self, row, last) -> None:
@@ -100,7 +101,7 @@ class ShardProducer:
                 raise GateProducerError("publish_refused") from error
             raise
         self._db.execute("UPDATE batches SET signature=? WHERE id=?", (signature, row[0]))
-        self._check_mark(self._sealed(), first=last is None)
+        self._check_mark(self._sealed())
 
     def commit(self, program: str, leaves: Sequence[gate.TokenLeaf], *, state_digest: bytes, created_at: int):
         """One batch of decided leaves (one program) -> (checkpoint, signed checkpoint, tokens)."""
