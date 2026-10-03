@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 36_198
+PRODUCT_CODE_LINES = 36_077
 # Test code and the Python gate tools under lean/; Lean files are not counted.
 EVIDENCE_CODE_LINES = 32_569
 MARKDOWN_FILES = 18
@@ -22,10 +22,10 @@ MARKDOWN_BYTES = 105_692
 CONFORMANCE_MARKDOWN_BYTES = 31_137
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 7_262,
-    "app/right_rail_financial_owner_independent.py": 4_638,
-    "app/right_rail_financial_semantic_adapter.py": 2_286,
-    "app/right_rail_financial_mirror.py": 1_374,
+    "app/right_rail_financial_owner.py": 7_181,
+    "app/right_rail_financial_owner_independent.py": 4_612,
+    "app/right_rail_financial_semantic_adapter.py": 2_279,
+    "app/right_rail_financial_mirror.py": 1_367,
     "app/right_rail_financial_engine.py": 1_258,
     "app/right_rail_financial_switch.py": 1_314,
     "app/right_rail_financial_line_pack.py": 253,

@@ -33,6 +33,10 @@ def _fail(code: str, caught: BaseException | None = None) -> NoReturn:
     raise error
 
 
+def _cols(row: sqlite3.Row, *names: str) -> dict[str, object]:
+    return {name: row[name] for name in names}
+
+
 # Stores and packages are verified at v8 only; every other version fails closed.
 SCHEMA_VERSION = 8
 SCHEMA = "RR/FINANCIAL/OWNER/v8"
@@ -1713,10 +1717,7 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
             _canonical(
                 {
                     "pack_id": pack_id,
-                    "state_id": row["state_id"],
-                    "deployment_id": row["deployment_id"],
-                    "program_id": row["program_id"],
-                    "period_id": row["period_id"],
+                    **_cols(row, "state_id", "deployment_id", "program_id", "period_id"),
                     "version": version,
                     "source_refs": source_refs,
                     "effective_start_ms": start,
@@ -2532,11 +2533,7 @@ def _verify_evidence(
             EVIDENCE_DOMAIN,
             _canonical(
                 {
-                    "source_id": row["source_id"],
-                    "source_version": row["source_version"],
-                    "local_ref": row["local_ref"],
-                    "common_origin_id": row["common_origin_id"],
-                    "kind": row["kind"],
+                    **_cols(row, "source_id", "source_version", "local_ref", "common_origin_id", "kind"),
                 },
                 "evidence:content-input",
             ),
@@ -2549,11 +2546,7 @@ def _verify_evidence(
                 {
                     "evidence_id": evidence_id,
                     "item_id": item_id,
-                    "kind": row["kind"],
-                    "common_origin_id": row["common_origin_id"],
-                    "source_id": row["source_id"],
-                    "source_version": row["source_version"],
-                    "local_ref": row["local_ref"],
+                    **_cols(row, "kind", "common_origin_id", "source_id", "source_version", "local_ref"),
                     "applicable_at_ms": applicable,
                     "event_at_ms": event,
                     "received_at_ms": received,
@@ -3075,26 +3068,9 @@ def _evaluation_bindings_json(raw: object, code: str) -> list[dict[str, str]]:
 
 def _evaluation_result(row: sqlite3.Row, evidence_ids: list[str]) -> dict[str, object]:
     return {
-        "evaluation_id": row["evaluation_id"],
-        "obligation_id": row["obligation_id"],
-        "revision": row["revision"],
-        "rule_version": row["rule_version"],
+        **_cols(row, "evaluation_id", "obligation_id", "revision", "rule_version"),
         "evidence_ids": evidence_ids,
-        "authority_id": row["authority_id"],
-        "evaluated_at_ms": row["evaluated_at_ms"],
-        "owed_cents": row["owed_cents"],
-        "claimed_adjustment_cents": row["claimed_adjustment_cents"],
-        "lawful_adjustment_cents": row["lawful_adjustment_cents"],
-        "received_cash_cents": row["received_cash_cents"],
-        "shortfall_cents": row["shortfall_cents"],
-        "overage_cents": row["overage_cents"],
-        "cash_satisfied": row["cash_satisfied"],
-        "amount_satisfied": row["amount_satisfied"],
-        "timely": row["timely"],
-        "reporting_complete": row["reporting_complete"],
-        "verification_status": row["verification_status"],
-        "case_status": row["case_status"],
-        "delivery_status": row["delivery_status"],
+        **_cols(row, "authority_id", "evaluated_at_ms", "owed_cents", "claimed_adjustment_cents", "lawful_adjustment_cents", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "reporting_complete", "verification_status", "case_status", "delivery_status"),
     }
 
 
@@ -3115,9 +3091,7 @@ def _evaluation_receipt_body(
     return {
         "contract_version": EVALUATION_RECEIPT_CONTRACT,
         "scope": dict(scope),
-        "evaluation_id": row["evaluation_id"],
-        "obligation_id": row["obligation_id"],
-        "revision": row["revision"],
+        **_cols(row, "evaluation_id", "obligation_id", "revision"),
         "control_pack": {
             "pack_id": control_pack_id,
             "version": control_pack_version,

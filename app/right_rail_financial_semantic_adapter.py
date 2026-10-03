@@ -25,6 +25,7 @@ from typing import Any, Final, Mapping
 
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
+from app.right_rail_financial_owner import _fail
 
 
 class SemanticAdapterError(owner.FinancialError):
@@ -54,14 +55,6 @@ MAX_SNAPSHOT_BYTES: Final[int] = 4 * 1024 * 1024
 MAX_JSON_COLUMN_BYTES: Final[int] = independent.MAX_JSON_BYTES
 _SNAPSHOT_DOMAIN: Final[bytes] = b"RR/FINANCIAL/SEMANTIC-INPUT/v1\x00"
 _HEX_DIGEST = re.compile(r"[0-9A-F]{128}\Z")
-
-
-def _fail(error_type: type[SemanticAdapterError], code: str) -> None:
-    error = error_type(code)
-    error.__cause__ = None
-    error.__context__ = None
-    error.__suppress_context__ = True
-    raise error
 
 
 def _text(value: object, label: str, *, max_bytes: int = 4096) -> str:
