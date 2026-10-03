@@ -5,9 +5,9 @@ import BlindLedger.Gate.Verify
     last published one and its tokens are exactly the batch.  Theorems: `ProducerTheorems`. -/
 namespace BlindLedger.Gate
 
-/-- A checkpoint as the payer stores it (`storeCheckpoint` builds the same triple). -/
+/-- A checkpoint as the payer stores it (`storeCheckpointAny` builds the same triple). -/
 def storedOf (H : Bytes → Bytes) (b : Bytes) : Option Stored :=
-  (decodeCheckpoint b).map fun x => ⟨H x.header, x.checkpoint, b⟩
+  (decodeAnyCheckpoint b).map fun x => ⟨H x.header, x.checkpoint, b⟩
 
 /-- `n` is the next checkpoint of the shard after `last` (none: the shard's first ever).  Same tenant and
     shard; `eventHead` is the digest of the shard's previous checkpoint in any epoch (zero only at the shard's

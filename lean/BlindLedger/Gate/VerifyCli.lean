@@ -5,7 +5,7 @@ open BlindLedger.Gate
 
 /-! `gate_verify`: stdin is one mode byte and its frame; stdout one answer line.  Exit 0 for ACCEPT, INDEX,
     STORED and FORK, 1 for REJECT and HOLD, 2 (stderr `GATE_VERIFY=FRAME`) for a malformed frame.  Every
-    decision is a theorem-covered function (`publishOk`, `storeCheckpoint`, `firstFailure`); this file only
+    decision is a theorem-covered function (`publishOk`, `storeCheckpointAny`, `firstFailure`); this file only
     reads the frame into the state they take.  Integers are big-endian; `u32‖x` is a length then `x`.
     - 0x01 PUBLISH: root_pk · u32‖cert · u32‖last (0 = genesis) · u32‖signed new · u16 k · (u32‖token)^k
     - 0x02 INDEX: u32‖signed checkpoint
@@ -61,12 +61,12 @@ def store : P (String × UInt32) := do
   let candidates ← pList pBytes
   let evidence ← pList pBytes
   let new ← pBytes
-  let some x := decodeCheckpoint new | pure (accept false)
+  let some x := decodeAnyCheckpoint new | pure (accept false)
   let c := realCrypto [(x.checkpoint.tenantId, rootPk)]
   let some s := certState c certs | fail
   let some old := candidates.mapM (storedOf sha3) | fail
   let some forks := evidence.mapM (storedOf sha3) | fail
-  match storeCheckpoint c { s with checkpoints := old, forked := forks.map fun f => (f, f) } new with
+  match storeCheckpointAny c { s with checkpoints := old, forked := forks.map fun f => (f, f) } new with
   | none => pure (accept false)
   | some s' =>
     match s'.forked with  -- a new fork is put in front of the recorded ones
@@ -93,7 +93,7 @@ def release : P (String × UInt32) := do
   let c := realCrypto [(p.tenantId, rootPk)]
   let some s0 := certState c certs | fail
   let some forks := evidence.mapM (storedOf sha3) | fail
-  let s1 := (storeCheckpoint c { s0 with equivocations := [], forked := [] } checkpoint).getD s0
+  let s1 := (storeCheckpointAny c { s0 with equivocations := [], forked := [] } checkpoint).getD s0
   let s := { s1 with equivocations := s0.equivocations, forked := forks.map fun f => (f, f), now, grants,
                      released := if released == 1 then [p.key] else [],
                      pins := if pinned == 1 then [(p.key, memberKey)] else [] }

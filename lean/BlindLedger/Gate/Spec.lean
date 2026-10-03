@@ -354,11 +354,9 @@ structure Checkpoint where
   count : Nat
   createdAt : Nat
 
-/-- The signed header: `prevCheckpoint` is the hash of the previous one's
+/-- v1's fields after the magic and `sig_alg`: `prevCheckpoint` is the hash of the previous
     header; the state digest (`stateDigest`) is never zero. -/
-def pCheckpoint : P Checkpoint := do
-  expect (domain "CHECKPOINT")
-  let _ ← nat 1 1 1
+def pCheckpointFields : P Checkpoint := do
   let tenantId ← ident
   let programId ← ident
   let shardId ← nat 4
@@ -378,6 +376,20 @@ def pCheckpoint : P Checkpoint := do
   pure { tenantId, programId, shardId, seqFrom, seqTo, epoch, prevCheckpoint, eventHead, tokenRoot,
          evidenceRoot, stateDigest, count, createdAt }
 
+def pCheckpoint : P Checkpoint := do
+  expect (domain "CHECKPOINT")
+  let _ ← nat 1 1 1
+  pCheckpointFields
+
+/-- CHECKPOINT/v2: v1's fields, then the tenant id-registry head (multi-shard-runtime-v1 §A). -/
+def pCheckpoint2 : P (Checkpoint × Bytes) := do
+  expect ("RR/GATE/CHECKPOINT/v2".toUTF8.toList ++ [0])
+  let _ ← nat 1 1 1
+  let cp ← pCheckpointFields
+  let registryHead ← digest
+  need (registryHead != zeroDigest)
+  pure (cp, registryHead)
+
 structure SignedCheckpoint where
   checkpoint : Checkpoint
   header : Bytes
@@ -389,6 +401,17 @@ def pSignedCheckpoint : P SignedCheckpoint := do
   pure { checkpoint, header, signature }
 
 def decodeCheckpoint : Bytes → Option SignedCheckpoint := parse pSignedCheckpoint maxCheckpointBytes
+
+def decodeCheckpoint2 : Bytes → Option (SignedCheckpoint × Bytes) := parse (do
+  let ((checkpoint, head), header) ← consumed pCheckpoint2
+  let signature ← blob mlDsa87Signature mlDsa87Signature
+  pure ({ checkpoint, header, signature }, head)) maxCheckpointBytes
+
+/-- Every signed checkpoint version, forever: the payer, `gate_verify` and the vectors read only this. -/
+def decodeAnyCheckpoint (b : Bytes) : Option SignedCheckpoint :=
+  match decodeCheckpoint b with
+  | some x => some x
+  | none => (decodeCheckpoint2 b).map (·.1)
 
 /-! ## #3 TOKEN/v1: leaf ‖ path ‖ checkpoint_digest.  The decision id is
     recomputed from the leaf and the checkpoint was verified under the installed certificate for its tenant and
@@ -680,6 +703,21 @@ def blocked (s : PayerState) (tenant : Bytes) (epoch : Nat) : Bool :=
     checkpoint of a blocked tenant and epoch is stored. -/
 def storeCheckpoint (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
   match decodeCheckpoint bytes with
+  | none => none
+  | some x =>
+    let new : Stored := ⟨c.hash x.header, x.checkpoint, bytes⟩
+    if s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
+        (c.keyUsable e && c.sigOk e.publicKey x.header x.signature) then
+      match s.checkpoints.find? (forks new) with
+      | some old => some { s with forked := (old, new) :: s.forked }
+      | none =>
+        if blocked s x.checkpoint.tenantId x.checkpoint.epoch then none
+        else some { s with checkpoints := new :: s.checkpoints }
+    else none
+
+/-- `storeCheckpoint` for every checkpoint version (`decodeAnyCheckpoint`); on v1 bytes it is `storeCheckpoint`. -/
+def storeCheckpointAny (c : Crypto) (s : PayerState) (bytes : Bytes) : Option PayerState :=
+  match decodeAnyCheckpoint bytes with
   | none => none
   | some x =>
     let new : Stored := ⟨c.hash x.header, x.checkpoint, bytes⟩

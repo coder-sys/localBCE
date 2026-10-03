@@ -147,11 +147,13 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     | .error .member_key_changed => pure (x, some (expect == "member_key_changed"))
   | "checkpoint" :: expect :: _ :: bytes :: rest =>
     let b ← hex bytes
-    let result := storeCheckpoint x.crypto x.state b
+    let result := storeCheckpointAny x.crypto x.state b
     let got := match result with
       | none => "reject"
       | some s => if s.forked.length > x.state.forked.length then "fork" else "accept"
-    let fields := if got == "accept" then ((decodeCheckpoint b).map renderCheckpoint).getD [] else []
+    let fields := if got != "accept" then [] else match decodeCheckpoint2 b with
+      | some (y, head) => renderCheckpoint y ++ [toHex head]
+      | none => ((decodeCheckpoint b).map renderCheckpoint).getD []
     pure ({ x with state := result.getD x.state }, some (got == expect && fields == rest))
   | "token" :: expect :: decodes :: _ :: payment :: bytes :: rest =>
     let b ← hex bytes
