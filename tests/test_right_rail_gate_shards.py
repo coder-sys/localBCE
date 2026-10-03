@@ -195,6 +195,16 @@ class ShardTests(fx.Scratch):
             with self.assertRaisesRegex(producer.GateProducerError, "store_rewound"):
                 c.producer(0)
 
+    def test_r3_store_restored_behind_a_settle_is_rewound(self) -> None:
+        with self.cluster() as c:
+            c.send(0, T, BAD)
+            old = snapshot(c.store(0))
+            c.send(0, NEXT)
+            c.send(0, {8: [30]})  # settles NEXT's 20 as recorded, then seals 30
+            restore(c.store(0), old)  # boot runs before any producer opens, so a restored mark would not help
+            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                c.boot()  # else the next settle would free the sealed 30 for shard 1 to ALLOW
+
     def test_r4_a_swapped_registry_is_not_booted(self) -> None:
         with self.cluster() as c:
             c.send(0, T, BAD)

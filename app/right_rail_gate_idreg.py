@@ -5,8 +5,8 @@ SETTLE marks the shard's unfreed reservations as in its sealed sets, BOOT names 
 flight while its holder has no later SETTLE.  ``reserve`` settles the shard's previous batch, then reserves, in one
 transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
 carry this handle's nonce.  ``boot`` requires each shard's newest signed commitment (row n and head, the
-checkpoint's registryHead) to lie in the chain, else ``registry_rewound``; a whole directory restored together is
-not detectable here (design 9, R5).
+checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard after it, else
+``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).
 """
 
 from __future__ import annotations
@@ -125,31 +125,26 @@ def _pending(db: sqlite3.Connection, shard: int) -> list[tuple[int, bytes]]:
         "AND NOT EXISTS (SELECT 1 FROM log f WHERE f.id = r.id AND f.n > r.n AND f.kind < 2) ORDER BY n", (shard,)).fetchall()
 
 
-def _replay(db: sqlite3.Connection) -> bytes:
-    head = gate.ZERO_DIGEST
-    try:
-        for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
-            head = _head(head, kind, key, shard)
-            if head != stored:
-                raise IdRegistryError("chain_broken")
-    except sqlite3.Error:
-        raise IdRegistryError("registry_unavailable") from None
-    return head
-
-
 def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
     """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
-    0..count-1, every shard with rows included) to be row n of it, append BOOT with a fresh nonce and return it."""
+    0..count-1; a shard with rows needs a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n
+    of it with no SETTLE of the shard after a RESERVE of it past n, append BOOT with a fresh nonce and return it."""
     db = _open(path)
     try:
         with _txn(db, None):
-            _replay(db)
+            head = gate.ZERO_DIGEST
+            for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
+                head = _head(head, kind, key, shard)
+                if head != stored:
+                    raise IdRegistryError("chain_broken")
             if set(commitments) != set(range(len(commitments))) or any(
-                    s not in commitments for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
+                    not commitments.get(s, (0,))[0] for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
                 raise IdRegistryError("commitment_missing")
-            for n, head in commitments.values():
+            for s, (n, head) in commitments.items():
                 row = db.execute("SELECT head FROM log WHERE n = ?", (n,)).fetchone() if n else (gate.ZERO_DIGEST,)
-                if not row or row[0] != head:
+                if not row or row[0] != head or db.execute(  # a settle of a batch newer than n: the shard's store is behind
+                        "SELECT 1 FROM log WHERE kind = 0 AND shard = ?1 AND n > ?2 AND n < "
+                        "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (s, n)).fetchone():
                     raise IdRegistryError("registry_rewound")
             nonce = os.urandom(32)
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
@@ -164,13 +159,6 @@ class IdRegistry:
 
     def close(self) -> None:
         self._db.close()
-
-    def pending(self, shard: int) -> tuple[int | None, list[int]]:
-        """The shard's in-flight ids in reserve order, and the row n of the newest (None when there are none)."""
-        _check(shard, ())
-        with _txn(self._db, self._boot):
-            rows = _pending(self._db, shard)
-        return (rows[-1][0] if rows else None), [int.from_bytes(key, "big") for _, key in rows]
 
     def reserve(self, shard: int, ids: Sequence[int], *, sealed: tuple[int, Sequence[int]] | None
                 ) -> tuple[list[tuple[int, int, bool]], int, bytes]:
@@ -211,7 +199,3 @@ class IdRegistry:
                 if ids:
                     tail.add(_SETTLE, bytes(ID_LEN), shard)
             return tail.n, tail.head
-
-    def verify(self) -> bytes:
-        """Replay the chain; return the head (the zero digest when empty) or raise on any broken link."""
-        return _replay(self._db)

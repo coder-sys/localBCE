@@ -247,7 +247,7 @@ class ProducerTests(fx.Scratch):
                                      idreg=(n, head), free=[2])
             header = signed[:-4629]
             self.assertTrue(header.startswith(gate.CHECKPOINT_V2))
-            self.assertEqual((header[-64:], reg.verify()), (head, head))
+            self.assertEqual(header[-64:], head)
             self.assertNotEqual(head, gate.ZERO_DIGEST)
             self.assertEqual(p.sealed_frees(), (n, [2]))
             p.close()  # the store is EXCLUSIVE while a shard runs: ``newest`` is for boot, before any shard starts

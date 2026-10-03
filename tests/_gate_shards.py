@@ -34,6 +34,7 @@ class Cluster:
 
     def __init__(self, tmp: str, custody: tuple[str, bytes, bytes], shards: int = 2, nonce: bytes = b"") -> None:
         self.dir, self.custody, self.shards, self.nonce, self.lines = Path(tmp), custody, shards, nonce, {}
+        self.genesis = (0, gate.ZERO_DIGEST)
 
     def store(self, k: int) -> Path:
         return self.dir / f"s{k}.sqlite3"
@@ -42,11 +43,15 @@ class Cluster:
     def reg(self) -> Path:
         return self.dir / "reg.sqlite3"
 
-    def boot(self) -> bytes:
-        """Boot the registry against every shard's newest signed commitment."""
-        self.nonce = idreg.boot(self.reg, {k: (self.store(k).exists() and producer.newest(self.store(k))) or (0, gate.ZERO_DIGEST)
+    def boot(self) -> None:
+        """Boot the registry against every shard's newest signed commitment, else the tenant genesis commitment, which
+        the first boot takes from the then-empty registry."""
+        self.nonce = idreg.boot(self.reg, {k: (self.store(k).exists() and producer.newest(self.store(k))) or self.genesis
                                            for k in range(self.shards)})
-        return self.nonce
+        if self.genesis[0] == 0:
+            reg = idreg.IdRegistry(self.reg, boot=self.nonce)
+            self.genesis = reg.genesis({})
+            reg.close()
 
     def producer(self, k: int) -> producer.ShardProducer:
         handle, root_pk, cert = self.custody
@@ -137,7 +142,7 @@ def owned(c: Cluster, t) -> dict[bytes, int]:
 
 def inv(t, c: Cluster) -> None:
     """The invariants after every scenario (section B): a) no id ALLOWed twice; b) no id in two sets; c) one more settle
-    leaves nothing pending; d) every other id reserves fresh; e) the chain verifies and a new boot passes."""
+    leaves every reserved id recorded; d) every other id reserves fresh; e) a new boot (it replays the chain) passes."""
     paid = [line for _, _, line in allowed(c)]
     t.assertEqual(len(paid), len(set(paid)), "an id was ALLOWed twice")
     owned(c, t)
@@ -149,11 +154,9 @@ def inv(t, c: Cluster) -> None:
                 reg.reserve(k, [], sealed=prod.sealed_frees())
             finally:
                 prod.close()
-        t.assertEqual([reg.pending(k) for k in range(c.shards)], [(None, [])] * c.shards)
-        held = owned(c, t)
-        free = sorted({i for v in c.lines.values() for i in v if idreg._key(i) not in held})
-        t.assertEqual(reg.reserve(0, free, sealed=None)[0], [(i, 0, False) for i in free])
-        reg.verify()
+        held, ids = owned(c, t), sorted({i for v in c.lines.values() for i in v})
+        t.assertEqual(reg.reserve(0, ids, sealed=None)[0],
+                      [(i, held[idreg._key(i)], True) if idreg._key(i) in held else (i, 0, False) for i in ids])
     finally:
         reg.close()
     c.boot()
