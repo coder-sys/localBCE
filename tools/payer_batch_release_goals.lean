@@ -645,14 +645,62 @@ private theorem pSigned_count {b rest : Bytes} {y : SignedCheckpoint}
   obtain ⟨rfl, -⟩ := h
   exact pCheckpoint_count (consumed_run hc)
 
+private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
+    (h : pCheckpointFields.run b = some (cp, rest)) : 1 ≤ cp.count ∧ cp.count ≤ maxBatch := by
+  simp only [pCheckpointFields, StateT.run_bind] at h
+  obtain ⟨a3, -, h⟩ := bind_some h
+  obtain ⟨a4, -, h⟩ := bind_some h
+  obtain ⟨a5, -, h⟩ := bind_some h
+  obtain ⟨a6, -, h⟩ := bind_some h
+  obtain ⟨a7, -, h⟩ := bind_some h
+  obtain ⟨a8, -, h⟩ := bind_some h
+  obtain ⟨a9, -, h⟩ := bind_some h
+  obtain ⟨a10, -, h⟩ := bind_some h
+  obtain ⟨a11, -, h⟩ := bind_some h
+  obtain ⟨a12, -, h⟩ := bind_some h
+  obtain ⟨a13, -, h⟩ := bind_some h
+  obtain ⟨a14, hc, h⟩ := bind_some h
+  obtain ⟨a15, -, h⟩ := bind_some h
+  obtain ⟨a16, -, h⟩ := bind_some h
+  obtain ⟨a17, -, h⟩ := bind_some h
+  obtain ⟨a18, -, h⟩ := bind_some h
+  have c13 := nat_ok hc
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, -⟩ := h
+  exact c13
+
+private theorem decodeCheckpoint2_count {b : Bytes} {y : SignedCheckpoint} {head : Bytes}
+    (h : decodeCheckpoint2 b = some (y, head)) : 1 ≤ y.checkpoint.count ∧ y.checkpoint.count ≤ maxBatch := by
+  have hr := parse_run h
+  simp only [StateT.run_bind] at hr
+  obtain ⟨c, hc, h⟩ := bind_some hr
+  obtain ⟨s, -, h⟩ := bind_some h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨⟨rfl, -⟩, -⟩ := h
+  have h2 := consumed_run hc
+  simp only [pCheckpoint2, StateT.run_bind] at h2
+  obtain ⟨a1, -, h2⟩ := bind_some h2
+  obtain ⟨a2, -, h2⟩ := bind_some h2
+  obtain ⟨⟨cp3, m3⟩, h3, h2⟩ := bind_some h2
+  obtain ⟨a4, -, h2⟩ := bind_some h2
+  obtain ⟨a5, -, h2⟩ := bind_some h2
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h2
+  have e : c.fst.1.fst = cp3 := (congrArg Prod.fst h2.1).symm
+  show 1 ≤ c.fst.1.fst.count ∧ c.fst.1.fst.count ≤ maxBatch
+  rw [e]
+  exact pCheckpointFields_count h3
+
 private theorem storedOf_count {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h : storedOf H b = some x) :
     1 ≤ x.checkpoint.count ∧ x.checkpoint.count ≤ maxBatch := by
   unfold storedOf at h
-  cases hd : decodeCheckpoint b with
+  cases hd : decodeAnyCheckpoint b with
   | none => simp [hd] at h
   | some y =>
     simp only [hd, Option.map_some, Option.some.injEq] at h
     subst h
+    rcases decodeAnyCheckpoint_cases hd with hd | ⟨head, hd⟩
+    swap
+    · exact decodeCheckpoint2_count hd
     unfold decodeCheckpoint parse at hd
     by_cases hl : b.length > maxCheckpointBytes
     · simp [hl] at hd
