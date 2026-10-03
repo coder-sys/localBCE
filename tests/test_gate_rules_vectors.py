@@ -53,6 +53,26 @@ class GateRulesVectors(unittest.TestCase):
         self.assertEqual(run.returncode, 1)
         self.assertIn("RULES_STATE_MISMATCH load", run.stdout)
 
+    def test_dash_is_zero_rows_and_still_checked(self):
+        """`load ASOF - ANCHOR` is an empty add list: it matches only the empty sets' digest."""
+        lines = open(os.path.join(ROOT, "tests", "gate_rules", "shards_v1.vectors")).read().split("\n")
+        head = lines[: next(n for n, line in enumerate(lines) if line.startswith("case "))]
+        load = next(line for line in lines if line.startswith("load ")).split(" ")
+
+        def run(*body):
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "dash.vectors")
+                open(path, "w").write("\n".join([*head, *body, "owners 0", "commit", "end 0"]))
+                return subprocess.run([EXE, path], capture_output=True, text=True, timeout=600)
+
+        empty = next(r for r in run("case empty").stdout.split("\n") if r.startswith("RULES_DIGEST ")).split(" ")[1]
+        ok = run("case dash", f"load {load[1]} - {empty}")
+        self.assertEqual(ok.returncode, 0, ok.stdout[-1000:])
+        self.assertIn("RULES_DIGEST " + empty, ok.stdout)
+        bad = run("case dash", f"load {load[1]} - {load[3]}")
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("RULES_STATE_MISMATCH load", bad.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -262,6 +262,14 @@ class ShardTests(fx.Scratch):
             self.assertEqual(c.send(0, {8: [10]})[10].split()[0], "HOLD")
             g.inv(self, c)
 
+    def test_shard_of_only_resends_is_not_stuck(self) -> None:
+        with self.cluster() as c:
+            c.send(0, {1: [10]})
+            c.send(0, NEXT)
+            self.assertEqual(c.send(1, {4: [10]}), {10: "HOLD ALREADY_DECIDED"})  # shard 1's first batch joins no set: empty adds
+            self.assertEqual(c.send(1, {5: [30]}), {30: "ALLOW -"})
+            g.inv(self, c)
+
 
 if __name__ == "__main__":
     unittest.main()

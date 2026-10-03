@@ -37,7 +37,7 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
     ``line`` directive bodies) against the shard's verified sets."""
     owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
     anchor = prod.anchor()
-    frame.write_text("\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex()} {anchor.hex()}"] if anchor else []),
+    frame.write_text("\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
                                 "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
                                 *(f"line {line}" for line in lines), "commit", "end 0"]), "utf-8")
     out = subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()

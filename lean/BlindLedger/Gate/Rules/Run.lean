@@ -265,7 +265,8 @@ def step (st : St) : List String → Option (St × List String)
     guard (h.length == 128)
     let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
     let anchor := Gate.beNat (← unhex h)
-    match (parseAdds (← unhex adds)).bind fun ad => Gate.ShardState.loadAdds h512 (g, g) [ad] anchor with
+    let bs ← if adds == "-" then pure [] else unhex adds   -- `-` is zero rows (the field cannot be empty)
+    match (parseAdds bs).bind fun ad => Gate.ShardState.loadAdds h512 (g, g) [ad] anchor with
     | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
     | some s => pure ({ st with
         snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
