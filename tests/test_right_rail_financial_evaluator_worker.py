@@ -88,8 +88,8 @@ class EvaluatorWorkerTests(unittest.TestCase):
         wire = self._wires()[0][0]
         expected = engine._evaluate_wire(wire)
         worker = engine._evaluator[0]
-        with self.assertRaises(process.VerifierProcessError) as raised:  # a length the worker refuses to read
-            worker.exchange(bytes(adapter.MAX_WIRE_BYTES + 2), response_cap_bytes=1024, timeout_seconds=5.0)
+        with self.assertRaises(process.VerifierProcessError) as raised:  # one byte over Lean maxWorkerFrameBytes (M + 8)
+            worker.exchange(bytes(adapter.MAX_WIRE_BYTES + 9), response_cap_bytes=1024, timeout_seconds=5.0)
         self.assertEqual(str(raised.exception), "worker_exchange")
         self.assertFalse(worker.alive)
         self.assertEqual(engine._evaluate_wire(wire), expected)
