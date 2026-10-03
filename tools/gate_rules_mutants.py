@@ -31,8 +31,8 @@ REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DAT
           "  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true")
 # A mutant the vectors miss is still killed if these proofs no longer build: the Spec's order independence
 # (the runner no longer re-decides each batch in reverse) and the twin's equality with the Spec.
-PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq")
-PROOF_FILES = ("Theorems.lean", "FastEq.lean")
+PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Shards")
+PROOF_FILES = ("Theorems.lean", "FastEq.lean", "Shards.lean")
 KEPT = "d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED"
 # Fast.lean text.
 R2 = "x.seen s (exactKey l) || x.seen s (nearKey l) || x.spanOk && validDate l.date && x.overlap l"
@@ -207,11 +207,11 @@ FAST = [
     ("payment without a line ALLOW", "!ls.isEmpty && ", ""),
     ("re-decision of an unreleased line ALLOW", "(!x.redo.contains p || x.own d.line)", "true"),
     ("checkpoint drops the batch's additions", (REL_ROW, UNR_ROW), ("released := x.relV,", "unresolved := x.unrV }")),
-    ("checkpoint advances only when chained", (REL_ROW, UNR_ROW),
-     (REL_ROW.replace("released := ", "released := if !x.relChained then x.relV else "),
-      UNR_ROW.replace("unresolved := ", "unresolved := if !x.unrChained then x.unrV else "))),
-    ("checkpoint forgets the view's rows", (REL_ROW, UNR_ROW),
-     ("released := ⟨x.relV.asOf, ra.length, ra⟩,", "unresolved := ⟨x.unrV.asOf, ua.length, ua⟩ }")),
+    ("checkpoint advances only when chained",
+     (REL_ROW, UNR_ROW), (REL_ROW.replace("released := ", "released := if !x.relChained then x.relV else "),
+                          UNR_ROW.replace("unresolved := ", "unresolved := if !x.unrChained then x.unrV else "))),
+    ("checkpoint forgets the view's rows",
+     (REL_ROW, UNR_ROW), ("released := ⟨x.relV.asOf, ra.length, ra⟩,", "unresolved := ⟨x.unrV.asOf, ua.length, ua⟩ }")),
     ("unchained set read as is", "if ch then o.getD prior else prior", "o.getD prior"),
     ("set read ignored", "if ch then o.getD prior else prior", "prior"),
     ("reviewed payments ALLOW", "d.outcome == .ALLOW && (", "d.outcome != .HOLD && ("),
@@ -279,8 +279,29 @@ RUN_MUTANTS = [
     ("commit adds every released line", "st.extra ++ r.released.entries.drop x.relN", "st.extra ++ r.released.entries"),
     ("commit keeps the released checkpoint", "rprior := r.released", "rprior := st.rprior"),
     ("commit keeps the unresolved checkpoint", "uprior := r.unresolved", "uprior := st.uprior"),
+    ("commit ignores the foreign ids", "x.runIn st.foreign lines", "x.runIn [] lines"),
+    ("commit keeps the foreign ids", "uprior := r.unresolved, batch := #[], redo := [], foreign := [],",
+     "uprior := r.unresolved, batch := #[], redo := [],"),
+    ("unanchored commit keeps the foreign ids", "pinned := some p, anchor := none, batch := #[], redo := [], foreign := [],",
+     "pinned := some p, anchor := none, batch := #[], redo := [],"),
+    ("case keeps the foreign ids", "anchor := none, batch := #[], redo := [], foreign := [], pays := [], done := []",
+     "anchor := none, batch := #[], redo := [], pays := [], done := []"),
 ]
 
+# Shard uniqueness: only shards_v1.vectors sees these (a foreign id must be ALREADY_DECIDED).
+DIN = ("def decideBatchIn (c : Ctx) (f : List Nat) (batch : List Line) : Result :=\n"
+       "  let ds := decideAll c (idSeen f ++ seen0 c batch) (order c batch)\n"
+       "  { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),\n"
+       "    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }")
+SHARD_MUTANTS = [
+    ("foreign ids ignored by the twin", "x.decideAll (HashSet.ofList (idSeen f)) (x.order b)", "x.decideAll ∅ (x.order b)"),
+    ("foreign ids are none", "f.map fun i => [4, i]", "([] : List Nat).map fun i => [4, i]"),
+    ("decideBatchIn forgets the foreign ids", DIN, DIN.replace("idSeen f ++ seen0 c batch", "seen0 c batch")),
+    ("decideBatchIn sees only the foreign ids", DIN, DIN.replace("idSeen f ++ seen0 c batch", "idSeen f")),
+    ("decideBatchIn releases nothing", DIN, DIN.replace("(releasedLines c ds)", "[]")),
+    ("decideBatchIn leaves nothing unresolved", DIN, DIN.replace("(unresolvedLines c ds)", "[]")),
+    ("decideBatchIn reads arrival order", DIN, DIN.replace("(order c batch)\n", "batch\n")),
+]
 
 def swap_reasons(lines):
     """Swap the reasons of the first two held lines with different reasons."""
@@ -332,9 +353,10 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
         lean = Path(tmp) / "lean"
         shutil.copytree(lean_dir, lean)
         built = build(lean, lake)[0]
-        base = [vectors(lean, Path(p)) if built else "BUILD_ERROR" for p in (rules, demo)]
+        shards = Path(rules).with_name("shards_v1.vectors")
+        base = [vectors(lean, Path(p)) if built else "BUILD_ERROR" for p in (rules, demo, shards)]
         proved = build(lean, lake, *PROOFS)[0]  # a proof kill below means nothing unless the unmutated proofs build
-        print(f"BASELINE rules={base[0]} demo={base[1]} proofs={'BUILT' if proved else 'BUILD_ERROR'}", flush=True)
+        print(f"BASELINE rules={base[0]} demo={base[1]} shards={base[2]} proofs={'BUILT' if proved else 'BUILD_ERROR'}", flush=True)
         for name, mutate in DEMO_MUTANTS:
             lines = Path(demo).read_text(encoding="utf-8").splitlines()
             mutate(lines)
@@ -344,7 +366,8 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
             killed += result.startswith("RULES_VECTORS=FAIL")
             print(f"MUTANT {name}: {result}", flush=True)
         chosen = ([("Spec.lean", *m) for m in SPEC] + [("Fast.lean", *m) for m in FAST] +
-                  [("Run.lean", *m) for m in RUN_MUTANTS])[
+                  [("Run.lean", *m) for m in RUN_MUTANTS] + [("Fast.lean", *SHARD_MUTANTS[0])] +
+                  [("Spec.lean", *m) for m in SHARD_MUTANTS[1:]])[
             slice(*(int(x) if x else None for x in part.split(":")))]
         for file, name, old, new in chosen:
             src = lean / "BlindLedger" / "Gate" / "Rules" / file
@@ -358,6 +381,8 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
                 mutated = mutated.replace(o, n)
             src.write_text(mutated, encoding="utf-8")
             result = vectors(lean, Path(rules)) if build(lean, lake)[0] else "BUILD_ERROR"
+            if result == "RULES_VECTORS=PASS":
+                result = vectors(lean, shards)
             if result == "RULES_VECTORS=PASS":  # the vectors cannot see it: killed only by a Lean error in a proof file
                 ok, output = build(lean, lake, *PROOFS)
                 error = proof_error(output)
@@ -369,7 +394,7 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
     total = len(chosen) + len(DEMO_MUTANTS)
     print(f"TRACKED_SOURCES sha256_before={before} sha256_after={after}")
     print(f"MUTANTS part={part} total={total} killed={killed}")
-    ok = proved and base == ["RULES_VECTORS=PASS"] * 2 and killed == total and before == after
+    ok = proved and base == ["RULES_VECTORS=PASS"] * 3 and killed == total and before == after
     return 0 if ok else 1
 
 

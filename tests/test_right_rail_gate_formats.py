@@ -39,7 +39,7 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "e8": (EPOCH + 1, TENANT, SHARDS), "reshard-e9": (EPOCH + 2, TENANT, 2 * SHARDS),
          "reshard-other9": (EPOCH + 2, OTHER, 2 * OTHER_SHARDS), "twin": (EPOCH + 1, OTHER, OTHER_SHARDS),
          "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS),
-         "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS)}
+         "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS), "e0": (0, TENANT, SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
            "decision-id", "input", "lines-root", "state")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them

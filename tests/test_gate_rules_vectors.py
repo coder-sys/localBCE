@@ -31,7 +31,7 @@ class GateRulesVectors(unittest.TestCase):
         self.assertEqual(run.returncode, 0, "the FastEq or Theorems proofs are stale; run `lake build` in lean/\n" + run.stdout[-1500:])
 
     def test_vectors_pass(self):
-        for name in ("rules_v1.vectors", "demo_zz.vectors"):
+        for name in ("rules_v1.vectors", "demo_zz.vectors", "shards_v1.vectors"):
             with self.subTest(name):
                 run = subprocess.run([EXE, os.path.join(ROOT, "tests", "gate_rules", name)],
                                      capture_output=True, text=True, timeout=600)
