@@ -122,8 +122,6 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.load_ok
 /-- info: 'BlindLedger.Gate.step_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.step_ok
-/-- info: 'BlindLedger.Gate.stepReg_some' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms BlindLedger.Gate.stepReg_some
 /-- info: 'BlindLedger.Gate.natBE_beNat' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.natBE_beNat
 /-- info: 'BlindLedger.Gate.realCrypto_cert_not_root' depends on axioms: [propext, Quot.sound] -/
@@ -142,6 +140,72 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_signed
 /-- info: 'BlindLedger.Gate.storeCheckpoint_not_root' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_not_root
+/-- info: 'BlindLedger.Gate.pCheckpointFields_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.pCheckpointFields_wf
+/-- info: 'BlindLedger.Gate.pCheckpoint_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.pCheckpoint_wf
+/-- info: 'BlindLedger.Gate.parse_run' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.parse_run
+/-- info: 'BlindLedger.Gate.decodeAnyCheckpoint_cases' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeAnyCheckpoint_cases
+/-- info: 'BlindLedger.Gate.decodeCheckpoint2_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint2_wf
+/-- info: 'BlindLedger.Gate.publishOkAny_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkAny_sound
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_slice' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_slice
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_signed' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_signed
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_not_root
+/-- info: 'BlindLedger.Gate.acceptsAny_cert_not_root' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.acceptsAny_cert_not_root
+/-- info: 'BlindLedger.Gate.checkpoint2_header_domain' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.checkpoint2_header_domain
+/-- info: 'BlindLedger.Gate.idx_append' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.idx_append
+/-- info: 'BlindLedger.Gate.checkpoint_header_ne_keycert_body_any' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.checkpoint_header_ne_keycert_body_any
+/-- info: 'BlindLedger.Gate.decodeCheckpoint2_magic' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint2_magic
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_v1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_v1
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_keeps' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_keeps
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_released' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_released
+/-- info: 'BlindLedger.Gate.storeCheckpointAny_coherent' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpointAny_coherent
+/-- info: 'BlindLedger.Gate.storeCheckpoint_any' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.storeCheckpoint_any
+/-- info: 'BlindLedger.Gate.Step.any' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Step.any
+/-- info: 'BlindLedger.Gate.Steps.any' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Steps.any
+/-- info: 'BlindLedger.Gate.StepAny.keeps' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepAny.keeps
+/-- info: 'BlindLedger.Gate.StepsAny.keeps' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepsAny.keeps
+/-- info: 'BlindLedger.Gate.verifyToken_one_route_any' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_one_route_any
+/-- info: 'BlindLedger.Gate.StepAny.new_pin' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepAny.new_pin
+/-- info: 'BlindLedger.Gate.StepsAny.first_send' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepsAny.first_send
+/-- info: 'BlindLedger.Gate.verifyToken_first_send_any' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_first_send_any
+/-- info: 'BlindLedger.Gate.verifyToken_after_send_any' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_after_send_any
+/-- info: 'BlindLedger.Gate.StepAny.released_grows' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepAny.released_grows
+/-- info: 'BlindLedger.Gate.StepsAny.released_grows' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepsAny.released_grows
+/-- info: 'BlindLedger.Gate.StepsAny.at_most_once' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepsAny.at_most_once
+/-- info: 'BlindLedger.Gate.StepsAny.coherent' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StepsAny.coherent
+/-- info: 'BlindLedger.Gate.stepReg_some' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.stepReg_some
 /-- info: 'BlindLedger.Semantic.sha3_512_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Semantic.sha3_512_eq
 /-- info: 'BlindLedger.Semantic.shake128_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/

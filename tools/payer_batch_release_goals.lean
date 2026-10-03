@@ -3,6 +3,7 @@ import BlindLedger.Gate.Payer
 import BlindLedger.Gate.Producer
 import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.Theorems
+import BlindLedger.Sha3FastEq
 
 /-! payer-batch-release-v1 goals (design, 2026-10-01).  Definitions are final text for the builder; every
     `sorry` is a proof the builder owes.  Home in the product tree: `Gate/Batch.lean` (imports Verify, Payer,
@@ -699,22 +700,21 @@ private theorem storedOf_count {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h
     simp only [hd, Option.map_some, Option.some.injEq] at h
     subst h
     rcases decodeAnyCheckpoint_cases hd with hd | ⟨head, hd⟩
-    swap
+    · unfold decodeCheckpoint parse at hd
+      by_cases hl : b.length > maxCheckpointBytes
+      · simp [hl] at hd
+      · simp only [hl, if_false] at hd
+        cases hr : pSignedCheckpoint.run b with
+        | none => simp [hr] at hd
+        | some r =>
+          obtain ⟨z, rest⟩ := r
+          cases rest with
+          | nil =>
+            simp [hr] at hd
+            subst hd
+            exact pSigned_count hr
+          | cons a l => simp [hr] at hd
     · exact decodeCheckpoint2_count hd
-    unfold decodeCheckpoint parse at hd
-    by_cases hl : b.length > maxCheckpointBytes
-    · simp [hl] at hd
-    · simp only [hl, if_false] at hd
-      cases hr : pSignedCheckpoint.run b with
-      | none => simp [hr] at hd
-      | some r =>
-        obtain ⟨z, rest⟩ := r
-        cases rest with
-        | nil =>
-          simp [hr] at hd
-          subst hd
-          exact pSigned_count hr
-        | cons a l => simp [hr] at hd
 
 private theorem mapM_decode : ∀ (tokens : List Bytes) (ts : List Token), tokens.mapM decodeToken = some ts →
     tokens.filterMap decodeToken = ts ∧ ts.length = tokens.length ∧
@@ -820,7 +820,10 @@ def publishCollision (tokens : List Bytes) : Option (Bytes × Bytes) :=
   let xs := publishInputs tokens
   (xs.flatMap fun x => xs.map (x, ·)).find? fun (x, y) => x != y && sha3 x == sha3 y
 
-private theorem sha3_len (x : Bytes) : (sha3 x).length = digestBytes := Semantic.sha3_512_toList_length _
+private theorem sha3_len (x : Bytes) : (sha3 x).length = digestBytes := by
+  unfold sha3
+  rw [← congrFun Semantic.sha3_512_eq]
+  exact Semantic.sha3_512_toList_length _
 
 private theorem many_digest_len : ∀ (k : Nat) (b : Bytes) (r : List Bytes × Bytes),
     (many digest k).run b = some r → ∀ s ∈ r.1, s.length = digestBytes

@@ -54,4 +54,14 @@ def publishOk (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens 
       ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId))
   | _, _ => false
 
+/-- `publishOk` for any checkpoint version: the same decision with `acceptsAny`. -/
+def publishOkAny (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes) : Bool :=
+  match decodeKeyCert cert, storedOf sha3 new with
+  | some e, some n =>
+    acceptsAny rootPk cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
+      follows (last.bind (storedOf sha3)) n && tokens.length == n.checkpoint.count &&
+      (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b) &&
+      ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId))
+  | _, _ => false
+
 end BlindLedger.Gate

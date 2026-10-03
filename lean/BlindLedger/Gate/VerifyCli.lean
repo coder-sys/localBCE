@@ -46,7 +46,7 @@ def publish : P (String × UInt32) := do
   let last ← pBytes
   let new ← pBytes
   let tokens ← pList pBytes
-  pure (accept (publishOk rootPk cert (if last.isEmpty then none else some last) new tokens))
+  pure (accept (publishOkAny rootPk cert (if last.isEmpty then none else some last) new tokens))
 
 def index : P (String × UInt32) := do
   match storedOf sha3 (← pBytes) with
