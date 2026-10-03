@@ -1,2 +1,0 @@
-# SHA-256-pinned guard wrapper (CRLF): keep bytes exact.
-run_guarded_v4.ps1 -text

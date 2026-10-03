@@ -121,9 +121,6 @@ The HTTP adapter accepts exactly one length and content-type header, no
 transfer encoding, and at most 8,192 bytes within a five-second total body
 deadline; a refusal drains at most 8,193 unread bytes for 100 ms before closing.
 
-Parked `parked/state_clearance/`: only `CLEAR` or a valid `EXCEPTION_APPROVED` may
-advance economic state; `HOLD`, `HUMAN_REVIEW` and `BLOCK` cannot.
-
 ## Mirror Provider Trust Graph
 
 `app/mirror/` is the read-only Provider Trust Graph wedge: a synthetic North
@@ -180,4 +177,4 @@ is an inline gate on every payment. There is no integrated payer gate. Toward it
 - Fixed-shape/AIR compatibility as a production authority.
 
 Private zero-knowledge is an evidence-only prototype in its separate repository
-(Constitution IX.4); `parked/` is historical reference.
+(Constitution IX.4); `parked/` holds only the frozen release producer.

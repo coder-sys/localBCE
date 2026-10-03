@@ -1,9 +1,0 @@
-[package]
-name = "profile11_source_host"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-[dependencies]
-zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
-zkboo = { path = "C:/Users/neers/Documents/Codex/2026-09-01/blind-profile11-source-transaction-v1", features = ["source-appliance"] }

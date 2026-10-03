@@ -16,8 +16,7 @@ Working rules (details in the constitution):
   the `lean/` commit its `PROVENANCE.md` names. Any later `lean/` change
   voids that claim until a guarded rebuild re-pins it.
 - Private zero-knowledge is an active prototype track (Constitution IX.4). It
-  is evidence only and never blocks core or gate work. The old code under
-  `parked/` stays reference material.
+  lives in its own repository, is evidence only and never blocks core or gate work.
 - Only the lead edits `STATUS.md`, once per trunk merge, replacing what it supersedes.
 - Standing claims: synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
   `production_usable=false`, `activation=false`.
@@ -31,5 +30,4 @@ Working rules (details in the constitution):
 - Never destroy uncommitted work, raw evidence, keys or the only copy of
   anything. No `git reset --hard`, `git clean`, or force pushes.
 
-Previous per-checkout instructions are archived in
-`work/_retired-research-20260924/trunk-docs-history-20260924/` (outside the trunk; also in Git history before 2026-09-24's removal commit).
+Previous per-checkout instructions are in Git history before 2026-09-24's removal commit.
