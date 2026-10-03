@@ -472,7 +472,6 @@ def _payment_receipts(connection: sqlite3.Connection, obligation_id: str) -> lis
     return connection.execute("SELECT json_extract(payload_json,'$.payment_id'),before_revision,json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' ORDER BY 1", (obligation_id,)).fetchall()
 
 
-_LEAN_DECIDES_PAYMENTS: Final[bool] = True  # M3 steps 3-4 only (lean-live-m3 section 8); step 5 deletes it and the Python decider
 
 _PAYMENT_REFUSALS: Final = (None,  # Lean `refusals` order (Codec.lean), codes 1..16
     (FinancialInputError, "payment_amount_zero"), (FinancialConflictError, "payment_request_conflict"),
@@ -4136,142 +4135,17 @@ class FinancialOwner:
         if pays_action_id is not None:
             _id(pays_action_id, "pays_action_id")
         _cents(amount_cents, "payment_amount", nonnegative=True)
-        if amount_cents == 0:
-            _fail(FinancialInputError, "payment_amount_zero")
         _id(item_id, "item_id")
         _id(common_origin_id, "common_origin_id")
         _id(source_id, "source_id")
-        _text(source_version, "source_version")
-        if _LEAN_DECIDES_PAYMENTS:
-            _id(evidence_id, "evidence_id")
-            _id(source_version, "source_version")
-            if local_ref:
-                _id(local_ref, "local_ref")
-            with self._write() as connection:
-                return self._decide_payment(connection, self._get_obligation_row(connection, item_id), expected_revision, {
-                    "kind": "record", "payment_id": payment_id, "evidence_id": evidence_id, "common_origin_id": common_origin_id, "source_id": source_id,
-                    "source_version": source_version, "local_ref": local_ref or None, "amount_cents": amount_cents, "event_at_ms": event_at_ms, "pays_action_id": pays_action_id})
-        normalized_local_ref = local_ref or f"payment:{payment_id}"
-        evidence_fields = {
-            "evidence_id": evidence_id,
-            "item_id": item_id,
-            "kind": "PAYMENT_CONFIRMATION",
-            "common_origin_id": common_origin_id,
-            "source_id": source_id,
-            "source_version": source_version,
-            "local_ref": normalized_local_ref,
-            "applicable_at_ms": event_at_ms,
-            "event_at_ms": event_at_ms,
-            "amount_cents": amount_cents,
-        }
+        _id(evidence_id, "evidence_id")
+        _id(source_version, "source_version")
+        if local_ref:
+            _id(local_ref, "local_ref")
         with self._write() as connection:
-            obligation = self._get_obligation_row(connection, item_id)
-            existing_id = connection.execute(
-                "SELECT * FROM payments WHERE payment_id=?",
-                (payment_id,),
-            ).fetchone()
-            if existing_id is not None:
-                existing_evidence = connection.execute(
-                    "SELECT * FROM evidence WHERE evidence_id=? AND item_id=?",
-                    (evidence_id, item_id),
-                ).fetchone()
-                if existing_evidence is None:
-                    _fail(FinancialConflictError, "payment_request_conflict")
-                retry_evidence = self._new_evidence(**evidence_fields, received_at_ms=int(existing_evidence["received_at_ms"]))
-                payment_events = connection.execute(
-                    "SELECT aggregate_id,before_revision,after_revision,payload_json "
-                    "FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? "
-                    "AND kind='PAYMENT_RECEIVED' ORDER BY event_sequence DESC",
-                    (existing_id["obligation_id"],),
-                ).fetchall()
-                original_event = None
-                for event in payment_events:
-                    payload = _stored_object(event["payload_json"], "payment_retry_event")
-                    if payload.get("payment_id") == payment_id:
-                        original_event = (event, payload)
-                        break
-                if original_event is None:
-                    _fail(FinancialIntegrityError, "payment_retry_event_missing")
-                event, event_payload = original_event
-                expected_event_payload = {
-                    "payment_id": payment_id,
-                    "evidence_id": evidence_id,
-                    "amount_cents": amount_cents,
-                    "common_origin_id": common_origin_id,
-                    **({} if pays_action_id is None else {"pays_action_id": pays_action_id}),
-                }
-                actual_event_fields = {
-                    key: event_payload.get(key)
-                    for key in expected_event_payload
-                }
-                if (
-                    expected_revision is None
-                    or type(expected_revision) is not int
-                    or int(event["before_revision"]) != expected_revision
-                    or int(event["after_revision"]) != expected_revision + 1
-                    or str(event["aggregate_id"]) != str(obligation["obligation_id"])
-                    or str(existing_id["obligation_id"]) != str(obligation["obligation_id"])
-                    or str(existing_id["item_id"]) != item_id
-                    or str(existing_id["evidence_id"]) != evidence_id
-                    or str(existing_id["common_origin_id"]) != common_origin_id
-                    or int(existing_id["amount_cents"]) != amount_cents
-                    or int(existing_id["event_at_ms"]) != event_at_ms
-                    or actual_event_fields != expected_event_payload
-                    # _append_event binds every obligation event that names an
-                    # evaluation to that evaluation's input/result/receipt digests.
-                    or set(event_payload) - {"rows"} != (
-                        set(expected_event_payload)
-                        | {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
-                    )
-                    or type(event_payload.get("evaluation_id")) is not str
-                    or retry_evidence.record_digest != bytes(existing_evidence["record_digest"])
-                ):
-                    _fail(FinancialConflictError, "payment_request_conflict")
-                return {
-                    "status": "DUPLICATE",
-                    "payment_id": payment_id,
-                    **self._current_projection(connection, str(obligation["obligation_id"])),
-                }
-
-            existing = connection.execute("SELECT * FROM payments WHERE obligation_id=? AND common_origin_id=?", (obligation["obligation_id"], common_origin_id)).fetchone()
-            same = existing is not None and int(existing["amount_cents"]) == amount_cents
-            prior = connection.execute("SELECT received_at_ms FROM evidence WHERE evidence_id=?", (evidence_id,)).fetchone() if same else None
-            if same and prior is None and not existing["active"] and event_at_ms > connection.execute("SELECT event_at_ms FROM evidence WHERE evidence_id=?", (existing["reversed_by_evidence_id"],)).fetchone()[0]:  # a repeat dated after the reversal may be a re-presentment: a person decides
-                _fail(FinancialConflictError, "payment_origin_reversed")
-            if prior is None:  # an exact repeat of a stored alias confirmation is rebuilt as stored and writes nothing (III.3)
-                self._check_revision(obligation, expected_revision)
-            evidence = self._new_evidence(**evidence_fields, received_at_ms=self._now() if prior is None else int(prior[0]))
-            evidence_status = self._insert_evidence(connection, evidence)
-            if existing is not None:  # existing_id is None here: that retry path returned or failed above
-                if same:
-                    recorded_link = connection.execute("SELECT json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' AND json_extract(payload_json,'$.payment_id')=?", (obligation["obligation_id"], existing["payment_id"])).fetchone()[0]
-                    if pays_action_id not in (None, recorded_link):  # it may not change or add a link; an outside confirmation that omits it corroborates
-                        _fail(FinancialConflictError, "payment_request_conflict")
-                    if evidence_status == "INSERTED":
-                        self._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=str(obligation["obligation_id"]), kind="PAYMENT_DUPLICATE_EVIDENCE", before_revision=int(obligation["revision"]), after_revision=int(obligation["revision"]), payload={"candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, committed_at_ms=self._now())
-                    return {"status": "DUPLICATE", "payment_id": str(existing["payment_id"]), **self._current_projection(connection, str(obligation["obligation_id"]))}
-                conflict_id = f"conflict:{item_id}:{common_origin_id}:{evidence_id}"
-                if connection.execute("SELECT 1 FROM financial_conflicts WHERE conflict_id=?", (conflict_id,)).fetchone() is None:
-                    connection.execute("INSERT INTO financial_conflicts VALUES (?,?,?,?,?,?,?,?,?)", (conflict_id, obligation["obligation_id"], common_origin_id, str(existing["payment_id"]), evidence_id, int(existing["amount_cents"]), amount_cents, "CONFLICTING_COMMON_ORIGIN_AMOUNT", self._now()))
-                    self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_CONFLICT_VISIBLE", payload={"conflict_id": conflict_id, "candidate_evidence_id": evidence_id, "existing_payment_id": str(existing["payment_id"]), "common_origin_id": common_origin_id}, now_ms=self._now())
-                return {"status": "CONFLICT", "conflict_id": conflict_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
-            link = {}
-            if pays_action_id is not None:
-                (request,) = connection.execute(
-                    "SELECT json_extract(payload_json,'$.amount_cents') FROM actions WHERE action_id=? AND obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST'",
-                    (pays_action_id, obligation["obligation_id"]),
-                ).fetchone() or (None,)
-                if request is None:
-                    _fail(FinancialConflictError, "payment_request_unknown")
-                paid = next((entry["paid_cents"] for entry in _correction_paid(connection, str(obligation["obligation_id"])) if entry["action_id"] == pays_action_id), 0)
-                if paid + amount_cents > request:
-                    _fail(FinancialConflictError, "payment_exceeds_unpaid_request")
-                if amount_cents > _open_requests(connection, str(obligation["obligation_id"]), int(obligation["shortfall_cents"])).get(pays_action_id, 0):  # R2: only what the request still has open within the balance
-                    _fail(FinancialConflictError, "payment_exceeds_unpaid_balance")
-                link = {"pays_action_id": pays_action_id}
-            connection.execute("INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)", (payment_id, obligation["obligation_id"], item_id, evidence_id, common_origin_id, amount_cents, event_at_ms, 1, None))
-            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_RECEIVED", payload={"payment_id": payment_id, "evidence_id": evidence_id, "amount_cents": amount_cents, "common_origin_id": common_origin_id, **link}, now_ms=self._now())
-            return {"status": "RECORDED", "payment_id": payment_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
+            return self._decide_payment(connection, self._get_obligation_row(connection, item_id), expected_revision, {
+                "kind": "record", "payment_id": payment_id, "evidence_id": evidence_id, "common_origin_id": common_origin_id, "source_id": source_id,
+                "source_version": source_version, "local_ref": local_ref or None, "amount_cents": amount_cents, "event_at_ms": event_at_ms, "pays_action_id": pays_action_id})
 
     def reverse_payment(
         self,
@@ -4285,27 +4159,10 @@ class FinancialOwner:
     ) -> dict[str, Any]:
         self._assert_actionable()
         _id(payment_id, "payment_id")
-        if _LEAN_DECIDES_PAYMENTS:
-            _id(evidence_id, "evidence_id")
-            with self._write() as connection:
-                return self._decide_payment(connection, self._get_obligation_row(connection, item_id), expected_revision, {
-                    "kind": "reverse", "payment_id": payment_id, "evidence_id": evidence_id, "common_origin_id": common_origin_id or None, "event_at_ms": event_at_ms})
+        _id(evidence_id, "evidence_id")
         with self._write() as connection:
-            obligation = self._get_obligation_row(connection, item_id)
-            payment = connection.execute("SELECT * FROM payments WHERE payment_id=? AND obligation_id=?", (payment_id, obligation["obligation_id"])).fetchone()
-            if payment is None:
-                _fail(FinancialIntegrityError, "payment_missing")
-            reversal_time = event_at_ms if event_at_ms is not None else connection.execute("SELECT COALESCE((SELECT event_at_ms FROM evidence WHERE evidence_id=?), ?)", (_id(evidence_id, "evidence_id"), self._now())).fetchone()[0]  # a retry without event_at_ms restates the first recording's time
-            evidence = self._new_evidence(evidence_id=evidence_id, item_id=item_id, kind="PAYMENT_REVERSAL", common_origin_id=common_origin_id or f"reversal:{payment_id}", source_id="synthetic-payment-source", source_version="fixture-v1", local_ref=f"reversal:{payment_id}", applicable_at_ms=reversal_time, event_at_ms=reversal_time, received_at_ms=self._now(), amount_cents=int(payment["amount_cents"]), reversal_of=payment_id)
-            status = self._insert_evidence(connection, evidence)
-            if status == "DUPLICATE":
-                return {"status": "DUPLICATE", **self._projection_for_row(obligation)}
-            self._check_revision(obligation, expected_revision)
-            if int(payment["active"]) == 0:
-                _fail(FinancialConflictError, "payment_already_reversed")
-            connection.execute("UPDATE payments SET active=0,reversed_by_evidence_id=? WHERE payment_id=? AND active=1", (evidence_id, payment_id))
-            self._recompute_and_record(connection, str(obligation["obligation_id"]), kind="PAYMENT_REVERSED", payload={"payment_id": payment_id, "evidence_id": evidence_id}, now_ms=self._now())
-            return {"status": "REVERSED", "payment_id": payment_id, **self._current_projection(connection, str(obligation["obligation_id"]))}
+            return self._decide_payment(connection, self._get_obligation_row(connection, item_id), expected_revision, {
+                "kind": "reverse", "payment_id": payment_id, "evidence_id": evidence_id, "common_origin_id": common_origin_id or None, "event_at_ms": event_at_ms})
 
     def record_offset_claim(
         self,

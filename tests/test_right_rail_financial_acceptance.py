@@ -5391,6 +5391,17 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, "^payment:link$"):
             verify_database(early, expected_config=store.config, expected_authority=self.authority)
 
+    def test_a_zero_payment_amount_is_refused_by_the_owner_without_writing(self) -> None:
+        store = self._build_base_for_correction()
+        before = _image(store.path)
+        with self.assertRaisesRegex(FinancialInputError, "^payment_amount_zero$"):
+            store.record_payment_evidence(
+                item_id=expected.H_ITEM_ID, payment_id="payment:h:zero", common_origin_id="origin:payment:h:zero", amount_cents=0,
+                evidence_id="evidence:payment-h:zero", event_at_ms=expected.CORRECTION_AUTH_MS + 500,
+            )
+        self.assertEqual(_image(store.path), before)
+        self._assert_verified(store)
+
     def test_a_linked_payment_never_pays_past_the_balance(self) -> None:
         # F1 scenario B: pay the request, pay the same cents unlinked, reverse the linked one. The balance is
         # settled and the request reads open again, but it may not collect a second time. A payment still owed is taken.
@@ -5510,8 +5521,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 for action_id, cents in self._open_cents(store).items() if cents is not None}
 
     def test_the_lean_link_rule_agrees_with_pythons_open_amounts(self) -> None:
-        # Python decides linked payments today (`_open_requests`); the Lean rule (`Payment.linkRefusal`, BLFPAY01) is the
-        # proved but unwired twin. For every request the R2 scenarios above leave, Lean records open_cents and refuses
+        # Lean decides linked payments (`Payment.linkRefusal`, BLFPAY01); the open amounts shown (`_open_requests`) must
+        # agree with it. For every request the R2 scenarios above leave, Lean records open_cents and refuses
         # open_cents + 1 with code 8 (LINK_EXCEEDS_UNPAID). A request with 0 open is refused at 1 cent (nothing to record at 0).
         recorded, refused = b"\x00BLFPRS01\x01", b"\x00BLFPRS01\x07\x08"
         seen: list[tuple[str, int]] = []
