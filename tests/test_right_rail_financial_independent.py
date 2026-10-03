@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
+from tests.lean_without_one_rule import lean_without_one_rule
 
 _HISTORY_TRIGGERS = ("financial_event_update_immutable", "financial_event_delete_immutable")
 
@@ -640,13 +641,13 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 self._assert_rejected_without_repair(target, tamper, "determination:actor-role")
 
     def test_determination_dated_before_its_pack_approval_or_effect_fails_closed_without_repair(self) -> None:
-        # A raw row edit trips evaluation:input-determination first; a writer skipping its pack rule and pre-commit check stores a digest-consistent decision at 2_000 under a pack approved, or in effect, from 2_500.
+        # A raw row edit trips evaluation:input-determination first; a writer whose Lean misses the pack rule, and its pre-commit check, stores a digest-consistent decision at 2_000 under a pack approved, or in effect, from 2_500.
         real, fixture = owner.FinancialOwner._authority_action, self._fixture_pack()
         for field, code in (("approved_at_ms", "determination:pack-not-approved"), ("effective_start_ms", "determination:pack-not-effective")):
             self.db, self.clock = Path(self.temp_dir.name) / f"{field}.sqlite", _Clock()
             self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
             self.addCleanup(self.store.close)
-            with patch.object(self, "_fixture_pack", return_value=replace(fixture, **{field: 2_500})), patch.object(owner.FinancialOwner, "_authority_action", lambda *args: replace(real(*args), **{field: getattr(fixture, field)})), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+            with patch.object(self, "_fixture_pack", return_value=replace(fixture, **{field: 2_500})), patch.object(owner.FinancialOwner, "_authority_action", lambda *args: replace(real(*args), **{field: getattr(fixture, field)})), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None), lean_without_one_rule(self.store, lift_decision_to_ms=2_500):
                 self._populate_owner()
             self._assert_rejected_without_repair(self._copy_database(f"before-{field}.sqlite"), lambda _path: None, code)
 
@@ -668,12 +669,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self._assert_rejected_without_repair(self._copy_database("staged-due-before-pack.sqlite"), tamper, "item:due-before-pack")
 
     def test_authorization_above_its_input_shortfall_fails_closed_without_repair(self) -> None:
-        # M1: 9,800,000 paid leaves 200,000 unpaid; a writer told the shortfall equals the 300,000 claim, with no pre-commit check, stores a digest-consistent over-authorization.
+        # M1: 9,800,000 paid leaves 200,000 unpaid; a writer whose Lean misses the shortfall rule, with no pre-commit check, stores a digest-consistent over-authorization.
         self.db, self.clock = Path(self.temp_dir.name) / "over-shortfall.sqlite", _Clock()
         self.store = owner.FinancialOwner(path=self.db, config=self.config, trusted_authority=self.authority, clock=self.clock)
         self.addCleanup(self.store.close)
-        pay, inputs = owner.FinancialOwner.record_payment_evidence, owner.FinancialOwner._claim_decision_inputs
-        with patch.object(owner.FinancialOwner, "record_payment_evidence", lambda store, **kw: pay(store, **{**kw, "amount_cents": 9_800_000})), patch.object(owner.FinancialOwner, "_claim_decision_inputs", lambda *args, **kw: (lambda c, t, r, d: (c, t, {**r, "shortfall_cents": c["amount_cents"]}, d))(*inputs(*args, **kw))), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None):
+        pay = owner.FinancialOwner.record_payment_evidence
+        with patch.object(owner.FinancialOwner, "record_payment_evidence", lambda store, **kw: pay(store, **{**kw, "amount_cents": 9_800_000})), patch.object(owner.FinancialOwner, "_verify_before_commit", lambda *args: None), lean_without_one_rule(self.store, exceeds_shortfall=True):
             self._populate_owner()
         self._assert_rejected_without_repair(self._copy_database("over-shortfall-copy.sqlite"), lambda _path: None, "^action:exceeds-shortfall$")
 

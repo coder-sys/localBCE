@@ -55,6 +55,7 @@ from app.right_rail_financial_owner_independent import (
     verify_obligation_connection,
 )
 from tests import rightrail_financial_expected_cases as expected
+from tests.lean_without_one_rule import lean_without_one_rule
 from tests.financial_decision_package_oracle import verify_decision_package
 
 
@@ -4235,21 +4236,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         clock = _Clock()
         store, request, evaluated_at = self._s2_offset_request(clock)
         clock.value = expected.H_DUE_AT_MS + 172_800_000
-        encode, run, real_now = financial_engine.encode_correction_transition_request, financial_engine.run_offset_authorization_v1, []
-
-        def stale_encode(**kwargs: Any) -> bytes:
-            real_now.append(kwargs["command"]["owner_now_ms"])
-            return encode(**{**kwargs, "command": {**kwargs["command"], "owner_now_ms": kwargs["command"]["decision_at_ms"]}})
-
-        def answer_for_real_now(*, request: bytes) -> dict[str, Any]:
-            answer = run(request=request)
-            answer["mutation"]["dependencies"]["owner_now_ms"] = real_now[-1]
-            return answer
-
-        from app import right_rail_financial_semantic_adapter as semantic
-
-        with patch.object(financial_engine, "encode_correction_transition_request", stale_encode), patch.object(financial_engine, "run_offset_authorization_v1", answer_for_real_now), patch.object(semantic, "bind_resulting_state", lambda *_args, **_kwargs: None):
-            with self.assertRaisesRegex(FinancialIntegrityError, "^evaluation_verification:action:backdated-past-due$"):
+        with lean_without_one_rule(store, stale_owner_now=True):
+            with self.assertRaisesRegex(FinancialIntegrityError, "^correction_verification:action:backdated-past-due$"):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
             with patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
@@ -5238,8 +5226,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         return store
 
-    def _offset_b_refused_then_forced(self, store: FinancialOwner, bypass: object) -> None:
-        """Offset B is refused and writes nothing; committed anyway with the owner rule bypassed, the checker fails it."""
+    def _offset_b_refused_then_forced(self, store: FinancialOwner) -> None:
+        """Offset B is refused and writes nothing; committed anyway by a writer whose Lean misses the rule, the checker fails it."""
         def authorize_b() -> None:
             receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
             self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
@@ -5250,7 +5238,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             authorize_b()
         self.assertEqual(store.export_continuity(), before)
         self._assert_verified(store)
-        with bypass, patch.object(FinancialOwner, "_verify_before_commit", lambda *args: None):
+        with lean_without_one_rule(store, exceeds_shortfall=True), patch.object(FinancialOwner, "_verify_before_commit", lambda *args: None):
             authorize_b()
         with self.assertRaisesRegex(independent.IndependentFinancialError, "^action:exceeds-shortfall$"):
             self._assert_verified(store)
@@ -5262,14 +5250,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)
         store.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-a", expected_revision=receipt["revision"], action_id="action:offset-a",
                                decision_at_ms=expected.CORRECTION_AUTH_MS + 1_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
-        inputs = FinancialOwner._claim_decision_inputs
-        self._offset_b_refused_then_forced(store, patch.object(FinancialOwner, "_claim_decision_inputs", lambda *args, **kw: (lambda c, t, r, d: (c, t, {**r, "shortfall_cents": 600_000}, d))(*inputs(*args, **kw))))
+        self._offset_b_refused_then_forced(store)
 
     def test_an_offset_counts_open_correction_requests_against_the_shortfall(self) -> None:
-        # M1 (review finding 1): 300,000 unpaid and correction request A (300,000) open: a 300,000 offset would let paying A recover twice.
-        # With nothing open, the same 300,000 offset is accepted (test_case_* H fixture).
-        store, _reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=300_000)
-        self._offset_b_refused_then_forced(store, patch.object(owner, "_open_requests", lambda *args: {}))
+        # M1 (review finding 1): 400,000 unpaid and correction request A (300,000) open leaves 100,000: a 200,000 offset would let paying A recover twice.
+        # With nothing open, a 300,000 offset on 300,000 unpaid is accepted (test_case_* H fixture).
+        store, _reject_b = self._two_claim_corrections(300_000, 200_000, unpaid_cents=400_000)
+        self._offset_b_refused_then_forced(store)
 
     def test_an_offset_counts_only_the_unpaid_part_of_an_open_request(self) -> None:
         # M1 re-review LOW: 400,000 unpaid and request A (300,000) with 100,000 paid against it: 300,000 unpaid, 200,000 still asked, so a
