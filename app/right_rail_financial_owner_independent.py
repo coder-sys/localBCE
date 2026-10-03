@@ -76,6 +76,7 @@ _CORRECTION_AMOUNT_RULES = {
     "b2-v1": lambda claim, shortfall, unpaid: min(claim, shortfall),  # 88D8: the unpaid balance
     "h1-v1": lambda claim, shortfall, unpaid: min(claim, max(shortfall - unpaid, 0)),  # current: not yet requested
 }
+_ENGINES: dict[tuple[object, ...], dict[str, tuple[int, str]]] = {}  # verified once per (path, pins, size, mtime): per-op work must not grow with re-pins
 
 
 def correction_engines() -> dict[str, tuple[int, str]]:
@@ -83,9 +84,13 @@ def correction_engines() -> dict[str, tuple[int, str]]:
     valid for history, never for new work; generation is registry order and the current pin is newest
     (append-only, digest-pinned; line = sha, date, retiring commit, rule, reason). A malformed registry refuses."""
     try:
+        st = RETIRED_PINS_PATH.stat()
+        key: tuple[object, ...] | None = (RETIRED_PINS_PATH, RETIRED_PINS_SHA256, CORRECTION_TRANSITION_ARTIFACT_SHA256, st.st_size, st.st_mtime_ns)
+        if key in _ENGINES:
+            return dict(_ENGINES[key])
         registry = RETIRED_PINS_PATH.read_bytes()
     except OSError:
-        registry = b""
+        key, registry = None, b""
     if hashlib.sha256(registry).hexdigest() != RETIRED_PINS_SHA256:
         _fail("history:correction-retired-pins")
     engines: dict[str, tuple[int, str]] = {}
@@ -98,6 +103,8 @@ def correction_engines() -> dict[str, tuple[int, str]]:
     except ValueError:
         _fail("history:correction-retired-pins")
     engines[CORRECTION_TRANSITION_ARTIFACT_SHA256] = (len(engines), "h1-v1")
+    if key:
+        _ENGINES[key] = dict(engines)
     return engines
 
 
