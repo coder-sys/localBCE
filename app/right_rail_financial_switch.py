@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import hashlib
 import json
 import re
@@ -40,9 +40,6 @@ RUN_REPORT_CONTRACT = "RR/SWITCH/RUN-REPORT/v1"
 CURRENT_OWNER_SCHEMA_VERSION = SCHEMA_VERSION
 MAX_REPLAY_INPUT_BYTES = 2 * MAX_PACKAGE_BYTES
 MAX_RESULT_BYTES = 8 * 1024 * 1024
-_SHA256_RE = re.compile(r"[0-9A-F]{64}\Z")
-_SHA3_RE = re.compile(r"[0-9A-F]{128}\Z")
-_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 _EVALUATOR = Callable[[bytes], object]
 
 
@@ -97,10 +94,20 @@ def _decode_canonical_json(raw: bytes, *, maximum: int, label: str) -> dict[str,
     return value
 
 
-def _id(value: object, label: str) -> str:
-    if type(value) is not str or _ID_RE.fullmatch(value) is None:
-        _fail(f"switch:{label}")
-    return value
+def _matching(pattern: str) -> Callable[[object, str], str]:
+    compiled = re.compile(pattern)
+
+    def check(value: object, label: str) -> str:
+        if type(value) is not str or compiled.fullmatch(value) is None:
+            _fail(f"switch:{label}")
+        return value
+
+    return check
+
+
+_id = _matching(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
+_sha256 = _matching(r"[0-9A-F]{64}\Z")
+_sha3 = _matching(r"[0-9A-F]{128}\Z")
 
 
 def _text(value: object, label: str, *, maximum: int = 1024) -> str:
@@ -115,101 +122,33 @@ def _text(value: object, label: str, *, maximum: int = 1024) -> str:
     return value
 
 
-def _sha256(value: object, label: str) -> str:
-    if type(value) is not str or _SHA256_RE.fullmatch(value) is None:
-        _fail(f"switch:{label}")
-    return value
-
-
-def _sha3(value: object, label: str) -> str:
-    if type(value) is not str or _SHA3_RE.fullmatch(value) is None:
-        _fail(f"switch:{label}")
-    return value
-
-
 def _expect_keys(value: object, keys: set[str], label: str) -> dict[str, object]:
     if type(value) is not dict or set(value) != keys:
         _fail(f"switch:{label}-fields")
     return value
 
 
-class _SnapshotRecords:
-    """Wire records shared by verified snapshot facts and decoded replay input."""
-
-    __slots__ = ()
-
-    def owner_record(self) -> dict[str, object]:
-        return {
-            "owner_id": self.owner_id,
-            "schema": self.owner_schema,
-            "schema_version": self.schema_version,
-            "continuity_epoch": self.continuity_epoch,
-            "sequence": self.sequence,
-            "history_head": self.history_head,
-        }
-
-    def scope_record(self) -> dict[str, object]:
-        return {
-            "state_id": self.state_id,
-            "deployment_id": self.deployment_id,
-            "program_id": self.program_id,
-            "period_id": self.period_id,
-            "currency": self.currency,
-        }
-
-    def authority_record(self) -> dict[str, object]:
-        return {
-            "authority_id": self.authority_id,
-            "epoch": self.authority_epoch,
-            "digest": self.authority_digest,
-        }
-
-    def control_pack_record(self) -> dict[str, object]:
-        return {
-            "pack_id": self.control_pack_id,
-            "version": self.control_pack_version,
-            "digest": self.control_pack_digest,
-            "effective_start_ms": self.control_pack_start_ms,
-            "effective_end_ms": self.control_pack_end_ms,
-            "calculation_rule_id": self.calculation_rule_id,
-            "adjustment_rule_id": self.adjustment_rule_id,
-        }
-
-    def population_record(self) -> dict[str, object]:
-        return {
-            "population_id": self.population_id,
-            "manifest_id": self.manifest_id,
-            "manifest_version": self.manifest_version,
-            "manifest_digest": self.manifest_digest,
-            "member_digest": self.member_digest,
-            "member_ids": list(self.member_ids),
-        }
-
-    def source_record(self) -> dict[str, object]:
-        return {
-            "source_id": self.source_id,
-            "version": self.source_version,
-            "digest": self.source_digest,
-            "watermark_ms": self.source_watermark_ms,
-        }
-
-    def binding_records(self) -> dict[str, object]:
-        return {
-            "owner": self.owner_record(),
-            "authority": self.authority_record(),
-            "scope": self.scope_record(),
-            "control_pack": self.control_pack_record(),
-            "population": self.population_record(),
-            "source": self.source_record(),
-        }
+# Wire record name -> ((wire key, field name), ...); one table drives records and replay-input keys.
+_RECORDS = {
+    "owner": (("owner_id", "owner_id"), ("schema", "owner_schema"), ("schema_version", "schema_version"),
+              ("continuity_epoch", "continuity_epoch"), ("sequence", "sequence"), ("history_head", "history_head")),
+    "authority": (("authority_id", "authority_id"), ("epoch", "authority_epoch"), ("digest", "authority_digest")),
+    "scope": tuple((key, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")),
+    "control_pack": (("pack_id", "control_pack_id"), ("version", "control_pack_version"), ("digest", "control_pack_digest"),
+                     ("effective_start_ms", "control_pack_start_ms"), ("effective_end_ms", "control_pack_end_ms"),
+                     ("calculation_rule_id", "calculation_rule_id"), ("adjustment_rule_id", "adjustment_rule_id")),
+    "population": (("population_id", "population_id"), ("manifest_id", "manifest_id"), ("manifest_version", "manifest_version"),
+                   ("manifest_digest", "manifest_digest"), ("member_digest", "member_digest"), ("member_ids", "member_ids")),
+    "source": (("source_id", "source_id"), ("version", "source_version"), ("digest", "source_digest"),
+               ("watermark_ms", "source_watermark_ms")),
+}
+_COHORT_TEXTS = ("test_identity", "source_class", "receiver_boundary_ref", "custody_ref", "permissions_ref", "pending_boundary_ref")
 
 
 @dataclass(frozen=True, slots=True)
-class SnapshotFacts(_SnapshotRecords):
-    """Identity and exact cohort facts derived from verified current-version SHADOW bytes."""
+class _SnapshotRecords:
+    """Wire-record fields shared by verified snapshot facts and decoded replay input."""
 
-    snapshot_sha256: str
-    package_digest: str
     owner_id: str
     owner_schema: str
     schema_version: int
@@ -242,28 +181,32 @@ class SnapshotFacts(_SnapshotRecords):
     source_digest: str
     source_watermark_ms: int
 
-    def cohort_binding_bytes(
-        self,
-        *,
-        cohort_id: str,
-        test_identity: str,
-        source_class: str,
-        receiver_boundary_ref: str,
-        custody_ref: str,
-        permissions_ref: str,
-        pending_boundary_ref: str,
-    ) -> bytes:
+    def record(self, name: str) -> dict[str, object]:
+        return {
+            key: list(value) if type(value) is tuple else value
+            for key, value in ((key, getattr(self, field)) for key, field in _RECORDS[name])
+        }
+
+    def binding_records(self) -> dict[str, object]:
+        return {name: self.record(name) for name in _RECORDS}
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotFacts(_SnapshotRecords):
+    """Identity and exact cohort facts derived from verified current-version SHADOW bytes."""
+
+    snapshot_sha256: str
+    package_digest: str
+
+    def cohort_binding_bytes(self, *, cohort_id: str, **texts: str) -> bytes:
         """Return the canonical bytes an external cohort approval must bind."""
 
+        if set(texts) != set(_COHORT_TEXTS):
+            _fail("switch:cohort-binding-fields")
         payload = {
             "contract": COHORT_BINDING_CONTRACT,
             "cohort_id": _id(cohort_id, "cohort-id"),
-            "test_identity": _text(test_identity, "test-identity"),
-            "source_class": _text(source_class, "source-class"),
-            "receiver_boundary_ref": _text(receiver_boundary_ref, "receiver-boundary-ref"),
-            "custody_ref": _text(custody_ref, "custody-ref"),
-            "permissions_ref": _text(permissions_ref, "permissions-ref"),
-            "pending_boundary_ref": _text(pending_boundary_ref, "pending-boundary-ref"),
+            **{key: _text(texts[key], key.replace("_", "-")) for key in _COHORT_TEXTS},
             "snapshot_sha256": self.snapshot_sha256,
             **self.binding_records(),
         }
@@ -497,37 +440,6 @@ class DecodedReplayInput(_SnapshotRecords):
     input_sha256: str
     snapshot_package_bytes: bytes
     cohort_id: str
-    owner_id: str
-    owner_schema: str
-    schema_version: int
-    continuity_epoch: int
-    sequence: int
-    history_head: str
-    authority_id: str
-    authority_epoch: int
-    authority_digest: str
-    state_id: str
-    deployment_id: str
-    program_id: str
-    period_id: str
-    currency: str
-    population_id: str
-    manifest_id: str
-    manifest_version: int
-    manifest_digest: str
-    member_digest: str
-    member_ids: tuple[str, ...]
-    control_pack_id: str
-    control_pack_version: int
-    control_pack_digest: str
-    control_pack_start_ms: int
-    control_pack_end_ms: int
-    calculation_rule_id: str
-    adjustment_rule_id: str
-    source_id: str
-    source_version: str
-    source_digest: str
-    source_watermark_ms: int
     reference_id: str
     reference_version: str
     reference_tool_version: str
@@ -590,12 +502,11 @@ def decode_replay_input(
         {"cohort_id", "test_identity", "approval_id", "approved_by", "approval_ref", "source_class", "receiver_boundary_ref", "custody_ref", "permissions_ref", "pending_boundary_ref", "binding_sha256"},
         "replay-cohort",
     )
-    owner = _expect_keys(value["owner"], {"owner_id", "schema", "schema_version", "continuity_epoch", "sequence", "history_head"}, "replay-owner")
-    authority = _expect_keys(value["authority"], {"authority_id", "epoch", "digest"}, "replay-authority")
-    scope = _expect_keys(value["scope"], {"state_id", "deployment_id", "program_id", "period_id", "currency"}, "replay-scope")
-    pack = _expect_keys(value["control_pack"], {"pack_id", "version", "digest", "effective_start_ms", "effective_end_ms", "calculation_rule_id", "adjustment_rule_id"}, "replay-control-pack")
-    population = _expect_keys(value["population"], {"population_id", "manifest_id", "manifest_version", "manifest_digest", "member_digest", "member_ids"}, "replay-population")
-    source = _expect_keys(value["source"], {"source_id", "version", "digest", "watermark_ms"}, "replay-source")
+    records = {
+        name: _expect_keys(value[name], {key for key, _ in fields}, f"replay-{name.replace('_', '-')}")
+        for name, fields in _RECORDS.items()
+    }
+    population = records["population"]
     reference = _expect_keys(value["reference"], {"reference_id", "version", "authority_id", "reviewer_id", "source_ref", "source_sha256", "tool_version", "expected_differences", "forbidden_differences"}, "replay-reference")
     candidate = _expect_keys(value["candidate"], {"operator_id", "version", "tool_version", "release_sha256"}, "replay-candidate")
     snapshot = _expect_keys(value["snapshot"], {"mode", "package_digest", "sha256", "package_base64"}, "replay-snapshot")
@@ -612,7 +523,7 @@ def decode_replay_input(
         trusted_authority=trusted_authority,
         expected_scope=expected_scope,
     )
-    if {"owner": owner, "authority": authority, "scope": scope, "control_pack": pack, "population": population, "source": source} != facts.binding_records():
+    if records != facts.binding_records():
         _fail("switch:replay-binding")
     if snapshot.get("package_digest") != facts.package_digest:
         _fail("switch:replay-package-digest")
@@ -620,12 +531,7 @@ def decode_replay_input(
         _fail("switch:replay-source-class")
     cohort_binding = facts.cohort_binding_bytes(
         cohort_id=_id(cohort.get("cohort_id"), "replay-cohort-id"),
-        test_identity=_text(cohort.get("test_identity"), "replay-test-identity"),
-        source_class=_text(cohort.get("source_class"), "replay-source-class"),
-        receiver_boundary_ref=_text(cohort.get("receiver_boundary_ref"), "replay-receiver-boundary-ref"),
-        custody_ref=_text(cohort.get("custody_ref"), "replay-custody-ref"),
-        permissions_ref=_text(cohort.get("permissions_ref"), "replay-permissions-ref"),
-        pending_boundary_ref=_text(cohort.get("pending_boundary_ref"), "replay-pending-boundary-ref"),
+        **{key: _text(cohort.get(key), "replay-" + key.replace("_", "-")) for key in _COHORT_TEXTS},
     )
     if hashlib.sha256(cohort_binding).hexdigest().upper() != _sha256(cohort.get("binding_sha256"), "replay-cohort-binding"):
         _fail("switch:replay-cohort-binding")
@@ -653,37 +559,7 @@ def decode_replay_input(
         input_sha256=hashlib.sha256(raw).hexdigest().upper(),
         snapshot_package_bytes=package_bytes,
         cohort_id=_id(cohort.get("cohort_id"), "replay-cohort-id"),
-        owner_id=facts.owner_id,
-        owner_schema=facts.owner_schema,
-        schema_version=facts.schema_version,
-        continuity_epoch=facts.continuity_epoch,
-        sequence=facts.sequence,
-        history_head=facts.history_head,
-        authority_id=facts.authority_id,
-        authority_epoch=facts.authority_epoch,
-        authority_digest=facts.authority_digest,
-        state_id=facts.state_id,
-        deployment_id=facts.deployment_id,
-        program_id=facts.program_id,
-        period_id=facts.period_id,
-        currency=facts.currency,
-        population_id=facts.population_id,
-        manifest_id=facts.manifest_id,
-        manifest_version=facts.manifest_version,
-        manifest_digest=facts.manifest_digest,
-        member_digest=facts.member_digest,
-        member_ids=facts.member_ids,
-        control_pack_id=facts.control_pack_id,
-        control_pack_version=facts.control_pack_version,
-        control_pack_digest=facts.control_pack_digest,
-        control_pack_start_ms=facts.control_pack_start_ms,
-        control_pack_end_ms=facts.control_pack_end_ms,
-        calculation_rule_id=facts.calculation_rule_id,
-        adjustment_rule_id=facts.adjustment_rule_id,
-        source_id=facts.source_id,
-        source_version=facts.source_version,
-        source_digest=facts.source_digest,
-        source_watermark_ms=facts.source_watermark_ms,
+        **{field.name: getattr(facts, field.name) for field in fields(_SnapshotRecords)},
         reference_id=_id(reference.get("reference_id"), "replay-reference-id"),
         reference_version=_text(reference.get("version"), "replay-reference-version"),
         reference_tool_version=_text(reference.get("tool_version"), "replay-reference-tool-version"),
@@ -751,45 +627,24 @@ def _validate_approval(approval: CohortApproval | None, facts: SnapshotFacts) ->
     if type(approval) is not CohortApproval or approval.contract != COHORT_APPROVAL_CONTRACT:
         return None, "cohort_approval_schema"
     try:
-        approval_id = _id(approval.approval_id, "approval-id")
-        cohort_id = _id(approval.cohort_id, "cohort-id")
-        approved_by = _id(approval.approved_by, "approver-id")
-        approval_ref = _text(approval.approval_ref, "approval-ref")
-        test_identity = _text(approval.test_identity, "test-identity")
-        source_class = _text(approval.source_class, "source-class")
-        receiver_boundary_ref = _text(approval.receiver_boundary_ref, "receiver-boundary-ref")
-        custody_ref = _text(approval.custody_ref, "custody-ref")
-        permissions_ref = _text(approval.permissions_ref, "permissions-ref")
-        pending_boundary_ref = _text(approval.pending_boundary_ref, "pending-boundary-ref")
-        binding_digest = _sha256(approval.binding_sha256, "cohort-binding-digest")
+        record = {
+            "cohort_id": _id(approval.cohort_id, "cohort-id"),
+            "approval_id": _id(approval.approval_id, "approval-id"),
+            "approved_by": _id(approval.approved_by, "approver-id"),
+            "approval_ref": _text(approval.approval_ref, "approval-ref"),
+            **{key: _text(getattr(approval, key), key.replace("_", "-")) for key in _COHORT_TEXTS},
+            "binding_sha256": _sha256(approval.binding_sha256, "cohort-binding-digest"),
+        }
         binding_bytes = facts.cohort_binding_bytes(
-            cohort_id=cohort_id,
-            test_identity=test_identity,
-            source_class=source_class,
-            receiver_boundary_ref=receiver_boundary_ref,
-            custody_ref=custody_ref,
-            permissions_ref=permissions_ref,
-            pending_boundary_ref=pending_boundary_ref,
+            **{key: record[key] for key in ("cohort_id", *_COHORT_TEXTS)}
         )
     except FinancialSwitchError:
         return None, "cohort_approval_fields"
-    if source_class != "SYNTHETIC":
+    if record["source_class"] != "SYNTHETIC":
         return None, "snapshot_source_not_approved_synthetic"
-    if hashlib.sha256(binding_bytes).hexdigest().upper() != binding_digest:
+    if hashlib.sha256(binding_bytes).hexdigest().upper() != record["binding_sha256"]:
         return None, "cohort_approval_binding_mismatch"
-    return {
-        "cohort_id": cohort_id,
-        "test_identity": test_identity,
-        "approval_id": approval_id,
-        "approved_by": approved_by,
-        "approval_ref": approval_ref,
-        "source_class": source_class,
-        "receiver_boundary_ref": receiver_boundary_ref,
-        "custody_ref": custody_ref,
-        "permissions_ref": permissions_ref,
-        "pending_boundary_ref": pending_boundary_ref,
-        "binding_sha256": binding_digest,
-    }, None
+    return record, None
 
 
 def _reference_identity(reference: ReferenceSpec) -> dict[str, str]:
@@ -1039,6 +894,12 @@ def _member_audit(output: object, facts: SnapshotFacts) -> dict[str, object]:
     }
 
 
+def _unknown(report: dict[str, object], reasons: list[str], unknowns: list[str]) -> dict[str, object]:
+    report["reasons"] = reasons
+    report["unknowns"] = [{"class": "UNKNOWN", "reason": reason} for reason in unknowns]
+    return report
+
+
 def _run_evaluator(evaluator: _EVALUATOR, replay_input: bytes, *, label: str) -> tuple[object | None, int | None, str | None]:
     if not callable(evaluator):
         return None, None, f"{label}:evaluator-missing"
@@ -1075,11 +936,11 @@ def _base_report(
             "continuity_epoch": facts.continuity_epoch,
             "sequence": facts.sequence,
             "history_head": facts.history_head,
-            "authority": facts.authority_record(),
-            "scope": facts.scope_record(),
-            "population": facts.population_record(),
-            "control_pack": facts.control_pack_record(),
-            "source": facts.source_record(),
+            "authority": facts.record("authority"),
+            "scope": facts.record("scope"),
+            "population": facts.record("population"),
+            "control_pack": facts.record("control_pack"),
+            "source": facts.record("source"),
         },
         "expected_member_count": 0 if facts is None else len(facts.member_ids),
         "reference_received_member_count": 0,
@@ -1143,9 +1004,7 @@ def run_shadow_replay(
             expected_scope=expected_scope,
         )
     except FinancialSwitchError as error:
-        report = _base_report(status="INVALID_SNAPSHOT", reasons=[str(error)])
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": str(error)}]
-        return report
+        return _unknown(_base_report(status="INVALID_SNAPSHOT", reasons=[str(error)]), [str(error)], [str(error)])
     missing: list[str] = []
     if cohort_approval is None:
         missing.append("cohort_approval_missing")
@@ -1157,15 +1016,11 @@ def run_shadow_replay(
         return _base_report(status="INCOMPLETE", reasons=missing, facts=facts)
     assert cohort_approval is not None and reference is not None and candidate is not None
     if type(reference) is not ReferenceSpec or type(candidate) is not CandidateSpec:
-        report = _base_report(status="INCOMPLETE", reasons=["operator_spec_schema"], facts=facts)
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": "operator_spec_schema"}]
-        return report
+        return _unknown(_base_report(status="INCOMPLETE", reasons=[], facts=facts), ["operator_spec_schema"], ["operator_spec_schema"])
     approval_record, approval_error = _validate_approval(cohort_approval, facts)
     if approval_error is not None or approval_record is None:
         reason = approval_error or "cohort_approval_invalid"
-        report = _base_report(status="INCOMPLETE", reasons=[reason], facts=facts)
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": reason}]
-        return report
+        return _unknown(_base_report(status="INCOMPLETE", reasons=[], facts=facts), [reason], [reason])
     try:
         if not callable(reference.evaluate) or not callable(candidate.evaluate):
             _fail("switch:evaluator-missing")
@@ -1177,9 +1032,7 @@ def run_shadow_replay(
             forbidden_policies,
         ) = _build_replay_input(snapshot_bytes, facts, approval_record, reference, candidate)
     except FinancialSwitchError as error:
-        report = _base_report(status="INCOMPLETE", reasons=[str(error)], facts=facts)
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": str(error)}]
-        return report
+        return _unknown(_base_report(status="INCOMPLETE", reasons=[], facts=facts), [str(error)], [str(error)])
     assert approval_record is not None
     input_sha256 = hashlib.sha256(replay_input).hexdigest().upper()
     report = _base_report(status="INCOMPLETE", reasons=[], facts=facts, input_sha256=input_sha256)
@@ -1188,61 +1041,36 @@ def run_shadow_replay(
     report["cohort_approval"] = approval_record
     report["resources"]["replay_input_bytes"] = len(replay_input)  # type: ignore[index]
 
-    reference_raw, reference_elapsed, reference_error = _run_evaluator(reference.evaluate, replay_input, label="reference")
-    report["resources"]["reference_elapsed_ns"] = reference_elapsed  # type: ignore[index]
-    if reference_error is not None:
-        report["member_audit"]["reference"] = {"status": "EVALUATOR_FAILED", "reason": reference_error}  # type: ignore[index]
-        report["reasons"] = [reference_error]
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": reference_error}]
-        return report
-    reference_valid, reference_errors = _validate_output(
-        reference_raw,
-        facts=facts,
-        input_sha256=input_sha256,
-        producer={
-            "kind": "REFERENCE",
-            "id": reference_record["reference_id"],
-            "version": reference_record["version"],
-            "tool_version": reference_record["tool_version"],
-            "artifact_sha256": reference_record["source_sha256"],
-        },
-        label="reference",
-    )
-    report["member_audit"]["reference"] = _member_audit(reference_raw, facts)  # type: ignore[index]
-    report["reference_received_member_count"] = report["member_audit"]["reference"]["received_member_count"]  # type: ignore[index]
-    if reference_valid is None:
-        report["reasons"] = ["independent_reference_result_invalid"]
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": error} for error in reference_errors]
-        return report
-    report["resources"]["reference_output_bytes"] = len(_canonical_json(reference_valid, maximum=MAX_RESULT_BYTES))  # type: ignore[index]
-
-    candidate_raw, candidate_elapsed, candidate_error = _run_evaluator(candidate.evaluate, replay_input, label="candidate")
-    report["resources"]["candidate_elapsed_ns"] = candidate_elapsed  # type: ignore[index]
-    if candidate_error is not None:
-        report["member_audit"]["candidate"] = {"status": "EVALUATOR_FAILED", "reason": candidate_error}  # type: ignore[index]
-        report["reasons"] = [candidate_error]
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": candidate_error}]
-        return report
-    candidate_valid, candidate_errors = _validate_output(
-        candidate_raw,
-        facts=facts,
-        input_sha256=input_sha256,
-        producer={
-            "kind": "CANDIDATE",
-            "id": candidate_record["operator_id"],
-            "version": candidate_record["version"],
-            "tool_version": candidate_record["tool_version"],
-            "artifact_sha256": candidate_record["release_sha256"],
-        },
-        label="candidate",
-    )
-    report["member_audit"]["candidate"] = _member_audit(candidate_raw, facts)  # type: ignore[index]
-    report["candidate_received_member_count"] = report["member_audit"]["candidate"]["received_member_count"]  # type: ignore[index]
-    if candidate_valid is None:
-        report["reasons"] = ["candidate_result_invalid"]
-        report["unknowns"] = [{"class": "UNKNOWN", "reason": error} for error in candidate_errors]
-        return report
-    report["resources"]["candidate_output_bytes"] = len(_canonical_json(candidate_valid, maximum=MAX_RESULT_BYTES))  # type: ignore[index]
+    valid: dict[str, dict[str, object]] = {}
+    for label, spec, record, id_key, digest_key, invalid_reason in (
+        ("reference", reference, reference_record, "reference_id", "source_sha256", "independent_reference_result_invalid"),
+        ("candidate", candidate, candidate_record, "operator_id", "release_sha256", "candidate_result_invalid"),
+    ):
+        raw, elapsed, error = _run_evaluator(spec.evaluate, replay_input, label=label)
+        report["resources"][f"{label}_elapsed_ns"] = elapsed  # type: ignore[index]
+        if error is not None:
+            report["member_audit"][label] = {"status": "EVALUATOR_FAILED", "reason": error}  # type: ignore[index]
+            return _unknown(report, [error], [error])
+        checked, errors = _validate_output(
+            raw,
+            facts=facts,
+            input_sha256=input_sha256,
+            producer={
+                "kind": label.upper(),
+                "id": record[id_key],
+                "version": record["version"],
+                "tool_version": record["tool_version"],
+                "artifact_sha256": record[digest_key],
+            },
+            label=label,
+        )
+        report["member_audit"][label] = _member_audit(raw, facts)  # type: ignore[index]
+        report[f"{label}_received_member_count"] = report["member_audit"][label]["received_member_count"]  # type: ignore[index]
+        if checked is None:
+            return _unknown(report, [invalid_reason], errors)
+        report["resources"][f"{label}_output_bytes"] = len(_canonical_json(checked, maximum=MAX_RESULT_BYTES))  # type: ignore[index]
+        valid[label] = checked
+    reference_valid, candidate_valid = valid["reference"], valid["candidate"]
 
     expected_by_path = {policy["path"]: policy for policy in expected_policies}
     forbidden_by_path = {policy["path"]: policy for policy in forbidden_policies}
@@ -1262,22 +1090,15 @@ def run_shadow_replay(
             matched += 1
             continue
         rule = expected_by_path.get(path) or forbidden_by_path.get(path)
-        if rule is None:
-            classification = "UNEXPLAINED"
-            rationale = None
-            approval_ref = None
-        else:
-            classification = str(rule["classification"])
-            rationale = rule["rationale"]
-            approval_ref = rule["approval_ref"]
+        if rule is not None:
             used_rules.add(path)
         differences.append({
             "path": path,
-            "classification": classification,
+            "classification": "UNEXPLAINED" if rule is None else str(rule["classification"]),
             "reference_value": expected_value,
             "candidate_value": candidate_value,
-            "rationale": rationale,
-            "approval_ref": approval_ref,
+            "rationale": None if rule is None else rule["rationale"],
+            "approval_ref": None if rule is None else rule["approval_ref"],
         })
     all_rules = expected_policies + forbidden_policies
     report["unused_difference_rules"] = [
@@ -1295,20 +1116,13 @@ def run_shadow_replay(
         + bytes.fromhex(report["reference_result_sha256"])
         + bytes.fromhex(report["candidate_result_sha256"])
     ).hexdigest().upper()
-    if unknowns:
-        report["status"] = "INCOMPLETE"
-        report["comparison_status"] = "INCOMPLETE"
-    elif any(item["classification"] == "FORBIDDEN" for item in differences):
-        report["status"] = "BLOCKED"
-        report["comparison_status"] = "FORBIDDEN_DIFFERENCES"
-    elif any(item["classification"] == "UNEXPLAINED" for item in differences):
-        report["status"] = "BLOCKED"
-        report["comparison_status"] = "UNEXPLAINED_DIFFERENCES"
-    elif differences:
-        report["status"] = "COMPARISON_ONLY"
-        report["comparison_status"] = "EXPECTED_DIFFERENCES_ONLY"
-    else:
-        report["status"] = "COMPARISON_ONLY"
-        report["comparison_status"] = "MATCHED"
+    classes = {item["classification"] for item in differences}
+    report["status"], report["comparison_status"] = (
+        ("INCOMPLETE", "INCOMPLETE") if unknowns
+        else ("BLOCKED", "FORBIDDEN_DIFFERENCES") if "FORBIDDEN" in classes
+        else ("BLOCKED", "UNEXPLAINED_DIFFERENCES") if "UNEXPLAINED" in classes
+        else ("COMPARISON_ONLY", "EXPECTED_DIFFERENCES_ONLY") if differences
+        else ("COMPARISON_ONLY", "MATCHED")
+    )
     report["reasons"] = []
     return report

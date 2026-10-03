@@ -27,7 +27,7 @@ CORE_FILE_LINES = {
     "app/right_rail_financial_semantic_adapter.py": 2_286,
     "app/right_rail_financial_mirror.py": 1_374,
     "app/right_rail_financial_engine.py": 1_249,
-    "app/right_rail_financial_switch.py": 1_314,
+    "app/right_rail_financial_switch.py": 1_128,
     "app/right_rail_financial_line_pack.py": 253,
     "app/right_rail_financial_followthrough.py": 336,
 }
