@@ -107,4 +107,45 @@ foreign 980
 line 980 FFS_CLAIM 9001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED,MEMBER_DECEASED
 commit
 
-end 17
+# Id registry answers (`owners K ID:SHARD:SETTLED`; STEP 1b): a payment with an id the registry does not give K waits
+case owners_wait
+owners 1
+line 800 FFS_CLAIM 1002 7001 7001 20270306 99213 1 11000 WAIT -
+commit
+
+# An id another shard has sealed holds as ALREADY_DECIDED; an id K itself has in flight decides
+case owners_foreign_sealed
+owners 0 910:1:1 911:0:0
+line 910 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 HOLD ALREADY_DECIDED
+line 911 FFS_CLAIM 1001 7001 7001 20270306 99214 1 13100 ALLOW -
+commit
+
+# One waiting line makes its whole payment wait; the other payment decides
+case owners_wait_whole_payment
+owners 0 931:0:0 932:0:0
+line 930:930 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 WAIT -
+line 931:930 FFS_CLAIM 1001 7001 7001 20270306 99214 1 13100 WAIT -
+line 932 FFS_CLAIM 1001 7001 7001 20270307 99213 1 12500 ALLOW -
+commit
+
+# An id another shard holds unsealed (settled=0) is not K's and not recorded elsewhere: it waits
+case owners_foreign_unsealed_waits
+owners 0 950:1:0
+line 950 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 WAIT -
+commit
+
+# The registry frees K's in-flight ids that the commit did not decide; sealed ids are not in flight
+case owners_free
+owners 0 940:0:0 941:0:0 942:0:1
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+free 941
+commit
+
+# Nothing in flight: nothing to free
+case owners_free_none
+owners 0 940:0:1
+line 940 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500 ALLOW -
+free
+commit
+
+end 26

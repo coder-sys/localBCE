@@ -170,7 +170,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   else
   let lines := st.batch.toList.map (·.1)
   -- `owners`: `Fast.decideRegF` (= `decideReg`, `decideRegF_eq`) with the waiting lines left out.
-  let (b, f, wait) := match st.owners with
+  let (b, f, wait) : List Line × List Nat × List Line := match st.owners with
     | some (k, os) =>
       let b := Fast.readyF k os lines
       let ps := Std.HashSet.ofList (b.map (·.pay))

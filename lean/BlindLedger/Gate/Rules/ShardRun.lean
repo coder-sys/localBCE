@@ -292,7 +292,7 @@ theorem holder_mem (i : Nat) (l : List Row) : ∀ x, holder i l = some x → ∃
     obtain ⟨kd, j, k⟩ := r
     intro x h
     by_cases hj : j = i
-    · exact ⟨_, by simp, hj⟩
+    · exact ⟨(kd, j, k), by simp, hj⟩
     · cases hy : holder i l with
       | none => simp [holder, hj, hy] at h
       | some y =>
@@ -373,7 +373,7 @@ theorem World.step_inv {w w' : World} {l : List Row} {e : Ev} (h : w.Inv l)
         · obtain rfl : q1 = k := by simpa using he.2
           have hp := hf _ _ rfl i hq
           cases hm : ((w.rel q1 ++ w.unr q1).map (·.id)).contains i
-          · exact (hc ⟨List.mem_filter.mpr ⟨hp, by simp [hm]⟩, hq⟩).elim
+          · exact (hc ⟨List.mem_filter.mpr ⟨hp, by simp only [hm, Bool.not_false]⟩, hq⟩).elim
           · obtain ⟨x, hxm, hxi⟩ := List.mem_map.mp (List.contains_iff_mem.mp hm)
             exact ⟨x, hxm, hxi⟩
         · exact hx i q1 hq
@@ -533,7 +533,7 @@ end Fast
 #guard_msgs in #print axioms Fast.settleFreeF_eq
 /-- info: 'BlindLedger.Gate.Rules.run_taken_recorded' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms run_taken_recorded
-/-- info: 'BlindLedger.Gate.Rules.World.runL_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.Rules.World.runL_run' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms World.runL_run
 /-- info: 'BlindLedger.Gate.Rules.pendingOf_fair' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms pendingOf_fair
