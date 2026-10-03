@@ -1,10 +1,9 @@
-"""The gate's per-tenant line-id registry (``app/right_rail_gate_idreg.py``): one id, one shard; first reserver
-owns; durable before reply; atomic; chain replay.  Synthetic ids, non-PHI."""
+"""The gate's per-tenant line-id registry (``app/right_rail_gate_idreg.py``, store v2): chained RESERVE, FREE,
+SETTLE and BOOT rows; settle-then-reserve in one transaction; the boot check.  Synthetic ids, non-PHI."""
 
 from __future__ import annotations
 
 import contextlib
-import shutil
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -15,30 +14,15 @@ import unittest
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
-from app import right_rail_gate_mark as marks
 
 ROOT = Path(__file__).resolve().parents[1]
-_RECORD = idreg._MARK_BODY + marks.CHECK  # one mark record
-
-
-def _run(code: str, *args: str) -> subprocess.Popen:
-    return subprocess.Popen([sys.executable, "-c", code, *args], cwd=ROOT, stdout=subprocess.PIPE, text=True)
-
-
-_RESERVE_1000 = (  # argv: path shard start-time; the start time is the barrier that makes the two batches race
+_RESERVE_1000 = (  # argv: path nonce-hex shard start-time; the start time is the barrier that makes the two batches race
     "import sys, time\n"
     "from pathlib import Path\n"
     "from app.right_rail_gate_idreg import IdRegistry\n"
-    "r = IdRegistry(Path(sys.argv[1]), timeout=30)\n"
-    "ids = list(range(1000))\n"
-    "time.sleep(max(0.0, float(sys.argv[3]) - time.time()))\n"
-    "print(len(r.reserve(int(sys.argv[2]), ids)[0]))\n")
-_RESERVE_THEN_DIE = (  # the reply was never read: the process dies the moment reserve returns
-    "import os, sys\n"
-    "from pathlib import Path\n"
-    "from app.right_rail_gate_idreg import IdRegistry\n"
-    "IdRegistry(Path(sys.argv[1])).reserve(0, list(range(50)))\n"
-    "os._exit(0)\n")
+    "r = IdRegistry(Path(sys.argv[1]), boot=bytes.fromhex(sys.argv[2]), timeout=30)\n"
+    "time.sleep(max(0.0, float(sys.argv[4]) - time.time()))\n"
+    "print(repr(r.reserve(int(sys.argv[3]), list(range(1000)), sealed=None)[0]))\n")
 
 
 class _Dying:
@@ -78,273 +62,180 @@ class IdRegistryTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)  # cleanups run last-in first: stores close before the directory goes
         self.path = Path(tmp.name) / "ids.sqlite3"
+        self.nonce = idreg.boot(self.path, {})
+        self.reg = self.open(self.nonce)
 
-    def open(self, **kwargs) -> idreg.IdRegistry:
-        reg = idreg.IdRegistry(self.path, **kwargs)
+    def open(self, nonce: bytes, **kwargs) -> idreg.IdRegistry:
+        reg = idreg.IdRegistry(self.path, boot=nonce, **kwargs)
         self.addCleanup(reg.close)
         return reg
 
-    def test_t1_the_second_shard_gets_the_first_shards_ids_as_foreign(self) -> None:
-        reg = self.open()
-        self.assertEqual(reg.reserve(0, [1, 2])[0], [])
-        foreign, head, _ = reg.reserve(1, [1, 3])
-        self.assertEqual(foreign, [(1, 0)])  # only the contested id, with its owner
-        self.assertEqual(reg.reserve(1, [3])[0], [])  # the new id is shard 1's own now
-        self.assertEqual(reg.reserve(0, [3])[0], [(3, 1)])
-        self.assertEqual(reg.reserve(1, [1, 3])[1], reg.verify())  # replay agrees with the returned head
-        self.assertNotEqual(head, gate.ZERO_DIGEST)
+    def rows(self) -> int:
+        return self.reg._db.execute("SELECT COUNT(*) FROM log").fetchone()[0]
 
-    def test_t1_swap_whoever_reserves_first_owns(self) -> None:
-        reg = self.open()
-        self.assertEqual(reg.reserve(1, [1])[0], [])
-        self.assertEqual(reg.reserve(0, [1])[0], [(1, 1)])
-        self.assertEqual(reg.reserve(1, [1])[0], [])  # the owner asking again is not foreign
-
-    def test_reserving_again_changes_nothing(self) -> None:
-        reg = self.open()
-        _, head, _ = reg.reserve(0, [1, 2, 1])  # a repeat inside one batch counts once
-        self.assertEqual(reg.reserve(0, [2, 1])[1], head)
-        self.assertEqual(reg.reserve(0, [])[1], head)
-
-    def test_t2_two_processes_racing_one_batch_give_it_to_exactly_one(self) -> None:
-        self.open()  # create the schema first so the two processes only race on the reservation
-        start = str(time.time() + 3)
-        procs = [_run(_RESERVE_1000, str(self.path), str(shard), start) for shard in (0, 1)]
-        foreign_counts = []
-        for proc in procs:
-            out, _ = proc.communicate(timeout=120)
-            self.assertEqual(proc.returncode, 0)
-            foreign_counts.append(int(out))
-        self.assertEqual(sorted(foreign_counts), [0, 1000])  # one shard owns all 1000, the other is refused all 1000
-        foreign, head, _ = self.open().reserve(2, list(range(1000)))
-        self.assertEqual(len({owner for _, owner in foreign}), 1)
-        self.assertEqual((len(foreign), head), (1000, self.open().verify()))
-
-    def test_t3_a_process_that_dies_after_reserve_returns_keeps_its_ids(self) -> None:
-        self.open()
-        proc = _run(_RESERVE_THEN_DIE, str(self.path))
-        proc.communicate(timeout=120)
-        self.assertEqual(proc.returncode, 0)
-        reg = self.open()
-        ids = list(range(50))
-        self.assertEqual(reg.reserve(0, ids)[0], [])  # the same shard, after restart, sees them as its own
-        self.assertEqual(reg.reserve(1, ids)[0], [(i, 0) for i in ids])  # the other shard is refused all of them
-
-    def test_t4_a_process_that_dies_at_commit_reserves_nothing(self) -> None:
-        reg = self.open()
-        reg._db = _Dying(reg._db, die=True)
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-            reg.reserve(1, [1, 2])
-        again = self.open()
-        self.assertEqual(again.verify(), gate.ZERO_DIGEST)  # no row survived
-        self.assertEqual(again.reserve(0, [1, 2])[0], [])  # so shard 0, not shard 1, owns them
-
-    def test_t4_a_failed_commit_rolls_back_and_the_registry_still_works(self) -> None:
-        reg = self.open()
-        live = reg._db
-        reg._db = _Dying(live, die=False)
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-            reg.reserve(1, [1])
-        reg._db = live
-        self.assertEqual(reg.verify(), gate.ZERO_DIGEST)
-        self.assertEqual(reg.reserve(0, [1])[0], [])
-
-    def test_t6_genesis_refuses_a_shared_id_and_reserves_nothing(self) -> None:
-        reg = self.open()
-        with self.assertRaisesRegex(idreg.IdRegistryError, "genesis_double_acceptance"):
-            reg.genesis({0: [1, 2], 1: [3, 2]})
-        self.assertEqual(reg.verify(), gate.ZERO_DIGEST)
-        self.assertEqual(reg.reserve(2, [1, 2, 3])[0], [])  # even shard 0's ids were rolled back
-
-    def test_genesis_reserves_every_shards_set(self) -> None:
-        reg = self.open()
-        head = reg.genesis({0: [1], 1: [2]})
-        self.assertEqual(head, reg.verify())
-        self.assertEqual(reg.reserve(2, [1, 2])[0], [(1, 0), (2, 1)])
-
-    def test_verify_replays_the_chain_and_pins_the_hash_rule(self) -> None:
-        reg = self.open()
-        self.assertEqual(reg.verify(), gate.ZERO_DIGEST)
-        _, head, _ = reg.reserve(5, [1, 2])
-        want = gate.ZERO_DIGEST
-        for i in (1, 2):
-            want = gate.sha3_512(b"RR/GATE/ID-REG/v1\x00" + want + i.to_bytes(129, "big") + (5).to_bytes(4, "big"))
-        self.assertEqual((head, reg.verify()), (want, want))
+    def state(self):
+        return self.rows(), self.reg.verify(), self.reg.pending(0), self.reg.pending(1)
 
     def _edit(self, sql: str) -> None:
         with contextlib.closing(sqlite3.connect(self.path, isolation_level=None)) as db:
             db.execute(sql)
 
-    def test_rows_cannot_be_changed_or_removed_and_tampering_is_caught(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1, 2, 3])
-        for sql in ("UPDATE ids SET shard = 9 WHERE n = 1", "DELETE FROM ids WHERE n = 2"):
-            with self.assertRaises(sqlite3.DatabaseError):  # the append-only triggers
-                self._edit(sql)
-            self.assertNotEqual(reg.verify(), gate.ZERO_DIGEST)
-        self._edit("DROP TRIGGER ids_no_update")
-        self._edit("DROP TRIGGER ids_no_delete")
-        self._edit("UPDATE ids SET shard = 9 WHERE n = 1")  # a rewritten owner
-        with self.assertRaisesRegex(idreg.IdRegistryError, "chain_broken"):
-            reg.verify()
-        self._edit("UPDATE ids SET shard = 0 WHERE n = 1")
-        self.assertNotEqual(reg.verify(), gate.ZERO_DIGEST)  # restored: the chain verifies again
-        self._edit("DELETE FROM ids WHERE n = 2")  # a removed middle row
-        with self.assertRaisesRegex(idreg.IdRegistryError, "chain_broken"):
-            reg.verify()
+    def test_v1_store_refused(self) -> None:
+        old = self.path.parent / "v1.sqlite3"
+        with contextlib.closing(sqlite3.connect(old)) as db:
+            db.execute("CREATE TABLE ids(n INTEGER PRIMARY KEY, id BLOB NOT NULL UNIQUE, shard INTEGER NOT NULL, head BLOB NOT NULL)")
+        with self.assertRaisesRegex(idreg.IdRegistryError, "store_version"):
+            idreg.boot(old, {})
+        with self.assertRaisesRegex(idreg.IdRegistryError, "store_version"):
+            idreg.IdRegistry(old, boot=self.nonce)
 
-    def test_bad_input_is_refused_before_anything_is_reserved(self) -> None:
-        reg = self.open()
+    def test_genesis_owners(self) -> None:
+        n, head = self.reg.genesis({0: [1, 2], 1: [3]})
+        self.assertEqual(self.reg.verify(), head)
+        owners, n2, head2 = self.reg.reserve(0, [1, 3, 9], sealed=None)
+        self.assertEqual(owners, [(1, 0, True), (3, 1, True), (9, 0, False)])
+        self.assertEqual((n2, head2), (self.rows(), self.reg.verify()))
+        self.assertEqual(n, 1 + 3 + 2)  # BOOT, 3 RESERVE, 2 SETTLE
+        with self.assertRaisesRegex(idreg.IdRegistryError, "genesis_double_acceptance"):
+            self.reg.genesis({0: [50], 1: [50]})
+        self.assertEqual(self.reg.verify(), head2)  # nothing of the refused genesis was written
+
+    def test_head_rule(self) -> None:
+        _, n, head = self.reg.reserve(0, [1, 2, 1], sealed=None)
+        want = self.reg._db.execute("SELECT head FROM log WHERE n = 1").fetchone()[0]  # the BOOT row
+        for kind, i in ((0, 1), (0, 2)):
+            want = gate.sha3_512(b"RR/GATE/ID-REG/v2\x00" + want + bytes([kind]) + i.to_bytes(129, "big") + (0).to_bytes(4, "big"))
+        self.assertEqual((head, self.reg.verify()), (want, want))
+        self.assertEqual(n, 3)  # a repeat inside one batch counts once
+
+    def test_settle_guard(self) -> None:
+        self.reg.genesis({0: [7], 1: [8]})
+        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
+        self.reg.reserve(1, [], sealed=None)
+        before = self.state()
+        for name, bad in (("other shard's id", 8), ("recorded id", 7), ("unknown id", 99)):
+            with self.subTest(name), self.assertRaisesRegex(idreg.IdRegistryError, "settle_mismatch"):
+                self.reg.reserve(0, [5], sealed=(n, [bad]))
+            self.assertEqual(self.state(), before)
+
+    def test_settle_frees_and_keeps(self) -> None:
+        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
+        self.assertEqual(self.reg.pending(0), (n, [1, 2]))
+        self.reg.reserve(0, [], sealed=(n, [1]))
+        self.assertEqual(self.reg.reserve(1, [1, 2], sealed=None)[0], [(1, 1, False), (2, 0, True)])
+        self.assertEqual(self.reg.pending(0), (None, []))
+
+    def test_settle_stale_frees_all(self) -> None:
+        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
+        self.reg.reserve(0, [], sealed=(n - 1, []))
+        self.assertEqual(self.reg.reserve(1, [1, 2], sealed=None)[0], [(1, 1, False), (2, 1, False)])
+
+    def test_settle_atomic_with_reserve(self) -> None:
+        n = self.reg.reserve(0, [1, 2], sealed=None)[1]
+        before = self.state()
+        with self.assertRaisesRegex(idreg.IdRegistryError, "id"):
+            self.reg.reserve(0, [-1], sealed=(n, [1]))
+        self.assertEqual(self.state(), before)
+
+    def test_boot_nonce(self) -> None:
+        stale = self.open(b"\x01" * 32)
+        before = self.rows()
+        for call in (lambda: stale.reserve(0, [1], sealed=None), lambda: stale.pending(0)):
+            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+                call()
+        self.assertEqual(self.rows(), before)
+        second = self.open(idreg.boot(self.path, {}))
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.pending(0)
+        self.assertEqual(second.pending(0), (None, []))
+
+    def test_boot_commitments(self) -> None:
+        n, head = self.reg.genesis({0: [1], 1: [2]})
+        idreg.boot(self.path, {0: (n, head), 1: (n, head)})
+        idreg.boot(self.path, {0: (0, gate.ZERO_DIGEST), 1: (2, self.reg._db.execute("SELECT head FROM log WHERE n = 2").fetchone()[0])})
+        with self.assertRaisesRegex(idreg.IdRegistryError, "commitment_missing"):
+            idreg.boot(self.path, {0: (n, head)})
+        for bad in ((n, bytes(64)), (n + 10, head)):
+            with self.subTest(bad), self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                idreg.boot(self.path, {0: bad, 1: (n, head)})
+        self._edit("DROP TRIGGER log_no_update")
+        self._edit("UPDATE log SET shard = 5 WHERE n = 3")  # a middle row edited, stored heads kept
+        with self.assertRaisesRegex(idreg.IdRegistryError, "chain_broken"):
+            idreg.boot(self.path, {0: (n, head), 1: (n, head)})
+
+    def test_rows_are_append_only(self) -> None:
+        self.reg.reserve(0, [1, 2, 3], sealed=None)
+        for sql in ("UPDATE log SET shard = 9 WHERE n = 2", "DELETE FROM log WHERE n = 3"):
+            with self.assertRaises(sqlite3.DatabaseError):
+                self._edit(sql)
+        self.assertNotEqual(self.reg.verify(), gate.ZERO_DIGEST)
+
+    def test_concurrent_reserve(self) -> None:
+        start = str(time.time() + 3)
+        procs = [subprocess.Popen([sys.executable, "-c", _RESERVE_1000, str(self.path), self.nonce.hex(), str(shard), start],
+                                  cwd=ROOT, stdout=subprocess.PIPE, text=True) for shard in (0, 1)]
+        owners = []
+        for proc in procs:
+            out, _ = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0)
+            owners.append(eval(out))
+        self.assertIn(owners[0][0][1], (0, 1))
+        self.assertEqual(owners[0], owners[1])  # one owner s for every id, seen by both: (i, s, False)
+        self.assertEqual({shard for _, shard, _ in owners[0]}, {owners[0][0][1]})
+        count = self.reg._db.execute("SELECT COUNT(*), COUNT(DISTINCT id) FROM log WHERE kind = 0").fetchone()
+        self.assertEqual(count, (1000, 1000))
+
+    def test_dying_at_commit_writes_nothing(self) -> None:
+        self.reg._db = _Dying(self.reg._db, die=True)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+            self.reg.reserve(1, [1, 2], sealed=None)
+        again = self.open(self.nonce)
+        self.assertEqual(again.reserve(0, [1, 2], sealed=None)[0], [(1, 0, False), (2, 0, False)])
+
+    def test_failed_commit_rolls_back_and_the_registry_still_works(self) -> None:
+        live = self.reg._db
+        self.reg._db = _Dying(live, die=False)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+            self.reg.reserve(1, [1], sealed=None)
+        self.reg._db = live
+        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    def test_bad_input_is_refused_before_anything_is_written(self) -> None:
+        before = self.rows()
         for shard, ids in ((-1, [1]), (1 << 32, [1]), (True, [1]), (0, [1, -1]), (0, [1, True]), (0, [1, 2 ** 1032]),
                            (0, [1, b"short"]), (0, [1, "x" * idreg.ID_LEN])):
             with self.assertRaises(idreg.IdRegistryError):
-                reg.reserve(shard, ids)
+                self.reg.reserve(shard, ids, sealed=None)
         with self.assertRaises(idreg.IdRegistryError):
-            reg.genesis({0: [1], 1: [b"short"]})
-        self.assertEqual(reg.verify(), gate.ZERO_DIGEST)
+            self.reg.genesis({0: [1], 1: [b"short"]})
+        self.assertEqual(self.rows(), before)
 
     def test_an_unavailable_registry_is_a_typed_refusal(self) -> None:
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-            idreg.IdRegistry(self.path.parent / "missing" / "ids.sqlite3")
-        self.open()
-        busy = self.open(timeout=0.1)
+            idreg.IdRegistry(self.path.parent / "missing" / "ids.sqlite3", boot=self.nonce)
+        busy = self.open(self.nonce, timeout=0.1)
         with contextlib.closing(sqlite3.connect(self.path, isolation_level=None)) as other:
             other.execute("BEGIN IMMEDIATE")  # another writer holds the lock
             with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-                busy.reserve(0, [1])
-        self.assertEqual(busy.reserve(0, [1])[0], [])  # and it recovers once the lock is gone
-
-    def test_reserve_returns_the_row_count(self) -> None:
-        reg = self.open()
-        self.assertEqual(reg.reserve(0, [1, 2])[2], 2)
-        self.assertEqual(reg.reserve(1, [2, 3])[2], 3)  # id 2 is foreign and adds no row
-        self.assertEqual(reg.reserve(1, [])[2], 3)
-
-    def test_a_restored_older_database_is_refused_as_rewound(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1, 2])
-        reg.close()
-        old = self.path.with_name("old.sqlite3")
-        shutil.copyfile(self.path, old)  # the backup: two rows
-        reg = idreg.IdRegistry(self.path)
-        reg.reserve(1, [3, 4])  # shard 1 owns 3 and 4 now
-        reg.close()
-        shutil.copyfile(old, self.path)  # restored without them
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            idreg.IdRegistry(self.path)
-        for suffix in ("-wal", "-shm"):
-            self.assertFalse(Path(f"{self.path}{suffix}").exists())
-
-    def test_a_rewritten_chain_is_refused_as_rewound_on_reserve_and_on_open(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1, 2, 3])
-        for sql in ("DROP TRIGGER ids_no_update", "DROP TRIGGER ids_no_delete", "DELETE FROM ids WHERE n = 2"):
-            self._edit(sql)
-        head = idreg._head(idreg._head(gate.ZERO_DIGEST, (1).to_bytes(129, "big"), 0), (3).to_bytes(129, "big"), 0)
-        with contextlib.closing(sqlite3.connect(self.path, isolation_level=None)) as db:
-            db.execute("UPDATE ids SET head = ? WHERE n = 3", (head,))  # later heads recomputed: verify() is satisfied
-        self.assertEqual(reg.verify(), head)
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            reg.reserve(1, [9])
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            idreg.IdRegistry(self.path)
-
-    def test_the_mark_is_created_when_empty_and_required_when_not(self) -> None:
-        reg = self.open()
-        mark = Path(f"{self.path}.mark")
-        self.assertTrue(mark.exists())  # a fresh empty registry creates it
-        reg.reserve(0, [1])
-        reg.close()
-        self.open().reserve(0, [2])  # a normal reopen passes
-        mark.unlink()
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            idreg.IdRegistry(self.path)  # fail closed
-        mark.touch()
-        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            idreg.IdRegistry(self.path)
-
-    def test_a_crash_between_commit_and_mark_is_caught_up(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1])
-        mark = Path(f"{self.path}.mark")
-        mark.write_bytes(mark.read_bytes()[: _RECORD])  # only the first (empty-registry) record survived
-        reg.reserve(0, [2])
-        self.assertEqual(mark.read_bytes()[-_RECORD:][:8], (2).to_bytes(8, "big"))  # caught up to 1, then marked 2
-
-    def test_a_zero_filled_mark_tail_does_not_hide_a_restored_older_database(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1, 2])
-        reg.close()
-        old = self.path.with_name("old.sqlite3")
-        shutil.copyfile(self.path, old)
-        reg = idreg.IdRegistry(self.path)
-        reg.reserve(1, [3, 4])
-        reg.close()
-        mark = Path(f"{self.path}.mark")
-        marked = mark.read_bytes()
-        for zeros in (72, 104):  # power loss can leave the file longer with its new bytes zero
-            shutil.copyfile(old, self.path)
-            mark.write_bytes(marked + bytes(zeros))
-            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                idreg.IdRegistry(self.path)
-            self.assertEqual(mark.read_bytes(), marked + bytes(zeros))  # refused, not re-marked
-
-    def test_a_fresh_registry_whose_only_mark_record_is_torn_opens_and_repairs(self) -> None:
-        self.open().close()
-        mark = Path(f"{self.path}.mark")
-        whole = mark.read_bytes()
-        mark.write_bytes(whole[:50])
-        self.open()
-        self.assertEqual(mark.read_bytes(), whole)
-
-    def test_after_a_torn_last_record_the_registry_must_be_strictly_ahead_of_the_one_before(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1])
-        reg.close()
-        old = self.path.with_name("old.sqlite3")
-        shutil.copyfile(self.path, old)  # one row
-        reg = idreg.IdRegistry(self.path)
-        reg.reserve(0, [2])  # two rows
-        reg.close()
-        mark = Path(f"{self.path}.mark")
-        whole = mark.read_bytes()
-        torns = (whole[:-50], whole[:-40] + bytes(40))  # cut short; its second page never written
-        for torn in torns:
-            mark.write_bytes(torn)
-            idreg.IdRegistry(self.path).close()  # ahead of the record before: the torn bytes go, row 2 is marked again
-            self.assertEqual(mark.read_bytes(), whole)
-        for torn in torns:
-            mark.write_bytes(torn)
-            shutil.copyfile(old, self.path)  # restored to exactly the record before the damaged one
-            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                idreg.IdRegistry(self.path)
-            self.assertEqual(mark.read_bytes(), torn)  # refused, not re-marked
-        damaged = bytearray(whole)
-        damaged[-1] ^= 1
-        damaged[-_RECORD - 1] ^= 1  # the last two records both bad
-        mark.write_bytes(damaged)
-        with self.assertRaisesRegex(idreg.IdRegistryError, "mark_corrupt"):
-            idreg.IdRegistry(self.path)
+                busy.reserve(0, [1], sealed=None)
+        self.assertEqual(busy.reserve(0, [1], sealed=None)[0], [(1, 0, False)])  # and it recovers once the lock is gone
 
     def test_a_broken_database_or_rollback_is_a_typed_refusal(self) -> None:
-        reg = self.open()
-        reg.reserve(0, [1])
-        live = reg._db
-        reg._db = _NoRollback(live, die=False)
+        live = self.reg._db
+        self.reg._db = _NoRollback(live, die=False)
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-            reg.reserve(0, [2])
+            self.reg.reserve(0, [2], sealed=None)
         live.execute("ROLLBACK")
-        reg._db = live
-        self._edit("DROP TABLE ids")
+        self.reg._db = live
+        self._edit("DROP TABLE log")
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-            reg.verify()
+            self.reg.verify()
 
     def test_durability_pragmas_are_set_and_a_rollback_journal_is_refused(self) -> None:
-        reg = self.open()
-        self.assertEqual(reg._db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
-        self.assertEqual(reg._db.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
+        self.assertEqual(self.reg._db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        self.assertEqual(self.reg._db.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-            idreg.IdRegistry(Path(":memory:"))  # journal_mode stays 'memory'
+            idreg.IdRegistry(Path(":memory:"), boot=self.nonce)  # journal_mode stays 'memory'
 
 
 if __name__ == "__main__":

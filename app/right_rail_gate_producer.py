@@ -1,6 +1,8 @@
 """The gate's checkpoint producer: one serial writer per (tenant, shard), synthetic, activation=false.
 
-``commit`` is reserve, sign and Lean-check, seal, mark, publish.  The batch's header bytes and tokens are
+``commit`` is reserve, sign and Lean-check, seal, mark, publish.  It needs the id registry's reply for the batch
+(row n and head): the head is signed into the CHECKPOINT/v2 header and n and the batch's ``free`` ids are stored, so
+no checkpoint exists without a reservation and the next registry settle can be derived after a restart.  The batch's header bytes and tokens are
 stored before the key is used, so a crash re-signs the same header at the same seq and never reuses a seq
 with other bytes; ``signer.seal`` releases a signature only when Lean ``publishOk`` accepts it, and only a
 sealed batch is published.  Seriality is the store's: one SQLite file opened EXCLUSIVE, WAL, synchronous
@@ -27,9 +29,9 @@ _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS batches(
   id INTEGER PRIMARY KEY, epoch INTEGER NOT NULL, seq_from INTEGER NOT NULL, seq_to INTEGER NOT NULL,
   digest BLOB NOT NULL UNIQUE, header BLOB NOT NULL, state_digest BLOB NOT NULL, tokens BLOB NOT NULL,
-  signature BLOB, UNIQUE(epoch, seq_from));
+  signature BLOB, idreg_n INTEGER NOT NULL, free TEXT NOT NULL, UNIQUE(epoch, seq_from));
 CREATE TRIGGER IF NOT EXISTS batches_fixed BEFORE UPDATE OF id, epoch, seq_from, seq_to, digest, header,
-  state_digest, tokens ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
+  state_digest, tokens, idreg_n, free ON batches BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_seal BEFORE UPDATE OF signature ON batches
   WHEN OLD.signature IS NOT NULL OR NEW.signature IS NULL BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS batches_void BEFORE DELETE ON batches
@@ -50,10 +52,16 @@ class ShardProducer:
         try:
             for pragma in ("locking_mode=EXCLUSIVE", "journal_mode=WAL", "synchronous=FULL"):
                 self._db.execute(f"PRAGMA {pragma}")
+            columns = [column[1] for column in self._db.execute("PRAGMA table_info(batches)")]
+            if columns and "idreg_n" not in columns:
+                raise GateProducerError("store_version")  # a pre-registry store: refused, never migrated
             self._db.executescript(_SCHEMA)
         except sqlite3.OperationalError as error:
             self._db.close()
             raise GateProducerError("store_locked") from error
+        except GateProducerError:
+            self._db.close()
+            raise
         try:
             last, open_ = self._sealed(), self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE signature IS NULL").fetchone()
             newest = max((row[1] for row in (last, open_) if row), default=epoch)
@@ -108,15 +116,18 @@ class ShardProducer:
         self._check_mark(sealed)
         return sealed
 
-    def commit(self, program: str, leaves: Sequence[gate.TokenLeaf], *, state_digest: bytes, created_at: int):
-        """One batch of decided leaves (one program) -> (checkpoint, signed checkpoint, tokens); a database error is
-        ``store_unavailable``."""
+    def commit(self, program: str, leaves: Sequence[gate.TokenLeaf], *, state_digest: bytes, created_at: int,
+               idreg: tuple[int, bytes], free: Sequence[int]):
+        """One batch of decided leaves (one program) -> (checkpoint, signed checkpoint, tokens); ``idreg`` is the
+        registry's (n, head) after the batch's reserve and ``free`` the ids Lean says the batch leaves free; a
+        database error is ``store_unavailable``."""
         try:
-            return self._commit(program, leaves, state_digest, created_at)
+            return self._commit(program, leaves, state_digest, created_at, idreg, free)
         except sqlite3.Error as error:
             raise GateProducerError("store_unavailable") from error
 
-    def _commit(self, program: str, leaves: Sequence[gate.TokenLeaf], state_digest: bytes, created_at: int):
+    def _commit(self, program: str, leaves: Sequence[gate.TokenLeaf], state_digest: bytes, created_at: int,
+                idreg: tuple[int, bytes], free: Sequence[int]):
         if not leaves:
             raise GateProducerError("empty_batch")
         if any((leaf.tenant_id, leaf.shard_id) != self._who for leaf in leaves):
@@ -131,12 +142,13 @@ class ShardProducer:
             [replace(leaf, program_id=program, epoch=self._epoch, seq=first + i, issued_at=created_at,
                      expires_at=created_at + LIFETIME) for i, leaf in enumerate(ordered)],
             prev_checkpoint_digest=last[3] if same else gate.ZERO_DIGEST, event_head=last[3] if last else gate.ZERO_DIGEST,
-            evidence_root=gate.ZERO_DIGEST, state_digest=state_digest, created_at=created_at)
+            evidence_root=gate.ZERO_DIGEST, state_digest=state_digest, created_at=created_at, registry_head=idreg[1])
         header = gate.encode_checkpoint_header(checkpoint)
         framed = b"".join(signer.framed(gate.encode_token(token)) for token in tokens)
         digest = gate.checkpoint_digest(checkpoint)
-        self._db.execute("INSERT INTO batches(epoch, seq_from, seq_to, digest, header, state_digest, tokens) VALUES(?,?,?,?,?,?,?)",
-                         (self._epoch, checkpoint.seq_from, checkpoint.seq_to, digest, header, state_digest, framed))
+        self._db.execute("INSERT INTO batches(epoch, seq_from, seq_to, digest, header, state_digest, tokens, idreg_n, free) VALUES(?,?,?,?,?,?,?,?,?)",
+                         (self._epoch, checkpoint.seq_from, checkpoint.seq_to, digest, header, state_digest, framed, idreg[0],
+                          ",".join(map(str, free))))
         sealed = self._seal(self._db.execute(f"SELECT {_COLUMNS} FROM batches WHERE digest=?", (digest,)).fetchone(), last)
         return checkpoint, gate.attach_signature(sealed[4], sealed[7]), tokens
 
@@ -150,5 +162,20 @@ class ShardProducer:
         last = self._sealed()
         return last and last[5]
 
+    def sealed_frees(self) -> tuple[int, list[int]] | None:
+        """The newest batch's (idreg_n, free), sealed or open: the next registry settle's ``sealed`` argument."""
+        row = self._db.execute("SELECT idreg_n, free FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+        return row and (row[0], [int(i) for i in row[1].split(",") if i])
+
     def close(self) -> None:
         self._db.close()
+
+
+def newest(path: Path) -> tuple[int, bytes] | None:
+    """Read-only, for the registry boot check: the newest batch's (idreg_n, registry head), sealed or open."""
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        row = db.execute("SELECT idreg_n, header FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+    finally:
+        db.close()
+    return row and (row[0], row[1][-64:])
