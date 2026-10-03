@@ -120,7 +120,7 @@ class LeanPaymentFrameTests(unittest.TestCase):
                 samples.append((time.perf_counter() - started) * 1000)
             timings[name] = statistics.median(samples)
         print("FINANCIAL_M3_FRAME_PROFILE", timings)
-        self.assertLessEqual(timings["payment"], 2.0 * timings["evaluate"] + 2.0)
+        self.assertLessEqual(timings["payment"], 2.0 * timings["evaluate"] + 0.5)  # step 4 measured 0.62 ms against 0.31 ms (m3s4-1)
 
     def test_many_payment_frames_keep_the_worker_flat(self) -> None:
         """One worker, recycling off: 1,000 payment items interleaved with 1,000 evaluations, then 8 items at the 8 MiB bound.

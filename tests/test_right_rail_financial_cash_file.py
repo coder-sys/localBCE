@@ -317,11 +317,11 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.store.record_payment_evidence(**{**self._row(9, 5, 0, "other"), "item_id": "item-0001", "pays_action_id": None})
         self.baseline = self._manifest()
         other = self._query("SELECT evidence_id FROM evidence WHERE item_id<>? ORDER BY evidence_id LIMIT 1", expected.H_ITEM_ID)[0][0]
-        real = engine.evaluate_live
+        real = engine.decide_payment_live
         def citing_foreign(*args, **kwargs):
-            decided = real(*args, **kwargs)
-            return dataclasses.replace(decided, evidence_ids=tuple(sorted((*decided.evidence_ids, other))))
-        with patch.object(engine, "evaluate_live", citing_foreign):
+            out = real(*args, **kwargs)
+            return dataclasses.replace(out, decided=dataclasses.replace(out.decided, evidence_ids=tuple(sorted((*out.decided.evidence_ids, other)))))
+        with patch.object(engine, "decide_payment_live", citing_foreign):
             self._unchanged(lambda: self.store.run_batch(cash._propose(canonical(self.value), self.baseline)), "evaluation_evidence_missing")
 
     def test_evaluation_takes_exactly_one_evidence_source(self):
@@ -859,7 +859,7 @@ raise SystemExit(main(sys.argv[2:]))
         self.source = {**self.source, "captured_at_ms": expected.P2_EVENT_MS}
         self.value.update(source=self.source, row_count=2, rows=rows, total_cents=300_001)
         self.fixture._advance_clock(store, expected.P2_EVENT_MS)
-        with patch.object(owner, "_correction_paid", lambda connection, obligation_id: []):
+        with patch.object(owner, "_payment_receipts", lambda c, o, real=owner._payment_receipts: [(p, r, None) for p, r, _a in real(c, o)]):
             self._refused_by("payment:link", lambda: self._apply())
         self.setUp()  # S5: an OVERLAP alias is stored with a wrong content digest
         self._apply()

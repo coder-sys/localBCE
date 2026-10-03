@@ -28,7 +28,9 @@ PAYMENT_MODULES = (
     "tests.test_right_rail_financial_core_r05", "tests.test_right_rail_financial_custody", "tests.test_history_growth",
 )
 # Timing and work-count pins that a second decider running in the same process must perturb; each is green alone (run m3s3 cash_file and history_growth without the harness).
-RED_UNDER_HARNESS = ("test_quarter_end_file_within_writer_timeout", "test_two_thousand_rows_in_files_within_writer_timeout_and_size", "test_work_stays_at_its_pinned_values")
+# Also red here by construction: the three step-4 tests of the Lean path (the harness runs Python as the decider; each is green in run m3s4-1 without it).
+RED_UNDER_HARNESS = ("test_quarter_end_file_within_writer_timeout", "test_two_thousand_rows_in_files_within_writer_timeout_and_size", "test_work_stays_at_its_pinned_values",
+                     "test_a_payment_never_pays_more_than_its_request_leaves_unpaid", "test_evaluation_bindings_cite_only_the_items_own_evidence", "test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit")
 REFUSAL_CODES = (None, "payment_amount_zero", "payment_request_conflict", "payment_origin_reversed",
                  "obligation_revision_conflict", "evidence_identity_conflict", "evidence_chronology",
                  "payment_request_unknown", "payment_exceeds_unpaid_balance", "payment_missing",
@@ -100,7 +102,7 @@ class _Harness:
     def __enter__(self):
         cls = owner_module.FinancialOwner
         real = {name: getattr(cls, name) for name in ("record_payment_evidence", "reverse_payment", "_get_obligation_row", "_recompute_and_record", "_append_event")}
-        harness, correction_paid, evaluate_live = self, owner_module._correction_paid, engine.evaluate_live
+        harness, receipts, decide = self, owner_module._payment_receipts, engine.decide_payment_live
 
         def command(kind, name):
             signature = inspect.signature(real[name])
@@ -140,7 +142,7 @@ class _Harness:
             call = getattr(harness.local, "call", None)
             if call is None or call.lean is not None:
                 return row
-            if owner_module._correction_paid is not correction_paid or engine.evaluate_live is not evaluate_live:  # the test swapped in a wrong Python decider or evaluator (cash_file S4); Lean never reads them
+            if owner_module._payment_receipts is not receipts or engine.decide_payment_live is not decide:  # the test swapped in wrong Lean inputs or a wrong Lean answer (cash_file S4, evidence bindings); the Python decider never reads them
                 harness.hits["decider-patched"] += 1
                 print("FINANCIAL_M3_SKIPPED decider-patched", call.command)
                 return row

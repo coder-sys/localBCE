@@ -5367,7 +5367,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._reject(store, self._record_claim(store))
         self.assertEqual(self._pay_a(store, 200_000)["status"], "RECORDED")
         counts = self._durable_counts(store.path)
-        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_request$"):
+        with self.assertRaisesRegex(FinancialConflictError, "^payment_exceeds_unpaid_balance$"):
             self._pay_a(store, 100_001, "p3")
         with self.assertRaisesRegex(FinancialConflictError, "^payment_request_unknown$"):
             store.record_payment_evidence(
