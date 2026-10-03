@@ -2979,6 +2979,8 @@ def _verify_conflicts(
         candidate = evidence.get(candidate_id)
         if candidate is None or candidate["kind"] != "PAYMENT_CONFIRMATION" or candidate["common_origin_id"] != common_origin_id:
             _fail("conflict:candidate")
+        if conflict_id != f"conflict:{candidate['item_id']}:{common_origin_id}:{candidate_id}":
+            _fail("conflict:id-form")
         existing_id = row["existing_payment_id"]
         if existing_id is None or str(existing_id) not in payments:
             _fail("conflict:existing-payment")

@@ -2,7 +2,7 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `9571578`.
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `1f5a7d6`.
 
 ## Product and standing claims
 
@@ -11,8 +11,10 @@ Blind Ledger, Mirror, Continuity and Switch share the financial owner; Provider 
 level within that product. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
 `production_usable=false`, `activation=false`. Guarded local runs are merge evidence, not release qualification.
 
-## What landed on trunk 9571578 (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
+## What landed on trunk 1f5a7d6 (raw output: `native/guard/guarded-command-*.stdout.log`; exits in `C:/Users/neers/rrb/logs/`)
 
+- **M3 answer binding (flag off).** Every payment-answer evidence and conflict field, DUPLICATE and ALIAS included, is bound;
+  closes the integ6 review. `mb-int-1`: all pass but quarter-end timing; gate `mb-int-6` 29/29 (stale `.lake` exe rebuilt).
 - **Correction frames as ByteArray.** Corrections re-encode through proved-equal byte-array twins (`CorrectionFast.lean`, `_eq`
   theorems pinned). Accepted 5 MB: 3.73 s / 846 MB before, 1.83 s / 259 MB now; the 7 MB cap frame 2.58 s / 164 MB. The worker
   stays flat within 16 MB across requests. Worker re-pinned `58CDA012` -> `8EB77363`.
@@ -20,7 +22,7 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 - **Gate fast SHA3.** The gate's SHA3 call sites run the proved-equal fast sponge (`Sha3Fast.lean`; `sha3_512_eq`, `shake128_eq`,
   `shake256_eq` hold for all inputs on `propext`, `Classical.choice`, `Quot.sound` only). No gate theorem's axioms changed. Rules
-  decide went from 99.5 to 251.6 lines/s on 20,000 lines.
+  decide went from 99.5 to 251.6 lines/s on 20,000 lines (target 2,000).
 - **Worker payments as ByteArray.** BLFPAY01 frames are read as a byte array; an 8.1 MB item now holds the worker near 62 MB (was
   952 MB). Corrections run on the evaluator worker (one-shot exe retired; 1,558 answers equal).
 - **M3 step 3, flag off.** Lean-side payment decision path with a differential; the flag stays off, so no live behaviour moved.
@@ -49,9 +51,7 @@ level within that product. Existing payment systems move money. Synthetic, state
   A fresh worktree also needs the ignored `rr_gate_mldsa87.exe` copied in, or the signer tests error.
 - **Real-world data:** a seeded dirty Medicaid corpus (branch `dirty-corpus`, not on trunk) shows six unrepresentable cases:
   advance payments, member crosswalk, PLB balances, death after release, upward retro rates, one bad cash row refusing a file.
-- **M3 binding fixes** from the integ6 review (one Medium, two Low, all on the flag-off path) must land before the step-4 flag flip.
-  The D4 live behaviour and a crash test belong to step 4.
-- **Rules throughput:** 252 lines/s against a 2,000 lines/s target.
+- **M3 step 4:** the D4 live behaviour and a crash test come with the flag flip.
 - **Gate unbuilt:** the checkpoint producer, the payer pin before send, the prior-digest check, an integrated payer gate and a durable
   token or release path. Failover TLC is a bounded model, not running failover.
 - **Unbuilt:** financial file adapters (MCO reports, X12 820/835, MMIS extracts), payee-identity consumption, a second synthetic state,
@@ -61,5 +61,5 @@ level within that product. Existing payment systems move money. Synthetic, state
   corrections; the receipt's `delivery_status` is the newest action's, not the verdict; core size targets unmet (owner 7,327 lines
   against about 3,000, checker 4,594 against about 1,800); isolated TEST restore uses the system clock.
 
-Next: M3 binding fixes, then the step-4 flag flip; connector and browser completion is paused at the founder's request. This
+Next: the M3 step-4 flag flip; connector and browser completion is paused at the founder's request. This
 candidate is a local commit, not a qualified release; no local check activates production.

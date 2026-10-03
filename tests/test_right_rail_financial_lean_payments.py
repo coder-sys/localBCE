@@ -1,5 +1,7 @@
 """Lean-live M3 step 3: the payment item and its answer on the live worker, fail closed (lean-live-m3 sections 3 and 7.2)."""
 
+import dataclasses
+import sqlite3
 import statistics
 import time
 import unittest
@@ -203,25 +205,106 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         self.assertEqual(_rows(self.store), before)
         self.assertEqual(self._pay("m3-p2")["status"], "RECORDED")  # and the honest carry is accepted
 
+    def test_a_second_population_naming_the_item_cannot_publish_so_the_item_keeps_one_obligation(self) -> None:
+        """A store holds one period and an obligation's id is its item and period, so live_payment_input's evidence by item is exactly
+        this obligation's: review Low 3's two-obligation case is unreachable."""
+        pack, population = expected.CONTROL_PACK_V1, "m3-second-population"
+        manifest = adapter_tests._population_manifest_from_fixture(expected.POPULATION_MANIFEST_V1, self.store.trusted_authority,
+                                                                    manifest_id="m3-second-manifest", source_owner_id="m3-second-source")
+        self.store.register_population_manifest(manifest)
+        self.store.stage_population(population_id=population, manifest_id=manifest.manifest_id, pack_id=pack.pack_id, cutoff_ms=pack.effective_start_ms,
+                                    inclusion_rules=("included:synthetic",), expected_count=adapter_tests.EXPECTED_HOSPITAL_COUNT,
+                                    items=adapter_tests._items_from_fixture(expected.PROGRAM_ITEMS, population))
+        self.store.validate_population(population)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "obligations.obligation_id"):
+            self.store.publish_population(population)
+        with self.store._connect() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM obligations WHERE item_id=?", (self.item_id,)).fetchone()[0], 1)
+
+    def test_a_stored_confirmation_id_comes_back_as_a_duplicate_an_unchanged_conflict_or_a_refusal(self) -> None:
+        """Each stored confirmation has a payment of its origin (Types.lean paymentConfirmationAccounted), so a record naming a stored id is
+        never RECORDED or CONFLICT_RECORDED, and the adapter requires an evidence row on those tags."""
+        self._pay()
+        conflict = self._pay("m3-c1", common_origin_id="o-m3-p1", amount_cents=101)
+        before = _rows(self.store)
+        self.assertEqual(self._pay("m3-p2", common_origin_id="o-m3-p1", evidence_id="e-m3-p1", local_ref="payment:m3-p1")["status"], "DUPLICATE")
+        again = self._pay("m3-c1", common_origin_id="o-m3-p1", amount_cents=101)  # the owner reports CONFLICT for recorded and unchanged alike
+        self.assertEqual(_rows(self.store), before)
+        self.assertEqual((again["status"], again["conflict_id"]), ("CONFLICT", conflict["conflict_id"]))
+        for evidence_id in ("e-m3-p1", "e-m3-c1"):
+            with self.assertRaisesRegex(owner_module.FinancialConflictError, "^evidence_identity_conflict$"):
+                self._pay("m3-p3", evidence_id=evidence_id)
+        self.assertEqual(_rows(self.store), before)
+
     def test_a_tampered_answer_is_refused_closes_the_worker_and_writes_nothing(self) -> None:
         """Each answer below is well framed and byte-exact with one field changed, so only the adapter's binding to the command and the stored rows can stop it."""
         first = self._pay()
+        self._pay("m3-c1", common_origin_id="o-m3-p1", amount_cents=101)  # a stored conflict, so the same call again is CONFLICT_UNCHANGED
         with self.store._connect() as connection:
             obligation_id = connection.execute("SELECT obligation_id FROM obligations").fetchone()[0]
         acts = {"record": lambda: self._pay("m3-p2"),
                 "alias": lambda: self._pay("m3-p3", common_origin_id="o-m3-p1"),  # the first payment's origin and amount, a new evidence id
                 "retry": lambda: self._pay("m3-p1", expected_revision=first["revision"] - 1),
-                "reverse": lambda: self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)}
+                "reverse": lambda: self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at),
+                "conflict": lambda: self._pay("m3-c2", common_origin_id="o-m3-p1", amount_cents=102),
+                "unchanged": lambda: self._pay("m3-c1", common_origin_id="o-m3-p1", amount_cents=101)}
         evidence = {"kind": "PAYMENT_X", "amount_cents": 101, "source_id": "other-source", "source_version": "v9", "local_ref": "other-ref", "applicable_at_ms": self.at + 1,
-                    "event_at_ms": self.at + 1, "common_origin_id": "o-other", "reversal_of": "m3-px", "supersedes": "e-x", "item_id": "other-item"}
+                    "event_at_ms": self.at + 1, "received_at_ms": self.at + 10**6, "common_origin_id": "o-other", "reversal_of": "m3-px", "supersedes": "e-x", "item_id": "other-item"}
+        conflict = {"conflict_id": "conflict:other", "obligation_id": "other-obligation", "common_origin_id": "o-other", "existing_payment_id": "m3-px",
+                    "candidate_evidence_id": "e-other", "existing_amount_cents": 99, "candidate_amount_cents": 103, "reason": "OTHER", "visible_at_ms": self.at + 10**6}
         cases = [(name, field, value) for name in ("record", "reverse") for field, value in evidence.items()]
-        cases += [("alias", "common_origin_id", "o-other"), ("alias", "payment_id", "m3-px"), ("retry", "payment_id", "m3-px"), ("record", "evidence", None)]
+        cases += [("conflict", field, value) for field, value in conflict.items()] + [("conflict", "received_at_ms", self.at + 10**6)]
+        cases += [("alias", "common_origin_id", "o-other"), ("alias", "payment_id", "m3-px"), ("retry", "payment_id", "m3-px"), ("record", "evidence", None),
+                  ("conflict", "evidence", None), ("unchanged", "conflict_id", "conflict:other")]
         before, real = _rows(self.store), engine._evaluate_wire
         for name, field, value in cases:
             with self.subTest(name, field=field), patch.object(engine, "_evaluate_wire", lambda wire: _swap(real(wire), obligation_id, field, value)):
                 with self.assertRaisesRegex(owner_module.FinancialIntegrityError, "^lean_payment:payment_binding$"):
                     acts[name]()
                 self.assertEqual((_rows(self.store), engine._evaluator), (before, []))
+
+    def test_a_duplicate_or_alias_answer_lean_would_not_give_is_refused_and_writes_nothing(self) -> None:
+        """Lean answers DUPLICATE only for a stored evidence id (a fresh record's twin is a stored payment of the same amount) and ALIAS only for a
+        record of a stored payment's amount; each forged answer below passed the origin check alone."""
+        self._pay()
+        with self.store._connect() as connection:
+            obligation_id = connection.execute("SELECT obligation_id FROM obligations").fetchone()[0]
+        reverse = lambda evidence_id: lambda: self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id=evidence_id, common_origin_id="o-m3-p1", event_at_ms=self.at)  # noqa: E731
+        cases = [("no twin for a fresh origin", 6, None, lambda: self._pay("m3-p2", evidence_id="e-m3-p1", common_origin_id="o-new")),
+                 ("another amount", 6, "m3-p1", lambda: self._pay("m3-p2", evidence_id="e-m3-p1", amount_cents=101, common_origin_id="o-m3-p1")),
+                 ("unstored evidence", 6, "m3-p1", lambda: self._pay("m3-p2", common_origin_id="o-m3-p1")),
+                 ("reversal, unstored evidence", 6, None, reverse("r-m3-p1")),
+                 ("alias of another amount", 5, "m3-p1", lambda: self._pay("m3-p2", amount_cents=101, common_origin_id="o-m3-p1")),
+                 ("alias of a reversal", 5, "m3-p1", reverse("r-m3-p1"))]
+        before, real = _rows(self.store), engine._evaluate_wire
+
+        def forge(answer: bytes, tag: int, lead: str | None) -> bytes:
+            writer = adapter._WireWriter()
+            writer.option_identifier(lead, "payment_id")
+            body = bytes(writer._buffer)
+            if tag == 5:  # the real answer's own evidence row, so only the alias binding is left to refuse
+                reader = adapter._WireReader(answer, max_bytes=adapter.MAX_WIRE_BYTES)
+                reader.take(8, "magic"), reader.byte("tag"), reader.boolean("evidence")
+                start = reader._offset
+                adapter._read_image(reader, adapter._EVIDENCE_ROW, adapter._encode_evidence, obligation_id)
+                body = body[1:] + answer[start:reader._offset]
+            return adapter.PAYMENT_ANSWER_MAGIC + bytes([tag]) + body
+
+        for name, tag, lead, act in cases:
+            with self.subTest(name), patch.object(engine, "_evaluate_wire", lambda wire: forge(real(wire), tag, lead)):
+                with self.assertRaisesRegex(owner_module.FinancialIntegrityError, "^lean_payment:payment_binding$"):
+                    act()
+                self.assertEqual((_rows(self.store), engine._evaluator), (before, []))
+
+    def test_a_wrong_total_in_leans_answer_is_refused_before_commit_and_the_worker_stays_open(self) -> None:
+        """decode_live_result binds identity only; the independent checker recomputes the post-payment totals from the exact rows."""
+        real = adapter.decode_live_result
+        before = _rows(self.store)
+        with patch.object(adapter, "decode_live_result", lambda *a: (lambda r: dataclasses.replace(r, received_cash_cents=r.received_cash_cents + 1))(real(*a))):
+            with self.assertRaisesRegex(owner_module.FinancialIntegrityError, "evaluation_verification"):
+                self._pay()
+        self.assertEqual(_rows(self.store), before)
+        self.assertNotEqual(engine._evaluator, [])
 
     def test_an_exact_retry_costs_no_more_than_a_record(self) -> None:
         """T3: a retry builds a snapshot and asks Lean; it must not cost more than recording."""
@@ -240,7 +323,7 @@ class LeanPaymentOwnerTests(unittest.TestCase):
 
 def _rows(store) -> tuple:
     with store._connect() as connection:
-        return tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("payments", "evidence", "financial_events", "evaluations"))
+        return tuple(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("payments", "evidence", "financial_events", "evaluations", "financial_conflicts"))
 
 
 def _swap(answer: bytes, obligation_id: str, field: str, value) -> bytes:
@@ -248,11 +331,20 @@ def _swap(answer: bytes, obligation_id: str, field: str, value) -> bytes:
     reader = adapter._WireReader(answer, max_bytes=adapter.MAX_WIRE_BYTES)
     reader.take(8, "magic")
     tag, start = reader.byte("tag"), reader._offset
-    if field == "payment_id":  # the leading id of ALIAS (5) and DUPLICATE (6)
-        (reader.identifier if tag == 5 else reader.option_identifier)("payment_id")
+    if field == "payment_id" or tag == 4:  # the leading id of ALIAS (5), DUPLICATE (6) and CONFLICT_UNCHANGED (4)
+        (reader.identifier if tag != 6 else reader.option_identifier)(field)
         writer = adapter._WireWriter()
-        (writer.identifier if tag == 5 else writer.option_identifier)(value, "payment_id")
+        (writer.identifier if tag != 6 else writer.option_identifier)(value, field)
         return answer[:start] + bytes(writer._buffer) + answer[reader._offset:]
+    if field in dict(adapter._CONFLICT_ROW) and tag == 3:  # past the evidence row and the payment flag, the conflict row
+        if reader.boolean("evidence"):
+            adapter._read_image(reader, adapter._EVIDENCE_ROW, adapter._encode_evidence, obligation_id)
+        reader.boolean("payment"), reader.boolean("conflict")
+        start = reader._offset
+        row = adapter._read_image(reader, adapter._CONFLICT_ROW, lambda w, v, _l, _c: adapter._write_conflicts(w, [v]), skip=2)
+        writer = adapter._WireWriter()
+        adapter._write_conflicts(writer, [{**row, field: value}])
+        return answer[:start] + bytes(writer._buffer)[2:] + answer[reader._offset:]
     reader.identifier("payment_id") if tag == 5 else reader.boolean("evidence")
     start = reader._offset
     row = adapter._read_image(reader, adapter._EVIDENCE_ROW, adapter._encode_evidence, obligation_id)

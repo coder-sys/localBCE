@@ -262,7 +262,7 @@ class PaymentDifferentialTests(unittest.TestCase):
         with patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", False), _Harness() as harness:
             result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
         red = [str(test) for test, _ in result.failures + result.errors]
-        print("FINANCIAL_M3_DIFFERENTIAL existing tests", result.testsRun, "red", red)
+        print("FINANCIAL_M3_DIFFERENTIAL existing tests run", result.testsRun, "red", red)
         compared = [call for call in harness.calls if call.lean is not None]
         bad = harness.disagreements()
         for entry in bad:
@@ -338,28 +338,28 @@ class PaymentDifferentialTests(unittest.TestCase):
             store.clock.value += rng.choice([0, 1, 60_000])
 
     def test_lean_decided_payments_cost_the_same_as_python_decided(self) -> None:
-        """T2 (steps 3-4 only): per-command wall time through the owner, both paths, same fixture."""
-        medians = {}
-        for lean in (False, True):
-            fixture = fixtures.RightRailFinancialAcceptanceTests()
+        """T2 (steps 3-4 only): per-command wall time through the owner, both paths, same fixture. The arms alternate sample by sample (the
+        order flips each time) so machine load hits both, and the bound, 1.10x + 1 ms, is held on the median of the per-sample ratios."""
+        fixtures_by_arm = {lean: fixtures.RightRailFinancialAcceptanceTests() for lean in (False, True)}
+        for fixture in fixtures_by_arm.values():
             fixture.setUp()
-            try:
-                store = fixture._build_base()
-                samples = []
-                with patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", lean):
-                    for n in range(40):
+        try:
+            stores = {lean: fixture._build_base() for lean, fixture in fixtures_by_arm.items()}
+            samples: dict[bool, list[float]] = {False: [], True: []}
+            for n in range(40):
+                for lean in ((False, True) if n % 2 else (True, False)):
+                    store = stores[lean]
+                    with patch.object(owner_module, "_LEAN_DECIDES_PAYMENTS", lean):
                         revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
                         started = time.perf_counter()
                         store.record_payment_evidence(item_id=expected.H_ITEM_ID, payment_id=f"t2-{n}", common_origin_id=f"t2-o{n}",
                                                       evidence_id=f"t2-e{n}", amount_cents=10, event_at_ms=expected.CASH_EVENT_MS,
                                                       source_id="t2", source_version="v1", expected_revision=revision)
-                        samples.append((time.perf_counter() - started) * 1000)
-                medians[lean] = statistics.median(samples[5:])
-            finally:
+                        samples[lean].append((time.perf_counter() - started) * 1000)
+        finally:
+            for fixture in fixtures_by_arm.values():
                 fixture.doCleanups()
-        print("FINANCIAL_M3_OWNER_PROFILE", medians)
-        self.assertLessEqual(medians[True], medians[False] * 1.10 + 1.0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        ratio = statistics.median(lean / python for python, lean in zip(samples[False][5:], samples[True][5:]))
+        python_ms = statistics.median(samples[False][5:])
+        print("FINANCIAL_M3_OWNER_PROFILE python_ms", python_ms, "median_ratio", ratio)
+        self.assertLessEqual(ratio, 1.10 + 1.0 / python_ms)
