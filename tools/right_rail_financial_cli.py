@@ -56,171 +56,113 @@ SWITCH_COMPARE_INCOMPLETE_EXIT = 4
 MAX_SWITCH_DOCUMENT_BYTES = 16 * 1024 * 1024
 
 
+_KINDS = {"int": int, "path": Path}
+_LIMIT = ("limit:int", {"default": 100})
+_OFFSET = ("offset:int", {"default": 0})
+# Every mutating command names who acts and the revision they reviewed; no defaults.
+_ACTOR = ("actor-id!", "actor-role!", "expected-revision:int!")
+
+
+def _flags(parser: argparse.ArgumentParser, *specs: str | tuple[str, dict[str, Any]]) -> None:
+    """Add flags: ``name`` optional, ``name!`` required, ``name:int``/``name:path`` typed; a tuple adds argparse keywords."""
+    for spec in specs:
+        text, extra = (spec, {}) if isinstance(spec, str) else spec
+        name, _, kind = text.partition(":")
+        required = text.endswith("!")
+        name, kind = name.rstrip("!"), kind.rstrip("!")
+        parser.add_argument("--" + name, **({"required": True} if required else {}), **({"type": _KINDS[kind]} if kind else {}), **extra)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", type=Path, help="existing FinancialOwner database for Owner commands")
-    parser.add_argument("--state-id")
-    parser.add_argument("--deployment-id")
-    parser.add_argument("--program-id")
-    parser.add_argument("--period-id")
-    parser.add_argument("--currency", default="USD")
-    parser.add_argument(
-        "--authority-file",
-        type=Path,
-        help="trusted authority JSON: authority_id, epoch, digest and actors roster (required)",
+    _flags(
+        parser,
+        ("database:path", {"help": "existing FinancialOwner database for Owner commands"}),
+        "state-id", "deployment-id", "program-id", "period-id",
+        ("currency", {"default": "USD"}),
+        ("authority-file:path", {"help": "trusted authority JSON: authority_id, epoch, digest and actors roster (required)"}),
+        ("custody-dir:path", {"help": "H2 custody log directory, outside the store's; with --custody-key, Owner commands check and extend it and packs are signed"}),
+        ("custody-key", {"help": "ML-DSA-87 custody key file (a gate signer handle)"}),
     )
-    parser.add_argument("--custody-dir", type=Path, help="H2 custody log directory, outside the store's; with --custody-key, Owner commands check and extend it and packs are signed")
-    parser.add_argument("--custody-key", help="ML-DSA-87 custody key file (a gate signer handle)")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("summary")
+    def command(name: str, *flags: str | tuple[str, dict[str, Any]], **kwargs: str) -> None:
+        _flags(commands.add_parser(name, **kwargs), *flags)
 
-    obligations = subparsers.add_parser("list-obligations")
-    obligations.add_argument("--status", choices=("OPEN", "ALL", "SATISFIED", "CASH_UNSATISFIED"), default="OPEN")
-    obligations.add_argument("--limit", type=int, default=100)
-    obligations.add_argument("--offset", type=int, default=0)
-
-    detail = subparsers.add_parser("obligation-detail")
-    detail.add_argument("--item-id", required=True)
-    detail.add_argument("--limit", type=int, default=100)
-
-    receipt = subparsers.add_parser("current-evaluation-receipt")
-    receipt.add_argument("--item-id", required=True)
-
-    history = subparsers.add_parser("history")
-    history.add_argument("--limit", type=int, default=100)
-    history.add_argument("--offset", type=int, default=0)
-
-    action = subparsers.add_parser("action-payload")
-    action.add_argument("--action-id", required=True)
-
-    authorize = subparsers.add_parser("authorize-offset")
-    _add_offset_arguments(authorize)
-
-    reject = subparsers.add_parser("reject-offset-and-authorize-correction")
-    _add_offset_arguments(reject)
-
-    acknowledge = subparsers.add_parser("acknowledge-action")
-    acknowledge.add_argument("--action-id", required=True)
-    acknowledge.add_argument("--acknowledgment-ref", required=True)
-    _add_actor_and_revision(acknowledge)
-
-    payment = subparsers.add_parser("record-payment-evidence")
-    payment.add_argument("--item-id", required=True)
-    payment.add_argument("--payment-id", required=True)
-    payment.add_argument("--common-origin-id", required=True)
-    payment.add_argument("--amount-cents", type=int, required=True)
-    payment.add_argument("--evidence-id", required=True)
-    payment.add_argument("--event-at-ms", type=int, required=True)
-    payment.add_argument("--source-id", default="synthetic-payment-source")
-    payment.add_argument("--source-version", default="fixture-v1")
-    payment.add_argument("--local-ref")
-    payment.add_argument("--pays-action-id")
-    payment.add_argument("--expected-revision", type=int, required=True)
-
-    cash = subparsers.add_parser("receiver-cash-file")
-    cash.add_argument("--file", type=Path, required=True)
-    cash.add_argument("--baseline", type=Path, required=True)
-    cash.add_argument("--source-sha256", required=True)
-    cash.add_argument("--baseline-sha256", required=True)
-    cash.add_argument("--source-context", nargs=5, required=True,
-                      metavar=("SOURCE", "VERSION", "RECEIVER", "CAPTURE", "CAPTURED_AT_MS"))
-    cash.add_argument("--owner-id", required=True)
-    cash.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
-    cash.add_argument("--apply", action="store_true", help="record checked evidence; default is isolated preview")
-
-    report = subparsers.add_parser("record-reporting-correction")
-    report.add_argument("--item-id", required=True)
-    report.add_argument("--report-id", required=True)
-    report.add_argument("--evidence-id")
-    _add_actor_and_revision(report)
-    report.add_argument("--event-at-ms", type=int)
-    report.add_argument("--supersedes")
-
-    subparsers.add_parser("verify-integrity")
-
-    export = subparsers.add_parser("export-continuity")
-    export.add_argument("--output", type=Path, required=True)
-
-    segments = subparsers.add_parser("export-history", help="write sealed history segments and the manifest a cash file is prepared against")
-    segments.add_argument("--output", type=Path, required=True)
-    segments.add_argument("--owner-id", required=True)
-    segments.add_argument("--mode", choices=("LIVE", "TEST"), required=True)
-
-    validate = subparsers.add_parser("validate-continuity")
-    validate.add_argument("--package", type=Path, required=True)
-
-    restore = subparsers.add_parser("restore-continuity")
-    restore.add_argument("--package", type=Path, required=True)
-    restore.add_argument("--destination", type=Path, required=True)
-
-    switch_prepare = subparsers.add_parser("switch-prepare", help="write one canonical Switch replay input; runs no evaluator")
-    _add_switch_files(switch_prepare)
-    switch_prepare.add_argument("--output", type=Path, required=True, help="new replay-input file; existing paths are never replaced")
-
-    switch_compare = subparsers.add_parser("switch-compare", help="compare supplied reference and candidate result records")
-    switch_compare.add_argument("--package", type=Path, required=True)
-    switch_compare.add_argument("--cohort-approval", type=Path)
-    switch_compare.add_argument("--reference-spec", type=Path)
-    switch_compare.add_argument("--candidate-spec", type=Path)
-    switch_compare.add_argument("--report-output", type=Path, help="optional new canonical JSON report file")
-
-    line_pack = subparsers.add_parser("line-pack", help="write one documentation-only CMS-64.9 line pack from --database, verified read-only")
-    line_pack.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
-    line_pack.add_argument("--line-map", type=Path, required=True, help="line map JSON listed by the approved Control Pack")
-    line_pack.add_argument("--line", required=True)
-    line_pack.add_argument("--quarter", required=True, help="federal fiscal quarter, e.g. FFY2025Q4")
-    line_pack.add_argument("--reported-line-cents", type=int, required=True, help="the reported line amount: the coverage denominator")
-    line_pack.add_argument("--generated-at-ms", type=int, required=True)
-    line_pack.add_argument("--prior-pack", type=Path, help="the line pack this one supersedes")
-    line_pack.add_argument("--output", type=Path, required=True, help="new line-pack file; existing paths are never replaced")
-
-    followthrough = subparsers.add_parser("followthrough-pack", help="write the documentation-only follow-through pack from --database, verified read-only")
-    followthrough.add_argument("--package", type=Path, required=True, help="that store's current Continuity package bytes")
-    followthrough.add_argument("--rules", type=Path, required=True, help="rules JSON listed by the approved Control Pack")
-    followthrough.add_argument("--generated-at-ms", type=int, required=True)
-    followthrough.add_argument("--output", type=Path, required=True, help="new follow-through file; existing paths are never replaced")
-
-    decision = subparsers.add_parser("record-followthrough-decision", help="record an official's ASSIGN or CLOSE decision on one recovery item")
-    decision.add_argument("--item-id", required=True)
-    decision.add_argument("--decision-id", required=True)
-    decision.add_argument("--act", choices=("ASSIGN", "CLOSE"), required=True)
-    decision.add_argument("--reason-code", help="CLOSE: a reason the rules list")
-    decision.add_argument("--owner-id", help="ASSIGN: a typed party the rules name")
-    decision.add_argument("--suggestion", type=Path, help="canonical JSON of the suggestion this decision answers, if any")
-    _add_actor_and_revision(decision)
-
-    resolve = subparsers.add_parser("custody-resolve", help="an operator's signed custody act: ADOPTED where the log is lost, REWIND_ACCEPTED for a restored store")
-    resolve.add_argument("--kind", choices=("ADOPTED", "REWIND_ACCEPTED"), required=True)
-    resolve.add_argument("--actor-id", required=True)
-    resolve.add_argument("--reason-ref", required=True)
-    resolve.add_argument("--expect-store-sequence", type=int, required=True, help="the store state the operator verified (verify-integrity)")
-    resolve.add_argument("--expect-store-head", required=True, help="that state's history head, hex")
+    switch_files = (
+        ("package:path!", {"help": "exact Continuity SHADOW package bytes"}),
+        "cohort-approval:path!", "reference-spec:path!", "candidate-spec:path!",
+    )
+    offset = ("item-id!", "claim-id!", *_ACTOR, "action-id", "decision-at-ms:int", "evaluation-id!", "evaluation-result-digest!")
+    command("summary")
+    command("list-obligations", ("status", {"choices": ("OPEN", "ALL", "SATISFIED", "CASH_UNSATISFIED"), "default": "OPEN"}), _LIMIT, _OFFSET)
+    command("obligation-detail", "item-id!", _LIMIT)
+    command("current-evaluation-receipt", "item-id!")
+    command("history", _LIMIT, _OFFSET)
+    command("action-payload", "action-id!")
+    command("authorize-offset", *offset)
+    command("reject-offset-and-authorize-correction", *offset)
+    command("acknowledge-action", "action-id!", "acknowledgment-ref!", *_ACTOR)
+    command(
+        "record-payment-evidence", "item-id!", "payment-id!", "common-origin-id!", "amount-cents:int!", "evidence-id!",
+        "event-at-ms:int!", ("source-id", {"default": "synthetic-payment-source"}), ("source-version", {"default": "fixture-v1"}),
+        "local-ref", "pays-action-id", "expected-revision:int!",
+    )
+    command(
+        "receiver-cash-file", "file:path!", "baseline:path!", "source-sha256!", "baseline-sha256!",
+        ("source-context", {"nargs": 5, "required": True, "metavar": ("SOURCE", "VERSION", "RECEIVER", "CAPTURE", "CAPTURED_AT_MS")}),
+        "owner-id!", ("mode", {"choices": ("LIVE", "TEST"), "required": True}),
+        ("apply", {"action": "store_true", "help": "record checked evidence; default is isolated preview"}),
+    )
+    command("record-reporting-correction", "item-id!", "report-id!", "evidence-id", *_ACTOR, "event-at-ms:int", "supersedes")
+    command("verify-integrity")
+    command("export-continuity", "output:path!")
+    command(
+        "export-history", "output:path!", "owner-id!", ("mode", {"choices": ("LIVE", "TEST"), "required": True}),
+        help="write sealed history segments and the manifest a cash file is prepared against",
+    )
+    command("validate-continuity", "package:path!")
+    command("restore-continuity", "package:path!", "destination:path!")
+    command(
+        "switch-prepare", *switch_files, ("output:path!", {"help": "new replay-input file; existing paths are never replaced"}),
+        help="write one canonical Switch replay input; runs no evaluator",
+    )
+    command(
+        "switch-compare", "package:path!", "cohort-approval:path", "reference-spec:path", "candidate-spec:path",
+        ("report-output:path", {"help": "optional new canonical JSON report file"}),
+        help="compare supplied reference and candidate result records",
+    )
+    command(
+        "line-pack",
+        ("package:path!", {"help": "that store's current Continuity package bytes"}),
+        ("line-map:path!", {"help": "line map JSON listed by the approved Control Pack"}),
+        "line!", ("quarter!", {"help": "federal fiscal quarter, e.g. FFY2025Q4"}),
+        ("reported-line-cents:int!", {"help": "the reported line amount: the coverage denominator"}),
+        "generated-at-ms:int!", ("prior-pack:path", {"help": "the line pack this one supersedes"}),
+        ("output:path!", {"help": "new line-pack file; existing paths are never replaced"}),
+        help="write one documentation-only CMS-64.9 line pack from --database, verified read-only",
+    )
+    command(
+        "followthrough-pack",
+        ("package:path!", {"help": "that store's current Continuity package bytes"}),
+        ("rules:path!", {"help": "rules JSON listed by the approved Control Pack"}),
+        "generated-at-ms:int!",
+        ("output:path!", {"help": "new follow-through file; existing paths are never replaced"}),
+        help="write the documentation-only follow-through pack from --database, verified read-only",
+    )
+    command(
+        "record-followthrough-decision", "item-id!", "decision-id!", ("act", {"choices": ("ASSIGN", "CLOSE"), "required": True}),
+        ("reason-code", {"help": "CLOSE: a reason the rules list"}), ("owner-id", {"help": "ASSIGN: a typed party the rules name"}),
+        ("suggestion:path", {"help": "canonical JSON of the suggestion this decision answers, if any"}), *_ACTOR,
+        help="record an official's ASSIGN or CLOSE decision on one recovery item",
+    )
+    command(
+        "custody-resolve", ("kind", {"choices": ("ADOPTED", "REWIND_ACCEPTED"), "required": True}), "actor-id!", "reason-ref!",
+        ("expect-store-sequence:int!", {"help": "the store state the operator verified (verify-integrity)"}),
+        ("expect-store-head!", {"help": "that state's history head, hex"}),
+        help="an operator's signed custody act: ADOPTED where the log is lost, REWIND_ACCEPTED for a restored store",
+    )
     return parser
-
-
-def _add_switch_files(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--package", type=Path, required=True, help="exact Continuity SHADOW package bytes")
-    parser.add_argument("--cohort-approval", type=Path, required=True)
-    parser.add_argument("--reference-spec", type=Path, required=True)
-    parser.add_argument("--candidate-spec", type=Path, required=True)
-
-
-def _add_actor_and_revision(parser: argparse.ArgumentParser) -> None:
-    """Every mutating command names who acts and the revision they reviewed; no defaults."""
-    parser.add_argument("--actor-id", required=True)
-    parser.add_argument("--actor-role", required=True)
-    parser.add_argument("--expected-revision", type=int, required=True)
-
-
-def _add_offset_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--item-id", required=True)
-    parser.add_argument("--claim-id", required=True)
-    _add_actor_and_revision(parser)
-    parser.add_argument("--action-id")
-    parser.add_argument("--decision-at-ms", type=int)
-    parser.add_argument("--evaluation-id", required=True)
-    parser.add_argument("--evaluation-result-digest", required=True)
 
 
 def _existing_database(path: Path) -> Path:
@@ -377,94 +319,39 @@ def _read_cohort_approval(path: Path) -> CohortApproval:
     value = _switch_keys(_read_switch_json(path, "switch_approval"), expected, "switch_approval")
     if value.get("contract") != COHORT_APPROVAL_CONTRACT:
         raise FinancialMirrorError("switch_approval_contract")
-    return CohortApproval(
-        approval_id=value["approval_id"],
-        cohort_id=value["cohort_id"],
-        test_identity=value["test_identity"],
-        approved_by=value["approved_by"],
-        approval_ref=value["approval_ref"],
-        source_class=value["source_class"],
-        receiver_boundary_ref=value["receiver_boundary_ref"],
-        custody_ref=value["custody_ref"],
-        permissions_ref=value["permissions_ref"],
-        pending_boundary_ref=value["pending_boundary_ref"],
-        binding_sha256=value["binding_sha256"],
-        contract=value["contract"],
-    )
+    return CohortApproval(**value)
 
 
 def _read_difference_policies(value: object, label: str) -> tuple[DifferencePolicy, ...]:
     if type(value) is not list or len(value) > 10000:
         raise FinancialMirrorError(f"{label}_shape")
-    policies: list[DifferencePolicy] = []
-    for record in value:
-        record = _switch_keys(record, {"path", "classification", "rationale", "approval_ref"}, label)
-        policies.append(DifferencePolicy(
-            path=record["path"],
-            classification=record["classification"],
-            rationale=record["rationale"],
-            approval_ref=record["approval_ref"],
-        ))
-    return tuple(policies)
+    return tuple(DifferencePolicy(**_switch_keys(record, {"path", "classification", "rationale", "approval_ref"}, label)) for record in value)
+
+
+def _read_spec(path: Path, kind: str, contract: str, identity: set[str], policies: tuple[str, ...] = ()) -> dict[str, object]:
+    """Read a reference or candidate spec file into spec fields; its stored ``result`` is the answer the evaluator returns."""
+    required = {"contract", "identity", *policies}
+    value = _read_switch_json(path, f"switch_{kind}")
+    if frozenset(value) not in {frozenset(required), frozenset(required | {"result"})}:
+        raise FinancialMirrorError(f"switch_{kind}_fields")
+    if value.get("contract") != contract:
+        raise FinancialMirrorError(f"switch_{kind}_contract")
+    fixed = _switch_keys(value.get("identity"), identity, f"switch_{kind}_identity")
+    answer = value.get("result")
+    return {
+        **fixed,
+        "evaluate": lambda _replay_input: answer,
+        **{name: _read_difference_policies(value[name], f"switch_{name}") for name in policies},
+    }
 
 
 def _read_reference_spec(path: Path) -> ReferenceSpec:
-    required = {"contract", "identity", "expected_differences", "forbidden_differences"}
-    allowed = required | {"result"}
-    value = _read_switch_json(path, "switch_reference")
-    if frozenset(value) not in {frozenset(required), frozenset(allowed)}:
-        raise FinancialMirrorError("switch_reference_fields")
-    if value.get("contract") != CLI_REFERENCE_SPEC_CONTRACT:
-        raise FinancialMirrorError("switch_reference_contract")
-    identity = _switch_keys(
-        value.get("identity"),
-        {"reference_id", "version", "authority_id", "reviewer_id", "source_ref", "source_sha256", "tool_version"},
-        "switch_reference_identity",
-    )
-    answer = value.get("result")
-
-    def supplied_answer(_replay_input: bytes, result: object = answer) -> object:
-        return result
-
-    return ReferenceSpec(
-        reference_id=identity["reference_id"],
-        version=identity["version"],
-        authority_id=identity["authority_id"],
-        reviewer_id=identity["reviewer_id"],
-        source_ref=identity["source_ref"],
-        source_sha256=identity["source_sha256"],
-        tool_version=identity["tool_version"],
-        evaluate=supplied_answer,
-        expected_differences=_read_difference_policies(value["expected_differences"], "switch_expected_differences"),
-        forbidden_differences=_read_difference_policies(value["forbidden_differences"], "switch_forbidden_differences"),
-    )
+    identity = {"reference_id", "version", "authority_id", "reviewer_id", "source_ref", "source_sha256", "tool_version"}
+    return ReferenceSpec(**_read_spec(path, "reference", CLI_REFERENCE_SPEC_CONTRACT, identity, ("expected_differences", "forbidden_differences")))
 
 
 def _read_candidate_spec(path: Path) -> CandidateSpec:
-    required = {"contract", "identity"}
-    allowed = required | {"result"}
-    value = _read_switch_json(path, "switch_candidate")
-    if frozenset(value) not in {frozenset(required), frozenset(allowed)}:
-        raise FinancialMirrorError("switch_candidate_fields")
-    if value.get("contract") != CLI_CANDIDATE_SPEC_CONTRACT:
-        raise FinancialMirrorError("switch_candidate_contract")
-    identity = _switch_keys(
-        value.get("identity"),
-        {"operator_id", "version", "tool_version", "release_sha256"},
-        "switch_candidate_identity",
-    )
-    result = value.get("result")
-
-    def supplied_result(_replay_input: bytes, output: object = result) -> object:
-        return output
-
-    return CandidateSpec(
-        operator_id=identity["operator_id"],
-        version=identity["version"],
-        tool_version=identity["tool_version"],
-        release_sha256=identity["release_sha256"],
-        evaluate=supplied_result,
-    )
+    return CandidateSpec(**_read_spec(path, "candidate", CLI_CANDIDATE_SPEC_CONTRACT, {"operator_id", "version", "tool_version", "release_sha256"}))
 
 
 def _try_switch_document(path: Path | None, loader: Any, label: str) -> tuple[Any, list[str]]:
@@ -640,70 +527,31 @@ def _run(args: argparse.Namespace) -> Any:
         return _owner_command(args, owner)
 
 
+_AUTHORIZE = ("", "item_id claim_id actor_id actor_role expected_revision action_id decision_at_ms evaluation_id evaluation_result_digest")
+# Mirror calls that only forward arguments: command -> (positional attributes, keyword attributes); the method is the command with underscores.
+_MIRROR_CALLS = {
+    "summary": ("", ""),
+    "list-obligations": ("", "status limit offset"),
+    "obligation-detail": ("item_id", "limit"),
+    "current-evaluation-receipt": ("item_id", ""),
+    "history": ("", "limit offset"),
+    "action-payload": ("action_id", ""),
+    "authorize-offset": _AUTHORIZE,
+    "reject-offset-and-authorize-correction": _AUTHORIZE,
+    "acknowledge-action": ("action_id acknowledgment_ref", "actor_id actor_role expected_revision"),
+    "record-payment-evidence": ("", "item_id payment_id common_origin_id amount_cents evidence_id event_at_ms source_id source_version local_ref pays_action_id expected_revision"),
+    "record-reporting-correction": ("", "item_id report_id evidence_id actor_id actor_role expected_revision event_at_ms supersedes"),
+    "verify-integrity": ("", ""),
+}
+
+
 def _owner_command(args: argparse.Namespace, owner: FinancialOwner) -> Any:
     mirror = FinancialMirror(owner)
     command = args.command
-
-    if command == "summary":
-        return mirror.summary()
-    if command == "list-obligations":
-        return mirror.list_obligations(status=args.status, limit=args.limit, offset=args.offset)
-    if command == "obligation-detail":
-        return mirror.obligation_detail(args.item_id, limit=args.limit)
-    if command == "current-evaluation-receipt":
-        return mirror.current_evaluation_receipt(args.item_id)
-    if command == "history":
-        return mirror.history(limit=args.limit, offset=args.offset)
-    if command == "action-payload":
-        return mirror.action_payload(args.action_id)
-    if command in {"authorize-offset", "reject-offset-and-authorize-correction"}:
-        decide = mirror.authorize_offset if command == "authorize-offset" else mirror.reject_offset_and_authorize_correction
-        return decide(
-            item_id=args.item_id,
-            claim_id=args.claim_id,
-            actor_id=args.actor_id,
-            actor_role=args.actor_role,
-            expected_revision=args.expected_revision,
-            action_id=args.action_id,
-            decision_at_ms=args.decision_at_ms,
-            evaluation_id=args.evaluation_id,
-            evaluation_result_digest=args.evaluation_result_digest,
-        )
-    if command == "acknowledge-action":
-        return mirror.acknowledge_action(
-            args.action_id,
-            args.acknowledgment_ref,
-            actor_id=args.actor_id,
-            actor_role=args.actor_role,
-            expected_revision=args.expected_revision,
-        )
-    if command == "record-payment-evidence":
-        return mirror.record_payment_evidence(
-            item_id=args.item_id,
-            payment_id=args.payment_id,
-            common_origin_id=args.common_origin_id,
-            amount_cents=args.amount_cents,
-            evidence_id=args.evidence_id,
-            event_at_ms=args.event_at_ms,
-            source_id=args.source_id,
-            source_version=args.source_version,
-            local_ref=args.local_ref,
-            pays_action_id=args.pays_action_id,
-            expected_revision=args.expected_revision,
-        )
-    if command == "record-reporting-correction":
-        return mirror.record_reporting_correction(
-            item_id=args.item_id,
-            report_id=args.report_id,
-            evidence_id=args.evidence_id,
-            actor_id=args.actor_id,
-            actor_role=args.actor_role,
-            expected_revision=args.expected_revision,
-            event_at_ms=args.event_at_ms,
-            supersedes=args.supersedes,
-        )
-    if command == "verify-integrity":
-        return mirror.verify_integrity()
+    if command in _MIRROR_CALLS:
+        positional, keywords = (names.split() for names in _MIRROR_CALLS[command])
+        return getattr(mirror, command.replace("-", "_"))(
+            *(getattr(args, name) for name in positional), **{name: getattr(args, name) for name in keywords})
     if command == "export-continuity":
         package = mirror.export_continuity()
         _write_new(args.output, package)
