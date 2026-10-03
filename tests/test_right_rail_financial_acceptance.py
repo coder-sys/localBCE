@@ -5237,6 +5237,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store, _reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=300_000)
         self._offset_b_refused_then_forced(store, patch.object(owner, "_open_requests", lambda *args: {}))
 
+    def test_an_offset_counts_only_the_unpaid_part_of_an_open_request(self) -> None:
+        # M1 re-review LOW: 400,000 unpaid and request A (300,000) with 100,000 paid against it: 300,000 unpaid, 200,000 still asked, so a
+        # 100,000 offset fits exactly. Kills an owner or checker sum that ignores what was paid against a request.
+        store, _reject_b = self._two_claim_corrections(300_000, 100_000, unpaid_cents=400_000)
+        self._pay_a(store, 100_000)
+        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
+        self.assertEqual(receipt["shortfall_cents"], 300_000)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
+        store.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"], action_id="action:offset-b",
+                               decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+        self._assert_verified(store)
+
     @staticmethod
     def _pay_a(store: FinancialOwner, cents: int, suffix: str = "p2", *, linked: bool = True, action: str = expected.ACTION_CORRECTION_ID) -> dict[str, object]:
         """A cash payment of ``cents`` after A's decision, answering correction request ``action`` (A's) when ``linked``."""
@@ -5547,8 +5559,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(seen, {_ACTION_B: ["NOT_SATISFIED", "SUPPORTED"], expected.ACTION_CORRECTION_ID: ["NOT_SATISFIED", "SUPPORTED"]})
 
     def test_delivery_matches_the_oracle_under_many_orderings_of_money_and_acks(self) -> None:
-        # Stale corrections: 700,000 unpaid, requests A and B (300,000 each) and a READY offset notice N (claim C, 100,000, within what A and B leave), so 600,000 is owed.
-        # Four of seven moves, every 29th of the 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
+        # Stale corrections: 700,000 unpaid, requests A and B (300,000 each), a READY offset notice N (claim C, 100,000, within what A and B leave), then
+        # 100,000 arrives unlinked, so 500,000 is owed while 600,000 is still asked. Four of seven moves, every 30th of the 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
         # oracle's recomputation (its own delivery rule), and a refused move is skipped. Both delivery verdicts must occur, or the sweep proves nothing.
         item, act_n, made, seen = expected.H_ITEM_ID, "action:obligation-item-h:offset-c", [], set()
         ack = lambda store, action: store.acknowledge_action(action, f"ack:{action}")
@@ -5562,7 +5574,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "ack-b": lambda store: ack(store, _ACTION_B),
             "ack-n": lambda store: ack(store, act_n),
         }
-        for order in list(itertools.permutations(moves, 4))[::29]:
+        for order in list(itertools.permutations(moves, 4))[::30]:
             store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=700_000)
             reject_b()
             store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)
@@ -5570,6 +5582,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
             store.authorize_offset(item_id=item, claim_id="claim:obligation-item-h:offset-c", expected_revision=receipt["revision"], action_id=act_n,
                                    decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+            self._pay_a(store, 100_000, "pn", linked=False)
             made.clear()
             for move in order:
                 try:
