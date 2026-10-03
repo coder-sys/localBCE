@@ -1136,9 +1136,9 @@ def run_correction_transition_v1(*, request: bytes) -> dict[str, Any]:
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
 
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
-EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_417_408
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_421_504
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B"
+    "84F8DCFC618D557838D15BFF5AFCA29CDB244F80DE47A57AAE4A633F0C571CE1"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0

@@ -1,13 +1,14 @@
 # Provenance: blind_financial_worker.exe
 
-Lake build of `lean/` at commit `98df3c9` (lean tree `00a6f26e207dbb47e3c21468b6640dee18f67975`), toolchain `leanprover/lean4:v4.33.1`.
+Lake build of `lean/` at commit `6a897d8` (lean tree `ec7d5398648854e9f28ad3e7b434156a8d67a0b8`), toolchain `leanprover/lean4:v4.33.1`.
 
-- 6,417,408 bytes; SHA-256 `3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B`; the engine module pins both.
-- Two guarded fresh stage builds, each in a `git archive` of that tree: `m4r-5a`, `m4r-5b`, each `lake build` of the four pin targets, exit 0. Both workers are byte-identical; `gate_verify` is still `724de1bd...`; a warm build (`m4r-6`) agrees.
+- 6,421,504 bytes; SHA-256 `84F8DCFC618D557838D15BFF5AFCA29CDB244F80DE47A57AAE4A633F0C571CE1`; the engine module pins both.
+- Two guarded fresh stage builds, each in a `git archive` of that tree: `m1-2a`, `m1-2b`, each `lake build` of the four pin targets, exit 0. Both workers are byte-identical; `gate_verify` is still `724de1bd...`; a warm build (`m1-3`) agrees.
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: the XI.2 section of the re-pin commit message.
-- Why it moved: 98df3c9 merges M4 L2 (offset authorization, bound authority digest, tag 22) with trunk's correction-capacity work; no earlier worker had both.
+- Why it moved: M1 adds reason 23 CLAIM_EXCEEDS_SHORTFALL; an offset claim above the shortfall is refused, no other decision changes.
 
-Retired pins, not deleted: `C063E4AC3D440D9392470E4546C2D324CC93569D0778E36B86B7853FDAC1EDC9`, 6,418,432 bytes
+Retired pins, not deleted: `3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B`, 6,417,408 bytes
+(lean `98df3c9`, tree `00a6f26e207dbb47e3c21468b6640dee18f67975`; before the shortfall bound); `C063E4AC3D440D9392470E4546C2D324CC93569D0778E36B86B7853FDAC1EDC9`, 6,418,432 bytes
 (lean `92f34ca`; M4 L2 without the capacity fix); `8EB77363E6E89FD63F0646028D3CD2B23C99CF270AF7644CFFAE1FDE769D1080`, 6,438,400 bytes
 (trunk `5e500db`; capacity fix without M4 L2); `58CDA012A47B82EB23BC600E9A5CC1AFA808E491A1CE33D73379E86B15DBCFD2`, 6,439,936 bytes
 (lean commit `c3239c0`, tree `26203703021c55fa42fb3b7409dda6a519fa914d`; stage logs `wp-c4stagea`, `wp-c4stageb`; before offset authorization); `5CA5A67CD5D80F4A2D0EAED7F3EDB75D21F2470F0C07C8558FC21079EBFFA097`, 6,460,416 bytes

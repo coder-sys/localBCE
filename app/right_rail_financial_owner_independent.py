@@ -64,9 +64,9 @@ PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; a writing Owner u
 PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind": ("financial_events", ("kind", "aggregate_type"))}
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B"  # the evaluator worker
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "84F8DCFC618D557838D15BFF5AFCA29CDB244F80DE47A57AAE4A633F0C571CE1"  # the evaluator worker
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "c2c2a5f42ec53121bff48469d4dae21193fe2be51cf37c981ec35100882343be"
+RETIRED_PINS_SHA256 = "52bde12ba3246dabdc7333af748c65aa6282d93d7e6528cbe4f8d66355242332"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
