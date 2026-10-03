@@ -211,6 +211,16 @@ def Ix.run (x : Ix) (b : List Line) : Result :=
 
 def decideBatchF (c : Ctx) (b : List Line) : Result := (Ix.build c b).run b
 
+/-- `run` with the ids `f` that the tenant's id registry gives another shard already seen. -/
+def Ix.runIn (x : Ix) (f : List Nat) (b : List Line) : Result :=
+  let ds := x.decideAll (HashSet.ofList (idSeen f)) (x.order b)
+  let ra := x.releasedLines ds
+  let ua := x.unresolvedLines ds
+  { decisions := ds, released := ⟨x.relV.asOf, x.relN + ra.length, x.relV.entries ++ ra⟩,
+    unresolved := ⟨x.unrV.asOf, x.unrN + ua.length, x.unrV.entries ++ ua⟩ }
+
+def decideBatchFIn (c : Ctx) (f : List Nat) (b : List Line) : Result := (Ix.build c b).runIn f b
+
 /-! ## Pins: `pinInput` as one ByteArray (about 0.93 KB a released row, not 22 KB of list cells). -/
 
 /-- `be w n` appended to `acc`: one shift per byte, not a power and a division. -/

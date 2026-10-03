@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.Fast
+import BlindLedger.Gate.Rules.Shards
 
 /-! Proves `Fast.decideBatchF` equal to `Spec.decideBatch` (and `pinBytes` to `pinInput`), plus its order laws; not imported by the runner, so a mutant of `Fast.lean` still builds `gate_rules`. -/
 
@@ -540,6 +541,16 @@ theorem decideBatchF_eq (c : Ctx) (b : List Line) : decideBatchF c b = decideBat
   simp only [hds, releasedLines_eq, unresolvedLines_eq, advance, build_relV, build_unrV, build_relN,
     build_unrN, releasedSet, unresolvedSet]
 
+/-- The twin with foreign ids equals `decideBatchIn`. -/
+theorem decideBatchFIn_eq (c : Ctx) (f : List Nat) (b : List Line) : decideBatchFIn c f b = decideBatchIn c f b := by
+  have hds : (Ix.build c b).decideAll (HashSet.ofList (idSeen f)) ((Ix.build c b).order b) =
+      decideAll c (idSeen f ++ seen0 c b) (order c b) := by
+    rw [order_eq]
+    exact decideAll_eq _ _ _ fun k => by simp [Ix.seen, seen0_eq, HashSet.contains_ofList]
+  unfold decideBatchFIn Ix.runIn decideBatchIn
+  simp only [hds, releasedLines_eq, unresolvedLines_eq, advance, build_relV, build_unrV, build_relN,
+    build_unrN, releasedSet, unresolvedSet]
+
 /-- Replaces the runner's reversed-order re-run: `decideBatchF_eq` and `deterministic`. -/
 theorem decideBatchF_perm {c : Ctx} {b₁ b₂ : List Line} (h : b₁.Perm b₂) :
     decideBatchF c b₁ = decideBatchF c b₂ := by
@@ -721,6 +732,8 @@ theorem pin_run_eq {α : Type} {d : String} {k : Nat} {f : α → List (Nat × N
 
 /-- info: 'BlindLedger.Gate.Rules.Fast.decideBatchF_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideBatchF_eq
+/-- info: 'BlindLedger.Gate.Rules.Fast.decideBatchFIn_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms decideBatchFIn_eq
 /-- info: 'BlindLedger.Gate.Rules.Fast.decideBatchF_perm' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms decideBatchF_perm
 /-- info: 'BlindLedger.Gate.Rules.Fast.decideBatchF_reverse' depends on axioms: [propext, Classical.choice, Quot.sound] -/

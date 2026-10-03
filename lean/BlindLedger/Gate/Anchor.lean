@@ -44,4 +44,12 @@ def ShardState.step (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (b :
     (ShardState.load H r.released r.unresolved).map fun st' => (r, st')
   else none
 
+/-- `step` with the ids `f` that the tenant's id registry gives another shard (gate-shard-uniqueness-v1). -/
+def ShardState.stepIn (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (f : List Nat) (b : List Rules.Line) :
+    Option (Rules.Result × ShardState) :=
+  if st.digest == natBE digestBytes c.anchor then
+    let r := Rules.decideBatchIn { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } f b
+    (ShardState.load H r.released r.unresolved).map fun st' => (r, st')
+  else none
+
 end BlindLedger.Gate

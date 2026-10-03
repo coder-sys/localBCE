@@ -422,6 +422,16 @@ def decideBatch (c : Ctx) (batch : List Line) : Result :=
   { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),
     unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }
 
+/-- The id keys of ids the tenant's id registry gives another shard (gate-shard-uniqueness-v1).  Kind 4
+    equals no exact (1, 3) or near (0, 2) key, so these fire only `ALREADY_DECIDED`. -/
+def idSeen (f : List Nat) : List Key := f.map fun i => [4, i]
+
+/-- `decideBatch` with the ids `f` (owned by another shard) already seen; `f = []` is `decideBatch`. -/
+def decideBatchIn (c : Ctx) (f : List Nat) (batch : List Line) : Result :=
+  let ds := decideAll c (idSeen f ++ seen0 c batch) (order c batch)
+  { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),
+    unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }
+
 /-! Pins.  A snapshot or set pin is the SHA3-512 of `pinInput`: its domain
     (`RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` or `RR/GATE/UNRESOLVED/v1`)
     and a NUL, the kind (1 DMF, 2 provider deaths, 3 exclusions, 4
