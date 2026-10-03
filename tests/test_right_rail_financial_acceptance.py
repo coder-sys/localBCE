@@ -5819,6 +5819,47 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         verify_database(path, expected_config=store.config, expected_authority=self.authority)
         self._make_owner(path=path)
 
+    def _retag_events(self, store: FinancialOwner, name: str, action_id: str, edit) -> Path:
+        path = self._path(f"{name}.sqlite")
+        path.write_bytes(_image(store.path))
+        self.assertEqual(self._rehash_history(path, lambda payload: payload.get("action_id") == action_id and ("artifact" in payload or "correction_followup" in payload) and (edit(payload) or True)), 1)
+        with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:  # a changed payload size changes its pending and open byte counts
+            connection.row_factory = sqlite3.Row
+            for key in [key for (key,) in connection.execute("SELECT row_key FROM history_pending WHERE table_name='financial_events'")]:
+                row = connection.execute("SELECT * FROM financial_events WHERE rowid=?", (key,)).fetchone()
+                connection.execute("UPDATE history_pending SET record_bytes=? WHERE table_name='financial_events' AND row_key=?", (independent._record_bytes("financial_events", row), key))
+            connection.execute("UPDATE history_open SET byte_count=(SELECT SUM(record_bytes) FROM history_pending)")
+        return path
+
+    def test_a_served_offset_names_the_serving_engine_or_a_newer_one(self) -> None:
+        # rr-review offset-served MED 1: a sha-less offset is legacy only before any event names the serving engine (7C1EAB94);
+        # an offset naming a pre-serving engine is refused. LOW 2 is the last case.
+        store = self._build_base_for_correction()
+        self._authorize(store, self._record_claim(store))
+        retired = "8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309"
+        path = self._retag_events(store, "offset-retired", expected.ACTION_OFFSET_ID, lambda payload: payload["artifact"].update(sha256=retired))
+        with self.subTest("retired"), self.assertRaisesRegex(IndependentFinancialError, "^action:engine$"):
+            verify_database(path, expected_config=store.config, expected_authority=self.authority)
+        path = self._retag_events(store, "offset-legacy", expected.ACTION_OFFSET_ID, lambda payload: payload.pop("artifact"))
+        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+
+        after_serving, _reject_b = self._two_claim_corrections(300_000, 100_000, unpaid_cents=400_000)
+        self._pay_a(after_serving, 100_000)
+        receipt = after_serving.current_evaluation_receipt(expected.H_ITEM_ID)
+        self._advance_clock(after_serving, expected.CORRECTION_AUTH_MS + 2_000)
+        after_serving.authorize_offset(item_id=expected.H_ITEM_ID, claim_id="claim:obligation-item-h:offset-b", expected_revision=receipt["revision"], action_id="action:offset-b",
+                                       decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+        path = self._retag_events(after_serving, "offset-after-serving", "action:offset-b", lambda payload: payload.pop("artifact"))
+        with self.subTest("after-serving"), self.assertRaisesRegex(IndependentFinancialError, "^action:engine$"):
+            verify_database(path, expected_config=after_serving.config, expected_authority=self.authority)
+
+        # LOW 2: a correction without a follow-up never reads a top-level artifact; read, E911 after A's current engine would be action:engine-order.
+        order_only, reject_b = self._two_claim_corrections(200_000, 100_000)
+        reject_b()
+        path = self._retag_events(order_only, "correction-top-level-sha", _ACTION_B, lambda payload: (payload.pop("correction_followup"), payload.update(artifact={"sha256": _RETIRED_CORRECTION_ARTIFACT_SHA256})))
+        with self.subTest("top-level-sha"):
+            verify_database(path, expected_config=order_only.config, expected_authority=self.authority)
+
     def test_a_cancelled_correction_or_changed_decision_amount_is_refused(self) -> None:
         store = self._build_base_for_correction()
         self._prepare_rejected(store)

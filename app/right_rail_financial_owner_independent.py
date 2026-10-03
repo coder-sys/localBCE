@@ -65,6 +65,7 @@ PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind":
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARTIFACT_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the evaluator worker
+OFFSET_SERVING_ENGINE_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the first engine whose Lean serves offset authorizations; fixed, unlike the current pin
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
 RETIRED_PINS_SHA256 = "3030519fbf180128c59efc64fc94d4916f4a35fcf289d704043a78d685d5b1fd"
 
@@ -2856,14 +2857,15 @@ def _verify_actions(
     current = registry[CORRECTION_TRANSITION_ARTIFACT_SHA256]
     engines: dict[str, tuple[int, str]] = {}  # correction action -> the engine that decided it, by its decision event
     decided: dict[str, object] = {}  # correction action -> the amount its decision event records
-    newest = 0
-    for action_ref, sha, event_amount, event_kind in connection.execute("SELECT json_extract(payload_json,'$.action_id'),COALESCE(json_extract(payload_json,'$.correction_followup.artifact.sha256'),json_extract(payload_json,'$.artifact.sha256')),json_extract(payload_json,'$.amount_cents'),kind FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind IN ('OFFSET_AUTHORIZED','OFFSET_REJECTED_CORRECTION_AUTHORIZED') ORDER BY event_sequence"):
+    newest, serving, served = 0, registry[OFFSET_SERVING_ENGINE_SHA256][0], False  # served: an event has named the serving engine or a newer one
+    for action_ref, sha, event_amount, event_kind in connection.execute("SELECT json_extract(payload_json,'$.action_id'),json_extract(payload_json,CASE kind WHEN 'OFFSET_AUTHORIZED' THEN '$.artifact.sha256' ELSE '$.correction_followup.artifact.sha256' END),json_extract(payload_json,'$.amount_cents'),kind FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind IN ('OFFSET_AUTHORIZED','OFFSET_REJECTED_CORRECTION_AUTHORIZED') ORDER BY event_sequence"):
         if event_kind == "OFFSET_AUTHORIZED":
-            if sha is None:
-                continue
-            if sha not in registry:
+            if sha is None and not served:
+                continue  # a legacy store: its offsets were committed before any engine served them
+            if sha not in registry or registry[sha][0] < serving:
                 _fail("action:engine")
         engines[action_ref] = engine = registry.get(sha, current)
+        served = served or sha is not None and engine[0] >= serving
         if engine[0] < newest:
             _fail("action:engine-order")  # a retired engine never decides after a newer one
         newest = engine[0]
