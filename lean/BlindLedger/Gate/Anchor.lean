@@ -44,4 +44,12 @@ def ShardState.step (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (b :
     (ShardState.load H r.released r.unresolved).map fun st' => (r, st')
   else none
 
+/-- `step` for shard `k` with the id registry's answers `os` (multi-shard-runtime-v1 §2 step 3). -/
+def ShardState.stepReg (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (k : Nat) (os : List Rules.Owner)
+    (b : List Rules.Line) : Option (Rules.Result × ShardState) :=
+  if st.digest == natBE digestBytes c.anchor then
+    let r := Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b
+    (ShardState.load H r.released r.unresolved).map fun st' => (r, st')
+  else none
+
 end BlindLedger.Gate

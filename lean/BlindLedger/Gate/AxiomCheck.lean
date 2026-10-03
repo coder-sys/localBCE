@@ -122,6 +122,8 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.load_ok
 /-- info: 'BlindLedger.Gate.step_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.step_ok
+/-- info: 'BlindLedger.Gate.stepReg_some' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.stepReg_some
 /-- info: 'BlindLedger.Gate.natBE_beNat' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.natBE_beNat
 /-- info: 'BlindLedger.Gate.realCrypto_cert_not_root' depends on axioms: [propext, Quot.sound] -/

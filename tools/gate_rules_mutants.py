@@ -31,8 +31,9 @@ REVIEW = ("| .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DAT
           "  | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true")
 # A mutant the vectors miss is still killed if these proofs no longer build: the Spec's order independence
 # (the runner no longer re-decides each batch in reverse) and the twin's equality with the Spec.
-PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Shards")
-PROOF_FILES = ("Theorems.lean", "FastEq.lean", "Shards.lean")
+PROOFS = ("BlindLedger.Gate.Rules.Theorems", "BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Shards",
+          "BlindLedger.Gate.Rules.ShardRun")
+PROOF_FILES = ("Theorems.lean", "FastEq.lean", "Shards.lean", "ShardRun.lean")
 KEPT = "d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED"
 # Fast.lean text.
 R2 = "x.seen s (exactKey l) || x.seen s (nearKey l) || x.spanOk && validDate l.date && x.overlap l"

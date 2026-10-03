@@ -368,4 +368,26 @@ theorem pinInput_lines {d : String} {k : Nat} {s s' : Rules.Snapshot Rules.Line}
   · simp only [not_or] at hm
     rw [List.count_eq_zero_of_not_mem hm.1, List.count_eq_zero_of_not_mem hm.2]
 
+/-- `stepReg` decides exactly `decideReg` on the state's own sets, and the next state holds its sets. -/
+theorem stepReg_some {H : Bytes → Bytes} {st st' : ShardState} {c : Rules.Ctx} {k : Nat}
+    {os : List Rules.Owner} {b : List Rules.Line} {r : Rules.Result} (h : st.stepReg H c k os b = some (r, st')) :
+    r = Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b ∧
+      st'.released = r.released ∧ st'.unresolved = r.unresolved := by
+  unfold ShardState.stepReg at h
+  by_cases hd : (st.digest == natBE digestBytes c.anchor) = true
+  · rw [if_pos hd] at h
+    dsimp only at h
+    cases hl : ShardState.load H
+        (Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b).released
+        (Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b).unresolved with
+    | none => rw [hl] at h; cases h
+    | some st0 =>
+      rw [hl] at h
+      simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨-, hr, hu⟩ := load_ok hl
+      exact ⟨rfl, hr, hu⟩
+  · rw [if_neg hd] at h
+    cases h
+
 end BlindLedger.Gate

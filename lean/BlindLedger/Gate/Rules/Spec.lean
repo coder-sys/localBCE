@@ -466,4 +466,35 @@ def pinInput {α : Type} (domain : String) (kind : Nat) (fields : α → List (N
   let rows ← s.entries.mapM (row ∘ fields)
   pure (domain.toUTF8.toList ++ 0 :: head ++ (rows.mergeSort fun a b => decide (a ≤ b)).flatten)
 
+/-! Multi-shard runtime (rrb/designs/multi-shard-runtime-v1.md §2, §5).  The tenant's id registry answers a
+    shard's reserve with one `Owner` per id it knows: the shard that holds it and whether that shard's
+    batch since sealed (`settled`: the id is recorded in that shard's sets).  Proofs: `ShardRun.lean`. -/
+
+structure Owner where
+  id : Nat
+  shard : Nat
+  settled : Bool
+  deriving DecidableEq, Repr
+
+/-- Shard `k` may act on id `i`: the registry gives it `k`, or another shard recorded it. -/
+def okId (k : Nat) (os : List Owner) (i : Nat) : Bool := os.any fun o => o.id == i && (o.shard == k || o.settled)
+
+/-- Another shard recorded id `i`: shard `k` answers it `ALREADY_DECIDED`. -/
+def taken (k : Nat) (os : List Owner) (i : Nat) : Bool := os.any fun o => o.id == i && (o.shard != k && o.settled)
+
+/-- The lines shard `k` decides now: a payment waits (answered UNAVAILABLE, resent) if any of its ids is
+    neither `k`'s nor recorded elsewhere, an id with no answer included. -/
+def ready (k : Nat) (os : List Owner) (b : List Line) : List Line :=
+  b.filter fun l => !b.any fun m => m.pay == l.pay && !okId k os m.id
+
+def foreignOf (k : Nat) (os : List Owner) (b : List Line) : List Nat := (b.map (·.id)).filter (taken k os)
+
+/-- Of shard `k`'s unsettled ids `p`, those its sealed sets do not hold: the registry frees them. -/
+def settleFree (rel unr : List Line) (p : List Nat) : List Nat :=
+  p.filter fun i => !((rel ++ unr).map (·.id)).contains i
+
+/-- One batch of shard `k` against the registry's answers `os`. -/
+def decideReg (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
+  decideBatchIn c (foreignOf k os (ready k os b)) (ready k os b)
+
 end BlindLedger.Gate.Rules

@@ -214,6 +214,25 @@ def decideBatchFIn (c : Ctx) (f : List Nat) (b : List Line) : Result := (Ix.buil
 
 def decideBatchF (c : Ctx) (b : List Line) : Result := decideBatchFIn c [] b
 
+/-! Twins of the multi-shard defs: one hash set per answer kind, built once per batch (`ShardRun.lean`). -/
+
+def readyF (k : Nat) (os : List Owner) (b : List Line) : List Line :=
+  let ok := HashSet.ofList ((os.filter fun o => o.shard == k || o.settled).map (·.id))
+  let wait := HashSet.ofList ((b.filter fun m => !ok.contains m.id).map (·.pay))
+  b.filter fun l => !wait.contains l.pay
+
+def foreignOfF (k : Nat) (os : List Owner) (b : List Line) : List Nat :=
+  let t := HashSet.ofList ((os.filter fun o => o.shard != k && o.settled).map (·.id))
+  (b.map (·.id)).filter fun i => t.contains i
+
+def settleFreeF (rel unr : List Line) (p : List Nat) : List Nat :=
+  let s := HashSet.ofList ((rel ++ unr).map (·.id))
+  p.filter fun i => !s.contains i
+
+def decideRegF (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
+  let r := readyF k os b
+  decideBatchFIn c (foreignOfF k os r) r
+
 /-! ## Pins: `pinInput` as one ByteArray (about 0.93 KB a released row, not 22 KB of list cells). -/
 
 /-- `be w n` appended to `acc`: one shift per byte, not a power and a division. -/
