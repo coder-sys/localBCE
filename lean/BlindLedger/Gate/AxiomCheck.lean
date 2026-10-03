@@ -2,6 +2,7 @@ import BlindLedger.Gate.Theorems
 import BlindLedger.Gate.MlDsa87Laws
 import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.AnchorTheorems
+import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Sha3FastEq
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
@@ -206,6 +207,14 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.StepsAny.coherent
 /-- info: 'BlindLedger.Gate.stepReg_some' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.stepReg_some
+/-- info: 'BlindLedger.Gate.decodeCheckpoint_disjoint' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint_disjoint
+/-- info: 'BlindLedger.Gate.decodeCheckpoint2_head' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint2_head
+/-- info: 'BlindLedger.Gate.decodeCheckpoint2_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint2_encode
+/-- info: 'BlindLedger.Gate.decodeCheckpoint2_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.decodeCheckpoint2_canonical
 /-- info: 'BlindLedger.Semantic.sha3_512_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Semantic.sha3_512_eq
 /-- info: 'BlindLedger.Semantic.shake128_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
