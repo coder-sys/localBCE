@@ -32,7 +32,7 @@ each one (verify from the repository root with
  impl `provider_app/provider_app/{evaluator,codec}.py`, Lean model
  `provider_app/lean`.
 - **Continuity segments** `RR/GATE/SEGMENT/v1`: **no vectors published**;
- prose only, [CORE_REDESIGN.md](../docs/CORE_REDESIGN.md) lines 168-184;
+ prose: [CORE_REDESIGN.md](../docs/CORE_REDESIGN.md) "History segments";
  impl `app/right_rail_financial_owner_independent.py`,
  `tests/test_right_rail_financial_history_segments.py`.
 

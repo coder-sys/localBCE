@@ -1,8 +1,7 @@
 # Financial core redesign (approved by the founder 2026-09-24)
 
-Approval (2026-09-24): founder approved the v8 rebuild and retiring v5/v6 stores, conditional on every step complying with CONSTITUTION.md; any step weakening a safety property or protected answer needs a separate founder decision.
-
-Format approval (2026-09-24, CONSTITUTION V.4): the founder approved the v8 store/package format (RR/FINANCIAL/CONTINUITY/v8) in session chat ("Yes, approve v8"). The only protected change is CASE_11's export version string in `tests/rightrail_financial_expected_cases.py`. History-completeness approval (same date): one sealed opening-balance event, then full facts on every later event. Both v7 provisions (migration on open, opening-balance conversion) were superseded 2026-09-25 (decision C3): v7 conversion and `OPENING_BALANCE` were removed.
+Approved 2026-09-24/25: the v8 rebuild and store format (RR/FINANCIAL/CONTINUITY/v8, CONSTITUTION V.4); v5/v6/v7 stores,
+v7 conversion and `OPENING_BALANCE` retired (decision C3). Any step weakening a safety property needs a separate founder decision.
 
 ## Gaps found (under-enforcement, not just size)
 
@@ -12,11 +11,9 @@ Format approval (2026-09-24, CONSTITUTION V.4): the founder approved the v8 stor
 
 ## Migration (each step leaves a working system; one guarded run per step)
 
-Done (history in git): v8 owner, Continuity and replay reuse. Standing rules:
-one typed decoder per record, no re-validating own writes; Python re-derivation
-of Lean is replaced by read-set binding plus a pre-COMMIT per-obligation
-checker; the checker is replay + compare with an incremental mode and all 25
-tamper tests still detect.
+Done (history in git): v8 owner, Continuity and replay reuse. Rules: one typed decoder per record, no re-validating own writes;
+read-set binding plus a pre-COMMIT per-obligation checker replace Python re-derivation of Lean; the checker is replay + compare
+with an incremental mode, and all 25 tamper tests still detect.
 Open: more transitions move to Lean.
 
 ## History segments (approved by the founder 2026-09-25)

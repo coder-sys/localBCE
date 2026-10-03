@@ -155,11 +155,10 @@ The target
 ([`docs/RIGHTRAIL_FULL_STACK_TARGET.md`](docs/RIGHTRAIL_FULL_STACK_TARGET.md))
 is an inline gate on every payment. There is no integrated payer gate. Toward it:
 
-- Lean decides every evaluated money field and one of 18 command types
- (`reject_offset_and_authorize_correction`); Python still decides
- population, Control Pack publishing, evidence, payment/reversal, offset
- authorization, acknowledgment, follow-through decisions, reporting and
- funding, and records what Lean decided.
+- Lean decides every evaluated money field, every payment and reversal, and
+ `reject_offset_and_authorize_correction`; Python still decides population,
+ publishing, evidence, offset authorization, acknowledgment, follow-through,
+ reporting and funding.
 - The live correction codec (`BLFCMD03`/`BLFCRES3`) proves canonicity (P2)
  unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
  admissible values; nothing yet proves every value Lean emits is admissible.
