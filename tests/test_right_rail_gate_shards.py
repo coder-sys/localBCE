@@ -103,6 +103,16 @@ class ShardTests(fx.Scratch):
             self.assertEqual([x for x in g.allowed(c) if x[2] == 10], [(0, 1, 10)])
             g.inv(self, c)
 
+    def test_paid_line_is_never_freed_or_paid_again(self) -> None:
+        with self.cluster() as c:
+            self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
+            c.send(0, NEXT)  # its settle records 10, so 10 is not in this batch's RULES_FREE
+            with contextlib.closing(c.producer(0)) as prod:
+                self.assertNotIn(10, prod.sealed_frees()[1])
+            self.assertEqual(g.owned(c, self)[idreg._key(10)], 0)
+            self.assertEqual(c.send(1, {4: [10]}), {10: "HOLD ALREADY_DECIDED"})
+            g.inv(self, c)
+
     def test_k0_dies_in_the_registry_transaction(self) -> None:
         for torn in (False, True):
             with self.subTest(torn=torn), self.cluster() as c:
