@@ -82,28 +82,85 @@ MAX_NODES = 4_096
 MAX_DEPTH = 16
 MAX_TIMESTAMP = 2_147_483_647
 
-INPUT_KEYS = set("schema provider_graph_subject scope observation_time sources".split())
-SOURCE_INPUT_KEYS = set(
-    "source_id source_kind coverage_scope coverage_observation_time coverage_effective_start "
-    "coverage_effective_end coverage_complete coverage_authority_id nonmembership_keys records provenance".split()
-)
+INPUT_KEYS = {
+    "schema",
+    "provider_graph_subject",
+    "scope",
+    "observation_time",
+    "sources",
+}
+SOURCE_INPUT_KEYS = {
+    "source_id",
+    "source_kind",
+    "coverage_scope",
+    "coverage_observation_time",
+    "coverage_effective_start",
+    "coverage_effective_end",
+    "coverage_complete",
+    "coverage_authority_id",
+    "nonmembership_keys",
+    "records",
+    "provenance",
+}
 SOURCE_OUTPUT_KEYS = SOURCE_INPUT_KEYS | {"source_root"}
 PROVENANCE_KEYS = {"provenance_id", "integrity_digest"}
-RECORD_KEYS = set(
-    "record_id record_kind provider_id credential_id enrollment_id subject_key observed_at issued_at "
-    "valid_from valid_until terminated_at status".split()
-)
+RECORD_KEYS = {
+    "record_id",
+    "record_kind",
+    "provider_id",
+    "credential_id",
+    "enrollment_id",
+    "subject_key",
+    "observed_at",
+    "issued_at",
+    "valid_from",
+    "valid_until",
+    "terminated_at",
+    "status",
+}
 SUBJECT_KEYS = {"provider_graph_subject", "scope"}
 SNAPSHOT_KEYS = {"snapshot_id", "snapshot_root", "observation_time"}
-FINDING_KEYS = set("finding_id kind subject_key observation_snapshot_id evidence_refs".split())
-DISCREPANCY_KEYS = set("discrepancy_id kind responsibility_boundary evidence_refs".split())
-IDENTITY_KEYS = set(
-    "provider_graph_subject scope observation_time snapshot_id snapshot_root source_coverage_root "
-    "findings_root discrepancies_root".split()
-)
+FINDING_KEYS = {
+    "finding_id",
+    "kind",
+    "subject_key",
+    "observation_snapshot_id",
+    "evidence_refs",
+}
+DISCREPANCY_KEYS = {
+    "discrepancy_id",
+    "kind",
+    "responsibility_boundary",
+    "evidence_refs",
+}
+IDENTITY_KEYS = {
+    "provider_graph_subject",
+    "scope",
+    "observation_time",
+    "snapshot_id",
+    "snapshot_root",
+    "source_coverage_root",
+    "findings_root",
+    "discrepancies_root",
+}
 REPORT_KEYS = {"report_id", "identity_material"}
-AUTHORITY_KEYS = set("clearance_authority payment_authority economic_mutation production_usable synthetic_only".split())
-OUTPUT_KEYS = set("schema subject observation_snapshot source_coverage findings discrepancies report authority".split())
+AUTHORITY_KEYS = {
+    "clearance_authority",
+    "payment_authority",
+    "economic_mutation",
+    "production_usable",
+    "synthetic_only",
+}
+OUTPUT_KEYS = {
+    "schema",
+    "subject",
+    "observation_snapshot",
+    "source_coverage",
+    "findings",
+    "discrepancies",
+    "report",
+    "authority",
+}
 PROFILE_KEYS = {"profile_id", "version", "profile_digest"}
 V2_INPUT_KEYS = INPUT_KEYS | {"profile_id", "profile_version", "profile_digest"}
 V2_OUTPUT_KEYS = OUTPUT_KEYS | {"profile"}
@@ -150,18 +207,46 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         return profile
     if profile is None:
         return _GraphProfile(
-            False, SCHEMA, INPUT_SCHEMA, None, None, None, PROVIDER_GRAPH_SUBJECT, SCOPE, CREDENTIAL_ID, ENROLLMENT_ID,
-            SUBJECT_KEY, SOURCE_IDS, SOURCE_KINDS, ("CREDENTIAL", "ENROLLMENT"),
-            (AUTH_CREDENTIAL_ID, AUTH_ENROLLMENT_ID), (PROVENANCE_CREDENTIAL_ID, PROVENANCE_ENROLLMENT_ID),
-            None, None, 6_000, 9_000, True, True,
+            False,
+            SCHEMA,
+            INPUT_SCHEMA,
+            None,
+            None,
+            None,
+            PROVIDER_GRAPH_SUBJECT,
+            SCOPE,
+            CREDENTIAL_ID,
+            ENROLLMENT_ID,
+            SUBJECT_KEY,
+            SOURCE_IDS,
+            SOURCE_KINDS,
+            ("CREDENTIAL", "ENROLLMENT"),
+            (AUTH_CREDENTIAL_ID, AUTH_ENROLLMENT_ID),
+            (PROVENANCE_CREDENTIAL_ID, PROVENANCE_ENROLLMENT_ID),
+            None,
+            None,
+            6_000,
+            9_000,
+            True,
+            True,
         )
     try:
-        (profile_id, version, subject, scope, credential_id, enrollment_id, details, observation_start, observation_end,
-         effective_start, effective_end, require_complete, allow_nonmembership, canonical_order, root_rule,
-         profile_digest) = (getattr(profile, name) for name in (
-            "profile_id version subject scope credential_id enrollment_id source_role_details observation_start "
-            "observation_end effective_start effective_end require_complete allow_nonmembership canonical_order "
-            "root_rule profile_digest").split())
+        profile_id = getattr(profile, "profile_id")
+        version = getattr(profile, "version")
+        subject = getattr(profile, "subject")
+        scope = getattr(profile, "scope")
+        credential_id = getattr(profile, "credential_id")
+        enrollment_id = getattr(profile, "enrollment_id")
+        details = getattr(profile, "source_role_details")
+        observation_start = getattr(profile, "observation_start")
+        observation_end = getattr(profile, "observation_end")
+        effective_start = getattr(profile, "effective_start")
+        effective_end = getattr(profile, "effective_end")
+        require_complete = getattr(profile, "require_complete")
+        allow_nonmembership = getattr(profile, "allow_nonmembership")
+        canonical_order = getattr(profile, "canonical_order")
+        root_rule = getattr(profile, "root_rule")
+        profile_digest = getattr(profile, "profile_digest")
     except Exception:
         raise_redacted(ProviderTrustGraphError, "profile:configuration")
     if (
@@ -183,11 +268,20 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         or root_rule != "source-root-v1"
     ):
         raise ProviderTrustGraphError("profile:configuration")
-    try:
-        roles = [tuple(getattr(detail, name) for name in ("source_id", "source_kind", "record_kind", "authority_id", "provenance_id"))
-                 for detail in details]
-    except Exception:
-        raise_redacted(ProviderTrustGraphError, "profile:source-role")
+    roles = []
+    for detail in details:
+        try:
+            roles.append(
+                (
+                    getattr(detail, "source_id"),
+                    getattr(detail, "source_kind"),
+                    getattr(detail, "record_kind"),
+                    getattr(detail, "authority_id"),
+                    getattr(detail, "provenance_id"),
+                )
+            )
+        except Exception as exc:
+            raise_redacted(ProviderTrustGraphError, "profile:source-role")
     role_ids = tuple(role[0] for role in roles)
     if (
         role_ids != tuple(sorted(role_ids))
@@ -208,7 +302,11 @@ def _profile_view(profile: object | None) -> _GraphProfile:
         credential_id,
         enrollment_id,
         subject + "|" + credential_id + "|" + enrollment_id,
-        *zip(*roles),
+        tuple(role[0] for role in roles),
+        tuple(role[1] for role in roles),
+        tuple(role[2] for role in roles),
+        tuple(role[3] for role in roles),
+        tuple(role[4] for role in roles),
         observation_start,
         observation_end,
         int(effective_start),

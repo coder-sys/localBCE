@@ -43,17 +43,41 @@ _UTC_TIMESTAMP = re.compile(
 )
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REQUEST_KEYS = {"contract", "mode", "scope", "evaluatedAt", "facts"}
-_FACT_KEYS = set("serviceDate serviceCategory supportReference chargeCents sourceBinding".split())
+_FACT_KEYS = {
+    "serviceDate",
+    "serviceCategory",
+    "supportReference",
+    "chargeCents",
+    "sourceBinding",
+}
 _SOURCE_KEYS = {"source", "version", "status", "effectiveAt", "receivedAt"}
-_BUNDLE_KEYS = set(
-    "contract bundleId version scope provenance issuerReference publishedAt effectiveFrom effectiveUntil "
-    "expiresAt withdrawnAt rules contentDigest".split()
-)
+_BUNDLE_KEYS = {
+    "contract",
+    "bundleId",
+    "version",
+    "scope",
+    "provenance",
+    "issuerReference",
+    "publishedAt",
+    "effectiveFrom",
+    "effectiveUntil",
+    "expiresAt",
+    "withdrawnAt",
+    "rules",
+    "contentDigest",
+}
 _PROVENANCE_KEYS = {"status", "issuerReference"}
-_RULE_KEYS = set(
-    "ruleId version semantic effectiveFrom effectiveUntil expectedCategory minimumCents maximumCents "
-    "maxSourceAgeDays".split()
-)
+_RULE_KEYS = {
+    "ruleId",
+    "version",
+    "semantic",
+    "effectiveFrom",
+    "effectiveUntil",
+    "expectedCategory",
+    "minimumCents",
+    "maximumCents",
+    "maxSourceAgeDays",
+}
 _HEX_DIGEST_PREFIX = "sha256:"
 
 

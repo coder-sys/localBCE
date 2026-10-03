@@ -11,7 +11,6 @@ explicit ``--authority-file``; there is no built-in default authority.
 from __future__ import annotations
 
 import argparse
-from dataclasses import fields
 import hashlib
 import json
 from pathlib import Path
@@ -312,7 +311,11 @@ def _switch_keys(value: object, expected: set[str], label: str) -> dict[str, obj
 
 
 def _read_cohort_approval(path: Path) -> CohortApproval:
-    expected = {field.name for field in fields(CohortApproval)}
+    expected = {
+        "contract", "approval_id", "cohort_id", "test_identity", "approved_by",
+        "approval_ref", "source_class", "receiver_boundary_ref", "custody_ref",
+        "permissions_ref", "pending_boundary_ref", "binding_sha256",
+    }
     value = _switch_keys(_read_switch_json(path, "switch_approval"), expected, "switch_approval")
     if value.get("contract") != COHORT_APPROVAL_CONTRACT:
         raise FinancialMirrorError("switch_approval_contract")
@@ -322,7 +325,7 @@ def _read_cohort_approval(path: Path) -> CohortApproval:
 def _read_difference_policies(value: object, label: str) -> tuple[DifferencePolicy, ...]:
     if type(value) is not list or len(value) > 10000:
         raise FinancialMirrorError(f"{label}_shape")
-    return tuple(DifferencePolicy(**_switch_keys(record, {field.name for field in fields(DifferencePolicy)}, label)) for record in value)
+    return tuple(DifferencePolicy(**_switch_keys(record, {"path", "classification", "rationale", "approval_ref"}, label)) for record in value)
 
 
 def _read_spec(path: Path, kind: str, contract: str, identity: set[str], policies: tuple[str, ...] = ()) -> dict[str, object]:

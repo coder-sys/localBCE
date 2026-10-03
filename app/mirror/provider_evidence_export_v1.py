@@ -34,20 +34,49 @@ EVIDENCE_PROFILE_VERSION = 1
 GRAPH_SCHEMA = "mirror-provider-trust-graph-v2"
 SYNTHETIC_SELECTION_AUTHORIZATION = "SYNTHETIC_PRIMARY_PROFILE_VERIFIED"
 QUALIFICATION_STATUS = "SYNTHETIC_ONLY"
-OUTCOME_KINDS = tuple(
-    "CONTINUITY_CONFIRMED CREDENTIAL_EXPIRED ENROLLMENT_TERMINATED EVIDENCE_INCOMPLETE "
-    "AUTHORITATIVE_RECORD_ABSENT SOURCE_CONFLICT COVERAGE_STALE".split()
+OUTCOME_KINDS = (
+    "CONTINUITY_CONFIRMED",
+    "CREDENTIAL_EXPIRED",
+    "ENROLLMENT_TERMINATED",
+    "EVIDENCE_INCOMPLETE",
+    "AUTHORITATIVE_RECORD_ABSENT",
+    "SOURCE_CONFLICT",
+    "COVERAGE_STALE",
 )
-REQUEST_KEYS = set(
-    "domain version operation_ref consumer_domain evidence_profile evidence_profile_version not_before "
-    "expires_at".split()
-)
-RESPONSE_KEYS = set(
-    "domain version operation_ref consumer_domain evidence_profile evidence_profile_version issued_at "
-    "expires_at outcome source_count complete_source_count record_count finding_count discrepancy_count "
-    "qualification_status synthetic_only production_usable activation clearance_authority "
-    "payment_authority economic_mutation proofSuiteId".split()
-)
+REQUEST_KEYS = {
+    "domain",
+    "version",
+    "operation_ref",
+    "consumer_domain",
+    "evidence_profile",
+    "evidence_profile_version",
+    "not_before",
+    "expires_at",
+}
+RESPONSE_KEYS = {
+    "domain",
+    "version",
+    "operation_ref",
+    "consumer_domain",
+    "evidence_profile",
+    "evidence_profile_version",
+    "issued_at",
+    "expires_at",
+    "outcome",
+    "source_count",
+    "complete_source_count",
+    "record_count",
+    "finding_count",
+    "discrepancy_count",
+    "qualification_status",
+    "synthetic_only",
+    "production_usable",
+    "activation",
+    "clearance_authority",
+    "payment_authority",
+    "economic_mutation",
+    "proofSuiteId",
+}
 MAX_REQUEST_BYTES = 4_096
 MAX_RESPONSE_BYTES = 4_096
 MAX_GRAPH_BYTES = 262_144
