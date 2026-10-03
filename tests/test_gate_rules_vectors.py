@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +37,21 @@ class GateRulesVectors(unittest.TestCase):
                 run = subprocess.run([EXE, os.path.join(ROOT, "tests", "gate_rules", name)],
                                      capture_output=True, text=True, timeout=600)
                 self.assertEqual(run.returncode, 0, run.stdout[-2000:])
+
+    def test_flipped_adds_byte_is_refused(self):
+        """One changed byte of the stored adds no longer hashes to the signed anchor: `load` refuses (STATE_MISMATCH)."""
+        path = os.path.join(ROOT, "tests", "gate_rules", "shards_v1.vectors")
+        lines = open(path).read().split("\n")
+        i = next(n for n, line in enumerate(lines) if line.startswith("load "))
+        f = lines[i].split(" ")
+        f[2] = f[2][:-1] + ("0" if f[2][-1] != "0" else "1")
+        lines[i] = " ".join(f)
+        with tempfile.TemporaryDirectory() as d:
+            flipped = os.path.join(d, "flipped.vectors")
+            open(flipped, "w").write("\n".join(lines))
+            run = subprocess.run([EXE, flipped], capture_output=True, text=True, timeout=600)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("RULES_STATE_MISMATCH load", run.stdout)
 
 
 if __name__ == "__main__":

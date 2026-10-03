@@ -31,7 +31,11 @@ open BlindLedger.Gate.Rules
     HEX` names the latest sealed checkpoint's state digest for the next commit,
     which then decides only if the checkpoints it extends hash to it
     (`Gate.decideAnchored`); without one, the runner's own last commit is that
-    checkpoint.  `commit UNANCHORED` expects the refusal.  Arrival
+    checkpoint.  `commit UNANCHORED` expects the refusal.  An `owners` commit also prints the state
+    digest after it (`RULES_DIGEST`, `Gate.setsDigest`) and the rows it appended (`RULES_ADDS`: per row
+    `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex).  `load G_ASOF ADDSHEX ANCHORHEX`
+    drops the released and unresolved sets and replays those rows onto empty sets dated G_ASOF
+    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  Arrival
     order cannot change a decision (`decideBatchIn_perm`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
@@ -41,6 +45,8 @@ def name {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").ge
 def parse {α : Type} [Repr α] (all : List α) (s : String) : Option α := all.find? (name · == s)
 
 #guard (reasons.map name).zip ((reasons.map name).drop 1) |>.all fun (a, b) => decide (a < b)
+
+def h512 (x : List UInt8) : List UInt8 := (BlindLedger.Semantic.sha3_512Fast x.toByteArray).toList
 
 def hexOf (b : ByteArray) : String :=
   String.join (b.toList.map fun x =>
@@ -54,6 +60,39 @@ def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [includ
   include_str "../Anchor.lean", include_str "../Spec.lean",
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
+
+/-- Hex to bytes, high digit first. -/
+def unhex (s : String) : Option (List UInt8) := do
+  let ds ← s.toList.mapM ("0123456789abcdef".toList.idxOf? ·)
+  guard (ds.length % 2 == 0)
+  pure ((List.range (ds.length / 2)).map fun i => (ds[2 * i]! * 16 + ds[2 * i + 1]!).toUInt8)
+
+/-- One `RULES_ADDS` row: the set tag, then the `Line.fields` row. -/
+def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
+  do let bs ← l.fields.mapM fun (w, n) => be w n
+     pure (tag :: bs.flatten)
+
+def rowWidths : List Nat := (Line.fields ⟨0, 0, .FFS_CYCLE, 0, 0, 0, 0, 0, 0, 0⟩).map (·.1)
+
+def parseRow (bs : List UInt8) : Option (UInt8 × Line) := do
+  let t :: bs := bs | none
+  match (rowWidths.foldl (fun (r, bs) w => (r ++ [Gate.beNat (bs.take w)], bs.drop w)) ([], bs)).1 with
+  | [i, y, f, m, p, r, d, c, u, a] =>
+    pure (t, ⟨i, y, ← [Flow.FFS_CYCLE, .FFS_CLAIM, .CAP_820].find? (·.tag == f), m, p, r, d, c, u, a⟩)
+  | _ => none
+
+/-- `RULES_ADDS` back into the released and unresolved rows. -/
+def parseAdds (bs : List UInt8) : Option (List Line × List Line) := do
+  let n := 1 + rowWidths.sum
+  guard (bs.length % n == 0)
+  let rows ← (List.range (bs.length / n)).mapM fun i => parseRow ((bs.drop (n * i)).take n)
+  guard (rows.all fun (t, _) => t == 1 || t == 2)
+  pure ((rows.filter (·.1 == 1)).map (·.2), (rows.filter (·.1 == 2)).map (·.2))
+
+/-- The pin of an empty set dated `a` (`snapshot`'s check, for a set that `load` declares). -/
+def emptyPin (kind : String) (a : Nat) : Option String :=
+  (Fast.pinBytes s!"RR/GATE/{kind.toUpper}/v1" (if kind == "released" then 5 else 6) Line.fields
+    (⟨a, 0, []⟩ : Snapshot Line)).map fun b => hexOf (BlindLedger.Semantic.sha3_512Fast b)
 
 /-- The six pinned inputs, parsed and pin-checked once per declaration.  -- FAST -/
 structure Pinned where
@@ -166,8 +205,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
   -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
-  if !st.anchor.all fun a => Gate.anchored (fun x => (BlindLedger.Semantic.sha3_512Fast x.toByteArray).toList)
-      { c with anchor := a } then
+  if !st.anchor.all fun a => Gate.anchored h512 { c with anchor := a } then
     ({ st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], owners := none,
                free := none, pays := [],
                checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },
@@ -195,10 +233,14 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let ok := ok && bad.isEmpty && !unanchored && frOk
   let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
-  let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)]
+  let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
+  let adds := do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten
+  let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
+    (Gate.setsDigest h512 r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
+    adds.toList.map fun b => s!"RULES_ADDS {hexOf b.toByteArray}"
   ({ st with pinned := some p, anchor := none,
-             extra := st.extra ++ r.released.entries.drop x.relN,     -- FAST: `run_relN`
-             held := st.held ++ r.unresolved.entries.drop x.unrN,
+             extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
+             held := st.held ++ fresh.2,
              rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], owners := none,
              free := none, pays := [],
              done := st.done ++ r.decisions, checked := st.checked + (if ok then n + st.pays.length else 0),
@@ -219,6 +261,16 @@ def step (st : St) : List String → Option (St × List String)
   | ["anchor", h] => do
     guard (h.length == 128)
     pure ({ st with anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
+  | ["load", a, adds, h] => do
+    guard (h.length == 128)
+    let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
+    let anchor := Gate.beNat (← unhex h)
+    match (parseAdds (← unhex adds)).bind fun ad => Gate.ShardState.loadAdds h512 (g, g) [ad] anchor with
+    | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
+    | some s => pure ({ st with
+        snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
+        rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
+        extra := s.released.entries, held := s.unresolved.entries, rprior := s.released, uprior := s.unresolved }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
