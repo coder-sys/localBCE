@@ -1,13 +1,14 @@
 # Provenance: blind_financial_worker.exe
 
-Lake build of `lean/` at commit `6a897d8` (lean tree `ec7d5398648854e9f28ad3e7b434156a8d67a0b8`), toolchain `leanprover/lean4:v4.33.1`.
+Lake build of `lean/` at commit `662dc18` (lean tree `b64dc5cb020d172abc47be4f1c416397c36440a0`), toolchain `leanprover/lean4:v4.33.1`.
 
-- 6,421,504 bytes; SHA-256 `84F8DCFC618D557838D15BFF5AFCA29CDB244F80DE47A57AAE4A633F0C571CE1`; the engine module pins both.
-- Two guarded fresh stage builds, each in a `git archive` of that tree: `m1-2a`, `m1-2b`, each `lake build` of the four pin targets, exit 0. Both workers are byte-identical; `gate_verify` is still `724de1bd...`; a warm build (`m1-3`) agrees.
+- 6,420,480 bytes; SHA-256 `8BB1C6461DA45587F2FFB9BEF22F15C856793BE1B4220C461F17D61D5DAF4309`; the engine module pins both.
+- Two guarded fresh stage builds, each in a `git archive` of that tree: `m1-9a`, `m1-9b`, each `lake build` of the four pin targets, exit 0. Both workers are byte-identical; `gate_verify` is still `724de1bd...`; a warm build (`m1-10`) agrees.
 - Worker laws use `propext`, `Classical.choice`, `Quot.sound` only. Record: the XI.2 section of the re-pin commit message.
-- Why it moved: M1 adds reason 23 CLAIM_EXCEEDS_SHORTFALL; an offset claim above the shortfall is refused, no other decision changes.
+- Why it moved: M1 review fix. The Lean offset rule (claim plus open requests within the shortfall, reason 23) is spec only: no worker frame serves it, so no served decision changes.
 
-Retired pins, not deleted: `3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B`, 6,417,408 bytes
+Retired pins, not deleted: `84F8DCFC618D557838D15BFF5AFCA29CDB244F80DE47A57AAE4A633F0C571CE1`, 6,421,504 bytes
+(lean `6a897d8`, tree `ec7d5398648854e9f28ad3e7b434156a8d67a0b8`; before offsets count open requests); `3AEC2F5E1056E589D5D53F97189FEBA4671599A9BA5CB34D886E096EB548F41B`, 6,417,408 bytes
 (lean `98df3c9`, tree `00a6f26e207dbb47e3c21468b6640dee18f67975`; before the shortfall bound); `C063E4AC3D440D9392470E4546C2D324CC93569D0778E36B86B7853FDAC1EDC9`, 6,418,432 bytes
 (lean `92f34ca`; M4 L2 without the capacity fix); `8EB77363E6E89FD63F0646028D3CD2B23C99CF270AF7644CFFAE1FDE769D1080`, 6,438,400 bytes
 (trunk `5e500db`; capacity fix without M4 L2); `58CDA012A47B82EB23BC600E9A5CC1AFA808E491A1CE33D73379E86B15DBCFD2`, 6,439,936 bytes

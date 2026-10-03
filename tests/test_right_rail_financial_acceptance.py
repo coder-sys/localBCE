@@ -5548,7 +5548,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_delivery_matches_the_oracle_under_many_orderings_of_money_and_acks(self) -> None:
         # Stale corrections: 700,000 unpaid, requests A and B (300,000 each) and a READY offset notice N (claim C, 100,000, within what A and B leave), so 600,000 is owed.
-        # Four of seven moves in a fixed stride over all 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
+        # Four of seven moves, every 29th of the 840 ordered choices, each on a fresh store; after every move the owner's package must equal the
         # oracle's recomputation (its own delivery rule), and a refused move is skipped. Both delivery verdicts must occur, or the sweep proves nothing.
         item, act_n, made, seen = expected.H_ITEM_ID, "action:obligation-item-h:offset-c", [], set()
         ack = lambda store, action: store.acknowledge_action(action, f"ack:{action}")
@@ -5562,7 +5562,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "ack-b": lambda store: ack(store, _ACTION_B),
             "ack-n": lambda store: ack(store, act_n),
         }
-        for order in list(itertools.permutations(moves, 4))[::30]:
+        for order in list(itertools.permutations(moves, 4))[::29]:
             store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=700_000)
             reject_b()
             store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)

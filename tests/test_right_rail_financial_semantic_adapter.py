@@ -122,13 +122,13 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             clock.value = max(clock.value, at_ms)
 
     @staticmethod
-    def _record_cash(store: FinancialOwner) -> None:
+    def _record_cash(store: FinancialOwner, cents: int = EXPECTED_H_CASH_CENTS) -> None:
         evidence = expected.H_CASH_EVIDENCE
         store.record_payment_evidence(
             item_id=evidence.item_id,
             payment_id="payment:h:cash",
             common_origin_id=evidence.common_origin_id,
-            amount_cents=EXPECTED_H_CASH_CENTS,
+            amount_cents=cents,
             evidence_id=evidence.evidence_id,
             event_at_ms=evidence.event_at_ms,
             source_id=evidence.source_id,
@@ -471,7 +471,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     def test_delivery_projection_uses_latest_action_creation_time_not_action_id(self) -> None:
         store = self._build_base()
-        self._record_cash(store)
+        self._record_cash(store, EXPECTED_H_CASH_CENTS - EXPECTED_OFFSET_CENTS)  # 600,000 unpaid: request A (300,000) is open, so a second 300,000 offset still fits
         first_claim = self._record_claim(store)
         self._record_h_support(store)
         first_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
