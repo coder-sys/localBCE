@@ -74,12 +74,12 @@ class Cluster:
         return {}
 
 
-def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], bad=()):
+def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], bad=(), worker=None):
     """Decide one batch on shard ``k`` without committing it: (answer, leaves, id -> 'OUTCOME REASONS')."""
     c.lines.update({(k, n): ids for n, ids in payments.items()})
     ans = decider.decide(rules.EXE, c.dir / f"batch{k}.vectors", _HEAD, ASOF, prod, reg, [i for v in payments.values() for i in v],
                          [f"{i}:{p} FFS_CLAIM {9001 if i in bad else 1001} 7001 7001 {20270301 + i % 14} 99213 1 {12500 + i}"
-                          for p, v in payments.items() for i in v])
+                          for p, v in payments.items() for i in v], worker)
     status, pay = {}, {}
     for row in ans.lines:
         f = row.split()

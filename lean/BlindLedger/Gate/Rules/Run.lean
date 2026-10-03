@@ -309,29 +309,60 @@ def step (st : St) : List String → Option (St × List String)
     pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 
+/-- The vector text through the rules: the output lines (the one-shot `main` prints them after `RULES_SOURCE`; the
+    worker answers a frame with them) and whether it passed.  Each text starts from the empty state. -/
+def runText (text : String) : Array String × Bool := Id.run do
+  let mut st : St := {}
+  let mut out : Array String := #[]
+  let mut number := 0
+  for raw in text.splitOn "
+" do
+    number := number + 1
+    let fields := ((String.ofList (raw.toList.filter (· ≠ ''))).splitOn " ").filter (· ≠ "")
+    if fields.isEmpty || fields.head!.startsWith "#" then continue
+    match step st fields with
+    | none =>
+      st := { st with failed := st.failed + 1 }
+      out := out.push s!"RULES_VECTOR_MALFORMED line={number}"
+    | some (next, lines) =>
+      if next.failed > st.failed then out := out.push s!"RULES_VECTOR_FAIL line={number}"
+      st := next
+      out := out ++ lines
+  let pass := st.failed == 0 && st.expected == some st.checked
+  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass)
+
 def main (args : List String) : IO UInt32 := do
   IO.println s!"RULES_SOURCE {source}"
   let [path] := args
     | IO.eprintln "RULES_VECTORS=USAGE gate_rules <path>"
       return 2
-  let mut st : St := {}
-  let mut number := 0
-  for raw in (← IO.FS.readFile path).splitOn "\n" do
-    number := number + 1
-    let fields := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
-    if fields.isEmpty || fields.head!.startsWith "#" then continue
-    match step st fields with
-    | none =>
-      st := { st with failed := st.failed + 1 }
-      IO.println s!"RULES_VECTOR_MALFORMED line={number}"
-    | some (next, out) =>
-      if next.failed > st.failed then IO.println s!"RULES_VECTOR_FAIL line={number}"
-      st := next
-      out.forM IO.println
-  let pass := st.failed == 0 && st.expected == some st.checked
-  IO.println s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}"
+  let (out, pass) := runText (← IO.FS.readFile path)
+  out.forM IO.println
   return (if pass then 0 else 1)
 
-end BlindLedger.Gate.Rules.Run
+/-! Long-lived worker (`gate_rules_worker`), the shape of `Financial.WorkerCli`: each stdin frame is a u32 BE length and
+    a vector text, each stdout frame a u32 BE length and `runText`'s lines.  Clean end of input exits 0; a short, oversize
+    or non-UTF-8 frame, or an answer past the cap, exits 65 without output. -/
 
-def main (args : List String) : IO UInt32 := BlindLedger.Gate.Rules.Run.main args
+def maxFrame : Nat := 64 * 1024 * 1024
+
+partial def readN (read : USize → IO ByteArray) (n : Nat) (acc : ByteArray := .empty) : IO ByteArray := do
+  if acc.size ≥ n then return acc
+  let b ← read (min (n - acc.size) 1048576).toUSize
+  if b.size = 0 then return acc else readN read n (acc ++ b)
+
+partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit) : IO UInt32 := do
+  let h ← readN read 4
+  if h.size = 0 then return 0
+  let n := h.foldl (fun a b => a * 256 + b.toNat) 0
+  if h.size < 4 || n > maxFrame then return 65
+  let f ← readN read n
+  if f.size < n then return 65
+  let some text := String.fromUTF8? f | return 65
+  let resp := (String.join ((runText text).1.toList.map (· ++ "
+"))).toUTF8
+  if resp.size > maxFrame then return 65
+  write (ByteArray.mk #[(resp.size >>> 24).toUInt8, (resp.size >>> 16).toUInt8, (resp.size >>> 8).toUInt8, resp.size.toUInt8] ++ resp)
+  serve read write
+
+end BlindLedger.Gate.Rules.Run

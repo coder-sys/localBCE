@@ -11,9 +11,15 @@ decodes the rows.  At genesis (no sealed batch) the header's empty sets are the 
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+import shutil
 import subprocess
+import tempfile
+import threading
 from typing import NamedTuple, Sequence
+
+from app import minimal_clearance_verifier_process as process
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
@@ -30,6 +36,54 @@ class GateDecideError(RuntimeError):
     out; the next ``decide`` settles it, never re-commit)."""
 
 
+FRAME_CAP = 1 << 20  # the largest frame the worker takes; Lean's own limit (``process.WORKER_MAX_FRAME_BYTES``) is far above it
+
+
+class RulesWorker:
+    """A long-lived ``gate_rules_worker`` (the one-shot's process start and arena are paid once, not per batch): u32 BE frames
+    of the same vector text, answered with the same output lines minus ``RULES_SOURCE``; both exes run ``Run.runText``.  Any
+    failure (a killed or hung worker, a stray byte, an oversize answer) closes it and raises ``rules_refused``; the next call
+    starts a fresh one.  A frame over ``FRAME_CAP`` goes to the one-shot exe (``decide``), by size, never after a
+    failure: a decide takes some 700 times its frame in memory (measured), so the 1 GB job cap stops a batch near 1.5 MiB."""
+
+    TIMEOUT_SECONDS = 600.0
+    RECYCLE_COMMIT_BYTES = 400_000_000  # replaced between batches, never mid-batch, so slow growth never reaches the job cap
+    JOB_MEMORY_CAP_BYTES = 1_000_000_000
+
+    def __init__(self, exe: Path) -> None:
+        self.exe, self._worker, self._workspace, self._lock = exe, None, None, threading.Lock()
+
+    def close(self) -> None:
+        with self._lock:
+            self._close()
+
+    def _close(self) -> None:
+        worker, workspace, self._worker, self._workspace = self._worker, self._workspace, None, None
+        if worker is not None:
+            worker.close()
+            shutil.rmtree(workspace, ignore_errors=True)
+
+    def run(self, data: bytes) -> list[str]:
+        with self._lock:
+            try:
+                if self._worker is not None and not self._worker.alive:
+                    self._close()
+                if self._worker is None:
+                    exe = self.exe.read_bytes()
+                    self._workspace = Path(tempfile.mkdtemp(prefix="rr-rules-"))
+                    self._worker = process.launch_contained_worker(
+                        self.exe, workspace=self._workspace, job_memory_cap_bytes=self.JOB_MEMORY_CAP_BYTES,
+                        expected_executable_size_bytes=len(exe), expected_executable_sha256=hashlib.sha256(exe).digest())
+                answer = self._worker.exchange(data, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
+                                               timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8")
+                if self._worker.commit_bytes() > self.RECYCLE_COMMIT_BYTES:
+                    self._close()
+                return answer.splitlines()
+            except Exception as error:  # a timeout, an OS error or bad UTF-8 is a refusal too, never an untyped escape
+                self._close()
+                raise GateDecideError("rules_refused") from error
+
+
 class Answer(NamedTuple):
     lines: list[str]  # ``RULES_LINE`` bodies, one per line, waiting lines included
     free: list[int]
@@ -41,9 +95,10 @@ class Answer(NamedTuple):
 
 
 def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer.ShardProducer, reg: idreg.IdRegistry,
-           ids: Sequence[int], lines: Sequence[str]) -> Answer:
+           ids: Sequence[int], lines: Sequence[str], worker: RulesWorker | None = None) -> Answer:
     """Settle the producer's shard's previous batch and reserve ``ids`` (the registry transaction), then decide ``lines`` (the
-    ``line`` directive bodies) against the shard's verified sets."""
+    ``line`` directive bodies) against the shard's verified sets: on ``worker`` (no frame file) when the frame fits its cap,
+    else on the one-shot ``exe``."""
     if any("\n" in s or "\r" in s for s in [*head, *lines]):
         raise GateDecideError("frame_injection")
     k, anchor = prod.shard, prod.anchor()
@@ -52,13 +107,18 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
     seen = prod.tip()
     owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
     f = len({i for i, s, w in owners if s == k and not w})  # fresh RESERVE rows: the reserve's last f, nothing before in flight
-    frame.write_text("\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
-                                "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
-                                *(f"line {line}" for line in lines), "commit", "end 0"]), "utf-8")
-    try:
-        out = subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()
-    except subprocess.TimeoutExpired as e:
-        raise GateDecideError("rules_refused") from e
+    text = "\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
+                       "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
+                       *(f"line {line}" for line in lines), "commit", "end 0"])
+    data = text.encode("utf-8")
+    if worker is not None and len(data) <= FRAME_CAP:
+        out = worker.run(data)
+    else:
+        frame.write_bytes(data)
+        try:
+            out = subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()
+        except subprocess.TimeoutExpired as e:
+            raise GateDecideError("rules_refused") from e
     got: dict[str, list[str]] = {}
     for row in out:
         tag, _, body = row.partition(" ")
