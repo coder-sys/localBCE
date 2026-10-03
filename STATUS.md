@@ -2,7 +2,7 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `a6c0125`.
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `c4c5cb9`.
 
 ## Product and standing claims
 
@@ -11,28 +11,28 @@ Blind Ledger, Mirror, Continuity and Switch share the financial owner; Provider 
 level within that product. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
 `production_usable=false`, `activation=false`. Guarded local runs are merge evidence, not release qualification.
 
-## What landed on trunk a6c0125
+## What landed on trunk c4c5cb9
 
-Full suite `os-full-2` on this tree: 785 pass, 0 fail, 14 skips (logs: `native/guard/`, `C:/Users/neers/rrb/logs/`).
+Full suite `land-c4c5cb9-full` on this tree: 823 run: 809 pass, 0 fail, 14 skips.
 
 - **Cash file (design d).** Plan on a copy, commit under the lock; a stale plan re-plans (3 tries, then `cash_file_busy`).
   Quarter-end lock 1.44-1.65 s (was 5.9-6.1 s; bound 5 s).
-- **M3 answer binding (flag off).** Every payment-answer evidence and conflict field, DUPLICATE and ALIAS included, is bound.
-- **Correction frames as ByteArray.** Corrections re-encode through proved-equal byte-array twins (`CorrectionFast.lean`, `_eq`
-  theorems pinned). Accepted 5 MB: 3.73 s / 846 MB before, 1.83 s / 259 MB now; the 7 MB cap frame 2.58 s / 164 MB. The worker
-  stays flat within 16 MB across requests.
+- **Lean decides every payment (M3 step 4).** The owner asks Lean for every payment and reversal; every answer field is bound, and
+  the pre-COMMIT checker re-reads payment links itself (`payment:link`). While the clock is behind the last update, only an exact
+  retry is answered. Payment frame 0.62-0.65 ms against evaluation 0.31-0.32 ms. The Python decider stays until step 5.
+- **ByteArray frames.** Corrections and BLFPAY01 run through proved-equal byte-array twins: accepted 5 MB correction 1.83 s / 259 MB
+  (was 3.73 s / 846 MB); an 8.1 MB item holds the worker near 62 MB (was 952 MB).
 - **M4 claim and offset laws.** BLFOFC01/BLFOCR01 and `decideClaim` (section F theorems); offset laws served by Lean (BLFOFA01,
   tag 24); a decision dated before its pack's approval or effective start is refused, as is an item due before its pack. The checker verifies `RETIRED_PINS` once per file state,
   so per-operation work no longer grows with each re-pin.
 - **M1 offset cap.** Offset plus unpaid open requests <= shortfall.
-- **Shards.** Lean proves one payment per line across shards (`Gate/Rules/Shards.lean`). Registry and producer
-  keep a checked SHA3 mark refusing a restored older store.
-- **Gate fast SHA3.** The proved-equal fast sponge (`Sha3Fast.lean`). Rules decide 99.5 ->
-  251.6 lines/s on 20,000 lines (target 2,000).
-- **Worker payments as ByteArray.** BLFPAY01 frames are read as a byte array; an 8.1 MB item now holds the worker near 62 MB (was
-  952 MB). Corrections run on the evaluator worker.
-- **Pins.** Worker `7C1EAB94...` (`artifacts/engine-evaluator`), `gate_verify` `724de1bd...` (`artifacts/gate-verify`), `tcb_pin`
-  8/8. Superseded pins: each PROVENANCE file and `RETIRED_PINS`. Stage builds `m1-9a`/`m1-9b` byte-identical.
+- **Runtime multi-shard with a decide layer.** Lean proves one payment per line across shards (`Gate/Rules/Shards.lean`). The decide
+  layer reserves ids, carries per-shard sets into Lean, seals, then settles the registry before any token leaves. It refuses a
+  restored store or registry (checked at boot and at every reserve) and a stale answer (`stale_answer`). Registry and producer keep a
+  checked SHA3 mark.
+- **Gate fast SHA3** (`Sha3Fast.lean`, proved equal): rules decide 251.6 lines/s on 20,000 lines (target 2,000).
+- **Pins.** Worker `7C1EAB94...` (`artifacts/engine-evaluator`), `gate_verify` `a9f47312...` (`artifacts/gate-verify`), `tcb_pin`
+  passes. Superseded pins: each PROVENANCE file and `RETIRED_PINS`. Stage builds `dp-3a`/`dp-3b` byte-identical.
 
 ## Standing design
 
@@ -51,19 +51,17 @@ Full suite `os-full-2` on this tree: 785 pass, 0 fail, 14 skips (logs: `native/g
   result cap.
 - **Cash residuals:** a foreign commit before the first write costs a whole-store verify under the lock (~10 s at 6,000
   payments). A ROLLBACK that raises fails the next write once (untested).
-- **Fresh worktrees** need the ignored `rr_gate_mldsa87.exe` copied in, or signer tests error.
-- **Real-world data:** a seeded dirty Medicaid corpus (branch `dirty-corpus`, not on trunk) shows six unrepresentable cases:
-  advance payments, member crosswalk, PLB balances, death after release, upward retro rates, one bad cash row refusing a file.
-- **M3 step 4:** the D4 live behaviour and a crash test come with the flag flip.
-- **Gate unbuilt:** a decide layer calling the producer and registry (until then multi-shard is unsafe; a
-  whole-directory restore passes the mark), the payer pin before send, the prior-digest check, an integrated payer gate and a durable
-  token or release path. Failover TLC is a bounded model, not running failover.
+- **Real-world data:** a seeded dirty Medicaid corpus (branch `dirty-corpus`, not on trunk) shows six unrepresentable cases
+  (advance payments, member crosswalk, PLB balances, death after release, upward retro rates, one bad row refusing a file).
+- **M3 step 5:** retire the Python decider; a crash test of the Lean payment path is still owed.
+- **Gate:** a second decider on one shard and an open, unsigned row are not yet refused (fix on `gate-chaos`). A decide
+  costs ~1.8 s, mostly a cold `gate_rules` process. Unbuilt: payer pin before send, prior-digest check, integrated payer gate,
+  durable token or release path. Failover TLC is a bounded model.
 - **Unbuilt:** financial file adapters (MCO reports, X12 820/835, MMIS extracts), payee-identity consumption, a second synthetic state,
   a Lean seal codec. The NC capture path is synthetic file intake.
-- **Carried from earlier, not re-measured:** staff roles are UI-only (no authentication or refusal logging); no cancel or reduce command for stale
-  corrections (so an unpaid request blocks offsetting that amount); the receipt's `delivery_status` is the newest action's, not the
-  verdict; core size targets unmet (owner 7,441 lines against about 3,000, checker 4,631 against about 1,800);
-  isolated TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`).
+- **Carried, not re-measured:** staff roles are UI-only; no cancel or reduce command for stale corrections; receipt
+  `delivery_status` is the newest action's, not the verdict; core size targets unmet (owner 7,441 vs ~3,000 lines, checker 4,631 vs
+  ~1,800); TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`).
 
-Next: M3 step 4; connector and browser work paused by the founder.
+Next: land `gate-chaos` and `hostile-fuzz` (in review), M3 step 5, a persistent `gate_rules` worker.
 A local commit, not a qualified release; no local check activates production.
