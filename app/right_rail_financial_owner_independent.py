@@ -8,7 +8,7 @@ database paths read-only.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 import hashlib
 import json
 from pathlib import Path
@@ -43,6 +43,7 @@ SCHEMA = "RR/FINANCIAL/OWNER/v8"
 CONTINUITY_SCHEMA = "RR/FINANCIAL/CONTINUITY/v8"
 POPULATION_MANIFEST_CONTRACT = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 CURRENCY = "USD"
+SCOPE_IDS = ("state_id", "deployment_id", "program_id", "period_id")
 MAX_CENTS = (1 << 63) - 1
 MAX_ROWS = 10_000
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
@@ -657,6 +658,16 @@ def _blob64(value: object, code: str) -> bytes:
     return bytes(value)
 
 
+def _shape(value: object, keys: object, code: str) -> Any:
+    if not isinstance(value, dict) or set(value) != keys:
+        _fail(code)
+    return value
+
+
+def _authority_body(authority_id: object, epoch: object, digest: bytes) -> dict[str, object]:
+    return {"authority_id": authority_id, "epoch": epoch, "digest": digest.hex().upper()}
+
+
 def _event_header(before_revision: int, after_revision: int, committed_at_ms: int, code: str = "history:event-header") -> bytes:
     before = _integer(before_revision, f"{code}:before", maximum=MAX_CENTS)
     after = _integer(after_revision, f"{code}:after", maximum=MAX_CENTS)
@@ -1269,14 +1280,12 @@ def _verify_correction_followup_records(
             _fail("history:correction-followup-payload")
         if "correction_followup" not in payload:
             continue
-        followup = payload["correction_followup"]
-        if not isinstance(followup, dict) or set(followup) != {
+        followup = _shape(payload["correction_followup"], {
             "contract", "work_id", "determination_id", "source", "artifact", "control_pack", "authority",
             "input_evaluation", "result_evaluation", "determination_digest", "case_status",
             "action_status", "outbox_status", "supporting_evidence",
             "dependency_families", "read_observations", "outputs",
-        }:
-            _fail("history:correction-followup-shape")
+        }, "history:correction-followup-shape")
         if followup["contract"] != CORRECTION_FOLLOWUP_CONTRACT:
             _fail("history:correction-followup-contract")
         work_id = _id(followup["work_id"], "history:correction-followup-work-id")
@@ -1290,11 +1299,9 @@ def _verify_correction_followup_records(
         aggregate_id = _id(event.get("aggregate_id"), "history:correction-followup-obligation")
         if work_id != action_id or followup.get("determination_id") != determination_id:
             _fail("history:correction-followup-work-binding")
-        source = followup["source"]
-        if not isinstance(source, dict) or set(source) != {
+        source = _shape(followup["source"], {
             "action_id", "outbox_action_id", "case_id", "resulting_evaluation_id", "event_sequence",
-        }:
-            _fail("history:correction-followup-source")
+        }, "history:correction-followup-source")
         case_id = _id(source["case_id"], "history:correction-followup-case-id")
         if source != {
             "action_id": action_id,
@@ -1310,9 +1317,7 @@ def _verify_correction_followup_records(
         ):
             _fail("history:correction-followup-revision-binding")
 
-        artifact = followup["artifact"]
-        if not isinstance(artifact, dict) or set(artifact) != {"contract", "version", "sha256"}:
-            _fail("history:correction-followup-artifact")
+        artifact = _shape(followup["artifact"], {"contract", "version", "sha256"}, "history:correction-followup-artifact")
         if (
             artifact["contract"] != CORRECTION_TRANSITION_OPERATION
             or _integer(artifact["version"], "history:correction-followup-artifact-version", minimum=1, maximum=MAX_ROWS) != 1
@@ -1320,9 +1325,7 @@ def _verify_correction_followup_records(
         ):
             _fail("history:correction-followup-artifact-binding")
 
-        control_pack = followup["control_pack"]
-        if not isinstance(control_pack, dict) or set(control_pack) != {"pack_id", "version", "digest"}:
-            _fail("history:correction-followup-control-pack")
+        control_pack = _shape(followup["control_pack"], {"pack_id", "version", "digest"}, "history:correction-followup-control-pack")
         pack_id = _id(control_pack["pack_id"], "history:correction-followup-pack-id")
         pack = packs.get(pack_id)
         if pack is None or (
@@ -1333,11 +1336,8 @@ def _verify_correction_followup_records(
         ):
             _fail("history:correction-followup-pack-binding")
 
-        result_evaluation = followup["result_evaluation"]
-        if not isinstance(result_evaluation, dict) or set(result_evaluation) != {
-            "evaluation_id", "revision", "result_digest", "receipt_digest",
-        }:
-            _fail("history:correction-followup-result-evaluation")
+        evaluation_keys = {"evaluation_id", "revision", "result_digest", "receipt_digest"}
+        result_evaluation = _shape(followup["result_evaluation"], evaluation_keys, "history:correction-followup-result-evaluation")
         result_row = evaluations.get(result_evaluation_id)
         if result_row is None:
             _fail("history:correction-followup-result-missing")
@@ -1357,16 +1357,13 @@ def _verify_correction_followup_records(
             != _hex_digest(control_pack["digest"], "history:correction-followup-pack-digest")
         ):
             _fail("history:correction-followup-result-binding")
-        if (
-            payload.get("evaluation_input_digest") != bytes(result_row["input_snapshot_digest"]).hex().upper()
-            or payload.get("evaluation_result_digest") != bytes(result_row["result_digest"]).hex().upper()
-            or payload.get("evaluation_receipt_digest") != bytes(result_row["receipt_digest"]).hex().upper()
+        if any(
+            payload.get(f"evaluation_{name}_digest") != bytes(result_row[column]).hex().upper()
+            for name, column in (("input", "input_snapshot_digest"), ("result", "result_digest"), ("receipt", "receipt_digest"))
         ):
             _fail("history:correction-followup-event-evaluation")
 
-        authority = followup["authority"]
-        if not isinstance(authority, dict) or set(authority) != {"authority_id", "epoch", "digest"}:
-            _fail("history:correction-followup-authority")
+        authority = _shape(followup["authority"], {"authority_id", "epoch", "digest"}, "history:correction-followup-authority")
         if (
             authority["authority_id"] != result_row.get("authority_id")
             or _integer(authority["epoch"], "history:correction-followup-authority-epoch", minimum=1, maximum=MAX_CENTS)
@@ -1376,11 +1373,7 @@ def _verify_correction_followup_records(
         ):
             _fail("history:correction-followup-authority-binding")
 
-        input_evaluation = followup["input_evaluation"]
-        if not isinstance(input_evaluation, dict) or set(input_evaluation) != {
-            "evaluation_id", "revision", "result_digest", "receipt_digest",
-        }:
-            _fail("history:correction-followup-input-evaluation")
+        input_evaluation = _shape(followup["input_evaluation"], evaluation_keys, "history:correction-followup-input-evaluation")
         input_evaluation_id = _id(input_evaluation["evaluation_id"], "history:correction-followup-input-id")
         input_row = evaluations.get(input_evaluation_id)
         determination = determinations.get(determination_id)
@@ -1422,17 +1415,13 @@ def _verify_correction_followup_records(
             _fail("history:correction-followup-dependencies")
         if followup["outputs"] != ["MIRROR_EXPLANATION", "STATE_REPORT", "CORPORATE_SUPPORT"]:
             _fail("history:correction-followup-outputs")
-        observations = followup["read_observations"]
-        if not isinstance(observations, dict) or set(observations) != set(CORRECTION_FOLLOWUP_READ_OBSERVATIONS):
-            _fail("history:correction-followup-observations")
+        observations = _shape(followup["read_observations"], set(CORRECTION_FOLLOWUP_READ_OBSERVATIONS), "history:correction-followup-observations")
         previous_head = _blob64(event.get("previous_head"), "history:correction-followup-previous-head").hex().upper()
         for key, (predicate, subject_key) in CORRECTION_FOLLOWUP_READ_OBSERVATIONS.items():
-            observation = observations[key]
-            if not isinstance(observation, dict) or set(observation) != {
+            observation = _shape(observations[key], {
                 "predicate", "subject", "complete", "match_count", "result_identity",
                 "version_sequence", "version_head",
-            }:
-                _fail("history:correction-followup-observation-shape")
+            }, "history:correction-followup-observation-shape")
             expected_subject = input_evaluation_id if subject_key == "input_evaluation_id" else action_id if subject_key == "action_id" else determination_id
             if (
                 observation["predicate"] != predicate
@@ -1444,6 +1433,13 @@ def _verify_correction_followup_records(
                 or observation["version_head"] != previous_head
             ):
                 _fail("history:correction-followup-observation-binding")
+
+
+def _verify_followups_in(events: Iterable[Mapping[str, object]], rows: Callable[[str], Iterable[Mapping[str, object]]]) -> None:
+    def keyed(table: str, key: str) -> dict[str, dict[str, object]]:
+        return {str(row[key]): dict(row) for row in rows(table)}
+
+    _verify_correction_followup_records(events, evaluations=keyed("evaluations", "evaluation_id"), determinations=keyed("determinations", "determination_id"), actions=keyed("actions", "action_id"), cases=keyed("cases", "case_id"), packs=keyed("control_packs", "pack_id"))
 
 
 def _verify_program_funding_rows(
@@ -1482,11 +1478,7 @@ def _verify_program_funding_rows(
         record = {
             "schema": PROGRAM_FUNDING_RECEIPT_SCHEMA,
             "receipt_id": receipt_id,
-            "state_id": row_scope["state_id"],
-            "deployment_id": row_scope["deployment_id"],
-            "program_id": row_scope["program_id"],
-            "period_id": row_scope["period_id"],
-            "currency": row_scope["currency"],
+            **row_scope,
             "source_record_ref": source_ref,
             "amount_cents": amount,
             "confirmation_class": confirmation_class,
@@ -1579,14 +1571,7 @@ def _verify_program_funding_rows(
                 _fail("funding:event-order")
             prior_sequence = sequence
             payload = _parse_json(event["payload_json"], "funding:event:payload")
-            expected_payload = {
-                key: value
-                for key, value in receipt.items()
-                if key not in {"receipt_digest"}
-            }
-            expected_payload["receipt_digest"] = bytes(receipt["receipt_digest"]).hex().upper()
-            expected_payload["projection_revision"] = revision
-            if payload != expected_payload:
+            if payload != {**receipt, "receipt_digest": bytes(receipt["receipt_digest"]).hex().upper(), "projection_revision": revision}:
                 _fail("funding:event-payload")
             child_id = children.get(receipt_id)
             if child_id is None:
@@ -1682,7 +1667,7 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
         if pack_id in result:
             _fail("pack:duplicate")
         result[pack_id] = row
-        for key in ("state_id", "deployment_id", "program_id", "period_id"):
+        for key in SCOPE_IDS:
             _id(row[key], f"pack:{key}")
             if row[key] != scope[key]:
                 _fail(f"pack:scope:{key}")
@@ -1747,14 +1732,13 @@ def _verify_packs(connection: sqlite3.Connection, meta: dict[str, object]) -> di
     return result
 
 
+def _source_key(row: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(row[key] for key in ("state_id", "deployment_id", "program_id", "period_id", "currency", "pack_id", "cutoff_ms", "source_owner_id"))
+
+
 def _verify_population_manifest_rows(
     *,
-    manifest_rows: list[Mapping[str, object]],
-    member_rows: list[Mapping[str, object]],
-    head_rows: list[Mapping[str, object]],
-    binding_rows: list[Mapping[str, object]],
-    population_rows: list[Mapping[str, object]],
-    item_rows: list[Mapping[str, object]],
+    rows: Callable[[str], list[Mapping[str, object]]],
     event_rows: list[Mapping[str, object]],
     packs: Mapping[str, Mapping[str, object]],
     scope: Mapping[str, object],
@@ -1765,6 +1749,9 @@ def _verify_population_manifest_rows(
 ) -> dict[str, object]:
     """Reconstruct manifest receipts, membership, supersession, and bindings."""
 
+    manifest_rows, member_rows, head_rows, binding_rows, population_rows, item_rows = (
+        rows(f"population_{table}") for table in ("manifests", "manifest_members", "manifest_heads", "manifest_bindings", "imports", "items")
+    )
     manifests: dict[str, Mapping[str, object]] = {}
     members_by_manifest: dict[str, tuple[str, ...]] = {}
     if len(manifest_rows) > MAX_ROWS or len(member_rows) > MAX_ROWS or len(head_rows) > MAX_ROWS or len(binding_rows) > MAX_ROWS:
@@ -1801,10 +1788,7 @@ def _verify_population_manifest_rows(
             _fail("population-manifest:contract")
         version = _integer(row["manifest_version"], f"population-manifest:{index}:version", minimum=1, maximum=MAX_ROWS)
         manifest_scope = {
-            "state_id": _id(row["state_id"], f"population-manifest:{index}:state"),
-            "deployment_id": _id(row["deployment_id"], f"population-manifest:{index}:deployment"),
-            "program_id": _id(row["program_id"], f"population-manifest:{index}:program"),
-            "period_id": _id(row["period_id"], f"population-manifest:{index}:period"),
+            **{key: _id(row[key], f"population-manifest:{index}:{key.removesuffix('_id')}") for key in SCOPE_IDS},
             "currency": row["currency"],
         }
         if manifest_scope != dict(scope) or manifest_scope["currency"] != CURRENCY:
@@ -1813,7 +1797,7 @@ def _verify_population_manifest_rows(
         pack = packs.get(pack_id)
         if pack is None or pack["status"] != "APPROVED":
             _fail("population-manifest:pack")
-        if any(pack[key] != manifest_scope[key] for key in ("state_id", "deployment_id", "program_id", "period_id")):
+        if any(pack[key] != manifest_scope[key] for key in SCOPE_IDS):
             _fail("population-manifest:pack-scope")
         cutoff_ms = _time(row["cutoff_ms"], f"population-manifest:{index}:cutoff")
         pack_start = _time(pack["effective_start_ms"], f"population-manifest:{index}:pack-start")
@@ -1857,10 +1841,7 @@ def _verify_population_manifest_rows(
         parent_digest = None if parent_digest_value is None else _blob64(parent_digest_value, f"population-manifest:{index}:parent-digest")
         if (parent_id is None) != (parent_digest is None):
             _fail("population-manifest:parent-binding")
-        source_key = (
-            manifest_scope["state_id"], manifest_scope["deployment_id"], manifest_scope["program_id"],
-            manifest_scope["period_id"], manifest_scope["currency"], pack_id, cutoff_ms, source_owner_id,
-        )
+        source_key = (*manifest_scope.values(), pack_id, cutoff_ms, source_owner_id)
         versions = manifest_keys.setdefault(source_key, {})
         if version in versions:
             _fail("population-manifest:version-duplicate")
@@ -1874,11 +1855,7 @@ def _verify_population_manifest_rows(
             if parent is None:
                 _fail("population-manifest:parent-missing")
             parent_version = _integer(parent["manifest_version"], "population-manifest:parent-version", minimum=1, maximum=MAX_ROWS)
-            parent_key = (
-                parent["state_id"], parent["deployment_id"], parent["program_id"], parent["period_id"],
-                parent["currency"], parent["pack_id"], parent["cutoff_ms"], parent["source_owner_id"],
-            )
-            if parent_key != source_key or parent_version + 1 != version or _blob64(parent["manifest_digest"], "population-manifest:parent-manifest-digest") != parent_digest:
+            if _source_key(parent) != source_key or parent_version + 1 != version or _blob64(parent["manifest_digest"], "population-manifest:parent-manifest-digest") != parent_digest:
                 _fail("population-manifest:parent-binding")
             if parent_id in children:
                 _fail("population-manifest:fork")
@@ -1893,11 +1870,7 @@ def _verify_population_manifest_rows(
             "cutoff_ms": cutoff_ms,
             "inclusion_rules": rules,
             "source_owner_id": source_owner_id,
-            "authority": {
-                "authority_id": row_authority_id,
-                "epoch": row_authority_epoch,
-                "digest": row_authority_digest.hex().upper(),
-            },
+            "authority": _authority_body(row_authority_id, row_authority_epoch, row_authority_digest),
             "approved_by": approved_by,
             "approval_ref": approval_ref,
             "source": {"source_id": source_id, "version": source_version, "digest": source_digest.hex().upper()},
@@ -1968,10 +1941,7 @@ def _verify_population_manifest_rows(
     actual_heads: dict[tuple[object, ...], Mapping[str, object]] = {}
     for index, row in enumerate(head_rows):
         key = (
-            _id(row["state_id"], f"population-head:{index}:state"),
-            _id(row["deployment_id"], f"population-head:{index}:deployment"),
-            _id(row["program_id"], f"population-head:{index}:program"),
-            _id(row["period_id"], f"population-head:{index}:period"),
+            *(_id(row[name], f"population-head:{index}:{name.removesuffix('_id')}") for name in SCOPE_IDS),
             row["currency"],
             _id(row["pack_id"], f"population-head:{index}:pack"),
             _time(row["cutoff_ms"], f"population-head:{index}:cutoff"),
@@ -2043,11 +2013,7 @@ def _verify_population_manifest_rows(
             _fail("population-manifest:source-complete-members")
         if status in {"VALIDATED", "PUBLISHED"} and (complete != 1 or actual != expected):
             _fail("population-manifest:validated-members")
-        source_key = (
-            manifest["state_id"], manifest["deployment_id"], manifest["program_id"], manifest["period_id"],
-            manifest["currency"], manifest["pack_id"], manifest["cutoff_ms"], manifest["source_owner_id"],
-        )
-        head = actual_heads.get(source_key)
+        head = actual_heads.get(_source_key(manifest))
         if status == "PUBLISHED" and (head is None or head["manifest_id"] != manifest_id):
             _fail("population-manifest:published-stale")
     return {
@@ -2079,11 +2045,7 @@ def _verify_populations(
     manifest_records = manifest_state["manifests"]
     manifest_members = manifest_state["members_by_manifest"]
     manifest_bindings = manifest_state["bindings"]
-    if not (
-        isinstance(manifest_records, dict)
-        and isinstance(manifest_members, dict)
-        and isinstance(manifest_bindings, dict)
-    ):
+    if not all(isinstance(value, dict) for value in (manifest_records, manifest_members, manifest_bindings)):
         _fail("population:manifest-state")
     for row in imports:
         population_id = _id(row["population_id"], "population:id")
@@ -2280,12 +2242,7 @@ def _verify_population_history(
     event_sequences = manifest_state.get("event_sequences")
     superseded_at = manifest_state.get("superseded_at")
     # A typed failure, not an ``assert``: the check must hold under ``python -O`` too.
-    if not (
-        isinstance(bindings, dict)
-        and isinstance(manifests, dict)
-        and isinstance(event_sequences, dict)
-        and isinstance(superseded_at, dict)
-    ):
+    if not all(isinstance(value, dict) for value in (bindings, manifests, event_sequences, superseded_at)):
         _fail("history:population-manifest-state")
     last_committed_at: dict[str, int | None] = {}
     for population_id, population in populations.items():
@@ -2380,9 +2337,7 @@ def _verify_population_history(
                 if _hex_digest(payload["staging_digest"], "history:population-open-staging-digest") != expected_staging_digest:
                     _fail("history:population-open-staging-digest")
                 opened = True
-                continue
-
-            if kind == "POPULATION_STAGED":
+            elif kind == "POPULATION_STAGED":
                 if source_completed or validated or published:
                     _fail("history:population-stage-order")
                 payload_binds(payload, "stage", "imported_count", "chunk_count")
@@ -2393,9 +2348,7 @@ def _verify_population_history(
                 if count > expected:
                     _fail("history:population-stage-count")
                 imported = count
-                continue
-
-            if kind == "POPULATION_SOURCE_COMPLETED":
+            elif kind == "POPULATION_SOURCE_COMPLETED":
                 if source_completed:
                     _fail("history:population-completion-duplicate")
                 if validated or published:
@@ -2408,9 +2361,7 @@ def _verify_population_history(
                 if _flag(population["source_complete"], "population:source-complete") != 1 or completed_imported != expected or completed_expected != expected:
                     _fail("history:population-completion-binding")
                 source_completed = True
-                continue
-
-            if kind == "POPULATION_VALIDATED":
+            elif kind == "POPULATION_VALIDATED":
                 if not source_completed:
                     _fail("history:population-completion-order")
                 if validated or published:
@@ -2425,9 +2376,7 @@ def _verify_population_history(
                 if population["status"] not in {"VALIDATED", "PUBLISHED"} or population["validated_count"] != validated_count or bytes(population["validation_digest"]) != validation_digest:
                     _fail("history:population-validation-binding")
                 validated = True
-                continue
-
-            if kind == "POPULATION_PUBLISHED":
+            elif kind == "POPULATION_PUBLISHED":
                 if not validated:
                     _fail("history:population-validation-order")
                 if published:
@@ -2458,15 +2407,8 @@ def _verify_population_history(
         if source_complete == 0 and source_completed:
             _fail("history:population-completion-unexpected")
         status = str(population["status"])
-        if status == "STAGED":
-            if validated or published:
-                _fail("history:population-status-order")
-        elif status == "VALIDATED":
-            if not validated or published:
-                _fail("history:population-status-order")
-        elif status == "PUBLISHED":
-            if not validated or not published:
-                _fail("history:population-status-order")
+        if {"STAGED": (False, False), "VALIDATED": (True, False), "PUBLISHED": (True, True)}.get(status, (validated, published)) != (validated, published):
+            _fail("history:population-status-order")
         last_committed_at[population_id] = by_population[population_id][-1]["committed_at_ms"] if by_population[population_id] else None
     if any(populations[population_id]["updated_at_ms"] != at for population_id, at in last_committed_at.items()):
         _fail("history:population-updated-at")
@@ -3037,8 +2979,7 @@ def _evaluation_bindings_json(raw: object, code: str) -> list[dict[str, str]]:
         _fail(f"{code}:shape")
     result: list[dict[str, str]] = []
     for binding in value["bindings"]:
-        if not isinstance(binding, dict) or set(binding) != {"evidence_id", "record_digest"}:
-            _fail(f"{code}:binding")
+        _shape(binding, {"evidence_id", "record_digest"}, f"{code}:binding")
         result.append({"evidence_id": _id(binding["evidence_id"], f"{code}:id"), "record_digest": _hex_digest(binding["record_digest"], f"{code}:digest").hex().upper()})
     ids = [binding["evidence_id"] for binding in result]
     if ids != sorted(ids) or len(set(ids)) != len(ids):
@@ -3079,11 +3020,7 @@ def _evaluation_receipt_body(
         },
         "evidence_bindings": evidence_bindings,
         "input_snapshot_digest": input_snapshot_digest.hex().upper(),
-        "authority": {
-            "authority_id": row["authority_id"],
-            "epoch": authority_epoch,
-            "digest": authority_digest.hex().upper(),
-        },
+        "authority": _authority_body(row["authority_id"], authority_epoch, authority_digest),
         **result,
         "result_digest": _blob64(row["result_digest"], "evaluation:result-digest").hex().upper(),
     }
@@ -3245,25 +3182,7 @@ def _evaluation_projection_from_input(
     owed = int(obligation["owed_cents"])
     shortfall = max(owed - total, 0)
     overage = max(total - owed, 0)
-    entries = [
-        (int(row["decided_at_ms"]), int(row["amount_cents"]))
-        for row in determinations
-        if row["decision"] == "OFFSET_AUTHORIZED"
-    ]
-    entries.extend(
-        (int(row["event_at_ms"]), int(row["amount_cents"]))
-        for row in payments
-        if row["active"] == 1
-    )
-    completion: int | None = None
-    running_total = 0
-    for at_ms, amount in sorted(entries, key=lambda value: (value[0], value[1])):
-        running_total = _add_cents(running_total, amount, "evaluation-input:completion")
-        if running_total >= owed:
-            completion = at_ms
-            break
-    if completion is None and _add_cents(lawful, cash, "evaluation-input:completion-total") >= owed and entries:
-        completion = max(value[0] for value in entries)
+    completion = _completion_time(owed, payments, determinations, "evaluation-input:completion", lambda: _add_cents(lawful, cash, "evaluation-input:completion-total"))
     amount_satisfied = int(total >= owed)
     cash_satisfied = int(cash >= owed)
     if amount_satisfied and int(obligation["reporting_complete"]):
@@ -3733,10 +3652,14 @@ def _verify_evaluation_history_events(
 
 
 def _completion_time(
-    obligation: sqlite3.Row,
+    owed: object,
     payments: list[sqlite3.Row],
     determinations: list[sqlite3.Row],
+    code: str,
+    settled: Callable[[], int],
 ) -> int | None:
+    """First time authorized offsets plus active cash reach ``owed``; else the last entry once ``settled()`` covers it."""
+
     entries: list[tuple[int, int]] = [
         (int(row["decided_at_ms"]), int(row["amount_cents"]))
         for row in determinations
@@ -3749,15 +3672,10 @@ def _completion_time(
     )
     total = 0
     for at_ms, amount in sorted(entries, key=lambda value: (value[0], value[1])):
-        total = _add_cents(total, amount, "projection:completion-overflow")
-        if total >= obligation["owed_cents"]:
+        total = _add_cents(total, amount, code)
+        if total >= owed:
             return at_ms
-    lawful = _sum_cents(
-        [int(row["amount_cents"]) for row in determinations if row["decision"] == "OFFSET_AUTHORIZED"],
-        "projection:lawful",
-    )
-    cash = _sum_cents([int(row["amount_cents"]) for row in payments if row["active"] == 1], "projection:cash")
-    if _add_cents(lawful, cash, "projection:completion-total") >= obligation["owed_cents"] and entries:
+    if settled() >= owed and entries:
         return max(value[0] for value in entries)
     return None
 
@@ -3801,7 +3719,12 @@ def _verify_projections(
         evidence_count = len(evidence_by.get(obligation["item_id"], []))
         conflict_count = len(conflicts_by.get(obligation_id, []))
         verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
-        completion = _completion_time(obligation, active_payments, determinations_by_obligation.get(obligation_id, []))
+        obligation_determinations = determinations_by_obligation.get(obligation_id, [])
+        completion = _completion_time(obligation["owed_cents"], active_payments, obligation_determinations, "projection:completion-overflow", lambda: _add_cents(
+            _sum_cents([int(row["amount_cents"]) for row in obligation_determinations if row["decision"] == "OFFSET_AUTHORIZED"], "projection:lawful"),
+            _sum_cents([int(row["amount_cents"]) for row in active_payments if row["active"] == 1], "projection:cash"),
+            "projection:completion-total",
+        ))
         timely = int(completion is not None and completion <= obligation["due_at_ms"])
         amount_satisfied = int(total >= owed)
         cash_satisfied = int(cash >= owed)
@@ -4113,7 +4036,7 @@ def _verify_history_export(directory: Path, expected_authority: object, expected
     if manifest["last_segment_digest"] != previous.hex().upper() or (meta["sequence"], meta["history_head"]) != (sequence, head) or identity["anchor_sequence"] > sequence:
         _fail("history:manifest-binding")
     result: dict[str, object] = {  # shaped like a verified package, for restore
-        "scope": scope, "authority": {"authority_id": expected["authority_id"], "epoch": expected["authority_epoch"], "digest": expected["authority_digest"].hex().upper()},
+        "scope": scope, "authority": _authority_body(expected["authority_id"], expected["authority_epoch"], expected["authority_digest"]),
         "continuity_epoch": meta["continuity_epoch"], "sequence": sequence, "history_head": head.hex().upper(), "package_digest": manifest["manifest_digest"],
         "segment_count": count, "tables": {"financial_identity": [manifest["identity"]], "financial_meta": [manifest["meta"]]},
     }
@@ -4184,21 +4107,17 @@ def verify_continuity_package(
         _fail("continuity:schema-version-binding")
     if identity["schema_version"] is not None and identity["schema_version"] != package_version:
         _fail("continuity:schema-version-binding")
-    scope = value["scope"]
-    if not isinstance(scope, dict) or set(scope) != {"state_id", "deployment_id", "program_id", "period_id", "currency"}:
-        _fail("continuity:scope")
+    scope = _shape(value["scope"], {"state_id", "deployment_id", "program_id", "period_id", "currency"}, "continuity:scope")
     expected_scope_value = identity["scope"]
     assert isinstance(expected_scope_value, dict)
     for key, expected in expected_scope_value.items():
         if scope[key] != expected:
             _fail(f"continuity:scope:{key}")
-    for key in ("state_id", "deployment_id", "program_id", "period_id"):
+    for key in SCOPE_IDS:
         _id(scope[key], f"continuity:scope:{key}")
     if scope["currency"] != CURRENCY:
         _fail("continuity:scope:currency")
-    authority = value["authority"]
-    if not isinstance(authority, dict) or set(authority) != {"authority_id", "epoch", "digest"}:
-        _fail("continuity:authority")
+    authority = _shape(value["authority"], {"authority_id", "epoch", "digest"}, "continuity:authority")
     authority_id = _id(authority["authority_id"], "continuity:authority-id")
     authority_epoch = _integer(authority["epoch"], "continuity:authority-epoch", minimum=1, maximum=MAX_CENTS)
     authority_digest = _hex_digest(authority["digest"], "continuity:authority-digest")
@@ -4218,9 +4137,7 @@ def verify_continuity_package(
         _fail("continuity:head-binding")
     if expected_continuity_epoch is not None and epoch != _integer(expected_continuity_epoch, "continuity:expected-epoch", minimum=1, maximum=MAX_CENTS):
         _fail("continuity:epoch-binding")
-    tables = value["tables"]
-    if not isinstance(tables, dict) or set(tables) != PACKAGE_TABLES:
-        _fail("continuity:tables")
+    tables = _shape(value["tables"], PACKAGE_TABLES, "continuity:tables")
     counts: dict[str, int] = {}
     decoded_rows: dict[str, list[dict[str, object]]] = {}
     for table in PACKAGE_TABLES:
@@ -4277,25 +4194,13 @@ def verify_continuity_package(
     package_digest = value["package_digest"]
     if type(package_digest) is not str or package_digest != package_digest.upper() or _HEX128.fullmatch(package_digest) is None or package_digest != expected_digest:
         _fail("continuity:package-digest")
-    _verify_correction_followup_records(
-        decoded_rows["financial_events"],
-        evaluations={str(row["evaluation_id"]): row for row in decoded_rows["evaluations"]},
-        determinations={str(row["determination_id"]): row for row in decoded_rows["determinations"]},
-        actions={str(row["action_id"]): row for row in decoded_rows["actions"]},
-        cases={str(row["case_id"]): row for row in decoded_rows["cases"]},
-        packs={str(row["pack_id"]): row for row in decoded_rows["control_packs"]},
-    )
+    _verify_followups_in(decoded_rows["financial_events"], lambda table: decoded_rows[table])
     package_packs = {
         _id(row["pack_id"], "continuity:manifest-pack-id"): row
         for row in decoded_rows["control_packs"]
     }
     manifest_state = _verify_population_manifest_rows(
-        manifest_rows=decoded_rows["population_manifests"],
-        member_rows=decoded_rows["population_manifest_members"],
-        head_rows=decoded_rows["population_manifest_heads"],
-        binding_rows=decoded_rows["population_manifest_bindings"],
-        population_rows=decoded_rows["population_imports"],
-        item_rows=decoded_rows["population_items"],
+        rows=lambda table: decoded_rows[table],
         event_rows=decoded_rows["financial_events"],
         packs=package_packs,
         scope=scope,
@@ -4317,7 +4222,7 @@ def verify_continuity_package(
         "schema": package_schema,
         "version": package_version,
         "scope": dict(scope),
-        "authority": {"authority_id": authority_id, "epoch": authority_epoch, "digest": authority_digest.hex().upper()},
+        "authority": _authority_body(authority_id, authority_epoch, authority_digest),
         "continuity_epoch": epoch,
         "sequence": sequence,
         "history_head": history_head.hex().upper(),
@@ -4357,12 +4262,7 @@ def _verify_connection(
     events = _verify_events(connection, meta)
     packs = _verify_packs(connection, meta)
     manifest_state = _verify_population_manifest_rows(
-        manifest_rows=[dict(row) for row in _bounded_rows(connection, "population_manifests")],
-        member_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_members")],
-        head_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_heads")],
-        binding_rows=[dict(row) for row in _bounded_rows(connection, "population_manifest_bindings")],
-        population_rows=[dict(row) for row in _bounded_rows(connection, "population_imports")],
-        item_rows=[dict(row) for row in _bounded_rows(connection, "population_items")],
+        rows=lambda table: [dict(row) for row in _bounded_rows(connection, table)],
         event_rows=[dict(row) for row in events],
         packs={pack_id: dict(row) for pack_id, row in packs.items()},
         scope=meta["scope"],
@@ -4408,44 +4308,27 @@ def _verify_connection(
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:
         _fail("continuity:duplicate-input")
-    if current_snapshot_package is not None:
+    if current_snapshot_package is not None or restore_source_package is not None:
+        current = current_snapshot_package is not None  # a current snapshot also binds the live sequence and head
         package_result = verify_continuity_package(
-            current_snapshot_package,
+            current_snapshot_package if current else restore_source_package,
             expected_scope=meta["scope"],
             expected_schema_version=schema_version,
             expected_authority=identity["authority_source"],
-            expected_sequence=meta["sequence"],
-            expected_history_head=meta["history_head"],
+            expected_sequence=meta["sequence"] if current else None,
+            expected_history_head=meta["history_head"] if current else None,
             expected_continuity_epoch=meta["continuity_epoch"],
             _include_rows=True,
         )
         package_rows = package_result.pop("_decoded_rows")
         if not isinstance(package_rows, dict):
             _fail("continuity:decoded-rows")
-        _verify_current_snapshot(connection, package_rows)
-        package_result["role"] = "current_snapshot"
-    elif restore_source_package is not None:
-        package_result = verify_continuity_package(
-            restore_source_package,
-            expected_scope=meta["scope"],
-            expected_schema_version=schema_version,
-            expected_authority=identity["authority_source"],
-            expected_continuity_epoch=meta["continuity_epoch"],
-            _include_rows=True,
-        )
-        package_rows = package_result.pop("_decoded_rows")
-        if not isinstance(package_rows, dict):
-            _fail("continuity:decoded-rows")
-        _verify_restore_source_binding(meta, package_result, package_rows)
-        package_result["role"] = "restore_source"
-    _verify_correction_followup_records(
-        events,
-        evaluations={str(row["evaluation_id"]): dict(row) for row in _bounded_rows(connection, "evaluations")},
-        determinations={str(row["determination_id"]): dict(row) for row in _bounded_rows(connection, "determinations")},
-        actions={str(row["action_id"]): dict(row) for row in _bounded_rows(connection, "actions")},
-        cases={str(row["case_id"]): dict(row) for row in _bounded_rows(connection, "cases")},
-        packs={str(row["pack_id"]): dict(row) for row in _bounded_rows(connection, "control_packs")},
-    )
+        if current:
+            _verify_current_snapshot(connection, package_rows)
+        else:
+            _verify_restore_source_binding(meta, package_result, package_rows)
+        package_result["role"] = "current_snapshot" if current else "restore_source"
+    _verify_followups_in(events, lambda table: _bounded_rows(connection, table))
     _verify_commands(
         {table: [dict(row) for row in _bounded_rows(connection, table)] for table in sorted(TABLES)},
         "commands",
@@ -4454,11 +4337,7 @@ def _verify_connection(
         "schema": SCHEMA,
         "schema_version": schema_version,
         "scope": dict(meta["scope"]),
-        "authority": {
-            "authority_id": meta["authority_id"],
-            "epoch": meta["authority_epoch"],
-            "digest": meta["authority_digest"].hex().upper(),
-        },
+        "authority": _authority_body(meta["authority_id"], meta["authority_epoch"], meta["authority_digest"]),
         "mode": meta["mode"],
         "owner_id": meta["owner_id"],
         "continuity_epoch": meta["continuity_epoch"],
