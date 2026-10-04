@@ -172,13 +172,10 @@ class FinancialSwitchTests(unittest.TestCase):
         report = self._run(reference=replace(reference, evaluate=lambda raw: (received_inputs.append(raw), reference.evaluate(raw))[1]),
                            candidate=replace(candidate, evaluate=lambda raw: (received_inputs.append(raw), candidate.evaluate(raw))[1]))
         self.assertEqual((report["status"], report["comparison_status"]), ("BLOCKED", "UNEXPLAINED_DIFFERENCES"))
-        differences = {row["path"]: row for row in report["differences"]}
-        self.assertEqual(differences[f"members.{expected.H_ITEM_ID}.owed_cents"]["classification"], "EXPECTED")
-        self.assertEqual(differences["aggregate.total_owed_cents"]["classification"], "UNEXPLAINED")
-        counts = (report["expected_member_count"], report["reference_received_member_count"], report["candidate_received_member_count"])
-        self.assertEqual(counts, (len(expected.PROGRAM_ITEMS),) * 3)
-        self.assertEqual(len(received_inputs), 2)
-        self.assertIs(received_inputs[0], received_inputs[1])
+        differences = {row["path"]: row["classification"] for row in report["differences"]}
+        self.assertEqual((differences[f"members.{expected.H_ITEM_ID}.owed_cents"], differences["aggregate.total_owed_cents"]), ("EXPECTED", "UNEXPLAINED"))
+        self.assertEqual((report["expected_member_count"], report["reference_received_member_count"], report["candidate_received_member_count"]), (len(expected.PROGRAM_ITEMS),) * 3)
+        self.assertEqual([id(raw) for raw in received_inputs], [id(received_inputs[0])] * 2)  # both evaluators got the same bytes object
         self.assertEqual(report["isolation"], {**report["isolation"], "evaluator_input": "CANONICAL_REPLAY_BYTES_ONLY", "evaluator_closure_isolation": "UNVERIFIED"})
         self.assertFalse(report["resources"]["evaluation_timeout_enforced_by_module"])
         self.assertEqual((report["source_class_verification"], report["difference_policy_approval"]), ("CALLER_ASSERTED",) * 2)
@@ -220,8 +217,9 @@ class FinancialSwitchTests(unittest.TestCase):
                 self._assert_source_bytes_unchanged()
 
     def _assert_incomplete(self, report: dict[str, object], reasons: list[str]) -> None:
-        unknowns = [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons]
-        self.assertEqual((report["status"], report["reasons"], report["unknowns"]), ("INCOMPLETE", ["candidate_result_invalid"], unknowns))
+        audit = ("OUTPUT_NOT_ENCODABLE", None) if reasons == ["result-byte-cap-or-type"] else ("OUTPUT_RETURNED", len(self.facts.member_ids))
+        self.assertEqual((report["status"], report["reasons"], report["unknowns"], report["member_audit"]["candidate"]["status"], report["candidate_received_member_count"]),
+                         ("INCOMPLETE", ["candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], *audit))
 
     def test_output_is_checked_stored_and_hashed_as_one_plain_json_copy(self) -> None:
         class Flip(dict):  # json.dumps reads a non-empty dict subclass through items(); this one answers each call differently
@@ -244,6 +242,8 @@ class FinancialSwitchTests(unittest.TestCase):
             ("forged-first-encoding", lambda out: out.update(authority=Flip(forged, pairs)), ["authority-binding"]),
             ("non-json-second-encoding", lambda out: out.update(authority=Flip(pairs, [("epoch", object())])), None),
             ("encoding-raises-index-error", lambda out: out.update(authority=Flip((pairs[len(pairs)] for _ in "x"), pairs)), ["result-byte-cap-or-type"]),
+            ("duplicate-keys-last-forged", lambda out: out.update(authority=Flip(pairs + forged)), ["result-byte-cap-or-type"]),
+            ("over-8-mib-cap", lambda out: out.update(contract="x" * 8 * 1024 * 1024), ["result-byte-cap-or-type"]),
             ("currency-ne-raises", lambda out: out["aggregate"].update(currency=Liar(out["aggregate"]["currency"])), None),
             ("member-currency-ne-lies", lambda out: out["member_results"][0].update(currency=Liar("XXX")), [f"member-result-type:{first_id}", "aggregate-reconciliation"]),
             ("aggregate-currency-ne-lies", lambda out: out["aggregate"].update(currency=Liar("XXX")), ["aggregate-reconciliation"]),
