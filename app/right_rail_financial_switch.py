@@ -760,9 +760,9 @@ def _validate_output(
     errors: list[str] = []
     if type(output) is not dict:
         return None, [f"{label}:result-not-object"]
-    try:
-        canonical_output = _canonical_json(output, maximum=MAX_RESULT_BYTES)
-    except FinancialSwitchError:
+    try:  # one encoding: every check below, the audit, the stored result and its digest read this plain decoded copy
+        output = json.loads(_canonical_json(output, maximum=MAX_RESULT_BYTES))
+    except Exception:  # dict and str subclasses run their own code, which may raise anything, while being encoded
         return None, [f"{label}:result-byte-cap-or-type"]
     expected_top = {
         "contract", "input_sha256", "producer", "owner", "authority", "scope",
@@ -821,10 +821,7 @@ def _validate_output(
         errors.append(f"{label}:aggregate-reconciliation")
     elif total > MAX_CENTS:
         errors.append(f"{label}:aggregate-total-bound")
-    if errors:
-        return None, errors
-    normalized = json.loads(canonical_output.decode("ascii"))
-    return normalized, []
+    return output, errors
 
 
 def _comparable_values(output: Mapping[str, object], facts: SnapshotFacts) -> dict[str, object]:
@@ -1064,9 +1061,9 @@ def run_shadow_replay(
             },
             label=label,
         )
-        report["member_audit"][label] = _member_audit(raw, facts)  # type: ignore[index]
+        report["member_audit"][label] = _member_audit(checked, facts)  # type: ignore[index]
         report[f"{label}_received_member_count"] = report["member_audit"][label]["received_member_count"]  # type: ignore[index]
-        if checked is None:
+        if errors:
             return _unknown(report, [invalid_reason], errors)
         report["resources"][f"{label}_output_bytes"] = len(_canonical_json(checked, maximum=MAX_RESULT_BYTES))  # type: ignore[index]
         valid[label] = checked

@@ -160,47 +160,29 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertEqual(self.incumbent.export_continuity(), self.incumbent_before)
         self.assertEqual(self.shadow.export_continuity(), self.shadow_before)
 
+    def _run(self, **changes: object) -> dict[str, object]:
+        return run_shadow_replay(**{"snapshot_bytes": self.snapshot, **self.trust, "cohort_approval": self.approval, "reference": self.reference, "candidate": self.candidate, **changes})
+
+    def _h_policy(self, classification: str) -> DifferencePolicy:
+        return DifferencePolicy(path=f"members.{expected.H_ITEM_ID}.owed_cents", classification=classification, rationale="test-only comparison fixture", approval_ref="fixture-difference-approval:local-test-only")
+
     def test_synthetic_shadow_replay_reports_typed_difference_and_preserves_owner_bytes(self) -> None:
         received_inputs: list[bytes] = []
-        reference = self._reference(
-            expected_differences=(
-                DifferencePolicy(
-                    path=f"members.{expected.H_ITEM_ID}.owed_cents",
-                    classification="EXPECTED",
-                    rationale="test-only comparison fixture",
-                    approval_ref="fixture-difference-approval:local-test-only",
-                ),
-            )
-        )
-        candidate = self._candidate(h_delta=1)
-        reference_runner = replace(reference, evaluate=lambda raw: (received_inputs.append(raw), reference.evaluate(raw))[1])
-        candidate_runner = replace(candidate, evaluate=lambda raw: (received_inputs.append(raw), candidate.evaluate(raw))[1])
-
-        report = run_shadow_replay(
-            self.snapshot,
-            **self.trust,
-            cohort_approval=self.approval,
-            reference=reference_runner,
-            candidate=candidate_runner,
-        )
-
-        self.assertEqual(report["status"], "BLOCKED")
-        self.assertEqual(report["comparison_status"], "UNEXPLAINED_DIFFERENCES")
+        reference, candidate = self._reference(expected_differences=(self._h_policy("EXPECTED"),)), self._candidate(h_delta=1)
+        report = self._run(reference=replace(reference, evaluate=lambda raw: (received_inputs.append(raw), reference.evaluate(raw))[1]),
+                           candidate=replace(candidate, evaluate=lambda raw: (received_inputs.append(raw), candidate.evaluate(raw))[1]))
+        self.assertEqual((report["status"], report["comparison_status"]), ("BLOCKED", "UNEXPLAINED_DIFFERENCES"))
         differences = {row["path"]: row for row in report["differences"]}
         self.assertEqual(differences[f"members.{expected.H_ITEM_ID}.owed_cents"]["classification"], "EXPECTED")
         self.assertEqual(differences["aggregate.total_owed_cents"]["classification"], "UNEXPLAINED")
-        self.assertEqual(report["expected_member_count"], len(expected.PROGRAM_ITEMS))
-        self.assertEqual(report["reference_received_member_count"], len(expected.PROGRAM_ITEMS))
-        self.assertEqual(report["candidate_received_member_count"], len(expected.PROGRAM_ITEMS))
+        counts = (report["expected_member_count"], report["reference_received_member_count"], report["candidate_received_member_count"])
+        self.assertEqual(counts, (len(expected.PROGRAM_ITEMS),) * 3)
         self.assertEqual(len(received_inputs), 2)
         self.assertIs(received_inputs[0], received_inputs[1])
-        self.assertEqual(report["isolation"]["evaluator_input"], "CANONICAL_REPLAY_BYTES_ONLY")
-        self.assertEqual(report["isolation"]["evaluator_closure_isolation"], "UNVERIFIED")
+        self.assertEqual(report["isolation"], {**report["isolation"], "evaluator_input": "CANONICAL_REPLAY_BYTES_ONLY", "evaluator_closure_isolation": "UNVERIFIED"})
         self.assertFalse(report["resources"]["evaluation_timeout_enforced_by_module"])
-        self.assertEqual(report["source_class_verification"], "CALLER_ASSERTED")
-        self.assertEqual(report["difference_policy_approval"], "CALLER_ASSERTED")
-        self.assertFalse(report["transfer_authorized"])
-        self.assertEqual(report["candidate_authority"], "NONE")
+        self.assertEqual((report["source_class_verification"], report["difference_policy_approval"]), ("CALLER_ASSERTED",) * 2)
+        self.assertEqual((report["transfer_authorized"], report["candidate_authority"]), (False, "NONE"))
         self._assert_source_bytes_unchanged()
 
     def test_missing_or_bad_inputs_never_call_evaluators(self) -> None:
@@ -215,7 +197,7 @@ class FinancialSwitchTests(unittest.TestCase):
             ({"trusted_authority": None}, "INVALID_SNAPSHOT", ["switch:trusted-authority-required"]),
         ):
             with self.subTest(changes=sorted(changes)):
-                report = run_shadow_replay(**{"snapshot_bytes": self.snapshot, **self.trust, "cohort_approval": self.approval, **stubs, **changes})
+                report = self._run(**{**stubs, **changes})
                 self.assertEqual(report["status"], status)
                 if type(reasons) is str:
                     self.assertIn(reasons, report["reasons"])
@@ -234,34 +216,49 @@ class FinancialSwitchTests(unittest.TestCase):
             with self.subTest(record=name, key=key, value=bad):
                 forge = {name: {**records[name], key: bad} if key else bad}
                 candidate = replace(self.candidate, evaluate=lambda raw, forge=forge: {**self.candidate.evaluate(raw), **forge})
-                report = run_shadow_replay(self.snapshot, **self.trust, cohort_approval=self.approval, reference=self.reference, candidate=candidate)
-                self.assertEqual((report["status"], report["reasons"]), ("INCOMPLETE", ["candidate_result_invalid"]))
-                reason = f"candidate:{name}-binding" if key else "candidate:unknown-result-fields:invented_field"
-                self.assertEqual(report["unknowns"], [{"class": "UNKNOWN", "reason": reason}])
+                self._assert_incomplete(self._run(candidate=candidate), [f"{name}-binding" if key else "unknown-result-fields:invented_field"])
                 self._assert_source_bytes_unchanged()
 
-    def test_forbidden_difference_is_reported_as_blocking(self) -> None:
-        reference = self._reference(
-            forbidden_differences=(
-                DifferencePolicy(
-                    path=f"members.{expected.H_ITEM_ID}.owed_cents",
-                    classification="FORBIDDEN",
-                    rationale="synthetic negative-path assertion",
-                    approval_ref="fixture-forbidden-difference:local-test-only",
-                ),
-            )
-        )
-        report = run_shadow_replay(
-            self.snapshot,
-            **self.trust,
-            cohort_approval=self.approval,
-            reference=reference,
-            candidate=self._candidate(h_delta=1),
-        )
+    def _assert_incomplete(self, report: dict[str, object], reasons: list[str]) -> None:
+        unknowns = [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons]
+        self.assertEqual((report["status"], report["reasons"], report["unknowns"]), ("INCOMPLETE", ["candidate_result_invalid"], unknowns))
 
+    def test_output_is_checked_stored_and_hashed_as_one_plain_json_copy(self) -> None:
+        class Flip(dict):  # json.dumps reads a non-empty dict subclass through items(); this one answers each call differently
+            def __init__(self, *answers: object) -> None:
+                super().__init__(pairs)
+                self.answers = list(answers)
+
+            def items(self):  # type: ignore[override]
+                return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+
+        class Liar(str):  # != calls a str subclass's own __ne__ first: "XXX" claims equality, any other text raises
+            def __ne__(self, other: object) -> bool:
+                return False if self == "XXX" else bool(1 // 0)
+
+        pairs = list(self.facts.record("authority").items())
+        forged = [(key, value + 1 if key == "epoch" else value) for key, value in pairs]
+        first_id, honest = self.facts.member_ids[0], self._run()
+        self.assertEqual(honest["comparison_status"], "MATCHED")
+        for name, forge, reasons in (  # reasons None: the run matches and hashes exactly the honest output
+            ("forged-first-encoding", lambda out: out.update(authority=Flip(forged, pairs)), ["authority-binding"]),
+            ("non-json-second-encoding", lambda out: out.update(authority=Flip(pairs, [("epoch", object())])), None),
+            ("encoding-raises-index-error", lambda out: out.update(authority=Flip((pairs[len(pairs)] for _ in "x"), pairs)), ["result-byte-cap-or-type"]),
+            ("currency-ne-raises", lambda out: out["aggregate"].update(currency=Liar(out["aggregate"]["currency"])), None),
+            ("member-currency-ne-lies", lambda out: out["member_results"][0].update(currency=Liar("XXX")), [f"member-result-type:{first_id}", "aggregate-reconciliation"]),
+            ("aggregate-currency-ne-lies", lambda out: out["aggregate"].update(currency=Liar("XXX")), ["aggregate-reconciliation"]),
+        ):
+            with self.subTest(name):
+                report = self._run(candidate=replace(self.candidate, evaluate=lambda raw, forge=forge: (out := self.candidate.evaluate(raw), forge(out))[0]))
+                if reasons is None:
+                    self.assertEqual((report["status"], report["candidate_result_sha256"]), (honest["status"], honest["candidate_result_sha256"]))
+                else:
+                    self._assert_incomplete(report, reasons)
+
+    def test_forbidden_difference_is_reported_as_blocking(self) -> None:
+        report = self._run(reference=self._reference(forbidden_differences=(self._h_policy("FORBIDDEN"),)), candidate=self._candidate(h_delta=1))
         differences = {row["path"]: row for row in report["differences"]}
-        self.assertEqual(report["status"], "BLOCKED")
-        self.assertEqual(report["comparison_status"], "FORBIDDEN_DIFFERENCES")
+        self.assertEqual((report["status"], report["comparison_status"]), ("BLOCKED", "FORBIDDEN_DIFFERENCES"))
         self.assertEqual(differences[f"members.{expected.H_ITEM_ID}.owed_cents"]["classification"], "FORBIDDEN")
         self._assert_source_bytes_unchanged()
 
