@@ -841,24 +841,20 @@ def _comparable_values(output: Mapping[str, object], facts: SnapshotFacts) -> di
     return values
 
 
+def _unread_audit(status: str, count: int | None = None) -> dict[str, object]:
+    """Audit of member rows never read one by one: what is not known is None, never a made-up 0 or []."""
+    return {"status": status, "received_member_count": count, **dict.fromkeys((
+        "unique_received_member_count", "omitted_member_ids", "extra_member_ids", "duplicate_member_ids", "rejected_member_record_count"))}
+
+
 def _member_audit(output: dict[str, object] | str, facts: SnapshotFacts) -> dict[str, object]:
     rows = output.get("member_results") if type(output) is dict else None
-    if type(rows) is not list or len(rows) > MAX_ROWS:  # unknown counts are None, never a made-up 0
-        status, count = (
-            (output, 0 if output == "NO_MEMBER_RESULTS" else None) if type(output) is str
-            else ("OUTPUT_MEMBER_COUNT_EXCEEDED", len(rows)) if type(rows) is list
-            else ("NO_MEMBER_RESULTS", 0)
-        )
-        known = 0 if count == 0 else None
-        return {
-            "status": status,
-            "received_member_count": count,
-            "unique_received_member_count": known,
-            "omitted_member_ids": [],
-            "extra_member_ids": [],
-            "duplicate_member_ids": [],
-            "rejected_member_record_count": known,
-        }
+    status = "OUTPUT_RETURNED" if type(rows) is list else "NO_MEMBER_RESULTS"  # none received: every expected member is omitted
+    if type(output) is str and output != "NO_MEMBER_RESULTS":
+        return _unread_audit(output)
+    if status == "OUTPUT_RETURNED" and len(rows) > MAX_ROWS:
+        return _unread_audit("OUTPUT_MEMBER_COUNT_EXCEEDED", len(rows))
+    rows = rows if status == "OUTPUT_RETURNED" else []
     received_ids: list[str] = []
     rejected = 0
     for row in rows:
@@ -877,7 +873,7 @@ def _member_audit(output: dict[str, object] | str, facts: SnapshotFacts) -> dict
             duplicate_ids.add(member_id)
         seen.add(member_id)
     return {
-        "status": "OUTPUT_RETURNED",
+        "status": status,
         "received_member_count": len(rows),
         "unique_received_member_count": len(received),
         "omitted_member_ids": sorted(expected - received),
@@ -935,13 +931,10 @@ def _base_report(
             "control_pack": facts.record("control_pack"),
             "source": facts.record("source"),
         },
-        "expected_member_count": 0 if facts is None else len(facts.member_ids),
+        "expected_member_count": None if facts is None else len(facts.member_ids),
         "reference_received_member_count": None,  # stays None if that evaluator is not run or raises
         "candidate_received_member_count": None,
-        "member_audit": {
-            label: {"status": "NOT_RUN", "omitted_member_ids": [], "extra_member_ids": [], "duplicate_member_ids": [], "rejected_member_record_count": None}
-            for label in ("reference", "candidate")
-        },
+        "member_audit": {label: _unread_audit("NOT_RUN") for label in ("reference", "candidate")},
         "matched_field_count": 0,
         "differences": [],
         "unknowns": [],
@@ -1042,7 +1035,7 @@ def run_shadow_replay(
         raw, elapsed, error = _run_evaluator(spec.evaluate, replay_input, label=label)
         report["resources"][f"{label}_elapsed_ns"] = elapsed  # type: ignore[index]
         if error is not None:
-            report["member_audit"][label] = {"status": "EVALUATOR_FAILED", "reason": error}  # type: ignore[index]
+            report["member_audit"][label] = {**_unread_audit("EVALUATOR_FAILED"), "reason": error}  # type: ignore[index]
             return _unknown(report, [error], [error])
         checked, errors = _validate_output(
             raw,

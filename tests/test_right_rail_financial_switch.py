@@ -23,8 +23,22 @@ from app.right_rail_financial_switch import (
 )
 from tests import rightrail_financial_expected_cases as expected
 
-_AUDITS = {"result-byte-cap-or-type": ("OUTPUT_NOT_ENCODABLE", None), "result-not-object": ("NO_MEMBER_RESULTS", 0),  # reason -> (audit, count); None: unknown
-           "member-results-shape": ("OUTPUT_MEMBER_COUNT_EXCEEDED", MAX_ROWS + 1), "evaluator-raised:ZeroDivisionError": ("EVALUATOR_FAILED", None)}
+_AUDITS = {  # first reason -> candidate member-audit status and received count; None is unknown, never a made-up 0
+    "result-byte-cap-or-type": ("OUTPUT_NOT_ENCODABLE", None), "result-not-object": ("NO_MEMBER_RESULTS", 0),
+    "member-results-shape": ("OUTPUT_MEMBER_COUNT_EXCEEDED", MAX_ROWS + 1), "evaluator-raised:ZeroDivisionError": ("EVALUATOR_FAILED", None),
+}
+
+
+def _output(binding: dict[str, object], member_results: list[dict[str, object]], currency: str) -> dict[str, object]:
+    return {
+        **binding,
+        "member_results": member_results,
+        "aggregate": {
+            "member_count": len(member_results),
+            "total_owed_cents": sum(row["owed_cents"] for row in member_results),
+            "currency": currency,
+        },
+    }
 
 
 class FinancialSwitchTests(unittest.TestCase):
@@ -35,17 +49,15 @@ class FinancialSwitchTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.incumbent = self.fixture._build_base()
-        incumbent_package = self.incumbent.export_continuity()
+        self.incumbent_before = self.incumbent.export_continuity()
         self.shadow = FinancialOwner.restore_continuity(
-            package_bytes=incumbent_package,
+            package_bytes=self.incumbent_before,
             recovered_path=self.fixture._path("switch-shadow.sqlite"),
             trusted_authority=self.fixture.authority,
             restore_mode="SHADOW",
         )
         self.addCleanup(self.shadow.close)  # R1a: its export opens the writer
-        self.snapshot = self.shadow.export_continuity()
-        self.incumbent_before = self.incumbent.export_continuity()
-        self.shadow_before = self.shadow.export_continuity()
+        self.snapshot = self.shadow_before = self.shadow.export_continuity()
         config = self.shadow.config
         # Trusted inputs come from the test's own authority and Owner config,
         # never from the snapshot being inspected.
@@ -92,15 +104,7 @@ class FinancialSwitchTests(unittest.TestCase):
                 {"member_id": item_id, "currency": replay.currency, "owed_cents": expected_by_id[item_id]}
                 for item_id in replay.member_ids
             ]
-            return {
-                **replay.reference_output_binding(),
-                "member_results": member_results,
-                "aggregate": {
-                    "member_count": len(member_results),
-                    "total_owed_cents": sum(row["owed_cents"] for row in member_results),
-                    "currency": replay.currency,
-                },
-            }
+            return _output(replay.reference_output_binding(), member_results, replay.currency)
 
         return ReferenceSpec(
             reference_id="independent-reference:fixture",
@@ -119,27 +123,24 @@ class FinancialSwitchTests(unittest.TestCase):
         def evaluate(input_bytes: bytes) -> dict[str, object]:
             replay = decode_replay_input(input_bytes, **self.trust)
             package = json.loads(replay.snapshot_package_bytes.decode("ascii"))
-            population_items = {row["item_id"]: row for row in package["tables"]["population_items"] if row["population_id"] == replay.population_id}
+            population_items = {
+                row["item_id"]: row
+                for row in package["tables"]["population_items"]
+                if row["population_id"] == replay.population_id
+            }
             member_results = []
             for item_id in replay.member_ids:
                 item = population_items[item_id]
                 amount = item["owed_cents"] + (h_delta if item_id == expected.H_ITEM_ID else 0)
                 member_results.append({"member_id": item_id, "currency": item["currency"], "owed_cents": amount})
-            return {
-                **replay.output_binding(
-                    producer_kind="CANDIDATE",
-                    producer_id=replay.candidate_id,
-                    version=replay.candidate_version,
-                    tool_version=replay.candidate_tool_version,
-                    artifact_sha256=replay.candidate_release_sha256,
-                ),
-                "member_results": member_results,
-                "aggregate": {
-                    "member_count": len(member_results),
-                    "total_owed_cents": sum(row["owed_cents"] for row in member_results),
-                    "currency": replay.currency,
-                },
-            }
+            binding = replay.output_binding(
+                producer_kind="CANDIDATE",
+                producer_id=replay.candidate_id,
+                version=replay.candidate_version,
+                tool_version=replay.candidate_tool_version,
+                artifact_sha256=replay.candidate_release_sha256,
+            )
+            return _output(binding, member_results, replay.currency)
 
         return CandidateSpec(
             operator_id="candidate:fixture",
@@ -173,6 +174,8 @@ class FinancialSwitchTests(unittest.TestCase):
         self.assertFalse(report["resources"]["evaluation_timeout_enforced_by_module"])
         self.assertEqual((report["source_class_verification"], report["difference_policy_approval"]), ("CALLER_ASSERTED",) * 2)
         self.assertEqual((report["transfer_authorized"], report["candidate_authority"]), (False, "NONE"))
+        report = self._run(reference=self._reference(forbidden_differences=(self._h_policy("FORBIDDEN"),)), candidate=candidate)
+        self.assertEqual((report["status"], report["comparison_status"], {row["path"]: row["classification"] for row in report["differences"]}[f"members.{expected.H_ITEM_ID}.owed_cents"]), ("BLOCKED", "FORBIDDEN_DIFFERENCES", "FORBIDDEN"))
         self._assert_source_bytes_unchanged()
 
     def test_missing_or_bad_inputs_never_call_evaluators(self) -> None:
@@ -194,7 +197,9 @@ class FinancialSwitchTests(unittest.TestCase):
                 elif reasons is not None:
                     self.assertEqual(report["reasons"], reasons)
                 self.assertEqual(calls, [])
-                self.assertEqual([report[f"{label}_received_member_count"] for label in ("reference", "candidate")] + [audit["rejected_member_record_count"] for audit in report["member_audit"].values()], [None] * 4)
+                not_run = {"status": "NOT_RUN", **dict.fromkeys(("received_member_count", "unique_received_member_count", "omitted_member_ids", "extra_member_ids", "duplicate_member_ids", "rejected_member_record_count"))}
+                self.assertEqual((report["expected_member_count"], report["reference_received_member_count"], report["candidate_received_member_count"], report["member_audit"]),
+                                 (None if status == "INVALID_SNAPSHOT" else len(self.facts.member_ids), None, None, {"reference": not_run, "candidate": not_run}))
                 self._assert_source_bytes_unchanged()
 
     def test_candidate_unknown_field_or_float_or_bool_binding_is_incomplete(self) -> None:
@@ -211,9 +216,11 @@ class FinancialSwitchTests(unittest.TestCase):
                 self._assert_source_bytes_unchanged()
 
     def _assert_incomplete(self, report: dict[str, object], reasons: list[str]) -> None:
-        audit = _AUDITS.get(reasons[0], ("OUTPUT_RETURNED", len(self.facts.member_ids)))
-        self.assertEqual((report["status"], report["reasons"], report["unknowns"], report["member_audit"]["candidate"]["status"], report["candidate_received_member_count"]),
-                         ("INCOMPLETE", [f"candidate:{reasons[0]}" if audit[0] == "EVALUATOR_FAILED" else "candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], *audit))
+        status, count = _AUDITS.get(reasons[0], ("OUTPUT_RETURNED", len(self.facts.member_ids)))
+        ids = {"OUTPUT_RETURNED": [[], [], []], "NO_MEMBER_RESULTS": [list(self.facts.member_ids), [], []]}.get(status, [None] * 3)  # omitted, extra, duplicate
+        audit = report["member_audit"]["candidate"]
+        self.assertEqual((report["status"], report["reasons"], report["unknowns"], audit["status"], report["candidate_received_member_count"], [audit.get(f"{kind}_member_ids", "absent") for kind in ("omitted", "extra", "duplicate")]),
+                         ("INCOMPLETE", [f"candidate:{reasons[0]}" if status == "EVALUATOR_FAILED" else "candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], status, count, ids))
 
     def test_output_is_checked_stored_and_hashed_as_one_plain_json_copy(self) -> None:
         class Flip(dict):  # json.dumps reads a non-empty dict subclass through items(); this one answers each call differently
@@ -251,13 +258,6 @@ class FinancialSwitchTests(unittest.TestCase):
                     self.assertEqual((report["status"], report["candidate_result_sha256"]), (honest["status"], honest["candidate_result_sha256"]))
                 else:
                     self._assert_incomplete(report, reasons)
-
-    def test_forbidden_difference_is_reported_as_blocking(self) -> None:
-        report = self._run(reference=self._reference(forbidden_differences=(self._h_policy("FORBIDDEN"),)), candidate=self._candidate(h_delta=1))
-        differences = {row["path"]: row for row in report["differences"]}
-        self.assertEqual((report["status"], report["comparison_status"]), ("BLOCKED", "FORBIDDEN_DIFFERENCES"))
-        self.assertEqual(differences[f"members.{expected.H_ITEM_ID}.owed_cents"]["classification"], "FORBIDDEN")
-        self._assert_source_bytes_unchanged()
 
     def test_replay_input_refuses_a_float_or_bool_for_an_integer_field(self) -> None:
         raw = prepare_shadow_replay_input(self.snapshot, **self.trust, cohort_approval=self.approval, reference=self.reference, candidate=self.candidate)
