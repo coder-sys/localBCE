@@ -1248,14 +1248,15 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
                 _fail(f"replay:image:{table}")
             if table == "evidence" and (row if "row" in image else changes).get("received_at_ms", event["committed_at_ms"]) != event["committed_at_ms"]:
                 _fail("replay:evidence-received-at")  # received is when the event that wrote it committed
-    def exact(value: object) -> object:  # type-tagged, so True is not 1, 1 is not 1.0 and a subclass is not its base
-        return {exact(key): exact(item) for key, item in value.items()} if type(value) is dict else (type(value), value)
-
     for table in CAPTURED_TABLES:
-        if exact({str(row[0]): dict(row) for row in _bounded_rows(connection, table)}) != exact(state[table]):
+        if _exact({str(row[0]): dict(row) for row in _bounded_rows(connection, table)}) != _exact(state[table]):
             _fail(f"replay:{table}")
-    if exact({row["action_id"]: row["acknowledgment_ref"] for row in _bounded_rows(connection, "action_outbox") if row["acknowledgment_ref"] is not None}) != exact(acknowledged):
+    if _exact({row["action_id"]: row["acknowledgment_ref"] for row in _bounded_rows(connection, "action_outbox") if row["acknowledgment_ref"] is not None}) != _exact(acknowledged):
         _fail("replay:acknowledgment")
+
+
+def _exact(value: object) -> object:  # type-tagged, so True is not 1, 1 is not 1.0 and a subclass is not its base
+    return {_exact(key): _exact(item) for key, item in value.items()} if type(value) is dict else (type(value), value)
 
 
 def _verify_correction_followup_records(
@@ -2233,8 +2234,6 @@ def _verify_population_history(
     for event in events:
         if event["aggregate_type"] != "POPULATION":
             continue
-        if event["kind"] not in _EVENT_KINDS["POPULATION"]:
-            _fail("history:event-kind")  # the package path has no _verify_event; an unknown kind must not be skipped
         population_id = str(event["aggregate_id"])
         if population_id not in populations:
             _fail("history:population-reference")
@@ -2273,18 +2272,13 @@ def _verify_population_history(
         def payload_binds(payload: dict[str, object], tag: str, *fields: str) -> None:
             if set(payload) != {"population_id", *fields} | set(manifest_fields):
                 _fail(f"history:population-{tag}-payload")
-            if any(payload.get(key) != value for key, value in manifest_fields.items()):
+            if any(_exact(payload.get(key)) != _exact(value) for key, value in manifest_fields.items()):
                 _fail(f"history:population-{tag}-manifest")
             if payload["population_id"] != population_id:
                 _fail(f"history:population-{tag}-population")
 
         for event in by_population[population_id]:
-            event_sequence = _integer(
-                event["event_sequence"],
-                "history:population-event-sequence",
-                minimum=1,
-                maximum=MAX_ROWS,
-            )
+            event_sequence = event["event_sequence"]  # both callers ran _verify_event on every event: sequence, payload object
             if event_sequence <= manifest_event_sequence:
                 _fail("history:population-manifest-order")
             if (
@@ -2300,8 +2294,6 @@ def _verify_population_history(
             before = _integer(event["before_revision"], "history:population-before", maximum=MAX_ROWS)
             after = _integer(event["after_revision"], "history:population-after", maximum=MAX_ROWS)
             payload = _parse_json(event["payload_json"], "history:population-payload", max_bytes=MAX_PACKAGE_BYTES)
-            if not isinstance(payload, dict):
-                _fail("history:population-payload")
             payload.pop("rows", None)  # the rows it wrote, checked by replay
             kind = str(event["kind"])
             if kind != "POPULATION_IMPORT_OPENED" and not opened:
@@ -4185,10 +4177,15 @@ def verify_continuity_package(
             _fail("continuity:identity-anchor")
         if identity_contract["anchor_sequence"] == 0 and identity_contract["anchor_head"] != identity_contract["genesis_head"]:
             _fail("continuity:identity-anchor")
-        if identity_contract["anchor_sequence"] > 0:
-            anchor_row = next((row for row in decoded_rows["financial_events"] if row["event_sequence"] == identity_contract["anchor_sequence"]), None)
-            if anchor_row is None or anchor_row["head"] != identity_contract["anchor_head"]:
-                _fail("continuity:identity-history-anchor")
+    if counts["financial_events"] != sequence:  # the whole chain, every kind and link, as _verify_events walks the database's
+        _fail("history:sequence-count")
+    head = identity_contract["genesis_head"]
+    for index, row in enumerate(decoded_rows["financial_events"], start=1):
+        head = _verify_event(row, index, head)
+        if index == identity_contract["anchor_sequence"] and head != identity_contract["anchor_head"]:
+            _fail("continuity:identity-history-anchor")
+    if head != history_head:
+        _fail("history:meta-head")
     payload = _package_payload_without_digest(value)
     expected_digest = continuity_package_digest(payload)
     package_digest = value["package_digest"]

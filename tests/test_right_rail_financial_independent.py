@@ -524,8 +524,17 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 )
                 row["previous_head"], previous = previous, row["head"]
                 connection.execute(f"UPDATE financial_events SET {','.join(f'{column}=?' for column in row)} WHERE event_sequence=?", (*row.values(), row["event_sequence"]))
+                connection.execute("UPDATE history_pending SET record_bytes=? WHERE table_name='financial_events' AND row_key=?", (independent._record_bytes("financial_events", row), row["event_sequence"]))
+            connection.execute("UPDATE history_open SET byte_count=(SELECT SUM(record_bytes) FROM history_pending)")  # an edit may resize an open event
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             _restore_history_triggers(connection)
+
+    def _unverified_package(self, path: Path) -> bytes:
+        """A compromised writer's export of a store no Owner can open: a handle that skipped open verification."""
+        writer = owner.FinancialOwner.__new__(owner.FinancialOwner)
+        writer._initialize(path=path, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE", owner_id="financial-owner-v1", identity_contract=None)
+        with closing(writer):
+            return _unverified_export(writer)
 
     def test_rehashed_history_whose_commit_times_run_backward_fails_database_and_package(self) -> None:
         def last_event_before_its_predecessor(rows: list[dict[str, object]]) -> None:
@@ -535,16 +544,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self._edit_events_and_rehash(target, last_event_before_its_predecessor)
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
             self._verify(target)
-        # No Owner can open it; a compromised writer's export must fail the package path too.
-        tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
-        tampered_owner._initialize(
-            path=target, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE",
-            owner_id="financial-owner-v1", identity_contract=None,
-        )
-        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
-            independent.verify_continuity_package(
-                _unverified_export(tampered_owner), expected_scope=self.scope, expected_authority=self.authority_binding,
-            )
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):  # the package path too
+            independent.verify_continuity_package(self._unverified_package(target), expected_scope=self.scope, expected_authority=self.authority_binding)
 
     def test_rehashed_evidence_received_before_its_event_committed_fails_replay(self) -> None:
         def skew_support_received(rows: list[dict[str, object]]) -> None:
@@ -562,12 +563,27 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         with self.assertRaisesRegex(independent.IndependentFinancialError, "replay:evidence-received-at"):
             self._verify(target)
 
-    def test_replay_compares_exactly_and_population_history_rejects_unknown_kinds(self) -> None:
-        value = json.loads(_unverified_export(self.store))  # the package path has no event-chain check of its own
-        next(row for row in value["tables"]["financial_events"] if row["aggregate_type"] == "POPULATION")["kind"] = "POPULATION_RETRACTED"
-        value["package_digest"] = independent.continuity_package_digest(independent._package_payload_without_digest(value))
-        with self.assertRaisesRegex(independent.IndependentFinancialError, "^history:event-kind$"):
-            independent.verify_continuity_package(independent._canonical(value), expected_scope=self.scope, expected_authority=self.authority_binding)
+    def test_checker_compares_exactly_and_package_path_walks_the_event_chain(self) -> None:
+        export = _unverified_export(self.store)
+        for name, edit, code in (  # only the package digest is redone: the package path must walk the chain itself
+            ("unknown-population-kind", lambda rows: next(row for row in rows if row["aggregate_type"] == "POPULATION").update(kind="POPULATION_RETRACTED"), "history:event-kind"),
+            ("unknown-other-kind", lambda rows: next(row for row in rows if row["aggregate_type"] != "POPULATION").update(kind="RETRACTED"), "history:event-kind"),
+            ("broken-link", lambda rows: rows[1].update(previous_head=rows[0]["previous_head"]), "history:predecessor"),
+        ):
+            value = json.loads(export)
+            edit(value["tables"]["financial_events"])
+            value["package_digest"] = independent.continuity_package_digest(independent._package_payload_without_digest(value))
+            with self.subTest(name), self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                independent.verify_continuity_package(independent._canonical(value), expected_scope=self.scope, expected_authority=self.authority_binding)
+
+        def manifest_version_true(rows: list[dict[str, object]]) -> None:  # True == 1, so a loose compare would accept it
+            row = next(row for row in rows if row["aggregate_type"] == "POPULATION")
+            row["payload_json"] = independent._canonical({**json.loads(str(row["payload_json"])), "manifest_version": True}).decode("ascii")
+
+        target = self._copy_database("manifest-bool.sqlite")
+        self._edit_events_and_rehash(target, manifest_version_true)
+        with self.subTest("manifest-bool-for-int"), self.assertRaisesRegex(independent.IndependentFinancialError, "^history:population-open-manifest$"):
+            self._verify(target)
         with closing(sqlite3.connect(self._copy_database("replay-exact.sqlite"))) as connection:
             connection.row_factory = sqlite3.Row
             events = [dict(row) for row in connection.execute("SELECT kind,payload_json,committed_at_ms FROM financial_events ORDER BY event_sequence")]
@@ -893,26 +909,9 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     clock=_Clock(),
                 )
             self.assertEqual(target.read_bytes(), tampered_bytes, f"variant={variant}")
-            # The package path must reject such a store too. No Owner can open it,
-            # so export through a handle that skipped open verification, as a
-            # compromised writer would.
-            tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
-            tampered_owner._initialize(
-                path=target,
-                config=self.config,
-                trusted_authority=self.authority,
-                clock=_Clock(),
-                mode="LIVE",
-                owner_id="financial-owner-v1",
-                identity_contract=None,
-            )
-            tampered_package = _unverified_export(tampered_owner)
+            tampered_package = self._unverified_package(target)  # the package path must reject such a store too
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
-                independent.verify_continuity_package(
-                    tampered_package,
-                    expected_scope=self.scope,
-                    expected_authority=self.authority_binding,
-                )
+                independent.verify_continuity_package(tampered_package, expected_scope=self.scope, expected_authority=self.authority_binding)
             rejected_restore = Path(self.temp_dir.name) / f"partial-{variant}-restore.sqlite"
             with self.assertRaisesRegex(owner.FinancialContinuityError, "continuity_restore_integrity"):
                 owner.FinancialOwner.restore_continuity(
@@ -922,7 +921,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     clock=_Clock(),
                 )
             self.assertFalse(rejected_restore.exists())
-            tampered_owner.close()
 
     def test_reporting_supersedes_fork_fails_closed_without_repair(self) -> None:
         target = self._copy_database("reporting-lineage-fork.sqlite")
