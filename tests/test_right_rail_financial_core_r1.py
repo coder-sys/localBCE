@@ -150,7 +150,7 @@ class CoreR1aMarkTests(unittest.TestCase):
                 command()
         self.assertEqual(acceptance._image(store.path), rewound)
 
-    @unittest.skip("R1c: the pre-commit evidence read stays NOT INDEXED (an index-only read is weaker); lead decision pending")
+    @unittest.skip("R1c: the pre-commit evidence read stays NOT INDEXED (an index-only read is weaker); lead kept the full read 2026-10-03, gap 48-101 vs 60 recorded in 3409453")
     def test_first_write_after_open_lock_work_is_flat_in_history(self):
         fixture = self._fixture()
         store = fixture._build_base()
