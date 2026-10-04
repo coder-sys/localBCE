@@ -500,42 +500,17 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             _restore_history_triggers(connection)
 
     @staticmethod
-    def _reorder_and_rehash_population_events(
-        path: Path,
-        population_id: str,
-        left_kind: str,
-        left_index: int,
-        right_kind: str,
-        right_index: int,
-    ) -> None:
-        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-            connection.row_factory = sqlite3.Row
-            rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
-            times = [int(row["committed_at_ms"]) for row in rows]  # each position keeps its time: the clock stays in order
-            left_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == left_kind]
-            right_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == right_kind]
-            left_position = left_candidates[left_index]
-            right_position = right_candidates[right_index]
-            rows[left_position], rows[right_position] = rows[right_position], rows[left_position]
-            offset = 100_000
-            _drop_history_triggers(connection)
-            connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
-            _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
-            for sequence, (row, committed_at) in enumerate(zip(rows, times), start=1):
-                event_id, head = IndependentFinancialCheckerTests._rehashed_event(
-                    row, sequence, committed_at, previous, bytes(row["payload_digest"]),
-                )
-                connection.execute(
-                    "UPDATE financial_events SET event_sequence=?,event_id=?,previous_head=?,head=?,committed_at_ms=? WHERE event_sequence=?",
-                    (sequence, event_id, previous, head, committed_at, int(row["event_sequence"]) + offset),
-                )
-                previous = head
-            connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
-            _restore_history_triggers(connection)
+    def _reorder_and_rehash_population_events(path: Path, population_id: str, left_kind: str, left_index: int, right_kind: str, right_index: int) -> None:
+        def swap(rows: list[dict[str, object]]) -> None:  # each position keeps its sequence and time: the clock stays in order
+            left, right = ([row for row in rows if row["aggregate_id"] == population_id and row["kind"] == kind][index] for kind, index in ((left_kind, left_index), (right_kind, right_index)))
+            for column in ("aggregate_type", "aggregate_id", "kind", "before_revision", "after_revision", "payload_json"):
+                left[column], right[column] = right[column], left[column]
+
+        IndependentFinancialCheckerTests._edit_events_and_rehash(path, swap)
 
     @staticmethod
     def _edit_events_and_rehash(path: Path, edit: object) -> None:
-        """Let ``edit(rows)`` change event dicts (payload_json, committed_at_ms), then rehash the whole chain."""
+        """Let ``edit(rows)`` change event dicts in place (any column but event_sequence), then rehash the whole chain."""
         with closing(sqlite3.connect(path, isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             rows = [dict(row) for row in connection.execute("SELECT * FROM financial_events ORDER BY event_sequence")]
@@ -543,15 +518,12 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             _drop_history_triggers(connection)
             _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
             for row in rows:
-                payload_digest = independent._digest(independent.EVENT_DOMAIN, str(row["payload_json"]).encode("ascii"))
-                event_id, head = IndependentFinancialCheckerTests._rehashed_event(
-                    row, int(row["event_sequence"]), int(row["committed_at_ms"]), previous, payload_digest,
+                row["payload_digest"] = independent._digest(independent.EVENT_DOMAIN, str(row["payload_json"]).encode("ascii"))
+                row["event_id"], row["head"] = IndependentFinancialCheckerTests._rehashed_event(
+                    row, int(row["event_sequence"]), int(row["committed_at_ms"]), previous, row["payload_digest"],
                 )
-                connection.execute(
-                    "UPDATE financial_events SET event_id=?,previous_head=?,head=?,committed_at_ms=?,payload_json=?,payload_digest=? WHERE event_sequence=?",
-                    (event_id, previous, head, row["committed_at_ms"], row["payload_json"], payload_digest, row["event_sequence"]),
-                )
-                previous = head
+                row["previous_head"], previous = previous, row["head"]
+                connection.execute(f"UPDATE financial_events SET {','.join(f'{column}=?' for column in row)} WHERE event_sequence=?", (*row.values(), row["event_sequence"]))
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             _restore_history_triggers(connection)
 
@@ -589,6 +561,34 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self._edit_events_and_rehash(target, skew_support_received)
         with self.assertRaisesRegex(independent.IndependentFinancialError, "replay:evidence-received-at"):
             self._verify(target)
+
+    def test_replay_compares_exactly_and_population_history_rejects_unknown_kinds(self) -> None:
+        value = json.loads(_unverified_export(self.store))  # the package path has no event-chain check of its own
+        next(row for row in value["tables"]["financial_events"] if row["aggregate_type"] == "POPULATION")["kind"] = "POPULATION_RETRACTED"
+        value["package_digest"] = independent.continuity_package_digest(independent._package_payload_without_digest(value))
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "^history:event-kind$"):
+            independent.verify_continuity_package(independent._canonical(value), expected_scope=self.scope, expected_authority=self.authority_binding)
+        with closing(sqlite3.connect(self._copy_database("replay-exact.sqlite"))) as connection:
+            connection.row_factory = sqlite3.Row
+            events = [dict(row) for row in connection.execute("SELECT kind,payload_json,committed_at_ms FROM financial_events ORDER BY event_sequence")]
+            table, key, column, number = next(  # a stored 0/1 integer, written last by this extra event
+                (table, row[0], name, row[name]) for table in independent.CAPTURED_TABLES for row in connection.execute(f'SELECT * FROM "{table}"')
+                for name in independent.TABLE_COLUMNS[table][1:] if type(row[name]) is int and row[name] in (0, 1) and name != "received_at_ms"
+            )
+            cases = {
+                "bool-for-int": ({"table": table, "key": key, "set": {column: bool(number)}}, f"replay:{table}"),
+                "float-for-int": ({"table": table, "key": key, "set": {column: float(number)}}, f"replay:{table}"),
+                "extra-key": ({"table": table, "key": key, "set": {"unknown_column": number}}, f"replay:image:{table}"),
+                "missing-key": ({"table": table, "row": {independent.TABLE_COLUMNS[table][0]: "replay:new"}}, f"replay:image:{table}"),
+            }
+            independent._verify_replayed_rows(connection, events)  # the untouched history replays exactly
+            for name, (image, code) in cases.items():
+                edit = {"kind": "TEST_EDIT", "committed_at_ms": 0, "payload_json": independent._canonical({"rows": [image]}).decode("ascii")}
+                with self.subTest(name), self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                    independent._verify_replayed_rows(connection, [*events, edit])
+            connection.text_factory = type("Text", (str,), {})  # a caller's connection may return str subclasses
+            with self.subTest("subclass"), self.assertRaisesRegex(independent.IndependentFinancialError, "^replay:"):
+                independent._verify_replayed_rows(connection, events)
 
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()

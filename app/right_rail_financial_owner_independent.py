@@ -1248,10 +1248,13 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
                 _fail(f"replay:image:{table}")
             if table == "evidence" and (row if "row" in image else changes).get("received_at_ms", event["committed_at_ms"]) != event["committed_at_ms"]:
                 _fail("replay:evidence-received-at")  # received is when the event that wrote it committed
+    def exact(value: object) -> object:  # type-tagged, so True is not 1, 1 is not 1.0 and a subclass is not its base
+        return {exact(key): exact(item) for key, item in value.items()} if type(value) is dict else (type(value), value)
+
     for table in CAPTURED_TABLES:
-        if {str(row[0]): dict(row) for row in _bounded_rows(connection, table)} != state[table]:
+        if exact({str(row[0]): dict(row) for row in _bounded_rows(connection, table)}) != exact(state[table]):
             _fail(f"replay:{table}")
-    if {row["action_id"]: row["acknowledgment_ref"] for row in _bounded_rows(connection, "action_outbox") if row["acknowledgment_ref"] is not None} != acknowledged:
+    if exact({row["action_id"]: row["acknowledgment_ref"] for row in _bounded_rows(connection, "action_outbox") if row["acknowledgment_ref"] is not None}) != exact(acknowledged):
         _fail("replay:acknowledgment")
 
 
@@ -2045,8 +2048,6 @@ def _verify_populations(
     manifest_records = manifest_state["manifests"]
     manifest_members = manifest_state["members_by_manifest"]
     manifest_bindings = manifest_state["bindings"]
-    if not all(isinstance(value, dict) for value in (manifest_records, manifest_members, manifest_bindings)):
-        _fail("population:manifest-state")
     for row in imports:
         population_id = _id(row["population_id"], "population:id")
         if population_id in populations:
@@ -2232,6 +2233,8 @@ def _verify_population_history(
     for event in events:
         if event["aggregate_type"] != "POPULATION":
             continue
+        if event["kind"] not in _EVENT_KINDS["POPULATION"]:
+            _fail("history:event-kind")  # the package path has no _verify_event; an unknown kind must not be skipped
         population_id = str(event["aggregate_id"])
         if population_id not in populations:
             _fail("history:population-reference")
@@ -2241,9 +2244,6 @@ def _verify_population_history(
     manifests = manifest_state.get("manifests")
     event_sequences = manifest_state.get("event_sequences")
     superseded_at = manifest_state.get("superseded_at")
-    # A typed failure, not an ``assert``: the check must hold under ``python -O`` too.
-    if not all(isinstance(value, dict) for value in (bindings, manifests, event_sequences, superseded_at)):
-        _fail("history:population-manifest-state")
     last_committed_at: dict[str, int | None] = {}
     for population_id, population in populations.items():
         expected = _integer(population["expected_count"], "history:population-expected", minimum=1, maximum=MAX_ROWS)
