@@ -13,9 +13,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 34_376
+PRODUCT_CODE_LINES = 34_369
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 31_334
+EVIDENCE_CODE_LINES = 31_330
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 105_692
@@ -27,7 +27,7 @@ CORE_FILE_LINES = {
     "app/right_rail_financial_semantic_adapter.py": 2_279,
     "app/right_rail_financial_mirror.py": 1_367,
     "app/right_rail_financial_engine.py": 1_249,
-    "app/right_rail_financial_switch.py": 1_128,
+    "app/right_rail_financial_switch.py": 1_121,
     "app/right_rail_financial_line_pack.py": 253,
     "app/right_rail_financial_followthrough.py": 336,
 }

@@ -760,9 +760,9 @@ def _validate_output(
     errors: list[str] = []
     if type(output) is not dict:
         return None, [f"{label}:result-not-object"]
-    try:
-        canonical_output = _canonical_json(output, maximum=MAX_RESULT_BYTES)
-    except FinancialSwitchError:
+    try:  # one encoding: every check below, the audit, the stored result and its digest read this plain decoded copy
+        output = json.loads(_canonical_json(output, maximum=MAX_RESULT_BYTES), object_pairs_hook=_reject_duplicate_keys)
+    except Exception:  # dict and str subclasses run their own code, which may raise anything, while being encoded
         return None, [f"{label}:result-byte-cap-or-type"]
     expected_top = {
         "contract", "input_sha256", "producer", "owner", "authority", "scope",
@@ -784,8 +784,8 @@ def _validate_output(
     for key, expected in expected_binding.items():
         if key == "contract" or key == "input_sha256":
             continue
-        if output.get(key) != expected:
-            errors.append(f"{label}:{key}-binding")
+        if _canonical_json(output.get(key), maximum=MAX_RESULT_BYTES) != _canonical_json(expected, maximum=MAX_RESULT_BYTES):
+            errors.append(f"{label}:{key}-binding")  # JSON text, not ==, which takes 7.0 and True for the ints 7 and 1
     member_results = output.get("member_results")
     if type(member_results) is not list or len(member_results) > MAX_ROWS:
         errors.append(f"{label}:member-results-shape")
@@ -821,10 +821,7 @@ def _validate_output(
         errors.append(f"{label}:aggregate-reconciliation")
     elif total > MAX_CENTS:
         errors.append(f"{label}:aggregate-total-bound")
-    if errors:
-        return None, errors
-    normalized = json.loads(canonical_output.decode("ascii"))
-    return normalized, []
+    return output, errors
 
 
 def _comparable_values(output: Mapping[str, object], facts: SnapshotFacts) -> dict[str, object]:
@@ -844,27 +841,23 @@ def _comparable_values(output: Mapping[str, object], facts: SnapshotFacts) -> di
     return values
 
 
-def _member_audit(output: object, facts: SnapshotFacts) -> dict[str, object]:
+def _member_audit(output: object, facts: SnapshotFacts, *, not_encodable: bool) -> dict[str, object]:
     rows = output.get("member_results") if type(output) is dict else None
-    if type(rows) is not list:
+    if type(rows) is not list or len(rows) > MAX_ROWS:  # unknown counts are None, never a made-up 0
+        status, count = (
+            ("OUTPUT_NOT_ENCODABLE", None) if not_encodable
+            else ("OUTPUT_MEMBER_COUNT_EXCEEDED", len(rows)) if type(rows) is list
+            else ("NO_MEMBER_RESULTS", 0)
+        )
+        known = 0 if count == 0 else None
         return {
-            "status": "NO_MEMBER_RESULTS",
-            "received_member_count": 0,
-            "unique_received_member_count": 0,
+            "status": status,
+            "received_member_count": count,
+            "unique_received_member_count": known,
             "omitted_member_ids": [],
             "extra_member_ids": [],
             "duplicate_member_ids": [],
-            "rejected_member_record_count": 0,
-        }
-    if len(rows) > MAX_ROWS:
-        return {
-            "status": "OUTPUT_MEMBER_COUNT_EXCEEDED",
-            "received_member_count": len(rows),
-            "unique_received_member_count": None,
-            "omitted_member_ids": [],
-            "extra_member_ids": [],
-            "duplicate_member_ids": [],
-            "rejected_member_record_count": None,
+            "rejected_member_record_count": known,
         }
     received_ids: list[str] = []
     rejected = 0
@@ -1064,9 +1057,9 @@ def run_shadow_replay(
             },
             label=label,
         )
-        report["member_audit"][label] = _member_audit(raw, facts)  # type: ignore[index]
+        report["member_audit"][label] = _member_audit(checked, facts, not_encodable=checked is None and type(raw) is dict)  # type: ignore[index]
         report[f"{label}_received_member_count"] = report["member_audit"][label]["received_member_count"]  # type: ignore[index]
-        if checked is None:
+        if errors:
             return _unknown(report, [invalid_reason], errors)
         report["resources"][f"{label}_output_bytes"] = len(_canonical_json(checked, maximum=MAX_RESULT_BYTES))  # type: ignore[index]
         valid[label] = checked
