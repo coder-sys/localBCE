@@ -756,14 +756,14 @@ def _validate_output(
     input_sha256: str,
     producer: Mapping[str, str],
     label: str,
-) -> tuple[dict[str, object] | None, list[str]]:
+) -> tuple[dict[str, object] | str, list[str]]:  # a str is the member-audit status of output never read
     errors: list[str] = []
     if type(output) is not dict:
-        return None, [f"{label}:result-not-object"]
+        return "NO_MEMBER_RESULTS", [f"{label}:result-not-object"]
     try:  # one encoding: every check below, the audit, the stored result and its digest read this plain decoded copy
         output = json.loads(_canonical_json(output, maximum=MAX_RESULT_BYTES), object_pairs_hook=_reject_duplicate_keys)
     except Exception:  # dict and str subclasses run their own code, which may raise anything, while being encoded
-        return None, [f"{label}:result-byte-cap-or-type"]
+        return "OUTPUT_NOT_ENCODABLE", [f"{label}:result-byte-cap-or-type"]
     expected_top = {
         "contract", "input_sha256", "producer", "owner", "authority", "scope",
         "control_pack", "population", "source", "member_results", "aggregate",
@@ -841,11 +841,11 @@ def _comparable_values(output: Mapping[str, object], facts: SnapshotFacts) -> di
     return values
 
 
-def _member_audit(output: object, facts: SnapshotFacts, *, not_encodable: bool) -> dict[str, object]:
+def _member_audit(output: dict[str, object] | str, facts: SnapshotFacts) -> dict[str, object]:
     rows = output.get("member_results") if type(output) is dict else None
     if type(rows) is not list or len(rows) > MAX_ROWS:  # unknown counts are None, never a made-up 0
         status, count = (
-            ("OUTPUT_NOT_ENCODABLE", None) if not_encodable
+            (output, 0 if output == "NO_MEMBER_RESULTS" else None) if type(output) is str
             else ("OUTPUT_MEMBER_COUNT_EXCEEDED", len(rows)) if type(rows) is list
             else ("NO_MEMBER_RESULTS", 0)
         )
@@ -936,11 +936,11 @@ def _base_report(
             "source": facts.record("source"),
         },
         "expected_member_count": 0 if facts is None else len(facts.member_ids),
-        "reference_received_member_count": 0,
-        "candidate_received_member_count": 0,
+        "reference_received_member_count": None,  # stays None if that evaluator is not run or raises
+        "candidate_received_member_count": None,
         "member_audit": {
-            "reference": {"status": "NOT_RUN", "omitted_member_ids": [], "extra_member_ids": [], "duplicate_member_ids": [], "rejected_member_record_count": 0},
-            "candidate": {"status": "NOT_RUN", "omitted_member_ids": [], "extra_member_ids": [], "duplicate_member_ids": [], "rejected_member_record_count": 0},
+            label: {"status": "NOT_RUN", "omitted_member_ids": [], "extra_member_ids": [], "duplicate_member_ids": [], "rejected_member_record_count": None}
+            for label in ("reference", "candidate")
         },
         "matched_field_count": 0,
         "differences": [],
@@ -1057,7 +1057,7 @@ def run_shadow_replay(
             },
             label=label,
         )
-        report["member_audit"][label] = _member_audit(checked, facts, not_encodable=checked is None and type(raw) is dict)  # type: ignore[index]
+        report["member_audit"][label] = _member_audit(checked, facts)  # type: ignore[index]
         report[f"{label}_received_member_count"] = report["member_audit"][label]["received_member_count"]  # type: ignore[index]
         if errors:
             return _unknown(report, [invalid_reason], errors)

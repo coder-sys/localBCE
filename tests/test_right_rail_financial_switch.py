@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 import unittest
@@ -9,6 +10,7 @@ import unittest
 from app.right_rail_financial_owner import FinancialOwner
 from app.right_rail_financial_switch import (
     _RECORDS,
+    MAX_ROWS,
     CandidateSpec,
     CohortApproval,
     DifferencePolicy,
@@ -20,6 +22,9 @@ from app.right_rail_financial_switch import (
     run_shadow_replay,
 )
 from tests import rightrail_financial_expected_cases as expected
+
+_AUDITS = {"result-byte-cap-or-type": ("OUTPUT_NOT_ENCODABLE", None), "result-not-object": ("NO_MEMBER_RESULTS", 0),  # reason -> (audit, count); None: unknown
+           "member-results-shape": ("OUTPUT_MEMBER_COUNT_EXCEEDED", MAX_ROWS + 1), "evaluator-raised:ZeroDivisionError": ("EVALUATOR_FAILED", None)}
 
 
 class FinancialSwitchTests(unittest.TestCase):
@@ -70,20 +75,12 @@ class FinancialSwitchTests(unittest.TestCase):
             "pending_boundary_ref": "fixture-pending-boundary:whole-population",
         }
         binding = self.facts.cohort_binding_bytes(**fields)
-        import hashlib
-
         return CohortApproval(
             approval_id="fixture-approval:local-test-only",
-            cohort_id=fields["cohort_id"],
-            test_identity=fields["test_identity"],
             approved_by="fixture-reviewer",
             approval_ref="fixture-approval-ref:local-test-only",
-            source_class=fields["source_class"],
-            receiver_boundary_ref=fields["receiver_boundary_ref"],
-            custody_ref=fields["custody_ref"],
-            permissions_ref=fields["permissions_ref"],
-            pending_boundary_ref=fields["pending_boundary_ref"],
             binding_sha256=hashlib.sha256(binding).hexdigest().upper(),
+            **fields,
         )
 
     def _reference(self, *, expected_differences: tuple[DifferencePolicy, ...] = (), forbidden_differences: tuple[DifferencePolicy, ...] = ()) -> ReferenceSpec:
@@ -122,11 +119,7 @@ class FinancialSwitchTests(unittest.TestCase):
         def evaluate(input_bytes: bytes) -> dict[str, object]:
             replay = decode_replay_input(input_bytes, **self.trust)
             package = json.loads(replay.snapshot_package_bytes.decode("ascii"))
-            population_items = {
-                row["item_id"]: row
-                for row in package["tables"]["population_items"]
-                if row["population_id"] == replay.population_id
-            }
+            population_items = {row["item_id"]: row for row in package["tables"]["population_items"] if row["population_id"] == replay.population_id}
             member_results = []
             for item_id in replay.member_ids:
                 item = population_items[item_id]
@@ -201,6 +194,7 @@ class FinancialSwitchTests(unittest.TestCase):
                 elif reasons is not None:
                     self.assertEqual(report["reasons"], reasons)
                 self.assertEqual(calls, [])
+                self.assertEqual([report[f"{label}_received_member_count"] for label in ("reference", "candidate")] + [audit["rejected_member_record_count"] for audit in report["member_audit"].values()], [None] * 4)
                 self._assert_source_bytes_unchanged()
 
     def test_candidate_unknown_field_or_float_or_bool_binding_is_incomplete(self) -> None:
@@ -217,9 +211,9 @@ class FinancialSwitchTests(unittest.TestCase):
                 self._assert_source_bytes_unchanged()
 
     def _assert_incomplete(self, report: dict[str, object], reasons: list[str]) -> None:
-        audit = ("OUTPUT_NOT_ENCODABLE", None) if reasons == ["result-byte-cap-or-type"] else ("OUTPUT_RETURNED", len(self.facts.member_ids))
+        audit = _AUDITS.get(reasons[0], ("OUTPUT_RETURNED", len(self.facts.member_ids)))
         self.assertEqual((report["status"], report["reasons"], report["unknowns"], report["member_audit"]["candidate"]["status"], report["candidate_received_member_count"]),
-                         ("INCOMPLETE", ["candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], *audit))
+                         ("INCOMPLETE", [f"candidate:{reasons[0]}" if audit[0] == "EVALUATOR_FAILED" else "candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], *audit))
 
     def test_output_is_checked_stored_and_hashed_as_one_plain_json_copy(self) -> None:
         class Flip(dict):  # json.dumps reads a non-empty dict subclass through items(); this one answers each call differently
@@ -247,9 +241,12 @@ class FinancialSwitchTests(unittest.TestCase):
             ("currency-ne-raises", lambda out: out["aggregate"].update(currency=Liar(out["aggregate"]["currency"])), None),
             ("member-currency-ne-lies", lambda out: out["member_results"][0].update(currency=Liar("XXX")), [f"member-result-type:{first_id}", "aggregate-reconciliation"]),
             ("aggregate-currency-ne-lies", lambda out: out["aggregate"].update(currency=Liar("XXX")), ["aggregate-reconciliation"]),
+            ("list-not-object", lambda out: [out], ["result-not-object"]),
+            ("over-max-rows-members", lambda out: out.update(member_results=[{}] * (MAX_ROWS + 1)), ["member-results-shape", "member-results-order-or-membership", "aggregate-reconciliation"]),
+            ("evaluator-raises", lambda out: 1 // 0, ["evaluator-raised:ZeroDivisionError"]),
         ):
             with self.subTest(name):
-                report = self._run(candidate=replace(self.candidate, evaluate=lambda raw, forge=forge: (out := self.candidate.evaluate(raw), forge(out))[0]))
+                report = self._run(candidate=replace(self.candidate, evaluate=lambda raw, forge=forge: forge(out := self.candidate.evaluate(raw)) or out))
                 if reasons is None:
                     self.assertEqual((report["status"], report["candidate_result_sha256"]), (honest["status"], honest["candidate_result_sha256"]))
                 else:
