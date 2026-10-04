@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import json
 from dataclasses import replace
@@ -22,12 +23,6 @@ from app.right_rail_financial_switch import (
     run_shadow_replay,
 )
 from tests import rightrail_financial_expected_cases as expected
-
-_AUDITS = {  # first reason -> candidate member-audit status and received count; None is unknown, never a made-up 0
-    "result-byte-cap-or-type": ("OUTPUT_NOT_ENCODABLE", None), "result-not-object": ("NO_MEMBER_RESULTS", 0),
-    "member-results-shape": ("OUTPUT_MEMBER_COUNT_EXCEEDED", MAX_ROWS + 1), "evaluator-raised:ZeroDivisionError": ("EVALUATOR_FAILED", None),
-}
-
 
 def _output(binding: dict[str, object], member_results: list[dict[str, object]], currency: str) -> dict[str, object]:
     return {
@@ -215,12 +210,12 @@ class FinancialSwitchTests(unittest.TestCase):
                 self._assert_incomplete(self._run(candidate=candidate), [f"{name}-binding" if key else "unknown-result-fields:invented_field"])
                 self._assert_source_bytes_unchanged()
 
-    def _assert_incomplete(self, report: dict[str, object], reasons: list[str]) -> None:
-        status, count = _AUDITS.get(reasons[0], ("OUTPUT_RETURNED", len(self.facts.member_ids)))
-        ids = {"OUTPUT_RETURNED": [[], [], []], "NO_MEMBER_RESULTS": [list(self.facts.member_ids), [], []]}.get(status, [None] * 3)  # omitted, extra, duplicate
-        audit = report["member_audit"]["candidate"]
-        self.assertEqual((report["status"], report["reasons"], report["unknowns"], audit["status"], report["candidate_received_member_count"], [audit.get(f"{kind}_member_ids", "absent") for kind in ("omitted", "extra", "duplicate")]),
-                         ("INCOMPLETE", [f"candidate:{reasons[0]}" if status == "EVALUATOR_FAILED" else "candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], status, count, ids))
+    def _assert_incomplete(self, report: dict[str, object], reasons: list[str], status: str = "OUTPUT_RETURNED", count: int | None = None) -> None:
+        n = len(self.facts.member_ids)  # expected: received, unique, omitted, extra, duplicate, rejected; rows not read are None, never a made-up 0 or []
+        audit = (n, n, [], [], [], 0) if status == "OUTPUT_RETURNED" else (0, 0, list(self.facts.member_ids), [], [], 0) if count == 0 else (count, *(None,) * 5)
+        got = report["member_audit"]["candidate"]
+        self.assertEqual((report["status"], report["reasons"], report["unknowns"], got["status"], report["candidate_received_member_count"], *[got.get(key, "absent") for key in ("unique_received_member_count", "omitted_member_ids", "extra_member_ids", "duplicate_member_ids", "rejected_member_record_count")]),
+                         ("INCOMPLETE", [f"candidate:{reasons[0]}" if status == "EVALUATOR_FAILED" else "candidate_result_invalid"], [{"class": "UNKNOWN", "reason": f"candidate:{reason}"} for reason in reasons], status, *audit))
 
     def test_output_is_checked_stored_and_hashed_as_one_plain_json_copy(self) -> None:
         class Flip(dict):  # json.dumps reads a non-empty dict subclass through items(); this one answers each call differently
@@ -239,25 +234,28 @@ class FinancialSwitchTests(unittest.TestCase):
         forged = [(key, value + 1 if key == "epoch" else value) for key, value in pairs]
         first_id, honest = self.facts.member_ids[0], self._run()
         self.assertEqual(honest["comparison_status"], "MATCHED")
-        for name, forge, reasons in (  # reasons None: the run matches and hashes exactly the honest output
+        for name, forge, reasons, *audit in (  # reasons None: the run matches and hashes exactly the honest output; audit: candidate status, count
             ("forged-first-encoding", lambda out: out.update(authority=Flip(forged, pairs)), ["authority-binding"]),
             ("non-json-second-encoding", lambda out: out.update(authority=Flip(pairs, [("epoch", object())])), None),
-            ("encoding-raises-index-error", lambda out: out.update(authority=Flip((pairs[len(pairs)] for _ in "x"), pairs)), ["result-byte-cap-or-type"]),
-            ("duplicate-keys-last-forged", lambda out: out.update(authority=Flip(pairs + forged)), ["result-byte-cap-or-type"]),
-            ("over-8-mib-cap", lambda out: out.update(contract="x" * 8 * 1024 * 1024), ["result-byte-cap-or-type"]),
+            ("encoding-raises-index-error", lambda out: out.update(authority=Flip((pairs[len(pairs)] for _ in "x"), pairs)), ["result-byte-cap-or-type"], "OUTPUT_NOT_ENCODABLE"),
+            ("duplicate-keys-last-forged", lambda out: out.update(authority=Flip(pairs + forged)), ["result-byte-cap-or-type"], "OUTPUT_NOT_ENCODABLE"),
+            ("over-8-mib-cap", lambda out: out.update(contract="x" * 8 * 1024 * 1024), ["result-byte-cap-or-type"], "OUTPUT_NOT_ENCODABLE"),
             ("currency-ne-raises", lambda out: out["aggregate"].update(currency=Liar(out["aggregate"]["currency"])), None),
             ("member-currency-ne-lies", lambda out: out["member_results"][0].update(currency=Liar("XXX")), [f"member-result-type:{first_id}", "aggregate-reconciliation"]),
             ("aggregate-currency-ne-lies", lambda out: out["aggregate"].update(currency=Liar("XXX")), ["aggregate-reconciliation"]),
-            ("list-not-object", lambda out: [out], ["result-not-object"]),
-            ("over-max-rows-members", lambda out: out.update(member_results=[{}] * (MAX_ROWS + 1)), ["member-results-shape", "member-results-order-or-membership", "aggregate-reconciliation"]),
-            ("evaluator-raises", lambda out: 1 // 0, ["evaluator-raised:ZeroDivisionError"]),
+            ("list-not-object", lambda out: [out], ["result-not-object"], "NO_MEMBER_RESULTS"),
+            ("ordered-dict-not-plain", lambda out: OrderedDict(out), ["result-not-object"], "NO_MEMBER_RESULTS"),
+            ("members-missing", lambda out: {key: value for key, value in out.items() if key != "member_results"}, ["missing-result-fields:member_results", "member-results-shape", "member-results-order-or-membership", "aggregate-reconciliation"], "NO_MEMBER_RESULTS", 0),
+            ("members-not-list", lambda out: out.update(member_results={}), ["member-results-shape", "member-results-order-or-membership", "aggregate-reconciliation"], "NO_MEMBER_RESULTS", 0),
+            ("over-max-rows-members", lambda out: out.update(member_results=[{}] * (MAX_ROWS + 1)), ["member-results-shape", "member-results-order-or-membership", "aggregate-reconciliation"], "OUTPUT_MEMBER_COUNT_EXCEEDED", MAX_ROWS + 1),
+            ("evaluator-raises", lambda out: 1 // 0, ["evaluator-raised:ZeroDivisionError"], "EVALUATOR_FAILED"),
         ):
             with self.subTest(name):
                 report = self._run(candidate=replace(self.candidate, evaluate=lambda raw, forge=forge: forge(out := self.candidate.evaluate(raw)) or out))
                 if reasons is None:
                     self.assertEqual((report["status"], report["candidate_result_sha256"]), (honest["status"], honest["candidate_result_sha256"]))
                 else:
-                    self._assert_incomplete(report, reasons)
+                    self._assert_incomplete(report, reasons, *audit)
 
     def test_replay_input_refuses_a_float_or_bool_for_an_integer_field(self) -> None:
         raw = prepare_shadow_replay_input(self.snapshot, **self.trust, cohort_approval=self.approval, reference=self.reference, candidate=self.candidate)

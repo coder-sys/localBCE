@@ -848,13 +848,12 @@ def _unread_audit(status: str, count: int | None = None) -> dict[str, object]:
 
 
 def _member_audit(output: dict[str, object] | str, facts: SnapshotFacts) -> dict[str, object]:
-    rows = output.get("member_results") if type(output) is dict else None
-    status = "OUTPUT_RETURNED" if type(rows) is list else "NO_MEMBER_RESULTS"  # none received: every expected member is omitted
-    if type(output) is str and output != "NO_MEMBER_RESULTS":
+    if type(output) is str:  # raw output that was not a plain dict, or could not be encoded
         return _unread_audit(output)
-    if status == "OUTPUT_RETURNED" and len(rows) > MAX_ROWS:
+    rows = output.get("member_results")
+    if type(rows) is list and len(rows) > MAX_ROWS:
         return _unread_audit("OUTPUT_MEMBER_COUNT_EXCEEDED", len(rows))
-    rows = rows if status == "OUTPUT_RETURNED" else []
+    status, rows = ("OUTPUT_RETURNED", rows) if type(rows) is list else ("NO_MEMBER_RESULTS", [])  # decoded, none received: all omitted
     received_ids: list[str] = []
     rejected = 0
     for row in rows:
