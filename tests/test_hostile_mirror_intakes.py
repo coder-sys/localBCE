@@ -16,6 +16,7 @@ from app.mirror import nc_medicaid_fhir_profile as profile
 from app.mirror import provider_evidence_export_v1 as export
 from app.mirror import provider_evidence_export_v1_independent as export_independent
 from app.mirror import provider_trust_graph as graph
+from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import provider_trust_graph_read_model_v1 as read_model
 from tests import test_mirror_provider_evidence_export_v1 as export_tests
 from tests import test_mirror_provider_trust_graph_read_model_v1 as read_tests
@@ -28,11 +29,11 @@ _BOUND_SECONDS = 1.0
 
 
 def _fixed(base: bytes) -> list[bytes]:
-    """The named hostile shapes: deep nesting, huge integer, BOM, NUL, duplicate key, oversize."""
+    """The named hostile shapes: deep nesting, huge integer, BOM, NUL, duplicate key, oversize, CRLF tail."""
     key = base[1:base.index(b":")]
     return [
         b'{"a":' + b"[" * 2000 + b"]" * 2000 + b"}", b'{"a":' + b"9" * 5000 + b"}", b"\xef\xbb\xbf" + base,
-        base[:1] + b"\x00" + base[1:], base[:-1] + b"," + key + b":0}", base + b" " * 2_000_000,
+        base[:1] + b"\x00" + base[1:], base[:-1] + b"," + key + b":0}", base + b" " * 2_000_000, base + b"\r\n",
     ]
 
 
@@ -58,6 +59,11 @@ class HostileMirrorIntakeTests(unittest.TestCase):
         except allowed as error:
             self.assertIsNotNone(_CODE.fullmatch(str(error)), f"case {case}: code shape")
             outcome = ("refused", str(error))
+            probe = raw[:32].decode("latin-1")
+            link = error
+            while link is not None and len(raw) >= 32:  # no raw input in the error or any chained context
+                self.assertNotIn(probe, str(link), f"case {case}: raw bytes in error")
+                link = link.__context__
         except Exception as error:
             self.fail(f"case {case}: untyped {type(error).__name__}")
         self.assertLess(time.perf_counter() - started, _BOUND_SECONDS, f"case {case}: slow")
@@ -93,10 +99,22 @@ class HostileMirrorIntakeTests(unittest.TestCase):
             self.assertIn(value["source_status"], fhir.SOURCE_STATUSES)
             self.assertIn(value["failure_code"], fhir.FAILURE_CODES | {None})
             if case < len(fixed):
-                self.assertEqual(("FAILED", "schema"), (value["source_status"], value["failure_code"]), f"case {case}")
+                want = "noncanonical" if body == fixed[-1] else "schema"
+                self.assertEqual(("FAILED", want), (value["source_status"], value["failure_code"]), f"case {case}")
+        for depth in (21, *range(900, 1001, 10), 2000):  # past the profile caps, and around the recursion limit
+            body = b'{"a":' + b"[" * depth + b"]" * depth + b"}"
+            kind, raw = self._classify(capture, (fhir.NcMedicaidFhirError,), body, depth)
+            self.assertEqual("ok", kind, f"depth {depth}: capture refused")
+            value = json.loads(raw)
+            self.assertEqual(("FAILED", "schema"), (value["source_status"], value["failure_code"]), f"depth {depth}")
 
     def test_fhir_independent_checker(self) -> None:
         self._sweep(fhir_independent.verify_bytes, (fhir_independent.IndependentNcMedicaidFhirError,), _envelope(), 500, strict_keys=True)
+
+    def test_trust_graph_independent_verifier(self) -> None:
+        registry = dict(profile.NC_MEDICAID_GRAPH_PROFILE_REGISTRY)
+        call = lambda raw: graph_independent.verify_artifact_v2(raw, registry)
+        self._sweep(call, (graph_independent.IndependentProviderTrustGraphError,), read_tests._admission().graph_artifact, 500)
 
     def test_trust_graph_parse_canonical(self) -> None:
         artifact = read_tests._admission().graph_artifact

@@ -101,6 +101,14 @@ def _parse_fixture_body(raw: bytes) -> dict[str, object]:
         raise_redacted(NcMedicaidFhirError, "json:parse")
     if not isinstance(value, dict):
         raise NcMedicaidFhirError("json:top-level")
+    caps, stack, nodes = NC_MEDICAID_PROFILE.transport_caps, [(value, 0)], 0
+    while stack:  # iterative, so the outcome never depends on the recursion limit
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > caps["max_nodes"] or depth > caps["max_depth"]:
+            raise NcMedicaidFhirError("json:caps")
+        children = (*item, *item.values()) if isinstance(item, dict) else item if isinstance(item, list) else ()
+        stack.extend((child, depth + 1) for child in children)
     if canonical_json(value) != raw:
         raise NcMedicaidFhirError("json:noncanonical")
     return value
