@@ -85,8 +85,7 @@ month, under Lean's `maxRows`). With the manifest baseline a month is four full 
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each payment re-binds every earlier payment of
   its item), bounded by the 5 s writer busy timeout. One evaluation per payment is kept (founder, 2026-09-28).
-- The quarter-end lock is over 5 s (7.4 s measured; the owner path is most of it). Getting under 5 s needs a limit
-  or a check restructure.
+- The quarter-end lock must stay under the 5 s writer busy timeout; the measured time is in `STATUS.md`.
 - Before COMMIT the checker runs its own rules (never copies) on the touched rows. A structural test lists each
   whole-store rule not run before COMMIT, with its reason. Corruption that bypassed the owner is caught at the next
   open or by `verify-integrity`.

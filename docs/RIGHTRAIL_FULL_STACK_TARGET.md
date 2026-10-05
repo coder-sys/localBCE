@@ -253,7 +253,7 @@ guidance accepts ZK proofs as audit evidence.
 cross-organizational case with an unmotivated verifier, e.g. proving to an MCO
 or a federal partner that no member in a release is on a death-match file
 without disclosing the eligibility list. `CAP-REL-v1` (the capitation-release
-relation) is a plain Lean predicate, useful as `DIRECT_STATE_OWNED` evidence and
+relation) is to be a plain Lean predicate (not yet written), useful as `DIRECT_STATE_OWNED` evidence and
 as the exact spec for a later hidden-input proof. Circuit and verifier proofs
 are not scheduled.
 
