@@ -1,0 +1,33 @@
+{
+  "schema": "RR/PROVIDER-SCREEN/INTERACTION-MODEL/v1",
+  "note": "CONSTITUTION Art. XIII.4: the declared interaction model of the provider check screen. Screens name what the page shows; controls name what a person can do, where they appear, the one backend call each makes, and where each response leads. enabled_when is a Python boolean expression over the declared state. The words the page shows are the ones below; the tests drive the real handler.",
+  "assets": ["/", "/screen.css", "/screen.js", "/interaction-model.json"],
+  "state": {
+    "cases_loaded": "The synthetic cases were read from the local service",
+    "pending": "A check is outstanding; a second one cannot start"
+  },
+  "screens": {
+    "loading": { "label": "Loading the cases", "message": "Loading the cases. If this does not change, reload this page.", "home": false, "back": null, "entry": true, "reload": true },
+    "ready": { "label": "Pick a case", "message": "Pick a case, then press Check.", "home": true, "back": null },
+    "answer": { "label": "Answer and fix list", "home": false, "back": "ready" },
+    "refused": { "label": "Check refused", "message": "This case could not be checked. Pick a case and press Check again.", "home": false, "back": "ready" }
+  },
+  "controls": {
+    "load": { "kind": "read", "selector": null, "route": "GET /cases", "screens": ["loading"], "enabled_when": "True", "responses": { "success": { "screen": "ready" }, "failure": { "screen": "loading" } } },
+    "pick-case": { "kind": "choose", "selector": "#case", "route": null, "screens": ["ready", "answer", "refused"], "enabled_when": "cases_loaded", "responses": { "success": { "screen": "ready" } } },
+    "check": { "kind": "submit", "selector": "#check", "route": "POST /check", "screens": ["ready", "answer", "refused"], "enabled_when": "cases_loaded and not pending", "responses": { "success": { "screen": "answer" }, "refused": { "screen": "refused" }, "transport_failure": { "screen": "refused" } } }
+  },
+  "outcomes": {
+    "PASS": { "word": "PASS", "says": "No fixes needed." },
+    "MISSING": { "word": "MISSING", "says": "Add what is missing, then check again." },
+    "HUMAN_CHECK": { "word": "HUMAN CHECK", "says": "A person must review this claim." }
+  },
+  "fixes_heading": "What to fix",
+  "citation": "Rule: ",
+  "reason": "Reason: ",
+  "accessibility": {
+    "note": "Art. XIII.3 (WCAG 2.1 AA): colour-token contrast pairs, checked in the light and the dark palette, and the regions that must stay aria-live. Text pairs need 4.5, control borders 3.",
+    "contrast_pairs": [["ink", "sheet", 4.5], ["ink-2", "sheet", 4.5], ["ink-3", "sheet", 4.5], ["blue", "sheet", 4.5], ["sheet", "blue", 4.5], ["green", "sheet", 4.5], ["amber", "sheet", 4.5], ["red", "sheet", 4.5], ["ink", "ground", 4.5], ["rule-2", "sheet", 3.0]],
+    "live_regions": ["answer"]
+  }
+}
