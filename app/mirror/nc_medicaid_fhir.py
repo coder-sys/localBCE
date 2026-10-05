@@ -92,6 +92,23 @@ def _duplicate_reject(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
+def _check_caps(value: object, depth: int, code: str) -> None:
+    """The independent checker's JSON caps (depth, nodes, no floats, string bytes), walked iteratively so the outcome never
+    depends on the recursion limit."""
+    caps, stack, nodes = NC_MEDICAID_PROFILE.transport_caps, [(value, depth, None)], 0
+    while stack:
+        item, depth, key = stack.pop()
+        nodes += 1
+        limit = caps["max_page_bytes"] * 2 if key == "body_hex" else caps["max_string_bytes"]
+        if nodes > caps["max_nodes"] or depth > caps["max_depth"] or isinstance(item, float) or (isinstance(item, str) and len(item.encode("utf-8")) > limit):
+            raise NcMedicaidFhirError(code)
+        if isinstance(item, dict):
+            stack.extend((name, depth + 1, None) for name in item)
+            stack.extend((child, depth + 1, name) for name, child in item.items())
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1, None) for child in item)
+
+
 def _parse_fixture_body(raw: bytes) -> dict[str, object]:
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_reject, parse_constant=lambda _value: (_ for _ in ()).throw(NcMedicaidFhirError("json:constant")))
@@ -101,6 +118,7 @@ def _parse_fixture_body(raw: bytes) -> dict[str, object]:
         raise_redacted(NcMedicaidFhirError, "json:parse")
     if not isinstance(value, dict):
         raise NcMedicaidFhirError("json:top-level")
+    _check_caps(value, 3, "json:caps")  # the bundle sits under envelope -> pages -> page
     if canonical_json(value) != raw:
         raise NcMedicaidFhirError("json:noncanonical")
     return value
@@ -340,6 +358,7 @@ def build_fixture_envelope(transport: FhirTransport, *, profile: NcMedicaidFhirS
         source_status = "STALE"
     body = _envelope_body(profile, context, pages, source_status=source_status, failure_code=failure_code, server_markers=server_markers)
     body["envelope_id"] = _digest("envelope-id", body)
+    _check_caps(body, 0, "envelope:caps")  # pages that each fit can still overflow together
     raw = canonical_json(body)
     if len(raw) > profile.transport_caps["complete_frame_bytes"] or len(raw) > profile.transport_caps["max_envelope_bytes"]:
         raise NcMedicaidFhirError("envelope:byte-cap")
