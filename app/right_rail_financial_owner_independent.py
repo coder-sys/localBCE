@@ -1255,8 +1255,10 @@ def _verify_replayed_rows(connection: sqlite3.Connection, events: list[sqlite3.R
         _fail("replay:acknowledgment")
 
 
-def _exact(value: object) -> object:  # type-tagged, so True is not 1, 1 is not 1.0 and a subclass is not its base
-    return {_exact(key): _exact(item) for key, item in value.items()} if type(value) is dict else (type(value), value)
+def _exact(value: object) -> object:  # type-tagged, so True is not 1, 1 is not 1.0, [1] is not [True] and a subclass is not its base
+    if type(value) is dict:
+        return {_exact(key): _exact(item) for key, item in value.items()}
+    return (type(value), tuple(map(_exact, value)) if type(value) in (list, tuple) else value)
 
 
 def _verify_correction_followup_records(

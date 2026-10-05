@@ -6393,7 +6393,7 @@ class FinancialOwner:
             if columns != self._table_columns[table]:
                 _fail(FinancialContinuityError, "continuity_schema_columns")
             rows: list[dict[str, Any]] = []
-            for row in connection.execute(f"SELECT * FROM {table}"):
+            for row in connection.execute(f"SELECT * FROM {table} ORDER BY rowid"):  # every package table is a rowid table; history replays in event order
                 rows.append({column: self._export_value(row[column]) for column in columns})
             if len(rows) > _MAX_ROWS:
                 _fail(FinancialContinuityError, "continuity_row_cap")

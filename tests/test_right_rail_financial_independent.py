@@ -65,12 +65,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             period_id="period:test",
         )
         self.authority = owner.SyntheticTrustedAuthority()
-        self.store = owner.FinancialOwner(
-            path=self.db,
-            config=self.config,
-            trusted_authority=self.authority,
-            clock=self.clock,
-        )
+        self.store = self._open(self.db, self.clock)
         self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
         self.scope = {
@@ -230,6 +225,9 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             supersedes="evidence:report:H:correction",
         )
 
+    def _open(self, path: Path, clock: object | None = None) -> owner.FinancialOwner:
+        return owner.FinancialOwner(path=path, config=self.config, trusted_authority=self.authority, clock=clock or _Clock())
+
     def _verify(
         self,
         path: Path | None = None,
@@ -338,12 +336,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def _make_partial_import(self, name: str = "partial-import.sqlite") -> Path:
         path = Path(self.temp_dir.name) / name
-        partial = owner.FinancialOwner(
-            path=path,
-            config=self.config,
-            trusted_authority=self.authority,
-            clock=_Clock(),
-        )
+        partial = self._open(path)
         pack = self._fixture_pack()
         partial.publish_control_pack(pack)
         population_id = "population:partial-history"
@@ -545,7 +538,9 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
             self._verify(target)
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):  # the package path too
-            independent.verify_continuity_package(self._unverified_package(target), expected_scope=self.scope, expected_authority=self.authority_binding)
+            independent.verify_continuity_package(
+                self._unverified_package(target), expected_scope=self.scope, expected_authority=self.authority_binding,
+            )
 
     def test_rehashed_evidence_received_before_its_event_committed_fails_replay(self) -> None:
         def skew_support_received(rows: list[dict[str, object]]) -> None:
@@ -565,13 +560,16 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def test_checker_compares_exactly_and_package_path_walks_the_event_chain(self) -> None:
         export = _unverified_export(self.store)
+        other_head = {"hex": "AB" * 64}  # a well-formed head no event chain reaches
         for name, edit, code in (  # only the package digest is redone: the package path must walk the chain itself
-            ("unknown-population-kind", lambda rows: next(row for row in rows if row["aggregate_type"] == "POPULATION").update(kind="POPULATION_RETRACTED"), "history:event-kind"),
-            ("unknown-other-kind", lambda rows: next(row for row in rows if row["aggregate_type"] != "POPULATION").update(kind="RETRACTED"), "history:event-kind"),
-            ("broken-link", lambda rows: rows[1].update(previous_head=rows[0]["previous_head"]), "history:predecessor"),
+            ("unknown-population-kind", lambda rows, _: next(row for row in rows if row["aggregate_type"] == "POPULATION").update(kind="POPULATION_RETRACTED"), "history:event-kind"),
+            ("unknown-other-kind", lambda rows, _: next(row for row in rows if row["aggregate_type"] != "POPULATION").update(kind="RETRACTED"), "history:event-kind"),
+            ("broken-link", lambda rows, _: rows[1].update(previous_head=rows[0]["previous_head"]), "history:predecessor"),
+            ("missing-last-event", lambda rows, _: rows.pop(), "history:sequence-count"),
+            ("head-past-chain", lambda _, value: (value.update(history_head=other_head["hex"]), value["tables"]["financial_meta"][0].update(history_head=other_head)), "history:meta-head"),
         ):
             value = json.loads(export)
-            edit(value["tables"]["financial_events"])
+            edit(value["tables"]["financial_events"], value)
             value["package_digest"] = independent.continuity_package_digest(independent._package_payload_without_digest(value))
             with self.subTest(name), self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
                 independent.verify_continuity_package(independent._canonical(value), expected_scope=self.scope, expected_authority=self.authority_binding)
@@ -605,6 +603,8 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             connection.text_factory = type("Text", (str,), {})  # a caller's connection may return str subclasses
             with self.subTest("subclass"), self.assertRaisesRegex(independent.IndependentFinancialError, "^replay:"):
                 independent._verify_replayed_rows(connection, events)
+        with self.subTest("sequence-elements"):  # no caller compares lists yet; [1] and [True] must still differ
+            self.assertNotEqual(independent._exact([1]), independent._exact([True]))
 
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
@@ -765,12 +765,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             self._verify(target)
         # Owner open replays the history and refuses before any read or write.
         with self.assertRaisesRegex(owner.FinancialIntegrityError, r"\Aopen_verification:history:event-id\Z"):
-            owner.FinancialOwner(
-                path=target,
-                config=self.config,
-                trusted_authority=self.authority,
-                clock=self.clock,
-            )
+            self._open(target, self.clock)
         self.assertEqual(target.read_bytes(), tampered_bytes)
 
     def test_stored_row_edits_fail_closed_without_repair(self) -> None:
@@ -859,12 +854,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self.assertEqual(valid_result["counts"]["populations"], 1)
         self.assertEqual(valid_result["sequence"], 5)
 
-        reopened = owner.FinancialOwner(
-            path=valid_path,
-            config=self.config,
-            trusted_authority=self.authority,
-            clock=_Clock(),
-        )
+        reopened = self._open(valid_path)
         self.assertEqual(reopened.verify_integrity()["mode"], "LIVE")
         package = reopened.export_continuity()
         independent.verify_continuity_package(
@@ -902,16 +892,15 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 r"\Aopen_verification:history:population-imported-binding\Z",
                 msg=f"variant={variant}",
             ):
-                owner.FinancialOwner(
-                    path=target,
-                    config=self.config,
-                    trusted_authority=self.authority,
-                    clock=_Clock(),
-                )
+                self._open(target)
             self.assertEqual(target.read_bytes(), tampered_bytes, f"variant={variant}")
             tampered_package = self._unverified_package(target)  # the package path must reject such a store too
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
-                independent.verify_continuity_package(tampered_package, expected_scope=self.scope, expected_authority=self.authority_binding)
+                independent.verify_continuity_package(
+                    tampered_package,
+                    expected_scope=self.scope,
+                    expected_authority=self.authority_binding,
+                )
             rejected_restore = Path(self.temp_dir.name) / f"partial-{variant}-restore.sqlite"
             with self.assertRaisesRegex(owner.FinancialContinuityError, "continuity_restore_integrity"):
                 owner.FinancialOwner.restore_continuity(
