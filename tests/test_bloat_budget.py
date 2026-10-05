@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 34_359
+PRODUCT_CODE_LINES = 34_340
 # Test code and the Python gate tools under lean/; Lean files are not counted.
 EVIDENCE_CODE_LINES = 30_682
 MARKDOWN_FILES = 18
@@ -23,7 +23,7 @@ CONFORMANCE_MARKDOWN_BYTES = 30_970
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 6_713,
-    "app/right_rail_financial_owner_independent.py": 4_470,
+    "app/right_rail_financial_owner_independent.py": 4_451,
     "app/right_rail_financial_semantic_adapter.py": 2_279,
     "app/right_rail_financial_mirror.py": 1_367,
     "app/right_rail_financial_engine.py": 1_249,
@@ -36,7 +36,7 @@ FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Independent checkers may restate a small shared schema by design; the rest
 # is duplication to delete.
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
-DUPLICATED_WINDOWS = 256
+DUPLICATED_WINDOWS = 240
 
 
 def _live_files():
