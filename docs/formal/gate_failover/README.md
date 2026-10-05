@@ -12,13 +12,11 @@ spec.
 
 | Config | Model | Checked | Result |
 |---|---|---|---|
-| `safety.cfg` | 2 nodes, 2 payments, MaxEpoch 3 | TypeOK, NoConflictingTokens, NoFencedTokenAccepted, ReleaseRequiresTokenOrBypass, AtMostOnceRelease, NoLostDecision, StaleCannotSign, EpochMonotone | No error. 17,706,382 states generated, 3,516,192 distinct, depth 24, 2 min 17 s |
+| `safety.cfg` | 2 nodes, 2 payments, MaxEpoch 3 | TypeOK, NoConflictingTokens, NoFencedTokenAccepted, ReleaseRequiresTokenOrBypass, AtMostOnceRelease, NoLostDecision, StaleCannotSign, EpochMonotone | No error. 17,706,382 generated, 3,516,192 distinct, depth 24, 2 min 17 s |
 | `live.cfg` | 2 nodes, 1 payment, MaxEpoch 2 | BypassEventuallyReconciled | No error. 21,214 generated, 5,152 distinct, depth 14 |
+| `gate_failover.cfg` | as `safety.cfg` | all of the above | No error (2026-10-05, 3.5 GB heap). Same counts as `safety.cfg`, 37 min 42 s |
 
-`gate_failover.cfg` (all properties together) and a 1-payment/MaxEpoch-3
-liveness run ran out of Java heap; they are not results. Not yet checked: the
-deeper model (3 nodes, 3 payments, MaxEpoch 4) and liveness on the 2-payment
-model; both need more memory than the guard floor leaves.
+Not yet checked: 3 nodes, 3 payments, MaxEpoch 4.
 
 ## Rerun
 
