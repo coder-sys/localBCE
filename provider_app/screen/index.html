@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>RightRail provider check</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/screen.css">
+  <script src="/screen.js" defer></script>
+</head>
+<body data-screen="loading">
+  <header class="bar">
+    <span class="brand">RightRail</span>
+    <span class="ctx">Provider billing check</span>
+    <span class="tag" title="Synthetic cases. This tool cannot approve real claims.">synthetic · not for claims · no PHI</span>
+  </header>
+  <main>
+    <form id="form" class="pick">
+      <label for="case">Case</label>
+      <select id="case" disabled></select>
+      <button id="check" class="btn primary" type="submit" disabled>Check</button>
+    </form>
+    <section id="answer" role="status" aria-live="polite"><p class="hint">Loading the cases. If this does not change, reload this page.</p></section>
+  </main>
+</body>
+</html>
