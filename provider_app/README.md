@@ -6,25 +6,24 @@ The only admitted bundle is `UNAPPROVED_SYNTHETIC_FIXTURE`. It may be used in sy
 
 ## Layout
 
-- `provider_app/contracts.py` contains closed typed facts, bundle, and result records and explicit bounds.
-- `provider_app/codec.py` rejects unknown or duplicate fields, floats, malformed time values, oversize input, excessive nesting, invalid rule intervals, and digest mismatch. Parser failures use stable fixed error codes, including oversized integer tokens.
-- `provider_app/evaluator.py` owns pure ordered outcome semantics. `provider_app/api.py` is the narrow in-memory byte adapter; it has no storage or external I/O.
-- `provider_app/checker.py` independently reconstructs the complete result using only the Python standard library. It does not import the application package.
-- `schemas` contains versioned request, bundle, and result contracts. The result schema fixes all five rule identifiers by position. `vectors/synthetic-vectors-v1.json` contains 26 fictional expected cases.
-- `tests` includes 9 parser rejection methods, vector evaluation and independent reconstruction, checker mutation, lifecycle accounting, and duplicate/shuffled result-schema rejection. The optional `test` dependency supplies the Draft 2020-12 `jsonschema` validator.
+- `provider_app/contracts.py`: closed typed facts, bundle and result records, explicit bounds.
+- `provider_app/codec.py`: rejects unknown or duplicate fields, floats, malformed time, oversize or deeply nested input, invalid rule intervals and digest mismatch, with stable fixed error codes.
+- `provider_app/evaluator.py`: pure ordered outcome semantics. `provider_app/api.py` is the in-memory byte adapter; it has no storage or external I/O.
+- `provider_app/checker.py`: independently reconstructs the complete result using only the standard library. It does not import the application package.
+- `schemas` holds the versioned request, bundle and result contracts. `vectors/synthetic-vectors-v1.json` holds 26 fictional expected cases.
+- `tests` covers parser rejection, vectors, independent reconstruction and checker mutation.
 - `lean/ProviderApp/` is the pure Lean decision model, pinned to Lean 4.33.1; `provider_app/lean_compare.py` compares its result with Python and the independent checker and fails closed on any mismatch or unpinned artifact. It never replaces the Python authority. See `lean/AdapterContract.md`.
 
 The fixture categories, source names, references, and amount range are invented, not billing codes, medical rules, payer policy or coverage criteria.
 
 ## Limits and nonclaims
 
-There is no real issuer, state, payer, program, provider identity, clinical catalog, source integration, UI, persistence, network, logging, telemetry, support export, claim submission, payment, or State financial-owner path. No PHI, provider/person identifier, claim ID, or claim-derived fingerprint is accepted or emitted by the result contract. User-supplied evaluation time is fixture input, not trusted time. Claims continue only through a provider's existing approved channel outside this core.
+There is no real issuer, state, payer, provider identity, source integration, UI, persistence, network, telemetry, claim submission, payment, or State financial-owner path. No PHI, provider/person identifier, claim ID, or claim-derived fingerprint is accepted or emitted. User-supplied evaluation time is fixture input, not trusted time. Claims continue only through a provider's existing approved channel outside this core.
 
 ## Real-use design
 
-A real rule bundle is issuer-signed and carries publication, version,
-effective-date, expiry and withdrawal data; a wrong digest, unknown or revoked
-key, or stale authority fails closed. Claim data is read only for an
-authenticated provider principal and role from the provider's own identity
-system, with provider-approved trusted time and approved, versioned schemas.
-Run status is in `../STATUS.md`.
+A real rule bundle is issuer-signed with publication, version, effective-date,
+expiry and withdrawal data; a wrong digest, unknown or revoked key, or stale
+authority fails closed. Claim data is read only for an authenticated provider
+principal, with trusted time and approved schemas. Run status is in
+`../STATUS.md`.

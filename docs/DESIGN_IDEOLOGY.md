@@ -1,19 +1,15 @@
 # Blind Ledger design ideology
 
-Updated: 2026-09-23. Owner: independent design contract for the smallest
-correct implementation, deterministic evidence, bounded resources, modular
-ownership, and fail-closed execution. Constitution Article XI is distilled from
-it; the constitution wins any conflict and states the principles (invariants,
-one owner per truth, narrow interfaces, formal means executed, fail-closed
-authority). Assessing a substantial workflow change is Article XII. This document adds
-only the following.
+Constitution Article XI is distilled from this document; the constitution wins
+any conflict and states the principles (invariants, one owner per truth, narrow
+interfaces, formal means executed, fail-closed authority). Assessing a
+substantial workflow change is Article XII. This document adds only the
+following.
 
 ## Boundaries
 
-The financial owner is the only writer, Mirror is a caller/read model,
-Continuity is a bounded SHADOW/TEST handoff, and State owns rules, authority,
-policy transitions and official consequences, even when a verifier or proof
-supplies an evidence result. Every module states what it owns, receives and may
+State owns rules, authority, policy transitions and official consequences, even
+when a verifier or proof supplies an evidence result. Every module states what it owns, receives and may
 mutate, and what evidence proves the boundary; no second ledger, speculative
 orchestration layer or duplicate receipt format compensates for an unresolved
 contract. Corruption, omission, duplication, replay, stale revision, wrong
@@ -34,11 +30,5 @@ complete path with separately attributable ingestion, owner transaction,
 independent check, Continuity restore and recovery evidence. A component
 benchmark is not a system SLA; missing targets remain unknown.
 
-## Sequencing
-
-Implement in dependency order: stabilize the owner contract; independently
-verify schema, history, retries and recovery; complete and verify the Lean
-semantic implementation and concrete adapter contract; link and qualify the
-formal boundary; then qualify custody, source, operations, shadow use and any
-activation. A later commercial or routing need never silently expands current
-financial authority.
+A later commercial or routing need never silently expands current financial
+authority.

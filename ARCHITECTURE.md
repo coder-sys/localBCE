@@ -21,7 +21,7 @@ FinancialOwner (app/right_rail_financial_owner.py) -- the only writer, one SQLit
    +--> Switch (app/right_rail_financial_switch.py): read-only replay and comparison
 ```
 
-Dispatch and egress are disabled; nothing here moves money (Constitution II).
+Dispatch and egress are disabled; nothing here moves money.
 
 ## Financial owner
 
@@ -33,52 +33,42 @@ in one transaction. An exact retry returns `DUPLICATE`; changed input is a
 conflict. Crashes before and after commit are recovered by restart; the
 committed result is found again by its command identity.
 
-The owner writes one store version, `RR/FINANCIAL/OWNER/v8` (population
-manifest, program funding receipts, decision package v2, the exported
-`commands` log and declared foreign keys), with its matching
-`RR/FINANCIAL/CONTINUITY/v8` package (founder approval 2026-09-24). Owner and
-independent checker accept v8 stores/packages only; every other version
-is rejected without mutation, owner open with `unsupported_store_version`; a
-converted v7 store (an `OPENING_BALANCE` event) fails `history:event-kind`.
+Store version is `RR/FINANCIAL/OWNER/v8` with its `RR/FINANCIAL/CONTINUITY/v8`
+package; owner and checker accept v8 only and reject any other without
+mutation (`unsupported_store_version`).
 
-The evaluation receipt binds scope, evaluation/obligation/revision, Control
-Pack id/version/digest, sorted evidence id/record-digest pairs, trusted
-authority id/epoch/digest, time, result fields and digests — references
-only, never raw evidence. A determination binds the evaluation id, its
-result digest and the expected revision against current and historical
-state before the one atomic determination/action/outbox transition.
-
-Missing, stale, malformed or unauthorized input raises a typed error and
-changes nothing; the independent checker enforces actor roles against a
-digest-bound roster.
+The evaluation receipt binds scope, Control Pack id/version/digest, sorted
+evidence id/record-digest pairs, trusted authority, time, and result fields and
+digests: references only, never raw evidence. A determination binds the
+evaluation id, its result digest and the expected revision before the one atomic
+determination/action/outbox transition. Missing, stale, malformed or
+unauthorized input raises a typed error and changes nothing; the independent
+checker enforces actor roles against a digest-bound roster.
 
 Every outer write checks current funding projections against their immutable
-receipts, indexed funding events, successor status and root coverage under the
-same SQLite lock, before executing and before committing (the funding summary
-within its read snapshot); independent full replay still checks historical rows,
-digests and the whole store.
+receipts under the same SQLite lock, before executing and before committing;
+independent full replay still checks the whole store.
 
 ## Lean decides, the owner commits
 
-- **Correction transition** (`RR/FINANCIAL/CORRECTION-TRANSITION/v1`).
+- **Correction transition** (`RR/FINANCIAL/CORRECTION-TRANSITION/v1`, wire spec
+ `conformance/CORRECTION_TRANSITION_WIRE.md`).
  `FinancialOwner.reject_offset_and_authorize_correction` encodes a `BLFCMD03`
- request (payment links, from which Lean derives paid-so-far), runs the pinned Lean executable through the contained process runner
+ request (payment links, from which Lean derives paid-so-far), runs the pinned
+ Lean executable through the contained process runner
  (`app/minimal_clearance_verifier_process.py`), decodes the `BLFCRES3` result,
  computes every storage digest itself, checks the accepted delta against its
  own reconstructed post-transition snapshot, and commits it inside its
  existing transaction. A zero shortfall is rejected with no mutation; the
- action amount is exactly the lesser of the claim and the unpaid balance
- that earlier correction requests, less what linked payments paid on them,
- do not already ask for (theorem `applyCorrectionTransition_action_amount_eq_linked`). The evaluator
- worker decides it; if the worker fails, the command fails closed. There is no
- Python fallback decision.
-- **Pinned executable:** the evaluator worker (`artifacts/engine-evaluator/`) decides corrections as well; engines a
- re-pin retired are in the digest-pinned `artifacts/engine-correction/RETIRED_PINS` (rules in its `PROVENANCE.md`): only
- the current pin decides new work.
-- **Evaluation:** Lean decides. `evaluate_live` (`app/right_rail_financial_engine.py`)
- sends `BLFIN02` to the pinned worker (`artifacts/engine-evaluator/`); its `BLFRES02`
- answer is bound to the three writes and re-checked before COMMIT. A bad worker
- refuses the write; no Python fallback.
+ action amount is the lesser of the claim and the still-unrequested unpaid
+ balance (theorem `applyCorrectionTransition_action_amount_eq_linked`).
+- **Evaluation:** `evaluate_live` (`app/right_rail_financial_engine.py`) sends
+ `BLFIN02` to the pinned worker; its `BLFRES02` answer is bound to the three
+ writes and re-checked before COMMIT.
+- **Pinned executable:** the evaluator worker (`artifacts/engine-evaluator/`)
+ decides both. If it fails, the command fails closed; there is no Python
+ fallback. Only the current pin decides new work; retired engines are in
+ `artifacts/engine-correction/RETIRED_PINS`.
 - **Lean sources:** `lean/`, one Lake workspace (package `RightRail`, library
  `BlindLedger`: financial types, codec, evaluation, correction transition,
  decision package, gate rules, theorems; four executables).
@@ -90,8 +80,8 @@ digests and the whole store.
 **Mirror** reads the owner with bounded pagination and sends authorized
 commands back to it. It has no tables of its own and cannot invent cash,
 authority or clearance. From one current decision package it derives the
-correction follow-up explanation, a state report and a recipient-safe
-corporate-support output; an acknowledgment changes follow-up status, never cash.
+follow-up explanation, a state report and a recipient-safe support output; an
+acknowledgment changes follow-up status, never cash.
 
 **Continuity** exports the history as chained, bounded segments
 (`RR/GATE/SEGMENT/v1`, docs/CORE_REDESIGN.md), which the checker verifies and
@@ -101,25 +91,17 @@ without replacing anything. SHADOW opens read-only; TEST is isolated; neither
 can dispatch, egress, become a live writer or replace an identity.
 
 **Switch** takes only independently verified Continuity SHADOW bytes, gives
-the same canonical input to a reference and a candidate evaluator supplied
-by the caller, and reports the differences. It has no write API, live
-routing or cutover.
+the same canonical input to a reference and a caller-supplied candidate
+evaluator, and reports the differences. It has no write API, live routing or
+cutover.
 
 **Staff server** is loopback-only and serves `app/staff_workspace/`. The
 **service kit** (`tools/right_rail_financial_service_kit.py`) is the one
 packager: it assembles, verifies, extracts, runs the end-to-end scenario and
-serves the workspace from a digest-bound offline archive. Its inventory binds
-the current vectors and retired-pin registry. The release producer is parked
-and frozen in `parked/release-producer/` (never run on this tree; its path
-check refuses to run there); only the kit still reads it, bundling the script
-byte for byte and recording its hash in the engine receipt. The kit checks canonical source paths and the
-exact v4 guard records under LF or CRLF endings; exercised archives are in
-provenance. Staff cash evidence names the correction request it pays;
+serves the workspace from a digest-bound offline archive. The release producer
+is parked in `parked/release-producer/` (see its README); the kit bundles the
+script byte for byte. Staff cash evidence names the correction request it pays;
 acknowledgment alone never provides that credit.
-
-The HTTP adapter accepts exactly one length and content-type header, no
-transfer encoding, and at most 8,192 bytes within a five-second total body
-deadline; a refusal drains at most 8,193 unread bytes for 100 ms before closing.
 
 ## Mirror Provider Trust Graph
 
@@ -132,14 +114,10 @@ identifiers, paths and error text never cross its boundary; failures use fixed
 codes. `tools/provider_trust_graph_view.py` is a loopback browser view over it.
 
 Source intake takes a bounded captured envelope and independently supplied
-capture context (subject, credential, enrollment, locator, observation and fetch
-time); all six values must match the independent source check before admission,
-so a failed capture or mismatch opens no server. The served projection keeps
-freshness and source truth unknown. Both CLIs accept `--source-envelope` and
-`--capture-context` (see `--help`) instead of `--artifact PATH`; the four
-identities are opaque 128-character hex values from the capture configuration,
-never parsed from the untrusted envelope. File intake for the fixed synthetic
-profile only.
+capture context; all six values (subject, credential, enrollment, locator,
+observation and fetch time) must match the independent source check before
+admission, so a mismatch opens no server. The served projection keeps freshness
+and source truth unknown.
 
 ## Provider App
 
@@ -148,33 +126,30 @@ fictional provider facts (`provider_app/README.md`).
 
 ## Path to the payment gate
 
-The target
-([`docs/RIGHTRAIL_FULL_STACK_TARGET.md`](docs/RIGHTRAIL_FULL_STACK_TARGET.md))
+The target ([`docs/RIGHTRAIL_FULL_STACK_TARGET.md`](docs/RIGHTRAIL_FULL_STACK_TARGET.md))
 is an inline gate on every payment. There is no integrated payer gate. Toward it:
 
 - Lean decides every evaluated money field, every payment and reversal, and
  `reject_offset_and_authorize_correction`; Python still decides population,
  publishing, evidence, offset authorization, acknowledgment, follow-through,
  reporting and funding.
-- The live correction codec (`BLFCMD03`/`BLFCRES3`) proves canonicity (P2)
+- The correction codec (`BLFCMD03`/`BLFCRES3`) proves canonicity (P2)
  unconditionally, round-trip (P1) and trailing-byte rejection (P3) only for
  admissible values; nothing yet proves every value Lean emits is admissible.
 - There is no batch decide API, independent witness, fenced standby or Bypass
- outcome; ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
- the gate-v1 codec, Lean model and `gate_verify` (no product caller), not
- connected to signed grant admission, durable payer state or the rules path.
-- The correction transition starts one Windows process per call, disqualifying
- for gate throughput; only evaluation has a long-lived worker.
+ outcome. ML-DSA-87 checkpoints, Merkle tokens and shard routing exist only as
+ the gate-v1 codec, Lean model and `gate_verify` (no product caller).
+- The correction transition starts one Windows process per call, which
+ disqualifies it for gate throughput; only evaluation has a long-lived worker.
 
 ## Rejected directions
 
-- BL-PQ512, H4, K128 and K512 proof layouts, monolithic STARK-era launch
- blockers and version-3-composite assumptions.
 - L2, rollup, sequencer, bridge or Ethereum settlement; Cairo, Starknet or
  Solidity settlement code. Official state payment rails move funds.
 - Caller-selected plaintext evaluation or any private-proof-to-plaintext
  downgrade; the approved profile fixes the evidence mode.
-- Fixed-shape/AIR compatibility as a production authority.
+- BL-PQ512, H4, K128 and K512 proof layouts and fixed-shape/AIR compatibility
+ as a production authority.
 
-Private zero-knowledge is an evidence-only prototype in its separate repository
-(Constitution IX.4); `parked/` holds only the frozen release producer.
+Private zero-knowledge is an evidence-only prototype in its own repository
+(Constitution IX.4).

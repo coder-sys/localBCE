@@ -14,7 +14,7 @@ authority.
 
 The package under `ProviderApp/` pins `leanprover/lean4:v4.33.1` and builds
 `providerAppLean.exe` with Lake, using `.lake/provider-lean-split-r7/`, with
-`-j1` (no Lake-wide job or memory quota is claimed). The adapter never
+`-j1`. The adapter never
 compiles, downloads, or substitutes an executable. Before each invocation it
 checks the root and package toolchain pins and the hashes of `lean.exe`,
 `lake.exe`, all Lean sources, the Lake file, package manifest, and exact built
@@ -29,38 +29,27 @@ never reaches Lean. The normalized argument is at most 2,048 bytes; every field
 is a closed token or canonical decimal integer, and none is a provider, patient,
 claim, credential, or caller-selected authority field.
 
-The argument is pipe-delimited. Field positions are fixed:
-
-| Position | Meaning |
-| --- | --- |
-| 0 | `RRPA-LEAN-COMPARE/v1` |
-| 1–2 | Run mode (`S`/`R`) and request scope (`A`/`B`) |
-| 3–4 | Evaluation seconds and day ordinal |
-| 5–8 | Optional service day, category, support-reference state, and cents |
-| 9–11 | Optional source status, effective day, and received timestamp |
-| 12–19 | Bundle version, scope, publication time, effective day range, expiry, withdrawal, and digest-match bit |
-| 20 | Rule count from 1 through 8 |
-| 21 onward | Nine fields per rule: ID, version, semantic, effective day range, optional category, optional minimum/maximum cents, and optional maximum source age |
+The argument is pipe-delimited with fixed positions (`ProviderApp/InputProtocol.lean`
+holds the layout): the header `RRPA-LEAN-COMPARE/v1`, run mode and scope, the
+evaluation time, the optional facts, the bundle fields, a rule count from 1
+through 8, then nine fields per rule.
 
 Dates use Python's one-based Gregorian day ordinal. Timestamps are integer
-seconds from `0001-01-01T00:00:00Z`; this adapter accepts only UTC-offset-zero
-timestamps with no fractional second. Other offsets or fractional seconds fail with `LEAN_INPUT_UNREPRESENTABLE`
+seconds from `0001-01-01T00:00:00Z`; only UTC-offset-zero timestamps with no
+fractional second are accepted, and others fail with `LEAN_INPUT_UNREPRESENTABLE`
 instead of being rounded. The Lean entrypoint checks that the evaluation day
-agrees with the timestamp and derives the source received-day from its
-timestamp. The source label and version are checked by the Python codec and
-omitted from the Lean model, whose rules do not consult them. Bundle ID, fixture
-provenance, and local-fixture issuer are supplied as closed Lean constants. The digest
-field is `1` only after strict Python parsing has verified the canonical
-bundle digest. For `REAL_USE`, the Python adapter sends empty fact tokens to
-Lean because the mode itself blocks the bundle and all rules before fact
-evaluation; this preserves the blocked-result comparison without forwarding
-fact values to the child process.
+agrees with the timestamp and derives the source received-day from it. The
+source label and version are checked by the Python codec and omitted from the
+Lean model, whose rules do not consult them. Bundle ID, fixture provenance and
+issuer are closed Lean constants. The digest field is `1` only after strict
+Python parsing has verified the canonical bundle digest. For `REAL_USE`, the
+adapter sends empty fact tokens because the mode blocks the bundle and all
+rules before fact evaluation, so no fact values reach the child process.
 
-The Lean parser independently checks the exact v1 header, ASCII and byte
-bounds, closed tags, canonical decimal forms, the 21 + 9n field count and the
-separator count (so empty and trailing fields cannot be discarded by splitting).
-It rejects an R argument unless all seven fact fields at positions 5–11 use
-the hyphen sentinel, making the empty-fact REAL_USE shape a parser invariant.
+The Lean parser independently checks the exact header, ASCII and byte bounds,
+closed tags, canonical decimals, the field count and the separator count (so
+empty and trailing fields cannot be discarded). It rejects an R argument unless
+all seven fact fields use the hyphen sentinel.
 
 ## Output and comparison
 
@@ -70,8 +59,7 @@ reason codes, and facts used), and aggregate missing facts. Every token is a
 fixed code or a citation formed from the fixed bundle ID and bounded version
 fields; the input is never echoed. On invalid input, `Main.lean` writes exactly
 one fixed diagnostic line (at most 64 bytes, from the parser's closed error-code
-set, unknown codes reduced to `LEAN_PROTOCOL_MALFORMED`) to stderr, flushes it,
-exits with status 2, and emits no stdout. The adapter requires the exact v1
+set) to stderr, exits with status 2, and emits no stdout. The adapter requires the exact v1
 header, canonical decimal counts, the five rule IDs in fixed order, closed result
 codes, and no missing or trailing fields.
 
@@ -83,24 +71,20 @@ nonzero exit, stderr, timeout, size-limit breach, or difference raises a
 stable error and returns no result. This checks observed agreement; it is not
 a proof of the Python parser's refinement into Lean.
 
-Each of the 26 manual vector cases asserts four result field families:
-`outcome`, `issues` (mapped to `bundleIssues`), `ruleOutcomes`, and
-`missingFacts`. All four are represented by the Lean projection (0 of 4
-families, 0 of 104 case-field checks unrepresented); rule IDs and derived
-citations are also compared. The Lean result omits seven top-level Python
-result fields: `contract`, `runMode`, `scope`, `evaluatedAt`, `bundle`,
-`sourceBinding`, and `limitation`. Those remain checked in the complete
-Python result by the independent checker; they are not claimed as Lean
-agreement.
+The 26 vector cases assert four result field families (`outcome`, `issues`,
+`ruleOutcomes`, `missingFacts`); the Lean projection represents all four, and
+rule IDs and derived citations are also compared. The Lean result omits seven
+top-level Python result fields (`contract`, `runMode`, `scope`, `evaluatedAt`,
+`bundle`, `sourceBinding`, `limitation`). The independent checker still checks
+them in the Python result; they are not claimed as Lean agreement.
 
 ## Resource and product limits
 
 The adapter serializes Lean calls within one Python process and allows one
-child process per comparison, a two-second child deadline, a 2,048-byte input
-cap, 4,096 captured stdout bytes, 2,048 captured stderr bytes, and a 128 MiB
-executable read cap; a process that exceeds a deadline or output bound is
-terminated. Separate Python processes share no concurrency quota. These are
-local adapter bounds, not a capacity or memory-quota measurement.
+child process per comparison, a two-second deadline, a 2,048-byte input cap,
+4,096 captured stdout bytes, 2,048 captured stderr bytes, and a 128 MiB
+executable read cap; a process that exceeds a bound is terminated. These are
+local adapter bounds, not a capacity measurement.
 
 The path is deterministic and nonactivating, with none of the routes excluded in
 `../README.md`. `REAL_USE`

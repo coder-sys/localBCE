@@ -20,9 +20,9 @@ $3,000 short. Expected cents are derived by hand, never by the code under test.
 
 ## Read first
 
-`CONSTITUTION.md` (supreme rules), `STATUS.md` (the only status), `ARCHITECTURE.md`
-(how the code fits today), `docs/RIGHTRAIL_FULL_STACK_TARGET.md` (the target),
-`docs/DESIGN_IDEOLOGY.md` (engineering principles) and `AGENTS.md`.
+`AGENTS.md` gives the reading order: the constitution, `STATUS.md`,
+`ARCHITECTURE.md` and the target in `docs/RIGHTRAIL_FULL_STACK_TARGET.md`.
+Engineering principles are in `docs/DESIGN_IDEOLOGY.md`.
 
 ## How to run
 
@@ -38,9 +38,8 @@ from `requirements-dev.txt`):
 python -m pip install --no-index --find-links <wheelhouse> --require-hashes --only-binary=:all: --no-deps -r requirements-dev.txt
 ```
 
-Production has no Python package dependency; development adds only pytest and
-its five dependencies. Changing any means re-pinning hashes and updating
-`docs/SBOM.python.spdx.json`.
+Production has no Python package dependency. Changing a development dependency
+means re-pinning hashes and updating `docs/SBOM.python.spdx.json`.
 
 **Staff workspace** (loopback only, synthetic TEST owner):
 
@@ -48,7 +47,6 @@ its five dependencies. Changing any means re-pinning hashes and updating
 python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir>
 ```
 
-Corrections run on the pinned evaluator worker (`artifacts/engine-evaluator/`).
 `--resume-existing-workspace` reopens and re-verifies an existing TEST
 database instead of reseeding it.
 
