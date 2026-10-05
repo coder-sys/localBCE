@@ -389,7 +389,7 @@ def parse_canonical(raw: bytes, *, artifact: bool = False) -> dict[str, object]:
         )
     except ProviderTrustGraphError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (RecursionError, ValueError):
         raise_redacted(ProviderTrustGraphError, "json:parse")
     if not isinstance(value, dict):
         raise ProviderTrustGraphError("json:top-level")
