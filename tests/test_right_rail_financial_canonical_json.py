@@ -71,6 +71,9 @@ class CanonicalJsonTests(unittest.TestCase):
         for raw in (b'{"a":1e400}', b'{"a":-1E999}'):  # parse as +-inf: refused with the kit's own code, not a bare ValueError
             with self.assertRaisesRegex(kit.KitError, "json_not_canonical:label"):
                 kit._strict_canonical_json(raw, "label")
+        for raw in (b'{"a":' + b"1" * 4301 + b"}", b'{"a":' + b"[" * 1000 + b"]" * 1000 + b"}"):  # int too long, too deep
+            with self.assertRaisesRegex(kit.KitError, "json_invalid:label"):
+                kit._strict_json(raw, "label")
 
     def test_decode_refuses_even_when_a_callback_returns(self) -> None:
         for raw in (b'{"a":1,"a":2}', b'{"a":NaN}'):

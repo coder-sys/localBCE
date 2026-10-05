@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -192,7 +191,7 @@ def _no_json_constant(value: str) -> None:
 def _strict_json(raw: bytes, label: str) -> dict[str, Any]:
     try:
         value = decode(raw, "utf-8", _duplicate_json_key, _no_json_constant)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:  # ValueError covers 4301+ digit integers
         raise KitError(f"json_invalid:{label}") from error
     if type(value) is not dict:
         raise KitError(f"json_object_required:{label}")
