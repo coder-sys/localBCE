@@ -102,7 +102,7 @@ def _parse(raw: bytes, profile: NcMedicaidFhirSourceProfile) -> dict[str, object
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_reject, parse_constant=lambda _value: (_ for _ in ()).throw(IndependentNcMedicaidFhirError("json:constant")))
     except IndependentNcMedicaidFhirError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (RecursionError, ValueError):
         raise_redacted(IndependentNcMedicaidFhirError, "json:parse")
     if not isinstance(value, dict):
         raise IndependentNcMedicaidFhirError("json:top-level")

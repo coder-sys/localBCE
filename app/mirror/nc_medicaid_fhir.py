@@ -97,7 +97,7 @@ def _parse_fixture_body(raw: bytes) -> dict[str, object]:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_reject, parse_constant=lambda _value: (_ for _ in ()).throw(NcMedicaidFhirError("json:constant")))
     except NcMedicaidFhirError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (RecursionError, ValueError):
         raise_redacted(NcMedicaidFhirError, "json:parse")
     if not isinstance(value, dict):
         raise NcMedicaidFhirError("json:top-level")
