@@ -101,12 +101,15 @@ class HostileMirrorIntakeTests(unittest.TestCase):
             if case < len(fixed):
                 want = "noncanonical" if body == fixed[-1] else "schema"
                 self.assertEqual(("FAILED", want), (value["source_status"], value["failure_code"]), f"case {case}")
-        for depth in (21, *range(900, 1001, 10), 2000):  # past the profile caps, and around the recursion limit
-            body = b'{"a":' + b"[" * depth + b"]" * depth + b"}"
-            kind, raw = self._classify(capture, (fhir.NcMedicaidFhirError,), body, depth)
-            self.assertEqual("ok", kind, f"depth {depth}: capture refused")
+        # The checker's caps count from the envelope root, three levels above the bundle: depth 17 fits, 18 does not.
+        over = [b'{"a":' + b"[" * depth + b"]" * depth + b"}" for depth in (18, 21, *range(900, 1001, 10), 2000)]
+        over += [b'{"a":[1.5]}', b'{"a":"' + b"x" * 513 + b'"}', b'{"a":[' + b",".join([b"0"] * 9000) + b"]}"]
+        for case, body in enumerate([b'{"a":' + b"[" * 17 + b"]" * 17 + b"}", *over]):
+            kind, raw = self._classify(capture, (fhir.NcMedicaidFhirError,), body, case)
+            self.assertEqual("ok", kind, f"caps case {case}: capture refused")
             value = json.loads(raw)
-            self.assertEqual(("FAILED", "schema"), (value["source_status"], value["failure_code"]), f"depth {depth}")
+            want = ("COMPLETE", None) if case == 0 else ("FAILED", "schema")
+            self.assertEqual(want, (value["source_status"], value["failure_code"]), f"caps case {case}")
 
     def test_fhir_independent_checker(self) -> None:
         self._sweep(fhir_independent.verify_bytes, (fhir_independent.IndependentNcMedicaidFhirError,), _envelope(), 500, strict_keys=True)
