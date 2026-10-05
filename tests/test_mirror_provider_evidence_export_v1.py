@@ -80,10 +80,7 @@ def _selection_for_graph_profile(admission, graph_profile) -> producer.ProviderE
             record["enrollment_id"] = graph_profile.enrollment_id
             record["subject_key"] = subject_key
             record["observed_at"] = graph_profile.observation_start
-        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
-            source,
-            profile=graph_profile,
-        )
+        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(source)
     graph_artifact = graph_producer.build_report(
         graph_producer.canonical_input(value),
         profile=graph_profile,
@@ -122,10 +119,7 @@ def _conflict_selection() -> producer.ProviderEvidenceSelectionV1:
     value["sources"][0]["records"].append(extra)
     value["sources"][0]["records"].sort(key=lambda record: record["record_id"])
     for source in value["sources"]:
-        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
-            source,
-            profile=profile.NC_MEDICAID_GRAPH_PROFILE,
-        )
+        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(source)
     graph_artifact = graph_producer.build_report(
         graph_producer.canonical_input(value),
         profile=profile.NC_MEDICAID_GRAPH_PROFILE,

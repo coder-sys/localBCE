@@ -13,9 +13,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 34_705
+PRODUCT_CODE_LINES = 34_516
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 31_255
+EVIDENCE_CODE_LINES = 31_073
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 90_932
@@ -36,7 +36,7 @@ FORBIDDEN_NAMES = {"CURRENT_TASK.md", "STATE.md", "AGENTS.override.md"}
 # Independent checkers may restate a small shared schema by design; the rest
 # is duplication to delete.
 PRODUCT_DIRS = ("app", "tools", os.path.join("provider_app", "provider_app"))
-DUPLICATED_WINDOWS = 240
+DUPLICATED_WINDOWS = 210
 
 
 def _live_files():

@@ -73,10 +73,7 @@ def _stale_artifact(admission) -> bytes:
     for source in value["sources"]:
         source["coverage_effective_start"] = value["observation_time"] + 1
         source["coverage_effective_end"] = 9_000
-        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(
-            source,
-            profile=profile.NC_MEDICAID_GRAPH_PROFILE,
-        )
+        source["provenance"]["integrity_digest"] = graph_producer.source_integrity_digest(source)
     artifact = graph_producer.build_report(
         graph_producer.canonical_input(value),
         profile=profile.NC_MEDICAID_GRAPH_PROFILE,

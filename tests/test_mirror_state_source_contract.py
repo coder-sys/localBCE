@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from contextlib import ExitStack
+from dataclasses import replace
+import functools
 import json
 import traceback
 import unittest
@@ -11,9 +12,8 @@ from app.mirror import provider_trust_graph as graph
 from app.mirror import provider_trust_graph_independent as graph_independent
 from app.mirror import nc_medicaid_fhir_independent as nc_fhir
 from app.mirror import nc_medicaid_fhir_profile as nc_profile
-from tests.instruments.trust_graph_demo import demo_input
+from app.mirror import source_admission
 from app.mirror.source_admission import (
-    EvidenceMode,
     SourceAdmissionError,
     SourceAdmissionService,
     SourceProfile,
@@ -21,119 +21,51 @@ from app.mirror.source_admission import (
 )
 
 
-ADAPTER_SCHEMA = "mirror-test-source-adapter-v1"
-PROFILE_ID = "SYNTHETIC_TEST_PROVIDER_PROFILE_V1"
-VERIFIER_ID = "SYNTHETIC_TEST_SOURCE_VERIFIER_V1"
-VERIFIER_EPOCH = 1
-SUPPORTED_CASES = {"confirmed", "absent", "expired", "terminated", "conflict"}
+@functools.cache
+def _fixture() -> tuple[bytes, SourceProfile, VerifiedSourceCoverage]:
+    from tests.test_nc_medicaid_fhir_source import _envelope
+
+    context = nc_profile.DynamicCaptureContext("1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070)
+    raw = _envelope(context=context)
+    profile = nc_profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context)
+    return raw, profile, nc_fhir.NcMedicaidFhirVerifier(expected_context=context).verify(raw)
 
 
-class SyntheticTestVerificationError(ValueError):
-    """Fixture-only verifier failure; no production source authentication."""
+class FixedVerifier:
+    """Returns one pre-verified nc result so admission is tested on its own."""
 
+    def __init__(self, result: VerifiedSourceCoverage | None = None) -> None:
+        _, profile, verified = _fixture()
+        self.identity = profile.verifier_id
+        self.epoch = profile.verifier_epoch
+        self.result = verified if result is None else result
+        self.calls = 0
 
-class SyntheticTestSourceVerifier:
-    """Explicit test verifier backed by existing graph fixtures only."""
-
-    identity = VERIFIER_ID
-    epoch = VERIFIER_EPOCH
-
-    @staticmethod
-    def _parse(raw: bytes) -> dict[str, object]:
-        if type(raw) is not bytes or not raw:
-            raise SyntheticTestVerificationError("synthetic:bytes")
-        try:
-            value = json.loads(
-                raw.decode("ascii"),
-                object_pairs_hook=lambda pairs: _reject_duplicate_keys(pairs),
-            )
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise SyntheticTestVerificationError("synthetic:parse") from exc
-        if not isinstance(value, dict) or set(value) != {"schema", "case"}:
-            raise SyntheticTestVerificationError("synthetic:schema")
-        if value["schema"] != ADAPTER_SCHEMA or value["case"] not in SUPPORTED_CASES:
-            raise SyntheticTestVerificationError("synthetic:unsupported-case")
-        canonical = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
-        if canonical != raw:
-            raise SyntheticTestVerificationError("synthetic:noncanonical")
-        return value
-
-    def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-        value = self._parse(adapter_bytes)
-        case = value["case"]
-        assert isinstance(case, str)
-        graph_input_value = demo_input(case)
-        graph_input = graph.canonical_input(graph_input_value)
-        sources = graph_input_value["sources"]
-        assert isinstance(sources, list)
-        source_roles = tuple(source["source_id"] for source in sources)
-        return VerifiedSourceCoverage(
-            profile_id=PROFILE_ID,
-            subject=graph.PROVIDER_GRAPH_SUBJECT,
-            scope=graph.SCOPE,
-            observation_time=7_000,
-            effective_start=6_000,
-            effective_end=9_000,
-            complete=all(source["coverage_complete"] is True for source in sources),
-            source_roles=source_roles,
-            evidence_mode=EvidenceMode.SYNTHETIC_TEST_ONLY,
-            graph_input=graph_input,
-        )
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    value: dict[str, object] = {}
-    for key, item in pairs:
-        if key in value:
-            raise SyntheticTestVerificationError("synthetic:duplicate-key")
-        value[key] = item
-    return value
-
-
-def _adapter(case: str = "confirmed", **extra: object) -> bytes:
-    value: dict[str, object] = {"schema": ADAPTER_SCHEMA, "case": case, **extra}
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
-
-
-def _profile(**overrides: object) -> SourceProfile:
-    values: dict[str, object] = {
-        "profile_id": PROFILE_ID,
-        "version": 1,
-        "subject": graph.PROVIDER_GRAPH_SUBJECT,
-        "scope": graph.SCOPE,
-        "observation_time": 7_000,
-        "effective_start": 6_000,
-        "effective_end": 9_000,
-        "source_roles": graph.SOURCE_IDS,
-        "require_complete": True,
-        "verifier_id": VERIFIER_ID,
-        "verifier_epoch": VERIFIER_EPOCH,
-        "evidence_mode": EvidenceMode.SYNTHETIC_TEST_ONLY,
-    }
-    values.update(overrides)
-    return SourceProfile(**values)  # type: ignore[arg-type]
+    def verify(self, _raw: bytes) -> VerifiedSourceCoverage:
+        self.calls += 1
+        return self.result
 
 
 def _service(verifier: object | None = None, profile: SourceProfile | None = None) -> SourceAdmissionService:
-    return SourceAdmissionService(profile or _profile(), verifier or SyntheticTestSourceVerifier())  # type: ignore[arg-type]
+    return SourceAdmissionService(profile or _fixture()[1], verifier or FixedVerifier())  # type: ignore[arg-type]
 
 
 class MirrorSourceAdmissionTests(unittest.TestCase):
     def test_configured_verifier_drives_admission_and_graph_is_independent(self) -> None:
-        service = _service()
-        admission = service.admit(_adapter())
-        independent = graph_independent.verify_bytes(admission.graph_artifact)
+        raw, profile, _ = _fixture()
+        admission = _service().admit(raw)
+        independent = graph_independent.verify_bytes_v2(admission.graph_artifact, {profile.profile_id: profile})
         receipt = json.loads(admission.receipt.decode("ascii"))
         artifact = graph.parse_canonical(admission.graph_artifact, artifact=True)
 
         self.assertTrue(independent["accepted"])
         self.assertEqual(admission.report_id, independent["report_id"])
-        self.assertEqual(PROFILE_ID, admission.profile_id)
-        self.assertEqual(VERIFIER_ID, admission.verifier_id)
-        self.assertEqual(VERIFIER_EPOCH, admission.verifier_epoch)
+        self.assertEqual(profile.profile_id, admission.profile_id)
+        self.assertEqual(profile.verifier_id, admission.verifier_id)
+        self.assertEqual(profile.verifier_epoch, admission.verifier_epoch)
         self.assertFalse(admission.production_source_authentication)
         self.assertFalse(receipt["production_source_authentication"])
-        self.assertEqual("synthetic_test_only", receipt["evidence_mode"])
+        self.assertEqual(profile.evidence_mode, receipt["evidence_mode"])
         self.assertEqual(
             {"clearance_authority": False, "payment_authority": False, "economic_mutation": False},
             {key: artifact["authority"][key] for key in ("clearance_authority", "payment_authority", "economic_mutation")},
@@ -141,39 +73,11 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         self.assertNotIn("directive", artifact)
         self.assertNotIn("payment", artifact)
 
-    def test_raw_verifier_authentication_profile_and_mode_fields_are_rejected(self) -> None:
-        for extra in (
-            {"verifier_id": VERIFIER_ID},
-            {"verifier_epoch": VERIFIER_EPOCH},
-            {"authenticated": True},
-            {"evidence_mode": "synthetic_test_only"},
-            {"source_roles": list(graph.SOURCE_IDS)},
-            {"version": 1},
-        ):
-            with self.subTest(extra=extra):
-                with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject"):
-                    _service().admit(_adapter(**extra))
-
     def test_removed_external_keyword_api_rejects_before_mutation(self) -> None:
-        class CountingVerifier(SyntheticTestSourceVerifier):
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-                self.calls += 1
-                return super().verify(adapter_bytes)
-
-        verifier = CountingVerifier()
+        raw = _fixture()[0]
+        verifier = FixedVerifier()
         service = _service(verifier)
-        raw = _adapter()
         before = service.admit(raw)
-        before_bytes = (
-            before.graph_input,
-            before.graph_artifact,
-            before.receipt,
-            before.observation,
-            before.verification_receipt,
-        )
         calls_before = verifier.calls
         for removed_kwargs in (
             {"external_evidence_raw": b"removed"},
@@ -184,14 +88,7 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
                     service.admit(raw, **removed_kwargs)  # type: ignore[call-arg]
                 self.assertEqual(calls_before, verifier.calls)
         after = service.admit(raw)
-        after_bytes = (
-            after.graph_input,
-            after.graph_artifact,
-            after.receipt,
-            after.observation,
-            after.verification_receipt,
-        )
-        self.assertEqual(before_bytes, after_bytes)
+        self.assertEqual(before, after)
         self.assertEqual(calls_before + 1, verifier.calls)
         for field in (
             "external_artifact_id",
@@ -201,26 +98,26 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         ):
             self.assertFalse(hasattr(before, field))
 
-    def test_synthetic_verifier_failure_and_malformed_output_fail_closed(self) -> None:
+    def test_verifier_failure_and_malformed_output_fail_closed(self) -> None:
+        raw, _, verified = _fixture()
+
+        class FailingVerifier(FixedVerifier):
+            def verify(self, _raw: bytes) -> VerifiedSourceCoverage:
+                raise ValueError("fixture failure")
+
         with self.assertRaisesRegex(SourceAdmissionError, "verifier:reject"):
-            _service().admit(_adapter("fail"))
-
-        class BadVerifier(SyntheticTestSourceVerifier):
-            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-                result = super().verify(adapter_bytes)
-                return replace(result, graph_input=b"not-canonical")
-
+            _service(FailingVerifier()).admit(raw)
         with self.assertRaisesRegex(SourceAdmissionError, "graph:producer-reject"):
-            _service(BadVerifier()).admit(_adapter())
+            _service(FixedVerifier(replace(verified, graph_input=b"not-canonical"))).admit(raw)
 
     def test_arbitrary_verifier_graph_and_parser_failures_have_no_public_context(self) -> None:
         canary = "PRIVATE-SOURCE-BOUNDARY-CANARY"
-        graph_input = SyntheticTestSourceVerifier().verify(_adapter()).graph_input
-        valid_report = graph.build_report(graph_input)
+        raw, profile, verified = _fixture()
+        valid_report = graph.build_report(verified.graph_input, profile=profile)
         stages = (
-            (SyntheticTestSourceVerifier, "verify", "verifier:reject"),
+            (FixedVerifier, "verify", "verifier:reject"),
             (graph, "build_report", "graph:producer-reject"),
-            (graph_independent, "verify_bytes", "graph:independent-reject"),
+            (graph_independent, "verify_bytes_v2", "graph:independent-reject"),
             (graph, "parse_canonical", "graph:artifact-shape"),
         )
         for target, method, code in stages:
@@ -229,7 +126,7 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
                     patches.enter_context(patch.object(graph, "build_report", return_value=valid_report))
                 patches.enter_context(patch.object(target, method, side_effect=RuntimeError(canary)))
                 with self.assertRaisesRegex(SourceAdmissionError, code) as caught:
-                    _service().admit(_adapter())
+                    _service().admit(raw)
                 self.assertIsNone(caught.exception.__cause__)
                 self.assertIsNone(caught.exception.__context__)
                 self.assertNotIn(canary, str(caught.exception))
@@ -237,6 +134,7 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
 
     def test_verifier_configuration_failure_has_no_public_context(self) -> None:
         canary = "PRIVATE-SOURCE-VERIFIER-CANARY"
+        raw, profile, _ = _fixture()
 
         class ExplodingConfiguration:
             @property
@@ -245,16 +143,18 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
 
             @property
             def epoch(self) -> int:
-                return VERIFIER_EPOCH
+                return profile.verifier_epoch
 
         with self.assertRaisesRegex(SourceAdmissionError, "composition:verifier") as caught:
-            _service(ExplodingConfiguration()).admit(_adapter())
+            _service(ExplodingConfiguration()).admit(raw)
         self.assertIsNone(caught.exception.__cause__)
         self.assertIsNone(caught.exception.__context__)
         self.assertNotIn(canary, str(caught.exception))
         self.assertNotIn(canary, "".join(traceback.format_exception(caught.exception)))
 
     def test_result_profile_coverage_roles_and_mode_are_service_owned(self) -> None:
+        raw, profile, verified = _fixture()
+        strict = replace(profile, require_complete=True)
         mutations = (
             ("profile", {"profile_id": "OTHER_PROFILE"}, "result:profile-mismatch"),
             ("subject", {"subject": "OTHER_SUBJECT"}, "result:subject-or-scope-mismatch"),
@@ -265,49 +165,15 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         )
         for name, changes, expected in mutations:
             with self.subTest(name=name):
-                class MutatingVerifier(SyntheticTestSourceVerifier):
-                    def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-                        return replace(super().verify(adapter_bytes), **changes)
-
+                result = replace(verified, graph_profile=strict, **{"complete": True, **changes})
                 with self.assertRaisesRegex(SourceAdmissionError, expected):
-                    _service(MutatingVerifier()).admit(_adapter())
+                    _service(FixedVerifier(result), strict).admit(raw)
 
-    def test_supplied_graph_profile_must_equal_the_configured_profile(self) -> None:
-        configured = _profile()
-
-        class RebindingVerifier(SyntheticTestSourceVerifier):
-            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-                result = super().verify(adapter_bytes)
-                rebound = replace(configured, profile_id="SYNTHETIC_PROFILE_B", version=2)
-                return replace(result, graph_profile=rebound)
-
-        with self.assertRaisesRegex(SourceAdmissionError, "^result:profile-mismatch$") as caught:
-            SourceAdmissionService(configured, RebindingVerifier()).admit(_adapter())
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-
-    def test_v2_result_profile_is_required_and_owned_field_exact(self) -> None:
-        from tests.test_nc_medicaid_fhir_source import _envelope
-
-        context = nc_profile.DynamicCaptureContext(
-            "1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070,
-        )
-        raw = _envelope(context=context)
-        configured = nc_profile.NC_MEDICAID_PROFILE.graph_profile_for_context(context)
-        verified = nc_fhir.NcMedicaidFhirVerifier(expected_context=context).verify(raw)
-
-        class RebindingVerifier:
-            identity = configured.verifier_id
-            epoch = configured.verifier_epoch
-
-            def __init__(self, result: VerifiedSourceCoverage) -> None:
-                self.result = result
-
-            def verify(self, _raw: bytes) -> VerifiedSourceCoverage:
-                return self.result
-
+    def test_result_profile_is_required_and_owned_field_exact(self) -> None:
+        raw, configured, verified = _fixture()
         cases = {
             "omitted": None,
+            "profile-id": replace(configured, profile_id="OTHER_PROFILE", version=2),
             "credential": replace(configured, credential_id="f" * 128),
             "enrollment": replace(configured, enrollment_id="e" * 128),
             "source-role": replace(
@@ -321,44 +187,93 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         for name, graph_profile in cases.items():
             with self.subTest(name=name):
                 with self.assertRaisesRegex(SourceAdmissionError, "^result:profile-mismatch$") as caught:
-                    SourceAdmissionService(configured, RebindingVerifier(replace(verified, graph_profile=graph_profile))).admit(raw)
+                    _service(FixedVerifier(replace(verified, graph_profile=graph_profile))).admit(raw)
                 self.assertIsNone(caught.exception.__cause__)
                 self.assertIsNone(caught.exception.__context__)
                 self.assertTrue(caught.exception.__suppress_context__)
-        SourceAdmissionService(configured, RebindingVerifier(verified)).admit(raw)
-        for observation_time in (context.observation_time - 1, context.observation_time + 1, 999_999):
-            with self.subTest(observation_time=observation_time):
-                result = replace(verified, observation_time=observation_time)
+        _service().admit(raw)
+        for shifted in (verified.observation_time - 1, verified.observation_time + 1, 999_999):
+            with self.subTest(observation_time=shifted):
                 with self.assertRaisesRegex(SourceAdmissionError, "^result:observation-mismatch$"):
-                    SourceAdmissionService(configured, RebindingVerifier(result)).admit(raw)
+                    _service(FixedVerifier(replace(verified, observation_time=shifted))).admit(raw)
 
     def test_graph_output_profile_and_coverage_rebinding_fail_closed(self) -> None:
-        class StaleGraphVerifier(SyntheticTestSourceVerifier):
-            def verify(self, adapter_bytes: bytes) -> VerifiedSourceCoverage:
-                result = super().verify(adapter_bytes)
-                value = demo_input("confirmed")
-                value["sources"][0]["coverage_effective_end"] = 6_999
-                return replace(result, graph_input=graph.canonical_input(value))
-
+        raw, _, verified = _fixture()
+        value = json.loads(verified.graph_input)
+        value["sources"][0]["coverage_effective_end"] = 6_999
+        value["sources"][0]["provenance"]["integrity_digest"] = graph.source_integrity_digest(value["sources"][0])
+        stale = replace(verified, graph_input=graph.canonical_input(value))
         with self.assertRaisesRegex(SourceAdmissionError, "graph:producer-reject|graph:stale-coverage"):
-            _service(StaleGraphVerifier()).admit(_adapter())
+            _service(FixedVerifier(stale)).admit(raw)
 
     def test_exact_retry_is_deterministic_and_conflicting_retry_rejects(self) -> None:
+        raw = _fixture()[0]
         service = _service()
-        first = service.admit(_adapter())
-        replay = service.admit(_adapter(), expected_receipt=first.receipt)
+        first = service.admit(raw)
+        replay = service.admit(raw, expected_receipt=first.receipt)
         self.assertEqual(first.receipt, replay.receipt)
         self.assertEqual(first.graph_artifact, replay.graph_artifact)
         with self.assertRaisesRegex(SourceAdmissionError, "retry:conflict"):
-            service.admit(_adapter("expired"), expected_receipt=first.receipt)
+            service.admit(raw, expected_receipt=first.receipt + b" ")
+        from tests.test_nc_medicaid_fhir_source import _envelope
+
+        context = nc_profile.DynamicCaptureContext("1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070)
+        changed_raw = _envelope(context=context, location_variant="changed")
+        changed_service = _service(nc_fhir.NcMedicaidFhirVerifier(expected_context=context))
+        changed = changed_service.admit(changed_raw)
+        self.assertNotEqual(first.receipt, changed.receipt)
+        first_receipt = bytes(first.receipt)
+        with self.assertRaisesRegex(SourceAdmissionError, "retry:conflict"):
+            changed_service.admit(changed_raw, expected_receipt=first.receipt)
+        self.assertEqual(first_receipt, first.receipt)
+        self.assertEqual(first_receipt, service.admit(raw, expected_receipt=first.receipt).receipt)
+
+    def test_raw_adapter_authentication_profile_and_mode_fields_are_rejected(self) -> None:
+        raw = _fixture()[0]
+        context = nc_profile.DynamicCaptureContext("1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070)
+        service = _service(nc_fhir.NcMedicaidFhirVerifier(expected_context=context))
+        self.assertEqual(service.admit(raw).profile_id, _fixture()[1].profile_id)
+        for extra in (
+            {"verifier_id": _fixture()[1].verifier_id},
+            {"verifier_epoch": _fixture()[1].verifier_epoch},
+            {"authenticated": True},
+            {"evidence_mode": "synthetic_test_only"},
+            {"source_roles": list(_fixture()[1].source_roles)},
+            {"version": 1},
+        ):
+            with self.subTest(extra=extra):
+                value = json.loads(raw)
+                value.update(extra)
+                tampered = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+                with self.assertRaisesRegex(SourceAdmissionError, "^verifier:reject$"):
+                    service.admit(tampered)
 
     def test_composition_mismatch_and_production_mode_are_rejected(self) -> None:
+        profile = _fixture()[1]
         with self.assertRaisesRegex(SourceAdmissionError, "composition:verifier-mismatch"):
-            _service(profile=_profile(verifier_id="OTHER_VERIFIER"))
+            _service(profile=replace(profile, verifier_id="OTHER_VERIFIER"))
         with self.assertRaisesRegex(ValueError, "profile:evidence-mode-not-qualified"):
-            _profile(evidence_mode="production")
+            replace(profile, evidence_mode="production")
         with self.assertRaisesRegex(ValueError, "profile:source-roles"):
-            _profile(source_roles=list(graph.SOURCE_IDS))
+            replace(profile, source_roles=list(profile.source_roles))
+
+    def test_retired_v1_grammars_are_refused(self) -> None:
+        raw, profile, verified = _fixture()
+        artifact = json.loads(_service().admit(raw).graph_artifact)
+        del artifact["profile"]
+        artifact["schema"] = "mirror-provider-trust-graph-v1"
+        v1_artifact = json.dumps(artifact, sort_keys=True, separators=(",", ":")).encode("ascii")
+        with self.assertRaisesRegex(graph_independent.IndependentProviderTrustGraphError, "^artifact:profile:schema$"):
+            graph_independent.verify_bytes_v2(v1_artifact, {profile.profile_id: profile})
+        self.assertFalse(hasattr(graph_independent, "verify_bytes"))
+        value = json.loads(verified.graph_input)
+        value["schema"] = "mirror-provider-trust-graph-input-v1"
+        with self.assertRaisesRegex(graph.ProviderTrustGraphError, "^input:schema$"):
+            graph.build_report(graph.canonical_input(value), profile=profile)
+        with self.assertRaisesRegex(ValueError, "^profile:source-role-details$"):
+            replace(profile, source_role_details=None)
+        self.assertFalse(hasattr(source_admission, "RECEIPT_SCHEMA"))
+        self.assertEqual("mirror-source-admission-receipt-v2", json.loads(_service().admit(raw).receipt)["schema"])
 
 
 if __name__ == "__main__":

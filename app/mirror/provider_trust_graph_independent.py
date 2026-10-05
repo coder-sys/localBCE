@@ -1,4 +1,4 @@
-"""Independent bounded verifier for the external Provider Trust Graph V1.
+"""Independent bounded verifier for the external Provider Trust Graph v2.
 
 This file intentionally duplicates the small wire grammar and semantic
 checks instead of importing the producer's records or evaluator.  Acceptance
@@ -21,22 +21,7 @@ class IndependentProviderTrustGraphError(ValueError):
     """Raised when the canonical graph artifact cannot be independently verified."""
 
 
-SCHEMA = "mirror-provider-trust-graph-v1"
 SCHEMA_V2 = "mirror-provider-trust-graph-v2"
-SCOPE = "provider-credential-enrollment-continuity-v1"
-PROVIDER_GRAPH_SUBJECT = "SYNTH_PROVIDER_001"
-SUBJECT_KEY = "SYNTH_PROVIDER_001|SYNTH_CREDENTIAL_001|SYNTH_ENROLLMENT_001"
-CREDENTIAL_ID = "SYNTH_CREDENTIAL_001"
-ENROLLMENT_ID = "SYNTH_ENROLLMENT_001"
-SOURCE_CREDENTIAL_ID = "SYNTH_SOURCE_CREDENTIAL_001"
-SOURCE_ENROLLMENT_ID = "SYNTH_SOURCE_ENROLLMENT_001"
-SOURCE_CREDENTIAL_KIND = "CREDENTIAL_REGISTRY"
-SOURCE_ENROLLMENT_KIND = "ENROLLMENT_REGISTRY"
-SOURCE_IDS = (SOURCE_CREDENTIAL_ID, SOURCE_ENROLLMENT_ID)
-AUTH_CREDENTIAL_ID = "SYNTH_AUTHORITY_CREDENTIAL_001"
-AUTH_ENROLLMENT_ID = "SYNTH_AUTHORITY_ENROLLMENT_001"
-PROVENANCE_CREDENTIAL_ID = "SYNTH_PROVENANCE_CREDENTIAL_001"
-PROVENANCE_ENROLLMENT_ID = "SYNTH_PROVENANCE_ENROLLMENT_001"
 STATUS_ACTIVE = "ACTIVE"
 STATUS_EXPIRED = "EXPIRED"
 STATUS_TERMINATED = "TERMINATED"
@@ -104,6 +89,7 @@ DISCREPANCY_KEYS = {
 IDENTITY_KEYS = {
     "provider_graph_subject", "scope", "observation_time", "snapshot_id",
     "snapshot_root", "source_coverage_root", "findings_root", "discrepancies_root",
+    "profile_id", "version", "profile_digest",
 }
 REPORT_KEYS = {"report_id", "identity_material"}
 AUTHORITY_KEYS = {
@@ -112,22 +98,18 @@ AUTHORITY_KEYS = {
 }
 OUTPUT_KEYS = {
     "schema", "subject", "observation_snapshot", "source_coverage",
-    "findings", "discrepancies", "report", "authority",
+    "findings", "discrepancies", "report", "authority", "profile",
 }
 PROFILE_KEYS = {"profile_id", "version", "profile_digest"}
-V2_OUTPUT_KEYS = OUTPUT_KEYS | {"profile"}
-V2_IDENTITY_KEYS = IDENTITY_KEYS | PROFILE_KEYS
 _RE_HEX = re.compile(r"^[0-9a-f]{128}$")
 _RE_RECORD = re.compile(r"^SYNTH_(CREDENTIAL|ENROLLMENT)_RECORD_00[1-8]$")
 
 
 @dataclass(frozen=True)
 class _GraphProfile:
-    v2: bool
-    schema: str
-    profile_id: str | None
-    version: int | None
-    profile_digest: str | None
+    profile_id: str
+    version: int
+    profile_digest: str
     subject: str
     scope: str
     credential_id: str
@@ -138,8 +120,8 @@ class _GraphProfile:
     record_kinds: tuple[str, ...]
     authority_ids: tuple[str, ...]
     provenance_ids: tuple[str, ...]
-    observation_start: int | None
-    observation_end: int | None
+    observation_start: int
+    observation_end: int
     effective_start: int
     effective_end: int
     require_complete: bool
@@ -204,33 +186,7 @@ def _profile_digest(profile: object) -> str:
     return h.hexdigest()
 
 
-def _profile_view(profile: object | None) -> _GraphProfile:
-    if isinstance(profile, _GraphProfile):
-        return profile
-    if profile is None:
-        return _GraphProfile(
-            False,
-            SCHEMA,
-            None,
-            None,
-            None,
-            PROVIDER_GRAPH_SUBJECT,
-            SCOPE,
-            CREDENTIAL_ID,
-            ENROLLMENT_ID,
-            SUBJECT_KEY,
-            SOURCE_IDS,
-            (SOURCE_CREDENTIAL_KIND, SOURCE_ENROLLMENT_KIND),
-            ("CREDENTIAL", "ENROLLMENT"),
-            (AUTH_CREDENTIAL_ID, AUTH_ENROLLMENT_ID),
-            (PROVENANCE_CREDENTIAL_ID, PROVENANCE_ENROLLMENT_ID),
-            None,
-            None,
-            6_000,
-            9_000,
-            True,
-            True,
-        )
+def _profile_view(profile: object) -> _GraphProfile:
     try:
         details = getattr(profile, "source_role_details")
         roles = tuple(
@@ -268,8 +224,6 @@ def _profile_view(profile: object | None) -> _GraphProfile:
     credential_id = getattr(profile, "credential_id")
     enrollment_id = getattr(profile, "enrollment_id")
     return _GraphProfile(
-        True,
-        SCHEMA_V2,
         getattr(profile, "profile_id"),
         getattr(profile, "version"),
         profile_digest,
@@ -363,10 +317,9 @@ def _parse(raw: bytes) -> dict[str, object]:
     return value
 
 
-def _digest(label: str, value: object, *, profile: _GraphProfile | None = None) -> str:
+def _digest(label: str, value: object) -> str:
     h = hashlib.sha3_512()
-    version = "v2" if profile is not None and profile.v2 else "v1"
-    h.update(("BL/MIRROR/PROVIDER-TRUST-GRAPH/" + label + "/" + version + "\0").encode("ascii"))
+    h.update(("BL/MIRROR/PROVIDER-TRUST-GRAPH/" + label + "/v2\0").encode("ascii"))
     h.update(_canonical(value))
     return h.hexdigest()
 
@@ -403,9 +356,7 @@ def _bool(value: object, label: str) -> bool:
     return value
 
 
-def _hex(value: object, label: str, *, nullable: bool = False) -> str | None:
-    if nullable and value is None:
-        return None
+def _hex(value: object, label: str) -> str:
     if not isinstance(value, str) or _RE_HEX.fullmatch(value) is None:
         raise IndependentProviderTrustGraphError(f"{label}:hex")
     return value
@@ -441,31 +392,30 @@ def _validate_record(
     source_kind: str,
     observation_time: int,
     *,
-    profile: _GraphProfile | None = None,
+    profile: _GraphProfile,
 ) -> dict[str, object]:
-    view = _profile_view(profile)
     record = _expect_keys(value, RECORD_KEYS, "record")
     record_id = _text(record["record_id"], "record:id")
-    if view.version == 3:
+    if profile.version == 3:
         if _RE_HEX.fullmatch(record_id) is None:
             raise IndependentProviderTrustGraphError("record:id:opaque")
     elif _RE_RECORD.fullmatch(record_id) is None:
         raise IndependentProviderTrustGraphError("record:id:not-synthetic")
     try:
-        role_index = view.source_kinds.index(source_kind)
+        role_index = profile.source_kinds.index(source_kind)
     except ValueError:
         raise_redacted(IndependentProviderTrustGraphError, "record:source-mismatch")
-    expected_kind = view.record_kinds[role_index]
+    expected_kind = profile.record_kinds[role_index]
     expected_prefix = "SYNTH_" + expected_kind
-    if view.version != 3 and not record_id.startswith(expected_prefix):
+    if profile.version != 3 and not record_id.startswith(expected_prefix):
         raise IndependentProviderTrustGraphError("record:id:source-mismatch")
     if record["record_kind"] != expected_kind:
         raise IndependentProviderTrustGraphError("record:kind:source-mismatch")
     for field, expected in (
-        ("provider_id", view.subject),
-        ("credential_id", view.credential_id),
-        ("enrollment_id", view.enrollment_id),
-        ("subject_key", view.subject_key),
+        ("provider_id", profile.subject),
+        ("credential_id", profile.credential_id),
+        ("enrollment_id", profile.enrollment_id),
+        ("subject_key", profile.subject_key),
     ):
         if _text(record[field], "record:" + field) != expected:
             raise IndependentProviderTrustGraphError("record:identity-mismatch")
@@ -498,32 +448,31 @@ def _integrity_material(source: Mapping[str, object]) -> dict[str, object]:
     return material
 
 
-def _integrity_digest(source: Mapping[str, object], *, profile: _GraphProfile | None = None) -> str:
-    return _digest("source-integrity", _integrity_material(source), profile=profile)
+def _integrity_digest(source: Mapping[str, object]) -> str:
+    return _digest("source-integrity", _integrity_material(source))
 
 
-def _source_root(source: Mapping[str, object], *, profile: _GraphProfile | None = None) -> str:
-    return _digest("source-root", {"source": dict(source)}, profile=profile)
+def _source_root(source: Mapping[str, object]) -> str:
+    return _digest("source-root", {"source": dict(source)})
 
 
 def _validate_source(
     value: object,
     observation_time: int,
     *,
-    profile: _GraphProfile | None = None,
+    profile: _GraphProfile,
 ) -> dict[str, object]:
-    view = _profile_view(profile)
     source = _expect_keys(value, SOURCE_OUTPUT_KEYS, "source")
     source_id = _text(source["source_id"], "source:id")
     source_kind = _text(source["source_kind"], "source:kind")
-    if source_id not in view.source_roles or source_kind not in view.source_kinds:
+    if source_id not in profile.source_roles or source_kind not in profile.source_kinds:
         raise IndependentProviderTrustGraphError("source:identity")
-    role_index = view.role_index(source_id)
-    expected = (view.source_kinds[role_index], view.authority_ids[role_index], view.provenance_ids[role_index])
+    role_index = profile.role_index(source_id)
+    expected = (profile.source_kinds[role_index], profile.authority_ids[role_index], profile.provenance_ids[role_index])
     provenance = _expect_keys(source["provenance"], PROVENANCE_KEYS, "source:provenance")
     if (source_kind, source["coverage_authority_id"], provenance["provenance_id"]) != expected:
         raise IndependentProviderTrustGraphError("source:authority-or-provenance")
-    if _text(source["coverage_scope"], "source:scope") != view.scope:
+    if _text(source["coverage_scope"], "source:scope") != profile.scope:
         raise IndependentProviderTrustGraphError("source:scope")
     if _int(source["coverage_observation_time"], "source:coverage-observation") != observation_time:
         raise IndependentProviderTrustGraphError("source:coverage-observation-mismatch")
@@ -532,18 +481,18 @@ def _validate_source(
     if start >= end:
         raise IndependentProviderTrustGraphError("source:coverage-interval")
     coverage_complete = _bool(source["coverage_complete"], "source:complete")
-    if view.v2 and view.require_complete and coverage_complete is not True:
+    if profile.require_complete and coverage_complete is not True:
         raise IndependentProviderTrustGraphError("source:completeness-policy")
     _text(source["coverage_authority_id"], "source:authority")
     nonmembership = _sorted_unique(source["nonmembership_keys"], "source:nonmembership", maximum=2)
-    if nonmembership and not view.allow_nonmembership:
+    if nonmembership and not profile.allow_nonmembership:
         raise IndependentProviderTrustGraphError("source:nonmembership-policy")
-    if any(value != view.subject_key for value in nonmembership):
+    if any(value != profile.subject_key for value in nonmembership):
         raise IndependentProviderTrustGraphError("source:nonmembership-identity")
     records = source["records"]
     if not isinstance(records, list) or len(records) > MAX_RECORDS_PER_SOURCE:
         raise IndependentProviderTrustGraphError("source:record-cap")
-    record_items = [_validate_record(record, source_kind, observation_time, profile=view) for record in records]
+    record_items = [_validate_record(record, source_kind, observation_time, profile=profile) for record in records]
     ids = [record["record_id"] for record in record_items]
     if ids != sorted(ids) or len(set(ids)) != len(ids):
         raise IndependentProviderTrustGraphError("source:record-order-or-duplicate")
@@ -565,45 +514,35 @@ def _validate_sources(
     sources: object,
     observation_time: int,
     *,
-    profile: _GraphProfile | None = None,
+    profile: _GraphProfile,
 ) -> list[dict[str, object]]:
-    view = _profile_view(profile)
-    if not isinstance(sources, list) or len(sources) != len(view.source_roles):
+    if not isinstance(sources, list) or len(sources) != len(profile.source_roles):
         raise IndependentProviderTrustGraphError("sources:exact-count")
-    items = [_validate_source(source, observation_time, profile=view) for source in sources]
+    items = [_validate_source(source, observation_time, profile=profile) for source in sources]
     ids = [source["source_id"] for source in items]
-    if ids != list(view.source_roles) or ids != sorted(ids):
+    if ids != list(profile.source_roles) or ids != sorted(ids):
         raise IndependentProviderTrustGraphError("sources:identity-or-order")
     # This contradiction is checked before the digest/root checks so a mutated
     # completeness record is rejected as contradictory evidence, not merely as
     # a downstream hash failure.
     _fact_nonmembership_conflict(items)
     for source in items:
-        if source["provenance"]["integrity_digest"] != _integrity_digest(source, profile=view):  # type: ignore[index]
+        if source["provenance"]["integrity_digest"] != _integrity_digest(source):  # type: ignore[index]
             raise IndependentProviderTrustGraphError("source:integrity-mismatch")
         without_root = {key: value for key, value in source.items() if key != "source_root"}
-        if source["source_root"] != _source_root(without_root, profile=view):
+        if source["source_root"] != _source_root(without_root):
             raise IndependentProviderTrustGraphError("source:root-mismatch")
     return items
 
 
-_NEW_OUTPUT_KEYS_V1 = {"schema", "subject", "observation_snapshot", "source_coverage", "findings", "discrepancies", "report", "authority"}
-_NEW_OUTPUT_KEYS_V2 = _NEW_OUTPUT_KEYS_V1 | {"profile"}
-_NEW_IDENTITY_KEYS_V1 = {"provider_graph_subject", "scope", "observation_time", "snapshot_id", "snapshot_root", "source_coverage_root", "findings_root", "discrepancies_root"}
-_NEW_IDENTITY_KEYS_V2 = _NEW_IDENTITY_KEYS_V1 | {"profile_id", "version", "profile_digest"}
-_NEW_FINDING_KEYS = {"finding_id", "kind", "subject_key", "observation_snapshot_id", "evidence_refs"}
-_NEW_DISCREPANCY_KEYS = {"discrepancy_id", "kind", "responsibility_boundary", "evidence_refs"}
-_NEW_REPORT_KEYS = {"report_id", "identity_material"}
-
-
 def _new_finding(kind: str, snapshot_id: str, refs: Sequence[str], *, profile: _GraphProfile) -> dict[str, object]:
     body = {"kind": kind, "subject_key": profile.subject_key, "observation_snapshot_id": snapshot_id, "evidence_refs": sorted(refs)}
-    return {"finding_id": _digest("finding-id", body, profile=profile), **body}
+    return {"finding_id": _digest("finding-id", body), **body}
 
 
-def _new_discrepancy(kind: str, refs: Sequence[str], *, profile: _GraphProfile) -> dict[str, object]:
+def _new_discrepancy(kind: str, refs: Sequence[str]) -> dict[str, object]:
     body = {"kind": kind, "responsibility_boundary": "UNKNOWN", "evidence_refs": sorted(refs)}
-    return {"discrepancy_id": _digest("discrepancy-id", body, profile=profile), **body}
+    return {"discrepancy_id": _digest("discrepancy-id", body), **body}
 
 
 def _new_evaluate(sources: Sequence[Mapping[str, object]], observation_time: int, snapshot_id: str, *, profile: _GraphProfile) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -621,7 +560,7 @@ def _new_evaluate(sources: Sequence[Mapping[str, object]], observation_time: int
         raise IndependentProviderTrustGraphError("evidence:partial-absence")
     if any(len(source["records"]) > 1 for source in sources):
         refs = [record["record_id"] for record in matches]
-        return [_new_finding(FINDING_CONFLICT, snapshot_id, refs, profile=profile)], [_new_discrepancy("SOURCE_CONFLICT_EVIDENCE", refs, profile=profile)]
+        return [_new_finding(FINDING_CONFLICT, snapshot_id, refs, profile=profile)], [_new_discrepancy("SOURCE_CONFLICT_EVIDENCE", refs)]
     credential = next(record for record in matches if record["record_kind"] == "CREDENTIAL")
     enrollment = next(record for record in matches if record["record_kind"] == "ENROLLMENT")
     refs = [credential["record_id"], enrollment["record_id"]]
@@ -633,11 +572,10 @@ def _new_evaluate(sources: Sequence[Mapping[str, object]], observation_time: int
 
 
 def _new_validate_artifact(value: object, *, profile: _GraphProfile) -> dict[str, object]:
-    expected = _NEW_OUTPUT_KEYS_V2 if profile.v2 else _NEW_OUTPUT_KEYS_V1
-    item = _expect_keys(value, expected, "artifact")
-    if item["schema"] != profile.schema:
+    item = _expect_keys(value, OUTPUT_KEYS, "artifact")
+    if item["schema"] != SCHEMA_V2:
         raise IndependentProviderTrustGraphError("artifact:schema")
-    if profile.v2 and item["profile"] != {"profile_id": profile.profile_id, "version": profile.version, "profile_digest": profile.profile_digest}:
+    if item["profile"] != {"profile_id": profile.profile_id, "version": profile.version, "profile_digest": profile.profile_digest}:
         raise IndependentProviderTrustGraphError("artifact:profile")
     subject = _expect_keys(item["subject"], {"provider_graph_subject", "scope"}, "artifact:subject")
     if subject != {"provider_graph_subject": profile.subject, "scope": profile.scope}:
@@ -646,23 +584,23 @@ def _new_validate_artifact(value: object, *, profile: _GraphProfile) -> dict[str
     snapshot_id = _text(snapshot["snapshot_id"], "snapshot:id")
     snapshot_root = _hex(snapshot["snapshot_root"], "snapshot:root")
     observation = _int(snapshot["observation_time"], "snapshot:time", minimum=1)
-    if profile.v2 and not profile.observation_start <= observation < profile.observation_end:  # type: ignore[operator]
+    if not profile.observation_start <= observation < profile.observation_end:
         raise IndependentProviderTrustGraphError("snapshot:observation-window")
     sources = _validate_sources(item["source_coverage"], observation, profile=profile)
-    expected_snapshot_root = _digest("snapshot-root", {"provider_graph_subject": profile.subject, "scope": profile.scope, "observation_time": observation, "source_roots": [source["source_root"] for source in sources]}, profile=profile)
-    if snapshot_root != expected_snapshot_root or snapshot_id != _digest("snapshot-id", {"snapshot_root": snapshot_root, "observation_time": observation}, profile=profile):
+    expected_snapshot_root = _digest("snapshot-root", {"provider_graph_subject": profile.subject, "scope": profile.scope, "observation_time": observation, "source_roots": [source["source_root"] for source in sources]})
+    if snapshot_root != expected_snapshot_root or snapshot_id != _digest("snapshot-id", {"snapshot_root": snapshot_root, "observation_time": observation}):
         raise IndependentProviderTrustGraphError("snapshot:binding")
     finding_values = item["findings"]
     if not isinstance(finding_values, list) or len(finding_values) > MAX_FINDINGS:
         raise IndependentProviderTrustGraphError("finding:count-cap")
     findings: list[dict[str, object]] = []
     for value in finding_values:
-        finding = _expect_keys(value, _NEW_FINDING_KEYS, "finding")
+        finding = _expect_keys(value, FINDING_KEYS, "finding")
         kind = _text(finding["kind"], "finding:kind")
         if kind not in FINDING_KINDS or finding["subject_key"] != profile.subject_key or finding["observation_snapshot_id"] != snapshot_id:
             raise IndependentProviderTrustGraphError("finding:binding")
         refs = _sorted_unique(finding["evidence_refs"], "finding:evidence", maximum=MAX_RECORDS_PER_SOURCE * MAX_SOURCES)
-        if finding["finding_id"] != _digest("finding-id", {"kind": kind, "subject_key": profile.subject_key, "observation_snapshot_id": snapshot_id, "evidence_refs": refs}, profile=profile):
+        if finding["finding_id"] != _digest("finding-id", {"kind": kind, "subject_key": profile.subject_key, "observation_snapshot_id": snapshot_id, "evidence_refs": refs}):
             raise IndependentProviderTrustGraphError("finding:id")
         findings.append(finding)
     if [finding["finding_id"] for finding in findings] != sorted(finding["finding_id"] for finding in findings) or len({finding["finding_id"] for finding in findings}) != len(findings):
@@ -675,29 +613,29 @@ def _new_validate_artifact(value: object, *, profile: _GraphProfile) -> dict[str
         raise IndependentProviderTrustGraphError("discrepancy:count-cap")
     discrepancies: list[dict[str, object]] = []
     for value in discrepancy_values:
-        discrepancy = _expect_keys(value, _NEW_DISCREPANCY_KEYS, "discrepancy")
+        discrepancy = _expect_keys(value, DISCREPANCY_KEYS, "discrepancy")
         if discrepancy["kind"] != "SOURCE_CONFLICT_EVIDENCE" or discrepancy["responsibility_boundary"] != "UNKNOWN":
             raise IndependentProviderTrustGraphError("discrepancy:authority")
         refs = _sorted_unique(discrepancy["evidence_refs"], "discrepancy:evidence", maximum=MAX_RECORDS_PER_SOURCE * MAX_SOURCES)
-        expected_id = _digest("discrepancy-id", {"kind": discrepancy["kind"], "responsibility_boundary": "UNKNOWN", "evidence_refs": refs}, profile=profile)
+        expected_id = _digest("discrepancy-id", {"kind": discrepancy["kind"], "responsibility_boundary": "UNKNOWN", "evidence_refs": refs})
         if discrepancy["discrepancy_id"] != expected_id:
             raise IndependentProviderTrustGraphError("discrepancy:id")
         discrepancies.append(discrepancy)
     if discrepancies != expected_discrepancies:
         raise IndependentProviderTrustGraphError("discrepancy:semantic-mismatch")
-    report = _expect_keys(item["report"], _NEW_REPORT_KEYS, "report")
-    identity = _expect_keys(report["identity_material"], _NEW_IDENTITY_KEYS_V2 if profile.v2 else _NEW_IDENTITY_KEYS_V1, "report:identity")
+    report = _expect_keys(item["report"], REPORT_KEYS, "report")
+    identity = _expect_keys(report["identity_material"], IDENTITY_KEYS, "report:identity")
     if identity["provider_graph_subject"] != profile.subject or identity["scope"] != profile.scope or identity["snapshot_id"] != snapshot_id or identity["snapshot_root"] != snapshot_root or identity["observation_time"] != observation:
         raise IndependentProviderTrustGraphError("report:binding")
-    if profile.v2 and (identity["profile_id"], identity["version"], identity["profile_digest"]) != (profile.profile_id, profile.version, profile.profile_digest):
+    if (identity["profile_id"], identity["version"], identity["profile_digest"]) != (profile.profile_id, profile.version, profile.profile_digest):
         raise IndependentProviderTrustGraphError("report:profile")
     for field in ("snapshot_root", "source_coverage_root", "findings_root", "discrepancies_root"):
         _hex(identity[field], "report:" + field)
     expected_identity = dict(identity)
-    expected_identity["source_coverage_root"] = _digest("source-coverage-root", {"source_roots": [source["source_root"] for source in sources]}, profile=profile)
-    expected_identity["findings_root"] = _digest("findings-root", {"findings": findings}, profile=profile)
-    expected_identity["discrepancies_root"] = _digest("discrepancies-root", {"discrepancies": discrepancies}, profile=profile)
-    if identity != expected_identity or report["report_id"] != _digest("report-id", identity, profile=profile):
+    expected_identity["source_coverage_root"] = _digest("source-coverage-root", {"source_roots": [source["source_root"] for source in sources]})
+    expected_identity["findings_root"] = _digest("findings-root", {"findings": findings})
+    expected_identity["discrepancies_root"] = _digest("discrepancies-root", {"discrepancies": discrepancies})
+    if identity != expected_identity or report["report_id"] != _digest("report-id", identity):
         raise IndependentProviderTrustGraphError("report:identity")
     authority = _expect_keys(item["authority"], AUTHORITY_KEYS, "authority")
     if authority != {"clearance_authority": False, "payment_authority": False, "economic_mutation": False, "production_usable": False, "synthetic_only": True}:
@@ -715,18 +653,11 @@ def _new_graph_checked(raw: bytes, registry: Mapping[str, object]) -> _VerifiedG
     if configured is None:
         raise IndependentProviderTrustGraphError("profile:registry-miss")
     view = _profile_view(configured)
-    if not view.v2 or profile_value != {"profile_id": view.profile_id, "version": view.version, "profile_digest": view.profile_digest}:
+    if profile_value != {"profile_id": view.profile_id, "version": view.version, "profile_digest": view.profile_digest}:
         raise IndependentProviderTrustGraphError("profile:artifact-not-authority")
     item = _new_validate_artifact(artifact, profile=view)
     summary = {"report_id": item["report"]["report_id"], "finding_kinds": [finding["kind"] for finding in item["findings"]], "artifact_bytes": len(raw), "profile_id": view.profile_id, "profile_version": view.version, "profile_digest": view.profile_digest, "accepted": True}
     return _VerifiedGraphArtifactV2(value=item, profile=view, summary=summary)
-
-
-def verify_bytes(raw: bytes) -> dict[str, object]:
-    artifact = _parse(raw)
-    view = _profile_view(None)
-    item = _new_validate_artifact(artifact, profile=view)
-    return {"report_id": item["report"]["report_id"], "finding_kinds": [finding["kind"] for finding in item["findings"]], "artifact_bytes": len(raw), "accepted": True}
 
 
 def verify_artifact_v2(raw: bytes, profile_registry: Mapping[str, object]) -> _VerifiedGraphArtifactV2:

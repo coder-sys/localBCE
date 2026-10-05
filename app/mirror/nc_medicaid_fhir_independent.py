@@ -405,8 +405,7 @@ def _graph_source(graph_profile, role_index: int, observation_time: int, *, comp
         "coverage_authority_id": role.authority_id, "nonmembership_keys": [], "records": [record],
         "provenance": {"provenance_id": role.provenance_id, "integrity_digest": "0" * 128},
     }
-    view = graph_independent._profile_view(graph_profile)
-    source["provenance"]["integrity_digest"] = graph_independent._integrity_digest(source, profile=view)  # type: ignore[index]
+    source["provenance"]["integrity_digest"] = graph_independent._integrity_digest(source)  # type: ignore[index]
     return source
 
 

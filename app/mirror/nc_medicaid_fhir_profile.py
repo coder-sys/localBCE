@@ -297,7 +297,7 @@ class NcMedicaidFhirSourceProfile:
             raise NcMedicaidFhirProfileError("profile:context")
         return SourceProfile(
             profile_id=self.source_profile_id, version=3, subject=context.subject_id, scope=SCOPE,
-            observation_time=None, effective_start=6_000, effective_end=9_000,
+            effective_start=6_000, effective_end=9_000,
             source_roles=tuple(role.source_id for role in _GRAPH_ROLES), require_complete=False,
             verifier_id=VERIFIER_ID, verifier_epoch=VERIFIER_EPOCH, evidence_mode=EvidenceMode.OBSERVATION_ONLY,
             source_role_details=_GRAPH_ROLES, credential_id=context.credential_id, enrollment_id=context.enrollment_id,
@@ -315,7 +315,6 @@ class NcMedicaidFhirSourceProfile:
                 candidate.profile_id != expected.profile_id
                 or candidate.version != expected.version
                 or candidate.scope != expected.scope
-                or candidate.observation_time is not None
                 or candidate.effective_start != expected.effective_start
                 or candidate.effective_end != expected.effective_end
                 or candidate.source_roles != expected.source_roles
