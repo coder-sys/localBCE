@@ -215,6 +215,38 @@ class MirrorSourceAdmissionTests(unittest.TestCase):
         self.assertEqual(first.graph_artifact, replay.graph_artifact)
         with self.assertRaisesRegex(SourceAdmissionError, "retry:conflict"):
             service.admit(raw, expected_receipt=first.receipt + b" ")
+        from tests.test_nc_medicaid_fhir_source import _envelope
+
+        context = nc_profile.DynamicCaptureContext("1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070)
+        changed_raw = _envelope(context=context, location_variant="changed")
+        changed_service = _service(nc_fhir.NcMedicaidFhirVerifier(expected_context=context))
+        changed = changed_service.admit(changed_raw)
+        self.assertNotEqual(first.receipt, changed.receipt)
+        first_receipt = bytes(first.receipt)
+        with self.assertRaisesRegex(SourceAdmissionError, "retry:conflict"):
+            changed_service.admit(changed_raw, expected_receipt=first.receipt)
+        self.assertEqual(first_receipt, first.receipt)
+        self.assertEqual(first_receipt, service.admit(raw, expected_receipt=first.receipt).receipt)
+
+    def test_raw_adapter_authentication_profile_and_mode_fields_are_rejected(self) -> None:
+        raw = _fixture()[0]
+        context = nc_profile.DynamicCaptureContext("1" * 128, "2" * 128, "3" * 128, "4" * 128, 7_060, 7_070)
+        service = _service(nc_fhir.NcMedicaidFhirVerifier(expected_context=context))
+        self.assertEqual(service.admit(raw).profile_id, _fixture()[1].profile_id)
+        for extra in (
+            {"verifier_id": _fixture()[1].verifier_id},
+            {"verifier_epoch": _fixture()[1].verifier_epoch},
+            {"authenticated": True},
+            {"evidence_mode": "synthetic_test_only"},
+            {"source_roles": list(_fixture()[1].source_roles)},
+            {"version": 1},
+        ):
+            with self.subTest(extra=extra):
+                value = json.loads(raw)
+                value.update(extra)
+                tampered = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+                with self.assertRaisesRegex(SourceAdmissionError, "^verifier:reject$"):
+                    service.admit(tampered)
 
     def test_composition_mismatch_and_production_mode_are_rejected(self) -> None:
         profile = _fixture()[1]
