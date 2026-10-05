@@ -68,6 +68,14 @@ class CanonicalJsonTests(unittest.TestCase):
         with self.assertRaisesRegex(kit.KitError, "json_not_canonical:label"):
             kit._strict_canonical_json(b'{"a": 1}', "label")
         self.assertEqual(switch._decode_canonical_json(b'{"a":1}', maximum=100, label="label"), {"a": 1})
+        for raw in (b'{"a":1e400}', b'{"a":-1E999}'):  # parse as +-inf: refused with the kit's own code, not a bare ValueError
+            with self.assertRaisesRegex(kit.KitError, "json_not_canonical:label"):
+                kit._strict_canonical_json(raw, "label")
+
+    def test_decode_refuses_even_when_a_callback_returns(self) -> None:
+        for raw in (b'{"a":1,"a":2}', b'{"a":NaN}'):
+            with self.assertRaises(ValueError):
+                decode(raw, "ascii", lambda key: None, lambda name: 0)
 
 
 if __name__ == "__main__":

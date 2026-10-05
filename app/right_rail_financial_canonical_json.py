@@ -16,7 +16,12 @@ def decode(raw: bytes, encoding: str, duplicate_key: Callable[[str], object], co
         for key, item in items:
             if key in result:
                 duplicate_key(key)
+                raise ValueError("duplicate_key callback returned")
             result[key] = item
         return result
 
-    return json.loads(raw.decode(encoding), object_pairs_hook=pairs, parse_constant=constant)
+    def constants(name: str) -> object:
+        constant(name)
+        raise ValueError("constant callback returned")
+
+    return json.loads(raw.decode(encoding), object_pairs_hook=pairs, parse_constant=constants)

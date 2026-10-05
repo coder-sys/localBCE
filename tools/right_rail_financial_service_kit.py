@@ -201,7 +201,11 @@ def _strict_json(raw: bytes, label: str) -> dict[str, Any]:
 
 def _strict_canonical_json(raw: bytes, label: str) -> dict[str, Any]:
     value = _strict_json(raw, label)
-    if raw != _canonical_json(value):
+    try:
+        canonical = _canonical_json(value)
+    except ValueError as error:  # 1e400 parses as inf, which has no canonical form
+        raise KitError(f"json_not_canonical:{label}") from error
+    if raw != canonical:
         raise KitError(f"json_not_canonical:{label}")
     return value
 
