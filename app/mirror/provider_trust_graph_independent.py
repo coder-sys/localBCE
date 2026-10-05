@@ -353,7 +353,7 @@ def _parse(raw: bytes) -> dict[str, object]:
         )
     except IndependentProviderTrustGraphError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (RecursionError, ValueError):
         raise_redacted(IndependentProviderTrustGraphError, "json:parse")
     if not isinstance(value, dict):
         raise IndependentProviderTrustGraphError("json:top-level")

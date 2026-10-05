@@ -50,7 +50,7 @@ def _mutants(base: bytes, seeds: int):
 
 
 class HostileMirrorIntakeTests(unittest.TestCase):
-    def _outcome(self, call, allowed: tuple, raw: bytes, case: int) -> tuple:
+    def _classify(self, call, allowed: tuple, raw: bytes, case: int) -> tuple:
         """("ok", result) or ("refused", code); any other exception or a slow call fails with the case number only."""
         started = time.perf_counter()
         try:
@@ -66,13 +66,13 @@ class HostileMirrorIntakeTests(unittest.TestCase):
     def _sweep(self, call, allowed: tuple, base: bytes, seeds: int, *, strict_keys: bool = False) -> None:
         fixed = _fixed(base)
         for case, raw in enumerate(fixed + list(_mutants(base, seeds))):
-            first = self._outcome(call, allowed, raw, case)
-            self.assertEqual(first, self._outcome(call, allowed, raw, case), f"case {case}: repeat differs")
+            first = self._classify(call, allowed, raw, case)
+            self.assertEqual(first, self._classify(call, allowed, raw, case), f"case {case}: repeat differs")
             if case < len(fixed):
                 self.assertEqual("refused", first[0], f"case {case}: hostile shape accepted")
         if strict_keys:
             extra = fhir.canonical_json({**json.loads(base), "zz": 1})
-            self.assertEqual("refused", self._outcome(call, allowed, extra, -1)[0], "unknown field accepted")
+            self.assertEqual("refused", self._classify(call, allowed, extra, -1)[0], "unknown field accepted")
 
     def test_fhir_adapter_fails_the_page_not_the_capture(self) -> None:
         url = profile.NC_MEDICAID_PROFILE.page_url(0, None)
@@ -84,8 +84,11 @@ class HostileMirrorIntakeTests(unittest.TestCase):
         base = fhir.canonical_json(_bundle())
         fixed = _fixed(base)
         for case, body in enumerate(fixed + list(_mutants(base, 500))):
-            raw = self._outcome(capture, (), body, case)[1]
-            self.assertEqual(raw, capture(body), f"case {case}: repeat differs")
+            kind, raw = self._classify(capture, (fhir.NcMedicaidFhirError,), body, case)
+            self.assertEqual((kind, raw), self._classify(capture, (fhir.NcMedicaidFhirError,), body, case), f"case {case}: repeat differs")
+            if kind == "refused":
+                self.assertTrue(raw.startswith("markers:") and case >= len(fixed), f"case {case}: {raw}")
+                continue
             value = json.loads(raw)
             self.assertIn(value["source_status"], fhir.SOURCE_STATUSES)
             self.assertIn(value["failure_code"], fhir.FAILURE_CODES | {None})
