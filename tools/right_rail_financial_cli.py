@@ -25,6 +25,7 @@ from app.right_rail_financial_mirror import (
     MAX_PACKAGE_BYTES,
 )
 from app.right_rail_financial_custody import Custody
+from app.right_rail_financial_canonical_json import encode
 from app.right_rail_financial_followthrough import MAX_RULES_BYTES, PACK_CONTRACT, build_followthrough_pack
 from app.right_rail_financial_line_pack import LINE_PACK_CONTRACT, MAX_LINE_MAP_BYTES, MAX_LINE_PACK_BYTES, build_line_pack
 from app.right_rail_financial_switch import (
@@ -266,7 +267,7 @@ def _write_new(path: Path, value: bytes) -> None:
 
 
 def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return encode(value).decode("ascii")
 
 
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

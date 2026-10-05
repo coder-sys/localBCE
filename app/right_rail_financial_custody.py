@@ -38,6 +38,7 @@ import re
 from typing import Callable, Final
 
 from app import right_rail_gate_signer as signer
+from app.right_rail_financial_canonical_json import encode as _encode
 from app.right_rail_financial_owner import FinancialIntegrityError
 
 DIGEST: Final = b"RR/FINANCIAL/CUSTODY/v1\x00"
@@ -55,10 +56,6 @@ _LOCK_AT: Final = 0x7FFF_FFFE  # one byte far past the records: Windows byte loc
 
 def _refuse(code: str) -> None:
     raise FinancialIntegrityError(code) from None
-
-
-def _encode(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":"), sort_keys=True).encode("ascii")
 
 
 def _digest(record: dict) -> str:

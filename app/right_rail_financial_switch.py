@@ -16,10 +16,10 @@ import base64
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 import hashlib
-import json
 import re
 from time import monotonic_ns
 
+from app.right_rail_financial_canonical_json import decode as _decode_json, encode as _encode_json
 from app.right_rail_financial_owner_independent import (
     IndependentFinancialError,
     MAX_CENTS,
@@ -53,13 +53,7 @@ def _fail(code: str) -> None:
 
 def _canonical_json(value: object, *, maximum: int) -> bytes:
     try:
-        encoded = json.dumps(
-            value,
-            ensure_ascii=True,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("ascii")
+        encoded = _encode_json(value)
     except (TypeError, ValueError, UnicodeError, RecursionError):
         _fail("switch:canonical-json")
     if not encoded or len(encoded) > maximum:
@@ -67,27 +61,18 @@ def _canonical_json(value: object, *, maximum: int) -> bytes:
     return encoded
 
 
-def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            _fail("switch:duplicate-json-key")
-        result[key] = value
-    return result
+def _loads(raw: bytes, label: str) -> object:
+    return _decode_json(raw, "ascii", lambda _key: _fail("switch:duplicate-json-key"), lambda _value: _fail(f"{label}:constant"))
 
 
 def _decode_canonical_json(raw: bytes, *, maximum: int, label: str) -> dict[str, object]:
     if type(raw) is not bytes or not raw or len(raw) > maximum:
         _fail(f"{label}:byte-cap")
     try:
-        value = json.loads(
-            raw.decode("ascii"),
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=lambda _value: _fail(f"{label}:constant"),
-        )
+        value = _loads(raw, label)
     except FinancialSwitchError:
         raise
-    except (UnicodeError, ValueError, TypeError, json.JSONDecodeError, RecursionError):
+    except (UnicodeError, ValueError, TypeError, RecursionError):  # json.JSONDecodeError is a ValueError
         _fail(f"{label}:json")
     if type(value) is not dict or _canonical_json(value, maximum=maximum) != raw:
         _fail(f"{label}:canonical")
@@ -761,7 +746,7 @@ def _validate_output(
     if type(output) is not dict:
         return "NO_MEMBER_RESULTS", [f"{label}:result-not-object"]
     try:  # one encoding: every check below, the audit, the stored result and its digest read this plain decoded copy
-        output = json.loads(_canonical_json(output, maximum=MAX_RESULT_BYTES), object_pairs_hook=_reject_duplicate_keys)
+        output = _loads(_canonical_json(output, maximum=MAX_RESULT_BYTES), label)
     except Exception:  # dict and str subclasses run their own code, which may raise anything, while being encoded
         return "OUTPUT_NOT_ENCODABLE", [f"{label}:result-byte-cap-or-type"]
     expected_top = {

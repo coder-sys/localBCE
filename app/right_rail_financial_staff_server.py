@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
-import json
 from pathlib import Path
 import re
 import socket
@@ -22,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from app import right_rail_financial_engine as financial_engine
+from app.right_rail_financial_canonical_json import decode, encode
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorError,
@@ -768,16 +768,10 @@ class StaffWorkflow:
         raise FinancialMirrorError("continuity_destination_capacity")
 
 
-def _json_bytes(value: Any) -> bytes:
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """A repeated key would give one command two meanings (Art. III.3)."""
-    value = dict(pairs)
-    if len(value) != len(pairs):
-        raise ValueError("request_duplicate_key")
-    return value
+def _refuse_request_json(code: str):
+    def refuse(_value: str) -> None:
+        raise ValueError(code)  # a repeated key would give one command two meanings (Art. III.3)
+    return refuse
 
 
 def _request_allowed(peer: str, host: str, origin: str | None, port: int, *, mutation: bool) -> bool:
@@ -851,7 +845,7 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             )
 
         def _respond(self, status: int, value: Any, content_type: str = "application/json; charset=utf-8", *, retry_after: bool = False) -> None:
-            content = value if type(value) is bytes else _json_bytes(value)
+            content = value if type(value) is bytes else encode(value)
             self.close_connection = True
             self._response_length = len(content)
             self.send_response(status)
@@ -910,7 +904,7 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             finally:
                 self.connection.settimeout(HTTP_REQUEST_TIMEOUT_SECONDS)
             self._body_read = True
-            value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_json_object)
+            value = decode(data, "utf-8", _refuse_request_json("request_duplicate_key"), _refuse_request_json("request_nonstandard_number"))
             if type(value) is not dict:
                 raise ValueError("request_shape")
             return value
