@@ -1174,6 +1174,29 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             },
         }
 
+    def _verify_package(self, package: bytes, scope: object, **kwargs: object) -> dict[str, object]:
+        return verify_continuity_package(package, expected_scope=scope, expected_authority=self.authority, **kwargs)
+
+    def _race(self, jobs: list, join_timeout: int = 10) -> tuple[list, list[tuple[type[BaseException], str]]]:
+        barrier = threading.Barrier(len(jobs))
+        outcomes: list = []
+        errors: list[tuple[type[BaseException], str]] = []
+
+        def run(job) -> None:
+            try:
+                barrier.wait(timeout=5)
+                outcomes.append(job())
+            except BaseException as error:  # preserve the exact loser class/message for the gate
+                errors.append((type(error), str(error)))
+
+        threads = [threading.Thread(target=run, args=(job,)) for job in jobs]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=join_timeout)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        return outcomes, errors
+
     def _assert_checker_refuses(self, path: Path, store, pattern: str) -> None:
         with self.assertRaisesRegex(IndependentFinancialError, pattern):
             verify_database(path, expected_config=store.config, expected_authority=self.authority)
@@ -1319,28 +1342,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(expected.CASE_08.number, 8)
         store, claim_id, receipt = self._claimed_store()
         expected_revision = receipt["revision"]
-        barrier = threading.Barrier(2)
-        outcomes: list[str] = []
-        errors: list[tuple[type[BaseException], str]] = []
         self._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
 
-        def attempt(action_id: str) -> None:
-            try:
-                barrier.wait(timeout=5)
-                result = store.reject_offset_and_authorize_correction(**self._correction_kwargs(claim_id, receipt, expected_revision=expected_revision, action_id=action_id))
-                outcomes.append(str(result["status"]))
-            except BaseException as error:  # preserve the exact loser class/message for the gate
-                errors.append((type(error), str(error)))
+        def attempt(action_id: str) -> str:
+            result = store.reject_offset_and_authorize_correction(**self._correction_kwargs(claim_id, receipt, expected_revision=expected_revision, action_id=action_id))
+            return str(result["status"])
 
-        threads = [
-            threading.Thread(target=attempt, args=("action:race:one",)),
-            threading.Thread(target=attempt, args=("action:race:two",)),
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
-        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        outcomes, errors = self._race([lambda: attempt("action:race:one"), lambda: attempt("action:race:two")])
         self.assertEqual(outcomes, ["CORRECTION_AUTHORIZED"])
         self.assertEqual(errors, [(FinancialRevisionError, expected.REVISION_RACE.loser_error)])
         detail = store.obligation_detail(expected.H_ITEM_ID)
@@ -1542,11 +1550,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_snapshot(store, expected.H_ACKNOWLEDGED)
         source_before_restore = _image(store.path)
         package = store.export_continuity()
-        package_result = verify_continuity_package(
-            package,
-            expected_scope=_SCOPE,
-            expected_authority=self.authority,
-        )
+        package_result = self._verify_package(package, _SCOPE)
         self.assertEqual(package_result["package_digest"], package_result["package_digest"].upper())
         destination = self._path("shadow.sqlite")
         shadow = self._restore(package, destination, clock=_Clock())
@@ -1646,7 +1650,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(FinancialContinuityError, "continuity_identity:" + reason):
                     FinancialOwner.validate_continuity_package(candidate)
                 with self.assertRaisesRegex(IndependentFinancialError, "continuity:identity:" + reason):
-                    verify_continuity_package(candidate, expected_scope=restore_scope, expected_authority=self.authority)
+                    self._verify_package(candidate, restore_scope)
 
         mode_only = self._path("test-promotion-mode-only.sqlite")
         mode_only.write_bytes(test_bytes_after_completion)
@@ -1756,12 +1760,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), second_package)
 
         package_identity = json.loads(second_package.decode("ascii"))
-        independent_package = verify_continuity_package(
-            second_package,
-            expected_scope=package_identity["scope"],
-            expected_authority=self.authority,
-            expected_schema_version=8,
-        )
+        independent_package = self._verify_package(second_package, package_identity["scope"], expected_schema_version=8)
         self.assertEqual(independent_package["version"], 8)
         self.assertEqual(independent_package["program_funding"]["reported_funding_cents"], 99_000_000)
         tampered_package = json.loads(second_package.decode("ascii"))
@@ -1770,12 +1769,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         del tampered_body["package_digest"]
         tampered_package["package_digest"] = continuity_package_digest(tampered_body)
         with self.assertRaisesRegex(IndependentFinancialError, "funding:projection-reconstruction"):
-            verify_continuity_package(
-                _independent_canonical(tampered_package),
-                expected_scope=package_identity["scope"],
-                expected_authority=self.authority,
-                expected_schema_version=8,
-            )
+            self._verify_package(_independent_canonical(tampered_package), package_identity["scope"], expected_schema_version=8)
         restored_mirror = mirror.restore_test_continuity(
             second_package,
             self._path("funding-test-restore.sqlite"),
@@ -2005,28 +1999,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         source_package = source.export_continuity()
         legacy_path = self._legacy_copy("v7-private-index-concurrent-legacy.sqlite", source)
 
-        barrier = threading.Barrier(2)
-        results: list[bytes] = []
-        errors: list[BaseException] = []
+        def open_owner() -> bytes:
+            return self._make_owner(
+                schema_version=8,
+                path=legacy_path,
+                clock=_Clock(initial=1_700_000_000_000),
+            ).export_continuity()
 
-        def open_owner() -> None:
-            try:
-                barrier.wait(timeout=5)
-                store = self._make_owner(
-                    schema_version=8,
-                    path=legacy_path,
-                    clock=_Clock(initial=1_700_000_000_000),
-                )
-                results.append(store.export_continuity())
-            except BaseException as error:
-                errors.append(error)
-
-        workers = [threading.Thread(target=open_owner) for _ in range(2)]
-        for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join(timeout=15)
-        self.assertFalse(any(worker.is_alive() for worker in workers))
+        results, errors = self._race([open_owner, open_owner], join_timeout=15)
         self.assertEqual(errors, [])
         self.assertEqual(results, [source_package, source_package])
         self._assert_private_index_schema(legacy_path)
@@ -2372,7 +2352,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 index += batch
         package = store.export_continuity()  # the largest package, one receipt under the cap, restores and verifies
         self.assertLess(owner._MAX_PACKAGE_BYTES - len(package), 8_000)
-        verify_continuity_package(package, expected_scope=json.loads(package)["scope"], expected_authority=self.authority)
+        self._verify_package(package, json.loads(package)["scope"])
         with FinancialMirror(store).restore_test_continuity(package, self._path("continuity-cap-largest.sqlite")).owner as restored:
             restored_package = restored.export_continuity()
         self.assertLessEqual(len(restored_package), owner._MAX_PACKAGE_BYTES)
@@ -2655,11 +2635,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         source_bytes_before_restore = _image(store.path)
         source_package = mirror.export_continuity()
-        source_package_result = verify_continuity_package(
-            source_package,
-            expected_scope=_SCOPE,
-            expected_authority=self.authority,
-        )
+        source_package_result = self._verify_package(source_package, _SCOPE)
         self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v8")
         self.assertEqual(source_package_result["program_funding"]["reported_funding_cents"], expected.PROGRAM_TOTAL_CENTS)
         source_package_view = mirror.validate_owner_continuity_package(source_package)
@@ -3099,23 +3075,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 supersedes=root,
             ),
         )
-        barrier = threading.Barrier(2)
-        outcomes: list[str] = []
-        errors: list[tuple[type[BaseException], str]] = []
-
-        def register(manifest: PopulationManifest) -> None:
-            try:
-                barrier.wait(timeout=5)
-                outcomes.append(str(store.register_population_manifest(manifest)["status"]))
-            except BaseException as error:
-                errors.append((type(error), str(error)))
-
-        threads = [threading.Thread(target=register, args=(manifest,)) for manifest in children]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
-        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        outcomes, errors = self._race([lambda manifest=manifest: str(store.register_population_manifest(manifest)["status"]) for manifest in children])
         self.assertEqual(outcomes, ["SUPERSEDED"])
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0][0], FinancialConflictError)
@@ -3131,12 +3091,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base()
         package_bytes = store.export_continuity()
         package = json.loads(package_bytes.decode("ascii"))
-        verified = verify_continuity_package(
-            package_bytes,
-            expected_scope=package["scope"],
-            expected_authority=self.authority,
-            expected_schema_version=8,
-        )
+        verified = self._verify_package(package_bytes, package["scope"], expected_schema_version=8)
         self.assertEqual(verified["version"], 8)
         self.assertEqual(verified["table_counts"]["population_manifests"], 1)
         self.assertEqual(verified["table_counts"]["population_manifest_members"], len(expected.POPULATION_MANIFEST_MEMBER_IDS))
@@ -3168,12 +3123,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         for altered in (tampered_member, tampered_binding, tampered_head, tampered_event):
             with self.subTest(package="tampered_manifest_continuity"):
                 with self.assertRaises(IndependentFinancialError):
-                    verify_continuity_package(
-                        altered,
-                        expected_scope=package["scope"],
-                        expected_authority=self.authority,
-                        expected_schema_version=8,
-                    )
+                    self._verify_package(altered, package["scope"], expected_schema_version=8)
         self._assert_verified(store)
 
     def test_population_staging_rejects_imported_count_projection_drift(self) -> None:
@@ -4307,11 +4257,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
                 FinancialOwner.validate_continuity_package(old_package)
             with self.assertRaisesRegex(IndependentFinancialError, "continuity:schema"):
-                verify_continuity_package(
-                    old_package,
-                    expected_scope=package["scope"],
-                    expected_authority=self.authority,
-                )
+                self._verify_package(old_package, package["scope"])
             destination = self._path(f"tag-only-restore-v{version}.sqlite")
             with self.assertRaisesRegex(FinancialContinuityError, "continuity_package_schema"):
                 FinancialOwner.restore_continuity(
