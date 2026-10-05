@@ -130,12 +130,14 @@ class _Clock:
         return self.value
 
 
+_SCOPE = {
+    "state_id": expected.STATE_ID, "deployment_id": expected.DEPLOYMENT_ID, "program_id": expected.PROGRAM_ID,
+    "period_id": expected.PERIOD_ONE_ID, "currency": expected.CURRENCY,
+}
+
+
 def _owner_config(**overrides: object) -> FinancialOwnerConfig:
-    scope = dict(
-        state_id=expected.STATE_ID, deployment_id=expected.DEPLOYMENT_ID, program_id=expected.PROGRAM_ID,
-        period_id=expected.PERIOD_ONE_ID, currency=expected.CURRENCY,
-    )
-    return FinancialOwnerConfig(**{**scope, **overrides})
+    return FinancialOwnerConfig(**{**_SCOPE, **overrides})
 
 
 def _image(path: Path) -> bytes:
@@ -828,6 +830,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:v1")
 
     @staticmethod
+    def _reverse_p2(store: FinancialOwner) -> dict[str, object]:
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        RightRailFinancialAcceptanceTests._advance_clock(store, reversal.event_at_ms)
+        return store.reverse_payment(
+            item_id=reversal.item_id,
+            payment_id="payment:h:p2",
+            evidence_id=reversal.evidence_id,
+            common_origin_id=reversal.common_origin_id,
+            event_at_ms=reversal.event_at_ms,
+        )
+
+    @staticmethod
     def _record_p2(store: FinancialOwner) -> None:
         evidence = expected.P2_PAYMENT_EVIDENCE
         RightRailFinancialAcceptanceTests._advance_clock(store, evidence.event_at_ms)
@@ -852,6 +866,42 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             event_at_ms=evidence.event_at_ms,
             supersedes=expected.REPORT_ORIGINAL_EVIDENCE.evidence_id,
         )
+
+    @staticmethod
+    def _stage(store: FinancialOwner, pack: ControlPack, population_id: str, manifest: PopulationManifest, **overrides: object) -> dict[str, object]:
+        return store.stage_population(**{
+            "population_id": population_id, "manifest_id": manifest.manifest_id, "pack_id": pack.pack_id,
+            "cutoff_ms": pack.effective_start_ms, "inclusion_rules": ("included:synthetic",), **overrides,
+        })
+
+    @staticmethod
+    def _population_rows(store: FinancialOwner, population_id: str, columns: str = "imported_count,source_complete") -> tuple[tuple[object, ...], int, list[str]]:
+        with store._read_snapshot() as connection:
+            imported = connection.execute(f"SELECT {columns} FROM population_imports WHERE population_id=?", (population_id,)).fetchone()
+            item_count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
+            events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
+        assert imported is not None
+        return tuple(imported), item_count, events
+
+    def _owner_with_pack(self) -> tuple[FinancialOwner, ControlPack]:
+        store = self._make_owner()
+        pack = self._pack(expected.CONTROL_PACK_V1)
+        store.publish_control_pack(pack)
+        return store, pack
+
+    def _assert_wrong_scope_leaves_untouched(self, path: Path, image: bytes, config: FinancialOwnerConfig, state_id: str, clock: _Clock) -> None:
+        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
+            FinancialOwner(path=path, config=replace(config, state_id=state_id), trusted_authority=self.authority, clock=clock)
+        self.assertEqual(_image(path), image)
+
+    @staticmethod
+    def _evaluation_history(store: FinancialOwner) -> tuple[tuple[object, ...], ...]:
+        keys = ("evaluation_id", "revision", "control_pack_id", "control_pack_version", "control_pack_digest", "result_digest")
+        return tuple(tuple(row[key] for key in keys) for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"])
+
+    @staticmethod
+    def _report(method: object, tag: str, **fields: object) -> dict[str, object]:
+        return method(**{"item_id": expected.H_ITEM_ID, "report_id": f"report:{tag}", "evidence_id": f"evidence:report:{tag}", **fields})
 
     def _prepare_rejected(self, store: FinancialOwner) -> str:
         self._record_cash(store)
@@ -879,15 +929,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         conflict = expected.P2_CONFLICT_EVIDENCE
         conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
-        reversal = expected.P2_REVERSAL_EVIDENCE
-        self._advance_clock(store, reversal.event_at_ms)
-        store.reverse_payment(
-            item_id=reversal.item_id,
-            payment_id="payment:h:p2",
-            evidence_id=reversal.evidence_id,
-            common_origin_id=reversal.common_origin_id,
-            event_at_ms=reversal.event_at_ms,
-        )
+        self._reverse_p2(store)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
         RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
@@ -1202,15 +1244,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(result["status"], "CONFLICT")
         self._assert_snapshot(store, expected.H_P2_CONFLICT_VISIBLE)
-        reversal = expected.P2_REVERSAL_EVIDENCE
-        self._advance_clock(store, reversal.event_at_ms)
-        store.reverse_payment(
-            item_id=reversal.item_id,
-            payment_id="payment:h:p2",
-            evidence_id=reversal.evidence_id,
-            common_origin_id=reversal.common_origin_id,
-            event_at_ms=reversal.event_at_ms,
-        )
+        self._reverse_p2(store)
         self._assert_snapshot(store, expected.H_P2_REVERSED)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
@@ -1537,13 +1571,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         package = store.export_continuity()
         package_result = verify_continuity_package(
             package,
-            expected_scope={
-                "state_id": expected.STATE_ID,
-                "deployment_id": expected.DEPLOYMENT_ID,
-                "program_id": expected.PROGRAM_ID,
-                "period_id": expected.PERIOD_ONE_ID,
-                "currency": expected.CURRENCY,
-            },
+            expected_scope=_SCOPE,
             expected_authority=self.authority,
         )
         self.assertEqual(package_result["package_digest"], package_result["package_digest"].upper())
@@ -1910,15 +1938,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute("PRAGMA user_version=0")
         legacy_bytes = _image(legacy_path)
 
-        wrong_config = replace(source.config, state_id="state:wrong-private-index-scope")
-        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
-            FinancialOwner(
-                path=legacy_path,
-                config=wrong_config,
-                trusted_authority=self.authority,
-                clock=_Clock(initial=1_700_000_000_000),
-            )
-        self.assertEqual(_image(legacy_path), legacy_bytes)
+        self._assert_wrong_scope_leaves_untouched(legacy_path, legacy_bytes, source.config, "state:wrong-private-index-scope", _Clock(initial=1_700_000_000_000))
 
         migrated = self._make_owner(path=legacy_path)
         self._assert_private_index_schema(legacy_path)
@@ -2006,15 +2026,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         legacy_bytes = _image(legacy_path)
         with self.assertRaisesRegex(IndependentFinancialError, "schema:triggers"):
             verify_database(legacy_path, expected_config=store.config, expected_authority=self.authority)
-        wrong_config = replace(store.config, state_id="state:wrong-history-trigger-scope")
-        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
-            FinancialOwner(
-                path=legacy_path,
-                config=wrong_config,
-                trusted_authority=self.authority,
-                clock=_Clock(),
-            )
-        self.assertEqual(_image(legacy_path), legacy_bytes)
+        self._assert_wrong_scope_leaves_untouched(legacy_path, legacy_bytes, store.config, "state:wrong-history-trigger-scope", _Clock())
         migrated = self._make_owner(path=legacy_path)
         self.assertEqual(migrated.export_continuity(), package)
         self._assert_verified(migrated)
@@ -2360,15 +2372,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             for table in ("history_segments", "history_pending", "history_open"):
                 connection.execute(f"DROP TABLE {table}")
         legacy_bytes = _image(legacy_path)
-        wrong_config = _owner_config(state_id="state:wrong-admission-scope")
-        with self.assertRaisesRegex(FinancialIntegrityError, "schema_identity"):
-            FinancialOwner(
-                path=legacy_path,
-                config=wrong_config,
-                trusted_authority=self.authority,
-                clock=_Clock(initial=1_700_000_000_000),
-            )
-        self.assertEqual(_image(legacy_path), legacy_bytes)
+        self._assert_wrong_scope_leaves_untouched(legacy_path, legacy_bytes, config, "state:wrong-admission-scope", _Clock(initial=1_700_000_000_000))
 
         migrated = FinancialOwner(
             path=legacy_path,
@@ -2792,13 +2796,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         source_package = mirror.export_continuity()
         source_package_result = verify_continuity_package(
             source_package,
-            expected_scope={
-                "state_id": expected.STATE_ID,
-                "deployment_id": expected.DEPLOYMENT_ID,
-                "program_id": expected.PROGRAM_ID,
-                "period_id": expected.PERIOD_ONE_ID,
-                "currency": expected.CURRENCY,
-            },
+            expected_scope=_SCOPE,
             expected_authority=self.authority,
         )
         self.assertEqual(source_package_result["schema"], "RR/FINANCIAL/CONTINUITY/v8")
@@ -2913,17 +2911,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(test_store, restore_source_package=source_package)
         self._assert_verified(test_store, current_snapshot_package=final_test_package)
 
-        v1_history_before_rule_change = tuple(
-            (
-                row["evaluation_id"],
-                row["revision"],
-                row["control_pack_id"],
-                row["control_pack_version"],
-                row["control_pack_digest"],
-                row["result_digest"],
-            )
-            for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"]
-        )
+        v1_history_before_rule_change = self._evaluation_history(store)
         v1_receipt_before_rule_change = mirror.current_evaluation_receipt(expected.H_ITEM_ID)
         self.assertEqual(v1_receipt_before_rule_change["control_pack"]["pack_id"], expected.CONTROL_PACK_V1.pack_id)
         self.assertEqual(v1_receipt_before_rule_change["control_pack"]["version"], 1)
@@ -2939,17 +2927,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(v2_receipt["rule_version"], 2)
         self.assertEqual(v2_receipt["scope"]["period_id"], expected.PERIOD_TWO_ID)
         self.assertEqual(mirror.current_evaluation_receipt(expected.H_ITEM_ID), v1_receipt_before_rule_change)
-        v1_history_after_rule_change = tuple(
-            (
-                row["evaluation_id"],
-                row["revision"],
-                row["control_pack_id"],
-                row["control_pack_version"],
-                row["control_pack_digest"],
-                row["result_digest"],
-            )
-            for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"]
-        )
+        v1_history_after_rule_change = self._evaluation_history(store)
         self.assertEqual(v1_history_after_rule_change, v1_history_before_rule_change)
         self.assertTrue(
             all(row["control_pack_id"] == expected.CONTROL_PACK_V1.pack_id for row in store.obligation_detail(expected.H_ITEM_ID)["evaluations"])
@@ -3073,9 +3051,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             store.publish_control_pack(missing_receiver)
 
     def test_population_import_requires_manifest_without_mutation(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         before_package = store.export_continuity()
         before_counts = self._durable_counts(store.path)
         population_id = "population:fixture:no-manifest"
@@ -3094,9 +3070,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_population_same_count_substitution_stays_incomplete_and_unpublishable(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         population_id = "population:fixture:substitution"
         manifest = self._population_manifest(
             manifest_id="population-manifest:fixture:substitution:v1",
@@ -3105,14 +3079,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         expected_items = self._items(population_id)
         substituted_items = (*expected_items[:-1], replace(expected_items[-1], item_id="item-z"))
         with self.assertRaisesRegex(FinancialInputError, "^population_item_due_before_pack$"):  # item 4: refused before any item is stored
-            store.stage_population(population_id=population_id, manifest_id=manifest.manifest_id, pack_id=pack.pack_id, cutoff_ms=pack.effective_start_ms, inclusion_rules=("included:synthetic",), expected_count=len(expected.PROGRAM_ITEMS), items=(replace(expected_items[0], due_at_ms=pack.effective_start_ms - 1),))
+            self._stage(store, pack, population_id, manifest, expected_count=len(expected.PROGRAM_ITEMS), items=(replace(expected_items[0], due_at_ms=pack.effective_start_ms - 1),))
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_extra_member"):
-            store.stage_population(
-                population_id=population_id,
-                manifest_id=manifest.manifest_id,
-                pack_id=pack.pack_id,
-                cutoff_ms=pack.effective_start_ms,
-                inclusion_rules=("included:synthetic",),
+            self._stage(
+                store, pack, population_id, manifest,
                 expected_count=len(expected.PROGRAM_ITEMS),
                 items=substituted_items,
                 chunk_size=len(expected_items) - 1,
@@ -3131,9 +3101,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_exact_roster_completeness_is_not_source_authentication(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         population_id = "population:fixture:caller-asserted-roster"
         items = self._items(population_id)
         unrelated_source_bytes = b"source bytes not supplied to the owner"
@@ -3154,12 +3122,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store.register_population_manifest(manifest)
         # Exactness here is only relative to this caller-supplied roster; neither
         # the owner nor checker receives source bytes or an external attestation.
-        store.stage_population(
-            population_id=population_id,
-            manifest_id=manifest.manifest_id,
-            pack_id=pack.pack_id,
-            cutoff_ms=pack.effective_start_ms,
-            inclusion_rules=("included:synthetic",),
+        self._stage(
+            store, pack, population_id, manifest,
             expected_count=len(items),
             items=items,
             chunk_size=len(items),
@@ -3181,9 +3145,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_population_manifest_retry_authorization_supersession_and_binding(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         root = self._population_manifest()
         self.assertEqual(store.register_population_manifest(root)["status"], "REGISTERED")
         registered_package = store.export_continuity()
@@ -3354,9 +3316,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_population_staging_rejects_imported_count_projection_drift(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         population_id = "population:fixture:imported-count-drift"
         items = self._items(population_id)
         manifest = self._population_manifest(
@@ -3364,12 +3324,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             member_ids=tuple(sorted(item.item_id for item in items[:2])),
         )
         store.register_population_manifest(manifest)
-        store.stage_population(
-            population_id=population_id,
-            manifest_id=manifest.manifest_id,
-            pack_id=pack.pack_id,
-            cutoff_ms=pack.effective_start_ms,
-            inclusion_rules=("included:synthetic",),
+        self._stage(
+            store, pack, population_id, manifest,
             expected_count=2,
             items=items[:1],
             chunk_size=1,
@@ -3382,45 +3338,21 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.commit()
         before = _image(store.path)  # R1a: an export after this outside edit is refused
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_imported_count"):
-            store.stage_population(
-                population_id=population_id,
-                manifest_id=manifest.manifest_id,
-                pack_id=pack.pack_id,
-                cutoff_ms=pack.effective_start_ms,
-                inclusion_rules=("included:synthetic",),
+            self._stage(
+                store, pack, population_id, manifest,
                 expected_count=2,
                 items=items[1:2],
                 chunk_size=1,
             )
         self.assertEqual(_image(store.path), before)
-        with store._read_snapshot() as connection:
-            imported = connection.execute(
-                "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
-                (population_id,),
-            ).fetchone()
-            item_count = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM population_items WHERE population_id=?",
-                    (population_id,),
-                ).fetchone()[0]
-            )
-            events = [
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence",
-                    (population_id,),
-                )
-            ]
-        assert imported is not None
-        self.assertEqual(tuple(imported), (0, 0))
+        imported, item_count, events = self._population_rows(store, population_id)
+        self.assertEqual(imported, (0, 0))
         self.assertEqual(item_count, 1)
         self.assertEqual(events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(store.summary()["obligation_count"], 0)
 
     def test_population_count_backpressure_preserves_prior_chunks(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         population_id = "population:fixture-overflow"
         items = self._items(population_id)
         manifest = self._population_manifest(
@@ -3429,43 +3361,27 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         store.register_population_manifest(manifest)
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_extra_member"):
-            store.stage_population(
-                population_id=population_id,
-                manifest_id=manifest.manifest_id,
-                pack_id=pack.pack_id,
-                cutoff_ms=pack.effective_start_ms,
-                inclusion_rules=("included:synthetic",),
+            self._stage(
+                store, pack, population_id, manifest,
                 expected_count=3,
                 items=items[:4],
                 chunk_size=3,
             )
-        with store._read_snapshot() as connection:
-            imported = connection.execute(
-                "SELECT imported_count,status,source_complete FROM population_imports WHERE population_id=?",
-                (population_id,),
-            ).fetchone()
-            item_count = int(connection.execute("SELECT COUNT(*) FROM population_items WHERE population_id=?", (population_id,)).fetchone()[0])
-        assert imported is not None
-        self.assertEqual(tuple(imported), (3, "STAGED", 0))
+        imported, item_count, _events = self._population_rows(store, population_id, "imported_count,status,source_complete")
+        self.assertEqual(imported, (3, "STAGED", 0))
         self.assertEqual(item_count, 3)
         with self.assertRaisesRegex(FinancialIntegrityError, "population_source_incomplete"):
             store.validate_population(population_id)
         self._assert_verified(store)
-        with store._read_snapshot() as connection:
-            before_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
-        resumed = store.stage_population(
-            population_id=population_id,
-            manifest_id=manifest.manifest_id,
-            pack_id=pack.pack_id,
-            cutoff_ms=pack.effective_start_ms,
-            inclusion_rules=("included:synthetic",),
+        before_resume_events = self._population_rows(store, population_id)[2]
+        resumed = self._stage(
+            store, pack, population_id, manifest,
             expected_count=3,
             items=items[:3],
             chunk_size=3,
         )
         self.assertTrue(resumed["source_complete"])
-        with store._read_snapshot() as connection:
-            after_resume_events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
+        after_resume_events = self._population_rows(store, population_id)[2]
         self.assertEqual(before_resume_events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(
             after_resume_events,
@@ -3479,9 +3395,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_population_duplicate_member_is_rejected_before_source_completion(self) -> None:
-        store = self._make_owner()
-        pack = self._pack(expected.CONTROL_PACK_V1)
-        store.publish_control_pack(pack)
+        store, pack = self._owner_with_pack()
         population_id = "population:fixture-duplicate-input-limit"
         item = self._items(population_id)[0]
         manifest = self._population_manifest(
@@ -3490,24 +3404,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         store.register_population_manifest(manifest)
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_duplicate_member"):
-            store.stage_population(
-                population_id=population_id,
-                manifest_id=manifest.manifest_id,
-                pack_id=pack.pack_id,
-                cutoff_ms=pack.effective_start_ms,
-                inclusion_rules=("included:synthetic",),
+            self._stage(
+                store, pack, population_id, manifest,
                 expected_count=1,
                 items=(item,) * 258,
                 chunk_size=1,
             )
-        with store._read_snapshot() as connection:
-            imported = connection.execute(
-                "SELECT imported_count,source_complete FROM population_imports WHERE population_id=?",
-                (population_id,),
-            ).fetchone()
-            events = [str(row[0]) for row in connection.execute("SELECT kind FROM financial_events WHERE aggregate_type='POPULATION' AND aggregate_id=? ORDER BY event_sequence", (population_id,))]
-        assert imported is not None
-        self.assertEqual(tuple(imported), (1, 0))
+        imported, _item_count, events = self._population_rows(store, population_id)
+        self.assertEqual(imported, (1, 0))
         self.assertEqual(events, ["POPULATION_IMPORT_OPENED", "POPULATION_STAGED"])
         self.assertEqual(store.summary()["obligation_count"], 0)
         self._assert_verified(store)
@@ -3517,38 +3421,30 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         before = store.obligation_detail(expected.H_ITEM_ID)["revision"]
         self._advance_clock(store, expected.REPORT_CORRECTION_MS)
         with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_missing"):
-            store.record_reporting_correction(
-                item_id=expected.H_ITEM_ID,
-                report_id="report:missing-target",
-                evidence_id="evidence:report:missing-target",
+            self._report(
+                store.record_reporting_correction, "missing-target",
                 expected_revision=before,
                 event_at_ms=expected.REPORT_CORRECTION_MS,
                 supersedes="evidence:report:not-present",
             )
         self.assertEqual(store.obligation_detail(expected.H_ITEM_ID)["revision"], before)
         self._advance_clock(store, expected.P2_EVENT_MS)
-        store.record_reporting_evidence(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:original-bound",
-            evidence_id="evidence:report:original-bound",
+        self._report(
+            store.record_reporting_evidence, "original-bound",
             event_at_ms=expected.P2_EVENT_MS,
         )
         h_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
         item_revision = store.obligation_detail("item-01")["revision"]
         with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_item"):
-            store.record_reporting_correction(
-                item_id="item-01",
-                report_id="report:cross-item",
-                evidence_id="evidence:report:cross-item",
+            self._report(
+                store.record_reporting_correction, "cross-item", item_id="item-01",
                 expected_revision=item_revision,
                 event_at_ms=expected.REPORT_CORRECTION_MS,
                 supersedes="evidence:report:original-bound",
             )
         with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_chronology"):
-            store.record_reporting_correction(
-                item_id=expected.H_ITEM_ID,
-                report_id="report:too-early",
-                evidence_id="evidence:report:too-early",
+            self._report(
+                store.record_reporting_correction, "too-early",
                 expected_revision=h_revision,
                 event_at_ms=expected.P2_EVENT_MS,
                 supersedes="evidence:report:original-bound",
@@ -3564,10 +3460,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         )
         h_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
         with self.assertRaisesRegex(FinancialIntegrityError, "report_supersedes_kind"):
-            store.record_reporting_correction(
-                item_id=expected.H_ITEM_ID,
-                report_id="report:incompatible-target",
-                evidence_id="evidence:report:incompatible-target",
+            self._report(
+                store.record_reporting_correction, "incompatible-target",
                 expected_revision=h_revision,
                 event_at_ms=expected.REPORT_CORRECTION_MS + 1,
                 supersedes="evidence:payment:report-lineage-incompatible",
@@ -3577,17 +3471,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_reporting_correction_retry_is_identity_stable_and_side_effect_free(self) -> None:
         store = self._build_base()
         self._advance_clock(store, expected.P2_EVENT_MS)
-        store.record_reporting_evidence(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:retry-original",
-            evidence_id="evidence:report:retry-original",
+        self._report(
+            store.record_reporting_evidence, "retry-original",
             event_at_ms=expected.P2_EVENT_MS,
         )
         original_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
-        first = store.record_reporting_correction(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:retry-correction",
-            evidence_id="evidence:report:retry-correction",
+        first = self._report(
+            store.record_reporting_correction, "retry-correction",
             expected_revision=original_revision,
             supersedes="evidence:report:retry-original",
         )
@@ -3601,10 +3491,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         before_evaluation_count = len(before_detail["evaluations"])
         store.close()
         reopened = self._make_owner(path=store.path)
-        retry = reopened.record_reporting_correction(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:retry-correction",
-            evidence_id="evidence:report:retry-correction",
+        retry = self._report(
+            reopened.record_reporting_correction, "retry-correction",
             expected_revision=original_revision,
             supersedes="evidence:report:retry-original",
         )
@@ -3618,10 +3506,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(after_detail["evaluations"]), before_evaluation_count)
         self.assertEqual(after_detail["revision"], before_detail["revision"])
         with self.assertRaisesRegex(FinancialConflictError, "evidence_identity_conflict"):
-            reopened.record_reporting_correction(
-                item_id=expected.H_ITEM_ID,
-                report_id="report:retry-correction",
-                evidence_id="evidence:report:retry-correction",
+            self._report(
+                reopened.record_reporting_correction, "retry-correction",
                 expected_revision=original_revision,
                 event_at_ms=before_event_at + 1,
                 supersedes="evidence:report:retry-original",
@@ -3671,28 +3557,22 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_reporting_correction_chain_survives_restart_and_shadow_restore(self) -> None:
         store = self._build_base()
         self._advance_clock(store, expected.P2_EVENT_MS)
-        store.record_reporting_evidence(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:chain-original",
-            evidence_id="evidence:report:chain-original",
+        self._report(
+            store.record_reporting_evidence, "chain-original",
             event_at_ms=expected.P2_EVENT_MS,
         )
         first_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
         self._advance_clock(store, expected.REPORT_CORRECTION_MS)
-        store.record_reporting_correction(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:chain-correction-1",
-            evidence_id="evidence:report:chain-correction-1",
+        self._report(
+            store.record_reporting_correction, "chain-correction-1",
             expected_revision=first_revision,
             event_at_ms=expected.REPORT_CORRECTION_MS,
             supersedes="evidence:report:chain-original",
         )
         second_revision = store.obligation_detail(expected.H_ITEM_ID)["revision"]
         self._advance_clock(store, expected.REPORT_CORRECTION_MS + 1)
-        store.record_reporting_correction(
-            item_id=expected.H_ITEM_ID,
-            report_id="report:chain-correction-2",
-            evidence_id="evidence:report:chain-correction-2",
+        self._report(
+            store.record_reporting_correction, "chain-correction-2",
             expected_revision=second_revision,
             event_at_ms=expected.REPORT_CORRECTION_MS + 1,
             supersedes="evidence:report:chain-correction-1",
@@ -3867,10 +3747,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base_for_correction()
         self._prepare_reported(store)
         # Reverse p2 and replace it: the middle page then holds only a reversed payment and no claim row.
-        reversal = expected.P2_REVERSAL_EVIDENCE
-        self._advance_clock(store, reversal.event_at_ms)
-        store.reverse_payment(item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id=reversal.evidence_id,
-                              common_origin_id=reversal.common_origin_id, event_at_ms=reversal.event_at_ms)
+        self._reverse_p2(store)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
         RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
@@ -4266,13 +4143,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             for evidence_id in sorted(evidence_rows)
         ]
         self.assertEqual(receipt["evidence_bindings"], evidence_bindings)
-        scope = {
-            "state_id": expected.STATE_ID,
-            "deployment_id": expected.DEPLOYMENT_ID,
-            "program_id": expected.PROGRAM_ID,
-            "period_id": expected.PERIOD_ONE_ID,
-            "currency": expected.CURRENCY,
-        }
+        scope = dict(_SCOPE)
         input_snapshot = {
             "pre_revision": int(before_evaluate["revision"]),
             "obligation": {
@@ -5966,14 +5837,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base_for_correction()
         self._prepare_reported(store)
         reversal = expected.P2_REVERSAL_EVIDENCE
-        self._advance_clock(store, reversal.event_at_ms)
-        store.reverse_payment(
-            item_id=reversal.item_id,
-            payment_id="payment:h:p2",
-            evidence_id=reversal.evidence_id,
-            common_origin_id=reversal.common_origin_id,
-            event_at_ms=reversal.event_at_ms,
-        )
+        self._reverse_p2(store)
         before = _image(store.path)
         # Review 466178b: this answered DUPLICATE yet wrote an evidence row no event explains.
         with self.assertRaisesRegex(FinancialConflictError, "^payment_already_reversed$"):
