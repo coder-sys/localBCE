@@ -884,7 +884,8 @@ raise SystemExit(main(sys.argv[2:]))
         current = "the touched current evaluation and projection are recomputed; finish proves the cash deltas"
         excused = {**dict.fromkeys(("_verify_packs", "_verify_population_manifest_rows", "_verify_populations", "_verify_population_history", "_verify_program_funding", "_verify_adjustments", "_verify_current_snapshot", "_verify_restore_source_binding"), untouched),
                    **dict.fromkeys(("_verify_events", "_verify_payments", "_verify_conflicts", "_verify_duplicate_evidence", "_verify_event_references", "_verify_commands", "_verify_replayed_rows", "_verify_history_tables"), written),
-                   **dict.fromkeys(("_verify_obligations", "_verify_evaluations", "_verify_evaluation_history_events", "_verify_projections"), current)}
+                   **dict.fromkeys(("_verify_obligations", "_verify_evaluations", "_verify_evaluation_history_events", "_verify_projections"), current),
+                   "_verify_followups_in": "only reads whole tables into _verify_correction_followup_records, which runs before commit on the touched rows"}
         unreached = {name for name in names("_verify_connection") if name.startswith("_verify_") and name not in reached}
         self.assertEqual(sorted(unreached - set(excused)), [], "a whole-store rule that neither runs before commit nor has a written reason")
         self.assertEqual(sorted(set(excused) - unreached), [], "an excused rule that is now reachable or gone: delete its line")

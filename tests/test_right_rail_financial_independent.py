@@ -65,12 +65,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             period_id="period:test",
         )
         self.authority = owner.SyntheticTrustedAuthority()
-        self.store = owner.FinancialOwner(
-            path=self.db,
-            config=self.config,
-            trusted_authority=self.authority,
-            clock=self.clock,
-        )
+        self.store = self._open(self.db, self.clock)
         self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
         self.scope = {key: getattr(self.config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
@@ -224,6 +219,9 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             supersedes="evidence:report:H:correction",
         )
 
+    def _open(self, path: Path, clock: object | None = None) -> owner.FinancialOwner:
+        return owner.FinancialOwner(path=path, config=self.config, trusted_authority=self.authority, clock=clock or _Clock())
+
     def _verify(
         self,
         path: Path | None = None,
@@ -332,12 +330,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def _make_partial_import(self, name: str = "partial-import.sqlite") -> Path:
         path = Path(self.temp_dir.name) / name
-        partial = owner.FinancialOwner(
-            path=path,
-            config=self.config,
-            trusted_authority=self.authority,
-            clock=_Clock(),
-        )
+        partial = self._open(path)
         pack = self._fixture_pack()
         partial.publish_control_pack(pack)
         population_id = "population:partial-history"
@@ -494,42 +487,17 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             _restore_history_triggers(connection)
 
     @staticmethod
-    def _reorder_and_rehash_population_events(
-        path: Path,
-        population_id: str,
-        left_kind: str,
-        left_index: int,
-        right_kind: str,
-        right_index: int,
-    ) -> None:
-        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
-            connection.row_factory = sqlite3.Row
-            rows = list(connection.execute("SELECT * FROM financial_events ORDER BY event_sequence"))
-            times = [int(row["committed_at_ms"]) for row in rows]  # each position keeps its time: the clock stays in order
-            left_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == left_kind]
-            right_candidates = [index for index, row in enumerate(rows) if row["aggregate_id"] == population_id and row["kind"] == right_kind]
-            left_position = left_candidates[left_index]
-            right_position = right_candidates[right_index]
-            rows[left_position], rows[right_position] = rows[right_position], rows[left_position]
-            offset = 100_000
-            _drop_history_triggers(connection)
-            connection.execute("UPDATE financial_events SET event_sequence=event_sequence+?", (offset,))
-            _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
-            for sequence, (row, committed_at) in enumerate(zip(rows, times), start=1):
-                event_id, head = IndependentFinancialCheckerTests._rehashed_event(
-                    row, sequence, committed_at, previous, bytes(row["payload_digest"]),
-                )
-                connection.execute(
-                    "UPDATE financial_events SET event_sequence=?,event_id=?,previous_head=?,head=?,committed_at_ms=? WHERE event_sequence=?",
-                    (sequence, event_id, previous, head, committed_at, int(row["event_sequence"]) + offset),
-                )
-                previous = head
-            connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
-            _restore_history_triggers(connection)
+    def _reorder_and_rehash_population_events(path: Path, population_id: str, left_kind: str, left_index: int, right_kind: str, right_index: int) -> None:
+        def swap(rows: list[dict[str, object]]) -> None:  # each position keeps its sequence and time: the clock stays in order
+            left, right = ([row for row in rows if row["aggregate_id"] == population_id and row["kind"] == kind][index] for kind, index in ((left_kind, left_index), (right_kind, right_index)))
+            for column in ("aggregate_type", "aggregate_id", "kind", "before_revision", "after_revision", "payload_json"):
+                left[column], right[column] = right[column], left[column]
+
+        IndependentFinancialCheckerTests._edit_events_and_rehash(path, swap)
 
     @staticmethod
     def _edit_events_and_rehash(path: Path, edit: object) -> None:
-        """Let ``edit(rows)`` change event dicts (payload_json, committed_at_ms), then rehash the whole chain."""
+        """Let ``edit(rows)`` change event dicts in place (any column but event_sequence), then rehash the whole chain."""
         with closing(sqlite3.connect(path, isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             rows = [dict(row) for row in connection.execute("SELECT * FROM financial_events ORDER BY event_sequence")]
@@ -537,17 +505,23 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             _drop_history_triggers(connection)
             _base, _registered, previous = IndependentFinancialCheckerTests._history_rehash_context(connection, rows)
             for row in rows:
-                payload_digest = independent._digest(independent.EVENT_DOMAIN, str(row["payload_json"]).encode("ascii"))
-                event_id, head = IndependentFinancialCheckerTests._rehashed_event(
-                    row, int(row["event_sequence"]), int(row["committed_at_ms"]), previous, payload_digest,
+                row["payload_digest"] = independent._digest(independent.EVENT_DOMAIN, str(row["payload_json"]).encode("ascii"))
+                row["event_id"], row["head"] = IndependentFinancialCheckerTests._rehashed_event(
+                    row, int(row["event_sequence"]), int(row["committed_at_ms"]), previous, row["payload_digest"],
                 )
-                connection.execute(
-                    "UPDATE financial_events SET event_id=?,previous_head=?,head=?,committed_at_ms=?,payload_json=?,payload_digest=? WHERE event_sequence=?",
-                    (event_id, previous, head, row["committed_at_ms"], row["payload_json"], payload_digest, row["event_sequence"]),
-                )
-                previous = head
+                row["previous_head"], previous = previous, row["head"]
+                connection.execute(f"UPDATE financial_events SET {','.join(f'{column}=?' for column in row)} WHERE event_sequence=?", (*row.values(), row["event_sequence"]))
+                connection.execute("UPDATE history_pending SET record_bytes=? WHERE table_name='financial_events' AND row_key=?", (independent._record_bytes("financial_events", row), row["event_sequence"]))
+            connection.execute("UPDATE history_open SET byte_count=(SELECT SUM(record_bytes) FROM history_pending)")  # an edit may resize an open event
             connection.execute("UPDATE financial_meta SET history_head=? WHERE id=1", (previous,))
             _restore_history_triggers(connection)
+
+    def _unverified_package(self, path: Path) -> bytes:
+        """A compromised writer's export of a store no Owner can open: a handle that skipped open verification."""
+        writer = owner.FinancialOwner.__new__(owner.FinancialOwner)
+        writer._initialize(path=path, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE", owner_id="financial-owner-v1", identity_contract=None)
+        with closing(writer):
+            return _unverified_export(writer)
 
     def test_rehashed_history_whose_commit_times_run_backward_fails_database_and_package(self) -> None:
         def last_event_before_its_predecessor(rows: list[dict[str, object]]) -> None:
@@ -557,15 +531,9 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self._edit_events_and_rehash(target, last_event_before_its_predecessor)
         with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
             self._verify(target)
-        # No Owner can open it; a compromised writer's export must fail the package path too.
-        tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
-        tampered_owner._initialize(
-            path=target, config=self.config, trusted_authority=self.authority, clock=_Clock(), mode="LIVE",
-            owner_id="financial-owner-v1", identity_contract=None,
-        )
-        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):
+        with self.assertRaisesRegex(independent.IndependentFinancialError, "history:commit-order"):  # the package path too
             independent.verify_continuity_package(
-                _unverified_export(tampered_owner), expected_scope=self.scope, expected_authority=self.authority_binding,
+                self._unverified_package(target), expected_scope=self.scope, expected_authority=self.authority_binding,
             )
 
     def test_rehashed_evidence_received_before_its_event_committed_fails_replay(self) -> None:
@@ -583,6 +551,54 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self._edit_events_and_rehash(target, skew_support_received)
         with self.assertRaisesRegex(independent.IndependentFinancialError, "replay:evidence-received-at"):
             self._verify(target)
+
+    def test_checker_compares_exactly_and_package_path_walks_the_event_chain(self) -> None:
+        export = _unverified_export(self.store)
+        other_head = {"hex": "AB" * 64}  # a well-formed head no event chain reaches
+        for name, edit, code in (  # only the package digest is redone: the package path must walk the chain itself
+            ("unknown-population-kind", lambda rows, _: next(row for row in rows if row["aggregate_type"] == "POPULATION").update(kind="POPULATION_RETRACTED"), "history:event-kind"),
+            ("unknown-other-kind", lambda rows, _: next(row for row in rows if row["aggregate_type"] != "POPULATION").update(kind="RETRACTED"), "history:event-kind"),
+            ("broken-link", lambda rows, _: rows[1].update(previous_head=rows[0]["previous_head"]), "history:predecessor"),
+            ("missing-last-event", lambda rows, _: rows.pop(), "history:sequence-count"),
+            ("head-past-chain", lambda _, value: (value.update(history_head=other_head["hex"]), value["tables"]["financial_meta"][0].update(history_head=other_head)), "history:meta-head"),
+        ):
+            value = json.loads(export)
+            edit(value["tables"]["financial_events"], value)
+            value["package_digest"] = independent.continuity_package_digest(independent._package_payload_without_digest(value))
+            with self.subTest(name), self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                independent.verify_continuity_package(independent._canonical(value), expected_scope=self.scope, expected_authority=self.authority_binding)
+
+        def manifest_version_true(rows: list[dict[str, object]]) -> None:  # True == 1, so a loose compare would accept it
+            row = next(row for row in rows if row["aggregate_type"] == "POPULATION")
+            row["payload_json"] = independent._canonical({**json.loads(str(row["payload_json"])), "manifest_version": True}).decode("ascii")
+
+        target = self._copy_database("manifest-bool.sqlite")
+        self._edit_events_and_rehash(target, manifest_version_true)
+        with self.subTest("manifest-bool-for-int"), self.assertRaisesRegex(independent.IndependentFinancialError, "^history:population-open-manifest$"):
+            self._verify(target)
+        with closing(sqlite3.connect(self._copy_database("replay-exact.sqlite"))) as connection:
+            connection.row_factory = sqlite3.Row
+            events = [dict(row) for row in connection.execute("SELECT kind,payload_json,committed_at_ms FROM financial_events ORDER BY event_sequence")]
+            table, key, column, number = next(  # a stored 0/1 integer, written last by this extra event
+                (table, row[0], name, row[name]) for table in independent.CAPTURED_TABLES for row in connection.execute(f'SELECT * FROM "{table}"')
+                for name in independent.TABLE_COLUMNS[table][1:] if type(row[name]) is int and row[name] in (0, 1) and name != "received_at_ms"
+            )
+            cases = {
+                "bool-for-int": ({"table": table, "key": key, "set": {column: bool(number)}}, f"replay:{table}"),
+                "float-for-int": ({"table": table, "key": key, "set": {column: float(number)}}, f"replay:{table}"),
+                "extra-key": ({"table": table, "key": key, "set": {"unknown_column": number}}, f"replay:image:{table}"),
+                "missing-key": ({"table": table, "row": {independent.TABLE_COLUMNS[table][0]: "replay:new"}}, f"replay:image:{table}"),
+            }
+            independent._verify_replayed_rows(connection, events)  # the untouched history replays exactly
+            for name, (image, code) in cases.items():
+                edit = {"kind": "TEST_EDIT", "committed_at_ms": 0, "payload_json": independent._canonical({"rows": [image]}).decode("ascii")}
+                with self.subTest(name), self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
+                    independent._verify_replayed_rows(connection, [*events, edit])
+            connection.text_factory = type("Text", (str,), {})  # a caller's connection may return str subclasses
+            with self.subTest("subclass"), self.assertRaisesRegex(independent.IndependentFinancialError, "^replay:"):
+                independent._verify_replayed_rows(connection, events)
+        with self.subTest("sequence-elements"):  # no caller compares lists yet; [1] and [True] must still differ
+            self.assertNotEqual(independent._exact([1]), independent._exact([True]))
 
     def test_valid_owner_fixture_reconstructs_projection_and_identity(self) -> None:
         result = self._verify()
@@ -743,12 +759,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             self._verify(target)
         # Owner open replays the history and refuses before any read or write.
         with self.assertRaisesRegex(owner.FinancialIntegrityError, r"\Aopen_verification:history:event-id\Z"):
-            owner.FinancialOwner(
-                path=target,
-                config=self.config,
-                trusted_authority=self.authority,
-                clock=self.clock,
-            )
+            self._open(target, self.clock)
         self.assertEqual(target.read_bytes(), tampered_bytes)
 
     def test_stored_row_edits_fail_closed_without_repair(self) -> None:
@@ -837,12 +848,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self.assertEqual(valid_result["counts"]["populations"], 1)
         self.assertEqual(valid_result["sequence"], 5)
 
-        reopened = owner.FinancialOwner(
-            path=valid_path,
-            config=self.config,
-            trusted_authority=self.authority,
-            clock=_Clock(),
-        )
+        reopened = self._open(valid_path)
         self.assertEqual(reopened.verify_integrity()["mode"], "LIVE")
         package = reopened.export_continuity()
         independent.verify_continuity_package(
@@ -880,27 +886,9 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                 r"\Aopen_verification:history:population-imported-binding\Z",
                 msg=f"variant={variant}",
             ):
-                owner.FinancialOwner(
-                    path=target,
-                    config=self.config,
-                    trusted_authority=self.authority,
-                    clock=_Clock(),
-                )
+                self._open(target)
             self.assertEqual(target.read_bytes(), tampered_bytes, f"variant={variant}")
-            # The package path must reject such a store too. No Owner can open it,
-            # so export through a handle that skipped open verification, as a
-            # compromised writer would.
-            tampered_owner = owner.FinancialOwner.__new__(owner.FinancialOwner)
-            tampered_owner._initialize(
-                path=target,
-                config=self.config,
-                trusted_authority=self.authority,
-                clock=_Clock(),
-                mode="LIVE",
-                owner_id="financial-owner-v1",
-                identity_contract=None,
-            )
-            tampered_package = _unverified_export(tampered_owner)
+            tampered_package = self._unverified_package(target)  # the package path must reject such a store too
             with self.assertRaisesRegex(independent.IndependentFinancialError, "history:population-imported-binding"):
                 independent.verify_continuity_package(
                     tampered_package,
@@ -916,7 +904,6 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
                     clock=_Clock(),
                 )
             self.assertFalse(rejected_restore.exists())
-            tampered_owner.close()
 
     def test_reporting_supersedes_fork_fails_closed_without_repair(self) -> None:
         target = self._copy_database("reporting-lineage-fork.sqlite")
