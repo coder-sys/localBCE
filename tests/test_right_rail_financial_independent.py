@@ -73,13 +73,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
         self._populate_owner()
-        self.scope = {
-            "state_id": self.config.state_id,
-            "deployment_id": self.config.deployment_id,
-            "program_id": self.config.program_id,
-            "period_id": self.config.period_id,
-            "currency": self.config.currency,
-        }
+        self.scope = {key: getattr(self.config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
         self.authority_binding = {
             "authority_id": self.authority.authority_id,
             "epoch": self.authority.epoch,

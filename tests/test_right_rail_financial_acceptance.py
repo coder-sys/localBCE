@@ -429,6 +429,25 @@ def _record_fixture_support(store: FinancialOwner, evidence: expected.EvidenceEx
     )
 
 
+def _record_fixture_payment(
+    store: FinancialOwner | FinancialMirror,
+    evidence: expected.EvidenceExpectation | expected.RecipientPaymentExpectation,
+    *,
+    payment_id: str,
+) -> dict[str, object]:
+    return store.record_payment_evidence(
+        item_id=evidence.item_id,
+        payment_id=payment_id,
+        common_origin_id=evidence.common_origin_id,
+        amount_cents=evidence.amount_cents or 0,
+        evidence_id=evidence.evidence_id,
+        event_at_ms=evidence.event_at_ms,
+        source_id=evidence.source_id,
+        source_version=evidence.source_version,
+        local_ref=evidence.local_ref,
+    )
+
+
 class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="right-rail-financial-acceptance-")
@@ -775,7 +794,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     @staticmethod
     def _record_cash(store: FinancialOwner) -> None:
         evidence = expected.H_CASH_EVIDENCE
-        RightRailFinancialAcceptanceTests._record_fixture_payment(store, evidence, payment_id="payment:h:cash")
+        _record_fixture_payment(store, evidence, payment_id="payment:h:cash")
 
     @staticmethod
     def _advance_clock(store: FinancialOwner, at_ms: int) -> None:
@@ -845,7 +864,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def _record_p2(store: FinancialOwner) -> None:
         evidence = expected.P2_PAYMENT_EVIDENCE
         RightRailFinancialAcceptanceTests._advance_clock(store, evidence.event_at_ms)
-        RightRailFinancialAcceptanceTests._record_fixture_payment(store, evidence, payment_id="payment:h:p2")
+        _record_fixture_payment(store, evidence, payment_id="payment:h:p2")
 
     @staticmethod
     def _record_report(store: FinancialOwner) -> None:
@@ -924,15 +943,15 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_p2(store)
         self._record_report(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
-        duplicate_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
+        duplicate_result = _record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(duplicate_result["status"], "DUPLICATE")
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
+        conflict_result = _record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         self._reverse_p2(store)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
+        _record_fixture_payment(store, replacement, payment_id="payment:h:p3")
 
     def _prepare_final(self, store: FinancialOwner) -> str:
         claim_id = self._prepare_acknowledged(store)
@@ -975,25 +994,6 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             if store.obligation_detail(row["item_id"])["evidence"]
         }
         self.assertEqual(len(item_ids_with_evidence), expected_evidence_items)
-
-    @staticmethod
-    def _record_fixture_payment(
-        store: FinancialOwner | FinancialMirror,
-        evidence: expected.EvidenceExpectation | expected.RecipientPaymentExpectation,
-        *,
-        payment_id: str,
-    ) -> dict[str, object]:
-        return store.record_payment_evidence(
-            item_id=evidence.item_id,
-            payment_id=payment_id,
-            common_origin_id=evidence.common_origin_id,
-            amount_cents=evidence.amount_cents or 0,
-            evidence_id=evidence.evidence_id,
-            event_at_ms=evidence.event_at_ms,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
-        )
 
     def _first_service_decision_package(self, mirror: FinancialMirror) -> dict[str, object]:
         """Assemble a test-only view from existing owner-backed Mirror references."""
@@ -1237,18 +1237,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         store = self._build_base_for_correction()
         self._prepare_reported(store)
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
-        result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
+        result = _record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(result["status"], "DUPLICATE")
         self._assert_snapshot(store, expected.H_P2_DUPLICATE_UNCHANGED)
         conflict = expected.P2_CONFLICT_EVIDENCE
-        result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
+        result = _record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(result["status"], "CONFLICT")
         self._assert_snapshot(store, expected.H_P2_CONFLICT_VISIBLE)
         self._reverse_p2(store)
         self._assert_snapshot(store, expected.H_P2_REVERSED)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
+        _record_fixture_payment(store, replacement, payment_id="payment:h:p3")
         self._assert_snapshot(store, expected.H_P3_REPLACED)
         self._assert_verified(store)
 
@@ -2703,7 +2703,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_population(store, expected.CASE_01.expected_population_evidence_count)
         self._assert_snapshot(store, expected.H_MISSING)
         for payment in expected.OTHER_RECIPIENT_PAYMENTS[:18]:
-            result = self._record_fixture_payment(mirror, payment, payment_id=payment.payment_id)
+            result = _record_fixture_payment(mirror, payment, payment_id=payment.payment_id)
             self.assertEqual(result["status"], "RECORDED")
 
         partial = mirror.summary()
@@ -2716,13 +2716,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
 
         final_payment = expected.OTHER_RECIPIENT_PAYMENTS[18]
-        final_other = self._record_fixture_payment(mirror, final_payment, payment_id=final_payment.payment_id)
+        final_other = _record_fixture_payment(mirror, final_payment, payment_id=final_payment.payment_id)
         self.assertEqual(final_other["status"], "RECORDED")
         self.assertEqual(mirror.summary()["received_cash_cents"], expected.OTHER_TOTAL_CENTS)
         self.assertEqual(mirror.obligation_detail(expected.H_ITEM_ID)["verification_status"], "MISSING_EVIDENCE")
 
         h_cash = expected.H_CASH_EVIDENCE
-        h_cash_result = RightRailFinancialAcceptanceTests._record_fixture_payment(mirror, h_cash, payment_id=expected.H_INITIAL_PAYMENT_ID)
+        h_cash_result = _record_fixture_payment(mirror, h_cash, payment_id=expected.H_INITIAL_PAYMENT_ID)
         self.assertEqual(h_cash_result["status"], "RECORDED")
         claim = expected.OFFSET_CLAIM_EVIDENCE
         claim_result = store.record_offset_claim(
@@ -2841,18 +2841,18 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
         late_payment = expected.P2_PAYMENT_EVIDENCE
         self._advance_clock(test_store, late_payment.event_at_ms)
-        late_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, late_payment, payment_id="payment:h:p2")
+        late_result = _record_fixture_payment(test_mirror, late_payment, payment_id="payment:h:p2")
         self.assertEqual(late_result["status"], "RECORDED")
         self._assert_snapshot(test_store, expected.H_P2_RECEIVED_LATE)
 
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
         cash_before_duplicate = test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"]
-        duplicate_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, duplicate, payment_id="payment:h:p2-confirmation")
+        duplicate_result = _record_fixture_payment(test_mirror, duplicate, payment_id="payment:h:p2-confirmation")
         self.assertEqual(duplicate_result["status"], "DUPLICATE")
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
 
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(test_mirror, conflict, payment_id="payment:h:p2-conflict")
+        conflict_result = _record_fixture_payment(test_mirror, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"], cash_before_duplicate)
         self.assertEqual(test_store.obligation_detail(expected.H_ITEM_ID)["timely"], 0)
@@ -3647,7 +3647,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._record_p2(store)
         self._record_report(store)
         conflict = expected.P2_CONFLICT_EVIDENCE
-        conflict_result = RightRailFinancialAcceptanceTests._record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
+        conflict_result = _record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")
         self.assertEqual(conflict_result["status"], "CONFLICT")
         final_package = store.decision_package(expected.H_ITEM_ID)
         self.assertEqual(final_package["case"]["status"], "RESOLVED")
@@ -3750,7 +3750,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._reverse_p2(store)
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        RightRailFinancialAcceptanceTests._record_fixture_payment(store, replacement, payment_id="payment:h:p3")
+        _record_fixture_payment(store, replacement, payment_id="payment:h:p3")
         self._assert_verdict_ignores_window(store)
 
     def test_c05_v7_decision_package_survives_test_restore(self) -> None:

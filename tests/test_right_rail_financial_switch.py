@@ -36,37 +36,32 @@ def _output(binding: dict[str, object], member_results: list[dict[str, object]],
     }
 
 
+def _shadow_setup(case: unittest.TestCase, shadow_name: str) -> None:
+    """The shared Switch fixture: the incumbent Owner, its SHADOW restore, and the exports before any comparison.
+    Trusted inputs come from the test's own authority and Owner config, never from the package under comparison."""
+    from tests.test_right_rail_financial_acceptance import RightRailFinancialAcceptanceTests
+
+    case.fixture = RightRailFinancialAcceptanceTests(methodName="runTest")
+    case.fixture.setUp()
+    case.addCleanup(case.fixture.doCleanups)
+    case.incumbent = case.fixture._build_base()
+    case.incumbent_before = case.incumbent.export_continuity()
+    case.shadow = FinancialOwner.restore_continuity(
+        package_bytes=case.incumbent_before,
+        recovered_path=case.fixture._path(shadow_name),
+        trusted_authority=case.fixture.authority,
+        restore_mode="SHADOW",
+    )
+    case.addCleanup(case.shadow.close)  # R1a: its export opens the writer
+    case.snapshot = case.shadow_before = case.shadow.export_continuity()
+    scope = ("state_id", "deployment_id", "program_id", "period_id", "currency")
+    case.trust = {"trusted_authority": case.fixture.authority, "expected_scope": {key: getattr(case.shadow.config, key) for key in scope}}
+    case.facts = inspect_shadow_snapshot(case.snapshot, **case.trust)
+
+
 class FinancialSwitchTests(unittest.TestCase):
     def setUp(self) -> None:
-        from tests.test_right_rail_financial_acceptance import RightRailFinancialAcceptanceTests
-
-        self.fixture = RightRailFinancialAcceptanceTests(methodName="runTest")
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.incumbent = self.fixture._build_base()
-        self.incumbent_before = self.incumbent.export_continuity()
-        self.shadow = FinancialOwner.restore_continuity(
-            package_bytes=self.incumbent_before,
-            recovered_path=self.fixture._path("switch-shadow.sqlite"),
-            trusted_authority=self.fixture.authority,
-            restore_mode="SHADOW",
-        )
-        self.addCleanup(self.shadow.close)  # R1a: its export opens the writer
-        self.snapshot = self.shadow_before = self.shadow.export_continuity()
-        config = self.shadow.config
-        # Trusted inputs come from the test's own authority and Owner config,
-        # never from the snapshot being inspected.
-        self.trust = {
-            "trusted_authority": self.fixture.authority,
-            "expected_scope": {
-                "state_id": config.state_id,
-                "deployment_id": config.deployment_id,
-                "program_id": config.program_id,
-                "period_id": config.period_id,
-                "currency": config.currency,
-            },
-        }
-        self.facts = inspect_shadow_snapshot(self.snapshot, **self.trust)
+        _shadow_setup(self, "switch-shadow.sqlite")
         self.approval = self._approval()
         self.reference = self._reference()
         self.candidate = self._candidate()
