@@ -72,7 +72,6 @@ class SourceProfile:
     version: int
     subject: str
     scope: str
-    observation_time: int | None
     effective_start: int
     effective_end: int
     source_roles: tuple[str, ...]
@@ -98,8 +97,6 @@ class SourceProfile:
             raise ValueError("profile:identity")
         if type(self.version) is not int or self.version <= 0:
             raise ValueError("profile:version")
-        if self.observation_time is not None and (type(self.observation_time) is not int or self.observation_time < 0):
-            raise ValueError("profile:observation-time")
         if (
             type(self.effective_start) is not int
             or type(self.effective_end) is not int
@@ -123,22 +120,15 @@ class SourceProfile:
             raise ValueError("profile:nonmembership-policy")
         if self.canonical_order != "lexicographic-v1" or self.root_rule != "source-root-v1":
             raise ValueError("profile:canonical-rules")
+        if type(self.source_role_details) is not tuple or len(self.source_role_details) != 2:
+            raise ValueError("profile:source-role-details")
         if self.source_contract_digest is not None:
             if (
-                self.source_role_details is None
-                or type(self.source_contract_digest) is not str
+                type(self.source_contract_digest) is not str
                 or len(self.source_contract_digest) != 128
                 or any(character not in "0123456789abcdef" for character in self.source_contract_digest)
             ):
                 raise ValueError("profile:source-contract")
-        if self.source_role_details is None:
-            if self.observation_time is None:
-                raise ValueError("profile:observation-window")
-            if any(value is not None for value in (self.credential_id, self.enrollment_id, self.observation_start, self.observation_end)) or not self.allow_nonmembership:
-                raise ValueError("profile:v1-extra")
-            return
-        if type(self.source_role_details) is not tuple or len(self.source_role_details) != 2:
-            raise ValueError("profile:source-role-details")
         if self.version not in (2, 3):
             raise ValueError("profile:v2-version")
         if any(not isinstance(role, SourceRole) for role in self.source_role_details):
@@ -146,8 +136,6 @@ class SourceProfile:
         role_ids = tuple(role.source_id for role in self.source_role_details)
         if role_ids != self.source_roles or role_ids != tuple(sorted(role_ids)) or len(set(role_ids)) != len(role_ids):
             raise ValueError("profile:source-role-order")
-        if self.observation_time is not None:
-            raise ValueError("profile:v2-snapshot-time")
         if any(type(value) is not str or not value for value in (self.credential_id, self.enrollment_id)):
             raise ValueError("profile:subject-identities")
         if (
@@ -161,21 +149,6 @@ class SourceProfile:
             raise ValueError("profile:observation-window-interval")
 
     def material(self) -> dict[str, object]:
-        if self.source_role_details is None:
-            return {
-                "profile_id": self.profile_id,
-                "version": self.version,
-                "subject": self.subject,
-                "scope": self.scope,
-                "observation_time": self.observation_time,
-                "effective_start": self.effective_start,
-                "effective_end": self.effective_end,
-                "source_roles": list(self.source_roles),
-                "require_complete": self.require_complete,
-                "verifier_id": self.verifier_id,
-                "verifier_epoch": self.verifier_epoch,
-                "evidence_mode": self.evidence_mode.value,
-            }
         material = {
             "profile_id": self.profile_id,
             "version": self.version,
@@ -274,7 +247,6 @@ class SourceAdmission:
 
 MAX_ADAPTER_BYTES = 262_144
 MAX_RECEIPT_BYTES = 32_768
-RECEIPT_SCHEMA = "mirror-source-admission-receipt-v1"
 RECEIPT_SCHEMA_V2 = "mirror-source-admission-receipt-v2"
 SANITIZED_OBSERVATION_SCHEMA = "mirror-source-observation-v1"
 SANITIZED_OBSERVATION_VERSION = 1
@@ -320,10 +292,6 @@ def _scoped_observation_digest(raw: bytes) -> str:
     digest.update(b"BL/MIRROR/INGRESS/V6/sanitized-observation\0")
     digest.update(raw)
     return digest.hexdigest()
-
-
-def _v2_profile(profile: SourceProfile) -> bool:
-    return profile.source_role_details is not None
 
 
 def _sanitized_values(
@@ -462,16 +430,9 @@ class SourceAdmissionService:
         return result
 
     def _validate_result(self, result: VerifiedSourceCoverage) -> None:
-        if _v2_profile(self.profile):
-            if not isinstance(result.graph_profile, SourceProfile) or result.graph_profile != self.profile:
-                raise_redacted(SourceAdmissionError, "result:profile-mismatch")
-            profile = result.graph_profile
-        else:
-            if result.graph_profile is not None and result.graph_profile != self.profile:
-                raise_redacted(SourceAdmissionError, "result:profile-mismatch")
-            profile = result.graph_profile or self.profile
-        if not isinstance(profile, SourceProfile) or profile.source_contract_digest != self.profile.source_contract_digest:
+        if not isinstance(result.graph_profile, SourceProfile) or result.graph_profile != self.profile:
             raise_redacted(SourceAdmissionError, "result:profile-mismatch")
+        profile = self.profile
         if type(result.profile_id) is not str or result.profile_id != profile.profile_id:
             raise SourceAdmissionError("result:profile-mismatch")
         if (
@@ -483,12 +444,8 @@ class SourceAdmissionService:
             raise SourceAdmissionError("result:subject-or-scope-mismatch")
         if type(result.observation_time) is not int:
             raise SourceAdmissionError("result:observation-mismatch")
-        if _v2_profile(profile):
-            assert profile.observation_start is not None and profile.observation_end is not None
-            # The verifier's capture profile must match the configured window.
-            if not profile.observation_start <= result.observation_time < profile.observation_end:
-                raise SourceAdmissionError("result:observation-mismatch")
-        elif result.observation_time != profile.observation_time:
+        # The verifier's capture profile must match the configured window.
+        if not profile.observation_start <= result.observation_time < profile.observation_end:  # type: ignore[operator]
             raise SourceAdmissionError("result:observation-mismatch")
         if (
             type(result.effective_start) is not int
@@ -523,11 +480,7 @@ class SourceAdmissionService:
                 raise SourceAdmissionError("graph:partial-coverage")
             if not isinstance(source.get("coverage_observation_time"), int):
                 raise SourceAdmissionError("graph:observation-mismatch")
-            if _v2_profile(profile):
-                assert profile.observation_start is not None and profile.observation_end is not None
-                if not profile.observation_start <= source["coverage_observation_time"] < profile.observation_end:
-                    raise SourceAdmissionError("graph:observation-mismatch")
-            elif source.get("coverage_observation_time") != profile.observation_time:
+            if not profile.observation_start <= source["coverage_observation_time"] < profile.observation_end:  # type: ignore[operator]
                 raise SourceAdmissionError("graph:observation-mismatch")
             start = source.get("coverage_effective_start")
             end = source.get("coverage_effective_end")
@@ -546,22 +499,13 @@ class SourceAdmissionService:
             raise SourceAdmissionError("adapter:byte-cap")
         result = self._verify(adapter_bytes)
         self._validate_result(result)
-        effective_profile = result.graph_profile or self.profile
+        profile = self.profile
         try:
-            if _v2_profile(effective_profile):
-                graph_artifact = graph.build_report(result.graph_input, profile=effective_profile)
-            else:
-                graph_artifact = graph.build_report(result.graph_input)
+            graph_artifact = graph.build_report(result.graph_input, profile=profile)
         except Exception:
             raise_redacted(SourceAdmissionError, "graph:producer-reject")
         try:
-            if _v2_profile(effective_profile):
-                independent = graph_independent.verify_bytes_v2(
-                    graph_artifact,
-                    {effective_profile.profile_id: effective_profile},
-                )
-            else:
-                independent = graph_independent.verify_bytes(graph_artifact)
+            independent = graph_independent.verify_bytes_v2(graph_artifact, {profile.profile_id: profile})
         except Exception:
             raise_redacted(SourceAdmissionError, "graph:independent-reject")
         if independent.get("accepted") is not True:
@@ -570,7 +514,7 @@ class SourceAdmissionService:
             artifact = graph.parse_canonical(graph_artifact, artifact=True)
         except Exception:
             raise_redacted(SourceAdmissionError, "graph:artifact-shape")
-        self._validate_graph_coverage(artifact, effective_profile)
+        self._validate_graph_coverage(artifact, profile)
         report_id = independent.get("report_id")
         if not isinstance(report_id, str):
             raise SourceAdmissionError("graph:report-id")
@@ -595,13 +539,13 @@ class SourceAdmissionService:
             },
         )
         body: dict[str, object] = {
-            "schema": RECEIPT_SCHEMA_V2 if _v2_profile(effective_profile) else RECEIPT_SCHEMA,
-            "profile_id": effective_profile.profile_id,
-            "profile_version": effective_profile.version,
-            "profile_digest": effective_profile.profile_digest,
-            "verifier_id": effective_profile.verifier_id,
-            "verifier_epoch": effective_profile.verifier_epoch,
-            "evidence_mode": effective_profile.evidence_mode.value,
+            "schema": RECEIPT_SCHEMA_V2,
+            "profile_id": profile.profile_id,
+            "profile_version": profile.version,
+            "profile_digest": profile.profile_digest,
+            "verifier_id": profile.verifier_id,
+            "verifier_epoch": profile.verifier_epoch,
+            "evidence_mode": profile.evidence_mode.value,
             "adapter_digest": _raw_digest("adapter", adapter_bytes),
             "source_result_digest": source_result_digest,
             "graph_input_digest": graph_input_digest,
@@ -611,22 +555,22 @@ class SourceAdmissionService:
         }
         source_receipt_value = {"receipt_id": _digest("receipt-id", body), **body}
         source_receipt = _canonical(source_receipt_value)
-        observation_value, verification_receipt_value = _sanitized_values(artifact, result, effective_profile)
+        observation_value, verification_receipt_value = _sanitized_values(artifact, result, profile)
         observation = _canonical(observation_value)
         verification_receipt = _canonical(verification_receipt_value)
         if expected_receipt is not None and (type(expected_receipt) is not bytes or expected_receipt != source_receipt):
             raise SourceAdmissionError("retry:conflict")
         return SourceAdmission(
-            profile_id=effective_profile.profile_id,
-            profile_digest=effective_profile.profile_digest,
-            verifier_id=effective_profile.verifier_id,
-            verifier_epoch=effective_profile.verifier_epoch,
+            profile_id=profile.profile_id,
+            profile_digest=profile.profile_digest,
+            verifier_id=profile.verifier_id,
+            verifier_epoch=profile.verifier_epoch,
             graph_input=result.graph_input,
             graph_artifact=graph_artifact,
             receipt=source_receipt,
             report_id=report_id,
             production_source_authentication=False,
-            profile_version=effective_profile.version,
+            profile_version=profile.version,
             source_contract_digest=result.source_contract_digest,
             envelope_digest=_raw_digest("envelope", adapter_bytes),
             page_digests=tuple(result.page_digests),
