@@ -20,7 +20,7 @@ The fixture categories, source names, references, and amount range are invented,
 
 ## Limits and nonclaims
 
-There is no real issuer, state, payer, provider identity, source integration, UI, persistence, network, telemetry, claim submission, payment, or State financial-owner path. No PHI, provider/person identifier, claim ID, or claim-derived fingerprint is accepted or emitted. User-supplied evaluation time is fixture input, not trusted time. Claims continue only through a provider's existing approved channel outside this core.
+There is no real issuer, state, payer, provider identity, source integration, UI or network beyond one loopback-only synthetic check screen (`provider_app/screen.py`), persistence, outbound network, telemetry, claim submission, payment, or State financial-owner path. No PHI, provider/person identifier, claim ID, or claim-derived fingerprint is accepted or emitted. User-supplied evaluation time is fixture input, not trusted time. Claims continue only through a provider's existing approved channel outside this core.
 
 ## Real-use design
 

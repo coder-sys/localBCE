@@ -8,10 +8,12 @@ import re
 import socket
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from provider_app.api import preflight_bytes
 from provider_app.fix_list import fix_list
+from provider_app import screen
 from provider_app.screen import MAX_BODY, make_server
 from tests.helpers import VECTORS, bundle_bytes, canonical_bytes, request_bytes
 
@@ -98,6 +100,9 @@ class ServerTests(unittest.TestCase):
             ("POST", "/" + _MARK, b"{}", _J, 404, "NOT_FOUND"),
             ("GET", "/../README.md", None, {}, 404, "NOT_FOUND"),
             ("GET", "/screen.css?" + _MARK, None, {}, 404, "NOT_FOUND"),
+            ("GET", "/", None, {"Host": "evil.example"}, 421, "HOST_REFUSED"),
+            ("POST", "/check", b"{}", {**_J, "Host": "evil.example:%d" % self.port}, 421, "HOST_REFUSED"),
+            ("GET", "/cases", None, {"Host": "127.0.0.1"}, 421, "HOST_REFUSED"),
         ]
         for method, path, body, headers, status, code in hostile:
             with self.subTest(method=method, path=path[:20], body=(body or b"")[:20]):
@@ -108,10 +113,14 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(code or error, error)
                 self.assertRegex(error, r"^[A-Z_]+$")
         with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:  # no Content-Length at all
-            sock.sendall(b"POST /check HTTP/1.0\r\n\r\n")
+            sock.sendall(b"POST /check HTTP/1.0\r\nHost: 127.0.0.1:%d\r\n\r\n" % self.port)
             self.assertIn(b"BODY_INVALID", sock.makefile("rb").read())
         self.assertEqual(200, self.call("GET", "/")[0])
         self.assertEqual(200, self.call("POST", "/check", ('{"request":%s,"bundle":%s}' % (req, bun)).encode(), _J)[0])
+        self.assertEqual(200, self.call("GET", "/", headers={"Host": "localhost:%d" % self.port})[0])
+        with mock.patch.object(screen, "preflight_bytes", side_effect=RuntimeError(_MARK)):  # an internal fault
+            status, raw = self.call("POST", "/check", ('{"request":%s,"bundle":%s}' % (req, bun)).encode(), _J)
+        self.assertEqual((500, b'{"error":"CHECK_FAILED"}'), (status, raw))
 
     def test_every_declared_route_exists_and_every_outcome_is_declared(self) -> None:
         for path in _MODEL["assets"] + ["/cases"]:
@@ -180,6 +189,8 @@ class InteractionModelTests(unittest.TestCase):
         self.assertEqual(in_page, {c["selector"][1:] for c in _MODEL["controls"].values() if c["selector"]})
         self.assertLess(_HTML.index('id="case"'), _HTML.index('id="check"'), "focus order: pick, then check")
         self.assertNotRegex(_HTML, r'tabindex="[1-9]')
+        self.assertIn("if (pending) return", _JS)  # a second Check while one runs does nothing
+        self.assertIn("mine !== generation", _JS)  # a stale answer never lands on a newly picked case
         self.assertIn(_MODEL["screens"]["loading"]["message"], _HTML)
         for path in re.findall(r'"(/[\w./-]+)"', _JS):
             self.assertIn(path, _ROUTES, path)

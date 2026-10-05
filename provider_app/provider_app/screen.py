@@ -20,7 +20,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _PAGES = {"/": ("index.html", "text/html"), "/screen.css": ("screen.css", "text/css"),
           "/screen.js": ("screen.js", "text/javascript"), "/interaction-model.json": ("interaction-model.json", "application/json")}
 MAX_BODY = 2 * MAX_JSON_BYTES + 64  # {"request":...,"bundle":...}: each part keeps the codec's own bound
-_STATUS_CODES = {400: "BODY_INVALID", 404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 413: "BODY_TOO_LARGE"}
+_STATUS_CODES = {400: "BODY_INVALID", 404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 413: "BODY_TOO_LARGE", 421: "HOST_REFUSED", 500: "CHECK_FAILED"}
 _CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'"
 
 
@@ -86,7 +86,17 @@ class _Handler(BaseHTTPRequestHandler):
     def send_error(self, code, message=None, explain=None) -> None:  # fixed JSON, never the request line
         self._send(code, {"error": _STATUS_CODES.get(code, "REQUEST_REFUSED")})
 
+    def _foreign_host(self) -> bool:
+        """A page another site points at 127.0.0.1 (DNS rebinding) carries its own Host; refuse it."""
+        port = self.server.server_address[1]
+        if self.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            return False
+        self.send_error(421)
+        return True
+
     def do_GET(self) -> None:
+        if self._foreign_host():
+            return None
         if self.path == "/cases":
             return self._send(200, _cases())
         if self.path not in _PAGES:
@@ -95,6 +105,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(200, (_ROOT / "screen" / name).read_bytes(), kind)
 
     def do_POST(self) -> None:
+        if self._foreign_host():
+            return None
         if self.path != "/check":
             return self.send_error(405 if self.path in _PAGES or self.path == "/cases" else 404)
         try:
@@ -104,9 +116,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not 0 <= size <= MAX_BODY:
             return self.send_error(413 if size > MAX_BODY else 400)
         try:
-            self._send(200, _check(self.rfile.read(size)))
+            result = _check(self.rfile.read(size))
         except InputError as refusal:
-            self._send(400, {"error": refusal.code})
+            return self._send(400, {"error": refusal.code})
+        except Exception:  # a fault is a fixed code too, never a traceback or the input
+            return self.send_error(500)
+        self._send(200, result)
 
     do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = lambda self: self.send_error(405)
 
