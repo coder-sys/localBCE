@@ -69,6 +69,38 @@ class FixListTests(unittest.TestCase):
                 fix_list(canonical_bytes(result))
             self.assertEqual("RESULT_SHAPE", caught.exception.code)
 
+    def _refused(self, vector: str, edit) -> None:
+        case = next(c for c in VECTORS["cases"] if c["id"] == vector)
+        result = json.loads(preflight_bytes(request_bytes(case), bundle_bytes(case)))
+        edit(result, next(r for r in result["rules"] if r["outcome"] != "PASS"))
+        with self.assertRaises(InputError) as caught:
+            fix_list(canonical_bytes(result))
+        self.assertEqual("RESULT_SHAPE", caught.exception.code)
+
+    def test_codes_a_missing_rule_does_not_render_are_still_checked(self) -> None:
+        self._refused("support-reference-absent", lambda _, rule: rule.update(reasonCodes=["NOPE"]))
+
+    def test_codes_must_be_allowed_for_the_rule_outcome(self) -> None:
+        for code in ("charge_cents", "BUNDLE_BLOCKED", "REQUIRED_FACT_MISSING"):
+            with self.subTest(code):
+                self._refused("partial-source", lambda _, rule: rule.update(reasonCodes=[code]))
+        self._refused("support-reference-absent", lambda _, rule: rule.update(reasonCodes=["SERVICE_CATEGORY_REQUIRES_REVIEW"]))
+
+    def test_a_non_pass_rule_with_no_codes_is_refused(self) -> None:
+        self._refused("partial-source", lambda _, rule: rule.update(reasonCodes=[]))
+        self._refused("support-reference-absent", lambda _, rule: rule.update(reasonCodes=[]))
+        self._refused("support-reference-absent", lambda _, rule: rule.update(missingFacts=[]))
+
+    def test_top_level_outcome_and_run_mode_are_checked(self) -> None:
+        for key, bad in (("outcome", "NOPE"), ("runMode", "NOPE"), ("outcome", None)):
+            with self.subTest(key, bad=bad):
+                self._refused("partial-source", lambda result, _: result.update({key: bad}))
+
+    def test_the_list_is_empty_exactly_when_the_outcome_is_pass(self) -> None:
+        self._refused("partial-source", lambda result, _: result.update(outcome="PASS"))
+        self._refused("partial-source", lambda result, rule: (rule.update(outcome="PASS", reasonCodes=[]), result.update(outcome="HUMAN_CHECK")))
+        self._refused("real-use-blocked", lambda result, _: result.update(outcome="PASS"))
+
     def test_hostile_bytes_are_refused_typed_by_the_codec(self) -> None:
         for raw, code in (
             (b'{"a":1,"a":2}', "JSON_DUPLICATE_KEY"),

@@ -33,31 +33,41 @@ TEXT = {
 }
 
 
+_CODES = {  # reason codes each (bundle blocked, rule outcome) may carry; anything else is refused
+    (False, "PASS"): frozenset(),
+    (False, "MISSING"): frozenset({"REQUIRED_FACT_MISSING", "SUPPORT_REFERENCE_MISSING", "SOURCE_EFFECTIVE_TIME_MISSING", "SOURCE_RECEIVED_TIME_MISSING"}),
+    (False, "HUMAN_CHECK"): frozenset(TEXT) - {f.value for f in FactName} - {"BUNDLE_BLOCKED"},
+    (True, "HUMAN_CHECK"): frozenset({"BUNDLE_BLOCKED"}),
+}
+
+
 def fix_list(result_bytes: bytes) -> tuple[tuple[str, str, str, str], ...]:
-    """Return (ruleId, citation, fact, text) per fix; empty when nothing is needed.
+    """Return (ruleId, citation, fact, text) per fix; empty exactly when the outcome is PASS.
 
     Claim-level lines (real use, blocked rule set) carry empty ruleId, citation and fact.
-    Any unknown or malformed content raises InputError and returns nothing.
+    Any unknown, inconsistent or malformed content raises InputError and returns nothing.
     """
     doc = _load(result_bytes, "RESULT_TOO_LARGE")
     try:
-        if doc["contract"] != RESULT_CONTRACT:
+        if doc["contract"] != RESULT_CONTRACT or doc["outcome"] not in ("PASS", "MISSING", "HUMAN_CHECK") or doc["runMode"] not in ("SYNTHETIC_TEST", "REAL_USE"):
             raise InputError("RESULT_SHAPE")
-        if doc["runMode"] == "REAL_USE":
-            return (("", "", "", REAL_USE_TEXT),)
-        if doc["bundleIssues"]:
-            return (("", "", "", TEXT["BUNDLE_BLOCKED"]),)
+        blocked = bool(doc["bundleIssues"])
         fixes = []
         for rule in doc["rules"]:
-            outcome = rule["outcome"]
-            if outcome == "PASS":
-                continue
-            rule_id, citation = RuleId(rule["ruleId"]).value, rule["citation"]
-            if type(citation) is not str or outcome not in ("MISSING", "HUMAN_CHECK"):
+            outcome, codes, facts = rule["outcome"], rule["reasonCodes"], rule["missingFacts"]
+            if type(codes) is not list or type(facts) is not list or not set(codes) <= _CODES[blocked, outcome]:
                 raise InputError("RESULT_SHAPE")
-            for code in rule["missingFacts"] if outcome == "MISSING" else rule["reasonCodes"]:
-                fact = FactName(code).value if outcome == "MISSING" else ""
-                fixes.append((rule_id, citation, fact, TEXT[code]))
+            if bool(codes) != (outcome != "PASS") or bool(facts) != (outcome == "MISSING") or type(rule["citation"]) is not str:
+                raise InputError("RESULT_SHAPE")
+            rule_id, citation = RuleId(rule["ruleId"]).value, rule["citation"]
+            for code in facts or codes:
+                fixes.append((rule_id, citation, FactName(code).value if facts else "", TEXT[code]))
+        if doc["runMode"] == "REAL_USE":
+            fixes = [("", "", "", REAL_USE_TEXT)]
+        elif blocked:
+            fixes = [("", "", "", TEXT["BUNDLE_BLOCKED"])]
+        if bool(fixes) != (doc["outcome"] != "PASS"):
+            raise InputError("RESULT_SHAPE")
         return tuple(fixes)
     except InputError:
         raise
