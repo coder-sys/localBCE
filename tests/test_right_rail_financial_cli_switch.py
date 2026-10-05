@@ -9,9 +9,9 @@ import json
 from pathlib import Path
 import unittest
 
-from app.right_rail_financial_owner import FinancialOwner
-from app.right_rail_financial_switch import decode_replay_input, inspect_shadow_snapshot
+from app.right_rail_financial_switch import decode_replay_input
 from tests import rightrail_financial_expected_cases as expected
+from tests.test_right_rail_financial_switch import _shadow_setup
 from tools import right_rail_financial_cli as financial_cli
 
 
@@ -27,37 +27,9 @@ def _json_bytes(value: object) -> bytes:
 
 class FinancialSwitchCliTests(unittest.TestCase):
     def setUp(self) -> None:
-        from tests.test_right_rail_financial_acceptance import RightRailFinancialAcceptanceTests
-
-        self.fixture = RightRailFinancialAcceptanceTests(methodName="runTest")
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.incumbent = self.fixture._build_base()
-        incumbent_package = self.incumbent.export_continuity()
-        self.shadow = FinancialOwner.restore_continuity(
-            package_bytes=incumbent_package,
-            recovered_path=self.fixture._path("switch-cli-shadow.sqlite"),
-            trusted_authority=self.fixture.authority,
-            restore_mode="SHADOW",
-        )
-        self.addCleanup(self.shadow.close)  # R1a: its export opens the writer
-        self.package = self.shadow.export_continuity()
-        self.incumbent_before = self.incumbent.export_continuity()
-        self.shadow_before = self.shadow.export_continuity()
+        _shadow_setup(self, "switch-cli-shadow.sqlite")
+        self.package = self.snapshot
         config = self.shadow.config
-        # Trusted inputs come from the test's own authority and Owner config,
-        # never from the package under comparison.
-        self.trust = {
-            "trusted_authority": self.fixture.authority,
-            "expected_scope": {
-                "state_id": config.state_id,
-                "deployment_id": config.deployment_id,
-                "program_id": config.program_id,
-                "period_id": config.period_id,
-                "currency": config.currency,
-            },
-        }
-        self.facts = inspect_shadow_snapshot(self.package, **self.trust)
         self.authority_path = self.fixture._path("switch-cli-authority.json")
         self.authority_path.write_bytes(_json_bytes(financial_cli.authority_file_record(self.fixture.authority)))
         self.trust_args = [

@@ -87,7 +87,7 @@ class PaymentCrashTests(unittest.TestCase):
 
     def _prepare(self, kind: str) -> None:
         if kind == "reverse":
-            acceptance.RightRailFinancialAcceptanceTests._record_fixture_payment(self.store, _EVIDENCE, payment_id="payment:h:cash")
+            acceptance._record_fixture_payment(self.store, _EVIDENCE, payment_id="payment:h:cash")
 
     def _verify(self, path: Path) -> None:
         verify_database(path, expected_scope=self.store._scope_value(), expected_authority=owner_module._checker_authority(self.fixture.authority))
@@ -150,7 +150,7 @@ class PaymentCrashTests(unittest.TestCase):
     def _fresh(self, kind: str, name: str):
         store = self.fixture._build_base(path=self.directory / name)
         if kind == "reverse":
-            acceptance.RightRailFinancialAcceptanceTests._record_fixture_payment(store, _EVIDENCE, payment_id="payment:h:cash")
+            acceptance._record_fixture_payment(store, _EVIDENCE, payment_id="payment:h:cash")
         return store
 
     def test_the_worker_killed_before_its_answer_writes_nothing_and_a_retry_matches_a_clean_run(self) -> None:

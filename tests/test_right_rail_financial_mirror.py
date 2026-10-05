@@ -56,13 +56,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.db = self.root / "owner.sqlite"
         self.clock = _Clock()
-        self.config = owner.FinancialOwnerConfig(
-            state_id=PERIOD_ONE_SCOPE.state_id,
-            deployment_id=PERIOD_ONE_SCOPE.deployment_id,
-            program_id=PERIOD_ONE_SCOPE.program_id,
-            period_id=PERIOD_ONE_SCOPE.period_id,
-            currency=PERIOD_ONE_SCOPE.currency,
-        )
+        self.config = owner.FinancialOwnerConfig(**dataclasses.asdict(PERIOD_ONE_SCOPE))
         self.authority = owner.SyntheticTrustedAuthority()
         self.store = owner.FinancialOwner(
             path=self.db,
@@ -143,11 +137,10 @@ class FinancialMirrorTests(unittest.TestCase):
             expected_revision=1,
         )
 
-    def _prepare_action(self) -> dict[str, object]:
-        self._prepare_claim()
-        receipt = self.mirror.current_evaluation_receipt(H_ITEM_ID)
-        self.clock.value = 1_774_922_399_999  # recorded when decided: a later event never commits before this one
-        return self.mirror.reject_offset_and_authorize_correction(
+    @staticmethod
+    def _reject_correction(target: FinancialMirror) -> dict[str, object]:
+        receipt = target.current_evaluation_receipt(H_ITEM_ID)
+        return target.reject_offset_and_authorize_correction(
             item_id=H_ITEM_ID,
             claim_id="claim:offset:h",
             action_id="action:correction:h",
@@ -156,6 +149,11 @@ class FinancialMirrorTests(unittest.TestCase):
             evaluation_id=receipt["evaluation_id"],
             evaluation_result_digest=receipt["result_digest"],
         )
+
+    def _prepare_action(self) -> dict[str, object]:
+        self._prepare_claim()
+        self.clock.value = 1_774_922_399_999  # recorded when decided: a later event never commits before this one
+        return self._reject_correction(self.mirror)
 
     def _followup(self) -> tuple[str, list[str]]:
         outputs = self.mirror.correction_followup_outputs(H_ITEM_ID, "action:correction:h")
@@ -669,25 +667,19 @@ class FinancialMirrorTests(unittest.TestCase):
             expected_revision=0,
         )
         self.assertEqual(original_retry["status"], "DUPLICATE")
-        first = self.mirror.record_reporting_correction(
-            item_id=H_ITEM_ID,
-            report_id="report:default:correction:h",
-            evidence_id="evidence:report:default:correction:h",
-            supersedes="evidence:report:default:prior:h",
-            expected_revision=original_revision,
-        )
+        def correct() -> dict[str, object]:
+            return self.mirror.record_reporting_correction(
+                item_id=H_ITEM_ID, report_id="report:default:correction:h", evidence_id="evidence:report:default:correction:h",
+                supersedes="evidence:report:default:prior:h", expected_revision=original_revision,
+            )
+
+        first = correct()
         self.assertEqual(first["status"], "RECORDED")
         before = self.mirror.obligation_detail(H_ITEM_ID, limit=20)
         before_summary = self.mirror.summary()
         before_row = next(row for row in before["evidence_references"] if row["evidence_id"] == "evidence:report:default:correction:h")
         self.clock.value += 1_000_000
-        retry = self.mirror.record_reporting_correction(
-            item_id=H_ITEM_ID,
-            report_id="report:default:correction:h",
-            evidence_id="evidence:report:default:correction:h",
-            supersedes="evidence:report:default:prior:h",
-            expected_revision=original_revision,
-        )
+        retry = correct()
         self.assertEqual(retry["status"], "DUPLICATE")
         after = self.mirror.obligation_detail(H_ITEM_ID, limit=20)
         after_summary = self.mirror.summary()
@@ -983,16 +975,7 @@ class FinancialMirrorTests(unittest.TestCase):
         destination = self.root / "test-restore-then-reject.sqlite"
         restored = self.mirror.restore_test_continuity(package, destination)
         self.addCleanup(restored.owner.close)
-        receipt = restored.current_evaluation_receipt(H_ITEM_ID)
-        decision = restored.reject_offset_and_authorize_correction(
-            item_id=H_ITEM_ID,
-            claim_id="claim:offset:h",
-            action_id="action:correction:h",
-            expected_revision=receipt["revision"],
-            decision_at_ms=1_774_922_400_000,
-            evaluation_id=receipt["evaluation_id"],
-            evaluation_result_digest=receipt["result_digest"],
-        )
+        decision = self._reject_correction(restored)
         self.assertEqual(decision["status"], "CORRECTION_AUTHORIZED")
 
     def test_continuity_tamper_oversize_source_overwrite_and_existing_destination_reject(self) -> None:
@@ -1021,13 +1004,7 @@ class FinancialMirrorTests(unittest.TestCase):
 
     def test_continuity_validation_requires_caller_trusted_authority(self) -> None:
         package = self.mirror.export_continuity()
-        scope = {
-            "state_id": self.config.state_id,
-            "deployment_id": self.config.deployment_id,
-            "program_id": self.config.program_id,
-            "period_id": self.config.period_id,
-            "currency": self.config.currency,
-        }
+        scope = dataclasses.asdict(PERIOD_ONE_SCOPE)
         with self.assertRaisesRegex(FinancialMirrorContinuityError, "continuity_trusted_authority_required"):
             FinancialMirror.validate_continuity_package(package, trusted_authority=None, expected_scope=scope)
         other_authority = owner.SyntheticTrustedAuthority(authority_id="synthetic-authority-other")

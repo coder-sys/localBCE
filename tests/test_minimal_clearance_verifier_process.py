@@ -349,17 +349,19 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         second = os.pipe()
         return [first[1], second[1]], [first[0], second[0]]
 
-    def test_handle_list_is_exact_and_attribute_cleanup_is_ordered(self):
-        kernel = _Kernel()
+    def _create(self, kernel, **extra):
         parent, readers = self._descriptors()
         try:
             process._create_process_with_owned_output_handles(
-                kernel32=kernel, output_handles=(13101, 13102), parent_descriptors=parent,
-                **self._inputs(),
+                kernel32=kernel, output_handles=(13101, 13102), parent_descriptors=parent, **extra, **self._inputs(),
             )
         finally:
             for descriptor in readers:
                 os.close(descriptor)
+
+    def test_handle_list_is_exact_and_attribute_cleanup_is_ordered(self):
+        kernel = _Kernel()
+        self._create(kernel)
         self.assertEqual(kernel.handles, [13101, 13102])
         create_args = next(value for name, value in kernel.events if name == "create_args")
         self.assertTrue(create_args[0])
@@ -369,15 +371,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
 
     def test_verify_handle_list_adds_only_artifact_stdin(self):
         kernel = _Kernel()
-        parent, readers = self._descriptors()
-        try:
-            process._create_process_with_owned_output_handles(
-                kernel32=kernel, output_handles=(13101, 13102), stdin_handle=13103,
-                parent_descriptors=parent, **self._inputs(),
-            )
-        finally:
-            for descriptor in readers:
-                os.close(descriptor)
+        self._create(kernel, stdin_handle=13103)
         self.assertEqual(kernel.handles, [13101, 13102, 14000])
         self.assertIn(("duplicate", 14000), kernel.events)
         self.assertIn(("close", 14000), kernel.events)
@@ -482,6 +476,13 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         self.assertLess(names.index("terminate_process"), names.index("wait"))
         self.assertLess(names.index("wait"), names.index("pin_close"))
 
+    @staticmethod
+    def _pin_real(executable, payload):
+        return process._open_pinned_executable(
+            kernel32=ctypes.WinDLL("kernel32", use_last_error=True), executable=executable,
+            expected_executable_size_bytes=len(payload), expected_executable_sha256=hashlib.sha256(payload).digest(),
+        )
+
     @unittest.skipUnless(os.name == "nt", "Windows share-mode pin test")
     def test_real_pinned_handle_denies_write_delete_and_replace_until_close(self):
         payload = b"real-share-mode-pin"
@@ -491,13 +492,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             replacement = root / "replacement.bin"
             executable.write_bytes(payload)
             replacement.write_bytes(b"replacement")
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            pinned = process._open_pinned_executable(
-                kernel32=kernel32,
-                executable=executable,
-                expected_executable_size_bytes=len(payload),
-                expected_executable_sha256=hashlib.sha256(payload).digest(),
-            )
+            pinned = self._pin_real(executable, payload)
             try:
                 with self.assertRaises(OSError):
                     executable.write_bytes(b"changed")
@@ -521,13 +516,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
             executable = parent / "harmless.exe"
             shutil.copyfile(sys._base_executable, executable)
             payload = executable.read_bytes()
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            pinned = process._open_pinned_executable(
-                kernel32=kernel32,
-                executable=executable,
-                expected_executable_size_bytes=len(payload),
-                expected_executable_sha256=hashlib.sha256(payload).digest(),
-            )
+            pinned = self._pin_real(executable, payload)
             try:
                 with self.assertRaises(OSError):
                     parent.rename(sibling)
@@ -621,19 +610,8 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         kernel = _Kernel(overlap=True)
         kernels = (kernel, kernel)
 
-        def launch(kernel):
-            parent, readers = self._descriptors()
-            try:
-                process._create_process_with_owned_output_handles(
-                    kernel32=kernel, output_handles=(13101, 13102), parent_descriptors=parent,
-                    **self._inputs(),
-                )
-            finally:
-                for descriptor in readers:
-                    os.close(descriptor)
-
         with ThreadPoolExecutor(max_workers=2) as executor:
-            list(executor.map(launch, kernels))
+            list(executor.map(self._create, kernels))
         self.assertFalse(hasattr(process, "_PROCESS_CREATION_LOCK"))
         self.assertTrue(all(any(name == "create" for name, _ in kernel.events) for kernel in kernels))
 
@@ -641,17 +619,8 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         for failure in ("attribute_initialize", "attribute_update", "create"):
             with self.subTest(failure=failure):
                 kernel = _Kernel(failure=failure)
-                parent, readers = self._descriptors()
-                try:
-                    with patch.object(process.ctypes, "get_last_error", return_value=5):
-                        with self.assertRaises(process.VerifierProcessError):
-                            process._create_process_with_owned_output_handles(
-                                kernel32=kernel, output_handles=(13101, 13102), parent_descriptors=parent,
-                                **self._inputs(),
-                            )
-                finally:
-                    for descriptor in readers:
-                        os.close(descriptor)
+                with patch.object(process.ctypes, "get_last_error", return_value=5), self.assertRaises(process.VerifierProcessError):
+                    self._create(kernel)
                 self.assertEqual(sum(name == "attr_delete" for name, _ in kernel.events), 0 if failure == "attribute_initialize" else 1)
 
     def test_workspace_identity_ignores_volatile_windows_attribute_bits(self):

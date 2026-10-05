@@ -32,6 +32,7 @@ from tests.test_right_rail_financial_acceptance import (
     _image,
     _items_from_fixture,
     _population_manifest_from_fixture,
+    _record_fixture_payment,
     _record_fixture_support,
 )
 
@@ -123,17 +124,14 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     @staticmethod
     def _record_cash(store: FinancialOwner, cents: int = EXPECTED_H_CASH_CENTS) -> None:
-        evidence = expected.H_CASH_EVIDENCE
-        store.record_payment_evidence(
-            item_id=evidence.item_id,
-            payment_id="payment:h:cash",
-            common_origin_id=evidence.common_origin_id,
-            amount_cents=cents,
-            evidence_id=evidence.evidence_id,
-            event_at_ms=evidence.event_at_ms,
-            source_id=evidence.source_id,
-            source_version=evidence.source_version,
-            local_ref=evidence.local_ref,
+        _record_fixture_payment(store, replace(expected.H_CASH_EVIDENCE, amount_cents=cents), payment_id="payment:h:cash")
+
+    @staticmethod
+    def _reverse_p2(store: FinancialOwner) -> dict[str, object]:
+        reversal = expected.P2_REVERSAL_EVIDENCE
+        return store.reverse_payment(
+            item_id=reversal.item_id, payment_id="payment:h:p2", evidence_id=reversal.evidence_id,
+            common_origin_id=reversal.common_origin_id, event_at_ms=reversal.event_at_ms,
         )
 
     @staticmethod
@@ -155,32 +153,27 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         _record_fixture_support(store, expected.OFFSET_SUPPORT_EVIDENCE)
 
     @staticmethod
-    def _authorize(store: FinancialOwner, claim_id: str) -> None:
+    def _decide(store: FinancialOwner, method: str, claim_id: str, action_id: str, decision_ms: int) -> None:
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
-        RightRailFinancialSemanticAdapterTests._advance_clock(store, expected.OFFSET_DECISION_MS)  # recorded when decided
-        store.authorize_offset(
+        RightRailFinancialSemanticAdapterTests._advance_clock(store, decision_ms)  # recorded when decided
+        getattr(store, method)(
             item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
             expected_revision=receipt["revision"],
-            action_id=expected.ACTION_OFFSET_ID,
-            decision_at_ms=expected.OFFSET_DECISION_MS,
+            action_id=action_id,
+            decision_at_ms=decision_ms,
             evaluation_id=receipt["evaluation_id"],
             evaluation_result_digest=receipt["result_digest"],
         )
 
     @staticmethod
+    def _authorize(store: FinancialOwner, claim_id: str) -> None:
+        RightRailFinancialSemanticAdapterTests._decide(store, "authorize_offset", claim_id, expected.ACTION_OFFSET_ID, expected.OFFSET_DECISION_MS)
+
+    @staticmethod
     def _reject(store: FinancialOwner, claim_id: str) -> None:
-        receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
-        RightRailFinancialSemanticAdapterTests._advance_clock(store, expected.CORRECTION_AUTH_MS)  # recorded when decided
-        store.reject_offset_and_authorize_correction(
-            item_id=expected.H_ITEM_ID,
-            claim_id=claim_id,
-            expected_revision=receipt["revision"],
-            action_id=expected.ACTION_CORRECTION_ID,
-            decision_at_ms=expected.CORRECTION_AUTH_MS,
-            evaluation_id=receipt["evaluation_id"],
-            evaluation_result_digest=receipt["result_digest"],
-        )
+        RightRailFinancialSemanticAdapterTests._decide(
+            store, "reject_offset_and_authorize_correction", claim_id, expected.ACTION_CORRECTION_ID, expected.CORRECTION_AUTH_MS)
 
     @staticmethod
     def _ack(store: FinancialOwner) -> None:
@@ -197,17 +190,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         claim_id = self._prepare_acknowledged(store)
         payment = expected.P2_PAYMENT_EVIDENCE
         self._advance_clock(store, payment.event_at_ms)
-        store.record_payment_evidence(
-            item_id=payment.item_id,
-            payment_id="payment:h:p2",
-            common_origin_id=payment.common_origin_id,
-            amount_cents=EXPECTED_OFFSET_CENTS,
-            evidence_id=payment.evidence_id,
-            event_at_ms=payment.event_at_ms,
-            source_id=payment.source_id,
-            source_version=payment.source_version,
-            local_ref=payment.local_ref,
-        )
+        _record_fixture_payment(store, payment, payment_id="payment:h:p2")
         original = expected.REPORT_ORIGINAL_EVIDENCE
         self._advance_clock(store, original.event_at_ms)
         store.record_reporting_evidence(
@@ -524,72 +507,24 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         conflict = expected.P2_CONFLICT_EVIDENCE
         self._advance_clock(store, duplicate.event_at_ms)
         self.assertEqual(
-            store.record_payment_evidence(
-                item_id=duplicate.item_id,
-                payment_id="payment:h:p2-confirmation",
-                common_origin_id=duplicate.common_origin_id,
-                amount_cents=EXPECTED_OFFSET_CENTS,
-                evidence_id=duplicate.evidence_id,
-                event_at_ms=duplicate.event_at_ms,
-                source_id=duplicate.source_id,
-                source_version=duplicate.source_version,
-                local_ref=duplicate.local_ref,
-            )["status"],
+            _record_fixture_payment(store, duplicate, payment_id="payment:h:p2-confirmation")["status"],
             "DUPLICATE",
         )
         self.assertEqual(
-            store.record_payment_evidence(
-                item_id=conflict.item_id,
-                payment_id="payment:h:p2-conflict",
-                common_origin_id=conflict.common_origin_id,
-                amount_cents=conflict.amount_cents or EXPECTED_OFFSET_CENTS + 1,
-                evidence_id=conflict.evidence_id,
-                event_at_ms=conflict.event_at_ms,
-                source_id=conflict.source_id,
-                source_version=conflict.source_version,
-                local_ref=conflict.local_ref,
-            )["status"],
+            _record_fixture_payment(store, conflict, payment_id="payment:h:p2-conflict")["status"],
             "CONFLICT",
         )
         reversal = expected.P2_REVERSAL_EVIDENCE
         self._advance_clock(store, reversal.event_at_ms)
-        self.assertEqual(
-            store.reverse_payment(
-                item_id=reversal.item_id,
-                payment_id="payment:h:p2",
-                evidence_id=reversal.evidence_id,
-                common_origin_id=reversal.common_origin_id,
-                event_at_ms=reversal.event_at_ms,
-            )["status"],
-            "REVERSED",
-        )
+        self.assertEqual(self._reverse_p2(store)["status"], "REVERSED")
         with closing(store._connect()) as connection:
             received_at_ms = int(connection.execute("SELECT received_at_ms FROM evidence WHERE evidence_id=?", (reversal.evidence_id,)).fetchone()[0])
         if isinstance(store.clock, _Clock):
             store.clock.value = received_at_ms - 1
-        self.assertEqual(
-            store.reverse_payment(
-                item_id=reversal.item_id,
-                payment_id="payment:h:p2",
-                evidence_id=reversal.evidence_id,
-                common_origin_id=reversal.common_origin_id,
-                event_at_ms=reversal.event_at_ms,
-            )["status"],
-            "DUPLICATE",
-        )
+        self.assertEqual(self._reverse_p2(store)["status"], "DUPLICATE")
         replacement = expected.P3_REPLACEMENT_EVIDENCE
         self._advance_clock(store, replacement.event_at_ms)
-        store.record_payment_evidence(
-            item_id=replacement.item_id,
-            payment_id="payment:h:p3",
-            common_origin_id=replacement.common_origin_id,
-            amount_cents=EXPECTED_OFFSET_CENTS,
-            evidence_id=replacement.evidence_id,
-            event_at_ms=replacement.event_at_ms,
-            source_id=replacement.source_id,
-            source_version=replacement.source_version,
-            local_ref=replacement.local_ref,
-        )
+        _record_fixture_payment(store, replacement, payment_id="payment:h:p3")
 
     def test_duplicate_conflict_reversal_replacement_and_reporting_are_real_facts(self) -> None:
         store = self._build_base()
