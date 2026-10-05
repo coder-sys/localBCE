@@ -3152,6 +3152,25 @@ def _evaluation_event_kinds(connection: sqlite3.Connection, obligation_id: str |
     return {str(row[0]): str(row[1]) for row in rows if row[0] is not None}
 
 
+def _amount_projection(
+    owed: int, cash: int, claimed: int, lawful: int, total: int, completion: int | None, due_at_ms: int, reporting_complete: int,
+) -> dict[str, object]:
+    """The amount and timeliness fields an evaluation row and its obligation projection both bind."""
+
+    return {
+        "owed_cents": owed,
+        "claimed_adjustment_cents": claimed,
+        "lawful_adjustment_cents": lawful,
+        "received_cash_cents": cash,
+        "shortfall_cents": max(owed - total, 0),
+        "overage_cents": max(total - owed, 0),
+        "cash_satisfied": int(cash >= owed),
+        "amount_satisfied": int(total >= owed),
+        "timely": int(completion is not None and completion <= due_at_ms),
+        "reporting_complete": reporting_complete,
+    }
+
+
 def _evaluation_projection_from_input(
     snapshot: dict[str, object],
     *,
@@ -3174,14 +3193,11 @@ def _evaluation_projection_from_input(
     lawful = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] == "AUTHORIZED"), "evaluation-input:lawful")
     total = _add_cents(cash, lawful, "evaluation-input:total")
     owed = int(obligation["owed_cents"])
-    shortfall = max(owed - total, 0)
-    overage = max(total - owed, 0)
     completion = _completion_time(owed, payments, determinations, "evaluation-input:completion", lambda: _add_cents(lawful, cash, "evaluation-input:completion-total"))
-    amount_satisfied = int(total >= owed)
-    cash_satisfied = int(cash >= owed)
-    if amount_satisfied and int(obligation["reporting_complete"]):
+    amounts = _amount_projection(owed, cash, claimed, lawful, total, completion, int(obligation["due_at_ms"]), int(obligation["reporting_complete"]))
+    if amounts["amount_satisfied"] and amounts["reporting_complete"]:
         case_status = "RESOLVED"
-    elif amount_satisfied:
+    elif amounts["amount_satisfied"]:
         case_status = "ACTIONED"
     elif latch in {"CORRECTION_REQUIRED", "AUTHORIZED"}:
         case_status = latch
@@ -3194,16 +3210,7 @@ def _evaluation_projection_from_input(
         "revision": int(evaluation["revision"]),
         "rule_version": int(obligation["rule_version"]),
         "evidence_ids": [str(row["evidence_id"]) for row in evidence],
-        "owed_cents": owed,
-        "claimed_adjustment_cents": claimed,
-        "lawful_adjustment_cents": lawful,
-        "received_cash_cents": cash,
-        "shortfall_cents": shortfall,
-        "overage_cents": overage,
-        "cash_satisfied": cash_satisfied,
-        "amount_satisfied": amount_satisfied,
-        "timely": int(completion is not None and completion <= int(obligation["due_at_ms"])),
-        "reporting_complete": int(obligation["reporting_complete"]),
+        **amounts,
         "verification_status": "CONFLICT_VISIBLE" if conflicts else ("SUPPORTED" if evidence else "MISSING_EVIDENCE"),
         "case_status": case_status,
         "delivery_status": delivery,
@@ -3708,8 +3715,6 @@ def _verify_projections(
         lawful = _sum_cents([int(row["amount_cents"]) for row in obligation_claims if row["status"] == "AUTHORIZED"], "projection:lawful")
         total = _add_cents(cash, lawful, "projection:total")
         owed = int(obligation["owed_cents"])
-        shortfall = max(owed - total, 0)
-        overage = max(total - owed, 0)
         evidence_count = len(evidence_by.get(obligation["item_id"], []))
         conflict_count = len(conflicts_by.get(obligation_id, []))
         verification = "CONFLICT_VISIBLE" if conflict_count else ("SUPPORTED" if evidence_count else "MISSING_EVIDENCE")
@@ -3719,10 +3724,7 @@ def _verify_projections(
             _sum_cents([int(row["amount_cents"]) for row in active_payments if row["active"] == 1], "projection:cash"),
             "projection:completion-total",
         ))
-        timely = int(completion is not None and completion <= obligation["due_at_ms"])
-        amount_satisfied = int(total >= owed)
-        cash_satisfied = int(cash >= owed)
-        reporting_complete = int(obligation["reporting_complete"])
+        amounts = _amount_projection(owed, cash, claimed, lawful, total, completion, obligation["due_at_ms"], int(obligation["reporting_complete"]))
         action_rows = actions_by.get(obligation_id, [])
         delivery = "NONE" if not action_rows else str(
             max(action_rows, key=lambda row: (row["revision"], row["action_id"]))["status"]
@@ -3730,16 +3732,7 @@ def _verify_projections(
         current = max(evaluations.get(obligation_id, []), key=lambda row: row["revision"])
         expected = {
             "revision": obligation["revision"],
-            "owed_cents": owed,
-            "claimed_adjustment_cents": claimed,
-            "lawful_adjustment_cents": lawful,
-            "received_cash_cents": cash,
-            "shortfall_cents": shortfall,
-            "overage_cents": overage,
-            "cash_satisfied": cash_satisfied,
-            "amount_satisfied": amount_satisfied,
-            "timely": timely,
-            "reporting_complete": reporting_complete,
+            **amounts,
             "verification_status": verification,
             "case_status": current["case_status"],
             "delivery_status": delivery,
@@ -3767,7 +3760,7 @@ def _verify_projections(
             "due_at_ms": obligation["due_at_ms"],
         }
         projections[obligation_id] = projection
-        for key, value in (("owed_cents", owed), ("received_cash_cents", cash), ("lawful_adjustment_cents", lawful), ("shortfall_cents", shortfall)):
+        for key, value in (("owed_cents", owed), ("received_cash_cents", cash), ("lawful_adjustment_cents", lawful), ("shortfall_cents", amounts["shortfall_cents"])):
             totals[key] = _add_cents(totals[key], value, f"projection:total:{key}")
     return projections, totals
 
@@ -4387,6 +4380,12 @@ def _mapped(check: Any) -> dict[str, object]:
         _fail("database:malformed", error)
 
 
+def _checked_identity(current_snapshot_package: bytes | None, restore_source_package: bytes | None, **expected: Any) -> dict[str, object]:
+    if current_snapshot_package is not None and restore_source_package is not None:
+        _fail("continuity:duplicate-input")
+    return _identity(**expected)
+
+
 def verify_database(
     path: str | Path,
     *,
@@ -4405,16 +4404,7 @@ def verify_database(
     the source package used to create a continuity-restored database.
     """
 
-    if current_snapshot_package is not None and restore_source_package is not None:
-        _fail("continuity:duplicate-input")
-    identity = _identity(
-        expected_config=expected_config,
-        expected_scope=expected_scope,
-        expected_authority=expected_authority,
-        expected_mode=expected_mode,
-        expected_owner_id=expected_owner_id,
-        expected_continuity_epoch=expected_continuity_epoch,
-    )
+    identity = _checked_identity(current_snapshot_package, restore_source_package, expected_config=expected_config, expected_scope=expected_scope, expected_authority=expected_authority, expected_mode=expected_mode, expected_owner_id=expected_owner_id, expected_continuity_epoch=expected_continuity_epoch)
     connection = _open_readonly(path)
     check = lambda: _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)  # noqa: E731
     data_version = lambda: _mapped(lambda: connection.execute("PRAGMA data_version").fetchone()[0])  # noqa: E731
@@ -4457,14 +4447,5 @@ def verify_database_connection(
 
     if not isinstance(connection, sqlite3.Connection):
         _fail("database:connection")
-    if current_snapshot_package is not None and restore_source_package is not None:
-        _fail("continuity:duplicate-input")
-    identity = _identity(
-        expected_config=expected_config,
-        expected_scope=expected_scope,
-        expected_authority=expected_authority,
-        expected_mode=expected_mode,
-        expected_owner_id=expected_owner_id,
-        expected_continuity_epoch=expected_continuity_epoch,
-    )
+    identity = _checked_identity(current_snapshot_package, restore_source_package, expected_config=expected_config, expected_scope=expected_scope, expected_authority=expected_authority, expected_mode=expected_mode, expected_owner_id=expected_owner_id, expected_continuity_epoch=expected_continuity_epoch)
     return _verify_mapped(connection, identity, current_snapshot_package, restore_source_package)
