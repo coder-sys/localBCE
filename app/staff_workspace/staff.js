@@ -687,7 +687,7 @@
         method: "POST",
         cache: "no-store",
         credentials: "omit",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Staff-Role": role },
         body: JSON.stringify(body),
       });
       value = await response.json();
