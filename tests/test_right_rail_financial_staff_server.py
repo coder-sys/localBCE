@@ -904,7 +904,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         # Exact targets and one exact Host; odd framing, duplicate keys and deep nesting get a clean 400.
         self.assertEqual(call("GET", f"http://127.0.0.1:{port}/api/workspace", (host,))[0], 404)
         self.assertEqual(call("GET", "/api/workspace", (host, ("Host", "rebound.example")))[0], 403)
-        for body_bytes, length in ((b'{"revision":0,"revision":0}', ""), (b"[" * 5000, ""), (b'{"revision":0}', "1_4")):
+        for body_bytes, length in ((b'{"revision":0,"revision":0}', ""), (b"[" * 5000, ""), (b'{"revision":0}', "1_4"), (b'{"revision":NaN}', ""), (b'{"revision":-Infinity}', "")):
             self.assertEqual(call("POST", "/api/action/acknowledge", post, body_bytes, length)[:3:2], (400, {"error": {"code": "invalid_request"}}))
         # Framework refusals and unexpected read failures are JSON with the same headers, and no detail.
         status, headers, body = call("PUT", "/api/workspace", post, b'{"revision":0}')

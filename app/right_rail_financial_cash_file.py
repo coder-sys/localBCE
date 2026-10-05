@@ -12,6 +12,7 @@ import tempfile
 import time
 from typing import Any
 
+from app.right_rail_financial_canonical_json import decode, encode
 from app.right_rail_financial_owner import FinancialBusyError, FinancialConflictError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, FinancialRevisionError, FinancialStaleError, _TABLE_COLUMNS, _checker_authority
 from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, CashFileCheck, CashFileError, CashFilePreview
 
@@ -22,13 +23,8 @@ _DERIVED = ("history_pending", "history_open")  # the owner's triggers keep thes
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 
-def _object(pairs):
-    value = {}
-    for key, item in pairs:
-        if key in value:
-            raise CashFileError("cash_file_format")
-        value[key] = item
-    return value
+def _refuse(_value):
+    raise CashFileError("cash_file_format")
 
 
 def _fields(value, names):
@@ -50,8 +46,8 @@ def _propose(source_bytes, baseline_bytes):
     if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= MAX_FILE_BYTES or type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
         raise CashFileError("cash_file_format")
     try:
-        value = json.loads(source_bytes.decode("ascii"), object_pairs_hook=_object)
-        canonical = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+        value = decode(source_bytes, "ascii", _refuse, _refuse)
+        canonical = encode(value)
     except (ValueError, UnicodeError, RecursionError):
         raise CashFileError("cash_file_format") from None
     if canonical != source_bytes:

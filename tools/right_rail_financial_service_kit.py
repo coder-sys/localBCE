@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -40,6 +39,8 @@ import tomllib
 import unicodedata
 import zipfile
 from typing import Any, BinaryIO, Callable
+
+from app.right_rail_financial_canonical_json import decode, encode as _canonical_json
 
 
 KIT_SCHEMA = "RR/FINANCIAL/SERVICE-KIT-MANIFEST/v2"
@@ -98,6 +99,7 @@ STATE_FILES = (
     "app/minimal_clearance_verifier_process.py",
     "app/fixtures/h_followthrough_rules_v1.json",
     "app/right_rail_financial_engine.py",
+    "app/right_rail_financial_canonical_json.py",
     "app/right_rail_financial_cash_file.py",
     "app/right_rail_financial_cash_file_independent.py",
     "app/right_rail_financial_custody.py",
@@ -178,17 +180,8 @@ class KitError(RuntimeError):
 
 # ---- JSON -----------------------------------------------------------------
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise KitError(f"json_duplicate_key:{key}")
-        result[key] = value
-    return result
+def _duplicate_json_key(key: str) -> None:
+    raise KitError(f"json_duplicate_key:{key}")
 
 
 def _no_json_constant(value: str) -> None:
@@ -197,8 +190,8 @@ def _no_json_constant(value: str) -> None:
 
 def _strict_json(raw: bytes, label: str) -> dict[str, Any]:
     try:
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object, parse_constant=_no_json_constant)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        value = decode(raw, "utf-8", _duplicate_json_key, _no_json_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:  # ValueError covers 4301+ digit integers
         raise KitError(f"json_invalid:{label}") from error
     if type(value) is not dict:
         raise KitError(f"json_object_required:{label}")
@@ -207,7 +200,11 @@ def _strict_json(raw: bytes, label: str) -> dict[str, Any]:
 
 def _strict_canonical_json(raw: bytes, label: str) -> dict[str, Any]:
     value = _strict_json(raw, label)
-    if raw != _canonical_json(value):
+    try:
+        canonical = _canonical_json(value)
+    except ValueError as error:  # 1e400 parses as inf, which has no canonical form
+        raise KitError(f"json_not_canonical:{label}") from error
+    if raw != canonical:
         raise KitError(f"json_not_canonical:{label}")
     return value
 
