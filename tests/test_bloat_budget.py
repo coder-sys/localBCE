@@ -18,8 +18,8 @@ PRODUCT_CODE_LINES = 34_359
 EVIDENCE_CODE_LINES = 31_019
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 105_692
-CONFORMANCE_MARKDOWN_BYTES = 31_137
+MARKDOWN_BYTES = 90_669
+CONFORMANCE_MARKDOWN_BYTES = 30_970
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
     "app/right_rail_financial_owner.py": 6_713,

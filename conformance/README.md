@@ -40,8 +40,7 @@ each one (verify from the repository root with
 
 Feed each request as one worker frame; the answer, after tag 00, must match
 `*.expected.bin` byte-for-byte. A conforming
-decoder must also reject every input the wire spec marks rejected; negative
-vectors aren't published yet. Report `<sha256>  <path>  PASS|FAIL` per
+decoder must also reject every input the wire spec marks rejected. Report `<sha256>  <path>  PASS|FAIL` per
 vector plus the implementation's name, version, SHA-256 — a result is only
 meaningful against the manifest digest it names.
 
@@ -56,9 +55,6 @@ meaningful against the manifest digest it names.
  this kit only records what exists.
 5. Suppliers report pass/fail per file digest, never per path or name.
 
-## Known gaps
-
-Lean/Python correction-codec differences incl. one money rule
-([Open discrepancies](CORRECTION_TRANSITION_WIRE.md#open-discrepancies));
-gate rules and provider `contentDigest` have no written spec; continuity
-segments have no published vectors; no negative (must-reject) vectors exist.
+Known gaps: no negative (must-reject) vectors exist; Lean/Python correction-codec
+differences are in
+[Open discrepancies](CORRECTION_TRANSITION_WIRE.md#open-discrepancies).

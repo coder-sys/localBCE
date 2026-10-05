@@ -20,32 +20,12 @@ production_usable=false, activation=false.
 | Correction and reconciliation error, in cents | approver, auditor | after the correction |
 | Repeat payment message counted twice | analyst, auditor | when a message arrives again |
 
-## Before and after
+## Measured values
 
-"Manual" values are assumptions from plan §4, never measurements; "unknown" means
-the plan gives no figure. "Demo before" (at 1c7ed3b, product code unchanged since
-e9b3727) and "after" were both measured by this harness.
-
-| Role, moment | Unit | Manual | Demo before | After |
-|---|---|---|---|---|
-| Analyst, Monday | screens to answer status, owner, gap, next step | 4 (assumption) | 3 | **1** |
-| | clicks | unknown | 2 | **0** |
-| | rows shown as open | 20 (assumption) | 20 | 1 |
-| Analyst, correction | clicks | unknown | 6 | **3** |
-| | requests | unknown | 14 | **12** |
-| Approver, decision | screens | 5 (assumption) | 3 | **1** |
-| | clicks to see every input | unknown | 2 | **0** |
-| | requests through the decision | unknown | 8 | 8 |
-| Director, weekly | totals nowhere on screen (of 5) | unknown | 3 | **0** |
-| | clicks | unknown | 3 | **0** |
-| | rows to add by hand | 20 (assumption) | 20 | **0** |
-| Auditor | clicks | unknown | 2 | **0** |
-| Replacement operator | clicks through restore and reorientation | unknown | 3 | **1** |
-| Case H | hours unresolved / past due | unknown | 48 / 24 | 48 / 24 |
-| Accuracy | correction error, reconciliation error, double count (cents) | unknown | 0 / 0 / 0 | 0 / 0 / 0 |
-
-The hours come from the fixture's synthetic clock; paying late does not erase
-the missed deadline.
+`scorecard/hospital_h.json` holds the current value of every unit and is the
+ratchet. "Manual" baselines in it are assumptions from plan §4, never
+measurements. The hours come from the fixture's synthetic clock; paying late
+does not erase the missed deadline.
 
 ## Not shown, because the read model does not carry it
 
