@@ -221,4 +221,7 @@ def ingest_cash_file(owner, raw, baseline_bytes, *, expected_source_sha256, expe
             if _stored(owner, sha) is None:
                 raise
         record = _stored(owner, sha)  # a racing ingest of the same bytes may have written first: its record is the answer
+    bound = json.loads(record["payload_json"])["binding"]  # a stored answer is given only under the scope, owner, mode and authority it was made for
+    if not (_same(bound["scope"], expected_scope) and (owner.owner_id, owner.mode) == (expected_owner_id, expected_mode) and bound["authority"] == {"authority_id": trusted_authority.authority_id, "authority_epoch": trusted_authority.epoch, "authority_digest": trusted_authority.digest.hex().upper()}):
+        raise CashFileError("cash_file_binding")
     return _receipt(record)

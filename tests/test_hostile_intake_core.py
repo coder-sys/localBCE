@@ -25,12 +25,26 @@ class HostileIntakeTests(unittest.TestCase):
     _row = cashtests.ReceiverCashFileTests._row
     _query = cashtests.ReceiverCashFileTests._query
 
-    def _ingest(self, raw, baseline=None, expected_sha=None):
+    def _ingest(self, raw, baseline=None, expected_sha=None, **changes):
         baseline = self.baseline if baseline is None else baseline
-        return intake.ingest_cash_file(
-            self.store, raw, baseline, expected_source_sha256=sha(raw) if expected_sha is None else expected_sha,
-            expected_baseline_sha256=sha(baseline), expected_scope=self.scope, expected_source=self.source,
-            expected_owner_id=self.store.owner_id, expected_mode=self.store.mode, trusted_authority=self.fixture.authority)
+        return intake.ingest_cash_file(self.store, raw, baseline, **{
+            "expected_source_sha256": sha(raw) if expected_sha is None else expected_sha, "expected_baseline_sha256": sha(baseline), "expected_scope": self.scope,
+            "expected_source": self.source, "expected_owner_id": self.store.owner_id, "expected_mode": self.store.mode, "trusted_authority": self.fixture.authority, **changes})
+
+    def _intake_history(self):
+        """(events, meta, payments) as the export verifier hands them to verify_intakes."""
+        seen, real = [], check.verify_intakes
+        with patch.object(check, "verify_intakes", lambda *arguments: (seen.append(arguments), real(*arguments))[1]):
+            self._verified()
+        return seen[0]
+
+    def _forged(self, events, position, change=None, **event):
+        """A copy of events with the one at position changed: its payload by change, its columns by event."""
+        copy = [dict(entry) for entry in events]
+        payload = json.loads(copy[position]["payload_json"])
+        change and change(payload)
+        copy[position].update(event, payload_json=json.dumps(payload))
+        return copy
 
     def _file(self, rows, total):
         return {"contract": "RR/FINANCIAL/RECEIVER-CASH-FILE/v1", "source_class": "SYNTHETIC_RECEIVER_CASH", "scope": self.scope,
@@ -77,13 +91,7 @@ class HostileIntakeTests(unittest.TestCase):
             rows.append(row)
             kinds.append(kind)
         value = self._file(rows, total)
-        layout = seed % 3
-        if layout == 0:
-            raw = encode(value)
-        elif layout == 1:
-            raw = json.dumps(value, indent=2).replace("\n", "\r\n").encode("ascii")  # pretty, unsorted, CRLF
-        else:
-            raw = intake.BOM + json.dumps(value).encode("ascii")
+        raw = (encode(value), json.dumps(value, indent=2).replace("\n", "\r\n").encode("ascii"), intake.BOM + json.dumps(value).encode("ascii"))[seed % 3]  # canonical; pretty, unsorted, CRLF; BOM
         return raw.replace(b'"' + BARE, b"").replace(BARE + b'"', b""), rows, kinds, total
 
     def test_seeded_files_sort_every_row_and_move_only_clean_cash(self):
@@ -210,18 +218,9 @@ class HostileIntakeTests(unittest.TestCase):
     def test_forged_intake_events_are_refused_by_the_checker(self):
         revision = self._revisions()[expected.H_ITEM_ID]
         self._ingest(encode(self._file([self._row(1, 100, revision), {**self._row(2, 50, revision + 1), "event_at_ms": "01/02/2026"}], 150)))
-        seen, real = [], check.verify_intakes
-        with patch.object(check, "verify_intakes", lambda *arguments: (seen.append(arguments), real(*arguments))[1]):
-            self._verified()
-        events, meta, payments = seen[0]
+        (events, meta, payments), real = self._intake_history(), check.verify_intakes
         position = next(i for i, event in enumerate(events) if event["aggregate_type"] == "INTAKE")
-
-        def forged(change=None, **event):
-            copy = [dict(entry) for entry in events]
-            payload = json.loads(copy[position]["payload_json"])
-            change and change(payload)
-            copy[position].update(event, payload_json=json.dumps(payload))
-            return copy
+        forged = lambda change=None, **event: self._forged(events, position, change, **event)
         outcome = lambda key, value: lambda payload: payload["outcomes"][0].update({key: value})
         cases = {"contract": forged(lambda payload: payload.update(contract="x")), "totals": forged(lambda payload: payload["totals"].update(cash_delta_cents=101)),
                  "status": forged(outcome("status", "HELD")), "amount": forged(outcome("amount_cents", 99)), "baseline": forged(lambda payload: payload["binding"].update(baseline_sequence=10 ** 6)),
@@ -238,19 +237,10 @@ class HostileIntakeTests(unittest.TestCase):
     def test_forged_binding_claim_and_window_are_refused_by_the_checker(self):
         revision = self._revisions()[expected.H_ITEM_ID]
         self._ingest(encode(self._file([self._row(1, 100, revision)], 100)))
-        seen, real = [], check.verify_intakes
-        with patch.object(check, "verify_intakes", lambda *arguments: (seen.append(arguments), real(*arguments))[1]):
-            self._verified()
-        events, meta, payments = seen[0]
+        (events, meta, payments), real = self._intake_history(), check.verify_intakes
         position = next(i for i, event in enumerate(events) if event["aggregate_type"] == "INTAKE")
         received = next(event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" and json.loads(event["payload_json"])["payment_id"] == "file-payment-1")
-
-        def forged(change, **event):
-            copy = [dict(entry) for entry in events]
-            payload = json.loads(copy[position]["payload_json"])
-            change(payload)
-            copy[position].update(event, payload_json=json.dumps(payload))
-            return copy
+        forged = lambda change, **event: self._forged(events, position, change, **event)
         later = forged(lambda payload: payload["intake"].update(source_sha256="1" * 64), aggregate_id="1" * 64)[position]
         cases = {"scope": forged(lambda payload: payload["binding"]["scope"].update(period_id="other-period")),
                  "authority": forged(lambda payload: payload["binding"]["authority"].update(authority_epoch=10 ** 6)),
@@ -290,7 +280,20 @@ class HostileIntakeTests(unittest.TestCase):
         held = self._ingest(encode(self._file([self._row(2, 50, revision)], 50)))  # a new row naming the old revision: the owner's refusal holds it
         self.assertEqual(([(out["status"], out["basis"]) for out in held["rows"]], held["cash_delta_cents"], held["unallocated_cents"], self._payments("")), ([("HELD", "obligation_revision_conflict")], 0, 50, payments))
         self.assertNotIn("stale", json.dumps([first, resolved, held]))
-        self._verified()
+        events, meta, payments = self._intake_history()
+        position = [i for i, event in enumerate(events) if event["aggregate_type"] == "INTAKE"][1]  # the file whose row RESOLVED
+        with self.assertRaisesRegex(Exception, "history:intake"):  # forged: the same-amount payment the RESOLVED row names is of another origin
+            check.verify_intakes(self._forged(events, position, lambda payload: payload["outcomes"][0].update(common_origin_id="other-origin")), meta, payments)
+
+    def test_a_resend_is_answered_only_under_the_binding_it_was_made_for(self):
+        raw = encode(self._file([self._row(1, 100, self._revisions()[expected.H_ITEM_ID])], 100))
+        receipt, authority = self._ingest(raw), self.fixture.authority
+        changes = {"scope": {"expected_scope": {**self.scope, "period_id": "other-period"}}, "owner": {"expected_owner_id": "other-owner"}, "mode": {"expected_mode": "SHADOW"},
+                   "authority": {"trusted_authority": type(authority)(authority_id=authority.authority_id, epoch=authority.epoch + 1, actors=authority.actors)}}
+        for label, change in changes.items():
+            with self.subTest(change=label), self.assertRaisesRegex(check.CashFileError, "^cash_file_binding$"):
+                self._ingest(raw, **change)
+        self.assertEqual(self._ingest(raw), receipt)
 
     def test_intake_payload_has_the_v2_shape_and_the_receipt_reads_only_what_is_stored(self):
         self._ingest(encode(self._file([self._row(1, 100, self._revisions()[expected.H_ITEM_ID])], 100)))
@@ -302,31 +305,24 @@ class HostileIntakeTests(unittest.TestCase):
         receipt = intake._receipt({**record, "payload_json": json.dumps(payload)})
         self.assertEqual((receipt["cash_delta_cents"], receipt["rows"][0]["amount_cents"]), (12_345, 777))
 
-    def test_an_intake_event_that_is_not_the_checkers_exact_bytes_is_refused_at_write(self):
+    def _refused_at_write(self, change):
+        """A file whose intake event is written after change(connection, event) is refused whole: nothing is left and the resend goes through."""
         raw = encode(self._file([self._row(1, 100, self._revisions()[expected.H_ITEM_ID])], 100))
         before, real = self.store.export_continuity(), cashtests.owner.FinancialOwner._append_event
 
-        def tampered(owner, connection, **event):  # False equals 0 when read back, but is not the checker's bytes; the plan's private copy writes it
-            if event["kind"] == "INTAKE_RECEIVED":
-                event["payload"] = {**event["payload"], "totals": {**event["payload"]["totals"], "held": False}}
+        def step(owner, connection, **event):
+            event["kind"] == "INTAKE_RECEIVED" and change(connection, event)
             return real(owner, connection, **event)
-        with patch.object(cashtests.owner.FinancialOwner, "_append_event", tampered), self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+        with patch.object(cashtests.owner.FinancialOwner, "_append_event", step), self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
             self._ingest(raw)
         self.assertEqual((self.store.export_continuity(), self.store.intake_records()), (before, []))
         self.assertEqual(self._ingest(raw)["admitted"], 1)
 
-    def test_a_stray_write_during_an_intake_commit_is_refused_by_the_write_log(self):
-        raw = encode(self._file([self._row(1, 100, self._revisions()[expected.H_ITEM_ID])], 100))
-        before, real = self.store.export_continuity(), cashtests.owner.FinancialOwner._append_event
+    def test_an_intake_event_that_is_not_the_checkers_exact_bytes_is_refused_at_write(self):  # False equals 0 when read back, but is not the checker's bytes; the plan's private copy writes it
+        self._refused_at_write(lambda connection, event: event.update(payload={**event["payload"], "totals": {**event["payload"]["totals"], "held": False}}))
 
-        def stray(owner, connection, **event):  # a no-op UPDATE of a table a file may only insert into, made as the intake event is written
-            if event["kind"] == "INTAKE_RECEIVED":
-                connection.execute("UPDATE payments SET active=active")
-            return real(owner, connection, **event)
-        with patch.object(cashtests.owner.FinancialOwner, "_append_event", stray), self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
-            self._ingest(raw)
-        self.assertEqual((self.store.export_continuity(), self.store.intake_records()), (before, []))
-        self.assertEqual(self._ingest(raw)["admitted"], 1)
+    def test_a_stray_command_row_during_an_intake_commit_is_refused_by_the_write_log(self):  # a command row no event derives, bound to the intake event about to be written so every constraint holds at commit; commands are not exported
+        self._refused_at_write(lambda connection, event: connection.execute("INSERT INTO commands SELECT 'PAYMENT:stray',kind,request_json,request_digest,(SELECT max(event_sequence)+1 FROM financial_events) FROM commands ORDER BY event_sequence DESC LIMIT 1"))
 
     def test_untrusted_container_is_refused_whole_keeping_only_its_bytes(self):
         good = self._file([self._row(1, 100, self._revisions()[expected.H_ITEM_ID])], 100)
