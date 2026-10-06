@@ -55,7 +55,10 @@ from typing import Any, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = ROOT / "lean" / "tools" / "semantic_assurance_manifest.json"
 MAX_MANIFEST_BYTES = 256 * 1024
-COMMAND_TIMEOUT_SECONDS = 180.0
+# Cold build of the extracted pinned tree (no shared .lake). Measured 2026-10-06
+# (semgate-1, 3 guarded lanes busy): 72 of 102 jobs in 180 s, so ~255 s whole.
+# 900 s is ~3.5x that; a hung build is still killed and refused.
+BUILD_TIMEOUT_SECONDS = 900.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
@@ -994,7 +997,7 @@ def _verify_candidate(
         build = _run(
             build_command,
             cwd=build_root,
-            timeout=COMMAND_TIMEOUT_SECONDS,
+            timeout=BUILD_TIMEOUT_SECONDS,
             env=environment,
         )
         _require_success("candidate build", build)
