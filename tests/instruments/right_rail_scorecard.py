@@ -115,7 +115,7 @@ async function handle(m, S) {
   const page = S.page;
   if (m.op === "navigate") {
     if (S.context) await S.context.close();
-    browser ??= chromium.launch({ executablePath, headless: true, args: ["--disable-gpu", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-features=site-per-process,IsolateOrigins,msEdgeCollections,EdgeCollections,msEntityExtraction,EdgeEntityExtraction,msEdgeEntityExtraction,msExtractor,EntityExtraction", "--renderer-process-limit=1", "--in-process-gpu", "--disable-breakpad", "--disable-software-rasterizer", "--disable-sync", "--disable-crash-reporter", "--noerrdialogs"] });  // fewer processes, same page
+    browser ??= chromium.launch({ executablePath, headless: true, args: ["--disable-gpu", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-features=site-per-process,IsolateOrigins,msEdgeCollections,EdgeCollections,msEntityExtraction,EdgeEntityExtraction,msEdgeEntityExtraction,msExtractor,EntityExtraction", "--renderer-process-limit=1", "--in-process-gpu", "--disable-breakpad", "--disable-software-rasterizer", "--disable-sync", "--disable-crash-reporter", "--noerrdialogs"] }).catch((error) => { browser = null; throw error; });  // fewer processes, same page; a failed launch is not cached
     S.context = await (await browser).newContext({ locale: "en-US", ...(m.width ? { viewport: { width: m.width, height: 800 } } : {}) });
     const page = S.page = await S.context.newPage();
     const t0 = Date.now(); await page.clock.install({ time: t0 }); await page.clock.pauseAt(t0 + 10000);  // page time is paused: only "tick" fires the 15 s read poll, never machine load
@@ -299,7 +299,8 @@ class _Browser:
         if reply is None:
             raise RuntimeError("browser_driver_exited:" + (self._process.stderr.read() if self._process.stderr else "")[-2000:])
         for diagnostic in reply.pop("diagnostics", []):
-            print("BROWSER_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True), flush=True)
+            sys.stdout.write("BROWSER_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True) + "\n")  # one write per line: worker threads never splice lines
+            sys.stdout.flush()
         if not reply.pop("ok"):
             raise RuntimeError("browser_driver:" + str(reply.get("error")))
         if "view" in reply:
