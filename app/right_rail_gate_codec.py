@@ -542,7 +542,7 @@ def encode_moves(moves: tuple[Move, ...]) -> bytes:
         w.blob(m.claim_key, "claim_key")
         w.blob(m.payee_key, "payee_key")
         w.int(m.cents, 8, "cents", low=1)
-        if type(m.line) is not bytes:
+        if type(m.line) is not bytes or not m.line:
             _fail("line")
         w.out += line_digest(m.line)
     _sorted_unique([m.cell for m in moves], "moves")

@@ -5,6 +5,7 @@ import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.Rules.DecideLayer
+import BlindLedger.Gate.ApprovalLaws
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -122,3 +123,7 @@ import BlindLedger.Gate.Rules.DecideLayer
 #print axioms BlindLedger.Gate.decide_ok
 #print axioms BlindLedger.Gate.decide_run_fold
 #print axioms BlindLedger.Gate.loadAdds_binds
+#print axioms BlindLedger.Gate.Approval.decodeMoves_canonical
+#print axioms BlindLedger.Gate.Approval.decodeMoves_lineDigest
+#print axioms BlindLedger.Gate.Approval.decodeMoves_ascending
+#print axioms BlindLedger.Gate.Approval.decodeApproval_canonical

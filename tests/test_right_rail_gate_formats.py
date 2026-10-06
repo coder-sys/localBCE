@@ -765,6 +765,8 @@ class GoldenVectorTests(unittest.TestCase):
     def test_python_digests_only_a_raw_line(self) -> None:
         with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
             gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, "raw"),))
+        with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
+            gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, b""),))
 
     def test_lean_judges_every_golden_vector(self) -> None:
         for path in (VECTORS, V2_VECTORS, APPROVAL_VECTORS):
@@ -1074,7 +1076,8 @@ class AxiomRecordTests(unittest.TestCase):
                   if (m := re.match(r"'BlindLedger\.Gate\.(\S+)' depends", line))}
         for name in ("storedOf_wf", "forks_comm", "chain_no_fork", "follows_twice_forks", "publishOk_sound",
                      "publish_payer_local", "verifyToken_slice", "storeCheckpoint_slice", "firstFailure_none",
-                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
+                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat",
+                     "Approval.decodeMoves_canonical", "Approval.decodeMoves_lineDigest", "Approval.decodeMoves_ascending", "Approval.decodeApproval_canonical"):
             with self.subTest(name):
                 self.assertIn(name, record)
                 self.assertNotIn("sorryAx", record[name])
