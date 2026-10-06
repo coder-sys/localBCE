@@ -79,11 +79,11 @@ class Interchange:
 def _segment(text: str, esep: str, rsep: str, csep: str) -> Segment:
     if not _PRINTABLE.fullmatch(text):
         refuse("x12:charset")
-    tag, *raw = text.split(esep)
-    if not _TAG.fullmatch(tag):
+    if not _TAG.fullmatch(text.partition(esep)[0]):
         refuse("x12:segment")
-    if len(raw) > MAX_ELEMENTS:
+    if text.count(esep) > MAX_ELEMENTS:  # counted before splitting
         refuse("x12:cap-elements")
+    tag, *raw = text.split(esep)
     elements = []
     for item in raw:
         if len(item) > MAX_ELEMENT_LEN:
@@ -99,6 +99,7 @@ def _segment(text: str, esep: str, rsep: str, csep: str) -> Segment:
 
 
 def _match(close: Segment, opened: Segment, close_at: int, open_at: int, count: int) -> None:
+    close.blank(3)
     control = opened.value(open_at)
     if close.value(close_at) != control or not _CONTROL.fullmatch(control):
         refuse("x12:control")
@@ -130,11 +131,11 @@ def tokenize(data: bytes) -> Interchange:
     if not fields[12].isdecimal() or fields[13] not in ("0", "1") or fields[14] not in ("P", "T"):
         refuse("x12:isa")
     isa = Segment("ISA", tuple(((field,),) for field in fields))
+    if text.count(term, 106) > MAX_SEGMENTS:  # counted before splitting
+        refuse("x12:cap-segments")
     chunks = text[106:].split(term)
     tail = chunks.pop()
-    if len(chunks) > MAX_SEGMENTS:
-        refuse("x12:cap-segments")
-    tags = [chunk.split(esep, 1)[0] for chunk in chunks]
+    tags = [chunk.partition(esep)[0] for chunk in chunks]
     if "IEA" in tags[:-1]:
         refuse("x12:trailing")
     if not tags or tags[-1] != "IEA":
@@ -149,10 +150,14 @@ def tokenize(data: bytes) -> Interchange:
         elif seg.tag == "GS":
             if gs is not None:
                 refuse("x12:envelope")
+            seg.blank(9)
             gs, sets = seg, []
         elif seg.tag == "ST":
             if gs is None or txn is not None:
                 refuse("x12:envelope")
+            seg.blank(4)
+            if seg.value(3) not in ("", gs.value(8)):
+                refuse("x12:version")
             txn = [seg]
         elif seg.tag == "SE":
             if txn is None:
@@ -174,6 +179,7 @@ def tokenize(data: bytes) -> Interchange:
     if gs is not None or txn is not None or not groups:
         refuse("x12:envelope")
     iea = segments[-1]
+    iea.blank(3)
     if iea.value(2) != isa.value(13):
         refuse("x12:control")
     if iea.value(1) != str(len(groups)):

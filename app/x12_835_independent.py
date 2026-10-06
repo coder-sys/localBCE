@@ -74,9 +74,9 @@ def _lex(chunk: str, e: str, r: str, c: str) -> _Seg:
     tag, has, rest = chunk.partition(e)
     if not re.fullmatch("[A-Z][A-Z0-9]{1,2}", tag):
         _no("x12:segment")
-    raw = rest.split(e) if has else []
-    if len(raw) > 64:
+    if has and rest.count(e) >= 64:
         _no("x12:cap-elements")
+    raw = rest.split(e) if has else []
     for item in raw:
         if len(item) > 128:
             _no("x12:cap-element-length")
@@ -89,6 +89,7 @@ def _lex(chunk: str, e: str, r: str, c: str) -> _Seg:
 
 
 def _check(close: _Seg, opened: _Seg, close_at: int, open_at: int, n: int) -> None:
+    close.blank(3)
     control = opened.val(open_at)
     if close.val(close_at) != control or not re.fullmatch("[0-9]{1,9}", control):
         _no("x12:control")
@@ -112,7 +113,7 @@ def _iso(text: str) -> str:
             when = datetime.strptime(text, "%Y%m%d")
         except ValueError:
             pass
-    if when is None:
+    if when is None or not 1900 <= when.year <= 2199:
         _no("835:date")
     return when.strftime("%Y-%m-%d")
 
@@ -184,10 +185,10 @@ def rederive_835(data: bytes) -> dict:
         _no("x12:version")
     if not re.fullmatch("[0-9]{9}", f[12]) or f[13] not in "01" or f[14] not in "PT":
         _no("x12:isa")
+    if text.count(t, 106) > 5000:
+        _no("x12:cap-segments")
     body, found, tail = text[106:].rpartition(t)
     chunks = body.split(t) if found else []
-    if len(chunks) > 5000:
-        _no("x12:cap-segments")
     tags = [chunk.partition(e)[0] for chunk in chunks]
     if "IEA" in tags[:-1]:
         _no("x12:trailing")
@@ -201,7 +202,11 @@ def rederive_835(data: bytes) -> dict:
         gs, sets, i = mid[i], [], i + 1
         if gs.tag != "GS":
             _no("x12:envelope")
+        gs.blank(9)
         while i < len(mid) and mid[i].tag == "ST":
+            mid[i].blank(4)
+            if mid[i].val(3) not in ("", gs.val(8)):
+                _no("x12:version")
             j = i + 1
             while j < len(mid) and mid[j].tag not in _FRAME:
                 j += 1
@@ -217,6 +222,7 @@ def rederive_835(data: bytes) -> dict:
         i += 1
     if not groups:
         _no("x12:envelope")
+    segs[-1].blank(3)
     if segs[-1].val(2) != f[12]:
         _no("x12:control")
     if segs[-1].val(1) != str(len(groups)):
@@ -242,7 +248,7 @@ def rederive_835(data: bytes) -> dict:
     if total < 0:
         _no("835:amount")
     record = {"interchange_control": f[12], "group_control": gs.val(6), "set_control": st.val(2),
-              "handling": bpr.text(1, _CODE), "total_cents": total, "credit_debit": bpr.text(3, re.compile("[CD]")),
+              "handling": bpr.text(1, _CODE), "total_cents": total, "credit_debit": bpr.text(3, re.compile("C")),
               "method": bpr.text(4, _CODE), "format": bpr.text(5, _CODE), "effective_date": _iso(bpr.val(16)),
               "trace": trn.text(2), "trace_origin": trn.text(3), "dates": [], "payer": None, "payee": None, "claims": [], "adjustments": []}
     level, parties = record["dates"], []

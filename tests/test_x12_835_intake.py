@@ -6,6 +6,7 @@ import dataclasses
 import json
 import random
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -178,7 +179,7 @@ class Intake(unittest.TestCase):
             "835:segment": build(no_trn), "835:segment#extra": build(remit("1250.50", *CLAIMS, "REF*EV*X")),
             "835:segment#role": edit(GOOD, "N1*PE*", "N1*PR*"), "835:segment#order": build(remit("1125.00", PLB, *CLAIMS)),
             "835:segment#missing-payee": build(remit("0.00")[:-1]),
-            "835:field": edit(GOOD, "TRACE0001", "TRACE@@@"), "835:field#trn01": edit(GOOD, "TRN*1*", "TRN*2*"),
+            "835:field": edit(GOOD, "TRACE0001", "TRACE@@@"), "835:field#debit": edit(GOOD, "*1250.50*C*", "*1250.50*D*"), "835:field#trn01": edit(GOOD, "TRN*1*", "TRN*2*"),
             "835:field#svc": edit(GOOD, "HC:99213", "99213"), "835:field#cas": edit(GOOD, "CAS*PR*1*100.00~DTM*232", "CAS*PR~DTM*232"),
             "835:field#plb": edit(WITH_PLB, "FB:CARRY0001", "FBX:CARRY0001"), "835:field#blank": edit(GOOD, "CLAIMA001", ""),
             "835:amount": edit(GOOD, "*1250.50*C*", "*1250.505*C*"), "835:amount#negative-total": edit(GOOD, "*1250.50*C*", "*-1250.50*C*"),
@@ -221,6 +222,48 @@ class Intake(unittest.TestCase):
         self.assertEqual(len(tokenize(edit(GOOD, "TRACE0001", "T" * 128)).groups), 1)
         self.assertEqual(len(tokenize(edit(GOOD, "TRACE0001", "^".join("A" * 8))).groups), 1)
         self.assertEqual(len(tokenize(edit(GOOD, "TRACE0001", ":".join("A" * 16))).groups), 1)
+
+    def test_unmodeled_envelope_elements_are_refused(self):
+        for name, data, code in (("SE03", edit(GOOD, "*0001~GE*", "*0001*X~GE*"), "x12:extra"),
+                                 ("GE03", edit(GOOD, "GE*1*1~", "GE*1*1*X~"), "x12:extra"),
+                                 ("IEA03", edit(GOOD, "IEA*1*000000905~", "IEA*1*000000905*X~"), "x12:extra"),
+                                 ("GS09", edit(GOOD, "*X*005010X221A1", "*X*005010X221A1*Z"), "x12:extra"),
+                                 ("ST04", edit(GOOD, "ST*835*0001~", "ST*835*0001*005010X221A1*Z~"), "x12:extra"),
+                                 ("ST03", edit(GOOD, "ST*835*0001~", "ST*835*0001*005010X222A1~"), "x12:version")):
+            with self.subTest(name):
+                self.refused(data, code)
+        self.assertIsNotNone(self.both(edit(GOOD, "ST*835*0001~", "ST*835*0001*005010X221A1~"))[0])
+
+    def test_years_are_bounded(self):
+        for year, ok in (("0001", False), ("1899", False), ("1900", True), ("2199", True), ("2200", False), ("9999", False)):
+            for old, new in (("DTM*405*20261003", f"DTM*405*{year}1003"), ("*" * 11 + "20261005", "*" * 11 + f"{year}1005")):
+                with self.subTest(year=year, field=old[:3]):
+                    data = edit(GOOD, old, new)
+                    if ok:
+                        self.assertIsNotNone(self.both(data)[0])
+                    else:
+                        self.refused(data, "835:date")
+
+    def test_caps_are_counted_before_splitting(self):
+        head = GOOD[:GOOD.index(b"~") + 1]
+        def oversplit(data):
+            seen = []
+            def probe(frame, event, arg):
+                if event == "c_call" and arg.__name__ == "split" and isinstance(arg.__self__, str):
+                    seen.append(arg.__self__)
+            sys.setprofile(probe)
+            try:
+                self.both(data)
+            finally:
+                sys.setprofile(None)
+            return [s for s in seen if s.count("~") > 5000 or ("~" not in s and s.count("*") > 64)]
+        self.assertEqual(oversplit(head + b"~" * 6000), [])
+        self.assertEqual(oversplit(head + b"GS" + b"*" * 60000 + b"~IEA*0*000000905~"), [])
+
+    def test_byte_cap_boundary(self):
+        padded = GOOD + b" " * (MAX_BYTES - len(GOOD))
+        self.refused(padded, "x12:trailing")  # exactly 1<<20 bytes passes the cap and fails for another reason
+        self.refused(padded + b" ", "x12:cap-bytes")
 
     def test_hostile_corpus(self):
         head = GOOD[:GOOD.index(b"~") + 1]

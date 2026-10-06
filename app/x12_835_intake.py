@@ -22,7 +22,7 @@ _TEXT = re.compile(r"[A-Za-z0-9._,&'/-](?:[A-Za-z0-9 ._,&'/-]{0,58}[A-Za-z0-9._,
 _CODE = re.compile(r"[A-Z0-9]{1,5}")
 _DTM_QUALIFIER = re.compile(r"[0-9]{3}")
 _PLB_REASON = re.compile(r"[A-Z0-9]{2}")
-_CREDIT_DEBIT = re.compile(r"[CD]")
+_CREDIT = re.compile(r"C")  # credit only: a debit needs an owner design first
 
 
 @dataclass(frozen=True)
@@ -120,9 +120,12 @@ def _date(text: str) -> str:
     if not _DATE.fullmatch(text):
         refuse("835:date")
     try:
-        return datetime.date(int(text[:4]), int(text[4:6]), int(text[6:])).isoformat()
+        when = datetime.date(int(text[:4]), int(text[4:6]), int(text[6:]))
     except ValueError:
         raise_redacted(X12Error, "835:date")
+    if not 1900 <= when.year <= 2199:
+        refuse("835:date")
+    return when.isoformat()
 
 
 def _text(seg: Segment, i: int, pattern: re.Pattern = _TEXT, blank: bool = False) -> str:
@@ -252,7 +255,7 @@ def parse_835(data: bytes) -> Remittance:
     total = cents(bpr.value(2))
     if total < 0:
         refuse("835:amount")
-    head = (_text(bpr, 1, _CODE), total, _text(bpr, 3, _CREDIT_DEBIT), _text(bpr, 4, _CODE), _text(bpr, 5, _CODE),
+    head = (_text(bpr, 1, _CODE), total, _text(bpr, 3, _CREDIT), _text(bpr, 4, _CODE), _text(bpr, 5, _CODE),
             _date(bpr.value(16)), _text(trn, 2), _text(trn, 3))
     dates = tuple(_dtm(s) for s in cursor.take("DTM"))
     payer, payee = _party(cursor.next("N1"), "PR"), _party(cursor.next("N1"), "PE")
