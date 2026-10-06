@@ -1263,30 +1263,453 @@ def push (P : Pins) (st : LogState) (e : Entry) : Option LogState := do
 /-- All custody state: the fold of the off-machine log, once, at boot (H3). -/
 def fold (P : Pins) (log : List Entry) : Option LogState := log.foldlM (push P) LogState.init
 
+private theorem guard_some (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
+  by_cases hc : c <;> simp [guard, hc]
+
+private theorem push_shape (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st') :
+    st'.reg = e.reg ++ st.reg ∧ st'.rhead = chainHead sha3 st.rhead e.reg ∧
+    ∃ sh', st'.shard = upd st.shard e.shard sh' ∧
+      ((∃ t, e.body = .seal t ∧ (st.shard e.shard).last = none ∧ (st.shard e.shard).live = false ∧
+          sh'.pays = (st.shard e.shard).pays) ∨
+       (∃ p, e.body = .resume p ∧ (st.shard e.shard).live = false ∧ sh'.pays = (st.shard e.shard).pays) ∨
+       (∃ cert new tokens fresh n, e.body = .sign cert new tokens fresh ∧ (st.shard e.shard).live = true ∧
+          storedOfAny sha3 new = some n ∧
+          (∀ q y c, (st.shard e.shard).last = some (y, c) → storedOfAny sha3 y = some q →
+            q.checkpoint.createdAt < n.checkpoint.createdAt) ∧
+          sh'.last = some (new, cert) ∧ sh'.live = true ∧
+          e.body.leaves.foldlM payStep (st.shard e.shard).pays = some sh'.pays)) := by
+  unfold push at h
+  cases hb : e.body with
+  | «seal» t =>
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
+    obtain ⟨_, a, _, ⟨_, _, _, hl, hv⟩, rfl⟩ := h
+    exact ⟨rfl, rfl, _, rfl, Or.inl ⟨t, rfl, hl, hv, rfl⟩⟩
+  | resume p =>
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
+    obtain ⟨_, a, _, ⟨hv, _⟩, _, _, _, _, _, _, _, _, _, rfl⟩ := h
+    exact ⟨rfl, rfl, _, rfl, Or.inr (Or.inl ⟨p, rfl, hv, rfl⟩)⟩
+  | sign cert new tokens fresh =>
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
+    obtain ⟨_, a, _, hlive, _, _, _, _, n, hn, _, _, _, _, _, hg, ps, hps, rfl⟩ := h
+    refine ⟨rfl, rfl, _, rfl, Or.inr (Or.inr ⟨cert, new, tokens, fresh, n, rfl, hlive, hn, ?_, rfl, hlive, hps⟩)⟩
+    intro q y c hl hq
+    rw [hl] at hg
+    simpa [hq] using hg
+
 /-- FORMAT: the folded registry head is the chain of the folded rows. -/
 theorem registry_head (P : Pins) (log : List Entry) (st : LogState) (h : fold P log = some st) :
-    st.rhead = chainHead sha3 zeroDigest st.reg := sorry
+    st.rhead = chainHead sha3 zeroDigest st.reg := by
+  have key : ∀ (log : List Entry) (s0 st : LogState), s0.rhead = chainHead sha3 zeroDigest s0.reg →
+      log.foldlM (push P) s0 = some st → st.rhead = chainHead sha3 zeroDigest st.reg := by
+    intro log
+    induction log with
+    | nil => intro s0 st h0 h; simp at h; subst h; exact h0
+    | cons x rest ih =>
+      intro s0 st h0 h
+      simp only [List.foldlM] at h
+      obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨hreg, hrh, _⟩ := push_shape P s0 s1 x hs1
+      refine ih s1 st ?_ hr
+      rw [hreg, hrh, chainHead_append, h0]
+  exact key log LogState.init st rfl h
+
+
+private theorem lookup_cons' (q p : Nat) (v : Leaf) (t : List (Nat × Leaf)) :
+    ((p, v) :: t).lookup q = if q = p then some v else t.lookup q := by
+  by_cases h : q = p
+  · subst h; simp [List.lookup]
+  · have h' : (q == p) = false := by simpa using h
+    simp [List.lookup, h, h']
+
+private theorem lookup_mem (q : Nat) (o : Leaf) : ∀ ps : List (Nat × Leaf),
+    ps.lookup q = some o → o ∈ ps.map (·.2)
+  | [], h => by simp [List.lookup] at h
+  | (a, v) :: t, h => by
+    rw [lookup_cons'] at h
+    by_cases hq : q = a
+    · rw [if_pos hq] at h; obtain rfl := Option.some.inj h; simp
+    · rw [if_neg hq] at h; exact List.mem_cons_of_mem _ (lookup_mem q o t h)
+
+private theorem lookup_filter_ne (ps : List (Nat × Leaf)) (p q : Nat) (hq : q ≠ p) :
+    ((ps.filter (·.1 != p)).lookup q) = ps.lookup q := by
+  induction ps with
+  | nil => rfl
+  | cons x t ih =>
+    obtain ⟨a, v⟩ := x
+    by_cases ha : a = p
+    · subst ha; simp [ih, lookup_cons', hq]
+    · simp [ha, lookup_cons', ih]
+
+private theorem redecides_rev {o l : Leaf} (h : redecides o.revision o l = true) : l.revision = o.revision + 1 := by
+  simp [redecides] at h
+  omega
+
+/-- Everything one successful `payStep` says, for the payment `p` of `l`. -/
+private theorem payStep_facts {ps ps' : List (Nat × Leaf)} {l : Leaf} (h : payStep ps l = some ps') :
+    (∀ o, ps.lookup (payNat l.programId l.paymentId) = some o →
+      o.revision ≤ l.revision ∧ (o.revision = l.revision → l.outcome ≠ .ALLOW)) ∧
+    (∃ o', ps'.lookup (payNat l.programId l.paymentId) = some o' ∧ l.revision ≤ o'.revision) ∧
+    (∀ q o, ps.lookup q = some o → ∃ o', ps'.lookup q = some o' ∧ o.revision ≤ o'.revision) ∧
+    (∀ x ∈ ps', x.2 = l ∨ x.2 ∈ ps.map (·.2)) ∧
+    (l.outcome = .ALLOW → 0 < l.revision → ∃ o ∈ ps.map (·.2), redecides o.revision o l = true) := by
+  unfold payStep at h
+  rcases hl : ps.lookup (payNat l.programId l.paymentId) with _ | old
+  · simp only [hl] at h
+    split at h
+    · obtain rfl := Option.some.inj h
+      refine ⟨by simp, ⟨l, by simp [lookup_cons'], Nat.le_refl _⟩, ?_, ?_, ?_⟩
+      · intro q o hq
+        by_cases hqp : q = payNat l.programId l.paymentId
+        · subst hqp; simp [hl] at hq
+        · refine ⟨o, ?_, Nat.le_refl _⟩
+          rw [lookup_cons', if_neg hqp]; exact hq
+      · intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact Or.inl rfl
+        · exact Or.inr (List.mem_map.mpr ⟨x, hx, rfl⟩)
+      · intro _ hr; omega
+    · simp at h
+  · simp only [hl] at h
+    split at h
+    · rename_i hrd
+      obtain rfl := Option.some.inj h
+      have hr := redecides_rev hrd
+      refine ⟨?_, ⟨l, by simp [lookup_cons'], Nat.le_refl _⟩, ?_, ?_, ?_⟩
+      · intro o ho; obtain rfl := Option.some.inj ho; omega
+      · intro q o hq
+        by_cases hqp : q = payNat l.programId l.paymentId
+        · subst hqp
+          obtain rfl := Option.some.inj (hl.symm.trans hq)
+          exact ⟨l, by simp [lookup_cons'], by omega⟩
+        · refine ⟨o, ?_, Nat.le_refl _⟩
+          rw [lookup_cons', if_neg hqp, lookup_filter_ne _ _ _ hqp]; exact hq
+      · intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact Or.inl rfl
+        · exact Or.inr (List.mem_map.mpr ⟨x, (List.mem_filter.mp hx).1, rfl⟩)
+      · intro _ _
+        exact ⟨old, lookup_mem _ _ _ hl, hrd⟩
+    · split at h
+      · rename_i hc
+        obtain rfl := Option.some.inj h
+        refine ⟨?_, ⟨old, hl, by omega⟩, ?_, ?_, ?_⟩
+        · intro o ho; obtain rfl := Option.some.inj ho; exact ⟨by omega, fun _ => hc.2⟩
+        · intro q o hq; exact ⟨o, hq, Nat.le_refl _⟩
+        · intro x hx; exact Or.inr (List.mem_map.mpr ⟨x, hx, rfl⟩)
+        · intro ha; exact absurd ha hc.2
+      · simp at h
+
+
+private theorem leaves_mono : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ q o, ps.lookup q = some o →
+      ∃ o', ps'.lookup q = some o' ∧ o.revision ≤ o'.revision
+  | [], ps, ps', h, q, o, ho => by simp at h; subst h; exact ⟨o, ho, Nat.le_refl _⟩
+  | l :: rest, ps, ps', h, q, o, ho => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨o1, ho1, hle⟩ := (payStep_facts h1).2.2.1 q o ho
+    obtain ⟨o2, ho2, hle2⟩ := leaves_mono rest ps1 ps' h2 q o1 ho1
+    exact ⟨o2, ho2, Nat.le_trans hle hle2⟩
+
+private theorem leaves_born : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ l ∈ ls,
+      ∃ o', ps'.lookup (payNat l.programId l.paymentId) = some o' ∧ l.revision ≤ o'.revision
+  | [], _, _, _, l, hl => by simp at hl
+  | x :: rest, ps, ps', h, l, hl => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases List.mem_cons.mp hl with rfl | hl
+    · obtain ⟨o1, ho1, hle⟩ := (payStep_facts h1).2.1
+      obtain ⟨o2, ho2, hle2⟩ := leaves_mono rest ps1 ps' h2 _ o1 ho1
+      exact ⟨o2, ho2, Nat.le_trans hle hle2⟩
+    · exact leaves_born rest ps1 ps' h2 l hl
+
+private theorem leaves_gate : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ l ∈ ls, ∀ o, ps.lookup (payNat l.programId l.paymentId) = some o →
+      o.revision ≤ l.revision ∧ (o.revision = l.revision → l.outcome ≠ .ALLOW) := by
+  intro ls
+  induction ls with
+  | nil => intro ps ps' h l hl; simp at hl
+  | cons x rest ih =>
+    intro ps ps' h l hl o ho
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases List.mem_cons.mp hl with rfl | hl
+    · exact (payStep_facts h1).1 o ho
+    · obtain ⟨o1, ho1, hle⟩ := (payStep_facts h1).2.2.1 _ o ho
+      obtain ⟨h3, h4⟩ := ih ps1 ps' h2 l hl o1 ho1
+      exact ⟨Nat.le_trans hle h3, fun he => h4 (by omega)⟩
+
+private theorem leaves_mem : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ y ∈ ps'.map (·.2), y ∈ ps.map (·.2) ∨ y ∈ ls
+  | [], ps, ps', h, y, hy => by simp at h; subst h; exact Or.inl hy
+  | x :: rest, ps, ps', h, y, hy => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases leaves_mem rest ps1 ps' h2 y hy with hy1 | hy1
+    · obtain ⟨z, hz, rfl⟩ := List.mem_map.mp hy1
+      rcases (payStep_facts h1).2.2.2.1 z hz with h5 | h5
+      · exact Or.inr (by simp [h5])
+      · exact Or.inl h5
+    · exact Or.inr (List.mem_cons_of_mem _ hy1)
+
+private theorem leaves_step : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ l ∈ ls, l.outcome = .ALLOW → 0 < l.revision →
+      ∃ o, (o ∈ ps.map (·.2) ∨ o ∈ ls) ∧ redecides o.revision o l = true
+  | [], _, _, _, l, hl, _, _ => by simp at hl
+  | x :: rest, ps, ps', h, l, hl, ha, hr => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases List.mem_cons.mp hl with rfl | hl
+    · obtain ⟨o, ho, hrd⟩ := (payStep_facts h1).2.2.2.2 ha hr
+      exact ⟨o, Or.inl ho, hrd⟩
+    · obtain ⟨o, ho, hrd⟩ := leaves_step rest ps1 ps' h2 l hl ha hr
+      refine ⟨o, ?_, hrd⟩
+      rcases ho with ho | ho
+      · obtain ⟨z, hz, rfl⟩ := List.mem_map.mp ho
+        rcases (payStep_facts h1).2.2.2.1 z hz with h5 | h5
+        · exact Or.inr (by simp [h5])
+        · exact Or.inl h5
+      · exact Or.inr (List.mem_cons_of_mem _ ho)
+
+private theorem push_pays (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1) :
+    x.body.leaves.foldlM payStep (s0.shard x.shard).pays = some (s1.shard x.shard).pays := by
+  obtain ⟨_, _, sh', hsh, hc⟩ := push_shape P s0 s1 x h
+  have hs : s1.shard x.shard = sh' := by rw [hsh]; simp [upd]
+  rw [hs]
+  rcases hc with ⟨t, hb, _, _, hp⟩ | ⟨p, hb, _, hp⟩ | ⟨cert, new, tokens, fresh, n, hb, _, _, _, _, _, hp⟩
+  · rw [hp, hb]; simp [Body.leaves]
+  · rw [hp, hb]; simp [Body.leaves]
+  · exact hp
+
+private theorem push_other (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (k : Nat) (hk : k ≠ x.shard) : s1.shard k = s0.shard k := by
+  obtain ⟨_, _, sh', hsh, _⟩ := push_shape P s0 s1 x h
+  rw [hsh]; simp [upd, hk]
+
+private theorem push_mono (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (k q : Nat) (o : Leaf) (ho : (s0.shard k).pays.lookup q = some o) :
+    ∃ o', (s1.shard k).pays.lookup q = some o' ∧ o.revision ≤ o'.revision := by
+  by_cases hk : k = x.shard
+  · subst hk; exact leaves_mono _ _ _ (push_pays P s0 s1 x h) q o ho
+  · rw [push_other P s0 s1 x h k hk]; exact ⟨o, ho, Nat.le_refl _⟩
+
+private theorem push_mem (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (k : Nat) (o : Leaf) (ho : o ∈ (s1.shard k).pays.map (·.2)) :
+    o ∈ (s0.shard k).pays.map (·.2) ∨ (x.shard = k ∧ o ∈ x.body.leaves) := by
+  by_cases hk : k = x.shard
+  · subst hk
+    rcases leaves_mem _ _ _ (push_pays P s0 s1 x h) o ho with h0 | h0
+    · exact Or.inl h0
+    · exact Or.inr ⟨rfl, h0⟩
+  · rw [push_other P s0 s1 x h k hk] at ho; exact Or.inl ho
+
+private theorem fold_gate (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (k q : Nat) (o : Leaf), (s0.shard k).pays.lookup q = some o →
+    ∀ (j : Nat) (y : Entry), xs[j]? = some y → y.shard = k →
+    ∀ l ∈ y.body.leaves, payNat l.programId l.paymentId = q →
+      o.revision ≤ l.revision ∧ (o.revision = l.revision → l.outcome ≠ .ALLOW) := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h k q o ho j y hy; simp at hy
+  | cons x rest ih =>
+    intro s0 s h k q o ho j y hy hk l hl hq
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    subst hq
+    cases j with
+    | zero =>
+      simp at hy; subst hy; subst hk
+      exact leaves_gate _ _ _ (push_pays P s0 s1 _ hs1) l hl o ho
+    | succ j =>
+      simp at hy
+      obtain ⟨o1, ho1, hle⟩ := push_mono P s0 s1 x hs1 k _ o ho
+      obtain ⟨g1, g2⟩ := ih s1 s hr k _ o1 ho1 j y hy hk l hl rfl
+      exact ⟨Nat.le_trans hle g1, fun he => g2 (by omega)⟩
+
+private theorem fold_mono (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (i j : Nat), i < j → ∀ (e e' : Entry), xs[i]? = some e → xs[j]? = some e' → e.shard = e'.shard →
+    ∀ l ∈ e.body.leaves, ∀ l' ∈ e'.body.leaves,
+      payNat l.programId l.paymentId = payNat l'.programId l'.paymentId →
+      l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h i j hij e e' hi; simp at hi
+  | cons x rest ih =>
+    intro s0 s h i j hij e e' hi hj hk l hl l' hl' hp
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    cases i with
+    | zero =>
+      simp at hi; subst hi
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hj
+        obtain ⟨o1, ho1, hle⟩ := leaves_born _ _ _ (push_pays P s0 s1 _ hs1) l hl
+        obtain ⟨g1, g2⟩ := fold_gate P rest s1 s hr _ _ o1 ho1 j e' hj hk.symm l' hl' hp.symm
+        exact ⟨Nat.le_trans hle g1, fun he => g2 (by omega)⟩
+    | succ i =>
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hi hj
+        exact ih s1 s hr i j (by omega) e e' hi hj hk l hl l' hl' hp
+
+private theorem fold_redec (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (j : Nat) (y : Entry), xs[j]? = some y → ∀ l' ∈ y.body.leaves, l'.outcome = .ALLOW → 0 < l'.revision →
+    ∃ o, (o ∈ (s0.shard y.shard).pays.map (·.2) ∨
+        ∃ i e, i ≤ j ∧ xs[i]? = some e ∧ e.shard = y.shard ∧ o ∈ e.body.leaves) ∧
+      redecides o.revision o l' = true := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h j y hy; simp at hy
+  | cons x rest ih =>
+    intro s0 s h j y hy l' hl' ha hr
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr1⟩ := Option.bind_eq_some_iff.mp h
+    cases j with
+    | zero =>
+      simp at hy; subst hy
+      obtain ⟨o, ho, hrd⟩ := leaves_step _ _ _ (push_pays P s0 s1 _ hs1) l' hl' ha hr
+      rcases ho with ho | ho
+      · exact ⟨o, Or.inl ho, hrd⟩
+      · exact ⟨o, Or.inr ⟨0, _, Nat.le_refl _, rfl, rfl, ho⟩, hrd⟩
+    | succ j =>
+      simp at hy
+      obtain ⟨o, ho, hrd⟩ := ih s1 s hr1 j y hy l' hl' ha hr
+      refine ⟨o, ?_, hrd⟩
+      rcases ho with ho | ⟨i, e, hij, hi, hs, ho⟩
+      · rcases push_mem P s0 s1 x hs1 y.shard o ho with h0 | ⟨hxk, h0⟩
+        · exact Or.inl h0
+        · exact Or.inr ⟨0, x, by omega, rfl, hxk, h0⟩
+      · exact Or.inr ⟨i + 1, e, by omega, by simpa using hi, hs, ho⟩
+
+private theorem push_live (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (hl : (s0.shard x.shard).live = true) : ∃ a, x.body.signed? = some a := by
+  obtain ⟨_, _, sh', hsh, hc⟩ := push_shape P s0 s1 x h
+  rcases hc with ⟨t, hb, _, hv, _⟩ | ⟨p, hb, hv, _⟩ | ⟨cert, new, tokens, fresh, n, hb, _⟩
+  · rw [hl] at hv; exact absurd hv (by decide)
+  · rw [hl] at hv; exact absurd hv (by decide)
+  · exact ⟨new, by rw [hb]; rfl⟩
+
+private theorem push_sign (P : Pins) (s0 s1 : LogState) (x : Entry) (a : Bytes) (h : push P s0 x = some s1)
+    (ha : x.body.signed? = some a) :
+    ∃ cert n, (s0.shard x.shard).live = true ∧ storedOfAny sha3 a = some n ∧
+      (∀ q y c, (s0.shard x.shard).last = some (y, c) → storedOfAny sha3 y = some q →
+        q.checkpoint.createdAt < n.checkpoint.createdAt) ∧
+      (s1.shard x.shard).last = some (a, cert) ∧ (s1.shard x.shard).live = true := by
+  obtain ⟨_, _, sh', hsh, hc⟩ := push_shape P s0 s1 x h
+  have hs : s1.shard x.shard = sh' := by rw [hsh]; simp [upd]
+  rcases hc with ⟨t, hb, _⟩ | ⟨p, hb, _⟩ | ⟨cert, new, tokens, fresh, n, hb, hlive, hn, hlt, hlast, hl', _⟩
+  · rw [hb] at ha; simp [Body.signed?] at ha
+  · rw [hb] at ha; simp [Body.signed?] at ha
+  · rw [hb] at ha
+    simp only [Body.signed?, Option.some.injEq] at ha
+    subst ha
+    exact ⟨cert, n, hlive, hn, hlt, by rw [hs]; exact hlast, by rw [hs]; exact hl'⟩
+
+private theorem fold_last (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (k c : Nat), (s0.shard k).live = true →
+    (∃ y cert q, (s0.shard k).last = some (y, cert) ∧ storedOfAny sha3 y = some q ∧
+      c ≤ q.checkpoint.createdAt) →
+    ∀ (j : Nat) (y : Entry), xs[j]? = some y → y.shard = k →
+    ∀ b n', y.body.signed? = some b → storedOfAny sha3 b = some n' → c < n'.checkpoint.createdAt := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h k c hlive hex j y hy; simp at hy
+  | cons x rest ih =>
+    intro s0 s h k c hlive hex j y hy hk b n' hb hn'
+    obtain ⟨y0, cert0, q, hlast0, hq, hc⟩ := hex
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    by_cases hxk : x.shard = k
+    · subst hxk
+      obtain ⟨a, ha⟩ := push_live P s0 s1 x hs1 hlive
+      obtain ⟨cert, n, _, hn, hlt, hlast, hlive'⟩ := push_sign P s0 s1 x a hs1 ha
+      have hlt' := hlt q y0 cert0 hlast0 hq
+      cases j with
+      | zero =>
+        simp at hy; subst hy
+        rw [ha] at hb; obtain rfl := Option.some.inj hb
+        rw [hn] at hn'; obtain rfl := Option.some.inj hn'
+        omega
+      | succ j =>
+        simp at hy
+        have := ih s1 s hr _ n.checkpoint.createdAt hlive'
+          ⟨a, cert, n, hlast, hn, Nat.le_refl _⟩ j y hy hk b n' hb hn'
+        omega
+    · rw [← push_other P s0 s1 x hs1 k (fun e => hxk e.symm)] at hlive hlast0
+      cases j with
+      | zero => simp at hy; subst hy; exact absurd hk hxk
+      | succ j =>
+        simp at hy
+        exact ih s1 s hr k c hlive ⟨y0, cert0, q, hlast0, hq, hc⟩ j y hy hk b n' hb hn'
+
+private theorem fold_created (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (i j : Nat), i < j → ∀ (e e' : Entry), xs[i]? = some e → xs[j]? = some e' → e.shard = e'.shard →
+    ∀ a b, e.body.signed? = some a → e'.body.signed? = some b → ∀ n n' : Stored,
+      storedOfAny sha3 a = some n → storedOfAny sha3 b = some n' →
+      n.checkpoint.createdAt < n'.checkpoint.createdAt := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h i j hij e e' hi; simp at hi
+  | cons x rest ih =>
+    intro s0 s h i j hij e e' hi hj hk a b ha hb n n' hn hn'
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    cases i with
+    | zero =>
+      simp at hi; subst hi
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hj
+        obtain ⟨cert, n0, _, hn0, _, hlast, hlive⟩ := push_sign P s0 s1 _ a hs1 ha
+        rw [hn] at hn0; obtain rfl := Option.some.inj hn0
+        exact fold_last P rest s1 s hr _ n.checkpoint.createdAt hlive
+          ⟨a, cert, n, hlast, hn, Nat.le_refl _⟩ j e' hj hk.symm b n' hb hn'
+    | succ i =>
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hi hj
+        exact ih s1 s hr i j (by omega) e e' hi hj hk a b ha hb n n' hn hn'
 
 /-- Per shard and payment, revisions never go down, and an equal revision later is never ALLOW. -/
 theorem revision_mono (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (i j : Nat) (hij : i < j)
     (e e' : Entry) (hi : log[i]? = some e) (hj : log[j]? = some e') (hk : e.shard = e'.shard)
     (l l' : Leaf) (hl : l ∈ e.body.leaves) (hl' : l' ∈ e'.body.leaves)
     (hp : payNat l.programId l.paymentId = payNat l'.programId l'.paymentId) :
-    l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := sorry
+    l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := by
+  obtain ⟨st, hst⟩ := Option.isSome_iff_exists.mp hf
+  exact fold_mono P log LogState.init st hst i j hij e e' hi hj hk l hl l' hl' hp
 
 /-- An ALLOW past revision 0 re-decides an earlier ALLOW of the same shard by trunk `redecides`. -/
 theorem revision_step (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (j : Nat) (e' : Entry)
     (hj : log[j]? = some e') (l' : Leaf) (hl' : l' ∈ e'.body.leaves) (ha : l'.outcome = .ALLOW)
     (hr : 0 < l'.revision) :
     ∃ (i : Nat) (e : Entry) (l : Leaf), i ≤ j ∧ log[i]? = some e ∧ e.shard = e'.shard ∧ l ∈ e.body.leaves ∧
-      redecides l.revision l l' = true := sorry
+      redecides l.revision l l' = true := by
+  obtain ⟨st, hst⟩ := Option.isSome_iff_exists.mp hf
+  obtain ⟨o, ho, hrd⟩ := fold_redec P log LogState.init st hst j e' hj l' hl' ha hr
+  rcases ho with ho | ⟨i, e, hij, hi, hs, ho⟩
+  · simp [LogState.init, Shard.init] at ho
+  · exact ⟨i, e, o, hij, hi, hs, ho, hrd⟩
 
 /-- F8: signed checkpoints of one shard have strictly increasing createdAt. -/
 theorem createdAt_strict (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (i j : Nat) (hij : i < j)
     (e e' : Entry) (hi : log[i]? = some e) (hj : log[j]? = some e') (hk : e.shard = e'.shard)
     (a b : Bytes) (ha : e.body.signed? = some a) (hb : e'.body.signed? = some b) (n n' : Stored)
     (hn : storedOfAny sha3 a = some n) (hn' : storedOfAny sha3 b = some n') :
-    n.checkpoint.createdAt < n'.checkpoint.createdAt := sorry
+    n.checkpoint.createdAt < n'.checkpoint.createdAt := by
+  obtain ⟨st, hst⟩ := Option.isSome_iff_exists.mp hf
+  exact fold_created P log LogState.init st hst i j hij e e' hi hj hk a b ha hb n n' hn hn'
 
 /-! ### 8g. Custody: the courier supplies requests, snapshots, redo and the witness; Lean the rest -/
 
