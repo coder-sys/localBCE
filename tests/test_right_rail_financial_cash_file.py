@@ -103,6 +103,17 @@ class ReceiverCashFileTests(unittest.TestCase):
             callback()
         self.assertEqual(self.store.export_continuity(), before)
 
+    def _held(self, callback, *rows):
+        """A row's own fault holds that row (L3, D2), never the file: `rows` are each row's (status, reason). A file of
+        held rows and repeats writes nothing."""
+        before = self.store.export_continuity()
+        receipt = callback()
+        self.assertEqual([(row["status"], row["reason"]) for row in receipt["rows"]], list(rows))
+        self.assertEqual(receipt["held_count"], sum(status == "HELD" for status, _ in rows))
+        if receipt["recorded_count"] == 0:
+            self.assertEqual((receipt["cash_delta_cents"], self.store.export_continuity()), (0, before))
+        return receipt
+
     def _query(self, sql, *parameters):
         with closing(sqlite3.connect(self.store.path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
             return connection.execute(sql, parameters).fetchall()
@@ -111,7 +122,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         prepared = self._prepare()
         live = fixtures._image(self.store.path)
         preview = cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
-        self.assertEqual((preview["contract"], preview["mode"], preview["cash_delta_cents"]), ("RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2", "PREVIEW", 300))
+        self.assertEqual((preview["contract"], preview["mode"], preview["cash_delta_cents"]), ("RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3", "PREVIEW", 300))
         self.assertEqual((self.store.export_continuity(), fixtures._image(self.store.path)), (self.package, live))  # the preview ran on a copy
         applied = self._apply(prepared)
         self.assertEqual((applied["recorded_count"], applied["duplicate_count"], applied["cash_delta_cents"]), (2, 0, 300))
@@ -200,20 +211,23 @@ class ReceiverCashFileTests(unittest.TestCase):
                     self._unchanged(lambda: self.store.run_batch(commands, cash_file_context={**context, section: changed}))
         self._apply((commands, context))
         rebased = self._prepare(baseline=self._manifest())
-        self._unchanged(lambda: self._apply(rebased))
+        self._held(lambda: self._apply(rebased), ("DUPLICATE", None), ("DUPLICATE", None))  # the same rows on a fresh baseline: exact retries
 
-    def test_stale_baseline_and_mixed_retry_roll_back(self):
+    def test_moved_baseline_keeps_retries_exact_and_a_row_at_its_revision_records(self):
         commands, context = self._prepare()
-        self.store.record_payment_evidence(**commands[0][1])
-        self._unchanged(lambda: self._apply((commands, context)))
-        self._unchanged(lambda: self._apply(self._prepare()))
+        self.store.record_payment_evidence(**commands[0][1])  # row 1 was recorded since the baseline: its retry is exact, row 2 is at the item's revision now (F1: the revision it names, not the baseline's age)
+        self.assertEqual(self._held(lambda: self._apply((commands, context)), ("DUPLICATE", None), ("RECORDED", None))["cash_delta_cents"], 200)
+        self._held(lambda: self._apply(self._prepare()), ("DUPLICATE", None), ("DUPLICATE", None))
 
-    def test_mid_file_revision_and_action_errors_roll_back(self):
-        for changes in ({"expected_revision": 0}, {"pays_action_id": "missing-action"}):
-            value = copy.deepcopy(self.value)
-            value["rows"][1].update(changes)
+    def test_mid_file_revision_and_action_refusals_refuse_a_file_that_is_not_absorbed_whole(self):
+        for changes, reason in (({"expected_revision": 0}, "obligation_revision_conflict"), ({"pays_action_id": "missing-action"}, "payment_request_unknown")):
             with self.subTest(changes=changes):
-                self._unchanged(lambda: self._apply(self._prepare(value)))
+                self.setUp()
+                value = copy.deepcopy(self.value)
+                value["rows"][1].update(changes)
+                prepared = self._prepare(value)
+                self._unchanged(lambda: self._apply(prepared), reason)  # F4/F9: only an absorbed file holds a row (D2); any other file is atomic
+                self.assertEqual(self._query("SELECT payment_id FROM payments WHERE payment_id LIKE 'file-%'"), [])
 
     def _file_of(self, items, count, prefix="file"):
         revisions = dict(self._query("SELECT item_id,revision FROM obligations WHERE period_id=?", self.scope["period_id"]))
@@ -303,7 +317,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 previewed = time.perf_counter() - start
                 self.assertLess(previewed, 15.0)
                 self.assertEqual((preview["recorded_count"], fixtures._image(self.store.path)), (check.MAX_ROWS, live))
-                receipt, seconds = self._timed(lambda: self._apply(prepared))
+                receipt, seconds = self._timed(lambda: cash.apply_cash_file(self.store, *prepared))  # the production route (design (d)): the lock a writer waits on
                 print(f"CASH1B_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
                 self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
                 self.assertLess(seconds, 5.0)
@@ -603,16 +617,16 @@ class ReceiverCashFileTests(unittest.TestCase):
         clock, plan_file, calls = _FixedClock(self.store.clock.value), cash.plan_cash_file, []
         with self._copy_of_live(clock) as direct:
             direct.run_batch(other)
-            with self.assertRaisesRegex(check.CashFileError, "^cash_file_stale$"):  # the direct path after the other writer: new rows on a baseline it passed
-                direct.run_batch(prepared[0], cash_file_context=prepared[1])
+            expected_receipt = direct.run_batch(prepared[0], cash_file_context=prepared[1])  # the direct path after the other writer: its items did not move, so its rows are new work
+            self.assertEqual((expected_receipt["recorded_count"], expected_receipt["held_count"]), (8, 0))
         def overtaken(*arguments, **keywords):
             calls.append(len(calls))
             plan = plan_file(*arguments, **keywords)
             with self.fixture._make_owner(path=self.store.path, clock=clock) as writer:
                 writer.run_batch(other)
             return plan
-        with patch.object(self.store, "clock", clock), patch.object(cash, "plan_cash_file", overtaken), self.assertRaisesRegex(check.CashFileError, "^cash_file_stale$"):
-            cash.apply_cash_file(self.store, *prepared)
+        with patch.object(self.store, "clock", clock), patch.object(cash, "plan_cash_file", overtaken):
+            self.assertEqual(cash.apply_cash_file(self.store, *prepared)["recorded_count"], 8)
         self.assertEqual(len(calls), 2)  # the moved store refused the first plan's commit; the second plan, on the moved store, is the direct path's answer
         self.assertEqual(_tables(self.store.path), _tables(direct.path))
 
@@ -775,10 +789,11 @@ raise SystemExit(main(sys.argv[2:]))
         self.source = {**self.source, "captured_at_ms": expected.P2_EVENT_MS}
         self.value.update(source=self.source, rows=rows, total_cents=expected.CORRECTION_PAYMENT_CENTS + 1)
         self.fixture._advance_clock(self.store, expected.P2_EVENT_MS)
-        self._unchanged(lambda: self._apply())
+        self._unchanged(self._apply, "payment_exceeds_unpaid_balance")  # past the action's amount: the file is refused whole
         self.value["rows"][1]["amount_cents"] = 1
         self.value["total_cents"] = expected.CORRECTION_PAYMENT_CENTS
-        self.assertEqual(self._apply()["cash_delta_cents"], expected.CORRECTION_PAYMENT_CENTS)
+        self.assertEqual(self._held(lambda: self._apply(), ("RECORDED", None), ("RECORDED", None))["cash_delta_cents"], expected.CORRECTION_PAYMENT_CENTS)
+        self.assertEqual(self.store.obligation_detail(expected.H_ITEM_ID)["received_cash_cents"] - detail["received_cash_cents"], expected.CORRECTION_PAYMENT_CENTS)
         before, after = json.loads(self.package)["tables"], json.loads(self.store.export_continuity())["tables"]
         for table in ("actions", "action_outbox", "determinations"):
             self.assertEqual(after[table], before[table], table)
@@ -807,23 +822,24 @@ raise SystemExit(main(sys.argv[2:]))
         self.assertEqual(self.store.export_continuity(), committed)
         self.store.record_payment_evidence(**self._row(5, 7, 3, "later"), source_id="fictional-receiver", source_version="v1", local_ref="later")
         later = self.store.export_continuity()
-        retry = self._apply(prepared)  # stale baseline: repeats only, still exact
+        retry = self._apply(prepared)  # moved baseline: repeats only, still exact
         self.assertEqual((retry["duplicate_count"], retry["cash_delta_cents"]), (2, 0))
         self.assertEqual(self.store.export_continuity(), later)
 
-    def test_conflicting_reused_and_stale_rows_refuse_with_their_class(self):
+    def test_conflicting_reused_and_unknown_rows_are_held_with_their_class_and_a_prepared_row_at_its_revision_records(self):
         stale = self._prepare({**self.value, "row_count": 1, "total_cents": 7, "rows": [self._row(7, 7, 2)]})  # a new row reviewed before file A
         self._apply()
         self.baseline = self._manifest()
         origin_1 = {"common_origin_id": "file-origin-1"}
-        cases = {"cash_file_conflict": ({**self._row(4, 101, 2), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),
-                 "cash_file_already_recorded": ({**self._row(1, 100, 0), "common_origin_id": "file-origin-9"}, {**self._row(4, 100, 2), "evidence_id": "file-evidence-1"})}
-        for code, rows in cases.items():
+        cases = {"conflict": ({**self._row(4, 101, 2), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),
+                 "already_recorded": ({**self._row(1, 100, 0), "common_origin_id": "file-origin-9"}, {**self._row(4, 100, 2), "evidence_id": "file-evidence-1"}),
+                 "unknown_item": ({**self._row(4, 100, 2), "item_id": "item-not-in-period"},)}
+        for reason, rows in cases.items():
             for row in rows:
-                value = {**self.value, "row_count": 1, "total_cents": row["amount_cents"], "rows": [row]}
-                with self.subTest(code=code, row=row):
-                    self._unchanged(lambda: self._apply(self._prepare(value)), f"^{code}$")
-        self._unchanged(lambda: self._apply(stale), "^cash_file_stale$")
+                value = {**self.value, "row_count": 2, "total_cents": row["amount_cents"] + 5, "rows": [row, {**self._row(5, 5, 2), "item_id": row["item_id"]}]}
+                with self.subTest(reason=reason, row=row):  # the item's next row counted on the held one; an unknown item's rows are each unknown
+                    self._held(lambda: self._apply(self._prepare(value)), ("HELD", reason), ("HELD", "unknown_item" if reason == "unknown_item" else "depends_on_held"))
+        self._held(lambda: self._apply(stale), ("RECORDED", None))  # prepared before file A, at the revision file A left: new work, not stale
 
     def _file_b(self, rows, captured_at_ms=None):
         self.baseline = self._manifest()
@@ -848,7 +864,7 @@ raise SystemExit(main(sys.argv[2:]))
                             self.assertEqual((receipt["recorded_count"], receipt["duplicate_count"], receipt["cash_delta_cents"]), (0, 1, 0))
                             verify_database(self.store.path, expected_scope=self.scope, expected_authority=owner._checker_authority(self.fixture.authority))
                         else:
-                            self._unchanged(lambda: self._apply(), "^cash_file_conflict$")
+                            self._held(self._apply, ("HELD", "conflict"))
                     else:
                         command = lambda: self.store.record_payment_evidence(**{key: value for key, value in row.items() if key != "pays_action_id"}, source_id="fictional-receiver", source_version="v1", local_ref="direct")
                         if duplicate:

@@ -98,7 +98,7 @@ class ChangeLogCompareTests(unittest.TestCase):
 
     def _log_triggers(self, connection):
         names = [row[0] for row in connection.execute("SELECT name FROM sqlite_temp_master WHERE type='trigger' AND name LIKE 'rr_cfc_%'")]
-        self.assertEqual(len(names), 3 * len(check.ledger.PACKAGE_TABLES) + 3, "one log trigger per package table and operation, three guarding the log")
+        self.assertEqual(({name for (name,) in connection.execute("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~'")}, len(names)), (logged := check.ledger.PACKAGE_TABLES | {"commands", "history_segments", "history_pending", "history_open"}, 3 * len(logged) + 3), "the store's tables are the package tables plus four named extras (an unexpected table fails); one log trigger per table and operation, three guarding the log")
         return names
 
     def test_a_dropped_log_trigger_or_an_unlogged_replace_delete_is_refused(self):  # recursive_triggers OFF: the REPLACE's delete is unlogged, the count refuses it

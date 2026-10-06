@@ -165,30 +165,36 @@ BLOCK. **RightRail staff hold no release or deny role in any tenant.** SLA
 timers follow the flow's clock: 42 CFR 447.45 prompt-pay for non-fraud FFS
 holds, the 42 CFR 455.23 5-day suspension clock for fraud reasons,
 before-the-next-820 for capitation, contract terms for plan-to-provider.
-Mirror is the exception queue holding every non-ALLOW item.
+Mirror is the exception queue holding every non-ALLOW item and every bypassed
+payment.
 
-**Fail policy.** Each flow's grant sets `FAIL_CLOSED` (default for the
-weekly cycle, capitation and directed payments: a payer holds the payments)
-or `FAIL_OPEN` (allowed only where a state explicitly chooses it, for
-real-time flows, as a standing pre-signed bypass that activates only while the
-gate is down). There is no other fallback: Constitution III.5 makes
-fail-closed the universal default.
+**Fail policy.** Every flow fails closed (Constitution III.5): if the gate is
+down or does not allow a payment, the payer holds it. There is no `FAIL_OPEN`
+setting and no standing or pre-signed bypass.
 
-**Emergency bypass.** Two distinct state officials — the payment authority
-and a program-integrity or CIO official — sign a `BYPASS-GRANT` with keys
-held in the state's own HSM; RightRail cannot issue, extend or countersign
-one. The grant names its tenant, program, flows, amount ceiling, payee
-exclusions, reason and expiry (at most 72 hours), enforced by the payer's own
-check. Every bypassed payment is logged as its own release record and, once
-the gate recovers, re-decided post hoc against the rule version in force at
-release time: ALLOW closes it, anything else opens a recoupment case in
-Mirror. All are reconciled within 5 business days with a signed summary to the
-state.
+**Bypass.** A bypass releases one named payment before it goes. Named state
+officials from the state-signed roster first fully verify it against every
+item of the Control Pack's bypass checklist for its hold reason, then sign an
+`APPROVAL` of kind `BYPASS`. The approval commits to the exact payment (the
+hash of its moves), the deployment and mode, the Control Pack, and an expiry
+no later than the pack's. Signers follow the release rules above: distinct
+from the raiser and from every author of the payment's lines; a releaser plus
+a program-integrity supervisor for a BLOCK; and two distinct officials with
+distinct identity-provider subjects once one official's single-signer total
+for the claim, the payee cycle or the held line reaches the program threshold.
+While the gate is down, the payer's own check verifies the approval and,
+because it cannot see the hold class or the single-signer totals, requires
+their strictest values: a releaser plus a program-integrity supervisor. The
+payer records each released payment once and refuses a second release of it.
+RightRail cannot issue, extend or countersign a bypass. A bypass names its
+payment, so it can release no other and cannot outlive its admission. There is
+no grant, time window, post-hoc re-decision or recoupment: a payment is
+verified before it goes, never chased after.
 
-Fail-closed is an unconditional invariant today (`outcome ≠ Accepted → delta = ∅`,
-fv-plan's T1). A Bypass outcome needs its own theorem, that a bypass cannot
-outlive its authorization or be exercised silently; T1 then becomes conditional
-on no active bypass grant.
+Fail-closed is the invariant T1' (`fail_closed_unless_bypass`): `outcome ≠
+Accepted → delta = ∅`, unless a verified `BYPASS` approval admitted in the
+same step commits to exactly that delta and none of its payments was released
+before (`bypass_attributed`, `bypass_no_window`).
 
 ## 7. Primary, fenced standby, and the operational runbook
 

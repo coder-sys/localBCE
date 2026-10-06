@@ -24,8 +24,14 @@ responsibility is complete — and it keeps the state free to leave.
 2. Any power to approve, hold, release or redirect an external action needs
    separate, explicit state authority. Expanding scope needs state approval.
    The inline payment gate may allow or hold a payment only to the extent a
-   signed state authority grant permits; its fail policy and any emergency
-   bypass are themselves signed by the state; the gate ships off by default.
+   signed state authority grant permits, and it fails closed: a payment it
+   does not allow does not go. The one exception is a bypass of a single named
+   payment, fully verified before it goes by named state employees on the
+   state-signed roster, who sign an approval committing to exactly that
+   payment. A bypass obeys the same threshold, roster, separation and calendar
+   rules as any release. There is no standing, time-window, fail-open or
+   after-the-fact bypass, and RightRail cannot issue, extend or sign one. The
+   gate ships off by default.
 3. Human judgment stays human. A model output is a lead, never a determination.
 4. Existing payment systems move money. RightRail never does. BLOCK remains a
    human or state action, never an automated one.
@@ -359,3 +365,8 @@ never an amendment. Each amendment-log entry quotes the founder's own words that
   thats a core value, we need to makes re thats handled", 2026-10-01):
   a deterministic growth test pins the listed operations' work at two history
   sizes, with a shrink-only exception list.
+- 2026-10-06 — Article I.2 amended by the founders ("make it all happen, the
+  constiution change", 2026-10-06, approving the text): the gate fails closed;
+  the only bypass is of one named payment, fully verified before it goes by
+  named state employees who sign an approval for exactly that payment. No
+  standing, time-window, fail-open or after-the-fact bypass; no recoupment.
