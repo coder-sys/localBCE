@@ -68,6 +68,8 @@ No full suite on `d7192b0` yet: `land-d7192b0-full` a1-a3 each stopped at the me
 - **Carried, not re-measured:** staff roles are UI-only; no cancel or reduce command for stale corrections; receipt
   `delivery_status` is the newest action's, not the verdict; core size targets unmet (owner 7,262 vs ~3,000 lines, checker 4,638 vs
   ~1,800); TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`).
+- **Acknowledger not stored (open, needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so the rule that a decider may not
+  acknowledge is claim-level and cannot be re-verified by the checker or Lean; fixing it needs a versioned ACK record.
 
 Next: the full suite on `d7192b0`; gate throughput toward 50,000 lines/s.
 A local commit, not a qualified release; no local check activates production.

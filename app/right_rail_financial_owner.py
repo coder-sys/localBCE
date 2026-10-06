@@ -920,8 +920,8 @@ SYNTHETIC_STAFF: Final = (
 
 
 def staff_authority() -> SyntheticTrustedAuthority:
-    """The fixture authority plus the named staff who hold owner roles."""
-    return SyntheticTrustedAuthority(actors=SyntheticTrustedAuthority().actors + tuple(AuthorityActor(i, r) for i, _n, _s, r in SYNTHETIC_STAFF if r))
+    """The fixture authority plus the named staff who hold owner roles. Epoch 2: epoch 1 names the three fixture actors only."""
+    return SyntheticTrustedAuthority(epoch=2, actors=SyntheticTrustedAuthority().actors + tuple(AuthorityActor(i, r) for i, _n, _s, r in SYNTHETIC_STAFF if r))
 
 
 def _authority_ref(authority: SyntheticTrustedAuthority) -> dict[str, Any]:

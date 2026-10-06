@@ -131,17 +131,18 @@ _READ_ROUTES = {
     "/api/correction-followup": "correction_followup",
     "/api/item-timeline": "item_timeline",
 }
-# The owner role each actor-bearing command needs; the acting person is named by X-Staff-Person, else the role's first fit.
+# The owner role each actor-bearing command needs. X-Staff-Person names the acting person; with no header nobody is named and the command records its role's synthetic actor.
 _ACTOR_ROLE = {
     "authorize_offset": "FINANCE_DECISION", "reject_offset_and_authorize_correction": "FINANCE_DECISION",
     "acknowledge_correction_action": "RECEIVER", "record_reporting_evidence": "REPORTING_EDITOR",
 }
 _PEOPLE = {person[0]: person for person in SYNTHETIC_STAFF}
+_DECISION_EVENTS = ("OFFSET_AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED")
 
 
-def _acting_person(staff_role: str, owner_role: str, named: list[str]) -> str | None:
-    fit = [i for i, _n, role, owner_roles in SYNTHETIC_STAFF if role == staff_role and owner_role in owner_roles]
-    return fit[0] if not named and fit else named[0] if len(named) == 1 and named[0] in fit else None
+def _person_fits(staff_role: str, owner_role: str, named: list[str]) -> bool:
+    """Exactly one named roster person of this staff role who holds the owner role."""
+    return len(named) == 1 and any(i == named[0] and role == staff_role and owner_role in owner_roles for i, _n, role, owner_roles in SYNTHETIC_STAFF)
 # The record only that command writes: its appearance after a busy error proves the command committed.
 _OWN_RECORD = {
     "authorize_offset": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_OFFSET_ACTION_ID),
@@ -734,26 +735,25 @@ class StaffWorkflow:
             }
 
     def item_timeline(self) -> dict[str, Any]:
-        """Item H's record chain, read-only, from what the owner holds. A step with no record is named in ``absent``, never filled in.
-        Every person is ``claimed``: the session named them and nobody signed."""
-        owner = self._mirror.owner
-        with self._lock, owner._read_snapshot() as connection:
-            detail = owner.obligation_detail(H_ITEM_ID, _connection=connection)
-            events = owner._obligation_timeline(connection, H_OBLIGATION_ID, 200)["items"]
+        """Item H's record chain, read-only, from the verified staff snapshot. A step with no record is named in ``absent``, never filled in.
+        Every person is ``claimed``: the session named them and nobody signed. ``incomplete`` is true when older events are not shown."""
+        with self._lock:
+            h = self._workspace_locked()["h"]
+        events = h["timeline"]
 
         def by(actor_id: str) -> dict[str, str]:
             return {"by": actor_id, "by_name": _PEOPLE.get(actor_id, (None, actor_id))[1], "attribution": "claimed"}
 
-        steps = [{"step": "decision", "at_ms": d["decided_at_ms"], "what": d["decision"], "amount_cents": d["amount_cents"], **by(d["actor_id"])} for d in detail["determinations"]]
-        for event in events:
-            payload = json.loads(event["payload_json"])
-            if event["kind"] == "FOLLOWTHROUGH_DECIDED" and payload["act"] == "ASSIGN":
-                steps.append({"step": "assign", "at_ms": event["committed_at_ms"], "owner_id": payload["owner_id"], **by(payload["actor_id"])})
-        steps.sort(key=lambda step: step["at_ms"])
+        # A decision is placed by its own owner event (the one that reached its resulting revision); older than the window sorts first.
+        decided = {e["after_revision"]: e["event_sequence"] for e in events if e["kind"] in _DECISION_EVENTS}
+        steps = [{"step": "decision", "seq": decided.get(d["resulting_revision"], 0), "at_ms": d["decided_at_ms"], "what": d["decision"], "amount_cents": d["amount_cents"], **by(d["actor_id"])} for d in h["detail"]["determinations"]]
+        steps += [{"step": "assign", "seq": e["event_sequence"], "at_ms": e["committed_at_ms"], "owner_id": e["followthrough"]["owner_id"], **by(e["followthrough"]["actor_id"])}
+                  for e in events if e["kind"] == "FOLLOWTHROUGH_DECIDED" and e["followthrough"]["act"] == "ASSIGN"]
+        steps.sort(key=lambda step: step["seq"])
         # No release or payment-system confirmation record exists in the stack, so those steps are always absent: cash recorded
         # from the payer (the payments table) is a different fact and never reads as "Paid" here.
         chain = ("hold", "assign", "ask", "reply", "decision", "release", "payment_confirmation")
-        return {"contract": "RR/FINANCIAL/STAFF-ITEM-TIMELINE/v1", "item_id": H_ITEM_ID, "steps": steps, "absent": [n for n in chain if n not in {x["step"] for x in steps}]}
+        return {"contract": "RR/FINANCIAL/STAFF-ITEM-TIMELINE/v1", "item_id": H_ITEM_ID, "steps": steps, "incomplete": h["timeline_truncated"], "absent": [n for n in chain if n not in {x["step"] for x in steps}]}
 
     def restore_test(self, body: object) -> dict[str, Any]:
         revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
@@ -981,10 +981,11 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             if len(claimed) != 1 or claimed[0] not in COMMAND_ROLES.get(self.path, ()):
                 self._respond(403, {"error": {"code": "staff_role_refused"}, "changed": False})
                 return
-            actor = None
-            if command in _ACTOR_ROLE and (actor := _acting_person(claimed[0], _ACTOR_ROLE[command], self.headers.get_all("X-Staff-Person", []))) is None:
+            named = self.headers.get_all("X-Staff-Person", []) if command in _ACTOR_ROLE else []
+            if named and not _person_fits(claimed[0], _ACTOR_ROLE[command], named):
                 self._respond(403, {"error": {"code": "staff_person_refused"}, "changed": False})
                 return
+            actor = named[0] if named else None
             try:
                 body = self._json_request()
             except (ValueError, RecursionError, OSError):  # malformed, truncated or timed-out body
@@ -1069,7 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_dir=args.workspace,
             resume_existing=args.resume_existing_workspace,
         )
-    except (OSError, ValueError, financial_engine.FinancialEngineError) as error:
+    except (OSError, ValueError, FinancialError, financial_engine.FinancialEngineError) as error:
         parser.error(str(error))
     return 0
 
