@@ -871,9 +871,29 @@ def pLineFull : P WireLineFull := do
   pure { flow, lineId, memberKey, payeeRef, rendering, date, proc, units, cents }
 
 /-- The widened parser accepts exactly what `pLine` (Spec.lean:277-287) accepts. -/
+private theorem g1_run_agrees (s : Bytes) :
+    pLine.run s = (pLineFull.run s).map fun (l, t) => (⟨l.flow, l.memberKey, l.payeeRef, l.cents⟩, t) := by
+  simp only [pLine, pLineFull, StateT.run_bind, StateT.run_pure]
+  rcases (tag flows).run s with _ | ⟨a, s1⟩ <;> simp
+  rcases ident.run s1 with _ | ⟨b, s2⟩ <;> simp
+  rcases (take memberKeyBytes).run s2 with _ | ⟨c, s3⟩ <;> simp
+  rcases ident.run s3 with _ | ⟨d, s4⟩ <;> simp
+  rcases ident.run s4 with _ | ⟨e, s5⟩ <;> simp
+  rcases (nat 4).run s5 with _ | ⟨f, s6⟩ <;> simp
+  rcases ident.run s6 with _ | ⟨g, s7⟩ <;> simp
+  rcases (nat 4).run s7 with _ | ⟨h, s8⟩ <;> simp
+  rcases (nat 8).run s8 with _ | ⟨i, s9⟩ <;> simp
+
 theorem pLineFull_agrees (x : Bytes) :
     parse pLine maxLineBytes x =
-      (parse pLineFull maxLineBytes x).map fun l => ⟨l.flow, l.memberKey, l.payeeRef, l.cents⟩ := sorry
+      (parse pLineFull maxLineBytes x).map fun l => ⟨l.flow, l.memberKey, l.payeeRef, l.cents⟩ := by
+  unfold parse
+  split
+  · rfl
+  · rw [g1_run_agrees]
+    rcases pLineFull.run x with _ | ⟨l, t⟩
+    · rfl
+    · cases t <;> rfl
 
 /-- The rules' identifier numbers (Rules/Spec.lean:87-104): a 0x01 byte, then the bytes, big-endian. -/
 def idNat (x : Bytes) : Nat := beNat (1 :: x)
@@ -907,12 +927,184 @@ def reqsOf (tenant program : Bytes) (reqs : List Bytes) : Option (List Request) 
 def batchLines (rs : List Request) : Option (List Line) :=
   ((rs.filter (·.flow.ruled)).mapM linesOf).map List.flatten
 
+private theorem g1_take {n : Nat} {s : Bytes} {p : Bytes × Bytes} (h : (take n).run s = some p) :
+    p.1.length = n := by
+  simp only [StateT.run, take] at h
+  split at h
+  · simp at h; subst h; simp; omega
+  · simp at h
+
+private theorem g1_foldl : ∀ (bs : Bytes) (acc : Nat),
+    bs.foldl (fun a x => a * 256 + x.toNat) acc < (acc + 1) * 256 ^ bs.length
+  | [], acc => by simp
+  | x :: bs, acc => by
+    have ih := g1_foldl bs (acc * 256 + x.toNat)
+    have hx : x.toNat < 256 := UInt8.toNat_lt x
+    have h1 : acc * 256 + x.toNat + 1 ≤ (acc + 1) * 256 := by omega
+    have h2 : (acc * 256 + x.toNat + 1) * 256 ^ bs.length ≤ (acc + 1) * 256 ^ (x :: bs).length := by
+      simp only [List.length_cons, Nat.pow_succ]
+      calc _ ≤ ((acc + 1) * 256) * 256 ^ bs.length := Nat.mul_le_mul_right _ h1
+        _ = _ := by rw [Nat.mul_assoc, Nat.mul_comm 256 (256 ^ bs.length)]
+    exact Nat.lt_of_lt_of_le ih h2
+
+private theorem g1_beNat_lt (bs : Bytes) : beNat bs < 256 ^ bs.length := by
+  have := g1_foldl bs 0
+  simpa [beNat] using this
+
+private theorem g1_run_bind {α β : Type} (x : P α) (f : α → P β) (s : Bytes) (p : β × Bytes) :
+    (x >>= f).run s = some p ↔ ∃ q, x.run s = some q ∧ (f q.1).run q.2 = some p := by
+  rw [StateT.run_bind]
+  cases hq : x.run s <;> simp
+
+private theorem g1_run_pure {α : Type} (a : α) (s : Bytes) (p : α × Bytes) :
+    (pure a : P α).run s = some p ↔ p = (a, s) := by
+  rw [StateT.run_pure]; simp [eq_comm]
+
+private theorem g1_need {c : Bool} {s : Bytes} {p : Unit × Bytes} (h : (need c).run s = some p) : c = true := by
+  simp only [StateT.run, need] at h
+  split at h
+  · assumption
+  · simp at h
+
+private theorem g1_nat {w lo hi : Nat} {s : Bytes} {p : Nat × Bytes} (h : (nat w lo hi).run s = some p) :
+    p.1 < 256 ^ w := by
+  simp only [nat, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q, hq, r, hr, h⟩ := h
+  have := g1_beNat_lt q.1
+  rw [g1_take hq] at this
+  subst h
+  exact this
+
+private theorem g1_ident {s : Bytes} {p : Bytes × Bytes} (h : ident.run s = some p) : identOk p.1 = true := by
+  simp only [ident, blob, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q, ⟨q0, h0, h1⟩, r, hr, h⟩ := h
+  have := g1_need hr
+  subst h
+  exact this
+
+private theorem g1_pLineFull {s : Bytes} {p : WireLineFull × Bytes} (h : pLineFull.run s = some p) :
+    identOk p.1.lineId = true ∧ p.1.memberKey.length = 32 ∧ identOk p.1.payeeRef = true ∧
+    identOk p.1.rendering = true ∧ p.1.date < 256 ^ 4 ∧ identOk p.1.proc = true ∧ p.1.units < 256 ^ 4 ∧
+    p.1.cents < 256 ^ 8 := by
+  simp only [pLineFull, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q1, h1, q2, h2, q3, h3, q4, h4, q5, h5, q6, h6, q7, h7, q8, h8, q9, h9, h⟩ := h
+  subst h
+  exact ⟨g1_ident h2, g1_take h3, g1_ident h4, g1_ident h5, g1_nat h6, g1_ident h7, g1_nat h8, g1_nat h9⟩
+
+private theorem g1_parse {α : Type} {p : P α} {lim : Nat} {b : Bytes} {a : α} (h : parse p lim b = some a) :
+    ∃ t, p.run b = some (a, t) := by
+  unfold parse at h
+  split at h
+  · simp at h
+  · rcases hr : p.run b with _ | ⟨a', t⟩
+    · simp [hr] at h
+    · cases t
+      · simp [hr] at h; subst h; exact ⟨[], rfl⟩
+      · simp [hr] at h
+
+private theorem g1_identOk_len {x : Bytes} (h : identOk x = true) : x.length ≤ 128 := by
+  cases x with
+  | nil => simp [identOk] at h
+  | cons c r =>
+    simp only [identOk, Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨⟨_, hl⟩, _⟩ := h
+    simp; omega
+
+private theorem g1_idNat_lt {x : Bytes} {w : Nat} (h : x.length + 1 ≤ w) : idNat x < 256 ^ w := by
+  have := g1_beNat_lt (1 :: x)
+  exact Nat.lt_of_lt_of_le this (Nat.pow_le_pow_right (by omega) (by simpa using h))
+
 theorem payNat_fits (program pay : Bytes) (hp : identOk program = true) (hq : identOk pay = true) :
-    payNat program pay < 256 ^ payWidth := sorry
+    payNat program pay < 256 ^ payWidth := by
+  have h1 := g1_identOk_len hp
+  have h2 := g1_identOk_len hq
+  unfold payNat
+  apply g1_idNat_lt
+  simp [identField, natBE, payWidth]
+  omega
+
+private theorem g1_mapM_mem {α β : Type} (f : α → Option β) :
+    ∀ (xs : List α) (ys : List β), xs.mapM f = some ys → ∀ y ∈ ys, ∃ x ∈ xs, f x = some y
+  | [], ys, h, y, hy => by simp [List.mapM_nil] at h; subst h; simp at hy
+  | x :: xs, ys, h, y, hy => by
+    simp only [List.mapM_cons] at h
+    cases hx : f x with
+    | none => simp [hx] at h
+    | some a =>
+      cases hm : xs.mapM f with
+      | none => simp [hx, hm] at h
+      | some bs =>
+        simp [hx, hm] at h
+        subst h
+        rcases List.mem_cons.mp hy with rfl | hy
+        · exact ⟨x, by simp, hx⟩
+        · obtain ⟨x', hx', e⟩ := g1_mapM_mem f xs bs hm y hy
+          exact ⟨x', by simp [hx'], e⟩
+
+private theorem g1_mapM_be : ∀ (l : List (Nat × Nat)), (∀ e ∈ l, e.2 < 256 ^ e.1) →
+    (l.mapM fun (w, n) => be w n).isSome = true
+  | [], _ => by simp
+  | (w, n) :: l, h => by
+    have h1 : (be w n).isSome = true := by
+      have := h (w, n) (by simp)
+      simp only at this
+      simp [be, this]
+    obtain ⟨bs, hbs⟩ := Option.isSome_iff_exists.mp h1
+    have h2 := g1_mapM_be l (fun e he => h e (by simp [he]))
+    obtain ⟨cs, hcs⟩ := Option.isSome_iff_exists.mp h2
+    simp [List.mapM_cons, hbs, hcs]
+
+private theorem g1_rowKey_some (l : Line) (h : ∀ e ∈ Line.fields l, e.2 < 256 ^ e.1) :
+    (keyBytes (rowKey l)).isSome = true := by
+  obtain ⟨bs, hbs⟩ := Option.isSome_iff_exists.mp (g1_mapM_be _ h)
+  have hz : [idWidth, payWidth, 1, idWidth, idWidth, idWidth, 4, idWidth, 4, 8].zip
+      ((Line.fields l).map (·.2)) = Line.fields l := by
+    simp [Line.fields]
+  have hlen : (Line.fields l).length = 10 := by simp [Line.fields]
+  simp [keyBytes, rowKey, keyWidths, hz, hlen, hbs]
+
+private theorem g1_lineOf_fits {pay : Nat} (hpay : pay < 256 ^ payWidth) {wl : WireLineFull} {l : Line}
+    (hid : identOk wl.lineId = true) (hm : wl.memberKey.length = 32) (hp : identOk wl.payeeRef = true)
+    (hr : identOk wl.rendering = true) (hd : wl.date < 256 ^ 4) (hpr : identOk wl.proc = true)
+    (hu : wl.units < 256 ^ 4) (hc : wl.cents < 256 ^ 8) (h : lineOf pay wl = some l) :
+    (keyBytes (rowKey l)).isSome = true := by
+  unfold lineOf at h
+  simp only [Option.map_eq_some_iff] at h
+  obtain ⟨f, hf, rfl⟩ := h
+  apply g1_rowKey_some
+  have i1 := g1_idNat_lt (w := idWidth) (x := wl.lineId) (by have := g1_identOk_len hid; simp [idWidth]; omega)
+  have i2 := g1_idNat_lt (w := idWidth) (x := wl.memberKey) (by simp [idWidth, hm])
+  have i3 := g1_idNat_lt (w := idWidth) (x := wl.payeeRef) (by have := g1_identOk_len hp; simp [idWidth]; omega)
+  have i4 := g1_idNat_lt (w := idWidth) (x := wl.rendering) (by have := g1_identOk_len hr; simp [idWidth]; omega)
+  have i5 := g1_idNat_lt (w := idWidth) (x := wl.proc) (by have := g1_identOk_len hpr; simp [idWidth]; omega)
+  have i6 : f.tag < 256 ^ 1 := by cases f <;> simp [Flow.tag]
+  intro e he
+  simp only [Line.fields, List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp only <;> assumption
+
+private theorem g1_request_ids {s : Bytes} {p : Request × Bytes} (h : pRequest.run s = some p) :
+    identOk p.1.programId = true ∧ identOk p.1.paymentId = true := by
+  simp only [pRequest, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q1, h1, q2, h2, q3, h3, q4, h4, q5, h5, q6, h6, q7, h7, q8, h8, q9, h9, q10, h10, q11, h11, q12, h12,
+    q13, h13, q14, h14, q15, h15, q16, h16, q17, h17, q18, h18, q19, h19, h⟩ := h
+  subst h
+  exact ⟨g1_ident h3, g1_ident h6⟩
 
 /-- A decoded line always has a row key, so `decideIdx`'s guard (§7) never refuses a decoded batch. -/
 theorem lineOf_fits (r : Request) (hr : ∃ x, decodeRequest x = some r) (ls : List Line) (h : linesOf r = some ls) :
-    ls.all (fun l => (keyBytes (rowKey l)).isSome) = true := sorry
+    ls.all (fun l => (keyBytes (rowKey l)).isSome) = true := by
+  obtain ⟨x, hx⟩ := hr
+  obtain ⟨t, ht⟩ := g1_parse (by unfold decodeRequest at hx; exact hx)
+  obtain ⟨hp, hq⟩ := g1_request_ids ht
+  have hpay := payNat_fits r.programId r.paymentId hp hq
+  simp only [List.all_eq_true]
+  intro l hl
+  unfold linesOf at h
+  obtain ⟨y, hy, hf⟩ := g1_mapM_mem _ _ ls h l hl
+  obtain ⟨wl, hwl, hlo⟩ := Option.bind_eq_some_iff.mp hf
+  obtain ⟨t', ht'⟩ := g1_parse hwl
+  obtain ⟨a1, a2, a3, a4, a5, a6, a7, a8⟩ := g1_pLineFull ht'
+  exact g1_lineOf_fits hpay a1 a2 a3 a4 a5 a6 a7 a8 hlo
 
 
 /-! ### 8d. PayRow and tokens: every money field, one permutation check (F2: revision bound) -/
@@ -949,7 +1141,19 @@ def reasonName : Reason → String
 def reasonCode (r : Reason) : Bytes := (reasonName r).toUTF8.toList
 
 /-- Rows are built from `reasons` filtered, so the leaf's ascending check (Spec.lean:472) always holds. -/
-theorem reasonCode_ascending (xs : List Reason) (h : xs.Sublist reasons) : ascending (xs.map reasonCode) = true := sorry
+private theorem g1_reasons_pw : (reasons.map reasonCode).Pairwise (fun a b => lexLt a b = true) := by
+  decide +kernel
+
+private theorem g1_pw_asc : ∀ (l : List Bytes), l.Pairwise (fun a b => lexLt a b = true) → ascending l = true
+  | [], _ => rfl
+  | [_], _ => rfl
+  | a :: b :: rest, h => by
+    have h1 := List.pairwise_cons.mp h
+    simp only [ascending, g1_pw_asc (b :: rest) h1.2, Bool.and_true]
+    exact h1.1 b (List.mem_cons_self ..)
+
+theorem reasonCode_ascending (xs : List Reason) (h : xs.Sublist reasons) : ascending (xs.map reasonCode) = true :=
+  g1_pw_asc _ (g1_reasons_pw.sublist (h.map reasonCode))
 
 def wireOf : Outcome → WireOutcome
   | .ALLOW => .ALLOW
@@ -1163,9 +1367,290 @@ def entryIn (e : Entry) : Option Bytes := do
 
 def entryDigest (e : Entry) : Option Bytes := (entryIn e).map sha3
 
+private theorem be_len {w n : Nat} {bs : Bytes} (h : be w n = some bs) : bs.length = w := by
+  unfold be at h
+  split at h
+  · simp at h; subst h; simp
+  · simp at h
+
+private theorem be_lt {w n : Nat} {bs : Bytes} (h : be w n = some bs) : n < 256 ^ w := by
+  unfold be at h
+  split at h
+  · assumption
+  · simp at h
+
+private theorem be_digits_succ (w n : Nat) :
+    ((List.range (w + 1)).reverse.map fun i => (n / 256 ^ i % 256).toUInt8) =
+    ((List.range w).reverse.map fun i => (n / 256 / 256 ^ i % 256).toUInt8) ++ [(n % 256).toUInt8] := by
+  rw [List.range_succ_eq_map, List.reverse_cons, ← List.map_reverse, List.map_append, List.map_map]
+  simp [Function.comp_def, Nat.pow_succ, Nat.div_div_eq_div_mul, Nat.mul_comm]
+
+private theorem be_digits_inj : ∀ (w n m : Nat), n < 256 ^ w → m < 256 ^ w →
+    ((List.range w).reverse.map fun i => (n / 256 ^ i % 256).toUInt8) =
+    ((List.range w).reverse.map fun i => (m / 256 ^ i % 256).toUInt8) → n = m
+  | 0, n, m, hn, hm, _ => by simp at hn hm; omega
+  | w + 1, n, m, hn, hm, h => by
+    rw [be_digits_succ, be_digits_succ] at h
+    have hl : ∀ k : Nat, (((List.range w).reverse.map fun i => (k / 256 ^ i % 256).toUInt8)).length = w := by
+      intro k; simp
+    obtain ⟨h1, h2⟩ := List.append_inj h (by rw [hl, hl])
+    have e1 : n / 256 = m / 256 := by
+      refine be_digits_inj w _ _ (by rw [Nat.pow_succ] at hn; omega) (by rw [Nat.pow_succ] at hm; omega) ?_
+      simpa using h1
+    have e2 : n % 256 = m % 256 := by
+      have := congrArg (fun l : List UInt8 => l.head?.map UInt8.toNat) h2
+      simpa [Nat.mod_mod] using this
+    omega
+
+private theorem be_inj {w n m : Nat} {bs : Bytes} (h : be w n = some bs) (h' : be w m = some bs) : n = m := by
+  have hn := be_lt h
+  have hm := be_lt h'
+  unfold be at h h'
+  rw [if_pos hn] at h
+  rw [if_pos hm] at h'
+  exact be_digits_inj w n m hn hm (by rw [Option.some.inj h, Option.some.inj h'])
+
+private theorem mapM_flat_inj {α : Type} (f : α → Option Bytes)
+    (hf : ∀ a a' y y' (r r' : Bytes), f a = some y → f a' = some y' → y ++ r = y' ++ r' → a = a' ∧ r = r') :
+    ∀ (l l' : List α) (ys ys' : List Bytes) (r r' : Bytes), l.length = l'.length →
+      l.mapM f = some ys → l'.mapM f = some ys' → ys.flatten ++ r = ys'.flatten ++ r' → l = l' ∧ r = r' := by
+  intro l
+  induction l with
+  | nil =>
+    intro l' ys ys' r r' hl h1 h2 h
+    cases l' with
+    | nil => simp at h1 h2; subst h1; subst h2; simpa using h
+    | cons _ _ => simp at hl
+  | cons a t ih =>
+    intro l' ys ys' r r' hl h1 h2 h
+    cases l' with
+    | nil => simp at hl
+    | cons a' t' =>
+      simp [List.mapM_cons, Option.bind_eq_some_iff] at h1 h2
+      obtain ⟨y, hy, zs, hz, rfl⟩ := h1
+      obtain ⟨y', hy', zs', hz', rfl⟩ := h2
+      simp only [List.flatten_cons, List.append_assoc] at h
+      obtain ⟨e1, e2⟩ := hf a a' y y' _ _ hy hy' h
+      obtain ⟨e3, e4⟩ := ih t' zs zs' r r' (by simpa using hl) hz hz' e2
+      exact ⟨by rw [e1, e3], e4⟩
+
+private theorem lenBytes_inj {a a' y y' r r' : Bytes} (h : lenBytes a = some y) (h' : lenBytes a' = some y')
+    (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  unfold lenBytes at h h'
+  obtain ⟨p, hp, rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨p', hp', rfl⟩ := Option.map_eq_some_iff.mp h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  exact List.append_inj e2 (be_inj hp hp')
+
+private theorem fields_inj : ∀ (fs fs' : List (Nat × Nat)) (bs bs' : List Bytes) (r r' : Bytes),
+    fs.map Prod.fst = fs'.map Prod.fst →
+    (fs.mapM fun (w, n) => be w n) = some bs → (fs'.mapM fun (w, n) => be w n) = some bs' →
+    bs.flatten ++ r = bs'.flatten ++ r' → fs = fs' ∧ r = r' := by
+  intro fs
+  induction fs with
+  | nil =>
+    intro fs' bs bs' r r' hw h1 h2 h
+    cases fs' with
+    | nil => simp at h1 h2; subst h1; subst h2; simpa using h
+    | cons _ _ => simp at hw
+  | cons p t ih =>
+    intro fs' bs bs' r r' hw h1 h2 h
+    cases fs' with
+    | nil => simp at hw
+    | cons p' t' =>
+      obtain ⟨w, n⟩ := p
+      obtain ⟨w', n'⟩ := p'
+      simp at hw
+      obtain ⟨rfl, hw⟩ := hw
+      simp [List.mapM_cons, Option.bind_eq_some_iff] at h1 h2
+      obtain ⟨y, hy, zs, hz, rfl⟩ := h1
+      obtain ⟨y', hy', zs', hz', rfl⟩ := h2
+      simp only [List.flatten_cons, List.append_assoc] at h
+      obtain ⟨e1, e2⟩ := List.append_inj h (by rw [be_len hy, be_len hy'])
+      subst e1
+      obtain ⟨e3, e4⟩ := ih t' zs zs' r r' hw hz hz' e2
+      have := be_inj hy hy'
+      subst this
+      subst e3
+      exact ⟨rfl, e4⟩
+
+private theorem Line_ext {l l' : Line} (h : Line.fields l = Line.fields l') : l = l' := by
+  obtain ⟨a1, a2, f, a4, a5, a6, a7, a8, a9, a10⟩ := l
+  obtain ⟨b1, b2, g, b4, b5, b6, b7, b8, b9, b10⟩ := l'
+  cases f <;> cases g <;> simp_all [Line.fields, Flow.tag]
+
+private theorem rowBytes_inj {a a' : Line} {y y' r r' : Bytes} (h : rowBytes a = some y)
+    (h' : rowBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  unfold rowBytes at h h'
+  obtain ⟨bs, hbs, rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨bs', hbs', rfl⟩ := Option.map_eq_some_iff.mp h'
+  obtain ⟨e1, e2⟩ := fields_inj _ _ bs bs' r r' (by simp [Line.fields]) hbs hbs' hx
+  exact ⟨Line_ext e1, e2⟩
+
+private theorem rowsBytes_inj {a a' : List Line} {y y' r r' : Bytes} (h : rowsBytes a = some y)
+    (h' : rowsBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  simp [rowsBytes, Option.bind_eq_some_iff] at h h'
+  obtain ⟨p, hp, rs, hrs, rfl⟩ := h
+  obtain ⟨p', hp', rs', hrs', rfl⟩ := h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  exact mapM_flat_inj rowBytes (fun _ _ _ _ _ _ => rowBytes_inj) a a' rs rs' r r' (be_inj hp hp') hrs hrs' e2
+
+private theorem setBytes_inj {a a' : Snapshot Line} {y y' r r' : Bytes} (h : setBytes a = some y)
+    (h' : setBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  obtain ⟨t, c, es⟩ := a
+  obtain ⟨t', c', es'⟩ := a'
+  simp [setBytes, Option.bind_eq_some_iff] at h h'
+  obtain ⟨p, hp, q, hq, z, hz, rfl⟩ := h
+  obtain ⟨p', hp', q', hq', z', hz', rfl⟩ := h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [be_len hq, be_len hq'])
+  subst e3
+  obtain ⟨e5, e6⟩ := rowsBytes_inj hz hz' e4
+  have h1 := be_inj hp hp'
+  have h2 := be_inj hq hq'
+  subst h1; subst h2; subst e5
+  exact ⟨rfl, e6⟩
+
+private theorem tipBytes_inj : ∀ {a a' : Option (Bytes × Bytes)} {y y' r r' : Bytes}, tipBytes a = some y →
+    tipBytes a' = some y' → y ++ r = y' ++ r' → a = a' ∧ r = r'
+  | none, none, y, y', r, r', h, h', hx => by
+    simp [tipBytes] at h h'; subst h; subst h'; simpa using hx
+  | none, some _, y, y', r, r', h, h', hx => by
+    simp [tipBytes, Option.bind_eq_some_iff] at h h'
+    obtain ⟨_, _, _, _, rfl⟩ := h'
+    subst h
+    simp at hx
+  | some _, none, y, y', r, r', h, h', hx => by
+    simp [tipBytes, Option.bind_eq_some_iff] at h h'
+    obtain ⟨_, _, _, _, rfl⟩ := h
+    subst h'
+    simp at hx
+  | some (s, c), some (s', c'), y, y', r, r', h, h', hx => by
+    simp [tipBytes, Option.bind_eq_some_iff] at h h'
+    obtain ⟨a, ha, b, hb, rfl⟩ := h
+    obtain ⟨a', ha', b', hb', rfl⟩ := h'
+    simp only [List.cons_append, List.cons.injEq, true_and, List.append_assoc] at hx
+    obtain ⟨e1, e2⟩ := lenBytes_inj ha ha' hx
+    obtain ⟨e3, e4⟩ := lenBytes_inj hb hb' e2
+    subst e1; subst e3
+    exact ⟨rfl, e4⟩
+
+private theorem regBytes_inj {a a' : Nat × Nat × Nat} {y y' r r' : Bytes} (h : regBytes a = some y)
+    (h' : regBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  obtain ⟨a1, a2, a3⟩ := a
+  obtain ⟨b1, b2, b3⟩ := a'
+  simp [regBytes, Option.bind_eq_some_iff] at h h'
+  obtain ⟨p, hp, q, hq, z, hz, rfl⟩ := h
+  obtain ⟨p', hp', q', hq', z', hz', rfl⟩ := h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [be_len hq, be_len hq'])
+  subst e3
+  obtain ⟨e5, e6⟩ := List.append_inj e4 (by rw [be_len hz, be_len hz'])
+  subst e5
+  have h1 := be_inj hp hp'
+  have h2 := be_inj hq hq'
+  have h3 := be_inj hz hz'
+  subst h1; subst h2; subst h3
+  exact ⟨rfl, e6⟩
+
+private theorem bodyBytes_inj {b b' : Body} {y : Bytes} (h : bodyBytes b = some y)
+    (h' : bodyBytes b' = some y) : b = b' := by
+  rcases b with ⟨cert, s, ts, f⟩ | ⟨⟨tip, rel, unr⟩⟩ | ⟨t⟩ <;>
+    rcases b' with ⟨cert', s', ts', f'⟩ | ⟨⟨tip', rel', unr'⟩⟩ | ⟨t'⟩ <;>
+    simp [bodyBytes, Option.bind_eq_some_iff] at h h'
+  · obtain ⟨a, ha, s1, hs, n, hn, tt, ht, x1, hx1, x2, hx2, rfl⟩ := h
+    obtain ⟨a', ha', s1', hs', n', hn', tt', ht', x1', hx1', x2', hx2', hy⟩ := h'
+    have hx := (List.cons.inj hy).2.symm
+    obtain ⟨e1, e2⟩ := lenBytes_inj ha ha' hx
+    obtain ⟨e3, e4⟩ := lenBytes_inj hs hs' e2
+    obtain ⟨e5, e6⟩ := List.append_inj e4 (by rw [be_len hn, be_len hn'])
+    subst e5
+    have hl := be_inj hn hn'
+    obtain ⟨e7, e8⟩ := mapM_flat_inj lenBytes (fun _ _ _ _ _ _ => lenBytes_inj) ts ts' tt tt' _ _ hl ht ht' e6
+    obtain ⟨e9, e10⟩ := rowsBytes_inj hx1 hx1' e8
+    obtain ⟨e11, _⟩ := rowsBytes_inj hx2 hx2' (by rw [List.append_nil, List.append_nil]; exact e10)
+    subst e1; subst e3; subst e7
+    exact congrArg (Body.sign cert s ts) (Prod.ext e9 e11)
+  · obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨a, ha, a1, ha1, a2, ha2, rfl⟩ := h
+    obtain ⟨a', ha', a1', ha1', a2', ha2', hy⟩ := h'
+    have hx := (List.cons.inj hy).2.symm
+    obtain ⟨e1, e2⟩ := tipBytes_inj ha ha' hx
+    obtain ⟨e3, e4⟩ := setBytes_inj ha1 ha1' e2
+    obtain ⟨e5, _⟩ := setBytes_inj ha2 ha2' (by rw [List.append_nil, List.append_nil]; exact e4)
+    subst e1; subst e3; subst e5
+    rfl
+  · obtain ⟨_, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨a, ha, rfl⟩ := h
+    obtain ⟨a', ha', hy⟩ := h'
+    have hx := (List.cons.inj hy).2.symm
+    obtain ⟨e1, _⟩ := lenBytes_inj ha ha' (by rw [List.append_nil, List.append_nil]; exact hx)
+    subst e1
+    rfl
+
+private theorem entryIn_prev {e : Entry} {x : Bytes} (h : entryIn e = some x) : e.prev.length = digestBytes := by
+  unfold entryIn at h
+  by_cases hc : e.prev.length = digestBytes
+  · exact hc
+  · have hn : (guard (e.prev.length = digestBytes) : Option Unit) = none := by simp [guard, hc]; rfl
+    rw [hn] at h
+    simp at h
+
 /-- FORMAT: the entry encoding is injective where defined. -/
-theorem entryIn_inj (e e' : Entry) (x : Bytes) (h : entryIn e = some x) (h' : entryIn e' = some x) : e = e' :=
-  sorry
+theorem entryIn_inj (e e' : Entry) (x : Bytes) (h : entryIn e = some x) (h' : entryIn e' = some x) : e = e' := by
+  have hg := entryIn_prev h
+  have hg' := entryIn_prev h'
+  obtain ⟨idx, prev, shard, reg, body⟩ := e
+  obtain ⟨idx', prev', shard', reg', body'⟩ := e'
+  simp [entryIn, guard, hg, hg', Option.bind_eq_some_iff] at h h'
+  obtain ⟨i, hi, k, hk, n, hn, rs, hrs, b, hb, rfl⟩ := h
+  obtain ⟨i', hi', k', hk', n', hn', rs', hrs', b', hb', hx⟩ := h'
+  have hx := (List.append_cancel_left hx).symm
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hi, be_len hi'])
+  subst e1
+  obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [hg, hg'])
+  subst e3
+  obtain ⟨e5, e6⟩ := List.append_inj e4 (by rw [be_len hk, be_len hk'])
+  subst e5
+  obtain ⟨e7, e8⟩ := List.append_inj e6 (by rw [be_len hn, be_len hn'])
+  subst e7
+  obtain ⟨e9, e10⟩ := mapM_flat_inj regBytes (fun _ _ _ _ _ _ => regBytes_inj) reg reg' rs rs' b b'
+    (be_inj hn hn') hrs hrs' e8
+  have e11 := bodyBytes_inj hb (by rw [e10]; exact hb')
+  have := be_inj hi hi'
+  have := be_inj hk hk'
+  subst_vars
+  rfl
 
 /-- FORMAT: rows are newest first, so appending older rows extends the chain under the newer ones. -/
 theorem chainHead_append (H : Bytes → Bytes) (g : Bytes) (d l : List Row) :
@@ -1263,30 +1748,453 @@ def push (P : Pins) (st : LogState) (e : Entry) : Option LogState := do
 /-- All custody state: the fold of the off-machine log, once, at boot (H3). -/
 def fold (P : Pins) (log : List Entry) : Option LogState := log.foldlM (push P) LogState.init
 
+private theorem guard_some (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
+  by_cases hc : c <;> simp [guard, hc]
+
+private theorem push_shape (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st') :
+    st'.reg = e.reg ++ st.reg ∧ st'.rhead = chainHead sha3 st.rhead e.reg ∧
+    ∃ sh', st'.shard = upd st.shard e.shard sh' ∧
+      ((∃ t, e.body = .seal t ∧ (st.shard e.shard).last = none ∧ (st.shard e.shard).live = false ∧
+          sh'.pays = (st.shard e.shard).pays) ∨
+       (∃ p, e.body = .resume p ∧ (st.shard e.shard).live = false ∧ sh'.pays = (st.shard e.shard).pays) ∨
+       (∃ cert new tokens fresh n, e.body = .sign cert new tokens fresh ∧ (st.shard e.shard).live = true ∧
+          storedOfAny sha3 new = some n ∧
+          (∀ q y c, (st.shard e.shard).last = some (y, c) → storedOfAny sha3 y = some q →
+            q.checkpoint.createdAt < n.checkpoint.createdAt) ∧
+          sh'.last = some (new, cert) ∧ sh'.live = true ∧
+          e.body.leaves.foldlM payStep (st.shard e.shard).pays = some sh'.pays)) := by
+  unfold push at h
+  cases hb : e.body with
+  | «seal» t =>
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
+    obtain ⟨_, a, _, ⟨_, _, _, hl, hv⟩, rfl⟩ := h
+    exact ⟨rfl, rfl, _, rfl, Or.inl ⟨t, rfl, hl, hv, rfl⟩⟩
+  | resume p =>
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
+    obtain ⟨_, a, _, ⟨hv, _⟩, _, _, _, _, _, _, _, _, _, rfl⟩ := h
+    exact ⟨rfl, rfl, _, rfl, Or.inr (Or.inl ⟨p, rfl, hv, rfl⟩)⟩
+  | sign cert new tokens fresh =>
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
+    obtain ⟨_, a, _, hlive, _, _, _, _, n, hn, _, _, _, _, _, hg, ps, hps, rfl⟩ := h
+    refine ⟨rfl, rfl, _, rfl, Or.inr (Or.inr ⟨cert, new, tokens, fresh, n, rfl, hlive, hn, ?_, rfl, hlive, hps⟩)⟩
+    intro q y c hl hq
+    rw [hl] at hg
+    simpa [hq] using hg
+
 /-- FORMAT: the folded registry head is the chain of the folded rows. -/
 theorem registry_head (P : Pins) (log : List Entry) (st : LogState) (h : fold P log = some st) :
-    st.rhead = chainHead sha3 zeroDigest st.reg := sorry
+    st.rhead = chainHead sha3 zeroDigest st.reg := by
+  have key : ∀ (log : List Entry) (s0 st : LogState), s0.rhead = chainHead sha3 zeroDigest s0.reg →
+      log.foldlM (push P) s0 = some st → st.rhead = chainHead sha3 zeroDigest st.reg := by
+    intro log
+    induction log with
+    | nil => intro s0 st h0 h; simp at h; subst h; exact h0
+    | cons x rest ih =>
+      intro s0 st h0 h
+      simp only [List.foldlM] at h
+      obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨hreg, hrh, _⟩ := push_shape P s0 s1 x hs1
+      refine ih s1 st ?_ hr
+      rw [hreg, hrh, chainHead_append, h0]
+  exact key log LogState.init st rfl h
+
+
+private theorem lookup_cons' (q p : Nat) (v : Leaf) (t : List (Nat × Leaf)) :
+    ((p, v) :: t).lookup q = if q = p then some v else t.lookup q := by
+  by_cases h : q = p
+  · subst h; simp [List.lookup]
+  · have h' : (q == p) = false := by simpa using h
+    simp [List.lookup, h, h']
+
+private theorem lookup_mem (q : Nat) (o : Leaf) : ∀ ps : List (Nat × Leaf),
+    ps.lookup q = some o → o ∈ ps.map (·.2)
+  | [], h => by simp [List.lookup] at h
+  | (a, v) :: t, h => by
+    rw [lookup_cons'] at h
+    by_cases hq : q = a
+    · rw [if_pos hq] at h; obtain rfl := Option.some.inj h; simp
+    · rw [if_neg hq] at h; exact List.mem_cons_of_mem _ (lookup_mem q o t h)
+
+private theorem lookup_filter_ne (ps : List (Nat × Leaf)) (p q : Nat) (hq : q ≠ p) :
+    ((ps.filter (·.1 != p)).lookup q) = ps.lookup q := by
+  induction ps with
+  | nil => rfl
+  | cons x t ih =>
+    obtain ⟨a, v⟩ := x
+    by_cases ha : a = p
+    · subst ha; simp [ih, lookup_cons', hq]
+    · simp [ha, lookup_cons', ih]
+
+private theorem redecides_rev {o l : Leaf} (h : redecides o.revision o l = true) : l.revision = o.revision + 1 := by
+  simp [redecides] at h
+  omega
+
+/-- Everything one successful `payStep` says, for the payment `p` of `l`. -/
+private theorem payStep_facts {ps ps' : List (Nat × Leaf)} {l : Leaf} (h : payStep ps l = some ps') :
+    (∀ o, ps.lookup (payNat l.programId l.paymentId) = some o →
+      o.revision ≤ l.revision ∧ (o.revision = l.revision → l.outcome ≠ .ALLOW)) ∧
+    (∃ o', ps'.lookup (payNat l.programId l.paymentId) = some o' ∧ l.revision ≤ o'.revision) ∧
+    (∀ q o, ps.lookup q = some o → ∃ o', ps'.lookup q = some o' ∧ o.revision ≤ o'.revision) ∧
+    (∀ x ∈ ps', x.2 = l ∨ x.2 ∈ ps.map (·.2)) ∧
+    (l.outcome = .ALLOW → 0 < l.revision → ∃ o ∈ ps.map (·.2), redecides o.revision o l = true) := by
+  unfold payStep at h
+  rcases hl : ps.lookup (payNat l.programId l.paymentId) with _ | old
+  · simp only [hl] at h
+    split at h
+    · obtain rfl := Option.some.inj h
+      refine ⟨by simp, ⟨l, by simp [lookup_cons'], Nat.le_refl _⟩, ?_, ?_, ?_⟩
+      · intro q o hq
+        by_cases hqp : q = payNat l.programId l.paymentId
+        · subst hqp; simp [hl] at hq
+        · refine ⟨o, ?_, Nat.le_refl _⟩
+          rw [lookup_cons', if_neg hqp]; exact hq
+      · intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact Or.inl rfl
+        · exact Or.inr (List.mem_map.mpr ⟨x, hx, rfl⟩)
+      · intro _ hr; omega
+    · simp at h
+  · simp only [hl] at h
+    split at h
+    · rename_i hrd
+      obtain rfl := Option.some.inj h
+      have hr := redecides_rev hrd
+      refine ⟨?_, ⟨l, by simp [lookup_cons'], Nat.le_refl _⟩, ?_, ?_, ?_⟩
+      · intro o ho; obtain rfl := Option.some.inj ho; omega
+      · intro q o hq
+        by_cases hqp : q = payNat l.programId l.paymentId
+        · subst hqp
+          obtain rfl := Option.some.inj (hl.symm.trans hq)
+          exact ⟨l, by simp [lookup_cons'], by omega⟩
+        · refine ⟨o, ?_, Nat.le_refl _⟩
+          rw [lookup_cons', if_neg hqp, lookup_filter_ne _ _ _ hqp]; exact hq
+      · intro x hx
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact Or.inl rfl
+        · exact Or.inr (List.mem_map.mpr ⟨x, (List.mem_filter.mp hx).1, rfl⟩)
+      · intro _ _
+        exact ⟨old, lookup_mem _ _ _ hl, hrd⟩
+    · split at h
+      · rename_i hc
+        obtain rfl := Option.some.inj h
+        refine ⟨?_, ⟨old, hl, by omega⟩, ?_, ?_, ?_⟩
+        · intro o ho; obtain rfl := Option.some.inj ho; exact ⟨by omega, fun _ => hc.2⟩
+        · intro q o hq; exact ⟨o, hq, Nat.le_refl _⟩
+        · intro x hx; exact Or.inr (List.mem_map.mpr ⟨x, hx, rfl⟩)
+        · intro ha; exact absurd ha hc.2
+      · simp at h
+
+
+private theorem leaves_mono : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ q o, ps.lookup q = some o →
+      ∃ o', ps'.lookup q = some o' ∧ o.revision ≤ o'.revision
+  | [], ps, ps', h, q, o, ho => by simp at h; subst h; exact ⟨o, ho, Nat.le_refl _⟩
+  | l :: rest, ps, ps', h, q, o, ho => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨o1, ho1, hle⟩ := (payStep_facts h1).2.2.1 q o ho
+    obtain ⟨o2, ho2, hle2⟩ := leaves_mono rest ps1 ps' h2 q o1 ho1
+    exact ⟨o2, ho2, Nat.le_trans hle hle2⟩
+
+private theorem leaves_born : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ l ∈ ls,
+      ∃ o', ps'.lookup (payNat l.programId l.paymentId) = some o' ∧ l.revision ≤ o'.revision
+  | [], _, _, _, l, hl => by simp at hl
+  | x :: rest, ps, ps', h, l, hl => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases List.mem_cons.mp hl with rfl | hl
+    · obtain ⟨o1, ho1, hle⟩ := (payStep_facts h1).2.1
+      obtain ⟨o2, ho2, hle2⟩ := leaves_mono rest ps1 ps' h2 _ o1 ho1
+      exact ⟨o2, ho2, Nat.le_trans hle hle2⟩
+    · exact leaves_born rest ps1 ps' h2 l hl
+
+private theorem leaves_gate : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ l ∈ ls, ∀ o, ps.lookup (payNat l.programId l.paymentId) = some o →
+      o.revision ≤ l.revision ∧ (o.revision = l.revision → l.outcome ≠ .ALLOW) := by
+  intro ls
+  induction ls with
+  | nil => intro ps ps' h l hl; simp at hl
+  | cons x rest ih =>
+    intro ps ps' h l hl o ho
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases List.mem_cons.mp hl with rfl | hl
+    · exact (payStep_facts h1).1 o ho
+    · obtain ⟨o1, ho1, hle⟩ := (payStep_facts h1).2.2.1 _ o ho
+      obtain ⟨h3, h4⟩ := ih ps1 ps' h2 l hl o1 ho1
+      exact ⟨Nat.le_trans hle h3, fun he => h4 (by omega)⟩
+
+private theorem leaves_mem : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ y ∈ ps'.map (·.2), y ∈ ps.map (·.2) ∨ y ∈ ls
+  | [], ps, ps', h, y, hy => by simp at h; subst h; exact Or.inl hy
+  | x :: rest, ps, ps', h, y, hy => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases leaves_mem rest ps1 ps' h2 y hy with hy1 | hy1
+    · obtain ⟨z, hz, rfl⟩ := List.mem_map.mp hy1
+      rcases (payStep_facts h1).2.2.2.1 z hz with h5 | h5
+      · exact Or.inr (by simp [h5])
+      · exact Or.inl h5
+    · exact Or.inr (List.mem_cons_of_mem _ hy1)
+
+private theorem leaves_step : ∀ (ls : List Leaf) (ps ps' : List (Nat × Leaf)),
+    ls.foldlM payStep ps = some ps' → ∀ l ∈ ls, l.outcome = .ALLOW → 0 < l.revision →
+      ∃ o, (o ∈ ps.map (·.2) ∨ o ∈ ls) ∧ redecides o.revision o l = true
+  | [], _, _, _, l, hl, _, _ => by simp at hl
+  | x :: rest, ps, ps', h, l, hl, ha, hr => by
+    simp only [List.foldlM] at h
+    obtain ⟨ps1, h1, h2⟩ := Option.bind_eq_some_iff.mp h
+    rcases List.mem_cons.mp hl with rfl | hl
+    · obtain ⟨o, ho, hrd⟩ := (payStep_facts h1).2.2.2.2 ha hr
+      exact ⟨o, Or.inl ho, hrd⟩
+    · obtain ⟨o, ho, hrd⟩ := leaves_step rest ps1 ps' h2 l hl ha hr
+      refine ⟨o, ?_, hrd⟩
+      rcases ho with ho | ho
+      · obtain ⟨z, hz, rfl⟩ := List.mem_map.mp ho
+        rcases (payStep_facts h1).2.2.2.1 z hz with h5 | h5
+        · exact Or.inr (by simp [h5])
+        · exact Or.inl h5
+      · exact Or.inr (List.mem_cons_of_mem _ ho)
+
+private theorem push_pays (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1) :
+    x.body.leaves.foldlM payStep (s0.shard x.shard).pays = some (s1.shard x.shard).pays := by
+  obtain ⟨_, _, sh', hsh, hc⟩ := push_shape P s0 s1 x h
+  have hs : s1.shard x.shard = sh' := by rw [hsh]; simp [upd]
+  rw [hs]
+  rcases hc with ⟨t, hb, _, _, hp⟩ | ⟨p, hb, _, hp⟩ | ⟨cert, new, tokens, fresh, n, hb, _, _, _, _, _, hp⟩
+  · rw [hp, hb]; simp [Body.leaves]
+  · rw [hp, hb]; simp [Body.leaves]
+  · exact hp
+
+private theorem push_other (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (k : Nat) (hk : k ≠ x.shard) : s1.shard k = s0.shard k := by
+  obtain ⟨_, _, sh', hsh, _⟩ := push_shape P s0 s1 x h
+  rw [hsh]; simp [upd, hk]
+
+private theorem push_mono (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (k q : Nat) (o : Leaf) (ho : (s0.shard k).pays.lookup q = some o) :
+    ∃ o', (s1.shard k).pays.lookup q = some o' ∧ o.revision ≤ o'.revision := by
+  by_cases hk : k = x.shard
+  · subst hk; exact leaves_mono _ _ _ (push_pays P s0 s1 x h) q o ho
+  · rw [push_other P s0 s1 x h k hk]; exact ⟨o, ho, Nat.le_refl _⟩
+
+private theorem push_mem (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (k : Nat) (o : Leaf) (ho : o ∈ (s1.shard k).pays.map (·.2)) :
+    o ∈ (s0.shard k).pays.map (·.2) ∨ (x.shard = k ∧ o ∈ x.body.leaves) := by
+  by_cases hk : k = x.shard
+  · subst hk
+    rcases leaves_mem _ _ _ (push_pays P s0 s1 x h) o ho with h0 | h0
+    · exact Or.inl h0
+    · exact Or.inr ⟨rfl, h0⟩
+  · rw [push_other P s0 s1 x h k hk] at ho; exact Or.inl ho
+
+private theorem fold_gate (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (k q : Nat) (o : Leaf), (s0.shard k).pays.lookup q = some o →
+    ∀ (j : Nat) (y : Entry), xs[j]? = some y → y.shard = k →
+    ∀ l ∈ y.body.leaves, payNat l.programId l.paymentId = q →
+      o.revision ≤ l.revision ∧ (o.revision = l.revision → l.outcome ≠ .ALLOW) := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h k q o ho j y hy; simp at hy
+  | cons x rest ih =>
+    intro s0 s h k q o ho j y hy hk l hl hq
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    subst hq
+    cases j with
+    | zero =>
+      simp at hy; subst hy; subst hk
+      exact leaves_gate _ _ _ (push_pays P s0 s1 _ hs1) l hl o ho
+    | succ j =>
+      simp at hy
+      obtain ⟨o1, ho1, hle⟩ := push_mono P s0 s1 x hs1 k _ o ho
+      obtain ⟨g1, g2⟩ := ih s1 s hr k _ o1 ho1 j y hy hk l hl rfl
+      exact ⟨Nat.le_trans hle g1, fun he => g2 (by omega)⟩
+
+private theorem fold_mono (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (i j : Nat), i < j → ∀ (e e' : Entry), xs[i]? = some e → xs[j]? = some e' → e.shard = e'.shard →
+    ∀ l ∈ e.body.leaves, ∀ l' ∈ e'.body.leaves,
+      payNat l.programId l.paymentId = payNat l'.programId l'.paymentId →
+      l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h i j hij e e' hi; simp at hi
+  | cons x rest ih =>
+    intro s0 s h i j hij e e' hi hj hk l hl l' hl' hp
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    cases i with
+    | zero =>
+      simp at hi; subst hi
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hj
+        obtain ⟨o1, ho1, hle⟩ := leaves_born _ _ _ (push_pays P s0 s1 _ hs1) l hl
+        obtain ⟨g1, g2⟩ := fold_gate P rest s1 s hr _ _ o1 ho1 j e' hj hk.symm l' hl' hp.symm
+        exact ⟨Nat.le_trans hle g1, fun he => g2 (by omega)⟩
+    | succ i =>
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hi hj
+        exact ih s1 s hr i j (by omega) e e' hi hj hk l hl l' hl' hp
+
+private theorem fold_redec (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (j : Nat) (y : Entry), xs[j]? = some y → ∀ l' ∈ y.body.leaves, l'.outcome = .ALLOW → 0 < l'.revision →
+    ∃ o, (o ∈ (s0.shard y.shard).pays.map (·.2) ∨
+        ∃ i e, i ≤ j ∧ xs[i]? = some e ∧ e.shard = y.shard ∧ o ∈ e.body.leaves) ∧
+      redecides o.revision o l' = true := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h j y hy; simp at hy
+  | cons x rest ih =>
+    intro s0 s h j y hy l' hl' ha hr
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr1⟩ := Option.bind_eq_some_iff.mp h
+    cases j with
+    | zero =>
+      simp at hy; subst hy
+      obtain ⟨o, ho, hrd⟩ := leaves_step _ _ _ (push_pays P s0 s1 _ hs1) l' hl' ha hr
+      rcases ho with ho | ho
+      · exact ⟨o, Or.inl ho, hrd⟩
+      · exact ⟨o, Or.inr ⟨0, _, Nat.le_refl _, rfl, rfl, ho⟩, hrd⟩
+    | succ j =>
+      simp at hy
+      obtain ⟨o, ho, hrd⟩ := ih s1 s hr1 j y hy l' hl' ha hr
+      refine ⟨o, ?_, hrd⟩
+      rcases ho with ho | ⟨i, e, hij, hi, hs, ho⟩
+      · rcases push_mem P s0 s1 x hs1 y.shard o ho with h0 | ⟨hxk, h0⟩
+        · exact Or.inl h0
+        · exact Or.inr ⟨0, x, by omega, rfl, hxk, h0⟩
+      · exact Or.inr ⟨i + 1, e, by omega, by simpa using hi, hs, ho⟩
+
+private theorem push_live (P : Pins) (s0 s1 : LogState) (x : Entry) (h : push P s0 x = some s1)
+    (hl : (s0.shard x.shard).live = true) : ∃ a, x.body.signed? = some a := by
+  obtain ⟨_, _, sh', hsh, hc⟩ := push_shape P s0 s1 x h
+  rcases hc with ⟨t, hb, _, hv, _⟩ | ⟨p, hb, hv, _⟩ | ⟨cert, new, tokens, fresh, n, hb, _⟩
+  · rw [hl] at hv; exact absurd hv (by decide)
+  · rw [hl] at hv; exact absurd hv (by decide)
+  · exact ⟨new, by rw [hb]; rfl⟩
+
+private theorem push_sign (P : Pins) (s0 s1 : LogState) (x : Entry) (a : Bytes) (h : push P s0 x = some s1)
+    (ha : x.body.signed? = some a) :
+    ∃ cert n, (s0.shard x.shard).live = true ∧ storedOfAny sha3 a = some n ∧
+      (∀ q y c, (s0.shard x.shard).last = some (y, c) → storedOfAny sha3 y = some q →
+        q.checkpoint.createdAt < n.checkpoint.createdAt) ∧
+      (s1.shard x.shard).last = some (a, cert) ∧ (s1.shard x.shard).live = true := by
+  obtain ⟨_, _, sh', hsh, hc⟩ := push_shape P s0 s1 x h
+  have hs : s1.shard x.shard = sh' := by rw [hsh]; simp [upd]
+  rcases hc with ⟨t, hb, _⟩ | ⟨p, hb, _⟩ | ⟨cert, new, tokens, fresh, n, hb, hlive, hn, hlt, hlast, hl', _⟩
+  · rw [hb] at ha; simp [Body.signed?] at ha
+  · rw [hb] at ha; simp [Body.signed?] at ha
+  · rw [hb] at ha
+    simp only [Body.signed?, Option.some.injEq] at ha
+    subst ha
+    exact ⟨cert, n, hlive, hn, hlt, by rw [hs]; exact hlast, by rw [hs]; exact hl'⟩
+
+private theorem fold_last (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (k c : Nat), (s0.shard k).live = true →
+    (∃ y cert q, (s0.shard k).last = some (y, cert) ∧ storedOfAny sha3 y = some q ∧
+      c ≤ q.checkpoint.createdAt) →
+    ∀ (j : Nat) (y : Entry), xs[j]? = some y → y.shard = k →
+    ∀ b n', y.body.signed? = some b → storedOfAny sha3 b = some n' → c < n'.checkpoint.createdAt := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h k c hlive hex j y hy; simp at hy
+  | cons x rest ih =>
+    intro s0 s h k c hlive hex j y hy hk b n' hb hn'
+    obtain ⟨y0, cert0, q, hlast0, hq, hc⟩ := hex
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    by_cases hxk : x.shard = k
+    · subst hxk
+      obtain ⟨a, ha⟩ := push_live P s0 s1 x hs1 hlive
+      obtain ⟨cert, n, _, hn, hlt, hlast, hlive'⟩ := push_sign P s0 s1 x a hs1 ha
+      have hlt' := hlt q y0 cert0 hlast0 hq
+      cases j with
+      | zero =>
+        simp at hy; subst hy
+        rw [ha] at hb; obtain rfl := Option.some.inj hb
+        rw [hn] at hn'; obtain rfl := Option.some.inj hn'
+        omega
+      | succ j =>
+        simp at hy
+        have := ih s1 s hr _ n.checkpoint.createdAt hlive'
+          ⟨a, cert, n, hlast, hn, Nat.le_refl _⟩ j y hy hk b n' hb hn'
+        omega
+    · rw [← push_other P s0 s1 x hs1 k (fun e => hxk e.symm)] at hlive hlast0
+      cases j with
+      | zero => simp at hy; subst hy; exact absurd hk hxk
+      | succ j =>
+        simp at hy
+        exact ih s1 s hr k c hlive ⟨y0, cert0, q, hlast0, hq, hc⟩ j y hy hk b n' hb hn'
+
+private theorem fold_created (P : Pins) : ∀ (xs : List Entry) (s0 s : LogState),
+    xs.foldlM (push P) s0 = some s →
+    ∀ (i j : Nat), i < j → ∀ (e e' : Entry), xs[i]? = some e → xs[j]? = some e' → e.shard = e'.shard →
+    ∀ a b, e.body.signed? = some a → e'.body.signed? = some b → ∀ n n' : Stored,
+      storedOfAny sha3 a = some n → storedOfAny sha3 b = some n' →
+      n.checkpoint.createdAt < n'.checkpoint.createdAt := by
+  intro xs
+  induction xs with
+  | nil => intro s0 s h i j hij e e' hi; simp at hi
+  | cons x rest ih =>
+    intro s0 s h i j hij e e' hi hj hk a b ha hb n n' hn hn'
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    cases i with
+    | zero =>
+      simp at hi; subst hi
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hj
+        obtain ⟨cert, n0, _, hn0, _, hlast, hlive⟩ := push_sign P s0 s1 _ a hs1 ha
+        rw [hn] at hn0; obtain rfl := Option.some.inj hn0
+        exact fold_last P rest s1 s hr _ n.checkpoint.createdAt hlive
+          ⟨a, cert, n, hlast, hn, Nat.le_refl _⟩ j e' hj hk.symm b n' hb hn'
+    | succ i =>
+      cases j with
+      | zero => omega
+      | succ j =>
+        simp at hi hj
+        exact ih s1 s hr i j (by omega) e e' hi hj hk a b ha hb n n' hn hn'
 
 /-- Per shard and payment, revisions never go down, and an equal revision later is never ALLOW. -/
 theorem revision_mono (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (i j : Nat) (hij : i < j)
     (e e' : Entry) (hi : log[i]? = some e) (hj : log[j]? = some e') (hk : e.shard = e'.shard)
     (l l' : Leaf) (hl : l ∈ e.body.leaves) (hl' : l' ∈ e'.body.leaves)
     (hp : payNat l.programId l.paymentId = payNat l'.programId l'.paymentId) :
-    l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := sorry
+    l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := by
+  obtain ⟨st, hst⟩ := Option.isSome_iff_exists.mp hf
+  exact fold_mono P log LogState.init st hst i j hij e e' hi hj hk l hl l' hl' hp
 
 /-- An ALLOW past revision 0 re-decides an earlier ALLOW of the same shard by trunk `redecides`. -/
 theorem revision_step (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (j : Nat) (e' : Entry)
     (hj : log[j]? = some e') (l' : Leaf) (hl' : l' ∈ e'.body.leaves) (ha : l'.outcome = .ALLOW)
     (hr : 0 < l'.revision) :
     ∃ (i : Nat) (e : Entry) (l : Leaf), i ≤ j ∧ log[i]? = some e ∧ e.shard = e'.shard ∧ l ∈ e.body.leaves ∧
-      redecides l.revision l l' = true := sorry
+      redecides l.revision l l' = true := by
+  obtain ⟨st, hst⟩ := Option.isSome_iff_exists.mp hf
+  obtain ⟨o, ho, hrd⟩ := fold_redec P log LogState.init st hst j e' hj l' hl' ha hr
+  rcases ho with ho | ⟨i, e, hij, hi, hs, ho⟩
+  · simp [LogState.init, Shard.init] at ho
+  · exact ⟨i, e, o, hij, hi, hs, ho, hrd⟩
 
 /-- F8: signed checkpoints of one shard have strictly increasing createdAt. -/
 theorem createdAt_strict (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (i j : Nat) (hij : i < j)
     (e e' : Entry) (hi : log[i]? = some e) (hj : log[j]? = some e') (hk : e.shard = e'.shard)
     (a b : Bytes) (ha : e.body.signed? = some a) (hb : e'.body.signed? = some b) (n n' : Stored)
     (hn : storedOfAny sha3 a = some n) (hn' : storedOfAny sha3 b = some n') :
-    n.checkpoint.createdAt < n'.checkpoint.createdAt := sorry
+    n.checkpoint.createdAt < n'.checkpoint.createdAt := by
+  obtain ⟨st, hst⟩ := Option.isSome_iff_exists.mp hf
+  exact fold_created P log LogState.init st hst i j hij e e' hi hj hk a b ha hb n n' hn hn'
 
 /-! ### 8g. Custody: the courier supplies requests, snapshots, redo and the witness; Lean the rest -/
 
