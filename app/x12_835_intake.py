@@ -5,12 +5,20 @@ the subset (another segment, an unmodeled element, a production ISA15, a second 
 Money is exact integer cents; one tree-sum rule closes every level: SVC02 - line CAS = SVC03; CLP03 - claim and service CAS =
 CLP04, and with services CLP04 = sum(SVC03) - claim CAS; BPR02 = sum(CLP04) - sum(PLB amounts). PLB adjustments are kept whole,
 each with its reason code and reference, and `forward_balance_cents` totals the ones coded FB (sign as on the wire).
+
+Fold keys (hold-release r4.2 section 2). `rows` folds every CLP block of one file with the same key into one row, and every PLB
+tuple likewise. The 835 tag comes from CLP02 alone (REV iff 22; the amount never changes it), so a sign flip keeps the key. A CLP02,
+CLP07 or PLB reason or reference that cannot be read does not refuse the file: the block keys as ("RAW", H(raw block)). A folded
+amount of 0 is a zero row (a receipt fact: the S3 verdict engine, not this parser, gives it no cell). `flags` carry the sign checks.
+Raw text is a canonical re-encoding (element, repeat, component and segment ends are control characters) so the key does not
+depend on the file's delimiters.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
+import hashlib
 import re
 
 from app.mirror.error_boundary import raise_redacted
@@ -62,12 +70,12 @@ class Service:
 @dataclass(frozen=True)
 class Claim:
     control: str
-    status: str
+    status: str | None  # CLP02; None when unreadable
     charge_cents: int
     paid_cents: int
     patient_cents: int
     filing: str
-    payer_control: str
+    payer_control: str | None  # CLP07; None when unreadable
     facility: str
     frequency: str
     adjustments: tuple[Cas, ...]
@@ -79,9 +87,17 @@ class Claim:
 class PlbAdjustment:
     provider_id: str
     fiscal_date: str  # ISO
-    reason: str
-    reference: str
+    reason: str | None  # None when the reason or reference cannot be read
+    reference: str | None
     amount_cents: int  # positive reduces the payment
+
+
+@dataclass(frozen=True)
+class Row:
+    key: tuple[str, ...]  # ("CLP"|"REV", CLP07), ("PLB", PLB01, PLB02, reason, reference) or ("RAW", H(raw block))
+    amount_cents: int  # sum of CLP04, or minus the sum of the PLB wire amounts; 0 is a zero row
+    raw: str  # the folded blocks' canonical text, in file order
+    flags: tuple[str, ...]  # rev_sign: REV with amount > 0; clp_sign: CLP with amount < 0
 
 
 @dataclass(frozen=True)
@@ -109,6 +125,7 @@ class Remittance:
     claims_paid_cents: int
     plb_total_cents: int
     forward_balance_cents: int
+    rows: tuple[Row, ...]
 
 
 def cents(text: str) -> int:
@@ -140,6 +157,40 @@ def _text(seg: Segment, i: int, pattern: re.Pattern = _TEXT, blank: bool = False
     if not pattern.fullmatch(value):
         refuse("835:field")
     return value
+
+
+def _soft(seg: Segment, i: int, pattern: re.Pattern = _TEXT) -> str | None:
+    try:
+        return _text(seg, i, pattern)
+    except X12Error:
+        return None
+
+
+def _raw(seg: Segment, *at: int) -> str:
+    return seg.tag + "".join("\x1f" + "\x1e".join("\x1d".join(r) for r in (seg.elements[i - 1] if i <= len(seg.elements) else ())) for i in at) + "\n"
+
+
+def _h(*parts: str) -> str:
+    return hashlib.sha3_256("\0".join(parts).encode("ascii")).hexdigest()
+
+
+def origin_id(sender: str, key: tuple[str, ...]) -> str:
+    """common_origin_id of a row key for the channel's `sender` (section 2)."""
+    if key[0] == "PLB":
+        return f"x12/{sender}/PLB/{_h(*key)}"
+    return f"x12/{sender}/{'raw' if key[0] == 'RAW' else key[0]}/{key[1]}"
+
+
+def pool(sender: str, record: Remittance) -> tuple[str, str, str]:
+    return (sender, record.trace_origin, record.trace)
+
+
+def _fold(parts: list[tuple[tuple[str, ...], int, str]]) -> tuple[Row, ...]:
+    folded: dict[tuple[str, ...], tuple[int, str]] = {}
+    for key, amount, raw in parts:
+        total, text = folded.get(key, (0, ""))
+        folded[key] = (total + amount, text + raw)
+    return tuple(Row(k, a, r, ("rev_sign",) if k[0] == "REV" and a > 0 else ("clp_sign",) if k[0] == "CLP" and a < 0 else ()) for k, (a, r) in folded.items())
 
 
 def _quantity(text: str) -> str:
@@ -174,16 +225,19 @@ def _cas(seg: Segment) -> list[Cas]:
     return found
 
 
-def _plb(seg: Segment) -> list[PlbAdjustment]:
+def _plb(seg: Segment) -> list[tuple[PlbAdjustment, str]]:
     provider, fiscal, found = _text(seg, 1), _date(seg.value(2)), []
     for k in range(3, 15, 2):
-        parts = seg.parts(k)
+        try:
+            parts = seg.parts(k)
+        except X12Error:
+            parts = None
         if parts == ("",):
             seg.blank(k)
             break
-        if len(parts) > 2 or not _PLB_REASON.fullmatch(parts[0]) or (len(parts) == 2 and not _TEXT.fullmatch(parts[1])):
-            refuse("835:field")
-        found.append(PlbAdjustment(provider, fiscal, parts[0], parts[1] if len(parts) == 2 else "", cents(seg.value(k + 1))))
+        readable = parts is not None and len(parts) <= 2 and _PLB_REASON.fullmatch(parts[0]) and (len(parts) == 1 or _TEXT.fullmatch(parts[1]))
+        reason, reference = (parts[0], parts[1] if len(parts) == 2 else "") if readable else (None, None)
+        found.append((PlbAdjustment(provider, fiscal, reason, reference, cents(seg.value(k + 1))), _raw(seg, 1, 2, k, k + 1)))
     else:
         seg.blank(15)
     if not found:
@@ -233,11 +287,11 @@ def _service(cursor: _Cursor) -> Service:
     return Service(*fields, *_level(cursor))
 
 
-def _claim(cursor: _Cursor) -> Claim:
-    seg = cursor.next("CLP")
+def _claim(cursor: _Cursor) -> tuple[Claim, str]:
+    start, seg = cursor._at, cursor.next("CLP")
     seg.blank(10)
-    fields = (_text(seg, 1), _text(seg, 2, _CODE), cents(seg.value(3)), cents(seg.value(4)), cents(seg.value(5)),
-              _text(seg, 6, _CODE), _text(seg, 7), _text(seg, 8, _CODE, True), _text(seg, 9, _CODE, True))
+    fields = (_text(seg, 1), _soft(seg, 2, _CODE), cents(seg.value(3)), cents(seg.value(4)), cents(seg.value(5)),
+              _text(seg, 6, _CODE), _soft(seg, 7), _text(seg, 8, _CODE, True), _text(seg, 9, _CODE, True))
     adjustments, dates = _level(cursor)
     services = []
     while cursor.peek() == "SVC":
@@ -245,7 +299,7 @@ def _claim(cursor: _Cursor) -> Claim:
     claim = Claim(*fields, adjustments, dates, tuple(services))
     if not all(_closes(s) for s in services) or not _closes(claim, claim.services):
         refuse("835:claim-balance")
-    return claim
+    return claim, "".join(_raw(s, *range(1, len(s.elements) + 1)) for s in cursor._segments[start:cursor._at])
 
 
 def parse_835(data: bytes) -> Remittance:
@@ -274,10 +328,16 @@ def parse_835(data: bytes) -> Remittance:
             _date(bpr.value(16)), _text(trn, 2), _text(trn, 3))
     dates = tuple(_dtm(s) for s in cursor.take("DTM"))
     payer, payee = _party(cursor.next("N1"), "PR"), _party(cursor.next("N1"), "PE")
-    claims = []
+    claims, parts = [], []
     while cursor.peek() == "CLP":
-        claims.append(_claim(cursor))
-    adjustments = tuple(a for s in cursor.take("PLB") for a in _plb(s))
+        claim, raw = _claim(cursor)
+        claims.append(claim)
+        key = ("RAW", _h(raw)) if None in (claim.status, claim.payer_control) else ("REV" if claim.status == "22" else "CLP", claim.payer_control)
+        parts.append((key, claim.paid_cents, raw))
+    plbs = [p for s in cursor.take("PLB") for p in _plb(s)]
+    adjustments = tuple(a for a, _ in plbs)
+    for a, raw in plbs:
+        parts.append((("RAW", _h(raw)) if a.reason is None else ("PLB", a.provider_id, a.fiscal_date, a.reason, a.reference), -a.amount_cents, raw))
     if cursor.peek():
         refuse("835:segment")
     claims_paid = sum(c.paid_cents for c in claims)
@@ -287,4 +347,4 @@ def parse_835(data: bytes) -> Remittance:
     return Remittance(interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), interchange.isa.value(6).rstrip(" "),
                       interchange.isa.value(8).rstrip(" "), group.gs.value(2), group.gs.value(3), *head, dates, payer, payee,
                       tuple(claims), adjustments, claims_paid, plb_total,
-                      sum(a.amount_cents for a in adjustments if a.reason == "FB"))
+                      sum(a.amount_cents for a in adjustments if a.reason == "FB"), _fold(parts))

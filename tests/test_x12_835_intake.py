@@ -4,6 +4,7 @@ and agreement of the independent re-derivation on every fixture. Fixtures are fi
 import ast
 import dataclasses
 import decimal
+import hashlib
 import json
 import random
 import re
@@ -11,8 +12,8 @@ import sys
 import unittest
 from pathlib import Path
 
-from app.x12_835_independent import IndependentX12Error, rederive_835, verify_835
-from app.x12_835_intake import Cas, Dtm, PlbAdjustment, Remittance, cents, parse_835
+from app.x12_835_independent import IndependentX12Error, origin_id as independent_origin_id, pool as independent_pool, rederive_835, verify_835
+from app.x12_835_intake import Cas, Dtm, PlbAdjustment, Remittance, cents, origin_id, parse_835, pool
 from app.x12_tokenizer import MAX_BYTES, X12Error, tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -247,7 +248,7 @@ class Intake(unittest.TestCase):
             "835:segment#missing-payee": build(remit("0.00")[:-1]),
             "835:field": edit(GOOD, "TRACE0001", "TRACE@@@"), "835:field#debit": edit(GOOD, "*1250.50*C*", "*1250.50*D*"), "835:field#trn01": edit(GOOD, "TRN*1*", "TRN*2*"),
             "835:field#svc": edit(GOOD, "HC:99213", "99213"), "835:field#cas": edit(GOOD, "CAS*PR*1*50.00~DTM*232", "CAS*PR~DTM*232"),
-            "835:field#plb": edit(WITH_PLB, "FB:CARRY0001", "FBX:CARRY0001"), "835:field#blank": edit(GOOD, "CLAIMA001", ""),
+            "835:field#plb": edit(WITH_PLB, "PLB*1234567890*", "PLB**"),  # was an unknown reason (FBX); that is now a RAW row (test_raw_keys), so PLB01 is the refusal "835:field#blank": edit(GOOD, "CLAIMA001", ""),
             "835:amount": edit(GOOD, "*1250.50*C*", "*1250.505*C*"), "835:amount#negative-total": edit(GOOD, "*1250.50*C*", "*-1250.50*C*"),
             "835:amount#minus-zero": edit(GOOD, "*400.00*100.00*MC*", "*-0*100.00*MC*"), "835:amount#plb": edit(WITH_PLB, "*100.00*WO", "*1e2*WO"),
             "835:date": edit(GOOD, "*" * 11 + "20261005", "*" * 11 + "20261305"),
@@ -429,14 +430,105 @@ class Intake(unittest.TestCase):
 
     def test_modules_are_read_only_and_call_no_owner(self):
         allowed = {"app/x12_tokenizer.py": {"__future__", "dataclasses", "datetime", "re", "string", "typing", "app.mirror.error_boundary"},
-                   "app/x12_835_intake.py": {"__future__", "dataclasses", "datetime", "re", "app.mirror.error_boundary", "app.x12_tokenizer"},
-                   "app/x12_835_independent.py": {"__future__", "dataclasses", "decimal", "re", "datetime", "typing"}}
+                   "app/x12_835_intake.py": {"__future__", "dataclasses", "datetime", "hashlib", "re", "app.mirror.error_boundary", "app.x12_tokenizer"},
+                   "app/x12_835_independent.py": {"__future__", "dataclasses", "decimal", "hashlib", "re", "datetime", "typing"}}
         for path, names in allowed.items():
             tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
             imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
             imported |= {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
             self.assertLessEqual(imported, names, path)
             self.assertFalse({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} & {"open", "exec", "eval", "__import__"}, path)
+
+    # ---- S3a fold keys (hold-release r4.2 sections 2 and 14: M21, M21z, M22) ----
+
+    def rows(self, total, *segments, **o):
+        record, code = self.both(build(remit(total, *segments), **o))
+        self.assertIsNotNone(record, code)
+        return record, {r.key: r for r in record.rows}
+
+    def test_tag_comes_from_clp02_alone(self):
+        record, rows = self.rows("60.00", "CLP*C1*1*100.00*100.00*0.00*MC*X1", "CLP*C2*22*-40.00*-40.00*0.00*MC*X2")
+        self.assertEqual([(r.key, r.amount_cents, r.flags) for r in record.rows], [(("CLP", "X1"), 10000, ()), (("REV", "X2"), -4000, ())])
+        self.assertEqual(rows[("CLP", "X1")].raw, "CLP\x1fC1\x1f1\x1f100.00\x1f100.00\x1f0.00\x1fMC\x1fX1\n")
+        for status in ("2", "4", "19", "20", "23"):  # only 22 is a reversal
+            self.assertEqual(self.rows("1.00", f"CLP*C*{status}*1.00*1.00*0.00*MC*K")[0].rows[0].key, ("CLP", "K"))
+
+    def test_zero_and_sign_rows(self):  # M21z
+        _, rows = self.rows("0.00", "CLP*D1*4*0.00*0.00*0.00*MC*DEN1")
+        self.assertEqual((rows[("CLP", "DEN1")].amount_cents, rows[("CLP", "DEN1")].flags), (0, ()))
+        record, _ = self.rows("30.00", "CLP*R1*22*30.00*30.00*0.00*MC*REVX")
+        self.assertEqual((record.rows[0].key, record.rows[0].flags), (("REV", "REVX"), ("rev_sign",)))
+        record, _ = self.rows("5.00", "CLP*P1*1*35.00*35.00*0.00*MC*PAYK", "CLP*P2*1*-30.00*-30.00*0.00*MC*NEGK")
+        self.assertEqual([(r.key, r.flags) for r in record.rows], [(("CLP", "PAYK"), ()), (("CLP", "NEGK"), ("clp_sign",))])
+        record, _ = self.rows("0.00", "CLP*Z1*1*50.00*50.00*0.00*MC*ZZ1", "CLP*Z2*1*-50.00*-50.00*0.00*MC*ZZ1")  # blocks that cancel
+        self.assertEqual([(r.key, r.amount_cents, r.flags) for r in record.rows], [(("CLP", "ZZ1"), 0, ())])
+
+    def test_a_reissue_flipping_the_sign_keeps_its_key(self):  # M21z: S3 sees the same cell, not a second one
+        other = "CLP*G*1*50.00*50.00*0.00*MC*G1"
+        for tag, status, plus, minus in (("REV", "22", "100.00", "0.00"), ("CLP", "1", "100.00", "0.00")):
+            a = self.rows(minus, f"CLP*F*{status}*-50.00*-50.00*0.00*MC*FLIP", other)[1][(tag, "FLIP")]
+            b = self.rows(plus, f"CLP*F*{status}*50.00*50.00*0.00*MC*FLIP", other)[1][(tag, "FLIP")]
+            self.assertEqual((a.amount_cents, b.amount_cents, a.raw == b.raw), (-5000, 5000, False), tag)
+            self.assertEqual([a.flags, b.flags], [("clp_sign",) if tag == "CLP" else (), ("rev_sign",) if tag == "REV" else ()], tag)
+
+    def test_blocks_with_one_key_fold_in_file_order(self):  # M21
+        a, b = "CLP*A*1*100.00*100.00*0.00*MC*X", "CLP*B*1*50.00*50.00*0.00*MC*X"
+        record, _ = self.rows("150.00", a, b)
+        (row,) = record.rows
+        self.assertEqual((row.key, row.amount_cents, row.raw.count("\n")), (("CLP", "X"), 15000, 2))
+        self.assertNotEqual(self.rows("150.00", b, a)[0].rows[0].raw, row.raw)  # a reordered reissue differs, which S3 holds as CONFLICT
+        self.assertEqual(self.rows("150.00", a, b)[0].rows, record.rows)
+        only_b = self.rows("50.00", b)[0].rows[0]  # the review's T1/T2 case: [B] and [A, B] are one key with different raw
+        self.assertEqual((only_b.key, only_b.raw == row.raw), (row.key, False))
+
+    def test_plb_rows_fold_per_tuple(self):
+        def plb(*tuples):
+            return f"PLB*{PROVIDER}*20261231*" + "*".join(tuples)
+        claim = "CLP*C1*1*200.00*200.00*0.00*MC*X"
+        key = ("PLB", PROVIDER, "2026-12-31", "FB", "REFA")
+        _, rows = self.rows("100.00", claim, plb("FB:REFA", "50.00"), plb("FB:REFA", "30.00", "WO", "20.00"))
+        self.assertEqual((rows[key].amount_cents, rows[key[:3] + ("WO", "")].amount_cents), (-8000, -2000))
+        self.assertEqual(self.rows("250.00", claim, plb("FB:REFA", "-50.00"))[1][key].amount_cents, 5000)  # a negative wire amount raises the payment
+        zero = self.rows("200.00", claim, plb("FB:REFA", "10.00", "FB:REFA", "-10.00"))[1][key]
+        self.assertEqual((zero.amount_cents, zero.flags), (0, ()))
+        self.assertEqual(origin_id("S", key), "x12/S/PLB/" + hashlib.sha3_256("\0".join(key).encode()).hexdigest())
+
+    def test_m22_example_rows(self):  # A 300, B 200, PLB +50 against an earlier cell, BPR02 450
+        record, _ = self.rows("450.00", "CLP*A*1*300.00*300.00*0.00*MC*A1", "CLP*B*1*200.00*200.00*0.00*MC*B1", f"PLB*{PROVIDER}*20261231*FB:A1*50.00")
+        self.assertEqual([(r.key, r.amount_cents) for r in record.rows],
+                         [(("CLP", "A1"), 30000), (("CLP", "B1"), 20000), (("PLB", PROVIDER, "2026-12-31", "FB", "A1"), -5000)])
+
+    def test_raw_keys(self):
+        def raw_row(total, *segments):
+            (row,) = [r for r in self.rows(total, *segments)[0].rows if r.key[0] == "RAW"]
+            self.assertEqual(row.key, ("RAW", hashlib.sha3_256(row.raw.encode()).hexdigest()))
+            return row
+        bad7 = raw_row("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")  # CLP07 unreadable
+        self.assertEqual((bad7.amount_cents, bad7.flags, self.rows("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")[0].claims[0].payer_control), (100, (), None))
+        bad2 = raw_row("1.00", "CLP*C1*zz!*1.00*1.00*0.00*MC*OK7")  # CLP02 unreadable
+        self.assertNotEqual(bad7.key, bad2.key)
+        self.assertIn("CAS", raw_row("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*", "CAS*PR*1*0.00").raw)  # a blank CLP07 keys RAW, with its children in the raw
+        again = self.rows("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7", icn="000000906")[0].rows
+        self.assertEqual(again, (bad7,))  # the key is the block, not the file around it
+        moved = parse_835(build(remit("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")).decode().translate(str.maketrans("*^:~", "|!;$")).encode())
+        self.assertEqual(moved.rows, (bad7,))  # the same block under other delimiters keys the same
+        self.assertEqual(origin_id("S", bad7.key), "x12/S/raw/" + bad7.key[1])
+        reason = raw_row("1.00", "CLP*C1*1*6.00*6.00*0.00*MC*K", f"PLB*{PROVIDER}*20261231*FBX:R*5.00")  # an unknown PLB reason
+        self.assertEqual(reason.amount_cents, -500)
+        self.assertEqual(raw_row("1.00", "CLP*C1*1*6.00*6.00*0.00*MC*K", f"PLB*{PROVIDER}*20261231*FB:A:B*5.00").amount_cents, -500)  # a composite reference
+
+    def test_pool_and_origin_follow_trn03_and_trn02(self):
+        record, _ = self.both(GOOD)
+        self.assertEqual(pool("S", record), ("S", "1999999999", "TRACE0001"))
+        other = self.both(edit(GOOD, "1999999999", "1888888888"))[0]
+        self.assertEqual((pool("S", other), other.trace == record.trace), (("S", "1888888888", "TRACE0001"), True))  # two payers, one TRN02: two pools
+        self.assertNotEqual(pool("S", record), pool("T", record))
+        self.assertEqual(origin_id("S", ("REV", "X1")), "x12/S/REV/X1")
+        for name, data in FIXTURES.items():
+            record = parse_835(data)
+            for row in record.rows:
+                self.assertEqual(independent_origin_id("S", list(row.key)), origin_id("S", row.key), name)
+            self.assertEqual(independent_pool("S", rederive_835(data)), pool("S", record), name)
 
 
 if __name__ == "__main__":

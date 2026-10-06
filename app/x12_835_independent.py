@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 from decimal import Context, Decimal
+import hashlib
 import re
 from datetime import datetime
 from typing import NoReturn
@@ -64,6 +65,17 @@ class _Seg:
         if not pattern.fullmatch(v):
             _no("835:field")
         return v
+
+    def soft(self, i: int, pattern: re.Pattern = _TEXT) -> str | None:
+        try:
+            return self.text(i, pattern)
+        except IndependentX12Error:
+            return None
+
+    def canon(self, *at: int) -> str:
+        """Canonical text of the elements `at`: this file's delimiters become control characters, so the hash ignores them."""
+        items = (self.raw[i - 1] if i <= len(self.raw) else "" for i in at)
+        return self.tag + "".join("\x1f" + "\x1e".join("\x1d".join(x.split(self.c)) for x in item.split(self.r)) for item in items) + "\n"
 
     def dtm(self) -> dict:
         self.blank(3)
@@ -155,17 +167,19 @@ def _cas(s: _Seg) -> list[dict]:
     return found
 
 
-def _plb(s: _Seg) -> list[dict]:
+def _plb(s: _Seg) -> list[tuple[dict, str]]:
     provider, fiscal, found = s.text(1), _iso(s.val(2)), []
     for k in range(3, 15, 2):
-        p = s.parts(k)
+        try:
+            p = s.parts(k)
+        except IndependentX12Error:
+            p = None
         if p == [""]:
             s.blank(k)
             break
-        if len(p) > 2 or not re.fullmatch("[A-Z0-9]{2}", p[0]) or (len(p) == 2 and not _TEXT.fullmatch(p[1])):
-            _no("835:field")
-        found.append({"provider_id": provider, "fiscal_date": fiscal, "reason": p[0], "reference": p[1] if len(p) == 2 else "",
-                      "amount_cents": _cents(s.val(k + 1))})
+        ok = p is not None and len(p) <= 2 and re.fullmatch("[A-Z0-9]{2}", p[0]) and (len(p) == 1 or _TEXT.fullmatch(p[1]))
+        found.append(({"provider_id": provider, "fiscal_date": fiscal, "reason": p[0] if ok else None, "reference": (p[1:] or [""])[0] if ok else None,
+                       "amount_cents": _cents(s.val(k + 1))}, s.canon(1, 2, k, k + 1)))
     else:
         s.blank(15)
     if not found:
@@ -178,6 +192,40 @@ def _closes(node: dict, children: list[dict] | tuple = ()) -> bool:
     own = sum(a["amount_cents"] for a in node["adjustments"])
     below = sum(a["amount_cents"] for k in children for a in k["adjustments"])
     return node["charge_cents"] - own - below == node["paid_cents"] and (not children or sum(k["paid_cents"] for k in children) - own == node["paid_cents"])
+
+
+def _h(*parts: str) -> str:
+    return hashlib.sha3_256("\0".join(parts).encode("ascii")).hexdigest()
+
+
+def origin_id(sender: str, key: list[str]) -> str:
+    """common_origin_id of a row key for the channel's `sender` (section 2)."""
+    if key[0] == "PLB":
+        return f"x12/{sender}/PLB/{_h(*key)}"
+    return "x12/%s/%s/%s" % (sender, {"RAW": "raw"}.get(key[0], key[0]), key[1])
+
+
+def pool(sender: str, record: dict) -> tuple[str, str, str]:
+    return (sender, record["trace_origin"], record["trace"])
+
+
+def _rows(claims: list[dict], blocks: list[str], adjustments: list[dict], tuples: list[str]) -> list[dict]:
+    """Fold per key in file order: a row is every block with that key; CLP04 and minus the PLB wire amount add up."""
+    rows: list[dict] = []
+    items = [(("RAW", _h(raw)) if None in (c["status"], c["payer_control"]) else ("REV" if c["status"] == "22" else "CLP", c["payer_control"]), c["paid_cents"], raw)
+             for c, raw in zip(claims, blocks)]
+    items += [(("RAW", _h(raw)) if a["reason"] is None else ("PLB", a["provider_id"], a["fiscal_date"], a["reason"], a["reference"]), -a["amount_cents"], raw)
+              for a, raw in zip(adjustments, tuples)]
+    for key, amount, raw in items:
+        row = next((r for r in rows if r["key"] == list(key)), None)
+        if row is None:
+            row = {"key": list(key), "amount_cents": 0, "raw": "", "flags": []}
+            rows.append(row)
+        row["amount_cents"] += amount
+        row["raw"] += raw
+    for r in rows:
+        r["flags"] = [f for f, ok in (("rev_sign", r["key"][0] == "REV" and r["amount_cents"] > 0), ("clp_sign", r["key"][0] == "CLP" and r["amount_cents"] < 0)) if ok]
+    return rows
 
 
 def _party(s: _Seg, role: str) -> dict:
@@ -282,7 +330,7 @@ def rederive_835(data: bytes) -> dict:
               "handling": bpr.text(1, _CODE), "total_cents": total, "credit_debit": bpr.text(3, re.compile("C")),
               "method": bpr.text(4, _CODE), "format": bpr.text(5, _CODE), "effective_date": _iso(bpr.val(16)),
               "trace": trn.text(2), "trace_origin": trn.text(3), "dates": [], "payer": None, "payee": None, "claims": [], "adjustments": []}
-    level, parties = record["dates"], []
+    level, parties, tuples = record["dates"], [], []
     for s in body[2:]:
         if s.tag == "DTM":
             level.append(s.dtm())
@@ -290,8 +338,8 @@ def rederive_835(data: bytes) -> dict:
             parties.append(_party(s, "PR" if not parties else "PE"))
         elif s.tag == "CLP":
             s.blank(10)
-            claim = {"control": s.text(1), "status": s.text(2, _CODE), "charge_cents": _cents(s.val(3)), "paid_cents": _cents(s.val(4)),
-                     "patient_cents": _cents(s.val(5)), "filing": s.text(6, _CODE), "payer_control": s.text(7),
+            claim = {"control": s.text(1), "status": s.soft(2, _CODE), "charge_cents": _cents(s.val(3)), "paid_cents": _cents(s.val(4)),
+                     "patient_cents": _cents(s.val(5)), "filing": s.text(6, _CODE), "payer_control": s.soft(7),
                      "facility": s.text(8, _CODE, True), "frequency": s.text(9, _CODE, True), "adjustments": [], "dates": [], "services": []}
             record["claims"].append(claim)
             level, adjust = claim["dates"], claim["adjustments"]
@@ -307,17 +355,26 @@ def rederive_835(data: bytes) -> dict:
         elif s.tag == "CAS":
             adjust.extend(_cas(s))
         else:
-            record["adjustments"].extend(_plb(s))
+            for adjustment, raw in _plb(s):
+                record["adjustments"].append(adjustment)
+                tuples.append(raw)
         if s.tag == "N1" and len(parties) == 2:
             record["payer"], record["payee"] = parties
     if not all(_closes(s) for c in record["claims"] for s in c["services"]) or not all(_closes(c, c["services"]) for c in record["claims"]):
         _no("835:claim-balance")
+    blocks: list[list[str]] = []
+    for s in body[2:]:
+        if s.tag == "CLP":
+            blocks.append([])
+        if blocks and s.tag != "PLB":
+            blocks[-1].append(s.canon(*range(1, len(s.raw) + 1)))
     claims_paid = sum(c["paid_cents"] for c in record["claims"])
     plb_total = sum(a["amount_cents"] for a in record["adjustments"])
     if total != claims_paid - plb_total:
         _no("835:balance")
     record.update(claims_paid_cents=claims_paid, plb_total_cents=plb_total,
-                  forward_balance_cents=sum(a["amount_cents"] for a in record["adjustments"] if a["reason"] == "FB"))
+                  forward_balance_cents=sum(a["amount_cents"] for a in record["adjustments"] if a["reason"] == "FB"),
+                  rows=_rows(record["claims"], ["".join(b) for b in blocks], record["adjustments"], tuples))
     return record
 
 
