@@ -31,6 +31,7 @@ _ORDER = re.compile(r"BPR TRN( DTM)* N1 N1( CLP( (?:CAS|DTM))*( SVC( (?:CAS|DTM)
 _MONEY = re.compile(r"-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,2})?")
 _QTY = re.compile(r"-?(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,4})?")
 _TEXT = re.compile(r"(?=.{1,60}$)[A-Za-z0-9._,&'/-]+(?: +[A-Za-z0-9._,&'/-]+)*")
+_ID = re.compile(r"[!-~]+(?: +[!-~]+)*")  # ISA06/ISA08/GS02/GS03: printable AN; this file's delimiters never reach it
 _CODE = re.compile(r"[A-Z0-9]{1,5}")
 _QUALIFIERS = frozenset("01 14 20 27 28 29 30 33 ZZ".split())
 _CONTEXT = Context(prec=28)  # never the ambient decimal context
@@ -130,7 +131,7 @@ def _clock(text: str) -> bool:
 def _isa_ok(f: tuple[str, ...]) -> bool:
     quiet = (f[0] != "00" or f[1] == " " * 10) and (f[2] != "00" or f[3] == " " * 10)
     return (f[0] in ("00", "03") and f[2] in ("00", "01") and quiet and f[4] in _QUALIFIERS and f[6] in _QUALIFIERS
-            and all(re.fullmatch("[ -~]*", f[i]) for i in (1, 3)) and all(_TEXT.fullmatch(f[i].rstrip(" ")) for i in (5, 7))
+            and all(re.fullmatch("[ -~]*", f[i]) for i in (1, 3)) and all(_ID.fullmatch(f[i].rstrip(" ")) for i in (5, 7))
             and _when(f[8], 6, "%y%m%d") is not None and len(f[9]) == 4 and _clock(f[9]))
 
 
@@ -170,6 +171,13 @@ def _plb(s: _Seg) -> list[dict]:
     if not found:
         _no("835:field")
     return found
+
+
+def _closes(node: dict, children: list[dict] | tuple = ()) -> bool:
+    """One tree-sum rule: paid = charge - own CAS - children's CAS, and, with children, paid = sum(children paid) - own CAS."""
+    own = sum(a["amount_cents"] for a in node["adjustments"])
+    below = sum(a["amount_cents"] for k in children for a in k["adjustments"])
+    return node["charge_cents"] - own - below == node["paid_cents"] and (not children or sum(k["paid_cents"] for k in children) - own == node["paid_cents"])
 
 
 def _party(s: _Seg, role: str) -> dict:
@@ -221,7 +229,7 @@ def rederive_835(data: bytes) -> dict:
         gs.blank(9)
         sender, receiver, day, clock, agency = (gs.val(k) for k in (2, 3, 4, 5, 7))
         when = _when(day)
-        if not (all(_TEXT.fullmatch(v) and 1 < len(v) < 16 for v in (sender, receiver))
+        if not (all(_ID.fullmatch(v) and 1 < len(v) < 16 for v in (sender, receiver))
                 and when and 1900 <= when.year <= 2199 and _clock(clock) and agency == "X"):
             _no("x12:envelope")
         while i < len(mid) and mid[i].tag == "ST":
@@ -302,10 +310,8 @@ def rederive_835(data: bytes) -> dict:
             record["adjustments"].extend(_plb(s))
         if s.tag == "N1" and len(parties) == 2:
             record["payer"], record["payee"] = parties
-    for c in record["claims"]:
-        lines = [c, *c["services"]]
-        if any(x["charge_cents"] - sum(a["amount_cents"] for a in x["adjustments"]) != x["paid_cents"] for x in lines[1:]) or                 c["charge_cents"] - sum(a["amount_cents"] for x in lines for a in x["adjustments"]) != c["paid_cents"]:
-            _no("835:claim-balance")
+    if not all(_closes(s) for c in record["claims"] for s in c["services"]) or not all(_closes(c, c["services"]) for c in record["claims"]):
+        _no("835:claim-balance")
     claims_paid = sum(c["paid_cents"] for c in record["claims"])
     plb_total = sum(a["amount_cents"] for a in record["adjustments"])
     if total != claims_paid - plb_total:

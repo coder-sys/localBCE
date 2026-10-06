@@ -52,7 +52,7 @@ WITH_PLB = build(remit("1125.00", *CLAIMS, PLB))
 NEGATIVE_PLB = build(remit("1550.50", *CLAIMS, f"PLB*{PROVIDER}*20261231*FB:CARRY0001*-300.00"))
 EMPTY = build(remit("0.00"))
 EDGE = build(remit("0.01", "CLP*EDGE0001*1*999999999999.99*0.01*0.00*MC*PAYERCTL003", "CAS*CO*45*999999999999.98",
-                                "SVC*HC:J0001*0.01*0.01"))
+                                "SVC*HC:J0001*999999999999.99*999999999999.99"))
 BALANCED = build(remit("350.00", "CLP*MULTI001*1*300.00*200.00*0.00*MC*P1", "SVC*HC:A0001*100.00*100.00", "SVC*HC:A0002*200.00*100.00", "CAS*CO*45*100.00",
                        "CLP*MULTI002*1*100.00*150.00*0.00*MC*P2", "CAS*CO*45*-50.00"))
 FIXTURES = {"good": GOOD, "plb": WITH_PLB, "negative-plb": NEGATIVE_PLB, "empty": EMPTY, "edge": EDGE,
@@ -161,6 +161,8 @@ class Intake(unittest.TestCase):
     def test_claims_and_services_must_balance(self):
         shifted = edit(edit(GOOD, "*500.00*400.00*100.00*MC", "*500.00*500.00*100.00*MC"), "*900.00*850.50*49.50", "*900.00*750.50*49.50")
         for name, data in (("shifted-between-claims", shifted), ("svc03-over-claim", edit(GOOD, "*500.00*450.00**1", "*500.00*40000.00**1")),
+                           ("svc-inflated-together", edit(GOOD, "*500.00*450.00**1", "*40050.00*40000.00**1")),
+                           ("svc-short-of-claim", edit(GOOD, "*500.00*450.00**1", "*400.00*350.00**1")),
                            ("service-cas-zero", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*0.00")), ("claim-cas-missing", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*0.00*1")),
                            ("sign", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*-49.50*1")), ("service-cas-over", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*60.00"))):
             with self.subTest(name):
@@ -178,7 +180,7 @@ class Intake(unittest.TestCase):
                 parts[int(key[1:]) - 1] = value
             return ("ISA*" + "*".join(parts)).encode() + GOOD[105:]
         for name, data in (("i01", isa(i01="99")), ("i01-blank-required", isa(i02="ABCDEFGHIJ")), ("i03", isa(i03="02")), ("i03-blank-required", isa(i04="ABCDEFGHIJ")),
-                           ("i05", isa(i05="AA")), ("i05-blank", isa(i05="  ")), ("i06-blank", isa(i06=" " * 15)), ("i06-char", isa(i06="SYNTH@PAYER    ")),
+                           ("i05", isa(i05="AA")), ("i05-blank", isa(i05="  ")), ("i06-blank", isa(i06=" " * 15)), ("i06-control", isa(i06="SYNTHPAYER    ")),
                            ("i06-leading", isa(i06=" SYNTHPAYER    ")), ("i07", isa(i07="99")), ("i08-blank", isa(i08=" " * 15)),
                            ("i09-month", isa(i09="261305")), ("i09-day", isa(i09="260230")), ("i09-digits", isa(i09="26100A")),
                            ("i10-hour", isa(i10="2460")), ("i10-minute", isa(i10="1260")), ("i10-digits", isa(i10="12AB")),
@@ -186,18 +188,35 @@ class Intake(unittest.TestCase):
             with self.subTest(name):
                 self.refused(data, "x12:isa")
         for name, data in (("i01-03", isa(i01="03", i02="ABCDEFGHIJ")), ("i03-01", isa(i03="01", i04="ABCDEFGHIJ")), ("i05-01", isa(i05="01")),
+                           ("i06-an", isa(i06="SYNTH@PAYER    ")), ("i08-an", isa(i08="(PROV)+ID=1;#?!")),
+                           ("gs02-an", edit(GOOD, "SYNTHPAYER01*", "SYNTH@PAYER01*")), ("gs03-an", edit(GOOD, "*SYNTHPROVIDER*2", "*(SYN)+PROV@1*2")),
                            ("leap-day", isa(i09="240229")), ("gs-hhmmss", edit(GOOD, "*1200*1*X*", "*120059*1*X*")),
                            ("gs-15", edit(GOOD, "SYNTHPAYER01*", "SYNTHPAYER0123*")), ("gs-2", edit(GOOD, "SYNTHPAYER01*", "AB*"))):
             with self.subTest(name):
                 self.assertIsNotNone(self.both(data)[0])
         for name, old, new in (("gs02-short", "SYNTHPAYER01*", "S*"), ("gs02-long", "SYNTHPAYER01*", "SYNTHPAYER01234567*"), ("gs02-empty", "HP*SYNTHPAYER01*", "HP**"),
-                               ("gs02-char", "SYNTHPAYER01*", "SYNTH@PAYER01*"), ("gs02-padded", "SYNTHPAYER01*", "SYNTHPAYER01 *"),
-                               ("gs03-char", "*SYNTHPROVIDER*2", "*SYNTH@ROVIDER*2"), ("gs03-short", "*SYNTHPROVIDER*2", "*S*2"),
+                               ("gs02-padded", "SYNTHPAYER01*", "SYNTHPAYER01 *"),
+                               ("gs03-short", "*SYNTHPROVIDER*2", "*S*2"),
                                ("gs04-month", "*20261005*1200*1*", "*20261305*1200*1*"), ("gs04-short", "*20261005*1200*1*", "*261005*1200*1*"),
                                ("gs04-year", "*20261005*1200*1*", "*18991005*1200*1*"), ("gs05-hour", "*1200*1*X*", "*2460*1*X*"), ("gs05-short", "*1200*1*X*", "*12*1*X*"),
                                ("gs05-minute", "*1200*1*X*", "*1260*1*X*"), ("gs07", "*1*X*0050", "*1*T*0050"), ("gs07-empty", "*1*X*0050", "*1**0050")):
             with self.subTest(name):
                 self.refused(edit(GOOD, old, new), "x12:envelope")
+
+    def test_id_charset_excludes_this_files_delimiters_only(self):
+        record, _ = self.both(edit(GOOD, "SYNTHPAYER01*", "SYNTH@PAYER01*"))
+        self.assertEqual(record.group_sender, "SYNTH@PAYER01")
+        self.assertEqual(self.both(edit(GOOD, "SYNTHPAYER     ", "SYNTH@(+)PAYER "))[0].interchange_sender, "SYNTH@(+)PAYER")
+        other = FIXTURES["separators"]  # element |, repeat !, component ;, terminator $: * and ^ are ordinary characters here
+        self.assertEqual(self.both(edit(other, "SYNTHPAYER01|", "SYN*^PAYER01|"))[0].group_sender, "SYN*^PAYER01")
+        for old, new, code in (("SYNTHPAYER01*", "SYNTHPAYER01*", "x12:charset"), ("SYNTHPAYER01*", "SYNTH:PAYER01*", "x12:shape"),
+                               ("SYNTHPAYER01*", "SYNTH^PAYER01*", "x12:shape"), ("SYNTHPAYER     ", "SYNTH^PAYER    ", "x12:separator"),
+                               ("SYNTHPAYER01*", "SYNTH*PAYER01*", "x12:extra")):
+            with self.subTest(new):
+                self.refused(edit(GOOD, old, new), code)
+        for new, code in (("SYN|PAYER01|", "x12:extra"), ("SYN!PAYER01|", "x12:shape"), ("SYN;PAYER01|", "x12:shape")):
+            with self.subTest(new):
+                self.refused(edit(other, "SYNTHPAYER01|", new), code)
 
     def test_control_numbers_and_counts(self):
         for kwargs, code in (({"ic": "000000906"}, "x12:control"), ({"gec": "2"}, "x12:control"), ({"sc": "0002"}, "x12:control"),

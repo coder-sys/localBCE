@@ -2,8 +2,8 @@
 
 Evidence only: this module reads bytes and returns a record. It calls no owner and makes no determination. Anything outside
 the subset (another segment, an unmodeled element, a production ISA15, a second transaction) is refused, never dropped.
-Money is exact integer cents; every level must balance: SVC02 - line CAS = SVC03, CLP03 - claim and service CAS = CLP04, and
-BPR02 = sum(CLP04) - sum(PLB amounts). PLB adjustments are kept whole,
+Money is exact integer cents; one tree-sum rule closes every level: SVC02 - line CAS = SVC03; CLP03 - claim and service CAS =
+CLP04, and with services CLP04 = sum(SVC03) - claim CAS; BPR02 = sum(CLP04) - sum(PLB amounts). PLB adjustments are kept whole,
 each with its reason code and reference, and `forward_balance_cents` totals the ones coded FB (sign as on the wire).
 """
 
@@ -216,9 +216,11 @@ def _level(cursor: _Cursor) -> tuple[tuple[Cas, ...], tuple[Dtm, ...]]:
     return (tuple(a for s in segments if s.tag == "CAS" for a in _cas(s)), tuple(_dtm(s) for s in segments if s.tag == "DTM"))
 
 
-def _balance(charge: int, paid: int, adjustments: tuple[Cas, ...]) -> None:
-    if charge - sum(a.amount_cents for a in adjustments) != paid:
-        refuse("835:claim-balance")
+def _closes(node: Claim | Service, children: tuple[Service, ...] = ()) -> bool:
+    """One tree-sum rule: paid = charge - own CAS - children's CAS, and, with children, paid = sum(children paid) - own CAS."""
+    own = sum(a.amount_cents for a in node.adjustments)
+    below = sum(a.amount_cents for k in children for a in k.adjustments)
+    return node.charge_cents - own - below == node.paid_cents and (not children or sum(k.paid_cents for k in children) - own == node.paid_cents)
 
 
 def _service(cursor: _Cursor) -> Service:
@@ -228,9 +230,7 @@ def _service(cursor: _Cursor) -> Service:
     if len(parts) != 2 or not _CODE.fullmatch(parts[0]) or not _TEXT.fullmatch(parts[1]):
         refuse("835:field")
     fields = (parts[0], parts[1], cents(seg.value(2)), cents(seg.value(3)), _text(seg, 4, _CODE, True), _quantity(seg.value(5)))
-    service = Service(*fields, *_level(cursor))
-    _balance(service.charge_cents, service.paid_cents, service.adjustments)
-    return service
+    return Service(*fields, *_level(cursor))
 
 
 def _claim(cursor: _Cursor) -> Claim:
@@ -242,8 +242,10 @@ def _claim(cursor: _Cursor) -> Claim:
     services = []
     while cursor.peek() == "SVC":
         services.append(_service(cursor))
-    _balance(fields[2], fields[3], adjustments + tuple(a for s in services for a in s.adjustments))
-    return Claim(*fields, adjustments, dates, tuple(services))
+    claim = Claim(*fields, adjustments, dates, tuple(services))
+    if not all(_closes(s) for s in services) or not _closes(claim, claim.services):
+        refuse("835:claim-balance")
+    return claim
 
 
 def parse_835(data: bytes) -> Remittance:
