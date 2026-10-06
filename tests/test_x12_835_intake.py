@@ -159,16 +159,40 @@ class Intake(unittest.TestCase):
             with self.subTest(name):
                 self.refused(data, "835:balance")
 
-    def test_claims_and_services_must_balance(self):
+    def test_a_bad_block_is_a_raw_row_and_the_rest_parses(self):  # one bad claim no longer sinks the whole remittance
         shifted = edit(edit(GOOD, "*500.00*400.00*100.00*MC", "*500.00*500.00*100.00*MC"), "*900.00*850.50*49.50", "*900.00*750.50*49.50")
-        for name, data in (("shifted-between-claims", shifted), ("svc03-over-claim", edit(GOOD, "*500.00*450.00**1", "*500.00*40000.00**1")),
-                           ("svc-inflated-together", edit(GOOD, "*500.00*450.00**1", "*40050.00*40000.00**1")),
-                           ("svc-short-of-claim", edit(GOOD, "*500.00*450.00**1", "*400.00*350.00**1")),
-                           ("service-cas-zero", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*0.00")), ("claim-cas-missing", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*0.00*1")),
-                           ("sign", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*-49.50*1")), ("service-cas-over", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*60.00"))):
+        bal, fld, amt, date = "835:claim-balance", "835:field", "835:amount", "835:date"
+        # name, data, the code each RAW row is flagged with, how many RAW rows, whether an unreadable amount holds every row, which list lost them
+        for name, data, code, raw, unverified, lost in (
+                ("shifted-between-claims", shifted, bal, 2, False, "claims"), ("svc03-over-claim", edit(GOOD, "*500.00*450.00**1", "*500.00*40000.00**1"), bal, 1, False, "claims"),
+                ("svc-inflated-together", edit(GOOD, "*500.00*450.00**1", "*40050.00*40000.00**1"), bal, 1, False, "claims"),
+                ("svc-short-of-claim", edit(GOOD, "*500.00*450.00**1", "*400.00*350.00**1"), bal, 1, False, "claims"),
+                ("service-cas-zero", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*0.00"), bal, 1, False, "claims"),
+                ("claim-cas-missing", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*0.00*1"), bal, 1, False, "claims"),
+                ("sign", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*-49.50*1"), bal, 1, False, "claims"),
+                ("service-cas-over", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*60.00"), bal, 1, False, "claims"),
+                ("svc-shape", edit(GOOD, "HC:99213", "99213"), fld, 1, False, "claims"),
+                ("cas-short", edit(GOOD, "CAS*PR*1*50.00~DTM*232", "CAS*PR~DTM*232"), fld, 1, False, "claims"),
+                ("clp01-blank", edit(GOOD, "CLAIMA001", ""), fld, 1, False, "claims"),
+                ("clp06-blank", edit(GOOD, "*100.00*MC*PAYERCTL001", "*100.00**PAYERCTL001"), fld, 1, False, "claims"),
+                ("dtm-leap", edit(GOOD, "DTM*232*20261001", "DTM*232*20270229"), date, 1, False, "claims"),
+                ("clp03-unreadable", edit(GOOD, "*500.00*400.00*100.00*MC", "*5e2*400.00*100.00*MC"), amt, 1, True, "claims"),
+                ("clp04-minus-zero", edit(GOOD, "*400.00*100.00*MC*", "*-0*100.00*MC*"), amt, 1, True, "claims"),
+                ("clp05-unreadable", edit(GOOD, "*400.00*100.00*MC", "*400.00*1e2*MC"), amt, 1, True, "claims"),
+                ("plb01-blank", edit(WITH_PLB, "PLB*1234567890*", "PLB**"), fld, 2, False, "adjustments"),
+                ("plb02-bad-date", edit(WITH_PLB, "*20261231*", "*20261232*"), date, 2, False, "adjustments"),
+                ("plb-amount-unreadable", edit(WITH_PLB, "*100.00*WO", "*1e2*WO"), amt, 1, True, "adjustments")):
             with self.subTest(name):
-                self.refused(data, "835:claim-balance")
-        self.assertIn(b"*1250.50*C*", shifted)  # the shift keeps the file total, so only the claim check can catch it
+                record, _ = self.both(data)
+                self.assertIsNotNone(record)
+                bad = [r for r in record.rows if r.key[0] == "RAW"]
+                self.assertEqual(([r.flags for r in bad], record.balance_unverified), ([(code,)] * raw, unverified))
+                self.assertEqual(None in [r.amount_cents for r in bad], unverified)
+                self.assertTrue(all(r.amount_cents is not None for r in record.rows if r.key[0] != "RAW"))
+                self.assertEqual(len(getattr(record, lost)) + raw, 2)
+                self.assertEqual(len(record.rows), len(parse_835(WITH_PLB if lost == "adjustments" else GOOD).rows))  # no row folded away
+        self.assertIn(b"*1250.50*C*", shifted)  # the shift keeps the file total, so the balance check passes and only the claim check sees it
+        self.assertFalse(self.both(shifted)[0].balance_unverified)
         record, _ = self.both(BALANCED)  # two services, a negative adjustment, adjustments at both levels
         self.assertEqual((record.total_cents, [c.paid_cents for c in record.claims]), (35000, [20000, 15000]))
 
@@ -247,15 +271,10 @@ class Intake(unittest.TestCase):
             "835:segment#role": edit(GOOD, "N1*PE*", "N1*PR*"), "835:segment#order": build(remit("1125.00", PLB, *CLAIMS)),
             "835:segment#missing-payee": build(remit("0.00")[:-1]),
             "835:field": edit(GOOD, "TRACE0001", "TRACE@@@"), "835:field#debit": edit(GOOD, "*1250.50*C*", "*1250.50*D*"), "835:field#trn01": edit(GOOD, "TRN*1*", "TRN*2*"),
-            "835:field#svc": edit(GOOD, "HC:99213", "99213"), "835:field#cas": edit(GOOD, "CAS*PR*1*50.00~DTM*232", "CAS*PR~DTM*232"),
-            "835:field#plb": edit(WITH_PLB, "PLB*1234567890*", "PLB**"),  # was an unknown reason (FBX); that is now a RAW row (test_raw_keys), so PLB01 is the refusal "835:field#blank": edit(GOOD, "CLAIMA001", ""),
-            "835:amount": edit(GOOD, "*1250.50*C*", "*1250.505*C*"), "835:amount#negative-total": edit(GOOD, "*1250.50*C*", "*-1250.50*C*"),
-            "835:amount#minus-zero": edit(GOOD, "*400.00*100.00*MC*", "*-0*100.00*MC*"), "835:amount#plb": edit(WITH_PLB, "*100.00*WO", "*1e2*WO"),
-            "835:date": edit(GOOD, "*" * 11 + "20261005", "*" * 11 + "20261305"),
-            "835:date#dtm": edit(GOOD, "DTM*405*20261003", "DTM*405*2026-10-03"), "835:date#leap": edit(GOOD, "DTM*232*20261001", "DTM*232*20270229"),
-            "835:date#plb": edit(WITH_PLB, "*20261231*", "*20261232*"),
-            "835:claim-balance": edit(edit(GOOD, "*500.00*400.00*100.00*MC", "*500.00*500.00*100.00*MC"), "*900.00*850.50*49.50", "*900.00*750.50*49.50"),
-            "835:claim-balance#service": edit(GOOD, "*500.00*450.00**1", "*500.00*40000.00**1"),
+            # a fault inside one claim or adjustment is a RAW row, not a refusal: see test_a_bad_block_is_a_raw_row_and_the_rest_parses
+            "835:amount#bpr02-unreadable": edit(GOOD, "*1250.50*C*", "*1250.505*C*"),  # nothing can balance, so the whole file refuses
+            "835:amount#negative-total": edit(GOOD, "*1250.50*C*", "*-1250.50*C*"),
+            "835:date": edit(GOOD, "*" * 11 + "20261005", "*" * 11 + "20261305"), "835:date#dtm": edit(GOOD, "DTM*405*20261003", "DTM*405*2026-10-03"),
         }
         seen = set()
         for name, data in cases.items():
@@ -263,7 +282,7 @@ class Intake(unittest.TestCase):
                 code = name.split("#")[0]
                 seen.add(code)
                 self.refused(data, code)
-        self.assertEqual(len(seen), 24)
+        self.assertEqual((len(cases), len(seen)), (40, 23))
         for bad in ("text", None, bytearray(GOOD), [GOOD]):
             with self.assertRaises(X12Error) as caught:
                 parse_835(bad)
@@ -273,7 +292,7 @@ class Intake(unittest.TestCase):
     def test_error_text_never_carries_input(self):
         secret = "HUNTERSECRET"
         for data in (edit(GOOD, "SYNTH STATE MEDICAID PROGRAM", secret + "@"), edit(GOOD, "TRACE0001", secret + "^" * 9),
-                     edit(GOOD, "CLAIMA001*1*500.00", "CLAIMA001*1*" + secret), edit(GOOD, "20261003", secret)):
+                     edit(GOOD, "*1250.50*C*", "*" + secret + "*C*"), edit(GOOD, "20261003", secret)):
             with self.assertRaises(X12Error) as caught:
                 parse_835(data)
             error = caught.exception
@@ -460,8 +479,8 @@ class Intake(unittest.TestCase):
         self.assertEqual((record.rows[0].key, record.rows[0].flags), (("REV", "REVX"), ("rev_sign",)))
         record, _ = self.rows("5.00", "CLP*P1*1*35.00*35.00*0.00*MC*PAYK", "CLP*P2*1*-30.00*-30.00*0.00*MC*NEGK")
         self.assertEqual([(r.key, r.flags) for r in record.rows], [(("CLP", "PAYK"), ()), (("CLP", "NEGK"), ("clp_sign",))])
-        record, _ = self.rows("0.00", "CLP*Z1*1*50.00*50.00*0.00*MC*ZZ1", "CLP*Z2*1*-50.00*-50.00*0.00*MC*ZZ1")  # blocks that cancel
-        self.assertEqual([(r.key, r.amount_cents, r.flags) for r in record.rows], [(("CLP", "ZZ1"), 0, ())])
+        record, _ = self.rows("0.00", "CLP*Z1*1*50.00*50.00*0.00*MC*ZZ1", "CLP*Z2*1*-50.00*-50.00*0.00*MC*ZZ1")  # blocks that cancel: the net is 0, the negative block still shows
+        self.assertEqual([(r.key, r.amount_cents, r.flags) for r in record.rows], [(("CLP", "ZZ1"), 0, ("clp_sign",))])
 
     def test_a_reissue_flipping_the_sign_keeps_its_key(self):  # M21z: S3 sees the same cell, not a second one
         other = "CLP*G*1*50.00*50.00*0.00*MC*G1"
@@ -491,7 +510,7 @@ class Intake(unittest.TestCase):
         self.assertEqual(self.rows("250.00", claim, plb("FB:REFA", "-50.00"))[1][key].amount_cents, 5000)  # a negative wire amount raises the payment
         zero = self.rows("200.00", claim, plb("FB:REFA", "10.00", "FB:REFA", "-10.00"))[1][key]
         self.assertEqual((zero.amount_cents, zero.flags), (0, ()))
-        self.assertEqual(origin_id("S", key), "x12/S/PLB/" + hashlib.sha3_256("\0".join(key).encode()).hexdigest())
+        self.assertEqual(origin_id("S", key), hashlib.sha3_256("".join(f"{len(p)}:{p}" for p in ("RR/835/ORIGIN/v1", "S", *key)).encode()).hexdigest())
 
     def test_m22_example_rows(self):  # A 300, B 200, PLB +50 against an earlier cell, BPR02 450
         record, _ = self.rows("450.00", "CLP*A*1*300.00*300.00*0.00*MC*A1", "CLP*B*1*200.00*200.00*0.00*MC*B1", f"PLB*{PROVIDER}*20261231*FB:A1*50.00")
@@ -501,10 +520,10 @@ class Intake(unittest.TestCase):
     def test_raw_keys(self):
         def raw_row(total, *segments):
             (row,) = [r for r in self.rows(total, *segments)[0].rows if r.key[0] == "RAW"]
-            self.assertEqual(row.key, ("RAW", hashlib.sha3_256(row.raw.encode()).hexdigest()))
+            self.assertEqual(row.key, ("RAW", hashlib.sha3_256(f"13:RR/835/RAW/v1{len(row.raw)}:{row.raw}".encode()).hexdigest()))  # the domain tag, length-prefixed
             return row
         bad7 = raw_row("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")  # CLP07 unreadable
-        self.assertEqual((bad7.amount_cents, bad7.flags, self.rows("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")[0].claims[0].payer_control), (100, (), None))
+        self.assertEqual((bad7.amount_cents, bad7.flags, self.rows("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")[0].claims), (100, ("835:field",), ()))
         bad2 = raw_row("1.00", "CLP*C1*zz!*1.00*1.00*0.00*MC*OK7")  # CLP02 unreadable
         self.assertNotEqual(bad7.key, bad2.key)
         self.assertIn("CAS", raw_row("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*", "CAS*PR*1*0.00").raw)  # a blank CLP07 keys RAW, with its children in the raw
@@ -512,10 +531,19 @@ class Intake(unittest.TestCase):
         self.assertEqual(again, (bad7,))  # the key is the block, not the file around it
         moved = parse_835(build(remit("1.00", "CLP*C1*1*1.00*1.00*0.00*MC*BAD@7")).decode().translate(str.maketrans("*^:~", "|!;$")).encode())
         self.assertEqual(moved.rows, (bad7,))  # the same block under other delimiters keys the same
-        self.assertEqual(origin_id("S", bad7.key), "x12/S/raw/" + bad7.key[1])
+        self.assertEqual(origin_id("S", bad7.key), hashlib.sha3_256(f"16:RR/835/ORIGIN/v1" "1:S" "3:RAW" f"{len(bad7.key[1])}:{bad7.key[1]}".encode()).hexdigest())
         reason = raw_row("1.00", "CLP*C1*1*6.00*6.00*0.00*MC*K", f"PLB*{PROVIDER}*20261231*FBX:R*5.00")  # an unknown PLB reason
         self.assertEqual(reason.amount_cents, -500)
         self.assertEqual(raw_row("1.00", "CLP*C1*1*6.00*6.00*0.00*MC*K", f"PLB*{PROVIDER}*20261231*FB:A:B*5.00").amount_cents, -500)  # a composite reference
+
+    def test_trailing_empties_are_not_content(self):  # F5: both encoders drop trailing empty elements, repeats and components
+        keys = {self.rows("1.00", f"CLP*C1*1*1.00*1.00*0.00*MC*BAD@7{tail}")[0].rows[0].key for tail in ("", "*", "**", "^", ":", "^:*^")}
+        self.assertEqual((len(keys), next(iter(keys))[0]), (1, "RAW"))
+
+    def test_flags_are_per_block(self):  # F6: a REV +30.00 beside a REV -100.00 is still seen, in the folded row too
+        record, rows = self.rows("30.00", "CLP*A*22*-100.00*-100.00*0.00*MC*R1", "CLP*B*22*30.00*30.00*0.00*MC*R1", "CLP*C*1*100.00*100.00*0.00*MC*P1")
+        self.assertEqual((rows[("REV", "R1")].amount_cents, rows[("REV", "R1")].flags), (-7000, ("rev_sign",)))
+        self.assertEqual(rows[("CLP", "P1")].flags, ())
 
     def test_pool_and_origin_follow_trn03_and_trn02(self):
         record, _ = self.both(GOOD)
@@ -523,7 +551,8 @@ class Intake(unittest.TestCase):
         other = self.both(edit(GOOD, "1999999999", "1888888888"))[0]
         self.assertEqual((pool("S", other), other.trace == record.trace), (("S", "1888888888", "TRACE0001"), True))  # two payers, one TRN02: two pools
         self.assertNotEqual(pool("S", record), pool("T", record))
-        self.assertEqual(origin_id("S", ("REV", "X1")), "x12/S/REV/X1")
+        self.assertEqual(origin_id("S", ("REV", "X1")), hashlib.sha3_256(b"16:RR/835/ORIGIN/v1" b"1:S" b"3:REV" b"2:X1").hexdigest())
+        self.assertNotEqual(origin_id("S", ("CLP", "CLP/A")), origin_id("S/CLP", ("CLP", "A")))  # F4: the old "/"-joined id gave one id to both
         for name, data in FIXTURES.items():
             record = parse_835(data)
             for row in record.rows:

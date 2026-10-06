@@ -38,6 +38,19 @@ _QUALIFIERS = frozenset("01 14 20 27 28 29 30 33 ZZ".split())
 _CONTEXT = Context(prec=28)  # never the ambient decimal context
 
 
+def _strip(items: list[str]) -> list[str]:
+    while items and items[-1] == "":
+        items = items[:-1]
+    return items
+
+
+def _try(read):
+    try:
+        return read()
+    except IndependentX12Error:
+        return None
+
+
 class _Seg:
     def __init__(self, tag: str, raw: list[str], r: str, c: str) -> None:
         self.tag, self.raw, self.r, self.c = tag, raw, r, c
@@ -66,16 +79,11 @@ class _Seg:
             _no("835:field")
         return v
 
-    def soft(self, i: int, pattern: re.Pattern = _TEXT) -> str | None:
-        try:
-            return self.text(i, pattern)
-        except IndependentX12Error:
-            return None
-
     def canon(self, *at: int) -> str:
-        """Canonical text of the elements `at`: this file's delimiters become control characters, so the hash ignores them."""
-        items = (self.raw[i - 1] if i <= len(self.raw) else "" for i in at)
-        return self.tag + "".join("\x1f" + "\x1e".join("\x1d".join(x.split(self.c)) for x in item.split(self.r)) for item in items) + "\n"
+        """Canonical text of the elements `at`: this file's delimiters become control characters, so the hash ignores them; trailing
+        empty elements, repeats and components are not content and are dropped."""
+        items = ("\x1e".join(_strip(["\x1d".join(_strip(x.split(self.c))) for x in (self.raw[i - 1] if i <= len(self.raw) else "").split(self.r)])) for i in at)
+        return self.tag + "".join("\x1f" + x for x in _strip(list(items))) + "\n"
 
     def dtm(self) -> dict:
         self.blank(3)
@@ -167,24 +175,58 @@ def _cas(s: _Seg) -> list[dict]:
     return found
 
 
-def _plb(s: _Seg) -> list[tuple[dict, str]]:
-    provider, fiscal, found = s.text(1), _iso(s.val(2)), []
+def _pairs(s: _Seg) -> list[int]:
+    """The 1-based element of each PLB pair; a fault in the segment's own shape (no pair, or content past six pairs) refuses it."""
+    found = []
     for k in range(3, 15, 2):
-        try:
-            p = s.parts(k)
-        except IndependentX12Error:
-            p = None
-        if p == [""]:
+        if _try(lambda: s.parts(k)) == [""]:
             s.blank(k)
             break
-        ok = p is not None and len(p) <= 2 and re.fullmatch("[A-Z0-9]{2}", p[0]) and (len(p) == 1 or _TEXT.fullmatch(p[1]))
-        found.append(({"provider_id": provider, "fiscal_date": fiscal, "reason": p[0] if ok else None, "reference": (p[1:] or [""])[0] if ok else None,
-                       "amount_cents": _cents(s.val(k + 1))}, s.canon(1, 2, k, k + 1)))
+        found.append(k)
     else:
         s.blank(15)
     if not found:
         _no("835:field")
     return found
+
+
+def _pair(s: _Seg, k: int) -> dict:
+    provider, fiscal, p = s.text(1), _iso(s.val(2)), s.parts(k)
+    if len(p) > 2 or not re.fullmatch("[A-Z0-9]{2}", p[0]) or (len(p) == 2 and not _TEXT.fullmatch(p[1])):
+        _no("835:field")
+    return {"provider_id": provider, "fiscal_date": fiscal, "reason": p[0], "reference": (p[1:] or [""])[0], "amount_cents": _cents(s.val(k + 1))}
+
+
+def _paid(s: _Seg) -> int | None:
+    """CLP04 when CLP03-05 all read, else None: one unknown amount can absorb another's error in BPR02."""
+    amounts = [_try(lambda: _cents(s.val(i))) for i in (3, 4, 5)]
+    return None if None in amounts else amounts[1]
+
+
+def _claim(block: list[_Seg]) -> dict:
+    s = block[0]
+    s.blank(10)
+    claim = {"control": s.text(1), "status": s.text(2, _CODE), "charge_cents": _cents(s.val(3)), "paid_cents": _cents(s.val(4)),
+             "patient_cents": _cents(s.val(5)), "filing": s.text(6, _CODE), "payer_control": s.text(7),
+             "facility": s.text(8, _CODE, True), "frequency": s.text(9, _CODE, True), "adjustments": [], "dates": [], "services": []}
+    level, adjust = claim["dates"], claim["adjustments"]
+    for s in block[1:]:
+        if s.tag == "SVC":
+            s.blank(6)
+            q = s.parts(1)
+            if len(q) != 2 or not _CODE.fullmatch(q[0]) or not _TEXT.fullmatch(q[1]):
+                _no("835:field")
+            service = {"qualifier": q[0], "code": q[1], "charge_cents": _cents(s.val(2)), "paid_cents": _cents(s.val(3)),
+                       "revenue": s.text(4, _CODE, True), "units": _qty(s.val(5)), "adjustments": [], "dates": []}
+            claim["services"].append(service)
+            level, adjust = service["dates"], service["adjustments"]
+        elif s.tag == "CAS":
+            adjust.extend(_cas(s))
+        else:
+            level.append(s.dtm())
+    if not all(_closes(k) for k in claim["services"]) or not _closes(claim, claim["services"]):
+        _no("835:claim-balance")
+    return claim
 
 
 def _closes(node: dict, children: list[dict] | tuple = ()) -> bool:
@@ -194,37 +236,42 @@ def _closes(node: dict, children: list[dict] | tuple = ()) -> bool:
     return node["charge_cents"] - own - below == node["paid_cents"] and (not children or sum(k["paid_cents"] for k in children) - own == node["paid_cents"])
 
 
-def _h(*parts: str) -> str:
-    return hashlib.sha3_256("\0".join(parts).encode("ascii")).hexdigest()
+def _h(domain: str, *parts: str) -> str:
+    """SHA3-256 over the domain and the parts, each length-prefixed, so no two part lists can share an input."""
+    return hashlib.sha3_256("".join("%d:%s" % (len(p), p) for p in (domain, *parts)).encode("ascii")).hexdigest()
 
 
 def origin_id(sender: str, key: list[str]) -> str:
-    """common_origin_id of a row key for the channel's `sender` (section 2)."""
-    if key[0] == "PLB":
-        return f"x12/{sender}/PLB/{_h(*key)}"
-    return "x12/%s/%s/%s" % (sender, {"RAW": "raw"}.get(key[0], key[0]), key[1])
+    """common_origin_id of a row key for the channel's `sender` (section 2): injective in (sender, tag, parts)."""
+    return _h("RR/835/ORIGIN/v1", sender, *key)
 
 
 def pool(sender: str, record: dict) -> tuple[str, str, str]:
     return (sender, record["trace_origin"], record["trace"])
 
 
-def _rows(claims: list[dict], blocks: list[str], adjustments: list[dict], tuples: list[str]) -> list[dict]:
-    """Fold per key in file order: a row is every block with that key; CLP04 and minus the PLB wire amount add up."""
+def _guard(raw: str, amount: int | None, read, key) -> tuple[dict | None, tuple]:
+    """The one block-fault path. read() builds the block's record, key(record) its fold key; any refusal makes the block a RAW part
+    whose flag is the refusal code. Flags are per block (the fold ORs them), so REV -100.00 and +30.00 cannot hide the +30.00."""
+    try:
+        item = read()
+    except IndependentX12Error as fault:
+        return None, (["RAW", _h("RR/835/RAW/v1", raw)], amount, raw, [str(fault)])
+    k = key(item)
+    return item, (k, amount, raw, [f for f, ok in (("rev_sign", k[0] == "REV" and amount > 0), ("clp_sign", k[0] == "CLP" and amount < 0)) if ok])
+
+
+def _rows(parts: list[tuple]) -> list[dict]:
+    """Fold per key in file order: a row is every block with that key; CLP04 and minus the PLB wire amount add up (None if any is unknown)."""
     rows: list[dict] = []
-    items = [(("RAW", _h(raw)) if None in (c["status"], c["payer_control"]) else ("REV" if c["status"] == "22" else "CLP", c["payer_control"]), c["paid_cents"], raw)
-             for c, raw in zip(claims, blocks)]
-    items += [(("RAW", _h(raw)) if a["reason"] is None else ("PLB", a["provider_id"], a["fiscal_date"], a["reason"], a["reference"]), -a["amount_cents"], raw)
-              for a, raw in zip(adjustments, tuples)]
-    for key, amount, raw in items:
-        row = next((r for r in rows if r["key"] == list(key)), None)
+    for key, amount, raw, flags in parts:
+        row = next((r for r in rows if r["key"] == key), None)
         if row is None:
-            row = {"key": list(key), "amount_cents": 0, "raw": "", "flags": []}
+            row = {"key": key, "amount_cents": 0, "raw": "", "flags": []}
             rows.append(row)
-        row["amount_cents"] += amount
+        row["amount_cents"] = None if None in (row["amount_cents"], amount) else row["amount_cents"] + amount
         row["raw"] += raw
-    for r in rows:
-        r["flags"] = [f for f, ok in (("rev_sign", r["key"][0] == "REV" and r["amount_cents"] > 0), ("clp_sign", r["key"][0] == "CLP" and r["amount_cents"] < 0)) if ok]
+        row["flags"] = sorted({*row["flags"], *flags})
     return rows
 
 
@@ -321,7 +368,7 @@ def rederive_835(data: bytes) -> dict:
     trn.blank(4)
     if trn.val(1) != "1":
         _no("835:field")
-    total = _cents(bpr.val(2))
+    total = _cents(bpr.val(2))  # bpr02-unreadable: nothing can balance, so this one refuses the whole file
     if total < 0:
         _no("835:amount")
     record = {"interchange_control": f[12], "group_control": gs.val(6), "set_control": st.val(2),
@@ -330,51 +377,48 @@ def rederive_835(data: bytes) -> dict:
               "handling": bpr.text(1, _CODE), "total_cents": total, "credit_debit": bpr.text(3, re.compile("C")),
               "method": bpr.text(4, _CODE), "format": bpr.text(5, _CODE), "effective_date": _iso(bpr.val(16)),
               "trace": trn.text(2), "trace_origin": trn.text(3), "dates": [], "payer": None, "payee": None, "claims": [], "adjustments": []}
-    level, parties, tuples = record["dates"], [], []
-    for s in body[2:]:
-        if s.tag == "DTM":
-            level.append(s.dtm())
-        elif s.tag == "N1":
-            parties.append(_party(s, "PR" if not parties else "PE"))
-        elif s.tag == "CLP":
-            s.blank(10)
-            claim = {"control": s.text(1), "status": s.soft(2, _CODE), "charge_cents": _cents(s.val(3)), "paid_cents": _cents(s.val(4)),
-                     "patient_cents": _cents(s.val(5)), "filing": s.text(6, _CODE), "payer_control": s.soft(7),
-                     "facility": s.text(8, _CODE, True), "frequency": s.text(9, _CODE, True), "adjustments": [], "dates": [], "services": []}
-            record["claims"].append(claim)
-            level, adjust = claim["dates"], claim["adjustments"]
-        elif s.tag == "SVC":
-            s.blank(6)
-            q = s.parts(1)
-            if len(q) != 2 or not _CODE.fullmatch(q[0]) or not _TEXT.fullmatch(q[1]):
-                _no("835:field")
-            service = {"qualifier": q[0], "code": q[1], "charge_cents": _cents(s.val(2)), "paid_cents": _cents(s.val(3)),
-                       "revenue": s.text(4, _CODE, True), "units": _qty(s.val(5)), "adjustments": [], "dates": []}
-            claim["services"].append(service)
-            level, adjust = service["dates"], service["adjustments"]
-        elif s.tag == "CAS":
-            adjust.extend(_cas(s))
-        else:
-            for adjustment, raw in _plb(s):
-                record["adjustments"].append(adjustment)
-                tuples.append(raw)
-        if s.tag == "N1" and len(parties) == 2:
-            record["payer"], record["payee"] = parties
-    if not all(_closes(s) for c in record["claims"] for s in c["services"]) or not all(_closes(c, c["services"]) for c in record["claims"]):
-        _no("835:claim-balance")
-    blocks: list[list[str]] = []
+    parties, blocks, plbs = [], [], []
     for s in body[2:]:
         if s.tag == "CLP":
-            blocks.append([])
-        if blocks and s.tag != "PLB":
-            blocks[-1].append(s.canon(*range(1, len(s.raw) + 1)))
-    claims_paid = sum(c["paid_cents"] for c in record["claims"])
-    plb_total = sum(a["amount_cents"] for a in record["adjustments"])
-    if total != claims_paid - plb_total:
+            blocks.append([s])
+        elif s.tag == "PLB":
+            plbs.append(s)
+        elif blocks:
+            blocks[-1].append(s)
+        elif s.tag == "DTM":
+            record["dates"].append(s.dtm())
+        else:
+            parties.append(_party(s, "PR" if not parties else "PE"))
+    record["payer"], record["payee"] = parties
+    parts, paid, withheld = [], [], []
+    for block in blocks:
+        amount = _paid(block[0])
+        claim, part = _guard("".join(s.canon(*range(1, len(s.raw) + 1)) for s in block), amount, lambda: _claim(block),
+                             lambda c: ["REV" if c["status"] == "22" else "CLP", c["payer_control"]])
+        record["claims"] += [claim] if claim else []
+        paid.append(amount)
+        parts.append(part)
+    for s in plbs:
+        try:
+            ks = _pairs(s)
+        except IndependentX12Error as fault:
+            raw, wires = s.canon(*range(1, len(s.raw) + 1)), [None]
+            parts.append((["RAW", _h("RR/835/RAW/v1", raw)], None, raw, [str(fault)]))
+        else:
+            wires = [_try(lambda: _cents(s.val(k + 1))) for k in ks]
+            for k, wire in zip(ks, wires):
+                adjustment, part = _guard(s.canon(1, 2, k, k + 1), None if wire is None else -wire, lambda: _pair(s, k),
+                                          lambda a: ["PLB", a["provider_id"], a["fiscal_date"], a["reason"], a["reference"]])
+                record["adjustments"] += [adjustment] if adjustment else []
+                parts.append(part)
+        withheld += wires
+    unverified = None in paid or None in withheld
+    claims_paid, plb_total = sum(a for a in paid if a is not None), sum(a for a in withheld if a is not None)
+    if not unverified and total != claims_paid - plb_total:
         _no("835:balance")
     record.update(claims_paid_cents=claims_paid, plb_total_cents=plb_total,
                   forward_balance_cents=sum(a["amount_cents"] for a in record["adjustments"] if a["reason"] == "FB"),
-                  rows=_rows(record["claims"], ["".join(b) for b in blocks], record["adjustments"], tuples))
+                  rows=_rows(parts), balance_unverified=unverified)
     return record
 
 
