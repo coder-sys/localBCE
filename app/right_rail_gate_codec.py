@@ -487,10 +487,10 @@ def encode_decide_response(response: DecideResponse) -> bytes:
 
 
 # ------------------------------------------------- APPROVAL/v1 (hold-release S2)
-# A person's act and the moves it binds (r4.2 section 10).  Each move carries the
-# payment line it pays as a 64-byte digest field, like every gate digest, so no
-# other length can be written or decoded (Lean ``Gate.Approval``).  A digest
-# under the wrong domain is refused where admission recomputes it.
+# A person's act and the moves it binds (r4.2 section 10).  A move names the raw
+# payment line it pays and the writer digests it, so no other domain or length
+# can be written; Lean ``Gate.Approval`` decodes, and admission checks the stored
+# bytes against ``moves_digest`` without re-encoding (``admitMoves``).
 
 APPROVAL: Final = b"RR/APPROVAL/v1\x00"
 APPROVAL_MOVES: Final = b"RR/APPROVAL/MOVES/v1\x00"
@@ -505,7 +505,7 @@ class Move:
     claim_key: bytes
     payee_key: bytes
     cents: int
-    line_digest: bytes
+    line: bytes  # the raw payment line; a gate cell's is its ``encode_decide_request`` bytes
 
 
 @dataclass(frozen=True)
@@ -521,8 +521,13 @@ class Approval:
 
 
 def line_digest(raw: bytes) -> bytes:
-    """The one line digest; a gate cell's ``raw`` is its ``encode_decide_request`` bytes."""
+    """The one line digest (Lean ``lineDigest``)."""
     return sha3_512(APPROVAL_LINE + raw)
+
+
+def moves_digest(moves: tuple[Move, ...]) -> bytes:
+    """An approval's ``moves_digest``: SHA3-512 of the stored moves bytes (Lean ``admitMoves``)."""
+    return sha3_512(encode_moves(moves))
 
 
 def encode_moves(moves: tuple[Move, ...]) -> bytes:
@@ -537,7 +542,9 @@ def encode_moves(moves: tuple[Move, ...]) -> bytes:
         w.blob(m.claim_key, "claim_key")
         w.blob(m.payee_key, "payee_key")
         w.int(m.cents, 8, "cents", low=1)
-        w.digest(m.line_digest, "line_digest")
+        if type(m.line) is not bytes:
+            _fail("line")
+        w.out += line_digest(m.line)
     _sorted_unique([m.cell for m in moves], "moves")
     if len(w.out) > MAX_REQUEST_BYTES:
         _fail("size")

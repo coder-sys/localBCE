@@ -10,7 +10,7 @@ open BlindLedger.Gate
     has no encoding: the decoder reads exactly 64 bytes and the whole input must
     be consumed (`ApprovalLaws.decodeMoves_lineDigest`).  `lineDigest` is the one
     way to make one; a digest under another domain is refused where admission
-    recomputes it from the line.  Signatures and the roster are a later slice. -/
+    compares the moves with its dry run.  Signatures and the roster are a later slice. -/
 
 def dom (name : String) : Bytes := name.toUTF8.toList ++ [0]
 
@@ -81,6 +81,17 @@ def pApproval : P Approval := do
 
 def decodeMoves (b : Bytes) : Option (List Move) := parse pMoves maxRequestBytes b
 def decodeApproval (b : Bytes) : Option Approval := parse pApproval maxRequestBytes b
+
+/-- Admission's one check of an act's moves: the approval's `movesDigest` is `H`
+    of exactly the stored bytes, and those bytes decode.  It never re-encodes;
+    the caller compares the result with its dry run by value.  The writer's twin
+    is Python `moves_digest`. -/
+def admitMoves (H : Bytes → Bytes) (movesDigest stored : Bytes) : Option (List Move) :=
+  if H stored = movesDigest then decodeMoves stored else none
+
+/-! `encMove`, `encMoves` and `encApproval` state canonicity (`ApprovalLaws`) and
+    serve tests only.  Outside decoded values they collide (a 63-byte cell, a
+    2^16-byte key, cents ≥ 2^64), so nothing admits by them. -/
 
 def encMove (m : Move) : Bytes :=
   m.cell ++ identField m.paymentId ++ identField m.claimKey ++ identField m.payeeKey ++ natBE 8 m.cents ++

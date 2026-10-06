@@ -20,7 +20,7 @@ open BlindLedger.Gate Approval
     checkpoint lines, and tokens that decode, list the decoded fields they must
     yield; a response line
     names the decoded request it answers, and a `reissue` (`redecide`) line
-    checks `reissues` (`redecides`) on the latest revision and two tokens.  `moves` and `approval` lines
+    checks `reissues` (`redecides`) on the latest revision and two tokens.  `moves`, `admit-moves` and `approval` lines
     decode APPROVAL/v1 records (`tests/gate_vectors/approval_v1.vectors`).  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
     never a release path. -/
@@ -183,6 +183,8 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   | "moves" :: expect :: _ :: bytes :: rest => pure (x, some (← decoded expect renderMoves (decodeMoves (← hex bytes)) rest))
   | "approval" :: expect :: _ :: bytes :: rest =>
     pure (x, some (← decoded expect renderApproval (decodeApproval (← hex bytes)) rest))
+  | "admit-moves" :: expect :: _ :: d :: bytes :: rest =>
+    pure (x, some (← decoded expect renderMoves (admitMoves sha3 (← hex d) (← hex bytes)) rest))
   | ["line-digest", _, raw, out] => pure (x, some (lineDigest sha3 (← hex raw) == (← hex out)))
   | [kind, expect, _, latest, old, new] =>
     let f ← [("reissue", reissues), ("redecide", redecides)].lookup kind

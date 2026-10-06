@@ -41,7 +41,7 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS),
          "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS), "e0": (0, TENANT, SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
-           "decision-id", "input", "lines-root", "state", "moves", "approval", "line-digest")
+           "decision-id", "input", "lines-root", "state", "moves", "admit-moves", "approval", "line-digest")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
 PINS = tuple(bytes.fromhex(gate_rules_data.pin([f"snap {kind} 20270315 0 ?"])[0].split()[4])
              for kind in ("released", "unresolved"))
@@ -696,15 +696,20 @@ def build_approval_vectors() -> str:
     add = out.append
     raws = [gate.encode_decide_request(_request("FFS_CLAIM", n, _lines(n))) for n in range(3)]
     moves = tuple(gate.Move(cell, f"pay-{n:04d}".encode(), f"claim-{n}".encode(), f"payee-{n % 3}".encode(),
-                            125_000 + n, gate.line_digest(raws[n])) for n, cell in enumerate(sorted(D[7:10])))
+                            125_000 + n, raws[n]) for n, cell in enumerate(sorted(D[7:10])))
+
+    def fields(ms: tuple[gate.Move, ...]) -> str:
+        return " ".join(f"{h(m.cell)} {h(m.payment_id)} {h(m.claim_key)} {h(m.payee_key)} {m.cents} "
+                        f"{h(gate.line_digest(m.line))}" for m in ms)
+
     for n, raw in enumerate(raws):
-        add(f"line-digest l{n} {h(raw)} {h(moves[n].line_digest)}")
-    for name, ms in (("none", ()), ("one", moves[:1]), ("three", moves)):
-        fields = (f"{h(m.cell)} {h(m.payment_id)} {h(m.claim_key)} {h(m.payee_key)} {m.cents} {h(m.line_digest)}" for m in ms)
-        add(f"moves accept {name} {h(gate.encode_moves(ms))} {' '.join(fields)}".rstrip())
+        add(f"line-digest l{n} {h(raw)} {h(gate.line_digest(raw))}")
+    for name, ms in (("none", ()), ("one", moves[:1]), ("three", moves), ("cents-max", (replace(moves[0], cents=gate.MAX_NAT),))):
+        add(f"moves accept {name} {h(gate.encode_moves(ms))} {fields(ms)}".rstrip())
     one, three = gate.encode_moves(moves[:1]), gate.encode_moves(moves)
     body = [gate.encode_moves((m,))[len(gate.APPROVAL_MOVES) + 2 :] for m in moves]
     end, two = len(one), gate.APPROVAL_MOVES + b"\x00\x02"  # move 0 ends where `one` ends
+    key = len(gate.APPROVAL_MOVES) + 2 + 64  # move 0's payment_id field
     for name, data in (
         ("line-digest-32", one[:-32]),
         ("line-digest-65", one + b"\x5a"),
@@ -716,10 +721,16 @@ def build_approval_vectors() -> str:
         ("cell-repeated", two + body[0] + body[0]),
         ("count-too-high", two + body[0]),
         ("approval-domain", gate.APPROVAL + one[len(gate.APPROVAL_MOVES) :]),
+        ("cents-over-max", one[:-72] + (1 << 63).to_bytes(8, "big") + one[-64:]),
+        ("payment-id-empty", one[:key] + bytes(2) + one[key + 2 + len(moves[0].payment_id) :]),
     ):
         add(f"moves reject {name} {h(data)}")
+    digest = gate.moves_digest(moves)
+    add(f"admit-moves accept three {h(digest)} {h(three)} {fields(moves)}")
+    for name, d, data in (("other-moves", digest, one), ("undecodable", gate.sha3_512(three + b"\x00"), three + b"\x00")):
+        add(f"admit-moves reject {name} {h(d)} {h(data)}")
     for n, kind in enumerate(gate.KINDS):
-        a = gate.Approval(kind, D[11], bytes(range(n)), gate.sha3_512(three), f"owner-{n}", "dual", D[13], NOW + 600 * n)
+        a = gate.Approval(kind, D[11], bytes(range(n)), digest, f"owner-{n}", "dual", D[13], NOW + 600 * n)
         add(f"approval accept {kind.lower()} {h(gate.encode_approval(a))} {kind} {h(a.subject)} {h(a.arg) or '-'} "
             f"{h(a.moves_digest)} {a.owner_id} {a.mode} {h(a.pack_digest)} {a.not_after_s}")
     base = gate.encode_approval(gate.Approval("RELEASE", D[11], b"", D[12], "zz-owner", "dual", D[13], NOW))
@@ -730,6 +741,10 @@ def build_approval_vectors() -> str:
         ("trailing-byte", base + b"\x00"),
         ("truncated", base[:-1]),
         ("moves-domain", gate.APPROVAL_MOVES + base[at:]),
+        ("owner-empty", base.replace(b"\x00\x08zz-owner", bytes(2))),
+        ("mode-empty", base.replace(b"\x00\x04dual", bytes(2))),
+        ("mode-not-ident", base.replace(b"dual", b"-ual")),
+        ("not-after-over-max", base[:-8] + (1 << 63).to_bytes(8, "big")),
     ):
         add(f"approval reject {name} {h(data)}")
     add(f"end {sum(line.split(' ', 1)[0] in CHECKED for line in out)}")
@@ -747,12 +762,9 @@ class GoldenVectorTests(unittest.TestCase):
         self.assertEqual(build_v2_vectors(), V2_VECTORS.read_text("ascii"))
         self.assertEqual(build_approval_vectors(), APPROVAL_VECTORS.read_text("ascii"))
 
-    def test_python_writes_no_line_digest_of_another_length(self) -> None:
-        move = gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, D[8])
-        self.assertEqual(len(gate.encode_moves((move,))), len(gate.APPROVAL_MOVES) + 2 + 64 + 3 * 2 + 22 + 8 + 64)
-        for size in (0, 32, 63, 65):
-            with self.subTest(size), self.assertRaisesRegex(gate.GateCodecError, "^line_digest$"):
-                gate.encode_moves((replace(move, line_digest=bytes(size)),))
+    def test_python_digests_only_a_raw_line(self) -> None:
+        with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
+            gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, "raw"),))
 
     def test_lean_judges_every_golden_vector(self) -> None:
         for path in (VECTORS, V2_VECTORS, APPROVAL_VECTORS):
