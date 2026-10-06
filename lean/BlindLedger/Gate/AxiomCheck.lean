@@ -4,6 +4,7 @@ import BlindLedger.Gate.ProducerTheorems
 import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Gate.Rules.DecideLayer
+import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Sha3FastEq
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
@@ -244,3 +245,11 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.decide_run_fold
 /-- info: 'BlindLedger.Gate.loadAdds_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.loadAdds_binds
+/-- info: 'BlindLedger.Gate.Approval.decodeMoves_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeMoves_canonical
+/-- info: 'BlindLedger.Gate.Approval.decodeMoves_lineDigest' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeMoves_lineDigest
+/-- info: 'BlindLedger.Gate.Approval.decodeMoves_ascending' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeMoves_ascending
+/-- info: 'BlindLedger.Gate.Approval.decodeApproval_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeApproval_canonical

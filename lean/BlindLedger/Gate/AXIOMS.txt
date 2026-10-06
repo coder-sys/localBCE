@@ -115,3 +115,7 @@
 'BlindLedger.Gate.decide_ok' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.decide_run_fold' depends on axioms: [propext, Quot.sound]
 'BlindLedger.Gate.loadAdds_binds' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.Approval.decodeMoves_canonical' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Approval.decodeMoves_lineDigest' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Approval.decodeMoves_ascending' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Approval.decodeApproval_canonical' depends on axioms: [propext, Quot.sound]
