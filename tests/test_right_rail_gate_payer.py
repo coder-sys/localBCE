@@ -10,6 +10,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import threading
 import unittest
 
 from app import right_rail_gate_codec as gate
@@ -105,6 +106,88 @@ class PayerTests(fx.Scratch):
             self.assertEqual(store.release(other, gate.encode_token(tokens[1]), now=fx.NOW), "payment")
             self.assertEqual(store.holds(), [(request.payment_id, "pin"), (request.payment_id, "released"),
                                              (other.payment_id, "payment")])
+
+    def _ready(self, tmp: str) -> tuple[gate.DecideRequest, bytes]:
+        """A stored checkpoint and payment 0 sent, in a closed store: the request and its token."""
+        handle, root_pk, cert = fx.custody(tmp)
+        store = self._store(tmp)
+        store.install_cert(cert)
+        checkpoint, tokens = fx.build(fx.batch_leaves(0, 2))
+        header = gate.encode_checkpoint_header(checkpoint)
+        store.store_checkpoint(gate.attach_signature(header, signer.seal(handle, root_pk, cert, None, header,
+                                                                         [gate.encode_token(t) for t in tokens])))
+        request = fx.payment_request(0)
+        store.send(request, transmit=lambda data: None)
+        store.close()
+        return request, gate.encode_token(tokens[0])
+
+    def _raw(self, tmp: str, *statements: str) -> None:
+        with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as db:
+            for statement in statements:
+                db.execute(statement)
+
+    def test_two_connections_release_one_key_once(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            barrier, outcomes = threading.Barrier(2), []
+
+            def run() -> None:
+                store = payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]},
+                                         grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),))
+                barrier.wait()
+                outcomes.append(store.release(request, token, now=fx.NOW))
+                store.close()  # a connection closes in its own thread
+
+            threads = [threading.Thread(target=run) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(sorted(outcomes, key=str), [None, "released"])  # the loser sees the winner's row under the lock
+            with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3")) as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM releases").fetchone()[0], 1)
+                self.assertEqual(db.execute("SELECT count(*) FROM closed WHERE outcome='RELEASED'").fetchone()[0], 1)
+
+    def test_a_closed_key_is_already_closed_and_writes_nothing_per_program(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            # a closed key of the same payment_id under another program does not close this one (R4.1-13)
+            self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','other-program','{request.payment_id}','DENIED','x',1)")
+            store = self._store(tmp)
+            # the same key already closed (a DENIED, so no releases row): the PK hit is caught, nothing is written
+            self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','{request.program_id}','{request.payment_id}','DENIED','x',1)")
+            self.assertEqual(store.release(request, token, now=fx.NOW), "already_closed")
+            self.assertEqual((store.holds(), store._db.execute("SELECT count(*) FROM releases").fetchone()[0]), ([], 0))
+            self.assertEqual(store._db.execute("SELECT count(*) FROM closed").fetchone()[0], 2)
+            self.assertEqual(store.release(request, token, now=fx.NOW), "already_closed")  # the connection stays usable
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','other-program','{request.payment_id}','DENIED','x',1)")
+            self.assertIsNone(self._store(tmp).release(request, token, now=fx.NOW))
+
+    def test_an_integrity_error_on_releases_rolls_back_closed_and_fails_loudly(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            self._raw(tmp, "CREATE TRIGGER boom BEFORE INSERT ON releases BEGIN SELECT RAISE(ABORT, 'boom'); END")
+            store = self._store(tmp)
+            with self.assertRaises(sqlite3.IntegrityError):
+                store.release(request, token, now=fx.NOW)
+            self.assertEqual([store._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("closed", "releases", "holds")],
+                             [0, 0, 0])
+            self._raw(tmp, "DROP TRIGGER boom")
+            self.assertIsNone(store.release(request, token, now=fx.NOW))  # the connection is usable and the key still free
+
+    def test_closed_is_migrated_from_releases_without_loss_and_idempotently(self) -> None:
+        with self.scratch() as tmp:
+            self._store(tmp).close()
+            self._raw(tmp, "DROP TABLE closed", *(
+                f"INSERT INTO releases VALUES('t{n % 2}','p{n}','pay-{n}',x'00','payee',{n},'2026-09',{100 + n})" for n in range(5)))
+            for _ in range(2):  # the second open changes nothing
+                store = self._store(tmp)
+                self.assertEqual(store._db.execute("SELECT tenant, program, payment_id, outcome, ref, closed_at FROM closed "
+                                                   "ORDER BY closed_at").fetchall(),
+                                 [(f"t{n % 2}", f"p{n}", f"pay-{n}", "RELEASED", "payee", 100 + n) for n in range(5)])
+                store.close()
 
     def test_a_second_genesis_is_recorded_as_a_fork(self) -> None:
         with self.scratch() as tmp:

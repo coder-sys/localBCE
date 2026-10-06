@@ -29,6 +29,8 @@ _TABLES: Final = {
     "forks": "id INTEGER PRIMARY KEY, stored BLOB NOT NULL, forking BLOB NOT NULL",
     "releases": "tenant TEXT, program TEXT, payment_id TEXT, token BLOB NOT NULL, payee_ref TEXT NOT NULL, "
                 "amount_cents INTEGER NOT NULL, period TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(tenant, program, payment_id)",
+    "closed": "tenant TEXT, program TEXT, payment_id TEXT, outcome TEXT NOT NULL CHECK(outcome IN ('RELEASED','DENIED')), "
+              "ref TEXT NOT NULL, closed_at INTEGER NOT NULL, PRIMARY KEY(tenant, program, payment_id)",
     "holds": "id INTEGER PRIMARY KEY, payment_id TEXT NOT NULL, token BLOB NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL",
 }
 _SCHEMA: Final = "".join(
@@ -72,6 +74,8 @@ class PayerStore:
         self._db = sqlite3.connect(path, isolation_level=None)
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)
+        # Idempotent on every open: a store from before ``closed`` keeps every release as a closed key.
+        self._db.execute("INSERT OR IGNORE INTO closed SELECT tenant, program, payment_id, 'RELEASED', payee_ref, at FROM releases")
 
     @contextlib.contextmanager
     def _tx(self) -> Iterator[None]:
@@ -180,9 +184,15 @@ class PayerStore:
         return its reason.  Both signatures are re-verified here, at every release."""
         if not 0 <= now <= gate.MAX_NAT:  # the frame's u64 and the store's INTEGER both hold it
             raise GatePayerError("now_out_of_range")
-        reason =self._decide(request, token, now)
-        with self._tx():
+        with self._tx():  # the whole decision under one write lock: no read-then-write window
+            reason = self._decide(request, token, now)
             if reason is None:
+                try:  # the used-set's primary key is the only guard against a second release of this key
+                    self._db.execute("INSERT INTO closed VALUES(?,?,?,'RELEASED',?,?)", (
+                        request.tenant_id, request.program_id, request.payment_id, request.payee_ref, now))
+                except sqlite3.IntegrityError:
+                    return "already_closed"  # nothing written; the empty transaction commits
+                # An IntegrityError here means closed and releases disagree: it propagates, the transaction rolls back.
                 self._db.execute("INSERT INTO releases VALUES(?,?,?,?,?,?,?,?)", (
                     request.tenant_id, request.program_id, request.payment_id, token, request.payee_ref,
                     request.amount_cents, request.period, now))
