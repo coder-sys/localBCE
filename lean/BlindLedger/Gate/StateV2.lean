@@ -1759,10 +1759,104 @@ theorem stale_released_iff (c₀ : Ctx) (rel unr : Snapshot Line) (hc : rel.coun
   show (!chained c₀.today rel (some rel)) = _
   rw [chained_self, hc]; simp [hv]
 
+/-- `ids_disjoint` (Rules/Theorems.lean:516) with the registry's foreign ids. -/
+private theorem sv_ids_disjoint_in {c : Ctx} {f : List Nat} {b : List Line}
+    (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet c, x.id ≠ y.id) :
+    ∀ x ∈ (decideBatchIn c f b).released.entries, ∀ y ∈ (decideBatchIn c f b).unresolved.entries,
+      x.id ≠ y.id := by
+  intro x hx y hy hxy
+  rcases List.mem_append.mp hx with hx | hx <;> rcases List.mem_append.mp hy with hy | hy
+  · exact h x hx y hy hxy
+  · obtain ⟨dy, hdy, rfl⟩ := List.mem_map.mp hy
+    obtain ⟨hdy, hay⟩ := List.mem_filter.mp hdy
+    have fy : dy.outcome ≠ .ALLOW ∧ Reason.ALREADY_DECIDED ∉ dy.reasons ∧ own c dy.line = false := by
+      simp at hay; exact and_assoc.mp hay
+    obtain ⟨seen, he, hs⟩ := seen_all_in (c := c) (f := f) (b := b) hdy fy.2.2
+    apply fy.2.1
+    rw [he]
+    exact mem_decideLine.mpr (Or.inl (hs x hx _ (by
+      rw [show idKey dy.line = idKey x by simp [idKey, hxy]]; exact idKey_mem)))
+  · obtain ⟨dx, hdx, rfl⟩ := List.mem_map.mp (List.mem_filter.mp hx).1
+    obtain ⟨hdx, hax⟩ := List.mem_filter.mp hdx
+    have hdx' : dx ∈ decideAll c (idSeen f ++ seen0 c b) (order c b) := hdx
+    obtain ⟨pre, l, rfl⟩ := mem_decideAll hdx'
+    have hk := ((allow_facts (by simpa using hax)).2 (idKey l) idKey_mem).2
+    have hxy : l.id = y.id := hxy
+    exact hk (List.mem_flatMap.mpr ⟨y, hy, by
+      rw [show idKey l = idKey y by simp [idKey, hxy]]; exact idKey_claim⟩)
+  · obtain ⟨dx, hdx, rfl⟩ := List.mem_map.mp (List.mem_filter.mp hx).1
+    obtain ⟨hdx, hax⟩ := List.mem_filter.mp hdx
+    obtain ⟨dy, hdy, rfl⟩ := List.mem_map.mp hy
+    obtain ⟨hdy, hay⟩ := List.mem_filter.mp hdy
+    have hdx' : dx ∈ decideAll c (idSeen f ++ seen0 c b) (order c b) := hdx
+    have hdy' : dy ∈ decideAll c (idSeen f ++ seen0 c b) (order c b) := hdy
+    have hax : dx.outcome = .ALLOW := by simpa using hax
+    have hay : dy.outcome ≠ .ALLOW ∧ Reason.ALREADY_DECIDED ∉ dy.reasons ∧ own c dy.line = false := by
+      simp at hay; exact and_assoc.mp hay
+    exact fresh_ids c hdx' hdy' (fun e => hay.1 (e ▸ hax)) (by rw [allow_nil hdx' hax]; simp) hay.2.1 hxy
+
+/-- Two decisions of one run, neither `ALREADY_DECIDED`, have distinct line ids (positions, not values). -/
+private theorem sv_fresh_pairwise (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
+    (decideAll c seen ls).Pairwise fun a d =>
+      Reason.ALREADY_DECIDED ∉ a.reasons → Reason.ALREADY_DECIDED ∉ d.reasons → a.line.id ≠ d.line.id
+  | _, [] => List.Pairwise.nil
+  | seen, l :: ls => by
+    refine List.Pairwise.cons (fun e he _ fe hid => ?_) (sv_fresh_pairwise c (claim c l ++ seen) ls)
+    have hid' : l.id = e.line.id := hid
+    exact (fresh_unseen he fe).1 (List.mem_append_left _ (by
+      rw [show idKey e.line = idKey l by simp [idKey, hid']]; exact idKey_claim))
+
+private theorem sv_unr_fresh {c : Ctx} {d : Decision}
+    (hq : (d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !own c d.line) = true) :
+    Reason.ALREADY_DECIDED ∉ d.reasons := fun hm => by
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at hq
+  rw [List.contains_iff_mem.mpr hm] at hq
+  cases hq.1.2
+
+/-- `released_nodup` (Rules/Shards.lean:131) for the unresolved set. -/
+private theorem sv_unresolved_nodup_in {c : Ctx} {f : List Nat} {b : List Line}
+    (hn : ((unresolvedSet c).map (·.id)).Nodup) :
+    (((decideBatchIn c f b).unresolved.entries).map (·.id)).Nodup := by
+  change ((unresolvedSet c ++ unresolvedLines c (decideAll c (idSeen f ++ seen0 c b) (order c b))).map
+    (·.id)).Nodup
+  rw [List.map_append, List.nodup_append]
+  refine ⟨hn, ?_, ?_⟩
+  · unfold unresolvedLines List.Nodup
+    rw [List.map_map, List.pairwise_map, List.pairwise_filter]
+    exact (sv_fresh_pairwise c (idSeen f ++ seen0 c b) (order c b)).imp
+      fun {_ _} h ha hd => h (sv_unr_fresh ha) (sv_unr_fresh hd)
+  · intro i hi j hj hij
+    obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hi
+    obtain ⟨z, hz, rfl⟩ := List.mem_map.mp hj
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hz
+    obtain ⟨hd, hq⟩ := List.mem_filter.mp hd
+    exact (fresh_unseen hd (sv_unr_fresh hq)).2 (List.mem_flatMap.mpr ⟨y, hy, by
+      rw [show idKey d.line = idKey y by simp [idKey, hij]]; exact idKey_claim⟩)
+
+/-- `Inv` survives one `decideReg` batch on the carried sets (dates aside). -/
+private theorem sv_inv_reg (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line)
+    (hi : Inv rel unr) :
+    Inv (decideReg (carried c₀ rel unr) k os b).released (decideReg (carried c₀ rel unr) k os b).unresolved := by
+  obtain ⟨-, -, n1, n2⟩ := decideReg_carried_asOf c₀ k os b rel unr
+  have h := hi.1
+  rw [List.map_append, List.nodup_append] at h
+  obtain ⟨hr, hu, hd⟩ := h
+  refine ⟨?_, n1, n2⟩
+  rw [List.map_append, List.nodup_append]
+  refine ⟨released_nodup (f := foreignOf k os (ready k os b)) (b := ready k os b)
+      (by rw [sv_released_carried]; exact hr),
+    sv_unresolved_nodup_in (by rw [sv_unresolved_carried]; exact hu), ?_⟩
+  intro i hi' j hj hij
+  obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hi'
+  obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hj
+  refine sv_ids_disjoint_in (f := foreignOf k os (ready k os b)) (b := ready k os b) ?_ x hx y hy hij
+  rw [sv_released_carried, sv_unresolved_carried]
+  exact fun x hx y hy => hd _ (List.mem_map_of_mem hx) _ (List.mem_map_of_mem hy)
+
 theorem inv_step (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line)
     (hi : Inv rel unr) :
     let r := decideRegT (carried c₀ rel unr) k os b
-    Inv r.released r.unresolved := sorry
+    Inv r.released r.unresolved := sv_inv_reg c₀ k os b rel unr hi
 
 
 /-! ## 6. STATE/v2 head and digest (H-d, M-a) -/
@@ -2631,8 +2725,15 @@ theorem invB_iff (rel unr : Snapshot Line) : invB rel unr = true ↔ Inv rel unr
 
 /-- NEW (fix 5): every reachable v1 state passes `invB`, so the quarantine is unreachable without a collision.
     Route: Rules/Shards.lean:120,132 and `inv_step` (the dates do not enter `Inv`). -/
+private theorem sv_shardSets_inv (k : Nat) :
+    ∀ (g : Snapshot Line × Snapshot Line) (ts : List Batch), Inv g.1 g.2 →
+      Inv (shardSets k g ts).1 (shardSets k g ts).2
+  | _, [], h => h
+  | g, t :: ts, h => sv_shardSets_inv k _ ts (sv_inv_reg t.ctx k t.owners t.lines g.1 g.2 h)
+
 theorem v1_reach_inv (k : Nat) (ts : List Batch) :
-    Inv (shardSets k (genesisSets 0) ts).1 (shardSets k (genesisSets 0) ts).2 := sorry
+    Inv (shardSets k (genesisSets 0) ts).1 (shardSets k (genesisSets 0) ts).2 :=
+  sv_shardSets_inv k _ ts ⟨List.nodup_nil, rfl, rfl⟩
 
 
 /-- A shard's activation sets. `tip = none`: genesis; `some (signed, cert)`: the sealed v1 tip and its cert. -/
