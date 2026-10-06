@@ -2,7 +2,8 @@
 
 Evidence only: this module reads bytes and returns a record. It calls no owner and makes no determination. Anything outside
 the subset (another segment, an unmodeled element, a production ISA15, a second transaction) is refused, never dropped.
-Money is exact integer cents; the file must balance: BPR02 = sum(CLP04) - sum(PLB amounts). PLB adjustments are kept whole,
+Money is exact integer cents; every level must balance: SVC02 - line CAS = SVC03, CLP03 - claim and service CAS = CLP04, and
+BPR02 = sum(CLP04) - sum(PLB amounts). PLB adjustments are kept whole,
 each with its reason code and reference, and `forward_balance_cents` totals the ones coded FB (sign as on the wire).
 """
 
@@ -88,6 +89,10 @@ class Remittance:
     interchange_control: str
     group_control: str
     set_control: str
+    interchange_sender: str  # ISA06, padding removed
+    interchange_receiver: str  # ISA08, padding removed
+    group_sender: str  # GS02
+    group_receiver: str  # GS03
     handling: str
     total_cents: int
     credit_debit: str
@@ -211,6 +216,11 @@ def _level(cursor: _Cursor) -> tuple[tuple[Cas, ...], tuple[Dtm, ...]]:
     return (tuple(a for s in segments if s.tag == "CAS" for a in _cas(s)), tuple(_dtm(s) for s in segments if s.tag == "DTM"))
 
 
+def _balance(charge: int, paid: int, adjustments: tuple[Cas, ...]) -> None:
+    if charge - sum(a.amount_cents for a in adjustments) != paid:
+        refuse("835:claim-balance")
+
+
 def _service(cursor: _Cursor) -> Service:
     seg = cursor.next("SVC")
     seg.blank(6)
@@ -218,7 +228,9 @@ def _service(cursor: _Cursor) -> Service:
     if len(parts) != 2 or not _CODE.fullmatch(parts[0]) or not _TEXT.fullmatch(parts[1]):
         refuse("835:field")
     fields = (parts[0], parts[1], cents(seg.value(2)), cents(seg.value(3)), _text(seg, 4, _CODE, True), _quantity(seg.value(5)))
-    return Service(*fields, *_level(cursor))
+    service = Service(*fields, *_level(cursor))
+    _balance(service.charge_cents, service.paid_cents, service.adjustments)
+    return service
 
 
 def _claim(cursor: _Cursor) -> Claim:
@@ -230,6 +242,7 @@ def _claim(cursor: _Cursor) -> Claim:
     services = []
     while cursor.peek() == "SVC":
         services.append(_service(cursor))
+    _balance(fields[2], fields[3], adjustments + tuple(a for s in services for a in s.adjustments))
     return Claim(*fields, adjustments, dates, tuple(services))
 
 
@@ -269,6 +282,7 @@ def parse_835(data: bytes) -> Remittance:
     plb_total = sum(a.amount_cents for a in adjustments)
     if total != claims_paid - plb_total:
         refuse("835:balance")
-    return Remittance(interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), *head, dates, payer, payee,
+    return Remittance(interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), interchange.isa.value(6).rstrip(" "),
+                      interchange.isa.value(8).rstrip(" "), group.gs.value(2), group.gs.value(3), *head, dates, payer, payee,
                       tuple(claims), adjustments, claims_paid, plb_total,
                       sum(a.amount_cents for a in adjustments if a.reason == "FB"))

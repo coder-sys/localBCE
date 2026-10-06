@@ -8,6 +8,7 @@ truncated bytes, each segment (charset, tag, element, length, repeat and compone
 from __future__ import annotations
 
 from dataclasses import dataclass
+import datetime
 import re
 import string
 from typing import NoReturn
@@ -34,6 +35,9 @@ _SEPARATORS = frozenset(string.punctuation)
 _PRINTABLE = re.compile(r"[ -~]*")
 _TAG = re.compile(r"[A-Z][A-Z0-9]{1,2}")
 _CONTROL = re.compile(r"[0-9]{1,9}")
+_ID = re.compile(r"[A-Za-z0-9._,&'/-]+(?: +[A-Za-z0-9._,&'/-]+)*")  # an ISA06/ISA08/GS02/GS03 id, padding removed first
+_ID_QUALIFIERS = frozenset(("01", "14", "20", "27", "28", "29", "30", "33", "ZZ"))
+_TIME = re.compile(r"(?:[01][0-9]|2[0-3])[0-5][0-9](?:[0-5][0-9][0-9]{0,2})?")  # HHMM, HHMMSS, HHMMSSD or HHMMSSDD
 _EMPTY = (("",),)
 
 Element = tuple[tuple[str, ...], ...]  # repeats, each a tuple of components
@@ -98,6 +102,27 @@ def _segment(text: str, esep: str, rsep: str, csep: str) -> Segment:
     return Segment(tag, tuple(elements))
 
 
+def _real_date(year: int, text: str) -> bool:
+    try:
+        return 1900 <= datetime.date(year, int(text[:2]), int(text[2:])).year <= 2199
+    except ValueError:
+        return False
+
+
+def _isa_valid(f: list[str]) -> bool:
+    """ISA01-ISA10: qualifier code sets, a blank ISA02/ISA04 under qualifier 00, padded ids, a real YYMMDD date and an HHMM time."""
+    return (f[0] in ("00", "03") and f[2] in ("00", "01") and f[4] in _ID_QUALIFIERS and f[6] in _ID_QUALIFIERS
+            and all(_PRINTABLE.fullmatch(f[i]) for i in (1, 3)) and (f[1] == " " * 10 or f[0] != "00") and (f[3] == " " * 10 or f[2] != "00")
+            and all(_ID.fullmatch(f[i].rstrip(" ")) for i in (5, 7)) and re.fullmatch("[0-9]{6}", f[8]) is not None
+            and _real_date(2000 + int(f[8][:2]), f[8][2:]) and len(f[9]) == 4 and _TIME.fullmatch(f[9]) is not None)
+
+
+def _group_valid(sender: str, receiver: str, day: str, time: str, agency: str) -> bool:
+    """GS02-GS05 and GS07: 2-15 character ids, a real CCYYMMDD date, a time, and agency code X."""
+    return (all(_ID.fullmatch(v) and 2 <= len(v) <= 15 for v in (sender, receiver)) and re.fullmatch("[0-9]{8}", day) is not None
+            and _real_date(int(day[:4]), day[4:]) and _TIME.fullmatch(time) is not None and agency == "X")
+
+
 def _match(close: Segment, opened: Segment, close_at: int, open_at: int, count: int) -> None:
     close.blank(3)
     control = opened.value(open_at)
@@ -130,6 +155,8 @@ def tokenize(data: bytes) -> Interchange:
         refuse("x12:version")
     if not fields[12].isdecimal() or fields[13] not in ("0", "1") or fields[14] not in ("P", "T"):
         refuse("x12:isa")
+    if not _isa_valid(fields):
+        refuse("x12:isa")
     isa = Segment("ISA", tuple(((field,),) for field in fields))
     if text.count(term, 106) > MAX_SEGMENTS:  # counted before splitting
         refuse("x12:cap-segments")
@@ -151,6 +178,8 @@ def tokenize(data: bytes) -> Interchange:
             if gs is not None:
                 refuse("x12:envelope")
             seg.blank(9)
+            if not _group_valid(*(seg.value(i) for i in (2, 3, 4, 5, 7))):
+                refuse("x12:envelope")
             gs, sets = seg, []
         elif seg.tag == "ST":
             if gs is None or txn is not None:

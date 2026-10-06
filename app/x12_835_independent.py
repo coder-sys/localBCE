@@ -9,8 +9,7 @@ on every input: the same record, or a refusal. Envelope-level (x12:) codes match
 from __future__ import annotations
 
 import dataclasses
-from decimal import Decimal
-import json
+from decimal import Context, Decimal
 import re
 from datetime import datetime
 from typing import NoReturn
@@ -33,6 +32,8 @@ _MONEY = re.compile(r"-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,2})?")
 _QTY = re.compile(r"-?(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,4})?")
 _TEXT = re.compile(r"(?=.{1,60}$)[A-Za-z0-9._,&'/-]+(?: +[A-Za-z0-9._,&'/-]+)*")
 _CODE = re.compile(r"[A-Z0-9]{1,5}")
+_QUALIFIERS = frozenset("01 14 20 27 28 29 30 33 ZZ".split())
+_CONTEXT = Context(prec=28)  # never the ambient decimal context
 
 
 class _Seg:
@@ -100,22 +101,37 @@ def _check(close: _Seg, opened: _Seg, close_at: int, open_at: int, n: int) -> No
 def _cents(text: str) -> int:
     if not _MONEY.fullmatch(text):
         _no("835:amount")
-    d = Decimal(text)
+    d = _CONTEXT.create_decimal(text)
     if text[0] == "-" and d == 0:
         _no("835:amount")
-    return int(d.scaleb(2))
+    return int(_CONTEXT.scaleb(d, 2))
+
+
+def _when(text: str, digits: int = 8, fmt: str = "%Y%m%d") -> datetime | None:
+    if re.fullmatch("[0-9]{%d}" % digits, text):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    return None
 
 
 def _iso(text: str) -> str:
-    when = None
-    if re.fullmatch("[0-9]{8}", text):
-        try:
-            when = datetime.strptime(text, "%Y%m%d")
-        except ValueError:
-            pass
+    when = _when(text)
     if when is None or not 1900 <= when.year <= 2199:
         _no("835:date")
     return when.strftime("%Y-%m-%d")
+
+
+def _clock(text: str) -> bool:
+    return re.fullmatch("[0-9]{4}(?:[0-9]{2}(?:[0-9]{1,2})?)?", text) is not None and int(text[:2]) < 24 and int(text[2:4]) < 60 and int(text[4:6] or 0) < 60
+
+
+def _isa_ok(f: tuple[str, ...]) -> bool:
+    quiet = (f[0] != "00" or f[1] == " " * 10) and (f[2] != "00" or f[3] == " " * 10)
+    return (f[0] in ("00", "03") and f[2] in ("00", "01") and quiet and f[4] in _QUALIFIERS and f[6] in _QUALIFIERS
+            and all(re.fullmatch("[ -~]*", f[i]) for i in (1, 3)) and all(_TEXT.fullmatch(f[i].rstrip(" ")) for i in (5, 7))
+            and _when(f[8], 6, "%y%m%d") is not None and len(f[9]) == 4 and _clock(f[9]))
 
 
 def _qty(text: str) -> str:
@@ -183,7 +199,7 @@ def rederive_835(data: bytes) -> dict:
         _no("x12:separator")
     if f[11] != "00501":
         _no("x12:version")
-    if not re.fullmatch("[0-9]{9}", f[12]) or f[13] not in "01" or f[14] not in "PT":
+    if not re.fullmatch("[0-9]{9}", f[12]) or f[13] not in "01" or f[14] not in "PT" or not _isa_ok(f):
         _no("x12:isa")
     if text.count(t, 106) > 5000:
         _no("x12:cap-segments")
@@ -203,6 +219,11 @@ def rederive_835(data: bytes) -> dict:
         if gs.tag != "GS":
             _no("x12:envelope")
         gs.blank(9)
+        sender, receiver, day, clock, agency = (gs.val(k) for k in (2, 3, 4, 5, 7))
+        when = _when(day)
+        if not (all(_TEXT.fullmatch(v) and 1 < len(v) < 16 for v in (sender, receiver))
+                and when and 1900 <= when.year <= 2199 and _clock(clock) and agency == "X"):
+            _no("x12:envelope")
         while i < len(mid) and mid[i].tag == "ST":
             mid[i].blank(4)
             if mid[i].val(3) not in ("", gs.val(8)):
@@ -248,6 +269,8 @@ def rederive_835(data: bytes) -> dict:
     if total < 0:
         _no("835:amount")
     record = {"interchange_control": f[12], "group_control": gs.val(6), "set_control": st.val(2),
+              "interchange_sender": f[5].rstrip(" "), "interchange_receiver": f[7].rstrip(" "),
+              "group_sender": gs.val(2), "group_receiver": gs.val(3),
               "handling": bpr.text(1, _CODE), "total_cents": total, "credit_debit": bpr.text(3, re.compile("C")),
               "method": bpr.text(4, _CODE), "format": bpr.text(5, _CODE), "effective_date": _iso(bpr.val(16)),
               "trace": trn.text(2), "trace_origin": trn.text(3), "dates": [], "payer": None, "payee": None, "claims": [], "adjustments": []}
@@ -279,6 +302,10 @@ def rederive_835(data: bytes) -> dict:
             record["adjustments"].extend(_plb(s))
         if s.tag == "N1" and len(parties) == 2:
             record["payer"], record["payee"] = parties
+    for c in record["claims"]:
+        lines = [c, *c["services"]]
+        if any(x["charge_cents"] - sum(a["amount_cents"] for a in x["adjustments"]) != x["paid_cents"] for x in lines[1:]) or                 c["charge_cents"] - sum(a["amount_cents"] for x in lines for a in x["adjustments"]) != c["paid_cents"]:
+            _no("835:claim-balance")
     claims_paid = sum(c["paid_cents"] for c in record["claims"])
     plb_total = sum(a["amount_cents"] for a in record["adjustments"])
     if total != claims_paid - plb_total:
@@ -288,9 +315,18 @@ def rederive_835(data: bytes) -> dict:
     return record
 
 
+def _same(stored: object, derived: object) -> bool:
+    """Exact types: a frozen dataclass where the derivation has a dict, a tuple where it has a list, int (never bool or float), str."""
+    if type(derived) is dict:
+        return (dataclasses.is_dataclass(stored) and not isinstance(stored, type) and stored.__dataclass_params__.frozen
+                and {f.name for f in dataclasses.fields(stored)} == derived.keys()
+                and all(_same(getattr(stored, k), v) for k, v in derived.items()))
+    if type(derived) is list:
+        return type(stored) is tuple and len(stored) == len(derived) and all(map(_same, stored, derived))
+    return type(stored) is type(derived) and stored == derived
+
+
 def verify_835(data: bytes, record: object) -> None:
     """Raise unless `record` (the intake's frozen record) equals the independent re-derivation of `data`."""
-    if not dataclasses.is_dataclass(record) or isinstance(record, type):
-        _no("835:disagree")
-    if json.loads(json.dumps(dataclasses.asdict(record))) != rederive_835(data):
+    if not _same(record, rederive_835(data)):
         _no("835:disagree")

@@ -3,6 +3,7 @@ and agreement of the independent re-derivation on every fixture. Fixtures are fi
 
 import ast
 import dataclasses
+import decimal
 import json
 import random
 import re
@@ -17,8 +18,8 @@ from app.x12_tokenizer import MAX_BYTES, X12Error, tokenize
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDER = "1234567890"  # fictional NPI shape; the Luhn test below proves it cannot be a real one
 CLAIMS = [
-    "CLP*CLAIMA001*1*500.00*400.00*100.00*MC*PAYERCTL001*11*1", "CAS*PR*1*100.00", "DTM*232*20261001",
-    "SVC*HC:99213*500.00*400.00**1", "CAS*PR*1*100.00", "DTM*472*20261001",
+    "CLP*CLAIMA001*1*500.00*400.00*100.00*MC*PAYERCTL001*11*1", "CAS*PR*1*50.00", "DTM*232*20261001",
+    "SVC*HC:99213*500.00*450.00**1", "CAS*PR*3*50.00", "DTM*472*20261001",
     "CLP*CLAIMB002*1*900.00*850.50*49.50*MC*PAYERCTL002*11*1", "CAS*PR*2*49.50*1",
 ]
 PLB = f"PLB*{PROVIDER}*20261231*FB:CARRY0001*100.00*WO:WRITEOFF2*25.50"
@@ -50,10 +51,13 @@ GOOD = build(remit("1250.50", *CLAIMS))
 WITH_PLB = build(remit("1125.00", *CLAIMS, PLB))
 NEGATIVE_PLB = build(remit("1550.50", *CLAIMS, f"PLB*{PROVIDER}*20261231*FB:CARRY0001*-300.00"))
 EMPTY = build(remit("0.00"))
-EDGE = build(remit("0.01", "CLP*EDGE0001*1*999999999999.99*0.01*0.00*MC*PAYERCTL003", "SVC*HC:J0001*0.00*0.01"))
+EDGE = build(remit("0.01", "CLP*EDGE0001*1*999999999999.99*0.01*0.00*MC*PAYERCTL003", "CAS*CO*45*999999999999.98",
+                                "SVC*HC:J0001*0.01*0.01"))
+BALANCED = build(remit("350.00", "CLP*MULTI001*1*300.00*200.00*0.00*MC*P1", "SVC*HC:A0001*100.00*100.00", "SVC*HC:A0002*200.00*100.00", "CAS*CO*45*100.00",
+                       "CLP*MULTI002*1*100.00*150.00*0.00*MC*P2", "CAS*CO*45*-50.00"))
 FIXTURES = {"good": GOOD, "plb": WITH_PLB, "negative-plb": NEGATIVE_PLB, "empty": EMPTY, "edge": EDGE,
             "separators": GOOD.decode().translate(str.maketrans("*^:~", "|!;$")).encode(),
-            "two-plb-segments": build(remit("1100.00", *CLAIMS, PLB, f"PLB*{PROVIDER}*20261231*CS*25.00"))}
+            "balanced-multi": BALANCED, "two-plb-segments": build(remit("1100.00", *CLAIMS, PLB, f"PLB*{PROVIDER}*20261231*CS*25.00"))}
 
 
 def edit(data, old, new):
@@ -104,13 +108,15 @@ class Intake(unittest.TestCase):
         record, _ = self.both(GOOD)
         self.assertIsInstance(record, Remittance)
         self.assertEqual((record.interchange_control, record.group_control, record.set_control), ("000000905", "1", "0001"))
+        self.assertEqual((record.interchange_sender, record.interchange_receiver, record.group_sender, record.group_receiver),
+                         ("SYNTHPAYER", "SYNTHPROVIDER", "SYNTHPAYER01", "SYNTHPROVIDER"))
         self.assertEqual((record.total_cents, record.claims_paid_cents, record.plb_total_cents, record.forward_balance_cents),
                          (125050, 125050, 0, 0))
         self.assertEqual((record.effective_date, record.trace, record.dates), ("2026-10-05", "TRACE0001", (Dtm("405", "2026-10-03"),)))
         self.assertEqual((record.payer.name, record.payee.id), ("SYNTH STATE MEDICAID PROGRAM", PROVIDER))
         first, second = record.claims
-        self.assertEqual((first.paid_cents, first.adjustments, first.dates), (40000, (Cas("PR", "1", 10000, ""),), (Dtm("232", "2026-10-01"),)))
-        self.assertEqual((first.services[0].code, first.services[0].paid_cents, first.services[0].units), ("99213", 40000, "1"))
+        self.assertEqual((first.paid_cents, first.adjustments, first.dates), (40000, (Cas("PR", "1", 5000, ""),), (Dtm("232", "2026-10-01"),)))
+        self.assertEqual((first.services[0].code, first.services[0].paid_cents, first.services[0].units), ("99213", 45000, "1"))
         self.assertEqual((second.paid_cents, second.adjustments[0].quantity, second.services), (85050, "1", ()))
         with self.assertRaises(dataclasses.FrozenInstanceError):
             record.total_cents = 1
@@ -148,9 +154,50 @@ class Intake(unittest.TestCase):
     def test_totals_must_balance(self):
         for name, data in (("claims", edit(GOOD, "*1250.50*C*", "*1250.51*C*")), ("plb-ignored", edit(WITH_PLB, "*1125.00*C*", "*1250.50*C*")),
                            ("plb-doubled", build(remit("1125.00", *CLAIMS, PLB, PLB))),
-                           ("claim", edit(GOOD, "*850.50*49.50*MC", "*850.51*49.50*MC")), ("empty", edit(EMPTY, "*0.00*C*", "*0.01*C*"))):
+                           ("claim", edit(edit(GOOD, "*850.50*49.50*MC", "*850.51*49.50*MC"), "CAS*PR*2*49.50*1", "CAS*PR*2*49.49*1")), ("empty", edit(EMPTY, "*0.00*C*", "*0.01*C*"))):
             with self.subTest(name):
                 self.refused(data, "835:balance")
+
+    def test_claims_and_services_must_balance(self):
+        shifted = edit(edit(GOOD, "*500.00*400.00*100.00*MC", "*500.00*500.00*100.00*MC"), "*900.00*850.50*49.50", "*900.00*750.50*49.50")
+        for name, data in (("shifted-between-claims", shifted), ("svc03-over-claim", edit(GOOD, "*500.00*450.00**1", "*500.00*40000.00**1")),
+                           ("service-cas-zero", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*0.00")), ("claim-cas-missing", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*0.00*1")),
+                           ("sign", edit(GOOD, "CAS*PR*2*49.50*1", "CAS*PR*2*-49.50*1")), ("service-cas-over", edit(GOOD, "CAS*PR*3*50.00", "CAS*PR*3*60.00"))):
+            with self.subTest(name):
+                self.refused(data, "835:claim-balance")
+        self.assertIn(b"*1250.50*C*", shifted)  # the shift keeps the file total, so only the claim check can catch it
+        record, _ = self.both(BALANCED)  # two services, a negative adjustment, adjustments at both levels
+        self.assertEqual((record.total_cents, [c.paid_cents for c in record.claims]), (35000, [20000, 15000]))
+
+    def test_isa_and_gs_content_is_validated_and_carried(self):
+        head = GOOD.decode()[4:105].split("*")
+
+        def isa(**fields):
+            parts = list(head)
+            for key, value in fields.items():
+                parts[int(key[1:]) - 1] = value
+            return ("ISA*" + "*".join(parts)).encode() + GOOD[105:]
+        for name, data in (("i01", isa(i01="99")), ("i01-blank-required", isa(i02="ABCDEFGHIJ")), ("i03", isa(i03="02")), ("i03-blank-required", isa(i04="ABCDEFGHIJ")),
+                           ("i05", isa(i05="AA")), ("i05-blank", isa(i05="  ")), ("i06-blank", isa(i06=" " * 15)), ("i06-char", isa(i06="SYNTH@PAYER    ")),
+                           ("i06-leading", isa(i06=" SYNTHPAYER    ")), ("i07", isa(i07="99")), ("i08-blank", isa(i08=" " * 15)),
+                           ("i09-month", isa(i09="261305")), ("i09-day", isa(i09="260230")), ("i09-digits", isa(i09="26100A")),
+                           ("i10-hour", isa(i10="2460")), ("i10-minute", isa(i10="1260")), ("i10-digits", isa(i10="12AB")),
+                           ("i02-control", isa(i01="03", i02="ABCDE\x01GHIJ"))):
+            with self.subTest(name):
+                self.refused(data, "x12:isa")
+        for name, data in (("i01-03", isa(i01="03", i02="ABCDEFGHIJ")), ("i03-01", isa(i03="01", i04="ABCDEFGHIJ")), ("i05-01", isa(i05="01")),
+                           ("leap-day", isa(i09="240229")), ("gs-hhmmss", edit(GOOD, "*1200*1*X*", "*120059*1*X*")),
+                           ("gs-15", edit(GOOD, "SYNTHPAYER01*", "SYNTHPAYER0123*")), ("gs-2", edit(GOOD, "SYNTHPAYER01*", "AB*"))):
+            with self.subTest(name):
+                self.assertIsNotNone(self.both(data)[0])
+        for name, old, new in (("gs02-short", "SYNTHPAYER01*", "S*"), ("gs02-long", "SYNTHPAYER01*", "SYNTHPAYER01234567*"), ("gs02-empty", "HP*SYNTHPAYER01*", "HP**"),
+                               ("gs02-char", "SYNTHPAYER01*", "SYNTH@PAYER01*"), ("gs02-padded", "SYNTHPAYER01*", "SYNTHPAYER01 *"),
+                               ("gs03-char", "*SYNTHPROVIDER*2", "*SYNTH@ROVIDER*2"), ("gs03-short", "*SYNTHPROVIDER*2", "*S*2"),
+                               ("gs04-month", "*20261005*1200*1*", "*20261305*1200*1*"), ("gs04-short", "*20261005*1200*1*", "*261005*1200*1*"),
+                               ("gs04-year", "*20261005*1200*1*", "*18991005*1200*1*"), ("gs05-hour", "*1200*1*X*", "*2460*1*X*"), ("gs05-short", "*1200*1*X*", "*12*1*X*"),
+                               ("gs05-minute", "*1200*1*X*", "*1260*1*X*"), ("gs07", "*1*X*0050", "*1*T*0050"), ("gs07-empty", "*1*X*0050", "*1**0050")):
+            with self.subTest(name):
+                self.refused(edit(GOOD, old, new), "x12:envelope")
 
     def test_control_numbers_and_counts(self):
         for kwargs, code in (({"ic": "000000906"}, "x12:control"), ({"gec": "2"}, "x12:control"), ({"sc": "0002"}, "x12:control"),
@@ -180,13 +227,15 @@ class Intake(unittest.TestCase):
             "835:segment#role": edit(GOOD, "N1*PE*", "N1*PR*"), "835:segment#order": build(remit("1125.00", PLB, *CLAIMS)),
             "835:segment#missing-payee": build(remit("0.00")[:-1]),
             "835:field": edit(GOOD, "TRACE0001", "TRACE@@@"), "835:field#debit": edit(GOOD, "*1250.50*C*", "*1250.50*D*"), "835:field#trn01": edit(GOOD, "TRN*1*", "TRN*2*"),
-            "835:field#svc": edit(GOOD, "HC:99213", "99213"), "835:field#cas": edit(GOOD, "CAS*PR*1*100.00~DTM*232", "CAS*PR~DTM*232"),
+            "835:field#svc": edit(GOOD, "HC:99213", "99213"), "835:field#cas": edit(GOOD, "CAS*PR*1*50.00~DTM*232", "CAS*PR~DTM*232"),
             "835:field#plb": edit(WITH_PLB, "FB:CARRY0001", "FBX:CARRY0001"), "835:field#blank": edit(GOOD, "CLAIMA001", ""),
             "835:amount": edit(GOOD, "*1250.50*C*", "*1250.505*C*"), "835:amount#negative-total": edit(GOOD, "*1250.50*C*", "*-1250.50*C*"),
             "835:amount#minus-zero": edit(GOOD, "*400.00*100.00*MC*", "*-0*100.00*MC*"), "835:amount#plb": edit(WITH_PLB, "*100.00*WO", "*1e2*WO"),
             "835:date": edit(GOOD, "*" * 11 + "20261005", "*" * 11 + "20261305"),
             "835:date#dtm": edit(GOOD, "DTM*405*20261003", "DTM*405*2026-10-03"), "835:date#leap": edit(GOOD, "DTM*232*20261001", "DTM*232*20270229"),
             "835:date#plb": edit(WITH_PLB, "*20261231*", "*20261232*"),
+            "835:claim-balance": edit(edit(GOOD, "*500.00*400.00*100.00*MC", "*500.00*500.00*100.00*MC"), "*900.00*850.50*49.50", "*900.00*750.50*49.50"),
+            "835:claim-balance#service": edit(GOOD, "*500.00*450.00**1", "*500.00*40000.00**1"),
         }
         seen = set()
         for name, data in cases.items():
@@ -194,7 +243,7 @@ class Intake(unittest.TestCase):
                 code = name.split("#")[0]
                 seen.add(code)
                 self.refused(data, code)
-        self.assertEqual(len(seen), 23)
+        self.assertEqual(len(seen), 24)
         for bad in ("text", None, bytearray(GOOD), [GOOD]):
             with self.assertRaises(X12Error) as caught:
                 parse_835(bad)
@@ -315,6 +364,41 @@ class Intake(unittest.TestCase):
                 verify_835(WITH_PLB, wrong)
             self.assertEqual(str(caught.exception), "835:disagree")
 
+    def test_verifier_demands_exact_types(self):
+        record = parse_835(GOOD)
+        claim = record.claims[0]
+        verify_835(GOOD, record)
+
+        class Text(str):
+            pass
+
+        def swap(**fields):
+            return dataclasses.replace(record, **fields)
+
+        def swap_claim(**fields):
+            return swap(claims=(dataclasses.replace(claim, **fields), *record.claims[1:]))
+        wrong = {"float-total": swap(total_cents=125050.0), "bool-for-int": swap(forward_balance_cents=False), "list-claims": swap(claims=list(record.claims)),
+                 "dict-payer": swap(payer=dataclasses.asdict(record.payer)), "float-claim": swap_claim(charge_cents=50000.0),
+                 "bool-claim": swap_claim(charge_cents=True), "list-adjustments": swap_claim(adjustments=list(claim.adjustments)),
+                 "list-services": swap_claim(services=list(claim.services)), "dict-claim": swap(claims=(dataclasses.asdict(claim), *record.claims[1:])),
+                 "float-line": swap_claim(services=(dataclasses.replace(claim.services[0], paid_cents=45000.0),)),
+                 "str-subclass": swap(trace=Text("TRACE0001")), "bytes": swap(trace=b"TRACE0001"), "int-for-str": swap(trace=1),
+                 "list-dates": swap(dates=list(record.dates)), "set-claims": swap(claims=set(record.claims))}
+        for name, bad in wrong.items():
+            with self.subTest(name):
+                with self.assertRaises(IndependentX12Error) as caught:
+                    verify_835(GOOD, bad)
+                self.assertEqual(str(caught.exception), "835:disagree")
+
+    def test_decimal_context_is_not_ambient(self):
+        want = rederive_835(EDGE)
+        with decimal.localcontext() as ambient:
+            ambient.prec = 6
+            self.assertEqual(rederive_835(EDGE), want)
+            self.assertEqual(self.both(EDGE)[0].claims[0].charge_cents, 99999999999999)
+            ambient.prec = 1
+            self.assertEqual(rederive_835(GOOD)["total_cents"], 125050)
+
     def test_fixture_identifiers_are_fictional(self):
         def luhn_ok(digits):
             total = sum((d * 2 - 9 if d > 4 else d * 2) if i % 2 else d for i, d in enumerate(map(int, reversed(digits))))
@@ -325,9 +409,9 @@ class Intake(unittest.TestCase):
         self.assertIn(b"*0*T*:", GOOD)  # ISA15 is T: synthetic only
 
     def test_modules_are_read_only_and_call_no_owner(self):
-        allowed = {"app/x12_tokenizer.py": {"__future__", "dataclasses", "re", "string", "typing", "app.mirror.error_boundary"},
+        allowed = {"app/x12_tokenizer.py": {"__future__", "dataclasses", "datetime", "re", "string", "typing", "app.mirror.error_boundary"},
                    "app/x12_835_intake.py": {"__future__", "dataclasses", "datetime", "re", "app.mirror.error_boundary", "app.x12_tokenizer"},
-                   "app/x12_835_independent.py": {"__future__", "dataclasses", "decimal", "json", "re", "datetime", "typing"}}
+                   "app/x12_835_independent.py": {"__future__", "dataclasses", "decimal", "re", "datetime", "typing"}}
         for path, names in allowed.items():
             tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
             imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
