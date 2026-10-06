@@ -654,8 +654,260 @@ private theorem chunks_flat : ∀ (f : Nat) (ls : List Bytes), ls.length ≤ f �
 private theorem be_eq_natBE {w n : Nat} (h : n < 256 ^ w) : be w n = some (natBE w n) := by
   unfold be natBE; rw [if_pos h]
 
+private theorem pu_take_even (H : Bytes → Bytes) (d : Bytes) : ∀ (lv : List Bytes) (j : Nat), j % 2 = 0 →
+    pairUp H d (lv.take j) = (pairUp H d lv).take (j / 2)
+  | [], j, _ => by simp [pairUp]
+  | [a], j, h => by
+    rcases j with _ | j
+    · simp [pairUp]
+    · have : 1 ≤ (j + 1) / 2 := by omega
+      simp [pairUp, List.take_of_length_le, this]
+  | a :: b :: rest, j, h => by
+    rcases j with _ | _ | j
+    · simp [pairUp]
+    · omega
+    · have := pu_take_even H d rest j (by omega)
+      have e : (j + 1 + 1) / 2 = j / 2 + 1 := by omega
+      simp [pairUp, this, e]
+
+private theorem pu_len (H : Bytes → Bytes) (d : Bytes) : ∀ (lv : List Bytes), (pairUp H d lv).length = (lv.length + 1) / 2
+  | [] => by simp [pairUp]
+  | [a] => by simp [pairUp]
+  | a :: b :: rest => by
+    have := pu_len H d rest
+    simp [pairUp, this]; omega
+
+private theorem tr_succ (H : Bytes → Bytes) (d : Bytes) (f : Nat) (T : List Bytes) (h : 1 < T.length) :
+    treeRoot H d (f + 1) T = treeRoot H d f (pairUp H d T) := by
+  rcases T with _ | ⟨x, _ | ⟨y, t⟩⟩
+  · simp at h
+  · simp at h
+  · simp [treeRoot]
+
+/-- Split-point tree root over a leaf list of length at most `2^a` (fuel `a`). -/
+private def Mt (H : Bytes → Bytes) (d : Bytes) : Nat → List Bytes → Bytes
+  | 0, L => L.headD []
+  | a + 1, L => if L.length ≤ 2 ^ a then Mt H d a L
+      else nodeHash H d (Mt H d a (L.take (2 ^ a))) (Mt H d a (L.drop (2 ^ a)))
+
+private theorem Mt_succ (H : Bytes → Bytes) (d : Bytes) (a : Nat) (L : List Bytes) : Mt H d (a + 1) L =
+    if L.length ≤ 2 ^ a then Mt H d a L
+      else nodeHash H d (Mt H d a (L.take (2 ^ a))) (Mt H d a (L.drop (2 ^ a))) := by rw [Mt]
+
+private theorem pu_drop_even (H : Bytes → Bytes) (d : Bytes) : ∀ (lv : List Bytes) (j : Nat), j % 2 = 0 →
+    pairUp H d (lv.drop j) = (pairUp H d lv).drop (j / 2)
+  | [], j, _ => by simp [pairUp]
+  | [a], j, h => by
+    rcases j with _ | j
+    · simp [pairUp]
+    · have : 1 ≤ (j + 1) / 2 := by omega
+      simp [pairUp, List.drop_of_length_le, this]
+  | a :: b :: rest, j, h => by
+    rcases j with _ | _ | j
+    · simp [pairUp]
+    · omega
+    · have := pu_drop_even H d rest j (by omega)
+      have e : (j + 1 + 1) / 2 = j / 2 + 1 := by omega
+      simp [pairUp, this, e]
+
+private theorem Mt_one (H : Bytes → Bytes) (d : Bytes) : ∀ (a : Nat) (x : Bytes), Mt H d a [x] = x
+  | 0, x => rfl
+  | a + 1, x => by
+    have h1 : 1 ≤ 2 ^ a := Nat.one_le_two_pow
+    rw [Mt_succ H d a [x], if_pos (by simpa using h1)]
+    exact Mt_one H d a x
+
+private theorem Mt_indep (H : Bytes → Bytes) (d : Bytes) : ∀ (b a : Nat) (L : List Bytes), L.length ≤ 2 ^ a → a ≤ b →
+    Mt H d a L = Mt H d b L
+  | 0, a, L, hl, hab => by
+    have : a = 0 := by omega
+    subst this; rfl
+  | b + 1, a, L, hl, hab => by
+    by_cases h : a = b + 1
+    · subst h; rfl
+    · have hab' : a ≤ b := by omega
+      have hl' : L.length ≤ 2 ^ b := Nat.le_trans hl (Nat.pow_le_pow_right (by omega) hab')
+      rw [Mt_succ H d b L, if_pos hl']
+      exact Mt_indep H d b a L hl hab'
+
+private theorem Mt_pair (H : Bytes → Bytes) (d : Bytes) : ∀ (a : Nat) (L : List Bytes), L ≠ [] → L.length ≤ 2 ^ (a + 1) →
+    Mt H d a (pairUp H d L) = Mt H d (a + 1) L
+  | 0, L, hne, hl => by
+    rcases L with _ | ⟨x, _ | ⟨y, t⟩⟩
+    · exact absurd rfl hne
+    · simp [Mt, pairUp]
+    · rcases t with _ | ⟨z, t'⟩
+      · simp [Mt, pairUp, nodeHash]
+      · simp at hl
+  | a + 1, L, hne, hl => by
+    have pp : ∀ k, 0 < 2 ^ k := fun k => Nat.two_pow_pos k
+    have p2 : 2 ^ (a + 1) = 2 * 2 ^ a := by rw [Nat.pow_succ]; omega
+    have p3 : 2 ^ (a + 1 + 1) = 2 * 2 ^ (a + 1) := by rw [Nat.pow_succ]; omega
+    have hlen := pu_len H d L
+    have pa := pp a
+    have pa1 := pp (a + 1)
+    by_cases h : L.length ≤ 2 ^ (a + 1)
+    · rw [Mt_succ H d a (pairUp H d L), if_pos (by omega), Mt_succ H d (a + 1) L, if_pos h]
+      exact Mt_pair H d a L hne h
+    · rw [Mt_succ H d a (pairUp H d L), if_neg (by omega), Mt_succ H d (a + 1) L, if_neg h]
+      have e1 : (pairUp H d L).take (2 ^ a) = pairUp H d (L.take (2 ^ (a + 1))) := by
+        rw [pu_take_even H d L (2 ^ (a + 1)) (by omega), show 2 ^ (a + 1) / 2 = 2 ^ a by omega]
+      have e2 : (pairUp H d L).drop (2 ^ a) = pairUp H d (L.drop (2 ^ (a + 1))) := by
+        rw [pu_drop_even H d L (2 ^ (a + 1)) (by omega), show 2 ^ (a + 1) / 2 = 2 ^ a by omega]
+      have hk : (L.take (2 ^ (a + 1))).length = 2 ^ (a + 1) := by simp; omega
+      have hd : (L.drop (2 ^ (a + 1))).length = L.length - 2 ^ (a + 1) := by simp
+      have hne1 : L.take (2 ^ (a + 1)) ≠ [] := by
+        intro h0; rw [h0] at hk; simp at hk; omega
+      have hne2 : L.drop (2 ^ (a + 1)) ≠ [] := by
+        intro h0; rw [h0] at hd; simp at hd; omega
+      rw [e1, e2, Mt_pair H d a _ hne1 (by omega), Mt_pair H d a _ hne2 (by omega)]
+
+private theorem tr_nil (H : Bytes → Bytes) (d : Bytes) : ∀ f : Nat, treeRoot H d f [] = []
+  | 0 => rfl
+  | f + 1 => by simp only [treeRoot, pairUp]; exact tr_nil H d f
+
+private theorem tr_Mt (H : Bytes → Bytes) (d : Bytes) : ∀ (f : Nat) (L : List Bytes), L ≠ [] → L.length ≤ 2 ^ f →
+    treeRoot H d f L = Mt H d f L
+  | 0, L, hne, hl => by
+    rcases L with _ | ⟨x, _ | ⟨y, t⟩⟩
+    · exact absurd rfl hne
+    · simp [treeRoot, Mt]
+    · simp at hl
+  | f + 1, L, hne, hl => by
+    have p2 : 2 ^ (f + 1) = 2 * 2 ^ f := by rw [Nat.pow_succ]; omega
+    rcases L with _ | ⟨x, _ | ⟨y, t⟩⟩
+    · exact absurd rfl hne
+    · simp [treeRoot, Mt_one]
+    · have h1 : 1 < (x :: y :: t).length := by simp
+      have hlen := pu_len H d (x :: y :: t)
+      rw [tr_succ H d f _ h1, tr_Mt H d f _ (by simp [pairUp]) (by omega), Mt_pair H d f _ hne hl]
+
+private def Fr (H : Bytes → Bytes) (d : Bytes) : List (Nat × Bytes) → List Bytes → Prop
+  | [], T => T = []
+  | (h, r) :: rest, T => ∃ P B, T = P ++ B ∧ B.length = 2 ^ h ∧ r = Mt H d h B ∧ (∀ e ∈ rest, h < e.1) ∧ Fr H d rest P
+
+private theorem carry_fr (H : Bytes → Bytes) : ∀ (f h : Nat) (r : Bytes) (fs : List (Nat × Bytes)) (P B : List Bytes),
+    fs.length ≤ f → (∀ e ∈ fs, h ≤ e.1) → Fr H PD fs P → B.length = 2 ^ h → r = Mt H PD h B →
+    Fr H PD (carry H f h r fs) (P ++ B) := by
+  intro f
+  induction f with
+  | zero =>
+    intro h r fs P B hl _ hF hB hr
+    have : fs = [] := List.eq_nil_of_length_eq_zero (by omega)
+    subst this
+    simp only [Fr] at hF; subst hF
+    simp only [carry, Fr]
+    exact ⟨[], B, by simp, hB, hr, by simp, by simp [Fr]⟩
+  | succ f ih =>
+    intro h r fs P B hl hmin hF hB hr
+    rcases fs with _ | ⟨⟨h', l⟩, rest⟩
+    · simp only [Fr] at hF; subst hF
+      simp only [carry, Fr]
+      exact ⟨[], B, by simp, hB, hr, by simp, by simp [Fr]⟩
+    · simp only [Fr] at hF
+      obtain ⟨P', Bl, rfl, hBl, hl', hlt, hF'⟩ := hF
+      simp only [carry]
+      by_cases hh : h = h'
+      · subst hh
+        simp only [beq_self_eq_true, if_true]
+        have hne : ¬ (Bl ++ B).length ≤ 2 ^ h := by
+          rw [List.length_append, hBl, hB]; have := Nat.two_pow_pos h; omega
+        have := ih (h + 1) (nodeHash H PD l r) rest P' (Bl ++ B) (by simp at hl; omega)
+          (fun e he => Nat.succ_le_of_lt (hlt e he)) hF'
+          (by rw [List.length_append, hBl, hB, Nat.pow_succ]; omega)
+          (by rw [Mt_succ H PD h (Bl ++ B), if_neg hne, List.take_left' hBl, List.drop_left' hBl, hl', hr])
+        rw [List.append_assoc]; exact this
+      · have hlt' : h < h' := by
+          have := hmin ⟨h', l⟩ (by simp); omega
+        have hne : (h == h') = false := by simp [hh]
+        rw [hne]; simp only [Bool.false_eq_true, if_false]
+        simp only [Fr]
+        refine ⟨P' ++ Bl, B, rfl, hB, hr, ?_, ⟨P', Bl, rfl, hBl, hl', hlt, hF'⟩⟩
+        intro e he
+        simp only [List.mem_cons] at he
+        rcases he with rfl | he
+        · exact hlt'
+        · exact Nat.lt_trans hlt' (hlt e he)
+
+private theorem fr_fold (H : Bytes → Bytes) :
+    ∀ xs : List Bytes, xs.length < 2 ^ 64 → Fr H PD (xs.foldl (frontierPush H) []) (xs.map (leafHash H PD)) := by
+  intro xs
+  induction xs using snoc_ind with
+  | h0 => intro _; simp [Fr]
+  | hs ys x ih =>
+    intro hn
+    have hn' : ys.length < 2 ^ 64 := by simp at hn; omega
+    have hF := ih hn'
+    have hlen : (ys.foldl (frontierPush H) []).length ≤ 64 := by
+      have := congrArg List.length (svFp H ys hn')
+      simp only [List.length_map] at this
+      rw [this]; unfold peaksOf
+      exact Nat.le_trans (List.length_filter_le _ _) (by simp)
+    rw [List.foldl_append]
+    simp only [List.foldl_cons, List.foldl_nil, frontierPush, List.map_append, List.map_cons, List.map_nil]
+    exact carry_fr H 64 0 (leafHash H PD x) _ (ys.map (leafHash H PD)) [leafHash H PD x] hlen
+      (fun e _ => Nat.zero_le _) hF (by simp) (by simp [Mt])
+
+private theorem fr_fold_root (H : Bytes → Bytes) : ∀ (rest : List (Nat × Bytes)) (P S : List Bytes) (acc : Bytes) (a : Nat),
+    Fr H PD rest P → (∀ e ∈ rest, a ≤ e.1 ∧ e.1 < 64) → S.length ≤ 2 ^ a → S ≠ [] → a ≤ 64 →
+    acc = Mt H PD a S →
+    ∃ b ≤ 64, (P ++ S).length ≤ 2 ^ b ∧
+      rest.foldl (fun acc e => nodeHash H PD e.2 acc) acc = Mt H PD b (P ++ S) := by
+  intro rest
+  induction rest with
+  | nil =>
+    intro P S acc a hF _ hS _ ha hacc
+    simp only [Fr] at hF; subst hF
+    exact ⟨a, ha, by simpa using hS, by simp [hacc]⟩
+  | cons e rest ih =>
+    obtain ⟨h1, r1⟩ := e
+    intro P S acc a hF hb hS hSne ha hacc
+    simp only [Fr] at hF
+    obtain ⟨P', B, rfl, hB, hr, hlt, hF'⟩ := hF
+    obtain ⟨hah, h64⟩ := hb (h1, r1) (by simp)
+    have hSpos := List.length_pos_iff.mpr hSne
+    have hne : ¬ (B ++ S).length ≤ 2 ^ h1 := by
+      rw [List.length_append, hB]; omega
+    have hSle : S.length ≤ 2 ^ h1 := Nat.le_trans hS (Nat.pow_le_pow_right (by omega) hah)
+    have hMt : nodeHash H PD r1 acc = Mt H PD (h1 + 1) (B ++ S) := by
+      rw [Mt_succ H PD h1 (B ++ S), if_neg hne, List.take_left' hB, List.drop_left' hB, ← hr, hacc]
+      simp only [Mt_indep H PD h1 a S hS hah]
+    obtain ⟨b, hb64, hlen, hfold⟩ := ih P' (B ++ S) (nodeHash H PD r1 acc) (h1 + 1) hF'
+      (fun e he => ⟨Nat.succ_le_of_lt (hlt e he), (hb e (List.mem_cons_of_mem _ he)).2⟩)
+      (by rw [List.length_append, hB, Nat.pow_succ]; omega)
+      (by intro h0; exact hSne (List.append_eq_nil_iff.mp h0).2) (by omega) hMt
+    exact ⟨b, hb64, by simpa [List.append_assoc] using hlen, by simpa [List.foldl_cons, List.append_assoc] using hfold⟩
+
 theorem listRoot_frontier (H : Bytes → Bytes) (xs : List Bytes) (hn : xs.length < 2 ^ 64) :
-    frontierRoot H (xs.foldl (frontierPush H) []) = listRoot H xs := sorry
+    frontierRoot H (xs.foldl (frontierPush H) []) = listRoot H xs := by
+
+  by_cases hx : xs = []
+  · subst hx; simp [frontierRoot, listRoot, tr_nil]
+  · have hF := fr_fold H xs hn
+    have hpks := svFp H xs hn
+    generalize xs.foldl (frontierPush H) [] = fs at hF hpks
+    have hlt64 : ∀ e ∈ fs, e.1 < 64 := by
+      intro e he
+      have : e.1 ∈ fs.map (·.1) := List.mem_map_of_mem he
+      rw [hpks] at this
+      unfold peaksOf at this
+      simp at this
+      exact this.1
+    rcases fs with _ | ⟨⟨h0, r0⟩, rest⟩
+    · simp only [Fr] at hF
+      exact absurd (List.map_eq_nil_iff.mp hF) hx
+    · simp only [Fr] at hF
+      obtain ⟨P, B, hTe, hB, hr, hlt, hF'⟩ := hF
+      have hpos := Nat.two_pow_pos h0
+      have h064 := hlt64 (h0, r0) (by simp)
+      obtain ⟨b, hb64, hlen, hfold⟩ := fr_fold_root H rest P B r0 h0 hF'
+        (fun e he => ⟨Nat.le_of_lt (hlt e he), hlt64 e (List.mem_cons_of_mem _ he)⟩)
+        (by omega) (by intro h0'; rw [h0'] at hB; simp at hB; omega) (by omega) hr
+      have hTlen : (xs.map (leafHash H PD)).length ≤ 2 ^ 64 := by simp; omega
+      have hTne : xs.map (leafHash H PD) ≠ [] := by simpa using hx
+      simp only [frontierRoot]
+      rw [hfold, listRoot, tr_Mt H PD 64 _ hTne hTlen, hTe,
+        Mt_indep H PD 64 b _ hlen hb64]
 
 theorem frontier_peaks (H : Bytes → Bytes) (hH : HashLen H) (xs : List Bytes) (hn : xs.length < 2 ^ 64) :
     (xs.foldl (frontierPush H) []).map (·.1) = peaksOf xs.length := svFp H xs hn
@@ -732,29 +984,6 @@ def firstKPf (H : Bytes → Bytes) (d : Bytes) : Nat → Nat → List Bytes → 
     if lv.length ≤ 1 then [] else
     (if j % 2 == 1 && decide (j < lv.length) then [lv.getD j []] else []) ++
       firstKPf H d f ((j + 1) / 2) (pairUp H d lv)
-
-private theorem pu_take_even (H : Bytes → Bytes) (d : Bytes) : ∀ (lv : List Bytes) (j : Nat), j % 2 = 0 →
-    pairUp H d (lv.take j) = (pairUp H d lv).take (j / 2)
-  | [], j, _ => by simp [pairUp]
-  | [a], j, h => by
-    rcases j with _ | j
-    · simp [pairUp]
-    · have : 1 ≤ (j + 1) / 2 := by omega
-      simp [pairUp, List.take_of_length_le, this]
-  | a :: b :: rest, j, h => by
-    rcases j with _ | _ | j
-    · simp [pairUp]
-    · omega
-    · have := pu_take_even H d rest j (by omega)
-      have e : (j + 1 + 1) / 2 = j / 2 + 1 := by omega
-      simp [pairUp, this, e]
-
-private theorem pu_len (H : Bytes → Bytes) (d : Bytes) : ∀ (lv : List Bytes), (pairUp H d lv).length = (lv.length + 1) / 2
-  | [] => by simp [pairUp]
-  | [a] => by simp [pairUp]
-  | a :: b :: rest => by
-    have := pu_len H d rest
-    simp [pairUp, this]; omega
 
 private theorem pu_len64 (H : Bytes → Bytes) (hH : HashLen H) (d : Bytes) : ∀ (lv : List Bytes), (∀ a ∈ lv, a.length = 64) →
     ∀ a ∈ pairUp H d lv, a.length = 64
@@ -900,13 +1129,6 @@ private theorem fk_base (H : Bytes → Bytes) (d : Bytes) (f : Nat) (r1 r : Byte
     obtain ⟨h, -⟩ := Prod.mk.inj (Option.some.inj hrun)
     simp [h, hroot]
   · simp at hT
-
-private theorem tr_succ (H : Bytes → Bytes) (d : Bytes) (f : Nat) (T : List Bytes) (h : 1 < T.length) :
-    treeRoot H d (f + 1) T = treeRoot H d f (pairUp H d T) := by
-  rcases T with _ | ⟨x, _ | ⟨y, t⟩⟩
-  · simp at h
-  · simp at h
-  · simp [treeRoot]
 
 private theorem leaf_inj (H : Bytes → Bytes) : ∀ ys zs : List Bytes, ys.map (leafHash H PD) = zs.map (leafHash H PD) →
     ys = zs ∨ Collision H (ys.map (fun y => PD ++ 0 :: y)) (zs.map (fun y => PD ++ 0 :: y))
