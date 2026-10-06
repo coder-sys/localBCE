@@ -11,7 +11,6 @@ import random
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
 
 from tests import gate_bench as bench
 from tests import test_gate_rules_vectors as rules
@@ -25,7 +24,7 @@ N, BATCH = int(os.environ.get("RR_GATE_BENCH_N", 300)), int(os.environ.get("RR_G
 class GateBench(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.result = bench.run_bench(N, BATCH)
+        cls.result = bench.run_bench(N, BATCH, free=lambda: 1 << 62)  # injected: the result never depends on the machine
         if os.environ.get("RR_GATE_BENCH_OUT"):
             Path(os.environ["RR_GATE_BENCH_OUT"]).write_text(json.dumps({**cls.result, "corpus": None}, indent=1), "utf-8")
 
@@ -40,8 +39,7 @@ class GateBench(unittest.TestCase):
             self.assertAlmostEqual(sum(us[k] for k in (*bench.REPORT, "other")), us["total"], delta=0.02 * us["total"] + 1)
 
     def test_memory_wall_stops_the_run_and_says_why(self):
-        with mock.patch.object(bench, "free_bytes", lambda: bench.FLOOR):
-            r = bench.run_bench(BATCH, BATCH)
+        r = bench.run_bench(BATCH, BATCH, free=lambda: 0)
         self.assertEqual((r["wall"]["reason"], r["lines_done"]), ("memory", 0))
 
     @unittest.skipUnless(SHA3.is_file(), "SHA3 TWIN NOT RUN: build tools/sha3_bench (lake build -d tools/sha3_bench)")

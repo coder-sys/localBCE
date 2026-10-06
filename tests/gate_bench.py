@@ -5,8 +5,8 @@ with the exclusive time of each stage per line and its growth with history.  ``p
 Stages (µs per line): parse (the harness's line text and answer parse), frame (decide's text and hex of the sealed history),
 registry, storage (SQLite reads and writes), lean_decide and lean_replay (the Lean call, split by a probe that sends the same
 frame without its ``line`` rows: what is left is the history replay), canon (encoding and digests), sign, verify (Lean
-``gate_verify``), seal_other.  ``total`` leaves out the probe and the harness's own token leaves.  A batch whose Lean call
-would not fit the free memory above the guard floor (about 700 times its frame) stops the run, and the wall is recorded."""
+``gate_verify``), seal_other.  ``total`` leaves out the probe and the harness's own token leaves.  The guard owns memory policy: only with ``free`` (callable, free bytes; the CLI passes the live reading) does a batch whose Lean call
+would need more (about 700 times its frame) stop the run and record the wall."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from tests import _gate_shards as g
 from tests import test_gate_rules_worker as w
 from tests import test_right_rail_gate_formats as fx
 
-SEED, PER_PAYMENT, FLOOR, MEM_PER_FRAME_BYTE, SLACK = 20261005, 4, 2_029_372_048, 700, 100_000_000
+SEED, PER_PAYMENT, MEM_PER_FRAME_BYTE = 20261005, 4, 700
 REPORT = ("parse", "frame", "registry", "storage", "lean_decide", "lean_replay", "canon", "sign", "verify", "seal_other")
 
 
@@ -97,7 +97,7 @@ def _probe(fn, S):
     return run
 
 
-def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...] = ()) -> dict:
+def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...] = (), free=None) -> dict:
     S, rows, wall, store = Stages(), [], None, []
     S.probes = []
     worker = decider.RulesWorker(w.WORKER)
@@ -134,9 +134,9 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
         for payments, bad in corpus(total, batch):
             lines = sum(map(len, payments.values()))
             frame = 2 * len(adds_of(prod)) + 400 * lines + 4096
-            need, free = MEM_PER_FRAME_BYTE * frame, free_bytes()
-            if free - need < FLOOR + SLACK:
-                wall = {"reason": "memory", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": free}
+            need, avail = MEM_PER_FRAME_BYTE * frame, free() if free else None
+            if free and avail < need:
+                wall = {"reason": "memory", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": avail}
                 break
             S.take()
             t0 = time.perf_counter()
@@ -144,7 +144,7 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
                 ans, leaves, _ = g.decide_batch(c, prod, reg, 0, payments, bad, worker)
                 decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
             except decider.GateDecideError as error:
-                wall = {"reason": f"refused:{error}", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": free}
+                wall = {"reason": f"refused:{error}", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": avail}
                 break
             spent = S.take()
             t1 = time.perf_counter()
@@ -187,7 +187,7 @@ def main() -> None:
     ap.add_argument("--out")
     a = ap.parse_args()
     sizes = tuple(int(s) for s in a.sizes.split(","))
-    result = run_bench(max(sizes), a.batch, not a.no_probe, sizes)
+    result = run_bench(max(sizes), a.batch, not a.no_probe, sizes, free_bytes)
     result.pop("corpus")
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
