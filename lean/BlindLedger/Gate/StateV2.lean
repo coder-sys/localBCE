@@ -1541,19 +1541,23 @@ private theorem cust_leaf_eq (P : Pins) (st st' : LogState) (e : Entry) (h : pus
   | resume _ => rw [hb] at hl; simp [Body.leaves] at hl
   | «seal» _ => rw [hb] at hl; simp [Body.leaves] at hl
 
+/-- A prefix of a folding log folds. -/
+private theorem cust_fold_pre (P : Pins) (l r : List Entry) (h : (fold P (l ++ r)).isSome) :
+    (fold P l).isSome := by
+  simp only [fold, List.foldlM_append] at h
+  cases hx : l.foldlM (push P) LogState.init with
+  | none => rw [hx] at h; simp at h
+  | some _ => simp [fold, hx]
+
 /-- An entry at position m of a folding log: the prefix before it folds, it pushes, its index is m. -/
 private theorem cust_fold_at (P : Pins) (l : List Entry) (h : (fold P l).isSome) (m : Nat) (e : Entry)
     (hm : l[m]? = some e) :
     ∃ st st', fold P (l.take m) = some st ∧ push P st e = some st' ∧ e.idx = m ∧
       (fold P (l.take (m + 1))).isSome := by
   have hlt : m < l.length := (List.getElem?_eq_some_iff.mp hm).1
-  have ht : l.take (m + 1) = l.take m ++ [e] := by simp [List.take_succ, hm]
-  have hp : (fold P (l.take (m + 1))).isSome := by
-    have hs : (fold P (l.take (m + 1) ++ l.drop (m + 1))).isSome := by rw [List.take_append_drop]; exact h
-    simp only [fold, List.foldlM_append] at hs
-    cases hx : (l.take (m + 1)).foldlM (push P) LogState.init with
-    | none => rw [hx] at hs; simp at hs
-    | some _ => simp [fold, hx]
+  have ht : l.take (m + 1) = l.take m ++ [e] := by simp [List.take_add_one, hm]
+  have hp : (fold P (l.take (m + 1))).isSome :=
+    cust_fold_pre P _ (l.drop (m + 1)) (by rw [List.take_append_drop]; exact h)
   have hp' := hp
   rw [ht] at hp'
   obtain ⟨st', hst'⟩ := Option.isSome_iff_exists.mp hp'
@@ -1561,6 +1565,20 @@ private theorem cust_fold_at (P : Pins) (l : List Entry) (h : (fold P l).isSome)
   refine ⟨st, st', h1, h2, ?_, hp⟩
   rw [(cust_push P st st' e h2).1, cust_fold_len P _ st h1, List.length_take]
   omega
+
+/-- A pushed signed checkpoint is stored and names the entry's shard. -/
+private theorem cust_push_signed (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st')
+    (x : Bytes) (hx : e.body.signed? = some x) :
+    ∃ n, storedOfAny sha3 x = some n ∧ n.checkpoint.shardId = e.shard := by
+  cases hb : e.body with
+  | sign cert new tokens f =>
+    rw [hb] at hx
+    simp only [Body.signed?, Option.some.injEq] at hx
+    subst hx
+    obtain ⟨c, n, -, hn, hs, -⟩ := (cust_push P st st' e h).2.2.2.2 cert new tokens f hb
+    exact ⟨n, hn, hs⟩
+  | resume _ => rw [hb] at hx; simp [Body.signed?] at hx
+  | «seal» _ => rw [hb] at hx; simp [Body.signed?] at hx
 
 /-- In a folding log one signed checkpoint sits at one position (F8: createdAt strictly increasing). -/
 private theorem cust_signed_uniq (P : Pins) (l : List Entry) (h : (fold P l).isSome) (m m' : Nat)
@@ -1570,15 +1588,7 @@ private theorem cust_signed_uniq (P : Pins) (l : List Entry) (h : (fold P l).isS
       ∃ n, storedOfAny sha3 x = some n ∧ n.checkpoint.shardId = y.shard := by
     intro j y hj hy
     obtain ⟨st, st', -, hp, -, -⟩ := cust_fold_at P l h j y hj
-    cases hb : y.body with
-    | sign cert new tokens f =>
-      rw [hb] at hy
-      simp only [Body.signed?, Option.some.injEq] at hy
-      subst hy
-      obtain ⟨c, n, -, hn, hs, -⟩ := (cust_push P st st' y hp).2.2.2.2 cert new tokens f hb
-      exact ⟨n, hn, hs⟩
-    | resume _ => rw [hb] at hy; simp [Body.signed?] at hy
-    | «seal» _ => rw [hb] at hy; simp [Body.signed?] at hy
+    exact cust_push_signed P st st' y hp x hy
   obtain ⟨n, hn, hs⟩ := stored m e hm hx
   obtain ⟨n', hn', hs'⟩ := stored m' e' hm' hx'
   have hnn : n = n' := Option.some.inj (hn.symm.trans hn')
@@ -1707,9 +1717,356 @@ theorem honest_not_lost (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : ReachH P c
   obtain ⟨hl, ho⟩ := cust_honest_inv P cert₀ s hr
   exact ⟨hl, fun e he hg => hg e (ho e he) rfl⟩
 
+/-- The signed checkpoint an entry counts on shard k at cert epoch E, if any. -/
+private def cust_sig (k E : Nat) (x : Entry) : Option Bytes :=
+  match x.body with
+  | .sign cert new _ _ => if x.shard = k ∧ (decodeKeyCert cert).map (·.epoch) = some E then some new else none
+  | _ => none
+
+private theorem cust_sig_some {k E : Nat} {x : Entry} {y : Bytes} (h : cust_sig k E x = some y) :
+    x.shard = k ∧ x.body.signed? = some y := by
+  cases hb : x.body with
+  | sign cert new tokens f =>
+    simp only [cust_sig, hb] at h
+    split at h
+    · rename_i hc; cases h; exact ⟨hc.1, by simp [Body.signed?]⟩
+    · cases h
+  | resume _ => simp [cust_sig, hb] at h
+  | «seal» _ => simp [cust_sig, hb] at h
+
+private theorem cust_sig_none {k E : Nat} {x : Entry} (h : x.body.signed? = none) : cust_sig k E x = none := by
+  cases hs : cust_sig k E x with
+  | none => rfl
+  | some y => rw [(cust_sig_some hs).2] at h; cases h
+
+/-- A folded shard's count at epoch E is the number of signeds the log counts there. -/
+private theorem cust_own (P : Pins) (k E : Nat) (p : List Entry) (st : LogState) (h : fold P p = some st) :
+    (st.shard k).own E = (p.filterMap (cust_sig k E)).length := by
+  suffices ∀ (l : List Entry) s0 st, l.foldlM (push P) s0 = some st →
+      (st.shard k).own E = (s0.shard k).own E + (l.filterMap (cust_sig k E)).length by
+    simpa [LogState.init, Shard.init] using this p LogState.init st h
+  intro l
+  induction l with
+  | nil => intro s0 st h; simp at h; subst h; simp
+  | cons e l ih =>
+    intro s0 st h
+    simp only [List.foldlM] at h
+    obtain ⟨s1, hs1, hr⟩ := Option.bind_eq_some_iff.mp h
+    rw [ih s1 st hr, show e :: l = [e] ++ l from rfl, List.filterMap_append, List.length_append]
+    suffices (s1.shard k).own E = (s0.shard k).own E + ([e].filterMap (cust_sig k E)).length by omega
+    obtain ⟨-, -, hoth, hns, hsg⟩ := cust_push P s0 s1 e hs1
+    by_cases hk : e.shard = k
+    · subst hk
+      cases hb : e.body with
+      | sign cert new tokens f =>
+        obtain ⟨c, n, hc, -, -, hown⟩ := hsg cert new tokens f hb
+        rw [hown]
+        by_cases hE : c.epoch = E
+        · subst hE; simp [cust_sig, hb, hc, upd]
+        · simp [cust_sig, hb, hc, upd, hE, Ne.symm hE]
+      | resume _ => rw [hns (by simp [Body.signed?, hb])]; simp [cust_sig, hb]
+      | «seal» _ => rw [hns (by simp [Body.signed?, hb])]; simp [cust_sig, hb]
+    · rw [hoth k (Ne.symm hk)]
+      cases hb : e.body <;> simp [cust_sig, hb, hk]
+
+/-- A folding log counts each signed once. -/
+private theorem cust_sigs_nodup (P : Pins) (k E : Nat) (p : List Entry) (h : (fold P p).isSome) :
+    (p.filterMap (cust_sig k E)).Nodup := by
+  unfold List.Nodup
+  rw [List.pairwise_filterMap, List.pairwise_iff_getElem]
+  intro i j hi hj hij y hy y' hy' hyy
+  subst hyy
+  have := cust_signed_uniq P p h i j p[i] p[j] (List.getElem?_eq_some_iff.mpr ⟨hi, rfl⟩)
+    (List.getElem?_eq_some_iff.mpr ⟨hj, rfl⟩) y (cust_sig_some hy).2 (cust_sig_some hy').2
+  omega
+
+/-- Counted signeds S fit a set T for counter span N: inside T, or N of T plus one fresh signed on top. -/
+private def cust_fits (T : List Bytes) (N : Nat) (S : List Bytes) : Prop :=
+  S ⊆ T ∨ ∃ S0 y, S = S0 ++ [y] ∧ S0 ⊆ T ∧ S0.length = N
+
+/-- Until a TPM clear: each made entry is a stored signed under its shard's live cert; a shard with no counter
+    counts no signed in a folding prefix; a counted shard's signeds at its cert epoch fit a set T of at most
+    v - b signeds holding every released one. -/
+private theorem cust_lost_inv (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : Reach P cert₀ s) :
+    s.cleared = false →
+    (∀ e ∈ s.made, s.ctr e.shard ≠ none ∧ ∃ new tokens f n, e.body = .sign (s.cert e.shard) new tokens f ∧
+      storedOfAny sha3 new = some n ∧ n.checkpoint.shardId = e.shard) ∧
+    (∀ k p, s.ctr k = none → p <+: s.off → (fold P p).isSome → ∀ x ∈ p, x.shard = k →
+      x.body.signed? = none) ∧
+    (∀ k b v c, s.ctr k = some (b, v) → decodeKeyCert (s.cert k) = some c → b ≤ v ∧
+      ∃ T : List Bytes, T.length ≤ v - b ∧ (∀ e ∈ s.out, e.shard = k → ∃ x, e.body.signed? = some x ∧ x ∈ T) ∧
+      ∀ p, p <+: s.off → (fold P p).isSome → cust_fits T (v - b) (p.filterMap (cust_sig k c.epoch))) := by
+  induction hr with
+  | init =>
+    intro _
+    refine ⟨fun e he => by simp [Cust.init] at he, fun k p _ hp _ x hx _ => ?_,
+      fun k b v c hk => by simp [Cust.init] at hk⟩
+    simp [Cust.init] at hp; subst hp; simp at hx
+  | honest s s' hrs hs ih =>
+    intro hcl
+    have hB := (cust_out_inv P cert₀ s hrs).2.1
+    cases hs with
+    | sign k0 st0 b0 v0 i new tokens e hf0 hb hc hi he =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      obtain ⟨hsh, ⟨f, hbody⟩, st1, hp⟩ := cust_custodyOk P st0 k0 _ i new tokens e he
+      subst hsh
+      obtain ⟨c, n, hc', hn, hns, -⟩ := (cust_push P st0 st1 e hp).2.2.2.2 _ _ _ _ hbody
+      have hok : v0 - b0 = (st0.shard e.shard).own c.epoch := by
+        rw [cust_boot P s _ st0 b0 v0 c hf0 hc hc'] at hb
+        split at hb
+        · assumption
+        · split at hb <;> cases hb
+      have hf0' : (fold P s.off).isSome := by rw [hf0]; rfl
+      dsimp only
+      refine ⟨fun x hx => ?_, fun k p hk hpp hfp x hx hxk => ?_, fun k b v c0 hk hdk => ?_⟩
+      · rcases List.mem_append.mp hx with hx | hx
+        · exact hM x hx
+        · rw [List.mem_singleton.mp hx]
+          exact ⟨by rw [hc]; simp, new, tokens, f, n, hbody, hn, hns⟩
+      · rcases List.prefix_concat_iff.mp hpp with rfl | hpp
+        · rcases List.mem_append.mp hx with hx | hx
+          · exact hZ k s.off hk (List.prefix_refl _) hf0' x hx hxk
+          · rw [List.mem_singleton.mp hx] at hxk; rw [← hxk, hc] at hk; cases hk
+        · exact hZ k p hk hpp hfp x hx hxk
+      · obtain ⟨hbv, T, hT, hout, hfit⟩ := hF k b v c0 hk hdk
+        refine ⟨hbv, T, hT, hout, fun p hpp hfp => ?_⟩
+        rcases List.prefix_concat_iff.mp hpp with rfl | hpp
+        · have hfit0 := hfit s.off (List.prefix_refl _) hf0'
+          rw [List.filterMap_append]
+          by_cases hke : k = e.shard
+          · subst hke
+            rw [hc] at hk; rw [hc'] at hdk
+            simp only [Option.some.injEq, Prod.mk.injEq] at hk hdk
+            obtain ⟨rfl, rfl⟩ := hk
+            subst hdk
+            have hS := cust_own P e.shard c.epoch s.off st0 hf0
+            rcases hfit0 with hsub | ⟨S0, y, hS0, -, hl⟩
+            · exact Or.inr ⟨s.off.filterMap (cust_sig e.shard c.epoch), new,
+                by simp [cust_sig, hbody, hc'], hsub, by omega⟩
+            · simp [hS0] at hS; omega
+          · have hn0 : cust_sig k c0.epoch e = none := by simp [cust_sig, hbody, Ne.symm hke]
+            rw [List.filterMap_cons_none hn0, List.filterMap_nil, List.append_nil]
+            exact hfit0
+        · exact hfit p hpp hfp
+    | bump k0 b0 v0 hb hc =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      dsimp only
+      refine ⟨fun x hx => ?_, fun k p hk => ?_, fun k b v c hk hdk => ?_⟩
+      · obtain ⟨h1, h2⟩ := hM x hx
+        refine ⟨?_, h2⟩
+        by_cases hke : x.shard = k0
+        · rw [hke]; simp [upd]
+        · simp only [upd, if_neg hke]; exact h1
+      · by_cases hke : k = k0
+        · subst hke; simp [upd] at hk
+        · simp only [upd, if_neg hke] at hk; exact hZ k p hk
+      · by_cases hke : k = k0
+        · subst hke
+          simp [upd] at hk
+          obtain ⟨rfl, rfl⟩ := hk
+          cases hf : fold P s.off with
+          | none => simp [boot, hf] at hb
+          | some st =>
+            have hfin : v0 - b0 + 1 = (st.shard k).own c.epoch := by
+              rw [cust_boot P s _ st b0 v0 c hf hc hdk] at hb
+              split at hb
+              · cases hb
+              · split at hb
+                · assumption
+                · cases hb
+            obtain ⟨hbv, T, hT, hout, hfit⟩ := hF k b0 v0 c hc hdk
+            have hS := cust_own P k c.epoch s.off st hf
+            have hf' : (fold P s.off).isSome := by rw [hf]; rfl
+            rcases hfit s.off (List.prefix_refl _) hf' with hsub | ⟨S0, y, hS0, hsub, hl⟩
+            · have := (cust_sigs_nodup P k c.epoch s.off hf').length_le_of_subset hsub; omega
+            · refine ⟨by omega, T ++ [y], by simp; omega, fun x hx hxk => ?_, fun p hpp _ => Or.inl ?_⟩
+              · obtain ⟨z, hz, hzT⟩ := hout x hx hxk; exact ⟨z, hz, List.mem_append_left _ hzT⟩
+              · intro z hz
+                have hz' := (hpp.filterMap (cust_sig k c.epoch)).subset hz
+                rw [hS0] at hz'
+                rcases List.mem_append.mp hz' with hz' | hz'
+                · exact List.mem_append_left _ (hsub hz')
+                · exact List.mem_append_right _ hz'
+        · simp only [upd, if_neg hke] at hk; exact hF k b v c hk hdk
+    | activate e hs hfo =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      have hf0 := cust_fold_pre P s.off [e] hfo
+      dsimp only
+      refine ⟨hM, fun k p hk hpp hfp x hx hxk => ?_, fun k b v c hk hdk => ?_⟩
+      · rcases List.prefix_concat_iff.mp hpp with rfl | hpp
+        · rcases List.mem_append.mp hx with hx | hx
+          · exact hZ k s.off hk (List.prefix_refl _) hf0 x hx hxk
+          · rw [List.mem_singleton.mp hx]; exact hs
+        · exact hZ k p hk hpp hfp x hx hxk
+      · obtain ⟨hbv, T, hT, hout, hfit⟩ := hF k b v c hk hdk
+        refine ⟨hbv, T, hT, hout, fun p hpp hfp => ?_⟩
+        rcases List.prefix_concat_iff.mp hpp with rfl | hpp
+        · rw [List.filterMap_append, List.filterMap_cons_none (cust_sig_none hs), List.filterMap_nil,
+            List.append_nil]
+          exact hfit s.off (List.prefix_refl _) hf0
+        · exact hfit p hpp hfp
+    | define k0 c0 hc =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      dsimp only
+      refine ⟨fun x hx => ?_, fun k p hk => ?_, fun k b v c hk hdk => ?_⟩
+      · obtain ⟨h1, h2⟩ := hM x hx
+        refine ⟨?_, h2⟩
+        by_cases hke : x.shard = k0
+        · rw [hke]; simp [upd]
+        · simp only [upd, if_neg hke]; exact h1
+      · by_cases hke : k = k0
+        · subst hke; simp [upd] at hk
+        · simp only [upd, if_neg hke] at hk; exact hZ k p hk
+      · by_cases hke : k = k0
+        · subst hke
+          simp [upd] at hk
+          obtain ⟨rfl, rfl⟩ := hk
+          refine ⟨Nat.le_refl _, [], Nat.zero_le _, fun x hx hxk => ?_, fun p hpp hfp => Or.inl ?_⟩
+          · exact ((hM x (hB x hx)).1 (by rw [hxk]; exact hc)).elim
+          · intro y hy
+            obtain ⟨x, hx, hxy⟩ := List.mem_filterMap.mp hy
+            obtain ⟨hxk, hxs⟩ := cust_sig_some hxy
+            rw [hZ _ p hc hpp hfp x hx hxk] at hxs; cases hxs
+        · simp only [upd, if_neg hke] at hk; exact hF k b v c hk hdk
+    | ceremony k0 cert hc hdc =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      dsimp only
+      refine ⟨fun x hx => ?_, hZ, fun k b v c hk hdk => ?_⟩
+      · obtain ⟨h1, h2⟩ := hM x hx
+        have hne : x.shard ≠ k0 := fun h => h1 (by rw [h]; exact hc)
+        simp only [upd, if_neg hne]; exact ⟨h1, h2⟩
+      · have hne : k ≠ k0 := fun h => by rw [h, hc] at hk; cases hk
+        simp only [upd, if_neg hne] at hdk; exact hF k b v c hk hdk
+    | release e hm ho hb =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      dsimp only
+      refine ⟨hM, hZ, fun k b v c hk hdk => ?_⟩
+      obtain ⟨hbv, T, hT, hout, hfit⟩ := hF k b v c hk hdk
+      refine ⟨hbv, T, hT, fun x hx hxk => ?_, hfit⟩
+      rcases List.mem_append.mp hx with hx | hx
+      · exact hout x hx hxk
+      · rw [List.mem_singleton.mp hx] at hxk ⊢
+        subst hxk
+        obtain ⟨-, new, tokens, f, -, hbody, -⟩ := hM e hm
+        cases hf : fold P s.off with
+        | none => simp [boot, hf] at hb
+        | some st =>
+          rw [cust_boot P s e.shard st b v c hf hk hdk] at hb
+          have hok : v - b = (st.shard e.shard).own c.epoch := by
+            split at hb
+            · assumption
+            · split at hb <;> cases hb
+          have hS := cust_own P e.shard c.epoch s.off st hf
+          rcases hfit s.off (List.prefix_refl _) (by rw [hf]; rfl) with hsub | ⟨S0, y, hS0, -, hl⟩
+          · refine ⟨new, by rw [hbody]; rfl, hsub (List.mem_filterMap.mpr ⟨e, ho, ?_⟩)⟩
+            simp [cust_sig, hbody, hdk]
+          · simp [hS0] at hS; omega
+  | adv s s' hrs ha ih =>
+    intro hcl
+    have hB := (cust_out_inv P cert₀ s hrs).2.1
+    cases ha with
+    | offRollback j =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      dsimp only
+      refine ⟨hM, fun k p hk hpp => hZ k p hk (hpp.trans (List.take_prefix j s.off)), fun k b v c hk hdk => ?_⟩
+      obtain ⟨hbv, T, hT, hout, hfit⟩ := hF k b v c hk hdk
+      exact ⟨hbv, T, hT, hout, fun p hpp => hfit p (hpp.trans (List.take_prefix j s.off))⟩
+    | foreignWrite e hrw =>
+      obtain ⟨hM, hZ, hF⟩ := ih hcl
+      dsimp only
+      -- a signed the foreign entry pushes is a released signed of the same shard (stored shardId)
+      have hrel : (fold P (s.off ++ [e])).isSome → ∀ y, e.body.signed? = some y →
+          ∃ e' ∈ s.out, e'.shard = e.shard ∧ e'.body.signed? = some y := by
+        intro hfo y hy
+        obtain ⟨st1, hf1⟩ := Option.isSome_iff_exists.mp hfo
+        obtain ⟨st0, -, hp⟩ := (cust_fold_snoc P s.off e st1).mp hf1
+        obtain ⟨n, hn, hsh⟩ := cust_push_signed P st0 st1 e hp y hy
+        obtain ⟨e', he', hy'⟩ := hrw y hy
+        obtain ⟨-, new, tokens, f, n', hb', hn', hsh'⟩ := hM e' (hB e' he')
+        rw [hb'] at hy'
+        simp only [Body.signed?, Option.some.injEq] at hy'
+        rw [← hy', hn'] at hn
+        cases hn
+        exact ⟨e', he', hsh'.symm.trans hsh, by rw [hb', ← hy']; rfl⟩
+      refine ⟨hM, fun k p hk hpp hfp x hx hxk => ?_, fun k b v c hk hdk => ?_⟩
+      · rcases List.prefix_concat_iff.mp hpp with rfl | hpp
+        · rcases List.mem_append.mp hx with hx | hx
+          · exact hZ k s.off hk (List.prefix_refl _) (cust_fold_pre P s.off [e] hfp) x hx hxk
+          · rw [List.mem_singleton.mp hx] at hxk ⊢
+            cases hy : e.body.signed? with
+            | none => rfl
+            | some y =>
+              obtain ⟨e', he', hsh, -⟩ := hrel hfp y hy
+              exact ((hM e' (hB e' he')).1 (by rw [hsh, hxk]; exact hk)).elim
+        · exact hZ k p hk hpp hfp x hx hxk
+      · obtain ⟨hbv, T, hT, hout, hfit⟩ := hF k b v c hk hdk
+        refine ⟨hbv, T, hT, hout, fun p hpp hfp => ?_⟩
+        rcases List.prefix_concat_iff.mp hpp with rfl | hpp
+        · have hfit0 := hfit s.off (List.prefix_refl _) (cust_fold_pre P s.off [e] hfp)
+          have hnd := cust_sigs_nodup P k c.epoch _ hfp
+          rw [List.filterMap_append] at hnd ⊢
+          cases hy : cust_sig k c.epoch e with
+          | none =>
+            rw [List.filterMap_cons_none hy, List.filterMap_nil, List.append_nil]; exact hfit0
+          | some y =>
+            rw [List.filterMap_cons_some hy, List.filterMap_nil] at hnd ⊢
+            obtain ⟨hek, hsy⟩ := cust_sig_some hy
+            obtain ⟨e', he', hsh, hy'⟩ := hrel hfp y hsy
+            obtain ⟨z, hz, hzT⟩ := hout e' he' (hsh.trans hek)
+            rw [hy', Option.some.injEq] at hz
+            rw [← hz] at hzT
+            rcases hfit0 with hsub | ⟨S0, y0, hS0, hsub, hl⟩
+            · exact Or.inl (List.append_subset.mpr ⟨hsub, List.cons_subset.mpr ⟨hzT, List.nil_subset _⟩⟩)
+            · exfalso
+              rw [hS0, List.append_assoc] at hnd
+              have h1 := (hnd.sublist ((List.sublist_append_right [y0] [y]).append_left S0)).length_le_of_subset
+                (List.append_subset.mpr ⟨hsub, List.cons_subset.mpr ⟨hzT, List.nil_subset _⟩⟩)
+              simp at h1; omega
+        · exact hfit p hpp hfp
+    | tpmClear k => simp at hcl
+
 /-- H2 + H1: a released signed missing from the store stops its shard at boot, unless the TPM was cleared. -/
 theorem lost_detected (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : Reach P cert₀ s) (e : Entry)
-    (he : e ∈ s.out) (hg : Gone s e) : s.cleared = true ∨ boot P s e.shard = .stop ∨ ChainCollision s := sorry
+    (he : e ∈ s.out) (hg : Gone s e) : s.cleared = true ∨ boot P s e.shard = .stop ∨ ChainCollision s := by
+  cases hcl : s.cleared
+  · obtain ⟨hM, -, hF⟩ := cust_lost_inv P cert₀ s hr hcl
+    right; left
+    obtain ⟨hne, new, tokens, f, -, hbody, -⟩ := hM e ((cust_out_inv P cert₀ s hr).2.1 e he)
+    cases hc : s.ctr e.shard with
+    | none => exact absurd hc hne
+    | some bv =>
+      obtain ⟨b, v⟩ := bv
+      cases hf : fold P s.off with
+      | none => simp [boot, hf]
+      | some st =>
+        cases hd : decodeKeyCert (s.cert e.shard) with
+        | none => simp [boot, hf, hc, hd]
+        | some c =>
+          obtain ⟨-, T, hT, hout, hfit⟩ := hF e.shard b v c hc hd
+          obtain ⟨x, hx, hxT⟩ := hout e he rfl
+          rw [hbody] at hx; simp only [Body.signed?, Option.some.injEq] at hx
+          rw [← hx] at hxT
+          have hS := cust_own P e.shard c.epoch s.off st hf
+          have hnd := cust_sigs_nodup P e.shard c.epoch s.off (by rw [hf]; rfl)
+          have hnot : new ∉ s.off.filterMap (cust_sig e.shard c.epoch) := fun hm => by
+            obtain ⟨y, hy, hyx⟩ := List.mem_filterMap.mp hm
+            exact hg y hy (by rw [(cust_sig_some hyx).2, hbody]; rfl)
+          rw [cust_boot P s e.shard st b v c hf hc hd]
+          rcases hfit s.off (List.prefix_refl _) (by rw [hf]; rfl) with hsub | ⟨S0, y, hS0, hsub, hl⟩
+          · have := (List.nodup_cons.mpr ⟨hnot, hnd⟩).length_le_of_subset (List.cons_subset.mpr ⟨hxT, hsub⟩)
+            simp only [List.length_cons] at this
+            split
+            · omega
+            · split
+              · omega
+              · rfl
+          · exfalso
+            rw [hS0] at hnot hnd
+            have := (List.nodup_cons.mpr ⟨fun h => hnot (List.mem_append_left _ h),
+              hnd.sublist (List.sublist_append_left _ _)⟩).length_le_of_subset (List.cons_subset.mpr ⟨hxT, hsub⟩)
+            simp only [List.length_cons] at this
+            omega
+  · exact Or.inl rfl
 
 /-- Honest custody keeps every shard's TPM count at the fold's count for its cert epoch, or one behind. -/
 private theorem cust_wedge_inv (P : Pins) (cert₀ : Bytes) (hc0 : (decodeKeyCert cert₀).isSome) (s : Cust)
