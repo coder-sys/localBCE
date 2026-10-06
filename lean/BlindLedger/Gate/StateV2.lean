@@ -1058,8 +1058,78 @@ theorem headOf_genesis (H : Bytes → Bytes) (t : Nat) :
     headOf H (genesisSets t).1 (genesisSets t).2 = some (genesisHead H t) := by
   first | rfl | simp [headOf, setMap, genesisSets, genesisHead, root, rootAt, guard]
 
+private theorem g1_mapM_mem {α β : Type} (f : α → Option β) :
+    ∀ (xs : List α) (ys : List β), xs.mapM f = some ys → ∀ y ∈ ys, ∃ x ∈ xs, f x = some y
+  | [], ys, h, y, hy => by simp [List.mapM_nil] at h; subst h; simp at hy
+  | x :: xs, ys, h, y, hy => by
+    simp only [List.mapM_cons] at h
+    cases hx : f x with
+    | none => simp [hx] at h
+    | some a =>
+      cases hm : xs.mapM f with
+      | none => simp [hx, hm] at h
+      | some bs =>
+        simp [hx, hm] at h
+        subst h
+        rcases List.mem_cons.mp hy with rfl | hy
+        · exact ⟨x, by simp, hx⟩
+        · obtain ⟨x', hx', e⟩ := g1_mapM_mem f xs bs hm y hy
+          exact ⟨x', by simp [hx'], e⟩
+
+private theorem keyVal_len (H : Bytes → Bytes) (hH : HashLen H) (xs : List Bytes) (v : Bytes)
+    (h : keyVal xs.length (xs.foldl (frontierPush H) []) = some v) : v.length < 2 ^ 32 := by
+  have hp := keyVal_parse H hH xs v h
+  unfold parseKeyVal at hp
+  by_cases hb : (v.length == 8 + 64 * (peaksOf (beNat (v.take 8))).length) = true
+  · have hl : v.length = 8 + 64 * (peaksOf (beNat (v.take 8))).length := by simpa using hb
+    have : (peaksOf (beNat (v.take 8))).length ≤ 64 := by
+      unfold peaksOf; exact Nat.le_trans (List.length_filter_le _ _) (by simp)
+    omega
+  · simp [hb] at hp
+
 theorem setMap_ok (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : List Line) (m : Map)
-    (h : setMap H u s = some m) : MapOk m := sorry
+    (h : setMap H u s = some m) : MapOk m := by
+  unfold setMap at h
+  simp only [bind, Option.bind] at h
+  split at h
+  · simp at h
+  rename_i rows hrows
+  dsimp only at h
+  split at h
+  · simp at h
+  rename_i ks hks
+  dsimp only at h
+  by_cases hg : (rows.map (·.1) ++ ks.map (·.1)).Nodup
+  · simp [guard, hg] at h
+    subst h
+    refine ⟨by simpa [List.map_append] using hg, ?_⟩
+    intro e he
+    rcases List.mem_append.mp he with he | he
+    · obtain ⟨⟨x, i⟩, hx, hf⟩ := g1_mapM_mem _ _ _ hrows e he
+      cases hk : keyBytes (rowKey x) with
+      | none => simp [hk] at hf
+      | some kb =>
+        cases hb : be 8 i with
+        | none => simp [hk, hb] at hf
+        | some v =>
+          simp [hk, hb] at hf
+          subst hf
+          exact ⟨hH _, by simp [be_len hb]⟩
+    · obtain ⟨q, hq, hf⟩ := g1_mapM_mem _ _ _ hks e he
+      cases hk : keyBytes q with
+      | none => simp [hk] at hf
+      | some kb =>
+        cases hp : postings u s q with
+        | none => simp [hk, hp] at hf
+        | some es =>
+          cases hv : keyVal es.length (es.foldl (frontierPush H) []) with
+          | none => simp [hk, hp, hv] at hf
+          | some v =>
+            simp [hk, hp, hv] at hf
+            subst hf
+            exact ⟨hH _, keyVal_len H hH es v hv⟩
+  · simp [guard, hg] at h
+
 
 /-- Every hash input behind one set's map: key paths, posting lists, tree (H-d). -/
 def setInputs (H : Bytes → Bytes) (u : Bool) (s : List Line) : List Bytes :=
@@ -1598,24 +1668,6 @@ theorem payNat_fits (program pay : Bytes) (hp : identOk program = true) (hq : id
   apply g1_idNat_lt
   simp [identField, natBE, payWidth]
   omega
-
-private theorem g1_mapM_mem {α β : Type} (f : α → Option β) :
-    ∀ (xs : List α) (ys : List β), xs.mapM f = some ys → ∀ y ∈ ys, ∃ x ∈ xs, f x = some y
-  | [], ys, h, y, hy => by simp [List.mapM_nil] at h; subst h; simp at hy
-  | x :: xs, ys, h, y, hy => by
-    simp only [List.mapM_cons] at h
-    cases hx : f x with
-    | none => simp [hx] at h
-    | some a =>
-      cases hm : xs.mapM f with
-      | none => simp [hx, hm] at h
-      | some bs =>
-        simp [hx, hm] at h
-        subst h
-        rcases List.mem_cons.mp hy with rfl | hy
-        · exact ⟨x, by simp, hx⟩
-        · obtain ⟨x', hx', e⟩ := g1_mapM_mem f xs bs hm y hy
-          exact ⟨x', by simp [hx'], e⟩
 
 private theorem g1_mapM_be : ∀ (l : List (Nat × Nat)), (∀ e ∈ l, e.2 < 256 ^ e.1) →
     (l.mapM fun (w, n) => be w n).isSome = true
