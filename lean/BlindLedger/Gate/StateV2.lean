@@ -651,6 +651,75 @@ def upsertPf : Nat → Nat → Proof → Map → Proof
       (upsertPf f (d + 1) r (ws.filter fun e => bit e.1 d))
   | _, _, pf, _ => pf
 
+/-- Elements of `L` share their first `d` bits. -/
+private def Agree (d : Nat) (L : Map) : Prop := ∀ e ∈ L, ∀ e' ∈ L, ∀ j < d, bit e.1 j = bit e'.1 j
+
+private theorem bit_ext (p q : Bytes) (hp : p.length = digestBytes) (hq : q.length = digestBytes)
+    (h : ∀ j < 512, bit p j = bit q j) : p = q := by
+  have h64 : digestBytes = 64 := rfl
+  refine List.ext_getElem (hp.trans hq.symm) fun i hi hi' => ?_
+  have hi64 : i < 64 := by omega
+  have gp : p.getD i 0 = p[i] := by rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]; rfl
+  have gq : q.getD i 0 = q[i] := by rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi']; rfl
+  have key : ∀ r < 8, (p[i]).toNat / 2 ^ (7 - r) % 2 = (q[i]).toNat / 2 ^ (7 - r) % 2 := by
+    intro r hr
+    have := h (8 * i + r) (by omega)
+    rw [bit, bit, show (8 * i + r) / 8 = i by omega, show (8 * i + r) % 8 = r by omega, gp, gq] at this
+    have la : (p[i]).toNat / 2 ^ (7 - r) % 2 < 2 := Nat.mod_lt _ (by omega)
+    have lb : (q[i]).toNat / 2 ^ (7 - r) % 2 < 2 := Nat.mod_lt _ (by omega)
+    generalize (p[i]).toNat / 2 ^ (7 - r) % 2 = a at this la ⊢
+    generalize (q[i]).toNat / 2 ^ (7 - r) % 2 = b at this lb ⊢
+    obtain rfl | rfl : a = 0 ∨ a = 1 := by omega
+    all_goals obtain rfl | rfl : b = 0 ∨ b = 1 := by omega
+    all_goals first | rfl | exact absurd this (by decide)
+  have k0 := key 0 (by omega)
+  have k1 := key 1 (by omega)
+  have k2 := key 2 (by omega)
+  have k3 := key 3 (by omega)
+  have k4 := key 4 (by omega)
+  have k5 := key 5 (by omega)
+  have k6 := key 6 (by omega)
+  have k7 := key 7 (by omega)
+  simp only [Nat.reduceSub, Nat.reducePow] at k0 k1 k2 k3 k4 k5 k6 k7
+  have lp : (p[i]).toNat < 256 := p[i].toNat_lt
+  have lq : (q[i]).toNat < 256 := q[i].toNat_lt
+  have : (p[i]).toNat = (q[i]).toNat := by omega
+  exact UInt8.toNat_inj.mp this
+
+private theorem agree_small {d : Nat} (hd : 512 ≤ d) {L : Map} (ha : Agree d L)
+    (hl : ∀ e ∈ L, e.1.length = digestBytes) (hn : (L.map (·.1)).Nodup) : L.length ≤ 1 := by
+  rcases L with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · simp
+  · simp
+  · exfalso
+    have hab : a.1 = b.1 := bit_ext _ _ (hl a (by simp)) (hl b (by simp))
+      (fun j hj => ha a (by simp) b (by simp) j (by omega))
+    simp [List.nodup_cons, hab] at hn
+
+private theorem agree_filter {d : Nat} {L : Map} (ha : Agree d L) (p : Bytes × Bytes → Bool)
+    (hp : ∀ e ∈ L, ∀ e' ∈ L, p e = true → p e' = true → bit e.1 d = bit e'.1 d) : Agree (d + 1) (L.filter p) := by
+  intro e he e' he' j hj
+  obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+  obtain ⟨he1', he2'⟩ := List.mem_filter.mp he'
+  by_cases hjd : j < d
+  · exact ha e he1 e' he1' j hjd
+  · have : j = d := by omega
+    subst this
+    exact hp e he1 e' he1' he2 he2'
+
+private theorem rootAt_len64 (H : Bytes → Bytes) (hH : HashLen H) (f d : Nat) (m : Map)
+    (h : f = 0 → m.length ≤ 1) : (rootAt H f d m).length = digestBytes := by
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · rw [rootAt_nil]; exact hH _
+  · obtain ⟨p, v⟩ := a
+    rw [rootAt_one]; exact hH _
+  · cases f with
+    | zero => simp at h
+    | succ f => rw [rootAt_succ2]; exact hH _
+
+private theorem mapOk_filter {m : Map} (hm : MapOk m) (p : Bytes × Bytes → Bool) : MapOk (m.filter p) :=
+  ⟨List.Nodup.sublist (List.filter_sublist.map _) hm.1, fun e he => hm.2 e (List.mem_filter.mp he).1⟩
+
 theorem multi_update_sound (H : Bytes → Bytes) (hH : HashLen H) (m ws : Map) (hm : MapOk m) (hw : MapOk ws)
     (ks : List Bytes) (pf : Proof) (hv : verifyMulti H (root H m) ks pf = true) (hs : ∀ e ∈ ws, e.1 ∈ ks) :
     hashPf H (upsertPf 513 0 pf ws) = root H (upsert m ws) ∨
@@ -665,8 +734,79 @@ def prune (H : Bytes → Bytes) : Nat → Nat → Map → List Bytes → Proof
   | f + 1, d, m, ks => .node (prune H f (d + 1) (m.filter fun e => !bit e.1 d) (ks.filter (!bit · d)))
       (prune H f (d + 1) (m.filter fun e => bit e.1 d) (ks.filter (bit · d)))
 
+private theorem prune_base (H : Bytes → Bytes) (hH : HashLen H) (f d : Nat) (m : Map) (ks : List Bytes)
+    (hm : MapOk m) (hsm : f = 0 → m.length ≤ 1) (hb : ks = [] ∨ m.length ≤ 1) :
+    hashPf H (prune H f d m ks) = rootAt H f d m ∧
+      (∀ k ∈ ks, (lookupPf d (prune H f d m ks) k).isSome = true) ∧
+      minimal d (prune H f d m ks) ks = true := by
+  rcases ks with _ | ⟨k0, ks'⟩
+  · simp [prune, hashPf, lookupPf, minimal, rootAt_len64 H hH f d m hsm]
+  · have hl : m.length ≤ 1 := hb.resolve_left (by simp)
+    rcases m with _ | ⟨⟨p, v⟩, _ | ⟨b, t⟩⟩
+    · simp [prune, hashPf, lookupPf, minimal, rootAt_nil]
+    · have hok : leafOk p v = true := by
+        have := hm.2 (p, v) (by simp)
+        simp [leafOk, this.1, this.2]
+      simp [prune, hashPf, lookupPf, minimal, hok, rootAt_one]
+    · simp at hl
+
+private theorem prune_node (H : Bytes → Bytes) (f d : Nat) (a b : Bytes × Bytes) (t : Map) (k : Bytes) (ks : List Bytes) :
+    prune H (f + 1) d (a :: b :: t) (k :: ks) =
+      .node (prune H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d) ((k :: ks).filter (!bit · d)))
+        (prune H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d) ((k :: ks).filter (bit · d))) := by
+  first | rfl | simp [prune]
+
+private theorem prune_aux (H : Bytes → Bytes) (hH : HashLen H) : ∀ (f d : Nat) (m : Map) (ks : List Bytes),
+    f + d = 513 → Agree d m → MapOk m → (∀ k ∈ ks, k.length = digestBytes) →
+    hashPf H (prune H f d m ks) = rootAt H f d m ∧
+      (∀ k ∈ ks, (lookupPf d (prune H f d m ks) k).isSome = true) ∧
+      minimal d (prune H f d m ks) ks = true := by
+  intro f
+  induction f with
+  | zero =>
+    intro d m ks hf ha hm hk
+    exact prune_base H hH 0 d m ks hm (fun _ => agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1)
+      (Or.inr (agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1))
+  | succ f ih =>
+    intro d m ks hf ha hm hk
+    rcases ks with _ | ⟨k0, ks'⟩
+    · exact prune_base H hH _ d m _ hm (fun h => by omega) (Or.inl rfl)
+    rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+    · exact prune_base H hH _ d _ _ hm (fun h => by omega) (Or.inr (by simp))
+    · exact prune_base H hH _ d _ _ hm (fun h => by omega) (Or.inr (by simp))
+    have hd : d < 512 := by
+      by_cases hc : d < 512
+      · exact hc
+      · have := agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1
+        simp at this
+    have hag0 := agree_filter ha (fun e => !bit e.1 d) (fun e _ e' _ h h' => by simp at h h'; rw [h, h'])
+    have hag1 := agree_filter ha (fun e => bit e.1 d) (fun e _ e' _ h h' => by
+      have h1 : bit e.1 d = true := h
+      have h2 : bit e'.1 d = true := h'
+      rw [h1, h2])
+    obtain ⟨l1, l2, l3⟩ := ih (d + 1) _ ((k0 :: ks').filter (!bit · d)) (by omega) hag0
+      (mapOk_filter hm _) (fun k hk' => hk k (List.mem_filter.mp hk').1)
+    obtain ⟨r1, r2, r3⟩ := ih (d + 1) _ ((k0 :: ks').filter (bit · d)) (by omega) hag1
+      (mapOk_filter hm _) (fun k hk' => hk k (List.mem_filter.mp hk').1)
+    rw [prune_node]
+    refine ⟨?_, ?_, ?_⟩
+    · rw [rootAt_succ2]; simp only [hashPf, l1, r1]
+    · intro k hk'
+      simp only [lookupPf, hd, ↓reduceIte]
+      by_cases hb : bit k d = true
+      · rw [if_pos hb]; exact r2 k (by simp [hk', hb])
+      · rw [if_neg hb]; exact l2 k (by simp [hk', show bit k d = false by simpa using hb])
+    · simp [minimal, hd, l3, r3]
+
 theorem prune_complete (H : Bytes → Bytes) (hH : HashLen H) (m : Map) (hm : MapOk m) (ks : List Bytes)
-    (hk : ∀ k ∈ ks, k.length = digestBytes) : verifyMulti H (root H m) ks (prune H 513 0 m ks) = true := sorry
+    (hk : ∀ k ∈ ks, k.length = digestBytes) : verifyMulti H (root H m) ks (prune H 513 0 m ks) = true := by
+  obtain ⟨ha, hl, hmin⟩ := prune_aux H hH 513 0 m ks rfl
+    (fun _ _ _ _ j hj => absurd hj (Nat.not_lt_zero _)) hm hk
+  unfold verifyMulti
+  simp only [Bool.and_eq_true, beq_iff_eq]
+  refine ⟨⟨⟨⟨rootAt_len64 H hH 513 0 m (fun h => by omega), List.all_eq_true.mpr fun k hk' => by simpa using hk k hk'⟩, ha⟩,
+    List.all_eq_true.mpr hl⟩, hmin⟩
+
 
 /-! ## 4. Posting lists (H2, M-b): append-only, row order, Spec.lean:198-206 shape -/
 
