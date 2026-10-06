@@ -18,7 +18,7 @@ PRODUCT_CODE_LINES = 35_823
 EVIDENCE_CODE_LINES = 32_533
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 92_715
+MARKDOWN_BYTES = 92_740  # 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)
 CONFORMANCE_MARKDOWN_BYTES = 30_970
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
