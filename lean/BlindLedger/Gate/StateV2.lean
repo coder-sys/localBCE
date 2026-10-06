@@ -2220,6 +2220,139 @@ def eps : Nat := 120
 
 /-! ### 8b. Order independence (fix 6) -/
 
+private theorem pm_view (t : Nat) (s : Snapshot Line) : view t s (some s) = s := by
+  unfold view; split <;> rfl
+
+private theorem pm_all_self (l : List Line) : l.all l.contains = true := by simp
+
+private theorem pm_chained (t : Nat) (s s' : Snapshot Line) (h1 : s.entries.Perm s'.entries)
+    (h2 : s.count = s'.count) (h3 : s.asOf = s'.asOf) :
+    chained t s (some s) = chained t s' (some s') := by
+  simp only [chained, pm_all_self, h1.length_eq, h2, h3]
+
+private theorem pm_loose (t : Nat) (s : Snapshot Line) : loose t s (some s) = [] := by
+  unfold loose; split
+  · rfl
+  · simp [entries]
+
+private theorem pm_relSet (c₀ : Ctx) (rel unr : Snapshot Line) :
+    releasedSet (carried c₀ rel unr) = rel.entries := by
+  simp [releasedSet, carried, pm_view]
+
+private theorem pm_unrSet (c₀ : Ctx) (rel unr : Snapshot Line) :
+    unresolvedSet (carried c₀ rel unr) = unr.entries := by
+  simp [unresolvedSet, carried, pm_view]
+
+private theorem pm_own (c₀ : Ctx) (rel unr rel' unr' : Snapshot Line) (hr : rel.entries.Perm rel'.entries)
+    (l : Line) : own (carried c₀ rel unr) l = own (carried c₀ rel' unr') l := by
+  simp only [own, pm_relSet, hr.contains_eq]
+  rfl
+
+private theorem pm_claim_gen (c c' : Ctx) (h1 : c.today = c'.today) (h5 : c.enrollment = c'.enrollment)
+    (l : Line) (ho : own c l = own c' l) : claim c l = claim c' l := by
+  have hne : notEnrolled c l = notEnrolled c' l := by
+    clear ho
+    cases c; cases c'
+    simp only at h1 h5
+    subst h1 h5
+    simp only [notEnrolled, certain, enrolled]
+  unfold claim
+  by_cases hcnd : (isCap l && notEnrolled c l && !own c l) = true
+  · have h2 : (isCap l && notEnrolled c' l && !own c' l) = true := by rw [← hne, ← ho]; exact hcnd
+    rw [if_pos hcnd, if_pos h2]
+  · have h2 : ¬ (isCap l && notEnrolled c' l && !own c' l) = true := by rw [← hne, ← ho]; exact hcnd
+    rw [if_neg hcnd, if_neg h2]
+
+private theorem pm_fires (c c' : Ctx) (h1 : c.today = c'.today) (h2 : c.dmf = c'.dmf)
+    (h3 : c.providerDeaths = c'.providerDeaths) (h4 : c.exclusions = c'.exclusions)
+    (h5 : c.enrollment = c'.enrollment)
+    (h6 : chained c.today c.releasedPrior c.released = chained c'.today c'.releasedPrior c'.released)
+    (h7 : chained c.today c.unresolvedPrior c.unresolved = chained c'.today c'.unresolvedPrior c'.unresolved)
+    (hp : ∀ x, (pending c).contains x = (pending c').contains x) (hl : looseKeys c = looseKeys c')
+    (seen seen' : List Key) (hs : ∀ x, seen.contains x = seen'.contains x) (l : Line) (r : Reason) :
+    fires c seen l r = fires c' seen' l r := by
+  cases c; cases c'
+  simp only at h1 h2 h3 h4 h5 h6 h7
+  subst h1 h2 h3 h4 h5
+  cases r <;> simp only [fires, certain, unverified, notEnrolled, enrolled, overlap, memberDead,
+    providerDead, excluded, h6, h7, hp, hl, hs]
+
+private def pmP (d : Decision) : Line × Outcome × List Reason := (d.line, d.outcome, d.reasons)
+
+private abbrev pmS (d : Decision) : Decision := { d with counterparts := [] }
+
+private theorem pm_decideAll (c c' : Ctx)
+    (hf : ∀ seen seen', (∀ x, seen.contains x = seen'.contains x) → ∀ l r, fires c seen l r = fires c' seen' l r)
+    (hcl : ∀ l, claim c l = claim c' l) :
+    ∀ (ls : List Line) (seen seen' : List Key), (∀ x, seen.contains x = seen'.contains x) →
+      (decideAll c seen ls).map pmP = (decideAll c' seen' ls).map pmP := by
+  intro ls
+  induction ls with
+  | nil => intros; rfl
+  | cons l ls ih =>
+    intro seen seen' hs
+    have hfl : fires c seen l = fires c' seen' l := funext (hf seen seen' hs l)
+    have := ih (claim c l ++ seen) (claim c' l ++ seen') (by intro x; rw [List.contains_append, List.contains_append, hs x, hcl])
+    simp only [decideAll, List.map_cons, decideLine, pmP, hfl]
+    rw [this]
+
+private theorem pm_strip : ∀ ds ds' : List Decision, ds.map pmP = ds'.map pmP → ds.map pmS = ds'.map pmS := by
+  intro ds
+  induction ds with
+  | nil => intro ds' h; cases ds' with
+    | nil => rfl
+    | cons _ _ => simp at h
+  | cons d ds ih => intro ds' h; cases ds' with
+    | nil => simp at h
+    | cons d' ds' =>
+      simp only [List.map_cons, List.cons.injEq] at h ⊢
+      refine ⟨?_, ih _ h.2⟩
+      obtain ⟨h1, _⟩ := h
+      cases d; cases d'
+      simp only [pmP, pmS, Prod.mk.injEq] at h1 ⊢
+      obtain ⟨a, b, c⟩ := h1
+      subst a b c
+      rfl
+
+
+private theorem pm_payOutcome_strip (c : Ctx) (ds : List Decision) (p : Nat) :
+    payOutcome c (ds.map pmS) p = payOutcome c ds p := by
+  simp [payOutcome, pmS, List.filter_map, Function.comp_def]
+
+private theorem pm_pays_strip (c : Ctx) (ds : List Decision) : paysOf c (ds.map pmS) = paysOf c ds := by
+  simp [paysOf, pm_payOutcome_strip, pmS, List.filter_map, Function.comp_def, List.map_map]
+
+private theorem pm_rl_strip (c : Ctx) (ds : List Decision) : releasedLines c (ds.map pmS) = releasedLines c ds := by
+  simp [releasedLines, allowedLines, pm_payOutcome_strip, pmS, List.filter_map, Function.comp_def, List.map_map]
+
+private theorem pm_ul_strip (c : Ctx) (ds : List Decision) : unresolvedLines c (ds.map pmS) = unresolvedLines c ds := by
+  simp [unresolvedLines, pmS, List.filter_map, Function.comp_def, List.map_map]
+
+private theorem pm_payOutcome_c (c c' : Ctx) (hr : c.redo = c'.redo) (ho : ∀ l, own c l = own c' l)
+    (ds : List Decision) (p : Nat) : payOutcome c ds p = payOutcome c' ds p := by
+  simp only [payOutcome, hr, ho]
+
+private theorem pm_three (c c' : Ctx) (ds ds' : List Decision) (hr : c.redo = c'.redo)
+    (ho : ∀ l, own c l = own c' l) (h : ds.map pmP = ds'.map pmP) :
+    releasedLines c ds = releasedLines c' ds' ∧ unresolvedLines c ds = unresolvedLines c' ds' ∧
+      paysOf c ds = paysOf c' ds' := by
+  have hs := pm_strip _ _ h
+  refine ⟨?_, ?_, ?_⟩
+  · rw [← pm_rl_strip c ds, hs, pm_rl_strip]
+    simp only [releasedLines, hr, pm_payOutcome_c c c' hr ho]
+  · rw [← pm_ul_strip c ds, hs, pm_ul_strip]
+    simp only [unresolvedLines, ho]
+  · rw [← pm_pays_strip c ds, hs, pm_pays_strip]
+    simp only [paysOf, pm_payOutcome_c c c' hr ho]
+
+private theorem pm_viewc (c₀ : Ctx) (rel unr : Snapshot Line) :
+    view (carried c₀ rel unr).today (carried c₀ rel unr).releasedPrior (carried c₀ rel unr).released = rel :=
+  pm_view _ _
+
+private theorem pm_viewu (c₀ : Ctx) (rel unr : Snapshot Line) :
+    view (carried c₀ rel unr).today (carried c₀ rel unr).unresolvedPrior (carried c₀ rel unr).unresolved = unr :=
+  pm_view _ _
+
 /-- RESTATED (fix 6; moved here from §5b because it names `paysOf`): a reordered base gives the same
     decisions, next sets equal up to order with equal counts and dates, and the same pays. -/
 theorem decideRegT_perm (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr rel' unr' : Snapshot Line)
@@ -2232,7 +2365,55 @@ theorem decideRegT_perm (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
     r.released.entries.Perm r'.released.entries ∧ r.unresolved.entries.Perm r'.unresolved.entries ∧
     r.released.count = r'.released.count ∧ r.unresolved.count = r'.unresolved.count ∧
     r.released.asOf = r'.released.asOf ∧ r.unresolved.asOf = r'.unresolved.asOf ∧
-    paysOf (carried c₀ rel unr) r.decisions = paysOf (carried c₀ rel' unr') r'.decisions := sorry
+    paysOf (carried c₀ rel unr) r.decisions = paysOf (carried c₀ rel' unr') r'.decisions := by
+  obtain ⟨hcr, hcu, har, hau⟩ := hc
+  have ho : ∀ l, own (carried c₀ rel unr) l = own (carried c₀ rel' unr') l := pm_own c₀ rel unr rel' unr' hr
+  have hcl : ∀ l, claim (carried c₀ rel unr) l = claim (carried c₀ rel' unr') l :=
+    fun l => pm_claim_gen (carried c₀ rel unr) (carried c₀ rel' unr') rfl rfl l (ho l)
+  have hpend : ∀ x, (pending (carried c₀ rel unr)).contains x = (pending (carried c₀ rel' unr')).contains x := by
+    intro x
+    have hc2 : claim (carried c₀ rel' unr') = claim (carried c₀ rel unr) := funext fun l => (hcl l).symm
+    simp only [pending, pm_unrSet, hc2]
+    exact (List.Perm.flatMap_right _ hu).contains_eq
+  have hloose : ∀ (a b : Snapshot Line), looseKeys (carried c₀ a b) = [] := by
+    intro a b; simp [looseKeys, carried, pm_loose]
+  have hchR : chained (carried c₀ rel unr).today (carried c₀ rel unr).releasedPrior (carried c₀ rel unr).released =
+      chained (carried c₀ rel' unr').today (carried c₀ rel' unr').releasedPrior (carried c₀ rel' unr').released :=
+    pm_chained c₀.today rel rel' hr hcr har
+  have hchU : chained (carried c₀ rel unr).today (carried c₀ rel unr).unresolvedPrior (carried c₀ rel unr).unresolved =
+      chained (carried c₀ rel' unr').today (carried c₀ rel' unr').unresolvedPrior (carried c₀ rel' unr').unresolved :=
+    pm_chained c₀.today unr unr' hu hcu hau
+  have hf : ∀ seen seen', (∀ x, seen.contains x = seen'.contains x) → ∀ l r,
+      fires (carried c₀ rel unr) seen l r = fires (carried c₀ rel' unr') seen' l r :=
+    fun seen seen' hs l r => pm_fires (carried c₀ rel unr) (carried c₀ rel' unr') rfl rfl rfl rfl rfl hchR hchU hpend
+      ((hloose _ _).trans (hloose _ _).symm) seen seen' hs l r
+  have hdec := pm_decideAll _ _ hf hcl
+  have hord : order (carried c₀ rel unr) (ready k os b) = order (carried c₀ rel' unr') (ready k os b) := by
+    have hown : own (carried c₀ rel unr) = own (carried c₀ rel' unr') := funext ho
+    simp only [order, hown]
+  have hseen0 : ∀ x, (idSeen (foreignOf k os (ready k os b)) ++ seen0 (carried c₀ rel unr) (ready k os b)).contains x =
+      (idSeen (foreignOf k os (ready k os b)) ++ seen0 (carried c₀ rel' unr') (ready k os b)).contains x := by
+    intro x
+    rw [List.contains_append, List.contains_append]
+    congr 1
+    have : (seen0 (carried c₀ rel unr) (ready k os b)).Perm (seen0 (carried c₀ rel' unr') (ready k os b)) := by
+      simp only [seen0, pm_relSet, ho]
+      exact List.Perm.flatMap_right _ (hr.filter _)
+    exact this.contains_eq
+  have hD := hdec (order (carried c₀ rel unr) (ready k os b)) _ _ hseen0
+  dsimp only
+  simp only [decideRegT, bumpRes, decideReg, decideBatchIn]
+  rw [← hord]
+  generalize decideAll (carried c₀ rel unr) _ (order (carried c₀ rel unr) (ready k os b)) = ds at hD ⊢
+  generalize decideAll (carried c₀ rel' unr') _ (order (carried c₀ rel unr) (ready k os b)) = ds' at hD ⊢
+  obtain ⟨hRL, hUL, hP⟩ := pm_three (carried c₀ rel unr) (carried c₀ rel' unr') ds ds' rfl ho hD
+  refine ⟨hD, ?_, ?_, ?_, ?_, ?_, ?_, hP⟩
+  · simp only [advance, pm_viewc, hRL]; exact List.Perm.append_right _ hr
+  · simp only [advance, pm_viewu, hUL]; exact List.Perm.append_right _ hu
+  · simp only [advance, pm_viewc, hRL, hr.length_eq]
+  · simp only [advance, pm_viewu, hUL, hu.length_eq]
+  · simp only [advance, pm_viewc, bumpIf, hchR, har]; try rfl
+  · simp only [advance, pm_viewu, bumpIf, hchU, hau]; try rfl
 
 /-- KEPT from r3: the dated spec along batches: per batch, (line, outcome, reasons) and pays. -/
 def runT (k : Nat) (g : Snapshot Line × Snapshot Line) :
@@ -2248,7 +2429,19 @@ def runT (k : Nat) (g : Snapshot Line × Snapshot Line) :
 theorem runT_perm (k : Nat) (g g' : Snapshot Line × Snapshot Line)
     (hr : g.1.entries.Perm g'.1.entries) (hu : g.2.entries.Perm g'.2.entries)
     (hc : g.1.count = g'.1.count ∧ g.2.count = g'.2.count ∧ g.1.asOf = g'.1.asOf ∧ g.2.asOf = g'.2.asOf)
-    (ts : List Batch) : runT k g ts = runT k g' ts := sorry
+    (ts : List Batch) : runT k g ts = runT k g' ts := by
+  induction ts generalizing g g' with
+  | nil => rfl
+  | cons t ts ih =>
+    have h := decideRegT_perm t.ctx k t.owners t.lines g.1 g.2 g'.1 g'.2 hr hu hc
+    dsimp only at h
+    obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h
+    have hih := ih ((decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).released,
+      (decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).unresolved)
+      ((decideRegT (carried t.ctx g'.1 g'.2) k t.owners t.lines).released,
+      (decideRegT (carried t.ctx g'.1 g'.2) k t.owners t.lines).unresolved) h2 h3 ⟨h4, h5, h6, h7⟩
+    simp only [runT]
+    rw [h1, h8, hih]
 
 /-! ### 8c. Requests and lines (r4 fix 4): Lean decodes `Request.lines` itself -/
 
