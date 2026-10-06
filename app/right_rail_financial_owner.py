@@ -175,6 +175,7 @@ _FOLLOWUP_TOUCHES: Final[dict[str, tuple[str, ...]]] = {
     "PAYMENT_REVERSED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_CONFLICT_VISIBLE": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_DUPLICATE_EVIDENCE": (),  # repeats an existing payment (the checker binds it); money is unchanged
+    "INTAKE_RECEIVED": (),  # a raw file's intake facts and row outcomes; its rows' own events move money
     "FOLLOWTHROUGH_DECIDED": (),  # an official's act moves no correction dependency
     "OFFSET_CLAIMED": ("AUTHORITY", "OFFSET_EVIDENCE"),
     "OFFSET_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
@@ -2625,7 +2626,8 @@ class FinancialOwner:
     def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]], *, cash_file_context=None):
         """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
         history, retries). All or nothing: the first failure rolls the whole batch back and is raised
-        with a ``batch_index=<i>`` note (Art. III.2, III.5)."""
+        with a ``batch_index=<i>`` note (Art. III.2, III.5). In a cash file an input, conflict or revision
+        refusal holds only its row (and its item's later rows), and the file's intake facts land last."""
         if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
             _fail(FinancialInputError, "batch_commands")
         check = None
@@ -2637,16 +2639,30 @@ class FinancialOwner:
             check = CashFileCheck(commands, cash_file_context)
             commands = check.commands
         with self._write(before_commit=(lambda connection: check.finish(connection, results)) if check else None, conclude=check.conclude if check else None) as connection:
-            if check:
-                check.begin(connection)
+            outcomes = check.begin(connection) if check else [None] * len(commands)
             self._batch.connection = connection
+            held = set()  # a cash file's items with a held row: their later rows assumed it (docs/CORE_REDESIGN.md "Rows")
             try:
-                for index, (name, arguments) in enumerate(commands):
-                    try:
-                        results.append(getattr(self, name)(**arguments))
-                    except BaseException as error:
-                        error.add_note(f"batch_index={index}")
-                        raise
+                for index, ((name, arguments), outcome) in enumerate(zip(commands, outcomes)):
+                    if check and outcome is None and arguments["item_id"] in held:
+                        outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": "depends_on_held"}
+                    elif outcome is None:
+                        check and connection.execute("SAVEPOINT rr_row")  # D2: a refused cash row rolls back alone
+                        try:
+                            answer = getattr(self, name)(**arguments)
+                            outcome = {"status": answer["status"], "payment_id": answer["payment_id"], "reason": None} if check else answer
+                        except BaseException as error:
+                            if not (check and isinstance(error, (FinancialInputError, FinancialConflictError, FinancialRevisionError))):
+                                error.add_note(f"batch_index={index}")
+                                raise
+                            connection.execute("ROLLBACK TO rr_row")  # this row's writes, temp logs included
+                            outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": str(error)}
+                        check and connection.execute("RELEASE rr_row")
+                    if check and outcome["status"] == "HELD":
+                        held.add(arguments["item_id"])
+                    results.append(outcome)
+                if check and check.intake is not None:
+                    self.record_intake(check.intake, results)
             finally:
                 self._batch.connection = None
         return check.receipt if check else results
@@ -6030,6 +6046,24 @@ class FinancialOwner:
             _fail(FinancialInputError, "history_page")
         with self._read_snapshot(_connection=_connection) as connection:
             return self._dict_rows(connection, "SELECT event_sequence,event_id,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,previous_head,head,committed_at_ms FROM financial_events ORDER BY event_sequence LIMIT ? OFFSET ?", (limit, offset))
+
+    def record_intake(self, intake: Mapping[str, Any], results: list) -> None:
+        """Store one raw file's intake facts and its rows' outcomes as one history event, once per raw file
+        (docs/CORE_REDESIGN.md "Rows"); inside a cash-file batch it lands last and the cash-file check verifies it."""
+        self._assert_actionable()
+        if not isinstance(intake, Mapping) or type(results) is not list:
+            _fail(FinancialInputError, "intake_record")
+        source = _id(intake.get("source_sha256"), "intake_record")
+        with self._write() as connection:
+            if connection.execute("SELECT 1 FROM financial_events WHERE aggregate_type='INTAKE' AND aggregate_id=?", (source,)).fetchone():
+                _fail(FinancialConflictError, "intake_already_recorded")
+            self._append_event(connection, aggregate_type="INTAKE", aggregate_id=source, kind="INTAKE_RECEIVED", before_revision=0, after_revision=0,
+                               payload={"intake": dict(intake), "results": results}, committed_at_ms=self._now())
+
+    def intake_records(self) -> list[dict[str, Any]]:
+        """Every stored intake record, oldest first: (aggregate_id = raw file SHA-256, committed_at_ms, payload_json)."""
+        with self._read_snapshot() as connection:
+            return self._dict_rows(connection, "SELECT aggregate_id,committed_at_ms,payload_json FROM financial_events WHERE aggregate_type='INTAKE' ORDER BY event_sequence")
 
     def _obligation_timeline(self, connection: sqlite3.Connection, obligation_id: str, limit: int) -> dict[str, Any]:
         """The newest ``limit`` OBLIGATION events for one obligation, oldest first."""

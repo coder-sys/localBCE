@@ -32,7 +32,7 @@ _ROW = {"item_id", "payment_id", "common_origin_id", "evidence_id", "amount_cent
 _CONTEXT = {
     "source_bytes", "baseline_bytes", "expected_source_sha256", "expected_baseline_sha256",
     "expected_scope", "expected_source", "expected_authority", "expected_owner_id",
-    "expected_mode", "preview",
+    "expected_mode", "preview", "intake",
 }
 _EVALUATION = {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
 
@@ -167,6 +167,10 @@ def _fact(argument: Mapping) -> dict:
     return {**fact, "kind": "PAYMENT_CONFIRMATION", "applicable_at_ms": argument["event_at_ms"], "reversal_of": None, "supersedes": None}
 
 
+def _held(argument: Mapping, reason: str) -> dict:
+    return {"status": "HELD", "payment_id": argument["payment_id"], "reason": reason}
+
+
 def _matches(row: Mapping | None, expected: Mapping) -> bool:
     return row is not None and all(row[key] == value for key, value in expected.items())
 
@@ -219,6 +223,9 @@ class CashFileCheck:
             _require(all(type(expected[key]) is type(value) and expected[key] == value for key, value in actual.items()), "cash_file_binding")
         _id(context["expected_owner_id"])
         _require(type(context["expected_mode"]) is str and context["expected_mode"] in ("LIVE", "TEST") and type(context["preview"]) is bool, "cash_file_binding")
+        intake = context["intake"]  # None, or the intake facts of the raw file this file was derived from, stored with every row's outcome
+        _require(intake is None or type(intake) is dict and intake.get("derived_sha256") == self._source_sha and type(intake.get("source_sha256")) is str and _SHA.fullmatch(intake["source_sha256"]) is not None, "cash_file_binding")
+        self.intake = None if intake is None else json.loads(ledger._canonical(intake))
         self._context = _freeze(context)
         self._source = _freeze(source)
         manifest = json.loads(context["baseline_bytes"].decode("ascii"), object_pairs_hook=_unique)  # B: the owner's history-export manifest (docs/CORE_REDESIGN.md "History segments")
@@ -289,40 +296,53 @@ class CashFileCheck:
         ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else _index(rows, "financial_events", "event_sequence").get(sequence, {}).get("head")
         sealed = connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
         _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
-        self._stale = meta["sequence"] != sequence
+        if self.intake is not None:  # one raw file is received once; its stored outcome is the answer to any resend of the same bytes
+            _require(all((event["aggregate_type"], event["aggregate_id"]) != ("INTAKE", self.intake["source_sha256"]) for event in rows["financial_events"]), "cash_file_conflict")
         self._received, self._aliases = _payment_events(rows["financial_events"])
-        self._plan = self._classify(rows)
+        self._plan = self._classify(rows, sequence)
         self._meta, self._obligations, self._cases = next(iter(stored["financial_meta"].items())), stored["obligations"], stored["cases"]
         self._payments, self._actions = _index(rows, "payments", "payment_id"), _index(rows, "actions", "action_id")
         self._arm(connection)
         self._changes, self._connection = connection.total_changes, connection
+        return [skip for _, _, skip in self._plan]
 
-    def _classify(self, rows: Mapping) -> tuple[tuple[str, str], ...]:
-        """Per row, before any write, (kind, the payment_id the owner must answer): RETRY of this row's own payment,
-        ALIAS (this row's stored repeat of another payment), OVERLAP (a new repeat of one: DUPLICATE, no cash) or NEW.
-        Any other reuse of a recorded id, or an origin recorded with another amount or link, refuses the whole file."""
+    def _classify(self, rows: Mapping, baseline: int) -> tuple[tuple[str, str | None, dict | None], ...]:
+        """Per row, before any write, (kind, the payment_id the owner must answer, the outcome it gets without running):
+        RETRY of this row's own payment or ALIAS (its stored repeat of another) answer DUPLICATE unrun; OVERLAP (a new
+        repeat: DUPLICATE, no cash) and NEW run. Any other reuse of a recorded id, an origin recorded with another amount
+        or link, an item not in the period, or a new write to an obligation moved since the baseline is HELD (L3)."""
         payments, evidence, actions = (_index(rows, table, key) for table, key in (("payments", "payment_id"), ("evidence", "evidence_id"), ("actions", "action_id")))
         origins = {(row["obligation_id"], row["common_origin_id"]): row for row in rows["payments"]}
         obligations = {row["item_id"]: row["obligation_id"] for row in rows["obligations"] if row["period_id"] == self._context["expected_scope"]["period_id"]}
+        later = [event for event in rows["financial_events"] if event["event_sequence"] > baseline]
+        moved = {event["aggregate_id"] for event in later if event["aggregate_type"] == "OBLIGATION"}
+        foreign = any(event["aggregate_type"] not in ("OBLIGATION", "INTAKE") for event in later)  # a rule or population change since the baseline moves every row
         plan = []
         for _, argument in self.commands:
-            _require(argument["item_id"] in obligations, "cash_file_binding")
-            existing = origins.get((obligations[argument["item_id"]], argument["common_origin_id"]))
+            if argument["item_id"] not in obligations:
+                plan.append(("HELD", None, _held(argument, "unknown_item")))
+                continue
+            obligation = obligations[argument["item_id"]]
+            existing = origins.get((obligation, argument["common_origin_id"]))
+            stored = evidence.get(argument["evidence_id"])
+            restated = {**argument, "local_ref": stored["local_ref"]} if stored is not None else argument  # the same fact sent again in another file is still the same fact
             if argument["payment_id"] in payments:
-                recorded = _recorded(argument, payments[argument["payment_id"]], evidence.get(argument["evidence_id"]), *self._received.get(argument["payment_id"], (None, None)), actions)
-                _require(recorded, "cash_file_already_recorded")
-                kind, answer = "RETRY", argument["payment_id"]
+                same = stored is not None and _recorded(restated, payments[argument["payment_id"]], stored, *self._received.get(argument["payment_id"], (None, None)), actions)
+                kind, answer = ("RETRY", argument["payment_id"]) if same else ("already_recorded", None)
             elif existing is None:
-                _require(argument["evidence_id"] not in evidence, "cash_file_already_recorded")
-                kind, answer = "NEW", argument["payment_id"]
+                kind, answer = ("NEW", argument["payment_id"]) if stored is None else ("already_recorded", None)
+            elif not (existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, self._received[existing["payment_id"]][1].get("pays_action_id"))
+                      and (stored is not None or existing["active"] == 1 or argument["event_at_ms"] <= evidence[existing["reversed_by_evidence_id"]]["event_at_ms"])):  # a new repeat of a reversed payment is DUPLICATE only if it predates the reversal: later may be a re-presentment
+                kind, answer = "conflict", None
+            elif stored is None:
+                kind, answer = "OVERLAP", existing["payment_id"]
             else:
-                link = self._received[existing["payment_id"]][1].get("pays_action_id")
-                stored = evidence.get(argument["evidence_id"])
-                _require(existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, link) and (stored is not None or existing["active"] == 1 or argument["event_at_ms"] <= evidence[existing["reversed_by_evidence_id"]]["event_at_ms"]), "cash_file_conflict")  # a new repeat of a reversed payment is DUPLICATE only if it predates the reversal: later may be a re-presentment
-                _require(stored is None or (self._aliases.get(argument["evidence_id"]) == existing["payment_id"] and _matches(stored, _fact(argument))), "cash_file_already_recorded")
-                kind, answer = "OVERLAP" if stored is None else "ALIAS", existing["payment_id"]
-            _require(not self._stale or kind in ("RETRY", "ALIAS"), "cash_file_stale")
-            plan.append((kind, answer))
+                same = self._aliases.get(argument["evidence_id"]) == existing["payment_id"] and _matches(stored, _fact(restated))
+                kind, answer = ("ALIAS", existing["payment_id"]) if same else ("already_recorded", None)
+            if kind in ("NEW", "OVERLAP") and (foreign or obligation in moved):
+                kind, answer = "stale", None
+            skip = {"status": "DUPLICATE", "payment_id": answer, "reason": None} if kind in ("RETRY", "ALIAS") else None if answer else _held(argument, kind)
+            plan.append(("HELD" if answer is None else kind, answer, skip))
         return tuple(plan)
 
     @_fixed_errors
@@ -337,11 +357,22 @@ class CashFileCheck:
         first = sequence = old_meta["sequence"]
         head = old_meta["history_head"]
         revisions = {row["obligation_id"]: row["revision"] for row in self._obligations.values()}
-        recorded, new_evidence, new_evaluations, deltas, touched = set(), set(), set(), {}, set()
-        for (_, argument), (kind, answer), result in zip(self.commands, self._plan, results):
-            _require(type(result) is dict and result.get("status") == ("RECORDED" if kind == "NEW" else "DUPLICATE") and result.get("payment_id") == answer, "cash_file_failed")
-            if kind in ("RETRY", "ALIAS"):
-                continue  # wrote nothing: the log and total_changes below prove it
+        recorded, new_evidence, new_evaluations, deltas, touched, held = set(), set(), set(), {}, set(), set()
+        held_cents = 0
+        for (_, argument), (kind, answer, skip), result in zip(self.commands, self._plan, results):
+            _require(type(result) is dict, "cash_file_failed")
+            if skip is None and argument["item_id"] in held:
+                skip = _held(argument, "depends_on_held")  # its expected_revision assumed the held row before it
+            if skip is None and result.get("status") == "HELD":  # the owner refused the row; its savepoint rolled the row back
+                _require(type(result.get("reason")) is str and _ID.fullmatch(result["reason"]) is not None, "cash_file_failed")
+                skip = _held(argument, result["reason"])
+            if skip is not None:
+                _require(result == skip, "cash_file_failed")  # wrote nothing: the log, the event chain and total_changes below prove it
+                if skip["status"] == "HELD":
+                    held.add(argument["item_id"])
+                    held_cents += argument["amount_cents"]
+                continue
+            _require(result == {"status": "RECORDED" if kind == "NEW" else "DUPLICATE", "payment_id": answer, "reason": None}, "cash_file_failed")
             sequence += 1  # each NEW or OVERLAP row appends exactly the next event, verified onto the chain
             event, obligation = events[sequence], payments[answer]["obligation_id"]
             head = ledger._verify_event(event, sequence, head)
@@ -360,7 +391,13 @@ class CashFileCheck:
             deltas[obligation] = deltas.get(obligation, 0) + argument["amount_cents"]
             recorded.add(answer)
             new_evaluations.add(payload["evaluation_id"])
-        new_meta = _table(connection, "financial_meta", [self._meta[0]])[self._meta[0]]
+        if self.intake is not None:  # last, the raw file's intake facts with every row's outcome, as one event
+            sequence += 1
+            event = events[sequence]
+            head = ledger._verify_event(event, sequence, head)
+            _require((event["aggregate_type"], event["aggregate_id"], event["kind"], event["before_revision"], event["after_revision"]) == ("INTAKE", self.intake["source_sha256"], "INTAKE_RECEIVED", 0, 0)
+                     and json.loads(event["payload_json"]) == {"intake": self.intake, "results": results}, "cash_file_failed")
+        new_meta =_table(connection, "financial_meta", [self._meta[0]])[self._meta[0]]
         _require((new_meta["sequence"], new_meta["history_head"]) == (sequence, head), "cash_file_failed")
         _unchanged(old_meta, new_meta, {"sequence", "history_head"})
         for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1)))):
@@ -380,18 +417,19 @@ class CashFileCheck:
             old = self._cases[rowid]
             _unchanged(old, now[rowid], {"status", "updated_at_ms"} if old["obligation_id"] in deltas else frozenset())
         ledger.verify_obligation_connection(connection, *sorted(touched), **self._expectations())  # schema and meta once, then each touched obligation
-        _require(bool(new_evidence) or connection.total_changes == self._changes, "cash_file_failed")  # a file of repeats writes nothing (III.3)
+        _require(bool(new_evidence) or self.intake is not None or connection.total_changes == self._changes, "cash_file_failed")  # a file of repeats writes nothing (III.3)
         self._disarm(connection)
         recorded_cents = sum(deltas.values())
         cash_before = sum(row["received_cash_cents"] for row in self._obligations.values())
+        held_count = sum(result["status"] == "HELD" for result in results)
         self.receipt = {
-            "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2",
+            "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3",
             "mode": "PREVIEW" if self._preview else "APPLIED",
             "source_sha256": self._source_sha, "baseline_sha256": self._baseline_sha,
-            "row_count": len(self.commands), "recorded_count": len(recorded),
-            "duplicate_count": len(self.commands) - len(recorded),
-            "file_total_cents": self._source["total_cents"], "recorded_cents": recorded_cents,
-            "duplicate_cents": self._source["total_cents"] - recorded_cents,
+            "row_count": len(self.commands), "recorded_count": len(recorded), "held_count": held_count,
+            "duplicate_count": len(self.commands) - len(recorded) - held_count,
+            "file_total_cents": self._source["total_cents"], "recorded_cents": recorded_cents, "held_cents": held_cents,
+            "duplicate_cents": self._source["total_cents"] - recorded_cents - held_cents, "rows": list(results),
             "cash_before_cents": cash_before, "cash_after_cents": cash_before + recorded_cents,
             "cash_delta_cents": recorded_cents, "proofSuiteId": None,
             "production_usable": False, "activation": False,
