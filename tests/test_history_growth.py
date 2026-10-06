@@ -74,7 +74,7 @@ MEASURED = {"record_payment_evidence", "reverse_payment", "evaluate_obligation",
 UNMEASURED = {
     "setup, scales with its own input": "publish_control_pack register_population_manifest stage_population validate_population publish_population population_status",
     "decision-path writes, not yet measured (gap)": "record_support_evidence record_offset_claim retry_action authorize_offset reject_offset_and_authorize_correction acknowledge_action record_followthrough_decision record_reporting_evidence record_reporting_correction drain_correction_followups record_program_funding_receipt",
-    "bounded staff reads, not yet measured (gap)": "list_obligations obligation_detail read_verified_staff_snapshot action_payload current_evaluation_receipt correction_followup_outputs program_funding_summary",
+    "bounded staff reads, not yet measured (gap)": "list_obligations obligation_detail read_verified_staff_snapshot action_payload current_evaluation_receipt correction_followup_outputs program_funding_summary intake_records",
     "whole state by design (restore, full audit)": "validate_continuity_package restore_continuity verify_integrity",
     "operator-only, once per recovery, never per claim or commit (reads one head row)": "resolve_custody",
     "no work": "dispatch_outbox close",

@@ -175,6 +175,7 @@ _FOLLOWUP_TOUCHES: Final[dict[str, tuple[str, ...]]] = {
     "PAYMENT_REVERSED": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_CONFLICT_VISIBLE": ("AUTHORITY", "PAYMENT_EVIDENCE"),
     "PAYMENT_DUPLICATE_EVIDENCE": (),  # repeats an existing payment (the checker binds it); money is unchanged
+    "INTAKE_RECEIVED": (),  # a raw file's intake facts and row outcomes; its rows' own events move money
     "FOLLOWTHROUGH_DECIDED": (),  # an official's act moves no correction dependency
     "OFFSET_CLAIMED": ("AUTHORITY", "OFFSET_EVIDENCE"),
     "OFFSET_AUTHORIZED": ("AUTHORITY", "DETERMINATION"),
@@ -2642,8 +2643,10 @@ class FinancialOwner:
     def run_batch(self, commands: list[tuple[str, Mapping[str, Any]]], *, cash_file_context=None):
         """Up to 1,000 commands in one transaction, each run exactly as its method alone (same checks,
         history, retries). All or nothing: the first failure rolls the whole batch back and is raised
-        with a ``batch_index=<i>`` note (Art. III.2, III.5)."""
-        if type(commands) is not list or not 0 < len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
+        with a ``batch_index=<i>`` note (Art. III.2, III.5). In an absorbed cash file (intake facts given) an input,
+        conflict or revision refusal holds only its row (and its item's later rows), the file may carry no row, and the
+        file's one INTAKE event lands last; any other cash file is atomic."""
+        if type(commands) is not list or not (cash_file_context is None) <= len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
             _fail(FinancialInputError, "batch_commands")
         check = None
         results = []
@@ -2654,16 +2657,32 @@ class FinancialOwner:
             check = CashFileCheck(commands, cash_file_context)
             commands = check.commands
         with self._write(before_commit=(lambda connection: check.finish(connection, results)) if check else None, conclude=check.conclude if check else None) as connection:
-            if check:
-                check.begin(connection)
+            outcomes = check.begin(connection) if check else [None] * len(commands)
             self._batch.connection = connection
+            absorbing = check is not None and check.intake is not None
+            held = set()  # a cash file's items with a held row: their later rows assumed it (docs/CORE_REDESIGN.md "Rows")
             try:
-                for index, (name, arguments) in enumerate(commands):
-                    try:
-                        results.append(getattr(self, name)(**arguments))
-                    except BaseException as error:
-                        error.add_note(f"batch_index={index}")
-                        raise
+                for index, ((name, arguments), outcome) in enumerate(zip(commands, outcomes)):
+                    if check and outcome is None and arguments["item_id"] in held:
+                        outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": "depends_on_held"}
+                    elif outcome is None:
+                        absorbing and connection.execute("SAVEPOINT rr_row")  # D2: a refused cash row rolls back alone
+                        try:
+                            answer = getattr(self, name)(**arguments)
+                            outcome = {"status": answer["status"], "payment_id": answer["payment_id"], "reason": None} if check else answer
+                        except BaseException as error:
+                            if not (absorbing and isinstance(error, (FinancialInputError, FinancialConflictError, FinancialRevisionError))):
+                                error.add_note(f"batch_index={index}")
+                                raise
+                            connection.execute("ROLLBACK TO rr_row")  # this row's writes, temp logs included
+                            outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": str(error)}
+                        absorbing and connection.execute("RELEASE rr_row")
+                    if check and outcome["status"] == "HELD":
+                        held.add(arguments["item_id"])
+                    results.append(outcome)
+                if absorbing:
+                    self._append_event(connection, aggregate_type="INTAKE", aggregate_id=check.intake["source_sha256"], kind="INTAKE_RECEIVED", before_revision=0, after_revision=0,
+                                       payload=check.intake_payload(results), committed_at_ms=self._now())
             finally:
                 self._batch.connection = None
         return check.receipt if check else results
@@ -6049,6 +6068,11 @@ class FinancialOwner:
             _fail(FinancialInputError, "history_page")
         with self._read_snapshot(_connection=_connection) as connection:
             return self._dict_rows(connection, "SELECT event_sequence,event_id,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,previous_head,head,committed_at_ms FROM financial_events ORDER BY event_sequence LIMIT ? OFFSET ?", (limit, offset))
+
+    def intake_records(self, sha: str | None = None) -> list[dict[str, Any]]:
+        """Every stored intake record (or the one raw file `sha`'s), oldest first: (aggregate_id = raw file SHA-256, committed_at_ms, payload_json)."""
+        with self._read_snapshot() as connection:
+            return self._dict_rows(connection, "SELECT aggregate_id,committed_at_ms,payload_json FROM financial_events WHERE aggregate_type='INTAKE'" + ("" if sha is None else " AND aggregate_id=?") + " ORDER BY event_sequence", () if sha is None else (sha,))
 
     def _obligation_timeline(self, connection: sqlite3.Connection, obligation_id: str, limit: int) -> dict[str, Any]:
         """The newest ``limit`` OBLIGATION events for one obligation, oldest first."""
