@@ -252,17 +252,17 @@ def _totals(rows: list[dict], control_total_cents: int) -> dict:
 
 
 def verify_intakes(events: list, meta: Mapping, payments: Mapping) -> None:
-    """A store's INTAKE events are the gate's: one per raw file, bound to this store, with outcomes that re-derive from
+    """A store's INTAKE events are the gate's: one per raw file, bound to what continuity keeps (scope, authority, baseline; owner and mode are checked once, at write), with outcomes that re-derive from
     their own results, totals that are their sums, and every ADMITTED or REPAIRED row a payment of its own received
     since the file's baseline and claimed once; every RESOLVED row names a stored payment of its amount."""
     intakes = [event for event in events if event["aggregate_type"] == "INTAKE"]
     if not intakes:
         return
-    received = {payload["payment_id"]: event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" for payload in (json.loads(event["payload_json"]),)}
-    binding = {"owner_id": meta["owner_id"], "mode": meta["mode"], "scope": meta["scope"],
+    binding = {"scope": meta["scope"],
                "authority": {"authority_id": meta["authority_id"], "authority_epoch": meta["authority_epoch"], "authority_digest": bytes(meta["authority_digest"]).hex().upper()}}
     claimed, shas = set(), set()
     try:
+        received = {payload["payment_id"]: event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" for payload in (json.loads(event["payload_json"]),)}
         for event in intakes:
             payload, at = json.loads(event["payload_json"]), event["event_sequence"]
             stored, bound, rows = payload["intake"], payload["binding"], payload["outcomes"]
@@ -342,7 +342,7 @@ class CashFileCheck:
     def intake_payload(self, results: list) -> dict:
         """The INTAKE event a file's results make: the one derivation of every row's outcome, which the owner stores and finish requires."""
         rows, meta = outcomes(self.intake, results), self._meta[1]
-        binding = {"owner_id": self._context["expected_owner_id"], "mode": self._context["expected_mode"], "scope": dict(self._context["expected_scope"]), "baseline_sha256": self._baseline_sha,
+        binding = {"scope": dict(self._context["expected_scope"]), "baseline_sha256": self._baseline_sha,
                    "baseline_sequence": self._anchor[1], "baseline_head": self._anchor[2].hex().upper(), "authority": {"authority_id": meta["trusted_authority_id"], "authority_epoch": meta["trusted_authority_epoch"], "authority_digest": bytes(meta["trusted_authority_digest"]).hex().upper()}}
         return json.loads(ledger._canonical({"contract": INTAKE_CONTRACT, "intake": {key: self.intake[key] for key in _INTAKE_KEYS}, "binding": binding, "outcomes": rows, "totals": _totals(rows, self.intake["control_total_cents"])}))
 
@@ -493,7 +493,7 @@ class CashFileCheck:
             event = events[sequence]
             head = ledger._verify_event(event, sequence, head)
             _require((event["aggregate_type"], event["aggregate_id"], event["kind"], event["before_revision"], event["after_revision"]) == ("INTAKE", self.intake["source_sha256"], "INTAKE_RECEIVED", 0, 0)
-                     and json.loads(event["payload_json"]) == self.intake_payload(results), "cash_file_failed")
+                     and event["payload_json"].encode("ascii") == ledger._canonical(self.intake_payload(results)), "cash_file_failed")
         new_meta =_table(connection, "financial_meta", [self._meta[0]])[self._meta[0]]
         _require((new_meta["sequence"], new_meta["history_head"]) == (sequence, head), "cash_file_failed")
         _unchanged(old_meta, new_meta, {"sequence", "history_head"})
@@ -514,7 +514,7 @@ class CashFileCheck:
             old = self._cases[rowid]
             _unchanged(old, now[rowid], {"status", "updated_at_ms"} if old["obligation_id"] in deltas else frozenset())
         ledger.verify_obligation_connection(connection, *sorted(touched), **self._expectations())  # schema and meta once, then each touched obligation
-        _require(bool(new_evidence) or self.intake is not None or connection.total_changes == self._changes, "cash_file_failed")  # a file of repeats writes nothing (III.3)
+        _require(bool(new_evidence) or self.intake is not None or connection.total_changes == self._changes, "cash_file_failed")  # a file of repeats writes nothing (III.3); an intake file writes, and its owner-held rows' rolled-back savepoints still count, so only the write log binds it
         self._disarm(connection)
         recorded_cents = sum(deltas.values())
         cash_before = sum(row["received_cash_cents"] for row in self._obligations.values())

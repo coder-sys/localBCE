@@ -6053,7 +6053,7 @@ class FinancialOwner:
     def intake_records(self, sha: str | None = None) -> list[dict[str, Any]]:
         """Every stored intake record (or the one raw file `sha`'s), oldest first: (aggregate_id = raw file SHA-256, committed_at_ms, payload_json)."""
         with self._read_snapshot() as connection:
-            return self._dict_rows(connection, "SELECT aggregate_id,committed_at_ms,payload_json FROM financial_events WHERE aggregate_type='INTAKE' AND (?1 IS NULL OR aggregate_id=?1) ORDER BY event_sequence", (sha,))
+            return self._dict_rows(connection, "SELECT aggregate_id,committed_at_ms,payload_json FROM financial_events WHERE aggregate_type='INTAKE'" + ("" if sha is None else " AND aggregate_id=?") + " ORDER BY event_sequence", () if sha is None else (sha,))
 
     def _obligation_timeline(self, connection: sqlite3.Connection, obligation_id: str, limit: int) -> dict[str, Any]:
         """The newest ``limit`` OBLIGATION events for one obligation, oldest first."""
