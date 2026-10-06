@@ -42,7 +42,7 @@ def _integer(value, low, high):
         raise CashFileError("cash_file_format")
 
 
-def _propose(source_bytes, baseline_bytes):
+def _propose(source_bytes, baseline_bytes, empty=False):
     if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= MAX_FILE_BYTES or type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
         raise CashFileError("cash_file_format")
     try:
@@ -52,7 +52,7 @@ def _propose(source_bytes, baseline_bytes):
         raise CashFileError("cash_file_format") from None
     if canonical != source_bytes:
         raise CashFileError("cash_file_format")
-    source, rows = _header(value)
+    source, rows = _header(value, empty)
     local_ref = hashlib.sha256(source_bytes).hexdigest().upper() + hashlib.sha256(baseline_bytes).hexdigest().upper()
     commands, payments, evidence, origins = [], set(), set(), set()
     for row in rows:
@@ -76,8 +76,8 @@ def _propose(source_bytes, baseline_bytes):
     return commands
 
 
-def _header(value):
-    """A file's container (everything but its rows' own fields): its source block and rows, or cash_file_format / cash_file_row_cap."""
+def _header(value, empty=False):
+    """A file's container (everything but its rows' own fields): its source block and rows, or cash_file_format / cash_file_row_cap. `empty`: a file derived from a raw one may carry no row."""
     _fields(value, "contract source_class scope source row_count total_cents rows")
     if value["contract"] != "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" or value["source_class"] != "SYNTHETIC_RECEIVER_CASH":
         raise CashFileError("cash_file_format")
@@ -93,8 +93,8 @@ def _header(value):
     _integer(source["captured_at_ms"], 0, 2**63 - 1)
     if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
         raise CashFileError("cash_file_row_cap")
-    _integer(value["row_count"], 1, MAX_ROWS)
-    _integer(value["total_cents"], 1, 2**63 - 1)
+    _integer(value["row_count"], not empty, MAX_ROWS)
+    _integer(value["total_cents"], not empty, 2**63 - 1)
     rows = value["rows"]
     if type(rows) is not list or len(rows) != value["row_count"]:
         raise CashFileError("cash_file_format")
@@ -106,7 +106,7 @@ def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
                       expected_owner_id, expected_mode, trusted_authority, intake=None):
     """Propose commands, checking external review bindings before any writer opens. ``intake``: the facts of the
     raw file this one was derived from (app/right_rail_financial_intake.py), stored with the rows' outcomes."""
-    commands = _propose(source_bytes, baseline_bytes)
+    commands = _propose(source_bytes, baseline_bytes, intake is not None)
     context = {
         "source_bytes": source_bytes, "baseline_bytes": baseline_bytes,
         "expected_source_sha256": expected_source_sha256,

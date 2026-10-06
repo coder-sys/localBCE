@@ -35,6 +35,18 @@ _CONTEXT = {
     "expected_mode", "preview", "intake",
 }
 _EVALUATION = {"evaluation_id", "evaluation_input_digest", "evaluation_result_digest", "evaluation_receipt_digest"}
+INTAKE_CONTRACT = "RR/FINANCIAL/INTAKE/v2"
+_INTAKE_KEYS = ("adapter", "ruleset_digest", "source_sha256", "derived_sha256", "sender", "control_total_cents", "repairs")
+OUTCOMES = ("ADMITTED", "REPAIRED", "RESOLVED", "HELD")
+SENDER_RESEND = ("sender", "resend_row")  # every hold reason not named below
+FAULTS = {
+    "amount_format": ("sender", "sender_profile:amount_format"), "date_format": ("sender", "sender_profile:date_format"),
+    "encoding": ("sender", "sender_profile:encoding"), "item_cap": ("state", "next_file"),
+}
+# The owner's own Input, Conflict and Revision refusals of a payment row (the owner's _PAYMENT_REFUSALS; a test holds the two equal): the only reasons it may hold a row with.
+_OWNER_HOLDS = frozenset((
+    "payment_amount_zero", "payment_request_conflict", "payment_origin_reversed", "obligation_revision_conflict", "evidence_identity_conflict", "evidence_chronology",
+    "payment_request_unknown", "payment_exceeds_unpaid_balance", "payment_already_reversed", "common_origin_id", "local_ref"))
 
 
 class CashFileError(ValueError):
@@ -93,7 +105,8 @@ def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _source(raw: bytes) -> dict[str, object]:
+def _source(raw: bytes, empty: bool) -> dict[str, object]:
+    """`empty`: a file derived from a raw one may carry no row (every raw row held); a direct file carries one at least."""
     _require(type(raw) is bytes and 0 < len(raw) <= 1024 * 1024, "cash_file_format")
     value = json.loads(raw.decode("ascii"), object_pairs_hook=_unique)
     _keys(value, {"contract", "source_class", "scope", "source", "row_count", "total_cents", "rows"})
@@ -107,8 +120,8 @@ def _source(raw: bytes) -> dict[str, object]:
         _id(value["source"][key])
     _integer(value["source"]["captured_at_ms"], 0, _MAX_CENTS)
     _require(type(value["row_count"]) is not int or value["row_count"] <= MAX_ROWS, "cash_file_row_cap")
-    _integer(value["row_count"], 1, MAX_ROWS)
-    _integer(value["total_cents"], 1, _MAX_CENTS)
+    _integer(value["row_count"], not empty, MAX_ROWS)
+    _integer(value["total_cents"], not empty, _MAX_CENTS)
     rows = value["rows"]
     _require(type(rows) is list and len(rows) == value["row_count"], "cash_file_format")
     seen_payment, seen_evidence, seen_origin = set(), set(), set()
@@ -124,7 +137,7 @@ def _source(raw: bytes) -> dict[str, object]:
         for seen, key in ((seen_payment, row["payment_id"]), (seen_evidence, row["evidence_id"]), (seen_origin, (row["item_id"], row["common_origin_id"]))):
             _require(key not in seen, "cash_file_format")
             seen.add(key)
-    _require(max(Counter(row["item_id"] for row in rows).values()) <= MAX_ITEM_ROWS, "cash_file_row_cap")
+    _require(max(Counter(row["item_id"] for row in rows).values(), default=0) <= MAX_ITEM_ROWS, "cash_file_row_cap")
     _require(sum(row["amount_cents"] for row in rows) == value["total_cents"], "cash_file_format")
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
     _require(raw == canonical, "cash_file_format")
@@ -204,13 +217,85 @@ def _recorded(argument: Mapping, payment: Mapping, fact: Mapping | None, event: 
             and (event["before_revision"], event["after_revision"]) == (argument["expected_revision"], argument["expected_revision"] + 1))
 
 
+def outcomes(facts: Mapping, results: list) -> list[dict]:
+    """The one row-outcome type: each raw row ADMITTED, REPAIRED (basis: its L1 rules), RESOLVED (basis: the payment it
+    repeats) or HELD (basis: its reason, with fault, fix and the earlier held row of its item it waits on). `facts` are
+    the raw rows as intake read them; `results` the gate's judgement of the rows it passed on, in order."""
+    rules, judged, first_held, made = {}, iter(results), {}, []
+    for fact in facts["repairs"]:
+        if fact["row_index"] is not None:
+            rules.setdefault(fact["row_index"], []).append(fact["rule_id"])
+    for i, row in enumerate(facts["rows"]):
+        result = {"status": "HELD", "reason": row["reason"]} if row["reason"] else next(judged)
+        status, basis, fault, fix, depends = result["status"], result["reason"], None, None, None
+        if status == "RECORDED":
+            status, basis = ("REPAIRED", rules[i]) if i in rules else ("ADMITTED", None)
+        elif status == "DUPLICATE":
+            status, basis = "RESOLVED", "duplicate_of:" + result["payment_id"]
+        else:
+            depends = first_held.get(row["item_id"]) if basis == "depends_on_held" else None
+            fault, fix = FAULTS.get(made[depends]["basis"] if depends is not None else basis, SENDER_RESEND)
+            fix = fix if depends is None else "release_row"
+            if row["item_id"] is not None:
+                first_held.setdefault(row["item_id"], i)
+        made.append({"row_index": i, "item_id": row["item_id"], "common_origin_id": row["common_origin_id"], "payment_id": row["payment_id"], "amount_cents": row["amount_cents"],
+                     "status": status, "basis": basis, "fault": fault, "fix": fix, "depends_on": depends})
+    return made
+
+
+def _totals(rows: list[dict], control_total_cents: int) -> dict:
+    counted, cents = Counter(row["status"] for row in rows), Counter()
+    for row in rows:
+        cents[row["status"]] += row["amount_cents"] or 0  # an unreadable amount counts 0
+    return {"received": len(rows), **{status.lower(): counted[status] for status in OUTCOMES}, "cash_delta_cents": cents["ADMITTED"] + cents["REPAIRED"],
+            "resolved_cents": cents["RESOLVED"], "held_cents": cents["HELD"], "unallocated_cents": control_total_cents - cents["ADMITTED"] - cents["REPAIRED"] - cents["RESOLVED"]}
+
+
+def verify_intakes(events: list, meta: Mapping, payments: Mapping) -> None:
+    """A store's INTAKE events are the gate's: one per raw file, bound to this store, with outcomes that re-derive from
+    their own results, totals that are their sums, and every ADMITTED or REPAIRED row a payment of its own received
+    since the file's baseline and claimed once; every RESOLVED row names a stored payment of its amount."""
+    intakes = [event for event in events if event["aggregate_type"] == "INTAKE"]
+    if not intakes:
+        return
+    received = {payload["payment_id"]: event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" for payload in (json.loads(event["payload_json"]),)}
+    binding = {"owner_id": meta["owner_id"], "mode": meta["mode"], "scope": meta["scope"],
+               "authority": {"authority_id": meta["authority_id"], "authority_epoch": meta["authority_epoch"], "authority_digest": bytes(meta["authority_digest"]).hex().upper()}}
+    claimed, shas = set(), set()
+    try:
+        for event in intakes:
+            payload, at = json.loads(event["payload_json"]), event["event_sequence"]
+            stored, bound, rows = payload["intake"], payload["binding"], payload["outcomes"]
+            base = bound["baseline_sequence"]
+            ok = (set(payload) == {"contract", "intake", "binding", "outcomes", "totals"} and payload["contract"] == INTAKE_CONTRACT and set(stored) == set(_INTAKE_KEYS)
+                  and stored["source_sha256"] == event["aggregate_id"] and event["aggregate_id"] not in shas and type(base) is int and 0 <= base < at and _SHA.fullmatch(bound["baseline_sha256"]) is not None)
+            shas.add(event["aggregate_id"])
+            head = bytes(events[base - 1]["head"] if base else events[0]["previous_head"]).hex().upper() if ok else None
+            facts = {"repairs": stored["repairs"], "rows": [{**{key: row[key] for key in ("item_id", "payment_id", "common_origin_id", "amount_cents")}, "reason": row["basis"] if row["status"] == "HELD" else None} for row in rows]}
+            judged = [{"status": "DUPLICATE" if row["status"] == "RESOLVED" else "RECORDED", "payment_id": str(row["basis"]).partition(":")[2], "reason": None} for row in rows if row["status"] != "HELD"]
+            ok = ok and bound == {**binding, "baseline_sha256": bound["baseline_sha256"], "baseline_sequence": base, "baseline_head": head} and rows == outcomes(facts, judged) and payload["totals"] == _totals(rows, stored["control_total_cents"])
+            for row in (row for row in rows if row["status"] != "HELD") if ok else ():
+                resolved = row["status"] == "RESOLVED"
+                target = row["basis"].partition(":")[2] if resolved else row["payment_id"]
+                paid = payments.get(target)
+                ok = paid is not None and paid["amount_cents"] == row["amount_cents"] and (resolved or (target not in claimed and base < received.get(target, 0) < at and (paid["item_id"], paid["common_origin_id"]) == (row["item_id"], row["common_origin_id"])))
+                if not ok:
+                    break
+                if not resolved:
+                    claimed.add(target)
+            if not ok:
+                ledger._fail("history:intake")
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError, StopIteration):
+        ledger._fail("history:intake")
+
+
 class CashFileCheck:
     """Single-use fixed verifier. A successful finish is still not a commit receipt."""
 
     @_fixed_errors
     def __init__(self, commands: object, context: object):
         _keys(context, _CONTEXT)
-        source = _source(context["source_bytes"])
+        source = _source(context["source_bytes"], context.get("intake") is not None)
         for field in ("expected_source_sha256", "expected_baseline_sha256"):
             _require(type(context[field]) is str and _SHA.fullmatch(context[field]) is not None, "cash_file_binding")
         _require(type(context["baseline_bytes"]) is bytes and 0 < len(context["baseline_bytes"]) <= ledger.MAX_JSON_BYTES, "cash_file_format")
@@ -247,9 +332,19 @@ class CashFileCheck:
             _require(set(entry[1]) == set(arguments) and all(type(entry[1][key]) is type(value) and entry[1][key] == value for key, value in arguments.items()), "cash_file_binding")
             frozen_commands.append(("record_payment_evidence", MappingProxyType(arguments)))
         self.commands = tuple(frozen_commands)
+        if self.intake is not None:  # the raw rows the gate judges, in order, are exactly this file's rows
+            judged = [row for row in self.intake["rows"] if not row["reason"]]
+            _require(len(judged) == len(self.commands) and all(row[key] == argument[key] for row, (_, argument) in zip(judged, self.commands) for key in ("item_id", "payment_id", "common_origin_id", "amount_cents")), "cash_file_binding")
         self.receipt = None
         self._connection = None
         self._finished = False
+
+    def intake_payload(self, results: list) -> dict:
+        """The INTAKE event a file's results make: the one derivation of every row's outcome, which the owner stores and finish requires."""
+        rows, meta = outcomes(self.intake, results), self._meta[1]
+        binding = {"owner_id": self._context["expected_owner_id"], "mode": self._context["expected_mode"], "scope": dict(self._context["expected_scope"]), "baseline_sha256": self._baseline_sha,
+                   "baseline_sequence": self._anchor[1], "baseline_head": self._anchor[2].hex().upper(), "authority": {"authority_id": meta["trusted_authority_id"], "authority_epoch": meta["trusted_authority_epoch"], "authority_digest": bytes(meta["trusted_authority_digest"]).hex().upper()}}
+        return json.loads(ledger._canonical({"contract": INTAKE_CONTRACT, "intake": {key: self.intake[key] for key in _INTAKE_KEYS}, "binding": binding, "outcomes": rows, "totals": _totals(rows, self.intake["control_total_cents"])}))
 
     def _expectations(self) -> dict:
         return {
@@ -297,26 +392,26 @@ class CashFileCheck:
         sealed = connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
         _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
         if self.intake is not None:  # one raw file is received once; its stored outcome is the answer to any resend of the same bytes
-            _require(all((event["aggregate_type"], event["aggregate_id"]) != ("INTAKE", self.intake["source_sha256"]) for event in rows["financial_events"]), "cash_file_conflict")
+            _require(connection.execute("SELECT 1 FROM financial_events WHERE aggregate_type='INTAKE' AND aggregate_id=?", (self.intake["source_sha256"],)).fetchone() is None, "cash_file_conflict")
         self._received, self._aliases = _payment_events(rows["financial_events"])
-        self._plan = self._classify(rows, sequence)
+        self._plan = self._classify(rows)
         self._meta, self._obligations, self._cases = next(iter(stored["financial_meta"].items())), stored["obligations"], stored["cases"]
         self._payments, self._actions = _index(rows, "payments", "payment_id"), _index(rows, "actions", "action_id")
         self._arm(connection)
         self._changes, self._connection = connection.total_changes, connection
         return [skip for _, _, skip in self._plan]
 
-    def _classify(self, rows: Mapping, baseline: int) -> tuple[tuple[str, str | None, dict | None], ...]:
+    def _classify(self, rows: Mapping) -> tuple[tuple[str, str | None, dict | None], ...]:
         """Per row, before any write, (kind, the payment_id the owner must answer, the outcome it gets without running):
         RETRY of this row's own payment or ALIAS (its stored repeat of another) answer DUPLICATE unrun; OVERLAP (a new
-        repeat: DUPLICATE, no cash) and NEW run. Any other reuse of a recorded id, an origin recorded with another amount
-        or link, an item not in the period, or a new write to an obligation moved since the baseline is HELD (L3)."""
+        repeat: DUPLICATE, no cash) and NEW run, but an OVERLAP naming a revision its obligation is not at is an ALIAS: its
+        money is fixed by the stored payment. Any other reuse of a recorded id, an origin recorded with another amount
+        or link, or an item not in the period is HELD (L3). A NEW row's own revision is the owner's to refuse."""
         payments, evidence, actions = (_index(rows, table, key) for table, key in (("payments", "payment_id"), ("evidence", "evidence_id"), ("actions", "action_id")))
         origins = {(row["obligation_id"], row["common_origin_id"]): row for row in rows["payments"]}
         obligations = {row["item_id"]: row["obligation_id"] for row in rows["obligations"] if row["period_id"] == self._context["expected_scope"]["period_id"]}
-        later = [event for event in rows["financial_events"] if event["event_sequence"] > baseline]
-        moved = {event["aggregate_id"] for event in later if event["aggregate_type"] == "OBLIGATION"}
-        foreign = any(event["aggregate_type"] not in ("OBLIGATION", "INTAKE") for event in later)  # a rule or population change since the baseline moves every row
+        turn = {row["obligation_id"]: row["revision"] for row in rows["obligations"]}  # the revision each obligation is at as the file reaches a row
+        self._items = obligations
         plan = []
         for _, argument in self.commands:
             if argument["item_id"] not in obligations:
@@ -339,8 +434,9 @@ class CashFileCheck:
             else:
                 same = self._aliases.get(argument["evidence_id"]) == existing["payment_id"] and _matches(stored, _fact(restated))
                 kind, answer = ("ALIAS", existing["payment_id"]) if same else ("already_recorded", None)
-            if kind in ("NEW", "OVERLAP") and (foreign or obligation in moved):
-                kind, answer = "stale", None
+            if kind == "OVERLAP" and argument["expected_revision"] != turn[obligation]:
+                kind = "ALIAS"
+            turn[obligation] += kind == "NEW"
             skip = {"status": "DUPLICATE", "payment_id": answer, "reason": None} if kind in ("RETRY", "ALIAS") else None if answer else _held(argument, kind)
             plan.append(("HELD" if answer is None else kind, answer, skip))
         return tuple(plan)
@@ -363,9 +459,10 @@ class CashFileCheck:
             _require(type(result) is dict, "cash_file_failed")
             if skip is None and argument["item_id"] in held:
                 skip = _held(argument, "depends_on_held")  # its expected_revision assumed the held row before it
-            if skip is None and result.get("status") == "HELD":  # the owner refused the row; its savepoint rolled the row back
-                _require(type(result.get("reason")) is str and _ID.fullmatch(result["reason"]) is not None, "cash_file_failed")
-                skip = _held(argument, result["reason"])
+            if skip is None and result.get("status") == "HELD":  # the owner refused the row; its savepoint rolled the row back (an intake file only: any other file is atomic)
+                reason = result.get("reason")
+                _require(self.intake is not None and reason in _OWNER_HOLDS and (reason != "obligation_revision_conflict" or argument["expected_revision"] != revisions[self._items[argument["item_id"]]]), "cash_file_failed")
+                skip = _held(argument, reason)
             if skip is not None:
                 _require(result == skip, "cash_file_failed")  # wrote nothing: the log, the event chain and total_changes below prove it
                 if skip["status"] == "HELD":
@@ -396,7 +493,7 @@ class CashFileCheck:
             event = events[sequence]
             head = ledger._verify_event(event, sequence, head)
             _require((event["aggregate_type"], event["aggregate_id"], event["kind"], event["before_revision"], event["after_revision"]) == ("INTAKE", self.intake["source_sha256"], "INTAKE_RECEIVED", 0, 0)
-                     and json.loads(event["payload_json"]) == {"intake": self.intake, "results": results}, "cash_file_failed")
+                     and json.loads(event["payload_json"]) == self.intake_payload(results), "cash_file_failed")
         new_meta =_table(connection, "financial_meta", [self._meta[0]])[self._meta[0]]
         _require((new_meta["sequence"], new_meta["history_head"]) == (sequence, head), "cash_file_failed")
         _unchanged(old_meta, new_meta, {"sequence", "history_head"})

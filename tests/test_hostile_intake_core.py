@@ -97,7 +97,7 @@ class HostileIntakeTests(unittest.TestCase):
                 through = [i for i in range(len(rows)) if i not in held]
                 seen |= {row["basis"] for row in held.values()} | {fact["rule_id"] for fact in receipt["repairs"]} | {row["status"] for row in receipt["rows"]}
                 self.assertEqual([row["row_index"] for row in receipt["rows"]], list(range(len(rows))))
-                self.assertEqual((receipt["received"], sum(receipt[status.lower()] for status in intake.OUTCOMES), receipt["resolved"]), (len(rows), len(rows), 0))
+                self.assertEqual((receipt["received"], sum(receipt[status.lower()] for status in check.OUTCOMES), receipt["resolved"]), (len(rows), len(rows), 0))
                 cents = sum(int(str(rows[i]["amount_cents"]).strip("@")) for i in through)
                 self.assertEqual((receipt["cash_delta_cents"], receipt["unallocated_cents"]), (cents, total - cents))
                 self.assertEqual(self._payments(f"s{seed}-"), {rows[i]["payment_id"] for i in through})  # a held row moves no money
@@ -110,9 +110,9 @@ class HostileIntakeTests(unittest.TestCase):
                         self.assertEqual((receipt["rows"][i]["status"], receipt["rows"][i]["basis"]), ("REPAIRED", ["amount_digits"]))
                 for i, hold in held.items():
                     if hold["depends_on"] is None:
-                        self.assertEqual((hold["fault"], hold["fix"]), intake.FAULTS.get(hold["basis"], intake._SENDER_RESEND))
+                        self.assertEqual((hold["fault"], hold["fix"]), check.FAULTS.get(hold["basis"], check.SENDER_RESEND))
                     else:  # the fault of the row it waits on
-                        self.assertEqual((hold["fault"], hold["fix"]), (intake.FAULTS.get(held[hold["depends_on"]]["basis"], intake._SENDER_RESEND)[0], "release_row"))
+                        self.assertEqual((hold["fault"], hold["fix"]), (check.FAULTS.get(held[hold["depends_on"]]["basis"], check.SENDER_RESEND)[0], "release_row"))
                         self.assertLess(hold["depends_on"], i)
                         self.assertIn(hold["depends_on"], held)
                         self.assertEqual(rows[hold["depends_on"]]["item_id"], rows[i]["item_id"])
@@ -192,12 +192,45 @@ class HostileIntakeTests(unittest.TestCase):
         self.assertEqual((receipt["cash_delta_cents"], receipt["unallocated_cents"], self._payments("file-")), (142, 60, {"file-payment-0", "file-payment-2"}))
 
     def test_all_rows_held_moves_nothing_and_is_receipted(self):
-        rows = [{**self._row(0, 1, 0, "held"), "amount_cents": "1.000,00"}, {**self._row(1, 2, 1, "held"), "event_at_ms": "03/04/2026"}]
+        """F3: one INTAKE writer. An all-held file is a zero-row derived file the checker verifies; nothing else can store an INTAKE."""
+        raw = encode(self._file([{**self._row(0, 1, 0, "held"), "amount_cents": "1.000,00"}, {**self._row(1, 2, 1, "held"), "event_at_ms": "03/04/2026"}], 100_002))
+        derived, _ = intake.absorb(raw, self.scope, self.source)
+        self.assertEqual(json.loads(derived)["rows"], [])
         payments = self._query("SELECT * FROM payments")
-        receipt = self._ingest(encode(self._file(rows, 100_002)))
-        self.assertEqual((receipt["held"], receipt["derived_sha256"], receipt["cash_delta_cents"], receipt["unallocated_cents"]), (2, None, 0, 100_002))
-        self.assertEqual((self._query("SELECT * FROM payments"), len(self.store.intake_records())), (payments, 1))
+        receipt = self._ingest(raw)
+        self.assertEqual((receipt["held"], receipt["derived_sha256"], receipt["cash_delta_cents"], receipt["unallocated_cents"]), (2, sha(derived), 0, 100_002))
+        self.assertEqual((self._query("SELECT * FROM payments"), self._query("SELECT kind,before_revision,after_revision FROM financial_events WHERE aggregate_type='INTAKE'")), (payments, [("INTAKE_RECEIVED", 0, 0)]))
+        self.assertFalse(hasattr(self.store, "record_intake"))
         self._verified()
+
+    def test_owner_holds_are_the_owners_input_conflict_and_revision_refusals(self):
+        owner = cashtests.owner
+        self.assertEqual(check._OWNER_HOLDS, {code for kind, code in owner._PAYMENT_REFUSALS[1:] if issubclass(kind, (owner.FinancialInputError, owner.FinancialConflictError, owner.FinancialRevisionError))})
+
+    def test_forged_intake_events_are_refused_by_the_checker(self):
+        revision = self._revisions()[expected.H_ITEM_ID]
+        self._ingest(encode(self._file([self._row(1, 100, revision), {**self._row(2, 50, revision + 1), "event_at_ms": "01/02/2026"}], 150)))
+        seen, real = [], check.verify_intakes
+        with patch.object(check, "verify_intakes", lambda *arguments: (seen.append(arguments), real(*arguments))[1]):
+            self._verified()
+        events, meta, payments = seen[0]
+        position = next(i for i, event in enumerate(events) if event["aggregate_type"] == "INTAKE")
+
+        def forged(change=None, **event):
+            copy = [dict(entry) for entry in events]
+            payload = json.loads(copy[position]["payload_json"])
+            change and change(payload)
+            copy[position].update(event, payload_json=json.dumps(payload))
+            return copy
+        outcome = lambda key, value: lambda payload: payload["outcomes"][0].update({key: value})
+        cases = {"contract": forged(lambda payload: payload.update(contract="x")), "totals": forged(lambda payload: payload["totals"].update(cash_delta_cents=101)),
+                 "status": forged(outcome("status", "HELD")), "amount": forged(outcome("amount_cents", 99)), "baseline": forged(lambda payload: payload["binding"].update(baseline_sequence=10 ** 6)),
+                 "sha": forged(aggregate_id="0" * 64), "twice": [*events, events[position]]}
+        for label, forgery in cases.items():
+            with self.subTest(forgery=label), self.assertRaisesRegex(Exception, "history:intake"):
+                real(forgery, meta, payments)
+        with self.assertRaisesRegex(Exception, "history:intake"):
+            real(events, meta, {**payments, "file-payment-1": {**payments["file-payment-1"], "amount_cents": 99}})
 
     def test_untrusted_container_is_refused_whole_keeping_only_its_bytes(self):
         good = self._file([self._row(1, 100, self._revisions()[expected.H_ITEM_ID])], 100)
@@ -246,15 +279,17 @@ class HostileIntakeTests(unittest.TestCase):
         for boundary in range(len(commands) + 1):  # before each row's write, then before the intake record that closes the file
             calls = []
 
-            def crashing(real):
+            def crashing(real, kind=None):
                 def step(*arguments, **keywords):
+                    if kind not in (None, keywords.get("kind")):
+                        return real(*arguments, **keywords)
                     calls.append(None)
                     if len(calls) > boundary:
                         raise RuntimeError("crash")
                     return real(*arguments, **keywords)
                 return step
             with self.subTest(boundary=boundary), patch.object(self.store, "record_payment_evidence", crashing(self.store.record_payment_evidence)), \
-                    patch.object(self.store, "record_intake", crashing(self.store.record_intake)), self.assertRaisesRegex(RuntimeError, "crash"):
+                    patch.object(self.store, "_append_event", crashing(self.store._append_event, "INTAKE_RECEIVED")), self.assertRaisesRegex(RuntimeError, "crash"):
                 self.store.run_batch(commands, cash_file_context=context)
             self.assertEqual((len(calls), self.store.export_continuity(), self.store.intake_records(), self._payments("file-")), (boundary + 1, before, [], set()))
         receipt = self._ingest(raw)

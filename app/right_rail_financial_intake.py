@@ -6,8 +6,7 @@ is and the fix. L4 refuses a container it cannot trust (unparseable, wrong contr
 total wrong) whole, keeping only its raw bytes. The rows this module can read form a canonical derived cash file that
 the gate judges row by row in the owner's one transaction (D2); the raw file's facts and every row's outcome land in
 the same transaction as one INTAKE event, so a crash leaves all or nothing. A held row moves no money (I.3); its cents
-stay unallocated (D3) until a later file carrying the same payment and amount releases it by evidence. No repair
-guesses: an amount or date in a sender's own format is held for a sender profile, never converted blind (D5).
+stay unallocated (D3) until a named release. No repair guesses: an amount or date in a sender's own format is held for a sender profile, never converted blind (D5).
 """
 
 import base64
@@ -32,12 +31,6 @@ _DIGITS = re.compile(r"[0-9]{1,19}\Z")
 _LOCAL_AMOUNT = re.compile(r"[0-9][0-9.,]*\Z")  # 1.000,00 or 1,000.00: dollars or cents, which mark is decimal is the sender's to say
 _TOKEN = re.compile(rb'"(?:[^"\\]|\\.)*"|-?[0-9][0-9.eE+-]*')  # a string (skipped whole) or a number
 _LEADING_ZERO = re.compile(rb"-?0[0-9]")
-_SENDER_RESEND = ("sender", "resend_row")  # every reason not named below
-FAULTS = {
-    "amount_format": ("sender", "sender_profile:amount_format"), "date_format": ("sender", "sender_profile:date_format"),
-    "encoding": ("sender", "sender_profile:encoding"), "item_cap": ("state", "next_file"), "stale": ("state", "fresh_baseline"),
-}
-OUTCOMES = ("ADMITTED", "REPAIRED", "RESOLVED", "HELD")
 
 
 def _sha(data):
@@ -96,7 +89,7 @@ def _same(left, right):
 
 
 def absorb(raw, expected_scope, expected_source):
-    """Sort a raw cash file into (derived file bytes or None, intake facts), or refuse its container whole (CashFileError)."""
+    """Sort a raw cash file into (derived file bytes, intake facts), or refuse its container whole (CashFileError). The derived file carries no row when every raw row is held."""
     repairs, text = [], raw
     if text.startswith(BOM):
         text = text[len(BOM):]
@@ -146,48 +139,17 @@ def absorb(raw, expected_scope, expected_source):
             if repaired:
                 repairs.append(_fact("amount_digits", i, "amount_cents", encode(rows[i]["amount_cents"]), encode(amount)))
             clean.append({**rows[i], "amount_cents": amount})
-    facts = [{"item_id": item, "payment_id": _readable(row.get("payment_id")) if type(row) is dict else None, "amount_cents": amount, "reason": reason}
+    facts = [{"item_id": item, "payment_id": _readable(row.get("payment_id")) if type(row) is dict else None, "common_origin_id": _readable(row.get("common_origin_id")) if type(row) is dict else None, "amount_cents": amount, "reason": reason}
              for item, row, amount, reason in zip(items, rows, amounts, reasons)]
-    derived = encode({**value, "row_count": len(clean), "total_cents": sum(row["amount_cents"] for row in clean), "rows": clean}) if clean else None
+    derived = encode({**value, "row_count": len(clean), "total_cents": sum(row["amount_cents"] for row in clean), "rows": clean})
     return derived, {"sender": source["receiver_system_id"], "control_total_cents": value["total_cents"], "repairs": repairs, "rows": facts}
-
-
-def outcomes(facts, results):
-    """The one row-outcome type: each raw row ADMITTED, REPAIRED (basis: its L1 rules), RESOLVED (basis: the payment it
-    repeats) or HELD (basis: its reason, with fault, fix and the earlier held row of its item it waits on). `facts` are
-    the raw rows as intake read them; `results` the gate's judgement of the rows it passed on, in order."""
-    rules, judged, first_held, made = {}, iter(results), {}, []
-    for fact in facts["repairs"]:
-        if fact["row_index"] is not None:
-            rules.setdefault(fact["row_index"], []).append(fact["rule_id"])
-    for i, row in enumerate(facts["rows"]):
-        result = {"status": "HELD", "reason": row["reason"]} if row["reason"] else next(judged)
-        status, basis, fault, fix, depends = result["status"], result["reason"], None, None, None
-        if status == "RECORDED":
-            status, basis = ("REPAIRED", rules[i]) if i in rules else ("ADMITTED", None)
-        elif status == "DUPLICATE":
-            status, basis = "RESOLVED", "duplicate_of:" + result["payment_id"]
-        else:
-            depends = first_held.get(row["item_id"]) if basis == "depends_on_held" else None
-            fault, fix = FAULTS.get(made[depends]["basis"] if depends is not None else basis, _SENDER_RESEND)
-            fix = fix if depends is None else "release_row"
-            if row["item_id"] is not None:
-                first_held.setdefault(row["item_id"], i)
-        made.append({"row_index": i, "status": status, "basis": basis, "payment_id": row["payment_id"], "amount_cents": row["amount_cents"],
-                     "fault": fault, "fix": fix, "depends_on": depends})
-    return made
 
 
 def _receipt(record):
     """The intake receipt, read only from the stored INTAKE event: the same bytes always get the same receipt."""
     payload = json.loads(record["payload_json"])
-    facts, rows = payload["intake"], outcomes(payload["intake"], payload["results"])
-    counted = Counter(row["status"] for row in rows)
-    receipt = {"contract": "RR/FINANCIAL/INTAKE-RECEIPT/v2", **{key: facts[key] for key in ("adapter", "ruleset_digest", "source_sha256", "derived_sha256", "sender")},
-               "received_at_ms": record["committed_at_ms"], "received": len(rows), **{status.lower(): counted[status] for status in OUTCOMES},
-               "cash_delta_cents": sum(row["amount_cents"] for row in rows if row["status"] in ("ADMITTED", "REPAIRED")),
-               "unallocated_cents": facts["control_total_cents"] - sum(row["amount_cents"] for row in rows if row["status"] != "HELD"),
-               "repairs": facts["repairs"], "rows": rows}
+    receipt = {"contract": "RR/FINANCIAL/INTAKE-RECEIPT/v3", **{key: payload["intake"][key] for key in ("adapter", "ruleset_digest", "source_sha256", "derived_sha256", "sender", "repairs")},
+               "received_at_ms": record["committed_at_ms"], **payload["totals"], "rows": payload["outcomes"]}
     receipt["receipt_digest"] = _sha(encode(receipt))
     return receipt
 
@@ -229,7 +191,7 @@ def _keep(folder, sha, raw):
 
 
 def _stored(owner, sha):
-    return next((record for record in owner.intake_records() if record["aggregate_id"] == sha), None)
+    return next(iter(owner.intake_records(sha)), None)
 
 
 def ingest_cash_file(owner, raw, baseline_bytes, *, expected_source_sha256, expected_baseline_sha256, expected_scope,
@@ -248,16 +210,13 @@ def ingest_cash_file(owner, raw, baseline_bytes, *, expected_source_sha256, expe
     record = _stored(owner, sha)
     if record is None:
         derived, facts = absorb(raw, expected_scope, expected_source)
-        facts = {"adapter": ADAPTER, "ruleset_digest": RULESET_DIGEST, "source_sha256": sha, "derived_sha256": None if derived is None else _sha(derived), **facts}
+        facts = {"adapter": ADAPTER, "ruleset_digest": RULESET_DIGEST, "source_sha256": sha, "derived_sha256": _sha(derived), **facts}
         try:
-            if derived is None:
-                owner.record_intake(facts, [])  # every row held: nothing for the gate, the facts still land
-            else:
-                commands, context = prepare_cash_file(
-                    derived, baseline_bytes, expected_source_sha256=facts["derived_sha256"], expected_baseline_sha256=expected_baseline_sha256,
-                    expected_scope=expected_scope, expected_source=expected_source, expected_owner_id=expected_owner_id,
-                    expected_mode=expected_mode, trusted_authority=trusted_authority, intake=facts)
-                apply_cash_file(owner, commands, context)
+            commands, context = prepare_cash_file(
+                derived, baseline_bytes, expected_source_sha256=facts["derived_sha256"], expected_baseline_sha256=expected_baseline_sha256,
+                expected_scope=expected_scope, expected_source=expected_source, expected_owner_id=expected_owner_id,
+                expected_mode=expected_mode, trusted_authority=trusted_authority, intake=facts)
+            apply_cash_file(owner, commands, context)
         except (CashFileError, FinancialConflictError):
             if _stored(owner, sha) is None:
                 raise

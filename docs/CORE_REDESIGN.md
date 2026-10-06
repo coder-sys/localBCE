@@ -55,8 +55,7 @@ evidence as one transaction: no repeated manual entry, exact retries, a refused 
   with a fresh export. The verifier does not import the producer. It accepts B only if canonical and it passes the
   export verifier's manifest checks (`_verify_manifest`).
 - Under one BEGIN IMMEDIATE, the store must match B: same identity row and event head at B's sequence, and B's
-  `segment_count` and `last_segment_digest` equal the live `history_segments` row sealed there. New work on an item
-  moved since B is HELD `stale` (Rows).
+  `segment_count` and `last_segment_digest` equal the live `history_segments` row sealed there. A row's `expected_revision`, not B, decides if it applies (Rows).
 - After final sealing the checker verifies row and command order, each new event onto the chain, payment/evidence/
   action links, revisions, every table's before/after difference and per-item cash deltas, then runs its own rules on
   the touched obligations. Other cash, acknowledgments and reporting stay unchanged. A file with no NEW or OVERLAP
@@ -65,12 +64,14 @@ evidence as one transaction: no repeated manual entry, exact retries, a refused 
 - Preview (the default) runs the checked file on a private SQLite-backup copy (`<store>.cash-preview`, swept
   hourly), rolls it back and deletes it. Apply uses the same checked boundary. CLI apply opens only an existing,
   current store with the reviewed mode/ID (`mode=rw`); a missing or empty store is refused.
-- Rows: NEW; RETRY (exact stored row); OVERLAP (a repeat of a stored payment under new IDs: DUPLICATE, one alias
-  event, no cash); ALIAS (a stored repeat: nothing written); or HELD (L3, D2, writes nothing): `unknown_item`,
-  `already_recorded` (an ID reused with other facts), `conflict` (an origin with another amount, link or reversal),
-  `stale` (its obligation moved, or any non-cash event, since B), the owner's own input/conflict/revision refusal,
-  or `depends_on_held` (a later row of a held item). An intake file (`app/right_rail_financial_intake.py`) ends with
-  one `INTAKE_RECEIVED` event of its facts and row outcomes in the same transaction; one raw file is received once.
+- Rows: NEW; RETRY (exact stored row); OVERLAP (a stored payment repeated under new IDs: DUPLICATE, one alias event,
+  no cash; at a revision its obligation is not at, unrun like ALIAS); ALIAS (a stored repeat: nothing written); or
+  HELD (writes nothing): `unknown_item`, `already_recorded` (an ID reused with other facts), `conflict` (an origin
+  with another amount, link or reversal), an owner input/conflict/revision refusal (a NEW row not at its
+  `expected_revision`: `obligation_revision_conflict`), or `depends_on_held`. Only an intake file
+  (`app/right_rail_financial_intake.py`) holds rows (it may carry none); it ends with one `INTAKE_RECEIVED` event
+  (`RR/FINANCIAL/INTAKE/v2`), written by `run_batch` in the same transaction and verified by the checker; a raw file
+  is received once. Any other file is atomic. Held cents stay unallocated.
 - Receipt `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3` (v1, v2 stay valid): `contract`, `mode` (PREVIEW or APPLIED),
   `source_sha256`, `baseline_sha256`, `row_count`, `recorded_count`, `duplicate_count` (includes OVERLAP rows),
   `held_count`, `file_total_cents`, `recorded_cents`, `duplicate_cents`, `held_cents`, `cash_before_cents`,
@@ -88,7 +89,8 @@ month, under Lean's `maxRows`). With the manifest baseline a month is four full 
 `STATUS.md`). All-provider refund flows need sharding or evaluations that bind evidence by digest (constant size) and are not claimed.
 
 - One file is one `run_batch`: at most 500 rows, at most 6 per item (each payment re-binds every earlier payment of
-  its item), bounded by the 5 s writer busy timeout. One evaluation per payment is kept (founder, 2026-09-28).
+  its item), bounded by the 5 s writer busy timeout, the quarter-end lock included (measured: `STATUS.md`). One evaluation per
+  payment is kept (founder, 2026-09-28).
 - Before COMMIT the checker runs its own rules (never copies) on the touched rows. A structural test lists each
   whole-store rule not run before COMMIT, with its reason. Corruption that bypassed the owner is caught at the next
   open or by `verify-integrity`.
