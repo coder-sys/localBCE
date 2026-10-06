@@ -231,8 +231,8 @@ _RESTORE_LOCK = threading.Lock()
 _ACTIVE_DESTINATIONS: set[str] = set()
 
 
-class FinancialMirrorError(RuntimeError):
-    """Base class for bounded Mirror-side input and boundary failures."""
+class FinancialMirrorError(FinancialError):
+    """Base class for bounded Mirror-side input and boundary failures; one fail-closed family with the Owner's, so a startup refusal is one catch."""
 
 
 class FinancialMirrorInputError(FinancialMirrorError):
@@ -934,15 +934,17 @@ class FinancialMirror:
             ):
                 _fail(FinancialMirrorContinuityError, "staff_timeline_binding")
             previous_sequence = event["event_sequence"]
-            timeline.append(
-                {
-                    "event_sequence": event["event_sequence"],
-                    "kind": str(event["kind"]),
-                    "before_revision": event["before_revision"],
-                    "after_revision": event["after_revision"],
-                    "committed_at_ms": int(event["committed_at_ms"]),
-                }
-            )
+            row = {
+                "event_sequence": event["event_sequence"],
+                "kind": str(event["kind"]),
+                "before_revision": event["before_revision"],
+                "after_revision": event["after_revision"],
+                "committed_at_ms": int(event["committed_at_ms"]),
+            }
+            if row["kind"] == "FOLLOWTHROUGH_DECIDED":  # who did what is the point of this event
+                payload = json.loads(event["payload_json"])
+                row["followthrough"] = {key: payload.get(key) for key in ("act", "owner_id", "actor_id")}
+            timeline.append(row)
         return timeline, raw["total_count"], raw["truncated"]
 
     @staticmethod

@@ -58,7 +58,7 @@ PINNED = {  # operation: (small-history work, large-history work) on trunk 70f96
     "decision": ((11747, 30506, 2216, 104, 0), (31530, 30506, 2216, 113, 0)),
     "reverse": ((11964, 32205, 2516, 112, 0), (31747, 32205, 2516, 120, 0)),
     "evaluate": ((11670, 35621, 2208, 141, 0), (31453, 35621, 2208, 134, 0)),
-    "cash_file": ((117909, 133818, 23304, 3084, 0), (266225, 133459, 22908, 29362, 0)),
+    "cash_file": ((137715, 133818, 23304, 3084, 0), (286031, 133459, 22908, 29362, 0)),  # F2: +12 armed triggers (4 tables); fixed +19806 at both sizes, measured b1t2
     "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
     "continuity": ((32004, 2226225, 0, 10760, 0), (229802, 44523292, 0, 141728, 1)),
     "package": ((3152, 18608, 0, 112, 0), (3152, 18608, 0, 112, 0)),
@@ -74,7 +74,7 @@ MEASURED = {"record_payment_evidence", "reverse_payment", "evaluate_obligation",
 UNMEASURED = {
     "setup, scales with its own input": "publish_control_pack register_population_manifest stage_population validate_population publish_population population_status",
     "decision-path writes, not yet measured (gap)": "record_support_evidence record_offset_claim retry_action authorize_offset reject_offset_and_authorize_correction acknowledge_action record_followthrough_decision record_reporting_evidence record_reporting_correction drain_correction_followups record_program_funding_receipt",
-    "bounded staff reads, not yet measured (gap)": "list_obligations obligation_detail read_verified_staff_snapshot action_payload current_evaluation_receipt correction_followup_outputs program_funding_summary",
+    "bounded staff reads, not yet measured (gap)": "list_obligations obligation_detail read_verified_staff_snapshot action_payload current_evaluation_receipt correction_followup_outputs program_funding_summary intake_records",
     "whole state by design (restore, full audit)": "validate_continuity_package restore_continuity verify_integrity",
     "operator-only, once per recovery, never per claim or commit (reads one head row)": "resolve_custody",
     "no work": "dispatch_outbox close",

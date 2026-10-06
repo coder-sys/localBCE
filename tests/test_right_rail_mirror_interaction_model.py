@@ -399,10 +399,10 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         real = workflow.reject_offset_and_authorize_correction
 
         def busy_after(commit):
-            def command(body):
+            def command(body, *actor):  # the server now passes the acting person
                 del workflow.reject_offset_and_authorize_correction  # busy once
                 if commit:
-                    real(body)
+                    real(body, *actor)
                 raise FinancialBusyError("store_busy")
             return command
         try:

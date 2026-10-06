@@ -448,6 +448,7 @@ _EVENT_KINDS = {
     },
     "POPULATION_MANIFEST": {"POPULATION_MANIFEST_REGISTERED", "POPULATION_MANIFEST_SUPERSEDED"},
     "PROGRAM_FUNDING_RECEIPT": {"FUNDING_RECEIPT_RECORDED", "FUNDING_RECEIPT_SUPERSEDED"},
+    "INTAKE": {"INTAKE_RECEIVED"},
     "OBLIGATION": {
         "SUPPORT_EVIDENCE_RECORDED",
         "PAYMENT_RECEIVED",
@@ -3186,8 +3187,7 @@ def _evaluation_projection_from_input(
     determinations = snapshot["determinations"]
     actions = snapshot["actions"]
     conflicts = snapshot["conflicts"]
-    assert isinstance(evidence, list) and isinstance(payments, list) and isinstance(claims, list)
-    assert isinstance(determinations, list) and isinstance(actions, list) and isinstance(conflicts, list)
+    assert all(isinstance(value, list) for value in (evidence, payments, claims, determinations, actions, conflicts))
     cash = _sum_cents((int(row["amount_cents"]) for row in payments if row["active"] == 1), "evaluation-input:cash")
     claimed = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] in {"CLAIMED", "AUTHORIZED"}), "evaluation-input:claimed")
     lawful = _sum_cents((int(row["amount_cents"]) for row in claims if row["status"] == "AUTHORIZED"), "evaluation-input:lawful")
@@ -4289,9 +4289,9 @@ def _verify_connection(
     _verify_duplicate_evidence(connection)
     _verify_followthrough_decisions(events, meta, obligations, populations, packs, identity["actors"])
     funding, funding_receipt_ids = _verify_program_funding(connection, meta, events)
-    manifest_records = manifest_state["manifests"]
-    assert isinstance(manifest_records, dict)
-    _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_records))
+    _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_state["manifests"]))
+    from app.right_rail_financial_cash_file_independent import verify_intakes  # it imports this module
+    verify_intakes(events, meta, payments)
     projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
     for key, obligation in obligations.items():
         _verify_exact_input(connection, obligation, _evaluation_input_snapshot(current[key]["input_snapshot_json"], "evaluation:input"))

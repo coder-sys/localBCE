@@ -122,6 +122,18 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         if isinstance(clock, _Clock):
             clock.value = max(clock.value, at_ms)
 
+    def _restore_shadow_and_test(self, package: bytes, prefix: str = "") -> tuple[FinancialOwner, FinancialOwner]:
+        return tuple(
+            FinancialOwner.restore_continuity(
+                package_bytes=package,
+                recovered_path=self._path(f"{prefix}{mode.lower()}.sqlite"),
+                trusted_authority=self.authority,
+                clock=_Clock(),
+                restore_mode=mode,
+            )
+            for mode in ("SHADOW", "TEST")
+        )
+
     @staticmethod
     def _record_cash(store: FinancialOwner, cents: int = EXPECTED_H_CASH_CENTS) -> None:
         _record_fixture_payment(store, replace(expected.H_CASH_EVIDENCE, amount_cents=cents), payment_id="payment:h:cash")
@@ -135,14 +147,16 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _record_claim(store: FinancialOwner) -> str:
-        evidence = expected.OFFSET_CLAIM_EVIDENCE
-        claim_id = "claim:obligation-item-h:offset-v1"
+    def _record_claim(
+        store: FinancialOwner,
+        claim_id: str = "claim:obligation-item-h:offset-v1",
+        evidence_id: str = expected.OFFSET_CLAIM_EVIDENCE.evidence_id,
+    ) -> str:
         store.record_offset_claim(
-            item_id=evidence.item_id,
+            item_id=expected.H_ITEM_ID,
             claim_id=claim_id,
             amount_cents=EXPECTED_OFFSET_CENTS,
-            evidence_id=evidence.evidence_id,
+            evidence_id=evidence_id,
             owner_role="CASE_OWNER",
             deadline_ms=expected.H_DUE_AT_MS,
         )
@@ -467,15 +481,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         store.acknowledge_action("action:z-old", "ack:z-old")
 
         self._advance_clock(store, expected.CORRECTION_AUTH_MS + 10)
-        second_claim = "claim:obligation-item-h:new-v1"
-        store.record_offset_claim(
-            item_id=expected.H_ITEM_ID,
-            claim_id=second_claim,
-            amount_cents=EXPECTED_OFFSET_CENTS,
-            evidence_id="evidence:offset-h:new",
-            owner_role="CASE_OWNER",
-            deadline_ms=expected.H_DUE_AT_MS,
-        )
+        second_claim = self._record_claim(store, "claim:obligation-item-h:new-v1", "evidence:offset-h:new")
         self._advance_clock(store, expected.CORRECTION_AUTH_MS + 20)
         second_receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
         store.authorize_offset(
@@ -562,20 +568,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         )
 
         package = authorized.export_continuity()
-        shadow = FinancialOwner.restore_continuity(
-            package_bytes=package,
-            recovered_path=self._path("engine-shadow.sqlite"),
-            trusted_authority=self.authority,
-            clock=_Clock(),
-            restore_mode="SHADOW",
-        )
-        test_owner = FinancialOwner.restore_continuity(
-            package_bytes=package,
-            recovered_path=self._path("engine-test.sqlite"),
-            trusted_authority=self.authority,
-            clock=_Clock(),
-            restore_mode="TEST",
-        )
+        shadow, test_owner = self._restore_shadow_and_test(package, "engine-")
         self._assert_fresh_engine_history_result(
             shadow,
             expected.H_AUTHORIZED_OFFSET,
@@ -657,20 +650,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self.assertGreaterEqual(len(historical.data["evaluations"]), 2)
         self.assertEqual(historical.data["evaluations"][0]["receipt"]["revision"], 0)
         package = reopened.export_continuity()
-        shadow = FinancialOwner.restore_continuity(
-            package_bytes=package,
-            recovered_path=self._path("shadow.sqlite"),
-            trusted_authority=self.authority,
-            clock=_Clock(),
-            restore_mode="SHADOW",
-        )
-        test_owner = FinancialOwner.restore_continuity(
-            package_bytes=package,
-            recovered_path=self._path("test.sqlite"),
-            trusted_authority=self.authority,
-            clock=_Clock(),
-            restore_mode="TEST",
-        )
+        shadow, test_owner = self._restore_shadow_and_test(package)
         shadow_data = self._snapshot(shadow).data
         test_data = self._snapshot(test_owner).data
         self.assertEqual(shadow_data["owner"]["mode"], "SHADOW")
