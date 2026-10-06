@@ -54,7 +54,7 @@ class DeploymentSlotsTest(unittest.TestCase):
     def test_one_unauthored_slot_keeps_activation_refused(self):
         for sid in SLOTS:
             with self.subTest(sid), self.assertLogs("rightrail.slots", "WARNING"):
-                slots = Slots({k: v for k, v in {**FULL, "DEPOSIT_FEED": []}.items() if k != sid} if sid == "SENDER_CHANNELS"
+                slots = Slots({k: v for k, v in {**FULL, "DEPOSIT_FEED": [["feed-1", []]]}.items() if k != sid} if sid == "SENDER_CHANNELS"
                               else {k: v for k, v in FULL.items() if k != sid})
             self.assertEqual(slots.empty(), [sid])
             with self.assertRaises(SlotError):
@@ -91,8 +91,14 @@ class DeploymentSlotsTest(unittest.TestCase):
         with self.subTest("two feeds cover one sender"):
             self.assertEqual(self.refused(DEPOSIT_FEED=[["f1", ["S1"]], ["f2", ["S1"]]]), "feed_covers_bad_sender")
 
-    def test_authored_empty_feed_is_allowed_without_an_835_channel(self):
-        Slots({**FULL, "SENDER_CHANNELS": [CHANNELS[1]], "DEPOSIT_FEED": []})
+    def test_a_slot_authored_with_an_empty_table_is_empty(self):
+        base = {**FULL, "SENDER_CHANNELS": [CHANNELS[1]], "DEPOSIT_FEED": [["feed-1", []]]}
+        for sid in SLOTS:
+            with self.subTest(sid), self.assertLogs("rightrail.slots", "WARNING") as logs:
+                slots = Slots({**base, sid: []})
+            self.assertEqual((slots.empty(), len(logs.output)), ([sid], 1))
+            with self.assertRaises(SlotError):
+                slots.require_active()
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ class Slots:
                 table[pair[0]] = pair[1]
             tables[sid] = MappingProxyType(table)
         self._tables = tables
-        self.authored = frozenset(tables)
+        self.authored = frozenset(sid for sid, table in tables.items() if table)  # an empty table is an empty slot
         self._cross_checks()
         for sid in self.empty():
             _log.warning("DEPLOYMENT_SLOT_EMPTY id=%s decider=%s", sid, SLOTS[sid][1])
@@ -75,7 +75,7 @@ class Slots:
                     raise SlotError(code)
         senders835 = {c[0] for c in channels if c[1] == "835"}
         feeds = self._tables.get("DEPOSIT_FEED", {})
-        if "DEPOSIT_FEED" in self.authored and not feeds and senders835:
+        if "DEPOSIT_FEED" in self._tables and not feeds and senders835:
             raise SlotError("feed_empty_with_835")
         covered = [s for ids in feeds.values() for s in ids]
         if feeds.keys() & self._tables.get("SENDER_CHANNELS", {}).keys():
