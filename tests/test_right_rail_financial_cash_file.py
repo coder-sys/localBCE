@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -343,15 +344,35 @@ class ReceiverCashFileTests(unittest.TestCase):
             with self.subTest(given=sorted(given)), self.assertRaisesRegex(owner.FinancialIntegrityError, "evaluation_evidence_source"):
                 self.store._insert_evaluation(None, result={}, pack=None, authority_epoch=0, authority_digest=b"", **given)
 
+    _seeded_quarter = None  # (image file, clock value, baseline manifest, ids): the 5,500 earlier payments, written once per process
+
+    def _seeded_quarter_store(self):
+        """Leave ``self.store`` an open owner on the 5,500 earlier payments of a quarter and ``self.baseline`` their manifest. The seed
+        writes happen once per process; each test opens its own copy of that image, so the write it times is on an owner it opened."""
+        cls = ReceiverCashFileTests
+        if cls._seeded_quarter is None:
+            ids = self._wide_store()
+            shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
+            for number in range(6_000 // check.MAX_ROWS - 1):
+                self.store.run_batch(cash._propose(canonical(self._file_of(shapes[number % 2], check.MAX_ROWS, prefix=f"seed-{number}")), self.baseline))
+            self.baseline = self._manifest()
+            template = Path(tempfile.mkdtemp(prefix="quarter-seed-")) / "seed.sqlite"
+            cls.addClassCleanup(shutil.rmtree, template.parent, True)
+            template.write_bytes(fixtures._image(self.store.path))
+            cls._seeded_quarter = (template, self.store.clock.value, self.baseline, ids)
+        template, clock, baseline, ids = cls._seeded_quarter
+        path = self.fixture._path()
+        shutil.copyfile(template, path)
+        self.store = self.fixture._make_owner(path=path, clock=fixtures._Clock(initial=clock))
+        self.baseline = baseline
+        return ids
+
     def _quarter_end(self, label, writer):
         """A quarter's last file on 5,500 earlier payments (6,000 in all), written through an already-open owner by the callable
         ``writer(prepared)`` returns: the lock of a warm apply, not of a fresh CLI open (its verify adds seconds,
         docs/CORE_REDESIGN.md "Cash-file capacity") or of one 84-item history. Returns the seconds the lock was held."""
-        ids = self._wide_store()
+        ids = self._seeded_quarter_store()
         shapes = (ids, ids[:-(-check.MAX_ROWS // check.MAX_ITEM_ROWS)])
-        for number in range(6_000 // check.MAX_ROWS - 1):
-            self.store.run_batch(cash._propose(canonical(self._file_of(shapes[number % 2], check.MAX_ROWS, prefix=f"seed-{number}")), self.baseline))
-        self.baseline = self._manifest()
         write, verified, real = writer(self._prepare(self._file_of(shapes[1], check.MAX_ROWS, prefix="quarter-end"))), [], independent._verify_evaluation_row
         live = lambda connection: os.path.samefile(connection.execute("PRAGMA database_list").fetchone()[2], self.store.path)  # a plan's copy verifies its own rows
         with patch.object(independent, "_verify_evaluation_row", lambda *args, **kwargs: (live(args[0]) and verified.append(args[2]["obligation_id"])) or real(*args, **kwargs)):

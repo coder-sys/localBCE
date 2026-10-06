@@ -140,10 +140,11 @@ class DifferentialTests(unittest.TestCase):
             lines = [f"mldsa87 {'accept' if ok else 'reject'} {p.hex()} {m.hex()} {s.hex()}" for p, m, s, ok in cases]
             path = Path(tmp) / "diff.vectors"
             path.write_text("\n".join([*lines, f"end {len(lines)}"]) + "\n", "ascii", newline="\n")
-            with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool:  # a worker process per case; at most 4 side by side
+            with ThreadPoolExecutor(min(4, os.cpu_count() or 1)) as pool, ThreadPoolExecutor(1) as lean:  # a worker process per case, at most 4 side by side, while Lean checks the one file
+                lean_verdict = lean.submit(lean_vectors, path)
                 verdicts = list(pool.map(lambda c: kat_verify(*c[:3]), cases))
             self.assertEqual(verdicts, [c[3] for c in cases])
-            self.assertEqual(lean_vectors(path), f"GATE_VECTORS=PASS checked={len(cases)} expected={len(cases)} failed=0")
+            self.assertEqual(lean_verdict.result(), f"GATE_VECTORS=PASS checked={len(cases)} expected={len(cases)} failed=0")
         print(f"differential: {len(cases)} cases, AWS-LC and Lean agree on every one")
 
 

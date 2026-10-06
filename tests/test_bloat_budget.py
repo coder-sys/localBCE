@@ -15,7 +15,7 @@ CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", "
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
 PRODUCT_CODE_LINES = 35_901
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 32_604  # +3: S2 canonical-decoder proofs cannot silently regress (pinned axioms, empty-line reject test)
+EVIDENCE_CODE_LINES = 32_705  # 32,533 trunk + 71 S2 pins/codec tests + 101 test-speed (fixture/server reuse, concurrent browser contexts; measured net)
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 92_740  # 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)

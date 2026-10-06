@@ -5134,15 +5134,21 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "ack-b": lambda store: ack(store, _ACTION_B),
             "ack-n": lambda store: ack(store, act_n),
         }
-        for order in list(itertools.permutations(moves, 4))[::30]:
-            store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=700_000)
-            reject_b()
-            store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)
-            receipt = store.current_evaluation_receipt(item)
-            self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
-            store.authorize_offset(item_id=item, claim_id="claim:obligation-item-h:offset-c", expected_revision=receipt["revision"], action_id=act_n,
-                                   decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
-            self._pay_a(store, 100_000, "pn", linked=False)
+        store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=700_000)  # the common start is built once; each ordering runs on its own copy of its image
+        reject_b()
+        store.record_offset_claim(item_id=item, claim_id="claim:obligation-item-h:offset-c", amount_cents=100_000, evidence_id="evidence:offset-h:claim-c", owner_role="CASE_OWNER", deadline_ms=expected.H_DUE_AT_MS)
+        receipt = store.current_evaluation_receipt(item)
+        self._advance_clock(store, expected.CORRECTION_AUTH_MS + 2_000)
+        store.authorize_offset(item_id=item, claim_id="claim:obligation-item-h:offset-c", expected_revision=receipt["revision"], action_id=act_n,
+                               decision_at_ms=expected.CORRECTION_AUTH_MS + 2_000, evaluation_id=receipt["evaluation_id"], evaluation_result_digest=receipt["result_digest"])
+        self._pay_a(store, 100_000, "pn", linked=False)
+        start, start_clock = _image(store.path), store.clock.value
+        for number, order in enumerate(list(itertools.permutations(moves, 4))[::30]):
+            path = self._path()
+            path.write_bytes(start)
+            store = self._make_owner(path=path, clock=_Clock(initial=start_clock))
+            if number == 0:
+                self.assertEqual(_image(path), start)  # opening a copy changes nothing: every ordering starts from the same image
             made.clear()
             for move in order:
                 try:
