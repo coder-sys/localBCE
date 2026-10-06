@@ -52,26 +52,7 @@ def _propose(source_bytes, baseline_bytes):
         raise CashFileError("cash_file_format") from None
     if canonical != source_bytes:
         raise CashFileError("cash_file_format")
-    _fields(value, "contract source_class scope source row_count total_cents rows")
-    if value["contract"] != "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" or value["source_class"] != "SYNTHETIC_RECEIVER_CASH":
-        raise CashFileError("cash_file_format")
-    _fields(value["scope"], "state_id deployment_id program_id period_id currency")
-    for item in value["scope"].values():
-        _identifier(item)
-    if value["scope"]["currency"] != "USD":
-        raise CashFileError("cash_file_format")
-    source = value["source"]
-    _fields(source, "source_id version receiver_system_id capture_id captured_at_ms")
-    for key in ("source_id", "version", "receiver_system_id", "capture_id"):
-        _identifier(source[key])
-    _integer(source["captured_at_ms"], 0, 2**63 - 1)
-    if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
-        raise CashFileError("cash_file_row_cap")
-    _integer(value["row_count"], 1, MAX_ROWS)
-    _integer(value["total_cents"], 1, 2**63 - 1)
-    rows = value["rows"]
-    if type(rows) is not list or len(rows) != value["row_count"]:
-        raise CashFileError("cash_file_format")
+    source, rows = _header(value)
     local_ref = hashlib.sha256(source_bytes).hexdigest().upper() + hashlib.sha256(baseline_bytes).hexdigest().upper()
     commands, payments, evidence, origins = [], set(), set(), set()
     for row in rows:
@@ -93,6 +74,31 @@ def _propose(source_bytes, baseline_bytes):
     if sum(row["amount_cents"] for row in rows) != value["total_cents"]:
         raise CashFileError("cash_file_format")
     return commands
+
+
+def _header(value):
+    """A file's container (everything but its rows' own fields): its source block and rows, or cash_file_format / cash_file_row_cap."""
+    _fields(value, "contract source_class scope source row_count total_cents rows")
+    if value["contract"] != "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" or value["source_class"] != "SYNTHETIC_RECEIVER_CASH":
+        raise CashFileError("cash_file_format")
+    _fields(value["scope"], "state_id deployment_id program_id period_id currency")
+    for item in value["scope"].values():
+        _identifier(item)
+    if value["scope"]["currency"] != "USD":
+        raise CashFileError("cash_file_format")
+    source = value["source"]
+    _fields(source, "source_id version receiver_system_id capture_id captured_at_ms")
+    for key in ("source_id", "version", "receiver_system_id", "capture_id"):
+        _identifier(source[key])
+    _integer(source["captured_at_ms"], 0, 2**63 - 1)
+    if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
+        raise CashFileError("cash_file_row_cap")
+    _integer(value["row_count"], 1, MAX_ROWS)
+    _integer(value["total_cents"], 1, 2**63 - 1)
+    rows = value["rows"]
+    if type(rows) is not list or len(rows) != value["row_count"]:
+        raise CashFileError("cash_file_format")
+    return source, rows
 
 
 def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
