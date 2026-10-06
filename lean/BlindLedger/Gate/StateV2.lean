@@ -720,10 +720,341 @@ private theorem rootAt_len64 (H : Bytes → Bytes) (hH : HashLen H) (f d : Nat) 
 private theorem mapOk_filter {m : Map} (hm : MapOk m) (p : Bytes × Bytes → Bool) : MapOk (m.filter p) :=
   ⟨List.Nodup.sublist (List.filter_sublist.map _) hm.1, fun e he => hm.2 e (List.mem_filter.mp he).1⟩
 
+private theorem rootAt_node (H : Bytes → Bytes) (f d : Nat) (L : Map) (h : 2 ≤ L.length) :
+    rootAt H (f + 1) d L = H (nodeIn (rootAt H f (d + 1) (L.filter fun e => !bit e.1 d))
+      (rootAt H f (d + 1) (L.filter fun e => bit e.1 d))) := by
+  rcases L with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · simp at h
+  · simp at h
+  · exact rootAt_succ2 H f d a b t
+
+private theorem agree_mono {d : Nat} {L L' : Map} (h : ∀ e ∈ L', e ∈ L) (ha : Agree d L) : Agree d L' :=
+  fun e he e' he' j hj => ha e (h e he) e' (h e' he') j hj
+
+private theorem build_hash (H : Bytes → Bytes) (hH : HashLen H) : ∀ (f d : Nat) (L : Map),
+    f + d = 513 → Agree d L → MapOk L → hashPf H (build f d L) = rootAt H f d L := by
+  intro f
+  induction f with
+  | zero =>
+    intro d L hf ha hm
+    have hs := agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1
+    rcases L with _ | ⟨⟨p, v⟩, _ | ⟨b, t⟩⟩
+    · simp [build, hashPf, rootAt_nil]
+    · have hok : leafOk p v = true := by
+        have := hm.2 (p, v) (by simp)
+        simp [leafOk, this.1, this.2]
+      simp [build, hashPf, hok, rootAt_one]
+    · simp at hs
+  | succ f ih =>
+    intro d L hf ha hm
+    rcases L with _ | ⟨⟨p, v⟩, _ | ⟨b, t⟩⟩
+    · simp [build, hashPf, rootAt_nil]
+    · have hok : leafOk p v = true := by
+        have := hm.2 (p, v) (by simp)
+        simp [leafOk, this.1, this.2]
+      simp [build, hashPf, hok, rootAt_one]
+    · have hag0 := agree_filter ha (fun e => !bit e.1 d) (fun e _ e' _ h h' => by simp at h h'; rw [h, h'])
+      have hag1 := agree_filter ha (fun e => bit e.1 d) (fun e _ e' _ h h' => by
+        have h1 : bit e.1 d = true := h
+        have h2 : bit e'.1 d = true := h'
+        rw [h1, h2])
+      rw [rootAt_succ2]
+      show H (nodeIn (hashPf H (build f (d + 1) _)) (hashPf H (build f (d + 1) _))) = _
+      rw [ih (d + 1) _ (by omega) hag0 (mapOk_filter hm _), ih (d + 1) _ (by omega) hag1 (mapOk_filter hm _)]
+
+/-- Upsert result as a list: the writes, then the old rows whose key is not overwritten. -/
+private def upM (m ws : Map) : Map := ws ++ m.filter fun e => !ws.any (·.1 == e.1)
+
+private theorem upM_nil (m : Map) : upM m [] = m := by simp [upM]
+
+private theorem upsert_perm : ∀ (ws m : Map), (ws.map (·.1)).Nodup → (upsert m ws).Perm (upM m ws) := by
+  intro ws
+  induction ws with
+  | nil => intro m _; show m.Perm (upM m []); rw [upM_nil]
+  | cons w ws ih =>
+    intro m hn
+    obtain ⟨k, v⟩ := w
+    rw [List.map_cons, List.nodup_cons] at hn
+    have e1 : upsert m ((k, v) :: ws) = upsert ((k, v) :: m.filter (·.1 != k)) ws := rfl
+    rw [e1]
+    refine (ih _ hn.2).trans ?_
+    have hk : ws.any (·.1 == k) = false := by
+      simp only [List.any_eq_false, beq_iff_eq]
+      intro x hx hxk
+      exact hn.1 (List.mem_map.mpr ⟨x, hx, hxk⟩)
+    have e2 : upM ((k, v) :: m.filter (·.1 != k)) ws =
+        ws ++ (k, v) :: (m.filter fun e => !((k, v) :: ws).any (·.1 == e.1)) := by
+      have hf : (m.filter (·.1 != k)).filter (fun e => !ws.any (·.1 == e.1)) =
+          m.filter fun e => !((k, v) :: ws).any (·.1 == e.1) := by
+        rw [List.filter_filter]
+        apply List.filter_congr
+        intro e _
+        by_cases h1 : e.1 = k
+        · simp [h1]
+        · have h2 : k ≠ e.1 := fun h => h1 h.symm
+          have h3 : (k == e.1) = false := beq_eq_false_iff_ne.mpr h2
+          have h4 : (e.1 != k) = true := bne_iff_ne.mpr h1
+          simp [h3, h4]
+      unfold upM
+      rw [List.filter_cons_of_pos (by simp [hk]), hf]
+    rw [e2]
+    exact List.perm_middle
+
+private theorem upM_filter (m ws : Map) (p : Bytes × Bytes → Bool) (hp : ∀ e e' : Bytes × Bytes, e.1 = e'.1 → p e = p e') :
+    (upM m ws).filter p = upM (m.filter p) (ws.filter p) := by
+  unfold upM
+  rw [List.filter_append, List.filter_filter, List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro e he
+  have key : ws.any (·.1 == e.1) = (ws.filter p).any (·.1 == e.1) ∨ p e = false := by
+    by_cases hpe : p e = true
+    · left
+      by_cases h : ws.any (·.1 == e.1) = true
+      · obtain ⟨w, hw, hwe⟩ := List.any_eq_true.mp h
+        have hwe' : w.1 = e.1 := by simpa using hwe
+        have : (ws.filter p).any (·.1 == e.1) = true :=
+          List.any_eq_true.mpr ⟨w, List.mem_filter.mpr ⟨hw, by rw [hp w e hwe']; exact hpe⟩, hwe⟩
+        rw [h, this]
+      · have h' : ws.any (·.1 == e.1) = false := Bool.eq_false_iff.mpr h
+        have : (ws.filter p).any (·.1 == e.1) = false := by
+          simp only [List.any_eq_false] at h' ⊢
+          intro x hx; exact h' x (List.mem_filter.mp hx).1
+        rw [h', this]
+    · right; simpa using hpe
+  rcases key with h | h
+  · simp only [h]; exact Bool.and_comm _ _
+  · simp [h]
+
+private theorem upM_two {m : Map} (hm : MapOk m) (h2 : 2 ≤ m.length) (ws : Map) : 2 ≤ (upM m ws).length := by
+  have hmem : ∀ e ∈ m, ∃ e' ∈ upM m ws, e'.1 = e.1 := by
+    intro e he
+    by_cases h : ws.any (·.1 == e.1) = true
+    · obtain ⟨w, hw, hwe⟩ := List.any_eq_true.mp h
+      exact ⟨w, by simp [upM, hw], by simpa using hwe⟩
+    · exact ⟨e, by simp [upM, he, h], rfl⟩
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · simp at h2
+  · simp at h2
+  · obtain ⟨x, hx, hxa⟩ := hmem a (by simp)
+    obtain ⟨y, hy, hyb⟩ := hmem b (by simp)
+    have hab : a.1 ≠ b.1 := by
+      have := hm.1
+      simp only [List.map_cons, List.nodup_cons, List.mem_cons, List.mem_map, not_or] at this
+      intro h; exact this.1.1 h
+    rcases hL : upM (a :: b :: t) ws with _ | ⟨z, _ | ⟨z', u⟩⟩
+    · rw [hL] at hx; simp at hx
+    · rw [hL] at hx hy
+      simp at hx hy
+      subst hx; subst hy
+      exact absurd (hxa.symm.trans hyb) hab
+    · simp
+
+private theorem upsertPf_empty (f d : Nat) (ws : Map) (h : ws ≠ []) : upsertPf f d .empty ws = build f d ws := by
+  cases ws with
+  | nil => exact absurd rfl h
+  | cons w ws => first | rfl | simp [upsertPf]
+
+private theorem upsertPf_leaf (f d : Nat) (p v : Bytes) (ws : Map) (h : ws ≠ []) :
+    upsertPf f d (.leaf p v) ws = build f d (if ws.any (·.1 == p) then ws else (p, v) :: ws) := by
+  cases ws with
+  | nil => exact absurd rfl h
+  | cons w ws => first | rfl | simp [upsertPf]
+
+private theorem upsertPf_node (f d : Nat) (l r : Proof) (ws : Map) (h : ws ≠ []) :
+    upsertPf (f + 1) d (.node l r) ws = .node (upsertPf f (d + 1) l (ws.filter fun e => !bit e.1 d))
+      (upsertPf f (d + 1) r (ws.filter fun e => bit e.1 d)) := by
+  cases ws with
+  | nil => exact absurd rfl h
+  | cons w ws => first | rfl | simp [upsertPf]
+
+private theorem upsertPf_nil (f d : Nat) (pf : Proof) : upsertPf f d pf [] = pf := by
+  first | rfl | simp [upsertPf]
+
+private theorem mu_aux (H : Bytes → Bytes) (hH : HashLen H) : ∀ (pf : Proof) (f d : Nat) (m ws : Map) (ks : List Bytes),
+    f + d = 513 → Agree d (m ++ ws) → MapOk m → MapOk ws → (∀ e ∈ ws, e.1 ∈ ks) → minimal d pf ks = true →
+    (∀ e ∈ ws, (lookupPf d pf e.1).isSome = true) → hashPf H pf = rootAt H f d m →
+    hashPf H (upsertPf f d pf ws) = rootAt H f d (upM m ws) ∨ Collision H (pfInputs H pf) (treeInputs H f d m) := by
+  intro pf
+  induction pf with
+  | «opaque» h =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · obtain ⟨w, hwm⟩ := List.exists_mem_of_ne_nil ws h0
+      have := hl w hwm
+      simp [lookupPf] at this
+  | empty =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · rw [upsertPf_empty f d ws h0]
+      obtain ⟨Y, hY, hXY, hsh⟩ := match_root H hH emptyIn f d m hh
+      have col : emptyIn ≠ Y → Collision H (pfInputs H .empty) (treeInputs H f d m) :=
+        fun hne => ⟨emptyIn, by simp [pfInputs], Y, hY, hne, hXY⟩
+      rcases hsh with ⟨rfl, rfl⟩ | ⟨p, v, rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+      · left
+        have e : upM [] ws = ws := by simp [upM]
+        rw [e]
+        exact build_hash H hH f d ws hf (by simpa using ha) hw
+      · right; exact col (emptyIn_ne_leafIn _ _)
+      · right; exact col (emptyIn_ne_nodeIn _ _)
+  | leaf p v =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · obtain ⟨w, hwm⟩ := List.exists_mem_of_ne_nil ws h0
+      have hok : leafOk p v = true := by
+        by_cases hc : leafOk p v = true
+        · exact hc
+        · have := hl w hwm
+          simp [lookupPf, hc] at this
+      have hp : p.length = digestBytes := by simp [leafOk] at hok; exact hok.1
+      have hh' : H (leafIn p v) = rootAt H f d m := by
+        simp only [hashPf, hok, ↓reduceIte] at hh; exact hh
+      obtain ⟨Y, hY, hXY, hsh⟩ := match_root H hH (leafIn p v) f d m hh'
+      have col : leafIn p v ≠ Y → Collision H (pfInputs H (.leaf p v)) (treeInputs H f d m) :=
+        fun hne => ⟨leafIn p v, by simp [pfInputs, hok], Y, hY, hne, hXY⟩
+      rcases hsh with ⟨rfl, rfl⟩ | ⟨p', v', rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+      · right; exact col (fun h => emptyIn_ne_leafIn _ _ h.symm)
+      · by_cases hne : leafIn p v = leafIn p' v'
+        · have hp' : p'.length = digestBytes := (hm.2 (p', v') (by simp)).1
+          obtain ⟨rfl, rfl⟩ := leafIn_inj hp hp' hne
+          left
+          rw [upsertPf_leaf f d p v ws h0]
+          have hcase : (if ws.any (·.1 == p) then ws else (p, v) :: ws).Perm (upM [(p, v)] ws) := by
+            by_cases hany : ws.any (·.1 == p) = true
+            · simp [upM, hany]
+            · have h' : ws.any (·.1 == p) = false := Bool.eq_false_iff.mpr hany
+              simp [upM, h']
+              exact (List.perm_append_singleton _ _).symm
+          have hL : MapOk (if ws.any (·.1 == p) then ws else (p, v) :: ws) := by
+            by_cases hany : ws.any (·.1 == p) = true
+            · simpa [hany] using hw
+            · have h' : ws.any (·.1 == p) = false := Bool.eq_false_iff.mpr hany
+              rw [if_neg hany]
+              refine ⟨?_, ?_⟩
+              · rw [List.map_cons, List.nodup_cons]
+                refine ⟨?_, hw.1⟩
+                intro hmem
+                obtain ⟨x, hx, hxp⟩ := List.mem_map.mp hmem
+                have : ws.any (·.1 == p) = true := List.any_eq_true.mpr ⟨x, hx, by simpa using hxp⟩
+                rw [h'] at this; exact Bool.false_ne_true this
+              · intro e he
+                rcases List.mem_cons.mp he with rfl | he
+                · exact hm.2 _ (by simp)
+                · exact hw.2 e he
+          have hAg : Agree d (if ws.any (·.1 == p) then ws else (p, v) :: ws) := by
+            refine agree_mono (L := [(p, v)] ++ ws) (fun e he => ?_) ha
+            by_cases hany : ws.any (·.1 == p) = true
+            · rw [if_pos hany] at he; simp [he]
+            · rw [if_neg hany] at he; simpa using he
+          rw [build_hash H hH f d _ hf hAg hL]
+          exact rootAt_perm' H f d _ _ hcase
+        · right; exact col hne
+      · right; exact col (leafIn_ne_nodeIn _ _ _ _)
+  | node l r ihl ihr =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · obtain ⟨w, hwm⟩ := List.exists_mem_of_ne_nil ws h0
+      have hd : d < 512 := by
+        by_cases hc : d < 512
+        · exact hc
+        · have := hl w hwm
+          simp [lookupPf, hc] at this
+      obtain ⟨f', rfl⟩ : ∃ f', f = f' + 1 := ⟨f - 1, by omega⟩
+      rw [upsertPf_node f' d l r ws h0]
+      simp only [minimal, Bool.and_eq_true] at hmin
+      obtain ⟨⟨⟨_, _⟩, hml⟩, hmr⟩ := hmin
+      have hll := hashPf_len H hH (d + 1) l _ hml
+      have hlr := hashPf_len H hH (d + 1) r _ hmr
+      have hXin : nodeIn (hashPf H l) (hashPf H r) ∈ pfInputs H (.node l r) := by simp [pfInputs]
+      have hh' : H (nodeIn (hashPf H l) (hashPf H r)) = rootAt H (f' + 1) d m := hh
+      obtain ⟨Y, hY, hXY, hsh⟩ := match_root H hH _ (f' + 1) d m hh'
+      have col : nodeIn (hashPf H l) (hashPf H r) ≠ Y →
+          Collision H (pfInputs H (.node l r)) (treeInputs H (f' + 1) d m) :=
+        fun hne => ⟨_, hXin, Y, hY, hne, hXY⟩
+      rcases hsh with ⟨rfl, rfl⟩ | ⟨p', v', rfl, rfl⟩ | ⟨f'', a, b, t, hf', rfl, rfl⟩
+      · right; exact col (fun h => emptyIn_ne_nodeIn _ _ h.symm)
+      · right; exact col (fun h => leafIn_ne_nodeIn _ _ _ _ h.symm)
+      · have hf'' : f'' = f' := by omega
+        subst hf''
+        by_cases hne : nodeIn (hashPf H l) (hashPf H r) =
+            nodeIn (rootAt H f'' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+              (rootAt H f'' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d))
+        case neg => exact Or.inr (col hne)
+        unfold nodeIn at hne
+        have h1 := (List.cons.inj (List.append_cancel_left hne)).2
+        have hlen := congrArg List.length h1
+        have e1 := rootAt_len H hH f'' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d)
+        have e2 := rootAt_len H hH f'' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)
+        simp only [List.length_append] at hlen
+        obtain ⟨q1, q2⟩ := List.append_inj h1 (by omega)
+        have hag0 := agree_filter ha (fun e => !bit e.1 d) (fun e _ e' _ h h' => by simp at h h'; rw [h, h'])
+        have hag1 := agree_filter ha (fun e => bit e.1 d) (fun e _ e' _ h h' => by
+          have h1 : bit e.1 d = true := h
+          have h2 : bit e'.1 d = true := h'
+          rw [h1, h2])
+        have hsub : ∀ (p : Bytes × Bytes → Bool) (x : Bytes × Bytes), x ∈ (a :: b :: t).filter p ++ ws.filter p →
+            x ∈ ((a :: b :: t) ++ ws).filter p := by
+          intro p x hx; rw [List.filter_append]; exact hx
+        have hagl : Agree (d + 1) ((a :: b :: t).filter (fun e => !bit e.1 d) ++ ws.filter (fun e => !bit e.1 d)) := by
+          have := hag0; rw [List.filter_append] at this; exact this
+        have hagr : Agree (d + 1) ((a :: b :: t).filter (fun e => bit e.1 d) ++ ws.filter (fun e => bit e.1 d)) := by
+          have := hag1; rw [List.filter_append] at this; exact this
+        have hsl : ∀ e ∈ ws.filter (fun e => !bit e.1 d), e.1 ∈ ks.filter (!bit · d) := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          exact List.mem_filter.mpr ⟨hs e he1, he2⟩
+        have hsr : ∀ e ∈ ws.filter (fun e => bit e.1 d), e.1 ∈ ks.filter (bit · d) := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          exact List.mem_filter.mpr ⟨hs e he1, he2⟩
+        have hll' : ∀ e ∈ ws.filter (fun e => !bit e.1 d), (lookupPf (d + 1) l e.1).isSome = true := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          have := hl e he1
+          have hb : bit e.1 d = false := by simpa using he2
+          simpa [lookupPf, hd, hb] using this
+        have hlr' : ∀ e ∈ ws.filter (fun e => bit e.1 d), (lookupPf (d + 1) r e.1).isSome = true := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          have := hl e he1
+          simpa [lookupPf, hd, he2] using this
+        have hfin : ∀ p : Bytes × Bytes → Bool, (∀ e e' : Bytes × Bytes, e.1 = e'.1 → p e = p e') →
+            (upM (a :: b :: t) ws).filter p = upM ((a :: b :: t).filter p) (ws.filter p) :=
+          fun p hp => upM_filter _ _ p hp
+        have hu0 := hfin (fun e => !bit e.1 d) (fun e e' h => by simp [h])
+        have hu1 := hfin (fun e => bit e.1 d) (fun e e' h => by simp [h])
+        have h2 := upM_two hm (by simp) ws
+        rw [rootAt_node H f'' d _ h2, hu0, hu1]
+        rcases ihl f'' (d + 1) _ _ _ (by omega) hagl (mapOk_filter hm _) (mapOk_filter hw _) hsl hml hll' q1 with c1 | c1
+        · rcases ihr f'' (d + 1) _ _ _ (by omega) hagr (mapOk_filter hm _) (mapOk_filter hw _) hsr hmr hlr' q2 with c2 | c2
+          · left
+            show H (nodeIn (hashPf H _) (hashPf H _)) = _
+            rw [c1, c2]
+          · right
+            refine col_mono (fun x hx => ?_) (fun x hx => ?_) c2
+            · simp [pfInputs, hx]
+            · rw [treeInputs_succ2]; simp [hx]
+        · right
+          refine col_mono (fun x hx => ?_) (fun x hx => ?_) c1
+          · simp [pfInputs, hx]
+          · rw [treeInputs_succ2]; simp [hx]
+
 theorem multi_update_sound (H : Bytes → Bytes) (hH : HashLen H) (m ws : Map) (hm : MapOk m) (hw : MapOk ws)
     (ks : List Bytes) (pf : Proof) (hv : verifyMulti H (root H m) ks pf = true) (hs : ∀ e ∈ ws, e.1 ∈ ks) :
     hashPf H (upsertPf 513 0 pf ws) = root H (upsert m ws) ∨
-      Collision H (pfInputs H pf) (treeInputs H 513 0 m) := sorry
+      Collision H (pfInputs H pf) (treeInputs H 513 0 m) := by
+  simp only [verifyMulti, Bool.and_eq_true, beq_iff_eq] at hv
+  obtain ⟨⟨⟨⟨_, _⟩, hh⟩, hsm⟩, hmin⟩ := hv
+  have hl : ∀ e ∈ ws, (lookupPf 0 pf e.1).isSome = true := fun e he => List.all_eq_true.mp hsm e.1 (hs e he)
+  rcases mu_aux H hH pf 513 0 m ws ks rfl (fun _ _ _ _ j hj => absurd hj (Nat.not_lt_zero _)) hm hw hs hmin hl hh with h | h
+  · left
+    rw [h]
+    exact rootAt_perm' H _ _ _ _ (upsert_perm ws m hw.1).symm
+  · right; exact h
 
 /-- The honest multiproof: `m`'s canonical tree cut to the paths `ks`. -/
 def prune (H : Bytes → Bytes) : Nat → Nat → Map → List Bytes → Proof
