@@ -907,6 +907,23 @@ class SyntheticTrustedAuthority:
         _fail(FinancialAuthorityError, "authority_actor_not_authorized")
 
 
+# Named synthetic staff of the staff workspace: (actor id, name, staff role, owner roles). The owner records the actor id; the name is
+# for screens. A director and an auditor decide nothing, so the owner holds no roles for them.
+SYNTHETIC_STAFF: Final = (
+    ("staff:maria-alvarez", "Maria Alvarez", "approver", ("FINANCE_DECISION", "CASE_OWNER")),
+    ("staff:devon-brooks", "Devon Brooks", "approver", ("FINANCE_DECISION", "CASE_OWNER")),
+    ("staff:priya-nair", "Priya Nair", "analyst", ("RECEIVER",)),
+    ("staff:tom-reyes", "Tom Reyes", "analyst", ("REPORTING_EDITOR",)),
+    ("staff:grace-okafor", "Grace Okafor", "director", ()),
+    ("staff:li-wei", "Li Wei", "auditor", ()),
+)
+
+
+def staff_authority() -> SyntheticTrustedAuthority:
+    """The fixture authority plus the named staff who hold owner roles."""
+    return SyntheticTrustedAuthority(actors=SyntheticTrustedAuthority().actors + tuple(AuthorityActor(i, r) for i, _n, _s, r in SYNTHETIC_STAFF if r))
+
+
 def _authority_ref(authority: SyntheticTrustedAuthority) -> dict[str, Any]:
     return {"authority_id": authority.authority_id, "epoch": authority.epoch, "digest": _hex(authority.digest)}
 
@@ -4898,6 +4915,8 @@ class FinancialOwner:
             action = _one(connection, "action_missing", "SELECT * FROM actions WHERE action_id=?", (action_id,))
             obligation = self._obligation_by_id(connection, str(action["obligation_id"]))
             self._authority_action(connection, str(obligation["obligation_id"]), actor_id, actor_role)
+            if connection.execute("SELECT 1 FROM determinations WHERE determination_id=? AND actor_id=?", (action["determination_id"], actor_id)).fetchone():
+                _fail(FinancialAuthorityError, "acknowledger_is_authorizer")
             outbox = _one(connection, "action_outbox_missing", "SELECT * FROM action_outbox WHERE action_id=?", (action_id,))
             if self._replayed_command(connection, "ACTION_ACKNOWLEDGMENT", action_id, {"acknowledgment_ref": acknowledgment_ref}, "acknowledgment_conflict"):
                 return {"status": "DUPLICATE", "action_id": action_id, **self._projection_for_row(obligation)}

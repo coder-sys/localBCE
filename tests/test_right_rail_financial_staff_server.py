@@ -23,6 +23,7 @@ from app.right_rail_financial_mirror import (
     FinancialMirrorContinuityError,
 )
 from app.right_rail_financial_owner import (
+    FinancialAuthorityError,
     FinancialBusyError,
     FinancialConflictError,
     FinancialContinuityError,
@@ -31,11 +32,14 @@ from app.right_rail_financial_owner import (
     FinancialInputError,
     FinancialOwner,
     FinancialRevisionError,
+    SyntheticTrustedAuthority,
+    staff_authority,
 )
 from app.right_rail_financial_followthrough import build_followthrough_pack
 
 from app.right_rail_financial_staff_server import (
     CASH_CORRECTION_COMMAND,
+    H_ACTION_ID,
     H_CASH_CENTS,
     H_ITEM_ID,
     H_OWED_CENTS,
@@ -1026,13 +1030,15 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         "/api/continuity/restore-test": {"operator"},
     }
     _REFUSED = {"error": {"code": "staff_role_refused"}, "changed": False}
+    _FIRST_FIT = {"/api/decision/authorize-offset": "staff:maria-alvarez", "/api/decision/reject-offset": "staff:maria-alvarez",
+                  "/api/action/acknowledge": "staff:priya-nair", "/api/reporting/record": "staff:tom-reyes"}
 
-    def _role_post(self, port: int, path: str, roles: tuple[str, ...], body: bytes = b'{"revision":0}') -> tuple[int, object]:
+    def _role_post(self, port: int, path: str, roles: tuple[str, ...], body: bytes = b'{"revision":0}', people: tuple[str, ...] = ()) -> tuple[int, object]:
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         self.addCleanup(connection.close)
         connection.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
         for name, value in (("Host", f"127.0.0.1:{port}"), ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"),
-                            *(("X-Staff-Role", role) for role in roles), ("Content-Length", str(len(body)))):
+                            *(("X-Staff-Role", role) for role in roles), *(("X-Staff-Person", person) for person in people), ("Content-Length", str(len(body)))):
             connection.putheader(name, value)
         connection.endheaders(body)
         response = connection.getresponse()
@@ -1053,7 +1059,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                         status, body = self._role_post(port, path, (role,))
                         if role in self._ROLE_TABLE[path]:
                             self.assertEqual((status, body), (200, {}))
-                            command.assert_called_once_with(name, {"revision": 0})
+                            command.assert_called_once_with(name, {"revision": 0}, self._FIRST_FIT.get(path))  # a command that writes an actor gets the role's first named person
                         else:
                             self.assertEqual((status, body), (403, self._REFUSED))
                             command.assert_not_called()
@@ -1091,6 +1097,81 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         decide = COMMAND_ROLES["/api/decision/authorize-offset"] | COMMAND_ROLES["/api/decision/reject-offset"]
         follow = COMMAND_ROLES["/api/action/acknowledge"] | COMMAND_ROLES["/api/correction/record-cash"] | COMMAND_ROLES["/api/reporting/record"]
         self.assertEqual(decide & follow, frozenset())  # the Owner keeps FINANCE_DECISION and RECEIVER separate; so does the table
+
+    def test_a_command_is_written_under_the_named_person_never_the_fixed_synthetic_official(self) -> None:
+        workflow = self._workflow()
+        owner = workflow.mirror.owner
+        port = int(self._serve_workflow(workflow).server_address[1])
+        decide, ack = "/api/decision/reject-offset", "/api/action/acknowledge"
+        refused = (403, {"error": {"code": "staff_person_refused"}, "changed": False})
+        with patch.object(workflow, "command", return_value={}) as command:  # what the server hands the owner, for each claim
+            for path, people, expected in (
+                (decide, ("staff:devon-brooks",), (200, {})),  # a named person who fits the role and the command
+                (decide, (), (200, {})),  # unnamed: the role's first fit
+                (decide, ("staff:priya-nair",), refused),  # a real person, but not one who may decide
+                (decide, ("staff:devon-brooks", "staff:maria-alvarez"), refused),  # two names
+                (decide, ("synthetic-official",), refused),
+                (ack, ("staff:maria-alvarez",), refused),  # a decider cannot be named as the acknowledger
+            ):
+                with self.subTest(path=path, people=people):
+                    command.reset_mock()
+                    self.assertEqual(self._role_post(port, path, ("approver",) if path == decide else ("analyst",), people=people), expected)
+                    self.assertEqual(command.called, expected[0] == 200)
+            command.reset_mock()
+            self._role_post(port, decide, ("approver",), people=("staff:devon-brooks",))
+            command.assert_called_once_with("reject_offset_and_authorize_correction", {"revision": 0}, "staff:devon-brooks")
+        # Through the owner: the determination carries the named person (a claim: the header names them, nobody signed).
+        workflow.command("reject_offset_and_authorize_correction", self._review_body(workflow), "staff:devon-brooks")
+        with closing(sqlite3.connect(owner.path)) as check:
+            self.assertEqual(check.execute("SELECT actor_id,actor_role FROM determinations").fetchall(), [("staff:devon-brooks", "FINANCE_DECISION")])
+
+    def test_claim_level_separation_the_named_acknowledger_may_not_be_the_named_authorizer(self) -> None:
+        # Claim-level only: both names are caller claims. This stops one claimed person doing both steps; it is not identity enforcement.
+        workflow = self._workflow()
+        owner = workflow.mirror.owner
+        workflow.command("reject_offset_and_authorize_correction", self._review_body(workflow), "staff:maria-alvarez")
+        revision = self._revision_body(workflow)["revision"]
+        with patch.object(SyntheticTrustedAuthority, "require", lambda *_: None):  # grant the role, so only the separation rule is under test
+            before = owner.export_continuity()
+            with self.assertRaisesRegex(FinancialAuthorityError, "^acknowledger_is_authorizer$"):
+                owner.acknowledge_action(H_ACTION_ID, "ack:same-person", actor_id="staff:maria-alvarez", actor_role="RECEIVER", expected_revision=revision)
+            self.assertEqual(owner.export_continuity(), before)  # nothing recorded
+            done = owner.acknowledge_action(H_ACTION_ID, "ack:other-person", actor_id="staff:priya-nair", actor_role="RECEIVER", expected_revision=revision)
+        self.assertEqual(done["status"], "ACKNOWLEDGED")
+
+    def test_item_timeline_shows_only_recorded_steps_and_never_paid_without_a_payment_system_record(self) -> None:
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        owner = workflow.mirror.owner
+        chain = ["hold", "assign", "ask", "reply", "decision", "release", "payment_confirmation"]
+        timeline = lambda: self._http_json(port, "/api/item-timeline")
+        self.assertEqual(timeline(), {"contract": "RR/FINANCIAL/STAFF-ITEM-TIMELINE/v1", "item_id": H_ITEM_ID, "steps": [], "absent": chain})
+        self.assertEqual(owner.export_continuity(), owner.export_continuity())
+
+        workflow.command("reject_offset_and_authorize_correction", self._review_body(workflow), "staff:maria-alvarez")
+        workflow.command("acknowledge_correction_action", self._revision_body(workflow), "staff:priya-nair")
+        owner.record_followthrough_decision(
+            item_id=H_ITEM_ID, decision_id="decision:h:assign", act="ASSIGN", owner_id="state:provider-finance",
+            actor_id="staff:devon-brooks", actor_role="CASE_OWNER", expected_revision=self._revision_body(workflow)["revision"],
+        )
+        before = owner.export_continuity()
+        view = timeline()
+        self.assertEqual(owner.export_continuity(), before)  # a read changes nothing
+        decision, assign = view["steps"]
+        self.assertEqual((decision["step"], decision["by"], decision["by_name"], decision["attribution"]), ("decision", "staff:maria-alvarez", "Maria Alvarez", "claimed"))
+        self.assertEqual((assign["step"], assign["by_name"], assign["owner_id"], assign["attribution"]), ("assign", "Devon Brooks", "state:provider-finance", "claimed"))
+        self.assertEqual(view["absent"], ["hold", "ask", "reply", "release", "payment_confirmation"])  # an acknowledgment is not a payment
+
+        workflow.record_cash_correction(self._cash_body(workflow))  # cash recorded from the payer is not a payment-system confirmation
+        self.assertEqual(timeline(), view)
+        self.assertNotIn("Paid", json.dumps(view))
+
+    def test_the_staff_authority_adds_named_people_and_leaves_the_default_authority_alone(self) -> None:
+        default, staff = SyntheticTrustedAuthority(), staff_authority()
+        self.assertEqual([a.actor_id for a in default.actors], ["synthetic-official", "synthetic-reporter", "synthetic-receiver"])  # the pinned default
+        self.assertEqual(staff.actors[:3], default.actors)  # the older actors keep their ids and roles
+        self.assertEqual({a.actor_id for a in staff.actors[3:]}, {"staff:maria-alvarez", "staff:devon-brooks", "staff:priya-nair", "staff:tom-reyes"})
+        self.assertNotEqual(staff.digest, default.digest)  # a new roster is a new authority: an older staff workspace does not resume under it
 
 
 if __name__ == "__main__":
