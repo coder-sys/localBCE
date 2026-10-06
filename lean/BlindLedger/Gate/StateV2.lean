@@ -871,9 +871,29 @@ def pLineFull : P WireLineFull := do
   pure { flow, lineId, memberKey, payeeRef, rendering, date, proc, units, cents }
 
 /-- The widened parser accepts exactly what `pLine` (Spec.lean:277-287) accepts. -/
+private theorem g1_run_agrees (s : Bytes) :
+    pLine.run s = (pLineFull.run s).map fun (l, t) => (⟨l.flow, l.memberKey, l.payeeRef, l.cents⟩, t) := by
+  simp only [pLine, pLineFull, StateT.run_bind, StateT.run_pure]
+  rcases (tag flows).run s with _ | ⟨a, s1⟩ <;> simp
+  rcases ident.run s1 with _ | ⟨b, s2⟩ <;> simp
+  rcases (take memberKeyBytes).run s2 with _ | ⟨c, s3⟩ <;> simp
+  rcases ident.run s3 with _ | ⟨d, s4⟩ <;> simp
+  rcases ident.run s4 with _ | ⟨e, s5⟩ <;> simp
+  rcases (nat 4).run s5 with _ | ⟨f, s6⟩ <;> simp
+  rcases ident.run s6 with _ | ⟨g, s7⟩ <;> simp
+  rcases (nat 4).run s7 with _ | ⟨h, s8⟩ <;> simp
+  rcases (nat 8).run s8 with _ | ⟨i, s9⟩ <;> simp
+
 theorem pLineFull_agrees (x : Bytes) :
     parse pLine maxLineBytes x =
-      (parse pLineFull maxLineBytes x).map fun l => ⟨l.flow, l.memberKey, l.payeeRef, l.cents⟩ := sorry
+      (parse pLineFull maxLineBytes x).map fun l => ⟨l.flow, l.memberKey, l.payeeRef, l.cents⟩ := by
+  unfold parse
+  split
+  · rfl
+  · rw [g1_run_agrees]
+    rcases pLineFull.run x with _ | ⟨l, t⟩
+    · rfl
+    · cases t <;> rfl
 
 /-- The rules' identifier numbers (Rules/Spec.lean:87-104): a 0x01 byte, then the bytes, big-endian. -/
 def idNat (x : Bytes) : Nat := beNat (1 :: x)
@@ -907,12 +927,184 @@ def reqsOf (tenant program : Bytes) (reqs : List Bytes) : Option (List Request) 
 def batchLines (rs : List Request) : Option (List Line) :=
   ((rs.filter (·.flow.ruled)).mapM linesOf).map List.flatten
 
+private theorem g1_take {n : Nat} {s : Bytes} {p : Bytes × Bytes} (h : (take n).run s = some p) :
+    p.1.length = n := by
+  simp only [StateT.run, take] at h
+  split at h
+  · simp at h; subst h; simp; omega
+  · simp at h
+
+private theorem g1_foldl : ∀ (bs : Bytes) (acc : Nat),
+    bs.foldl (fun a x => a * 256 + x.toNat) acc < (acc + 1) * 256 ^ bs.length
+  | [], acc => by simp
+  | x :: bs, acc => by
+    have ih := g1_foldl bs (acc * 256 + x.toNat)
+    have hx : x.toNat < 256 := UInt8.toNat_lt x
+    have h1 : acc * 256 + x.toNat + 1 ≤ (acc + 1) * 256 := by omega
+    have h2 : (acc * 256 + x.toNat + 1) * 256 ^ bs.length ≤ (acc + 1) * 256 ^ (x :: bs).length := by
+      simp only [List.length_cons, Nat.pow_succ]
+      calc _ ≤ ((acc + 1) * 256) * 256 ^ bs.length := Nat.mul_le_mul_right _ h1
+        _ = _ := by rw [Nat.mul_assoc, Nat.mul_comm 256 (256 ^ bs.length)]
+    exact Nat.lt_of_lt_of_le ih h2
+
+private theorem g1_beNat_lt (bs : Bytes) : beNat bs < 256 ^ bs.length := by
+  have := g1_foldl bs 0
+  simpa [beNat] using this
+
+private theorem g1_run_bind {α β : Type} (x : P α) (f : α → P β) (s : Bytes) (p : β × Bytes) :
+    (x >>= f).run s = some p ↔ ∃ q, x.run s = some q ∧ (f q.1).run q.2 = some p := by
+  rw [StateT.run_bind]
+  cases hq : x.run s <;> simp
+
+private theorem g1_run_pure {α : Type} (a : α) (s : Bytes) (p : α × Bytes) :
+    (pure a : P α).run s = some p ↔ p = (a, s) := by
+  rw [StateT.run_pure]; simp [eq_comm]
+
+private theorem g1_need {c : Bool} {s : Bytes} {p : Unit × Bytes} (h : (need c).run s = some p) : c = true := by
+  simp only [StateT.run, need] at h
+  split at h
+  · assumption
+  · simp at h
+
+private theorem g1_nat {w lo hi : Nat} {s : Bytes} {p : Nat × Bytes} (h : (nat w lo hi).run s = some p) :
+    p.1 < 256 ^ w := by
+  simp only [nat, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q, hq, r, hr, h⟩ := h
+  have := g1_beNat_lt q.1
+  rw [g1_take hq] at this
+  subst h
+  exact this
+
+private theorem g1_ident {s : Bytes} {p : Bytes × Bytes} (h : ident.run s = some p) : identOk p.1 = true := by
+  simp only [ident, blob, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q, ⟨q0, h0, h1⟩, r, hr, h⟩ := h
+  have := g1_need hr
+  subst h
+  exact this
+
+private theorem g1_pLineFull {s : Bytes} {p : WireLineFull × Bytes} (h : pLineFull.run s = some p) :
+    identOk p.1.lineId = true ∧ p.1.memberKey.length = 32 ∧ identOk p.1.payeeRef = true ∧
+    identOk p.1.rendering = true ∧ p.1.date < 256 ^ 4 ∧ identOk p.1.proc = true ∧ p.1.units < 256 ^ 4 ∧
+    p.1.cents < 256 ^ 8 := by
+  simp only [pLineFull, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q1, h1, q2, h2, q3, h3, q4, h4, q5, h5, q6, h6, q7, h7, q8, h8, q9, h9, h⟩ := h
+  subst h
+  exact ⟨g1_ident h2, g1_take h3, g1_ident h4, g1_ident h5, g1_nat h6, g1_ident h7, g1_nat h8, g1_nat h9⟩
+
+private theorem g1_parse {α : Type} {p : P α} {lim : Nat} {b : Bytes} {a : α} (h : parse p lim b = some a) :
+    ∃ t, p.run b = some (a, t) := by
+  unfold parse at h
+  split at h
+  · simp at h
+  · rcases hr : p.run b with _ | ⟨a', t⟩
+    · simp [hr] at h
+    · cases t
+      · simp [hr] at h; subst h; exact ⟨[], rfl⟩
+      · simp [hr] at h
+
+private theorem g1_identOk_len {x : Bytes} (h : identOk x = true) : x.length ≤ 128 := by
+  cases x with
+  | nil => simp [identOk] at h
+  | cons c r =>
+    simp only [identOk, Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨⟨_, hl⟩, _⟩ := h
+    simp; omega
+
+private theorem g1_idNat_lt {x : Bytes} {w : Nat} (h : x.length + 1 ≤ w) : idNat x < 256 ^ w := by
+  have := g1_beNat_lt (1 :: x)
+  exact Nat.lt_of_lt_of_le this (Nat.pow_le_pow_right (by omega) (by simpa using h))
+
 theorem payNat_fits (program pay : Bytes) (hp : identOk program = true) (hq : identOk pay = true) :
-    payNat program pay < 256 ^ payWidth := sorry
+    payNat program pay < 256 ^ payWidth := by
+  have h1 := g1_identOk_len hp
+  have h2 := g1_identOk_len hq
+  unfold payNat
+  apply g1_idNat_lt
+  simp [identField, natBE, payWidth]
+  omega
+
+private theorem g1_mapM_mem {α β : Type} (f : α → Option β) :
+    ∀ (xs : List α) (ys : List β), xs.mapM f = some ys → ∀ y ∈ ys, ∃ x ∈ xs, f x = some y
+  | [], ys, h, y, hy => by simp [List.mapM_nil] at h; subst h; simp at hy
+  | x :: xs, ys, h, y, hy => by
+    simp only [List.mapM_cons] at h
+    cases hx : f x with
+    | none => simp [hx] at h
+    | some a =>
+      cases hm : xs.mapM f with
+      | none => simp [hx, hm] at h
+      | some bs =>
+        simp [hx, hm] at h
+        subst h
+        rcases List.mem_cons.mp hy with rfl | hy
+        · exact ⟨x, by simp, hx⟩
+        · obtain ⟨x', hx', e⟩ := g1_mapM_mem f xs bs hm y hy
+          exact ⟨x', by simp [hx'], e⟩
+
+private theorem g1_mapM_be : ∀ (l : List (Nat × Nat)), (∀ e ∈ l, e.2 < 256 ^ e.1) →
+    (l.mapM fun (w, n) => be w n).isSome = true
+  | [], _ => by simp
+  | (w, n) :: l, h => by
+    have h1 : (be w n).isSome = true := by
+      have := h (w, n) (by simp)
+      simp only at this
+      simp [be, this]
+    obtain ⟨bs, hbs⟩ := Option.isSome_iff_exists.mp h1
+    have h2 := g1_mapM_be l (fun e he => h e (by simp [he]))
+    obtain ⟨cs, hcs⟩ := Option.isSome_iff_exists.mp h2
+    simp [List.mapM_cons, hbs, hcs]
+
+private theorem g1_rowKey_some (l : Line) (h : ∀ e ∈ Line.fields l, e.2 < 256 ^ e.1) :
+    (keyBytes (rowKey l)).isSome = true := by
+  obtain ⟨bs, hbs⟩ := Option.isSome_iff_exists.mp (g1_mapM_be _ h)
+  have hz : [idWidth, payWidth, 1, idWidth, idWidth, idWidth, 4, idWidth, 4, 8].zip
+      ((Line.fields l).map (·.2)) = Line.fields l := by
+    simp [Line.fields]
+  have hlen : (Line.fields l).length = 10 := by simp [Line.fields]
+  simp [keyBytes, rowKey, keyWidths, hz, hlen, hbs]
+
+private theorem g1_lineOf_fits {pay : Nat} (hpay : pay < 256 ^ payWidth) {wl : WireLineFull} {l : Line}
+    (hid : identOk wl.lineId = true) (hm : wl.memberKey.length = 32) (hp : identOk wl.payeeRef = true)
+    (hr : identOk wl.rendering = true) (hd : wl.date < 256 ^ 4) (hpr : identOk wl.proc = true)
+    (hu : wl.units < 256 ^ 4) (hc : wl.cents < 256 ^ 8) (h : lineOf pay wl = some l) :
+    (keyBytes (rowKey l)).isSome = true := by
+  unfold lineOf at h
+  simp only [Option.map_eq_some_iff] at h
+  obtain ⟨f, hf, rfl⟩ := h
+  apply g1_rowKey_some
+  have i1 := g1_idNat_lt (w := idWidth) (x := wl.lineId) (by have := g1_identOk_len hid; simp [idWidth]; omega)
+  have i2 := g1_idNat_lt (w := idWidth) (x := wl.memberKey) (by simp [idWidth, hm])
+  have i3 := g1_idNat_lt (w := idWidth) (x := wl.payeeRef) (by have := g1_identOk_len hp; simp [idWidth]; omega)
+  have i4 := g1_idNat_lt (w := idWidth) (x := wl.rendering) (by have := g1_identOk_len hr; simp [idWidth]; omega)
+  have i5 := g1_idNat_lt (w := idWidth) (x := wl.proc) (by have := g1_identOk_len hpr; simp [idWidth]; omega)
+  have i6 : f.tag < 256 ^ 1 := by cases f <;> simp [Flow.tag]
+  intro e he
+  simp only [Line.fields, List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp only <;> assumption
+
+private theorem g1_request_ids {s : Bytes} {p : Request × Bytes} (h : pRequest.run s = some p) :
+    identOk p.1.programId = true ∧ identOk p.1.paymentId = true := by
+  simp only [pRequest, g1_run_bind, g1_run_pure] at h
+  obtain ⟨q1, h1, q2, h2, q3, h3, q4, h4, q5, h5, q6, h6, q7, h7, q8, h8, q9, h9, q10, h10, q11, h11, q12, h12,
+    q13, h13, q14, h14, q15, h15, q16, h16, q17, h17, q18, h18, q19, h19, h⟩ := h
+  subst h
+  exact ⟨g1_ident h3, g1_ident h6⟩
 
 /-- A decoded line always has a row key, so `decideIdx`'s guard (§7) never refuses a decoded batch. -/
 theorem lineOf_fits (r : Request) (hr : ∃ x, decodeRequest x = some r) (ls : List Line) (h : linesOf r = some ls) :
-    ls.all (fun l => (keyBytes (rowKey l)).isSome) = true := sorry
+    ls.all (fun l => (keyBytes (rowKey l)).isSome) = true := by
+  obtain ⟨x, hx⟩ := hr
+  obtain ⟨t, ht⟩ := g1_parse (by unfold decodeRequest at hx; exact hx)
+  obtain ⟨hp, hq⟩ := g1_request_ids ht
+  have hpay := payNat_fits r.programId r.paymentId hp hq
+  simp only [List.all_eq_true]
+  intro l hl
+  unfold linesOf at h
+  obtain ⟨y, hy, hf⟩ := g1_mapM_mem _ _ ls h l hl
+  obtain ⟨wl, hwl, hlo⟩ := Option.bind_eq_some_iff.mp hf
+  obtain ⟨t', ht'⟩ := g1_parse hwl
+  obtain ⟨a1, a2, a3, a4, a5, a6, a7, a8⟩ := g1_pLineFull ht'
+  exact g1_lineOf_fits hpay a1 a2 a3 a4 a5 a6 a7 a8 hlo
 
 
 /-! ### 8d. PayRow and tokens: every money field, one permutation check (F2: revision bound) -/
@@ -949,7 +1141,19 @@ def reasonName : Reason → String
 def reasonCode (r : Reason) : Bytes := (reasonName r).toUTF8.toList
 
 /-- Rows are built from `reasons` filtered, so the leaf's ascending check (Spec.lean:472) always holds. -/
-theorem reasonCode_ascending (xs : List Reason) (h : xs.Sublist reasons) : ascending (xs.map reasonCode) = true := sorry
+private theorem g1_reasons_pw : (reasons.map reasonCode).Pairwise (fun a b => lexLt a b = true) := by
+  decide +kernel
+
+private theorem g1_pw_asc : ∀ (l : List Bytes), l.Pairwise (fun a b => lexLt a b = true) → ascending l = true
+  | [], _ => rfl
+  | [_], _ => rfl
+  | a :: b :: rest, h => by
+    have h1 := List.pairwise_cons.mp h
+    simp only [ascending, g1_pw_asc (b :: rest) h1.2, Bool.and_true]
+    exact h1.1 b (List.mem_cons_self ..)
+
+theorem reasonCode_ascending (xs : List Reason) (h : xs.Sublist reasons) : ascending (xs.map reasonCode) = true :=
+  g1_pw_asc _ (g1_reasons_pw.sublist (h.map reasonCode))
 
 def wireOf : Outcome → WireOutcome
   | .ALLOW => .ALLOW
