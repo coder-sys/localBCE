@@ -548,11 +548,24 @@ def Inv (rel unr : Snapshot Line) : Prop :=
   ((rel.entries ++ unr.entries).map (·.id)).Nodup ∧ rel.count = rel.entries.length ∧
     unr.count = unr.entries.length
 
+private theorem sv_view_self (t : Nat) (p : Snapshot Line) : view t p (some p) = p := by
+  unfold view; split <;> rfl
+
+private theorem chained_self (t : Nat) (s : Snapshot Line) :
+    chained t s (some s) = (s.entries.length == s.count && validDate s.asOf && decide (s.asOf ≤ t)) := by
+  have h : s.entries.all s.entries.contains = true := by
+    simp only [List.all_eq_true]; intro x hx; simpa using hx
+  simp [chained, h]
+
 /-- The view is already proved: `carried_sets` (DecideLayer.lean:28). -/
-theorem carried_loose (t : Nat) (s : Snapshot Line) : loose t s (some s) = [] := sorry
+theorem carried_loose (t : Nat) (s : Snapshot Line) : loose t s (some s) = [] := by
+  unfold loose; split
+  · rfl
+  · simp [entries, List.filter_eq_nil_iff]
 
 theorem carried_chained (t : Nat) (s : Snapshot Line) (hc : s.count = s.entries.length) :
-    chained t s (some s) = (validDate s.asOf && decide (s.asOf ≤ t)) := sorry
+    chained t s (some s) = (validDate s.asOf && decide (s.asOf ≤ t)) := by
+  rw [chained_self, hc]; simp
 
 /-- `seen0` as a count comparison; the excluded count comes from ROW probes of the batch. -/
 theorem seen0_count (c₀ : Ctx) (rel unr : Snapshot Line) (b : List Line) (q : Key) :
@@ -598,31 +611,114 @@ def replayT (g : Snapshot Line × Snapshot Line) (as : List (Nat × (List Line �
   as.foldl (fun s (t, a) => (⟨bumpSet t s.1, s.1.entries.length + a.1.length, s.1.entries ++ a.1⟩,
                              ⟨bumpSet t s.2, s.2.entries.length + a.2.length, s.2.entries ++ a.2⟩)) g
 
+private theorem bumpIf_ge {ok : Bool} {today a : Nat} (h : ok = true → a ≤ today) : a ≤ bumpIf ok today a := by
+  unfold bumpIf; split
+  · rename_i hh; simp [Bool.and_eq_true] at hh; exact h hh.1
+  · exact Nat.le_refl _
+
+private theorem chained_asOf_le {t : Nat} {s : Snapshot Line} (h : chained t s (some s) = true) : s.asOf ≤ t := by
+  rw [chained_self] at h; simp at h; exact h.2
+
+private theorem decideReg_carried_asOf (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line) :
+    (decideReg (carried c₀ rel unr) k os b).released.asOf = rel.asOf ∧
+      (decideReg (carried c₀ rel unr) k os b).unresolved.asOf = unr.asOf ∧
+      (decideReg (carried c₀ rel unr) k os b).released.count = (decideReg (carried c₀ rel unr) k os b).released.entries.length ∧
+      (decideReg (carried c₀ rel unr) k os b).unresolved.count = (decideReg (carried c₀ rel unr) k os b).unresolved.entries.length := by
+  simp [decideReg, decideBatchIn, advance, carried, sv_view_self]
+
+private theorem sv_carried_append (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os : List Owner) (b : List Line) :
+    (decideReg (carried c₀ rel unr) k os b).released.entries =
+        rel.entries ++ (batchFresh (carried c₀ rel unr) (decideReg (carried c₀ rel unr) k os b)).1 ∧
+      (decideReg (carried c₀ rel unr) k os b).unresolved.entries =
+        unr.entries ++ (batchFresh (carried c₀ rel unr) (decideReg (carried c₀ rel unr) k os b)).2 := by
+  have h1 : releasedSet (carried c₀ rel unr) = rel.entries := by simp [releasedSet, carried, sv_view_self]
+  have h2 : unresolvedSet (carried c₀ rel unr) = unr.entries := by simp [unresolvedSet, carried, sv_view_self]
+  simp only [batchFresh, h1, h2]
+  simp [decideReg, decideBatchIn, advance, carried, sv_view_self]
+
+private theorem decideRegT_sets (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line) :
+    ∃ f1 f2, (decideRegT (carried c₀ rel unr) k os b).released =
+        ⟨bumpSet c₀.today rel, rel.entries.length + f1.length, rel.entries ++ f1⟩ ∧
+      (decideRegT (carried c₀ rel unr) k os b).unresolved =
+        ⟨bumpSet c₀.today unr, unr.entries.length + f2.length, unr.entries ++ f2⟩ ∧
+      batchFresh (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b) = (f1, f2) := by
+  obtain ⟨e1, e2⟩ := sv_carried_append c₀ rel unr k os b
+  obtain ⟨a1, a2, n1, n2⟩ := decideReg_carried_asOf c₀ k os b rel unr
+  refine ⟨(batchFresh (carried c₀ rel unr) (decideReg (carried c₀ rel unr) k os b)).1,
+    (batchFresh (carried c₀ rel unr) (decideReg (carried c₀ rel unr) k os b)).2, ?_, ?_, rfl⟩
+  · show (⟨bumpIf (chained c₀.today rel (some rel)) c₀.today
+        (decideReg (carried c₀ rel unr) k os b).released.asOf,
+        (decideReg (carried c₀ rel unr) k os b).released.count,
+        (decideReg (carried c₀ rel unr) k os b).released.entries⟩ : Snapshot Line) = _
+    generalize (batchFresh (carried c₀ rel unr) (decideReg (carried c₀ rel unr) k os b)).1 = F at e1 ⊢
+    rw [a1, n1, e1, chained_self]
+    simp [bumpSet]
+  · show (⟨bumpIf (chained c₀.today unr (some unr)) c₀.today
+        (decideReg (carried c₀ rel unr) k os b).unresolved.asOf,
+        (decideReg (carried c₀ rel unr) k os b).unresolved.count,
+        (decideReg (carried c₀ rel unr) k os b).unresolved.entries⟩ : Snapshot Line) = _
+    generalize (batchFresh (carried c₀ rel unr) (decideReg (carried c₀ rel unr) k os b)).2 = F at e2 ⊢
+    rw [a2, n2, e2, chained_self]
+    simp [bumpSet]
+
 /-- KEPT. Added beside `replay_addsOf` (DecideLayer.lean:52-55, unchanged): whole snapshots, dates included. -/
 theorem replayT_addsOfT (k : Nat) (g : Snapshot Line × Snapshot Line) (ts : List Batch) :
-    replayT g ((ts.map (·.ctx.today)).zip (addsOfT k g ts)) = shardSetsT k g ts := sorry
+    replayT g ((ts.map (·.ctx.today)).zip (addsOfT k g ts)) = shardSetsT k g ts := by
+  induction ts generalizing g with
+  | nil => rfl
+  | cons t ts ih =>
+    obtain ⟨f1, f2, h1, h2, hf⟩ := decideRegT_sets t.ctx k t.owners t.lines g.1 g.2
+    have := ih ((decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).released,
+      (decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).unresolved)
+    simp only [addsOfT, List.map_cons, List.zip_cons_cons, replayT, List.foldl_cons, shardSetsT] at this ⊢
+    rw [hf, h1, h2]
+    rw [h1, h2] at this
+    exact this
 
 def genesisSets (t : Nat) : Snapshot Line × Snapshot Line := (⟨t, 0, []⟩, ⟨t, 0, []⟩)
 
 theorem genesis_chained (t : Nat) (ht : validDate t = true) :
     chained t (genesisSets t).1 (some (genesisSets t).1) = true ∧
-      chained t (genesisSets t).2 (some (genesisSets t).2) = true := sorry
+      chained t (genesisSets t).2 (some (genesisSets t).2) = true := by
+  simp [genesisSets, chained_self, ht]
 
 theorem asOf_mono (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line) :
     rel.asOf ≤ (decideRegT (carried c₀ rel unr) k os b).released.asOf ∧
-      unr.asOf ≤ (decideRegT (carried c₀ rel unr) k os b).unresolved.asOf := sorry
+      unr.asOf ≤ (decideRegT (carried c₀ rel unr) k os b).unresolved.asOf := by
+  obtain ⟨h1, h2, -, -⟩ := decideReg_carried_asOf c₀ k os b rel unr
+  refine ⟨?_, ?_⟩
+  · show rel.asOf ≤ bumpIf (chained c₀.today rel (some rel)) c₀.today
+      (decideReg (carried c₀ rel unr) k os b).released.asOf
+    rw [h1]; exact bumpIf_ge chained_asOf_le
+  · show unr.asOf ≤ bumpIf (chained c₀.today unr (some unr)) c₀.today
+      (decideReg (carried c₀ rel unr) k os b).unresolved.asOf
+    rw [h2]; exact bumpIf_ge chained_asOf_le
 
 /-- A dated set stays dated: after a batch on a valid `today` not before it, it is dated `today`. -/
 theorem asOf_step (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line)
     (hi : Inv rel unr) (hr : validDate rel.asOf = true) (hu : validDate unr.asOf = true)
     (ht : validDate c₀.today = true) (hrt : rel.asOf ≤ c₀.today) (hut : unr.asOf ≤ c₀.today) :
     (decideRegT (carried c₀ rel unr) k os b).released.asOf = c₀.today ∧
-      (decideRegT (carried c₀ rel unr) k os b).unresolved.asOf = c₀.today := sorry
+      (decideRegT (carried c₀ rel unr) k os b).unresolved.asOf = c₀.today := by
+  obtain ⟨h1, h2, -, -⟩ := decideReg_carried_asOf c₀ k os b rel unr
+  have hc1 : chained c₀.today rel (some rel) = true := by
+    rw [chained_self, hi.2.1]; simp [hr, hrt]
+  have hc2 : chained c₀.today unr (some unr) = true := by
+    rw [chained_self, hi.2.2]; simp [hu, hut]
+  refine ⟨?_, ?_⟩
+  · show bumpIf (chained c₀.today rel (some rel)) c₀.today
+      (decideReg (carried c₀ rel unr) k os b).released.asOf = c₀.today
+    rw [h1, hc1]; simp [bumpIf, ht]
+  · show bumpIf (chained c₀.today unr (some unr)) c₀.today
+      (decideReg (carried c₀ rel unr) k os b).unresolved.asOf = c₀.today
+    rw [h2, hc2]; simp [bumpIf, ht]
 
 /-- STALE_RELEASED fires on a carried, dated set only when the clock went back. -/
 theorem stale_released_iff (c₀ : Ctx) (rel unr : Snapshot Line) (hc : rel.count = rel.entries.length)
     (hv : validDate rel.asOf = true) (seen : List Key) (l : Line) :
-    fires (carried c₀ rel unr) seen l .STALE_RELEASED = !decide (rel.asOf ≤ c₀.today) := sorry
+    fires (carried c₀ rel unr) seen l .STALE_RELEASED = !decide (rel.asOf ≤ c₀.today) := by
+  show (!chained c₀.today rel (some rel)) = _
+  rw [chained_self, hc]; simp [hv]
 
 theorem inv_step (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr : Snapshot Line)
     (hi : Inv rel unr) :
@@ -680,7 +776,8 @@ def headOf (H : Bytes → Bytes) (rel unr : Snapshot Line) : Option Head := do
 def genesisHead (H : Bytes → Bytes) (t : Nat) : Head := ⟨t, t, 0, 0, H emptyIn, H emptyIn⟩
 
 theorem headOf_genesis (H : Bytes → Bytes) (t : Nat) :
-    headOf H (genesisSets t).1 (genesisSets t).2 = some (genesisHead H t) := sorry
+    headOf H (genesisSets t).1 (genesisSets t).2 = some (genesisHead H t) := by
+  first | rfl | simp [headOf, setMap, genesisSets, genesisHead, root, rootAt, guard]
 
 theorem setMap_ok (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : List Line) (m : Map)
     (h : setMap H u s = some m) : MapOk m := sorry
