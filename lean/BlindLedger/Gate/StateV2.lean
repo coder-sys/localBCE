@@ -394,12 +394,217 @@ def verifyMulti (H : Bytes → Bytes) (r : Bytes) (ks : List Bytes) (pf : Proof)
 def MapOk (m : Map) : Prop :=
   (m.map (·.1)).Nodup ∧ ∀ e ∈ m, e.1.length = digestBytes ∧ e.2.length < 2 ^ 32
 
+private theorem emptyIn_ne_leafIn (p v : Bytes) : emptyIn ≠ leafIn p v := by
+  intro h; unfold emptyIn leafIn at h
+  have := List.append_cancel_left h; simp at this
+
+private theorem emptyIn_ne_nodeIn (l r : Bytes) : emptyIn ≠ nodeIn l r := by
+  intro h; unfold emptyIn nodeIn at h
+  have := List.append_cancel_left h; simp at this
+
+private theorem leafIn_ne_nodeIn (p v l r : Bytes) : leafIn p v ≠ nodeIn l r := by
+  intro h; unfold leafIn nodeIn at h
+  have := List.append_cancel_left h; simp at this
+
+private theorem hashPf_len (H : Bytes → Bytes) (hH : HashLen H) (d : Nat) (pf : Proof) (ks : List Bytes)
+    (h : minimal d pf ks = true) : (hashPf H pf).length = digestBytes := by
+  cases pf with
+  | «opaque» x => simpa [minimal, hashPf] using h
+  | empty => exact hH _
+  | leaf p v =>
+    by_cases hl : leafOk p v = true
+    · simp only [hashPf, hl, ↓reduceIte]; exact hH _
+    · simp [minimal, hl] at h
+  | node l r => exact hH _
+
+private theorem rootAt_nil (H : Bytes → Bytes) (f d : Nat) : rootAt H f d [] = H emptyIn := by
+  cases f <;> first | rfl | simp [rootAt]
+private theorem rootAt_one (H : Bytes → Bytes) (f d : Nat) (p v : Bytes) : rootAt H f d [(p, v)] = H (leafIn p v) := by
+  cases f <;> first | rfl | simp [rootAt]
+private theorem rootAt_zero2 (H : Bytes → Bytes) (d : Nat) (a b : Bytes × Bytes) (t : Map) : rootAt H 0 d (a :: b :: t) = [] := by
+  first | rfl | simp [rootAt]
+private theorem rootAt_succ2 (H : Bytes → Bytes) (f d : Nat) (a b : Bytes × Bytes) (t : Map) :
+    rootAt H (f + 1) d (a :: b :: t) = H (nodeIn (rootAt H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+      (rootAt H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d))) := by
+  first | rfl | simp [rootAt]
+private theorem treeInputs_nil (H : Bytes → Bytes) (f d : Nat) : treeInputs H f d [] = [emptyIn] := by
+  cases f <;> first | rfl | simp [treeInputs]
+private theorem treeInputs_one (H : Bytes → Bytes) (f d : Nat) (p v : Bytes) : treeInputs H f d [(p, v)] = [leafIn p v] := by
+  cases f <;> first | rfl | simp [treeInputs]
+private theorem treeInputs_succ2 (H : Bytes → Bytes) (f d : Nat) (a b : Bytes × Bytes) (t : Map) :
+    treeInputs H (f + 1) d (a :: b :: t) =
+      nodeIn (rootAt H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+        (rootAt H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)) ::
+      (treeInputs H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d) ++
+        treeInputs H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)) := by
+  first | rfl | simp [treeInputs]
+
+private theorem rootAt_len (H : Bytes → Bytes) (hH : HashLen H) (f d : Nat) (m : Map) :
+    (rootAt H f d m).length = 0 ∨ (rootAt H f d m).length = digestBytes := by
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · right; rw [rootAt_nil]; exact hH _
+  · obtain ⟨p, v⟩ := a
+    right; rw [rootAt_one]; exact hH _
+  · cases f with
+    | zero => left; rw [rootAt_zero2]; rfl
+    | succ f => right; rw [rootAt_succ2]; exact hH _
+
+private theorem find_filter (k : Bytes) (p : Bytes × Bytes → Bool) (hp : ∀ e : Bytes × Bytes, e.1 = k → p e = true) :
+    ∀ m : Map, (m.filter p).find? (·.1 == k) = m.find? (·.1 == k) := by
+  intro m
+  induction m with
+  | nil => rfl
+  | cons e t ih =>
+    by_cases he : e.1 = k
+    · simp [List.filter_cons, hp e he, List.find?_cons, he]
+    · cases hpe : p e <;> simp [List.filter_cons, hpe, List.find?_cons, he, ih]
+
+private theorem lookup_filter (m : Map) (k : Bytes) (p : Bytes × Bytes → Bool)
+    (hp : ∀ e : Bytes × Bytes, e.1 = k → p e = true) : lookup (m.filter p) k = lookup m k := by
+  unfold lookup; rw [find_filter k p hp m]
+
+private theorem match_root (H : Bytes → Bytes) (hH : HashLen H) (X : Bytes) (f d : Nat) (m : Map)
+    (hh : H X = rootAt H f d m) :
+    ∃ Y ∈ treeInputs H f d m, H X = H Y ∧
+      ((m = [] ∧ Y = emptyIn) ∨ (∃ p v, m = [(p, v)] ∧ Y = leafIn p v) ∨
+       (∃ f' a b t, f = f' + 1 ∧ m = a :: b :: t ∧
+         Y = nodeIn (rootAt H f' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+               (rootAt H f' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)))) := by
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · exact ⟨emptyIn, by simp [treeInputs_nil], by rw [hh, rootAt_nil], Or.inl ⟨rfl, rfl⟩⟩
+  · obtain ⟨p, v⟩ := a
+    exact ⟨leafIn p v, by simp [treeInputs_one], by rw [hh, rootAt_one], Or.inr (Or.inl ⟨p, v, rfl, rfl⟩)⟩
+  · cases f with
+    | zero =>
+      exfalso
+      have := hH X
+      rw [hh, rootAt_zero2] at this
+      simp [digestBytes] at this
+    | succ f =>
+      refine ⟨nodeIn (rootAt H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+        (rootAt H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)), ?_, ?_, ?_⟩
+      · rw [treeInputs_succ2]; simp
+      · rw [hh, rootAt_succ2]
+      · exact Or.inr (Or.inr ⟨f, a, b, t, rfl, rfl, rfl⟩)
+
+private theorem col_mono {H : Bytes → Bytes} {A A' B B' : List Bytes} (hA : ∀ x ∈ A, x ∈ A')
+    (hB : ∀ x ∈ B, x ∈ B') : Collision H A B → Collision H A' B' :=
+  fun ⟨x, hx, y, hy, h1, h2⟩ => ⟨x, hA x hx, y, hB y hy, h1, h2⟩
+
+private theorem smt_aux (H : Bytes → Bytes) (hH : HashLen H) (k : Bytes) :
+    ∀ (pf : Proof) (d f : Nat) (m : Map) (ks : List Bytes), k ∈ ks → minimal d pf ks = true →
+      (∀ e ∈ m, e.1.length = digestBytes) → hashPf H pf = rootAt H f d m →
+      ∀ r, lookupPf d pf k = some r →
+        r = lookup m k ∨ Collision H (pfInputs H pf) (treeInputs H f d m) := by
+  intro pf
+  induction pf with
+  | «opaque» h => intro d f m ks hk hmin hm hh r hr; simp [lookupPf] at hr
+  | empty =>
+    intro d f m ks hk hmin hm hh r hr
+    simp only [lookupPf, Option.some.injEq] at hr
+    subst hr
+    obtain ⟨Y, hY, hXY, hs⟩ := match_root H hH emptyIn f d m hh
+    have col : emptyIn ≠ Y → Collision H (pfInputs H .empty) (treeInputs H f d m) :=
+      fun hne => ⟨emptyIn, by simp [pfInputs], Y, hY, hne, hXY⟩
+    rcases hs with ⟨rfl, rfl⟩ | ⟨p, v, rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+    · left; rfl
+    · right; exact col (emptyIn_ne_leafIn _ _)
+    · right; exact col (emptyIn_ne_nodeIn _ _)
+  | leaf p v =>
+    intro d f m ks hk hmin hm hh r hr
+    have hok : leafOk p v = true := by
+      by_cases hc : leafOk p v = true
+      · exact hc
+      · simp [lookupPf, hc] at hr
+    simp only [lookupPf, hok, ↓reduceIte, Option.some.injEq] at hr
+    subst hr
+    have hp : p.length = digestBytes := by simp [leafOk] at hok; exact hok.1
+    have hXin : leafIn p v ∈ pfInputs H (.leaf p v) := by simp [pfInputs, hok]
+    have hh' : H (leafIn p v) = rootAt H f d m := by
+      simp only [hashPf, hok, ↓reduceIte] at hh; exact hh
+    obtain ⟨Y, hY, hXY, hs⟩ := match_root H hH (leafIn p v) f d m hh'
+    have col : leafIn p v ≠ Y → Collision H (pfInputs H (.leaf p v)) (treeInputs H f d m) :=
+      fun hne => ⟨leafIn p v, hXin, Y, hY, hne, hXY⟩
+    rcases hs with ⟨rfl, rfl⟩ | ⟨p', v', rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+    · right; exact col (fun h => emptyIn_ne_leafIn _ _ h.symm)
+    · by_cases hne : leafIn p v = leafIn p' v'
+      · have hp' : p'.length = digestBytes := hm (p', v') (by simp)
+        obtain ⟨rfl, rfl⟩ := leafIn_inj hp hp' hne
+        left
+        by_cases hpk : (p == k) = true <;> simp [lookup, List.find?_cons, hpk]
+      · right; exact col hne
+    · right; exact col (leafIn_ne_nodeIn _ _ _ _)
+  | node l r ihl ihr =>
+    intro d f m ks hk hmin hm hh r' hr
+    have hd : d < 512 := by
+      by_cases hc : d < 512
+      · exact hc
+      · simp [lookupPf, hc] at hr
+    simp only [lookupPf, hd, ↓reduceIte] at hr
+    simp only [minimal, Bool.and_eq_true] at hmin
+    obtain ⟨⟨⟨_, _⟩, hml⟩, hmr⟩ := hmin
+    have hll := hashPf_len H hH (d + 1) l _ hml
+    have hlr := hashPf_len H hH (d + 1) r _ hmr
+    have hXin : nodeIn (hashPf H l) (hashPf H r) ∈ pfInputs H (.node l r) := by simp [pfInputs]
+    have hh' : H (nodeIn (hashPf H l) (hashPf H r)) = rootAt H f d m := hh
+    obtain ⟨Y, hY, hXY, hs⟩ := match_root H hH _ f d m hh'
+    have col : nodeIn (hashPf H l) (hashPf H r) ≠ Y → Collision H (pfInputs H (.node l r)) (treeInputs H f d m) :=
+      fun hne => ⟨_, hXin, Y, hY, hne, hXY⟩
+    rcases hs with ⟨rfl, rfl⟩ | ⟨p', v', rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+    · right; exact col (fun h => emptyIn_ne_nodeIn _ _ h.symm)
+    · right; exact col (fun h => leafIn_ne_nodeIn _ _ _ _ h.symm)
+    · by_cases hne : nodeIn (hashPf H l) (hashPf H r) =
+          nodeIn (rootAt H f' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+            (rootAt H f' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d))
+      case neg => exact Or.inr (col hne)
+      unfold nodeIn at hne
+      have h1 := (List.cons.inj (List.append_cancel_left hne)).2
+      have hlen := congrArg List.length h1
+      have e1 := rootAt_len H hH f' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d)
+      have e2 := rootAt_len H hH f' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)
+      simp only [List.length_append] at hlen
+      obtain ⟨q1, q2⟩ := List.append_inj h1 (by omega)
+      by_cases hb : bit k d = true
+      · rw [if_pos hb] at hr
+        have hk' : k ∈ ks.filter (bit · d) := by simp [hk, hb]
+        have hm' : ∀ e ∈ (a :: b :: t).filter (fun e => bit e.1 d), e.1.length = digestBytes :=
+          fun e he => hm e ((List.mem_filter.mp he).1)
+        rcases ihr (d + 1) f' _ _ hk' hmr hm' q2 r' hr with h | h
+        · left
+          rw [h]
+          exact lookup_filter _ k _ (fun e he => by rw [he]; exact hb)
+        · right
+          refine col_mono (fun x hx => ?_) (fun x hx => ?_) h
+          · simp [pfInputs, hx]
+          · rw [treeInputs_succ2]; simp [hx]
+      · have hb' : bit k d = false := by simpa using hb
+        rw [if_neg hb] at hr
+        have hk' : k ∈ ks.filter (!bit · d) := by simp [hk, hb']
+        have hm' : ∀ e ∈ (a :: b :: t).filter (fun e => !bit e.1 d), e.1.length = digestBytes :=
+          fun e he => hm e ((List.mem_filter.mp he).1)
+        rcases ihl (d + 1) f' _ _ hk' hml hm' q1 r' hr with h | h
+        · left
+          rw [h]
+          exact lookup_filter _ k _ (fun e he => by rw [he, hb']; rfl)
+        · right
+          refine col_mono (fun x hx => ?_) (fun x hx => ?_) h
+          · simp [pfInputs, hx]
+          · rw [treeInputs_succ2]; simp [hx]
+
 /-- C1: presence and absence both sound. True as stated: a forged leaf must have a 64-byte path
     (`leafOk`), so equal leaf bytes give equal path and value (`leafIn_inj`); leaf, node and empty
     preimages differ in their tag byte; every child hash is 64 bytes, so `nodeIn` splits one way. -/
 theorem smt_sound (H : Bytes → Bytes) (hH : HashLen H) (m : Map) (hm : MapOk m) (ks : List Bytes)
     (pf : Proof) (hv : verifyMulti H (root H m) ks pf = true) (k : Bytes) (hk : k ∈ ks) :
-    lookupPf 0 pf k = some (lookup m k) ∨ Collision H (pfInputs H pf) (treeInputs H 513 0 m) := sorry
+    lookupPf 0 pf k = some (lookup m k) ∨ Collision H (pfInputs H pf) (treeInputs H 513 0 m) := by
+  simp only [verifyMulti, Bool.and_eq_true, beq_iff_eq] at hv
+  obtain ⟨⟨⟨⟨_, _⟩, hh⟩, hs⟩, hmin⟩ := hv
+  have hsome := List.all_eq_true.mp hs k hk
+  obtain ⟨r, hr⟩ := Option.isSome_iff_exists.mp hsome
+  have hm2 : ∀ e ∈ m, e.1.length = digestBytes := fun e he => (hm.2 e he).1
+  rcases smt_aux H hH k pf 0 513 m ks hk hmin hm2 hh r hr with h | h
+  · left; rw [hr, h]
+  · right; exact h
 
 private theorem rootAt_perm' (H : Bytes → Bytes) : ∀ (f d : Nat) (m m' : Map), m.Perm m' → rootAt H f d m = rootAt H f d m' := by
   intro f
