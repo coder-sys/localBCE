@@ -567,18 +567,95 @@ theorem carried_chained (t : Nat) (s : Snapshot Line) (hc : s.count = s.entries.
     chained t s (some s) = (validDate s.asOf && decide (s.asOf ≤ t)) := by
   rw [chained_self, hc]; simp
 
+private theorem sv_filter_and_lt {α : Type} (L : List α) (P Q : α → Bool) :
+    (L.filter fun x => P x && Q x).length < (L.filter Q).length ↔ ∃ x ∈ L, Q x = true ∧ P x = false := by
+  have hle : ∀ L : List α, (L.filter fun x => P x && Q x).length ≤ (L.filter Q).length := by
+    intro L
+    induction L with
+    | nil => simp
+    | cons a L ih =>
+      by_cases hq : Q a = true <;> by_cases hp : P a = true <;> simp [hq, hp] <;> omega
+  induction L with
+  | nil => simp
+  | cons a L ih =>
+    have := hle L
+    by_cases hq : Q a = true <;> by_cases hp : P a = true <;>
+      simp [hq, hp, ih] <;> first | omega | skip
+
+private theorem sv_released_carried (c₀ : Ctx) (rel unr : Snapshot Line) :
+    releasedSet (carried c₀ rel unr) = rel.entries := by simp [releasedSet, carried, sv_view_self]
+
+private theorem sv_unresolved_carried (c₀ : Ctx) (rel unr : Snapshot Line) :
+    unresolvedSet (carried c₀ rel unr) = unr.entries := by simp [unresolvedSet, carried, sv_view_self]
+
 /-- `seen0` as a count comparison; the excluded count comes from ROW probes of the batch. -/
 theorem seen0_count (c₀ : Ctx) (rel unr : Snapshot Line) (b : List Line) (q : Key) :
     (seen0 (carried c₀ rel unr) b).contains q =
       decide ((rel.entries.filter fun x => c₀.redo.contains x.pay && b.contains x && (keys x).contains q).length
-        < (rel.entries.filter fun x => (keys x).contains q).length) := sorry
+        < (rel.entries.filter fun x => (keys x).contains q).length) := by
+  have hf : ∀ x ∈ rel.entries, (!(own (carried c₀ rel unr) x && b.contains x)) =
+      !(c₀.redo.contains x.pay && b.contains x) := by
+    intro x hx
+    have hc : (carried c₀ rel unr).redo = c₀.redo := rfl
+    simp only [own, hc, sv_released_carried]
+    simp [hx]
+  unfold seen0
+  rw [sv_released_carried, List.filter_congr hf]
+  rw [Bool.eq_iff_iff, decide_eq_true_iff, sv_filter_and_lt rel.entries
+    (fun x => c₀.redo.contains x.pay && b.contains x) (fun x => (keys x).contains q)]
+  simp [List.mem_flatMap, List.mem_filter]
+  constructor
+  · rintro ⟨x, ⟨hx, hp⟩, hq⟩; exact ⟨x, hx, hq, fun ha => hp.elim (fun h => absurd ha h) id⟩
+  · rintro ⟨x, hx, hq, hp⟩; exact ⟨x, ⟨hx, Decidable.not_or_of_imp hp⟩, hq⟩
 
 /-- The CAP near claim is local: day keys of today's covering spans, invalid dates, or the aggregate key
     when enrollment is unusable. Exact and id keys are always claimed. -/
 theorem pending_near_cap (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (m mo : Nat) :
     (pending (carried c₀ rel unr)).contains [0, m, mo] =
       unr.entries.any fun x => nearKey x == [0, m, mo] &&
-        (!usable c₀.today 7 okSpan c₀.enrollment || !validDate x.date || enrolled c₀ x) := sorry
+        (!usable c₀.today 7 okSpan c₀.enrollment || !validDate x.date || enrolled c₀ x) := by
+  have hd : ∀ x ∈ unr.entries, x ∉ rel.entries := by
+    intro x hx hr
+    have h := hi.1
+    rw [List.map_append, List.nodup_append] at h
+    exact h.2.2 x.id (List.mem_map.mpr ⟨x, hr, rfl⟩) x.id (List.mem_map.mpr ⟨x, hx, rfl⟩) rfl
+  have hown : ∀ x ∈ unr.entries, own (carried c₀ rel unr) x = false := by
+    intro x hx
+    have := hd x hx
+    simp only [own, sv_released_carried]
+    simp [this]
+  have hk : ∀ x ∈ unr.entries, ([0, m, mo] ∈ claim (carried c₀ rel unr) x) ↔
+      ((nearKey x == [0, m, mo] &&
+        (!usable c₀.today 7 okSpan c₀.enrollment || !validDate x.date || enrolled c₀ x)) = true) := by
+    intro x hx
+    have ho := hown x hx
+    by_cases hcap : isCap x = true
+    · have e1 : (carried c₀ rel unr).enrollment = c₀.enrollment := rfl
+      have e2 : (carried c₀ rel unr).today = c₀.today := rfl
+      simp [claim, notEnrolled, certain, enrolled, ho, hcap, nearKey, exactKey, idKey, keys, e1, e2]
+      by_cases hE : ∃ s, s ∈ entries c₀.enrollment ∧ covers x s = true
+      · have hE' : ¬ ∀ s, s ∈ entries c₀.enrollment → covers x s = false := fun h => by
+          obtain ⟨s, hs, hc⟩ := hE; simp [h s hs] at hc
+        by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true <;>
+          by_cases hv : validDate x.date = true <;> simp [hu, hv, hE, hE'] <;> first | done | (constructor <;> rintro ⟨a, b⟩ <;> exact ⟨a.symm, b.symm⟩)
+      · have hE' : ∀ s, s ∈ entries c₀.enrollment → covers x s = false := fun s hs => by
+          cases h : covers x s
+          · rfl
+          · exact absurd ⟨s, hs, h⟩ hE
+        by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true <;>
+          by_cases hv : validDate x.date = true <;> simp [hu, hv, hE, eq_true hE'] <;> first | done | (constructor <;> rintro ⟨a, b⟩ <;> exact ⟨a.symm, b.symm⟩)
+    · simp [claim, ho, hcap, nearKey, exactKey, idKey, keys]
+  unfold pending
+  rw [sv_unresolved_carried, Bool.eq_iff_iff, List.any_eq_true]
+  constructor
+  · intro h
+    have h' : [0, m, mo] ∈ unr.entries.flatMap (claim (carried c₀ rel unr)) := by simpa using h
+    obtain ⟨x, hx, hm⟩ := List.mem_flatMap.mp h'
+    exact ⟨x, hx, (hk x hx).mp hm⟩
+  · rintro ⟨x, hx, hm⟩
+    have h' : [0, m, mo] ∈ unr.entries.flatMap (claim (carried c₀ rel unr)) :=
+      List.mem_flatMap.mpr ⟨x, hx, (hk x hx).mpr hm⟩
+    simpa using h'
 
 /-! ## 5b. Dated sets (H-c), v2 only. `decideReg`/`advance` (Rules/Spec.lean:236-239, :500) stay as they
     are, so v1 replay, `loadAdds` and v1 pins are unchanged; v2 decides with `decideRegT` (dates only). -/
