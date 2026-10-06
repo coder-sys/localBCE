@@ -855,9 +855,203 @@ private theorem fkpf_len (H : Bytes → Bytes) (hH : HashLen H) (d : Bytes) : �
         · simp at ha
       · exact ih _ _ (pu_len64 H hH d lv hlv) a ha
 
+private theorem coll_mono (H : Bytes → Bytes) {A A' B B' : List Bytes} (hA : ∀ x ∈ A, x ∈ A') (hB : ∀ x ∈ B, x ∈ B') :
+    Collision H A B → Collision H A' B' := by
+  rintro ⟨x, hx, y, hy, hne, he⟩
+  exact ⟨x, hA x hx, y, hB y hy, hne, he⟩
+
+private theorem pair_prefix (H : Bytes → Bytes) (d : Bytes) : ∀ (ks T : List Bytes), (∀ a ∈ ks, a.length = 64) →
+    (∀ a ∈ T, a.length = 64) → ks.length ≤ T.length → (ks.length % 2 = 0 ∨ ks.length = T.length) →
+    pairUp H d ks = (pairUp H d T).take ((ks.length + 1) / 2) →
+    ks = T.take ks.length ∨ Collision H (levelInputs d ks) (levelInputs d T)
+  | [], T, _, _, _, _, _ => Or.inl (by simp)
+  | [a], T, _, hT, hl, hp, h => by
+    rcases T with _ | ⟨c, _ | ⟨e, t⟩⟩
+    · simp at hl
+    · left; simpa [pairUp] using h
+    · have := hp; simp only [List.length_cons, List.length_nil] at this; omega
+  | a :: b :: rest, T, hK, hT, hl, hp, h => by
+    rcases T with _ | ⟨c, _ | ⟨e, t⟩⟩
+    · simp at hl
+    · simp at hl
+    · have hlr : rest.length ≤ t.length := by simp only [List.length_cons] at hl; omega
+      have e2 : (rest.length + 1 + 1 + 1) / 2 = (rest.length + 1) / 2 + 1 := by omega
+      simp only [pairUp, List.length_cons, e2, List.take_succ_cons, List.cons.injEq] at h
+      obtain ⟨h1, h2⟩ := h
+      by_cases hab : d ++ 1 :: (a ++ b) = d ++ 1 :: (c ++ e)
+      · have hab' : a ++ b = c ++ e := by simpa using hab
+        have hac : a.length = c.length := by rw [hK a (by simp), hT c (by simp)]
+        obtain ⟨rfl, rfl⟩ := List.append_inj hab' hac
+        rcases pair_prefix H d rest t (fun x hx => hK x (by simp [hx])) (fun x hx => hT x (by simp [hx])) hlr
+            (by simp only [List.length_cons] at hp; omega) h2 with h3 | h3
+        · left; rw [List.length_cons, List.length_cons, List.take_succ_cons, List.take_succ_cons, ← h3]
+        · right; exact coll_mono H (fun x hx => by simp [levelInputs, hx]) (fun x hx => by simp [levelInputs, hx]) h3
+      · right
+        exact ⟨d ++ 1 :: (a ++ b), by simp [levelInputs], d ++ 1 :: (c ++ e), by simp [levelInputs], hab, h1⟩
+
+private theorem fk_base (H : Bytes → Bytes) (d : Bytes) (f : Nat) (r1 r : Bytes) (ins : List Bytes) (T : List Bytes)
+    (hT : T.length = 1) (hrun : (some (r1, ([] : List Bytes)) : Option (Bytes × List Bytes)) = some (r, ins))
+    (hroot : treeRoot H d f T = r) : [r1] = T.take [r1].length ∨ Collision H ins (treeInputsL H d f T) := by
+  rcases T with _ | ⟨t, _ | ⟨_, _⟩⟩
+  · simp at hT
+  · have : treeRoot H d f [t] = t := by cases f <;> rfl
+    rw [this] at hroot
+    left
+    obtain ⟨h, -⟩ := Prod.mk.inj (Option.some.inj hrun)
+    simp [h, hroot]
+  · simp at hT
+
+private theorem tr_succ (H : Bytes → Bytes) (d : Bytes) (f : Nat) (T : List Bytes) (h : 1 < T.length) :
+    treeRoot H d (f + 1) T = treeRoot H d f (pairUp H d T) := by
+  rcases T with _ | ⟨x, _ | ⟨y, t⟩⟩
+  · simp at h
+  · simp at h
+  · simp [treeRoot]
+
+private theorem leaf_inj (H : Bytes → Bytes) : ∀ ys zs : List Bytes, ys.map (leafHash H PD) = zs.map (leafHash H PD) →
+    ys = zs ∨ Collision H (ys.map (fun y => PD ++ 0 :: y)) (zs.map (fun y => PD ++ 0 :: y))
+  | [], [], _ => Or.inl rfl
+  | [], _ :: _, h => by simp at h
+  | _ :: _, [], h => by simp at h
+  | y :: ys, z :: zs, h => by
+    simp only [List.map_cons, List.cons.injEq] at h
+    obtain ⟨h1, h2⟩ := h
+    by_cases hyz : y = z
+    · subst hyz
+      rcases leaf_inj H ys zs h2 with h3 | h3
+      · exact Or.inl (by rw [h3])
+      · exact Or.inr (coll_mono H (fun x hx => by simp [hx]) (fun x hx => by simp [hx]) h3)
+    · right
+      refine ⟨PD ++ 0 :: y, by simp, PD ++ 0 :: z, by simp, ?_, h1⟩
+      intro he
+      apply hyz
+      have := List.append_cancel_left he
+      simpa using this
+
+private theorem fk_sound' (H : Bytes → Bytes) (hH : HashLen H) (d : Bytes) : ∀ (f n : Nat) (ks pf : List Bytes) (r : Bytes) (ins : List Bytes),
+    firstKRun H d f n ks pf = some (r, ins) → (∀ a ∈ ks, a.length = 64) → (∀ a ∈ pf, a.length = 64) →
+    ∀ T : List Bytes, T.length = n → (∀ a ∈ T, a.length = 64) → treeRoot H d f T = r →
+    ks = T.take ks.length ∨ Collision H ins (treeInputsL H d f T) := by
+  intro f
+  induction f with
+  | zero =>
+    intro n ks pf r ins hrun hks hpf T hT hTl hroot
+    by_cases hc : ∃ r1, n = 1 ∧ ks = [r1] ∧ pf = []
+    · obtain ⟨r1, rfl, rfl, rfl⟩ := hc
+      rw [firstKRun.eq_1] at hrun
+      exact fk_base H d 0 r1 r ins T hT hrun hroot
+    · rw [firstKRun.eq_2 _ _ _ _ _ (fun r h1 h2 h3 => hc ⟨r, h1, h2, h3⟩)] at hrun; simp at hrun
+  | succ f ih =>
+    intro n ks pf r ins hrun hks hpf T hT hTl hroot
+    by_cases hc : ∃ r1, n = 1 ∧ ks = [r1] ∧ pf = []
+    · obtain ⟨r1, rfl, rfl, rfl⟩ := hc
+      rw [firstKRun.eq_1] at hrun
+      exact fk_base H d (f + 1) r1 r ins T hT hrun hroot
+    · rw [firstKRun.eq_3 _ _ _ _ _ _ (fun r h1 h2 h3 => hc ⟨r, h1, h2, h3⟩)] at hrun
+      split at hrun
+      · simp at hrun
+      · rename_i hg
+        simp at hg
+        obtain ⟨⟨⟨hne, hn1⟩, hkn⟩, hpe⟩ := hg
+        have hT1 : 1 < T.length := by omega
+        have hroot' : treeRoot H d f (pairUp H d T) = r := by rw [← tr_succ H d f T hT1]; exact hroot
+        have step : ∀ (ks' pf' : List Bytes) (r' : Bytes) (ins' : List Bytes), (∀ a ∈ ks', a.length = 64) →
+            (∀ a ∈ pf', a.length = 64) → ks'.length ≤ n → (ks'.length % 2 = 0 ∨ ks'.length = n) →
+            firstKRun H d f ((n + 1) / 2) (pairUp H d ks') pf' = some (r', ins') → r' = r →
+            ks' = T.take ks'.length ∨ Collision H (levelInputs d ks' ++ ins') (treeInputsL H d (f + 1) T) := by
+          intro ks' pf' r' ins' hks' hpf' hl hpar hr hrr
+          subst hrr
+          have hrec := ih ((n + 1) / 2) (pairUp H d ks') pf' r' ins' hr (pu_len64 H hH d ks' hks') hpf'
+            (pairUp H d T) (by rw [pu_len, hT]) (pu_len64 H hH d T hTl) hroot'
+          have hti : treeInputsL H d (f + 1) T = levelInputs d T ++ treeInputsL H d f (pairUp H d T) := by
+            rcases T with _ | ⟨x, _ | ⟨y, t⟩⟩
+            · simp at hT1
+            · simp at hT1
+            · simp [treeInputsL]
+          rw [hti]
+          rcases hrec with h | h
+          · have hlen := pu_len H d ks'
+            rw [hlen] at h
+            rcases pair_prefix H d ks' T hks' hTl (by omega) (by rcases hpar with h | h; exact Or.inl h; exact Or.inr (by omega)) h with h3 | h3
+            · exact Or.inl h3
+            · exact Or.inr (coll_mono H (fun x hx => by simp [hx]) (fun x hx => by simp [hx]) h3)
+          · exact Or.inr (coll_mono H (fun x hx => by simp [hx]) (fun x hx => by simp [hx]) h)
+        have pre : ∀ ks' : List Bytes, (∃ x, ks' = ks ++ x) → ks' = T.take ks'.length → ks = T.take ks.length := by
+          rintro ks' ⟨x, rfl⟩ h
+          have h2 : (ks ++ x).take ks.length = ks := by simp
+          calc ks = (ks ++ x).take ks.length := h2.symm
+            _ = (T.take (ks ++ x).length).take ks.length := by rw [← h]
+            _ = T.take ks.length := by
+              rw [List.take_take]; congr 1; simp
+        by_cases hodd : (ks.length % 2 == 1 && decide (ks.length < n)) = true
+        · simp only [hodd, ↓reduceIte] at hrun
+          obtain ⟨⟨r', ins'⟩, hr, he⟩ := Option.map_eq_some_iff.mp hrun
+          injection he with h1 h2
+          subst h2
+          have hodd2 : ks.length % 2 = 1 ∧ ks.length < n := by simpa using hodd
+          have hpne : pf ≠ [] := hpe hodd2.1 hodd2.2
+          have hl1 : (pf.take 1).length = 1 := by
+            rcases pf with _ | ⟨p, ps⟩
+            · exact absurd rfl hpne
+            · simp
+          rcases step (ks ++ pf.take 1) (pf.drop 1) r' ins'
+              (fun a ha => by
+                rcases List.mem_append.mp ha with h | h
+                · exact hks a h
+                · exact hpf a (List.mem_of_mem_take h))
+              (fun a ha => hpf a (List.mem_of_mem_drop ha))
+              (by simp only [List.length_append, hl1]; omega)
+              (Or.inl (by simp only [List.length_append, hl1]; omega)) hr h1 with h | h
+          · exact Or.inl (pre _ ⟨_, rfl⟩ h)
+          · exact Or.inr h
+        · simp only [hodd, Bool.false_eq_true, ↓reduceIte] at hrun
+          obtain ⟨⟨r', ins'⟩, hr, he⟩ := Option.map_eq_some_iff.mp hrun
+          injection he with h1 h2
+          subst h2
+          have hpar : ks.length % 2 = 0 ∨ ks.length = n := by
+            by_cases h3 : ks.length % 2 = 1
+            · right
+              have : ¬ ks.length < n := fun h4 => hodd (by simp [h3, h4])
+              omega
+            · left; omega
+          rcases step ks pf r' ins' hks hpf hkn hpar hr h1 with h | h
+          · exact Or.inl h
+          · exact Or.inr h
+
 theorem firstK_sound (H : Bytes → Bytes) (hH : HashLen H) (xs ys pf : List Bytes) (hn : xs.length < 2 ^ 64)
     (hv : verifyFirstK H (listRoot H xs) xs.length ys pf = true) :
-    ys = xs.take K ∨ Collision H (firstKInputs H xs.length ys pf) (listInputs H xs) := sorry
+    ys = xs.take K ∨ Collision H (firstKInputs H xs.length ys pf) (listInputs H xs) := by
+  simp only [verifyFirstK, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, List.all_eq_true, Option.any_eq_true] at hv
+  obtain ⟨⟨⟨⟨hn1, hys⟩, hyl⟩, hpf⟩, ⟨⟨r', ins⟩, hrun, hr⟩⟩ := hv
+  have hlv : ∀ a ∈ xs.map (leafHash H PD), a.length = 64 := by
+    intro a ha; rw [List.mem_map] at ha; obtain ⟨x, _, rfl⟩ := ha
+    simp only [leafHash]; exact hH _
+  have hlv' : ∀ a ∈ ys.map (leafHash H PD), a.length = 64 := by
+    intro a ha; rw [List.mem_map] at ha; obtain ⟨x, _, rfl⟩ := ha
+    simp only [leafHash]; exact hH _
+  have hpf' : ∀ a ∈ pf, a.length = 64 := fun a ha => by simpa [digestBytes] using hpf a ha
+  have hr' : r' = listRoot H xs := by simpa using hr
+  have := fk_sound' H hH PD 64 xs.length (ys.map (leafHash H PD)) pf r' ins hrun hlv' hpf'
+    (xs.map (leafHash H PD)) (by simp) hlv (by rw [hr']; rfl)
+  have hfi : firstKInputs H xs.length ys pf = ys.map (fun y => PD ++ 0 :: y) ++ ins := by
+    simp [firstKInputs, hrun]
+  rw [hfi]
+  have htk : (xs.take K).map (leafHash H PD) = (xs.map (leafHash H PD)).take (min K xs.length) := by
+    rw [List.map_take]; rcases Nat.le_total K xs.length with h | h
+    · rw [Nat.min_eq_left h]
+    · rw [Nat.min_eq_right h]; simp [List.take_of_length_le, h]
+  rcases this with h | h
+  · simp only [List.length_map, hys] at h
+    rw [← htk] at h
+    rcases leaf_inj H ys (xs.take K) h with h3 | h3
+    · exact Or.inl h3
+    · right
+      refine coll_mono H (fun x hx => by simp [hx]) (fun x hx => ?_) h3
+      simp only [listInputs, List.mem_append, List.mem_map] at hx ⊢
+      rcases hx with ⟨y, hy, rfl⟩
+      exact Or.inl ⟨y, List.mem_of_mem_take hy, rfl⟩
+  · right
+    exact coll_mono H (fun x hx => by simp [hx]) (fun x hx => by simp [listInputs, hx]) h
 
 theorem firstK_complete (H : Bytes → Bytes) (hH : HashLen H) (xs : List Bytes) (h1 : 1 ≤ xs.length)
     (hn : xs.length < 2 ^ 64) (hx : ∀ x ∈ xs, x.length = 8 + idWidth) :
