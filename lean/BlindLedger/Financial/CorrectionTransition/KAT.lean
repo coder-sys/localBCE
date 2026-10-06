@@ -312,6 +312,7 @@ def gateCorrectionMissingClaimRejected : Bool :=
 
 def gateCorrectionClaimNotClaimedRejected : Bool :=
   let determination := { katDetermination .OFFSET_AUTHORIZED with
+    authorityDigest := correctionKatInput.authority.digest
     expectedRevision := 3
     resultingRevision := 4 }
   let action := { katAuthorizedAction with revision := 4 }
