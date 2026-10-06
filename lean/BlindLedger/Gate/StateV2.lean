@@ -1,37 +1,46 @@
 /-
-STATE/v2 goals r4 (rr-core, 2026-10-06). Placed in the Lean tree at S1 (state-v2 branch); proofs land in steps.
-Revises state-v2-goals-r3-20261006.lean against review-state-v2-r3-20261006.md (GO WITH FIXES, all 9 accepted).
-Design: state-v2-design-r4-body-20261006.md. Read against rightrail-main 6a528e3 (Gate Lean and producer.py as
-688bdd6): Gate/Spec.lean (digestBytes :24, zeroDigest :46, beNat :80, identField :156, WireFlow.ruled :166,
-inputCommitment :183, linesRoot :212, pLine :277, Request :289-326, Checkpoint :342-377, Leaf :420-476,
-decodeToken :490), Gate/Producer.lean (storedOfAny :13, isV2 :17, follows :23, publishOkAny :66-73),
-Gate/Verify.lean (acceptsAny :39), Gate/Anchor.lean (setsDigest :16), Gate/Rules/Spec.lean (Line :130,
-Ctx :170, Line.fields :458, pinInput :462, shardSets :520).
-§1-§7: r3 text unchanged except r3's duplicate `beNat` (= Gate.beNat, Spec.lean:80) removed and
-`decideRegT_perm` moved to §8b and RESTATED (it now names `paysOf`, defined in §7).
-§8 is new. One mechanism per bug class:
-  signing and custody state = one append-only signed-package log, CAS-appended off machine (fixes 1, 7, 8);
-  the decision = custody's own `plan` (base + decideIdx); nothing courier-made is trusted (fix 2);
-  the base = a function of the log: empty log -> the permit's base, else the last entry's header; no version
-    test (fix 3); the permit's base takes no clock input, so migration cannot sit in the ticket window (fix 5);
-  money fields = one PayRow per payment, compared by one permutation check (fix 4);
-  order independence = one restated `decideRegT_perm` + `runT_perm` (fix 6);
-  the last checkpoint = verified under `lastCert` inside `certsOk` (fix 9).
-Goals RESTATED: decideRegT_perm (+ next sets Perm, counts, dates, paysOf), migrate_binds (permit base,
-  runT equality, no redate-0 wrapper), chain_sound (logRunOk, independent counter, PayRow Perm; keeps the
-  stateDigest conclusion), mark_advances -> entry_appends + head_advances (log terms).
-Goals NEW: runT_perm, entryIn_inj, log_binds, invB_iff, v1_reach_inv, pLineFull_agrees, payNat_fits,
-  lineOf_fits, reasonCode_ascending, custody_binds, rebuild_sound, reach_inv, never_twice, reconcile_ok,
-  no_wedge, rollback_detected, restore_resumes.
-Goals/defs DROPPED and why: Ticket, Tip, tipOf, Tip.genesis, Mark, atMark, Mark.step, permitMark, r3 Boot and
-  reconcile (the log head and length replace the mark; r3's `tipOf n == mark.tip ||` re-sign path is gone,
-  re-release resends log bytes); payNum, outcomeOf, tokTriple (PayRow/tokRow bind every money field); migrate,
-  Base, baseOf, decideAt (permitBase/baseDigest; no isV2 test); lastDigest (follows already checks
-  eventHead == p.digest, Producer.lean:28); segIn, segIn_inj (entryIn, entryIn_inj); publishOkV2,
-  publishV2_binds, anchor_chain (custodyOk, custody_binds); r3 chainOk, trueSets, chain_sound_from (logRunOk,
-  shardSetsT, chain_sound); r3 beNat (duplicate of Gate.beNat).
-KEPT unchanged: tokens perm + length shape, tableOk, localDay_valid, localDay_mono, V1Collision, runT,
-  redate, invB, eps, and the r3 §1-§7 theorems.
+STATE/v2 goals r5 (rr-core, 2026-10-06). Revises r4 against review-state-v2-r4-20261006.md (GO WITH FIXES, F1-F8 all
+accepted) and the lead's H1-H3. §1-§8b unchanged from r4. §8c-§8i are new. Trunk refs as r4 (Spec.lean redecides :512,
+Leaf :420-444, decodeCheckpoint2 :405; Producer.lean publishOkAny :66-73; Verify.lean acceptsAny :39;
+Rules/ShardRun.lean holder :202, reserveRows :214, settleRows :219, chainHead :443).
+
+One mechanism per bug class:
+  all custody state = `fold` of ONE CAS-appended off-machine tenant log, O(n) once at boot (H3: no local log copy,
+    no pull, no restore). Each entry carries its registry rows; the fold holds per shard the last signed, its base,
+    the sign count per epoch and the latest leaf per payment;
+  rollback = an epoch-keyed TPM counter per shard compared with the fold's sign count for the cert's epoch (H1);
+  second ALLOW = the fold's `payStep` (new payment at revision 0; else trunk `redecides`, or an echo of the same
+    revision that is not ALLOW). Owners come from the folded registry, never from the courier (F1, F2);
+  activation = one `resume` entry checked by `activation` (genesis or the sealed v1 tip under acceptsAny), once
+    per shard (F3, F5, F6).
+Review r4: F1 registry in the fold, owners = `answer` on it, signed registryHead = fold rhead, entries record rows.
+  F2 PayRow.revision, tokens expire at secs + maxTokenLifetime, redo only through payStep. F3 `seal` entry + resume
+  from the sealed tip under acceptsAny. F4 custodyOk and the fold require a v2 checkpoint. F5 tableOk at
+  activation (P.tbl is pinned, so once). F6 adversary steps (rollback, foreign write, TPM clear), resume only when
+  not live. F7 CORRECTED CLAIM: the four snapshots and `redo` are courier inputs; they are bound into every token by
+  readSetOf (inputCommitment), and redo can only act through payStep. F8 createdAt strictly increases per shard.
+H1 RESTATED (deviation from the brief): a fence on live shards alone fails: roll the off store back below shard
+  k's first resume and k is not live, so a foreign resume is accepted. The counter is keyed by epoch instead:
+  the TPM holds (base, value) per shard; boot is `ok` iff value - base = the fold's sign count for the cert's
+  epoch. ctrBase left the permit (it was writable by whoever writes the store). A new epoch needs a ceremony,
+  which needs an undefined counter, which needs a TPM clear (`cleared`).
+H2: `lost` is a ghost flag set when a rollback leaves some released signed with no copy in the store (by
+  bytes, not index; a current-only form fails: rollback, TPM clear, new epoch, duplicate, foreign re-write).
+  never_twice holds under ¬lost and concludes the two leaves sit in the same signed; honest runs never lose;
+  a released signed missing now stops its shard at boot unless the TPM was cleared.
+Release only after the counter bump: CAS, bump, release. foreignWrite may place only released signeds.
+Residuals (not closed by Lean; each loud): total loss of the store followed by a genesis resume; a TPM clear +
+  ceremony + rollback (payer check 10 and its fork check); an adversary who READS unreleased store entries inside
+  the CAS-to-bump window and rolls back forks one position (payer fork check only); a HOLD is never re-decided and a
+  v1-era payment is never redone on v2 (refused, loudly); `fresh` rows are not signed: a forged copy breaks only the
+  witness (refusal), never a decision; evidenceRoot stays unchecked (trunk writes zero); never_twice is per shard,
+  cross-shard identity is the registry + payer check 10; any foreign junk makes the fold none and every shard
+  stops; a v1 signature past the seal is refused by the payer's follows check (v2 follows the tip).
+Dropped (r4): Entry (old), logHead, logOk + its lemmas, ZeroPre, log_binds, PermitBase, permitBase, baseDigest,
+  lastOf, plan, entry_appends, head_advances, r4 Cust/Boot/reconcile/Step/Reach, reach_inv, reconcile_ok,
+  restore_resumes, rollback_detected, SignedStep, logRunOk, stepBatch, runRows. chain_sound keeps the stateDigest
+  conclusion; the token rows per step are custody_binds applied to chain_sound's base.
+Kept: invB_iff with proof, V1Collision, v1_reach_inv, §8e lines, PayRow (+revision), certsOk, readSetOf.
 Every def is concrete; `sorry` stands only in theorem bodies. No axioms. PQ only: ML-DSA-87 via acceptsAny.
 -/
 
@@ -835,142 +844,7 @@ theorem runT_perm (k : Nat) (g g' : Snapshot Line × Snapshot Line)
     (hc : g.1.count = g'.1.count ∧ g.2.count = g'.2.count ∧ g.1.asOf = g'.1.asOf ∧ g.2.asOf = g'.2.asOf)
     (ts : List Batch) : runT k g ts = runT k g' ts := sorry
 
-/-! ### 8c. The signed-package log (fixes 1, 8) -/
-
-/-- One signed package: log index, previous log head (64 bytes), the signed checkpoint (header ‖ ML-DSA-87
-    signature), its tokens, and the set rows Lean appended (so a lost database is rebuilt by replay). -/
-structure Entry where
-  idx : Nat
-  prev : Bytes
-  signed : Bytes
-  tokens : List Bytes
-  fresh : List Line × List Line
-  deriving DecidableEq
-
-def rowBytes (l : Line) : Option Bytes := ((Line.fields l).mapM fun (w, n) => be w n).map List.flatten
-
-/-- Fix 8: digests are `digestBytes` = 64 (Spec.lean:24). Every variable part is length-prefixed; rows are
-    fixed width (`Line.fields`). -/
-def entryIn (e : Entry) : Option Bytes := do
-  guard (e.prev.length = digestBytes)
-  let i ← be 8 e.idx
-  let ls ← be 4 e.signed.length
-  let nt ← be 2 e.tokens.length
-  let ts ← e.tokens.mapM fun t => do pure ((← be 4 t.length) ++ t)
-  let r ← e.fresh.1.mapM rowBytes
-  let u ← e.fresh.2.mapM rowBytes
-  let nr ← be 8 r.length
-  let nu ← be 8 u.length
-  pure (dom2 "STATE-LOG" ++ i ++ e.prev ++ ls ++ e.signed ++ nt ++ ts.flatten ++ nr ++ r.flatten ++ nu ++ u.flatten)
-
-def entryDigest (e : Entry) : Option Bytes := (entryIn e).map sha3
-
-/-- The log head: `zeroDigest` for the empty log, else the last entry's digest. The r3 Mark is this value. -/
-def logHead (log : List Entry) : Option Bytes :=
-  match log.getLast? with
-  | none => some zeroDigest
-  | some e => entryDigest e
-
-/-- Entry i has index i and names the head of the first i entries. -/
-def logOk (log : List Entry) : Bool :=
-  log.zipIdx.all fun (e, i) => e.idx == i && logHead (log.take i) == some e.prev
-
-/-- A digest equal to `zeroDigest`: the only non-collision way two heads of different-length logs can meet. -/
-def ZeroPre (H : Bytes → Bytes) (A : List Bytes) : Prop := ∃ x ∈ A, H x = zeroDigest
-
-theorem entryIn_inj {e e' : Entry} {x : Bytes} (h : entryIn e = some x) (h' : entryIn e' = some x) : e = e' := sorry
-
-/-- NEW. A head names its whole log. -/
-theorem log_binds (hH : HashLen sha3) (log log' : List Entry) (hl : logOk log = true) (hl' : logOk log' = true)
-    (hs : (logHead log).isSome) (he : logHead log = logHead log') :
-    log = log' ∨ Collision sha3 (log.filterMap entryIn) (log'.filterMap entryIn) ∨
-      ZeroPre sha3 ((log ++ log').filterMap entryIn) := sorry
-
-/-! ### 8d. Permit and the base (fixes 1, 3, 5) -/
-
-/-- The permit's base: a new shard's genesis day, or the v1 cutover (last v1 signed checkpoint and its sets). -/
-inductive PermitBase
-  | genesis (day : Nat)
-  | v1 (header : Bytes) (rel unr : Snapshot Line)
-
-/-- Written once at provisioning and stored as the off-machine log's genesis record. `ctrBase` is the TPM
-    NV counter's value when the shard's counter was defined (TPM 2.0 starts a new counter at the TPM's highest). -/
-structure Permit where
-  tenant : Bytes
-  shard : Nat
-  ctrBase : Nat
-  base : PermitBase
-
-def redate (t : Nat) (g : Snapshot Line × Snapshot Line) : Snapshot Line × Snapshot Line :=
-  ({ g.1 with asOf := t }, { g.2 with asOf := t })
-
-def invB (rel unr : Snapshot Line) : Bool :=
-  decide (((rel.entries ++ unr.entries).map (·.id)).Nodup) && rel.count == rel.entries.length &&
-    unr.count == unr.entries.length
-
-/-- Ids are unique (`invB`), so every order of the same set sorts to the same list: rebuild is deterministic. -/
-def canon (s : Snapshot Line) : Snapshot Line := { s with entries := s.entries.mergeSort fun a b => a.id ≤ b.id }
-
-/-- Fix 5: no clock input, so the v1 check (setsDigest over the whole v1 sets, then invB) runs at boot,
-    before custody reads the clock. A refusal is the defined quarantine: no v2 signing; the shard stays on
-    its v1 producer, alerted (body §5). -/
-def permitBase (tbl : OffsetTable) (p : Permit) : Option (Snapshot Line × Snapshot Line) :=
-  match p.base with
-  | .genesis t => if validDate t then some (genesisSets t) else none
-  | .v1 b r u => do
-    let s ← storedOfAny sha3 b
-    guard (s.checkpoint.tenantId = p.tenant ∧ s.checkpoint.shardId = p.shard)
-    guard (setsDigest sha3 r u = some s.checkpoint.stateDigest)
-    guard (invB r u = true)
-    let m := localDay tbl s.checkpoint.createdAt
-    guard (validDate m = true)
-    pure (redate m (canon r, canon u))
-
-/-- Fix 3: the base is a function of the log. Empty log: the permit's base (migration iff the permit is v1).
-    Otherwise: the last entry's header. No version test. -/
-def baseDigest (tbl : OffsetTable) (p : Permit) (log : List Entry) : Option Bytes :=
-  match log.getLast? with
-  | some e => (storedOfAny sha3 e.signed).map (·.checkpoint.stateDigest)
-  | none => do
-    let g ← permitBase tbl p
-    let h ← headOf sha3 g.1 g.2
-    digestV2 sha3 h
-
-/-- The checkpoint the next one follows: the last log entry, else the permit's v1 header, else none. -/
-def lastOf (p : Permit) (log : List Entry) : Option Bytes :=
-  match log.getLast? with
-  | some e => some e.signed
-  | none => match p.base with
-    | .v1 b _ _ => some b
-    | .genesis _ => none
-
-/-- KEPT from r3: the STATE/v1 collision `loadAdds_binds` (DecideLayer.lean:185-196) names. -/
-def V1Collision (H : Bytes → Bytes) (a b r u : Snapshot Line) : Prop :=
-  ∃ A B A' B', pinInput "RR/GATE/RELEASED/v1" 5 Line.fields a = some A ∧
-    pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields b = some B ∧
-    pinInput "RR/GATE/RELEASED/v1" 5 Line.fields r = some A' ∧
-    pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields u = some B' ∧
-    ∃ x y, x ≠ y ∧ H x = H y ∧ ((x, y) = (A, A') ∨ (x, y) = (B, B') ∨
-      (x, y) = (Gate.domain "STATE" ++ H A ++ H B, Gate.domain "STATE" ++ H A' ++ H B'))
-
-theorem invB_iff (rel unr : Snapshot Line) : invB rel unr = true ↔ Inv rel unr := sorry
-
-/-- NEW (fix 5): every reachable v1 state passes `invB`, so the quarantine is unreachable without a collision.
-    Route: Rules/Shards.lean:120,132 and `inv_step` (the dates do not enter `Inv`). -/
-theorem v1_reach_inv (k : Nat) (ts : List Batch) :
-    Inv (shardSets k (genesisSets 0) ts).1 (shardSets k (genesisSets 0) ts).2 := sorry
-
-/-- RESTATED (fixes 2, 5): the cutover sets are the true v1 sets up to order, dated by the v1 header, and every
-    later batch decides and pays as on the true sets; else a v1 collision. -/
-theorem migrate_binds (hH : HashLen sha3) (tbl : OffsetTable) (p : Permit) (b : Bytes) (r' u' : Snapshot Line)
-    (hp : p.base = .v1 b r' u') (g : Snapshot Line × Snapshot Line) (hg : permitBase tbl p = some g)
-    (r u : Snapshot Line) (hi : Inv r u)
-    (hd : ∃ s, storedOfAny sha3 b = some s ∧ setsDigest sha3 r u = some s.checkpoint.stateDigest)
-    (k : Nat) (ts : List Batch) :
-    (∃ m, g.1.entries.Perm r.entries ∧ g.2.entries.Perm u.entries ∧ Inv g.1 g.2 ∧
-       runT k g ts = runT k (redate m (r, u)) ts) ∨ V1Collision sha3 r' u' r u := sorry
-
-/-! ### 8e. Requests and lines (fix 4): Lean decodes `Request.lines` itself -/
+/-! ### 8c. Requests and lines (r4 fix 4): Lean decodes `Request.lines` itself -/
 
 /-- `WireLine` (Spec.lean:271) with every field `pLine` skips. -/
 structure WireLineFull where
@@ -1040,10 +914,12 @@ theorem payNat_fits (program pay : Bytes) (hp : identOk program = true) (hq : id
 theorem lineOf_fits (r : Request) (hr : ∃ x, decodeRequest x = some r) (ls : List Line) (h : linesOf r = some ls) :
     ls.all (fun l => (keyBytes (rowKey l)).isSome) = true := sorry
 
-/-! ### 8f. PayRow and tokens (fix 4): every money field, one permutation check -/
+
+/-! ### 8d. PayRow and tokens: every money field, one permutation check (F2: revision bound) -/
 
 structure PayRow where
   pay : Nat
+  revision : Nat
   outcome : WireOutcome
   cents : Nat
   flow : WireFlow
@@ -1102,32 +978,201 @@ def readSetOf (c₀ : Ctx) (base : Bytes) : Option Bytes := do
   let rs ← c₀.redo.mapM (be payWidth)
   pure (sha3 (dom2 "READ-SET" ++ a ++ b ++ e ++ n ++ r ++ rs.flatten ++ base))
 
+
+/-- What the custody exe is pinned with: offset table, root key, tenant, constants. -/
+structure Pins where
+  tbl : OffsetTable
+  rootPk : Bytes
+  tenant : Bytes
+  c : Consts
+
 /-- The row of one request. Unruled flows: HUMAN_REVIEW, the request's amount, no reasons. Ruled: Lean's pay
-    (outcome, Σ line cents) and the reasons of its lines; a ruled pay Lean did not decide (WAIT) has no row. -/
-def rowOf (pays : List (Nat × Outcome × Nat)) (ds : List (Line × Outcome × List Reason)) (rset : Bytes)
-    (x : Bytes × Request) : Option PayRow :=
+    (outcome, Σ line cents) and the reasons of its lines; a ruled pay Lean did not decide (WAIT) has no row.
+    `rev`: the revision custody assigns (from the fold, §8g). -/
+def rowOf (rev : Nat → Nat) (pays : List (Nat × Outcome × Nat)) (ds : List (Line × Outcome × List Reason))
+    (rset : Bytes) (x : Bytes × Request) : Option PayRow :=
   let (raw, r) := x
-  let row : PayRow := ⟨payNat r.programId r.paymentId, .HUMAN_REVIEW, r.amountCents, r.flow, r.memberKey,
-    r.payeeRef, r.period, linesRoot sha3 r.lines, [], inputCommitment sha3 raw rset⟩
+  let pay := payNat r.programId r.paymentId
+  let row : PayRow := ⟨pay, rev pay, .HUMAN_REVIEW, r.amountCents, r.flow, r.memberKey, r.payeeRef, r.period,
+    linesRoot sha3 r.lines, [], inputCommitment sha3 raw rset⟩
   if !r.flow.ruled then some row else do
-    let (_, o, cents) ← pays.find? (·.1 == row.pay)
-    let rs := (ds.filter (·.1.pay == row.pay)).flatMap (·.2.2)
+    let (_, o, cents) ← pays.find? (·.1 == pay)
+    let rs := (ds.filter (·.1.pay == pay)).flatMap (·.2.2)
     pure { row with outcome := wireOf o, cents, reasons := (reasons.filter rs.contains).map reasonCode }
 
-/-- A token's row; decision time, issue time and the exe constants must be custody's. -/
+/-- A token's row; decision time, issue time, expiry (F2) and the exe constants must be custody's. -/
 def tokRow (c : Consts) (secs : Nat) (t : Bytes) : Option PayRow := do
   let k ← decodeToken t
   let l := k.leaf
-  guard (l.decidedAt = secs ∧ l.issuedAt = secs ∧ l.grantId = c.grant ∧ l.ruleVersion = c.rule ∧
-    l.engineRelease = c.engine ∧ l.authority = c.authority)
-  pure ⟨payNat l.programId l.paymentId, l.outcome, l.amountCents, l.flow, l.memberKey, l.payeeRef, l.period,
-    l.linesRoot, l.reasonCodes, l.inputCommitment⟩
+  guard (l.decidedAt = secs ∧ l.issuedAt = secs ∧ l.expiresAt = secs + maxTokenLifetime ∧ l.grantId = c.grant ∧
+    l.ruleVersion = c.rule ∧ l.engineRelease = c.engine ∧ l.authority = c.authority)
+  pure ⟨payNat l.programId l.paymentId, l.revision, l.outcome, l.amountCents, l.flow, l.memberKey, l.payeeRef,
+    l.period, l.linesRoot, l.reasonCodes, l.inputCommitment⟩
 
-/-- KEPT shape (perm + length), RESTATED rows (fix 4). -/
+/-- KEPT shape (perm + length). -/
 def tokensOk (c : Consts) (secs : Nat) (rows : List PayRow) (tokens : List Bytes) : Bool :=
   tokens.length == rows.length && (tokens.filterMap (tokRow c secs)).isPerm rows
 
-/-! ### 8g. Certificates (fix 9) and custody (fix 2) -/
+/-! ### 8e. Activation (F3, F5, F6): genesis, or the sealed v1 tip -/
+
+def redate (t : Nat) (g : Snapshot Line × Snapshot Line) : Snapshot Line × Snapshot Line :=
+  ({ g.1 with asOf := t }, { g.2 with asOf := t })
+
+def invB (rel unr : Snapshot Line) : Bool :=
+  decide (((rel.entries ++ unr.entries).map (·.id)).Nodup) && rel.count == rel.entries.length &&
+    unr.count == unr.entries.length
+
+/-- Ids are unique (`invB`), so every order of the same set sorts to the same list: rebuild is deterministic. -/
+def canon (s : Snapshot Line) : Snapshot Line := { s with entries := s.entries.mergeSort fun a b => a.id ≤ b.id }
+
+/-- KEPT from r3: the STATE/v1 collision `loadAdds_binds` (DecideLayer.lean:185-196) names. -/
+def V1Collision (H : Bytes → Bytes) (a b r u : Snapshot Line) : Prop :=
+  ∃ A B A' B', pinInput "RR/GATE/RELEASED/v1" 5 Line.fields a = some A ∧
+    pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields b = some B ∧
+    pinInput "RR/GATE/RELEASED/v1" 5 Line.fields r = some A' ∧
+    pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields u = some B' ∧
+    ∃ x y, x ≠ y ∧ H x = H y ∧ ((x, y) = (A, A') ∨ (x, y) = (B, B') ∨
+      (x, y) = (Gate.domain "STATE" ++ H A ++ H B, Gate.domain "STATE" ++ H A' ++ H B'))
+
+theorem invB_iff (rel unr : Snapshot Line) : invB rel unr = true ↔ Inv rel unr := by
+  simp [invB, Inv, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, and_assoc]
+
+/-- NEW (fix 5): every reachable v1 state passes `invB`, so the quarantine is unreachable without a collision.
+    Route: Rules/Shards.lean:120,132 and `inv_step` (the dates do not enter `Inv`). -/
+theorem v1_reach_inv (k : Nat) (ts : List Batch) :
+    Inv (shardSets k (genesisSets 0) ts).1 (shardSets k (genesisSets 0) ts).2 := sorry
+
+
+/-- A shard's activation sets. `tip = none`: genesis; `some (signed, cert)`: the sealed v1 tip and its cert. -/
+structure Permit where
+  tip : Option (Bytes × Bytes)
+  rel : Snapshot Line
+  unr : Snapshot Line
+  deriving DecidableEq
+
+/-- The activation base, checked once, before custody reads the clock. Genesis: empty sets on a valid day.
+    v1: the tip verifies under its cert (F3), names this tenant and shard, its stateDigest is these sets', they
+    pass invB, and they are dated by the tip. tableOk refuses activation on a bad table (F5). -/
+def activation (P : Pins) (k : Nat) (p : Permit) : Option (Snapshot Line × Snapshot Line) := do
+  guard (tableOk P.tbl = true)
+  match p.tip with
+  | none =>
+    guard ((p.rel, p.unr) = genesisSets p.rel.asOf ∧ validDate p.rel.asOf = true)
+    pure (p.rel, p.unr)
+  | some (b, cert) =>
+    let s ← storedOfAny sha3 b
+    guard (acceptsAny P.rootPk cert b = true ∧ s.checkpoint.tenantId = P.tenant ∧ s.checkpoint.shardId = k)
+    guard (setsDigest sha3 p.rel p.unr = some s.checkpoint.stateDigest ∧ invB p.rel p.unr = true)
+    let m := localDay P.tbl s.checkpoint.createdAt
+    guard (validDate m = true)
+    pure (redate m (canon p.rel, canon p.unr))
+
+/-- RESTATED (review: m pinned): the activation sets are the true v1 sets up to order, dated by the tip's
+    createdAt, and every later batch decides and pays as on the true sets; else a v1 collision. -/
+theorem migrate_binds (hH : HashLen sha3) (P : Pins) (k : Nat) (p : Permit) (b cert : Bytes)
+    (hp : p.tip = some (b, cert)) (g : Snapshot Line × Snapshot Line) (hg : activation P k p = some g)
+    (r u : Snapshot Line) (hi : Inv r u) (n : Stored) (hn : storedOfAny sha3 b = some n)
+    (hd : setsDigest sha3 r u = some n.checkpoint.stateDigest) (ts : List Batch) :
+    (g.1.entries.Perm r.entries ∧ g.2.entries.Perm u.entries ∧ Inv g.1 g.2 ∧
+       runT k g ts = runT k (redate (localDay P.tbl n.checkpoint.createdAt) (r, u)) ts) ∨
+      V1Collision sha3 p.rel p.unr r u := sorry
+
+/-! ### 8f. The tenant log and its fold (H1-H3, F1, F2, F4, F8) -/
+
+def rowBytes (l : Line) : Option Bytes := ((Line.fields l).mapM fun (w, n) => be w n).map List.flatten
+
+
+/-- One log entry's payload. `sign`: key cert, signed checkpoint (header ‖ signature), its tokens, the fresh set
+    rows. `resume`: a shard's activation permit. `seal`: a shard's last v1 signed (F3, F4). -/
+inductive Body
+  | sign (cert signed : Bytes) (tokens : List Bytes) (fresh : List Line × List Line)
+  | resume (p : Permit)
+  | seal (tip : Bytes)
+  deriving DecidableEq
+
+def Body.leaves : Body → List Leaf
+  | .sign _ _ ts _ => ts.filterMap fun t => (decodeToken t).map (·.leaf)
+  | _ => []
+
+def Body.signed? : Body → Option Bytes
+  | .sign _ s _ _ => some s
+  | _ => none
+
+/-- One CAS-appended entry of the off-machine tenant log: position, previous entry digest, shard, the registry
+    rows it adds (newest first, F1), payload. -/
+structure Entry where
+  idx : Nat
+  prev : Bytes
+  shard : Nat
+  reg : List Row
+  body : Body
+  deriving DecidableEq
+
+def lenBytes (x : Bytes) : Option Bytes := (be 4 x.length).map (· ++ x)
+
+def rowsBytes (ls : List Line) : Option Bytes := do
+  let n ← be 8 ls.length
+  let rs ← ls.mapM rowBytes
+  pure (n ++ rs.flatten)
+
+def setBytes (s : Snapshot Line) : Option Bytes := do
+  let t ← be 4 s.asOf
+  let c ← be 8 s.count
+  let rs ← rowsBytes s.entries
+  pure (t ++ c ++ rs)
+
+def regBytes (r : Row) : Option Bytes := do
+  let a ← be 1 r.1
+  let b ← be 129 r.2.1
+  let c ← be 4 r.2.2
+  pure (a ++ b ++ c)
+
+def tipBytes : Option (Bytes × Bytes) → Option Bytes
+  | none => some [0]
+  | some (s, c) => do
+    let a ← lenBytes s
+    let b ← lenBytes c
+    pure (1 :: a ++ b)
+
+def bodyBytes : Body → Option Bytes
+  | .sign cert s ts f => do
+    let a ← lenBytes cert
+    let b ← lenBytes s
+    let n ← be 2 ts.length
+    let t ← ts.mapM lenBytes
+    let x ← rowsBytes f.1
+    let y ← rowsBytes f.2
+    pure (0 :: a ++ b ++ n ++ t.flatten ++ x ++ y)
+  | .resume p => do
+    let t ← tipBytes p.tip
+    let r ← setBytes p.rel
+    let u ← setBytes p.unr
+    pure (1 :: t ++ r ++ u)
+  | .seal t => do
+    let a ← lenBytes t
+    pure (2 :: a)
+
+def entryIn (e : Entry) : Option Bytes := do
+  guard (e.prev.length = digestBytes)
+  let i ← be 8 e.idx
+  let k ← be 4 e.shard
+  let n ← be 4 e.reg.length
+  let rs ← e.reg.mapM regBytes
+  let b ← bodyBytes e.body
+  pure (dom2 "TENANT-LOG" ++ i ++ e.prev ++ k ++ n ++ rs.flatten ++ b)
+
+def entryDigest (e : Entry) : Option Bytes := (entryIn e).map sha3
+
+/-- FORMAT: the entry encoding is injective where defined. -/
+theorem entryIn_inj (e e' : Entry) (x : Bytes) (h : entryIn e = some x) (h' : entryIn e' = some x) : e = e' :=
+  sorry
+
+/-- FORMAT: rows are newest first, so appending older rows extends the chain under the newer ones. -/
+theorem chainHead_append (H : Bytes → Bytes) (g : Bytes) (d l : List Row) :
+    chainHead H g (d ++ l) = chainHead H (chainHead H g l) d := by
+  induction d with
+  | nil => rfl
+  | cons r d ih => obtain ⟨kd, i, s⟩ := r; simp [chainHead, ih]
 
 /-- RESTATED (fix 9): `lastCert` must accept `last` (acceptsAny, Verify.lean:39); within one epoch it is the same
     bytes as `cert`; across epochs both name the same tenant and shard count. -/
@@ -1140,202 +1185,327 @@ def certsOk (rootPk cert lastCert : Bytes) (last : Option Bytes) (n : Stored) : 
         e.shardCount == e'.shardCount && (p.checkpoint.epoch != n.checkpoint.epoch || cert == lastCert)
     | _, _, _ => false
 
-/-- Fix 2: custody computes the base and the decision itself; the courier supplies only requests, external
-    snapshots, owners and the witness, each re-checked. -/
-def plan (tbl : OffsetTable) (p : Permit) (log : List Entry) (secs : Nat) (program : Bytes) (reqs : List Bytes)
-    (c₀ : Ctx) (os : List Owner) (w : Witness) : Option (OutV2 × List PayRow) := do
-  let rs ← reqsOf p.tenant program reqs
-  let b ← batchLines rs
-  let d ← baseDigest tbl p log
-  let o ← decideIdx sha3 { c₀ with today := localDay tbl secs } p.shard os b d w
-  let rset ← readSetOf c₀ d
-  pure (o, (reqs.zip rs).filterMap (rowOf o.pays (o.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset))
 
-/-- Run by the Lean exe inside custody on the in-memory signature; a refusal wipes it. `ctr` is the TPM
-    reading minus `p.ctrBase`, read independently of the log. `new` is header ‖ signature. Custody keeps
-    `logOk log` from boot (`reconcile`), so it is a hypothesis here, not a re-check. -/
-def custodyOk (tbl : OffsetTable) (c : Consts) (rootPk cert lastCert : Bytes) (p : Permit) (log : List Entry)
-    (ctr secs now : Nat) (program : Bytes) (reqs : List Bytes) (c₀ : Ctx) (os : List Owner) (w : Witness)
-    (new : Bytes) (tokens : List Bytes) : Option Entry := do
-  let (o, rows) ← plan tbl p log secs program reqs c₀ os w
-  let last := lastOf p log
-  let n ← storedOfAny sha3 new
-  let prev ← logHead log
-  guard (ctr = log.length)
-  guard (publishOkAny rootPk cert last new tokens = true ∧ certsOk rootPk cert lastCert last n = true)
-  guard (n.checkpoint.tenantId = p.tenant ∧ n.checkpoint.shardId = p.shard ∧ n.checkpoint.programId = program)
-  guard (n.checkpoint.stateDigest = o.digest ∧ tokensOk c secs rows tokens = true)
-  guard (n.checkpoint.createdAt = secs ∧ secs ≤ now ∧ now ≤ secs + eps)
-  guard ((last.bind (storedOfAny sha3)).all fun q => decide (q.checkpoint.createdAt ≤ secs))
-  pure ⟨log.length, prev, new, tokens, o.fresh⟩
+/-- Per shard, what the fold knows: signs per cert epoch (H1), the sealed v1 tip, live, the last signed and
+    its cert, the base digest custody decides on, the latest leaf per payment (F2). -/
+structure Shard where
+  own : Nat → Nat
+  sealed : Option Bytes
+  live : Bool
+  last : Option (Bytes × Bytes)
+  base : Bytes
+  pays : List (Nat × Leaf)
 
-/-- RESTATED `mark_advances`, log terms: an accepted package is the next entry at index = length. -/
-theorem entry_appends (tbl : OffsetTable) (c : Consts) (rootPk cert lastCert : Bytes) (p : Permit)
-    (log : List Entry) (hl : logOk log = true) (ctr secs now : Nat) (program : Bytes) (reqs : List Bytes) (c₀ : Ctx)
-    (os : List Owner) (w : Witness) (new : Bytes) (tokens : List Bytes) (e : Entry)
-    (h : custodyOk tbl c rootPk cert lastCert p log ctr secs now program reqs c₀ os w new tokens = some e)
-    (he : (entryIn e).isSome) :
-    e.idx = log.length ∧ logHead log = some e.prev ∧ logOk (log ++ [e]) = true := sorry
+def Shard.init : Shard := ⟨fun _ => 0, none, false, none, zeroDigest, []⟩
 
-theorem head_advances (hH : HashLen sha3) (log : List Entry) (e : Entry) (hl : logOk (log ++ [e]) = true)
-    (he : (entryIn e).isSome) :
-    logHead (log ++ [e]) ≠ logHead log ∨ Collision sha3 ((log ++ [e]).filterMap entryIn) (log.filterMap entryIn) ∨
-      ZeroPre sha3 ((log ++ [e]).filterMap entryIn) := sorry
+structure LogState where
+  len : Nat
+  head : Bytes
+  reg : List Row
+  rhead : Bytes
+  shard : Nat → Shard
 
-/-- NEW (replaces publishV2_binds and anchor_chain): on a true base, the signed state digest is the true next
-    state's, and the tokens are the true rows up to order; else a named collision. -/
-theorem custody_binds (hH : HashLen sha3) (tbl : OffsetTable) (c : Consts) (rootPk cert lastCert : Bytes)
-    (p : Permit) (log : List Entry) (ctr secs now : Nat) (program : Bytes) (reqs : List Bytes) (c₀ : Ctx)
-    (os : List Owner) (w : Witness) (new : Bytes) (tokens : List Bytes) (e : Entry)
-    (h : custodyOk tbl c rootPk cert lastCert p log ctr secs now program reqs c₀ os w new tokens = some e)
-    (rel unr : Snapshot Line) (hi : Inv rel unr)
-    (hb : baseDigest tbl p log = (headOf sha3 rel unr).bind (digestV2 sha3)) :
-    ∃ rs b d rset n, reqsOf p.tenant program reqs = some rs ∧ batchLines rs = some b ∧
-      baseDigest tbl p log = some d ∧ readSetOf c₀ d = some rset ∧ storedOfAny sha3 new = some n ∧
-      ((let cc := carried { c₀ with today := localDay tbl secs } rel unr
-        let r := decideRegT cc p.shard os b
-        (∃ hd, headOf sha3 r.released r.unresolved = some hd ∧ digestV2 sha3 hd = some n.checkpoint.stateDigest) ∧
-        (tokens.filterMap (tokRow c secs)).Perm ((reqs.zip rs).filterMap
-          (rowOf (paysOf cc r.decisions) (r.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset)) ∧
-        tokens.length = ((reqs.zip rs).filterMap
-          (rowOf (paysOf cc r.decisions) (r.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset)).length ∧
-        e.fresh = batchFresh cc r) ∨
-       Collision sha3 (witnessInputs sha3 { c₀ with today := localDay tbl secs } p.shard os b w)
-         (stateInputs sha3 rel unr)) := sorry
+def LogState.init : LogState := ⟨0, zeroDigest, [], zeroDigest, fun _ => Shard.init⟩
 
-/-! ### 8h. Crash model (fixes 1, 7): the off-machine CAS store is the commit point -/
+def upd {α : Type} (f : Nat → α) (k : Nat) (x : α) : Nat → α := fun j => if j = k then x else f j
 
-/-- Durable state: local log copy, off-machine CAS store, TPM counter (minus `ctrBase`), and every package
-    that ever left custody (conservatively: at the CAS, before any release). -/
-structure Cust where
-  log : List Entry
-  off : List Entry
+/-- The one rule for a second decision on a payment: a new payment starts at revision 0; a known one moves
+    only by trunk `redecides`, or repeats its revision with an outcome that is not ALLOW. -/
+def payStep (ps : List (Nat × Leaf)) (l : Leaf) : Option (List (Nat × Leaf)) :=
+  let p := payNat l.programId l.paymentId
+  match ps.lookup p with
+  | none => if l.revision = 0 then some ((p, l) :: ps) else none
+  | some old =>
+    if redecides old.revision old l then some ((p, l) :: ps.filter (·.1 != p))
+    else if l.revision = old.revision ∧ l.outcome ≠ .ALLOW then some ps else none
+
+/-- One entry. Every entry: next index, previous digest, its registry rows on top (F1). `seal`: v1 only, before
+    any activation. `resume`: once per shard, from genesis or the sealed tip; it reserves and settles the base's
+    ids to the shard. `sign`: a live shard, a v2 checkpoint (F4) whose registry head is the fold's, this tenant
+    and shard, publishOkAny and certsOk against the last, createdAt strictly after the last (F8), every leaf
+    through payStep; the cert's epoch count goes up by one (H1). -/
+def push (P : Pins) (st : LogState) (e : Entry) : Option LogState := do
+  guard (e.idx = st.len ∧ e.prev = st.head)
+  let d ← entryDigest e
+  let reg := e.reg ++ st.reg
+  let rhead := chainHead sha3 st.rhead e.reg
+  let k := e.shard
+  let sh := st.shard k
+  let sh' ← match e.body with
+    | .seal t => do
+      guard (isV2 t = false ∧ e.reg = [] ∧ sh.sealed = none ∧ sh.last = none ∧ sh.live = false)
+      pure { sh with sealed := some t }
+    | .resume p => do
+      guard (sh.live = false ∧ p.tip.map (·.1) = sh.sealed)
+      let g ← activation P k p
+      let ids := (g.1.entries ++ g.2.entries).map (·.id)
+      guard (reg = (3, 0, k) :: (2, 0, k) :: reserveRows k st.reg ids)
+      guard (ids.all fun i => holder i reg == some (k, true))
+      let hd ← headOf sha3 g.1 g.2
+      let base ← digestV2 sha3 hd
+      pure { sh with live := true, last := p.tip, base }
+    | .sign cert new tokens _ => do
+      guard (sh.live = true)
+      let (_, rh) ← decodeCheckpoint2 new
+      guard (rh = rhead)
+      let n ← storedOfAny sha3 new
+      let c ← decodeKeyCert cert
+      guard (n.checkpoint.tenantId = P.tenant ∧ n.checkpoint.shardId = k)
+      guard (publishOkAny P.rootPk cert (sh.last.map (·.1)) new tokens = true)
+      guard (certsOk P.rootPk cert ((sh.last.map (·.2)).getD cert) (sh.last.map (·.1)) n = true)
+      guard (((sh.last.bind fun x => storedOfAny sha3 x.1).all fun q =>
+        decide (q.checkpoint.createdAt < n.checkpoint.createdAt)) = true)
+      let ps ← e.body.leaves.foldlM payStep sh.pays
+      pure { sh with last := some (new, cert), base := n.checkpoint.stateDigest, pays := ps,
+                     own := upd sh.own c.epoch (sh.own c.epoch + 1) }
+  pure { len := st.len + 1, head := d, reg, rhead, shard := upd st.shard k sh' }
+
+/-- All custody state: the fold of the off-machine log, once, at boot (H3). -/
+def fold (P : Pins) (log : List Entry) : Option LogState := log.foldlM (push P) LogState.init
+
+/-- FORMAT: the folded registry head is the chain of the folded rows. -/
+theorem registry_head (P : Pins) (log : List Entry) (st : LogState) (h : fold P log = some st) :
+    st.rhead = chainHead sha3 zeroDigest st.reg := sorry
+
+/-- Per shard and payment, revisions never go down, and an equal revision later is never ALLOW. -/
+theorem revision_mono (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (i j : Nat) (hij : i < j)
+    (e e' : Entry) (hi : log[i]? = some e) (hj : log[j]? = some e') (hk : e.shard = e'.shard)
+    (l l' : Leaf) (hl : l ∈ e.body.leaves) (hl' : l' ∈ e'.body.leaves)
+    (hp : payNat l.programId l.paymentId = payNat l'.programId l'.paymentId) :
+    l.revision ≤ l'.revision ∧ (l.revision = l'.revision → l'.outcome ≠ .ALLOW) := sorry
+
+/-- An ALLOW past revision 0 re-decides an earlier ALLOW of the same shard by trunk `redecides`. -/
+theorem revision_step (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (j : Nat) (e' : Entry)
+    (hj : log[j]? = some e') (l' : Leaf) (hl' : l' ∈ e'.body.leaves) (ha : l'.outcome = .ALLOW)
+    (hr : 0 < l'.revision) :
+    ∃ (i : Nat) (e : Entry) (l : Leaf), i ≤ j ∧ log[i]? = some e ∧ e.shard = e'.shard ∧ l ∈ e.body.leaves ∧
+      redecides l.revision l l' = true := sorry
+
+/-- F8: signed checkpoints of one shard have strictly increasing createdAt. -/
+theorem createdAt_strict (P : Pins) (log : List Entry) (hf : (fold P log).isSome) (i j : Nat) (hij : i < j)
+    (e e' : Entry) (hi : log[i]? = some e) (hj : log[j]? = some e') (hk : e.shard = e'.shard)
+    (a b : Bytes) (ha : e.body.signed? = some a) (hb : e'.body.signed? = some b) (n n' : Stored)
+    (hn : storedOfAny sha3 a = some n) (hn' : storedOfAny sha3 b = some n') :
+    n.checkpoint.createdAt < n'.checkpoint.createdAt := sorry
+
+/-! ### 8g. Custody: the courier supplies requests, snapshots, redo and the witness; Lean the rest -/
+
+structure SignIn where
   ctr : Nat
-  out : List Entry
-
-inductive Boot | ok | finishCounter | behind | offBehind | stop | waitOff
-  deriving DecidableEq
-
-/-- Boot decision from the local log, the off store (none: unreachable) and the counter. -/
-def reconcile (log : List Entry) (off : Option (List Entry)) (ctr : Nat) : Boot :=
-  match off with
-  | none => .waitOff
-  | some o =>
-    if !(logOk o && logOk log) then .stop
-    else if log == o then (if ctr == o.length then .ok else if ctr < o.length then .finishCounter else .stop)
-    else if log.isPrefixOf o && decide (ctr ≤ o.length) then .behind
-    else if o.isPrefixOf log && decide (ctr ≤ log.length) then .offBehind
-    else .stop
-
-/-- Custody steps. `sign` is the CAS: it succeeds only at index = off length on head = prev; a failed CAS or a
-    crash before it drops the in-memory signature. Crashes are the interleavings of these steps. -/
-inductive Step : Cust → Cust → Prop
-  | sign (s : Cust) (e : Entry) (ho : reconcile s.log (some s.off) s.ctr = .ok) (hc : s.off.length = e.idx)
-      (hp : logHead s.off = some e.prev) (hd : (entryIn e).isSome) :
-      Step s { s with off := s.off ++ [e], out := s.out ++ [e] }
-  | pull (s : Cust) (e : Entry) (h : s.off[s.log.length]? = some e) : Step s { s with log := s.log ++ [e] }
-  | bump (s : Cust) : Step s { s with ctr := max s.ctr s.log.length }
-  | release (s : Cust) (e : Entry) (h : e ∈ s.log) : Step s { s with out := s.out ++ [e] }
-  | restore (s : Cust) (j : Nat) : Step s { s with log := s.log.take j }
-
-inductive Reach : Cust → Prop
-  | init : Reach ⟨[], [], 0, []⟩
-  | step {s t : Cust} : Reach s → Step s t → Reach t
-
-theorem reach_inv (s : Cust) (h : Reach s) :
-    s.log <+: s.off ∧ s.ctr ≤ s.off.length ∧ logOk s.off = true ∧ ∀ e ∈ s.out, e ∈ s.off := sorry
-
-/-- Fix 7: at most one signed package per log index, across crashes, re-releases and restores. -/
-theorem never_twice (s : Cust) (h : Reach s) (e e' : Entry) (he : e ∈ s.out) (he' : e' ∈ s.out)
-    (hi : e.idx = e'.idx) : e = e' := sorry
-
-theorem reconcile_ok (log o : List Entry) (ctr : Nat) (h : reconcile log (some o) ctr = .ok) :
-    log = o ∧ ctr = o.length := sorry
-
-/-- Every crash point boots to a defined action. -/
-theorem no_wedge (s : Cust) (h : Reach s) : reconcile s.log (some s.off) s.ctr ≠ .stop := sorry
-
-/-- A restored or lost local database resumes by pulling the off log; it never signs at an old index. -/
-theorem restore_resumes (s : Cust) (h : Reach s) (j : Nat) :
-    reconcile (s.log.take j) (some s.off) s.ctr = .ok ∨ reconcile (s.log.take j) (some s.off) s.ctr = .finishCounter ∨
-      reconcile (s.log.take j) (some s.off) s.ctr = .behind := sorry
-
-/-- The counter is not tautological: an off store rolled back below it never boots `ok`, and with the local log
-    also short it stops. -/
-theorem rollback_detected (log o : List Entry) (ctr : Nat) (h : o.length < ctr) :
-    reconcile log (some o) ctr ≠ .ok ∧ (log.length < ctr → reconcile log (some o) ctr = .stop) := sorry
-
-/-! ### 8i. Chain (fix 7): the counter is an input per step; the stateDigest conclusion is kept -/
-
-structure SignedStep where
+  secs : Nat
+  now : Nat
   program : Bytes
   reqs : List Bytes
   ctx : Ctx
-  owners : List Owner
-  secs : Nat
-  now : Nat
-  ctr : Nat
   witness : Witness
-  cert : Bytes
 
-def logRunOk (tbl : OffsetTable) (c : Consts) (rootPk : Bytes) (p : Permit) :
-    List Entry → Bytes → List (SignedStep × Entry) → Bool
-  | _, _, [] => true
-  | log, lastCert, (s, e) :: rest =>
-    custodyOk tbl c rootPk s.cert lastCert p log s.ctr s.secs s.now s.program s.reqs s.ctx s.owners s.witness
-        e.signed e.tokens == some e &&
-      logRunOk tbl c rootPk p (log ++ [e]) s.cert rest
+/-- The revision custody assigns: 0 for a new payment; the latest + 1 if redone; else the latest. -/
+def revAt (sh : Shard) (redo : List Nat) (p : Nat) : Nat :=
+  match sh.pays.lookup p with
+  | none => 0
+  | some l => if redo.contains p then l.revision + 1 else l.revision
 
-def stepBatch (tbl : OffsetTable) (p : Permit) (s : SignedStep) : Option Batch := do
-  let rs ← reqsOf p.tenant s.program s.reqs
+/-- The batch: lines Lean decodes, owners answered by the folded registry with this batch reserved (F1). -/
+def batchAt (P : Pins) (st : LogState) (k : Nat) (i : SignIn) : Option (List Request × Batch) := do
+  let rs ← reqsOf P.tenant i.program i.reqs
   let b ← batchLines rs
-  pure ⟨{ s.ctx with today := localDay tbl s.secs }, s.owners, b⟩
+  let ids := b.map (·.id)
+  let os := ids.eraseDups.filterMap (answer (reserveRows k st.reg ids))
+  pure (rs, ⟨{ i.ctx with today := localDay P.tbl i.secs }, os, b⟩)
 
-/-- The spec rows per step: decideRegT on the true sets, the true base digest, the step's read set. -/
-def runRows (tbl : OffsetTable) (p : Permit) :
-    Snapshot Line × Snapshot Line → List SignedStep → Option (List (List PayRow))
-  | _, [] => some []
-  | g, s :: ss => do
-    let rs ← reqsOf p.tenant s.program s.reqs
-    let b ← batchLines rs
-    let d ← (headOf sha3 g.1 g.2).bind (digestV2 sha3)
-    let rset ← readSetOf s.ctx d
-    let cc := carried { s.ctx with today := localDay tbl s.secs } g.1 g.2
-    let r := decideRegT cc p.shard s.owners b
-    let more ← runRows tbl p (r.released, r.unresolved) ss
-    pure ((s.reqs.zip rs).filterMap
-      (rowOf (paysOf cc r.decisions) (r.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset) :: more)
+/-- Run by the Lean exe inside custody on the folded state. `i.ctr` is the TPM reading minus its base, read
+    independently of the store (H1); `new` is header ‖ signature. Accepted only if the fold takes the entry. -/
+def custodyOk (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
+    (tokens : List Bytes) : Option Entry := do
+  let sh := st.shard k
+  let c ← decodeKeyCert cert
+  guard (sh.live = true ∧ i.ctr = sh.own c.epoch)
+  guard ((i.ctx.redo.all fun p => (sh.pays.lookup p).isSome) = true)
+  let (rs, bt) ← batchAt P st k i
+  let o ← decideIdx sha3 bt.ctx k bt.owners bt.lines sh.base i.witness
+  let rset ← readSetOf i.ctx sh.base
+  let rows2 := settleRows k (reserveRows k st.reg (bt.lines.map (·.id))) o.free
+  let prs := (i.reqs.zip rs).filterMap
+    (rowOf (revAt sh i.ctx.redo) o.pays (o.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset)
+  let n ← storedOfAny sha3 new
+  guard (isV2 new = true ∧ n.checkpoint.programId = i.program ∧ n.checkpoint.stateDigest = o.digest)
+  guard (n.checkpoint.createdAt = i.secs ∧ i.secs ≤ i.now ∧ i.now ≤ i.secs + eps)
+  guard (tokensOk P.c i.secs prs tokens = true)
+  let e : Entry := ⟨st.len, st.head, k, rows2.take (rows2.length - st.reg.length), .sign cert new tokens o.fresh⟩
+  guard ((push P st e).isSome = true)
+  pure e
 
-/-- The sets a lost database is rebuilt to: the permit's base, then each entry's rows dated by its header. -/
-def rebuild (tbl : OffsetTable) (g : Snapshot Line × Snapshot Line) (log : List Entry) : Snapshot Line × Snapshot Line :=
-  replayT g (log.map fun e =>
-    (((storedOfAny sha3 e.signed).map fun n => localDay tbl n.checkpoint.createdAt).getD 0, e.fresh))
+/-- On a true base, the signed state digest is the true next state's, the tokens are the true rows (with the
+    fold's revisions) up to order, and the entry carries the true fresh rows; else a named collision. -/
+theorem custody_binds (hH : HashLen sha3) (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn)
+    (new : Bytes) (tokens : List Bytes) (e : Entry) (h : custodyOk P st k cert i new tokens = some e)
+    (rel unr : Snapshot Line) (hi : Inv rel unr)
+    (hb : some (st.shard k).base = (headOf sha3 rel unr).bind (digestV2 sha3)) :
+    ∃ (rs : List Request) (bt : Batch) (rset : Bytes) (n : Stored), batchAt P st k i = some (rs, bt) ∧
+      readSetOf i.ctx (st.shard k).base = some rset ∧ storedOfAny sha3 new = some n ∧
+      ((let cc := carried bt.ctx rel unr
+        let r := decideRegT cc k bt.owners bt.lines
+        let rows := (i.reqs.zip rs).filterMap (rowOf (revAt (st.shard k) i.ctx.redo) (paysOf cc r.decisions)
+          (r.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset)
+        (∃ hd, headOf sha3 r.released r.unresolved = some hd ∧ digestV2 sha3 hd = some n.checkpoint.stateDigest) ∧
+        (tokens.filterMap (tokRow P.c i.secs)).Perm rows ∧ tokens.length = rows.length ∧
+        e.body = .sign cert new tokens (batchFresh cc r)) ∨
+       Collision sha3 (witnessInputs sha3 bt.ctx k bt.owners bt.lines i.witness) (stateInputs sha3 rel unr)) :=
+  sorry
 
-/-- RESTATED: every signed step's tokens are the true rows up to order and its header's stateDigest is the
-    true sets' after the first i+1 batches; else a named collision at some step. -/
-theorem chain_sound (hH : HashLen sha3) (tbl : OffsetTable) (hT : tableOk tbl = true) (c : Consts)
-    (rootPk cert₀ : Bytes) (p : Permit) (g : Snapshot Line × Snapshot Line) (hg : permitBase tbl p = some g)
-    (hi : Inv g.1 g.2) (steps : List (SignedStep × Entry)) (hr : logRunOk tbl c rootPk p [] cert₀ steps = true) :
-    ∃ bs, (steps.map (·.1)).mapM (stepBatch tbl p) = some bs ∧
-      ((∃ rows, runRows tbl p g (steps.map (·.1)) = some rows ∧
-         ∀ i (s : SignedStep) (e : Entry), steps[i]? = some (s, e) →
-           (e.tokens.filterMap (tokRow c s.secs)).Perm (rows.getD i []) ∧
-           ∃ n h, storedOfAny sha3 e.signed = some n ∧
-             headOf sha3 (shardSetsT p.shard g (bs.take (i + 1))).1 (shardSetsT p.shard g (bs.take (i + 1))).2 =
-               some h ∧ digestV2 sha3 h = some n.checkpoint.stateDigest) ∨
-       ∃ (i : Nat) (s : SignedStep) (e : Entry) (b : Batch), steps[i]? = some (s, e) ∧ bs[i]? = some b ∧
-         Collision sha3 (witnessInputs sha3 b.ctx p.shard s.owners b.lines s.witness)
-           (stateInputs sha3 (shardSetsT p.shard g (bs.take i)).1 (shardSetsT p.shard g (bs.take i)).2)) := sorry
 
-/-- NEW: replay of the log alone (permit + entries) gives the chain's true sets (uses `replayT_addsOfT`,
-    `decideIdx_refines`, and `createdAt = secs`). -/
-theorem rebuild_sound (hH : HashLen sha3) (tbl : OffsetTable) (hT : tableOk tbl = true) (c : Consts)
-    (rootPk cert₀ : Bytes) (p : Permit) (g : Snapshot Line × Snapshot Line) (hg : permitBase tbl p = some g)
-    (hi : Inv g.1 g.2) (steps : List (SignedStep × Entry)) (hr : logRunOk tbl c rootPk p [] cert₀ steps = true)
-    (bs : List Batch) (hb : (steps.map (·.1)).mapM (stepBatch tbl p) = some bs) :
-    rebuild tbl g (steps.map (·.2)) = shardSetsT p.shard g bs ∨
-      ∃ (i : Nat) (s : SignedStep) (e : Entry) (b : Batch), steps[i]? = some (s, e) ∧ bs[i]? = some b ∧
-        Collision sha3 (witnessInputs sha3 b.ctx p.shard s.owners b.lines s.witness)
-          (stateInputs sha3 (shardSetsT p.shard g (bs.take i)).1 (shardSetsT p.shard g (bs.take i)).2) := sorry
+/-! ### 8h. Crash and adversary model (H1, H2, F6): the CAS store is the commit point; no local copy (H3) -/
+
+/-- Durable state: the off-machine store, the TPM counter per shard as (base, value), the cert per shard, every
+    entry custody made, every entry released. `lost` is a ghost: some released signed was once absent from
+    the store (set by the only step that removes entries). -/
+structure Cust where
+  off : List Entry
+  ctr : Nat → Option (Nat × Nat)
+  cert : Nat → Bytes
+  made : List Entry
+  out : List Entry
+  cleared : Bool
+  lost : Prop
+
+def Cust.init (cert₀ : Bytes) : Cust := ⟨[], fun _ => none, fun _ => cert₀, [], [], false, False⟩
+
+inductive Boot | ok | provision | finishCounter | stop
+  deriving DecidableEq
+
+/-- Boot: fold the store; compare the TPM count with the fold's sign count for the cert's epoch (H1). One more
+    in the store than the TPM is a crash between CAS and bump; anything else stops the shard. -/
+def boot (P : Pins) (s : Cust) (k : Nat) : Boot :=
+  match fold P s.off, s.ctr k, decodeKeyCert (s.cert k) with
+  | none, _, _ => .stop
+  | some _, none, _ => .provision
+  | some _, some _, none => .stop
+  | some st, some (b, v), some c =>
+    let n := (st.shard k).own c.epoch
+    if v - b = n then .ok else if v - b + 1 = n then .finishCounter else .stop
+
+/-- Honest steps. sign: CAS-append custody's entry; bump: then the TPM; release: only a made entry still in the
+    store, only once the counter is caught up. A ceremony needs an undefined counter and a fresh epoch. -/
+inductive HStep (P : Pins) : Cust → Cust → Prop
+  | sign (s : Cust) (k : Nat) (st : LogState) (b v : Nat) (i : SignIn) (new : Bytes) (tokens : List Bytes)
+      (e : Entry) (hf : fold P s.off = some st) (hb : boot P s k = .ok) (hc : s.ctr k = some (b, v))
+      (hi : i.ctr = v - b) (he : custodyOk P st k (s.cert k) i new tokens = some e) :
+      HStep P s { s with off := s.off ++ [e], made := s.made ++ [e] }
+  | bump (s : Cust) (k b v : Nat) (hb : boot P s k = .finishCounter) (hc : s.ctr k = some (b, v)) :
+      HStep P s { s with ctr := upd s.ctr k (some (b, v + 1)) }
+  | activate (s : Cust) (e : Entry) (hs : e.body.signed? = none) (hf : (fold P (s.off ++ [e])).isSome) :
+      HStep P s { s with off := s.off ++ [e] }
+  | define (s : Cust) (k c : Nat) (hc : s.ctr k = none) : HStep P s { s with ctr := upd s.ctr k (some (c, c)) }
+  | ceremony (s : Cust) (k : Nat) (cert : Bytes) (hc : s.ctr k = none)
+      (hd : ∃ c, decodeKeyCert cert = some c ∧ ∀ st, fold P s.off = some st → (st.shard k).own c.epoch = 0) :
+      HStep P s { s with cert := upd s.cert k cert }
+  | release (s : Cust) (e : Entry) (hm : e ∈ s.made) (ho : e ∈ s.off) (hb : boot P s e.shard = .ok) :
+      HStep P s { s with out := s.out ++ [e] }
+
+/-- Adversary steps: roll the store back to any prefix, append any entry whose signed (if any) was released,
+    clear a TPM counter. -/
+inductive AStep : Cust → Cust → Prop
+  | offRollback (s : Cust) (j : Nat) :
+      AStep s { s with off := s.off.take j,
+                       lost := s.lost ∨ ∃ e ∈ s.out, ∀ e' ∈ s.off.take j, e'.body.signed? ≠ e.body.signed? }
+  | foreignWrite (s : Cust) (e : Entry)
+      (hr : ∀ x, e.body.signed? = some x → ∃ e' ∈ s.out, e'.body.signed? = some x) :
+      AStep s { s with off := s.off ++ [e] }
+  | tpmClear (s : Cust) (k : Nat) : AStep s { s with ctr := upd s.ctr k none, cleared := true }
+
+inductive Reach (P : Pins) (cert₀ : Bytes) : Cust → Prop
+  | init : Reach P cert₀ (Cust.init cert₀)
+  | honest (s s' : Cust) : Reach P cert₀ s → HStep P s s' → Reach P cert₀ s'
+  | adv (s s' : Cust) : Reach P cert₀ s → AStep s s' → Reach P cert₀ s'
+
+inductive ReachH (P : Pins) (cert₀ : Bytes) : Cust → Prop
+  | init : ReachH P cert₀ (Cust.init cert₀)
+  | honest (s s' : Cust) : ReachH P cert₀ s → HStep P s s' → ReachH P cert₀ s'
+
+/-- A released signed is absent from the store now, by bytes. -/
+def Gone (s : Cust) (e : Entry) : Prop := ∀ e' ∈ s.off, e'.body.signed? ≠ e.body.signed?
+
+/-- Two released checkpoints with distinct headers and equal header hashes. -/
+def ChainCollision (s : Cust) : Prop :=
+  ∃ e ∈ s.out, ∃ e' ∈ s.out, ∃ (a b : Bytes) (x y : SignedCheckpoint), e.body.signed? = some a ∧
+    e'.body.signed? = some b ∧ decodeAnyCheckpoint a = some x ∧ decodeAnyCheckpoint b = some y ∧
+    x.header ≠ y.header ∧ sha3 x.header = sha3 y.header
+
+/-- H2: unless a released signed was ever lost, one shard never releases two ALLOWs for one payment and
+    revision, except as the same leaf of the same signed checkpoint. -/
+theorem never_twice (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : Reach P cert₀ s) (hl : ¬ s.lost)
+    (e e' : Entry) (he : e ∈ s.out) (he' : e' ∈ s.out) (hk : e.shard = e'.shard) (l l' : Leaf)
+    (hl1 : l ∈ e.body.leaves) (hl2 : l' ∈ e'.body.leaves) (ha : l.outcome = .ALLOW) (ha' : l'.outcome = .ALLOW)
+    (hp : l.programId = l'.programId ∧ l.paymentId = l'.paymentId ∧ l.revision = l'.revision) :
+    (e.body.signed? = e'.body.signed? ∧ l = l') ∨ ChainCollision s := sorry
+
+/-- H2: honest runs never lose a released signed. -/
+theorem honest_not_lost (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : ReachH P cert₀ s) :
+    ¬ s.lost ∧ ∀ e ∈ s.out, ¬ Gone s e := sorry
+
+/-- H2 + H1: a released signed missing from the store stops its shard at boot, unless the TPM was cleared. -/
+theorem lost_detected (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : Reach P cert₀ s) (e : Entry)
+    (he : e ∈ s.out) (hg : Gone s e) : s.cleared = true ∨ boot P s e.shard = .stop ∨ ChainCollision s := sorry
+
+/-- Honest runs never stop a shard at boot. -/
+theorem no_wedge (P : Pins) (cert₀ : Bytes) (hc : (decodeKeyCert cert₀).isSome) (s : Cust)
+    (hr : ReachH P cert₀ s) (k : Nat) : boot P s k ≠ .stop := sorry
+
+/-! ### 8i. The chain: every signed of a shard is the true state; the log alone rebuilds it -/
+
+/-- `hist`: per signed entry of shard k, in log order, the cert and custody input it was made from. -/
+def MadeBy (P : Pins) (log : List Entry) (k : Nat) (hist : List (Bytes × SignIn × Entry)) : Prop :=
+  hist.map (·.2.2) = log.filter (fun e => e.shard == k && e.body.signed?.isSome) ∧
+  ∀ x ∈ hist, ∃ (st : LogState) (new : Bytes) (tokens : List Bytes),
+    fold P (log.take x.2.2.idx) = some st ∧ custodyOk P st k x.1 x.2.1 new tokens = some x.2.2
+
+def histBatches (P : Pins) (log : List Entry) (k : Nat) (hist : List (Bytes × SignIn × Entry)) :
+    Option (List Batch) :=
+  hist.mapM fun x => do
+    let st ← fold P (log.take x.2.2.idx)
+    let (_, b) ← batchAt P st k x.2.1
+    pure b
+
+/-- The sets a lost database is rebuilt to: the activation base, then each signed entry's fresh rows dated by
+    its header. -/
+def rebuild (P : Pins) (k : Nat) (g : Snapshot Line × Snapshot Line) (log : List Entry) :
+    Snapshot Line × Snapshot Line :=
+  replayT g (log.filterMap fun e =>
+    match e.body with
+    | .sign _ new _ f =>
+      if e.shard = k then (storedOfAny sha3 new).map fun n => (localDay P.tbl n.checkpoint.createdAt, f) else none
+    | _ => none)
+
+/-- Honest stores fold, and every signed entry was made by custody on the fold of its prefix. (Not for Reach:
+    a foreign copy of a released signed may carry other fresh rows; that breaks only the witness.) -/
+theorem custody_signed (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : ReachH P cert₀ s) :
+    ∃ st, fold P s.off = some st ∧ ∀ k, ∃ hist, MadeBy P s.off k hist := sorry
+
+/-- Every signed of shard k carries the stateDigest of the true sets after its batch (owners from the folded
+    registry); else a named collision at some step. Token rows per step: custody_binds on this base. -/
+theorem chain_sound (hH : HashLen sha3) (P : Pins) (log : List Entry) (st : LogState) (hf : fold P log = some st)
+    (k : Nat) (hist : List (Bytes × SignIn × Entry)) (hm : MadeBy P log k hist) (er : Entry) (p : Permit)
+    (her : er ∈ log) (hk : er.shard = k) (hp : er.body = .resume p) (g : Snapshot Line × Snapshot Line)
+    (hg : activation P k p = some g) (hi : Inv g.1 g.2) :
+    ∃ bs, histBatches P log k hist = some bs ∧
+      ((∀ (i : Nat) (x : Bytes × SignIn × Entry) (new : Bytes), hist[i]? = some x →
+          x.2.2.body.signed? = some new →
+          ∃ (n : Stored) (hd : Head), storedOfAny sha3 new = some n ∧
+            headOf sha3 (shardSetsT k g (bs.take (i + 1))).1 (shardSetsT k g (bs.take (i + 1))).2 = some hd ∧
+            digestV2 sha3 hd = some n.checkpoint.stateDigest) ∨
+       ∃ (i : Nat) (x : Bytes × SignIn × Entry) (b : Batch), hist[i]? = some x ∧ bs[i]? = some b ∧
+         Collision sha3 (witnessInputs sha3 b.ctx k b.owners b.lines x.2.1.witness)
+           (stateInputs sha3 (shardSetsT k g (bs.take i)).1 (shardSetsT k g (bs.take i)).2)) := sorry
+
+/-- The log alone (activation base + fresh rows) rebuilds the chain's true sets; else the same collision. -/
+theorem rebuild_sound (hH : HashLen sha3) (P : Pins) (log : List Entry) (st : LogState)
+    (hf : fold P log = some st) (k : Nat) (hist : List (Bytes × SignIn × Entry)) (hm : MadeBy P log k hist)
+    (er : Entry) (p : Permit) (her : er ∈ log) (hk : er.shard = k) (hp : er.body = .resume p)
+    (g : Snapshot Line × Snapshot Line) (hg : activation P k p = some g) (hi : Inv g.1 g.2) (bs : List Batch)
+    (hb : histBatches P log k hist = some bs) :
+    rebuild P k g log = shardSetsT k g bs ∨
+      ∃ (i : Nat) (x : Bytes × SignIn × Entry) (b : Batch), hist[i]? = some x ∧ bs[i]? = some b ∧
+        Collision sha3 (witnessInputs sha3 b.ctx k b.owners b.lines x.2.1.witness)
+          (stateInputs sha3 (shardSetsT k g (bs.take i)).1 (shardSetsT k g (bs.take i)).2) := sorry
 
 end BlindLedger.Gate.StateV2
