@@ -401,8 +401,33 @@ theorem smt_sound (H : Bytes → Bytes) (hH : HashLen H) (m : Map) (hm : MapOk m
     (pf : Proof) (hv : verifyMulti H (root H m) ks pf = true) (k : Bytes) (hk : k ∈ ks) :
     lookupPf 0 pf k = some (lookup m k) ∨ Collision H (pfInputs H pf) (treeInputs H 513 0 m) := sorry
 
+private theorem rootAt_perm' (H : Bytes → Bytes) : ∀ (f d : Nat) (m m' : Map), m.Perm m' → rootAt H f d m = rootAt H f d m' := by
+  intro f
+  induction f with
+  | zero =>
+    intro d m m' hp
+    have hl := hp.length_eq
+    rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+    · rw [← hp.nil_eq]
+    · have := List.perm_singleton.mp hp.symm; subst this; rfl
+    · rcases m' with _ | ⟨a', _ | ⟨b', t'⟩⟩
+      · simp at hl
+      · simp at hl
+      · simp [rootAt]
+  | succ f ih =>
+    intro d m m' hp
+    have hl := hp.length_eq
+    rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+    · rw [← hp.nil_eq]
+    · have := List.perm_singleton.mp hp.symm; subst this; rfl
+    · rcases m' with _ | ⟨a', _ | ⟨b', t'⟩⟩
+      · simp at hl
+      · simp at hl
+      · simp only [rootAt]
+        rw [ih (d + 1) _ _ (hp.filter _), ih (d + 1) (List.filter (fun e => bit e.1 d) (a :: b :: t)) (List.filter (fun e => bit e.1 d) (a' :: b' :: t')) (hp.filter _)]
+
 theorem root_perm (H : Bytes → Bytes) (m m' : Map) (hm : MapOk m) (hp : m.Perm m') :
-    root H m = root H m' := sorry
+    root H m = root H m' := rootAt_perm' H _ _ _ _ hp
 
 /-- The canonical subtree of `m` from depth `d` with no opaque part. -/
 def build : Nat → Nat → Map → Proof
@@ -494,15 +519,192 @@ def parseKeyVal (v : Bytes) : Option (Nat × List (Nat × Bytes)) :=
   let n := beNat (v.take 8)
   if v.length == 8 + 64 * (peaksOf n).length then some (n, (peaksOf n).zip (chunks 64 (v.drop 8))) else none
 
+private def svPk (w n : Nat) : List Nat := (List.range w).filter fun i => n / 2 ^ i % 2 == 1
+
+private theorem snoc_ind {α : Type} {P : List α → Prop} (h0 : P []) (hs : ∀ ys x, P ys → P (ys ++ [x])) : ∀ xs, P xs := by
+  have key : ∀ n (xs : List α), xs.length = n → P xs := by
+    intro n
+    induction n with
+    | zero => intro xs h; rw [List.length_eq_zero_iff.mp h]; exact h0
+    | succ n ih =>
+      intro xs h
+      rcases List.eq_nil_or_concat xs with rfl | ⟨ys, x, rfl⟩
+      · simp at h
+      · simpa [List.concat_eq_append] using hs ys x (ih ys (by simp at h; omega))
+  exact fun xs => key _ xs rfl
+
+private theorem pk_succ (w n : Nat) : svPk (w + 1) n = (if n % 2 = 1 then [0] else []) ++ (svPk w (n / 2)).map Nat.succ := by
+  unfold svPk
+  rw [List.range_succ_eq_map, List.filter_cons, List.filter_map]
+  have : ((fun i : Nat => n / 2 ^ i % 2 == 1) ∘ Nat.succ) = fun i => (n / 2) / 2 ^ i % 2 == 1 := by
+    funext i; simp [Function.comp, Nat.pow_succ, Nat.div_div_eq_div_mul, Nat.mul_comm]
+  rw [this]
+  by_cases h : n % 2 = 1 <;> simp [h]
+
+private theorem carry_peaks (H : Bytes → Bytes) : ∀ (f h : Nat) (r : Bytes) (fs : List (Nat × Bytes)) (m : Nat),
+    fs.map (·.1) = (svPk f m).map (h + ·) → m + 1 < 2 ^ f →
+    (carry H f h r fs).map (·.1) = (svPk f (m + 1)).map (h + ·) := by
+  intro f
+  induction f with
+  | zero => intro h r fs m _ hm; simp at hm
+  | succ f ih =>
+    intro h r fs m hfs hm
+    rw [pk_succ] at hfs ⊢
+    by_cases hmo : m % 2 = 1
+    · rw [if_pos hmo] at hfs
+      rcases fs with _ | ⟨⟨h', l⟩, rest⟩
+      · simp at hfs
+      · simp only [List.map_cons, List.cons_append, List.nil_append, List.map_map] at hfs
+        obtain ⟨e1, e2⟩ := List.cons.inj hfs
+        simp only [carry]
+        have e1' : h' = h := by simpa using e1
+        subst e1'
+        simp only [beq_self_eq_true, if_true]
+        have := ih (h' + 1) (nodeHash H PD l r) rest (m / 2) (by
+          rw [e2]; simp [Function.comp_def]; omega) (by omega)
+        rw [this]
+        have : (m + 1) % 2 = 0 := by omega
+        have h2 : (m + 1) / 2 = m / 2 + 1 := by omega
+        simp [this, h2, Function.comp_def]
+        omega
+    · rw [if_neg hmo] at hfs
+      simp only [List.nil_append, List.map_map] at hfs
+      have hm1 : (m + 1) % 2 = 1 := by omega
+      have h2 : (m + 1) / 2 = m / 2 := by omega
+      have hd : ∀ x ∈ fs, h + 1 ≤ x.1 := by
+        intro x hx
+        have : x.1 ∈ fs.map (·.1) := List.mem_map_of_mem hx
+        rw [hfs] at this
+        simp [Function.comp_def] at this
+        omega
+      rcases fs with _ | ⟨⟨h', l⟩, rest⟩
+      · simp [carry, hm1, h2]
+        simpa using hfs.symm
+      · have := hd ⟨h', l⟩ (by simp)
+        simp only [carry]
+        have hne : (h == h') = false := by simp; simp at this; omega
+        rw [hne]
+        simp only [Bool.false_eq_true, if_false, List.map_cons, hm1, if_true, h2, List.cons_append, List.nil_append, List.map_map]
+        simp only [List.map_cons] at hfs
+        rw [hfs]; simp
+
+private theorem svFp (H : Bytes → Bytes) : ∀ xs : List Bytes, xs.length < 2 ^ 64 →
+    (xs.foldl (frontierPush H) []).map (·.1) = peaksOf xs.length := by
+  intro xs
+  induction xs using snoc_ind with
+  | h0 => intro _; simp [peaksOf]
+  | hs ys x ih =>
+    intro hn
+    rw [List.foldl_append]; simp only [List.foldl_cons, List.foldl_nil]
+    have hn' : ys.length < 2 ^ 64 := by simp at hn; omega
+    have := carry_peaks H 64 0 (leafHash H PD x) (ys.foldl (frontierPush H) []) ys.length
+      (by have := ih hn'; simpa [peaksOf, svPk] using this) (by simp at hn; omega)
+    simpa [frontierPush, List.length_append, peaksOf, svPk] using this
+
+private theorem carry_len (H : Bytes → Bytes) (hH : HashLen H) : ∀ (f h : Nat) (r : Bytes) (fs : List (Nat × Bytes)),
+    r.length = 64 → (∀ e ∈ fs, e.2.length = 64) → ∀ e ∈ carry H f h r fs, e.2.length = 64 := by
+  intro f
+  induction f with
+  | zero =>
+    intro h r fs hr hfs e he
+    simp only [carry, List.mem_cons] at he
+    rcases he with rfl | he
+    · exact hr
+    · exact hfs e he
+  | succ f ih =>
+    intro h r fs hr hfs
+    rcases fs with _ | ⟨⟨h', l⟩, rest⟩
+    · intro e he; simp only [carry, List.mem_cons, List.not_mem_nil, or_false] at he; subst he; exact hr
+    · simp only [carry]
+      split
+      · exact ih _ _ rest (by simp only [nodeHash]; exact hH _) (fun e he => hfs e (List.mem_cons_of_mem _ he))
+      · intro e he
+        simp only [List.mem_cons] at he
+        rcases he with rfl | rfl | he
+        · exact hr
+        · exact hfs _ (by simp)
+        · exact hfs e (List.mem_cons_of_mem _ he)
+
+private theorem fs_len (H : Bytes → Bytes) (hH : HashLen H) : ∀ xs : List Bytes,
+    ∀ e ∈ xs.foldl (frontierPush H) [], e.2.length = 64 := by
+  intro xs
+  induction xs using snoc_ind with
+  | h0 => simp
+  | hs ys x ih =>
+    rw [List.foldl_append]; simp only [List.foldl_cons, List.foldl_nil]
+    exact carry_len H hH 64 0 _ _ (by simp only [leafHash]; exact hH _) ih
+
+private theorem chunks_flat : ∀ (f : Nat) (ls : List Bytes), ls.length ≤ f → (∀ a ∈ ls, a.length = 64) →
+    chunks f ls.flatten = ls := by
+  intro f
+  induction f with
+  | zero => intro ls h _; have : ls = [] := List.eq_nil_of_length_eq_zero (by omega); subst this; simp [chunks]
+  | succ f ih =>
+    intro ls hl ha
+    rcases ls with _ | ⟨a, t⟩
+    · simp [chunks]
+    · have ha' := ha a (by simp)
+      have hne : (a ++ t.flatten).isEmpty = false := by
+        cases a with
+        | nil => simp at ha'
+        | cons _ _ => simp
+      simp only [List.flatten_cons, chunks, hne, Bool.false_eq_true, if_false]
+      rw [List.take_left' ha', List.drop_left' ha', ih t (by simpa using hl) (fun x hx => ha x (by simp [hx]))]
+
+private theorem be_eq_natBE {w n : Nat} (h : n < 256 ^ w) : be w n = some (natBE w n) := by
+  unfold be natBE; rw [if_pos h]
+
 theorem listRoot_frontier (H : Bytes → Bytes) (xs : List Bytes) (hn : xs.length < 2 ^ 64) :
     frontierRoot H (xs.foldl (frontierPush H) []) = listRoot H xs := sorry
 
 theorem frontier_peaks (H : Bytes → Bytes) (hH : HashLen H) (xs : List Bytes) (hn : xs.length < 2 ^ 64) :
-    (xs.foldl (frontierPush H) []).map (·.1) = peaksOf xs.length := sorry
+    (xs.foldl (frontierPush H) []).map (·.1) = peaksOf xs.length := svFp H xs hn
 
 theorem keyVal_parse (H : Bytes → Bytes) (hH : HashLen H) (xs : List Bytes) (v : Bytes)
     (h : keyVal xs.length (xs.foldl (frontierPush H) []) = some v) :
-    parseKeyVal v = some (xs.length, xs.foldl (frontierPush H) []) := sorry
+    parseKeyVal v = some (xs.length, xs.foldl (frontierPush H) []) := by
+  obtain ⟨c, hc, hv⟩ : ∃ c, be 8 xs.length = some c ∧ v = c ++ ((xs.foldl (frontierPush H) []).map (·.2)).flatten := by
+    cases hb : be 8 xs.length with
+    | none => simp [keyVal, hb] at h
+    | some c => refine ⟨c, rfl, ?_⟩; simp [keyVal, hb] at h; exact h.symm
+  have hlt : xs.length < 256 ^ 8 := by
+    unfold be at hc; split at hc
+    · assumption
+    · simp at hc
+  have hlt' : xs.length < 2 ^ 64 := by
+    have : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
+    omega
+  have hc' : c = natBE 8 xs.length := by
+    rw [be_eq_natBE hlt] at hc; exact (Option.some.inj hc).symm
+  have hfp := svFp H xs hlt'
+  have hl := fs_len H hH xs
+  subst hv; clear h
+  generalize xs.foldl (frontierPush H) [] = fs at hfp hl ⊢
+  have hcl : c.length = 8 := by rw [hc']; simp [natBE]
+  have hflat : ((fs.map (·.2)).flatten).length = 64 * fs.length := by
+    have : ∀ ls : List Bytes, (∀ a ∈ ls, a.length = 64) → ls.flatten.length = 64 * ls.length := by
+      intro ls; induction ls with
+      | nil => simp
+      | cons a t ih => intro ha; (simp [ha a (by simp), ih (fun x hx => ha x (by simp [hx]))]) <;> omega
+    rw [this _ (by intro a ha; rw [List.mem_map] at ha; obtain ⟨e, he, rfl⟩ := ha; exact hl e he)]; simp
+  have hfsl : fs.length = (peaksOf xs.length).length := by rw [← hfp]; simp
+  have hle : fs.length ≤ 64 := by
+    rw [hfsl]; unfold peaksOf; exact Nat.le_trans (List.length_filter_le _ _) (by simp)
+  unfold parseKeyVal
+  have ht : (c ++ (fs.map (·.2)).flatten).take 8 = c := by rw [List.take_left' hcl]
+  have hd : (c ++ (fs.map (·.2)).flatten).drop 8 = (fs.map (·.2)).flatten := by rw [List.drop_left' hcl]
+  rw [ht, hd, hc', beNat_natBE _ _ hlt]
+  have hz : ∀ l : List (Nat × Bytes), (l.map (·.1)).zip (l.map (·.2)) = l := by
+    intro l; induction l with
+    | nil => rfl
+    | cons a t ih => simp [ih]
+  have hb : ((natBE 8 xs.length ++ (fs.map (·.2)).flatten).length == 8 + 64 * (fs.map (·.1)).length) = true := by
+    have : (natBE 8 xs.length).length = 8 := by rw [← hc']; exact hcl
+    simp only [List.length_append, this, hflat, List.length_map, beq_iff_eq]
+  rw [chunks_flat 64 _ (by simpa using hle) (by intro a ha; rw [List.mem_map] at ha; obtain ⟨e, he, rfl⟩ := ha; exact hl e he)]
+  dsimp only
+  rw [← hfp, if_pos hb, hz]
+
 
 /-- First-K check: from the hashes of the first `min K n` entries and sibling hashes `pf`, rebuild the
     root level by level; returns the root and every preimage hashed (H-a, witness side). -/
