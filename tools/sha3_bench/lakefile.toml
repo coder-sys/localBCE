@@ -1,0 +1,14 @@
+name = "sha3_bench"
+version = "0.1.0"
+defaultTargets = ["sha3_bench"]
+
+# E1 measurement, a separate tiny package so lean/lakefile.toml (included in the rules source digest) is untouched.
+# Compiles only the two SHA3 sources of the main workspace, which import nothing.
+[[lean_lib]]
+name = "BlindLedger"
+srcDir = "../../lean"
+roots = ["BlindLedger.Sha3", "BlindLedger.Sha3Fast"]
+
+[[lean_exe]]
+name = "sha3_bench"
+root = "Sha3Bench"

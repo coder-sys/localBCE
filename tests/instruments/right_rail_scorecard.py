@@ -116,7 +116,7 @@ async function handle(m) {
     if (!browser) browser = await chromium.launch({ executablePath, headless: true });
     context = await browser.newContext({ locale: "en-US", ...(m.width ? { viewport: { width: m.width, height: 800 } } : {}) });
     page = await context.newPage();
-    await page.clock.install();  // time still runs; "tick" jumps the page's 15 s read poll
+    const t0 = Date.now(); await page.clock.install({ time: t0 }); await page.clock.pauseAt(t0 + 10000);  // page time is paused: only "tick" fires the 15 s read poll, never machine load
     pending = new Set();
     diagnostics = [];
     pageErrors = [];
