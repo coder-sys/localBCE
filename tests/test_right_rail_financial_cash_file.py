@@ -316,7 +316,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 previewed = time.perf_counter() - start
                 self.assertLess(previewed, 15.0)
                 self.assertEqual((preview["recorded_count"], fixtures._image(self.store.path)), (check.MAX_ROWS, live))
-                receipt, seconds = self._timed(lambda: self._apply(prepared))
+                receipt, seconds = self._timed(lambda: cash.apply_cash_file(self.store, *prepared))  # the production route (design (d)): the lock a writer waits on
                 print(f"CASH1B_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
                 self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
                 self.assertLess(seconds, 5.0)
