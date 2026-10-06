@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
+import itertools
 import json
 import os
 from pathlib import Path
@@ -61,20 +63,19 @@ if (!path.isAbsolute(modulePath) || !path.isAbsolute(executablePath) || path.bas
 }
 if (require(path.join(modulePath, "package.json")).version !== "1.62.1") throw new Error("playwright_version_mismatch");
 const { chromium } = require(modulePath);
-let browser = null, context = null, page = null, changedAt = 0;
-let pending = new Set(), diagnostics = [], pageErrors = [];
-let posts = [];
+let browser = null;  // the one browser, as a promise once launching: every session is a fresh context in it
+const sessions = new Map();
 const SHEET = { "reject-offset": "Reject the offset", "authorize-offset": "Accept the offset" };
-async function settle() {
+async function settle(S) {
   const deadline = Date.now() + 30000;
-  while (pending.size || Date.now() - changedAt < 150) {
+  while (S.pending.size || Date.now() - S.changedAt < 150) {
     if (Date.now() >= deadline) throw new Error("browser_network_idle_timeout");
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  if (pageErrors.length) throw new Error("browser_page_error:" + pageErrors.join("\n"));
+  if (S.pageErrors.length) throw new Error("browser_page_error:" + S.pageErrors.join("\n"));
 }
-async function view() {
-  const dom = await page.evaluate(() => {
+async function view(S) {
+  const dom = await S.page.evaluate(() => {
     const texts = {}, hidden = {}, disabled = {}, buttons = {}, lines = [];
     const invisible = (el) => !el.getClientRects().length || getComputedStyle(el).visibility === "hidden";
     const text = (el) => (el.children.length && ![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())
@@ -108,34 +109,35 @@ async function view() {
     const active = document.activeElement;
     return { texts, hidden, disabled, buttons, screens, lines, queue, unnamed, path: location.pathname, hash: location.hash, focus: active.id || active.className || active.tagName };
   });
-  return { ...dom, posts };
+  return { ...dom, posts: S.posts };
 }
-async function handle(m) {
+async function handle(m, S) {
+  const page = S.page;
   if (m.op === "navigate") {
-    if (context) await context.close();
-    if (!browser) browser = await chromium.launch({ executablePath, headless: true, args: ["--disable-gpu", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-features=site-per-process,IsolateOrigins,msEdgeCollections,EdgeCollections,msEntityExtraction,EdgeEntityExtraction,msEdgeEntityExtraction,msExtractor,EntityExtraction", "--renderer-process-limit=1", "--in-process-gpu", "--disable-breakpad", "--disable-software-rasterizer", "--disable-sync", "--disable-crash-reporter", "--noerrdialogs"] });  // fewer processes, same page
-    context = await browser.newContext({ locale: "en-US", ...(m.width ? { viewport: { width: m.width, height: 800 } } : {}) });
-    page = await context.newPage();
+    if (S.context) await S.context.close();
+    browser ??= chromium.launch({ executablePath, headless: true, args: ["--disable-gpu", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-features=site-per-process,IsolateOrigins,msEdgeCollections,EdgeCollections,msEntityExtraction,EdgeEntityExtraction,msEdgeEntityExtraction,msExtractor,EntityExtraction", "--renderer-process-limit=1", "--in-process-gpu", "--disable-breakpad", "--disable-software-rasterizer", "--disable-sync", "--disable-crash-reporter", "--noerrdialogs"] });  // fewer processes, same page
+    S.context = await (await browser).newContext({ locale: "en-US", ...(m.width ? { viewport: { width: m.width, height: 800 } } : {}) });
+    const page = S.page = await S.context.newPage();
     const t0 = Date.now(); await page.clock.install({ time: t0 }); await page.clock.pauseAt(t0 + 10000);  // page time is paused: only "tick" fires the 15 s read poll, never machine load
-    pending = new Set();
-    diagnostics = [];
-    pageErrors = [];
-    posts = [];
+    S.pending = new Set();
+    S.diagnostics = [];
+    S.pageErrors = [];
+    S.posts = [];
     page.on("request", (request) => {
-      pending.add(request);
-      changedAt = Date.now();
-      if (request.method() === "POST") posts.push({ url: request.url(), body: request.postData() });
+      S.pending.add(request);
+      S.changedAt = Date.now();
+      if (request.method() === "POST") S.posts.push({ url: request.url(), body: request.postData() });
     });
-    const finished = (request) => { pending.delete(request); changedAt = Date.now(); };
+    const finished = (request) => { S.pending.delete(request); S.changedAt = Date.now(); };
     page.on("requestfinished", finished);
     page.on("requestfailed", finished);
-    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    page.on("pageerror", (error) => S.pageErrors.push(String(error)));
     page.on("console", (message) => {
-      if (["warning", "error"].includes(message.type())) diagnostics.push({ type: message.type(), text: message.text() });
+      if (["warning", "error"].includes(message.type())) S.diagnostics.push({ type: message.type(), text: message.text() });
     });
     const response = await page.goto("http://127.0.0.1:" + m.port + (m.path || "/"));
-    await settle();
-    return { html: await response.text(), view: await view() };
+    await settle(S);
+    return { html: await response.text(), view: await view(S) };
   }
   if (m.op === "post") {
     return page.evaluate(async ({ path, body, role }) => {
@@ -144,7 +146,7 @@ async function handle(m) {
     }, m);
   }
   if (m.op === "close") {
-    if (browser) await browser.close();
+    if (browser) await (await browser).close();
     browser = null;
     return { closed: true };
   }
@@ -157,7 +159,7 @@ async function handle(m) {
     if (m.act === "find") {
       const found = await control.count();
       const text = found ? await control.first().textContent() : "";
-      return { found, text, visible: found ? await control.first().isVisible() : false, disabled: found ? await control.first().isDisabled() : null, checked: found && m.role === "radio" ? await control.first().isChecked() : null, view: await view() };
+      return { found, text, visible: found ? await control.first().isVisible() : false, disabled: found ? await control.first().isDisabled() : null, checked: found && m.role === "radio" ? await control.first().isChecked() : null, view: await view(S) };
     }
     await control.first()[m.act](...(m.text == null ? [] : [m.text]));
   } else if (m.op === "click") {
@@ -185,26 +187,30 @@ async function handle(m) {
       await page.locator("#confirm").click();
     }
   } else if (m.op !== "view") throw new Error("unknown_op:" + m.op);
-  if (m.op !== "begin-action" && m.wait !== false) await settle();
-  return { clicked: true, view: await view() };
+  if (m.op !== "begin-action" && m.wait !== false) await settle(S);
+  return { clicked: true, view: await view(S) };
 }
-let queue = Promise.resolve();
+const queues = new Map();  // one queue per session: its steps stay in order, other sessions run beside it
 const input = readline.createInterface({ input: process.stdin });
 input.on("line", (line) => {
-  queue = queue.then(async () => {
+  const m = JSON.parse(line);
+  if (!sessions.has(m.sid)) sessions.set(m.sid, { context: null, page: null, changedAt: 0, pending: new Set(), diagnostics: [], pageErrors: [], posts: [] });
+  const S = sessions.get(m.sid);
+  queues.set(m.sid, (queues.get(m.sid) || Promise.resolve()).then(async () => {
     let reply;
     try {
-      reply = { ok: true, ...(await handle(JSON.parse(line))) };
+      reply = { ok: true, ...(await handle(m, S)) };
     } catch (e) {
       reply = { ok: false, error: String(e && e.message ? e.message : e) };
     }
-    reply.diagnostics = diagnostics.splice(0);
+    reply.rid = m.rid;
+    reply.diagnostics = S.diagnostics.splice(0);
     process.stdout.write(JSON.stringify(reply) + "\n");
-  });
+  }));
 });
 input.on("close", () => {
-  queue.then(async () => {
-    if (browser) await browser.close();
+  Promise.all(queues.values()).then(async () => {
+    if (browser) await (await browser).close();
   }).catch((error) => {
     console.error(error);
     process.exitCode = 1;
@@ -254,7 +260,7 @@ def _node_path() -> str:
     return node
 
 class _Browser:
-    """One fresh browser tab for one role."""
+    """One fresh browser tab for one role; tab() gives more pages of the same browser, replies matched by id."""
     def __init__(self, port: int, driver: Path) -> None:
         self._process = subprocess.Popen(
             [_node_path(), str(driver)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -262,14 +268,36 @@ class _Browser:
         )
         self.port = port
         self.last_view: dict[str, Any] = {}
+        self.sid, self._sids, self._ids = 0, itertools.count(1), itertools.count(1)
+        self._lock, self._replies, self._eof = threading.Condition(), {}, False
+        self._reader = threading.Thread(target=self._read, daemon=True)
+        self._reader.start()
+    def _read(self) -> None:
+        try:
+            for line in self._process.stdout:
+                reply = json.loads(line)
+                with self._lock:
+                    self._replies[reply.pop("rid")] = reply
+                    self._lock.notify_all()
+        finally:
+            with self._lock:
+                self._eof = True
+                self._lock.notify_all()
+    def tab(self) -> "_Browser":
+        """Another page of this browser process, its own fresh context at every open; close the parent, not the tab."""
+        tab = copy.copy(self)
+        tab.sid, tab.last_view = next(self._sids), {}
+        return tab
     def call(self, message: dict[str, Any]) -> dict[str, Any]:
-        assert self._process.stdin and self._process.stdout
-        self._process.stdin.write(json.dumps(message) + "\n")
-        self._process.stdin.flush()
-        line = self._process.stdout.readline()
-        if not line:
+        assert self._process.stdin
+        mid = next(self._ids)
+        with self._lock:
+            self._process.stdin.write(json.dumps({**message, "rid": mid, "sid": self.sid}) + "\n")
+            self._process.stdin.flush()
+            self._lock.wait_for(lambda: mid in self._replies or self._eof)
+            reply = self._replies.pop(mid, None)
+        if reply is None:
             raise RuntimeError("browser_driver_exited:" + (self._process.stderr.read() if self._process.stderr else "")[-2000:])
-        reply = json.loads(line)
         for diagnostic in reply.pop("diagnostics", []):
             print("BROWSER_DIAGNOSTIC=" + json.dumps(diagnostic, sort_keys=True), flush=True)
         if not reply.pop("ok"):
@@ -311,6 +339,7 @@ class _Browser:
                 self._process.wait()
                 raise RuntimeError("browser_cleanup_timed_out") from error
             finally:
+                self._reader.join(30)
                 for stream in (self._process.stdout, self._process.stderr):
                     if stream:
                         stream.close()
