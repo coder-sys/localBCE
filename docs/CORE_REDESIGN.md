@@ -35,7 +35,7 @@ is a Lean change. The 8 MiB package export stays, refused at export, not at writ
 ## Receiver cash-file boundary (XI.2)
 
 An implementation lead previews one fictional receiver file against the reviewed ledger, then records its cash
-evidence as one transaction: no repeated manual entry, exact retries, all-or-nothing. No money moves.
+evidence as one transaction: no repeated manual entry, exact retries, a refused row held alone. No money moves.
 
 - Contract: `RR/FINANCIAL/RECEIVER-CASH-FILE/v1`, canonical ASCII JSON of at most 1 MiB, 1-500 ordered rows, at most
   6 per item (more: `cash_file_row_cap`). Root fields: `contract`, `source_class` (`SYNTHETIC_RECEIVER_CASH`),
@@ -44,19 +44,17 @@ evidence as one transaction: no repeated manual entry, exact retries, all-or-not
   `expected_revision`. The code (`app/right_rail_financial_cash_file.py`) holds the field grammar and number bounds.
 - Refuse completely: duplicate JSON keys, missing or extra fields, noncanonical bytes, duplicate payment/evidence
   IDs or item/origin pairs, count/total disagreement. MCO reports, X12 820/835 and MMIS extracts are unsupported.
-  Untrusted input never skips a row, turns acknowledgment or reporting into cash, or commits a partial file.
+  Untrusted input never drops a row unreceipted or turns acknowledgment or reporting into cash.
   No caller-provided callback or success flag authorizes acceptance.
 - Evidence: `record_payment_evidence` can return CONFLICT or an alias DUPLICATE after recording evidence, and
   `run_batch` rolls back exceptions, not those statuses. So the final check must follow history sealing and precede
   COMMIT.
 - Binding: the caller supplies trusted scope, source context, source SHA-256, baseline SHA-256, owner ID/mode and
-  authority. F is the exact file bytes; B is the exact `manifest.json` bytes that `export-history` wrote (about
-  1.9 KB). Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`. A retry never replaces B
+  authority. F is the exact file bytes; B is the exact `manifest.json` bytes that `export-history` wrote. Every derived command binds `local_ref = UPPER(SHA256(F)) || UPPER(SHA256(B))`. A retry never replaces B
   with a fresh export. The verifier does not import the producer. It accepts B only if canonical and it passes the
   export verifier's manifest checks (`_verify_manifest`).
 - Under one BEGIN IMMEDIATE, the store must match B: same identity row and event head at B's sequence, and B's
-  `segment_count` and `last_segment_digest` equal the live `history_segments` row sealed there. New work requires the
-  store still at B's sequence; on an older baseline only rows that write nothing (RETRY, ALIAS) are allowed.
+  `segment_count` and `last_segment_digest` equal the live `history_segments` row sealed there. A row's `expected_revision` decides (Rows).
 - After final sealing the checker verifies row and command order, each new event onto the chain, payment/evidence/
   action links, revisions, every table's before/after difference and per-item cash deltas, then runs its own rules on
   the touched obligations. Other cash, acknowledgments and reporting stay unchanged. A file with no NEW or OVERLAP
@@ -65,14 +63,19 @@ evidence as one transaction: no repeated manual entry, exact retries, all-or-not
 - Preview (the default) runs the checked file on a private SQLite-backup copy (`<store>.cash-preview`, swept
   hourly), rolls it back and deletes it. Apply uses the same checked boundary. CLI apply opens only an existing,
   current store with the reviewed mode/ID (`mode=rw`); a missing or empty store is refused.
-- Rows: NEW; RETRY (exact stored row); OVERLAP (a repeat of a stored payment under new IDs: DUPLICATE, one alias
-  event, no cash); ALIAS (a stored repeat: nothing written); or refused. A row that reuses stored IDs must be the
-  exact stored row, else the whole file refuses.
-- Receipt `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v2` (v1 receipts stay valid): `contract`, `mode` (PREVIEW or APPLIED),
+- Rows: NEW; RETRY (exact stored row); OVERLAP (a stored payment repeated under new IDs: DUPLICATE, one alias event,
+  no cash; off its obligation's revision, unrun like ALIAS); ALIAS (a stored repeat: nothing written); or
+  HELD (writes nothing): `unknown_item`, `already_recorded` (an ID reused with other facts), `conflict` (an origin
+  with another amount, link or reversal), an owner refusal (a NEW row off its
+  `expected_revision`: `obligation_revision_conflict`), or `depends_on_held`. Only an intake file
+  (`app/right_rail_financial_intake.py`) holds rows; it ends with one `INTAKE_RECEIVED` event
+  (`RR/FINANCIAL/INTAKE/v2`), written by `run_batch` in the same transaction, checker-verified; a raw file
+  is received once. Any other file is atomic.
+- Receipt `RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3` (v1, v2 stay valid): `contract`, `mode` (PREVIEW or APPLIED),
   `source_sha256`, `baseline_sha256`, `row_count`, `recorded_count`, `duplicate_count` (includes OVERLAP rows),
-  `file_total_cents`, `recorded_cents`, `duplicate_cents`, `cash_before_cents`, `cash_after_cents`,
-  `cash_delta_cents`, `proofSuiteId` (null), `production_usable` (false), `activation` (false). Amounts are the
-  checker's sums. RETRY and ALIAS rows add zero cash, including payments reversed after their receipt; a new repeat
+  `held_count`, `file_total_cents`, `recorded_cents`, `duplicate_cents`, `held_cents`, `cash_before_cents`,
+  `cash_after_cents`, `cash_delta_cents`, `rows` (each `status`, `payment_id`, `reason`), `proofSuiteId` (null),
+  `production_usable` (false), `activation` (false). Amounts are the checker's sums. RETRY and ALIAS rows add zero cash, including payments reversed after their receipt; a new repeat
   of a reversed payment is DUPLICATE only if dated no later than the reversal, else `conflict`.
 - Scope: local synthetic receiver cash evidence only; no live transport, source authentication, payment or
   activation claim.
@@ -83,9 +86,7 @@ Target: the largest state's hospital-level program, about 600 hospitals with up 
 month, under Lean's `maxRows`). With the manifest baseline a month is four full files and a quarter twelve (locks:
 `STATUS.md`). All-provider refund flows need sharding or evaluations that bind evidence by digest (constant size) and are not claimed.
 
-- One file is one `run_batch`: at most 500 rows, at most 6 per item (each payment re-binds every earlier payment of
-  its item), bounded by the 5 s writer busy timeout. One evaluation per payment is kept (founder, 2026-09-28).
-- The quarter-end lock must stay under the 5 s writer busy timeout; the measured time is in `STATUS.md`.
+- One file is one `run_batch`: at most 500 rows, at most 6 per item (see the checker), bounded by the 5 s writer busy timeout. One evaluation per payment is kept (founder, 2026-09-28).
 - Before COMMIT the checker runs its own rules (never copies) on the touched rows. A structural test lists each
   whole-store rule not run before COMMIT, with its reason. Corruption that bypassed the owner is caught at the next
   open or by `verify-integrity`.
@@ -94,6 +95,6 @@ month, under Lean's `maxRows`). With the manifest baseline a month is four full 
 
 Fixed classes only; no input or error text is ever printed (`ERROR:receiver_cash_file_refused:{code}`). `input`: the
 CLI could not read an input. `format`: not the contract. `row_cap`: split the file. `binding`: hashes, scope,
-owner/mode or baseline do not match this store. `stale`: prepare against a new baseline. `conflict`: an origin is
-recorded with another amount or link, or was paid and reversed; investigate. `already_recorded`: an ID is reused.
-`busy`: retry later. `failed`: checker or store refused; escalate.
+owner/mode or baseline do not match this store. `stale`: the store moved while the file was planned; send it again.
+`conflict`: this raw file was already received. `busy`: retry later. `failed`: checker or store refused; escalate.
+A row's own fault is never a file refusal: the row is HELD (Rows).

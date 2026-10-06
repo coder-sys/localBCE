@@ -42,7 +42,7 @@ def _integer(value, low, high):
         raise CashFileError("cash_file_format")
 
 
-def _propose(source_bytes, baseline_bytes):
+def _propose(source_bytes, baseline_bytes, empty=False):
     if type(baseline_bytes) is not bytes or not 0 < len(baseline_bytes) <= MAX_FILE_BYTES or type(source_bytes) is not bytes or not 0 < len(source_bytes) <= MAX_FILE_BYTES:
         raise CashFileError("cash_file_format")
     try:
@@ -52,26 +52,7 @@ def _propose(source_bytes, baseline_bytes):
         raise CashFileError("cash_file_format") from None
     if canonical != source_bytes:
         raise CashFileError("cash_file_format")
-    _fields(value, "contract source_class scope source row_count total_cents rows")
-    if value["contract"] != "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" or value["source_class"] != "SYNTHETIC_RECEIVER_CASH":
-        raise CashFileError("cash_file_format")
-    _fields(value["scope"], "state_id deployment_id program_id period_id currency")
-    for item in value["scope"].values():
-        _identifier(item)
-    if value["scope"]["currency"] != "USD":
-        raise CashFileError("cash_file_format")
-    source = value["source"]
-    _fields(source, "source_id version receiver_system_id capture_id captured_at_ms")
-    for key in ("source_id", "version", "receiver_system_id", "capture_id"):
-        _identifier(source[key])
-    _integer(source["captured_at_ms"], 0, 2**63 - 1)
-    if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
-        raise CashFileError("cash_file_row_cap")
-    _integer(value["row_count"], 1, MAX_ROWS)
-    _integer(value["total_cents"], 1, 2**63 - 1)
-    rows = value["rows"]
-    if type(rows) is not list or len(rows) != value["row_count"]:
-        raise CashFileError("cash_file_format")
+    source, rows = _header(value, empty)
     local_ref = hashlib.sha256(source_bytes).hexdigest().upper() + hashlib.sha256(baseline_bytes).hexdigest().upper()
     commands, payments, evidence, origins = [], set(), set(), set()
     for row in rows:
@@ -95,11 +76,37 @@ def _propose(source_bytes, baseline_bytes):
     return commands
 
 
+def _header(value, empty=False):
+    """A file's container (everything but its rows' own fields): its source block and rows, or cash_file_format / cash_file_row_cap. `empty`: a file derived from a raw one may carry no row."""
+    _fields(value, "contract source_class scope source row_count total_cents rows")
+    if value["contract"] != "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" or value["source_class"] != "SYNTHETIC_RECEIVER_CASH":
+        raise CashFileError("cash_file_format")
+    _fields(value["scope"], "state_id deployment_id program_id period_id currency")
+    for item in value["scope"].values():
+        _identifier(item)
+    if value["scope"]["currency"] != "USD":
+        raise CashFileError("cash_file_format")
+    source = value["source"]
+    _fields(source, "source_id version receiver_system_id capture_id captured_at_ms")
+    for key in ("source_id", "version", "receiver_system_id", "capture_id"):
+        _identifier(source[key])
+    _integer(source["captured_at_ms"], 0, 2**63 - 1)
+    if type(value["row_count"]) is int and value["row_count"] > MAX_ROWS:
+        raise CashFileError("cash_file_row_cap")
+    _integer(value["row_count"], not empty, MAX_ROWS)
+    _integer(value["total_cents"], not empty, 2**63 - 1)
+    rows = value["rows"]
+    if type(rows) is not list or len(rows) != value["row_count"]:
+        raise CashFileError("cash_file_format")
+    return source, rows
+
+
 def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
                       expected_baseline_sha256, expected_scope, expected_source,
-                      expected_owner_id, expected_mode, trusted_authority):
-    """Propose commands, checking external review bindings before any writer opens."""
-    commands = _propose(source_bytes, baseline_bytes)
+                      expected_owner_id, expected_mode, trusted_authority, intake=None):
+    """Propose commands, checking external review bindings before any writer opens. ``intake``: the facts of the
+    raw file this one was derived from (app/right_rail_financial_intake.py), stored with the rows' outcomes."""
+    commands = _propose(source_bytes, baseline_bytes, intake is not None)
     context = {
         "source_bytes": source_bytes, "baseline_bytes": baseline_bytes,
         "expected_source_sha256": expected_source_sha256,
@@ -107,7 +114,7 @@ def prepare_cash_file(source_bytes, baseline_bytes, *, expected_source_sha256,
         "expected_scope": expected_scope, "expected_source": expected_source,
         "expected_authority": _checker_authority(trusted_authority),
         "expected_owner_id": expected_owner_id, "expected_mode": expected_mode,
-        "preview": False,
+        "preview": False, "intake": intake,
     }
     checked = CashFileCheck(commands, context)
     return list(checked.commands), context
@@ -173,17 +180,16 @@ def plan_cash_file(commands, context, *, path, trusted_authority, clock=None):
     """Run the checked file on a private copy, recording every row it writes, so only a replay holds the live write lock. Writes nothing live."""
     try:
         with _copy_owner(context, path, trusted_authority, clock) as owner:
-            connection, results, real = owner._writer, [], owner.record_payment_evidence
+            connection = owner._writer
             owner.clock = reading = _Reading(owner.clock)
-            owner.record_payment_evidence = lambda **arguments: results.append(real(**arguments)) or results[-1]  # the file's own results, for the live checker
             connection.execute("CREATE TEMP TABLE rr_plan(id INTEGER PRIMARY KEY, tbl TEXT NOT NULL, op TEXT NOT NULL, rid INTEGER)")
             for (name,) in connection.execute("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
                 for op, row in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")):
                     if name not in _DERIVED or op == "DELETE":
                         connection.execute(f"CREATE TEMP TRIGGER rr_plan_{name}_{op} AFTER {op} ON main.\"{name}\" BEGIN INSERT INTO rr_plan(tbl,op,rid) VALUES ('{name}','{op}',{0 if name in _DERIVED else row + '.rowid'}); END")
             baseline = _baseline(connection)
-            owner.run_batch(commands, cash_file_context=context)
-            log = connection.execute("SELECT tbl,op,rid FROM temp.rr_plan ORDER BY id").fetchall()
+            results = owner.run_batch(commands, cash_file_context=context)["rows"]  # the file's own outcomes, for the live checker
+            log =connection.execute("SELECT tbl,op,rid FROM temp.rr_plan ORDER BY id").fetchall()
             if any(op == "DELETE" and table not in _DERIVED for table, op, _ in log):
                 raise CashFileError("cash_file_failed")  # a file deletes nothing; the direct path says why
             seal = (tuple(tuple(row) for row in connection.execute("SELECT * FROM history_pending ORDER BY 1,2")), tuple(connection.execute("SELECT * FROM history_open").fetchone())) if any(op == "DELETE" for _, op, _ in log) else None
