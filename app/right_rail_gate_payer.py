@@ -71,21 +71,23 @@ class PayerStore:
         self._roots = dict(root_keys)
         self._grants = _list([_blob(g) + _list([_blob(v) for v in rules]) + _list([_blob(r) for r in engines])
                               for g, rules, engines in grants])
-        self._db = sqlite3.connect(path, isolation_level=None)
+        self._db = sqlite3.connect(path, isolation_level=None, timeout=60)  # Lean may hold the write lock up to 30 s
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)
-        # Idempotent on every open: a store from before ``closed`` keeps every release as a closed key.
-        self._db.execute("INSERT OR IGNORE INTO closed SELECT tenant, program, payment_id, 'RELEASED', payee_ref, at FROM releases")
+        # A store from before ``closed`` keeps every release as a closed key; a migrated store opens without the write lock.
+        if self._db.execute("SELECT 1 FROM releases r WHERE NOT EXISTS(SELECT 1 FROM closed c WHERE c.tenant=r.tenant AND "
+                            "c.program=r.program AND c.payment_id=r.payment_id) LIMIT 1").fetchone():
+            self._db.execute("INSERT OR IGNORE INTO closed SELECT tenant, program, payment_id, 'RELEASED', payee_ref, at FROM releases")
 
     @contextlib.contextmanager
     def _tx(self) -> Iterator[None]:
         self._db.execute("BEGIN IMMEDIATE")
         try:
             yield
+            self._db.execute("COMMIT")  # a COMMIT that fails (busy) rolls back and raises: no half-open transaction
         except BaseException:
             self._db.execute("ROLLBACK")
             raise
-        self._db.execute("COMMIT")
 
     def pin(self, tenant: str, program: str, payment_id: str, member_key: bytes,
             command: tuple[str, bytes] | None = None) -> None:
@@ -144,21 +146,22 @@ class PayerStore:
         tenant = bytes.fromhex(info[1]).decode("ascii")
         shard, epoch, low, high = map(int, info[2:6])
         digest, prev = bytes.fromhex(info[6]), bytes.fromhex(info[7])
-        candidates = [signer.framed(row[0]) for row in self._db.execute(
-            "SELECT signed FROM checkpoints WHERE tenant=? AND shard=? AND epoch=? AND "
-            "(seq_from<=? AND seq_to>=? OR digest=? OR prev=?)", (tenant, shard, epoch, high + 1, low - 1, prev, digest))]
-        frame = (self._roots.get(tenant, bytes(gate.ML_DSA_87_PUBLIC_KEY)) + self._all("cert", "certs") + _list(candidates)
-                 + self._all("stored", "forks") + signer.framed(signed))
-        answer = signer.gate_verify(3, frame).split()
-        if answer[0] == "GATE_VERIFY=STORED":
-            self._db.execute("INSERT OR IGNORE INTO checkpoints VALUES(?,?,?,?,?,?,?,?)",
-                             (digest, tenant, shard, epoch, low, high, prev, signed))
-            return "stored"
-        if answer[0] != "GATE_VERIFY=FORK":
-            raise GatePayerError("checkpoint_rejected")
-        stored = self._db.execute("SELECT signed FROM checkpoints WHERE digest=?", (bytes.fromhex(answer[1]),)).fetchone()[0]
-        self._db.execute("INSERT INTO forks(stored, forking) VALUES(?,?)", (stored, signed))
-        return "fork"
+        with self._tx():  # the candidates, Lean's answer and the write under one write lock: two forks never both store
+            candidates = [signer.framed(row[0]) for row in self._db.execute(
+                "SELECT signed FROM checkpoints WHERE tenant=? AND shard=? AND epoch=? AND "
+                "(seq_from<=? AND seq_to>=? OR digest=? OR prev=?)", (tenant, shard, epoch, high + 1, low - 1, prev, digest))]
+            frame = (self._roots.get(tenant, bytes(gate.ML_DSA_87_PUBLIC_KEY)) + self._all("cert", "certs") + _list(candidates)
+                     + self._all("stored", "forks") + signer.framed(signed))
+            answer = signer.gate_verify(3, frame).split()
+            if answer[0] == "GATE_VERIFY=STORED":
+                self._db.execute("INSERT OR IGNORE INTO checkpoints VALUES(?,?,?,?,?,?,?,?)",
+                                 (digest, tenant, shard, epoch, low, high, prev, signed))
+                return "stored"
+            if answer[0] != "GATE_VERIFY=FORK":
+                raise GatePayerError("checkpoint_rejected")
+            stored = self._db.execute("SELECT signed FROM checkpoints WHERE digest=?", (bytes.fromhex(answer[1]),)).fetchone()[0]
+            self._db.execute("INSERT INTO forks(stored, forking) VALUES(?,?)", (stored, signed))
+            return "fork"
 
     def _decide(self, request: gate.DecideRequest, token: bytes, now: int) -> str | None:
         """None when Lean RELEASE accepts, else why not."""
@@ -191,12 +194,12 @@ class PayerStore:
                     self._db.execute("INSERT INTO closed VALUES(?,?,?,'RELEASED',?,?)", (
                         request.tenant_id, request.program_id, request.payment_id, request.payee_ref, now))
                 except sqlite3.IntegrityError:
-                    return "already_closed"  # nothing written; the empty transaction commits
-                # An IntegrityError here means closed and releases disagree: it propagates, the transaction rolls back.
-                self._db.execute("INSERT INTO releases VALUES(?,?,?,?,?,?,?,?)", (
-                    request.tenant_id, request.program_id, request.payment_id, token, request.payee_ref,
-                    request.amount_cents, request.period, now))
-            else:
+                    reason = "already_closed"
+                else:  # an IntegrityError here means closed and releases disagree: it propagates, the transaction rolls back
+                    self._db.execute("INSERT INTO releases VALUES(?,?,?,?,?,?,?,?)", (
+                        request.tenant_id, request.program_id, request.payment_id, token, request.payee_ref,
+                        request.amount_cents, request.period, now))
+            if reason is not None:  # every refusal is exactly one hold row and nothing else
                 self._db.execute("INSERT INTO holds(payment_id, token, reason, at) VALUES(?,?,?,?)",
                                  (request.payment_id, token, reason, now))
         return reason
