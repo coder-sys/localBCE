@@ -484,3 +484,74 @@ def encode_decide_response(response: DecideResponse) -> bytes:
     else:
         w.int(response.retry_after_ms, 4, "retry_after_ms", low=1, high=MAX_RETRY_AFTER_MS)
     return bytes(w.out)
+
+
+# ------------------------------------------------- APPROVAL/v1 (hold-release S2)
+# A person's act and the moves it binds (r4.2 section 10).  Each move carries the
+# payment line it pays as a 64-byte digest field, like every gate digest, so no
+# other length can be written or decoded (Lean ``Gate.Approval``).  A digest
+# under the wrong domain is refused where admission recomputes it.
+
+APPROVAL: Final = b"RR/APPROVAL/v1\x00"
+APPROVAL_MOVES: Final = b"RR/APPROVAL/MOVES/v1\x00"
+APPROVAL_LINE: Final = b"RR/APPROVAL/LINE/v1\x00"
+KINDS: Final = ("PROPOSE", "RELEASE", "DENY", "TOTAL", "RESTATE", "BYPASS", "CANCEL")
+
+
+@dataclass(frozen=True)
+class Move:
+    cell: bytes
+    payment_id: bytes
+    claim_key: bytes
+    payee_key: bytes
+    cents: int
+    line_digest: bytes
+
+
+@dataclass(frozen=True)
+class Approval:
+    kind: str
+    subject: bytes
+    arg: bytes
+    moves_digest: bytes
+    owner_id: str
+    mode: str
+    pack_digest: bytes
+    not_after_s: int
+
+
+def line_digest(raw: bytes) -> bytes:
+    """The one line digest; a gate cell's ``raw`` is its ``encode_decide_request`` bytes."""
+    return sha3_512(APPROVAL_LINE + raw)
+
+
+def encode_moves(moves: tuple[Move, ...]) -> bytes:
+    """Moves in strictly ascending cell order, so one cell has at most one move."""
+    if type(moves) is not tuple or any(type(m) is not Move for m in moves):
+        _fail("moves")
+    w = _Writer(APPROVAL_MOVES)
+    w.int(len(moves), 2, "moves", high=MAX_LINES)
+    for m in moves:
+        w.digest(m.cell, "cell")
+        w.blob(m.payment_id, "payment_id")
+        w.blob(m.claim_key, "claim_key")
+        w.blob(m.payee_key, "payee_key")
+        w.int(m.cents, 8, "cents", low=1)
+        w.digest(m.line_digest, "line_digest")
+    _sorted_unique([m.cell for m in moves], "moves")
+    if len(w.out) > MAX_REQUEST_BYTES:
+        _fail("size")
+    return bytes(w.out)
+
+
+def encode_approval(a: Approval) -> bytes:
+    w = _Writer(APPROVAL)
+    w.tag(KINDS, a.kind, "kind")
+    w.digest(a.subject, "subject")
+    w.blob(a.arg, "arg", low=0)
+    w.digest(a.moves_digest, "moves_digest")
+    w.ident(a.owner_id, "owner_id")
+    w.ident(a.mode, "mode")
+    w.digest(a.pack_digest, "pack_digest")
+    w.int(a.not_after_s, 8, "not_after_s")
+    return bytes(w.out)
