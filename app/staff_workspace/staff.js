@@ -672,6 +672,7 @@
     const declared = name && model.controls[name] && model.controls[name].responses[code];
     if (declared && declared.message) return declared.message;
     return {
+      staff_role_refused: "Your role can't do this. Nothing changed.",
       authority_actor_not_authorized: "Owner denied the command because the fixed synthetic reporter role cannot make a financial decision.",
       obligation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",
       evaluation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",

@@ -942,7 +942,7 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             if command is None:
                 self._respond(404, {"error": {"code": "not_found"}})
                 return
-            claimed = self.headers.get_all("X-Staff-Role", [])  # exactly one role, in this command's row; refused before the body is read
+            claimed = self.headers.get_all("X-Staff-Role", [])  # a caller claim, not a login: it can only narrow access to this command's row, never grant it; refused before the body is read
             if len(claimed) != 1 or claimed[0] not in COMMAND_ROLES.get(self.path, ()):
                 self._respond(403, {"error": {"code": "staff_role_refused"}, "changed": False})
                 return
