@@ -413,12 +413,13 @@ def rederive_835(data: bytes) -> dict:
                 parts.append(part)
         withheld += wires
     unverified = None in paid or None in withheld
-    claims_paid, plb_total = sum(a for a in paid if a is not None), sum(a for a in withheld if a is not None)
-    if not unverified and total != claims_paid - plb_total:
-        _no("835:balance")
-    record.update(claims_paid_cents=claims_paid, plb_total_cents=plb_total,
-                  forward_balance_cents=sum(a["amount_cents"] for a in record["adjustments"] if a["reason"] == "FB"),
-                  rows=_rows(parts), balance_unverified=unverified)
+    totals = dict.fromkeys(("claims_paid_cents", "plb_total_cents", "forward_balance_cents"))  # None unless every amount read
+    if not unverified:
+        totals.update(claims_paid_cents=sum(paid), plb_total_cents=sum(withheld),
+                      forward_balance_cents=sum(a["amount_cents"] for a in record["adjustments"] if a["reason"] == "FB"))
+        if total != totals["claims_paid_cents"] - totals["plb_total_cents"]:
+            _no("835:balance")
+    record.update(totals, rows=_rows(parts), balance_unverified=unverified)
     return record
 
 

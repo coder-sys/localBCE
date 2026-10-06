@@ -77,7 +77,8 @@ class PayerStore:
         # A store from before ``closed`` keeps every release as a closed key; a migrated store opens without the write lock.
         if self._db.execute("SELECT 1 FROM releases r WHERE NOT EXISTS(SELECT 1 FROM closed c WHERE c.tenant=r.tenant AND "
                             "c.program=r.program AND c.payment_id=r.payment_id) LIMIT 1").fetchone():
-            self._db.execute("INSERT OR IGNORE INTO closed SELECT tenant, program, payment_id, 'RELEASED', payee_ref, at FROM releases")
+            with self._tx():
+                self._db.execute("INSERT OR IGNORE INTO closed SELECT tenant, program, payment_id, 'RELEASED', payee_ref, at FROM releases")
 
     @contextlib.contextmanager
     def _tx(self) -> Iterator[None]:
@@ -85,8 +86,11 @@ class PayerStore:
         try:
             yield
             self._db.execute("COMMIT")  # a COMMIT that fails (busy) rolls back and raises: no half-open transaction
-        except BaseException:
-            self._db.execute("ROLLBACK")
+        except BaseException as fault:
+            try:
+                self._db.execute("ROLLBACK")
+            except sqlite3.Error as rollback:  # a failed COMMIT may already have ended the transaction: keep the first error
+                raise fault from rollback
             raise
 
     def pin(self, tenant: str, program: str, payment_id: str, member_key: bytes,
@@ -108,7 +112,8 @@ class PayerStore:
 
     def _deliver(self, key: str, data: bytes, transmit: Callable[[bytes], object]) -> None:
         transmit(data)
-        self._db.execute("UPDATE commands SET sent=1 WHERE command_key=?", (key,))
+        with self._tx():
+            self._db.execute("UPDATE commands SET sent=1 WHERE command_key=?", (key,))
 
     def send(self, request: gate.DecideRequest, transmit: Callable[[bytes], object]) -> None:
         """Pin, persist, then transmit the encoded request (the gate deduplicates by command key)."""
@@ -129,11 +134,12 @@ class PayerStore:
         carries every kept cert, so an unbounded store would push each frame past its timeout."""
         if len(cert) > MAX_CERT_BYTES:
             raise GatePayerError("cert_too_large")
-        if not self._db.execute("SELECT 1 FROM certs WHERE cert=?", (cert,)).fetchone():
-            if self._db.execute("SELECT COUNT(*) FROM certs").fetchone()[0] >= MAX_CERTS:
-                raise GatePayerError("cert_store_full")
-        signer.gate_verify(4, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
-        self._db.execute("INSERT OR IGNORE INTO certs VALUES(?)", (cert,))
+        with self._tx():  # the count, the probe and the insert under one write lock: concurrent installs cannot pass the cap
+            if not self._db.execute("SELECT 1 FROM certs WHERE cert=?", (cert,)).fetchone():
+                if self._db.execute("SELECT COUNT(*) FROM certs").fetchone()[0] >= MAX_CERTS:
+                    raise GatePayerError("cert_store_full")
+            signer.gate_verify(4, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
+            self._db.execute("INSERT OR IGNORE INTO certs VALUES(?)", (cert,))
 
     def _all(self, column: str, table: str) -> bytes:
         return _list([signer.framed(row[0]) for row in self._db.execute(f"SELECT {column} FROM {table} ORDER BY rowid")])

@@ -179,6 +179,7 @@ class Intake(unittest.TestCase):
                 ("clp03-unreadable", edit(GOOD, "*500.00*400.00*100.00*MC", "*5e2*400.00*100.00*MC"), amt, 1, True, "claims"),
                 ("clp04-minus-zero", edit(GOOD, "*400.00*100.00*MC*", "*-0*100.00*MC*"), amt, 1, True, "claims"),
                 ("clp05-unreadable", edit(GOOD, "*400.00*100.00*MC", "*400.00*1e2*MC"), amt, 1, True, "claims"),
+                ("clp04-three-decimals", edit(GOOD, "*500.00*400.00*100.00*MC", "*500.00*400.005*100.00*MC"), amt, 1, True, "claims"),
                 ("plb01-blank", edit(WITH_PLB, "PLB*1234567890*", "PLB**"), fld, 2, False, "adjustments"),
                 ("plb02-bad-date", edit(WITH_PLB, "*20261231*", "*20261232*"), date, 2, False, "adjustments"),
                 ("plb-amount-unreadable", edit(WITH_PLB, "*100.00*WO", "*1e2*WO"), amt, 1, True, "adjustments")):
@@ -188,6 +189,8 @@ class Intake(unittest.TestCase):
                 bad = [r for r in record.rows if r.key[0] == "RAW"]
                 self.assertEqual(([r.flags for r in bad], record.balance_unverified), ([(code,)] * raw, unverified))
                 self.assertEqual(None in [r.amount_cents for r in bad], unverified)
+                self.assertEqual([record.claims_paid_cents, record.plb_total_cents, record.forward_balance_cents].count(None),
+                                 3 if unverified else 0)  # a partial sum would look complete: totals exist only when every amount read
                 self.assertTrue(all(r.amount_cents is not None for r in record.rows if r.key[0] != "RAW"))
                 self.assertEqual(len(getattr(record, lost)) + raw, 2)
                 self.assertEqual(len(record.rows), len(parse_835(WITH_PLB if lost == "adjustments" else GOOD).rows))  # no row folded away

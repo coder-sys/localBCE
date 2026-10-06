@@ -184,6 +184,51 @@ class PayerTests(fx.Scratch):
             self.assertEqual(self._count(tmp, "closed", "releases", "holds"), [0, 0, 0])
             self.assertIsNone(store.release(request, token, now=fx.NOW))  # no transaction was left open
 
+    def test_a_commit_that_fails_after_the_transaction_ended_raises_the_commit_error(self) -> None:
+        class Gone:  # COMMIT fails the way a full disk does: SQLite has already rolled the transaction back
+            def __init__(self, db: sqlite3.Connection) -> None:
+                self.db = db
+
+            def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+                if sql == "COMMIT":
+                    self.db.execute("ROLLBACK")
+                    raise sqlite3.OperationalError("disk I/O error")
+                return self.db.execute(sql, *args)
+
+        with self.scratch() as tmp:
+            store = self._store(tmp)
+            real, store._db = store._db, Gone(store._db)
+            try:
+                with self.assertRaisesRegex(sqlite3.OperationalError, "disk I/O error") as caught:
+                    store.pin("t", "p", "pay", b"k")
+            finally:
+                store._db = real
+            self.assertRegex(str(caught.exception.__cause__), "no transaction is active")  # the ROLLBACK error is chained, not raised
+            store.pin("t", "p", "pay", b"k")  # the connection is usable
+            self.assertEqual(self._count(tmp, "pins"), [1])
+
+    def test_concurrent_installs_cannot_pass_the_cert_cap(self) -> None:
+        root, root_pk = f"root-{fx.TENANT}", fx.keypair(f"root-{fx.TENANT}")[0]
+
+        def install(epoch: int) -> Callable[[payer.PayerStore], str]:
+            body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, root_pk)
+            cert = gate.attach_signature(body, fx.det_sign(root, body))
+
+            def call(store: payer.PayerStore) -> str:
+                try:
+                    store.install_cert(cert)
+                except payer.GatePayerError as refusal:
+                    return str(refusal)
+                return "installed"
+            return call
+
+        with self.scratch() as tmp:
+            self._store(tmp).close()
+            self._raw(tmp, *(f"INSERT INTO certs VALUES(x'{n:04x}')" for n in range(payer.MAX_CERTS - 1)))
+            outcomes = self._race(tmp, *[install(fx.EPOCH + n) for n in range(4)])
+            self.assertEqual(sorted(outcomes), ["cert_store_full"] * 3 + ["installed"])
+            self.assertEqual(self._count(tmp, "certs"), [payer.MAX_CERTS])
+
     def test_a_complete_store_opens_without_a_write(self) -> None:
         with self.scratch() as tmp:
             self._store(tmp).close()

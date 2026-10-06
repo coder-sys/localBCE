@@ -5,6 +5,7 @@ the subset (another segment, an unmodeled element, a production ISA15, a second 
 Money is exact integer cents; one tree-sum rule closes every level: SVC02 - line CAS = SVC03; CLP03 - claim and service CAS =
 CLP04, and with services CLP04 = sum(SVC03) - claim CAS; BPR02 = sum(CLP04) - sum(PLB amounts). PLB adjustments are kept whole,
 each with its reason code and reference, and `forward_balance_cents` totals the ones coded FB (sign as on the wire).
+The three totals are None when `balance_unverified`.
 
 Fold keys (hold-release r4.2 section 2). `rows` folds every CLP block of one file with the same key into one row, and every PLB
 tuple likewise. The 835 tag comes from CLP02 alone (REV iff 22; the amount never changes it), so a sign flip keeps the key. One bad
@@ -125,9 +126,9 @@ class Remittance:
     payee: Party
     claims: tuple[Claim, ...]
     adjustments: tuple[PlbAdjustment, ...]
-    claims_paid_cents: int
-    plb_total_cents: int
-    forward_balance_cents: int
+    claims_paid_cents: int | None  # None with balance_unverified
+    plb_total_cents: int | None
+    forward_balance_cents: int | None
     rows: tuple[Row, ...]
     balance_unverified: bool  # a block amount was unreadable, so BPR02 was not checked: S3 holds every row
 
@@ -393,11 +394,13 @@ def parse_835(data: bytes) -> Remittance:
     if cursor.peek():
         refuse("835:segment")
     unverified = None in paid or None in withheld
-    claims_paid, plb_total = sum(a for a in paid if a is not None), sum(a for a in withheld if a is not None)
-    if not unverified and total != claims_paid - plb_total:
-        refuse("835:balance")
+    claims_paid = plb_total = forward_balance = None  # totals exist only when every amount read: a partial sum would look complete
+    if not unverified:
+        claims_paid, plb_total = sum(paid), sum(withheld)  # every CLP04 and PLB amount on the wire, RAW blocks too: BPR02's basis
+        if total != claims_paid - plb_total:
+            refuse("835:balance")
+        forward_balance = sum(a.amount_cents for a in adjustments if a.reason == "FB")  # a RAW pair is not here: its RAW row is the record
     return Remittance(interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), interchange.isa.value(6).rstrip(" "),
                       interchange.isa.value(8).rstrip(" "), group.gs.value(2), group.gs.value(3), *head, dates, payer, payee,
-                      tuple(claims), tuple(adjustments), claims_paid, plb_total,
-                      sum(a.amount_cents for a in adjustments if a.reason == "FB"),  # a RAW pair is not here: its RAW row is the record
+                      tuple(claims), tuple(adjustments), claims_paid, plb_total, forward_balance,
                       _fold(parts), unverified)
