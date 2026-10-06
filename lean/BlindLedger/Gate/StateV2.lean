@@ -1163,9 +1163,290 @@ def entryIn (e : Entry) : Option Bytes := do
 
 def entryDigest (e : Entry) : Option Bytes := (entryIn e).map sha3
 
+private theorem be_len {w n : Nat} {bs : Bytes} (h : be w n = some bs) : bs.length = w := by
+  unfold be at h
+  split at h
+  · simp at h; subst h; simp
+  · simp at h
+
+private theorem be_lt {w n : Nat} {bs : Bytes} (h : be w n = some bs) : n < 256 ^ w := by
+  unfold be at h
+  split at h
+  · assumption
+  · simp at h
+
+private theorem be_digits_succ (w n : Nat) :
+    ((List.range (w + 1)).reverse.map fun i => (n / 256 ^ i % 256).toUInt8) =
+    ((List.range w).reverse.map fun i => (n / 256 / 256 ^ i % 256).toUInt8) ++ [(n % 256).toUInt8] := by
+  rw [List.range_succ_eq_map, List.reverse_cons, ← List.map_reverse, List.map_append, List.map_map]
+  simp [Function.comp_def, Nat.pow_succ, Nat.div_div_eq_div_mul, Nat.mul_comm]
+
+private theorem be_digits_inj : ∀ (w n m : Nat), n < 256 ^ w → m < 256 ^ w →
+    ((List.range w).reverse.map fun i => (n / 256 ^ i % 256).toUInt8) =
+    ((List.range w).reverse.map fun i => (m / 256 ^ i % 256).toUInt8) → n = m
+  | 0, n, m, hn, hm, _ => by simp at hn hm; omega
+  | w + 1, n, m, hn, hm, h => by
+    rw [be_digits_succ, be_digits_succ] at h
+    have hl : ∀ k : Nat, (((List.range w).reverse.map fun i => (k / 256 ^ i % 256).toUInt8)).length = w := by
+      intro k; simp
+    obtain ⟨h1, h2⟩ := List.append_inj h (by rw [hl, hl])
+    have e1 : n / 256 = m / 256 := by
+      refine be_digits_inj w _ _ (by rw [Nat.pow_succ] at hn; omega) (by rw [Nat.pow_succ] at hm; omega) ?_
+      simpa using h1
+    have e2 : n % 256 = m % 256 := by
+      have := congrArg (fun l : List UInt8 => l.head?.map UInt8.toNat) h2
+      simpa [Nat.mod_mod] using this
+    omega
+
+private theorem be_inj {w n m : Nat} {bs : Bytes} (h : be w n = some bs) (h' : be w m = some bs) : n = m := by
+  have hn := be_lt h
+  have hm := be_lt h'
+  unfold be at h h'
+  rw [if_pos hn] at h
+  rw [if_pos hm] at h'
+  exact be_digits_inj w n m hn hm (by rw [Option.some.inj h, Option.some.inj h'])
+
+private theorem mapM_flat_inj {α : Type} (f : α → Option Bytes)
+    (hf : ∀ a a' y y' (r r' : Bytes), f a = some y → f a' = some y' → y ++ r = y' ++ r' → a = a' ∧ r = r') :
+    ∀ (l l' : List α) (ys ys' : List Bytes) (r r' : Bytes), l.length = l'.length →
+      l.mapM f = some ys → l'.mapM f = some ys' → ys.flatten ++ r = ys'.flatten ++ r' → l = l' ∧ r = r' := by
+  intro l
+  induction l with
+  | nil =>
+    intro l' ys ys' r r' hl h1 h2 h
+    cases l' with
+    | nil => simp at h1 h2; subst h1; subst h2; simpa using h
+    | cons _ _ => simp at hl
+  | cons a t ih =>
+    intro l' ys ys' r r' hl h1 h2 h
+    cases l' with
+    | nil => simp at hl
+    | cons a' t' =>
+      simp [List.mapM_cons, Option.bind_eq_some_iff] at h1 h2
+      obtain ⟨y, hy, zs, hz, rfl⟩ := h1
+      obtain ⟨y', hy', zs', hz', rfl⟩ := h2
+      simp only [List.flatten_cons, List.append_assoc] at h
+      obtain ⟨e1, e2⟩ := hf a a' y y' _ _ hy hy' h
+      obtain ⟨e3, e4⟩ := ih t' zs zs' r r' (by simpa using hl) hz hz' e2
+      exact ⟨by rw [e1, e3], e4⟩
+
+private theorem lenBytes_inj {a a' y y' r r' : Bytes} (h : lenBytes a = some y) (h' : lenBytes a' = some y')
+    (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  unfold lenBytes at h h'
+  obtain ⟨p, hp, rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨p', hp', rfl⟩ := Option.map_eq_some_iff.mp h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  exact List.append_inj e2 (be_inj hp hp')
+
+private theorem fields_inj : ∀ (fs fs' : List (Nat × Nat)) (bs bs' : List Bytes) (r r' : Bytes),
+    fs.map Prod.fst = fs'.map Prod.fst →
+    (fs.mapM fun (w, n) => be w n) = some bs → (fs'.mapM fun (w, n) => be w n) = some bs' →
+    bs.flatten ++ r = bs'.flatten ++ r' → fs = fs' ∧ r = r' := by
+  intro fs
+  induction fs with
+  | nil =>
+    intro fs' bs bs' r r' hw h1 h2 h
+    cases fs' with
+    | nil => simp at h1 h2; subst h1; subst h2; simpa using h
+    | cons _ _ => simp at hw
+  | cons p t ih =>
+    intro fs' bs bs' r r' hw h1 h2 h
+    cases fs' with
+    | nil => simp at hw
+    | cons p' t' =>
+      obtain ⟨w, n⟩ := p
+      obtain ⟨w', n'⟩ := p'
+      simp at hw
+      obtain ⟨rfl, hw⟩ := hw
+      simp [List.mapM_cons, Option.bind_eq_some_iff] at h1 h2
+      obtain ⟨y, hy, zs, hz, rfl⟩ := h1
+      obtain ⟨y', hy', zs', hz', rfl⟩ := h2
+      simp only [List.flatten_cons, List.append_assoc] at h
+      obtain ⟨e1, e2⟩ := List.append_inj h (by rw [be_len hy, be_len hy'])
+      subst e1
+      obtain ⟨e3, e4⟩ := ih t' zs zs' r r' hw hz hz' e2
+      have := be_inj hy hy'
+      subst this
+      subst e3
+      exact ⟨rfl, e4⟩
+
+private theorem Line_ext {l l' : Line} (h : Line.fields l = Line.fields l') : l = l' := by
+  obtain ⟨a1, a2, f, a4, a5, a6, a7, a8, a9, a10⟩ := l
+  obtain ⟨b1, b2, g, b4, b5, b6, b7, b8, b9, b10⟩ := l'
+  cases f <;> cases g <;> simp_all [Line.fields, Flow.tag]
+
+private theorem rowBytes_inj {a a' : Line} {y y' r r' : Bytes} (h : rowBytes a = some y)
+    (h' : rowBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  unfold rowBytes at h h'
+  obtain ⟨bs, hbs, rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨bs', hbs', rfl⟩ := Option.map_eq_some_iff.mp h'
+  obtain ⟨e1, e2⟩ := fields_inj _ _ bs bs' r r' (by simp [Line.fields]) hbs hbs' hx
+  exact ⟨Line_ext e1, e2⟩
+
+private theorem rowsBytes_inj {a a' : List Line} {y y' r r' : Bytes} (h : rowsBytes a = some y)
+    (h' : rowsBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  simp [rowsBytes, Option.bind_eq_some_iff] at h h'
+  obtain ⟨p, hp, rs, hrs, rfl⟩ := h
+  obtain ⟨p', hp', rs', hrs', rfl⟩ := h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  exact mapM_flat_inj rowBytes (fun _ _ _ _ _ _ => rowBytes_inj) a a' rs rs' r r' (be_inj hp hp') hrs hrs' e2
+
+private theorem setBytes_inj {a a' : Snapshot Line} {y y' r r' : Bytes} (h : setBytes a = some y)
+    (h' : setBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  obtain ⟨t, c, es⟩ := a
+  obtain ⟨t', c', es'⟩ := a'
+  simp [setBytes, Option.bind_eq_some_iff] at h h'
+  obtain ⟨p, hp, q, hq, z, hz, rfl⟩ := h
+  obtain ⟨p', hp', q', hq', z', hz', rfl⟩ := h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [be_len hq, be_len hq'])
+  subst e3
+  obtain ⟨e5, e6⟩ := rowsBytes_inj hz hz' e4
+  have h1 := be_inj hp hp'
+  have h2 := be_inj hq hq'
+  subst h1; subst h2; subst e5
+  exact ⟨rfl, e6⟩
+
+private theorem tipBytes_inj : ∀ {a a' : Option (Bytes × Bytes)} {y y' r r' : Bytes}, tipBytes a = some y →
+    tipBytes a' = some y' → y ++ r = y' ++ r' → a = a' ∧ r = r'
+  | none, none, y, y', r, r', h, h', hx => by
+    simp [tipBytes] at h h'; subst h; subst h'; simpa using hx
+  | none, some _, y, y', r, r', h, h', hx => by
+    simp [tipBytes, Option.bind_eq_some_iff] at h h'
+    obtain ⟨_, _, _, _, rfl⟩ := h'
+    subst h
+    simp at hx
+  | some _, none, y, y', r, r', h, h', hx => by
+    simp [tipBytes, Option.bind_eq_some_iff] at h h'
+    obtain ⟨_, _, _, _, rfl⟩ := h
+    subst h'
+    simp at hx
+  | some (s, c), some (s', c'), y, y', r, r', h, h', hx => by
+    simp [tipBytes, Option.bind_eq_some_iff] at h h'
+    obtain ⟨a, ha, b, hb, rfl⟩ := h
+    obtain ⟨a', ha', b', hb', rfl⟩ := h'
+    simp only [List.cons_append, List.cons.injEq, true_and, List.append_assoc] at hx
+    obtain ⟨e1, e2⟩ := lenBytes_inj ha ha' hx
+    obtain ⟨e3, e4⟩ := lenBytes_inj hb hb' e2
+    subst e1; subst e3
+    exact ⟨rfl, e4⟩
+
+private theorem regBytes_inj {a a' : Nat × Nat × Nat} {y y' r r' : Bytes} (h : regBytes a = some y)
+    (h' : regBytes a' = some y') (hx : y ++ r = y' ++ r') : a = a' ∧ r = r' := by
+  obtain ⟨a1, a2, a3⟩ := a
+  obtain ⟨b1, b2, b3⟩ := a'
+  simp [regBytes, Option.bind_eq_some_iff] at h h'
+  obtain ⟨p, hp, q, hq, z, hz, rfl⟩ := h
+  obtain ⟨p', hp', q', hq', z', hz', rfl⟩ := h'
+  simp only [List.append_assoc] at hx
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hp, be_len hp'])
+  subst e1
+  obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [be_len hq, be_len hq'])
+  subst e3
+  obtain ⟨e5, e6⟩ := List.append_inj e4 (by rw [be_len hz, be_len hz'])
+  subst e5
+  have h1 := be_inj hp hp'
+  have h2 := be_inj hq hq'
+  have h3 := be_inj hz hz'
+  subst h1; subst h2; subst h3
+  exact ⟨rfl, e6⟩
+
+private theorem bodyBytes_inj {b b' : Body} {y : Bytes} (h : bodyBytes b = some y)
+    (h' : bodyBytes b' = some y) : b = b' := by
+  rcases b with ⟨cert, s, ts, f⟩ | ⟨⟨tip, rel, unr⟩⟩ | ⟨t⟩ <;>
+    rcases b' with ⟨cert', s', ts', f'⟩ | ⟨⟨tip', rel', unr'⟩⟩ | ⟨t'⟩ <;>
+    simp [bodyBytes, Option.bind_eq_some_iff] at h h'
+  · obtain ⟨a, ha, s1, hs, n, hn, tt, ht, x1, hx1, x2, hx2, rfl⟩ := h
+    obtain ⟨a', ha', s1', hs', n', hn', tt', ht', x1', hx1', x2', hx2', hy⟩ := h'
+    have hx := (List.cons.inj hy).2.symm
+    obtain ⟨e1, e2⟩ := lenBytes_inj ha ha' hx
+    obtain ⟨e3, e4⟩ := lenBytes_inj hs hs' e2
+    obtain ⟨e5, e6⟩ := List.append_inj e4 (by rw [be_len hn, be_len hn'])
+    subst e5
+    have hl := be_inj hn hn'
+    obtain ⟨e7, e8⟩ := mapM_flat_inj lenBytes (fun _ _ _ _ _ _ => lenBytes_inj) ts ts' tt tt' _ _ hl ht ht' e6
+    obtain ⟨e9, e10⟩ := rowsBytes_inj hx1 hx1' e8
+    obtain ⟨e11, _⟩ := rowsBytes_inj hx2 hx2' (by rw [List.append_nil, List.append_nil]; exact e10)
+    subst e1; subst e3; subst e7
+    exact congrArg (Body.sign cert s ts) (Prod.ext e9 e11)
+  · obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨a, ha, a1, ha1, a2, ha2, rfl⟩ := h
+    obtain ⟨a', ha', a1', ha1', a2', ha2', hy⟩ := h'
+    have hx := (List.cons.inj hy).2.symm
+    obtain ⟨e1, e2⟩ := tipBytes_inj ha ha' hx
+    obtain ⟨e3, e4⟩ := setBytes_inj ha1 ha1' e2
+    obtain ⟨e5, _⟩ := setBytes_inj ha2 ha2' (by rw [List.append_nil, List.append_nil]; exact e4)
+    subst e1; subst e3; subst e5
+    rfl
+  · obtain ⟨_, _, _, _, _, _, e1⟩ := h
+    obtain ⟨_, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨_, _, e1⟩ := h
+    obtain ⟨_, _, _, _, _, _, e2⟩ := h'
+    have := e1.trans e2.symm
+    simp at this
+  · obtain ⟨a, ha, rfl⟩ := h
+    obtain ⟨a', ha', hy⟩ := h'
+    have hx := (List.cons.inj hy).2.symm
+    obtain ⟨e1, _⟩ := lenBytes_inj ha ha' (by rw [List.append_nil, List.append_nil]; exact hx)
+    subst e1
+    rfl
+
+private theorem entryIn_prev {e : Entry} {x : Bytes} (h : entryIn e = some x) : e.prev.length = digestBytes := by
+  unfold entryIn at h
+  by_cases hc : e.prev.length = digestBytes
+  · exact hc
+  · have hn : (guard (e.prev.length = digestBytes) : Option Unit) = none := by simp [guard, hc]; rfl
+    rw [hn] at h
+    simp at h
+
 /-- FORMAT: the entry encoding is injective where defined. -/
-theorem entryIn_inj (e e' : Entry) (x : Bytes) (h : entryIn e = some x) (h' : entryIn e' = some x) : e = e' :=
-  sorry
+theorem entryIn_inj (e e' : Entry) (x : Bytes) (h : entryIn e = some x) (h' : entryIn e' = some x) : e = e' := by
+  have hg := entryIn_prev h
+  have hg' := entryIn_prev h'
+  obtain ⟨idx, prev, shard, reg, body⟩ := e
+  obtain ⟨idx', prev', shard', reg', body'⟩ := e'
+  simp [entryIn, guard, hg, hg', Option.bind_eq_some_iff] at h h'
+  obtain ⟨i, hi, k, hk, n, hn, rs, hrs, b, hb, rfl⟩ := h
+  obtain ⟨i', hi', k', hk', n', hn', rs', hrs', b', hb', hx⟩ := h'
+  have hx := (List.append_cancel_left hx).symm
+  obtain ⟨e1, e2⟩ := List.append_inj hx (by rw [be_len hi, be_len hi'])
+  subst e1
+  obtain ⟨e3, e4⟩ := List.append_inj e2 (by rw [hg, hg'])
+  subst e3
+  obtain ⟨e5, e6⟩ := List.append_inj e4 (by rw [be_len hk, be_len hk'])
+  subst e5
+  obtain ⟨e7, e8⟩ := List.append_inj e6 (by rw [be_len hn, be_len hn'])
+  subst e7
+  obtain ⟨e9, e10⟩ := mapM_flat_inj regBytes (fun _ _ _ _ _ _ => regBytes_inj) reg reg' rs rs' b b'
+    (be_inj hn hn') hrs hrs' e8
+  have e11 := bodyBytes_inj hb (by rw [e10]; exact hb')
+  have := be_inj hi hi'
+  have := be_inj hk hk'
+  subst_vars
+  rfl
 
 /-- FORMAT: rows are newest first, so appending older rows extends the chain under the newer ones. -/
 theorem chainHead_append (H : Bytes → Bytes) (g : Bytes) (d l : List Row) :
