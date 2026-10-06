@@ -1509,13 +1509,180 @@ private theorem cust_boot (P : Pins) (s : Cust) (k : Nat) (st : LogState) (b v :
       else if v - b + 1 = (st.shard k).own c.epoch then .finishCounter else .stop := by
   simp only [boot, hf, hc, hd]
 
+/-- Two leaves of one pushed sign entry with one payment id are one leaf (publishOkAny: ids strictly ascending). -/
+private theorem cust_leaf_eq (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st')
+    (l l' : Leaf) (hl : l ∈ e.body.leaves) (hl' : l' ∈ e.body.leaves) (hp : l.paymentId = l'.paymentId) :
+    l = l' := by
+  have inj : ∀ (L : List Leaf), (L.map (·.paymentId)).Nodup →
+      ∀ a ∈ L, ∀ b ∈ L, a.paymentId = b.paymentId → a = b := by
+    intro L
+    induction L with
+    | nil => intro _ a ha; simp at ha
+    | cons x xs ih =>
+      intro hn a ha b hb hab
+      simp only [List.map_cons, List.nodup_cons, List.mem_map, not_exists, not_and] at hn
+      rcases List.mem_cons.mp ha with rfl | ha' <;> rcases List.mem_cons.mp hb with rfl | hb'
+      · rfl
+      · exact absurd hab.symm (hn.1 b hb')
+      · exact absurd hab (hn.1 a ha')
+      · exact ih hn.2 a ha' b hb' hab
+  unfold push at h
+  cases hb : e.body with
+  | sign cert new tokens fresh =>
+    rw [hb] at hl hl'
+    simp [hb, Option.bind_eq_some_iff, cust_guard] at h
+    obtain ⟨_, _, _, _, _, _, _, _, n, hn, c, hc, _, hpub, -⟩ := h
+    simp only [publishOkAny, hc, hn, Bool.and_eq_true] at hpub
+    have hnd := ascending_nodup _ hpub.1.2
+    have hL : (Body.sign cert new tokens fresh).leaves = (tokens.filterMap decodeToken).map (·.leaf) := by
+      simp [Body.leaves, List.map_filterMap]
+    rw [hL] at hl hl'
+    exact inj _ (by rw [List.map_map]; exact hnd) l hl l' hl' hp
+  | resume _ => rw [hb] at hl; simp [Body.leaves] at hl
+  | «seal» _ => rw [hb] at hl; simp [Body.leaves] at hl
+
+/-- An entry at position m of a folding log: the prefix before it folds, it pushes, its index is m. -/
+private theorem cust_fold_at (P : Pins) (l : List Entry) (h : (fold P l).isSome) (m : Nat) (e : Entry)
+    (hm : l[m]? = some e) :
+    ∃ st st', fold P (l.take m) = some st ∧ push P st e = some st' ∧ e.idx = m ∧
+      (fold P (l.take (m + 1))).isSome := by
+  have hlt : m < l.length := (List.getElem?_eq_some_iff.mp hm).1
+  have ht : l.take (m + 1) = l.take m ++ [e] := by simp [List.take_succ, hm]
+  have hp : (fold P (l.take (m + 1))).isSome := by
+    have hs : (fold P (l.take (m + 1) ++ l.drop (m + 1))).isSome := by rw [List.take_append_drop]; exact h
+    simp only [fold, List.foldlM_append] at hs
+    cases hx : (l.take (m + 1)).foldlM (push P) LogState.init with
+    | none => rw [hx] at hs; simp at hs
+    | some _ => simp [fold, hx]
+  have hp' := hp
+  rw [ht] at hp'
+  obtain ⟨st', hst'⟩ := Option.isSome_iff_exists.mp hp'
+  obtain ⟨st, h1, h2⟩ := (cust_fold_snoc P _ e st').mp hst'
+  refine ⟨st, st', h1, h2, ?_, hp⟩
+  rw [(cust_push P st st' e h2).1, cust_fold_len P _ st h1, List.length_take]
+  omega
+
+/-- In a folding log one signed checkpoint sits at one position (F8: createdAt strictly increasing). -/
+private theorem cust_signed_uniq (P : Pins) (l : List Entry) (h : (fold P l).isSome) (m m' : Nat)
+    (e e' : Entry) (hm : l[m]? = some e) (hm' : l[m']? = some e') (x : Bytes)
+    (hx : e.body.signed? = some x) (hx' : e'.body.signed? = some x) : m = m' := by
+  have stored : ∀ (j : Nat) (y : Entry), l[j]? = some y → y.body.signed? = some x →
+      ∃ n, storedOfAny sha3 x = some n ∧ n.checkpoint.shardId = y.shard := by
+    intro j y hj hy
+    obtain ⟨st, st', -, hp, -, -⟩ := cust_fold_at P l h j y hj
+    cases hb : y.body with
+    | sign cert new tokens f =>
+      rw [hb] at hy
+      simp only [Body.signed?, Option.some.injEq] at hy
+      subst hy
+      obtain ⟨c, n, -, hn, hs, -⟩ := (cust_push P st st' y hp).2.2.2.2 cert new tokens f hb
+      exact ⟨n, hn, hs⟩
+    | resume _ => rw [hb] at hy; simp [Body.signed?] at hy
+    | «seal» _ => rw [hb] at hy; simp [Body.signed?] at hy
+  obtain ⟨n, hn, hs⟩ := stored m e hm hx
+  obtain ⟨n', hn', hs'⟩ := stored m' e' hm' hx'
+  have hnn : n = n' := Option.some.inj (hn.symm.trans hn')
+  subst hnn
+  have hk : e.shard = e'.shard := hs.symm.trans hs'
+  rcases Nat.lt_trichotomy m m' with hlt | heq | hgt
+  · exact absurd (createdAt_strict P l h m m' hlt e e' hm hm' hk x x hx hx' n n hn hn) (Nat.lt_irrefl _)
+  · exact heq
+  · exact absurd (createdAt_strict P l h m' m hgt e' e hm' hm hk.symm x x hx' hx n n hn hn) (Nat.lt_irrefl _)
+
+/-- Unless a released signed was lost, every released entry sits at its own index under a folding prefix:
+    a rollback past it would need another copy of its signed below it in that prefix (F8 forbids). -/
+private theorem cust_out_inv (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : Reach P cert₀ s) :
+    (∀ e ∈ s.made, ∃ x, e.body.signed? = some x) ∧ (∀ e ∈ s.out, e ∈ s.made) ∧
+    (¬ s.lost → ∀ e ∈ s.out, s.off[e.idx]? = some e ∧ (fold P (s.off.take (e.idx + 1))).isSome) := by
+  have keep : ∀ (off : List Entry) (y x : Entry), off[x.idx]? = some x →
+      (fold P (off.take (x.idx + 1))).isSome →
+      (off ++ [y])[x.idx]? = some x ∧ (fold P ((off ++ [y]).take (x.idx + 1))).isSome := by
+    intro off y x h1 h2
+    have hlt : x.idx < off.length := (List.getElem?_eq_some_iff.mp h1).1
+    rw [List.getElem?_append_left hlt, List.take_append_of_le_length (by omega)]
+    exact ⟨h1, h2⟩
+  induction hr with
+  | init => simp [Cust.init]
+  | honest s s' _ hs ih =>
+    obtain ⟨hA, hB, hC⟩ := ih
+    cases hs with
+    | sign k0 st0 b0 v0 i new tokens e hf0 hb hc hi he =>
+      obtain ⟨-, ⟨f, hbody⟩, -⟩ := cust_custodyOk P st0 k0 (s.cert k0) i new tokens e he
+      refine ⟨fun x hx => ?_, fun x hx => List.mem_append_left _ (hB x hx),
+        fun hl x hx => keep _ e x (hC hl x hx).1 (hC hl x hx).2⟩
+      rcases List.mem_append.mp hx with hx | hx
+      · exact hA x hx
+      · rw [List.mem_singleton.mp hx, hbody]; exact ⟨new, rfl⟩
+    | bump k0 b0 v0 hb hc => exact ⟨hA, hB, hC⟩
+    | activate e hs hfo => exact ⟨hA, hB, fun hl x hx => keep _ e x (hC hl x hx).1 (hC hl x hx).2⟩
+    | define k0 c0 hc => exact ⟨hA, hB, hC⟩
+    | ceremony k0 cert hc hdc => exact ⟨hA, hB, hC⟩
+    | release e hm ho hb =>
+      refine ⟨hA, fun x hx => ?_, fun hl x hx => ?_⟩
+      · rcases List.mem_append.mp hx with hx | hx
+        · exact hB x hx
+        · rw [List.mem_singleton.mp hx]; exact hm
+      · rcases List.mem_append.mp hx with hx | hx
+        · exact hC hl x hx
+        · rw [List.mem_singleton.mp hx]
+          have hfs : (fold P s.off).isSome := by
+            revert hb; unfold boot; cases fold P s.off <;> simp
+          obtain ⟨m, hm'⟩ := List.mem_iff_getElem?.mp ho
+          obtain ⟨-, -, -, -, hidx, hpre⟩ := cust_fold_at P s.off hfs m e hm'
+          rw [hidx]; exact ⟨hm', hpre⟩
+  | adv s s' _ ha ih =>
+    obtain ⟨hA, hB, hC⟩ := ih
+    cases ha with
+    | offRollback j =>
+      refine ⟨hA, hB, fun hn x hx => ?_⟩
+      have hl : ¬ s.lost := fun h => hn (Or.inl h)
+      obtain ⟨h1, h2⟩ := hC hl x hx
+      by_cases hj : x.idx < j
+      · refine ⟨by rw [List.getElem?_take_of_lt hj]; exact h1, ?_⟩
+        have ht : (s.off.take j).take (x.idx + 1) = s.off.take (x.idx + 1) := by
+          rw [List.take_take]; congr 1; omega
+        rw [ht]; exact h2
+      · exfalso
+        obtain ⟨y, hy, hys⟩ : ∃ y ∈ s.off.take j, y.body.signed? = x.body.signed? :=
+          Classical.byContradiction fun hc => hn (Or.inr ⟨x, hx, fun y hy h => hc ⟨y, hy, h⟩⟩)
+        obtain ⟨m, hm⟩ := List.mem_iff_getElem?.mp hy
+        have hmj : m < j := by
+          have := (List.getElem?_eq_some_iff.mp hm).1
+          simp only [List.length_take] at this; omega
+        rw [List.getElem?_take_of_lt hmj] at hm
+        obtain ⟨z, hz⟩ := hA x (hB x hx)
+        have := cust_signed_uniq P _ h2 m x.idx y x
+          (by rw [List.getElem?_take_of_lt (by omega)]; exact hm)
+          (by rw [List.getElem?_take_of_lt (by omega)]; exact h1) z (hys.trans hz) hz
+        omega
+    | foreignWrite e hr => exact ⟨hA, hB, fun hl x hx => keep _ e x (hC hl x hx).1 (hC hl x hx).2⟩
+    | tpmClear k => exact ⟨hA, hB, hC⟩
+
 /-- H2: unless a released signed was ever lost, one shard never releases two ALLOWs for one payment and
     revision, except as the same leaf of the same signed checkpoint. -/
 theorem never_twice (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : Reach P cert₀ s) (hl : ¬ s.lost)
     (e e' : Entry) (he : e ∈ s.out) (he' : e' ∈ s.out) (hk : e.shard = e'.shard) (l l' : Leaf)
     (hl1 : l ∈ e.body.leaves) (hl2 : l' ∈ e'.body.leaves) (ha : l.outcome = .ALLOW) (ha' : l'.outcome = .ALLOW)
     (hp : l.programId = l'.programId ∧ l.paymentId = l'.paymentId ∧ l.revision = l'.revision) :
-    (e.body.signed? = e'.body.signed? ∧ l = l') ∨ ChainCollision s := sorry
+    (e.body.signed? = e'.body.signed? ∧ l = l') ∨ ChainCollision s := by
+  obtain ⟨-, -, hC⟩ := cust_out_inv P cert₀ s hr
+  obtain ⟨h1, f1⟩ := hC hl e he
+  obtain ⟨h2, f2⟩ := hC hl e' he'
+  have hpn : payNat l.programId l.paymentId = payNat l'.programId l'.paymentId := by rw [hp.1, hp.2.1]
+  left
+  rcases Nat.lt_trichotomy e.idx e'.idx with hlt | heq | hgt
+  · exact absurd ha' ((revision_mono P _ f2 e.idx e'.idx hlt e e'
+      (by rw [List.getElem?_take_of_lt (by omega)]; exact h1)
+      (by rw [List.getElem?_take_of_lt (by omega)]; exact h2) hk l l' hl1 hl2 hpn).2 hp.2.2)
+  · rw [heq] at h1
+    have hee : e = e' := Option.some.inj (h1.symm.trans h2)
+    subst hee
+    obtain ⟨st, st', -, hpush, -, -⟩ := cust_fold_at P _ f2 e.idx e
+      (by rw [List.getElem?_take_of_lt (by omega)]; exact h2)
+    exact ⟨rfl, cust_leaf_eq P st st' e hpush l l' hl1 hl2 hp.2.1⟩
+  · exact absurd ha ((revision_mono P _ f1 e'.idx e.idx hgt e' e
+      (by rw [List.getElem?_take_of_lt (by omega)]; exact h2)
+      (by rw [List.getElem?_take_of_lt (by omega)]; exact h1) hk.symm l' l hl2 hl1 hpn.symm).2 hp.2.2.symm)
 
 private theorem cust_honest_inv (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : ReachH P cert₀ s) :
     ¬ s.lost ∧ ∀ e ∈ s.out, e ∈ s.off := by
