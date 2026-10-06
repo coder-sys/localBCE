@@ -13,9 +13,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 36_004  # 35,823 trunk + 78 S2 codec + 103 D7 slots
+PRODUCT_CODE_LINES = 36_017  # 35,823 trunk + 78 S2 codec + 103 D7 slots + 13 S7a payer
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 32_804  # 32,533 trunk + 71 S2 + 101 test-speed (fixture/server reuse; measured net) + 99 D7 slots (empty slots refuse activation loudly)
+EVIDENCE_CODE_LINES = 32_935  # 32,533 trunk + 71 S2 + 101 test-speed (fixture/server reuse; measured net) + 99 D7 slots (empty slots refuse activation loudly) + 131 S7a payer tests (race, rollback, read-only open)
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 92_740  # 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)
