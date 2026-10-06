@@ -43,6 +43,8 @@ from app.right_rail_financial_staff_server import (
     ITEM_IDS,
     PROGRAM_TOTAL_CENTS,
     SUPPORT_EVENT_MS,
+    COMMAND_ROLES,
+    STAFF_ROLES,
     StaffWorkflow,
     _COMMAND_ROUTES,
     _LoopbackServer,
@@ -64,6 +66,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
     def _http_json(self, port: int, path: str, body: dict[str, object] | None = None, *, timeout: float = 5) -> dict[str, object]:
         host = f"127.0.0.1:{port}"
         headers = {"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"}
+        if body is not None:
+            headers["X-Staff-Role"] = min(COMMAND_ROLES[path])
         with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)) as connection:
             connection.request("GET" if body is None else "POST", path,
                                body=None if body is None else json.dumps(body, separators=(",", ":")), headers=headers)
@@ -350,7 +354,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         with patch.object(FinancialOwner, "restore_continuity", side_effect=failure):
             with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
                 connection.request("POST", "/api/continuity/restore-test", body=json.dumps(self._review_body(workflow)),
-                                   headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"})
+                                   headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json", "X-Staff-Role": "operator"})
                 response = connection.getresponse()
                 body = json.loads(response.read().decode("utf-8"))
         self.assertEqual(response.status, 409)
@@ -880,7 +884,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         server = self._serve_workflow(workflow)
         port = int(server.server_address[1])
         host = ("Host", f"127.0.0.1:{port}")
-        post = (host, ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"))
+        post = (host, ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"), ("X-Staff-Role", "analyst"))
 
         def call(method: str, path: str, headers: tuple[tuple[str, str], ...], body: bytes = b"", length: str = "") -> tuple[int, dict[str, str], object]:
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -934,7 +938,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         with patch.object(workflow, "command", return_value={}) as command, patch("app.right_rail_financial_staff_server.HTTP_BODY_TIMEOUT_SECONDS", 0.15):
             for framing, body, eof in cases:
                 with self.subTest(framing=framing, eof=eof), socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
-                    request = f"POST /api/action/acknowledge HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\n{framing}\r\n\r\n".encode() + body
+                    request = f"POST /api/action/acknowledge HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nX-Staff-Role: analyst\r\n{framing}\r\n\r\n".encode() + body
                     peer.sendall(request)
                     if eof:
                         peer.shutdown(socket.SHUT_WR)
@@ -983,7 +987,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
             self.addCleanup(connection.close)
             with patch.object(workflow.mirror, "record_reporting_evidence", commit_then_lock), patch.object(owner, "_read_snapshot", snapshot):
-                connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json"})
+                connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json", "X-Staff-Role": "analyst"})
                 response = connection.getresponse()
                 answer = (response.status, response.getheader("Retry-After"), json.loads(response.read().decode("utf-8")))
             code = "store_busy" if released else "store_busy_outcome_unknown"
@@ -1011,6 +1015,82 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertGreater(owner.summary()["sequence"], before)
         with closing(sqlite3.connect(owner.path)) as check:
             self.assertEqual(check.execute("SELECT COUNT(*) FROM evidence WHERE evidence_id='evidence:report:h:original'").fetchone()[0], 0)
+
+
+    _ROLE_TABLE = {  # the authority, pinned apart from the served file: widening a role must edit this on purpose
+        "/api/decision/authorize-offset": {"approver"},
+        "/api/decision/reject-offset": {"approver"},
+        "/api/action/acknowledge": {"analyst"},
+        "/api/correction/record-cash": {"analyst"},
+        "/api/reporting/record": {"analyst"},
+        "/api/continuity/restore-test": {"operator"},
+    }
+    _REFUSED = {"error": {"code": "staff_role_refused"}, "changed": False}
+
+    def _role_post(self, port: int, path: str, roles: tuple[str, ...], body: bytes = b'{"revision":0}') -> tuple[int, object]:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
+        for name, value in (("Host", f"127.0.0.1:{port}"), ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"),
+                            *(("X-Staff-Role", role) for role in roles), ("Content-Length", str(len(body)))):
+            connection.putheader(name, value)
+        connection.endheaders(body)
+        response = connection.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_every_role_by_every_command_is_enforced_by_the_server(self) -> None:
+        self.assertEqual(COMMAND_ROLES, {path: frozenset(roles) for path, roles in self._ROLE_TABLE.items()})
+        self.assertEqual(set(_COMMAND_ROUTES), set(COMMAND_ROLES))
+        self.assertEqual(STAFF_ROLES, ("analyst", "approver", "director", "auditor", "operator"))
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        before = workflow.mirror.owner.export_continuity()
+        with patch.object(workflow, "command", return_value={}) as command:
+            for role in STAFF_ROLES:
+                for path, name in _COMMAND_ROUTES.items():
+                    with self.subTest(role=role, command=name):
+                        command.reset_mock()
+                        status, body = self._role_post(port, path, (role,))
+                        if role in self._ROLE_TABLE[path]:
+                            self.assertEqual((status, body), (200, {}))
+                            command.assert_called_once_with(name, {"revision": 0})
+                        else:
+                            self.assertEqual((status, body), (403, self._REFUSED))
+                            command.assert_not_called()
+        self.assertEqual(workflow.mirror.owner.export_continuity(), before)
+
+    def test_a_missing_forged_or_repeated_role_and_an_unknown_command_reach_nothing(self) -> None:
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        before = workflow.mirror.owner.export_continuity()
+        path = "/api/decision/reject-offset"
+        claims = ((), ("",), ("APPROVER",), ("approver,analyst",), ("admin",), ("FINANCE_DECISION",), ("synthetic-official",),
+                  ("analyst",), ("director",), ("approver", "approver"), ("approver", "analyst"), ("analyst", "approver"))
+        with patch.object(workflow, "command", return_value={}) as command:
+            for claim in claims:
+                with self.subTest(claim=claim):
+                    self.assertEqual(self._role_post(port, path, claim), (403, self._REFUSED))
+                    self.assertEqual(self._role_post(port, path, claim, b"not json"), (403, self._REFUSED))  # refused before the body is read
+            self.assertEqual(self._role_post(port, "/api/decision/reject-offset/", ("approver",)), (404, {"error": {"code": "not_found"}}))
+            self.assertEqual(self._role_post(port, "/api/decision/delete-everything", ("approver",)), (404, {"error": {"code": "not_found"}}))
+            command.assert_not_called()
+        self.assertEqual(workflow.mirror.owner.export_continuity(), before)
+
+    def test_the_page_reads_the_servers_role_table_and_no_role_decides_and_acknowledges(self) -> None:
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        host = f"127.0.0.1:{port}"
+        with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
+            connection.request("GET", "/interaction-model.json", headers={"Host": host})
+            served = json.loads(connection.getresponse().read().decode("utf-8"))
+        ui_table = {c["route"][5:]: frozenset(c["roles"]) for c in served["controls"].values() if c["route"].startswith("POST ")}
+        self.assertEqual((ui_table, tuple(served["roles"])), (COMMAND_ROLES, STAFF_ROLES))
+        script = (Path(__file__).resolve().parents[1] / "app" / "staff_workspace" / "staff.js").read_text(encoding="utf-8")
+        self.assertIn("model.controls[name].roles.includes(role)", script)  # the button state is the table, not a copy of it
+        self.assertIn('"X-Staff-Role": role', script)  # and the command carries the role it was offered to
+        decide = COMMAND_ROLES["/api/decision/authorize-offset"] | COMMAND_ROLES["/api/decision/reject-offset"]
+        follow = COMMAND_ROLES["/api/action/acknowledge"] | COMMAND_ROLES["/api/correction/record-cash"] | COMMAND_ROLES["/api/reporting/record"]
+        self.assertEqual(decide & follow, frozenset())  # the Owner keeps FINANCE_DECISION and RECEIVER separate; so does the table
 
 
 if __name__ == "__main__":

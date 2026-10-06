@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
 import re
 import socket
@@ -106,10 +107,13 @@ ITEM_LABELS = {
 
 _ROOT = Path(__file__).resolve().parent
 FOLLOWTHROUGH_RULES_BYTES = (_ROOT / "fixtures" / "h_followthrough_rules_v1.json").read_bytes()  # listed by the fixture Control Pack
+# The role -> command table is the interaction model's, loaded once: do_POST enforces it, the page reads the same file.
 # Role is selected by path, never by query string: do_GET rejects any query
 # or fragment outright, and a fixed set of real roles keeps every disallowed
 # control absent from the page rather than merely disabled (Art. XIII.4).
-STAFF_ROLES = ("analyst", "approver", "director", "auditor", "operator")
+_MODEL = json.loads((_ROOT / "staff_workspace" / "interaction-model.json").read_bytes())
+STAFF_ROLES = tuple(_MODEL["roles"])
+COMMAND_ROLES = {c["route"][5:]: frozenset(c["roles"]) for c in _MODEL["controls"].values() if c["route"].startswith("POST ")}
 _STATIC_FILES: dict[str, tuple[str, str]] = {
     "/": ("staff_workspace/index.html", "text/html; charset=utf-8"),
     "/staff.css": ("staff_workspace/staff.css", "text/css; charset=utf-8"),
@@ -937,6 +941,10 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 return
             if command is None:
                 self._respond(404, {"error": {"code": "not_found"}})
+                return
+            claimed = self.headers.get_all("X-Staff-Role", [])  # exactly one role, in this command's row; refused before the body is read
+            if len(claimed) != 1 or claimed[0] not in COMMAND_ROLES.get(self.path, ()):
+                self._respond(403, {"error": {"code": "staff_role_refused"}, "changed": False})
                 return
             try:
                 body = self._json_request()
