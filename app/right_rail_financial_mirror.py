@@ -231,8 +231,8 @@ _RESTORE_LOCK = threading.Lock()
 _ACTIVE_DESTINATIONS: set[str] = set()
 
 
-class FinancialMirrorError(RuntimeError):
-    """Base class for bounded Mirror-side input and boundary failures."""
+class FinancialMirrorError(FinancialError):
+    """Base class for bounded Mirror-side input and boundary failures; one fail-closed family with the Owner's, so a startup refusal is one catch."""
 
 
 class FinancialMirrorInputError(FinancialMirrorError):

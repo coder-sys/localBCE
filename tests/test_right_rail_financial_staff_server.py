@@ -22,6 +22,7 @@ from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorContinuityError,
+    FinancialMirrorError,
 )
 from app.right_rail_financial_owner import (
     FinancialAuthorityError,
@@ -1205,6 +1206,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
     def test_the_page_never_says_paid_from_payer_cash_and_names_the_refused_person(self) -> None:
         script = (Path(__file__).resolve().parents[1] / "app" / "staff_workspace" / "staff.js").read_text(encoding="utf-8")
         self.assertNotRegex(script, r"[Pp]aid in full|is paid|was paid|\"Paid")  # only a release record could say Paid, and none exists
+        self.assertNotRegex(script, r"(?i)\bpaid\b")  # every money label takes its word from said(), which has none for paid
+        self.assertIn("EVIDENCE_WORD", script)
+        self.assertIn("Timeline cut short", script)  # the item timeline's incomplete flag (snapshot.h.timeline_truncated) is drawn on the page
+        self.assertIn("timeline_truncated", script)
         self.assertIn("staff_person_refused:", script)
 
     def test_resuming_a_workspace_made_under_the_older_authority_is_refused_cleanly(self) -> None:
@@ -1221,6 +1226,19 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             main(["--workspace", str(workspace), "--resume-existing-workspace"])
         self.assertEqual(raised.exception.code, 2)
         self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_a_mirror_refusal_at_startup_exits_cleanly_and_other_errors_are_not_swallowed(self) -> None:
+        workspace = Path(self.temp_dir.name)
+        StaffWorkflow(workspace).close()
+        stderr = io.StringIO()
+        with patch.object(StaffWorkflow, "_verify_resumable_workspace", side_effect=FinancialMirrorError("continuity_package_size")), \
+                redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            main(["--workspace", str(workspace), "--resume-existing-workspace"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("continuity_package_size", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+        with patch.object(StaffWorkflow, "_verify_resumable_workspace", side_effect=KeyError("x")), self.assertRaises(KeyError):
+            main(["--workspace", str(workspace), "--resume-existing-workspace"])
 
     def test_the_staff_authority_adds_named_people_and_leaves_the_default_authority_alone(self) -> None:
         default, staff = SyntheticTrustedAuthority(), staff_authority()
