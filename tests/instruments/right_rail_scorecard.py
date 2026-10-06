@@ -113,7 +113,7 @@ async function view() {
 async function handle(m) {
   if (m.op === "navigate") {
     if (context) await context.close();
-    if (!browser) browser = await chromium.launch({ executablePath, headless: true });
+    if (!browser) browser = await chromium.launch({ executablePath, headless: true, args: ["--disable-gpu", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-features=site-per-process,IsolateOrigins,msEdgeCollections,EdgeCollections,msEntityExtraction,EdgeEntityExtraction,msEdgeEntityExtraction,msExtractor,EntityExtraction", "--renderer-process-limit=1", "--in-process-gpu", "--disable-breakpad", "--disable-software-rasterizer", "--disable-sync", "--disable-crash-reporter", "--noerrdialogs"] });  // fewer processes, same page
     context = await browser.newContext({ locale: "en-US", ...(m.width ? { viewport: { width: m.width, height: 800 } } : {}) });
     page = await context.newPage();
     const t0 = Date.now(); await page.clock.install({ time: t0 }); await page.clock.pauseAt(t0 + 10000);  // page time is paused: only "tick" fires the 15 s read poll, never machine load
