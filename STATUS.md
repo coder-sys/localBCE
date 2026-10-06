@@ -63,9 +63,9 @@ No full suite on `d7192b0` yet: `land-d7192b0-full` a1-a3 each stopped at the me
 - **Gate:** ~1,550 lines/s against a 50,000 lines/s target. The rules worker needs a pinned `RULES_SOURCE` and a memory cap
   before live use; BLFPAY01 lacks a Lean length check (needs a re-pin). Unbuilt: payer pin before send, prior-digest check, integrated payer gate,
   durable token or release path. Failover TLC is a bounded model.
-- **Unbuilt:** financial file adapters (MCO reports, X12 820/835, MMIS extracts), payee-identity consumption, a second synthetic state,
+- **Unbuilt:** financial file adapters (MCO reports, X12 820, MMIS extracts; 835 intake is synthetic, read-only), payee-identity consumption, a second synthetic state,
   a Lean seal codec. The NC capture path is synthetic file intake.
-- **Carried, not re-measured:** staff roles are UI-only; no cancel or reduce command for stale corrections; receipt
+- **Carried, not re-measured:** the staff role header is a claim the server enforces, not a login; no cancel or reduce command for stale corrections; receipt
   `delivery_status` is the newest action's, not the verdict; core size targets unmet (owner 7,262 vs ~3,000 lines, checker 4,638 vs
   ~1,800); TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`).
 

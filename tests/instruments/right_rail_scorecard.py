@@ -138,8 +138,8 @@ async function handle(m) {
     return { html: await response.text(), view: await view() };
   }
   if (m.op === "post") {
-    return page.evaluate(async ({ path, body }) => {
-      const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return page.evaluate(async ({ path, body, role }) => {
+      const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Staff-Role": role }, body: JSON.stringify(body) });
       return { status: response.status, body: await response.json() };
     }, m);
   }
@@ -482,7 +482,7 @@ class _Journey:
         browser = _Browser(self.port, self.driver)
         try:
             browser.call({"op": "navigate", "port": self.port})
-            reply = browser.call({"op": "post", "path": "/api/correction/record-cash", "body": self._cash_body})
+            reply = browser.call({"op": "post", "path": "/api/correction/record-cash", "role": "analyst", "body": self._cash_body})
         finally:
             browser.close()
         after = cash()
