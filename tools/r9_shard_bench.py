@@ -87,7 +87,7 @@ def sender_on() -> bool:
     return os.environ.get("RR_SHARD_SENDER", "1") != "0"
 
 
-PART_HEAD = struct.Struct("<4sqqqHHH")  # b"PART", n, index, t_f, then the lengths of pool, pre_head and verdict; the bytes of those three follow, then the blob (the rest)
+PART_HEAD = struct.Struct("<4sqqqHHHq")  # b"PART", n, index, t_f, then the lengths of pool, pre_head, verdict and blob; the bytes of those four follow, and nothing else
 
 
 def encode(message: tuple) -> bytes:
@@ -96,17 +96,17 @@ def encode(message: tuple) -> bytes:
         return ForkingPickler.dumps(message)
     _, n, index, pool, t_f, blob, pre, verdict = message
     name = pool.encode()
-    return b"".join((PART_HEAD.pack(b"PART", n, index, t_f, len(name), len(pre), len(verdict)), name, pre, verdict, blob))
+    return b"".join((PART_HEAD.pack(b"PART", n, index, t_f, len(name), len(pre), len(verdict), len(blob)), name, pre, verdict, blob))
 
 
 def decode(buf: bytes) -> tuple:
     """The inverse of encode (a pickle starts with 0x80, never with PART): the same tuple the shard got from Connection.recv before."""
     if buf[:4] != b"PART":
         return ForkingPickler.loads(buf)
-    _, n, index, t_f, a, b, c = PART_HEAD.unpack_from(buf)
+    _, n, index, t_f, a, b, c, d = PART_HEAD.unpack_from(buf)
     o = PART_HEAD.size
-    if len(buf) < o + a + b + c:
-        raise ValueError("part message truncated")
+    if min(a, b, c, d) < 0 or len(buf) != o + a + b + c + d:
+        raise ValueError("part message length")  # short, long or shifted: never built
     return ("PART", n, index, buf[o:o + a].decode(), t_f, buf[o + a + b + c:], buf[o + a:o + a + b], buf[o + a + b:o + a + b + c])
 
 
@@ -193,7 +193,8 @@ class Shard:
                 w.write(name, data)
             w.finish(index, t_f, touched, began)
             digest.update(pickle.dumps(sorted(touched.items()), 5) + w.head)
-            w.c.execute("INSERT INTO applied VALUES (?,?,?,?)", (n, SPINE_ID, rb.sha("RR/SHARD/RCORE/v1", n, index, pool, t_f), hashlib.sha3_256(blob).digest()))
+            self.seen = hashlib.sha3_256(blob).digest()  # what the shard was sent: BUILT returns it and the spine checks it against its own copy
+            w.c.execute("INSERT INTO applied VALUES (?,?,?,?)", (n, SPINE_ID, rb.sha("RR/SHARD/RCORE/v1", n, index, pool, t_f), self.seen))
             w.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (w.seq, w.head))
             c0 = time.perf_counter()
             self.check(index, parts, seq0, pre_head, t["financial_events"])
@@ -271,7 +272,7 @@ def shard_main(conn, k: int, db: str) -> None:
         try:
             message = decode(raw)
             if message[0] == "PART":
-                conn.send(("BUILT", *shard.build(*message[1:])))
+                conn.send(("BUILT", *shard.build(*message[1:]), shard.seen))
                 if mode != 3:
                     shard.prewrite(conn)
             elif message[0] == "PREFLUSH":  # mode 3: every part of the group is built and the spine is committing; no reply
@@ -456,20 +457,22 @@ class Sender:
     """I1: one FIFO queue and one thread per shard. The spine puts each encoded message on the queue and the thread writes it; the write ends only as the shard drains the pipe (on Windows),
     so the spine no longer stands in a shard's COMMIT. A write error is kept and the thread drops what follows (the pipe is gone); the spine raises it at its next pump and before its COMMIT."""
 
-    def __init__(self, k: int, conn, owed: dict) -> None:
-        self.k, self.conn, self.owed, self.queue, self.error, self.seconds = k, conn, owed, queue.SimpleQueue(), None, {"owed": 0.0, "free": 0.0}
+    def __init__(self, k: int, conn) -> None:
+        self.k, self.conn, self.queue, self.error, self.seconds = k, conn, queue.SimpleQueue(), None, {"owed": 0.0, "free": 0.0}
         self.thread = threading.Thread(target=self.run, name=f"shard-sender-{k}", daemon=True)
         self.thread.start()
 
     def run(self) -> None:
-        while (buf := self.queue.get()) is not None:
+        while (item := self.queue.get()) is not None:
+            buf, kind = item  # kind: how the spine labelled the write when it queued it (None: not timed)
             if self.error is None:
-                t0, kind = time.perf_counter(), "owed" if self.k in self.owed else "free"  # a write while the shard's COMMIT is owed is time spent waiting on that commit
+                t0 = time.perf_counter()
                 try:
                     self.conn.send_bytes(buf)
                 except BaseException as error:  # kept for the spine's thread
                     self.error = error.with_traceback(None)  # the traceback would hold the overlapped write and its buffer for the life of the spine
-                self.seconds[kind] += time.perf_counter() - t0
+                if kind:
+                    self.seconds[kind] += time.perf_counter() - t0
 
     def stop(self) -> None:
         self.queue.put(None)
@@ -508,9 +511,9 @@ class Spine:
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
         self.dead: dict[int, str] = {}  # shards lost to this run (their COMMIT was refused, or they stopped answering) -> the error every later attempt and close raises
-        self.senders = {k: Sender(k, conn, self.owed) for k, (_, conn) in self.workers.items()} if sender_on() else {}
+        self.senders = {k: Sender(k, conn) for k, (_, conn) in self.workers.items()} if sender_on() else {}
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
-        self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes")}
+        self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes", "thread_send_owed", "thread_send_free")}
         self.commit_sent, self.ack_ms = 0.0, {k: [] for k in range(k_count)}  # per shard: ms from the spine's COMMIT send to the spine reading that shard's ACK, per group
 
     @staticmethod
@@ -536,16 +539,19 @@ class Spine:
     def send(self, k: int, message: tuple) -> None:
         """The message to shard k, in the order given: encoded here and queued for k's sender thread (I1, I3), or, with RR_SHARD_SENDER=0, pickled and written here, which on
         Windows ends only as the worker drains the pipe (a write to a worker whose COMMIT is still owed is counted apart: it is time spent waiting on that commit)."""
-        t0, sender, tt = time.perf_counter(), self.senders.get(k), self.tt
+        t0, sender, tt, counted = time.perf_counter(), self.senders.get(k), self.tt, message[0] in ("PART", "PREFLUSH", "COMMIT")  # as at 311fdb75 only these are timed
         buf = encode(message) if sender else ForkingPickler.dumps(message)
         t1 = time.perf_counter()
-        tt["ipc_pickle"] += t1 - t0
-        tt["ipc_bytes"] += len(buf)
+        kind = ("owed" if k in self.owed and message[0] != "COMMIT" else "free") if counted else None  # a write while k's COMMIT is owed is time spent waiting on that commit
+        if counted:
+            tt["ipc_pickle"] += t1 - t0
+            tt["ipc_bytes"] += len(buf)
         if sender:
-            sender.queue.put(buf)
+            sender.queue.put((buf, kind))
         else:
             self.workers[k][1].send_bytes(buf)
-            tt["ipc_send_owed" if k in self.owed else "ipc_send_free"] += time.perf_counter() - t1
+        if counted:
+            tt[f"ipc_send_{kind}"] += time.perf_counter() - t1  # the spine's own time in the call; the sender thread's write time is thread_send_*
 
     def check_senders(self) -> None:
         for k, sender in self.senders.items():
@@ -612,6 +618,8 @@ class Spine:
             raise rb.FinancialIntegrityError(f"shard_protocol:{m[0]}")
         g = self.g
         f = g.files[g.busy.pop(k)]
+        if m[3] != hashlib.sha3_256(f.p.blobs[k]).digest():  # the shard built from other bytes than the spine sent
+            raise rb.FinancialIntegrityError(f"shard_blob_mismatch:{k}")
         f.built[k], g.tip[k] = (m[1], m[2]), m[1]
         f.need.discard(k)
         if g.queue[k]:  # k is free: the group's next part for it goes out on the head it just reported
@@ -678,7 +686,10 @@ class Spine:
                 p = prepared
                 if p is None or p.index != index or p.n != n or not self.keys.keys().isdisjoint([d[0] for d in p.dirs]):
                     p = prepare(self.tbl, index, record.rows, n, self.keys)
-                f = SimpleNamespace(pos=pos, index=index, n=n, t_f=t_f, p=p, pool=f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}", need=set(p.blobs), built={}, pre={}, added=0, rows_done=False)
+                pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
+                if len(pool.encode()) > 0xFFFF:
+                    raise rb.FinancialIntegrityError("pool_too_long")
+                f = SimpleNamespace(pos=pos, index=index, n=n, t_f=t_f, p=p, pool=pool, need=set(p.blobs), built={}, pre={}, added=0, rows_done=False)
                 g.files.append(f)
                 self.keys.update((d[0], d[5]) for d in p.dirs)  # the next file of the group is judged against these cells; a rollback takes them out again
                 undo.extend(d[0] for d in p.dirs)
@@ -714,8 +725,8 @@ class Spine:
         self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
         t0 = self.commit_sent = time.perf_counter()
         for k in sorted(g.sent):
+            self.owed[k] = self.heads[k]  # before the write, so that the write is counted as the wait on this commit
             self.send(k, ("COMMIT",))
-            self.owed[k] = self.heads[k]
         self.tt["ipc"] += time.perf_counter() - t0
         self.groups.append(len(plan))
         self.ack_mark = (started, len(plan))
@@ -823,7 +834,7 @@ class Spine:
             for sender in self.senders.values():
                 sender.stop()
                 for kind, seconds in sender.seconds.items():
-                    self.tt[f"ipc_send_{kind}"] += seconds
+                    self.tt[f"thread_send_{kind}"] += seconds
             self.ckpt.close()
             self.c.close()
         return stats
@@ -907,7 +918,7 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
     stats = spine.close()
     shard_stats = sorted(stats, key=lambda s: s["k"])
     busy = sum(s["busy_s"] for s in shard_stats)
-    out = {"K": k_count, "lines": lines, "wall_s": wall, "lines_per_s": lines / wall, "classes": classes,
+    out = {"K": k_count, "sender": sender_on(), "lines": lines, "wall_s": wall, "lines_per_s": lines / wall, "classes": classes,
            "j_us": spine.tt["judge"] / lines * 1e6, "prep_us": prep_busy / lines * 1e6, "prep_wait_us": recv_s / lines * 1e6, "s_us": (spine.tt["spine_rows"] + spine.tt["spine_write"]) / lines * 1e6, "ipc_us": spine.tt["ipc"] / lines * 1e6,
            "w_us": busy / lines * 1e6, "shard_check_us": sum(s["check_s"] for s in shard_stats) / lines * 1e6,
            "shard_busy_s": [s["busy_s"] for s in shard_stats], "shard_lines": [s["lines"] for s in shard_stats], "imbalance": max(s["busy_s"] for s in shard_stats) / (busy / k_count),

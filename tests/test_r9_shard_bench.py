@@ -131,6 +131,19 @@ def stuck_main(conn, k: int, db: str) -> None:
     sb.shard_main(conn, k, db)
 
 
+def liar_main(conn, k: int, db: str) -> None:
+    """A shard worker that builds the part and reports a digest of other bytes than it was sent."""
+    real = sb.Shard.build
+
+    def build(self, *args):
+        result = real(self, *args)
+        self.seen = bytes(32)
+        return result
+
+    sb.Shard.build = build
+    sb.shard_main(conn, k, db)
+
+
 class Gated:
     """A sender's connection that writes only once the gate is open: the messages behind the one it holds stay queued."""
 
@@ -594,9 +607,17 @@ class ShardBench(unittest.TestCase):
             for k in (1, 8, 12):
                 runs = {}
                 for on in (False, True):
-                    with self.sender_env(on):
+                    closed, real_close = [], sb.Spine.close
+
+                    def close(spine):
+                        closed.append(bool(spine.senders))  # the toggle really chose the path: threads when on, none when off
+                        return real_close(spine)
+
+                    with self.sender_env(on), mock.patch.object(sb.Spine, "close", close):
                         work = self.tmp / f"s12-{name}-{k}-{int(on)}"
                         r = sb.run_once(k, files, self.template, work, True, 2)
+                    self.assertEqual((closed, r["sender"]), ([on], on), (name, k, on))
+                    self.assertEqual(r["phase_s"]["thread_send_owed"] + r["phase_s"]["thread_send_free"] > 0, on, (name, k, on))
                     r["tables"] = {p.name: digests(p) for p in sorted(work.glob("*.sqlite3")) if p.name != "snapshot.sqlite3"}
                     r["pinned"] = [pinned(work / "spine.sqlite3", False)] + [pinned(work / f"shard{i}.sqlite3", True) for i in range(k)]
                     runs[on] = r
@@ -805,6 +826,92 @@ class ShardBench(unittest.TestCase):
                     p.terminate()
         self.assertEqual(fired, [])
         self.quiet(spine)
+
+    def test_s12_part_frame_with_trailing_bytes_a_short_blob_or_shifted_lengths_is_rejected(self) -> None:
+        record, _ = self.files[0]
+        pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
+        p = sb.prepare(sb.tables(self.template, 1), 0, record.rows, 1)
+        work = self.tmp / "s12-frame"
+        work.mkdir()
+        shutil.copyfile(self.template, work / "s.sqlite3")
+        shard = sb.Shard(0, work / "s.sqlite3")
+        message = ("PART", 1, 0, pool, sb.T0_MS, p.blobs[0], shard.w.head, p.verdicts[0])
+        buf = sb.encode(message)
+        self.assertEqual(sb.decode(buf), message)
+        for name, bad in (("trailing byte", buf + b"x"), ("short blob", buf[:-1]), ("empty blob", buf[:-len(p.blobs[0])])):
+            with self.assertRaises(ValueError, msg=name):
+                sb.decode(bad)
+        fields, rest = list(sb.PART_HEAD.unpack_from(buf)), buf[sb.PART_HEAD.size:]
+        for at, delta in ((4, 1), (4, -1), (5, 1), (5, -1), (6, 1), (6, -1), (7, 1), (7, -1)):  # one length moved: the total no longer matches the frame
+            moved = fields.copy()
+            moved[at] += delta
+            with self.assertRaises(ValueError, msg=(at, delta)):
+                sb.decode(sb.PART_HEAD.pack(*moved) + rest)
+        for at in (4, 5, 6):  # a boundary moved with the total kept: the frame decodes, but not to a part any shard builds
+            moved = fields.copy()
+            moved[at] += 1
+            moved[at + 1] -= 1
+            with self.assertRaises(Exception, msg=at):
+                shard.build(*sb.decode(sb.PART_HEAD.pack(*moved) + rest)[1:])
+            self.assertFalse(shard.c.in_transaction)
+        shard.stats()
+
+    def test_s12_a_shard_that_built_from_other_bytes_fails_closed_with_the_sender_on_and_off(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        for on in (True, False):
+            name = f"s12-liar-{int(on)}"
+            spine = self.spine_with(liar_main, name, on)
+            timer, fired = self.watchdog(spine)
+            try:
+                results = spine.ingest_group([(0, *files[0], sb.prepare(spine.tbl, 0, files[0][0].rows, 1))])
+                self.assertTrue(isinstance(results[0], rb.FinancialIntegrityError) and "shard_blob_mismatch" in str(results[0]), (name, results))
+                self.assertEqual(spine.c.execute("SELECT COUNT(*) FROM records").fetchone()[0], 0, name)  # nothing was recorded
+                spine.close()
+            finally:
+                timer.cancel()
+                for p, _ in spine.workers.values():
+                    if p.is_alive():
+                        p.terminate()
+            self.assertEqual(fired, [], name)
+            self.quiet(spine)
+
+    def test_s12_a_pool_name_over_65535_bytes_is_refused_the_same_way_with_the_sender_on_and_off(self) -> None:
+        record, deposit = self.files[0]
+        for on in (True, False):
+            for extra, refused in (("t", False), ("tt", True)):  # "x12/SYNTHPAYER/" + origin + "/" + trace is 65,535 bytes, then 65,536
+                name = f"s12-pool-{int(on)}-{len(extra)}"
+                spine = self.spine_with(sb.shard_main, name, on)
+                timer, fired = self.watchdog(spine)
+                try:
+                    long_record = SimpleNamespace(rows=record.rows, trace_origin="o" * 65518, trace=extra)
+                    result = spine.ingest_group([(0, long_record, deposit, sb.prepare(spine.tbl, 0, record.rows, 1))])[0]
+                    if refused:
+                        self.assertTrue(isinstance(result, rb.FinancialIntegrityError) and "pool_too_long" in str(result), (name, result))
+                    else:
+                        self.assertIsInstance(result, dict, name)
+                    spine.close()
+                finally:
+                    timer.cancel()
+                    for p, _ in spine.workers.values():
+                        if p.is_alive():
+                            p.terminate()
+                self.assertEqual(fired, [], name)
+                self.quiet(spine)
+
+    def test_s12_blobs_over_the_pipe_buffer_store_the_same_with_the_sender_on_and_off(self) -> None:
+        files = sb.corpus(20261006, 3000, 2)
+        biggest = max(len(b) for r, _ in files[:1] for b in sb.prepare(sb.tables(self.template, 1), 0, r.rows, 1).blobs.values())
+        self.assertGreater(biggest, 1 << 16)  # more than a pipe holds: the writer really waits on the shard
+        runs = {}
+        for on in (False, True):
+            with self.sender_env(on):
+                work = self.tmp / f"s12-big-{int(on)}"
+                runs[on] = sb.run_once(1, files, self.template, work, True, 2)
+            runs[on]["tables"] = {p.name: digests(p) for p in sorted(work.glob("*.sqlite3")) if p.name != "snapshot.sqlite3"}
+            self.quiet()
+        self.assertEqual(runs[False]["classes"], runs[True]["classes"])
+        self.assertEqual(runs[False]["tables"], runs[True]["tables"])
+        self.assertTrue(runs[False]["replay"]["identical"] and runs[True]["replay"]["identical"])
 
 
 if __name__ == "__main__":
