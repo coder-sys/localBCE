@@ -603,6 +603,52 @@ theorem Rel_post_other {F : Fast} {M : Ledger} {c : Call} (hR : Rel F M)
   | conflictUnchanged _ => exact hR
   | refused _ => exact hR
 
+/-- `insertIfNew` at a key the map lacks answers like an insert. -/
+theorem get?_insertIfNew_fresh {β} {m : Std.TreeMap String β} {k : String} {v : β}
+    (hk : m.get? k = none) (id : String) :
+    (m.insertIfNew k v).get? id = if k = id then some v else m.get? id := by
+  have hn : ¬ k ∈ m := by
+    rw [Std.TreeMap.mem_iff_isSome_getElem?, ← Std.TreeMap.get?_eq_getElem?, hk]; simp
+  rw [Std.TreeMap.get?_eq_getElem?, Std.TreeMap.getElem?_insertIfNew, Std.TreeMap.get?_eq_getElem?]
+  by_cases h : k = id
+  · subst h; simp [hn]
+  · have hc : compare k id ≠ .eq := fun e => h (Std.LawfulEqCmp.compare_eq_iff_eq.1 e)
+    simp [hc, h]
+
+/-- An alias call inserts one fresh evidence row: `absorb` on the summary, `insertIfNew` on the rows. -/
+theorem Rel_alias {F : Fast} {M : Ledger} {c : Call} {pid e post} (hR : Rel F M)
+    (hr : requestWellFormed (M.request c) = true) (ho : M.outcome c = .alias pid e post) :
+    Rel (F.post (F.view c) (stepFast F (F.view c))) (step M c) := by
+  have hS' := absorb_summarize M c ho
+  have hstep : step M c = { M with input := post } := by simp only [step, ho]
+  obtain ⟨hpost, -, hfresh⟩ := alias_shape ho
+  have hfresh' : findEvidence M.input.evidence e.evidenceId = none := hfresh
+  rw [hstep] at hS'
+  rw [link_step hR c hr, ho, hstep]
+  obtain ⟨S, hS, hA⟩ := hR.agree
+  rw [hS, Option.map_some] at hS'
+  subst hpost
+  show Rel
+    { F with env := (F.view c).env, evidence := F.evidence + 1,
+             anchorBytes := F.anchorBytes + (encodeEvidence e).length,
+             rows := F.rows.insertIfNew e.evidenceId e } _
+  exact {
+    env := by show { F.env with evaluatedAt := c.now } = _; rw [hR.env]; rfl
+    pays := hR.pays
+    rcpts := hR.rcpts
+    origins := hR.origins
+    rows := funext fun id => by
+      show _ = findEvidence (insertBy EvidenceRecord.evidenceId e M.input.evidence) id
+      rw [findEvidence_insertBy hfresh', ← hR.rows]
+      exact get?_insertIfNew_fresh (by rw [hR.rows]; exact hfresh') id
+    conflicts := hR.conflicts
+    agree := ⟨_, hS'.symm, hA.cash, hA.lawful,
+      by show (insertBy (fun x => x) e.evidenceId S.evidenceIds).length = F.evidence + 1
+         rw [length_insertBy, hA.evidence],
+      hA.conflicts, hA.requests,
+      by show S.anchorBytes + (encodeEvidence e).length = F.anchorBytes + (encodeEvidence e).length
+         rw [hA.anchorBytes]⟩ }
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
