@@ -48,11 +48,17 @@ class Cluster:
     def boot(self) -> None:
         """Boot the registry against every shard's newest signed commitment, else the tenant genesis commitment, which
         the first boot takes from the then-empty registry, and each shard's store against the payer's newest stored
-        checkpoint map (B3; empty without a payer).  A refusal leaves ``nonce`` as it was (a process still running keeps
-        it), but its fence BOOT row makes every batch on it HOLD registry_not_booted."""
-        self.nonce = idreg.boot(self.reg, {k: (self.store(k).exists() and producer.newest(self.store(k))) or self.genesis
-                                           for k in range(self.shards)}, {k: self.store(k) for k in range(self.shards)},
-                                self.payer.newest_stored(fx.TENANT) if self.payer else {})
+        checkpoint map (B3; empty without a payer; a payer read error is ``None``, payer_unavailable), all read inside
+        boot's transaction.  A refusal, including a read that raises, leaves ``nonce`` as it was (a process still running
+        keeps it), but its fence BOOT row makes every batch on it HOLD registry_not_booted."""
+        def inputs():
+            try:
+                checkpoints = self.payer.newest_stored(fx.TENANT) if self.payer else {}
+            except (sqlite3.Error, OSError):
+                checkpoints = None
+            return ({k: producer.newest(self.store(k)) or self.genesis for k in range(self.shards)},
+                    {k: self.store(k) for k in range(self.shards)}, checkpoints)
+        self.nonce = idreg.boot(self.reg, inputs)
         if self.genesis[0] == 0:
             reg = idreg.IdRegistry(self.reg, boot=self.nonce)
             self.genesis = reg.genesis({})

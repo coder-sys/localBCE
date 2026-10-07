@@ -10,9 +10,10 @@ process dies; any other handle is refused ``shard_busy``, so nothing reserves fo
 check and its seal.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
 (row n and head, the checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard
 after it, else ``registry_rewound``.  A whole directory restored together passes that; ``boot`` refuses it
-``store_rewound`` when a shard's store lacks the payer's newest stored checkpoint (design idreg-restore B3).  Every
-refused boot appends a fence BOOT row (a nonce nobody holds), so a running handle's batches HOLD ``registry_not_booted``
-until a boot passes, and a restarted process holds no nonce (``decide`` with no registry HOLDs).
+``store_rewound`` when a shard's store lacks the payer's newest stored checkpoint (design idreg-restore B3).  Boot
+reads its inputs inside its write transaction, and every refused boot commits a fence BOOT row (a nonce nobody holds)
+in that same transaction, so a running handle's batches HOLD ``registry_not_booted`` until a boot passes, and a
+restarted process holds no nonce (``decide`` with no registry HOLDs).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import contextlib
 import os
 from pathlib import Path
 import sqlite3
-from typing import Final, Iterable, Mapping, Sequence
+from typing import Callable, Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_producer as producer
@@ -141,56 +142,65 @@ def _rewound(db: sqlite3.Connection, shard: int, n: int, head: bytes) -> bool:
         "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (shard, n)).fetchone() is not None
 
 
-def _fence(db: sqlite3.Connection) -> None:
-    """Append a BOOT row whose nonce nobody holds: every running handle fails ``registry_not_booted``.  BOOT rows never
-    enter ``_rewound`` or ``commitment_missing``, so a fence never refuses the next boot."""
-    with _txn(db, None):
-        _Tail(db).add(_BOOT, os.urandom(32).rjust(ID_LEN, b"\0"), 0)
+Inputs = Callable[[], tuple[Mapping[int, tuple[int, bytes]], Mapping[int, Path], Mapping[int, bytes] | None]]
 
 
-def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
-         stores: Mapping[int, Path], checkpoints: Mapping[int, bytes] | None) -> bytes:
-    """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
-    0..count-1; a shard with rows needs a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n
-    of it with no SETTLE of the shard after a RESERVE of it past n, append BOOT with a fresh nonce and return it.
-    ``stores`` names, for exactly those shards, the producer store the commitment came from; ``checkpoints`` is the
-    payer's whole map shard -> newest stored checkpoint digest (``None``: unreachable, ``payer_unavailable``).  A payer shard
-    outside the commitments is ``anchor_missing``, a store that lacks its digest sealed ``store_rewound`` (B3, design
-    idreg-restore 1: a store, registry and mark restored together to before a released checkpoint cannot boot), an
-    unreadable store ``store_unavailable``.
-    Every refusal after the registry opens commits one fence BOOT row (``_fence``), then raises: no RESERVE, FREE or
-    SETTLE, and no running handle reserves again until a boot passes."""
-    db = _open(path)
+def _admit(db: sqlite3.Connection, inputs: Inputs) -> None:
+    """``boot``'s reads and checks, inside its transaction."""
+    try:
+        commitments, stores, checkpoints = inputs()
+        head = gate.ZERO_DIGEST
+        for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
+            head = _head(head, kind, key, shard)
+            if head != stored:
+                raise IdRegistryError("chain_broken")
+        if set(commitments) != set(range(len(commitments))) or any(
+                not commitments.get(s, (0,))[0] for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
+            raise IdRegistryError("commitment_missing")
+        if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
+            raise IdRegistryError("registry_rewound")
+        if checkpoints is None:
+            raise IdRegistryError("payer_unavailable")
+        if set(stores) != set(commitments) or not set(checkpoints) <= set(commitments):
+            raise IdRegistryError("anchor_missing")
+        found = [producer.holds(stores[s], digest) for s, digest in checkpoints.items()]
+    except producer.GateProducerError as error:
+        raise IdRegistryError("store_unavailable") from error
+    except sqlite3.Error as error:
+        raise IdRegistryError("registry_unavailable") from error
+    if not all(found):
+        raise IdRegistryError("store_rewound" if None in found else "store_unsealed")
+
+
+def boot(path: Path, inputs: Inputs) -> bytes:
+    """Before any shard starts, in one write transaction: read ``inputs()`` = (commitments, stores, checkpoints), replay
+    the chain, require each shard's newest signed commitment ``(n, head)`` (shards 0..count-1; a shard with rows needs
+    a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n of it with no SETTLE of the shard
+    after a RESERVE of it past n, append BOOT with a fresh nonce and return it.  ``stores`` names, for exactly those
+    shards, the producer store the commitment came from; ``checkpoints`` is the payer's whole map shard -> newest
+    stored checkpoint digest (``None``: unreachable, ``payer_unavailable``).  A payer shard outside the commitments is
+    ``anchor_missing``; a store that lacks its digest is ``store_rewound`` (B3, design idreg-restore 1: a store,
+    registry and mark restored together to before a released checkpoint cannot boot), one that has it only unsigned
+    ``store_unsealed`` (open its producer to reseal, then boot), an unreadable one ``store_unavailable``.
+    A refusal, including any exception from ``inputs``, appends the same BOOT row in the same transaction, its nonce
+    returned to nobody (a fence: every running handle then HOLDs ``registry_not_booted`` until a boot passes), then
+    raises; if that commit fails, ``registry_unavailable`` chained from the refusal.  A registry that cannot be opened
+    or locked raises ``registry_unavailable`` before any input is read, and can be fenced by nothing."""
+    db, nonce, refusal = _open(path), os.urandom(32), None
     try:
         with _txn(db, None):
-            head = gate.ZERO_DIGEST
-            for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
-                head = _head(head, kind, key, shard)
-                if head != stored:
-                    raise IdRegistryError("chain_broken")
-            if set(commitments) != set(range(len(commitments))) or any(
-                    not commitments.get(s, (0,))[0] for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
-                raise IdRegistryError("commitment_missing")
-            if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
-                raise IdRegistryError("registry_rewound")
-            if checkpoints is None:
-                raise IdRegistryError("payer_unavailable")
-            if set(stores) != set(commitments) or not set(checkpoints) <= set(commitments):
-                raise IdRegistryError("anchor_missing")
             try:
-                rewound = not all(producer.holds(stores[s], digest) for s, digest in checkpoints.items())
-            except producer.GateProducerError as error:
-                raise IdRegistryError("store_unavailable") from error
-            if rewound:
-                raise IdRegistryError("store_rewound")
-            nonce = os.urandom(32)
+                _admit(db, inputs)
+            except BaseException as error:
+                refusal = error
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
-        return nonce
-    except BaseException:
-        _fence(db)
-        raise
+    except IdRegistryError as error:
+        raise error from refusal
     finally:
         db.close()
+    if refusal is not None:
+        raise refusal
+    return nonce
 
 
 class IdRegistry:

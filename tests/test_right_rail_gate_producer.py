@@ -239,7 +239,7 @@ class ProducerTests(fx.Scratch):
 
     def test_v2_carries_registry_head_and_the_frees(self) -> None:
         with self.scratch() as tmp:
-            reg = self.track(idreg.IdRegistry(Path(tmp) / "ids.sqlite3", boot=idreg.boot(Path(tmp) / "ids.sqlite3", {}, {}, {})))
+            reg = self.track(idreg.IdRegistry(Path(tmp) / "ids.sqlite3", boot=idreg.boot(Path(tmp) / "ids.sqlite3", lambda: ({}, {}, {}))))
             _, n, head = reg.reserve(0, [1, 2], sealed=None)
             p = self._open(tmp, fx.custody(tmp))
             self.assertIsNone(p.sealed_frees())
@@ -268,18 +268,22 @@ class ProducerTests(fx.Scratch):
             self.assertNotEqual(digests[0], digests[1])
             self.assertEqual([producer.holds(a, digests[0]), producer.holds(b, digests[1])], [True, True])
             self.assertEqual([producer.newest(a), producer.newest(b)], [IDREG, IDREG])
-            with mock.patch.object(Path, "exists", side_effect=PermissionError), \
+            with mock.patch.object(producer.os, "stat", side_effect=PermissionError), \
                     self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
                 producer.holds(a, digests[0])  # L3: an unreadable path is never an answer
-            self.assertEqual([producer.holds(a, digests[1]), producer.holds(b, digests[0])], [False, False])  # the other dir's
-            self.assertFalse(producer.holds(Path(tmp) / "none.sqlite3", digests[0]))  # no store holds nothing
+            self.assertEqual([producer.holds(a, digests[1]), producer.holds(b, digests[0])], [None, None])  # the other dir's
+            none = Path(tmp) / "none.sqlite3"
+            self.assertEqual([producer.holds(none, digests[0]), producer.newest(none)], [None, None])  # no store, no batch
             (Path(tmp) / "junk.sqlite3").write_bytes(b"not a database" * 64)
-            with self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
-                producer.holds(Path(tmp) / "junk.sqlite3", digests[0])
+            for bad in (Path(tmp) / "junk.sqlite3", Path(tmp) / "nul\0name", Path(tmp)):  # junk, no file name, a directory
+                for read in (lambda path: producer.holds(path, digests[0]), producer.newest):  # L-A, L-B: never absent
+                    with self.subTest(bad=bad, read=read), self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
+                        read(bad)
 
-    def test_an_open_row_holds_nothing(self) -> None:
-        """Review MEDIUM-2: a store copied between a batch's INSERT and its signature has the payer's digest only in an
-        open row, which a refused reseal would void; ``holds`` counts sealed rows only, so boot is ``store_rewound``."""
+    def test_an_open_row_is_unsealed(self) -> None:
+        """Review MEDIUM-2 and L-C: a store copied between a batch's INSERT and its signature has the payer's digest only
+        in an open row, which a refused reseal would void; ``holds`` counts sealed rows only, and boot is
+        ``store_unsealed`` (open the producer to reseal, then boot), not ``store_rewound``."""
         with self.scratch() as tmp:
             p = self._open(tmp, fx.custody(tmp))
             with mock.patch.object(signer, "seal", side_effect=signer.GateSignerError("gate_verify_failed")), \
@@ -290,9 +294,9 @@ class ProducerTests(fx.Scratch):
             with sqlite3.connect(store) as db:
                 (digest,) = db.execute("SELECT digest FROM batches WHERE signature IS NULL").fetchone()
             db.close()
-            self.assertFalse(producer.holds(store, digest))
-            with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
-                idreg.boot(Path(tmp) / "ids.sqlite3", {0: (0, gate.ZERO_DIGEST)}, {0: store}, {0: digest})
+            self.assertIs(producer.holds(store, digest), False)
+            with self.assertRaisesRegex(idreg.IdRegistryError, "store_unsealed"):
+                idreg.boot(Path(tmp) / "ids.sqlite3", lambda: ({0: (0, gate.ZERO_DIGEST)}, {0: store}, {0: digest}))
 
     def test_pre_decide_store_refused(self) -> None:
         with self.scratch() as tmp:

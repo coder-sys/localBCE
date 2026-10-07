@@ -64,7 +64,7 @@ class IdRegistryTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)  # cleanups run last-in first: stores close before the directory goes
         self.path = Path(tmp.name) / "ids.sqlite3"
-        self.nonce = idreg.boot(self.path, {}, {}, {})
+        self.nonce = idreg.boot(self.path, lambda: ({}, {}, {}))
         self.reg = self.open(self.nonce)
 
     def open(self, nonce: bytes, **kwargs) -> idreg.IdRegistry:
@@ -85,7 +85,7 @@ class IdRegistryTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(old)) as db:
             db.execute("CREATE TABLE ids(n INTEGER PRIMARY KEY, id BLOB NOT NULL UNIQUE, shard INTEGER NOT NULL, head BLOB NOT NULL)")
         with self.assertRaisesRegex(idreg.IdRegistryError, "store_version"):
-            idreg.boot(old, {}, {}, {})
+            idreg.boot(old, lambda: ({}, {}, {}))
         with self.assertRaisesRegex(idreg.IdRegistryError, "store_version"):
             idreg.IdRegistry(old, boot=self.nonce)
 
@@ -156,7 +156,7 @@ class IdRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
             stale.reserve(0, [1], sealed=None)
         self.assertEqual(self.tail(), before)
-        second = self.open(idreg.boot(self.path, {}, {}, {}))
+        second = self.open(idreg.boot(self.path, lambda: ({}, {}, {})))
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
             self.reg.reserve(0, [1], sealed=None)
         self.assertEqual(second.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
@@ -164,18 +164,18 @@ class IdRegistryTests(unittest.TestCase):
     def test_boot_commitments(self) -> None:
         n, head = self.reg.genesis({0: [1], 1: [2]})  # rows 2-3: RESERVE 1, SETTLE of shard 0; rows 4-5: the same for shard 1
         at = lambda i: (i, self.reg._db.execute("SELECT head FROM log WHERE n = ?", (i,)).fetchone()[0])
-        idreg.boot(self.path, {0: (n, head), 1: (n, head)}, STORES, {})
-        live = self.open(idreg.boot(self.path, {0: at(2), 1: (n, head)}, STORES, {}))  # a batch ending at its RESERVE, then the next batch's settle
+        idreg.boot(self.path, lambda: ({0: (n, head), 1: (n, head)}, STORES, {}))
+        live = self.open(idreg.boot(self.path, lambda: ({0: at(2), 1: (n, head)}, STORES, {})))  # a batch ending at its RESERVE, then the next batch's settle
         self.addCleanup(live.close)
         before = self.tail()
         for bad in ({0: (n, head)}, {0: (0, gate.ZERO_DIGEST), 1: (n, head)}):  # a shard with rows needs its commitment
             with self.subTest(bad), self.assertRaisesRegex(idreg.IdRegistryError, "commitment_missing"):
-                idreg.boot(self.path, bad, STORES, {})
+                idreg.boot(self.path, lambda: (bad, STORES, {}))
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            idreg.boot(self.path, {0: (n, head), 1: at(2)}, STORES, {})  # shard 1's RESERVE (row 4) and a later SETTLE lie past row 2
+            idreg.boot(self.path, lambda: ({0: (n, head), 1: at(2)}, STORES, {}))  # shard 1's RESERVE (row 4) and a later SETTLE lie past row 2
         for bad in ((n, bytes(64)), (n + 10, head)):
             with self.subTest(bad), self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                idreg.boot(self.path, {0: bad, 1: (n, head)}, STORES, {})
+                idreg.boot(self.path, lambda: ({0: bad, 1: (n, head)}, STORES, {}))
         junk = self.path.with_name("junk.sqlite3")
         junk.write_bytes(b"not a database" * 64)
         for stores, stored, error in (({0: STORES[0]}, {}, "anchor_missing"), ({**STORES, 2: STORES[1]}, {}, "anchor_missing"),
@@ -183,10 +183,10 @@ class IdRegistryTests(unittest.TestCase):
                                       (STORES, {1: bytes(64)}, "store_rewound"),  # a missing store holds nothing
                                       ({**STORES, 1: junk}, {1: bytes(64)}, "store_unavailable")):
             with self.subTest(error), self.assertRaisesRegex(idreg.IdRegistryError, error):
-                idreg.boot(self.path, {0: (n, head), 1: (n, head)}, stores, stored)
-        with mock.patch.object(Path, "exists", side_effect=PermissionError), self.assertRaisesRegex(
+                idreg.boot(self.path, lambda: ({0: (n, head), 1: (n, head)}, stores, stored))
+        with mock.patch.object(idreg.producer.os, "stat", side_effect=PermissionError), self.assertRaisesRegex(
                 idreg.IdRegistryError, "store_unavailable"):  # the store path's cause, never a raw OSError
-            idreg.boot(self.path, {0: (n, head), 1: (n, head)}, STORES, {0: bytes(64)})
+            idreg.boot(self.path, lambda: ({0: (n, head), 1: (n, head)}, STORES, {0: bytes(64)}))
         added = self.reg._db.execute("SELECT kind, id FROM log WHERE n > ?", (before[0],)).fetchall()
         self.assertEqual(([kind for kind, _ in added], len({nonce for _, nonce in added})), ([3] * 12, 12))  # one fence each
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
@@ -194,14 +194,14 @@ class IdRegistryTests(unittest.TestCase):
         self._edit("DROP TRIGGER log_no_update")
         self._edit("UPDATE log SET shard = 5 WHERE n = 3")  # a middle row edited, stored heads kept
         with self.assertRaisesRegex(idreg.IdRegistryError, "chain_broken"):
-            idreg.boot(self.path, {0: (n, head), 1: (n, head)}, STORES, {})
+            idreg.boot(self.path, lambda: ({0: (n, head), 1: (n, head)}, STORES, {}))
 
     def test_rows_are_append_only(self) -> None:
         self.reg.reserve(0, [1, 2, 3], sealed=None)
         for sql in ("UPDATE log SET shard = 9 WHERE n = 2", "DELETE FROM log WHERE n = 3"):
             with self.assertRaises(sqlite3.DatabaseError):
                 self._edit(sql)
-        idreg.boot(self.path, {0: self.tail()}, {0: STORES[0]}, {})  # the chain still replays
+        idreg.boot(self.path, lambda: ({0: self.tail()}, {0: STORES[0]}, {}))  # the chain still replays
 
     def test_concurrent_reserve(self) -> None:
         start = str(time.time() + 3)
@@ -244,7 +244,7 @@ class IdRegistryTests(unittest.TestCase):
         self.assertEqual(self.tail(), before)
 
     def test_an_unavailable_registry_is_a_typed_refusal(self) -> None:
-        for start in (lambda p: idreg.IdRegistry(p, boot=self.nonce), lambda p: idreg.boot(p, {}, {}, {})):
+        for start in (lambda p: idreg.IdRegistry(p, boot=self.nonce), lambda p: idreg.boot(p, lambda: ({}, {}, {}))):
             with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
                 start(self.path.parent / "missing" / "ids.sqlite3")
         busy = self.open(self.nonce, timeout=0.1)

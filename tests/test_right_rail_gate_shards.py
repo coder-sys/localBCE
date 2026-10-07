@@ -385,8 +385,10 @@ class ShardTests(fx.Scratch):
     def test_r5_refused_boot_fences_the_running_nonce(self) -> None:
         """Review HIGH-1: the process keeps running with the copy's newest nonce; the refused boot's BOOT row fences it,
         so shard 1's X HOLDs and X is released once.  Mutant: without that row the old nonce reserves and X pays twice."""
+        add = idreg._Tail.add
         for mutant in (False, True):
-            fence = mock.patch.object(idreg, "_fence", lambda db: None) if mutant else contextlib.nullcontext()
+            fence = mock.patch.object(idreg._Tail, "add", lambda t, kind, *a: kind == idreg._BOOT or add(t, kind, *a)) \
+                if mutant else contextlib.nullcontext()
             with self.subTest(mutant=mutant), self.released_then_restored(restart=False) as (c, store), fence:
                 with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
                     c.boot()
@@ -395,6 +397,46 @@ class ShardTests(fx.Scratch):
                 else:
                     self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
+
+    def test_r5_a_boot_that_cannot_read_its_inputs_fences(self) -> None:
+        """Review HIGH-1b: the payer or a shard's store cannot be read while booting.  Boot reads them inside its
+        transaction, so the refusal fences the running nonce and shard 1's X HOLDs (before: the caller read them first,
+        boot raised before its fence and the old nonce ALLOWed X again)."""
+        for target, name, error, label in ((None, "newest_stored", sqlite3.OperationalError("disk I/O error"), "payer_unavailable"),
+                                           (producer, "newest", PermissionError(13, "denied"), "denied")):
+            with self.subTest(name), self.released_then_restored(restart=False) as (c, store):
+                if target:
+                    c.store(1).touch()  # a store to read: the copy predates every batch
+                with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(Exception) as refused:
+                    c.boot()
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(self.releases(store), ["pay-0001"])
+                self.assertRegex(str(refused.exception), label)
+
+    def test_r5_the_refusal_and_its_fence_are_one_transaction(self) -> None:
+        """Review M-A: the moment the refused boot's connection gives up the write lock, the running nonce's shard 1 tries
+        X.  The fence committed with the refusal, so X HOLDs (before: ROLLBACK freed the lock, X ALLOWed, and only then
+        did a second transaction write the fence)."""
+        with self.released_then_restored(restart=False) as (c, store):
+            seen, real = [], idreg._open
+
+            class Hooked:  # the registry connection; the first COMMIT or ROLLBACK on it runs shard 1's batch
+                def __init__(self, db):
+                    self.db = db
+
+                def __getattr__(self, name):
+                    return getattr(self.db, name)
+
+                def execute(self, sql, *args):
+                    cursor = self.db.execute(sql, *args)
+                    if sql in ("COMMIT", "ROLLBACK") and not seen:
+                        seen.append(None)
+                        seen[0] = c.send(1, {2: [10]})
+                    return cursor
+            with mock.patch.object(idreg, "_open", lambda *a: Hooked(real(*a))), \
+                    self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
+                c.boot()
+            self.assertEqual((seen, self.releases(store)), ([{10: "HOLD registry_not_booted"}], ["pay-0001"]))
 
     def test_r5_a_payer_shard_outside_the_boot_is_refused(self) -> None:
         """Review MEDIUM-1: shard 2 of 3 pays X, the directory comes back and boots with 2 shards; the payer holds shard
@@ -417,9 +459,12 @@ class ShardTests(fx.Scratch):
     @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
     def test_r5_restore_while_running_no_boot(self) -> None:
         """The directory comes back under a running process that never reboots: it holds the copy's newest nonce, so
-        nothing fences it and shard 1 ALLOWs X again; it must HOLD."""
+        nothing fences it and shard 1 ALLOWs X again; it must HOLD.  The setup is asserted first (review L-D), so only
+        the final check can be the expected failure."""
         with self.released_then_restored(restart=False) as (c, store):
+            self.assertEqual((bool(c.nonce), self.releases(store), c.store(0).exists()), (True, ["pay-0001"], False))
             self.assertTrue(c.send(1, {2: [10]})[10].startswith("HOLD"))
+            self.assertEqual(self.releases(store), ["pay-0001"])
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the
