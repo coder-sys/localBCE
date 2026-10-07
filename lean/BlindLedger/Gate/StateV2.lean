@@ -4530,6 +4530,140 @@ private theorem c9_set (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s f : 
     unfold setInputs
     simp [hm, hy]
 
+private theorem c9_eraseDups_sub {α : Type} [BEq α] [LawfulBEq α] :
+    ∀ (n : Nat) (l : List α), l.length ≤ n → l.eraseDups.Sublist l
+  | _, [], _ => by simp
+  | 0, _ :: _, h => by simp at h
+  | n + 1, a :: as, h => by
+    rw [List.eraseDups_cons]
+    exact ((c9_eraseDups_sub n _ (Nat.le_trans (List.length_filter_le _ _) (by simp at h; omega))).trans
+      (List.filter_sublist ..)).cons_cons a
+
+private theorem c9_sub : ∀ (S T : List (Nat × Nat)), S.Pairwise (fun a b => a.1 < b.1) →
+    T.Pairwise (fun a b => a.1 ≤ b.1) → T.Nodup → (∀ e ∈ T, e ∈ S) → T.Sublist S
+  | [], [], _, _, _, _ => List.Sublist.slnil
+  | [], t :: _, _, _, _, hm => absurd (hm t (List.mem_cons_self ..)) (by simp)
+  | _ :: _, [], _, _, _, _ => List.nil_sublist _
+  | s :: S, t :: T, hS, hT, hN, hm => by
+    rw [List.pairwise_cons] at hS hT
+    rw [List.nodup_cons] at hN
+    by_cases e : t = s
+    · subst e
+      refine (c9_sub S T hS.2 hT.2 hN.2 fun a ha => ?_).cons_cons t
+      rcases List.mem_cons.mp (hm a (List.mem_cons_of_mem _ ha)) with h | h
+      · exact absurd (h ▸ ha) hN.1
+      · exact h
+    · have ht : t ∈ S := (List.mem_cons.mp (hm t (List.mem_cons_self ..))).resolve_left e
+      refine (c9_sub S (t :: T) hS.2 (List.pairwise_cons.mpr hT) (List.nodup_cons.mpr hN) fun a ha => ?_).cons s
+      rcases List.mem_cons.mp (hm a ha) with h | h
+      · exfalso
+        have h1 := hS.1 t ht
+        rcases List.mem_cons.mp ha with h2 | h2
+        · exact e (h2.symm.trans h)
+        · have h3 := hT.1 a h2; rw [h] at h3; omega
+      · exact h
+
+private theorem c9_take_mem {e : Nat × Nat} : ∀ (S L : List (Nat × Nat)) (k : Nat), S.Nodup → L.Sublist S →
+    e ∈ L → e ∈ S.take k → e ∈ L.take k
+  | [], L, _, _, hL, he, _ => by rw [List.sublist_nil.mp hL] at he; simp at he
+  | _ :: _, _, 0, _, _, _, hk => by simp at hk
+  | s :: S, L, k + 1, hN, hL, he, hk => by
+    rw [List.nodup_cons] at hN
+    rw [List.take_succ_cons, List.mem_cons] at hk
+    rcases List.sublist_cons_iff.mp hL with hL' | ⟨r, rfl, hr⟩
+    · rcases hk with rfl | hk
+      · exact absurd (hL'.subset he) hN.1
+      · rw [List.take_add]; exact List.mem_append_left _ (c9_take_mem S L k hN.2 hL' he hk)
+    · rw [List.take_succ_cons, List.mem_cons]
+      rcases List.mem_cons.mp he with h | h
+      · exact Or.inl h
+      · rcases hk with rfl | hk
+        · exact Or.inl rfl
+        · exact Or.inr (c9_take_mem S r k hN.2 hr h hk)
+
+private theorem c9_take_eq : ∀ (S T : List (Nat × Nat)) (k : Nat), S.Nodup → T.Sublist S →
+    (∀ e ∈ S.take k, e ∈ T) → T.take k = S.take k
+  | [], T, _, _, hT, _ => by rw [List.sublist_nil.mp hT]
+  | _ :: _, _, 0, _, _, _ => by simp
+  | s :: S, T, k + 1, hN, hT, hm => by
+    rw [List.nodup_cons] at hN
+    have hs : s ∈ T := hm s (by simp)
+    rcases List.sublist_cons_iff.mp hT with hT | ⟨r, rfl, hr⟩
+    · exact absurd (hT.subset hs) hN.1
+    · have ih : r.take k = S.take k := c9_take_eq S r k hN.2 hr fun e he => by
+        have := hm e (by rw [List.take_succ_cons]; exact List.mem_cons_of_mem _ he)
+        rcases List.mem_cons.mp this with h | h
+        · exact absurd (by rw [← h]; exact List.mem_of_mem_take he) hN.1
+        · exact h
+      rw [List.take_succ_cons, List.take_succ_cons, ih]
+
+/-- Merging per-key first-K lists of a position-sorted union gives the union's first K. -/
+private theorem c9_merge {ι : Type} (S : List (Nat × Nat)) (F : List ι) (f : ι → List (Nat × Nat))
+    (hS : S.Pairwise (fun a b => a.1 < b.1)) (hsub : ∀ i ∈ F, (f i).Sublist S) (hcov : ∀ e ∈ S, ∃ i ∈ F, e ∈ f i) :
+    (((F.map fun i => (f i).take K).flatten.mergeSort fun a b => decide (a.1 ≤ b.1)).eraseDups.take K) =
+      S.take K := by
+  have hN : S.Nodup := hS.imp fun {a b} (h : a.1 < b.1) (e : a = b) => by subst e; exact Nat.lt_irrefl _ h
+  have hM : ∀ e, e ∈ (F.map fun i => (f i).take K).flatten.mergeSort (fun a b => decide (a.1 ≤ b.1)) ↔
+      ∃ i ∈ F, e ∈ (f i).take K := fun e => by
+    rw [(List.mergeSort_perm _ _).mem_iff]
+    constructor
+    · intro h
+      obtain ⟨l, hl, he⟩ := List.mem_flatten.mp h
+      obtain ⟨i, hi, rfl⟩ := List.mem_map.mp hl
+      exact ⟨i, hi, he⟩
+    · rintro ⟨i, hi, he⟩
+      exact List.mem_flatten.mpr ⟨_, List.mem_map_of_mem hi, he⟩
+  have hP := List.pairwise_mergeSort (le := fun a b : Nat × Nat => decide (a.1 ≤ b.1))
+    (fun a b c h1 h2 => by simp only [decide_eq_true_eq] at *; omega)
+    (fun a b => by simp only [Bool.or_eq_true, decide_eq_true_eq]; omega)
+    ((F.map fun i => (f i).take K).flatten)
+  refine c9_take_eq S _ K hN (c9_sub S _ hS ((hP.sublist (c9_eraseDups_sub _ _ (Nat.le_refl _))).imp
+    fun h => of_decide_eq_true h) (c4_nodup_eraseDups _ _ (Nat.le_refl _)) fun e he => ?_) fun e he => ?_
+  · obtain ⟨i, hi, h⟩ := (hM e).mp (List.mem_eraseDups.mp he)
+    exact (hsub i hi).subset (List.mem_of_mem_take h)
+  · obtain ⟨i, hi, h⟩ := hcov e (List.mem_of_mem_take he)
+    exact List.mem_eraseDups.mpr ((hM e).mpr ⟨i, hi, c9_take_mem S (f i) K hN (hsub i hi) h he⟩)
+
+private theorem c9_zipIdx_lt {α : Type} : ∀ (s : List α) (n : Nat), (s.zipIdx n).Pairwise (fun a b => a.2 < b.2)
+  | [], _ => List.Pairwise.nil
+  | a :: s, n => by
+    rw [List.zipIdx_cons, List.pairwise_cons]
+    exact ⟨fun p hp => by have := List.le_snd_of_mem_zipIdx hp; show n < p.2; omega, c9_zipIdx_lt s (n + 1)⟩
+
+/-- The merge over per-key position lists of a set is the first K ids of the rows the keys cover. -/
+private theorem c9_mergeZ (s : List Line) (P : Line → Bool) (Qs : List Key) (M : Key → Line → Bool)
+    (hsub : ∀ x ∈ s, ∀ q ∈ Qs, M q x = true → P x = true) (hcov : ∀ x ∈ s, P x = true → ∃ q ∈ Qs, M q x = true) :
+    (((Qs.map fun q => ((s.zipIdx.filter fun p => M q p.1).map fun p => (p.2, p.1.id)).take K).flatten.mergeSort
+      fun a b => decide (a.1 ≤ b.1)).eraseDups.take K).map (·.2) = ((s.filter P).map (·.id)).take K := by
+  rw [c9_merge ((s.zipIdx.filter fun p => P p.1).map fun p => (p.2, p.1.id)) Qs
+    (fun q => (s.zipIdx.filter fun p => M q p.1).map fun p => (p.2, p.1.id))
+    (List.pairwise_map.mpr ((c9_zipIdx_lt s 0).sublist (List.filter_sublist ..)))
+    (fun q hq => by
+      have e : s.zipIdx.filter (fun p => M q p.1) = (s.zipIdx.filter fun p => P p.1).filter fun p => M q p.1 := by
+        rw [List.filter_filter]
+        refine List.filter_congr fun p hp => ?_
+        cases h : M q p.1
+        · simp
+        · simp [hsub _ (List.fst_mem_of_mem_zipIdx hp) q hq h]
+      rw [e]
+      exact (List.filter_sublist ..).map _)
+    (fun e he => by
+      obtain ⟨p, hp, rfl⟩ := List.mem_map.mp he
+      have hp' := List.mem_filter.mp hp
+      obtain ⟨q, hq, hm⟩ := hcov p.1 (List.fst_mem_of_mem_zipIdx hp'.1) hp'.2
+      exact ⟨q, hq, List.mem_map_of_mem (List.mem_filter.mpr ⟨hp'.1, hm⟩)⟩)]
+  rw [← List.map_take]
+  congr 1
+  conv => rhs; rw [← List.zipIdx_map_fst 0 s]
+  rw [List.filter_map, List.map_map, List.map_map]
+  rw [List.map_take]
+  rfl
+
+private theorem c9_take_app (A B : List Nat) : (A.take K ++ B.take K).take K = (A ++ B).take K := by
+  rw [List.take_append, List.take_append, List.take_take, List.take_take, List.length_take, Nat.min_self]
+  congr 2
+  omega
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
