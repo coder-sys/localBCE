@@ -2567,11 +2567,7 @@ def setInputs (H : Bytes → Bytes) (u : Bool) (s : List Line) : List Bytes :=
 def stateInputs (H : Bytes → Bytes) (rel unr : Snapshot Line) : List Bytes :=
   ((headOf H rel unr).bind headIn).toList ++ setInputs H false rel.entries ++ setInputs H true unr.entries
 
-theorem stateV2_binds (H : Bytes → Bytes) (hH : HashLen H) (rel unr rel' unr' : Snapshot Line)
-    (hi : Inv rel unr) (hi' : Inv rel' unr') (h h' : Head) (d : Bytes)
-    (ha : headOf H rel unr = some h) (ha' : headOf H rel' unr' = some h')
-    (he : digestV2 H h = some d) (he' : digestV2 H h' = some d) :
-    (rel = rel' ∧ unr = unr') ∨ Collision H (stateInputs H rel unr) (stateInputs H rel' unr') := sorry
+-- `stateV2_binds` is stated and proved after `c3_setMap_mem` (§7), whose lemmas it uses.
 
 /-! ## 7. The indexed decision (H2 output, H5 refinement, H-a) -/
 
@@ -2935,6 +2931,166 @@ private theorem c3_setMap_mem {H : Bytes → Bytes} {u : Bool} {s : List Line} {
             subst hf
             exact ⟨kb, es, rfl, rfl, v, by first | exact hv | rfl, List.mem_append_right _ he⟩
   · simp [guard, hg] at hm
+
+/-- The ROW leaf of row `i` is in the map, with value `be 8 i`. -/
+private theorem c12_setMap_row {H : Bytes → Bytes} {u : Bool} {s : List Line} {m : Map}
+    (hm : setMap H u s = some m) {x : Line} {i : Nat} (hxi : (x, i) ∈ s.zipIdx) :
+    ∃ kb v, keyBytes (rowKey x) = some kb ∧ be 8 i = some v ∧ (pathOf H kb, v) ∈ m := by
+  unfold setMap at hm
+  simp only [bind, Option.bind] at hm
+  split at hm
+  · simp at hm
+  rename_i rows hrows
+  dsimp only at hm
+  split at hm
+  · simp at hm
+  rename_i ks hks
+  dsimp only at hm
+  by_cases hg : (rows.map (·.1) ++ ks.map (·.1)).Nodup
+  · simp [guard, hg] at hm
+    subst hm
+    obtain ⟨e, he, hf⟩ := c3_mapM_all _ _ _ hrows _ hxi
+    cases hk : keyBytes (rowKey x) with
+    | none => simp [hk] at hf
+    | some kb =>
+      cases hb : be 8 i with
+      | none => simp [hk, hb] at hf
+      | some v =>
+        simp [hk, hb] at hf
+        subst hf
+        exact ⟨kb, v, rfl, rfl, List.mem_append_left _ he⟩
+  · simp [guard, hg] at hm
+
+/-- Tag 7: a row key is never one of the keys a row is stored under. -/
+private theorem c12_rowKey_ne (u : Bool) (x y : Line) : rowKey x ∉ rowKeys u y := by
+  intro h
+  by_cases hc : isCap y = true <;> by_cases hv : validDate y.date = true <;>
+    simp [rowKeys, keys, exactKey, nearKey, idKey, dayKey, badDayKey, rowKey, hc, hv] at h
+
+private theorem c12_kd_mem {H : Bytes → Bytes} {u : Bool} {s : List Line} {q : Key} {kb : Bytes}
+    (hq : q ∈ s.map rowKey ++ (s.flatMap (rowKeys u)).eraseDups) (hk : keyBytes q = some kb) :
+    KD ++ kb ∈ setInputs H u s := by
+  simp only [setInputs]
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_filterMap.mpr ⟨q, hq, by simp [hk]⟩))
+
+private theorem c12_tree_mem {H : Bytes → Bytes} {u : Bool} {s : List Line} {m : Map}
+    (hm : setMap H u s = some m) {z : Bytes} (hz : z ∈ treeInputs H 513 0 m) : z ∈ setInputs H u s := by
+  simp only [setInputs, hm]
+  exact List.mem_append_right _ hz
+
+/-- Map to set: if every entry of `s`'s map is in `s'`'s map and the lengths agree, the row lists are
+    equal, or two key paths collide. -/
+private theorem c12_set_bind {H : Bytes → Bytes} {u : Bool} {s s' : List Line} {m m' : Map}
+    (hs : setMap H u s = some m) (hs' : setMap H u s' = some m') (hsub : ∀ e ∈ m, e ∈ m')
+    (hl : s.length = s'.length) : s = s' ∨ Collision H (setInputs H u s) (setInputs H u s') := by
+  by_cases hc : Collision H (setInputs H u s) (setInputs H u s')
+  · exact Or.inr hc
+  left
+  have hkd : ∀ {kb kb' : Bytes}, KD ++ kb ∈ setInputs H u s → KD ++ kb' ∈ setInputs H u s' →
+      pathOf H kb = pathOf H kb' → kb = kb' := by
+    intro kb kb' h1 h2 hp
+    by_cases he : KD ++ kb = KD ++ kb'
+    · exact List.append_cancel_left he
+    · exact (hc (by unfold Collision; exact ⟨_, h1, _, h2, he, hp⟩)).elim
+  have key : ∀ x i, (x, i) ∈ s.zipIdx → s'[i]? = some x := by
+    intro x i hxi
+    obtain ⟨kb, v, hk, hb, hmem⟩ := c12_setMap_row hs hxi
+    have h1 : KD ++ kb ∈ setInputs H u s :=
+      c12_kd_mem (List.mem_append_left _ (List.mem_map_of_mem (c3_mem_zipIdx hxi))) hk
+    rcases (c3_setMap_mem hs').1 _ (hsub _ hmem) with
+      ⟨y, j, hyj, kb', hk', hb', hp⟩ | ⟨q, hq, kb', es, hk', _, _, hp⟩
+    · have hkb : kb = kb' :=
+        hkd h1 (c12_kd_mem (List.mem_append_left _ (List.mem_map_of_mem (c3_mem_zipIdx hyj))) hk') hp
+      subst hkb
+      have hxy : x = y := rowKey_inj hk hk'
+      have hij : i = j := be_inj hb hb'
+      subst hxy
+      subst hij
+      exact List.mem_zipIdx_iff_getElem?.mp hyj
+    · have hkb : kb = kb' := hkd h1 (c12_kd_mem (List.mem_append_right _ hq) hk') hp
+      subst hkb
+      have hq' := keyBytes_inj hk hk'
+      subst hq'
+      obtain ⟨y, _, hy⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp hq)
+      exact (c12_rowKey_ne u x y hy).elim
+  apply List.ext_getElem?
+  intro i
+  cases h : s[i]? with
+  | some x => exact (key x i (List.mem_zipIdx_iff_getElem?.mpr h)).symm
+  | none =>
+    have h1 : s.length ≤ i := by simpa using h
+    have h2 : s'[i]? = none := by simpa using (show s'.length ≤ i by omega)
+    exact h2.symm
+
+theorem stateV2_binds (H : Bytes → Bytes) (hH : HashLen H) (rel unr rel' unr' : Snapshot Line)
+    (hi : Inv rel unr) (hi' : Inv rel' unr') (h h' : Head) (d : Bytes)
+    (ha : headOf H rel unr = some h) (ha' : headOf H rel' unr' = some h')
+    (he : digestV2 H h = some d) (he' : digestV2 H h' = some d) :
+    (rel = rel' ∧ unr = unr') ∨ Collision H (stateInputs H rel unr) (stateInputs H rel' unr') := by
+  unfold digestV2 at he he'
+  obtain ⟨x, hx, rfl⟩ := Option.map_eq_some_iff.mp he
+  obtain ⟨x', hx', hxx⟩ := Option.map_eq_some_iff.mp he'
+  by_cases hne : x = x'
+  case neg =>
+    right
+    have h1 : x ∈ stateInputs H rel unr := by unfold stateInputs; rw [ha]; simp [hx]
+    have h2 : x' ∈ stateInputs H rel' unr' := by unfold stateInputs; rw [ha']; simp [hx']
+    unfold Collision
+    exact ⟨x, h1, x', h2, hne, hxx.symm⟩
+  subst hne
+  have hhh := c3_headIn_inj hx hx'
+  subst hhh
+  cases hs1 : setMap H false rel.entries with
+  | none => simp [headOf, hs1] at ha
+  | some a =>
+  cases hs2 : setMap H true unr.entries with
+  | none => simp [headOf, hs1, hs2] at ha
+  | some b =>
+  cases hs3 : setMap H false rel'.entries with
+  | none => simp [headOf, hs3] at ha'
+  | some a' =>
+  cases hs4 : setMap H true unr'.entries with
+  | none => simp [headOf, hs3, hs4] at ha'
+  | some b' =>
+  have e1 : headOf H rel unr = some ⟨rel.asOf, unr.asOf, rel.count, unr.count, root H a, root H b⟩ := by
+    unfold headOf; rw [hs1, hs2]; first | rfl | simp
+  have e2 : headOf H rel' unr' =
+      some ⟨rel'.asOf, unr'.asOf, rel'.count, unr'.count, root H a', root H b'⟩ := by
+    unfold headOf; rw [hs3, hs4]; first | rfl | simp
+  have heq := Option.some.inj ((e1.symm.trans ha).trans (ha'.symm.trans e2))
+  injection heq with q1 q2 q3 q4 q5 q6
+  obtain ⟨_, c1, c2⟩ := hi
+  obtain ⟨_, c1', c2'⟩ := hi'
+  rcases c12_root_bind H hH a a' (setMap_ok H hH _ _ _ hs1) (setMap_ok H hH _ _ _ hs3) q5 with hA | hA
+  · rcases c12_root_bind H hH b b' (setMap_ok H hH _ _ _ hs2) (setMap_ok H hH _ _ _ hs4) q6 with hB | hB
+    · rcases c12_set_bind hs1 hs3 (fun e he => hA.mem_iff.mp he) (by omega) with r1 | r1
+      · rcases c12_set_bind hs2 hs4 (fun e he => hB.mem_iff.mp he) (by omega) with r2 | r2
+        · left
+          have ext : ∀ p q : Snapshot Line, p.asOf = q.asOf → p.count = q.count → p.entries = q.entries →
+              p = q := by
+            intro p q f1 f2 f3
+            cases p
+            cases q
+            simp only at f1 f2 f3
+            subst f1 f2 f3
+            rfl
+          exact ⟨ext _ _ q1 q3 r1, ext _ _ q2 q4 r2⟩
+        · right
+          refine coll_mono H ?_ ?_ r2 <;> intro z hz <;> unfold stateInputs <;>
+            exact List.mem_append_right _ hz
+      · right
+        refine coll_mono H ?_ ?_ r1 <;> intro z hz <;> unfold stateInputs <;>
+          exact List.mem_append_left _ (List.mem_append_right _ hz)
+    · right
+      refine coll_mono H ?_ ?_ hB
+      · intro z hz; unfold stateInputs; exact List.mem_append_right _ (c12_tree_mem hs2 hz)
+      · intro z hz; unfold stateInputs; exact List.mem_append_right _ (c12_tree_mem hs4 hz)
+  · right
+    refine coll_mono H ?_ ?_ hA
+    · intro z hz; unfold stateInputs
+      exact List.mem_append_left _ (List.mem_append_right _ (c12_tree_mem hs1 hz))
+    · intro z hz; unfold stateInputs
+      exact List.mem_append_left _ (List.mem_append_right _ (c12_tree_mem hs3 hz))
 
 private theorem c3_lookup_some {m : Map} {p v : Bytes} (h : lookup m p = some v) : (p, v) ∈ m := by
   unfold lookup at h
