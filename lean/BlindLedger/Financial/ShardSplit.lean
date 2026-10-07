@@ -1264,9 +1264,10 @@ theorem no_cross_shard_duplicate (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk
   subst hxy
   exact Home.shard.inj (hh.symm.trans hh')
 
-/-- Sound direction only: on a reachable state, a spine state and shard states that `checkSpine` (against the honest
-    `mkRec`, not a stored record) and `checkShard` accept merge to a state `checkSingle` accepts.  The converse is
-    false because `merge` forgets heads, APPLIED and charge placement. -/
+/-- Sound direction: on a reachable state, a spine state and shard states that `checkSpine` (against the honest
+    `mkRec`, not a stored record) and `checkShard` (shards below `K`) accept merge to a state `checkSingle` accepts.
+    `checkSingle` alone does not imply the converse, because `merge` forgets heads, APPLIED and charge placement;
+    `check_split_iff` proves the two directions against `os3Bar`, which adds those per-DB checks. -/
 theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp : Input) (sp' : SpineDB)
     (sh' : Nat → ShardDB) (hsp : checkSpine pk cx ss inp sp')
     (hsh : ∀ k < pk.k cx.p, checkShard (mkRec pk cx ss inp).2 k (ss.2 k) (sh' k)) :
@@ -1278,6 +1279,131 @@ theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp
   · simp only [checkAll, Bool.and_eq_true] at hc; exact hc.1
   · rw [merge_congr pk cx _ sh' _ fun k hk => hsh k (List.mem_range.1 hk)]
     exact merge_commit pk cx ss inp hI
+
+/-- Over a duplicate-free list holding `k`, a function zero on every other member sums to its value at `k`. -/
+theorem sum_one (f : Nat → Nat) (k : Nat) : ∀ l : List Nat, l.Nodup → k ∈ l → (∀ k' ∈ l, k' ≠ k → f k' = 0) →
+    (l.map f).sum = f k
+  | [], _, hk, _ => absurd hk List.not_mem_nil
+  | a :: l, hn, hk, h0 => by
+    rw [List.map_cons, List.sum_cons]
+    have ha := (List.nodup_cons.1 hn).1
+    by_cases hak : a = k
+    · subst hak
+      rw [sum_zeroN f l fun k' hk' => h0 k' (List.mem_cons_of_mem _ hk') fun e => ha (e ▸ hk'), Nat.add_zero]
+    · rw [h0 a (List.mem_cons_self ..) hak, Nat.zero_add]
+      exact sum_one f k l (List.nodup_cons.1 hn).2 ((List.mem_cons.1 hk).resolve_left fun e => hak e.symm)
+        fun k' hk' => h0 k' (List.mem_cons_of_mem _ hk')
+
+/-- Two charge counts over shards `0..K-1` that are positive only where `P` holds, with `P` true of at most one
+    shard, and that have equal sums, agree on every shard below `K`. -/
+theorem pin_one (K k : Nat) (hk : k < K) (P : Nat → Prop) (hP : ∀ a b, P a → P b → a = b) (f g : Nat → Nat)
+    (hf : ∀ k' < K, 0 < f k' → P k') (hg : ∀ k' < K, 0 < g k' → P k')
+    (hs : ((List.range K).map f).sum = ((List.range K).map g).sum) : f k = g k := by
+  by_cases hp : P k
+  · have zf : ∀ k' ∈ List.range K, k' ≠ k → f k' = 0 := fun k' hk' hne =>
+      Nat.eq_zero_of_not_pos fun h => hne (hP _ _ (hf k' (List.mem_range.1 hk') h) hp)
+    have zg : ∀ k' ∈ List.range K, k' ≠ k → g k' = 0 := fun k' hk' hne =>
+      Nat.eq_zero_of_not_pos fun h => hne (hP _ _ (hg k' (List.mem_range.1 hk') h) hp)
+    rwa [sum_one f k _ List.nodup_range (List.mem_range.2 hk) zf,
+      sum_one g k _ List.nodup_range (List.mem_range.2 hk) zg] at hs
+  · rw [Nat.eq_zero_of_not_pos fun h => hp (hf k hk h), Nat.eq_zero_of_not_pos fun h => hp (hg k hk h)]
+
+theorem shard_eq {a b : ShardDB} (h1 : a.chg = b.chg) (h2 : a.gross = b.gross) (h3 : a.mc = b.mc)
+    (h4 : a.head = b.head) (h5 : a.applied = b.applied) : a = b := by
+  cases a; cases b; simp only [ShardDB.mk.injEq]; exact ⟨h1, h2, h3, h4, h5⟩
+
+theorem spine_eq {a b : SpineDB} (h1 : a.dir = b.dir) (h2 : a.t = b.t) (h3 : a.used = b.used)
+    (h4 : a.budget = b.budget) (h5 : a.lc = b.lc) (h6 : a.spineRows = b.spineRows) (h7 : a.heads = b.heads)
+    (h8 : a.recs = b.recs) : a = b := by
+  cases a; cases b; simp only [SpineDB.mk.injEq]; exact ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩
+
+/-- The OS3 bar for one record `R` = `(mkRec pk cx ss inp).2`: `checkSingle` on the merge, plus the per-DB checks
+    the merge forgets.  The spine stores `R` on top of its records and sets `heads(k)` to `post_head_k` exactly for
+    touched `k`; every shard below `K` has head `heads(k)` (`headsOk`) and APPLIED = the records touching it
+    (`appliedOk`), holds MOVE charges only on cells the new directory homes at it, and moves its gross by `gsum` of its
+    part and its machine charges by `finalize`'s total for its part (both zero when untouched). -/
+def os3Bar (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (sp' : SpineDB) (sh' : Nat → ShardDB) : Prop :=
+  checkSingle pk cx (merge pk cx ss) inp (merge pk cx (sp', sh')) ∧
+  sp'.recs = (mkRec pk cx ss inp).2 :: ss.1.recs ∧
+  (∀ k, sp'.heads k =
+    if k ∈ (mkRec pk cx ss inp).2.touched then (mkRec pk cx ss inp).2.post k else ss.1.heads k) ∧
+  headsOk pk cx (sp', sh') = true ∧ appliedOk pk cx (sp', sh') ∧
+  ∀ k < pk.k cx.p, (∀ c, 0 < (sh' k).chg c → ∃ x, sp'.dir c = some x ∧ x.home = .shard k) ∧
+    (sh' k).gross = (ss.2 k).gross +
+      (if k ∈ (mkRec pk cx ss inp).2.touched then gsum ((mkRec pk cx ss inp).2.I k) else 0) ∧
+    (sh' k).mc = (ss.2 k).mc + (if k ∈ (mkRec pk cx ss inp).2.touched then
+      (finRows (ss.2 k).chg ((mkRec pk cx ss inp).2.I k) ((mkRec pk cx ss inp).2.V k)).2 else 0)
+
+/-- Check split, both directions (review fix 6): on a reachable state, the spine check plus the shard checks for
+    every shard below `K` hold exactly when the OS3 bar `os3Bar` holds.  So the split checks are neither weaker nor
+    stronger than the single-store check on the merge together with per-DB heads, APPLIED, home-charge and
+    per-shard total checks. -/
+theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp : Input) (sp' : SpineDB)
+    (sh' : Nat → ShardDB) :
+    (checkSpine pk cx ss inp sp' ∧ ∀ k < pk.k cx.p, checkShard (mkRec pk cx ss inp).2 k (ss.2 k) (sh' k)) ↔
+      os3Bar pk cx ss inp sp' sh' := by
+  have hI : Inv ss := by obtain ⟨L, rs, rfl⟩ := hr; exact inv_run pk cx (initS L) rs (inv_init L)
+  have h3 : Inv3 ss := by obtain ⟨L, rs, rfl⟩ := hr; exact inv3_run pk cx (initS L) rs (inv3_init L)
+  have hh : headsOk pk cx ss = true := by
+    simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
+  have hst : checkAll pk cx ss inp = true → stepT pk cx ss inp =
+      (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
+        commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := fun hc => by
+    unfold stepT stepS; rw [if_pos hc]; rfl
+  have hI1 := inv_step pk cx ss inp hI
+  have h31 := inv3_step pk cx ss inp h3
+  constructor
+  · rintro ⟨⟨hc, rfl⟩, hsh⟩
+    rw [hst hc] at hI1 h31
+    have he : ∀ k < pk.k cx.p,
+        sh' k = commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k := hsh
+    refine ⟨check_split pk cx ss hr inp _ sh' ⟨hc, rfl⟩ hsh, rfl, fun k => rfl, ?_, fun k hk => ?_,
+      fun k hk => ⟨fun c hp => ?_, ?_, ?_⟩⟩
+    · simp only [headsOk, List.all_eq_true, beq_iff_eq]
+      intro k hk
+      exact (congrArg ShardDB.head (he k (List.mem_range.1 hk))).trans (h31 k).1
+    · exact (congrArg ShardDB.applied (he k hk)).trans (h31 k).2
+    · rw [he k hk] at hp; exact (hI1 c).2 k hp
+    · rw [he k hk]
+      by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+      · simp [commitShards, applyPart, ht]
+      · simp [commitShards, ht]
+    · rw [he k hk]
+      by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+      · simp [commitShards, applyPart, ht]
+      · simp [commitShards, ht]
+  · rintro ⟨⟨hok, hm⟩, hrec, hhd, hH, hA, hsh⟩
+    have hc : checkAll pk cx ss inp = true := by simp only [checkAll, hh, Bool.and_true]; exact hok
+    rw [hst hc] at hI1 h31
+    have hm' := hm.trans (merge_commit pk cx ss inp hI).symm
+    have hsp : sp' = commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2 :=
+      spine_eq (congrArg View.dir hm') (congrArg View.t hm') (congrArg View.used hm') (congrArg View.budget hm')
+        (congrArg View.lc hm') (congrArg View.spineRows hm') (funext hhd) hrec
+    subst hsp
+    refine ⟨⟨hc, rfl⟩, fun k hk => ?_⟩
+    obtain ⟨hhome, hg, hmc⟩ := hsh k hk
+    show sh' k = commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k
+    have hH' : (sh' k).head = (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).heads k := by
+      simp only [headsOk, List.all_eq_true, beq_iff_eq] at hH; exact hH k (List.mem_range.2 hk)
+    have hA' : (sh' k).applied = ((commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).recs.reverse.filter
+        fun R => k ∈ R.touched).map (·.n) := hA k hk
+    refine shard_eq (funext fun c => ?_) ?_ ?_ (hH'.trans (h31 k).1.symm) (hA'.trans (h31 k).2.symm)
+    · exact pin_one (pk.k cx.p) k hk
+        (fun k' => ∃ x, (judge pk cx ss.1.view inp).dir c = some x ∧ x.home = .shard k')
+        (fun a b ⟨x, hx, ha⟩ ⟨y, hy, hb⟩ => by
+          rw [hx] at hy; cases hy; exact Home.shard.inj (ha.symm.trans hb))
+        (fun k' => (sh' k').chg c)
+        (fun k' => (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k').chg c)
+        (fun k' hk' h => ((hsh k' hk').1 c h)) (fun k' _ h => (hI1 c).2 k' h)
+        (congrArg (fun v => View.chg v c) hm')
+    · rw [hg]
+      by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+      · simp [commitShards, applyPart, ht]
+      · simp [commitShards, ht]
+    · rw [hmc]
+      by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+      · simp [commitShards, applyPart, ht]
+      · simp [commitShards, ht]
 
 /-- Definitional unfolding: when the judgment is ok, `stepSingle` is `applySingle` with Lean's verdicts. -/
 theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judgeSingle pk cx s inp).ok = true) :
