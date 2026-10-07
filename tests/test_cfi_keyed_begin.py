@@ -160,6 +160,7 @@ class KeyedBeginTests(unittest.TestCase):
         seen = {kind for phase, _, plan, _, _ in after if phase == "begin" and plan for kind, _, _ in plan}
         self.assertLessEqual(kinds, seen)
         self.assertTrue(any(phase == "finish" and receipt for phase, _, _, receipt, _ in after))
+        return after
 
     def test_fault_corpus_equals_the_whole_history_begin(self):
         def corpus():
@@ -232,24 +233,45 @@ class KeyedBeginTests(unittest.TestCase):
         self.assertEqual(begin.call_count, 0)
         self.assertEqual(fixtures._image(fx.store.path), image)
 
-    def test_e1_duplicate_received_other_obligation_refused_at_open(self):
-        """E1 (design s4): a PAYMENT_RECEIVED of file-payment-1 appended again, by the owner's own event writer, under ANOTHER obligation: hash chain, schema and
-        digests intact, only the commands-log rule broken. Today's walk over every event refuses a file naming the payment; the keyed begin reads the payment's own
-        obligation and answers RETRY. The store is refused at every open, so no route reaches the begin. C-L adds the payload-id uniqueness index that makes it impossible."""
-        fx = self._fixture()
-        fx._apply()
+    def _tamper_e1(self, fx, store):
+        """`store` appends PAYMENT_RECEIVED of file-payment-1 again, under ANOTHER obligation, by the owner's own event writer: hash chain, schema and digests intact, only the commands-log rule broken."""
         other = fx._query("SELECT obligation_id FROM obligations WHERE item_id<>? LIMIT 1", cash_tests.expected.H_ITEM_ID)[0][0]
         payload = json.loads(fx._query("SELECT payload_json FROM financial_events WHERE kind='PAYMENT_RECEIVED' LIMIT 1")[0][0])
         payload = {key: value for key, value in payload.items() if key != "rows" and not key.startswith("evaluation")}
         revision = fx._query("SELECT revision FROM obligations WHERE obligation_id=?", other)[0][0]
-        with patch.object(owner.FinancialOwner, "_record_command", lambda *arguments, **keywords: None), fx.store._write() as connection:
-            owner.FinancialOwner._append_event(fx.store, connection, aggregate_type="OBLIGATION", aggregate_id=other, kind="PAYMENT_RECEIVED", before_revision=revision, after_revision=revision, payload=payload, committed_at_ms=fx.store._now())
+        with patch.object(owner.FinancialOwner, "_record_command", lambda *arguments, **keywords: None), store._write() as connection:
+            owner.FinancialOwner._append_event(store, connection, aggregate_type="OBLIGATION", aggregate_id=other, kind="PAYMENT_RECEIVED", before_revision=revision, after_revision=revision, payload=payload, committed_at_ms=store._now())
+
+    def test_e1_duplicate_received_other_obligation_refused_at_open(self):
+        """E1 (design s4): the tamper of _tamper_e1. Today's walk over every event refuses a file naming the payment; the keyed begin reads the payment's own
+        obligation and answers RETRY. The store is refused at every open, so no open route reaches the begin (the owner that wrote it, and an owner already open
+        before it, are the next test). C-L adds the payload-id uniqueness index that makes it impossible."""
+        fx = self._fixture()
+        fx._apply()
+        self._tamper_e1(fx, fx.store)
         fx.baseline = fx._manifest()
         prepared = fx._prepare()  # the same file again
         self._refused(fx, prepared, "commands:duplicate")
         path = self._copy(fx)
         self.assertEqual(self._raw_begin(fx, prepared, path, True), "cash_file_failed")
         self.assertEqual(self._raw_begin(fx, prepared, path, False), ["RETRY", "RETRY"])
+
+    def test_e1_run_batch_on_an_owner_open_before_the_tamper_is_refused_and_writes_nothing(self):
+        """The deferred re-verify path: owner A is open, a second owner writes the E1 tamper and moves the data version. A's run_batch re-verifies, defers the failure, runs the
+        begin over the bad indexes and refuses before COMMIT. (Direct run_batch by the tampering owner itself, whose mark did not move, answers RETRY with no money written:
+        the accepted owner-wide limit.)"""
+        fx = self._fixture()
+        fx._apply()
+        with fx.fixture._make_owner(path=fx.store.path, clock=fx.store.clock) as second:
+            self._tamper_e1(fx, second)
+            first, fx.store = fx.store, second
+            fx.baseline = fx._manifest()
+            fx.store = first
+        prepared, image = fx._prepare(), fixtures._image(first.path)
+        with self.assertRaises(owner.FinancialIntegrityError) as raised:
+            fx._apply(prepared)
+        self.assertEqual(str(raised.exception), "open_verification:commands:duplicate")
+        self.assertEqual(fixtures._image(first.path), image)
 
     def test_e2_misfiled_alias_refused_at_open(self):
         """E2 (design s4): an alias confirmation filed, by the owner's own event writer, under the wrong obligation: hash chain, schema and digests intact, only the
@@ -309,8 +331,8 @@ class KeyedBeginTests(unittest.TestCase):
                     self.assertIn(("check", file), log[:number])
 
     def test_a_resend_across_the_key_chunk_with_retry_overlap_and_alias_rows_equals_the_whole_history_begin(self):
-        """500 rows (the file cap): more than the 499 two-column keys of one chunk. File 1 is all NEW; file 2 resends 160 of them (RETRY), names 170 stored origins under new payment and evidence ids (OVERLAP)
-        and adds 170 NEW; file 3 sends file 2 again (RETRY and ALIAS)."""
+        """500 rows (the file cap): more than the 499 two-column keys of one chunk. File 1 is all NEW; file 2 resends 160 of them (RETRY), names 340 stored origins under new payment and evidence ids (OVERLAP); file 3 sends file 2 again (RETRY and ALIAS).
+        Rows 330..499 are the 2nd key chunk's (499 keys to a chunk): row 499 is OVERLAP in file 2 and ALIAS in file 3, found only by the 2-column lookup."""
         widest, find = [], check._find
 
         def spy(connection, table, columns, keys, where=""):
@@ -324,11 +346,13 @@ class KeyedBeginTests(unittest.TestCase):
             first = fx._file_of(ids, check.MAX_ROWS, "m1")["rows"]
             self._send(fx, first, "c1")
             fresh = fx._file_of(ids, check.MAX_ROWS, "m2")["rows"]
-            second = first[:160] + [{**fresh[number], "common_origin_id": first[number]["common_origin_id"]} for number in range(160, 330)] + fresh[330:]
+            second = first[:160] + [{**fresh[number], "common_origin_id": first[number]["common_origin_id"]} for number in range(160, 500)]
             self._send(fx, second, "c2")
             self._send(fx, second, "c3")
         with patch.object(check, "_find", spy):
-            self._equal(resend, {"NEW", "RETRY", "OVERLAP", "ALIAS"})
+            log = self._equal(resend, {"NEW", "RETRY", "OVERLAP", "ALIAS"})
+        plans = [plan for phase, _, plan, _, _ in log if phase == "begin"]
+        self.assertEqual([plan[499][0] for plan in plans], ["NEW", "OVERLAP", "ALIAS"])
         self.assertTrue(any(columns == 2 and count > 499 for columns, count in widest), widest)
 
     def test_a_database_error_in_the_live_begin_rolls_back_and_writes_nothing(self):

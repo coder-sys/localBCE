@@ -20,7 +20,9 @@ class CfiHistoryBenchSmokeTests(unittest.TestCase):
                 self.assertEqual(row["samples"], 3)
                 self.assertTrue(all(row[step + "_min"] <= row[step] <= row[step + "_max"] for step in bench.STEPS))
                 self.assertGreater(row["load_s"], 0)  # begin's obligations and cases load was timed
-                self.assertGreaterEqual(row["begin_s"], row["counts_s"] + row["load_s"])
+                self.assertEqual(len(row["per_sample"]), 3)
+                for sample in row["per_sample"]:  # a median of each column can break this by chance, a sample cannot
+                    self.assertGreaterEqual(sample["begin_s"], sample["counts_s"] + sample["load_s"])
         self.assertEqual([r["files"] for r in rows if r["lines"] == 6][0], 2)
         self.assertTrue(all(r[name] == 1.0 for r in rows if r["earlier"] == 4 for name in ("begin_x", "ops_x")))
 

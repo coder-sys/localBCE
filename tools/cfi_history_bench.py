@@ -1,14 +1,11 @@
-"""CFI-HIST H0 (rrb/state/cfi-history-design-20261007.md section 6): what does a cash file cost as earlier history grows?
-
-Report only, no product change.  One synthetic store is seeded to each history size in turn; every (file size, route) pair then
-runs on a fresh copy of it, twice: unmetered for wall time (a progress handler or tracemalloc would distort it), and metered
-with the test_history_growth meter for sql_ops and peak_kib.  Routes: direct (run_batch) and plan (plan on a copy, then commit).
-begin and finish are timed by wrapping CashFileCheck; on the plan route each runs twice (copy, then live) and is summed.
-The product caps a file at 500 rows, so a 5,000-line file is ten 500-row files: the row reports the first (history = earlier)
-and files_wall_s the whole run.  *_x columns are the growth ratio against the smallest history: flat is good, linear is burden.
-Each unmetered pass runs `samples` times (default 5), each on a fresh copy; every *_s column is the median of the first file's samples,
-with *_s_min and *_s_max beside it. counts_s is begin's _counts step (a COUNT(*) of every table) and load_s begin's whole obligations and
-cases load (_table, cash_file_independent.py:382); both are inside begin_s.
+"""CFI-HIST H0 (rrb/state/cfi-history-design-20261007.md section 6): what does a cash file cost as earlier history grows? Report only.
+One synthetic store is seeded to each history size in turn; every (file size, route) pair runs on a fresh copy of it: `samples` unmetered
+runs (default 5) for wall time, each on a fresh copy, and one metered run (test_history_growth meter) for sql_ops and peak_kib.
+Routes: direct (run_batch) and plan (plan on a copy, then commit). begin and finish are timed by wrapping CashFileCheck; on the plan route each
+runs twice (copy, then live) and is summed. A file is capped at 500 rows, so 5,000 lines are ten files: the row reports the first and
+files_wall_s the whole run. Every *_s column is the median of the first file's samples with *_s_min and *_s_max beside it, and per_sample
+keeps each sample's values. counts_s is begin's _counts step and load_s its obligations and cases load (_table); both lie inside begin_s.
+*_x columns are the growth ratio against the smallest history: flat is good, linear is burden.
 Synthetic, non-PHI, nonpayment; proofSuiteId=null, production_usable=false, activation=false.
 """
 
@@ -106,8 +103,9 @@ def _config(fx, seeded, fresh, size, lines, route, cap, samples):
                 row.update({k: v for k, v in done[0].items() if k in ("sql_ops", "begin_ops", "finish_ops", "peak_kib")})
             else:
                 timed.append(done)
+    row["per_sample"] = [{key: done[0][key] for key in STEPS} for done in timed]
     for key in STEPS:
-        values = [done[0][key] for done in timed]
+        values = [sample[key] for sample in row["per_sample"]]
         row.update({key: statistics.median(values), key + "_min": min(values), key + "_max": max(values)})
     row.update({"refused": next((done[0]["refused"] for done in timed if done[0].get("refused")), None), "files_wall_s": sum(d["wall_s"] for d in timed[0])})
     return row
