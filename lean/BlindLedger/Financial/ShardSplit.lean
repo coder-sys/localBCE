@@ -202,6 +202,61 @@ def sel (q : Row → Bool) : List Row → List Bool → List Bool
 def Local (cx : Ctx) : Prop := ∀ (q : Option Item → Bool) (rows : List Row),
   sel (fun r => q r.item) rows (cx.lean rows) = cx.lean (rows.filter fun r => q r.item)
 
+/-- Lean run once per group, the shape of the product judge (`batchFast` per obligation ledger, B:416): `κ` names a
+    row's group, `g a G` is the verdict list Lean gives group `a`'s rows `G` in file order (any function, so it may
+    thread state inside the group as `batchFast` does), and each row reads its verdict at its position inside its
+    group (`pre` = the rows before it). -/
+def groupAux {α : Type} [DecidableEq α] (κ : Row → α) (g : α → List Row → List Bool) (all : List Row) :
+    List Row → List Row → List Bool
+  | _, [] => []
+  | pre, r :: rs => (g (κ r) (all.filter fun x => decide (κ x = κ r))).getD
+      (pre.filter fun x => decide (κ x = κ r)).length false :: groupAux κ g all (pre ++ [r]) rs
+
+/-- The grouped judge on a file: every row's verdict from its group's one Lean batch. -/
+def grouped {α : Type} [DecidableEq α] (κ : Row → α) (g : α → List Row → List Bool) (rows : List Row) :
+    List Bool := groupAux κ g rows [] rows
+
+/-- Filtering by `q` first changes nothing when every row `p` keeps is one `q` keeps. -/
+theorem filter_sub (p q : Row → Bool) (h : ∀ x, p x = true → q x = true) :
+    ∀ l : List Row, (l.filter q).filter p = l.filter p
+  | [] => rfl
+  | x :: l => by
+    by_cases hp : p x = true
+    · simp [hp, h x hp, filter_sub p q h l]
+    · by_cases hq : q x = true
+      · simp [hp, hq, filter_sub p q h l]
+      · simp [hp, hq, filter_sub p q h l]
+
+/-- When every group lies inside one item, the grouped judge's verdicts for the rows of any set of items, read off
+    the whole batch, equal its verdicts on those rows alone (from any prefix `pre`). -/
+theorem group_sel {α : Type} [DecidableEq α] (κ : Row → α) (g : α → List Row → List Bool)
+    (q : Option Item → Bool) (hκ : ∀ x y, κ x = κ y → x.item = y.item) (all : List Row) :
+    ∀ (rs pre : List Row), sel (fun r => q r.item) rs (groupAux κ g all pre rs) =
+      groupAux κ g (all.filter fun r => q r.item) (pre.filter fun r => q r.item) (rs.filter fun r => q r.item)
+  | [], _ => rfl
+  | r :: rs, pre => by
+    have ih := group_sel κ g q hκ all rs (pre ++ [r])
+    by_cases hr : q r.item = true
+    · have hs : ∀ l : List Row, (l.filter fun r => q r.item).filter (fun x => decide (κ x = κ r)) =
+          l.filter fun x => decide (κ x = κ r) :=
+        filter_sub _ _ fun x hx => (by rw [hκ x r (of_decide_eq_true hx)]; exact hr)
+      rw [List.filter_cons_of_pos (p := fun r : Row => q r.item) hr]
+      simp only [groupAux, sel, hr, ↓reduceIte, List.headD_cons, List.tail_cons]
+      rw [ih, List.filter_append, List.filter_cons_of_pos (p := fun r : Row => q r.item) hr, List.filter_nil, hs, hs]
+    · rw [List.filter_cons_of_neg (p := fun r : Row => q r.item) hr]
+      simp only [groupAux, sel, hr, Bool.false_eq_true, ↓reduceIte, List.tail_cons]
+      rw [ih, List.filter_append, List.filter_cons_of_neg (p := fun r : Row => q r.item) hr, List.filter_nil,
+        List.append_nil]
+
+/-- Goal 4, `Local` on the real judge's shape: if Lean is run once per group (`cx.lean = grouped κ g`, any `g`) and
+    every group lies inside one item (`κ x = κ y → x.item = y.item`, true of obligation ledgers: one
+    `FinancialInput` has one obligation of one item), then `Local cx` holds. -/
+theorem local_grouped {α : Type} [DecidableEq α] (cx : Ctx) (κ : Row → α) (g : α → List Row → List Bool)
+    (hκ : ∀ x y, κ x = κ y → x.item = y.item) (hl : cx.lean = grouped κ g) : Local cx := by
+  intro q rows
+  rw [hl]
+  exact group_sel κ g q hκ rows rows []
+
 def applyWhole (cx : Ctx) (s : Single) (J : Judgment) : Single :=
   let w := wrows J.out
   let f := finRows s.chg w (cx.lean w)
@@ -1344,10 +1399,13 @@ theorem pin_one (K k : Nat) (hk : k < K) (P : Nat → Prop) (hP : ∀ a b, P a �
       sum_one g k _ List.nodup_range (List.mem_range.2 hk) zg] at hs
   · rw [Nat.eq_zero_of_not_pos fun h => hp (hf k hk h), Nat.eq_zero_of_not_pos fun h => hp (hg k hk h)]
 
+/-- Two shard databases with equal charges, gross, machine charges, head and APPLIED list are equal. -/
 theorem shard_eq {a b : ShardDB} (h1 : a.chg = b.chg) (h2 : a.gross = b.gross) (h3 : a.mc = b.mc)
     (h4 : a.head = b.head) (h5 : a.applied = b.applied) : a = b := by
   cases a; cases b; simp only [ShardDB.mk.injEq]; exact ⟨h1, h2, h3, h4, h5⟩
 
+/-- Two spine databases equal field by field (directory, clock, used, budget, LINK charges, spine rows, heads,
+    records) are equal. -/
 theorem spine_eq {a b : SpineDB} (h1 : a.dir = b.dir) (h2 : a.t = b.t) (h3 : a.used = b.used)
     (h4 : a.budget = b.budget) (h5 : a.lc = b.lc) (h6 : a.spineRows = b.spineRows) (h7 : a.heads = b.heads)
     (h8 : a.recs = b.recs) : a = b := by
@@ -1794,6 +1852,7 @@ theorem reader_cut (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List 
       · rw [if_neg ht]
   · cases h
 
+/-- Running `a ++ b` is running `a`, then `b` from where `a` ended. -/
 theorem runS_append (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (a b : List Input),
     runS pk cx ss (a ++ b) = runS pk cx (runS pk cx ss a) b
   | _, [], _ => rfl
