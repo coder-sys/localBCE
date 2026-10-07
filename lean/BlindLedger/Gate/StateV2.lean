@@ -2042,43 +2042,44 @@ theorem seen0_count (c₀ : Ctx) (rel unr : Snapshot Line) (b : List Line) (q : 
   · rintro ⟨x, ⟨hx, hp⟩, hq⟩; exact ⟨x, hx, hq, fun ha => hp.elim (fun h => absurd ha h) id⟩
   · rintro ⟨x, hx, hq, hp⟩; exact ⟨x, ⟨hx, Decidable.not_or_of_imp hp⟩, hq⟩
 
+/-- One unresolved row of the carried context claims `[0, m, mo]` exactly when its near key is that key and
+    enrollment is unusable, its date invalid, or its member enrolled. -/
+private theorem c9_near_claim (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (m mo : Nat) (x : Line)
+    (hx : x ∈ unr.entries) : ([0, m, mo] ∈ claim (carried c₀ rel unr) x) ↔
+      ((nearKey x == [0, m, mo] &&
+        (!usable c₀.today 7 okSpan c₀.enrollment || !validDate x.date || enrolled c₀ x)) = true) := by
+  have hd : x ∉ rel.entries := by
+    intro hr
+    have h := hi.1
+    rw [List.map_append, List.nodup_append] at h
+    exact h.2.2 x.id (List.mem_map.mpr ⟨x, hr, rfl⟩) x.id (List.mem_map.mpr ⟨x, hx, rfl⟩) rfl
+  have ho : own (carried c₀ rel unr) x = false := by
+    simp only [own, sv_released_carried]
+    simp [hd]
+  by_cases hcap : isCap x = true
+  · have e1 : (carried c₀ rel unr).enrollment = c₀.enrollment := rfl
+    have e2 : (carried c₀ rel unr).today = c₀.today := rfl
+    simp [claim, notEnrolled, certain, enrolled, ho, hcap, nearKey, exactKey, idKey, keys, e1, e2]
+    by_cases hE : ∃ s, s ∈ entries c₀.enrollment ∧ covers x s = true
+    · have hE' : ¬ ∀ s, s ∈ entries c₀.enrollment → covers x s = false := fun h => by
+        obtain ⟨s, hs, hc⟩ := hE; simp [h s hs] at hc
+      by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true <;>
+        by_cases hv : validDate x.date = true <;> simp [hu, hv, hE, hE'] <;> first | done | (constructor <;> rintro ⟨a, b⟩ <;> exact ⟨a.symm, b.symm⟩)
+    · have hE' : ∀ s, s ∈ entries c₀.enrollment → covers x s = false := fun s hs => by
+        cases h : covers x s
+        · rfl
+        · exact absurd ⟨s, hs, h⟩ hE
+      by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true <;>
+        by_cases hv : validDate x.date = true <;> simp [hu, hv, hE, eq_true hE'] <;> first | done | (constructor <;> rintro ⟨a, b⟩ <;> exact ⟨a.symm, b.symm⟩)
+  · simp [claim, ho, hcap, nearKey, exactKey, idKey, keys]
+
 /-- The CAP near claim is local: day keys of today's covering spans, invalid dates, or the aggregate key
     when enrollment is unusable. Exact and id keys are always claimed. -/
 theorem pending_near_cap (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (m mo : Nat) :
     (pending (carried c₀ rel unr)).contains [0, m, mo] =
       unr.entries.any fun x => nearKey x == [0, m, mo] &&
         (!usable c₀.today 7 okSpan c₀.enrollment || !validDate x.date || enrolled c₀ x) := by
-  have hd : ∀ x ∈ unr.entries, x ∉ rel.entries := by
-    intro x hx hr
-    have h := hi.1
-    rw [List.map_append, List.nodup_append] at h
-    exact h.2.2 x.id (List.mem_map.mpr ⟨x, hr, rfl⟩) x.id (List.mem_map.mpr ⟨x, hx, rfl⟩) rfl
-  have hown : ∀ x ∈ unr.entries, own (carried c₀ rel unr) x = false := by
-    intro x hx
-    have := hd x hx
-    simp only [own, sv_released_carried]
-    simp [this]
-  have hk : ∀ x ∈ unr.entries, ([0, m, mo] ∈ claim (carried c₀ rel unr) x) ↔
-      ((nearKey x == [0, m, mo] &&
-        (!usable c₀.today 7 okSpan c₀.enrollment || !validDate x.date || enrolled c₀ x)) = true) := by
-    intro x hx
-    have ho := hown x hx
-    by_cases hcap : isCap x = true
-    · have e1 : (carried c₀ rel unr).enrollment = c₀.enrollment := rfl
-      have e2 : (carried c₀ rel unr).today = c₀.today := rfl
-      simp [claim, notEnrolled, certain, enrolled, ho, hcap, nearKey, exactKey, idKey, keys, e1, e2]
-      by_cases hE : ∃ s, s ∈ entries c₀.enrollment ∧ covers x s = true
-      · have hE' : ¬ ∀ s, s ∈ entries c₀.enrollment → covers x s = false := fun h => by
-          obtain ⟨s, hs, hc⟩ := hE; simp [h s hs] at hc
-        by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true <;>
-          by_cases hv : validDate x.date = true <;> simp [hu, hv, hE, hE'] <;> first | done | (constructor <;> rintro ⟨a, b⟩ <;> exact ⟨a.symm, b.symm⟩)
-      · have hE' : ∀ s, s ∈ entries c₀.enrollment → covers x s = false := fun s hs => by
-          cases h : covers x s
-          · rfl
-          · exact absurd ⟨s, hs, h⟩ hE
-        by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true <;>
-          by_cases hv : validDate x.date = true <;> simp [hu, hv, hE, eq_true hE'] <;> first | done | (constructor <;> rintro ⟨a, b⟩ <;> exact ⟨a.symm, b.symm⟩)
-    · simp [claim, ho, hcap, nearKey, exactKey, idKey, keys]
+  have hk := fun x hx => c9_near_claim c₀ rel unr hi m mo x hx
   unfold pending
   rw [sv_unresolved_carried, Bool.eq_iff_iff, List.any_eq_true]
   constructor
@@ -4664,6 +4665,211 @@ private theorem c9_take_app (A B : List Nat) : (A.take K ++ B.take K).take K = (
   congr 2
   omega
 
+/-- A posting decodes to its (position, id). -/
+private theorem c9_postEntry {i n : Nat} {e : Bytes} (h : postEntry i n = some e) :
+    (beNat (e.take 8), beNat (e.drop 8)) = (i, n) := by
+  have hdec : ∀ {w v : Nat} {a : Bytes}, be w v = some a → beNat a = v := fun {w v a} hb => by
+    by_cases hl : v < 256 ^ w
+    · rw [be_eq_natBE hl] at hb; cases hb; exact beNat_natBE w v hl
+    · unfold be at hb; rw [if_neg hl] at hb; cases hb
+  unfold postEntry at h
+  cases ha : be 8 i with
+  | none => simp [ha] at h
+  | some a =>
+    cases hb : be idWidth n with
+    | none => simp [ha, hb] at h
+    | some c =>
+      simp [ha, hb] at h
+      subst h
+      rw [List.take_left' (be_len ha), List.drop_left' (be_len ha), hdec ha, hdec hb]
+
+private theorem c9_mapM {α β γ : Type} (F : α → Option β) (h : β → γ) (g : α → γ) :
+    ∀ (xs : List α) (ys : List β), xs.mapM F = some ys → (∀ x ∈ xs, ∀ y, F x = some y → h y = g x) →
+      ys.map h = xs.map g
+  | [], ys, hm, _ => by simp [List.mapM_nil] at hm; subst hm; rfl
+  | x :: xs, ys, hm, hg => by
+    simp only [List.mapM_cons] at hm
+    cases hx : F x with
+    | none => simp [hx] at hm
+    | some a =>
+      cases hr : xs.mapM F with
+      | none => simp [hx, hr] at hm
+      | some bs =>
+        simp [hx, hr] at hm
+        subst hm
+        simp only [List.map_cons, hg x (by simp) a hx,
+          c9_mapM F h g xs bs hr fun z hz => hg z (by simp [hz])]
+
+/-- A probed key's first-K list decodes to the first K (position, id) of the rows stored under it. -/
+private theorem c9_firstOf (H : Bytes → Bytes) (x : Ix) (u : Bool) (s : List Line) (m : Map)
+    (hm : setMap H u s = some m) (q : Key)
+    (hF : ∀ kb, keyBytes q = some kb → findHit x.hs u q = some (c3T H u s q (pathOf H kb)))
+    (hN : keyBytes q = none → findHit x.hs u q = none) :
+    (x.firstOf u q).map (fun e => (beNat (e.take 8), beNat (e.drop 8))) =
+      ((s.zipIdx.filter fun p => (rowKeys u p.1).contains q).map fun p => (p.2, p.1.id)).take K := by
+  have hP : postings u s q = (s.zipIdx.filter fun p => (rowKeys u p.1).contains q).mapM
+      fun p => postEntry p.2 p.1.id := by
+    first
+      | rfl
+      | (unfold postings; congr 1 <;> first | rfl | (funext ⟨y, i⟩; rfl) | (congr 1; funext ⟨y, i⟩; rfl))
+  by_cases hL : (s.zipIdx.filter fun p => (rowKeys u p.1).contains q) = []
+  · have h0 : x.firstOf u q = [] := by
+      unfold Ix.firstOf
+      cases hk : keyBytes q with
+      | none => rw [hN hk] <;> rfl
+      | some kb =>
+        rw [hF kb hk]
+        unfold c3T
+        split
+        · rfl
+        · rw [hP, hL] <;> rfl
+    rw [h0, hL] <;> rfl
+  · obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hL
+    have hp' := List.mem_filter.mp hp
+    have hpq : q ∈ rowKeys u p.1 := List.contains_iff_mem.mp hp'.2
+    obtain ⟨kb, es, hk, hes, -⟩ := (c3_setMap_mem hm).2.2.1 q
+      (List.mem_flatMap.mpr ⟨p.1, List.fst_mem_of_mem_zipIdx hp'.1, hpq⟩)
+    have hfo : x.firstOf u q = es.take K := by
+      unfold Ix.firstOf
+      rw [hF kb hk]
+      unfold c3T
+      rw [if_neg (c3_rowKeys_head u p.1 q hpq), hes] <;> rfl
+    rw [hfo, List.map_take]
+    congr 1
+    exact c9_mapM _ _ _ _ es (hP.symm.trans hes) fun y _ e he => c9_postEntry he
+
+/-- `mergeFirst` over keys `Qs` whose rows are exactly those with `P` is the first K ids of `s.filter P`. -/
+private theorem c9_mergeFirst (s : List Line) (u : Bool) (P : Line → Bool) (Qs : List Key) (f : Key → List Bytes)
+    (hf : ∀ q ∈ Qs, (f q).map (fun e => (beNat (e.take 8), beNat (e.drop 8))) =
+      ((s.zipIdx.filter fun p => (rowKeys u p.1).contains q).map fun p => (p.2, p.1.id)).take K)
+    (hsub : ∀ x ∈ s, ∀ q ∈ Qs, (rowKeys u x).contains q = true → P x = true)
+    (hcov : ∀ x ∈ s, P x = true → ∃ q ∈ Qs, (rowKeys u x).contains q = true) :
+    Ix.mergeFirst (Qs.map f) = ((s.filter P).map (·.id)).take K := by
+  have e : (Qs.map f).flatten.map (fun e => (beNat (e.take 8), beNat (e.drop 8))) =
+      (Qs.map fun q => ((s.zipIdx.filter fun p => (rowKeys u p.1).contains q).map
+        fun p => (p.2, p.1.id)).take K).flatten := by
+    rw [List.map_flatten, List.map_map]
+    congr 1
+    exact List.map_congr_left hf
+  unfold Ix.mergeFirst
+  rw [e]
+  exact c9_mergeZ s P Qs (fun q y => (rowKeys u y).contains q) hsub hcov
+
+/-- The unresolved probe keys of `firstKQ` hit exactly the unresolved rows whose claim shares a key with `l`. -/
+private theorem c9_unrQ (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (l y : Line) (hy : y ∈ unr.entries) :
+    (∃ q ∈ keys l, q ∈ claim (carried c₀ rel unr) y) ↔
+      ∃ q ∈ [exactKey l, idKey l] ++ (if isCap l then capProbes c₀ l.member (l.date / 100) else [nearKey l]),
+        q ∈ rowKeys true y := by
+  have hEx : exactKey l ∈ claim (carried c₀ rel unr) y ↔ exactKey l ∈ rowKeys true y :=
+    c4_claim_mem _ y _ (by unfold exactKey; split <;> simp)
+  have hId : idKey l ∈ claim (carried c₀ rel unr) y ↔ idKey l ∈ rowKeys true y :=
+    c4_claim_mem _ y _ (by simp [idKey])
+  have hK : ∀ P : Key → Prop, (∃ q ∈ keys l, P q) ↔ (P (exactKey l) ∨ P (nearKey l) ∨ P (idKey l)) :=
+    fun P => by simp [keys]
+  rw [hK]
+  by_cases hcap : isCap l = true
+  · rw [if_pos hcap]
+    have hNc : nearKey l = [0, l.member, l.date / 100] := by simp [nearKey, hcap]
+    rw [hNc, c9_near_claim c₀ rel unr hi _ _ y hy, hEx, hId]
+    constructor
+    · rintro (h | h | h)
+      · exact ⟨_, List.mem_append_left _ (by simp), h⟩
+      · simp only [Bool.and_eq_true, beq_iff_eq] at h
+        obtain ⟨q, hq, hr⟩ := (c4_capProbe_mem c₀ _ _ y).mpr h
+        exact ⟨q, List.mem_append_right _ hq, hr⟩
+      · exact ⟨_, List.mem_append_left _ (by simp), h⟩
+    · rintro ⟨q, hq, hr⟩
+      rcases List.mem_append.mp hq with h | h
+      · simp only [List.mem_cons, List.mem_nil_iff, or_false] at h
+        rcases h with rfl | rfl
+        · exact Or.inl hr
+        · exact Or.inr (Or.inr hr)
+      · have hc := (c4_capProbe_mem c₀ _ _ y).mp ⟨q, h, hr⟩
+        exact Or.inr (Or.inl (by simp [hc.1, hc.2]))
+  · rw [if_neg hcap]
+    have hNe : nearKey l ∈ claim (carried c₀ rel unr) y ↔ nearKey l ∈ rowKeys true y :=
+      c4_claim_mem _ y _ (by simp [nearKey, hcap])
+    rw [hEx, hId, hNe]
+    constructor
+    · rintro (h | h | h)
+      · exact ⟨_, List.mem_append_left _ (by simp), h⟩
+      · exact ⟨_, List.mem_append_right _ (by simp), h⟩
+      · exact ⟨_, List.mem_append_left _ (by simp), h⟩
+    · rintro ⟨q, hq, hr⟩
+      simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hq
+      rcases hq with (rfl | rfl) | rfl
+      · exact Or.inl hr
+      · exact Or.inr (Or.inr hr)
+      · exact Or.inr (Or.inl hr)
+
+/-- Per line: the indexed first-K equals the spec's `counterparts.take K` on the carried context. -/
+private theorem c9_firstKQ (H : Bytes → Bytes) (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr)
+    (mr mu : Map) (hmr : setMap H false rel.entries = some mr) (hmu : setMap H true unr.entries = some mu)
+    (hxc : x.c₀ = c₀) (l : Line)
+    (hF : ∀ (u : Bool) (q : Key) kb, keyBytes q = some kb →
+      (q ∈ keys l ∨ (u = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) →
+      findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb)))
+    (hN : ∀ u q, keyBytes q = none → findHit x.hs u q = none) :
+    x.firstKQ l = (decideLine (carried c₀ rel unr) [] l).counterparts.take K := by
+  have hl1 : loose (carried c₀ rel unr).today (carried c₀ rel unr).releasedPrior (carried c₀ rel unr).released = [] :=
+    carried_loose _ _
+  have hl2 : loose (carried c₀ rel unr).today (carried c₀ rel unr).unresolvedPrior
+      (carried c₀ rel unr).unresolved = [] := carried_loose _ _
+  have hc : (decideLine (carried c₀ rel unr) [] l).counterparts =
+      (rel.entries.filter fun y => (keys l).any (keys y).contains).map (·.id) ++
+      (unr.entries.filter fun y => (keys l).any (claim (carried c₀ rel unr) y).contains).map (·.id) := by
+    show ((releasedSet _ ++ loose _ _ _).filter _ ++ (unresolvedSet _ ++ loose _ _ _).filter _).map _ = _
+    rw [hl1, hl2, sv_released_carried, sv_unresolved_carried, List.append_nil, List.append_nil, List.map_append]
+  have rk0 : ∀ y, rowKeys false y = keys y := fun y => by simp [rowKeys]
+  have h1 : Ix.mergeFirst ((keys l).map (x.firstOf false)) =
+      ((rel.entries.filter fun y => (keys l).any (keys y).contains).map (·.id)).take K :=
+    c9_mergeFirst rel.entries false (fun y => (keys l).any (keys y).contains) (keys l) (x.firstOf false)
+      (fun q hq => c9_firstOf H x false rel.entries mr hmr q (fun kb hk => hF false q kb hk (Or.inl hq))
+        (hN false q))
+      (fun y _ q hq hm => List.any_eq_true.mpr ⟨q, hq, by rw [← rk0 y]; exact hm⟩)
+      (fun y _ hp => by
+        obtain ⟨q, hq, hm⟩ := List.any_eq_true.mp hp
+        exact ⟨q, hq, by rw [rk0 y]; exact hm⟩)
+  have hQ : ∀ q ∈ [exactKey l, idKey l] ++ (if isCap l then capProbes c₀ l.member (l.date / 100) else [nearKey l]),
+      q ∈ keys l ∨ (true = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100)) := by
+    intro q hq
+    rcases List.mem_append.mp hq with h | h
+    · simp only [List.mem_cons, List.mem_nil_iff, or_false] at h
+      left; rcases h with rfl | rfl <;> simp [keys]
+    · by_cases hcap : isCap l = true
+      · rw [if_pos hcap] at h; exact Or.inr ⟨rfl, hcap, h⟩
+      · rw [if_neg hcap, List.mem_singleton] at h; left; rw [h]; simp [keys]
+  have h2 : Ix.mergeFirst (([exactKey l, idKey l] ++
+      (if isCap l then capProbes c₀ l.member (l.date / 100) else [nearKey l])).map (x.firstOf true)) =
+      ((unr.entries.filter fun y => (keys l).any (claim (carried c₀ rel unr) y).contains).map (·.id)).take K :=
+    c9_mergeFirst unr.entries true (fun y => (keys l).any (claim (carried c₀ rel unr) y).contains)
+      ([exactKey l, idKey l] ++ (if isCap l then capProbes c₀ l.member (l.date / 100) else [nearKey l]))
+      (x.firstOf true)
+      (fun q hq => c9_firstOf H x true unr.entries mu hmu q (fun kb hk => hF true q kb hk (hQ q hq)) (hN true q))
+      (fun y hy q hq hm => by
+        obtain ⟨q', hq', h'⟩ := (c9_unrQ c₀ rel unr hi l y hy).mpr ⟨q, hq, List.contains_iff_mem.mp hm⟩
+        exact List.any_eq_true.mpr ⟨q', hq', List.contains_iff_mem.mpr h'⟩)
+      (fun y hy hp => by
+        obtain ⟨q, hq, h⟩ := List.any_eq_true.mp hp
+        obtain ⟨q', hq', h'⟩ := (c9_unrQ c₀ rel unr hi l y hy).mp ⟨q, hq, List.contains_iff_mem.mp h⟩
+        exact ⟨q', hq', List.contains_iff_mem.mpr h'⟩)
+  rw [hc]
+  show (Ix.mergeFirst ((keys l).map (x.firstOf false)) ++ Ix.mergeFirst (([exactKey l, idKey l] ++
+    (if isCap l then capProbes x.c₀ l.member (l.date / 100) else [nearKey l])).map (x.firstOf true))).take K = _
+  rw [hxc, h1, h2, c9_take_app]
+
+private theorem c9_firstKs (H : Bytes → Bytes) (x : Ix) : ∀ (seen : List Key) (ls : List Line),
+    (Ix.decideAllQ H x seen ls).map (·.firstK) = ls.map x.firstKQ
+  | _, [] => rfl
+  | _, l :: ls => congrArg (x.firstKQ l :: ·) (c9_firstKs H x _ ls)
+
+/-- The spec's counterparts do not depend on `seen`. -/
+private theorem c9_cps (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
+    (decideAll c seen ls).map (·.counterparts.take K) =
+      (decideAll c seen ls).map fun d => (decideLine c [] d.line).counterparts.take K
+  | _, [] => rfl
+  | _, l :: ls => congrArg ((decideLine c [] l).counterparts.take K :: ·) (c9_cps c _ ls)
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
@@ -4680,7 +4886,7 @@ theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k
   by_cases nc : Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr)
   · exact Or.inr nc
   left
-  obtain ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, -, -, hxb, -, hN, hD, hDec, hPs, hFresh, hW1, hW2, hHd, hxr, hxu,
+  obtain ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, -, hxc, hxb, hF, hN, hD, hDec, hPs, hFresh, hW1, hW2, hHd, hxr, hxu,
     hDg, -, hHit, hT⟩ := c7_core H hH c₀ k os b rel unr hi h ha d hd w o hr nc
   obtain ⟨f1, f2, hRel, hUnr, hBF⟩ := decideRegT_sets c₀ k os b rel unr
   have hI : Inv (decideRegT (carried c₀ rel unr) k os b).released (decideRegT (carried c₀ rel unr) k os b).unresolved :=
@@ -4741,7 +4947,25 @@ theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k
       pure (⟨bumpSet c₀.today rel, bumpSet c₀.today unr, rel.entries.length + f1.length,
         unr.entries.length + f2.length, root H a, root H b'⟩ : Head)) = _
     rw [hm1, hm2] <;> rfl
-  exact ⟨hDec, sorry, hHit, hFresh, hPs, hHead, hDg⟩
+  have hFK : o.decisions.map (·.firstK) =
+      (decideRegT (carried c₀ rel unr) k os b).decisions.map (·.counterparts.take K) := by
+    have e1 : o.decisions.map (·.firstK) = (o.decisions.map (·.line)).map x.firstKQ := by
+      rw [hD, c9_firstKs, (c7_lines H x _ _).1]
+    have e2 : (decideRegT (carried c₀ rel unr) k os b).decisions.map (·.counterparts.take K) =
+        ((decideRegT (carried c₀ rel unr) k os b).decisions.map (·.line)).map
+          fun l => (decideLine (carried c₀ rel unr) [] l).counterparts.take K := by
+      rw [List.map_map]
+      exact c9_cps (carried c₀ rel unr) (idSeen (foreignOf k os (ready k os b)) ++
+        seen0 (carried c₀ rel unr) (ready k os b)) (order (carried c₀ rel unr) (ready k os b))
+    rw [e1, e2, ← hL]
+    apply List.map_congr_left
+    intro l hl
+    have hlb : l ∈ x.bb := by
+      rw [hD, (c7_lines H x _ _).1] at hl
+      exact c7_ord x hl
+    exact c9_firstKQ H x c₀ rel unr hi mr mu hmr hmu hxc l
+      (fun u q kb hk hq => hF u q kb hk (Or.inl ⟨l, hlb, hq.elim Or.inl fun h => Or.inr (Or.inr h)⟩)) hN
+  exact ⟨hDec, hFK, hHit, hFresh, hPs, hHead, hDg⟩
 
 /-- A set has no row under id key [4, i] iff no row has id i (kinds 5, 6 never equal [4, i]). -/
 private theorem c7_cnt0 (u : Bool) (s : List Line) (i : Nat) :
