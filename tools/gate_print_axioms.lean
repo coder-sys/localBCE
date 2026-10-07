@@ -141,3 +141,4 @@ import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.releaseBatch_grant_tenant
 #print axioms BlindLedger.Gate.pathOf_verifies
 #print axioms BlindLedger.Gate.publishOkTree_sound
+#print axioms BlindLedger.Gate.publishOkTree_complete

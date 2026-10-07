@@ -134,4 +134,28 @@ def publishOkTree (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tok
       ascending (ts.map (·.leaf.paymentId))
   | _, _, _ => false
 
+/-- The hash inputs of `pathRoot`'s fold, in order: one `stepInput` per sibling consumed. -/
+def pathInputs (H : Bytes → Bytes) (d : Bytes) : Nat → Nat → Nat → Bytes → List Bytes → List Bytes
+  | 0, _, _, _, _ => []
+  | fuel + 1, index, count, node, path =>
+    if count ≤ 1 then []
+    else if index % 2 == 0 && index + 1 == count then
+      pathInputs H d fuel (index / 2) ((count + 1) / 2) node path
+    else match path with
+      | [] => []
+      | s :: rest => stepInput d index node s ::
+          pathInputs H d fuel (index / 2) ((count + 1) / 2) (H (stepInput d index node s)) rest
+
+/-- The hash inputs of the decoded tokens' path folds, each token at its position in the batch. -/
+def batchInputs (ts : List Token) : List Bytes :=
+  let d := domain "MERKLE-NODE"
+  ts.zipIdx.flatMap fun p => pathInputs sha3 d treeFuel p.2 ts.length (leafHash sha3 d p.1.leafBytes) p.1.siblings
+
+/-- The SHA3 collision behind a batch `publishOk` accepts and `publishOkTree` refuses
+    (`publishOkTree_complete`): the first pair of distinct `batchInputs` with one output.  Only `tokens`
+    matter.  Quadratic: a witness for the theorem, which the exe never runs. -/
+def publishCollision (tokens : List Bytes) : Option (Bytes × Bytes) :=
+  let xs := batchInputs (tokens.filterMap decodeToken)
+  (xs.flatMap fun x => xs.map (x, ·)).find? fun p => p.1 != p.2 && sha3 p.1 == sha3 p.2
+
 end BlindLedger.Gate
