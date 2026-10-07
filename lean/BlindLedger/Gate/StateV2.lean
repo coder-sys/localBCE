@@ -3621,6 +3621,55 @@ private theorem c5_peel (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List 
   exact ⟨hr', hu', wr, wu, _, g1, g2, g3.1, g3.2, ghr, ghu, rfl, rfl, rfl, rfl, rfl, rfl, rfl, gwr, gwu, rfl, gdg,
     rfl, rfl⟩
 
+/-- Without a collision every probed key's hit is the true hit, and unencodable keys have none. -/
+private theorem c5_hits (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
+    (rel unr : Snapshot Line) {mr mu : Map} (hmr : setMap H false rel.entries = some mr)
+    (hmu : setMap H true unr.entries = some mu) (w : Witness)
+    (hv1 : verifyMulti H (root H mr)
+      ((probeKeys c₀ k os (ready k os b)).1.filterMap fun q => (keyBytes q).map (pathOf H)) w.relPf = true)
+    (hv2 : verifyMulti H (root H mu)
+      ((probeKeys c₀ k os (ready k os b)).2.filterMap fun q => (keyBytes q).map (pathOf H)) w.unrPf = true)
+    {hr' hu' : List (Option Hit)}
+    (ghr : (probeKeys c₀ k os (ready k os b)).1.mapM (probe H w.relPf w false) = some hr')
+    (ghu : (probeKeys c₀ k os (ready k os b)).2.mapM (probe H w.unrPf w true) = some hu')
+    (nc : ¬ Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr)) :
+    (∀ (u : Bool) (q : Key) kb, keyBytes q = some kb →
+      q ∈ (if u then (probeKeys c₀ k os (ready k os b)).2 else (probeKeys c₀ k os (ready k os b)).1) →
+      findHit (hr'.filterMap id ++ hu'.filterMap id) u q =
+        some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb))) ∧
+    (∀ u q, keyBytes q = none → findHit (hr'.filterMap id ++ hu'.filterMap id) u q = none) := by
+  have hA1 : ∀ q ∈ (probeKeys c₀ k os (ready k os b)).1 ++ (probeKeys c₀ k os (ready k os b)).2, ∀ kb,
+      keyBytes q = some kb → KD ++ kb ∈ witnessInputs H c₀ k os b w := fun q hq kb hk => by
+    rw [c5_wIn, List.mem_append, List.mem_append, List.mem_append, List.mem_append]
+    exact Or.inl (Or.inl (Or.inl (Or.inr (List.mem_filterMap.mpr ⟨q, hq, by rw [hk]; rfl⟩))))
+  have hA2r : ∀ y ∈ pfInputs H w.relPf, y ∈ witnessInputs H c₀ k os b w := fun y hy => by
+    rw [c5_wIn, List.mem_append, List.mem_append, List.mem_append]
+    exact Or.inl (Or.inl (Or.inr hy))
+  have hA2u : ∀ y ∈ pfInputs H w.unrPf, y ∈ witnessInputs H c₀ k os b w := fun y hy => by
+    rw [c5_wIn, List.mem_append, List.mem_append]
+    exact Or.inl (Or.inr hy)
+  have hA3 : ∀ y ∈ w.lists.flatMap (fun (_, _, n, ys, fp) => firstKInputs H n ys fp),
+      y ∈ witnessInputs H c₀ k os b w := fun y hy => by
+    rw [c5_wIn, List.mem_append]
+    exact Or.inr hy
+  have hBr : ∀ y ∈ setInputs H false rel.entries, y ∈ stateInputs H rel unr := fun y hy => by
+    unfold stateInputs
+    rw [List.mem_append, List.mem_append]
+    exact Or.inl (Or.inr hy)
+  have hBu : ∀ y ∈ setInputs H true unr.entries, y ∈ stateInputs H rel unr := fun y hy => by
+    unfold stateInputs
+    rw [List.mem_append]
+    exact Or.inr hy
+  have P1 := c3_probes H hH false rel.entries mr hmr w.relPf w _ hv1 _ _
+    (fun q hq => hA1 q (List.mem_append_left _ hq)) hA2r hA3 hBr nc hr' ghr
+  have P2 := c3_probes H hH true unr.entries mu hmu w.unrPf w _ hv2 _ _
+    (fun q hq => hA1 q (List.mem_append_right _ hq)) hA2u hA3 hBu nc hu' ghu
+  have F := c3_findHit P1.1 P2.1
+  refine ⟨fun u q kb hk hq => ?_, fun u q hk => (F u q).1 hk⟩
+  cases u
+  · exact (F false q).2 kb hk (List.mem_append_left _ (P1.2 q hq kb hk))
+  · exact (F true q).2 kb hk (List.mem_append_right _ (P2.2 q hq kb hk))
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
