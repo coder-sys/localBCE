@@ -755,6 +755,245 @@ theorem advance_agree {F : Fast} {v : FView} {S s0 : ItemState} {w : Writes} (k 
                | exact hpay k'.paysActionId (· - q.amountCents),
       congrArg (· + _) hab⟩
 
+/-! ### Index updates of a mutated call -/
+
+theorem get?_insert_eq {β} (m : Std.TreeMap String β) (k : String) (v : β) (id : String) :
+    (m.insert k v).get? id = if k = id then some v else m.get? id := by
+  rw [Std.TreeMap.get?_eq_getElem?, Std.TreeMap.getElem?_insert, Std.TreeMap.get?_eq_getElem?]
+  by_cases h : k = id
+  · subst h; simp
+  · have hc : compare k id ≠ .eq := fun e => h (Std.LawfulEqCmp.compare_eq_iff_eq.1 e)
+    simp [hc, h]
+
+/-- `insertIfNew` at a key the map has changes nothing. -/
+theorem get?_insertIfNew_mem {β} {m : Std.TreeMap String β} {k : String} {v : β}
+    (hk : (m.get? k).isSome) (id : String) : (m.insertIfNew k v).get? id = m.get? id := by
+  have hm : k ∈ m := by
+    rw [Std.TreeMap.mem_iff_isSome_getElem?, ← Std.TreeMap.get?_eq_getElem?]; exact hk
+  rw [Std.TreeMap.get?_eq_getElem?, Std.TreeMap.getElem?_insertIfNew, Std.TreeMap.get?_eq_getElem?]
+  simp [hm]
+
+theorem contains_insert_eq (s : Std.TreeSet String) (k id : String) :
+    (s.insert k).contains id = (decide (k = id) || s.contains id) := by
+  rw [Std.TreeSet.contains_insert]
+  by_cases h : k = id
+  · subst h; simp
+  · have hc : compare k id ≠ .eq := fun e => h (Std.LawfulEqCmp.compare_eq_iff_eq.1 e)
+    cases hx : compare k id <;> simp only [h, decide_false] <;> first | exact absurd hx hc | rfl
+
+theorem any_insertBy {α} (key : α → String) (row : α) (p : α → Bool) :
+    ∀ l : List α, (insertBy key row l).any p = (p row || l.any p)
+  | [] => by simp only [insertBy, List.any_cons, List.any_nil]
+  | x :: xs => by
+    simp only [insertBy]
+    split
+    · simp only [List.any_cons]
+    · rw [List.any_cons, any_insertBy key row p xs, List.any_cons]
+      cases p x <;> cases p row <;> rfl
+
+theorem find?_insertBy_other {α} (key : α → String) (row : α) (p : α → Bool) (h : p row = false) :
+    ∀ l : List α, (insertBy key row l).find? p = l.find? p
+  | [] => by simp only [insertBy, List.find?_cons, h, List.find?_nil]
+  | x :: xs => by
+    simp only [insertBy]
+    split
+    · simp only [List.find?_cons, h]
+    · simp only [List.find?_cons, find?_insertBy_other key row p h xs]
+
+theorem find?_insertBy_unique {α} (key : α → String) (row : α) (p : α → Bool) (h : p row = true) :
+    ∀ l : List α, (∀ x ∈ l, p x = false) → (insertBy key row l).find? p = some row
+  | [], _ => by simp only [insertBy, List.find?_cons, h]
+  | x :: xs, hl => by
+    simp only [insertBy]
+    split
+    · simp only [List.find?_cons, h]
+    · simp only [List.find?_cons, hl x (List.mem_cons.2 (Or.inl rfl))]
+      exact find?_insertBy_unique key row p h xs fun y hy => hl y (List.mem_cons.2 (Or.inr hy))
+
+theorem find?_map_preserve {α} (f : α → α) (P : α → Bool) :
+    ∀ l : List α, (∀ x ∈ l, P (f x) = P x) → (l.map f).find? P = (l.find? P).map f
+  | [], _ => rfl
+  | x :: xs, h => by
+    rw [List.map_cons, List.find?_cons, List.find?_cons, h x (List.mem_cons.2 (Or.inl rfl))]
+    cases P x with
+    | true => rfl
+    | false => exact find?_map_preserve f P xs fun y hy => h y (List.mem_cons.2 (Or.inr hy))
+
+/-- The payment write answers its id with the new row and every other id as before. -/
+theorem findPayment_write {i : FinancialInput} {w : Writes} {p : Payment} (hp : w.payment = some p)
+    (id : String) :
+    findPayment (applyWrites i w).payments id = if p.paymentId = id then some p else findPayment i.payments id := by
+  cases hf : findPayment i.payments p.paymentId with
+  | none => rw [applyWrites_payments_insert hp hf, findPayment_insertBy hf]
+  | some q =>
+    have hq := findPayment_id _ _ _ hf
+    simp only [applyWrites, hp, hf, Option.isSome_some, ↓reduceIte]
+    rw [findPayment_replace i.payments p p rfl id]
+    by_cases h : p.paymentId = id
+    · subst h; rw [hf]; simp [hq]
+    · rw [if_neg h]
+      cases hx : findPayment i.payments id with
+      | none => rfl
+      | some x =>
+        have hne : ¬ x.paymentId = p.paymentId := fun e => h (e.symm.trans (findPayment_id _ _ _ hx))
+        simp only [Option.map_some, hne, ↓reduceIte]
+
+theorem post_pays {F : Fast} {v : FView} {k w b a} {i : FinancialInput}
+    (h : F.pays.get? = findPayment i.payments) :
+    (F.post v (.mutated k w b a)).pays.get? = findPayment (applyWrites i w).payments := by
+  funext id
+  cases hp : w.payment with
+  | none => simp only [Fast.post, applyWrites, hp]; rw [h]
+  | some p => simp only [Fast.post, hp]; rw [get?_insert_eq, h, findPayment_write hp]
+
+theorem post_rcpts {F : Fast} {v : FView} {k w b a} {rs : List Receipt}
+    (h : F.rcpts.get? = receiptOf rs) (hf : ∀ kk, w.receipt = some kk → receiptOf rs kk.paymentId = none) :
+    (F.post v (.mutated k w b a)).rcpts.get? = receiptOf (commitReceipts rs w) := by
+  funext id
+  cases hk : w.receipt with
+  | none => simp only [Fast.post, commitReceipts, hk, Option.map_none, Option.getD_none]; rw [h]
+  | some kk =>
+    have hn := hf kk hk
+    simp only [Fast.post, commitReceipts, hk, Option.map_some, Option.getD_some]
+    rw [receiptOf_insertBy hn, ← h]
+    exact get?_insertIfNew_fresh (by rw [h]; exact hn) id
+
+theorem post_rows {F : Fast} {v : FView} {k w b a} {i : FinancialInput}
+    (h : F.rows.get? = findEvidence i.evidence)
+    (hf : ∀ e, w.evidence = some e → findEvidence i.evidence e.evidenceId = none) :
+    (F.post v (.mutated k w b a)).rows.get? = findEvidence (applyWrites i w).evidence := by
+  funext id
+  cases he : w.evidence with
+  | none => simp only [Fast.post, applyWrites, he, Option.map_none, Option.getD_none]; rw [h]
+  | some e =>
+    have hn := hf e he
+    simp only [Fast.post, applyWrites, he, Option.map_some, Option.getD_some]
+    rw [findEvidence_insertBy hn, ← h]
+    exact get?_insertIfNew_fresh (by rw [h]; exact hn) id
+
+theorem post_conflicts {F : Fast} {v : FView} {k w b a} {i : FinancialInput}
+    (h : ∀ x, F.conflictIds.contains x = i.conflicts.any (·.conflictId = x)) (x : String) :
+    (F.post v (.mutated k w b a)).conflictIds.contains x =
+      (applyWrites i w).conflicts.any (·.conflictId = x) := by
+  cases hc : w.conflict with
+  | none => simp only [Fast.post, applyWrites, hc, Option.map_none, Option.getD_none]; exact h x
+  | some y =>
+    simp only [Fast.post, applyWrites, hc, Option.map_some, Option.getD_some]
+    rw [contains_insert_eq, any_insertBy, h x]
+
+theorem post_origins_none {F : Fast} {v : FView} {k w b a} {i : FinancialInput}
+    (h : ∀ o, F.origins.get? o = (i.payments.find? (·.commonOriginId = o)).map (·.paymentId))
+    (hp : w.payment = none) (o : String) :
+    (F.post v (.mutated k w b a)).origins.get? o =
+      ((applyWrites i w).payments.find? (·.commonOriginId = o)).map (·.paymentId) := by
+  simp only [Fast.post, applyWrites, hp]
+  exact h o
+
+/-- RECORDED: a new id with a new origin. -/
+theorem post_origins_insert {F : Fast} {v : FView} {k w b a} {i : FinancialInput} {P : Payment}
+    (h : ∀ o, F.origins.get? o = (i.payments.find? (·.commonOriginId = o)).map (·.paymentId))
+    (hp : w.payment = some P) (hf : findPayment i.payments P.paymentId = none)
+    (hno : ∀ q ∈ i.payments, q.commonOriginId ≠ P.commonOriginId) (o : String) :
+    (F.post v (.mutated k w b a)).origins.get? o =
+      ((applyWrites i w).payments.find? (·.commonOriginId = o)).map (·.paymentId) := by
+  have hk : F.origins.get? P.commonOriginId = none := by
+    rw [h, List.find?_eq_none.2 (fun q hq => by simpa using hno q hq), Option.map_none]
+  simp only [Fast.post, hp]
+  rw [applyWrites_payments_insert hp hf, get?_insertIfNew_fresh hk, h]
+  by_cases ho : P.commonOriginId = o
+  · subst ho
+    rw [if_pos rfl, find?_insertBy_unique Payment.paymentId P
+      (fun x => decide (x.commonOriginId = P.commonOriginId)) (by simp) i.payments
+      (fun q hq => by simpa using hno q hq)] <;> rfl
+  · rw [if_neg ho, find?_insertBy_other Payment.paymentId P (fun x => decide (x.commonOriginId = o))
+      (by simp [ho])]
+
+/-- REVERSED: the row of an existing id is replaced, its origin kept. -/
+theorem post_origins_replace {F : Fast} {v : FView} {k w b a} {i : FinancialInput} {P p : Payment}
+    (h : ∀ o, F.origins.get? o = (i.payments.find? (·.commonOriginId = o)).map (·.paymentId))
+    (hn : (i.payments.map Payment.paymentId).Nodup)
+    (hp : w.payment = some P) (hf : findPayment i.payments P.paymentId = some p)
+    (hid : P.paymentId = p.paymentId) (hor : P.commonOriginId = p.commonOriginId) (o : String) :
+    (F.post v (.mutated k w b a)).origins.get? o =
+      ((applyWrites i w).payments.find? (·.commonOriginId = o)).map (·.paymentId) := by
+  have hmem : p ∈ i.payments := List.mem_of_find?_eq_some (by rw [← findPayment_eq]; exact hf)
+  have hk : (F.origins.get? P.commonOriginId).isSome := by
+    rw [h, hor]
+    cases hx : i.payments.find? (fun x => decide (x.commonOriginId = p.commonOriginId)) with
+    | none => exact (List.find?_eq_none.1 hx p hmem (by simp)).elim
+    | some y => rfl
+  have hpay : (applyWrites i w).payments = i.payments.map fun q => if q.paymentId = P.paymentId then P else q := by
+    simp only [applyWrites, hp, hf, Option.isSome_some, ↓reduceIte]
+  have hpres : ∀ q ∈ i.payments,
+      (fun x => decide (x.commonOriginId = o)) ((fun q => if q.paymentId = P.paymentId then P else q) q) =
+        (fun x => decide (x.commonOriginId = o)) q := by
+    intro q hq
+    show decide ((if q.paymentId = P.paymentId then P else q).commonOriginId = o) = decide (q.commonOriginId = o)
+    by_cases hq' : q.paymentId = P.paymentId
+    · have h1 := findPayment_of_mem hn hq
+      rw [hq', hf] at h1
+      rw [if_pos hq', hor, ← Option.some.inj h1]
+    · rw [if_neg hq']
+  simp only [Fast.post, hp]
+  rw [get?_insertIfNew_mem hk, h, hpay, find?_map_preserve _ _ i.payments hpres]
+  cases i.payments.find? (fun x => decide (x.commonOriginId = o)) with
+  | none => rfl
+  | some y =>
+    show some y.paymentId = some (if y.paymentId = P.paymentId then P else y).paymentId
+    by_cases hy : y.paymentId = P.paymentId
+    · rw [if_pos hy, hy]
+    · rw [if_neg hy]
+
+/-- A mutated call keeps `Rel`: scalars by `advance_agree`, indexes by the write shape. -/
+theorem Rel_mutated {F : Fast} {M : Ledger} {c : Call} {k w post res} (hR : Rel F M)
+    (hr : requestWellFormed (M.request c) = true) (ho : M.outcome c = .mutated k w post res) :
+    Rel (F.post (F.view c) (stepFast F (F.view c))) (step M c) := by
+  have h : paymentTransition (M.request c) = .mutated k w post res := ho
+  have hstep : step M c = { input := commitInput post res, receipts := commitReceipts M.receipts w } := by
+    simp only [step, ho]
+  have hI' : Inv (step M c) := step_Inv c hR.inv
+  rw [hstep] at hI'
+  obtain ⟨S, hA, hv⟩ := view_link hR c
+  have h1 := stepView_eq hr rfl (v := (F.view c).toView S) hv
+  rw [h] at h1
+  have h2 : some (stepView ((F.view c).toView S)) =
+      (summaryOf (commitInput post res) (commitReceipts M.receipts w)).map
+        fun s => StepOutcome.mutated k w s res := h1
+  have hfr : ∀ kk, w.receipt = some kk → receiptOf M.receipts kk.paymentId = none := by
+    intro kk hk
+    rcases mutated_shape h with ⟨-, c', -, hf, -, -, hrc, -⟩ | ⟨-, c', -, -, hrc, -⟩ |
+      ⟨-, c', p, e', -, -, -, hw, -⟩
+    · rw [hrc] at hk; cases hk; exact receiptOf_none hR.inv hf
+    · rw [hrc] at hk; cases hk
+    · subst hw; cases hk
+  cases hsum : summaryOf (commitInput post res) (commitReceipts M.receipts w) with
+  | none => rw [hsum, Option.map_none] at h2; cases h2
+  | some S' =>
+    rw [hsum, Option.map_some, Option.some.injEq] at h2
+    obtain ⟨s0, hadv, hS'⟩ := settles_step (v := (F.view c).toView S) k w S' res h2
+    obtain ⟨hpost, -⟩ := paymentTransition_mutated_post h
+    subst hpost
+    rw [link_step hR c hr, ho, hstep]
+    exact {
+      env := by
+        show { { F.env with evaluatedAt := c.now } with beforeRevision := F.env.beforeRevision + 1 } = _
+        rw [hR.env]; rfl
+      pays := post_pays (i := (M.request c).input) hR.pays
+      rcpts := post_rcpts hR.rcpts hfr
+      origins := by
+        rcases mutated_shape h with ⟨-, c', -, hf, hno, hpay, -⟩ | ⟨-, c', -, hpay, -⟩ |
+          ⟨-, c', p, e', -, hfp, -, hw, -⟩
+        · exact post_origins_insert (i := (M.request c).input) hR.origins hpay hf hno
+        · exact post_origins_none (i := (M.request c).input) hR.origins hpay
+        · exact post_origins_replace (i := (M.request c).input) (P := reversedImage p c') (p := p)
+            hR.origins hR.inv.1 (by subst hw; rfl)
+            (by rw [show (reversedImage p c').paymentId = c'.paymentId from findPayment_id _ _ p hfp]; exact hfp)
+            rfl rfl
+      rows := post_rows (i := (M.request c).input) hR.rows (mutated_fresh h)
+      conflicts := post_conflicts (i := (M.request c).input) hR.conflicts
+      agree := ⟨S', hsum, by rw [hS']; exact advance_agree k _ _ hA hadv res⟩
+      inv := hI' }
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
