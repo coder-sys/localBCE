@@ -1,4 +1,6 @@
 import BlindLedger.Financial.Theorems
+import BlindLedger.Financial.Partition
+import BlindLedger.Financial.ShardSplit
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.Shards
 import BlindLedger.Gate.Rules.ShardRun
