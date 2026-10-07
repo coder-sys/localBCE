@@ -278,15 +278,15 @@ class ShardBench(unittest.TestCase):
             shutil.copyfile(self.template, work / "s.sqlite3")
             shard = sb.Shard(0, work / "s.sqlite3")
             head, w = shard.w.head, shard.w
-            real_write, real_mutate = w.write, w.mutate
-            if fault == "stored_digest":  # the store holds a payload digest that mutate did not build
+            real_write, real_mutations = w.write, w.mutations
+            if fault == "stored_digest":  # the store holds a payload digest that mutations did not build
                 w.write = lambda table, rows: real_write(table, [r[:8] + (bytes(64),) + r[9:] for r in rows] if table == "financial_events" else rows)
             else:  # the last built event does not link to the one before it (store and built agree, the link does not)
-                def mutate(t, *args):
-                    real_mutate(t, *args)
+                def mutations(t, *args):
+                    real_mutations(t, *args)
                     e = t["financial_events"][-1]
                     t["financial_events"][-1] = e[:9] + (bytes(64),) + e[10:]
-                w.mutate = mutate
+                w.mutations = mutations
             with self.assertRaises(rb.FinancialIntegrityError) as caught:
                 shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
             self.assertIn("shard_chain", str(caught.exception), fault)

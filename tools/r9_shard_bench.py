@@ -2,7 +2,7 @@
 A prep stage (its own process, where the product's parser runs) does the per-row pure work: keys, cell ids, raw digests, classification, routing by item
 hash and each shard's input bytes. The spine process checks the file's cell ids against its in-memory directory keys (equal to the cells table at every
 commit), writes the directory, the spine rows and the record R_n (each shard's input bytes, digests, heads), and is the only commit point; every shard
-is its own process. The shard build reuses the PERF-B Writer (mutate/finish). Lean is NOT modelled (no multi-command frame exists):
+is its own process. The shard build reuses the PERF-B Writer (mutations/finish). Lean is NOT modelled (no multi-command frame exists):
 w is measured without it. Synthetic, non-PHI; moves no money. Results: JSON list, append-only.
 """
 
@@ -185,13 +185,12 @@ class Shard:
             self.undo, self.pre_mark = [seq0, pre_head, began, 0], 0
         w.c.execute("SAVEPOINT part")  # a refused part leaves no trace, the parts before it in the group stay until the spine aborts the group
         try:
-            t = {name: [] for name in ("cell_rows", "resolutions", "charges", "evidence", "payments", "financial_events", "commands")}
+            t = {"cell_rows": [(rk, origin, tag, amount, raw, rawdig) for rk, origin, tag, _, amount, raw, rawdig, _, _ in parts],
+                 "resolutions": [(rk, cid, None, amount, "INTAKE") for rk, _, _, _, amount, _, _, _, cid in parts],
+                 "charges": [(rk, rk, ob, amount) for rk, _, _, _, amount, _, _, ob, _ in parts],
+                 "evidence": [], "payments": [], "financial_events": [], "commands": []}
             touched: dict[str, int] = {}
-            for rk, origin, tag, key, amount, raw, rawdig, ob, cid in parts:
-                t["cell_rows"].append((rk, origin, tag, amount, raw, rawdig))
-                t["resolutions"].append((rk, cid, None, amount, "INTAKE"))
-                t["charges"].append((rk, rk, ob, amount))
-                w.mutate(t, touched, index, t_f, ob, key, amount, "PAYMENT_RECEIVED")
+            w.mutations(t, touched, index, t_f, [(ob, key, amount, "PAYMENT_RECEIVED") for _, _, _, key, amount, _, _, ob, _ in parts])
             digest = hashlib.sha3_256()
             for name, data in t.items():
                 digest.update(pickle.dumps(data, 5))
@@ -220,7 +219,7 @@ class Shard:
         return w.head, digest.digest()
 
     def check(self, index: int, parts: list, seq0: int, pre_head: bytes, built: list) -> None:
-        """Shard check: the stored events equal the events mutate built (so every digest in them is the one mutate hashed), the links run from the pre-head,
+        """Shard check: the stored events equal the events mutations built (so every digest in them is the one mutations hashed), the links run from the pre-head,
         and rows, charges and amounts equal the part. The hashes are not computed a second time."""
         w, previous = self.w, pre_head
         events = w.c.execute("SELECT * FROM financial_events WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall()

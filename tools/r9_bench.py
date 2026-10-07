@@ -201,6 +201,27 @@ def sha(*parts: object) -> bytes:
     return hashlib.sha3_512("\x1f".join(map(str, parts)).encode()).digest()
 
 
+_CELL, _EVENT = hashlib.sha3_512(b"RR/CELL/CASH/v2\x1fbench-tenant\x1f"), hashlib.sha3_512(b"event\x1f")  # the constant leading parts of the cell and event ids, absorbed once
+
+
+def sha_from(prefix, *parts: object) -> bytes:
+    """sha(<the parts `prefix` absorbed>, *parts) when `prefix` holds those parts and their joining \\x1f: the hashed bytes are the same."""
+    h = prefix.copy()
+    h.update("\x1f".join(map(str, parts)).encode())
+    return h.digest()
+
+
+def sha_tags(x: object, *tags: object) -> list[bytes]:
+    """[sha(x, t) for t in tags], hashing x's bytes once."""
+    base = hashlib.sha3_512(f"{x}\x1f".encode())
+    out = []
+    for tag in tags:
+        h = base.copy()
+        h.update(str(tag).encode())
+        out.append(h.digest())
+    return out
+
+
 class Checkpointer:
     """WAL checkpoints (PASSIVE) on their own connection and thread, so a commit never copies pages into the database (PERF-B design 2.7).
     A checkpoint copies only committed frames and fsyncs the database before the WAL may reset, so committed state is unchanged."""
@@ -322,25 +343,34 @@ class Writer:
         self.c.executemany("INSERT INTO temp.probe VALUES (?)", [(cid,) for cid in cids])
         return {r[0] for r in self.c.execute("SELECT p.k FROM temp.probe p JOIN main.cells c ON c.cell_id=p.k")}
 
-    def mutate(self, t, touched, index, now, ob: str, key: str, cents: int, kind: str) -> None:
-        rev = self.revision[ob]
-        self.revision[ob] = rev + 1
-        touched[ob] = touched.get(ob, 0) + cents
-        ev = f"ev:{index:06d}:{key}"  # zero-padded, so the owner ids the adapter mints are monotone over the day
-        pay = f"pay:{index:06d}:{key}"
-        command, ckey = ("PAYMENT", pay) if kind == "PAYMENT_RECEIVED" else ("PAYMENT_REVERSAL", ev)
-        # the owner's commands row (owner._record_command): the canonical request (keys sorted, ascii strings, compact) then its domain digest; the fixed
-        # shape is written out by hand to skip json.dumps (the test pins the stored bytes)
-        body = (f'{{"amount_cents":{cents},"command":"{command}","common_origin_id":{quote(f"x12/{key}")},"event_at_ms":{now},"evidence_id":{quote(ev)},'
-                f'"item_id":{quote(self.obl[ob])},"key":{quote(ckey)},"local_ref":"","source_id":"x12","source_version":"v1"}}').encode("ascii")
-        t["commands"].append((f"{command}:{ckey}", command, body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
-        t["evidence"].append((ev, self.obl[ob], "PAYMENT", f"x12/{key}", "x12", "v1", "", now, now, now, sha(ev, 1), sha(ev, 2), cents, None, None))
-        t["payments"].append((pay, ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
-        self.seq += 1  # one history event per mutation, hash-chained (SHA3-512)
-        payload = f'{{"kind":"{kind}","obligation":"{ob}","before":{rev},"after":{rev + 1},"ref":"{key}"}}'
-        pd, previous = sha(payload), self.head
-        self.head = sha(previous, pd)
-        t["financial_events"].append((self.seq, sha("event", self.seq), "OBLIGATION", ob, kind, rev, rev + 1, payload, pd, previous, self.head, now))
+    def mutations(self, t, touched, index, now, items) -> None:
+        """One part's rows for the owner tables that carry history, in order; items yield (obligation, key, cents, kind). One builder with the part's state
+        in locals; each line writes the tuples the per-line mutate wrote (the test keeps that function as its oracle), and the hashed bytes are unchanged."""
+        revision, obl, seq, head = self.revision, self.obl, self.seq, self.head
+        add_command, add_evidence, add_payment, add_event = (t[name].append for name in ("commands", "evidence", "payments", "financial_events"))
+        for ob, key, cents, kind in items:
+            rev = revision[ob]
+            revision[ob] = rev + 1
+            touched[ob] = touched.get(ob, 0) + cents
+            item = obl[ob]
+            ev = f"ev:{index:06d}:{key}"  # zero-padded, so the owner ids the adapter mints are monotone over the day
+            pay = f"pay:{index:06d}:{key}"
+            command, ckey = ("PAYMENT", pay) if kind == "PAYMENT_RECEIVED" else ("PAYMENT_REVERSAL", ev)
+            origin = f"x12/{key}"
+            # the owner's commands row (owner._record_command): the canonical request (keys sorted, ascii strings, compact) then its domain digest; the fixed
+            # shape is written out by hand to skip json.dumps (the test pins the stored bytes)
+            body = (f'{{"amount_cents":{cents},"command":"{command}","common_origin_id":{quote(origin)},"event_at_ms":{now},"evidence_id":{quote(ev)},'
+                    f'"item_id":{quote(item)},"key":{quote(ckey)},"local_ref":"","source_id":"x12","source_version":"v1"}}').encode("ascii")
+            seq += 1  # one history event per mutation, hash-chained (SHA3-512)
+            add_command((f"{command}:{ckey}", command, body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), seq))
+            result, snapshot = sha_tags(ev, 1, 2)
+            add_evidence((ev, item, "PAYMENT", origin, "x12", "v1", "", now, now, now, result, snapshot, cents, None, None))
+            add_payment((pay, ob, item, ev, origin, abs(cents) or 1, now, 1, None))
+            payload = f'{{"kind":"{kind}","obligation":"{ob}","before":{rev},"after":{rev + 1},"ref":"{key}"}}'
+            pd, previous = sha(payload), head
+            head = sha(previous, pd)
+            add_event((seq, sha_from(_EVENT, seq), "OBLIGATION", ob, kind, rev, rev + 1, payload, pd, previous, head, now))
+        self.seq, self.head = seq, head
 
     def finish(self, index, now, touched, began) -> None:
         evals, cases, obls = [], [], []
@@ -348,7 +378,7 @@ class Writer:
             rev, cents = self.revision[ob], touched[ob]
             eid = f"eval:{index:06d}:{ob}:{rev}"
             row = list(self.base[ob])
-            for name, value in (("evaluation_id", eid), ("revision", rev), ("evaluated_at_ms", now), ("result_digest", sha(eid, 1)), ("input_snapshot_digest", sha(eid, 2)), ("receipt_digest", sha(eid, 3))):
+            for name, value in (("evaluation_id", eid), ("revision", rev), ("evaluated_at_ms", now), *zip(("result_digest", "input_snapshot_digest", "receipt_digest"), sha_tags(eid, 1, 2, 3))):
                 row[self.cols.index(name)] = value
             evals.append(tuple(row))
             cases.append((now, ob))
@@ -371,7 +401,7 @@ class Writer:
         began = dict(self.revision)
         base = index * KEY
 
-        mutate = lambda ob, key, cents, kind: self.mutate(t, touched, index, now, ob, key, cents, kind)  # noqa: E731
+        muts = []  # (obligation, key, cents, kind) per applied row, in order; one builder writes their history rows after the loop
 
         prep = []
         for row_index, row in rows:
@@ -379,7 +409,7 @@ class Writer:
             origin = f"{index}/{tag}/{key}"
             ref = row.key[4] if tag == "PLB" else row.key[1]
             ob = self.obligation(ref)
-            cid = sha("RR/CELL/CASH/v2", "bench-tenant", self.obl[ob], origin)  # the real cell id: a random-looking 64-byte digest, so the UNIQUE index on it is the random one
+            cid = sha_from(_CELL, self.obl[ob], origin)  # the real cell id: a random-looking 64-byte digest, so the UNIQUE index on it is the random one
             prep.append((row_index, row, tag, key, origin, ref, ob, cid))
         known = self.known_cells([p[7] for p in prep]) if self.fast else None
         seen: set[bytes] = set()  # keys this chunk creates are answered from memory
@@ -405,7 +435,7 @@ class Writer:
                     cls = "negative_applied"
                     t["resolutions"].append((rk, cid, None, amount, "INTAKE"))
                     t["charges"].append((rk, rk, ob, amount))
-                    mutate(ob, key, amount, "PAYMENT_REVERSED")
+                    muts.append((ob, key, amount, "PAYMENT_REVERSED"))
                 else:
                     cls = "negative_pending"
                     pending.setdefault(target, []).append((origin, cid, rk))
@@ -418,8 +448,9 @@ class Writer:
                     t["resolutions"].append((negrk, negcid, None, 0, "NET"))
                     t["charges"].append((negrk, negrk, ob, 0))
                 resolved.add(origin)
-                mutate(ob, key, amount, "PAYMENT_RECEIVED")
+                muts.append((ob, key, amount, "PAYMENT_RECEIVED"))
             self.classes[cls] = self.classes.get(cls, 0) + 1
+        self.mutations(t, touched, index, now, muts)
         for table, data in t.items():
             self.write(table, data)
         self.finish(index, now, touched, began)
