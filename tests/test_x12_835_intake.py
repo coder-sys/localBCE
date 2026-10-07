@@ -568,9 +568,9 @@ class Intake(unittest.TestCase):
 
     # ---- PERF-A fast lane: the lane may only skip work, never change an outcome ----
 
-    LANE_SEED = build(remit("79.50", "CLP*A001*1*100.00*100.00*0.00*MC*P1*11*1", "CLP*A002*22*-50.00*-50.00*0.00*MC*R1", "CLP*A003*1*30.00*0.00*0.00*MC*P4", "CAS*CO*45*30.00",
-                            "CLP*A004*1*20.00*20.00*0.00*MC*P1", "CLP*A005*1*20.00*20.00*0.00*MC*P1*11", "CLP*A006*22*10.00*10.00*0.00*MC*P%6",
-                            "CLP*A007*1*5.00*5.00*0.00*MC*P7", "CAS*PR*1*5.00", f"PLB*{PROVIDER}*20261231*FB:CARRY0001*25.50")).decode()
+    LANE_SEED = build(remit("79.50", "CLP*A001*1*100.00*100.00*0.00*MC*P1*11*1", "CLP*A002*22*-50.00*-50.00*0.00*MC*R1*11*1", "CLP*A003*1*30.00*0.00*0.00*MC*P4*11*1", "CAS*CO*45*30.00",
+                            "CLP*A004*1*20.00*20.00*0.00*MC*P1*11*1", "CLP*A005*1*20.00*20.00*0.00*MC*P1*11*1", "CLP*A006*22*10.00*10.00*0.00*MC*P6*11*1",
+                            "CLP*A007*1*5.00*5.00*0.00*MC*P7*11*1", "CAS*PR*1*5.00", f"PLB*{PROVIDER}*20261231*FB:CARRY0001*25.50")).decode()
 
     def outcome(self, data, slow=False):
         """('ok', record, fold) or ('err', code); the fold must agree with the record's own fields and refuse with the same code."""
@@ -596,6 +596,10 @@ class Intake(unittest.TestCase):
 
     def test_lane_agrees_with_slow_lane(self):
         seed = self.LANE_SEED
+        lane = intake._lane("*", "^", ":", "~")
+        for segment in seed.split("~"):
+            if segment[:3] in ("CLP", "CAS"):
+                self.assertIsNotNone(lane[segment[:3]](segment), segment)  # every seed block takes the lane, so the mutations below test it
         self.assertEqual(self.agree(seed.encode(), True)[0], "ok")
         self.assertEqual(len(parse_835(seed.encode()).rows), 6)  # P1 folds three blocks; a REV, a zero row, a RAW, P7 and the PLB are the rest
         segments = seed.split("~")

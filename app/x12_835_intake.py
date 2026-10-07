@@ -392,17 +392,18 @@ def _lane(esep: str, rsep: str, csep: str, term: str) -> dict | None:
     """tag -> the bound fullmatch of the segment shape the lane reads whole, or None when a separator could occur inside a lane
     class. Otherwise no lane class holds a separator, so the groups align with the element split and each is one plain component."""
     key = (esep, rsep, csep, term)
-    if key not in _LANES:
+    lane = _LANES.get(key, False)
+    if lane is False:
         if len(_LANES) > 64:
             _LANES.clear()
-        if any(c in _LANE_CLASSES for c in key):
-            _LANES[key] = None
-        else:
+        lane = None
+        if not any(c in _LANE_CLASSES for c in key):
             e, text, code, money = re.escape(esep), "(" + _TEXT.pattern + ")", "(" + _CODE.pattern + ")", "(" + _LANE_MONEY + ")"
             maybe = "(" + _CODE.pattern + "|)"
-            _LANES[key] = {"CLP": re.compile(e.join(("CLP", text, code, money, money, money, code, text, maybe, maybe))).fullmatch,
-                           "CAS": re.compile(e.join(("CAS", code, code, money))).fullmatch}
-    return _LANES[key]
+            lane = {"CLP": re.compile(e.join(("CLP", text, code, money, money, money, code, text, maybe, maybe))).fullmatch,
+                    "CAS": re.compile(e.join(("CAS", code, code, money))).fullmatch}
+        _LANES[key] = lane
+    return lane
 
 
 def _clp_key(claim: Claim) -> tuple[str, str]:
