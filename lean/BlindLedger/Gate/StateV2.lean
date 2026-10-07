@@ -3689,9 +3689,9 @@ private theorem c7_probe_mem (c₀ : Ctx) (k : Nat) (os : List Owner) (bb : List
   · cases u <;> exact List.mem_eraseDups.mpr (List.mem_append_right _ (List.mem_map.mpr ⟨i, hi, rfl⟩))
 
 private theorem c7_lines (H : Bytes → Bytes) (x : Ix) : ∀ (seen : List Key) (ls : List Line),
-    (Ix.decideAllQ H x seen ls).map (·.line) = ls
-  | _, [] => rfl
-  | _, l :: ls => congrArg (l :: ·) (c7_lines H x _ ls)
+    (Ix.decideAllQ H x seen ls).map (·.line) = ls ∧ (Ix.decideAllQ H x seen ls).map (·.hits) = ls.map (x.hitsQ H)
+  | _, [] => ⟨rfl, rfl⟩
+  | _, l :: ls => ⟨congrArg (l :: ·) (c7_lines H x _ ls).1, congrArg (x.hitsQ H l :: ·) (c7_lines H x _ ls).2⟩
 
 private theorem c7_ord (x : Ix) {bb : List Line} {l : Line} (h : l ∈ x.orderQ bb) : l ∈ bb := by
   unfold Ix.orderQ canonical at h
@@ -3761,8 +3761,7 @@ private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
       o.decisions = Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb) ∧
       o.decisions.map (fun d => (d.line, d.outcome, d.reasons)) =
         (decideRegT (carried c₀ rel unr) k os b).decisions.map (fun d => (d.line, d.outcome, d.reasons)) ∧
-      (∀ p, x.payOutcomeQ o.decisions p =
-        payOutcome (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b).decisions p) ∧
+      o.pays = paysOf (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b).decisions ∧
       o.fresh = batchFresh (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b) ∧
       writes H false x.hs rel.count o.fresh.1 = some wr ∧ writes H true x.hs unr.count o.fresh.2 = some wu ∧
       o.head = ⟨bumpIf x.relOk c₀.today rel.asOf, bumpIf x.unrOk c₀.today unr.asOf,
@@ -3773,8 +3772,7 @@ private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
       digestV2 H o.head = some o.digest ∧
       o.free = (pendingOf k os).filter (fun i => !((o.fresh.1 ++ o.fresh.2).map (·.id)).contains i &&
         x.cnt false [4, i] == 0 && x.cnt true [4, i] == 0) ∧
-      o.pays = (o.decisions.map (·.line.pay)).eraseDups.map fun p =>
-        (p, x.payOutcomeQ o.decisions p, ((o.decisions.filter (·.line.pay == p)).map (·.line.cents)).sum) := by
+      o.decisions.map (·.hits) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (trueHits H rel unr ·.line) := by
   obtain ⟨hr', hu', wr, wu, x, g1, gK, gv1, gv2, ghr, ghu, hxc, hxs, hxr, hxu, hxb, hD, hFr, hW1, hW2, hHd, hDg,
     hFree, hPays⟩ := c5_peel H c₀ k os b d w o hr
   obtain ⟨mr, mu, hmr, hmu, rfl⟩ := c5_headOf ha
@@ -3794,16 +3792,36 @@ private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
   have hDec : o.decisions.map (fun d => (d.line, d.outcome, d.reasons)) =
       (decideRegT (carried c₀ rel unr) k os b).decisions.map (fun d => (d.line, d.outcome, d.reasons)) := by
     rw [hD]; exact c4_decisions H x c₀ k os b rel unr hi hxc hxb hxr hxu hR hS hP
+  have hQ := c7_lines H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb)
+  rw [← hD] at hQ
   have hO : ∀ d ∈ o.decisions, x.ownQ d.line = own (carried c₀ rel unr) d.line := fun d hd' =>
     c4_ownQ x c₀ rel unr hxc hR d.line (by
       have hm : d.line ∈ o.decisions.map (·.line) := List.mem_map_of_mem hd'
-      rw [hD, c7_lines] at hm
+      rw [hQ.1] at hm
       exact c7_ord x hm)
   obtain ⟨hPay, hRel, hUnr⟩ := c7_sel x (carried c₀ rel unr) o.decisions _ hDec hO (by rw [hxc]; rfl)
   have hFresh : o.fresh = batchFresh (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b) := by
     rw [hFr, c5_fresh_spec, hRel, hUnr]
-  exact ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, hA, hxc, hxb, hF, hN, hD, hDec, hPay, hFresh, hW1, hW2, hHd, hxr,
-    hxu, hDg, hFree, hPays⟩
+  have hL : o.decisions.map (·.line) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (·.line) := by
+    simpa only [List.map_map, Function.comp_def] using congrArg (List.map Prod.fst) hDec
+  have hPs : o.pays = paysOf (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b).decisions := by
+    have e1 : o.decisions.map (·.line.pay) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (·.line.pay) := by
+      simpa only [List.map_map, Function.comp_def] using congrArg (List.map (·.pay)) hL
+    have e2 : ∀ p, (o.decisions.filter (·.line.pay == p)).map (·.line.cents) =
+        ((decideRegT (carried c₀ rel unr) k os b).decisions.filter (·.line.pay == p)).map (·.line.cents) := fun p => by
+      simpa only [List.filter_map, List.map_map, Function.comp_def] using
+        congrArg (fun L : List Line => (L.filter (·.pay == p)).map (·.cents)) hL
+    rw [hPays]; unfold paysOf; rw [e1]; simp only [hPay, e2]
+  have hHit : o.decisions.map (·.hits) =
+      (decideRegT (carried c₀ rel unr) k os b).decisions.map (trueHits H rel unr ·.line) := by
+    have e : (decideRegT (carried c₀ rel unr) k os b).decisions.map (trueHits H rel unr ·.line) =
+        (x.orderQ x.bb).map (trueHits H rel unr) := by
+      simp only [← hQ.1, hL, List.map_map, Function.comp_def]
+    rw [hQ.2, e]
+    exact List.map_congr_left fun l hl => c3_hitsQ H x rel unr hmr hmu l
+      (fun u q hq kb hk => hF u q kb hk (Or.inl ⟨l, c7_ord x hl, Or.inl hq⟩)) hN
+  exact ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, hA, hxc, hxb, hF, hN, hD, hDec, hPs, hFresh, hW1, hW2, hHd, hxr,
+    hxu, hDg, hFree, hHit⟩
 
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
