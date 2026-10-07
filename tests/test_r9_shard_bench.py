@@ -76,8 +76,8 @@ def faulty_main(conn, k: int, db: str) -> None:
 DIE_SHARD = 1
 
 
-def die_in_commit(conn, k: int, db: str, after: bool) -> None:
-    """A shard worker that dies on its COMMIT message: before it commits, or just after (so the commit is durable but never ACKed); patched here, in the child."""
+def die_in_commit(conn, k: int, db: str, after: bool, slow: bool = False) -> None:
+    """A shard worker that dies on its COMMIT message: before it commits, or just after (so the commit is durable but never ACKed); patched here, in the child. slow: the others take 1.5 s over their COMMIT."""
     real = sb.Shard.commit
 
     def commit(self):
@@ -85,6 +85,8 @@ def die_in_commit(conn, k: int, db: str, after: bool) -> None:
             if after:
                 real(self)
             os._exit(3)
+        if slow:
+            time.sleep(1.5)
         return real(self)
 
     sb.Shard.commit = commit
@@ -97,6 +99,21 @@ def die_before_commit_main(conn, k: int, db: str) -> None:
 
 def die_after_commit_main(conn, k: int, db: str) -> None:
     die_in_commit(conn, k, db, True)
+
+
+def die_before_commit_slow_main(conn, k: int, db: str) -> None:
+    die_in_commit(conn, k, db, False, True)
+
+
+def die_after_commit_slow_main(conn, k: int, db: str) -> None:
+    die_in_commit(conn, k, db, True, True)
+
+
+def unreadable_db_main(conn, k: int, db: str) -> None:
+    """A shard worker whose database file is not one."""
+    if k == DIE_SHARD + 2:
+        Path(db).write_bytes(b"not a database" * 300)
+    sb.shard_main(conn, k, db)
 
 
 def refuse_commit_main(conn, k: int, db: str) -> None:
@@ -341,20 +358,25 @@ class ShardBench(unittest.TestCase):
         work.mkdir()
         shutil.copyfile(self.template, work / "s.sqlite3")
         shard = sb.Shard(0, work / "s.sqlite3")
-        head, w = shard.w.head, shard.w
-        real_mutations = w.mutations
+        head, w, seq0, began = shard.w.head, shard.w, shard.w.seq, dict(shard.w.revision)
+        real_mutations, closed = w.mutations, [False]
+        writer = type(w)
+        w._h = w.__dict__.pop("head")
 
-        def mutations(t, *args):  # the sha is patched so the last link is the pre-head (store and built agree, the chain is closed on itself)
+        def mutations(t, *args):  # the real mutations run and move seq, head and revision; the last link is the pre-head (store and built agree) and the build reads the head as closed on itself
             real_mutations(t, *args)
+            self.assertNotEqual(w._h, head)
             e = t["financial_events"][-1]
             t["financial_events"][-1] = e[:10] + (head,) + e[11:]
-            w.head = head
+            closed[0] = True
         w.mutations = mutations
-        with self.assertRaises(rb.FinancialIntegrityError) as caught:
-            shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
-        self.assertIn("shard_fixed_point", str(caught.exception))
-        self.assertFalse(shard.c.in_transaction)
-        self.assertEqual(w.head, head)
+        with mock.patch.object(writer, "head", property(lambda s: head if closed[0] else s._h, lambda s, v: setattr(s, "_h", v)), create=True):
+            with self.assertRaises(rb.FinancialIntegrityError) as caught:
+                shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
+            closed[0] = False
+            self.assertIn("shard_fixed_point", str(caught.exception))
+            self.assertFalse(shard.c.in_transaction)
+            self.assertEqual((w.head, w.seq, w.revision), (head, seq0, began))  # what the part moved in memory is moved back
         shard.stats()
         self.assertEqual(sqlite3.connect(str(work / "s.sqlite3")).execute("SELECT COUNT(*) FROM applied").fetchone()[0], 0)
 
@@ -751,14 +773,22 @@ class ShardBench(unittest.TestCase):
     def test_s12_shard_killed_in_commit_stops_the_run_cleanly_and_replay_recovers_it(self) -> None:
         files = sb.corpus(20261007, LINES, 12)
         clean, _, _ = self.group_run("s12-kill-clean", files[:8], 8)  # what the first group alone stores
-        for after, main in ((False, die_before_commit_main), (True, die_after_commit_main)):
-            name = f"s12-kill-{int(after)}"
+        for after, main, forced in ((False, die_before_commit_main, False), (True, die_after_commit_main, False), (False, die_before_commit_slow_main, True), (True, die_after_commit_slow_main, True)):
+            name = f"s12-kill-{int(after)}{'-sender-first' if forced else ''}"
             spine = self.spine_with(main, name)
             timer, fired = self.watchdog(spine)
             try:
                 prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
                 first = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(8)])  # the spine commits; shard 1 is told to commit and dies
                 self.assertTrue(all(isinstance(r, dict) for r in first), first)
+                if forced:  # the sender error is in before group 2 ships (the first pump sees an owed shard's write fail), and the others are still inside their COMMIT
+                    spine.workers[DIE_SHARD][0].join(30)
+                    spine.senders[DIE_SHARD].queue.put((b"x", None))
+                    for _ in range(300):
+                        if spine.senders[DIE_SHARD].error is not None:
+                            break
+                        time.sleep(0.1)
+                    self.assertIsNotNone(spine.senders[DIE_SHARD].error)
                 rest = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(8, 12)])
                 self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and ("shard_lost" in str(r) or "shard_send" in str(r)) for r in rest), rest)
                 with self.assertRaises(rb.FinancialIntegrityError):
@@ -776,6 +806,39 @@ class ShardBench(unittest.TestCase):
             self.assertEqual(digests(work / "spine.sqlite3"), digests(clean / "spine.sqlite3"), name)
             result = self.replay_identical(work, DIE_SHARD, name, 0 if after else 8)  # the dead shard comes back: committed already (after) or from the spine's records (before)
             self.assertEqual(result["owed"], not after, name)
+
+    def test_s12_garbled_reply_to_an_abort_marks_the_shard_dead_and_the_rollback_and_the_undo_still_run(self) -> None:
+        spine = self.spine_with(sb.shard_main, "s12-garbled")
+        try:
+            spine.c.execute("BEGIN IMMEDIATE")
+            heads0, prev0, spine.keys["zz"] = dict(spine.heads), spine.prev_head, b"x"
+            spine.heads, spine.prev_head = {}, b"y"
+            spine.owed = {0: heads0[0], 2: heads0[2]}
+            with mock.patch.object(spine, "reply", side_effect=[("ACK",), pickle.UnpicklingError("garbled")]):  # a one-tuple where the COMMIT's ACK is owed; an unreadable reply
+                with self.assertRaises(rb.FinancialIntegrityError):
+                    spine.fail(SimpleNamespace(sent={0, 2}), ["zz"], heads0, prev0)
+            self.assertEqual(sorted(spine.dead), [0, 2])
+            self.assertFalse(spine.c.in_transaction)
+            self.assertEqual((spine.heads, spine.prev_head, "zz" in spine.keys), (heads0, prev0, False))
+        finally:
+            for p, _ in spine.workers.values():
+                p.terminate()
+            with self.assertRaises(rb.FinancialIntegrityError):
+                spine.close()
+        self.quiet(spine)
+
+    def test_s12_a_shard_that_cannot_open_its_database_fails_the_spine_start_without_a_hang_or_a_leaked_process(self) -> None:
+        with mock.patch.object(sb, "REPLY_DEADLINE", 20.0), self.assertRaisesRegex(rb.FinancialIntegrityError, "shard_refused"):
+            self.spine_with(unreadable_db_main, "s12-start")
+        self.quiet()
+
+    def test_s12_sender_switch_accepts_only_0_and_1(self) -> None:
+        for value, expected in (("0", False), ("1", True)):
+            with mock.patch.dict(os.environ, {"RR_SHARD_SENDER": value}):
+                self.assertEqual(sb.sender_on(), expected)
+        for value in ("", "true", "yes", "1 ", "2"):
+            with mock.patch.dict(os.environ, {"RR_SHARD_SENDER": value}), self.assertRaises(ValueError):
+                sb.sender_on()
 
     def test_s12_abort_with_parts_still_queued_leaves_the_pre_state_and_a_retry_equals_the_clean_run(self) -> None:
         files = sb.corpus(20261006, LINES, 4)
@@ -1047,7 +1110,7 @@ class ShardBench(unittest.TestCase):
                         self.assertEqual(str(raised.exception), reason, name)
                     rest = spine.ingest_group(items[2:])
                     self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and str(r) == reason for r in rest), (name, rest))
-                    self.assertEqual(spine.dead, dict.fromkeys(range(4), reason), name)  # every shard is dead: nothing more goes in
+                    self.assertEqual(spine.dead, {1: reason} if on and fault == "pipe" else dict.fromkeys(range(4), reason), name)  # nothing more goes in: the shard whose write failed is dead, or after a failed spine commit every shard
                     with self.assertRaises(rb.FinancialIntegrityError) as closed:
                         spine.close()
                     self.assertEqual(str(closed.exception), reason, name)

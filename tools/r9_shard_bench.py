@@ -90,7 +90,10 @@ def prewrite_mode() -> int:
 def sender_on() -> bool:
     """I1 and I3, the default (lead 2026-10-07): only a sender thread keeps a silent shard from blocking the spine in a write (a Windows pipe write has no deadline once the pipe is full).
     RR_SHARD_SENDER=0 is the earlier path, every message pickled and written by the spine's own thread: no write deadline, test and bench only."""
-    return os.environ.get("RR_SHARD_SENDER", "1") == "1"
+    mode = os.environ.get("RR_SHARD_SENDER", "1")
+    if mode not in ("0", "1"):  # "", "true", "1 " must not quietly pick the path with no write deadline
+        raise ValueError(f"RR_SHARD_SENDER must be 0 or 1, not {mode!r}")
+    return mode == "1"
 
 
 PART_HEAD = struct.Struct("<4sqqqHHHq")  # b"PART", n, index, t_f, then the lengths of pool, pre_head, verdict and blob; the bytes of those four follow, and nothing else
@@ -268,9 +271,13 @@ class Shard:
 
 
 def shard_main(conn, k: int, db: str) -> None:
-    shard = Shard(k, Path(db))
-    mode = prewrite_mode()
-    shard.pre = Prewriter(shard.c, Path(db), mode == 1) if mode else None
+    try:
+        shard = Shard(k, Path(db))
+        mode = prewrite_mode()
+        shard.pre = Prewriter(shard.c, Path(db), mode == 1) if mode else None
+    except BaseException as error:  # a shard that cannot open its database says so, or the spine would wait for its READY
+        conn.send(("ERR", repr(error)))
+        return
     conn.send(("READY", shard.w.head))
     while True:
         i0 = time.perf_counter()
@@ -504,6 +511,7 @@ class Spine:
         self.tbl = tables(template, k_count)
         self.keys = dict(self.c.execute("SELECT cell_id, raw_digest FROM cells"))  # the directory's cell id -> raw digest, loaded once and kept equal to main.cells at every commit
         self.workers: dict[int, tuple] = {}
+        self.senders: dict[int, Sender] = {}
         context = multiprocessing.get_context("spawn")
         try:
             for k in range(k_count):  # every shard is a worker process; the spine process only judges, ships, writes its record and commits
@@ -512,21 +520,26 @@ class Spine:
                 parent, child = context.Pipe()
                 process = context.Process(target=shard_main, args=(child, k, str(path)), daemon=True)
                 process.start()
+                child.close()  # only the shard holds its end now: its death or ERR ends the spine's wait for READY
                 self.workers[k] = (process, parent)
-            self.heads = {k: self.expect(conn, "READY")[0] for k, (_, conn) in self.workers.items()}
-        except BaseException:  # a spine that did not start leaves no shard process, and its databases are closed
+            self.heads = {k: self.ready(k) for k in self.workers}
+            self.c.executemany("INSERT INTO heads VALUES (?,?)", sorted(self.heads.items()))
+            if sender_on():
+                for k, (_, conn) in self.workers.items():
+                    self.senders[k] = Sender(k, conn)
+        except BaseException:  # a spine that did not start leaves no shard process and no sender thread, and its databases are closed
             for process, _ in self.workers.values():
                 process.terminate()
                 process.join()
+            for sender in self.senders.values():
+                sender.stop()
             self.ckpt.close()
             self.c.close()
             raise
-        self.c.executemany("INSERT INTO heads VALUES (?,?)", sorted(self.heads.items()))
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
         self.dead: dict[int, str] = {}  # shards lost to this run (their COMMIT was refused, or they stopped answering) -> the error every later attempt and close raises
-        self.senders = {k: Sender(k, conn) for k, (_, conn) in self.workers.items()} if sender_on() else {}
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
         self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes", "thread_send_owed", "thread_send_free")}
         self.commit_sent, self.ack_ms = 0.0, {k: [] for k in range(k_count)}  # per shard: ms from the spine's COMMIT send to the spine reading that shard's ACK, per group
@@ -539,6 +552,14 @@ class Spine:
         if message[0] != kind:
             raise rb.FinancialIntegrityError(f"shard_protocol:{message[0]}")
         return message[1:]
+
+    def ready(self, k: int) -> bytes:
+        process, conn = self.workers[k]
+        deadline = time.monotonic() + REPLY_DEADLINE
+        while not conn.poll(0.5):  # the shard's ERR or its death ends the wait at once; a shard that does neither ends it at the deadline
+            if not process.is_alive() or time.monotonic() > deadline:
+                raise rb.FinancialIntegrityError(f"shard_not_ready:{k}")
+        return self.expect(conn, "READY")[0]
 
     def wait_acks(self) -> None:
         """Step 2: every shard is past its last commit and its head equals the head the commit was made at, else a loud halt."""
@@ -572,8 +593,8 @@ class Spine:
         for k, sender in self.senders.items():
             if sender.error is not None:
                 reason = f"shard_send:{k}:{sender.error!r}"
-                if k in self.owed:  # a write failed after the spine committed (k's COMMIT, or one before it): as in attempt's post-commit section, the run ends
-                    self.dead = dict.fromkeys(self.workers, reason)
+                if k in self.owed:  # a write to k failed after the spine committed: k is lost to this run (as in handle's ERR), the healthy shards are drained at close
+                    self.dead[k] = reason
                 raise rb.FinancialIntegrityError(reason)
 
     def ship(self, f, k: int) -> None:
@@ -806,6 +827,9 @@ class Spine:
                 problems.append(rb.FinancialIntegrityError(str(error)))
             except (EOFError, OSError):
                 continue  # the pipe is gone or the ABORT was never written: a shard still owing a COMMIT keeps its debt (the next wait for acks says shard_lost); a write error is raised again by every check_senders
+            except Exception as error:  # a garbled reply: k is lost to this run, and the rollback below still runs
+                self.dead[k] = f"shard_reply:{k}:{error!r}"
+                problems.append(rb.FinancialIntegrityError(self.dead[k]))
         try:
             if self.c.in_transaction:  # SQLite has already rolled back by itself after an I/O error (or a full disk): the first error is the one to raise, not a failed ROLLBACK
                 self.c.execute("ROLLBACK")
@@ -861,6 +885,20 @@ class Spine:
         self.await_reply(k, "snapshot")
         self.expect(self.workers[k][1], "ACK")
 
+    def drain_owed(self) -> None:
+        """M-1: a shard that is alive and whose write has not failed was told to commit what the spine committed: its reply is read before any shard is stopped, so that its COMMIT is never killed half-way. A refusal (ERR) or a
+        silent shard is lost to this run, a wrong head diverges; every such shard is already named by close's error."""
+        deadline = time.monotonic() + REPLY_DEADLINE
+        for k in [k for k in self.owed if k not in self.dead and not (k in self.senders and self.senders[k].error)]:
+            try:
+                m = self.reply(k, deadline)
+                if m[0] != "ACK":
+                    self.dead[k] = f"shard_commit_refused:{k}:{m[1:]}"
+                elif m[1] != self.owed.pop(k):
+                    self.diverged(k)
+            except Exception as error:  # a silent, lost or garbled shard
+                self.dead[k] = f"shard_reply:{k}:{error!r}"
+
     def close(self) -> list[dict]:
         stats = []
         try:
@@ -872,12 +910,18 @@ class Spine:
                 self.send(k, ("STOP",))
                 self.await_reply(k, "stats")
                 stats.append(self.expect(conn, "STATS")[0])
-                process.join()
+                process.join(REPLY_DEADLINE)
+                if process.is_alive():  # it answered STATS and does not end
+                    self.dead[k] = f"stop_timeout:{k}"
+                    raise rb.FinancialIntegrityError(self.dead[k])
         finally:  # after a failure too: no shard process and no sender thread outlives the spine
-            for process, _ in self.workers.values():
-                if process.is_alive():
-                    process.terminate()
-                    process.join()
+            try:
+                self.drain_owed()  # first: a healthy shard is not stopped inside its COMMIT
+            finally:
+                for process, _ in self.workers.values():
+                    if process.is_alive():
+                        process.terminate()
+                        process.join()
             for sender in self.senders.values():
                 sender.stop()
                 for kind, seconds in sender.seconds.items():
