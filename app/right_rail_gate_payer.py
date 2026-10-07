@@ -58,13 +58,6 @@ def _blob(data: bytes) -> bytes:
     return len(data).to_bytes(2, "big") + data
 
 
-def _grant(tenant: str, grant_id: bytes, rules: Sequence[bytes], engines: Sequence[bytes]) -> bytes:
-    """One RELEASE-frame grant: its tenant (a canonical ident, refused here like Lean's `ident`), id, rules, engines."""
-    out = gate._Writer(b"")
-    out.ident(tenant, "grant_tenant")
-    return bytes(out.out) + _blob(grant_id) + _list([_blob(v) for v in rules]) + _list([_blob(r) for r in engines])
-
-
 # A RELEASE frame's tail after its certs: no forks, no checkpoint, now 0, no grants, unreleased and unpinned, a
 # canonical request and no token.  Lean decodes all of it and then each cert, so only a cert it cannot decode fails it.
 _CERT_PROBE: Final = (_list([]) + signer.framed(b"") + bytes(8) + _list([]) + bytes(2) + signer.framed(
@@ -76,7 +69,10 @@ class PayerStore:
     def __init__(self, path: Path | str, *, root_keys: Mapping[str, bytes],
                  grants: Sequence[tuple[str, bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
         self._roots = dict(root_keys)
-        self._grants = _list([_grant(*g) for g in grants])  # (tenant, id, rules, engines); no default tenant
+        for tenant, *_ in grants:  # a grant's tenant is a canonical ident, refused before anything is written
+            gate._Writer(b"").ident(tenant, "grant_tenant")
+        self._grants = _list([_blob(t.encode()) + _blob(g) + _list([_blob(v) for v in rs]) + _list([_blob(r) for r in es])
+                              for t, g, rs, es in grants])  # (tenant, id, rules, engines); no default tenant
         self._db = sqlite3.connect(path, isolation_level=None, timeout=60)  # Lean may hold the write lock up to 30 s
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)

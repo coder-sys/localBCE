@@ -138,7 +138,7 @@ class PayerTests(fx.Scratch):
             self.assertIsNone(own.release(request, token, now=fx.NOW))
             self.assertEqual(own.release(request, token, now=fx.NOW), "released")
             for bad in ((fx.D[3], *approves), ("-" + fx.TENANT, fx.D[3], *approves), (fx.TENANT.encode(), fx.D[3], *approves)):
-                with self.subTest(bad=bad[0]), self.assertRaises((TypeError, gate.GateCodecError)):
+                with self.subTest(bad=bad[0]), self.assertRaises(gate.GateCodecError):
                     payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={}, grants=(bad,))
 
     def _raw(self, tmp: str, *statements: str) -> None:
