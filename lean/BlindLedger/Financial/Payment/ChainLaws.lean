@@ -940,6 +940,26 @@ private theorem sort_congr {l₁ l₂ : List EvalContribution} (h : l₁.Perm l�
   sorted_eq ((evalSortContributions_perm _).trans (h.trans (evalSortContributions_perm _).symm))
     (sort_sorted _) (sort_sorted _)
 
+/-- `List.mergeSort` (O(n log n)) under "not key-before" is the evaluator's insertion sort: both
+    are sorted permutations of `l` under a strict total order, so they are equal (`sorted_eq`). -/
+theorem mergeSort_eq_evalSort (l : List EvalContribution) :
+    l.mergeSort (fun a b => !contributionKeyBefore b.time b.amountCents b.identity a.time a.amountCents a.identity) =
+      evalSortContributions l := by
+  show l.mergeSort (fun a b => !cb b a) = _
+  refine sorted_eq ((List.mergeSort_perm l _).trans (evalSortContributions_perm l).symm) ?_ (sort_sorted l)
+  refine (List.pairwise_mergeSort (fun a b c hab hbc => ?_) (fun a b => ?_) l).imp fun h => ?_
+  · simp only [Bool.not_eq_true'] at hab hbc ⊢
+    cases hca : cb c a
+    · rfl
+    · cases hab' : cb a b
+      · obtain rfl := cb_conn hab' hab
+        rw [hca] at hbc; exact hbc
+      · rw [cb_trans hca hab'] at hbc; exact hbc
+  · cases h : cb a b
+    · simp
+    · simp [cb_asymm h]
+  · simpa using h
+
 private theorem sort_erase (x : EvalContribution) {l : List EvalContribution} (h : x ∈ l) :
     (evalSortContributions l).erase x = evalSortContributions (l.erase x) := by
   have p : l.Perm (x :: l.erase x) := List.perm_cons_erase h
