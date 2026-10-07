@@ -169,11 +169,11 @@ def _top(prof) -> list[str]:
 # ---------------------------------------------------------------- stage b / e
 STORE_DDL = """
 CREATE TABLE IF NOT EXISTS cell_rows (origin_id TEXT PRIMARY KEY, file_id INTEGER NOT NULL, row_index INTEGER NOT NULL, tag TEXT NOT NULL, amount_cents INTEGER, raw TEXT NOT NULL, line_digest BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS cells (cell_id TEXT PRIMARY KEY, origin_id TEXT NOT NULL, pool TEXT NOT NULL, obligation_id TEXT NOT NULL, state TEXT NOT NULL, amount_cents INTEGER);
-CREATE TABLE IF NOT EXISTS resolutions (resolution_id TEXT PRIMARY KEY, cell_id TEXT NOT NULL, act TEXT, cents INTEGER NOT NULL, basis TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cells (cell_id BLOB PRIMARY KEY, origin_id TEXT NOT NULL, pool TEXT NOT NULL, obligation_id TEXT NOT NULL, state TEXT NOT NULL, amount_cents INTEGER);
+CREATE TABLE IF NOT EXISTS resolutions (resolution_id TEXT PRIMARY KEY, cell_id BLOB NOT NULL, act TEXT, cents INTEGER NOT NULL, basis TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS charges (charge_id TEXT PRIMARY KEY, resolution_id TEXT NOT NULL, obligation_id TEXT NOT NULL, cents INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS holds (hold_id TEXT PRIMARY KEY, cell_id TEXT NOT NULL, reason TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS links (link_id TEXT PRIMARY KEY, negative_cell_id TEXT NOT NULL, target_origin_id TEXT NOT NULL, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS holds (hold_id TEXT PRIMARY KEY, cell_id BLOB NOT NULL, reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS links (link_id TEXT PRIMARY KEY, negative_cell_id BLOB NOT NULL, target_origin_id TEXT NOT NULL, status TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deposit_rows (entry_id TEXT PRIMARY KEY, pool TEXT NOT NULL, amount_cents INTEGER NOT NULL);
 """
 
@@ -213,7 +213,7 @@ class Writer:
     def run_file(self, index: int, record, deposit: dict, hold_times: list[float]) -> int:
         rows = sorted(enumerate(record.rows), key=lambda p: (0 if (p[1].amount_cents or 0) < 0 else 1, p[0]))  # negatives first, then file order
         pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
-        pending: dict[str, list[str]] = {}
+        pending: dict[str, list[tuple[str, bytes]]] = {}
         resolved: set[str] = set()
         for start in range(0, len(rows), CHUNK):
             t0 = time.perf_counter()
@@ -238,7 +238,7 @@ class Writer:
             self.c.executemany(f"INSERT INTO {table} VALUES ({','.join('?' * len(rows[0]))})", rows)
 
     def chunk(self, index: int, pool: str, rows, pending, resolved) -> None:
-        t = {k: [] for k in ("cell_rows", "cells", "resolutions", "charges", "holds", "links", "evidence", "payments", "financial_events")}
+        t = {k: [] for k in ("cell_rows", "cells", "resolutions", "charges", "holds", "links", "evidence", "payments", "financial_events", "commands")}
         touched: dict[str, int] = {}  # obligation -> cents received in this chunk
         now = 1_700_000_000_000 + index
         began = dict(self.revision)
@@ -248,6 +248,10 @@ class Writer:
             self.revision[ob] = rev + 1
             touched[ob] = touched.get(ob, 0) + cents
             ev = f"ev:{index}:{key}"
+            request = {"command": "PAYMENT" if kind == "PAYMENT_RECEIVED" else "PAYMENT_REVERSAL", "key": f"pay:{index}:{key}" if kind == "PAYMENT_RECEIVED" else ev, "item_id": self.obl[ob],
+                       "evidence_id": ev, "common_origin_id": f"x12/{key}", "amount_cents": cents, "event_at_ms": now, "source_id": "x12", "source_version": "v1", "local_ref": ""}
+            body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("ascii")  # the owner's commands row (owner._record_command): canonical request, domain digest
+            t["commands"].append((f"{request['command']}:{request['key']}", request["command"], body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
             t["evidence"].append((ev, self.obl[ob], "PAYMENT", f"x12/{key}", "x12", "v1", "", now, now, now, sha(ev, 1), sha(ev, 2), cents, None, None))
             t["payments"].append((f"pay:{index}:{key}", ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
             self.seq += 1  # one history event per mutation, hash-chained (SHA3-512)
@@ -262,32 +266,33 @@ class Writer:
             amount = row.amount_cents
             ref = row.key[4] if tag == "PLB" else row.key[1]
             ob = self.obligation(ref)
+            cid = sha("RR/CELL/CASH/v2", "bench-tenant", self.obl[ob], origin)  # the real cell id: a random-looking 64-byte digest, so the UNIQUE index on it is the random one
             t["cell_rows"].append((origin, index, row_index, tag, amount, row.raw, hashlib.sha3_256(row.raw.encode()).digest()))
             if amount == 0:
                 cls = "zero"
             elif tag == "RAW" or amount is None:
                 cls = "held"
-                t["cells"].append((f"cell:{origin}", origin, pool, ob, "HELD", amount))
+                t["cells"].append((cid, origin, pool, ob, "HELD", amount))
             elif amount < 0:
                 target = f"{index}/CLP/{ref}"  # "negatives first, then file order": a REV's target is resolved only if it came earlier
-                t["cells"].append((f"cell:{origin}", origin, pool, ob, "NEGATIVE", amount))
-                t["holds"].append((f"hold:{origin}", f"cell:{origin}", "TARGET"))
-                t["links"].append((f"link:{origin}", f"cell:{origin}", target, "EFFECTIVE" if target in resolved else "PENDING"))
+                t["cells"].append((cid, origin, pool, ob, "NEGATIVE", amount))
+                t["holds"].append((f"hold:{origin}", cid, "TARGET"))
+                t["links"].append((f"link:{origin}", cid, target, "EFFECTIVE" if target in resolved else "PENDING"))
                 if target in resolved:
                     cls = "negative_applied"
-                    t["resolutions"].append((f"res:{origin}", f"cell:{origin}", None, amount, "INTAKE"))
+                    t["resolutions"].append((f"res:{origin}", cid, None, amount, "INTAKE"))
                     t["charges"].append((f"chg:{origin}", f"res:{origin}", ob, amount))
                     mutate(ob, key, amount, "PAYMENT_REVERSED")
                 else:
                     cls = "negative_pending"
-                    pending.setdefault(target, []).append(origin)
+                    pending.setdefault(target, []).append((origin, cid))
             else:
                 cls = "applied"
-                t["cells"].append((f"cell:{origin}", origin, pool, ob, "RESOLVED", amount))
-                t["resolutions"].append((f"res:{origin}", f"cell:{origin}", None, amount, "INTAKE"))
+                t["cells"].append((cid, origin, pool, ob, "RESOLVED", amount))
+                t["resolutions"].append((f"res:{origin}", cid, None, amount, "INTAKE"))
                 t["charges"].append((f"chg:{origin}", f"res:{origin}", ob, amount))
-                for neg in pending.pop(origin, ()):  # the target's resolution nets each pending link: its resolution and charge only
-                    t["resolutions"].append((f"res:{neg}", f"cell:{neg}", None, 0, "NET"))
+                for neg, negcid in pending.pop(origin, ()):  # the target's resolution nets each pending link: its resolution and charge only
+                    t["resolutions"].append((f"res:{neg}", negcid, None, 0, "NET"))
                     t["charges"].append((f"chg:{neg}", f"res:{neg}", ob, 0))
                 resolved.add(origin)
                 mutate(ob, key, amount, "PAYMENT_RECEIVED")
