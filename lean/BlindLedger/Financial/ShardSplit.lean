@@ -1757,6 +1757,91 @@ theorem reader_cut (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List 
       · rw [if_neg ht]
   · cases h
 
+theorem runS_append (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (a b : List Input),
+    runS pk cx ss (a ++ b) = runS pk cx (runS pk cx ss a) b
+  | _, [], _ => rfl
+  | ss, r :: a, b => runS_append pk cx (stepT pk cx ss r) a b
+
+/-- One step leaves shard `k` unchanged or appends exactly one APPLIED entry to it. -/
+theorem step_shard (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (k : Nat) :
+    (stepT pk cx ss inp).2 k = ss.2 k ∨
+      ((stepT pk cx ss inp).2 k).applied.length = (ss.2 k).applied.length + 1 := by
+  unfold stepT stepS
+  split
+  · by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+    · right; simp [commitShards, applyPart, ht]
+    · left; simp [commitShards, ht]
+  · exact .inl rfl
+
+/-- A shard at or above `K` is never changed by a step. -/
+theorem step_high (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (k : Nat) (hk : pk.k cx.p ≤ k) :
+    (stepT pk cx ss inp).2 k = ss.2 k := by
+  unfold stepT stepS
+  split
+  · have hn : k ∉ (mkRec pk cx ss inp).2.touched := fun ht => by
+      have ht' : k ∈ touched pk cx (judge pk cx ss.1.view inp) := ht
+      unfold touched at ht'
+      rw [List.mem_filter, List.mem_range] at ht'
+      exact absurd ht'.1 (Nat.not_lt.2 hk)
+    simp [commitShards, hn]
+  · rfl
+
+/-- Over any run, shard `k` is unchanged or its APPLIED list is strictly longer. -/
+theorem run_shard (pk : Pack) (cx : Ctx) (k : Nat) : ∀ (ss : SS) (rs : List Input),
+    (runS pk cx ss rs).2 k = ss.2 k ∨ (ss.2 k).applied.length < ((runS pk cx ss rs).2 k).applied.length
+  | _, [] => .inl rfl
+  | ss, r :: rs => by
+    show (runS pk cx (stepT pk cx ss r) rs).2 k = ss.2 k ∨
+      (ss.2 k).applied.length < ((runS pk cx (stepT pk cx ss r) rs).2 k).applied.length
+    rcases run_shard pk cx k (stepT pk cx ss r) rs with h | h <;> rcases step_shard pk cx ss r k with h' | h'
+    · exact .inl (h.trans h')
+    · right; rw [h, h']; omega
+    · rw [h'] at h; exact .inr h
+    · right; omega
+
+/-- A shard at or above `K` is never changed by a run. -/
+theorem run_high (pk : Pack) (cx : Ctx) (k : Nat) (hk : pk.k cx.p ≤ k) : ∀ (ss : SS) (rs : List Input),
+    (runS pk cx ss rs).2 k = ss.2 k
+  | _, [] => rfl
+  | ss, r :: rs => (run_high pk cx k hk (stepT pk cx ss r) rs).trans (step_high pk cx ss r k hk)
+
+/-- Reader cut over prefixes (review fix 7): a reader that takes the spine after the first `i` inputs of a run
+    from a migrated store and each shard `k` after any number `j k` of them, and whose APPLIED check
+    (`appliedOk`: each shard below `K` lists exactly the spine records touching it) passes, holds exactly the
+    store after the first `i` inputs, every shard included.  The check needed is APPLIED, not heads: `Ctx.hs` is
+    only assumed to change the head, so a shard two touching records ahead can show the spine's head again
+    (`hs` going `h0 → h1 → h0`) while its charges differ. -/
+theorem reader_cut_prefix (pk : Pack) (cx : Ctx) (L : Legacy) (rs : List Input) (i : Nat) (j : Nat → Nat)
+    (sp : SpineDB) (sh : Nat → ShardDB) (hsp : sp = (runS pk cx (initS L) (rs.take i)).1)
+    (hsh : ∀ k, sh k = (runS pk cx (initS L) (rs.take (j k))).2 k) (hA : appliedOk pk cx (sp, sh)) :
+    (sp, sh) = runS pk cx (initS L) (rs.take i) := by
+  subst hsp
+  refine Prod.ext rfl (funext fun k => ?_)
+  show sh k = (runS pk cx (initS L) (rs.take i)).2 k
+  have ext : ∀ m n, m ≤ n → ∃ ys, runS pk cx (initS L) (rs.take n) =
+      runS pk cx (runS pk cx (initS L) (rs.take m)) ys :=
+    fun m n h => ⟨(rs.drop m).take (n - m), by rw [← runS_append, ← List.take_add, Nat.add_sub_of_le h]⟩
+  rw [hsh k]
+  by_cases hK : k < pk.k cx.p
+  · have e : (sh k).applied =
+        ((runS pk cx (initS L) (rs.take i)).1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n) := hA k hK
+    have hl := congrArg List.length
+      (e.trans ((inv3_run pk cx (initS L) (rs.take i) (inv3_init L)) k).2.symm)
+    rw [hsh k] at hl
+    rcases Nat.le_total (j k) i with h | h
+    · obtain ⟨ys, hy⟩ := ext _ _ h
+      rw [hy] at hl ⊢
+      rcases run_shard pk cx k (runS pk cx (initS L) (rs.take (j k))) ys with e' | e'
+      · exact e'.symm
+      · omega
+    · obtain ⟨ys, hy⟩ := ext _ _ h
+      rw [hy] at hl ⊢
+      rcases run_shard pk cx k (runS pk cx (initS L) (rs.take i)) ys with e' | e'
+      · exact e'
+      · omega
+  · have hk := Nat.le_of_not_lt hK
+    rw [run_high pk cx k hk, run_high pk cx k hk]
+
 /-- Pool used is the shards' gross; the budget is the shards' machine charges plus the spine's LINK charges. -/
 theorem pool_budget_merge (pk : Pack) (cx : Ctx) (ss : SS) (h : reachOk pk cx ss) :
     ss.1.used = ((List.range (pk.k cx.p)).map fun k => (ss.2 k).gross).sum ∧
