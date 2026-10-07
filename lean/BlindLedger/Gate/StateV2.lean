@@ -3161,6 +3161,255 @@ private theorem c3_anchor (H : Bytes → Bytes) {g h : Head} {d : Bytes} (hg : d
       · subst e; exact c3_headIn_inj hx hy
       · exact absurd ⟨x, hA x hx, y, hB y hy, e, by rw [hg, hh]⟩ nc
 
+private theorem c4_nodup_eraseDups {α : Type} [BEq α] [LawfulBEq α] :
+    ∀ (n : Nat) (l : List α), l.length ≤ n → l.eraseDups.Nodup
+  | _, [], _ => by simp
+  | 0, _ :: _, h => by simp at h
+  | n + 1, a :: as, h => by
+    rw [List.eraseDups_cons, List.nodup_cons]
+    refine ⟨?_, c4_nodup_eraseDups n _ (Nat.le_trans (List.length_filter_le _ _) (by simp at h; omega))⟩
+    intro hm
+    rw [List.mem_eraseDups, List.mem_filter] at hm
+    simp at hm
+
+private theorem c4_len_eq {α : Type} {A B : List α} (hA : A.Nodup) (hB : B.Nodup) (h : ∀ y, y ∈ A ↔ y ∈ B) :
+    A.length = B.length :=
+  ((List.perm_ext_iff_of_nodup hA hB).mpr h).length_eq
+
+private theorem c4_rel_nodup {rel unr : Snapshot Line} (hi : Inv rel unr) : rel.entries.Nodup := by
+  have h := hi.1
+  rw [List.map_append, List.nodup_append] at h
+  exact List.Pairwise.of_map (·.id) (fun a b hab e => hab (by rw [e])) h.1
+
+private theorem c4_ownQ (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hx : x.c₀ = c₀)
+    (hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l) (l : Line) (hl : l ∈ x.bb) :
+    x.ownQ l = own (carried c₀ rel unr) l := by
+  unfold Ix.ownQ own
+  rw [sv_released_carried, hR l hl, hx]
+  rfl
+
+private theorem c4_seen0Has (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (hx : x.c₀ = c₀)
+    (hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l) (q : Key)
+    (hq : x.cnt false q = (rel.entries.filter fun y => (rowKeys false y).contains q).length) :
+    x.seen0Has q = (seen0 (carried c₀ rel unr) x.bb).contains q := by
+  have hlen : ((x.bb.filter x.ownQ).eraseDups.filter fun y => (keys y).contains q).length =
+      (rel.entries.filter fun y => c₀.redo.contains y.pay && x.bb.contains y && (keys y).contains q).length := by
+    apply c4_len_eq (List.Pairwise.filter _ (c4_nodup_eraseDups _ _ (Nat.le_refl _)))
+      (List.Pairwise.filter _ (c4_rel_nodup hi))
+    intro y
+    simp only [List.mem_filter, List.mem_eraseDups, Bool.and_eq_true]
+    constructor
+    · rintro ⟨⟨hb, ho⟩, hk⟩
+      have ho' := ho
+      unfold Ix.ownQ at ho'
+      rw [hR y hb, hx, Bool.and_eq_true] at ho'
+      exact ⟨List.contains_iff_mem.mp ho'.2, ⟨ho'.1, List.contains_iff_mem.mpr hb⟩, hk⟩
+    · rintro ⟨hr, ⟨hp, hb⟩, hk⟩
+      have hb' := List.contains_iff_mem.mp hb
+      refine ⟨⟨hb', ?_⟩, hk⟩
+      unfold Ix.ownQ
+      rw [hR y hb', hx, hp, List.contains_iff_mem.mpr hr]
+      rfl
+  have hk : ∀ y : Line, rowKeys false y = keys y := by intro y; simp [rowKeys]
+  rw [seen0_count, Ix.seen0Has, hq, hlen]
+  simp only [hk]
+
+private theorem c4_claim_mem (c : Ctx) (y : Line) (q : Key)
+    (hq : q.head? = some 1 ∨ q.head? = some 2 ∨ q.head? = some 3 ∨ q.head? = some 4) :
+    q ∈ claim c y ↔ q ∈ rowKeys true y := by
+  cases q with
+  | nil => simp at hq
+  | cons a t =>
+    simp only [List.head?_cons, Option.some.injEq] at hq
+    by_cases hc : isCap y = true <;> by_cases hv : validDate y.date = true <;>
+      simp only [claim, rowKeys, keys, exactKey, nearKey, idKey, dayKey, badDayKey, hc, hv] <;>
+      (try split) <;> rcases hq with rfl | rfl | rfl | rfl <;> simp_all
+
+private theorem c4_pend (c₀ : Ctx) (rel unr : Snapshot Line) (q : Key)
+    (hq : q.head? = some 1 ∨ q.head? = some 2 ∨ q.head? = some 3 ∨ q.head? = some 4) :
+    (pending (carried c₀ rel unr)).contains q =
+      decide (0 < (unr.entries.filter fun y => (rowKeys true y).contains q).length) := by
+  unfold pending
+  rw [sv_unresolved_carried]
+  apply Bool.eq_iff_iff.mpr
+  rw [List.contains_iff_mem, decide_eq_true_iff, List.length_pos_iff_exists_mem, List.mem_flatMap]
+  simp only [List.mem_filter, List.contains_iff_mem]
+  constructor
+  · rintro ⟨y, hy, hm⟩; exact ⟨y, hy, (c4_claim_mem _ y q hq).mp hm⟩
+  · rintro ⟨y, hy, hm⟩; exact ⟨y, hy, (c4_claim_mem _ y q hq).mpr hm⟩
+
+private theorem c4_monthDays_le (y m : Nat) : monthDays y m ≤ 31 := by
+  unfold monthDays; split
+  · split <;> omega
+  · split <;> omega
+
+private theorem c4_daysIn (d : Nat) (hv : validDate d = true) : d ∈ daysIn (d / 100) := by
+  unfold daysIn
+  rw [List.mem_filter, List.mem_map]
+  refine ⟨⟨d % 100 - 1, ?_, ?_⟩, hv⟩
+  · have := c4_monthDays_le (d / 10000) (d / 100 % 100)
+    unfold validDate at hv
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hv
+    rw [List.mem_range]; omega
+  · unfold validDate at hv
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hv
+    omega
+
+private theorem c4_capProbe_mem (c₀ : Ctx) (m mo : Nat) (y : Line) :
+    (∃ q ∈ capProbes c₀ m mo, q ∈ rowKeys true y) ↔
+      (nearKey y = [0, m, mo] ∧
+        (!usable c₀.today 7 okSpan c₀.enrollment || !validDate y.date || enrolled c₀ y) = true) := by
+  by_cases hu : usable c₀.today 7 okSpan c₀.enrollment = true
+  · have hp : capProbes c₀ m mo = [6, m, mo] :: ((entries c₀.enrollment).filter (·.member == m)).flatMap fun s =>
+        ((daysIn mo).filter fun d => decide (s.start ≤ d) && decide (d ≤ s.stop)).map fun d => [5, m, mo, s.plan, d] := by
+      simp [capProbes, hu]
+    rw [hp, hu]
+    constructor
+    · rintro ⟨q, hq, hm⟩
+      rw [List.mem_cons, List.mem_flatMap] at hq
+      rcases hq with rfl | ⟨s, hs, hq⟩
+      · by_cases hc : isCap y = true <;> by_cases hv : validDate y.date = true <;>
+          simp [rowKeys, keys, exactKey, nearKey, idKey, dayKey, badDayKey, hc, hv] at hm ⊢
+        exact ⟨hm.1.symm, hm.2.symm⟩
+      · rw [List.mem_map] at hq
+        obtain ⟨d, hd, rfl⟩ := hq
+        rw [List.mem_filter] at hs hd
+        by_cases hc : isCap y = true <;> by_cases hv : validDate y.date = true <;>
+          simp [rowKeys, keys, exactKey, nearKey, idKey, dayKey, badDayKey, hc, hv] at hm ⊢
+        obtain ⟨h1, h2, h3, h4⟩ := hm
+        refine ⟨⟨h1.symm, h2.symm⟩, ?_⟩
+        unfold enrolled
+        rw [List.any_eq_true]
+        refine ⟨s, hs.1, ?_⟩
+        simp only [covers, hc, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Bool.not_true, Bool.false_or]
+          at hs hd ⊢
+        refine ⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩ <;> omega
+    · rintro ⟨hn, ho⟩
+      have hc : isCap y = true := by
+        by_cases hc : isCap y = true
+        · exact hc
+        · simp [nearKey, hc] at hn
+      simp only [nearKey, hc, if_true, List.cons.injEq] at hn
+      obtain ⟨-, hm1, hm2, -⟩ := hn
+      by_cases hv : validDate y.date = true
+      · simp only [hv, Bool.not_true, Bool.false_or] at ho
+        unfold enrolled at ho
+        rw [List.any_eq_true] at ho
+        obtain ⟨s, hs, hcov⟩ := ho
+        simp only [covers, hc, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Bool.not_true,
+          Bool.false_or] at hcov
+        refine ⟨[5, m, mo, s.plan, y.date], ?_, ?_⟩
+        · rw [List.mem_cons, List.mem_flatMap]
+          refine Or.inr ⟨s, List.mem_filter.mpr ⟨hs, by simp [hcov.1.1.1, hm1]⟩, ?_⟩
+          rw [List.mem_map]
+          refine ⟨y.date, List.mem_filter.mpr ⟨by rw [← hm2]; exact c4_daysIn _ hv, ?_⟩, rfl⟩
+          simp [hcov.1.1.2, hcov.1.2]
+        · simp [rowKeys, keys, dayKey, hc, hv, hm1, hm2, hcov.2]
+      · refine ⟨[6, m, mo], List.mem_cons_self, ?_⟩
+        simp [rowKeys, keys, badDayKey, hc, hv, hm1, hm2]
+  · have hp : capProbes c₀ m mo = [[0, m, mo]] := by simp [capProbes, hu]
+    rw [hp]
+    have hu' : usable c₀.today 7 okSpan c₀.enrollment = false := by simpa using hu
+    rw [hu']
+    simp only [List.mem_singleton, exists_eq_left, Bool.not_false, Bool.true_or, and_true]
+    by_cases hc : isCap y = true <;> by_cases hv : validDate y.date = true <;>
+      simp [rowKeys, keys, exactKey, nearKey, idKey, dayKey, badDayKey, hc, hv] <;>
+      first | exact ⟨fun ⟨a, b⟩ => ⟨a.symm, b.symm⟩, fun ⟨a, b⟩ => ⟨a.symm, b.symm⟩⟩ | omega
+
+private theorem c4_pend_cap (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (m mo : Nat) :
+    (pending (carried c₀ rel unr)).contains [0, m, mo] =
+      (capProbes c₀ m mo).any fun q => decide (0 < (unr.entries.filter fun y => (rowKeys true y).contains q).length) := by
+  rw [pending_near_cap c₀ rel unr hi]
+  apply Bool.eq_iff_iff.mpr
+  simp only [List.any_eq_true, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, List.length_pos_iff_exists_mem,
+    List.mem_filter, List.contains_iff_mem]
+  constructor
+  · rintro ⟨y, hy, hn, ho⟩
+    obtain ⟨q, hq, hm⟩ := (c4_capProbe_mem c₀ m mo y).mpr ⟨hn, ho⟩
+    exact ⟨q, hq, y, hy, hm⟩
+  · rintro ⟨q, hq, y, hy, hm⟩
+    exact ⟨y, hy, (c4_capProbe_mem c₀ m mo y).mp ⟨q, hq, hm⟩⟩
+
+private theorem c4_fires (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr) (hx : x.c₀ = c₀)
+    (hrel : x.relOk = (validDate rel.asOf && decide (rel.asOf ≤ c₀.today)))
+    (hunr : x.unrOk = (validDate unr.asOf && decide (unr.asOf ≤ c₀.today)))
+    (seen : List Key) (l : Line)
+    (hS : ∀ q ∈ keys l, x.seen0Has q = (seen0 (carried c₀ rel unr) x.bb).contains q)
+    (hP : ∀ q ∈ keys l, x.pendQ q = (pending (carried c₀ rel unr)).contains q) (r : Reason) :
+    x.firesQ seen l r = fires (carried c₀ rel unr) (seen ++ seen0 (carried c₀ rel unr) x.bb) l r := by
+  have e1 := hS (idKey l) (by simp [keys])
+  have e2 := hS (exactKey l) (by simp [keys])
+  have e3 := hS (nearKey l) (by simp [keys])
+  have p1 := hP (idKey l) (by simp [keys])
+  have p2 := hP (exactKey l) (by simp [keys])
+  have p3 := hP (nearKey l) (by simp [keys])
+  have hl : looseKeys (carried c₀ rel unr) = [] := by simp [looseKeys, carried, carried_loose]
+  have hcr : chained (carried c₀ rel unr).today (carried c₀ rel unr).releasedPrior
+      (carried c₀ rel unr).released = (validDate rel.asOf && decide (rel.asOf ≤ c₀.today)) :=
+    carried_chained c₀.today rel hi.2.1
+  have hcu : chained (carried c₀ rel unr).today (carried c₀ rel unr).unresolvedPrior
+      (carried c₀ rel unr).unresolved = (validDate unr.asOf && decide (unr.asOf ≤ c₀.today)) :=
+    carried_chained c₀.today unr hi.2.2
+  cases r <;> simp only [Ix.firesQ, fires, List.contains_append, e1, e2, e3, p1, p2, p3, hx, hl, hrel, hunr,
+    hcr, hcu, List.contains_nil, Bool.and_false] <;> rfl
+
+private theorem c4_claimQ (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hx : x.c₀ = c₀)
+    (hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l) (l : Line) (hl : l ∈ x.bb) :
+    x.claimQ l = claim (carried c₀ rel unr) l := by
+  unfold Ix.claimQ claim
+  rw [c4_ownQ x c₀ rel unr hx hR l hl, hx]
+  rfl
+
+private theorem c4_decideAllQ (H : Bytes → Bytes) (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr)
+    (hx : x.c₀ = c₀) (hrel : x.relOk = (validDate rel.asOf && decide (rel.asOf ≤ c₀.today)))
+    (hunr : x.unrOk = (validDate unr.asOf && decide (unr.asOf ≤ c₀.today)))
+    (hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l)
+    (hS : ∀ l ∈ x.bb, ∀ q ∈ keys l, x.seen0Has q = (seen0 (carried c₀ rel unr) x.bb).contains q)
+    (hP : ∀ l ∈ x.bb, ∀ q ∈ keys l, x.pendQ q = (pending (carried c₀ rel unr)).contains q) :
+    ∀ (seen : List Key) (ls : List Line), (∀ l ∈ ls, l ∈ x.bb) →
+      (Ix.decideAllQ H x seen ls).map (fun d => (d.line, d.outcome, d.reasons)) =
+        (decideAll (carried c₀ rel unr) (seen ++ seen0 (carried c₀ rel unr) x.bb) ls).map
+          (fun d => (d.line, d.outcome, d.reasons))
+  | _, [], _ => rfl
+  | seen, l :: ls, h => by
+    have hl := h l (by simp)
+    have hf : x.firesQ seen l = fires (carried c₀ rel unr) (seen ++ seen0 (carried c₀ rel unr) x.bb) l :=
+      funext (c4_fires x c₀ rel unr hi hx hrel hunr seen l (hS l hl) (hP l hl))
+    have hcq := c4_claimQ x c₀ rel unr hx hR l hl
+    have ih := c4_decideAllQ H x c₀ rel unr hi hx hrel hunr hR hS hP (x.claimQ l ++ seen) ls
+      (fun l' hl' => h l' (by simp [hl']))
+    rw [hcq, List.append_assoc] at ih
+    simp only [Ix.decideAllQ, decideAll, decideLine, List.map_cons, hf, hcq, ih]
+
+private theorem c4_orderQ (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hx : x.c₀ = c₀)
+    (hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l) :
+    x.orderQ x.bb = order (carried c₀ rel unr) x.bb := by
+  unfold Ix.orderQ order
+  have h1 : x.bb.filter x.ownQ = x.bb.filter (own (carried c₀ rel unr)) :=
+    List.filter_congr (fun y hy => c4_ownQ x c₀ rel unr hx hR y hy)
+  have h2 : (x.bb.filter fun y => !x.ownQ y) = x.bb.filter (fun y => !own (carried c₀ rel unr) y) :=
+    List.filter_congr (fun y hy => by rw [c4_ownQ x c₀ rel unr hx hR y hy])
+  rw [h1, h2]
+
+private theorem c4_decisions (H : Bytes → Bytes) (x : Ix) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
+    (rel unr : Snapshot Line) (hi : Inv rel unr) (hx : x.c₀ = c₀) (hbb : x.bb = ready k os b)
+    (hrel : x.relOk = (validDate rel.asOf && decide (rel.asOf ≤ c₀.today)))
+    (hunr : x.unrOk = (validDate unr.asOf && decide (unr.asOf ≤ c₀.today)))
+    (hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l)
+    (hS : ∀ l ∈ x.bb, ∀ q ∈ keys l, x.seen0Has q = (seen0 (carried c₀ rel unr) x.bb).contains q)
+    (hP : ∀ l ∈ x.bb, ∀ q ∈ keys l, x.pendQ q = (pending (carried c₀ rel unr)).contains q) :
+    (Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb)).map (fun d => (d.line, d.outcome, d.reasons)) =
+      (decideRegT (carried c₀ rel unr) k os b).decisions.map (fun d => (d.line, d.outcome, d.reasons)) := by
+  show _ = (decideAll (carried c₀ rel unr) (idSeen (foreignOf k os (ready k os b)) ++
+    seen0 (carried c₀ rel unr) (ready k os b)) (order (carried c₀ rel unr) (ready k os b))).map _
+  rw [← hbb, c4_orderQ x c₀ rel unr hx hR]
+  refine c4_decideAllQ H x c₀ rel unr hi hx hrel hunr hR hS hP _ _ ?_
+  intro l hl
+  unfold order canonical at hl
+  rcases List.mem_append.mp hl with h | h
+  · exact (List.mem_filter.mp ((List.mergeSort_perm _ _).mem_iff.mp h)).1
+  · exact (List.mem_filter.mp ((List.mergeSort_perm _ _).mem_iff.mp h)).1
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
