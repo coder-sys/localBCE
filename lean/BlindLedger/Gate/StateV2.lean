@@ -2694,6 +2694,473 @@ def trueHits (H : Bytes → Bytes) (rel unr : Snapshot Line) (l : Line) : List (
     let es := (postings u (if u then unr.entries else rel.entries) q).getD []
     (u, pathOf H kb, es.length, listRoot H es)
 
+private theorem c3_headIn_some {h : Head} {x : Bytes} (hx : headIn h = some x) :
+    ∃ a b c d, be 4 h.relAsOf = some a ∧ be 4 h.unrAsOf = some b ∧ be 8 h.relCount = some c ∧
+      be 8 h.unrCount = some d ∧ h.relRoot.length = digestBytes ∧ h.unrRoot.length = digestBytes ∧
+      x = dom2 "STATE" ++ a ++ b ++ c ++ d ++ h.relRoot ++ h.unrRoot := by
+  unfold headIn at hx
+  cases h1 : be 4 h.relAsOf with
+  | none => simp [h1] at hx
+  | some a =>
+  cases h2 : be 4 h.unrAsOf with
+  | none => simp [h1, h2] at hx
+  | some b =>
+  cases h3 : be 8 h.relCount with
+  | none => simp [h1, h2, h3] at hx
+  | some c =>
+  cases h4 : be 8 h.unrCount with
+  | none => simp [h1, h2, h3, h4] at hx
+  | some d =>
+  by_cases hg : h.relRoot.length = digestBytes ∧ h.unrRoot.length = digestBytes
+  · simp [h1, h2, h3, h4, hg, guard] at hx
+    exact ⟨a, b, c, d, rfl, rfl, rfl, rfl, hg.1, hg.2, by rw [← hx]; simp [List.append_assoc]⟩
+  · simp [h1, h2, h3, h4, hg, guard] at hx
+    first | exact Option.noConfusion hx | cases hx | simp [failure] at hx
+
+private theorem c3_headIn_inj {g h : Head} {x : Bytes} (hg : headIn g = some x) (hh : headIn h = some x) : g = h := by
+  obtain ⟨a, b, c, d, h1, h2, h3, h4, h5, h6, rfl⟩ := c3_headIn_some hg
+  obtain ⟨a', b', c', d', h1', h2', h3', h4', h5', h6', he⟩ := c3_headIn_some hh
+  have e6 := List.append_inj' he (by rw [h6, h6'])
+  have e5 := List.append_inj' e6.1 (by rw [h5, h5'])
+  have e4 := List.append_inj' e5.1 (by rw [be_len h4, be_len h4'])
+  have e3 := List.append_inj' e4.1 (by rw [be_len h3, be_len h3'])
+  have e2 := List.append_inj' e3.1 (by rw [be_len h2, be_len h2'])
+  have e1 := List.append_inj' e2.1 (by rw [be_len h1, be_len h1'])
+  cases g; cases h
+  simp only at *
+  rw [← e1.2] at h1'; rw [← e2.2] at h2'; rw [← e3.2] at h3'; rw [← e4.2] at h4'
+  rw [be_inj h1 h1', be_inj h2 h2', be_inj h3 h3', be_inj h4 h4', e5.2, e6.2]
+
+private theorem c3_mapM_all {α β : Type} (f : α → Option β) :
+    ∀ (xs : List α) (ys : List β), xs.mapM f = some ys → ∀ x ∈ xs, ∃ y ∈ ys, f x = some y
+  | [], _, _, x, hx => by simp at hx
+  | a :: xs, ys, h, x, hx => by
+    simp only [List.mapM_cons] at h
+    cases ha : f a with
+    | none => simp [ha] at h
+    | some b =>
+      cases hm : xs.mapM f with
+      | none => simp [ha, hm] at h
+      | some bs =>
+        simp [ha, hm] at h
+        subst h
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact ⟨b, by simp, ha⟩
+        · obtain ⟨y, hy, e⟩ := c3_mapM_all f xs bs hm x hx
+          exact ⟨y, by simp [hy], e⟩
+
+private theorem c3_mem_zipIdx {α : Type} {s : List α} {x : α} {i : Nat} (h : (x, i) ∈ s.zipIdx) : x ∈ s := by
+  rw [List.mem_zipIdx_iff_getElem?] at h
+  exact List.mem_of_getElem? h
+
+private theorem c3_zipIdx_of_mem {α : Type} {s : List α} {x : α} (h : x ∈ s) : ∃ i, (x, i) ∈ s.zipIdx := by
+  obtain ⟨i, hi⟩ := List.mem_iff_getElem?.mp h
+  exact ⟨i, List.mem_zipIdx_iff_getElem?.mpr hi⟩
+
+private theorem c3_setMap_mem {H : Bytes → Bytes} {u : Bool} {s : List Line} {m : Map} (hm : setMap H u s = some m) :
+    (∀ e ∈ m, (∃ x i, (x, i) ∈ s.zipIdx ∧ ∃ kb, keyBytes (rowKey x) = some kb ∧ be 8 i = some e.2 ∧
+        e.1 = pathOf H kb) ∨
+      (∃ q ∈ (s.flatMap (rowKeys u)).eraseDups, ∃ kb es, keyBytes q = some kb ∧ postings u s q = some es ∧
+        keyVal es.length (es.foldl (frontierPush H) []) = some e.2 ∧ e.1 = pathOf H kb)) ∧
+    (∀ x ∈ s, ∃ kb, keyBytes (rowKey x) = some kb ∧ ∃ v, (pathOf H kb, v) ∈ m) ∧
+    (∀ q ∈ s.flatMap (rowKeys u), ∃ kb es, keyBytes q = some kb ∧ postings u s q = some es ∧
+        ∃ v, keyVal es.length (es.foldl (frontierPush H) []) = some v ∧ (pathOf H kb, v) ∈ m) ∧
+    (m.map (·.1)).Nodup := by
+  unfold setMap at hm
+  simp only [bind, Option.bind] at hm
+  split at hm
+  · simp at hm
+  rename_i rows hrows
+  dsimp only at hm
+  split at hm
+  · simp at hm
+  rename_i ks hks
+  dsimp only at hm
+  by_cases hg : (rows.map (·.1) ++ ks.map (·.1)).Nodup
+  · simp [guard, hg] at hm
+    subst hm
+    refine ⟨?_, ?_, ?_, by simpa [List.map_append] using hg⟩
+    · intro e he
+      rcases List.mem_append.mp he with he | he
+      · left
+        obtain ⟨⟨x, i⟩, hx, hf⟩ := g1_mapM_mem _ _ _ hrows e he
+        cases hk : keyBytes (rowKey x) with
+        | none => simp [hk] at hf
+        | some kb =>
+          cases hb : be 8 i with
+          | none => simp [hk, hb] at hf
+          | some v =>
+            simp [hk, hb] at hf
+            subst hf
+            exact ⟨x, i, hx, kb, hk, hb, rfl⟩
+      · right
+        obtain ⟨q, hq, hf⟩ := g1_mapM_mem _ _ _ hks e he
+        cases hk : keyBytes q with
+        | none => simp [hk] at hf
+        | some kb =>
+          cases hp : postings u s q with
+          | none => simp [hk, hp] at hf
+          | some es =>
+            cases hv : keyVal es.length (es.foldl (frontierPush H) []) with
+            | none => simp [hk, hp, hv] at hf
+            | some v =>
+              simp [hk, hp, hv] at hf
+              subst hf
+              exact ⟨q, hq, kb, es, hk, hp, hv, rfl⟩
+    · intro x hx
+      obtain ⟨i, hi⟩ := c3_zipIdx_of_mem hx
+      obtain ⟨e, he, hf⟩ := c3_mapM_all _ _ _ hrows _ hi
+      cases hk : keyBytes (rowKey x) with
+      | none => simp [hk] at hf
+      | some kb =>
+        cases hb : be 8 i with
+        | none => simp [hk, hb] at hf
+        | some v =>
+          simp [hk, hb] at hf
+          subst hf
+          exact ⟨kb, rfl, v, List.mem_append_left _ he⟩
+    · intro q hq
+      have hq' : q ∈ (s.flatMap (rowKeys u)).eraseDups := List.mem_eraseDups.mpr hq
+      obtain ⟨e, he, hf⟩ := c3_mapM_all _ _ _ hks _ hq'
+      cases hk : keyBytes q with
+      | none => simp [hk] at hf
+      | some kb =>
+        cases hp : postings u s q with
+        | none => simp [hk, hp] at hf
+        | some es =>
+          cases hv : keyVal es.length (es.foldl (frontierPush H) []) with
+          | none => simp [hk, hp, hv] at hf
+          | some v =>
+            simp [hk, hp, hv] at hf
+            subst hf
+            exact ⟨kb, es, rfl, rfl, v, by first | exact hv | rfl, List.mem_append_right _ he⟩
+  · simp [guard, hg] at hm
+
+private theorem c3_lookup_some {m : Map} {p v : Bytes} (h : lookup m p = some v) : (p, v) ∈ m := by
+  unfold lookup at h
+  cases hf : m.find? (·.1 == p) with
+  | none => simp [hf] at h
+  | some e =>
+    simp [hf] at h
+    have hm := List.mem_of_find?_eq_some hf
+    have he := List.find?_some hf
+    simp at he
+    obtain ⟨a, b⟩ := e
+    simp at he h
+    subst he; subst h; exact hm
+
+private theorem c3_lookup_none {m : Map} {p : Bytes} (h : lookup m p = none) : ∀ e ∈ m, e.1 ≠ p := by
+  unfold lookup at h
+  simp at h
+  intro e he hep
+  exact h e.1 e.2 he hep
+
+private theorem c3_rowKeys_head (u : Bool) (x : Line) : ∀ q ∈ rowKeys u x, q.head? ≠ some 7 := by
+  simp only [rowKeys, keys, exactKey, nearKey, idKey, dayKey, badDayKey]
+  repeat' split
+  all_goals simp
+
+/-- The true hit of key `q` in set `s` at path `p`. -/
+private def c3T (H : Bytes → Bytes) (u : Bool) (s : List Line) (q : Key) (p : Bytes) : Hit :=
+  if q.head? = some 7 then ⟨u, q, p, if s.any (fun x => rowKey x == q) then 1 else 0, [], []⟩ else
+    let es := (postings u s q).getD []
+    ⟨u, q, p, es.length, es.foldl (frontierPush H) [], es.take K⟩
+
+private theorem c3_probe (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : List Line) (m : Map)
+    (hm : setMap H u s = some m) (pf : Proof) (w : Witness) (ps : List Bytes)
+    (hv : verifyMulti H (root H m) ps pf = true) (q : Key) (kb : Bytes) (hk : keyBytes q = some kb)
+    (hp : pathOf H kb ∈ ps) (A B : List Bytes) (hA1 : KD ++ kb ∈ A) (hA2 : ∀ y ∈ pfInputs H pf, y ∈ A)
+    (hA3 : ∀ y ∈ w.lists.flatMap (fun (_, _, n, ys, fp) => firstKInputs H n ys fp), y ∈ A)
+    (hB : ∀ y ∈ setInputs H u s, y ∈ B) (nc : ¬ Collision H A B) (r : Option Hit)
+    (hr : probe H pf w u q = some r) : r = some (c3T H u s q (pathOf H kb)) := by
+  obtain ⟨hmem, hrow, hkey, -⟩ := c3_setMap_mem hm
+  have hlk : lookupPf 0 pf (pathOf H kb) = some (lookup m (pathOf H kb)) := by
+    rcases smt_sound H hH m (setMap_ok H hH u s m hm) ps pf hv _ hp with h | h
+    · exact h
+    · exact absurd (coll_mono H hA2 (fun y hy => hB y (by simp [setInputs, hm, hy])) h) nc
+  have hkb : ∀ q' kb', keyBytes q' = some kb' → q' ∈ s.map rowKey ++ (s.flatMap (rowKeys u)).eraseDups →
+      pathOf H kb' = pathOf H kb → q' = q := by
+    intro q' kb' hk' hq' he
+    by_cases hne : KD ++ kb = KD ++ kb'
+    · have : kb = kb' := List.append_cancel_left hne
+      subst this
+      exact keyBytes_inj hk' hk
+    · refine absurd ⟨KD ++ kb, hA1, KD ++ kb', hB _ ?_, hne, he.symm⟩ nc
+      unfold setInputs
+      simp only [List.mem_append, List.mem_filterMap]
+      exact Or.inl (Or.inl ⟨q', by simpa using hq', by simp [hk']⟩)
+  unfold probe at hr
+  rw [hk] at hr
+  simp only [hlk] at hr
+  cases hl : lookup m (pathOf H kb) with
+  | none =>
+    simp [hl] at hr
+    subst hr
+    have hn := c3_lookup_none hl
+    unfold c3T
+    split
+    · have : s.any (fun x => rowKey x == q) = false := by
+        rw [Bool.eq_false_iff]
+        intro ha
+        obtain ⟨x, hx, hxq⟩ := List.any_eq_true.mp ha
+        have hxq : rowKey x = q := by simpa using hxq
+        obtain ⟨kb', hk', v, hv'⟩ := hrow x hx
+        rw [hxq, hk] at hk'
+        cases hk'
+        exact hn _ hv' rfl
+      simp [this]
+    · have hnil : (s.zipIdx.filter fun (x, _) => (rowKeys u x).contains q) = [] := by
+        rw [List.filter_eq_nil_iff]
+        rintro ⟨x, i⟩ hxi hc
+        have hq : q ∈ s.flatMap (rowKeys u) := List.mem_flatMap.mpr ⟨x, c3_mem_zipIdx hxi, by simpa using hc⟩
+        obtain ⟨kb', es, hk', -, v, -, hv'⟩ := hkey q hq
+        rw [hk] at hk'
+        cases hk'
+        exact hn _ hv' rfl
+      have : postings u s q = some [] := by unfold postings; rw [hnil]; rfl
+      simp [this]
+  | some v =>
+    simp [hl] at hr
+    rcases hmem _ (c3_lookup_some hl) with ⟨x, i, hxi, kb', hk', hb, he⟩ | ⟨q', hq', kb', es, hk', hes, hkv, he⟩
+    · have hxq := hkb _ _ hk' (List.mem_append_left _ (List.mem_map_of_mem (c3_mem_zipIdx hxi))) he.symm
+      subst hxq
+      have h7 : (rowKey x).head? = some 7 := rfl
+      have hv8 : v.length = 8 := be_len hb
+      simp [h7, hv8] at hr
+      subst hr
+      unfold c3T
+      rw [if_pos h7]
+      have : s.any (fun y => rowKey y == rowKey x) = true := List.any_eq_true.mpr ⟨x, c3_mem_zipIdx hxi, by simp⟩
+      simp [this]
+    · have hqq := hkb _ _ hk' (List.mem_append_right _ hq') he.symm
+      subst hqq
+      rw [hk] at hk'; cases hk'
+      obtain ⟨y, -, hqy⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp hq')
+      have h7 := c3_rowKeys_head u y _ hqy
+      have hlt : es.length < 2 ^ 64 := by
+        unfold keyVal at hkv
+        cases hb : be 8 es.length with
+        | none => simp [hb] at hkv
+        | some c =>
+          have h1 := be_lt hb
+          have : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
+          omega
+      have hpk := keyVal_parse H hH es v hkv
+      rw [if_neg h7, hpk] at hr
+      cases hf : w.lists.find? (fun e => e.fst == u && e.snd.fst == pathOf H kb) with
+      | none => simp [hf] at hr
+      | some e =>
+        obtain ⟨a1, a2, n', ys, fp⟩ := e
+        simp only [hf] at hr
+        split at hr
+        · rename_i hc
+          obtain ⟨⟨-, rfl⟩, hvf⟩ := hc
+          rw [listRoot_frontier H es hlt] at hvf
+          have hmemL : (a1, a2, es.length, ys, fp) ∈ w.lists := List.mem_of_find?_eq_some hf
+          rcases firstK_sound H hH es ys fp hlt hvf with hys | hc
+          · simp at hr; subst hr; subst hys
+            unfold c3T; rw [if_neg h7]; simp [hes]
+          · refine absurd (coll_mono H (fun y hy => hA3 y ?_) (fun y hy => hB y ?_) hc) nc
+            · exact List.mem_flatMap.mpr ⟨_, hmemL, hy⟩
+            · unfold setInputs
+              simp only [List.mem_append, List.mem_flatMap]
+              exact Or.inl (Or.inr ⟨_, hq', by simpa [hes] using hy⟩)
+        · simp at hr
+
+private theorem c3T_key (H : Bytes → Bytes) (u : Bool) (s : List Line) (q : Key) (p : Bytes) :
+    (c3T H u s q p).key = q := by unfold c3T; split <;> rfl
+private theorem c3T_unr (H : Bytes → Bytes) (u : Bool) (s : List Line) (q : Key) (p : Bytes) :
+    (c3T H u s q p).unr = u := by unfold c3T; split <;> rfl
+
+private theorem c3_mapM_len {α β : Type} (f : α → Option β) :
+    ∀ (xs : List α) (ys : List β), xs.mapM f = some ys → ys.length = xs.length
+  | [], ys, h => by simp at h; subst h; rfl
+  | a :: xs, ys, h => by
+    simp only [List.mapM_cons] at h
+    cases ha : f a with
+    | none => simp [ha] at h
+    | some b =>
+      cases hm : xs.mapM f with
+      | none => simp [ha, hm] at h
+      | some bs =>
+        simp [ha, hm] at h
+        subst h
+        simp [c3_mapM_len f xs bs hm]
+
+private theorem c3_postings_len {u : Bool} {s : List Line} {q : Key} {es : List Bytes} (h : postings u s q = some es) :
+    es.length = (s.filter fun x => (rowKeys u x).contains q).length := by
+  unfold postings at h
+  rw [c3_mapM_len _ _ _ h]
+  have e : s.filter (fun x => (rowKeys u x).contains q) =
+      (s.zipIdx.filter fun (x, _) => (rowKeys u x).contains q).map Prod.fst := by
+    conv => lhs; rw [← List.zipIdx_map_fst 0 s]
+    rw [List.filter_map]
+    first | rfl | (congr 1; apply List.filter_congr; intro p _; cases p; rfl)
+  rw [e, List.length_map]
+
+private theorem c3T_n {H : Bytes → Bytes} {u : Bool} {s : List Line} {m : Map} (hm : setMap H u s = some m)
+    {q : Key} (h7 : q.head? ≠ some 7) (p : Bytes) :
+    (c3T H u s q p).n = (s.filter fun x => (rowKeys u x).contains q).length := by
+  unfold c3T
+  rw [if_neg h7]
+  show ((postings u s q).getD []).length = _
+  cases hp : postings u s q with
+  | some es => exact c3_postings_len hp
+  | none =>
+    show 0 = _
+    symm
+    rw [List.length_eq_zero_iff, List.filter_eq_nil_iff]
+    intro x hx hq
+    obtain ⟨kb, es, -, hes, -⟩ :=
+      (c3_setMap_mem hm).2.2.1 q (List.mem_flatMap.mpr ⟨x, hx, by simpa using hq⟩)
+    rw [hp] at hes; cases hes
+
+private theorem c3_postings_lt {H : Bytes → Bytes} {u : Bool} {s : List Line} {m : Map} (hm : setMap H u s = some m)
+    (q : Key) : ((postings u s q).getD []).length < 2 ^ 64 := by
+  by_cases hq : q ∈ s.flatMap (rowKeys u)
+  · obtain ⟨kb, es, -, hes, v, hv, -⟩ := (c3_setMap_mem hm).2.2.1 q hq
+    rw [hes]
+    unfold keyVal at hv
+    cases hb : be 8 es.length with
+    | none => simp [hb] at hv
+    | some c =>
+      have h1 := be_lt hb
+      have e : (256:Nat) ^ 8 = 2 ^ 64 := by decide
+      rw [e] at h1
+      exact h1
+  · have : (s.zipIdx.filter fun (x, _) => (rowKeys u x).contains q) = [] := by
+      rw [List.filter_eq_nil_iff]
+      intro ⟨x, i⟩ hx hc
+      exact hq (List.mem_flatMap.mpr ⟨x, c3_mem_zipIdx hx, by simpa using hc⟩)
+    unfold postings; rw [this]; simp
+
+private theorem c3_find {hs : List Hit} {P : Hit → Bool} {t : Hit} (ht : t ∈ hs) (hp : P t = true)
+    (hu : ∀ h ∈ hs, P h = true → h = t) : hs.find? P = some t := by
+  cases hf : hs.find? P with
+  | none => exact absurd hp (by simpa using List.find?_eq_none.mp hf t ht)
+  | some h => rw [hu h (List.mem_of_find?_eq_some hf) (List.find?_some hf)]
+
+private theorem c3_probes (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : List Line) (m : Map)
+    (hm : setMap H u s = some m) (pf : Proof) (w : Witness) (qs : List Key)
+    (hv : verifyMulti H (root H m) (qs.filterMap fun q => (keyBytes q).map (pathOf H)) pf = true)
+    (A B : List Bytes) (hA1 : ∀ q ∈ qs, ∀ kb, keyBytes q = some kb → KD ++ kb ∈ A)
+    (hA2 : ∀ y ∈ pfInputs H pf, y ∈ A)
+    (hA3 : ∀ y ∈ w.lists.flatMap (fun (_, _, n, ys, fp) => firstKInputs H n ys fp), y ∈ A)
+    (hB : ∀ y ∈ setInputs H u s, y ∈ B) (nc : ¬ Collision H A B) (hs : List (Option Hit))
+    (hh : qs.mapM (probe H pf w u) = some hs) :
+    (∀ h ∈ hs.filterMap id, ∃ kb, keyBytes h.key = some kb ∧ h = c3T H u s h.key (pathOf H kb)) ∧
+    (∀ q ∈ qs, ∀ kb, keyBytes q = some kb → c3T H u s q (pathOf H kb) ∈ hs.filterMap id) := by
+  have hpr : ∀ q ∈ qs, ∀ kb, keyBytes q = some kb → ∀ r, probe H pf w u q = some r →
+      r = some (c3T H u s q (pathOf H kb)) := fun q hq kb hk r hr =>
+    c3_probe H hH u s m hm pf w _ hv q kb hk
+      (List.mem_filterMap.mpr ⟨q, hq, by simp [hk]⟩) A B (hA1 q hq kb hk) hA2 hA3 hB nc r hr
+  refine ⟨?_, ?_⟩
+  · intro h hh'
+    obtain ⟨r, hr, hrh⟩ := List.mem_filterMap.mp hh'
+    obtain ⟨q, hq, hpq⟩ := g1_mapM_mem _ _ _ hh r hr
+    cases hk : keyBytes q with
+    | none =>
+      simp [probe, hk] at hpq; subst hpq; simp at hrh
+    | some kb =>
+      have e := hpr q hq kb hk r hpq
+      subst e
+      obtain rfl : c3T H u s q (pathOf H kb) = h := Option.some.inj hrh
+      exact ⟨kb, by rw [c3T_key]; exact hk, by rw [c3T_key]⟩
+  · intro q hq kb hk
+    obtain ⟨r, hr, hpq⟩ := c3_mapM_all _ _ _ hh q hq
+    have e := hpr q hq kb hk r hpq
+    subst e
+    exact List.mem_filterMap.mpr ⟨_, hr, rfl⟩
+
+private theorem c3_findHit {H : Bytes → Bytes} {rs us : List Line} {hr hu : List Hit}
+    (hr1 : ∀ h ∈ hr, ∃ kb, keyBytes h.key = some kb ∧ h = c3T H false rs h.key (pathOf H kb))
+    (hu1 : ∀ h ∈ hu, ∃ kb, keyBytes h.key = some kb ∧ h = c3T H true us h.key (pathOf H kb))
+    (u : Bool) (q : Key) :
+    (keyBytes q = none → findHit (hr ++ hu) u q = none) ∧
+    (∀ kb, keyBytes q = some kb → c3T H u (if u then us else rs) q (pathOf H kb) ∈ hr ++ hu →
+      findHit (hr ++ hu) u q = some (c3T H u (if u then us else rs) q (pathOf H kb))) := by
+  have hall : ∀ h ∈ hr ++ hu, ∃ kb, keyBytes h.key = some kb ∧
+      h = c3T H h.unr (if h.unr then us else rs) h.key (pathOf H kb) := by
+    intro h hh
+    rcases List.mem_append.mp hh with hh | hh
+    · obtain ⟨kb, hk, e⟩ := hr1 h hh
+      have hu' : h.unr = false := by rw [e, c3T_unr]
+      exact ⟨kb, hk, by rw [hu', if_neg (by decide)]; exact e⟩
+    · obtain ⟨kb, hk, e⟩ := hu1 h hh
+      have hu' : h.unr = true := by rw [e, c3T_unr]
+      exact ⟨kb, hk, by rw [hu', if_pos rfl]; exact e⟩
+  constructor
+  · intro hk
+    unfold findHit
+    rw [List.find?_eq_none]
+    intro h hh hp
+    obtain ⟨kb, hk', -⟩ := hall h hh
+    simp only [Bool.and_eq_true, beq_iff_eq] at hp
+    rw [hp.2, hk] at hk'
+    cases hk'
+  · intro kb hk ht
+    unfold findHit
+    refine c3_find ht (by simp [c3T_unr, c3T_key]) ?_
+    intro h hh hp
+    obtain ⟨kb', hk', e⟩ := hall h hh
+    simp only [Bool.and_eq_true, beq_iff_eq] at hp
+    rw [hp.2, hk] at hk'
+    cases hk'
+    rw [e, hp.1, hp.2]
+
+private theorem c3_flatMap_congr {α β : Type} {l : List α} {f g : α → List β} (h : ∀ x ∈ l, f x = g x) :
+    l.flatMap f = l.flatMap g := by
+  induction l with
+  | nil => rfl
+  | cons a l ih =>
+    simp only [List.flatMap_cons]
+    rw [h a (by simp), ih (fun x hx => h x (by simp [hx]))]
+
+private theorem c3_hitsQ (H : Bytes → Bytes) (x : Ix) (rel unr : Snapshot Line) {mr mu : Map}
+    (hmr : setMap H false rel.entries = some mr) (hmu : setMap H true unr.entries = some mu) (l : Line)
+    (hF : ∀ u, ∀ q ∈ keys l, ∀ kb, keyBytes q = some kb →
+      findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb)))
+    (hN : ∀ u q, keyBytes q = none → findHit x.hs u q = none) :
+    x.hitsQ H l = trueHits H rel unr l := by
+  unfold Ix.hitsQ trueHits
+  apply c3_flatMap_congr
+  intro q hq
+  have h7 : q.head? ≠ some 7 := c3_rowKeys_head false l q (by simp [rowKeys, hq])
+  have hf : ∀ u, ((findHit x.hs u q).map fun h => (u, h.path, h.n, frontierRoot H h.peaks)) =
+      (keyBytes q).map fun kb => (u, pathOf H kb,
+        ((postings u (if u then unr.entries else rel.entries) q).getD []).length,
+        listRoot H ((postings u (if u then unr.entries else rel.entries) q).getD [])) := by
+    intro u
+    cases hk : keyBytes q with
+    | none => rw [hN u q hk]; rfl
+    | some kb =>
+      rw [hF u q hq kb hk]
+      have hlt : ((postings u (if u then unr.entries else rel.entries) q).getD []).length < 2 ^ 64 := by
+        cases u
+        · exact c3_postings_lt hmr q
+        · exact c3_postings_lt hmu q
+      unfold c3T
+      rw [if_neg h7]
+      dsimp only [Option.map]
+      rw [listRoot_frontier H _ hlt]
+  exact congrArg (fun F => List.filterMap F [false, true]) (funext hf)
+
+private theorem c3_anchor (H : Bytes → Bytes) {g h : Head} {d : Bytes} (hg : digestV2 H g = some d)
+    (hh : digestV2 H h = some d) (A B : List Bytes) (hA : ∀ y, headIn g = some y → y ∈ A)
+    (hB : ∀ y, headIn h = some y → y ∈ B) (nc : ¬ Collision H A B) : g = h := by
+  unfold digestV2 at hg hh
+  cases hx : headIn g with
+  | none => rw [hx] at hg; cases hg
+  | some x =>
+    cases hy : headIn h with
+    | none => rw [hy] at hh; cases hh
+    | some y =>
+      rw [hx] at hg; rw [hy] at hh
+      simp at hg hh
+      by_cases e : x = y
+      · subst e; exact c3_headIn_inj hx hy
+      · exact absurd ⟨x, hA x hx, y, hB y hy, e, by rw [hg, hh]⟩ nc
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
