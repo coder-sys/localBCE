@@ -36,7 +36,7 @@ class Cluster:
 
     def __init__(self, tmp: str, custody: tuple[str, bytes, bytes], shards: int = 2, nonce: bytes = b"") -> None:
         self.dir, self.custody, self.shards, self.nonce, self.lines = Path(tmp), custody, shards, nonce, {}
-        self.genesis = (0, gate.ZERO_DIGEST)
+        self.genesis, self.payer = (0, gate.ZERO_DIGEST), None  # payer: the PayerStore whose stored checkpoints anchor boot
 
     def store(self, k: int) -> Path:
         return self.dir / f"s{k}.sqlite3"
@@ -47,9 +47,12 @@ class Cluster:
 
     def boot(self) -> None:
         """Boot the registry against every shard's newest signed commitment, else the tenant genesis commitment, which
-        the first boot takes from the then-empty registry."""
+        the first boot takes from the then-empty registry, and each shard's store against the payer's newest stored
+        checkpoint (B3; none without a payer).  A refusal leaves ``nonce`` as it was: a process still running keeps it."""
+        stored = self.payer.newest_stored(fx.TENANT) if self.payer else {}
         self.nonce = idreg.boot(self.reg, {k: (self.store(k).exists() and producer.newest(self.store(k))) or self.genesis
-                                           for k in range(self.shards)})
+                                           for k in range(self.shards)},
+                                {k: (self.store(k), stored.get(k)) for k in range(self.shards)})
         if self.genesis[0] == 0:
             reg = idreg.IdRegistry(self.reg, boot=self.nonce)
             self.genesis = reg.genesis({})
@@ -91,6 +94,9 @@ def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], 
 
 
 def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dict[int, str]:
+    """A process with no nonce (no boot passed) opens no store or registry: every line HOLDs and nothing is sealed."""
+    if not c.nonce:
+        return decide_batch(c, None, None, k, payments, bad)[2]
     prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
     try:
         ans, leaves, status = decide_batch(c, prod, reg, k, payments, bad)

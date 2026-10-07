@@ -239,7 +239,7 @@ class ProducerTests(fx.Scratch):
 
     def test_v2_carries_registry_head_and_the_frees(self) -> None:
         with self.scratch() as tmp:
-            reg = self.track(idreg.IdRegistry(Path(tmp) / "ids.sqlite3", boot=idreg.boot(Path(tmp) / "ids.sqlite3", {})))
+            reg = self.track(idreg.IdRegistry(Path(tmp) / "ids.sqlite3", boot=idreg.boot(Path(tmp) / "ids.sqlite3", {}, {})))
             _, n, head = reg.reserve(0, [1, 2], sealed=None)
             p = self._open(tmp, fx.custody(tmp))
             self.assertIsNone(p.sealed_frees())

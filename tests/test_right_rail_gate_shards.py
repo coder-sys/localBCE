@@ -11,8 +11,10 @@ import tempfile
 import unittest
 from unittest import mock
 
+from app import right_rail_gate_codec as gate
 from app import right_rail_gate_decide as decider
 from app import right_rail_gate_idreg as idreg
+from app import right_rail_gate_payer as payer
 from app import right_rail_gate_producer as producer
 from app import right_rail_gate_signer as signer
 from tests import _gate_shards as g
@@ -28,6 +30,12 @@ def count(c: g.Cluster, kind: int) -> int:
         return db.execute("SELECT COUNT(*) FROM log WHERE kind = ?", (kind,)).fetchone()[0]
     finally:
         db.close()
+
+
+def request(p: int, k: int):
+    """The payer's request for harness payment p on shard k: the one its ALLOW leaf (``g.decide_batch``) carries."""
+    key, flow = fx.member(p, k), "FFS_CLAIM" if p % 4 else "FFS_CYCLE"
+    return fx._request(flow, p, fx._lines(p, flow, key), member_key=key)
 
 
 def snapshot(path: Path) -> dict[str, bytes]:
@@ -323,25 +331,66 @@ class ShardTests(fx.Scratch):
             with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
                 c.send(0, NEXT)
 
-    def test_r5_whole_directory_restore_boots_and_forks(self) -> None:
-        with self.cluster() as c, tempfile.TemporaryDirectory() as keep:
-            c.send(0, T, BAD)
-            shutil.copytree(c.dir, keep, dirs_exist_ok=True)
-            c.send(0, NEXT)
-            published = c.producer(0)
-            original = published.published()[-1]
-            published.close()
+    def pay(self, c: g.Cluster, store: payer.PayerStore, k: int, p: int) -> str | None:
+        """Shard k decides payment p (line 10, X) and seals it; the payer stores the checkpoint, sends p and releases it."""
+        prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
+        try:
+            ans, leaves, status = g.decide_batch(c, prod, reg, k, {p: [10]})
+            _, signed, tokens = decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+        finally:
+            prod.close()
+            reg.close()
+        self.assertEqual((status, store.store_checkpoint(signed)), ({10: "ALLOW -"}, "stored"))
+        store.send(request(p, k), transmit=lambda data: None)
+        return store.release(request(p, k), gate.encode_token(tokens[0]), now=fx.NOW)
+
+    @contextlib.contextmanager
+    def released_then_restored(self):
+        """Copy the whole directory; shard 0 pays X in payment 1 (sealed, stored and released by the payer).  Then the
+        copy comes back and the process restarts: it holds no nonce until a boot passes."""
+        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+            shutil.copytree(c.dir, Path(keep) / "copy")
+            c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
+                                                          grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),)))
+            store.install_cert(c.custody[2])
+            self.assertIsNone(self.pay(c, store, 0, 1))
             for f in c.dir.iterdir():
                 f.unlink()
-            shutil.copytree(keep, c.dir, dirs_exist_ok=True)
-            c.boot()  # documented residual (design 9, R5): a whole-directory restore passes the boot check
+            shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
+            c.nonce = b""
+            yield c, store
+
+    def test_r5_restore_after_release_holds(self) -> None:
+        """Design idreg-restore T1 (was ``test_r5_whole_directory_restore_boots_and_forks``, the residual): the restored
+        store lacks the payer's newest stored checkpoint, so boot is refused and the gate HOLDs; X is released once."""
+        with self.released_then_restored() as (c, store):
+            with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
+                c.boot()
+            reserved = count(c, 0)
+            self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_restored"})  # shard 1 tries X for payment 2
+            ans = g.decide_batch(c, None, None, 1, {2: [10]})[0]
+            with self.assertRaisesRegex(decider.GateDecideError, "registry_restored"):
+                decider.commit(None, None, fx.PROGRAM, [], ans, fx.NOW)  # a HOLD answer is never sealed
+            self.assertEqual((count(c, 0), c.store(1).exists()), (reserved, False))  # no reserve, no checkpoint
+            store.send(request(2, 1), transmit=lambda data: None)  # intake during HOLD is accepted
+            self.assertEqual(store._db.execute("SELECT COUNT(*) FROM commands WHERE command_key=?",
+                                               (request(2, 1).command_key,)).fetchone()[0], 1)
+            self.assertEqual(store._db.execute("SELECT payment_id FROM releases").fetchall(), [("pay-0001",)])
+
+    def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
+        """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the
+        payer sees no fork (two shards); only shard 0 re-publishing its seq is a fork."""
+        with self.released_then_restored() as (c, store):
+            with mock.patch.object(producer, "holds", return_value=True):
+                c.boot()
+            self.assertIsNone(self.pay(c, store, 1, 2))
+            self.assertEqual(store._db.execute("SELECT payment_id FROM releases ORDER BY payment_id").fetchall(),
+                             [("pay-0001",), ("pay-0002",)])
             c.send(0, {3: [30]})  # the restored shard publishes a different batch at the same seq
             again = c.producer(0)
             new = again.published()[-1]
             again.close()
-            handle, root_pk, cert = c.custody
-            frame = root_pk + fx._list([signer.framed(cert)]) + fx._list([signer.framed(original)]) + fx._u16(0) + signer.framed(new)
-            self.assertTrue(signer.gate_verify(3, frame).startswith("GATE_VERIFY=FORK"))
+            self.assertEqual(store.store_checkpoint(new), "fork")
 
     def test_d7_lost_adds_stop_the_shard(self) -> None:
         with self.cluster() as c:

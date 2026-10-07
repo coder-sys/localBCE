@@ -16,6 +16,7 @@ from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
 
 ROOT = Path(__file__).resolve().parents[1]
+ANCHORS = {0: (Path("no-store-0"), None), 1: (Path("no-store-1"), None)}  # the payer stored no checkpoint: B3 passes
 _RESERVE_1000 = (  # argv: path nonce-hex shard start-time; the start time is the barrier that makes the two batches race
     "import sys, time\n"
     "from pathlib import Path\n"
@@ -62,7 +63,7 @@ class IdRegistryTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)  # cleanups run last-in first: stores close before the directory goes
         self.path = Path(tmp.name) / "ids.sqlite3"
-        self.nonce = idreg.boot(self.path, {})
+        self.nonce = idreg.boot(self.path, {}, {})
         self.reg = self.open(self.nonce)
 
     def open(self, nonce: bytes, **kwargs) -> idreg.IdRegistry:
@@ -83,7 +84,7 @@ class IdRegistryTests(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(old)) as db:
             db.execute("CREATE TABLE ids(n INTEGER PRIMARY KEY, id BLOB NOT NULL UNIQUE, shard INTEGER NOT NULL, head BLOB NOT NULL)")
         with self.assertRaisesRegex(idreg.IdRegistryError, "store_version"):
-            idreg.boot(old, {})
+            idreg.boot(old, {}, {})
         with self.assertRaisesRegex(idreg.IdRegistryError, "store_version"):
             idreg.IdRegistry(old, boot=self.nonce)
 
@@ -154,7 +155,7 @@ class IdRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
             stale.reserve(0, [1], sealed=None)
         self.assertEqual(self.tail(), before)
-        second = self.open(idreg.boot(self.path, {}))
+        second = self.open(idreg.boot(self.path, {}, {}))
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
             self.reg.reserve(0, [1], sealed=None)
         self.assertEqual(second.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
@@ -162,27 +163,33 @@ class IdRegistryTests(unittest.TestCase):
     def test_boot_commitments(self) -> None:
         n, head = self.reg.genesis({0: [1], 1: [2]})  # rows 2-3: RESERVE 1, SETTLE of shard 0; rows 4-5: the same for shard 1
         at = lambda i: (i, self.reg._db.execute("SELECT head FROM log WHERE n = ?", (i,)).fetchone()[0])
-        idreg.boot(self.path, {0: (n, head), 1: (n, head)})
-        idreg.boot(self.path, {0: at(2), 1: (n, head)})  # a batch ending at its RESERVE, then the next batch's settle
+        idreg.boot(self.path, {0: (n, head), 1: (n, head)}, ANCHORS)
+        idreg.boot(self.path, {0: at(2), 1: (n, head)}, ANCHORS)  # a batch ending at its RESERVE, then the next batch's settle
+        before = self.tail()
         for bad in ({0: (n, head)}, {0: (0, gate.ZERO_DIGEST), 1: (n, head)}):  # a shard with rows needs its commitment
             with self.subTest(bad), self.assertRaisesRegex(idreg.IdRegistryError, "commitment_missing"):
-                idreg.boot(self.path, bad)
+                idreg.boot(self.path, bad, ANCHORS)
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-            idreg.boot(self.path, {0: (n, head), 1: at(2)})  # shard 1's RESERVE (row 4) and a later SETTLE lie past row 2
+            idreg.boot(self.path, {0: (n, head), 1: at(2)}, ANCHORS)  # shard 1's RESERVE (row 4) and a later SETTLE lie past row 2
         for bad in ((n, bytes(64)), (n + 10, head)):
             with self.subTest(bad), self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                idreg.boot(self.path, {0: bad, 1: (n, head)})
+                idreg.boot(self.path, {0: bad, 1: (n, head)}, ANCHORS)
+        for anchors, error in (({0: ANCHORS[0]}, "anchor_missing"), ({**ANCHORS, 2: ANCHORS[1]}, "anchor_missing"),
+                               ({**ANCHORS, 1: (ANCHORS[1][0], bytes(64))}, "store_rewound")):  # a missing store holds nothing
+            with self.subTest(error), self.assertRaisesRegex(idreg.IdRegistryError, error):
+                idreg.boot(self.path, {0: (n, head), 1: (n, head)}, anchors)
+        self.assertEqual(self.tail(), before)  # every refusal wrote nothing: no BOOT row
         self._edit("DROP TRIGGER log_no_update")
         self._edit("UPDATE log SET shard = 5 WHERE n = 3")  # a middle row edited, stored heads kept
         with self.assertRaisesRegex(idreg.IdRegistryError, "chain_broken"):
-            idreg.boot(self.path, {0: (n, head), 1: (n, head)})
+            idreg.boot(self.path, {0: (n, head), 1: (n, head)}, ANCHORS)
 
     def test_rows_are_append_only(self) -> None:
         self.reg.reserve(0, [1, 2, 3], sealed=None)
         for sql in ("UPDATE log SET shard = 9 WHERE n = 2", "DELETE FROM log WHERE n = 3"):
             with self.assertRaises(sqlite3.DatabaseError):
                 self._edit(sql)
-        idreg.boot(self.path, {0: self.tail()})  # the chain still replays
+        idreg.boot(self.path, {0: self.tail()}, {0: ANCHORS[0]})  # the chain still replays
 
     def test_concurrent_reserve(self) -> None:
         start = str(time.time() + 3)

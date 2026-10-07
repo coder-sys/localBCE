@@ -9,7 +9,9 @@ rows) holds the shard's lease, an exclusive lock on ``<path>-lease<shard>`` the 
 process dies; any other handle is refused ``shard_busy``, so nothing reserves for the shard between a commit's stale
 check and its seal.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
 (row n and head, the checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard
-after it, else ``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).
+after it, else ``registry_rewound``.  A whole directory restored together passes that; ``boot`` refuses it
+``store_rewound`` when a shard's store lacks the payer's newest stored checkpoint (design idreg-restore B3), and the
+decide layer then answers HOLD (``decide`` with no registry).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import sqlite3
 from typing import Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_producer as producer
 
 ID_LEN: Final = 129  # the Line.fields id field
 _DOMAIN: Final = b"RR/GATE/ID-REG/v2\x00"
@@ -137,10 +140,15 @@ def _rewound(db: sqlite3.Connection, shard: int, n: int, head: bytes) -> bool:
         "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (shard, n)).fetchone() is not None
 
 
-def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
+def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
+         anchors: Mapping[int, tuple[Path, bytes | None]]) -> bytes:
     """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
     0..count-1; a shard with rows needs a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n
-    of it with no SETTLE of the shard after a RESERVE of it past n, append BOOT with a fresh nonce and return it."""
+    of it with no SETTLE of the shard after a RESERVE of it past n, append BOOT with a fresh nonce and return it.
+    ``anchors`` names, for exactly those shards, the producer store the commitment came from and the payer's newest
+    stored checkpoint digest (``None``: the payer stored none); a store that lacks it is ``store_rewound`` (B3, design
+    idreg-restore 1), so a store, registry and mark restored together to before a released checkpoint cannot boot.
+    Every refusal writes nothing: no BOOT row, no nonce, so no shard can reserve until a boot passes."""
     db = _open(path)
     try:
         with _txn(db, None):
@@ -154,6 +162,10 @@ def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
                 raise IdRegistryError("commitment_missing")
             if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
                 raise IdRegistryError("registry_rewound")
+            if set(anchors) != set(commitments):
+                raise IdRegistryError("anchor_missing")
+            if any(digest is not None and not producer.holds(store, digest) for store, digest in anchors.values()):
+                raise IdRegistryError("store_rewound")
             nonce = os.urandom(32)
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
         return nonce
