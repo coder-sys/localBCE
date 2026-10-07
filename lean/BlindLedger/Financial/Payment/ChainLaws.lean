@@ -935,7 +935,7 @@ private theorem sorted_eq {l₁ l₂ : List EvalContribution} (h : l₁.Perm l�
     l₁ = l₂ :=
   h.eq_of_pairwise (fun _ _ _ _ h1 h2 => cb_conn h2 h1) s₁ s₂
 
-private theorem sort_congr {l₁ l₂ : List EvalContribution} (h : l₁.Perm l₂) :
+theorem sort_congr {l₁ l₂ : List EvalContribution} (h : l₁.Perm l₂) :
     evalSortContributions l₁ = evalSortContributions l₂ :=
   sorted_eq ((evalSortContributions_perm _).trans (h.trans (evalSortContributions_perm _).symm))
     (sort_sorted _) (sort_sorted _)
