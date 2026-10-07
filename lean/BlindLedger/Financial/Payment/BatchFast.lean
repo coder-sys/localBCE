@@ -374,6 +374,13 @@ theorem linkFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (c :
       · have h0 : v.env.obligation.owedCents - t = 0 := by omega
         simp [ht, h0]
 
+/-- The foreign flags are false on every call the trace steps, with or without `ok`:
+    `Ledger.request` sets `foreign := ⟨false, false⟩`, so `FView.toView` drops nothing. -/
+theorem viewOfAnchor_foreign (L : Ledger) (c : Call) {v : PaymentView}
+    (h : viewOfAnchor (L.request c) = some v) : v.foreign = ⟨false, false⟩ := by
+  obtain ⟨S, -, rfl⟩ := Option.map_eq_some_iff.1 h
+  rfl
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} (h : ok L calls = true) :
     fast L calls = (trace L calls).map erase := by
   sorry
