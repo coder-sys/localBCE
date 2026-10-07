@@ -586,6 +586,23 @@ theorem Rel_init {L : Ledger} (hI : Inv L) {t : EvaluatedTotals} (ht : evaluateT
     rw [summaryOf, summarize, ht, Option.map_some]
     exact ⟨_, rfl, rfl, rfl, by simp only [Fast.init, List.length_map], rfl, rfl, rfl⟩
 
+/-! ## Preservation -/
+
+/-- Refused, duplicate and conflict-unchanged calls leave both states as they are. -/
+theorem Rel_post_other {F : Fast} {M : Ledger} {c : Call} (hR : Rel F M)
+    (hr : requestWellFormed (M.request c) = true)
+    (hm : ∀ k w post res, M.outcome c ≠ .mutated k w post res)
+    (ha : ∀ pid e post, M.outcome c ≠ .alias pid e post) :
+    Rel (F.post (F.view c) (stepFast F (F.view c))) (step M c) := by
+  rw [link_step hR c hr]
+  unfold step
+  cases h : M.outcome c with
+  | mutated k w post res => exact absurd h (hm k w post res)
+  | alias pid e post => exact absurd h (ha pid e post)
+  | duplicate _ => exact hR
+  | conflictUnchanged _ => exact hR
+  | refused _ => exact hR
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
