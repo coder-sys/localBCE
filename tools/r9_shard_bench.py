@@ -134,7 +134,11 @@ class Shard:
             self.lines -= built
 
     def snapshot(self, path: Path) -> None:
-        if self.c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+        for _ in range(100):  # the checkpointer thread may hold the checkpoint lock for a moment
+            if not self.c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+                break
+            time.sleep(0.02)
+        else:
             raise rb.FinancialIntegrityError("snapshot_busy")
         shutil.copyfile(self.db, path)
 
