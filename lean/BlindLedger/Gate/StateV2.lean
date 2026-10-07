@@ -7742,6 +7742,36 @@ def custodyOk (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (
   guard ((push P st e).isSome = true)
   pure e
 
+private theorem cust_guard (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
+  by_cases hc : c <;> simp [guard, hc]
+
+/-- custodyOk's binds: the batch, Lean's output on the shard base, the read set, the stored checkpoint carrying
+    Lean's digest, the token check on the rows custody built, and the sign body with Lean's fresh rows. -/
+private theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
+    (tokens : List Bytes) (e : Entry) (h : custodyOk P st k cert i new tokens = some e) :
+    ∃ (rs : List Request) (bt : Batch) (o : OutV2) (rset : Bytes) (n : Stored), batchAt P st k i = some (rs, bt) ∧
+      decideIdx sha3 bt.ctx k bt.owners bt.lines (st.shard k).base i.witness = some o ∧
+      readSetOf i.ctx (st.shard k).base = some rset ∧ storedOfAny sha3 new = some n ∧
+      n.checkpoint.stateDigest = o.digest ∧
+      tokensOk P.c i.secs ((i.reqs.zip rs).filterMap (rowOf (revAt (st.shard k) i.ctx.redo) o.pays
+        (o.decisions.map fun x => (x.line, x.outcome, x.reasons)) rset)) tokens = true ∧
+      e.body = .sign cert new tokens o.fresh := by
+  unfold custodyOk at h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨⟨rs, bt⟩, hbt, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨o, ho, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨rset, hrs, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨n, hn, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, g1, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, g3, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  have he := Option.some.inj h
+  subst he
+  exact ⟨rs, bt, o, rset, n, hbt, ho, hrs, hn, ((cust_guard _ _).mp g1).2.2, (cust_guard _ _).mp g3, rfl⟩
+
 /-- On a true base, the signed state digest is the true next state's, the tokens are the true rows (with the
     fold's revisions) up to order, and the entry carries the true fresh rows; else a named collision. -/
 theorem custody_binds (hH : HashLen sha3) (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn)
@@ -7757,8 +7787,20 @@ theorem custody_binds (hH : HashLen sha3) (P : Pins) (st : LogState) (k : Nat) (
         (∃ hd, headOf sha3 r.released r.unresolved = some hd ∧ digestV2 sha3 hd = some n.checkpoint.stateDigest) ∧
         (tokens.filterMap (tokRow P.c i.secs)).Perm rows ∧ tokens.length = rows.length ∧
         e.body = .sign cert new tokens (batchFresh cc r)) ∨
-       Collision sha3 (witnessInputs sha3 bt.ctx k bt.owners bt.lines i.witness) (stateInputs sha3 rel unr)) :=
-  sorry
+       Collision sha3 (witnessInputs sha3 bt.ctx k bt.owners bt.lines i.witness) (stateInputs sha3 rel unr)) := by
+  obtain ⟨rs, bt, o, rset, n, hbt, ho, hrs, hn, hdg, htk, hbody⟩ := c15_peel P st k cert i new tokens e h
+  obtain ⟨hh, ha, hd⟩ := Option.bind_eq_some_iff.mp hb.symm
+  refine ⟨rs, bt, rset, n, hbt, hrs, hn, ?_⟩
+  rcases decideIdx_refines sha3 hH bt.ctx k bt.owners bt.lines rel unr hi hh ha _ hd i.witness o ho with
+    ⟨hdec, -, -, hfr, hpays, hhd, hdo⟩ | hc
+  · left
+    intro cc r rows
+    rw [hpays, hdec] at htk
+    unfold tokensOk at htk
+    simp only [Bool.and_eq_true, beq_iff_eq, List.isPerm_iff] at htk
+    refine ⟨⟨o.head, hhd, by rw [hdg]; exact hdo⟩, htk.2, htk.1, ?_⟩
+    rw [hbody, hfr]
+  · exact Or.inr hc
 
 
 /-! ### 8h. Crash and adversary model (H1, H2, F6): the CAS store is the commit point; no local copy (H3) -/
@@ -7837,9 +7879,6 @@ def ChainCollision (s : Cust) : Prop :=
   ∃ e ∈ s.out, ∃ e' ∈ s.out, ∃ (a b : Bytes) (x y : SignedCheckpoint), e.body.signed? = some a ∧
     e'.body.signed? = some b ∧ decodeAnyCheckpoint a = some x ∧ decodeAnyCheckpoint b = some y ∧
     x.header ≠ y.header ∧ sha3 x.header = sha3 y.header
-
-private theorem cust_guard (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
-  by_cases hc : c <;> simp [guard, hc]
 
 /-- What custody's proofs read off one push: index, length, untouched shards, and the sign count. -/
 private theorem cust_push (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st') :
