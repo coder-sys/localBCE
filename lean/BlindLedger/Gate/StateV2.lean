@@ -4061,6 +4061,393 @@ private theorem c8_bumpSet (t : Nat) (s : Snapshot Line) (hc : s.count = s.entri
     bumpSet t s = bumpIf (validDate s.asOf && decide (s.asOf ≤ t)) t s.asOf := by
   simp only [bumpSet, hc, beq_self_eq_true, Bool.true_and]
 
+/-- The shape shared by `setMap` and `writes`: two `mapM` blocks under a Nodup guard. -/
+private theorem c9_dec {A B : Option Map} {m : Map}
+    (h : (do let a ← A; let b ← B; let m := a ++ b; guard (m.map (·.1)).Nodup; pure m) = some m) :
+    ∃ a b, A = some a ∧ B = some b ∧ (a.map (·.1) ++ b.map (·.1)).Nodup ∧ m = a ++ b := by
+  cases A with
+  | none => simp at h
+  | some a =>
+    cases B with
+    | none => simp at h
+    | some b =>
+      by_cases g : (a.map (·.1) ++ b.map (·.1)).Nodup
+      · simp [guard, g] at h
+        exact ⟨a, b, rfl, rfl, g, h.symm⟩
+      · simp [guard, g] at h <;> exact nomatch h
+
+private theorem c9_enc {A B : Option Map} {a b : Map} (hA : A = some a) (hB : B = some b)
+    (g : (a.map (·.1) ++ b.map (·.1)).Nodup) :
+    (do let a ← A; let b ← B; let m := a ++ b; guard (m.map (·.1)).Nodup; pure m) = some (a ++ b) := by
+  subst hA hB
+  simp [guard, g]
+
+/-- The path a key's leaf sits at (its bytes, when it has them). -/
+private def c9PK (H : Bytes → Bytes) (q : Key) : Bytes := pathOf H ((keyBytes q).getD [])
+
+private theorem c9_row {H : Bytes → Bytes} (pos : Nat → Nat) {x : Line} {i : Nat} {y : Bytes × Bytes}
+    (h : (fun ((x, i) : Line × Nat) => do
+      let kb ← keyBytes (rowKey x)
+      let v ← be 8 (pos i)
+      pure (pathOf H kb, v)) (x, i) = some y) :
+    ∃ kb, keyBytes (rowKey x) = some kb ∧ y.1 = pathOf H kb := by
+  cases hk : keyBytes (rowKey x) with
+  | none => simp [hk] at h
+  | some kb =>
+    cases hb : be 8 (pos i) with
+    | none => simp [hk, hb] at h
+    | some v =>
+      simp [hk, hb] at h
+      subst h
+      exact ⟨kb, rfl, rfl⟩
+
+private theorem c9_rows_fst {H : Bytes → Bytes} (pos : Nat → Nat) {t : List Line} {rows : Map}
+    (h : t.zipIdx.mapM (fun ((x, i) : Line × Nat) => do
+      let kb ← keyBytes (rowKey x)
+      let v ← be 8 (pos i)
+      pure (pathOf H kb, v)) = some rows) :
+    rows.map (·.1) = (t.map rowKey).map (c9PK H) ∧ ∀ x ∈ t, ∃ kb, keyBytes (rowKey x) = some kb := by
+  refine ⟨?_, fun x hx => ?_⟩
+  · calc rows.map (·.1) = (t.zipIdx.map Prod.fst).map (c9PK H ∘ rowKey) := by
+          rw [List.map_map]
+          refine c8_mapM_fst _ (fun p : Line × Nat => c9PK H (rowKey p.1)) _ _ h ?_
+          rintro ⟨x, i⟩ - y hy
+          obtain ⟨kb, hk, h1⟩ := c9_row pos hy
+          simp [c9PK, hk, h1]
+      _ = _ := by rw [List.zipIdx_map_fst, List.map_map]
+  · obtain ⟨i, hi⟩ := c3_zipIdx_of_mem hx
+    obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ h _ hi
+    obtain ⟨kb, hk, -⟩ := c9_row pos hy
+    exact ⟨kb, hk⟩
+
+private theorem c9_kS {H : Bytes → Bytes} {u : Bool} {t : List Line} {q : Key} {y : Bytes × Bytes}
+    (h : (do
+      let kb ← keyBytes q
+      let es ← postings u t q
+      let v ← keyVal es.length (es.foldl (frontierPush H) [])
+      pure (pathOf H kb, v)) = some y) :
+    ∃ kb, keyBytes q = some kb ∧ y.1 = pathOf H kb := by
+  cases hk : keyBytes q with
+  | none => simp [hk] at h
+  | some kb =>
+    cases hp : postings u t q with
+    | none => simp [hk, hp] at h
+    | some es =>
+      cases hv : keyVal es.length (es.foldl (frontierPush H) []) with
+      | none => simp [hk, hp, hv] at h
+      | some v =>
+        simp [hk, hp, hv] at h
+        subst h
+        exact ⟨kb, rfl, rfl⟩
+
+private theorem c9_ks_fst {H : Bytes → Bytes} {u : Bool} {t : List Line} {Q : List Key} {ks : Map}
+    (h : Q.mapM (fun (q : Key) => do
+      let kb ← keyBytes q
+      let es ← postings u t q
+      let v ← keyVal es.length (es.foldl (frontierPush H) [])
+      pure (pathOf H kb, v)) = some ks) :
+    ks.map (·.1) = Q.map (c9PK H) ∧ ∀ q ∈ Q, ∃ kb, keyBytes q = some kb := by
+  refine ⟨c8_mapM_fst _ _ _ _ h fun q _ y hy => ?_, fun q hq => ?_⟩
+  · obtain ⟨kb, hk, h1⟩ := c9_kS hy
+    simp [c9PK, hk, h1]
+  · obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ h q hq
+    obtain ⟨kb, hk, -⟩ := c9_kS hy
+    exact ⟨kb, hk⟩
+
+private theorem c9_kW {H : Bytes → Bytes} {u : Bool} {hs : List Hit} {c0 : Nat} {f : List Line} {q : Key}
+    {y : Bytes × Bytes}
+    (hy : (do
+      let kb ← keyBytes q
+      let h ← findHit hs u q
+      let es ← (f.zipIdx.filter fun ((x, _) : Line × Nat) => (rowKeys u x).contains q).mapM
+        fun ((x, j) : Line × Nat) => postEntry (c0 + j) x.id
+      let v ← keyVal (h.n + es.length) (es.foldl (frontierPush H) h.peaks)
+      pure (pathOf H kb, v)) = some y) :
+    ∃ kb hit es v, keyBytes q = some kb ∧ findHit hs u q = some hit ∧
+      (f.zipIdx.filter fun ((x, _) : Line × Nat) => (rowKeys u x).contains q).mapM
+        (fun ((x, j) : Line × Nat) => postEntry (c0 + j) x.id) = some es ∧
+      keyVal (hit.n + es.length) (es.foldl (frontierPush H) hit.peaks) = some v ∧ y = (pathOf H kb, v) := by
+  cases hk : keyBytes q with
+  | none => rw [hk] at hy; simp at hy
+  | some kb =>
+    rw [hk] at hy
+    cases hh : findHit hs u q with
+    | none => rw [hh] at hy; simp at hy
+    | some hit =>
+      rw [hh] at hy
+      cases he : (f.zipIdx.filter fun ((x, _) : Line × Nat) => (rowKeys u x).contains q).mapM
+          (fun ((x, j) : Line × Nat) => postEntry (c0 + j) x.id) with
+      | none => rw [he] at hy; simp at hy
+      | some es =>
+        rw [he] at hy
+        cases hv : keyVal (hit.n + es.length) (es.foldl (frontierPush H) hit.peaks) with
+        | none => simp [hv] at hy
+        | some v =>
+          simp [hv] at hy
+          exact ⟨kb, hit, es, v, rfl, rfl, rfl, hv, hy.symm⟩
+
+private theorem c9_kw_fst {H : Bytes → Bytes} {u : Bool} {hs : List Hit} {c0 : Nat} {f : List Line}
+    {Q : List Key} {ks : Map}
+    (h : Q.mapM (fun (q : Key) => do
+      let kb ← keyBytes q
+      let h ← findHit hs u q
+      let es ← (f.zipIdx.filter fun ((x, _) : Line × Nat) => (rowKeys u x).contains q).mapM
+        fun ((x, j) : Line × Nat) => postEntry (c0 + j) x.id
+      let v ← keyVal (h.n + es.length) (es.foldl (frontierPush H) h.peaks)
+      pure (pathOf H kb, v)) = some ks) :
+    ks.map (·.1) = Q.map (c9PK H) ∧ ∀ q ∈ Q, ∃ kb, keyBytes q = some kb := by
+  refine ⟨c8_mapM_fst _ _ _ _ h fun q _ y hy => ?_, fun q hq => ?_⟩
+  · obtain ⟨kb, _, _, _, hk, _, _, _, rfl⟩ := c9_kW hy
+    simp [c9PK, hk]
+  · obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ h q hq
+    obtain ⟨kb, _, _, _, hk, _⟩ := c9_kW hy
+    exact ⟨kb, hk⟩
+
+/-- No row of `t` sits under a key none of its rows uses. -/
+private theorem c9_postings_nil (u : Bool) (t : List Line) (q : Key) (hq : q ∉ t.flatMap (rowKeys u)) (k : Nat) :
+    (t.zipIdx k).filter (fun ((x, _) : Line × Nat) => (rowKeys u x).contains q) = [] := by
+  rw [List.filter_eq_nil_iff]
+  rintro ⟨x, j⟩ hp hc
+  have hx : x ∈ t := by
+    have := List.mem_map_of_mem (f := Prod.fst) hp
+    rwa [List.zipIdx_map_fst] at this
+  exact hq (List.mem_flatMap.mpr ⟨x, hx, by simpa using hc⟩)
+
+private theorem c9_postings_out (u : Bool) (s f : List Line) (q : Key) (hq : q ∉ f.flatMap (rowKeys u)) :
+    postings u (s ++ f) q = postings u s q := by
+  unfold postings
+  rw [List.zipIdx_append, List.filter_append, c9_postings_nil u f q hq, List.append_nil]
+
+/-- H2: appending `f` (true hits for its keys, fresh rows, path-separated keys) to `s` turns `s`'s map into
+    `upsert m (writes ..)`, up to order. -/
+private theorem c8_setMap_append (H : Bytes → Bytes) (u : Bool) (s f : List Line) (hs : List Hit) (m wm : Map)
+    (hm : setMap H u s = some m) (hw : writes H u hs s.length f = some wm)
+    (hT : ∀ q ∈ f.flatMap (rowKeys u), ∀ h, findHit hs u q = some h →
+      h.n = ((postings u s q).getD []).length ∧ h.peaks = ((postings u s q).getD []).foldl (frontierPush H) [])
+    (hR : ∀ x ∈ f, ∀ y ∈ s, rowKey x ≠ rowKey y)
+    (hP : ∀ a b ka kb, a ∈ f.map rowKey ++ f.flatMap (rowKeys u) → b ∈ s.map rowKey ++ s.flatMap (rowKeys u) →
+      keyBytes a = some ka → keyBytes b = some kb → pathOf H ka = pathOf H kb → a = b) :
+    ∃ m', setMap H u (s ++ f) = some m' ∧ (upsert m wm).Perm m' := by
+  have hwk := c8_writes_keys hw
+  obtain ⟨rS, kS, hrS, hkS, gS, rfl⟩ := c9_dec hm
+  obtain ⟨rF, kF, hrF, hkF, gF, rfl⟩ := c9_dec hw
+  have hQ : ∀ q, q ∈ ((s ++ f).flatMap (rowKeys u)).eraseDups ↔
+      q ∈ s.flatMap (rowKeys u) ∨ q ∈ f.flatMap (rowKeys u) := fun q => by
+    rw [List.mem_eraseDups, List.flatMap_append, List.mem_append]
+  have hps : ∀ q, ∃ ps, postings u s q = some ps := by
+    intro q
+    by_cases hq : q ∈ s.flatMap (rowKeys u)
+    · obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ hkS q (List.mem_eraseDups.mpr hq)
+      cases hp : postings u s q with
+      | none =>
+        cases hk : keyBytes q with
+        | none => simp [hk] at hy
+        | some kb => simp [hk, hp] at hy
+      | some ps => exact ⟨ps, rfl⟩
+    · exact ⟨[], by unfold postings; rw [c9_postings_nil u s q hq]; rfl⟩
+  -- a batch key's leaf is the appended set's leaf
+  have hKW : ∀ q ∈ f.flatMap (rowKeys u), ∀ y, (do
+      let kb ← keyBytes q
+      let h ← findHit hs u q
+      let es ← (f.zipIdx.filter fun ((x, _) : Line × Nat) => (rowKeys u x).contains q).mapM
+        fun ((x, j) : Line × Nat) => postEntry (s.length + j) x.id
+      let v ← keyVal (h.n + es.length) (es.foldl (frontierPush H) h.peaks)
+      pure (pathOf H kb, v)) = some y →
+      (do
+        let kb ← keyBytes q
+        let es ← postings u (s ++ f) q
+        let v ← keyVal es.length (es.foldl (frontierPush H) [])
+        pure (pathOf H kb, v)) = some y := by
+    intro q hq y hy
+    obtain ⟨kb, hit, es, v, hk, hh, he, hv, rfl⟩ := c9_kW hy
+    obtain ⟨ps, hp⟩ := hps q
+    obtain ⟨hn, hpk⟩ := hT q hq hit hh
+    simp only [hp, Option.getD_some] at hn hpk
+    rw [c8_postings_append u s f q (fun ((x, _) : Line × Nat) => (rowKeys u x).contains q) (fun _ _ => rfl)
+      (fun ((x, j) : Line × Nat) => postEntry (s.length + j) x.id) (fun _ _ => rfl), hp, he]
+    simp [hk, List.foldl_append, ← hn, ← hpk, hv]
+  obtain ⟨kN, hkN⟩ := c8_mapM_some (fun (q : Key) => do
+      let kb ← keyBytes q
+      let es ← postings u (s ++ f) q
+      let v ← keyVal es.length (es.foldl (frontierPush H) [])
+      pure (pathOf H kb, v)) ((s ++ f).flatMap (rowKeys u)).eraseDups (by
+    intro q hq
+    by_cases hqf : q ∈ f.flatMap (rowKeys u)
+    · obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ hkF q (List.mem_eraseDups.mpr hqf)
+      exact ⟨y, hKW q hqf y hy⟩
+    · have hqs : q ∈ s.flatMap (rowKeys u) := ((hQ q).mp hq).resolve_right hqf
+      obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ hkS q (List.mem_eraseDups.mpr hqs)
+      refine ⟨y, ?_⟩
+      simp only [c9_postings_out u s f q hqf]
+      exact hy)
+  have hrN : (s ++ f).zipIdx.mapM (fun ((x, i) : Line × Nat) => do
+      let kb ← keyBytes (rowKey x)
+      let v ← be 8 i
+      pure (pathOf H kb, v)) = some (rS ++ rF) := by
+    rw [c8_rows_append (fun ((x, i) : Line × Nat) => do
+      let kb ← keyBytes (rowKey x)
+      let v ← be 8 i
+      pure (pathOf H kb, v)) (fun ((x, j) : Line × Nat) => do
+      let kb ← keyBytes (rowKey x)
+      let v ← be 8 (s.length + j)
+      pure (pathOf H kb, v)) s f (fun _ _ => rfl), hrS, hrF] <;> rfl
+  -- keys: encodable, path-injective on each side, and across sides by hP
+  have cv : ∀ (t : List Line) a, a ∈ t.map rowKey ++ t.flatMap (rowKeys u) ↔
+      a ∈ t.map rowKey ++ (t.flatMap (rowKeys u)).eraseDups := fun t a => by
+    simp only [List.mem_append, List.mem_eraseDups]
+  have eS : ∀ a ∈ s.map rowKey ++ (s.flatMap (rowKeys u)).eraseDups, ∃ ka, keyBytes a = some ka := by
+    intro a ha
+    rcases List.mem_append.mp ha with ha | ha
+    · obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
+      exact (c9_rows_fst (fun i => i) hrS).2 x hx
+    · exact (c9_ks_fst hkS).2 a ha
+  have eF : ∀ a ∈ f.map rowKey ++ (f.flatMap (rowKeys u)).eraseDups, ∃ ka, keyBytes a = some ka := by
+    intro a ha
+    rcases List.mem_append.mp ha with ha | ha
+    · obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
+      exact (c9_rows_fst (fun j => s.length + j) hrF).2 x hx
+    · exact (c9_kw_fst hkF).2 a ha
+  have gS' : ((s.map rowKey ++ (s.flatMap (rowKeys u)).eraseDups).map (c9PK H)).Nodup := by
+    rw [List.map_append, ← (c9_rows_fst (fun i => i) hrS).1, ← (c9_ks_fst hkS).1]
+    exact gS
+  have gF' : ((f.map rowKey ++ (f.flatMap (rowKeys u)).eraseDups).map (c9PK H)).Nodup := by
+    rw [List.map_append, ← (c9_rows_fst (fun j => s.length + j) hrF).1, ← (c9_kw_fst hkF).1]
+    exact gF
+  have side : ∀ a ∈ (s ++ f).map rowKey ++ ((s ++ f).flatMap (rowKeys u)).eraseDups,
+      a ∈ s.map rowKey ++ (s.flatMap (rowKeys u)).eraseDups ∨
+        a ∈ f.map rowKey ++ (f.flatMap (rowKeys u)).eraseDups := by
+    intro a ha
+    simp only [List.map_append, List.flatMap_append, List.mem_append, List.mem_eraseDups] at ha ⊢
+    rcases ha with (h | h) | h | h
+    · exact Or.inl (Or.inl h)
+    · exact Or.inr (Or.inl h)
+    · exact Or.inl (Or.inr h)
+    · exact Or.inr (Or.inr h)
+  have hI : ∀ a ∈ (s ++ f).map rowKey ++ ((s ++ f).flatMap (rowKeys u)).eraseDups,
+      ∀ b ∈ (s ++ f).map rowKey ++ ((s ++ f).flatMap (rowKeys u)).eraseDups, c9PK H a = c9PK H b → a = b := by
+    intro a ha b hb e
+    rcases side a ha with ha | ha <;> rcases side b hb with hb | hb
+    · exact c8_inj_of_nodup_map _ _ gS' a b ha hb e
+    · obtain ⟨ka, hka⟩ := eS a ha
+      obtain ⟨kb, hkb⟩ := eF b hb
+      exact (hP b a kb ka ((cv f b).mpr hb) ((cv s a).mpr ha) hkb hka
+        (by simpa [c9PK, hka, hkb] using e.symm)).symm
+    · obtain ⟨ka, hka⟩ := eF a ha
+      obtain ⟨kb, hkb⟩ := eS b hb
+      exact hP a b ka kb ((cv f a).mpr ha) ((cv s b).mpr hb) hka hkb (by simpa [c9PK, hka, hkb] using e)
+    · exact c8_inj_of_nodup_map _ _ gF' a b ha hb e
+  have hL : ((s ++ f).map rowKey ++ ((s ++ f).flatMap (rowKeys u)).eraseDups).Nodup := by
+    have ndS : (s.map rowKey).Nodup := by
+      rw [List.map_append] at gS'
+      exact c8_nodup_of_map _ (List.nodup_append.mp gS').1
+    have ndF : (f.map rowKey).Nodup := by
+      rw [List.map_append] at gF'
+      exact c8_nodup_of_map _ (List.nodup_append.mp gF').1
+    rw [List.map_append]
+    refine List.nodup_append.mpr ⟨List.nodup_append.mpr ⟨ndS, ndF, ?_⟩,
+      c4_nodup_eraseDups _ _ (Nat.le_refl _), ?_⟩
+    · intro a ha b hb hab
+      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp ha
+      obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hb
+      exact hR x hx y hy hab.symm
+    · intro a ha b hb hab
+      obtain ⟨z', -, hb'⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp hb)
+      rcases List.mem_append.mp ha with ha | ha <;> obtain ⟨z, -, hz⟩ := List.mem_map.mp ha <;>
+        exact c3_rowKeys_head u z' b hb' (by rw [← hab, ← hz] <;> rfl)
+  have gN : ((rS ++ rF).map (·.1) ++ kN.map (·.1)).Nodup := by
+    rw [(c9_rows_fst (fun i => i) hrN).1, (c9_ks_fst hkN).1, ← List.map_append]
+    exact c8_nodup_map_of_inj _ _ hL hI
+  -- no new leaf shadows an old ROW leaf, or an old key leaf the batch does not touch
+  have noShadow : ∀ b kb, keyBytes b = some kb →
+      (b ∈ s.map rowKey ∨ (b ∈ s.flatMap (rowKeys u) ∧ b ∉ f.flatMap (rowKeys u))) →
+      (rF ++ kF).any (fun x => x.1 == pathOf H kb) = false := by
+    intro b kb hk hb
+    refine List.any_eq_false.mpr fun e' he' hc => ?_
+    obtain ⟨a, ka, hsrc, hka, he1⟩ := hwk e' he'
+    have hab : a = b := hP a b ka kb
+      (by
+        rcases hsrc with ⟨x, hx, rfl⟩ | h
+        · exact List.mem_append_left _ (List.mem_map_of_mem hx)
+        · exact List.mem_append_right _ h)
+      (by
+        rcases hb with h | h
+        · exact List.mem_append_left _ h
+        · exact List.mem_append_right _ h.1)
+      hka hk (he1.symm.trans (beq_iff_eq.mp hc))
+    rcases hsrc with ⟨x, hx, hax⟩ | haf <;> rcases hb with hbs | ⟨hbs, hbf⟩
+    · obtain ⟨y, hy, hyb⟩ := List.mem_map.mp hbs
+      exact hR x hx y hy (hax.symm.trans (hab.trans hyb.symm))
+    · obtain ⟨y, -, hq⟩ := List.mem_flatMap.mp hbs
+      exact c3_rowKeys_head u y b hq (by rw [← hab, hax] <;> rfl)
+    · obtain ⟨y, -, hyb⟩ := List.mem_map.mp hbs
+      obtain ⟨x, -, hq⟩ := List.mem_flatMap.mp haf
+      exact c3_rowKeys_head u x a hq (by rw [hab, ← hyb] <;> rfl)
+    · exact hbf (hab ▸ haf)
+  refine ⟨rS ++ rF ++ kN, c9_enc hrN hkN gN, ?_⟩
+  have wNd : ((rF ++ kF).map (·.1)).Nodup := by rw [List.map_append]; exact gF
+  have mNd : (rS ++ kS).Nodup := by
+    have g : ((rS ++ kS).map (·.1)).Nodup := by rw [List.map_append]; exact gS
+    exact c8_nodup_of_map _ g
+  have nNd : (rS ++ rF ++ kN).Nodup := by
+    have g : ((rS ++ rF ++ kN).map (·.1)).Nodup := by rw [List.map_append]; exact gN
+    exact c8_nodup_of_map _ g
+  refine (upsert_perm _ _ wNd).trans ((List.perm_ext_iff_of_nodup ?_ nNd).mpr ?_)
+  · unfold upM
+    refine List.nodup_append.mpr ⟨c8_nodup_of_map _ wNd, mNd.sublist List.filter_sublist, ?_⟩
+    intro a ha b hb hab
+    rw [List.mem_filter] at hb
+    have : (rF ++ kF).any (·.1 == b.1) = true := List.any_eq_true.mpr ⟨a, ha, by simp [hab]⟩
+    simp [this] at hb
+  intro e
+  constructor
+  · intro he
+    unfold upM at he
+    rcases List.mem_append.mp he with he | he
+    · rcases List.mem_append.mp he with he | he
+      · simp [he]
+      · obtain ⟨q, hq, hy⟩ := g1_mapM_mem _ _ _ hkF e he
+        have hqf := List.mem_eraseDups.mp hq
+        exact List.mem_append_right _ (c8_mapM_mem hkN ((hQ q).mpr (Or.inr hqf)) (hKW q hqf e hy))
+    · rw [List.mem_filter] at he
+      obtain ⟨he, hns⟩ := he
+      rcases List.mem_append.mp he with he | he
+      · simp [he]
+      · obtain ⟨q, hq, hy⟩ := g1_mapM_mem _ _ _ hkS e he
+        have hqs := List.mem_eraseDups.mp hq
+        by_cases hqf : q ∈ f.flatMap (rowKeys u)
+        · obtain ⟨y, hy', hyW⟩ := c3_mapM_all _ _ _ hkF q (List.mem_eraseDups.mpr hqf)
+          obtain ⟨kb, hk, h1⟩ := c9_kS hy
+          obtain ⟨kb', _, _, _, hk', _, _, _, rfl⟩ := c9_kW hyW
+          rw [hk] at hk'
+          obtain rfl := Option.some.inj hk'
+          have : (rF ++ kF).any (·.1 == e.1) = true :=
+            List.any_eq_true.mpr ⟨_, List.mem_append_right _ hy', by simp [h1]⟩
+          simp [this] at hns
+        · refine List.mem_append_right _ (c8_mapM_mem hkN ((hQ q).mpr (Or.inl hqs)) ?_)
+          simp only [c9_postings_out u s f q hqf]
+          exact hy
+  · intro he
+    unfold upM
+    rcases List.mem_append.mp he with he | he
+    · rcases List.mem_append.mp he with he | he
+      · obtain ⟨⟨x, i⟩, hx, hy⟩ := g1_mapM_mem _ _ _ hrS e he
+        obtain ⟨kb, hk, h1⟩ := c9_row (fun i => i) hy
+        refine List.mem_append_right _ (List.mem_filter.mpr ⟨List.mem_append_left _ he, ?_⟩)
+        rw [h1, noShadow (rowKey x) kb hk (Or.inl (List.mem_map_of_mem (c3_mem_zipIdx hx)))] <;> rfl
+      · exact List.mem_append_left _ (List.mem_append_left _ he)
+    · obtain ⟨q, hq, hy⟩ := g1_mapM_mem _ _ _ hkN e he
+      by_cases hqf : q ∈ f.flatMap (rowKeys u)
+      · obtain ⟨y, hy', hyW⟩ := c3_mapM_all _ _ _ hkF q (List.mem_eraseDups.mpr hqf)
+        have e1 : e = y := Option.some.inj (hy.symm.trans (hKW q hqf y hyW))
+        rw [e1]
+        exact List.mem_append_left _ (List.mem_append_right _ hy')
+      · have hqs : q ∈ s.flatMap (rowKeys u) := ((hQ q).mp hq).resolve_right hqf
+        simp only [c9_postings_out u s f q hqf] at hy
+        obtain ⟨kb, hk, h1⟩ := c9_kS hy
+        refine List.mem_append_right _ (List.mem_filter.mpr
+          ⟨List.mem_append_right _ (c8_mapM_mem hkS (List.mem_eraseDups.mpr hqs) hy), ?_⟩)
+        rw [h1, noShadow q kb hk (Or.inr ⟨hqs, hqf⟩)] <;> rfl
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
