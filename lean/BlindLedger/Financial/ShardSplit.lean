@@ -307,32 +307,250 @@ def checkShard (R : Rec) (k : Nat) (sh sh' : ShardDB) : Prop :=
 def appliedOk (pk : Pack) (cx : Ctx) (ss : SS) : Prop :=
   ∀ k < pk.k cx.p, (ss.2 k).applied = (ss.1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)
 
+/-! ## Helpers -/
+
+theorem kOf_pos : ∀ (l : List (PartId × Nat)) (p : PartId), (l.all fun x => 0 < x.2) = true → 0 < kOf l p
+  | [], _, _ => Nat.one_pos
+  | (q, n) :: t, p, h => by
+    simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at h
+    simp only [kOf]
+    split
+    · exact h.1
+    · exact kOf_pos t p h.2
+
+theorem judgeRows_keep (pk : Pack) (cx : Ctx) : ∀ (d : Dir) (rs : List Row) (c : Cell) (x : DirRow),
+    d c = some x → (judgeRows pk cx d rs).1 c = some x
+  | d, [], c, x, h => h
+  | d, r :: rs, c, x, h => by
+    show (judgeRows pk cx (judgeRow pk cx d r).1 rs).1 c = some x
+    apply judgeRows_keep pk cx _ rs c x
+    unfold judgeRow
+    split
+    · exact h
+    · next hn =>
+      simp only [setDir]
+      split
+      · next he => subst he; rw [hn] at h; cases h
+      · exact h
+
+theorem judgeRows_admit (pk : Pack) (cx : Ctx) (h : Home) : ∀ (d : Dir) (rs : List Row) (a : Row × Verdict),
+    a ∈ (judgeRows pk cx d rs).2 → a.2 = .admit h → ∃ x, (judgeRows pk cx d rs).1 a.1.cell = some x ∧ x.home = h
+  | d, [], a, hm, _ => by simp [judgeRows] at hm
+  | d, r :: rs, a, hm, hv => by
+    simp only [judgeRows, List.mem_cons] at hm
+    rcases hm with rfl | ht
+    · change (judgeRow pk cx d r).2 = _ at hv
+      have key : ∃ x, (judgeRow pk cx d r).1 r.cell = some x ∧ x.home = h := by
+        revert hv
+        unfold judgeRow
+        cases hd : d r.cell with
+        | some y => intro hv; dsimp only at hv; split at hv <;> cases hv
+        | none =>
+          intro hv; dsimp only at hv ⊢; cases hv
+          exact ⟨⟨routeNew pk cx r, r.raw, r.gross⟩, by simp [setDir], rfl⟩
+      obtain ⟨x, hx, hh⟩ := key
+      exact ⟨x, judgeRows_keep pk cx _ rs r.cell x hx, hh⟩
+    · exact judgeRows_admit pk cx h _ rs a ht hv
+
+theorem part_home (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (h : Home) {r : Row}
+    (hr : r ∈ part (judge pk cx sv inp) h) : ∃ x, (judge pk cx sv inp).dir r.cell = some x ∧ x.home = h := by
+  simp only [part, List.mem_map, List.mem_filter, beq_iff_eq] at hr
+  obtain ⟨a, ⟨hm, hv⟩, rfl⟩ := hr
+  exact judgeRows_admit pk cx h sv.dir inp.rows a hm hv
+
+theorem finRows_local (S : Cell → Prop) : ∀ (rs : List Row) (vs : List Bool) (chg chg' : Cell → Nat),
+    (∀ r ∈ rs, S r.cell) → (∀ c, S c → chg c = chg' c) →
+    (∀ c, S c → (finRows chg rs vs).1 c = (finRows chg' rs vs).1 c) ∧ (finRows chg rs vs).2 = (finRows chg' rs vs).2
+  | [], _, _, _, _, h => ⟨h, rfl⟩
+  | r :: rs, vs, chg, chg', hS, h => by
+    have hr : chg r.cell = chg' r.cell := h _ (hS r (List.mem_cons_self ..))
+    have h1 : ∀ c, S c → (if (vs.headD false && chg r.cell == 0) = true then bump chg r.cell else chg) c =
+        (if (vs.headD false && chg' r.cell == 0) = true then bump chg' r.cell else chg') c := by
+      intro c hc; rw [hr]; split <;> simp only [bump, h c hc]
+    obtain ⟨ih1, ih2⟩ := finRows_local S rs vs.tail _ _ (fun r' hr' => hS r' (List.mem_cons_of_mem _ hr')) h1
+    simp only [finRows]
+    exact ⟨ih1, by rw [ih2, hr]⟩
+
+theorem finRows_le1 : ∀ (rs : List Row) (vs : List Bool) (chg : Cell → Nat), (∀ c, chg c ≤ 1) →
+    ∀ c, (finRows chg rs vs).1 c ≤ 1
+  | [], _, _, h, c => h c
+  | r :: rs, vs, chg, h, c => by
+    simp only [finRows]
+    apply finRows_le1 rs vs.tail _ _ c
+    intro c'
+    split
+    · next hm =>
+      simp only [Bool.and_eq_true, beq_iff_eq] at hm
+      simp only [bump]
+      split
+      · next he => subst he; have := hm.2; omega
+      · exact h c'
+    · exact h c'
+
+theorem finRows_supp : ∀ (rs : List Row) (vs : List Bool) (chg : Cell → Nat) (c : Cell),
+    0 < (finRows chg rs vs).1 c → 0 < chg c ∨ ∃ r ∈ rs, r.cell = c
+  | [], _, _, _, h => .inl h
+  | r :: rs, vs, chg, c, h => by
+    simp only [finRows] at h
+    rcases finRows_supp rs vs.tail _ c h with h1 | ⟨r', hr', he⟩
+    · split at h1
+      · simp only [bump] at h1
+        split at h1
+        · next he => exact .inr ⟨r, List.mem_cons_self .., he.symm⟩
+        · exact .inl h1
+      · exact .inl h1
+    · exact .inr ⟨r', List.mem_cons_of_mem _ hr', he⟩
+
+theorem sum_zeroN (f : Nat → Nat) : ∀ l : List Nat, (∀ x ∈ l, f x = 0) → (l.map f).sum = 0
+  | [], _ => rfl
+  | x :: l, h => by
+    rw [List.map_cons, List.sum_cons, h x (List.mem_cons_self ..),
+      sum_zeroN f l fun y hy => h y (List.mem_cons_of_mem _ hy)]
+
+theorem sum_le_one (f : Nat → Nat) (hf : ∀ k, f k ≤ 1) (hu : ∀ k k', 0 < f k → 0 < f k' → k = k') :
+    ∀ l : List Nat, l.Nodup → (l.map f).sum ≤ 1
+  | [], _ => Nat.zero_le 1
+  | k :: l, hn => by
+    rw [List.nodup_cons] at hn
+    simp only [List.map_cons, List.sum_cons]
+    by_cases hk : f k = 0
+    · have := sum_le_one f hf hu l hn.2; omega
+    · have h0 := sum_zeroN f l fun x hx => by
+        cases hx0 : f x with
+        | zero => rfl
+        | succ m =>
+          obtain rfl := hu k x (Nat.pos_of_ne_zero hk) (by omega)
+          exact absurd hx hn.1
+      have := hf k; omega
+
+/-- The gate invariant: a shard holds at most one MOVE charge per cell, and only for cells the directory homes
+    at that shard. -/
+def Inv (ss : SS) : Prop :=
+  ∀ c, (∀ k, (ss.2 k).chg c ≤ 1) ∧ (∀ k, 0 < (ss.2 k).chg c → ∃ x, ss.1.dir c = some x ∧ x.home = .shard k)
+
+theorem inv_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) : Inv (stepT pk cx ss inp) := by
+  unfold stepT stepS
+  split
+  · intro c
+    obtain ⟨hle, hdir⟩ := hI c
+    refine ⟨fun k => ?_, fun k hk => ?_⟩
+    · show (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).chg c ≤ 1
+      unfold commitShards
+      split
+      · exact finRows_le1 _ _ _ (fun c' => (hI c').1 k) c
+      · exact hle k
+    · change 0 < (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).chg c at hk
+      change ∃ x, (judge pk cx ss.1.view inp).dir c = some x ∧ x.home = .shard k
+      unfold commitShards at hk
+      split at hk
+      · rcases finRows_supp _ _ _ c hk with h0 | ⟨r, hr, rfl⟩
+        · obtain ⟨x, hx, hh⟩ := hdir k h0
+          exact ⟨x, judgeRows_keep pk cx _ _ _ x hx, hh⟩
+        · exact part_home pk cx ss.1.view inp (.shard k) hr
+      · obtain ⟨x, hx, hh⟩ := hdir k hk
+        exact ⟨x, judgeRows_keep pk cx _ _ c x hx, hh⟩
+  · exact hI
+
+theorem inv_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv ss → Inv (runS pk cx ss rs)
+  | _, [], h => h
+  | ss, r :: rs, h => inv_run pk cx _ rs (inv_step pk cx ss r h)
+
+theorem inv_init : Inv initS := fun _ => ⟨fun _ => Nat.zero_le 1, fun _ h => (Nat.lt_irrefl 0 h).elim⟩
+
+/-- After a committed step, shard `k`'s head is the last record's `post_head_k` for every touched `k`. -/
+def Inv2 (ss : SS) : Prop := ∀ R rs, ss.1.recs = R :: rs → ∀ k ∈ R.touched, (ss.2 k).head = R.post k
+
+theorem inv2_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : Inv2 ss) : Inv2 (stepT pk cx ss inp) := by
+  unfold stepT stepS
+  split
+  · intro R rs hR k hk
+    have hR' : (mkRec pk cx ss inp).2 = R := (List.cons.inj hR).1
+    subst hR'
+    show (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).head = _
+    unfold commitShards
+    rw [if_pos hk]
+    rfl
+  · exact h
+
+theorem inv2_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv2 ss → Inv2 (runS pk cx ss rs)
+  | _, [], h => h
+  | ss, r :: rs, h => inv2_run pk cx _ rs (inv2_step pk cx ss r h)
+
+theorem replay_commit (R : Rec) (sh : Nat → ShardDB) (C : List Nat) (hC : ∀ k ∈ C, k ∈ R.touched)
+    (hpre : ∀ k, R.pre k = (sh k).head) (hadv : ∀ k, R.post k ≠ R.pre k) (k : Nat) :
+    replay R k (commitShards R C sh k) = commitShards R R.touched sh k := by
+  unfold commitShards replay
+  by_cases hk : k ∈ C
+  · have ht := hC k hk
+    rw [if_pos hk, if_pos ht]
+    have hn : ¬(k ∈ R.touched ∧ (applyPart R k (sh k)).head = R.pre k ∧ (applyPart R k (sh k)).head ≠ R.post k) :=
+      fun h' => h'.2.2 rfl
+    rw [if_neg hn]
+  · rw [if_neg hk]
+    by_cases ht : k ∈ R.touched
+    · have hy : k ∈ R.touched ∧ (sh k).head = R.pre k ∧ (sh k).head ≠ R.post k :=
+        ⟨ht, (hpre k).symm, fun h' => hadv k (h'.symm.trans (hpre k).symm)⟩
+      rw [if_pos ht, if_pos hy]
+    · have hn : ¬(k ∈ R.touched ∧ (sh k).head = R.pre k ∧ (sh k).head ≠ R.post k) := fun h' => ht h'.1
+      rw [if_neg ht, if_neg hn]
+
+/-- Every shard head equals the spine's head, and APPLIED lists the records touching the shard, in order. -/
+def Inv3 (ss : SS) : Prop := ∀ k, (ss.2 k).head = ss.1.heads k ∧
+  (ss.2 k).applied = (ss.1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)
+
+theorem inv3_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : Inv3 ss) : Inv3 (stepT pk cx ss inp) := by
+  unfold stepT stepS
+  split
+  · intro k
+    obtain ⟨h1, h2⟩ := h k
+    by_cases hk : k ∈ (mkRec pk cx ss inp).2.touched
+    · simp [commitShards, commitSpine, applyPart, hk, h2]
+    · simp [commitShards, commitSpine, hk, h1, h2]
+  · exact h
+
+theorem inv3_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv3 ss → Inv3 (runS pk cx ss rs)
+  | _, [], h => h
+  | ss, r :: rs, h => inv3_run pk cx _ rs (inv3_step pk cx ss r h)
+
 /-! ## §9 statements -/
 
 /-- K_p is positive under a well-formed pack. -/
 theorem k_pos (pk : Pack) (p : PartId) (h : packOk pk = true) : 0 < pk.k p := by
-  sorry
+  exact kOf_pos pk.ks p h
 
 /-- A new cell's home is the spine or exactly one shard below K. -/
 theorem route_total (pk : Pack) (cx : Ctx) (r : Row) (h : packOk pk = true) :
     routeNew pk cx r = .spine ∨ ∃ k, k < pk.k cx.p ∧ routeNew pk cx r = .shard k := by
-  sorry
+  unfold routeNew
+  split
+  · exact .inr ⟨_, Nat.mod_lt _ (k_pos pk cx.p h), rfl⟩
+  · exact .inl rfl
 
 /-- K is fixed once the partition has history. -/
 theorem shard_stable (hist : List PartId) (pk pk' : Pack) (p : PartId) (hu : packUpdateOk hist pk pk' = true)
     (hp : p ∈ hist) : pk'.k p = pk.k p := by
-  sorry
+  simp only [packUpdateOk, Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at hu
+  exact hu.2 p hp
 
 /-- Routes never move: a directory row survives every step unchanged. -/
 theorem dir_route_stable (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (c : Cell) (x : DirRow)
     (h : ss.1.dir c = some x) : (stepT pk cx ss inp).1.dir c = some x := by
-  sorry
+  unfold stepT stepS
+  split
+  · exact judgeRows_keep pk cx ss.1.dir inp.rows c x h
+  · exact h
 
 /-- Admitted rows of different homes in one judgment name different cells. -/
 theorem parts_disjoint (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) {h h' : Home} (hh : h ≠ h')
     {r r' : Row} (hr : r ∈ part (judge pk cx sv inp) h) (hr' : r' ∈ part (judge pk cx sv inp) h') :
     r.cell ≠ r'.cell := by
-  sorry
+  intro he
+  obtain ⟨x, hx, hxh⟩ := part_home pk cx sv inp h hr
+  obtain ⟨y, hy, hyh⟩ := part_home pk cx sv inp h' hr'
+  rw [he, hy] at hx
+  have hxy : y = x := Option.some.inj hx
+  subst hxy
+  exact hh (hxh.symm.trans hyh)
 
 /-- Shard-local: shard k's transaction reads and writes only shard k's rows. -/
 theorem part_local (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (k : Nat) (V : List Bool)
@@ -341,37 +559,76 @@ theorem part_local (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (k : Na
       restrict (judge pk cx sv inp).dir k (finRows chg' (part (judge pk cx sv inp) (.shard k)) V).1 ∧
     (finRows chg (part (judge pk cx sv inp) (.shard k)) V).2 =
       (finRows chg' (part (judge pk cx sv inp) (.shard k)) V).2 := by
-  sorry
+  have hS : ∀ r ∈ part (judge pk cx sv inp) (.shard k),
+      ((judge pk cx sv inp).dir r.cell).map (·.home) = some (.shard k) := fun r hr => by
+    obtain ⟨x, hx, hh⟩ := part_home pk cx sv inp _ hr
+    simp [hx, hh]
+  have hE : ∀ c, ((judge pk cx sv inp).dir c).map (·.home) = some (.shard k) → chg c = chg' c := fun c hc => by
+    have := congrFun h c
+    simp only [restrict, if_pos hc] at this
+    exact this
+  obtain ⟨h1, h2⟩ := finRows_local (fun c => ((judge pk cx sv inp).dir c).map (·.home) = some (.shard k))
+    (part (judge pk cx sv inp) (.shard k)) V chg chg' hS hE
+  refine ⟨funext fun c => ?_, h2⟩
+  by_cases hc : ((judge pk cx sv inp).dir c).map (·.home) = some (.shard k)
+  · simp only [restrict, if_pos hc]
+    exact h1 c hc
+  · simp only [restrict, if_neg hc]
 
 /-- A refusal changes no database. -/
 theorem refusal_atomic (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : checkAll pk cx ss inp = false) :
     stepT pk cx ss inp = ss := by
-  sorry
+  simp [stepT, stepS, h]
 
 /-- No commit on a stale head. -/
 theorem commit_requires_heads (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input)
     (h : stepS pk cx ss inp = some ss') : ∀ k < pk.k cx.p, (ss.2 k).head = ss.1.heads k := by
-  sorry
+  intro k hk
+  unfold stepS at h
+  split at h
+  · next hc =>
+    simp only [checkAll, headsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range, beq_iff_eq] at hc
+    exact hc.2 k hk
+  · cases h
 
 /-- Recovery reads only the last committed spine record and shard k. -/
 theorem recover_pure (sp : SpineDB) (R : Rec) (rs : List Rec) (h : sp.recs = R :: rs) (k : Nat) (sh : ShardDB) :
     recover sp k sh = replay R k sh := by
-  sorry
+  unfold recover
+  rw [h]
 
 /-- Recovery is idempotent. -/
 theorem recover_idem (sp : SpineDB) (k : Nat) (sh : ShardDB) :
     recover sp k (recover sp k sh) = recover sp k sh := by
-  sorry
+  cases hr : sp.recs with
+  | nil => simp only [recover, hr]
+  | cons R rs =>
+    rw [recover_pure sp R rs hr, recover_pure sp R rs hr]
+    unfold replay
+    by_cases hc : k ∈ R.touched ∧ sh.head = R.pre k ∧ sh.head ≠ R.post k
+    · have hn : ¬(k ∈ R.touched ∧ (applyPart R k sh).head = R.pre k ∧ (applyPart R k sh).head ≠ R.post k) :=
+        fun h' => h'.2.2 rfl
+      rw [if_pos hc, if_neg hn]
+    · simp only [if_neg hc]
 
 /-- The spine judge is the single-store judge: the spine alone is the dedup authority. -/
 theorem dir_dedup (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) :
     judge pk cx ss.1.view inp = judgeSingle pk cx (merge pk cx ss) inp := by
-  sorry
+  rfl
 
 /-- No double move: across all shards a cell carries at most one MOVE charge. -/
 theorem no_cross_shard_duplicate (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) (c : Cell) :
     moves c (merge pk cx ss) ≤ 1 := by
-  sorry
+  obtain ⟨rs, rfl⟩ := h
+  have hI := inv_run pk cx initS rs inv_init
+  show ((List.range (pk.k cx.p)).map fun k => ((runS pk cx initS rs).2 k).chg c).sum ≤ 1
+  refine sum_le_one (fun k => ((runS pk cx initS rs).2 k).chg c) (fun k => (hI c).1 k) ?_ _ (List.nodup_range ..)
+  intro k k' hk hk'
+  obtain ⟨x, hx, hh⟩ := (hI c).2 k hk
+  obtain ⟨y, hy, hh'⟩ := (hI c).2 k' hk'
+  have hxy : x = y := Option.some.inj (hx.symm.trans hy)
+  subst hxy
+  exact Home.shard.inj (hh.symm.trans hh')
 
 /-- Not weakened: whatever the spine and shard checks accept, the single-store check accepts. -/
 theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp : Input) (sp' : SpineDB)
@@ -384,7 +641,7 @@ theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp
 theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judgeSingle pk cx s inp).ok = true) :
     stepSingle pk cx s inp =
       applySingle pk cx s (judgeSingle pk cx s inp) (verdicts cx (judgeSingle pk cx s inp)) := by
-  sorry
+  simp [stepSingle, h]
 
 /-- Sharded = single: the merged sharded run is the single-store run. -/
 theorem shard_run_eq (pk : Pack) (cx : Ctx) (rs : List Input) :
@@ -395,18 +652,60 @@ theorem shard_run_eq (pk : Pack) (cx : Ctx) (rs : List Input) :
 theorem rollforward_eq (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List Nat)
     (h : stepS pk cx ss inp = some ss') (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) :
     recoverAll (afterSpine pk cx ss inp C) = ss' := by
-  sorry
+  unfold stepS at h
+  split at h
+  · next hc =>
+    obtain rfl := Option.some.inj h
+    unfold afterSpine
+    rw [if_pos hc]
+    refine Prod.ext rfl (funext fun k => ?_)
+    exact replay_commit _ ss.2 C hC (fun _ => rfl) (fun k => cx.advances _ _ _ _) k
+  · cases h
 
 /-- A crash before the spine COMMIT leaves a reachable state, and recovery changes nothing in it. -/
 theorem crash_before_spine (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) : recoverAll ss = ss := by
-  sorry
+  obtain ⟨rs, rfl⟩ := h
+  have h2 := inv2_run pk cx initS rs (fun _ _ h => by cases h)
+  refine Prod.ext rfl (funext fun k => ?_)
+  show recover _ k _ = _
+  cases hr : (runS pk cx initS rs).1.recs with
+  | nil => simp only [recover, hr]
+  | cons R rs' =>
+    rw [recover_pure _ R rs' hr]
+    have hn : ¬(k ∈ R.touched ∧ ((runS pk cx initS rs).2 k).head = R.pre k ∧
+        ((runS pk cx initS rs).2 k).head ≠ R.post k) := fun ⟨hk, _, hne⟩ => hne (h2 R rs' hr k hk)
+    unfold replay
+    rw [if_neg hn]
 
 /-- The reader cut is real: a crash state whose shard heads all equal the spine's is the committed step. -/
 theorem reader_cut (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List Nat)
     (h : stepS pk cx ss inp = some ss') (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched)
     (hh : ∀ k < pk.k cx.p, ((afterSpine pk cx ss inp C).2 k).head = (afterSpine pk cx ss inp C).1.heads k) :
     afterSpine pk cx ss inp C = ss' := by
-  sorry
+  unfold stepS at h
+  split at h
+  · next hc =>
+    obtain rfl := Option.some.inj h
+    unfold afterSpine at hh ⊢
+    rw [if_pos hc] at hh ⊢
+    refine Prod.ext rfl (funext fun k => ?_)
+    show commitShards (mkRec pk cx ss inp).2 C ss.2 k =
+      commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k
+    unfold commitShards
+    by_cases hk : k ∈ C
+    · rw [if_pos hk, if_pos (hC k hk)]
+    · rw [if_neg hk]
+      by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+      · exfalso
+        have hK : k < pk.k cx.p := by
+          have h' := ht
+          simp only [mkRec, touched, List.mem_filter, List.mem_range] at h'
+          exact h'.1
+        have e := hh k hK
+        simp only [commitShards, if_neg hk, commitSpine, if_pos ht] at e
+        exact cx.advances _ _ _ _ e.symm
+      · rw [if_neg ht]
+  · cases h
 
 /-- Pool used is the shards' gross; the budget is the shards' machine charges plus the spine's LINK charges. -/
 theorem pool_budget_merge (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
@@ -417,6 +716,10 @@ theorem pool_budget_merge (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss)
 /-- The spine binds the shard chains: heads match and each shard's APPLIED list is its records, in order. -/
 theorem spine_chain_binds (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
     headsOk pk cx ss = true ∧ appliedOk pk cx ss := by
-  sorry
+  obtain ⟨rs, rfl⟩ := h
+  have h3 := inv3_run pk cx initS rs (fun _ => ⟨rfl, rfl⟩)
+  refine ⟨?_, fun k _ => (h3 k).2⟩
+  simp only [headsOk, List.all_eq_true, beq_iff_eq]
+  exact fun k _ => (h3 k).1
 
 end BlindLedger.Financial.ShardSplit
