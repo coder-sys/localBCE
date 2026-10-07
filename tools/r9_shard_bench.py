@@ -789,11 +789,14 @@ class Spine:
                 problems.append(rb.FinancialIntegrityError(str(error)))
             except (EOFError, OSError):
                 continue  # the pipe is gone or the ABORT was never written: a shard still owing a COMMIT keeps its debt (the next wait for acks says shard_lost); a write error is raised again by every check_senders
-        self.c.execute("ROLLBACK")
-        self.dirty = self.pre_done = False
-        for cid in undo:
-            self.keys.pop(cid, None)
-        self.heads, self.prev_head = heads0, prev0
+        try:
+            if self.c.in_transaction:  # SQLite has already rolled back by itself after an I/O error (or a full disk): the first error is the one to raise, not a failed ROLLBACK
+                self.c.execute("ROLLBACK")
+        finally:
+            self.dirty = self.pre_done = False
+            for cid in undo:
+                self.keys.pop(cid, None)
+            self.heads, self.prev_head = heads0, prev0
         if problems:
             raise next((p for p in problems if isinstance(p, ShardDiverged)), problems[0])
 

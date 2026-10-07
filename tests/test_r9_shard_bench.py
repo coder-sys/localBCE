@@ -175,6 +175,26 @@ class FailingCommit:
         return self.c.execute(sql, *args)
 
 
+class AutoRolledBack:
+    """The spine's connection, whose first executemany fails as SQLite does on an I/O error: it has already rolled the transaction back by itself (here, a real ROLLBACK)."""
+
+    def __init__(self, c) -> None:
+        self.c, self.armed = c, True
+
+    def __getattr__(self, name: str):
+        return getattr(self.c, name)
+
+    def execute(self, sql: str, *args):
+        return self.c.execute(sql, *args)
+
+    def executemany(self, sql: str, *args):
+        if self.armed:
+            self.armed = False
+            self.c.execute("ROLLBACK")
+            raise sqlite3.OperationalError("disk I/O error")
+        return self.c.executemany(sql, *args)
+
+
 # pinned() of the spine and shard0..K-1 for 12 files x 300 lines (FL seed 20261006, DE seed 20261007), recorded at HEAD 311fdb75, before the sender thread and the PART header existed
 # (rrb/state/owc-s12-pre-digests-20261007.json)
 PRE_S12_PINNED = {
@@ -942,6 +962,30 @@ class ShardBench(unittest.TestCase):
                     p.terminate()
         self.assertEqual(fired, [])
         self.quiet(spine)
+
+    def test_s12_an_io_error_that_already_rolled_the_spine_back_is_the_error_raised_and_leaves_no_keys(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        clean = self.group_run("s12-h1-clean", files, 2)[1]
+        for items, name in ((2, "s12-h1-group"), (1, "s12-h1-one")):
+            spine = self.spine_with(sb.shard_main, name)
+            timer, fired = self.watchdog(spine)
+            try:
+                spine.c = AutoRolledBack(spine.c)
+                prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+                results = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(items)])
+                if items == 1:  # the first error, not "cannot rollback - no transaction is active", and the failed file's cells are not kept
+                    self.assertTrue(isinstance(results[0], sqlite3.OperationalError) and "disk I/O error" in str(results[0]), results)
+                    self.assertEqual((spine.n, spine.keys), (0, {}))
+                else:  # the group is retried one file at a time against clean keys: each file gets the classes of the clean run
+                    self.assertEqual(results, clean)
+                spine.close()
+            finally:
+                timer.cancel()
+                for p, _ in spine.workers.values():
+                    if p.is_alive():
+                        p.terminate()
+            self.assertEqual(fired, [], name)
+            self.quiet(spine)
 
     def test_s12_part_frame_with_trailing_bytes_a_short_blob_or_shifted_lengths_is_rejected(self) -> None:
         record, _ = self.files[0]
