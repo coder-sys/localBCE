@@ -262,6 +262,93 @@ def fast (L : Ledger) (calls : List Call) : List Erased := fastFrom (Fast.init L
 def batchFast (L : Ledger) (calls : List Call) : List Erased :=
   if ok L calls then fast L calls else (trace L calls).map erase
 
+/-! ## The fast step is the view step on a state that agrees with the carried scalars -/
+
+/-- The `PaymentView` of a fast view over the item state `s`, with `foreign = ⟨false, false⟩`. -/
+def FView.toView (v : FView) (s : ItemState) : PaymentView :=
+  { env := v.env, state := s, pending := [], byId := v.byId, byOrigin := v.byOrigin, evidence := v.evidence,
+    conflictVisible := v.conflictVisible, foreign := ⟨false, false⟩, expectedRevision := v.expectedRevision,
+    command := v.command }
+
+/-- The carried scalars of `F` are those of the item state `s`. -/
+structure Agree (F : Fast) (s : ItemState) : Prop where
+  cash : s.cash = F.cash
+  lawful : s.lawful = F.lawful
+  evidence : s.evidenceIds.length = F.evidence
+  conflicts : s.conflictCount = F.conflicts
+  requests : s.requests = F.requests
+  anchorBytes : s.anchorBytes = F.anchorBytes
+
+theorem evaluateState_isSome (e : Env) (s : ItemState) :
+    (evaluateState e s).isSome = decide (s.cash + s.lawful ≤ maxCents) := by
+  unfold evaluateState
+  rw [evalAdd_eq']
+  split <;> simp_all
+
+theorem evaluateState_rev {e : Env} {s : ItemState} {r : FinancialResult} (h : evaluateState e s = some r) :
+    r.beforeRevision = e.beforeRevision ∧ r.afterRevision = e.beforeRevision + 1 := by
+  unfold evaluateState at h
+  cases ht : evalAdd s.cash s.lawful with
+  | none => rw [ht] at h; cases h
+  | some t => rw [ht] at h; cases h; exact ⟨rfl, rfl⟩
+
+/-- `advance` then `evaluateState` succeed exactly where `deltaOk` holds on the carried scalars. A
+    payment write without a receipt (REVERSED) replaces the `byId` row by an image of equal amount. -/
+theorem advance_eval_isSome {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (w : Writes)
+    (hrev : ∀ p, w.payment = some p → w.receipt = none →
+      ∃ q k', v.byId = some (q, k') ∧ p.amountCents = q.amountCents) :
+    ((advance (v.toView s) s w).bind (evaluateState v.env)).isSome =
+      deltaOk ⟨F.evidence, F.conflicts, F.cash, some F.lawful⟩ w := by
+  obtain ⟨hc, hl, he, hf, -, -⟩ := hA
+  obtain ⟨we, wp, wc, wr⟩ := w
+  simp only at hrev
+  cases wp with
+  | none =>
+    cases we <;> cases wc <;>
+      simp only [advance, deltaOk, FView.toView, Option.map_none, Option.map_some, Option.getD_none,
+        Option.getD_some, Option.isSome_none, Option.isSome_some, length_insertBy] <;>
+      (repeat' split) <;> (try simp_all [evaluateState_isSome]) <;> omega
+  | some p =>
+    cases wr with
+    | some r =>
+      cases we <;> cases wc <;>
+        simp only [advance, deltaOk, FView.toView, Option.map_none, Option.map_some, Option.getD_none,
+          Option.getD_some, Option.isSome_none, Option.isSome_some, length_insertBy] <;>
+        (repeat' split) <;> (try simp_all [evaluateState_isSome]) <;> omega
+    | none =>
+      obtain ⟨q, k', hq, hamt⟩ := hrev p rfl rfl
+      clear hrev
+      cases we <;> cases wc <;>
+        simp only [advance, deltaOk, FView.toView, hq, hamt, Option.map_none, Option.map_some, Option.getD_none,
+          Option.getD_some, Option.isSome_none, Option.isSome_some, length_insertBy] <;>
+        clear hq hamt <;> (repeat' split) <;> (try simp_all [evaluateState_isSome]) <;> omega
+
+theorem commitFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (k : Mutation) (w : Writes)
+    (hrev : ∀ p, w.payment = some p → w.receipt = none →
+      ∃ q k', v.byId = some (q, k') ∧ p.amountCents = q.amountCents) :
+    commitFast F v k w = Erased.ofStep (commitView (v.toView s) s k w) := by
+  have hD := advance_eval_isSome hA v w hrev
+  have hg : anchorGrowth (v.toView s) w = growthF v w := rfl
+  have henv : (v.toView s).env = v.env := rfl
+  unfold commitFast commitView
+  simp only [hg, henv, hA.anchorBytes]
+  by_cases h1 : v.env.context.mode = .SHADOW
+  · simp only [h1, ↓reduceIte, Erased.ofStep]
+  · simp only [h1, ↓reduceIte]
+    by_cases h2 : F.anchorBytes + growthF v w + maxCallTailBytes > maxTotalEncodedBytes
+    · simp only [h2, ↓reduceIte, Erased.ofStep]
+    · simp only [h2, ↓reduceIte]
+      rw [← hD]
+      cases ha : advance (v.toView s) s w with
+      | none => simp only [Option.bind_none, Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Erased.ofStep]
+      | some s' =>
+        cases hr : evaluateState v.env s' with
+        | none =>
+          simp only [Option.bind_some, hr, Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Erased.ofStep]
+        | some r =>
+          obtain ⟨e1, e2⟩ := evaluateState_rev hr
+          simp only [Option.bind_some, hr, Option.isSome_some, ↓reduceIte, Erased.ofStep, e1, e2]
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} (h : ok L calls = true) :
     fast L calls = (trace L calls).map erase := by
   sorry

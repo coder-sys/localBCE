@@ -1043,7 +1043,7 @@ private theorem canonical_insert {l : List String} (h : canonicalIdList l = true
 
 /-! ## Totals -/
 
-private theorem evalAdd_eq' (a b : Nat) : evalAdd a b = if a + b ≤ maxCents then some (a + b) else none := by
+theorem evalAdd_eq' (a b : Nat) : evalAdd a b = if a + b ≤ maxCents then some (a + b) else none := by
   unfold evalAdd
   by_cases h : a + b ≤ maxCents
   · rw [if_pos h, if_pos]
@@ -1434,7 +1434,7 @@ private theorem findPayment_none_ne {l : List Payment} {id} (h : findPayment l i
   rw [findPayment_eq, List.find?_eq_none] at h
   intro e he eq; exact h e he (by simp [eq])
 
-private theorem length_insertBy {α} (key : α → String) (row : α) (l : List α) :
+theorem length_insertBy {α} (key : α → String) (row : α) (l : List α) :
     (insertBy key row l).length = l.length + 1 := by
   rw [(insertBy_perm key row l).length_eq]; rfl
 
