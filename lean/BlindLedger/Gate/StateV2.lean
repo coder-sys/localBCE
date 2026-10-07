@@ -3670,6 +3670,141 @@ private theorem c5_hits (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
   · exact (F false q).2 kb hk (List.mem_append_left _ (P1.2 q hq kb hk))
   · exact (F true q).2 kb hk (List.mem_append_right _ (P2.2 q hq kb hk))
 
+private theorem c7_probe_mem (c₀ : Ctx) (k : Nat) (os : List Owner) (bb : List Line) (u : Bool) (q : Key)
+    (h : (∃ l ∈ bb, q ∈ keys l ∨ q = rowKey l ∨
+      (u = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) ∨ ∃ i ∈ pendingOf k os, q = [4, i]) :
+    q ∈ (if u then (probeKeys c₀ k os bb).2 else (probeKeys c₀ k os bb).1) := by
+  rcases h with ⟨l, hl, hq⟩ | ⟨i, hi, rfl⟩
+  · cases u
+    · refine List.mem_eraseDups.mpr (List.mem_append_left _ (List.mem_flatMap.mpr ⟨l, hl, ?_⟩))
+      rcases hq with hq | rfl | ⟨h, -⟩
+      · exact List.mem_append_left _ hq
+      · exact List.mem_append_right _ (List.mem_singleton_self _)
+      · cases h
+    · refine List.mem_eraseDups.mpr (List.mem_append_left _ (List.mem_flatMap.mpr ⟨l, hl, ?_⟩))
+      rcases hq with hq | rfl | ⟨-, hc, hq⟩
+      · exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ hq))
+      · exact List.mem_append_left _ (List.mem_append_right _ (List.mem_singleton_self _))
+      · exact List.mem_append_right _ (by simpa [hc] using hq)
+  · cases u <;> exact List.mem_eraseDups.mpr (List.mem_append_right _ (List.mem_map.mpr ⟨i, hi, rfl⟩))
+
+private theorem c7_lines (H : Bytes → Bytes) (x : Ix) : ∀ (seen : List Key) (ls : List Line),
+    (Ix.decideAllQ H x seen ls).map (·.line) = ls
+  | _, [] => rfl
+  | _, l :: ls => congrArg (l :: ·) (c7_lines H x _ ls)
+
+private theorem c7_ord (x : Ix) {bb : List Line} {l : Line} (h : l ∈ x.orderQ bb) : l ∈ bb := by
+  unfold Ix.orderQ canonical at h
+  rcases List.mem_append.mp h with h | h <;> exact (List.mem_filter.mp ((List.mergeSort_perm _ _).mem_iff.mp h)).1
+
+private theorem c7_all {α : Type} : ∀ {L : List α} {p q : α → Bool}, (∀ a ∈ L, p a = q a) → L.all p = L.all q
+  | [], _, _, _ => rfl
+  | a :: L, _, _, h => by
+    rw [List.all_cons, List.all_cons, h a (by simp), c7_all fun b hb => h b (by simp [hb])]
+
+/-- Payment outcomes, released and unresolved lines read only line, outcome, reasons and `own` of the lines. -/
+private theorem c7_sel (x : Ix) (c : Ctx) (dsI : List DecisionV2) (dsS : List Decision)
+    (hT : dsI.map (fun d => (d.line, d.outcome, d.reasons)) = dsS.map (fun d => (d.line, d.outcome, d.reasons)))
+    (hO : ∀ d ∈ dsI, x.ownQ d.line = own c d.line) (hr : x.c₀.redo = c.redo) :
+    (∀ p, x.payOutcomeQ dsI p = payOutcome c dsS p) ∧ x.releasedQ dsI = releasedLines c dsS ∧
+      x.unresolvedQ dsI = unresolvedLines c dsS := by
+  have hM : dsI.map (fun d => ({ line := d.line, outcome := d.outcome, reasons := d.reasons, counterparts := [] } : Decision)) =
+      dsS.map (fun d => ({ line := d.line, outcome := d.outcome, reasons := d.reasons, counterparts := [] } : Decision)) := by
+    have := congrArg (List.map fun t : Line × Outcome × List Reason =>
+      ({ line := t.1, outcome := t.2.1, reasons := t.2.2, counterparts := [] } : Decision)) hT
+    simpa only [List.map_map, Function.comp_def] using this
+  have hPS : ∀ (L : List Decision) p, payOutcome c (L.map fun d =>
+      ({ line := d.line, outcome := d.outcome, reasons := d.reasons, counterparts := [] } : Decision)) p = payOutcome c L p := by
+    intro L p
+    simp only [payOutcome, List.filter_map, List.any_map, List.isEmpty_map, List.all_map, Function.comp_def]
+  have hP : ∀ p, x.payOutcomeQ dsI p = payOutcome c dsS p := by
+    intro p
+    have ha : ((dsI.filter (·.line.pay == p)).all fun d => d.outcome == .ALLOW && (!x.c₀.redo.contains p || x.ownQ d.line)) =
+        ((dsI.filter (·.line.pay == p)).all fun d => d.outcome == .ALLOW && (!c.redo.contains p || own c d.line)) :=
+      c7_all fun d hd => by rw [hr, hO d (List.mem_filter.mp hd).1]
+    rw [← hPS, ← hM]
+    dsimp only [Ix.payOutcomeQ, payOutcome]
+    rw [ha]
+    simp only [List.filter_map, List.any_map, List.isEmpty_map, List.all_map, Function.comp_def]
+  refine ⟨hP, ?_, ?_⟩
+  · have hal : (dsI.filter (·.outcome == .ALLOW)).map (·.line) = allowedLines dsS := by
+      have := congrArg allowedLines hM
+      simpa only [allowedLines, List.filter_map, List.map_map, Function.comp_def] using this
+    simp only [Ix.releasedQ, releasedLines, hP, hr, hal]
+  · have e := List.filter_congr (l := dsI)
+      (p := fun d : DecisionV2 => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !x.ownQ d.line)
+      (q := fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !own c d.line)
+      fun d hd => by rw [hO d hd]
+    unfold Ix.unresolvedQ unresolvedLines
+    rw [e]
+    have := congrArg (fun L : List Decision =>
+      (L.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !own c d.line).map (·.line)) hM
+    simpa only [List.filter_map, List.map_map, Function.comp_def] using this
+
+/-- Without a collision: the anchor is the state's head, every probed hit is the true hit, and the decisions,
+    payment outcomes and fresh rows are the spec's. -/
+private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
+    (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
+    (d : Bytes) (hd : digestV2 H h = some d) (w : Witness) (o : OutV2) (hr : decideIdx H c₀ k os b d w = some o)
+    (nc : ¬ Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr)) :
+    ∃ (x : Ix) (mr mu wr wu : Map), setMap H false rel.entries = some mr ∧ setMap H true unr.entries = some mu ∧
+      verifyMulti H (root H mr)
+        ((probeKeys c₀ k os (ready k os b)).1.filterMap fun q => (keyBytes q).map (pathOf H)) w.relPf = true ∧
+      verifyMulti H (root H mu)
+        ((probeKeys c₀ k os (ready k os b)).2.filterMap fun q => (keyBytes q).map (pathOf H)) w.unrPf = true ∧
+      w.anchor = ⟨rel.asOf, unr.asOf, rel.count, unr.count, root H mr, root H mu⟩ ∧ x.c₀ = c₀ ∧ x.bb = ready k os b ∧
+      (∀ (u : Bool) (q : Key) kb, keyBytes q = some kb →
+        ((∃ l ∈ x.bb, q ∈ keys l ∨ q = rowKey l ∨
+          (u = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) ∨ ∃ i ∈ pendingOf k os, q = [4, i]) →
+        findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb))) ∧
+      (∀ u q, keyBytes q = none → findHit x.hs u q = none) ∧
+      o.decisions = Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb) ∧
+      o.decisions.map (fun d => (d.line, d.outcome, d.reasons)) =
+        (decideRegT (carried c₀ rel unr) k os b).decisions.map (fun d => (d.line, d.outcome, d.reasons)) ∧
+      (∀ p, x.payOutcomeQ o.decisions p =
+        payOutcome (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b).decisions p) ∧
+      o.fresh = batchFresh (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b) ∧
+      writes H false x.hs rel.count o.fresh.1 = some wr ∧ writes H true x.hs unr.count o.fresh.2 = some wu ∧
+      o.head = ⟨bumpIf x.relOk c₀.today rel.asOf, bumpIf x.unrOk c₀.today unr.asOf,
+        rel.count + o.fresh.1.length, unr.count + o.fresh.2.length,
+        hashPf H (upsertPf 513 0 w.relPf wr), hashPf H (upsertPf 513 0 w.unrPf wu)⟩ ∧
+      x.relOk = (validDate rel.asOf && decide (rel.asOf ≤ c₀.today)) ∧
+      x.unrOk = (validDate unr.asOf && decide (unr.asOf ≤ c₀.today)) ∧
+      digestV2 H o.head = some o.digest ∧
+      o.free = (pendingOf k os).filter (fun i => !((o.fresh.1 ++ o.fresh.2).map (·.id)).contains i &&
+        x.cnt false [4, i] == 0 && x.cnt true [4, i] == 0) ∧
+      o.pays = (o.decisions.map (·.line.pay)).eraseDups.map fun p =>
+        (p, x.payOutcomeQ o.decisions p, ((o.decisions.filter (·.line.pay == p)).map (·.line.cents)).sum) := by
+  obtain ⟨hr', hu', wr, wu, x, g1, gK, gv1, gv2, ghr, ghu, hxc, hxs, hxr, hxu, hxb, hD, hFr, hW1, hW2, hHd, hDg,
+    hFree, hPays⟩ := c5_peel H c₀ k os b d w o hr
+  obtain ⟨mr, mu, hmr, hmu, rfl⟩ := c5_headOf ha
+  have hA : w.anchor = ⟨rel.asOf, unr.asOf, rel.count, unr.count, root H mr, root H mu⟩ :=
+    c3_anchor H g1 hd (witnessInputs H c₀ k os b w) (stateInputs H rel unr)
+      (fun y hy => by rw [c5_wIn]; simp [hy]) (fun y hy => by unfold stateInputs; simp [ha, hy]) nc
+  simp only [hA] at gv1 gv2 hW1 hW2 hHd hxr hxu
+  obtain ⟨hT, hN⟩ := c5_hits H hH c₀ k os b rel unr hmr hmu w gv1 gv2 ghr ghu nc
+  rw [← hxs] at hT hN
+  have hF : ∀ (u : Bool) (q : Key) kb, keyBytes q = some kb →
+      ((∃ l ∈ x.bb, q ∈ keys l ∨ q = rowKey l ∨
+        (u = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) ∨ ∃ i ∈ pendingOf k os, q = [4, i]) →
+      findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb)) :=
+    fun u q kb hk hm => hT u q kb hk (c7_probe_mem c₀ k os _ u q (hxb ▸ hm))
+  obtain ⟨hR, hS, hP⟩ := c4_hyps x c₀ rel unr hi hmr hmu hxc (fun u q kb hk hm => hF u q kb hk (Or.inl hm)) hN
+    (fun l hl => gK l (hxb ▸ hl))
+  have hDec : o.decisions.map (fun d => (d.line, d.outcome, d.reasons)) =
+      (decideRegT (carried c₀ rel unr) k os b).decisions.map (fun d => (d.line, d.outcome, d.reasons)) := by
+    rw [hD]; exact c4_decisions H x c₀ k os b rel unr hi hxc hxb hxr hxu hR hS hP
+  have hO : ∀ d ∈ o.decisions, x.ownQ d.line = own (carried c₀ rel unr) d.line := fun d hd' =>
+    c4_ownQ x c₀ rel unr hxc hR d.line (by
+      have hm : d.line ∈ o.decisions.map (·.line) := List.mem_map_of_mem hd'
+      rw [hD, c7_lines] at hm
+      exact c7_ord x hm)
+  obtain ⟨hPay, hRel, hUnr⟩ := c7_sel x (carried c₀ rel unr) o.decisions _ hDec hO (by rw [hxc]; rfl)
+  have hFresh : o.fresh = batchFresh (carried c₀ rel unr) (decideRegT (carried c₀ rel unr) k os b) := by
+    rw [hFr, c5_fresh_spec, hRel, hUnr]
+  exact ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, hA, hxc, hxb, hF, hN, hD, hDec, hPay, hFresh, hW1, hW2, hHd, hxr,
+    hxu, hDg, hFree, hPays⟩
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
@@ -3684,13 +3819,41 @@ theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k
      headOf H r.released r.unresolved = some o.head ∧ digestV2 H o.head = some o.digest) ∨
     Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr) := sorry
 
+/-- A set has no row under id key [4, i] iff no row has id i (kinds 5, 6 never equal [4, i]). -/
+private theorem c7_cnt0 (u : Bool) (s : List Line) (i : Nat) :
+    ((s.filter fun y => (rowKeys u y).contains [4, i]).length == 0) = !((s.map (·.id)).contains i) := by
+  have e : ∀ y : Line, (rowKeys u y).contains [4, i] = (y.id == i) := fun y => by
+    apply Bool.eq_iff_iff.mpr
+    unfold rowKeys keys exactKey nearKey idKey dayKey badDayKey
+    cases isCap y <;> cases validDate y.date <;> cases u <;> simp <;> exact eq_comm
+  simp only [e]
+  apply Bool.eq_iff_iff.mpr
+  simp [List.filter_eq_nil_iff]
+
 /-- H5: WAIT ids are probed as id keys in both trees; does not reuse `hp` (DecideLayer.lean:111). -/
 theorem freeIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
     (d : Bytes) (hd : digestV2 H h = some d) (w : Witness) (o : OutV2) (hr : decideIdx H c₀ k os b d w = some o) :
     (let r := decideRegT (carried c₀ rel unr) k os b
      o.free = settleFree r.released.entries r.unresolved.entries (pendingOf k os)) ∨
-    Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr) := sorry
+    Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr) := by
+  by_cases nc : Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr)
+  · exact Or.inr nc
+  left
+  obtain ⟨x, mr, mu, -, -, hmr, hmu, -, -, -, -, -, hF, hN, -, -, -, hFresh, -, -, -, -, -, -, hFree, -⟩ :=
+    c7_core H hH c₀ k os b rel unr hi h ha d hd w o hr nc
+  obtain ⟨f1, f2, e1, e2, e3⟩ := decideRegT_sets c₀ k os b rel unr
+  simp only [hFree, hFresh, e1, e2, e3, settleFree]
+  apply List.filter_congr
+  intro i hi'
+  have h0 : x.cnt false [4, i] = (rel.entries.filter fun y => (rowKeys false y).contains [4, i]).length :=
+    c4_cnt hmr (by simp) (fun kb hk => hF false _ kb hk (Or.inr ⟨i, hi', rfl⟩)) (hN false _)
+  have h1 : x.cnt true [4, i] = (unr.entries.filter fun y => (rowKeys true y).contains [4, i]).length :=
+    c4_cnt hmu (by simp) (fun kb hk => hF true _ kb hk (Or.inr ⟨i, hi', rfl⟩)) (hN true _)
+  rw [h0, h1, c7_cnt0, c7_cnt0]
+  simp only [List.map_append, List.contains_append]
+  cases (rel.entries.map (·.id)).contains i <;> cases (unr.entries.map (·.id)).contains i <;>
+    cases (f1.map (·.id)).contains i <;> cases (f2.map (·.id)).contains i <;> rfl
 
 /-- The honest witness. -/
 def witnessOf (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
