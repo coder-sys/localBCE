@@ -39,6 +39,7 @@ _ID = re.compile(r"[!-~]+(?: +[!-~]+)*")  # an ISA06/ISA08/GS02/GS03 id, padding
 _ID_QUALIFIERS = frozenset(("01", "14", "20", "27", "28", "29", "30", "33", "ZZ"))
 _TIME = re.compile(r"(?:[01][0-9]|2[0-3])[0-5][0-9](?:[0-5][0-9][0-9]{0,2})?")  # HHMM, HHMMSS, HHMMSSD or HHMMSSDD
 _EMPTY = (("",),)
+_ENVELOPE = frozenset(("ISA", "GS", "ST", "SE", "GE"))
 
 Element = tuple[tuple[str, ...], ...]  # repeats, each a tuple of components
 
@@ -132,7 +133,9 @@ def _match(close: Segment, opened: Segment, close_at: int, open_at: int, count: 
         refuse("x12:count")
 
 
-def tokenize(data: bytes) -> Interchange:
+def _scan(data: bytes) -> tuple[Segment, tuple[str, str, str, str], list[str], list[str]]:
+    """Every check before the first segment is split: input, caps, ISA, separators, segment count, trailing or truncated bytes.
+    Returns the ISA, the separators (element, repeat, component, segment), each segment's text and its tag (not yet validated)."""
     if type(data) is not bytes:
         refuse("x12:input")
     if len(data) > MAX_BYTES:
@@ -169,48 +172,58 @@ def tokenize(data: bytes) -> Interchange:
         refuse("x12:truncated")
     if tail:
         refuse("x12:trailing")
-    segments = [_segment(chunk, esep, rsep, csep) for chunk in chunks]
+    return isa, (esep, rsep, csep, term), chunks, tags
+
+
+def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
+    """Envelope checks over the segments in file order. A segment is read only at the envelope tags (ISA GS ST SE GE IEA);
+    every other item is carried through whole, so the caller may hand an already-split form of it."""
     groups, gs, sets, txn = [], None, [], None
-    for seg in segments[:-1]:
-        if seg.tag == "ISA":
+    for tag, seg in zip(tags[:-1], items):
+        if tag not in _ENVELOPE:
+            if txn is None:
+                refuse("x12:envelope")
+            txn.append(seg)
+        elif tag == "ISA":
             refuse("x12:envelope")
-        elif seg.tag == "GS":
+        elif tag == "GS":
             if gs is not None:
                 refuse("x12:envelope")
             seg.blank(9)
-            if not _group_valid(*(seg.value(i) for i in (2, 3, 4, 5, 7))):
+            if not _group_valid(*(seg.value(j) for j in (2, 3, 4, 5, 7))):
                 refuse("x12:envelope")
             gs, sets = seg, []
-        elif seg.tag == "ST":
+        elif tag == "ST":
             if gs is None or txn is not None:
                 refuse("x12:envelope")
             seg.blank(4)
             if seg.value(3) not in ("", gs.value(8)):
                 refuse("x12:version")
             txn = [seg]
-        elif seg.tag == "SE":
+        elif tag == "SE":
             if txn is None:
                 refuse("x12:envelope")
             txn.append(seg)
             _match(seg, txn[0], 2, 2, len(txn))
             sets.append(tuple(txn))
             txn = None
-        elif seg.tag == "GE":
+        else:
             if gs is None or txn is not None:
                 refuse("x12:envelope")
             _match(seg, gs, 2, 6, len(sets))
             groups.append(Group(gs, tuple(sets)))
             gs = None
-        elif txn is None:
-            refuse("x12:envelope")
-        else:
-            txn.append(seg)
     if gs is not None or txn is not None or not groups:
         refuse("x12:envelope")
-    iea = segments[-1]
+    iea = items[-1]
     iea.blank(3)
     if iea.value(2) != isa.value(13):
         refuse("x12:control")
     if iea.value(1) != str(len(groups)):
         refuse("x12:count")
     return Interchange(isa, tuple(groups))
+
+
+def tokenize(data: bytes) -> Interchange:
+    isa, (esep, rsep, csep, _), chunks, tags = _scan(data)
+    return _envelope(isa, tags, [_segment(chunk, esep, rsep, csep) for chunk in chunks])
