@@ -125,9 +125,18 @@ class PayerTests(fx.Scratch):
             own = self._store(tmp, ((fx.OTHER, fx.D[3], *approves), (fx.TENANT, fx.D[3], *approves)))
             self.assertIsNone(own.release(request, token, now=fx.NOW))
             self.assertEqual(own.release(request, token, now=fx.NOW), "released")
-            for bad in ((fx.D[3], *approves), ("-" + fx.TENANT, fx.D[3], *approves), (fx.TENANT.encode(), fx.D[3], *approves)):
+            for i, bad in enumerate(((fx.D[3], *approves), ("-" + fx.TENANT, fx.D[3], *approves), (fx.TENANT.encode(), fx.D[3], *approves))):
+                fresh = Path(tmp) / f"bad{i}.sqlite3"
                 with self.subTest(bad=bad[0]), self.assertRaises(gate.GateCodecError):
-                    payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={}, grants=(bad,))
+                    payer.PayerStore(fresh, root_keys={}, grants=(bad,))
+                self.assertFalse(fresh.exists())  # refused before any write
+
+    def test_grants_may_be_a_one_shot_iterable(self) -> None:
+        with self.scratch() as tmp:
+            request, (token, _) = self._ready(tmp)
+            store = self._store(tmp, (g for g in ((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)))
+            self.assertIsNone(store.release(request, token, now=fx.NOW))
+            self.assertEqual(store.release(request, token, now=fx.NOW), "released")
 
     def _raw(self, tmp: str, *statements: str) -> None:
         with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as db:

@@ -68,7 +68,7 @@ _CERT_PROBE: Final = (_list([]) + signer.framed(b"") + bytes(8) + _list([]) + by
 class PayerStore:
     def __init__(self, path: Path | str, *, root_keys: Mapping[str, bytes],
                  grants: Sequence[tuple[str, bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
-        self._roots = dict(root_keys)
+        self._roots, grants = dict(root_keys), tuple(grants)  # grants is walked twice
         for tenant, *_ in grants: gate._Writer(b"").ident(tenant, "grant_tenant")  # a canonical ident, refused before any write
         self._grants = _list([_blob(t.encode()) + _blob(g) + _list([*map(_blob, rs)]) + _list([*map(_blob, es)]) for t, g, rs, es in grants])
         self._db = sqlite3.connect(path, isolation_level=None, timeout=60)  # Lean may hold the write lock up to 30 s
