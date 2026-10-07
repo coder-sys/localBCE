@@ -3520,6 +3520,107 @@ private theorem c4_hyps {H : Bytes → Bytes} (x : Ix) (c₀ : Ctx) (rel unr : S
       · apply e14; simp [nearKey, hc]
     · apply e14; simp [idKey]
 
+private theorem c5_guard {p : Prop} [Decidable p] {u : Unit} (h : (guard p : Option Unit) = some u) : p := by
+  by_cases hp : p
+  · exact hp
+  rw [guard, if_neg hp] at h
+  cases h
+
+private theorem c5_headOf {H : Bytes → Bytes} {rel unr : Snapshot Line} {h : Head} (ha : headOf H rel unr = some h) :
+    ∃ mr mu, setMap H false rel.entries = some mr ∧ setMap H true unr.entries = some mu ∧
+      h = ⟨rel.asOf, unr.asOf, rel.count, unr.count, root H mr, root H mu⟩ := by
+  unfold headOf at ha
+  cases hmr : setMap H false rel.entries with
+  | none => simp only [hmr, bind, Option.bind] at ha; cases ha
+  | some mr =>
+    cases hmu : setMap H true unr.entries with
+    | none => simp only [hmr, hmu, bind, Option.bind] at ha; cases ha
+    | some mu =>
+      simp only [hmr, hmu, bind, Option.bind, pure] at ha
+      exact ⟨mr, mu, rfl, rfl, (Option.some.inj ha).symm⟩
+
+private theorem c5_wIn (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (w : Witness) :
+    witnessInputs H c₀ k os b w = (headIn w.anchor).toList ++
+      ((probeKeys c₀ k os (ready k os b)).1 ++ (probeKeys c₀ k os (ready k os b)).2).filterMap
+        (fun q => (keyBytes q).map (KD ++ ·)) ++ pfInputs H w.relPf ++ pfInputs H w.unrPf ++
+      w.lists.flatMap fun (_, _, n, ys, fp) => firstKInputs H n ys fp := rfl
+
+/-- `batchFresh` of a carried-style result is the batch's released and unresolved lines. -/
+private theorem c5_fresh_spec (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) :
+    batchFresh c (decideRegT c k os b) =
+      (releasedLines c (decideRegT c k os b).decisions, unresolvedLines c (decideRegT c k os b).decisions) := by
+  simp [batchFresh, decideRegT, bumpRes, decideReg, decideBatchIn, advance, releasedSet, unresolvedSet]
+
+/-- `decideIdx` peeled: every guard it passed and every value it bound. -/
+private theorem c5_peel (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (d : Bytes)
+    (w : Witness) (o : OutV2) (hr : decideIdx H c₀ k os b d w = some o) :
+    ∃ (hr' hu' : List (Option Hit)) (wr wu : Map) (x : Ix),
+      digestV2 H w.anchor = some d ∧ (∀ l ∈ ready k os b, (keyBytes (rowKey l)).isSome = true) ∧
+      verifyMulti H w.anchor.relRoot
+        ((probeKeys c₀ k os (ready k os b)).1.filterMap fun q => (keyBytes q).map (pathOf H)) w.relPf = true ∧
+      verifyMulti H w.anchor.unrRoot
+        ((probeKeys c₀ k os (ready k os b)).2.filterMap fun q => (keyBytes q).map (pathOf H)) w.unrPf = true ∧
+      (probeKeys c₀ k os (ready k os b)).1.mapM (probe H w.relPf w false) = some hr' ∧
+      (probeKeys c₀ k os (ready k os b)).2.mapM (probe H w.unrPf w true) = some hu' ∧
+      x.c₀ = c₀ ∧ x.hs = hr'.filterMap id ++ hu'.filterMap id ∧
+      x.relOk = (validDate w.anchor.relAsOf && decide (w.anchor.relAsOf ≤ c₀.today)) ∧
+      x.unrOk = (validDate w.anchor.unrAsOf && decide (w.anchor.unrAsOf ≤ c₀.today)) ∧
+      x.bb = ready k os b ∧
+      o.decisions = Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb) ∧
+      o.fresh = (x.releasedQ o.decisions, x.unresolvedQ o.decisions) ∧
+      writes H false x.hs w.anchor.relCount o.fresh.1 = some wr ∧
+      writes H true x.hs w.anchor.unrCount o.fresh.2 = some wu ∧
+      o.head = ⟨bumpIf x.relOk c₀.today w.anchor.relAsOf, bumpIf x.unrOk c₀.today w.anchor.unrAsOf,
+        w.anchor.relCount + o.fresh.1.length, w.anchor.unrCount + o.fresh.2.length,
+        hashPf H (upsertPf 513 0 w.relPf wr), hashPf H (upsertPf 513 0 w.unrPf wu)⟩ ∧
+      digestV2 H o.head = some o.digest ∧
+      o.free = (pendingOf k os).filter (fun i => !((o.fresh.1 ++ o.fresh.2).map (·.id)).contains i &&
+        x.cnt false [4, i] == 0 && x.cnt true [4, i] == 0) ∧
+      o.pays = (o.decisions.map (·.line.pay)).eraseDups.map fun p =>
+        (p, x.payOutcomeQ o.decisions p, ((o.decisions.filter (·.line.pay == p)).map (·.line.cents)).sum) := by
+  unfold decideIdx at hr
+  simp only [bind, Option.bind] at hr
+  split at hr
+  · cases hr
+  rename_i _ g1
+  replace g1 := c5_guard g1
+  split at hr
+  · cases hr
+  rename_i _ g2
+  replace g2 := c5_guard g2
+  rw [List.all_eq_true] at g2
+  generalize hq : probeKeys c₀ k os (ready k os b) = qq at hr ⊢
+  obtain ⟨qr, qu⟩ := qq
+  dsimp only at hr ⊢
+  split at hr
+  · cases hr
+  rename_i _ g3
+  replace g3 := c5_guard g3
+  rw [Bool.and_eq_true] at g3
+  dsimp only at hr
+  split at hr
+  · cases hr
+  rename_i hr' ghr
+  dsimp only at hr
+  split at hr
+  · cases hr
+  rename_i hu' ghu
+  dsimp only at hr
+  split at hr
+  · cases hr
+  rename_i wr gwr
+  dsimp only at hr
+  split at hr
+  · cases hr
+  rename_i wu gwu
+  dsimp only at hr
+  split at hr
+  · cases hr
+  rename_i dg gdg
+  cases hr
+  exact ⟨hr', hu', wr, wu, _, g1, g2, g3.1, g3.2, ghr, ghu, rfl, rfl, rfl, rfl, rfl, rfl, rfl, gwr, gwu, rfl, gdg,
+    rfl, rfl⟩
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
