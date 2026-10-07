@@ -5312,7 +5312,7 @@ private theorem c13_writes (H : Bytes → Bytes) (u : Bool) (s f : List Line) (h
           | none =>
             rw [hk, hp, he] at hy
             simp [List.foldl_append, ← hn, ← hpk, hv] at hy
-          | some v => exact ⟨(pathOf H kb, v), by simp [hh, he, hv]⟩)
+          | some v => exact ⟨(pathOf H kb, v), by simp [hh, hv]⟩)
   have gA' : (((s ++ f).map rowKey ++ ((s ++ f).flatMap (rowKeys u)).eraseDups).map (c9PK H)).Nodup := by
     rw [List.map_append, ← (c9_rows_fst (fun i => i) hrA0).1, ← (c9_ks_fst hkA).1]
     exact gA
@@ -5338,6 +5338,131 @@ private theorem c13_writes (H : Bytes → Bytes) (u : Bool) (s f : List Line) (h
     exact c8_nodup_map_of_inj _ _ hLF fun a ha b hb e =>
       c8_inj_of_nodup_map _ _ gA' a b (sub a ha) (sub b hb) e
   exact ⟨rF ++ kF, c9_enc hrF hkF gF⟩
+
+private theorem c13_postings_mem {u : Bool} {s : List Line} {q : Key} {es : List Bytes}
+    (h : postings u s q = some es) (hne : es ≠ []) : q ∈ s.flatMap (rowKeys u) := by
+  refine Classical.byContradiction fun hq => hne ?_
+  unfold postings at h
+  rw [c9_postings_nil u s q hq] at h
+  cases h
+  rfl
+
+private theorem c13_postings_ne {u : Bool} {s : List Line} {q : Key} {es : List Bytes}
+    (hq : q ∈ s.flatMap (rowKeys u)) (h : postings u s q = some es) : es ≠ [] := by
+  rintro rfl
+  obtain ⟨x, hx, hqx⟩ := List.mem_flatMap.mp hq
+  obtain ⟨i, hi⟩ := c3_zipIdx_of_mem hx
+  unfold postings at h
+  obtain ⟨y, hy, -⟩ := c3_mapM_all _ _ _ h (x, i) (List.mem_filter.mpr ⟨hi, by simpa using hqx⟩)
+  cases hy
+
+private theorem c13_postings_len {u : Bool} {s : List Line} {q : Key} {es : List Bytes}
+    (h : postings u s q = some es) : ∀ x ∈ es, x.length = 8 + idWidth := by
+  intro x hx
+  unfold postings at h
+  obtain ⟨⟨y, i⟩, -, hy⟩ := g1_mapM_mem _ _ _ h x hx
+  dsimp only at hy
+  unfold postEntry at hy
+  cases ha : be 8 i with
+  | none => simp [ha] at hy
+  | some a =>
+    cases hb : be idWidth y.id with
+    | none => simp [ha, hb] at hy
+    | some b =>
+      simp [ha, hb] at hy
+      subst hy
+      rw [List.length_append, be_len ha, be_len hb]
+
+/-- Probe completeness (mirror of `c3_probe`): on a verified proof of the set's map, with the honest list of
+    every listed key present and every listed entry honest, a probe is never refused. -/
+private theorem c13_probe (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : List Line) (m : Map)
+    (hm : setMap H u s = some m) (pf : Proof) (w : Witness) (ps : List Bytes)
+    (hv : verifyMulti H (root H m) ps pf = true) (q : Key) (kb : Bytes) (hk : keyBytes q = some kb)
+    (hp : pathOf H kb ∈ ps) (A B : List Bytes) (hA1 : KD ++ kb ∈ A) (hA2 : ∀ y ∈ pfInputs H pf, y ∈ A)
+    (hB : ∀ y ∈ setInputs H u s, y ∈ B) (nc : ¬ Collision H A B)
+    (hL1 : ∀ es, postings u s q = some es → es ≠ [] → q.head? ≠ some 7 →
+      (u, pathOf H kb, es.length, es.take K, firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD))) ∈ w.lists)
+    (hL2 : ∀ e ∈ w.lists, e.1 = u → ∃ q' kb' es', keyBytes q' = some kb' ∧ postings u s q' = some es' ∧ es' ≠ [] ∧
+      e = (u, pathOf H kb', es'.length, es'.take K, firstKPf H PD 64 (min K es'.length) (es'.map (leafHash H PD)))) :
+    ∃ r, probe H pf w u q = some r := by
+  cases hr : probe H pf w u q with
+  | some r => exact ⟨r, rfl⟩
+  | none =>
+  exfalso
+  obtain ⟨hmem, -, -, -⟩ := c3_setMap_mem hm
+  have hlk : lookupPf 0 pf (pathOf H kb) = some (lookup m (pathOf H kb)) := by
+    rcases smt_sound H hH m (setMap_ok H hH u s m hm) ps pf hv _ hp with h | h
+    · exact h
+    · exact absurd (coll_mono H hA2 (fun y hy => hB y (by simp [setInputs, hm, hy])) h) nc
+  have hkb : ∀ q' kb', keyBytes q' = some kb' → q' ∈ s.map rowKey ++ (s.flatMap (rowKeys u)).eraseDups →
+      pathOf H kb' = pathOf H kb → q' = q := by
+    intro q' kb' hk' hq' he
+    by_cases hne : KD ++ kb = KD ++ kb'
+    · have : kb = kb' := List.append_cancel_left hne
+      subst this
+      exact keyBytes_inj hk' hk
+    · refine absurd ⟨KD ++ kb, hA1, KD ++ kb', hB _ ?_, hne, he.symm⟩ nc
+      unfold setInputs
+      simp only [List.mem_append, List.mem_filterMap]
+      exact Or.inl (Or.inl ⟨q', by simpa using hq', by simp [hk']⟩)
+  unfold probe at hr
+  rw [hk] at hr
+  simp only [hlk] at hr
+  cases hl : lookup m (pathOf H kb) with
+  | none => simp [hl] at hr
+  | some v =>
+    simp [hl] at hr
+    rcases hmem _ (c3_lookup_some hl) with ⟨x, i, hxi, kb', hk', hb, he⟩ | ⟨q', hq', kb', es, hk', hes, hkv, he⟩
+    · have hxq := hkb _ _ hk' (List.mem_append_left _ (List.mem_map_of_mem (c3_mem_zipIdx hxi))) he.symm
+      subst hxq
+      have h7 : (rowKey x).head? = some 7 := rfl
+      have hv8 : v.length = 8 := be_len hb
+      simp [h7, hv8] at hr
+    · have hqq := hkb _ _ hk' (List.mem_append_right _ hq') he.symm
+      subst hqq
+      rw [hk] at hk'; cases hk'
+      obtain ⟨y, -, hqy⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp hq')
+      have h7 := c3_rowKeys_head u y _ hqy
+      have hne := c13_postings_ne (List.mem_eraseDups.mp hq') hes
+      have h1 : 1 ≤ es.length := by
+        cases es with
+        | nil => exact absurd rfl hne
+        | cons _ _ => exact Nat.succ_le_succ (Nat.zero_le _)
+      have hlt : es.length < 2 ^ 64 := by
+        unfold keyVal at hkv
+        cases hb : be 8 es.length with
+        | none => simp [hb] at hkv
+        | some c =>
+          have h1 := be_lt hb
+          have : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
+          omega
+      have hpk := keyVal_parse H hH es v hkv
+      have hvf : verifyFirstK H (frontierRoot H (es.foldl (frontierPush H) [])) es.length (es.take K)
+          (firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD))) = true := by
+        rw [listRoot_frontier H es hlt]
+        exact firstK_complete H hH es h1 hlt (c13_postings_len hes)
+      rw [if_neg h7, hpk] at hr
+      cases hf : w.lists.find? (fun e => e.fst == u && e.snd.fst == pathOf H kb) with
+      | none =>
+        have := List.find?_eq_none.mp hf _ (hL1 es hes hne h7)
+        simp at this
+      | some e =>
+        obtain ⟨a1, a2, n', ys, fp⟩ := e
+        have hpe := List.find?_some hf
+        simp only [Bool.and_eq_true, beq_iff_eq] at hpe
+        obtain ⟨q', kb', es', hk', hes', hne', he'⟩ := hL2 _ (List.mem_of_find?_eq_some hf) hpe.1
+        simp only [Prod.mk.injEq] at he'
+        obtain ⟨-, rfl, rfl, rfl, rfl⟩ := he'
+        have hqq := hkb _ _ hk' (List.mem_append_right _ (List.mem_eraseDups.mpr (c13_postings_mem hes' hne')))
+          hpe.2
+        subst hqq
+        rw [hk] at hk'; cases hk'
+        rw [hes] at hes'; cases hes'
+        simp only [hf] at hr
+        split at hr
+        · cases hr
+        · rename_i hc
+          exact hc (by simp [h1, hvf])
 
 /-- The honest witness. -/
 def witnessOf (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
