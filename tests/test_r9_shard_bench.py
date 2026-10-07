@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,6 +97,38 @@ def die_before_commit_main(conn, k: int, db: str) -> None:
 
 def die_after_commit_main(conn, k: int, db: str) -> None:
     die_in_commit(conn, k, db, True)
+
+
+def refuse_commit_main(conn, k: int, db: str) -> None:
+    """A shard worker whose COMMIT raises (the shard rolls back and answers ERR); patched here, in the child."""
+    real = sb.Shard.commit
+
+    def commit(self):
+        if k == DIE_SHARD:
+            raise rb.FinancialIntegrityError("forced_commit")
+        return real(self)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
+def wrong_ack_main(conn, k: int, db: str) -> None:
+    """A shard worker that commits and then ACKs a head that is not the one the spine expects."""
+    real = sb.Shard.commit
+
+    def commit(self):
+        real(self)
+        if k == DIE_SHARD:
+            self.w.head = bytes(64)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
+def stuck_main(conn, k: int, db: str) -> None:
+    """A shard worker that is stuck in the middle of a PART or a SNAPSHOT and answers nothing."""
+    sb.Shard.build = sb.Shard.snapshot = lambda self, *args: time.sleep(3600)
+    sb.shard_main(conn, k, db)
 
 
 class Gated:
@@ -674,6 +707,95 @@ class ShardBench(unittest.TestCase):
             self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and "shard_send:1" in str(r) for r in results), results)
             self.assertEqual((spine.n, spine.keys), (0, {}))
             self.assertEqual(self.all_digests(self.tmp / "s12-send"), before)  # nothing committed anywhere
+            with self.assertRaises(rb.FinancialIntegrityError):
+                spine.close()
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+
+    def test_s12_a_refused_commit_is_a_named_error_never_a_hang_and_a_wrong_commit_ack_in_abort_is_diverged(self) -> None:
+        files = sb.corpus(20261007, LINES, 12)
+        for on in (True, False):
+            for mode in ("pump", "abort", "diverged"):
+                name = f"s12-refuse-{int(on)}-{mode}"
+                spine = self.spine_with(wrong_ack_main if mode == "diverged" else refuse_commit_main, name, on)
+                timer, fired = self.watchdog(spine)
+                try:
+                    prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+                    first = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(8)])  # the spine commits; shard 1 is told to commit and refuses (or ACKs a wrong head)
+                    self.assertTrue(all(isinstance(r, dict) for r in first), (name, first))
+                    if mode != "pump":  # the next group fails in the spine while shard 1's reply to COMMIT is in flight: the abort reads it
+                        real_rows, calls = spine.write_rows, [0]
+
+                        def write_rows(*args, **kwargs):
+                            calls[0] += 1
+                            if calls[0] == 1:
+                                raise rb.FinancialIntegrityError("forced_spine_rows")
+                            return real_rows(*args, **kwargs)
+
+                        spine.write_rows = write_rows
+                    rest_items = [(i, *files[i], prepared[i]) for i in range(8, 12)]
+                    if mode == "diverged":
+                        with self.assertRaises(sb.ShardDiverged):
+                            spine.ingest_group(rest_items)
+                        self.assertEqual((spine.n, spine.keys), (8, directory(self.tmp / name / "spine.sqlite3")))  # the failed group left no trace in the spine or its keys
+                        spine.close()
+                    else:
+                        rest = spine.ingest_group(rest_items)
+                        self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and "shard_commit_refused:1" in str(r) for r in rest), (name, rest))
+                        self.assertEqual(list(spine.dead), [DIE_SHARD], name)
+                        with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                            spine.close()
+                        self.assertIn("shard_commit_refused:1", str(raised.exception), name)
+                finally:
+                    timer.cancel()
+                    for p, _ in spine.workers.values():
+                        if p.is_alive():
+                            p.terminate()
+                self.assertEqual(fired, [], name)  # no hang
+                self.quiet(spine)
+                if mode != "diverged":
+                    self.assertTrue(self.replay_identical(self.tmp / name, DIE_SHARD, name, 8)["owed"], name)  # the refusing shard comes back from the spine's records
+
+    def test_s12_a_silent_shard_ends_snapshot_and_abort_in_a_named_error_at_the_deadline(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        for on in (True, False):  # without the sender a write to a worker that does not read blocks (Windows), so the abort's deadline is the sender's case; the snapshot's is both
+            name = f"s12-stuck-{int(on)}"
+            spine = self.spine_with(stuck_main, name, on)
+            timer, fired = self.watchdog(spine)
+            try:
+                with mock.patch.object(sb, "REPLY_DEADLINE", 1.0):
+                    with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                        spine.snapshot(1, self.tmp / f"{name}-snapshot.sqlite3")
+                    self.assertIn("snapshot_timeout:1", str(raised.exception), name)
+                    if on:
+                        spine.write_rows = mock.Mock(side_effect=rb.FinancialIntegrityError("forced_spine_rows"))  # PARTs are out and never answered; the abort gets no ACK
+                        results = spine.ingest_group([(0, *files[0], sb.prepare(spine.tbl, 0, files[0][0].rows, 1))])
+                        self.assertTrue(isinstance(results[0], rb.FinancialIntegrityError) and "shard_reply_timeout" in str(results[0]), (name, results))
+                        self.assertTrue(spine.dead, name)
+            finally:
+                timer.cancel()
+                for p, _ in spine.workers.values():
+                    if p.is_alive():
+                        p.terminate()
+                        p.join()
+            with self.assertRaises(Exception):  # the workers are gone: close says so and stops the threads
+                spine.close()
+            self.assertEqual(fired, [], name)
+            self.quiet(spine)
+
+    def test_s12_snapshot_raises_a_failed_write_at_once(self) -> None:
+        spine = self.spine_with(sb.shard_main, "s12-snap-send")
+        timer, fired = self.watchdog(spine)
+        try:
+            spine.senders[1].conn = Broken()
+            with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                spine.snapshot(1, self.tmp / "s12-snap-send.sqlite3")
+            self.assertIn("shard_send:1", str(raised.exception))
             with self.assertRaises(rb.FinancialIntegrityError):
                 spine.close()
         finally:

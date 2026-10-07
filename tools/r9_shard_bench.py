@@ -379,6 +379,7 @@ def prep_main(conn, tbl: SimpleNamespace, rows: dict) -> None:
 
 GROUP_LINES = 40_000  # one group: the prepared files already queued when the spine is free, up to this many lines (the first file always goes); it never waits for a file
 PREP_AHEAD = 16  # files requested from the prep stage beyond the last one taken
+REPLY_DEADLINE = 120.0  # seconds a wait for a shard's reply to an ABORT or a SNAPSHOT may last before it is a named error, never a hang
 ROW_SLICE = 1024  # rows per executemany of the spine's rows; the spine takes the workers' replies between slices
 
 
@@ -467,7 +468,7 @@ class Sender:
                 try:
                     self.conn.send_bytes(buf)
                 except BaseException as error:  # kept for the spine's thread
-                    self.error = error
+                    self.error = error.with_traceback(None)  # the traceback would hold the overlapped write and its buffer for the life of the spine
                 self.seconds[kind] += time.perf_counter() - t0
 
     def stop(self) -> None:
@@ -506,6 +507,7 @@ class Spine:
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
+        self.dead: dict[int, str] = {}  # shards lost to this run (their COMMIT was refused, or they stopped answering) -> the error every later attempt and close raises
         self.senders = {k: Sender(k, conn, self.owed) for k, (_, conn) in self.workers.items()} if sender_on() else {}
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
         self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes")}
@@ -594,6 +596,10 @@ class Spine:
 
     def handle(self, k: int, m: tuple) -> None:
         if m[0] == "ERR":
+            if k in self.owed:  # a shard's first reply after COMMIT is the COMMIT's: it was refused after the spine committed, so the shard is lost to this run and replay recovers it
+                self.owed.pop(k)
+                self.dead[k] = f"shard_commit_refused:{k}:{m[1]}"
+                raise rb.FinancialIntegrityError(self.dead[k])
             raise rb.FinancialIntegrityError(f"shard_refused:{m[1]}")
         if m[0] == "ACK":
             if m[1] != self.owed.pop(k):
@@ -659,6 +665,8 @@ class Spine:
 
     def attempt(self, plan: list) -> list[dict]:
         """Steps 2-6 for one group. On any failure every shard asked is aborted, the spine rolled back and the keys undone, then it raises."""
+        if self.dead:
+            raise rb.FinancialIntegrityError(next(iter(self.dead.values())))
         started = time.perf_counter()
         self.ckpt.before_begin()
         self.c.execute("BEGIN IMMEDIATE")
@@ -715,27 +723,46 @@ class Spine:
             self.acked()
         return [f.p.classes for f in g.files]
 
+    def reply(self, k: int, deadline: float) -> tuple:
+        """The next reply of shard k, polled so that a never-sent ABORT (a failed write) or a silent shard ends in an error at the deadline."""
+        conn, sender = self.workers[k][1], self.senders.get(k)
+        while not conn.poll(0.5):
+            if sender is not None and sender.error is not None:
+                raise EOFError("abort_unsent")
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"shard_reply_timeout:{k}")
+        return conn.recv()
+
     def fail(self, g, undo: list, heads0: dict, prev0: bytes) -> None:
-        """Step 6/7: abort the shards that were asked, roll the spine back, forget the group's keys and heads."""
-        sent = sorted(g.sent)
+        """Step 6/7: abort the shards that were asked, roll the spine back, forget the group's keys and heads; then raise what the replies showed (a shard that diverged or went silent)."""
+        sent, problems, deadline = sorted(g.sent), [], time.monotonic() + REPLY_DEADLINE
         for k in sent:
             self.send(k, ("ABORT",))
-        for k in sent:  # replies in flight (a commit ACK still owed, BUILT or ERR) come first; the last ACK is the abort's. A shard whose pipe is gone, or whose ABORT could not be written, owes none.
-            conn, sender, acks = self.workers[k][1], self.senders.get(k), 1 + (k in self.owed)
+        for k in sent:  # a shard still owing a COMMIT answers it first (ACK, or ERR: refused), then BUILT or ERR of its part, the last ACK being the abort's
+            commit = k in self.owed
             try:
-                while acks:
-                    if sender is None or conn.poll(0.5):
-                        acks -= conn.recv()[0] == "ACK"
-                    elif sender.error is not None:
-                        raise EOFError("abort_unsent")
+                while True:
+                    m = self.reply(k, deadline)
+                    if commit:
+                        commit, expected = False, self.owed.pop(k)
+                        if m[0] != "ACK":
+                            self.dead[k] = f"shard_commit_refused:{k}:{m[1]}"
+                        elif m[1] != expected:
+                            problems.append(ShardDiverged(f"shard {k}: head differs after commit"))
+                    elif m[0] == "ACK":
+                        break
+            except TimeoutError as error:
+                self.dead[k] = str(error)
+                problems.append(rb.FinancialIntegrityError(str(error)))
             except (EOFError, OSError):
-                continue  # a lost shard keeps its debt: the next wait for acks says shard_lost, and nothing more goes to it
-            self.owed.pop(k, None)
+                continue  # the pipe is gone or the ABORT was never written: a shard still owing a COMMIT keeps its debt (the next wait for acks says shard_lost); a write error is raised again by every check_senders
         self.c.execute("ROLLBACK")
         self.dirty = self.pre_done = False
         for cid in undo:
             self.keys.pop(cid, None)
         self.heads, self.prev_head = heads0, prev0
+        if problems:
+            raise problems[0]
 
     def write_rows(self, index, pool, deposit, p: Prepared, tick=lambda: None) -> int:
         c, base, added, self.dirty = self.c, index * rb.KEY, 0, True
@@ -770,12 +797,19 @@ class Spine:
 
     def snapshot(self, k: int, path: Path) -> None:
         self.send(k, ("SNAPSHOT", str(path)))
-        self.expect(self.workers[k][1], "ACK")
+        conn, deadline = self.workers[k][1], time.monotonic() + REPLY_DEADLINE
+        while not conn.poll(0.5):  # a failed write is not a reply, and a silent shard must not hold the run: look at the senders and the clock now and then
+            self.check_senders()
+            if time.monotonic() > deadline:
+                raise rb.FinancialIntegrityError(f"snapshot_timeout:{k}")
+        self.expect(conn, "ACK")
 
     def close(self) -> list[dict]:
         stats = []
         try:
             self.check_senders()  # a STOP that cannot be written gets no STATS: say so, and stop the shards below
+            if self.dead:
+                raise rb.FinancialIntegrityError(next(iter(self.dead.values())))
             self.wait_acks()
             for k, (process, conn) in self.workers.items():
                 self.send(k, ("STOP",))
