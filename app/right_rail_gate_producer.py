@@ -187,24 +187,25 @@ class ShardProducer:
 
 def newest(path: Path) -> tuple[int, bytes] | None:
     """Read-only, for the registry boot check: the newest batch's (idreg_n, registry head), sealed or open."""
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     try:
-        row = db.execute("SELECT idreg_n, header FROM batches ORDER BY id DESC LIMIT 1").fetchone()
+        row =db.execute("SELECT idreg_n, header FROM batches ORDER BY id DESC LIMIT 1").fetchone()
     finally:
         db.close()
     return row and (row[0], row[1][-64:])
 
 
 def holds(path: Path, digest: bytes) -> bool:
-    """Read-only, for the registry boot check (B3): whether the store holds the batch ``digest``, sealed or open (as
-    ``newest``).  No store holds nothing; a store that cannot be read is ``store_unavailable``, never an answer."""
-    if not path.exists():
-        return False
+    """Read-only, for the registry boot check (B3): whether the store holds the batch ``digest`` sealed (an open row is
+    not yet a batch).  No store holds nothing; a store or path that cannot be read is ``store_unavailable``."""
     try:
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        if not path.exists():
+            return False
+        db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
-            return db.execute("SELECT 1 FROM batches WHERE digest=?", (digest,)).fetchone() is not None
+            return db.execute("SELECT 1 FROM batches WHERE digest=? AND signature IS NOT NULL",
+                              (digest,)).fetchone() is not None
         finally:
             db.close()
-    except sqlite3.Error as error:
+    except (sqlite3.Error, OSError) as error:
         raise GateProducerError("store_unavailable") from error

@@ -73,9 +73,9 @@ def head_at(c: g.Cluster, n: int) -> bytes:
 
 class ShardTests(fx.Scratch):
     @contextlib.contextmanager
-    def cluster(self):
+    def cluster(self, shards: int = 2):
         with self.scratch() as tmp:
-            c = g.Cluster(tmp, fx.custody(tmp))
+            c = g.Cluster(tmp, fx.custody(tmp), shards=shards)
             c.boot()
             yield c
 
@@ -346,15 +346,15 @@ class ShardTests(fx.Scratch):
         return store.release(request(p, k), gate.encode_token(tokens[0]), now=fx.NOW)
 
     @contextlib.contextmanager
-    def released_then_restored(self, restart: bool = True):
-        """Copy the whole directory; shard 0 pays X in payment 1 (sealed, stored and released by the payer).  Then the
+    def released_then_restored(self, restart: bool = True, shards: int = 2, k: int = 0):
+        """Copy the whole directory; shard ``k`` pays X in payment 1 (sealed, stored and released by the payer).  Then the
         copy comes back and, with ``restart``, the process restarts: it holds no nonce until a boot passes."""
-        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+        with tempfile.TemporaryDirectory() as keep, self.cluster(shards) as c:
             shutil.copytree(c.dir, Path(keep) / "copy")
             c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
                                                           grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),)))
             store.install_cert(c.custody[2])
-            self.assertIsNone(self.pay(c, store, 0, 1))
+            self.assertIsNone(self.pay(c, store, k, 1))
             for f in c.dir.iterdir():
                 f.unlink()
             shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
@@ -395,6 +395,31 @@ class ShardTests(fx.Scratch):
                 else:
                     self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
+
+    def test_r5_a_payer_shard_outside_the_boot_is_refused(self) -> None:
+        """Review MEDIUM-1: shard 2 of 3 pays X, the directory comes back and boots with 2 shards; the payer holds shard
+        2 outside the commitments, so boot is ``anchor_missing`` and X is released once.  Mutant: an anchor map cut to
+        the booted shards checks nothing, and shard 0 pays X again."""
+        for mutant in (False, True):
+            with self.subTest(mutant=mutant), self.released_then_restored(shards=3, k=2) as (c, store):
+                c.shards = 2
+                if mutant:
+                    stored = store.newest_stored
+                    with mock.patch.object(store, "newest_stored", lambda t: {s: d for s, d in stored(t).items() if s < 2}):
+                        c.boot()
+                    self.assertIsNone(self.pay(c, store, 0, 2))
+                else:
+                    with self.assertRaisesRegex(idreg.IdRegistryError, "anchor_missing"):
+                        c.boot()
+                    self.assertEqual(c.send(0, {2: [10]}), {10: "HOLD registry_restored"})
+                self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
+
+    @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
+    def test_r5_restore_while_running_no_boot(self) -> None:
+        """The directory comes back under a running process that never reboots: it holds the copy's newest nonce, so
+        nothing fences it and shard 1 ALLOWs X again; it must HOLD."""
+        with self.released_then_restored(restart=False) as (c, store):
+            self.assertTrue(c.send(1, {2: [10]})[10].startswith("HOLD"))
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the

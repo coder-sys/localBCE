@@ -149,13 +149,15 @@ def _fence(db: sqlite3.Connection) -> None:
 
 
 def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
-         anchors: Mapping[int, tuple[Path, bytes | None]]) -> bytes:
+         stores: Mapping[int, Path], checkpoints: Mapping[int, bytes] | None) -> bytes:
     """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
     0..count-1; a shard with rows needs a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n
     of it with no SETTLE of the shard after a RESERVE of it past n, append BOOT with a fresh nonce and return it.
-    ``anchors`` names, for exactly those shards, the producer store the commitment came from and the payer's newest
-    stored checkpoint digest (``None``: the payer stored none); a store that lacks it is ``store_rewound`` (B3, design
-    idreg-restore 1), so a store, registry and mark restored together to before a released checkpoint cannot boot.
+    ``stores`` names, for exactly those shards, the producer store the commitment came from; ``checkpoints`` is the
+    payer's whole map shard -> newest stored checkpoint digest (``None``: unreachable, ``payer_unavailable``).  A payer shard
+    outside the commitments is ``anchor_missing``, a store that lacks its digest sealed ``store_rewound`` (B3, design
+    idreg-restore 1: a store, registry and mark restored together to before a released checkpoint cannot boot), an
+    unreadable store ``store_unavailable``.
     Every refusal after the registry opens commits one fence BOOT row (``_fence``), then raises: no RESERVE, FREE or
     SETTLE, and no running handle reserves again until a boot passes."""
     db = _open(path)
@@ -171,9 +173,15 @@ def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
                 raise IdRegistryError("commitment_missing")
             if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
                 raise IdRegistryError("registry_rewound")
-            if set(anchors) != set(commitments):
+            if checkpoints is None:
+                raise IdRegistryError("payer_unavailable")
+            if set(stores) != set(commitments) or not set(checkpoints) <= set(commitments):
                 raise IdRegistryError("anchor_missing")
-            if any(digest is not None and not producer.holds(store, digest) for store, digest in anchors.values()):
+            try:
+                rewound = not all(producer.holds(stores[s], digest) for s, digest in checkpoints.items())
+            except producer.GateProducerError as error:
+                raise IdRegistryError("store_unavailable") from error
+            if rewound:
                 raise IdRegistryError("store_rewound")
             nonce = os.urandom(32)
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
