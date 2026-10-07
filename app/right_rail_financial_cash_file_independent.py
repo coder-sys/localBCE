@@ -168,7 +168,7 @@ def _table(connection: sqlite3.Connection, table: str, rowids: list[int] | None 
     return {row[0]: dict(zip(columns, row[1:])) for row in stored}
 
 
-def _find(connection: sqlite3.Connection, table: str, columns: tuple[str, ...], keys, where: str = "") -> list[dict]:  # the rows of one package table whose `columns` equal one of `keys` (tuples; a NULL key matches nothing): keyed reads in chunks of at most 999 variables, inside the caller's transaction
+def _find(connection: sqlite3.Connection, table: str, columns: tuple[str, ...], keys, where: str = "") -> list[dict]:  # the rows of one package table whose `columns` equal one of `keys` (tuples; a NULL key matches nothing): keyed reads in chunks of at most 999 variables, inside the caller's transaction. They trust the indexes they use (PK, UNIQUE, private index v2) because the whole-store check, whose PRAGMA integrity_check matches every index entry to its row, has run on the store file before every begin: each caller opened its owner under it (apply_cash_file also on its private copy, preview on one), and a forged store is refused at that open; tests/test_cfi_keyed_begin.py pins every route
     cursor, names, keys, size, found = connection.cursor(), ledger.TABLE_COLUMNS[table], sorted({key for key in keys if None not in key}), 999 // len(columns), []
     cursor.row_factory = None
     for start in range(0, len(keys), size):

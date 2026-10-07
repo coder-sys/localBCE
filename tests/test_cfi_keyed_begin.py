@@ -1,4 +1,5 @@
-"""CFI begin reads by key (cfi-history-design-20261007 s2, C1). The oracle is today's begin, kept here whole: it loads every table and walks every event."""
+"""CFI begin reads by key (cfi-history-design-20261007 s2, C1). The oracle is today's begin, kept here whole: it loads every table and walks every event.
+CORPUS replays 17 of the 56 ReceiverCashFileTests under it; each of the other 39 is in EXCLUDED with its reason, and a test that is in neither fails the module."""
 
 from contextlib import closing
 import hashlib
@@ -7,17 +8,41 @@ import sqlite3
 import unittest
 from unittest.mock import patch
 
+from app import right_rail_financial_cash_file as cash
 from app import right_rail_financial_cash_file_independent as check
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 from app.right_rail_financial_cash_file_independent import _held, _matches, _fact, _recorded, _require, _table, ledger
+from tests import test_right_rail_financial_acceptance as fixtures
 from tests import test_right_rail_financial_cash_file as cash_tests
 
 CORPUS = ("test_preview_apply_retry_restart_and_reversal", "test_mid_file_revision_and_action_refusals_refuse_a_file_that_is_not_absorbed_whole", "test_moved_baseline_keeps_retries_exact_and_a_row_at_its_revision_records",
           "test_planned_commit_equals_direct_for_an_overlapping_file_with_an_alias_row", "test_planned_commit_equals_direct_when_a_history_segment_seals_mid_file", "test_overlapping_file_records_new_rows_and_labels_repeats",
           "test_conflicting_reused_and_unknown_rows_are_held_with_their_class_and_a_prepared_row_at_its_revision_records", "test_repeat_of_a_reversed_payment_is_duplicate_only_if_it_predates_the_reversal",
           "test_linked_action_limit_and_ack_report_separation", "test_lost_response_recovers_without_new_cash", "test_a_plan_turns_only_refusals_into_a_refusal", "test_planned_commit_refuses_a_replayed_row_no_event_carries",
-          "test_manifest_baseline_binds_digest_owner_and_the_live_chain")
+          "test_manifest_baseline_binds_digest_owner_and_the_live_chain",
+          "test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit", "test_planned_commit_refuses_rows_unlike_the_plan_in_any_table", "test_final_verifier_failure_and_duplicate_sql_write_roll_back",
+          "test_concurrent_identical_files_commit_cash_once")  # the fault tests of the last four lines are compared too (review LOW-4)
+_NO_BEGIN = "refused before any begin runs (census cfx1: 0 begins), so there is nothing to compare"
+_CHILD = "runs the CLI or a child process; its begin runs outside this module's patch"
+_TIMING = "asserts wall time, not behaviour; the old begin alone differs run to run"
+_STALE = "stale-plan, busy or preview mechanics; every begin classifies only NEW rows of a fresh store (census cfx1), a kind the corpus already compares"
+_MIXED = "context binding and stale-plan mechanics; its begins classify only NEW and RETRY rows, kinds the corpus already compares"
+_BIG = "2,000 rows or the row caps, all NEW; the 499-key chunk is compared by the 500-row resend below"
+EXCLUDED = {
+    **dict.fromkeys(("test_a_crash_between_plan_and_commit_leaves_the_store_unchanged", "test_cli_apply_commits_an_empty_plan_for_a_resent_file_and_one_overtaken_by_the_same_file", "test_cli_binds_custom_live_and_test_identities_and_never_shadow",
+                     "test_cli_exports_the_manifest_a_file_is_prepared_against", "test_cli_preview_apply_privacy_and_source_preservation", "test_cli_refusal_never_migrates_or_creates_store", "test_process_crash_before_and_after_commit"), _CHILD),
+    **dict.fromkeys(("test_an_owner_write_without_a_checker_verifies_every_evaluated_obligation", "test_bounds_types_counts_origins_and_unsupported_formats", "test_checked_context_and_commands_are_immutable_copies", "test_evaluation_bindings_cite_only_the_items_own_evidence",
+                     "test_evaluation_takes_exactly_one_evidence_source", "test_every_field_is_required_and_unknowns_refuse", "test_every_whole_store_rule_runs_before_commit_or_is_excused", "test_history_export_replaces_only_an_earlier_manifest_of_this_history_and_not_through_a_leftover",
+                     "test_independent_commands_bind_every_field_order_and_type", "test_noncanonical_duplicate_keys_and_file_cap_refuse", "test_preview_cleanup_failure_cannot_publish_success", "test_refusals_are_fixed_classes"), _NO_BEGIN),
+    **dict.fromkeys(("test_a_repeated_production_apply_is_idempotent", "test_quarter_end_file_within_writer_timeout", "test_quarter_end_planned_commit_within_s1_bound"), _TIMING),
+    "test_a_raw_sqlite_error_on_apply_is_cash_file_failed_and_writes_nothing": "the old begin against itself gives different results from run to run; it still runs in its own module",
+    **dict.fromkeys(("test_row_caps_and_maximum_width_file", "test_two_thousand_rows_in_files_within_writer_timeout_and_size"), _BIG),
+    **dict.fromkeys(("test_a_different_writer_between_plan_and_commit_is_planned_again", "test_a_plan_is_stale_when_a_deadline_fell_between_its_clock_and_the_commit", "test_a_planned_commit_failing_mid_copy_writes_nothing", "test_a_stale_plan_is_made_again_and_commits_what_a_fresh_apply_commits",
+                     "test_a_stale_plan_is_refused_and_a_current_one_commits", "test_a_stale_refusal_keeps_the_writer_and_a_moved_store_is_verified_again", "test_planned_commit_runs_the_checker_on_the_live_rows_inside_the_lock", "test_planned_commit_writes_the_store_and_receipt_a_direct_apply_writes",
+                     "test_preview_refuses_a_copy_with_a_dangling_key_and_lives_beside_the_store", "test_preview_runs_the_owners_own_check_as_apply_does", "test_three_stale_plans_are_cash_file_busy_and_write_nothing"), _STALE),
+    **dict.fromkeys(("test_a_plan_with_nothing_to_write_or_after_a_seal_is_stale", "test_external_context_and_baseline_cannot_be_rebound", "test_production_apply_never_runs_a_file_on_the_live_store"), _MIXED),
+}
 
 
 def _old_begin_and_classify(self, connection):
@@ -118,6 +143,14 @@ class KeyedBeginTests(unittest.TestCase):
         self.addCleanup(fx.doCleanups)
         return fx
 
+    def _send(self, fx, rows, capture):
+        fx.baseline = fx._manifest()
+        fx.source = {**fx.source, "capture_id": capture}
+        try:
+            fx._apply(fx._prepare({**fx.value, "source": fx.source, "row_count": len(rows), "total_cents": sum(row["amount_cents"] for row in rows), "rows": rows}))
+        except (check.CashFileError, owner.FinancialError):
+            pass  # a refused file is part of the log
+
     def _equal(self, scenario, kinds):
         before, after = _run(scenario, True), _run(scenario, False)
         self.assertEqual(len(before), len(after))
@@ -140,13 +173,7 @@ class KeyedBeginTests(unittest.TestCase):
             fx = self._fixture()
             ids = fx._wide_store(12)
 
-            def send(rows, capture):
-                fx.baseline = fx._manifest()
-                fx.source = {**fx.source, "capture_id": capture}
-                try:
-                    fx._apply(fx._prepare({**fx.value, "source": fx.source, "row_count": len(rows), "total_cents": sum(row["amount_cents"] for row in rows), "rows": rows}))
-                except (check.CashFileError, owner.FinancialError):
-                    pass  # a refused file is part of the log
+            send = lambda rows, capture: self._send(fx, rows, capture)
             first = fx._file_of(ids[:3], 9, "s1")["rows"]
             send(first, "c1")
             send(first, "c1b")  # the same rows again: RETRY
@@ -182,42 +209,154 @@ class KeyedBeginTests(unittest.TestCase):
             finally:
                 connection.execute("ROLLBACK")
 
-    def _tampered_copy(self, fx, *statements):
-        """A copy of the live store with raw SQL run on it; open verification must refuse it."""
-        path = fx.store.path.with_name("tampered.sqlite")
+    def _copy(self, fx):
+        """A copy of the live store taken as it is, for a begin of its own."""
+        path = fx.store.path.with_name("copy.sqlite")
         with closing(sqlite3.connect(fx.store.path.resolve().as_uri() + "?mode=ro", uri=True)) as live, closing(sqlite3.connect(path)) as target:
             live.backup(target)
-            for statement in statements:
-                target.execute(statement)
-            target.commit()
-        with self.assertRaises(independent.IndependentFinancialError):
-            independent.verify_database(path, expected_scope=fx.scope, expected_authority=owner._checker_authority(fx.fixture.authority))
         return path
 
+    def _refused(self, fx, prepared, rule):
+        """The store is refused, with `rule`, at every open: the checker on a copy, a new owner, and the private copy under apply_cash_file and preview_cash_file (which wraps every refusal as cash_file_failed), none reaching a begin."""
+        with self.assertRaises(independent.IndependentFinancialError) as raised:
+            independent.verify_database(self._copy(fx), expected_scope=fx.scope, expected_authority=owner._checker_authority(fx.fixture.authority))
+        self.assertEqual(str(raised.exception), rule)
+        image = fixtures._image(fx.store.path)
+        with patch.object(check.CashFileCheck, "begin", autospec=True) as begin:
+            for route in (lambda: cash.apply_cash_file(fx.store, *prepared), lambda: fx.fixture._make_owner(path=fx.store.path, clock=fx.store.clock)):
+                with self.assertRaises(owner.FinancialIntegrityError) as raised:
+                    route()
+                self.assertEqual(str(raised.exception), "open_verification:" + rule)
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+                cash.preview_cash_file(*prepared, path=fx.store.path, trusted_authority=fx.fixture.authority, clock=fx.store.clock)
+        self.assertEqual(begin.call_count, 0)
+        self.assertEqual(fixtures._image(fx.store.path), image)
+
     def test_e1_duplicate_received_other_obligation_refused_at_open(self):
-        """E1 (design s4): a PAYMENT_RECEIVED of file-payment-1 filed again under ANOTHER obligation. Today's walk over every event refuses a file naming the
-        payment; the keyed begin reads the payment's own obligation and answers RETRY. Open verification (and the foreign-commit verify) refuses the store.
-        C-L adds the payload-id uniqueness index that makes it impossible."""
+        """E1 (design s4): a PAYMENT_RECEIVED of file-payment-1 appended again, by the owner's own event writer, under ANOTHER obligation: hash chain, schema and
+        digests intact, only the commands-log rule broken. Today's walk over every event refuses a file naming the payment; the keyed begin reads the payment's own
+        obligation and answers RETRY. The store is refused at every open, so no route reaches the begin. C-L adds the payload-id uniqueness index that makes it impossible."""
         fx = self._fixture()
-        prepared = fx._prepare()
-        fx._apply(prepared)
+        fx._apply()
         other = fx._query("SELECT obligation_id FROM obligations WHERE item_id<>? LIMIT 1", cash_tests.expected.H_ITEM_ID)[0][0]
-        path = self._tampered_copy(fx, "INSERT INTO financial_events SELECT event_sequence+1000, randomblob(64), 'OBLIGATION', '" + other + "', kind, before_revision, after_revision, payload_json, payload_digest, previous_head, head, committed_at_ms FROM financial_events WHERE kind='PAYMENT_RECEIVED' LIMIT 1")
+        payload = json.loads(fx._query("SELECT payload_json FROM financial_events WHERE kind='PAYMENT_RECEIVED' LIMIT 1")[0][0])
+        payload = {key: value for key, value in payload.items() if key != "rows" and not key.startswith("evaluation")}
+        revision = fx._query("SELECT revision FROM obligations WHERE obligation_id=?", other)[0][0]
+        with patch.object(owner.FinancialOwner, "_record_command", lambda *arguments, **keywords: None), fx.store._write() as connection:
+            owner.FinancialOwner._append_event(fx.store, connection, aggregate_type="OBLIGATION", aggregate_id=other, kind="PAYMENT_RECEIVED", before_revision=revision, after_revision=revision, payload=payload, committed_at_ms=fx.store._now())
+        fx.baseline = fx._manifest()
+        prepared = fx._prepare()  # the same file again
+        self._refused(fx, prepared, "commands:duplicate")
+        path = self._copy(fx)
         self.assertEqual(self._raw_begin(fx, prepared, path, True), "cash_file_failed")
         self.assertEqual(self._raw_begin(fx, prepared, path, False), ["RETRY", "RETRY"])
 
     def test_e2_misfiled_alias_refused_at_open(self):
-        """E2 (design s4): an alias confirmation filed under the wrong obligation. Today's walk finds it anywhere (ALIAS); the keyed begin looks under the
-        item's own obligation and holds the row as already_recorded, writing nothing. Open verification refuses the store. C-L adds the payload-id uniqueness index."""
+        """E2 (design s4): an alias confirmation filed, by the owner's own event writer, under the wrong obligation: hash chain, schema and digests intact, only the
+        duplicate-evidence rule broken. Today's walk finds it anywhere (ALIAS); the keyed begin looks under the item's own obligation and holds the row as
+        already_recorded, writing nothing. The store is refused at every open. C-L adds the payload-id uniqueness index."""
         fx = self._fixture()
         fx._apply()
-        fx._file_b([fx._row(3, 50, 2), {**fx._row(4, 100, 3), "common_origin_id": "file-origin-1"}])
-        prepared = fx._prepare()
-        fx._apply(prepared)
         other = fx._query("SELECT obligation_id FROM obligations WHERE item_id<>? LIMIT 1", cash_tests.expected.H_ITEM_ID)[0][0]
-        path = self._tampered_copy(fx, "DROP TRIGGER financial_event_update_immutable", "UPDATE financial_events SET aggregate_id='" + other + "' WHERE kind='PAYMENT_DUPLICATE_EVIDENCE'")
+        append = owner.FinancialOwner._append_event
+
+        def misfiled(self, connection, **event):
+            if event["kind"] == "PAYMENT_DUPLICATE_EVIDENCE":
+                revision = connection.execute("SELECT revision FROM obligations WHERE obligation_id=?", (other,)).fetchone()[0]
+                event = {**event, "aggregate_id": other, "before_revision": revision, "after_revision": revision}
+            return append(self, connection, **event)
+        with patch.object(owner.FinancialOwner, "_append_event", misfiled):
+            fx.store.record_payment_evidence(item_id=cash_tests.expected.H_ITEM_ID, payment_id="alias-payment", common_origin_id="file-origin-1", amount_cents=100, evidence_id="alias-evidence",
+                                             event_at_ms=cash_tests.expected.CASH_EVENT_MS, source_id="fictional-receiver", source_version="v1", local_ref="alias")
+        self.assertEqual(fx._query("SELECT DISTINCT aggregate_id FROM financial_events WHERE kind='PAYMENT_DUPLICATE_EVIDENCE'"), [(other,)])
+        fx._file_b([fx._row(2, 200, 1), {**fx._row(2, 100, 2), "payment_id": "alias-payment", "common_origin_id": "file-origin-1", "evidence_id": "alias-evidence"}])
+        prepared = fx._prepare()
+        self._refused(fx, prepared, "duplicate-evidence:binding")
+        path = self._copy(fx)
         self.assertEqual(self._raw_begin(fx, prepared, path, True), ["RETRY", "ALIAS"])
         self.assertEqual(self._raw_begin(fx, prepared, path, False), ["RETRY", "HELD"])
+
+    def test_every_route_into_begin_runs_the_whole_store_check_first(self):
+        """The keyed reads trust the store's indexes (LOW-1, accepted design) because the whole-store check, whose PRAGMA integrity_check sees every index entry, has run on the
+        file before each begin: apply_cash_file (on its private copy, then on the live store its owner opened under the check), run_batch(cash_file_context=...) on an owner
+        opened under it, preview_cash_file (on a private copy). Forged stores are refused before any begin: test_e1 and test_e2. A raw edit of a file after the owner
+        opened it is the owner-wide accepted limit, not a begin's."""
+        real_check, real_begin = independent._verify_connection, check.CashFileCheck.begin
+        where = lambda connection: connection.execute("PRAGMA database_list").fetchone()[2]
+        for route, files in (("apply_cash_file", 2), ("run_batch", 1), ("preview_cash_file", 1)):
+            with self.subTest(route):
+                fx = self._fixture()
+                prepared, log = fx._prepare(), []
+
+                def checked(connection, *arguments, **keywords):
+                    result = real_check(connection, *arguments, **keywords)
+                    log.append(("check", where(connection)))
+                    return result
+
+                def begun(instance, connection):
+                    log.append(("begin", where(connection)))
+                    return real_begin(instance, connection)
+                with patch.object(independent, "_verify_connection", checked), patch.object(check.CashFileCheck, "begin", begun), fx.fixture._make_owner(path=fx.store.path, clock=fx.store.clock) as store:
+                    if route == "apply_cash_file":
+                        cash.apply_cash_file(store, *prepared)
+                    elif route == "run_batch":
+                        fx._apply(prepared, store=store)
+                    else:
+                        cash.preview_cash_file(*prepared, path=store.path, trusted_authority=fx.fixture.authority, clock=store.clock)
+                begins = [(number, entry[1]) for number, entry in enumerate(log) if entry[0] == "begin"]
+                self.assertEqual(len({file for _, file in begins}), files)
+                for number, file in begins:
+                    self.assertIn(("check", file), log[:number])
+
+    def test_a_resend_across_the_key_chunk_with_retry_overlap_and_alias_rows_equals_the_whole_history_begin(self):
+        """500 rows (the file cap): more than the 499 two-column keys of one chunk. File 1 is all NEW; file 2 resends 160 of them (RETRY), names 170 stored origins under new payment and evidence ids (OVERLAP)
+        and adds 170 NEW; file 3 sends file 2 again (RETRY and ALIAS)."""
+        widest, find = [], check._find
+
+        def spy(connection, table, columns, keys, where=""):
+            keys = list(keys)
+            widest.append((len(columns), len({key for key in keys if None not in key})))
+            return find(connection, table, columns, keys, where)
+
+        def resend():
+            fx = self._fixture()
+            ids = fx._wide_store(600)
+            first = fx._file_of(ids, check.MAX_ROWS, "m1")["rows"]
+            self._send(fx, first, "c1")
+            fresh = fx._file_of(ids, check.MAX_ROWS, "m2")["rows"]
+            second = first[:160] + [{**fresh[number], "common_origin_id": first[number]["common_origin_id"]} for number in range(160, 330)] + fresh[330:]
+            self._send(fx, second, "c2")
+            self._send(fx, second, "c3")
+        with patch.object(check, "_find", spy):
+            self._equal(resend, {"NEW", "RETRY", "OVERLAP", "ALIAS"})
+        self.assertTrue(any(columns == 2 and count > 499 for columns, count in widest), widest)
+
+    def test_a_database_error_in_the_live_begin_rolls_back_and_writes_nothing(self):
+        """The private copy's begin passes; the begin at commit_cash_plan, inside the live BEGIN IMMEDIATE, meets the error (the test above fails the copy's begin)."""
+        fx = self._fixture()
+        prepared, find = fx._prepare(), check._find
+        live = str(fx.store.path.resolve())
+        raised = []
+
+        def failing(connection, *arguments, **keywords):
+            if connection.execute("PRAGMA database_list").fetchone()[2] == live:
+                raised.append(1)
+                raise sqlite3.DatabaseError("malformed")
+            return find(connection, *arguments, **keywords)
+        image, continuity = fixtures._image(fx.store.path), fx.store.export_continuity()
+        with patch.object(check, "_find", failing):
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+                cash.apply_cash_file(fx.store, *prepared)
+        self.assertEqual(raised, [1])
+        self.assertEqual((fixtures._image(fx.store.path), fx.store.export_continuity()), (image, continuity))
+        self.assertEqual(fx._query("SELECT payment_id FROM payments WHERE payment_id LIKE 'file-%'"), [])
+        self.assertEqual(cash.apply_cash_file(fx.store, *prepared)["recorded_count"], 2)  # the lock was released and the same file is still good
+
+    def test_every_cash_file_test_is_compared_or_excluded_with_a_reason(self):
+        names = set(unittest.TestLoader().getTestCaseNames(cash_tests.ReceiverCashFileTests))
+        self.assertEqual(set(CORPUS) | set(EXCLUDED), names)
+        self.assertEqual(set(CORPUS) & set(EXCLUDED), set())
+        self.assertEqual(len(CORPUS), len(set(CORPUS)))
 
 
 if __name__ == "__main__":
