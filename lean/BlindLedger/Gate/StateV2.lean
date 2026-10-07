@@ -652,10 +652,410 @@ def upsertPf : Nat → Nat → Proof → Map → Proof
       (upsertPf f (d + 1) r (ws.filter fun e => bit e.1 d))
   | _, _, pf, _ => pf
 
+/-- Elements of `L` share their first `d` bits. -/
+private def Agree (d : Nat) (L : Map) : Prop := ∀ e ∈ L, ∀ e' ∈ L, ∀ j < d, bit e.1 j = bit e'.1 j
+
+private theorem bit_ext (p q : Bytes) (hp : p.length = digestBytes) (hq : q.length = digestBytes)
+    (h : ∀ j < 512, bit p j = bit q j) : p = q := by
+  have h64 : digestBytes = 64 := rfl
+  refine List.ext_getElem (hp.trans hq.symm) fun i hi hi' => ?_
+  have hi64 : i < 64 := by omega
+  have gp : p.getD i 0 = p[i] := by rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]; rfl
+  have gq : q.getD i 0 = q[i] := by rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi']; rfl
+  have key : ∀ r < 8, (p[i]).toNat / 2 ^ (7 - r) % 2 = (q[i]).toNat / 2 ^ (7 - r) % 2 := by
+    intro r hr
+    have := h (8 * i + r) (by omega)
+    rw [bit, bit, show (8 * i + r) / 8 = i by omega, show (8 * i + r) % 8 = r by omega, gp, gq] at this
+    have la : (p[i]).toNat / 2 ^ (7 - r) % 2 < 2 := Nat.mod_lt _ (by omega)
+    have lb : (q[i]).toNat / 2 ^ (7 - r) % 2 < 2 := Nat.mod_lt _ (by omega)
+    generalize (p[i]).toNat / 2 ^ (7 - r) % 2 = a at this la ⊢
+    generalize (q[i]).toNat / 2 ^ (7 - r) % 2 = b at this lb ⊢
+    obtain rfl | rfl : a = 0 ∨ a = 1 := by omega
+    all_goals obtain rfl | rfl : b = 0 ∨ b = 1 := by omega
+    all_goals first | rfl | exact absurd this (by decide)
+  have k0 := key 0 (by omega)
+  have k1 := key 1 (by omega)
+  have k2 := key 2 (by omega)
+  have k3 := key 3 (by omega)
+  have k4 := key 4 (by omega)
+  have k5 := key 5 (by omega)
+  have k6 := key 6 (by omega)
+  have k7 := key 7 (by omega)
+  simp only [Nat.reduceSub, Nat.reducePow] at k0 k1 k2 k3 k4 k5 k6 k7
+  have lp : (p[i]).toNat < 256 := p[i].toNat_lt
+  have lq : (q[i]).toNat < 256 := q[i].toNat_lt
+  have : (p[i]).toNat = (q[i]).toNat := by omega
+  exact UInt8.toNat_inj.mp this
+
+private theorem agree_small {d : Nat} (hd : 512 ≤ d) {L : Map} (ha : Agree d L)
+    (hl : ∀ e ∈ L, e.1.length = digestBytes) (hn : (L.map (·.1)).Nodup) : L.length ≤ 1 := by
+  rcases L with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · simp
+  · simp
+  · exfalso
+    have hab : a.1 = b.1 := bit_ext _ _ (hl a (by simp)) (hl b (by simp))
+      (fun j hj => ha a (by simp) b (by simp) j (by omega))
+    simp [List.nodup_cons, hab] at hn
+
+private theorem agree_filter {d : Nat} {L : Map} (ha : Agree d L) (p : Bytes × Bytes → Bool)
+    (hp : ∀ e ∈ L, ∀ e' ∈ L, p e = true → p e' = true → bit e.1 d = bit e'.1 d) : Agree (d + 1) (L.filter p) := by
+  intro e he e' he' j hj
+  obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+  obtain ⟨he1', he2'⟩ := List.mem_filter.mp he'
+  by_cases hjd : j < d
+  · exact ha e he1 e' he1' j hjd
+  · have : j = d := by omega
+    subst this
+    exact hp e he1 e' he1' he2 he2'
+
+private theorem rootAt_len64 (H : Bytes → Bytes) (hH : HashLen H) (f d : Nat) (m : Map)
+    (h : f = 0 → m.length ≤ 1) : (rootAt H f d m).length = digestBytes := by
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · rw [rootAt_nil]; exact hH _
+  · obtain ⟨p, v⟩ := a
+    rw [rootAt_one]; exact hH _
+  · cases f with
+    | zero => simp at h
+    | succ f => rw [rootAt_succ2]; exact hH _
+
+private theorem mapOk_filter {m : Map} (hm : MapOk m) (p : Bytes × Bytes → Bool) : MapOk (m.filter p) :=
+  ⟨List.Nodup.sublist (List.filter_sublist.map _) hm.1, fun e he => hm.2 e (List.mem_filter.mp he).1⟩
+
+private theorem rootAt_node (H : Bytes → Bytes) (f d : Nat) (L : Map) (h : 2 ≤ L.length) :
+    rootAt H (f + 1) d L = H (nodeIn (rootAt H f (d + 1) (L.filter fun e => !bit e.1 d))
+      (rootAt H f (d + 1) (L.filter fun e => bit e.1 d))) := by
+  rcases L with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · simp at h
+  · simp at h
+  · exact rootAt_succ2 H f d a b t
+
+private theorem agree_mono {d : Nat} {L L' : Map} (h : ∀ e ∈ L', e ∈ L) (ha : Agree d L) : Agree d L' :=
+  fun e he e' he' j hj => ha e (h e he) e' (h e' he') j hj
+
+private theorem build_hash (H : Bytes → Bytes) (hH : HashLen H) : ∀ (f d : Nat) (L : Map),
+    f + d = 513 → Agree d L → MapOk L → hashPf H (build f d L) = rootAt H f d L := by
+  intro f
+  induction f with
+  | zero =>
+    intro d L hf ha hm
+    have hs := agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1
+    rcases L with _ | ⟨⟨p, v⟩, _ | ⟨b, t⟩⟩
+    · simp [build, hashPf, rootAt_nil]
+    · have hok : leafOk p v = true := by
+        have := hm.2 (p, v) (by simp)
+        simp [leafOk, this.1, this.2]
+      simp [build, hashPf, hok, rootAt_one]
+    · simp at hs
+  | succ f ih =>
+    intro d L hf ha hm
+    rcases L with _ | ⟨⟨p, v⟩, _ | ⟨b, t⟩⟩
+    · simp [build, hashPf, rootAt_nil]
+    · have hok : leafOk p v = true := by
+        have := hm.2 (p, v) (by simp)
+        simp [leafOk, this.1, this.2]
+      simp [build, hashPf, hok, rootAt_one]
+    · have hag0 := agree_filter ha (fun e => !bit e.1 d) (fun e _ e' _ h h' => by simp at h h'; rw [h, h'])
+      have hag1 := agree_filter ha (fun e => bit e.1 d) (fun e _ e' _ h h' => by
+        have h1 : bit e.1 d = true := h
+        have h2 : bit e'.1 d = true := h'
+        rw [h1, h2])
+      rw [rootAt_succ2]
+      show H (nodeIn (hashPf H (build f (d + 1) _)) (hashPf H (build f (d + 1) _))) = _
+      rw [ih (d + 1) _ (by omega) hag0 (mapOk_filter hm _), ih (d + 1) _ (by omega) hag1 (mapOk_filter hm _)]
+
+/-- Upsert result as a list: the writes, then the old rows whose key is not overwritten. -/
+private def upM (m ws : Map) : Map := ws ++ m.filter fun e => !ws.any (·.1 == e.1)
+
+private theorem upM_nil (m : Map) : upM m [] = m := by simp [upM]
+
+private theorem upsert_perm : ∀ (ws m : Map), (ws.map (·.1)).Nodup → (upsert m ws).Perm (upM m ws) := by
+  intro ws
+  induction ws with
+  | nil => intro m _; show m.Perm (upM m []); rw [upM_nil]
+  | cons w ws ih =>
+    intro m hn
+    obtain ⟨k, v⟩ := w
+    rw [List.map_cons, List.nodup_cons] at hn
+    have e1 : upsert m ((k, v) :: ws) = upsert ((k, v) :: m.filter (·.1 != k)) ws := rfl
+    rw [e1]
+    refine (ih _ hn.2).trans ?_
+    have hk : ws.any (·.1 == k) = false := by
+      simp only [List.any_eq_false, beq_iff_eq]
+      intro x hx hxk
+      exact hn.1 (List.mem_map.mpr ⟨x, hx, hxk⟩)
+    have e2 : upM ((k, v) :: m.filter (·.1 != k)) ws =
+        ws ++ (k, v) :: (m.filter fun e => !((k, v) :: ws).any (·.1 == e.1)) := by
+      have hf : (m.filter (·.1 != k)).filter (fun e => !ws.any (·.1 == e.1)) =
+          m.filter fun e => !((k, v) :: ws).any (·.1 == e.1) := by
+        rw [List.filter_filter]
+        apply List.filter_congr
+        intro e _
+        by_cases h1 : e.1 = k
+        · simp [h1]
+        · have h2 : k ≠ e.1 := fun h => h1 h.symm
+          have h3 : (k == e.1) = false := beq_eq_false_iff_ne.mpr h2
+          have h4 : (e.1 != k) = true := bne_iff_ne.mpr h1
+          simp [h3, h4]
+      unfold upM
+      rw [List.filter_cons_of_pos (by simp [hk]), hf]
+    rw [e2]
+    exact List.perm_middle
+
+private theorem upM_filter (m ws : Map) (p : Bytes × Bytes → Bool) (hp : ∀ e e' : Bytes × Bytes, e.1 = e'.1 → p e = p e') :
+    (upM m ws).filter p = upM (m.filter p) (ws.filter p) := by
+  unfold upM
+  rw [List.filter_append, List.filter_filter, List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro e he
+  have key : ws.any (·.1 == e.1) = (ws.filter p).any (·.1 == e.1) ∨ p e = false := by
+    by_cases hpe : p e = true
+    · left
+      by_cases h : ws.any (·.1 == e.1) = true
+      · obtain ⟨w, hw, hwe⟩ := List.any_eq_true.mp h
+        have hwe' : w.1 = e.1 := by simpa using hwe
+        have : (ws.filter p).any (·.1 == e.1) = true :=
+          List.any_eq_true.mpr ⟨w, List.mem_filter.mpr ⟨hw, by rw [hp w e hwe']; exact hpe⟩, hwe⟩
+        rw [h, this]
+      · have h' : ws.any (·.1 == e.1) = false := Bool.eq_false_iff.mpr h
+        have : (ws.filter p).any (·.1 == e.1) = false := by
+          simp only [List.any_eq_false] at h' ⊢
+          intro x hx; exact h' x (List.mem_filter.mp hx).1
+        rw [h', this]
+    · right; simpa using hpe
+  rcases key with h | h
+  · simp only [h]; exact Bool.and_comm _ _
+  · simp [h]
+
+private theorem upM_two {m : Map} (hm : MapOk m) (h2 : 2 ≤ m.length) (ws : Map) : 2 ≤ (upM m ws).length := by
+  have hmem : ∀ e ∈ m, ∃ e' ∈ upM m ws, e'.1 = e.1 := by
+    intro e he
+    by_cases h : ws.any (·.1 == e.1) = true
+    · obtain ⟨w, hw, hwe⟩ := List.any_eq_true.mp h
+      exact ⟨w, by simp [upM, hw], by simpa using hwe⟩
+    · exact ⟨e, by simp [upM, he, h], rfl⟩
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · simp at h2
+  · simp at h2
+  · obtain ⟨x, hx, hxa⟩ := hmem a (by simp)
+    obtain ⟨y, hy, hyb⟩ := hmem b (by simp)
+    have hab : a.1 ≠ b.1 := by
+      have := hm.1
+      simp only [List.map_cons, List.nodup_cons, List.mem_cons, List.mem_map, not_or] at this
+      intro h; exact this.1.1 h
+    rcases hL : upM (a :: b :: t) ws with _ | ⟨z, _ | ⟨z', u⟩⟩
+    · rw [hL] at hx; simp at hx
+    · rw [hL] at hx hy
+      simp at hx hy
+      subst hx; subst hy
+      exact absurd (hxa.symm.trans hyb) hab
+    · simp
+
+private theorem upsertPf_empty (f d : Nat) (ws : Map) (h : ws ≠ []) : upsertPf f d .empty ws = build f d ws := by
+  cases ws with
+  | nil => exact absurd rfl h
+  | cons w ws => first | rfl | simp [upsertPf]
+
+private theorem upsertPf_leaf (f d : Nat) (p v : Bytes) (ws : Map) (h : ws ≠ []) :
+    upsertPf f d (.leaf p v) ws = build f d (if ws.any (·.1 == p) then ws else (p, v) :: ws) := by
+  cases ws with
+  | nil => exact absurd rfl h
+  | cons w ws => first | rfl | simp [upsertPf]
+
+private theorem upsertPf_node (f d : Nat) (l r : Proof) (ws : Map) (h : ws ≠ []) :
+    upsertPf (f + 1) d (.node l r) ws = .node (upsertPf f (d + 1) l (ws.filter fun e => !bit e.1 d))
+      (upsertPf f (d + 1) r (ws.filter fun e => bit e.1 d)) := by
+  cases ws with
+  | nil => exact absurd rfl h
+  | cons w ws => first | rfl | simp [upsertPf]
+
+private theorem upsertPf_nil (f d : Nat) (pf : Proof) : upsertPf f d pf [] = pf := by
+  first | rfl | simp [upsertPf]
+
+private theorem mu_aux (H : Bytes → Bytes) (hH : HashLen H) : ∀ (pf : Proof) (f d : Nat) (m ws : Map) (ks : List Bytes),
+    f + d = 513 → Agree d (m ++ ws) → MapOk m → MapOk ws → (∀ e ∈ ws, e.1 ∈ ks) → minimal d pf ks = true →
+    (∀ e ∈ ws, (lookupPf d pf e.1).isSome = true) → hashPf H pf = rootAt H f d m →
+    hashPf H (upsertPf f d pf ws) = rootAt H f d (upM m ws) ∨ Collision H (pfInputs H pf) (treeInputs H f d m) := by
+  intro pf
+  induction pf with
+  | «opaque» h =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · obtain ⟨w, hwm⟩ := List.exists_mem_of_ne_nil ws h0
+      have := hl w hwm
+      simp [lookupPf] at this
+  | empty =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · rw [upsertPf_empty f d ws h0]
+      obtain ⟨Y, hY, hXY, hsh⟩ := match_root H hH emptyIn f d m hh
+      have col : emptyIn ≠ Y → Collision H (pfInputs H .empty) (treeInputs H f d m) :=
+        fun hne => ⟨emptyIn, by simp [pfInputs], Y, hY, hne, hXY⟩
+      rcases hsh with ⟨rfl, rfl⟩ | ⟨p, v, rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+      · left
+        have e : upM [] ws = ws := by simp [upM]
+        rw [e]
+        exact build_hash H hH f d ws hf (by simpa using ha) hw
+      · right; exact col (emptyIn_ne_leafIn _ _)
+      · right; exact col (emptyIn_ne_nodeIn _ _)
+  | leaf p v =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · obtain ⟨w, hwm⟩ := List.exists_mem_of_ne_nil ws h0
+      have hok : leafOk p v = true := by
+        by_cases hc : leafOk p v = true
+        · exact hc
+        · have := hl w hwm
+          simp [lookupPf, hc] at this
+      have hp : p.length = digestBytes := by simp [leafOk] at hok; exact hok.1
+      have hh' : H (leafIn p v) = rootAt H f d m := by
+        simp only [hashPf, hok, ↓reduceIte] at hh; exact hh
+      obtain ⟨Y, hY, hXY, hsh⟩ := match_root H hH (leafIn p v) f d m hh'
+      have col : leafIn p v ≠ Y → Collision H (pfInputs H (.leaf p v)) (treeInputs H f d m) :=
+        fun hne => ⟨leafIn p v, by simp [pfInputs, hok], Y, hY, hne, hXY⟩
+      rcases hsh with ⟨rfl, rfl⟩ | ⟨p', v', rfl, rfl⟩ | ⟨f', a, b, t, rfl, rfl, rfl⟩
+      · right; exact col (fun h => emptyIn_ne_leafIn _ _ h.symm)
+      · by_cases hne : leafIn p v = leafIn p' v'
+        · have hp' : p'.length = digestBytes := (hm.2 (p', v') (by simp)).1
+          obtain ⟨rfl, rfl⟩ := leafIn_inj hp hp' hne
+          left
+          rw [upsertPf_leaf f d p v ws h0]
+          have hcase : (if ws.any (·.1 == p) then ws else (p, v) :: ws).Perm (upM [(p, v)] ws) := by
+            by_cases hany : ws.any (·.1 == p) = true
+            · simp [upM, hany]
+            · have h' : ws.any (·.1 == p) = false := Bool.eq_false_iff.mpr hany
+              simp [upM, h']
+              exact (List.perm_append_singleton _ _).symm
+          have hL : MapOk (if ws.any (·.1 == p) then ws else (p, v) :: ws) := by
+            by_cases hany : ws.any (·.1 == p) = true
+            · simpa [hany] using hw
+            · have h' : ws.any (·.1 == p) = false := Bool.eq_false_iff.mpr hany
+              rw [if_neg hany]
+              refine ⟨?_, ?_⟩
+              · rw [List.map_cons, List.nodup_cons]
+                refine ⟨?_, hw.1⟩
+                intro hmem
+                obtain ⟨x, hx, hxp⟩ := List.mem_map.mp hmem
+                have : ws.any (·.1 == p) = true := List.any_eq_true.mpr ⟨x, hx, by simpa using hxp⟩
+                rw [h'] at this; exact Bool.false_ne_true this
+              · intro e he
+                rcases List.mem_cons.mp he with rfl | he
+                · exact hm.2 _ (by simp)
+                · exact hw.2 e he
+          have hAg : Agree d (if ws.any (·.1 == p) then ws else (p, v) :: ws) := by
+            refine agree_mono (L := [(p, v)] ++ ws) (fun e he => ?_) ha
+            by_cases hany : ws.any (·.1 == p) = true
+            · rw [if_pos hany] at he; simp [he]
+            · rw [if_neg hany] at he; simpa using he
+          rw [build_hash H hH f d _ hf hAg hL]
+          exact rootAt_perm' H f d _ _ hcase
+        · right; exact col hne
+      · right; exact col (leafIn_ne_nodeIn _ _ _ _)
+  | node l r ihl ihr =>
+    intro f d m ws ks hf ha hm hw hs hmin hl hh
+    by_cases h0 : ws = []
+    · subst h0; left; rw [upsertPf_nil, upM_nil]; exact hh
+    · obtain ⟨w, hwm⟩ := List.exists_mem_of_ne_nil ws h0
+      have hd : d < 512 := by
+        by_cases hc : d < 512
+        · exact hc
+        · have := hl w hwm
+          simp [lookupPf, hc] at this
+      obtain ⟨f', rfl⟩ : ∃ f', f = f' + 1 := ⟨f - 1, by omega⟩
+      rw [upsertPf_node f' d l r ws h0]
+      simp only [minimal, Bool.and_eq_true] at hmin
+      obtain ⟨⟨⟨_, _⟩, hml⟩, hmr⟩ := hmin
+      have hll := hashPf_len H hH (d + 1) l _ hml
+      have hlr := hashPf_len H hH (d + 1) r _ hmr
+      have hXin : nodeIn (hashPf H l) (hashPf H r) ∈ pfInputs H (.node l r) := by simp [pfInputs]
+      have hh' : H (nodeIn (hashPf H l) (hashPf H r)) = rootAt H (f' + 1) d m := hh
+      obtain ⟨Y, hY, hXY, hsh⟩ := match_root H hH _ (f' + 1) d m hh'
+      have col : nodeIn (hashPf H l) (hashPf H r) ≠ Y →
+          Collision H (pfInputs H (.node l r)) (treeInputs H (f' + 1) d m) :=
+        fun hne => ⟨_, hXin, Y, hY, hne, hXY⟩
+      rcases hsh with ⟨rfl, rfl⟩ | ⟨p', v', rfl, rfl⟩ | ⟨f'', a, b, t, hf', rfl, rfl⟩
+      · right; exact col (fun h => emptyIn_ne_nodeIn _ _ h.symm)
+      · right; exact col (fun h => leafIn_ne_nodeIn _ _ _ _ h.symm)
+      · have hf'' : f'' = f' := by omega
+        subst hf''
+        by_cases hne : nodeIn (hashPf H l) (hashPf H r) =
+            nodeIn (rootAt H f'' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+              (rootAt H f'' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d))
+        case neg => exact Or.inr (col hne)
+        unfold nodeIn at hne
+        have h1 := (List.cons.inj (List.append_cancel_left hne)).2
+        have hlen := congrArg List.length h1
+        have e1 := rootAt_len H hH f'' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d)
+        have e2 := rootAt_len H hH f'' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)
+        simp only [List.length_append] at hlen
+        obtain ⟨q1, q2⟩ := List.append_inj h1 (by omega)
+        have hag0 := agree_filter ha (fun e => !bit e.1 d) (fun e _ e' _ h h' => by simp at h h'; rw [h, h'])
+        have hag1 := agree_filter ha (fun e => bit e.1 d) (fun e _ e' _ h h' => by
+          have h1 : bit e.1 d = true := h
+          have h2 : bit e'.1 d = true := h'
+          rw [h1, h2])
+        have hsub : ∀ (p : Bytes × Bytes → Bool) (x : Bytes × Bytes), x ∈ (a :: b :: t).filter p ++ ws.filter p →
+            x ∈ ((a :: b :: t) ++ ws).filter p := by
+          intro p x hx; rw [List.filter_append]; exact hx
+        have hagl : Agree (d + 1) ((a :: b :: t).filter (fun e => !bit e.1 d) ++ ws.filter (fun e => !bit e.1 d)) := by
+          have := hag0; rw [List.filter_append] at this; exact this
+        have hagr : Agree (d + 1) ((a :: b :: t).filter (fun e => bit e.1 d) ++ ws.filter (fun e => bit e.1 d)) := by
+          have := hag1; rw [List.filter_append] at this; exact this
+        have hsl : ∀ e ∈ ws.filter (fun e => !bit e.1 d), e.1 ∈ ks.filter (!bit · d) := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          exact List.mem_filter.mpr ⟨hs e he1, he2⟩
+        have hsr : ∀ e ∈ ws.filter (fun e => bit e.1 d), e.1 ∈ ks.filter (bit · d) := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          exact List.mem_filter.mpr ⟨hs e he1, he2⟩
+        have hll' : ∀ e ∈ ws.filter (fun e => !bit e.1 d), (lookupPf (d + 1) l e.1).isSome = true := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          have := hl e he1
+          have hb : bit e.1 d = false := by simpa using he2
+          simpa [lookupPf, hd, hb] using this
+        have hlr' : ∀ e ∈ ws.filter (fun e => bit e.1 d), (lookupPf (d + 1) r e.1).isSome = true := by
+          intro e he
+          obtain ⟨he1, he2⟩ := List.mem_filter.mp he
+          have := hl e he1
+          simpa [lookupPf, hd, he2] using this
+        have hfin : ∀ p : Bytes × Bytes → Bool, (∀ e e' : Bytes × Bytes, e.1 = e'.1 → p e = p e') →
+            (upM (a :: b :: t) ws).filter p = upM ((a :: b :: t).filter p) (ws.filter p) :=
+          fun p hp => upM_filter _ _ p hp
+        have hu0 := hfin (fun e => !bit e.1 d) (fun e e' h => by simp [h])
+        have hu1 := hfin (fun e => bit e.1 d) (fun e e' h => by simp [h])
+        have h2 := upM_two hm (by simp) ws
+        rw [rootAt_node H f'' d _ h2, hu0, hu1]
+        rcases ihl f'' (d + 1) _ _ _ (by omega) hagl (mapOk_filter hm _) (mapOk_filter hw _) hsl hml hll' q1 with c1 | c1
+        · rcases ihr f'' (d + 1) _ _ _ (by omega) hagr (mapOk_filter hm _) (mapOk_filter hw _) hsr hmr hlr' q2 with c2 | c2
+          · left
+            show H (nodeIn (hashPf H _) (hashPf H _)) = _
+            rw [c1, c2]
+          · right
+            refine col_mono (fun x hx => ?_) (fun x hx => ?_) c2
+            · simp [pfInputs, hx]
+            · rw [treeInputs_succ2]; simp [hx]
+        · right
+          refine col_mono (fun x hx => ?_) (fun x hx => ?_) c1
+          · simp [pfInputs, hx]
+          · rw [treeInputs_succ2]; simp [hx]
+
 theorem multi_update_sound (H : Bytes → Bytes) (hH : HashLen H) (m ws : Map) (hm : MapOk m) (hw : MapOk ws)
     (ks : List Bytes) (pf : Proof) (hv : verifyMulti H (root H m) ks pf = true) (hs : ∀ e ∈ ws, e.1 ∈ ks) :
     hashPf H (upsertPf 513 0 pf ws) = root H (upsert m ws) ∨
-      Collision H (pfInputs H pf) (treeInputs H 513 0 m) := sorry
+      Collision H (pfInputs H pf) (treeInputs H 513 0 m) := by
+  simp only [verifyMulti, Bool.and_eq_true, beq_iff_eq] at hv
+  obtain ⟨⟨⟨⟨_, _⟩, hh⟩, hsm⟩, hmin⟩ := hv
+  have hl : ∀ e ∈ ws, (lookupPf 0 pf e.1).isSome = true := fun e he => List.all_eq_true.mp hsm e.1 (hs e he)
+  rcases mu_aux H hH pf 513 0 m ws ks rfl (fun _ _ _ _ j hj => absurd hj (Nat.not_lt_zero _)) hm hw hs hmin hl hh with h | h
+  · left
+    rw [h]
+    exact rootAt_perm' H _ _ _ _ (upsert_perm ws m hw.1).symm
+  · right; exact h
 
 /-- The honest multiproof: `m`'s canonical tree cut to the paths `ks`. -/
 def prune (H : Bytes → Bytes) : Nat → Nat → Map → List Bytes → Proof
@@ -666,8 +1066,79 @@ def prune (H : Bytes → Bytes) : Nat → Nat → Map → List Bytes → Proof
   | f + 1, d, m, ks => .node (prune H f (d + 1) (m.filter fun e => !bit e.1 d) (ks.filter (!bit · d)))
       (prune H f (d + 1) (m.filter fun e => bit e.1 d) (ks.filter (bit · d)))
 
+private theorem prune_base (H : Bytes → Bytes) (hH : HashLen H) (f d : Nat) (m : Map) (ks : List Bytes)
+    (hm : MapOk m) (hsm : f = 0 → m.length ≤ 1) (hb : ks = [] ∨ m.length ≤ 1) :
+    hashPf H (prune H f d m ks) = rootAt H f d m ∧
+      (∀ k ∈ ks, (lookupPf d (prune H f d m ks) k).isSome = true) ∧
+      minimal d (prune H f d m ks) ks = true := by
+  rcases ks with _ | ⟨k0, ks'⟩
+  · simp [prune, hashPf, lookupPf, minimal, rootAt_len64 H hH f d m hsm]
+  · have hl : m.length ≤ 1 := hb.resolve_left (by simp)
+    rcases m with _ | ⟨⟨p, v⟩, _ | ⟨b, t⟩⟩
+    · simp [prune, hashPf, lookupPf, minimal, rootAt_nil]
+    · have hok : leafOk p v = true := by
+        have := hm.2 (p, v) (by simp)
+        simp [leafOk, this.1, this.2]
+      simp [prune, hashPf, lookupPf, minimal, hok, rootAt_one]
+    · simp at hl
+
+private theorem prune_node (H : Bytes → Bytes) (f d : Nat) (a b : Bytes × Bytes) (t : Map) (k : Bytes) (ks : List Bytes) :
+    prune H (f + 1) d (a :: b :: t) (k :: ks) =
+      .node (prune H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d) ((k :: ks).filter (!bit · d)))
+        (prune H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d) ((k :: ks).filter (bit · d))) := by
+  first | rfl | simp [prune]
+
+private theorem prune_aux (H : Bytes → Bytes) (hH : HashLen H) : ∀ (f d : Nat) (m : Map) (ks : List Bytes),
+    f + d = 513 → Agree d m → MapOk m → (∀ k ∈ ks, k.length = digestBytes) →
+    hashPf H (prune H f d m ks) = rootAt H f d m ∧
+      (∀ k ∈ ks, (lookupPf d (prune H f d m ks) k).isSome = true) ∧
+      minimal d (prune H f d m ks) ks = true := by
+  intro f
+  induction f with
+  | zero =>
+    intro d m ks hf ha hm hk
+    exact prune_base H hH 0 d m ks hm (fun _ => agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1)
+      (Or.inr (agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1))
+  | succ f ih =>
+    intro d m ks hf ha hm hk
+    rcases ks with _ | ⟨k0, ks'⟩
+    · exact prune_base H hH _ d m _ hm (fun h => by omega) (Or.inl rfl)
+    rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+    · exact prune_base H hH _ d _ _ hm (fun h => by omega) (Or.inr (by simp))
+    · exact prune_base H hH _ d _ _ hm (fun h => by omega) (Or.inr (by simp))
+    have hd : d < 512 := by
+      by_cases hc : d < 512
+      · exact hc
+      · have := agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1
+        simp at this
+    have hag0 := agree_filter ha (fun e => !bit e.1 d) (fun e _ e' _ h h' => by simp at h h'; rw [h, h'])
+    have hag1 := agree_filter ha (fun e => bit e.1 d) (fun e _ e' _ h h' => by
+      have h1 : bit e.1 d = true := h
+      have h2 : bit e'.1 d = true := h'
+      rw [h1, h2])
+    obtain ⟨l1, l2, l3⟩ := ih (d + 1) _ ((k0 :: ks').filter (!bit · d)) (by omega) hag0
+      (mapOk_filter hm _) (fun k hk' => hk k (List.mem_filter.mp hk').1)
+    obtain ⟨r1, r2, r3⟩ := ih (d + 1) _ ((k0 :: ks').filter (bit · d)) (by omega) hag1
+      (mapOk_filter hm _) (fun k hk' => hk k (List.mem_filter.mp hk').1)
+    rw [prune_node]
+    refine ⟨?_, ?_, ?_⟩
+    · rw [rootAt_succ2]; simp only [hashPf, l1, r1]
+    · intro k hk'
+      simp only [lookupPf, hd, ↓reduceIte]
+      by_cases hb : bit k d = true
+      · rw [if_pos hb]; exact r2 k (by simp [hk', hb])
+      · rw [if_neg hb]; exact l2 k (by simp [hk', show bit k d = false by simpa using hb])
+    · simp [minimal, hd, l3, r3]
+
 theorem prune_complete (H : Bytes → Bytes) (hH : HashLen H) (m : Map) (hm : MapOk m) (ks : List Bytes)
-    (hk : ∀ k ∈ ks, k.length = digestBytes) : verifyMulti H (root H m) ks (prune H 513 0 m ks) = true := sorry
+    (hk : ∀ k ∈ ks, k.length = digestBytes) : verifyMulti H (root H m) ks (prune H 513 0 m ks) = true := by
+  obtain ⟨ha, hl, hmin⟩ := prune_aux H hH 513 0 m ks rfl
+    (fun _ _ _ _ j hj => absurd hj (Nat.not_lt_zero _)) hm hk
+  unfold verifyMulti
+  simp only [Bool.and_eq_true, beq_iff_eq]
+  refine ⟨⟨⟨⟨rootAt_len64 H hH 513 0 m (fun h => by omega), List.all_eq_true.mpr fun k hk' => by simpa using hk k hk'⟩, ha⟩,
+    List.all_eq_true.mpr hl⟩, hmin⟩
+
 
 /-! ## 4. Posting lists (H2, M-b): append-only, row order, Spec.lean:198-206 shape -/
 
@@ -2315,6 +2786,139 @@ def eps : Nat := 120
 
 /-! ### 8b. Order independence (fix 6) -/
 
+private theorem pm_view (t : Nat) (s : Snapshot Line) : view t s (some s) = s := by
+  unfold view; split <;> rfl
+
+private theorem pm_all_self (l : List Line) : l.all l.contains = true := by simp
+
+private theorem pm_chained (t : Nat) (s s' : Snapshot Line) (h1 : s.entries.Perm s'.entries)
+    (h2 : s.count = s'.count) (h3 : s.asOf = s'.asOf) :
+    chained t s (some s) = chained t s' (some s') := by
+  simp only [chained, pm_all_self, h1.length_eq, h2, h3]
+
+private theorem pm_loose (t : Nat) (s : Snapshot Line) : loose t s (some s) = [] := by
+  unfold loose; split
+  · rfl
+  · simp [entries]
+
+private theorem pm_relSet (c₀ : Ctx) (rel unr : Snapshot Line) :
+    releasedSet (carried c₀ rel unr) = rel.entries := by
+  simp [releasedSet, carried, pm_view]
+
+private theorem pm_unrSet (c₀ : Ctx) (rel unr : Snapshot Line) :
+    unresolvedSet (carried c₀ rel unr) = unr.entries := by
+  simp [unresolvedSet, carried, pm_view]
+
+private theorem pm_own (c₀ : Ctx) (rel unr rel' unr' : Snapshot Line) (hr : rel.entries.Perm rel'.entries)
+    (l : Line) : own (carried c₀ rel unr) l = own (carried c₀ rel' unr') l := by
+  simp only [own, pm_relSet, hr.contains_eq]
+  rfl
+
+private theorem pm_claim_gen (c c' : Ctx) (h1 : c.today = c'.today) (h5 : c.enrollment = c'.enrollment)
+    (l : Line) (ho : own c l = own c' l) : claim c l = claim c' l := by
+  have hne : notEnrolled c l = notEnrolled c' l := by
+    clear ho
+    cases c; cases c'
+    simp only at h1 h5
+    subst h1 h5
+    simp only [notEnrolled, certain, enrolled]
+  unfold claim
+  by_cases hcnd : (isCap l && notEnrolled c l && !own c l) = true
+  · have h2 : (isCap l && notEnrolled c' l && !own c' l) = true := by rw [← hne, ← ho]; exact hcnd
+    rw [if_pos hcnd, if_pos h2]
+  · have h2 : ¬ (isCap l && notEnrolled c' l && !own c' l) = true := by rw [← hne, ← ho]; exact hcnd
+    rw [if_neg hcnd, if_neg h2]
+
+private theorem pm_fires (c c' : Ctx) (h1 : c.today = c'.today) (h2 : c.dmf = c'.dmf)
+    (h3 : c.providerDeaths = c'.providerDeaths) (h4 : c.exclusions = c'.exclusions)
+    (h5 : c.enrollment = c'.enrollment)
+    (h6 : chained c.today c.releasedPrior c.released = chained c'.today c'.releasedPrior c'.released)
+    (h7 : chained c.today c.unresolvedPrior c.unresolved = chained c'.today c'.unresolvedPrior c'.unresolved)
+    (hp : ∀ x, (pending c).contains x = (pending c').contains x) (hl : looseKeys c = looseKeys c')
+    (seen seen' : List Key) (hs : ∀ x, seen.contains x = seen'.contains x) (l : Line) (r : Reason) :
+    fires c seen l r = fires c' seen' l r := by
+  cases c; cases c'
+  simp only at h1 h2 h3 h4 h5 h6 h7
+  subst h1 h2 h3 h4 h5
+  cases r <;> simp only [fires, certain, unverified, notEnrolled, enrolled, overlap, memberDead,
+    providerDead, excluded, h6, h7, hp, hl, hs]
+
+private def pmP (d : Decision) : Line × Outcome × List Reason := (d.line, d.outcome, d.reasons)
+
+private abbrev pmS (d : Decision) : Decision := { d with counterparts := [] }
+
+private theorem pm_decideAll (c c' : Ctx)
+    (hf : ∀ seen seen', (∀ x, seen.contains x = seen'.contains x) → ∀ l r, fires c seen l r = fires c' seen' l r)
+    (hcl : ∀ l, claim c l = claim c' l) :
+    ∀ (ls : List Line) (seen seen' : List Key), (∀ x, seen.contains x = seen'.contains x) →
+      (decideAll c seen ls).map pmP = (decideAll c' seen' ls).map pmP := by
+  intro ls
+  induction ls with
+  | nil => intros; rfl
+  | cons l ls ih =>
+    intro seen seen' hs
+    have hfl : fires c seen l = fires c' seen' l := funext (hf seen seen' hs l)
+    have := ih (claim c l ++ seen) (claim c' l ++ seen') (by intro x; rw [List.contains_append, List.contains_append, hs x, hcl])
+    simp only [decideAll, List.map_cons, decideLine, pmP, hfl]
+    rw [this]
+
+private theorem pm_strip : ∀ ds ds' : List Decision, ds.map pmP = ds'.map pmP → ds.map pmS = ds'.map pmS := by
+  intro ds
+  induction ds with
+  | nil => intro ds' h; cases ds' with
+    | nil => rfl
+    | cons _ _ => simp at h
+  | cons d ds ih => intro ds' h; cases ds' with
+    | nil => simp at h
+    | cons d' ds' =>
+      simp only [List.map_cons, List.cons.injEq] at h ⊢
+      refine ⟨?_, ih _ h.2⟩
+      obtain ⟨h1, _⟩ := h
+      cases d; cases d'
+      simp only [pmP, pmS, Prod.mk.injEq] at h1 ⊢
+      obtain ⟨a, b, c⟩ := h1
+      subst a b c
+      rfl
+
+
+private theorem pm_payOutcome_strip (c : Ctx) (ds : List Decision) (p : Nat) :
+    payOutcome c (ds.map pmS) p = payOutcome c ds p := by
+  simp [payOutcome, pmS, List.filter_map, Function.comp_def]
+
+private theorem pm_pays_strip (c : Ctx) (ds : List Decision) : paysOf c (ds.map pmS) = paysOf c ds := by
+  simp [paysOf, pm_payOutcome_strip, pmS, List.filter_map, Function.comp_def, List.map_map]
+
+private theorem pm_rl_strip (c : Ctx) (ds : List Decision) : releasedLines c (ds.map pmS) = releasedLines c ds := by
+  simp [releasedLines, allowedLines, pm_payOutcome_strip, pmS, List.filter_map, Function.comp_def, List.map_map]
+
+private theorem pm_ul_strip (c : Ctx) (ds : List Decision) : unresolvedLines c (ds.map pmS) = unresolvedLines c ds := by
+  simp [unresolvedLines, pmS, List.filter_map, Function.comp_def, List.map_map]
+
+private theorem pm_payOutcome_c (c c' : Ctx) (hr : c.redo = c'.redo) (ho : ∀ l, own c l = own c' l)
+    (ds : List Decision) (p : Nat) : payOutcome c ds p = payOutcome c' ds p := by
+  simp only [payOutcome, hr, ho]
+
+private theorem pm_three (c c' : Ctx) (ds ds' : List Decision) (hr : c.redo = c'.redo)
+    (ho : ∀ l, own c l = own c' l) (h : ds.map pmP = ds'.map pmP) :
+    releasedLines c ds = releasedLines c' ds' ∧ unresolvedLines c ds = unresolvedLines c' ds' ∧
+      paysOf c ds = paysOf c' ds' := by
+  have hs := pm_strip _ _ h
+  refine ⟨?_, ?_, ?_⟩
+  · rw [← pm_rl_strip c ds, hs, pm_rl_strip]
+    simp only [releasedLines, hr, pm_payOutcome_c c c' hr ho]
+  · rw [← pm_ul_strip c ds, hs, pm_ul_strip]
+    simp only [unresolvedLines, ho]
+  · rw [← pm_pays_strip c ds, hs, pm_pays_strip]
+    simp only [paysOf, pm_payOutcome_c c c' hr ho]
+
+private theorem pm_viewc (c₀ : Ctx) (rel unr : Snapshot Line) :
+    view (carried c₀ rel unr).today (carried c₀ rel unr).releasedPrior (carried c₀ rel unr).released = rel :=
+  pm_view _ _
+
+private theorem pm_viewu (c₀ : Ctx) (rel unr : Snapshot Line) :
+    view (carried c₀ rel unr).today (carried c₀ rel unr).unresolvedPrior (carried c₀ rel unr).unresolved = unr :=
+  pm_view _ _
+
 /-- RESTATED (fix 6; moved here from §5b because it names `paysOf`): a reordered base gives the same
     decisions, next sets equal up to order with equal counts and dates, and the same pays. -/
 theorem decideRegT_perm (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rel unr rel' unr' : Snapshot Line)
@@ -2327,7 +2931,55 @@ theorem decideRegT_perm (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
     r.released.entries.Perm r'.released.entries ∧ r.unresolved.entries.Perm r'.unresolved.entries ∧
     r.released.count = r'.released.count ∧ r.unresolved.count = r'.unresolved.count ∧
     r.released.asOf = r'.released.asOf ∧ r.unresolved.asOf = r'.unresolved.asOf ∧
-    paysOf (carried c₀ rel unr) r.decisions = paysOf (carried c₀ rel' unr') r'.decisions := sorry
+    paysOf (carried c₀ rel unr) r.decisions = paysOf (carried c₀ rel' unr') r'.decisions := by
+  obtain ⟨hcr, hcu, har, hau⟩ := hc
+  have ho : ∀ l, own (carried c₀ rel unr) l = own (carried c₀ rel' unr') l := pm_own c₀ rel unr rel' unr' hr
+  have hcl : ∀ l, claim (carried c₀ rel unr) l = claim (carried c₀ rel' unr') l :=
+    fun l => pm_claim_gen (carried c₀ rel unr) (carried c₀ rel' unr') rfl rfl l (ho l)
+  have hpend : ∀ x, (pending (carried c₀ rel unr)).contains x = (pending (carried c₀ rel' unr')).contains x := by
+    intro x
+    have hc2 : claim (carried c₀ rel' unr') = claim (carried c₀ rel unr) := funext fun l => (hcl l).symm
+    simp only [pending, pm_unrSet, hc2]
+    exact (List.Perm.flatMap_right _ hu).contains_eq
+  have hloose : ∀ (a b : Snapshot Line), looseKeys (carried c₀ a b) = [] := by
+    intro a b; simp [looseKeys, carried, pm_loose]
+  have hchR : chained (carried c₀ rel unr).today (carried c₀ rel unr).releasedPrior (carried c₀ rel unr).released =
+      chained (carried c₀ rel' unr').today (carried c₀ rel' unr').releasedPrior (carried c₀ rel' unr').released :=
+    pm_chained c₀.today rel rel' hr hcr har
+  have hchU : chained (carried c₀ rel unr).today (carried c₀ rel unr).unresolvedPrior (carried c₀ rel unr).unresolved =
+      chained (carried c₀ rel' unr').today (carried c₀ rel' unr').unresolvedPrior (carried c₀ rel' unr').unresolved :=
+    pm_chained c₀.today unr unr' hu hcu hau
+  have hf : ∀ seen seen', (∀ x, seen.contains x = seen'.contains x) → ∀ l r,
+      fires (carried c₀ rel unr) seen l r = fires (carried c₀ rel' unr') seen' l r :=
+    fun seen seen' hs l r => pm_fires (carried c₀ rel unr) (carried c₀ rel' unr') rfl rfl rfl rfl rfl hchR hchU hpend
+      ((hloose _ _).trans (hloose _ _).symm) seen seen' hs l r
+  have hdec := pm_decideAll _ _ hf hcl
+  have hord : order (carried c₀ rel unr) (ready k os b) = order (carried c₀ rel' unr') (ready k os b) := by
+    have hown : own (carried c₀ rel unr) = own (carried c₀ rel' unr') := funext ho
+    simp only [order, hown]
+  have hseen0 : ∀ x, (idSeen (foreignOf k os (ready k os b)) ++ seen0 (carried c₀ rel unr) (ready k os b)).contains x =
+      (idSeen (foreignOf k os (ready k os b)) ++ seen0 (carried c₀ rel' unr') (ready k os b)).contains x := by
+    intro x
+    rw [List.contains_append, List.contains_append]
+    congr 1
+    have : (seen0 (carried c₀ rel unr) (ready k os b)).Perm (seen0 (carried c₀ rel' unr') (ready k os b)) := by
+      simp only [seen0, pm_relSet, ho]
+      exact List.Perm.flatMap_right _ (hr.filter _)
+    exact this.contains_eq
+  have hD := hdec (order (carried c₀ rel unr) (ready k os b)) _ _ hseen0
+  dsimp only
+  simp only [decideRegT, bumpRes, decideReg, decideBatchIn]
+  rw [← hord]
+  generalize decideAll (carried c₀ rel unr) _ (order (carried c₀ rel unr) (ready k os b)) = ds at hD ⊢
+  generalize decideAll (carried c₀ rel' unr') _ (order (carried c₀ rel unr) (ready k os b)) = ds' at hD ⊢
+  obtain ⟨hRL, hUL, hP⟩ := pm_three (carried c₀ rel unr) (carried c₀ rel' unr') ds ds' rfl ho hD
+  refine ⟨hD, ?_, ?_, ?_, ?_, ?_, ?_, hP⟩
+  · simp only [advance, pm_viewc, hRL]; exact List.Perm.append_right _ hr
+  · simp only [advance, pm_viewu, hUL]; exact List.Perm.append_right _ hu
+  · simp only [advance, pm_viewc, hRL, hr.length_eq]
+  · simp only [advance, pm_viewu, hUL, hu.length_eq]
+  · simp only [advance, pm_viewc, bumpIf, hchR, har]; try rfl
+  · simp only [advance, pm_viewu, bumpIf, hchU, hau]; try rfl
 
 /-- KEPT from r3: the dated spec along batches: per batch, (line, outcome, reasons) and pays. -/
 def runT (k : Nat) (g : Snapshot Line × Snapshot Line) :
@@ -2343,7 +2995,19 @@ def runT (k : Nat) (g : Snapshot Line × Snapshot Line) :
 theorem runT_perm (k : Nat) (g g' : Snapshot Line × Snapshot Line)
     (hr : g.1.entries.Perm g'.1.entries) (hu : g.2.entries.Perm g'.2.entries)
     (hc : g.1.count = g'.1.count ∧ g.2.count = g'.2.count ∧ g.1.asOf = g'.1.asOf ∧ g.2.asOf = g'.2.asOf)
-    (ts : List Batch) : runT k g ts = runT k g' ts := sorry
+    (ts : List Batch) : runT k g ts = runT k g' ts := by
+  induction ts generalizing g g' with
+  | nil => rfl
+  | cons t ts ih =>
+    have h := decideRegT_perm t.ctx k t.owners t.lines g.1 g.2 g'.1 g'.2 hr hu hc
+    dsimp only at h
+    obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h
+    have hih := ih ((decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).released,
+      (decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).unresolved)
+      ((decideRegT (carried t.ctx g'.1 g'.2) k t.owners t.lines).released,
+      (decideRegT (carried t.ctx g'.1 g'.2) k t.owners t.lines).unresolved) h2 h3 ⟨h4, h5, h6, h7⟩
+    simp only [runT]
+    rw [h1, h8, hih]
 
 /-! ### 8c. Requests and lines (r4 fix 4): Lean decodes `Request.lines` itself -/
 
