@@ -488,6 +488,54 @@ theorem viewOfAnchor_foreign (L : Ledger) (c : Call) {v : PaymentView}
   obtain ⟨S, -, rfl⟩ := Option.map_eq_some_iff.1 h
   rfl
 
+/-! ## The carried state answers every read `viewOfAnchor` makes of the ledger -/
+
+/-- Each index of `F` is the list read of `M` it replaces, and the scalars agree with `M`'s summary. -/
+structure Rel (F : Fast) (M : Ledger) : Prop where
+  env : F.env = envOf M.input
+  pays : F.pays.get? = findPayment M.input.payments
+  rcpts : F.rcpts.get? = receiptOf M.receipts
+  origins : ∀ o, (F.origins.get? o).bind (findPayment M.input.payments) =
+    M.input.payments.find? (·.commonOriginId = o)
+  rows : F.rows.get? = findEvidence M.input.evidence
+  conflicts : ∀ x, F.conflictIds.contains x = M.input.conflicts.any (·.conflictId = x)
+  agree : ∃ S, summaryOf M.input M.receipts = some S ∧ Agree F S
+
+/-- The request's summary is the ledger's: only `evaluatedAt` moves, and no summary field reads it. -/
+theorem summarize_request (M : Ledger) (c : Call) :
+    summarize (M.request c).input (M.request c).receipts
+      (anchorOverhead + (M.request c).inputBytes + (encodeList encodeReceipt (M.request c).receipts).length) =
+    summaryOf M.input M.receipts := by
+  simp only [Ledger.request, summaryOf, anchorItemLength, rawEncode_evaluatedAt]
+  rfl
+
+theorem view_link {F : Fast} {M : Ledger} (hR : Rel F M) (c : Call) :
+    ∃ S, Agree F S ∧ viewOfAnchor (M.request c) = some ((F.view c).toView S) := by
+  obtain ⟨S, hS, hA⟩ := hR.agree
+  refine ⟨S, hA, ?_⟩
+  unfold viewOfAnchor
+  dsimp only
+  rw [summarize_request, hS]
+  simp only [Option.map_some, Option.some.injEq, Ledger.request, Fast.view, FView.toView]
+  rw [hR.pays, hR.rcpts, hR.rows, hR.env]
+  cases c.command with
+  | record r =>
+    dsimp only
+    rw [hR.origins, hR.conflicts]
+    rfl
+  | reverse r => rfl
+
+/-- One call: under `Rel`, the fast step is the erased trace outcome (stepView_eq, project_factors_erase). -/
+theorem link_step {F : Fast} {M : Ledger} (hR : Rel F M) (c : Call)
+    (hr : requestWellFormed (M.request c) = true) : stepFast F (F.view c) = erase (M.outcome c) := by
+  obtain ⟨S, hA, hv⟩ := view_link hR c
+  have h1 := stepView_eq hr rfl (v := (F.view c).toView S) hv
+  have h2 := project_factors_erase (M.request c) (paymentTransition (M.request c))
+  rw [← h1] at h2
+  simp only [Option.map_some, Option.some.injEq] at h2
+  rw [stepFast_eq hA]
+  exact h2
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} (h : ok L calls = true) :
     fast L calls = (trace L calls).map erase := by
   sorry
