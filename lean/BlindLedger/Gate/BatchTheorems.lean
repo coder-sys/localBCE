@@ -284,4 +284,124 @@ theorem releaseBatch_once {c : Crypto} {r : ReleaseRun} {items : List Item} {ten
           obtain ⟨⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, -⟩, h3⟩, -⟩, -⟩, -⟩, -⟩, -⟩ := hpm
           simp [unreleased, itemState, hrel, payKey, Payment.key, h1, h2, h3] at hun
 
+/-! ## §B  One-tree PUBLISH -/
+
+private theorem eq_single {hs : List Bytes} (h0 : 0 < hs.length) (h1 : hs.length ≤ 1) : ∃ x, hs = [x] := by
+  match hs, h0, h1 with
+  | [x], _, _ => exact ⟨x, rfl⟩
+  | [], h0, _ => simp at h0
+  | _ :: _ :: _, _, h1 => simp only [List.length_cons] at h1; omega
+
+private theorem pathOf_single {H : Bytes → Bytes} {d r : Bytes} (x : Bytes) (g f i : Nat) (hi : i < 1)
+    (hr : (levels H d f [x]).getLast? = some [r]) :
+    pathRoot H d (g + 1) i 1 ([x].getD i []) (pathOf (levels H d f [x]) i) = some r := by
+  have hl : levels H d f [x] = [[x]] := by cases f <;> rfl
+  obtain rfl : i = 0 := by omega
+  rw [hl] at hr ⊢
+  simp at hr
+  subst hr
+  simp [pathOf, pathRoot]
+
+private theorem levels_ne_nil {H : Bytes → Bytes} {d : Bytes} (f : Nat) (xs : List Bytes) :
+    levels H d f xs ≠ [] := by
+  unfold levels; split <;> simp
+
+private theorem levels_succ {H : Bytes → Bytes} {d : Bytes} {f : Nat} :
+    ∀ {hs : List Bytes}, 2 ≤ hs.length → levels H d (f + 1) hs = hs :: levels H d f (pairUp H d hs)
+  | _ :: _ :: _, _ => rfl
+  | [], h => absurd h (by simp)
+  | [_], h => absurd h (by simp)
+
+private theorem levels_zero {H : Bytes → Bytes} {d : Bytes} :
+    ∀ {hs : List Bytes}, 2 ≤ hs.length → levels H d 0 hs = [hs]
+  | _ :: _ :: _, _ => rfl
+  | [], h => absurd h (by simp)
+  | [_], h => absurd h (by simp)
+
+private theorem getLast?_cons_of_ne {a : List Bytes} :
+    ∀ {l : List (List Bytes)}, l ≠ [] → (a :: l).getLast? = l.getLast?
+  | _ :: _, _ => List.getLast?_cons_cons
+  | [], h => absurd rfl h
+
+private theorem pairUp_length {H : Bytes → Bytes} {d : Bytes} :
+    ∀ hs : List Bytes, (pairUp H d hs).length = (hs.length + 1) / 2
+  | [] => rfl
+  | [a] => by simp [show pairUp H d [a] = [a] from rfl]
+  | a :: b :: rest => by
+    simp only [pairUp, List.length_cons, pairUp_length rest]; omega
+
+private theorem pairUp_getD {H : Bytes → Bytes} {d : Bytes} :
+    ∀ (hs : List Bytes) (j : Nat), (pairUp H d hs).getD j [] =
+      if 2 * j + 1 < hs.length then nodeHash H d (hs.getD (2 * j) []) (hs.getD (2 * j + 1) [])
+      else hs.getD (2 * j) []
+  | [], j => by simp [show pairUp H d [] = [] from rfl]
+  | [a], 0 => by simp [show pairUp H d [a] = [a] from rfl]
+  | [a], j + 1 => by
+    rw [show 2 * (j + 1) = 2 * j + 1 + 1 by omega]
+    simp [show pairUp H d [a] = [a] from rfl]
+  | a :: b :: rest, 0 => by simp [pairUp]
+  | a :: b :: rest, j + 1 => by
+    rw [show 2 * (j + 1) = 2 * j + 1 + 1 by omega]
+    simp only [pairUp, List.getD_cons_succ, List.length_cons, pairUp_getD rest j]
+    by_cases hlt : 2 * j + 1 < rest.length
+    · rw [if_pos hlt, if_pos (by omega)]
+    · rw [if_neg hlt, if_neg (by omega)]
+
+private theorem pathOf_root {H : Bytes → Bytes} {d r : Bytes} (g : Nat) :
+    ∀ (f : Nat) (hs : List Bytes) (i : Nat), i < hs.length → hs.length ≤ 2 ^ g →
+      (levels H d f hs).getLast? = some [r] →
+      pathRoot H d (g + 1) i hs.length (hs.getD i []) (pathOf (levels H d f hs) i) = some r := by
+  induction g with
+  | zero =>
+    intro f hs i hi hn hr
+    obtain ⟨x, rfl⟩ := eq_single (hs := hs) (by omega) (by simpa using hn)
+    exact pathOf_single x 0 f i hi hr
+  | succ g ih =>
+    intro f hs i hi hn hr
+    by_cases h1 : hs.length ≤ 1
+    · obtain ⟨x, rfl⟩ := eq_single (hs := hs) (by omega) h1
+      exact pathOf_single x (g + 1) f i hi hr
+    have h2 : 2 ≤ hs.length := by omega
+    cases f with
+    | zero =>
+      simp [levels_zero h2] at hr
+      subst hr
+      simp at h2
+    | succ f =>
+      rw [levels_succ h2] at hr ⊢
+      have hr' := (getLast?_cons_of_ne (levels_ne_nil f (pairUp H d hs))).symm.trans hr
+      have hlen := pairUp_length (H := H) (d := d) hs
+      have hm : (hs.length + 1) / 2 ≤ 2 ^ g := by
+        rw [Nat.pow_succ] at hn; generalize 2 ^ g = m at hn ⊢; omega
+      have hih := ih f (pairUp H d hs) (i / 2) (by rw [hlen]; omega) (by rw [hlen]; exact hm) hr'
+      rw [hlen] at hih
+      rw [pathRoot.eq_def]
+      simp only [pathOf, h1, ↓reduceIte]
+      by_cases hc : i % 2 = 0 ∧ i + 1 = hs.length
+      · have hb : (i % 2 == 0 && i + 1 == hs.length) = true := by simp [hc]
+        simp only [hb, ↓reduceIte]
+        rw [pairUp_getD, if_neg (by omega), show 2 * (i / 2) = i by omega] at hih
+        exact hih
+      · have hb : ¬(i % 2 == 0 && i + 1 == hs.length) = true := by simpa using hc
+        simp only [hb, Bool.false_eq_true, ↓reduceIte]
+        have hnode : H (stepInput d i (hs.getD i []) (hs.getD (if i % 2 == 0 then i + 1 else i - 1) [])) =
+            (pairUp H d hs).getD (i / 2) [] := by
+          rw [pairUp_getD, if_pos (show 2 * (i / 2) + 1 < hs.length by omega)]
+          simp only [nodeHash, stepInput]
+          by_cases he : i % 2 = 0
+          · have hb2 : (i % 2 == 0) = true := by simp [he]
+            simp only [hb2, ↓reduceIte]
+            rw [show 2 * (i / 2) = i by omega]
+          · have hb2 : ¬(i % 2 == 0) = true := by simpa using he
+            simp only [hb2, Bool.false_eq_true, ↓reduceIte]
+            rw [show 2 * (i / 2) = i - 1 by omega, show i - 1 + 1 = i by omega]
+        rw [hnode]
+        exact hih
+
+/-- The expected path verifies to the tree's root (needs at most 2^16 leaves, which `maxBatch` gives). -/
+theorem pathOf_verifies {H : Bytes → Bytes} {d : Bytes} {hs : List Bytes} {i : Nat} {r : Bytes}
+    (hi : i < hs.length) (hn : hs.length ≤ maxBatch) (hr : (levels H d treeFuel hs).getLast? = some [r]) :
+    pathRoot H d treeFuel i hs.length (hs.getD i []) (pathOf (levels H d treeFuel hs) i) = some r :=
+  pathOf_root 16 treeFuel hs i hi (Nat.le_trans hn (by decide)) hr
+
 end BlindLedger.Gate
