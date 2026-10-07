@@ -4003,7 +4003,7 @@ private theorem c8_rows_append {α β : Type} (F G : α × Nat → Option β) (s
       pure (a ++ b)) := by
   have e := c8_shift (fun _ => true) (fun _ => true) (fun _ _ _ => rfl) F G s.length hG f 0
   have ft : ∀ l : List (α × Nat), l.filter (fun _ => true) = l := fun l => by
-    induction l <;> simp_all [List.filter_cons]
+    induction l <;> simp_all
   simp only [ft, Nat.add_zero] at e
   rw [List.zipIdx_append, List.mapM_append, Nat.zero_add, e]
 
@@ -4020,6 +4020,46 @@ private theorem c8_inj_of_nodup_map {α β : Type} (g : α → β) :
     · exact (h.1 (by rw [e]; exact List.mem_map_of_mem hb')).elim
     · exact (h.1 (by rw [← e]; exact List.mem_map_of_mem ha')).elim
     · exact c8_inj_of_nodup_map g l h.2 a b ha' hb' e
+
+private theorem c8_nodup_map_of_inj {α β : Type} (g : α → β) :
+    ∀ (l : List α), l.Nodup → (∀ a ∈ l, ∀ b ∈ l, g a = g b → a = b) → (l.map g).Nodup
+  | [], _, _ => by simp
+  | x :: l, h, hi => by
+    rw [List.nodup_cons] at h
+    rw [List.map_cons, List.nodup_cons]
+    refine ⟨fun hm => ?_, c8_nodup_map_of_inj g l h.2 fun a ha b hb => hi a (by simp [ha]) b (by simp [hb])⟩
+    obtain ⟨y, hy, e⟩ := List.mem_map.mp hm
+    exact h.1 (by rw [← hi y (by simp [hy]) x (by simp) e]; exact hy)
+
+/-- The first components of a `mapM` result, when each image's first component is a function of its source. -/
+private theorem c8_mapM_fst {α β γ : Type} (F : α → Option (β × γ)) (g : α → β) :
+    ∀ (xs : List α) (ys : List (β × γ)), xs.mapM F = some ys → (∀ x ∈ xs, ∀ y, F x = some y → y.1 = g x) →
+      ys.map (·.1) = xs.map g
+  | [], ys, h, _ => by simp [List.mapM_nil] at h; subst h; rfl
+  | x :: xs, ys, h, hg => by
+    simp only [List.mapM_cons] at h
+    cases hx : F x with
+    | none => simp [hx] at h
+    | some a =>
+      cases hm : xs.mapM F with
+      | none => simp [hx, hm] at h
+      | some bs =>
+        simp [hx, hm] at h
+        subst h
+        simp only [List.map_cons, hg x (by simp) a hx,
+          c8_mapM_fst F g xs bs hm fun z hz => hg z (by simp [hz])]
+
+private theorem c8_mapM_mem {α β : Type} {F : α → Option β} {xs : List α} {ys : List β}
+    (h : xs.mapM F = some ys) {x : α} {y : β} (hx : x ∈ xs) (hy : F x = some y) : y ∈ ys := by
+  obtain ⟨y', hy', e⟩ := c3_mapM_all F xs ys h x hx
+  rw [hy] at e
+  obtain rfl := Option.some.inj e
+  exact hy'
+
+/-- H0: with `count = entries.length`, the spec's date bump is the index's. -/
+private theorem c8_bumpSet (t : Nat) (s : Snapshot Line) (hc : s.count = s.entries.length) :
+    bumpSet t s = bumpIf (validDate s.asOf && decide (s.asOf ≤ t)) t s.asOf := by
+  simp only [bumpSet, hc, beq_self_eq_true, Bool.true_and]
 
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
