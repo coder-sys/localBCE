@@ -994,6 +994,15 @@ theorem Rel_mutated {F : Fast} {M : Ledger} {c : Call} {k w post res} (hR : Rel 
       agree := ⟨S', hsum, by rw [hS']; exact advance_agree k _ _ hA hadv res⟩
       inv := hI' }
 
+/-- Every well-formed call keeps `Rel`. -/
+theorem Rel_step {F : Fast} {M : Ledger} {c : Call} (hR : Rel F M)
+    (hr : requestWellFormed (M.request c) = true) :
+    Rel (F.post (F.view c) (stepFast F (F.view c))) (step M c) := by
+  cases ho : M.outcome c
+  case mutated k w post res => exact Rel_mutated hR hr ho
+  case alias pid e post => exact Rel_alias hR hr ho
+  all_goals exact Rel_post_other hR hr (fun _ _ _ _ h => by rw [ho] at h; cases h) (fun _ _ _ h => by rw [ho] at h; cases h)
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
