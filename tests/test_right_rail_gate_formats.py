@@ -235,12 +235,8 @@ def build_vectors() -> str:
         ("wrong-domain", gate.CHECKPOINT + good[len(gate.KEY_CERT) :]),
     ):
         add(f"cert reject {h(data)}")
-    # One grant per tenant, all with id D[3]: a grant is its tenant's alone (check 9)
-    tenants = (TENANT, OTHER, STANDBY, SELF)
-
-    def grants(rule: bytes = D[4], release: bytes = D[6], grant_id: bytes = D[3], of: tuple[str, ...] = tenants) -> None:
-        add(f"grants {','.join(of)} {h(grant_id)} {h(rule)} {h(release)}")
-
+    tenants = (TENANT, OTHER, STANDBY, SELF)  # one grant per tenant, all with id D[3]: a grant is its tenant's alone (check 9)
+    grants = lambda rule=D[4], release=D[6], grant_id=D[3], of=tenants: add(f"grants {','.join(of)} {h(grant_id)} {h(rule)} {h(release)}")
     grants()
     add(f"now {NOW}")
 
@@ -381,7 +377,6 @@ def build_vectors() -> str:
     for name, t in (("other-shard", typo[0]), ("same-shard", rogue[2])):
         payment_line(f"member-changed-{name}", t.leaf, "member_key_changed")
         token("reject", f"member-changed-{name}", f"member-changed-{name}", t)
-    # The same grant id, rules and release under every other tenant approve nothing for this one
     for name, kw in (("grant-id", {"grant_id": D[0]}), ("grant-rule", {"rule": D[0]}), ("grant-release", {"release": D[0]}),
                      ("grant-tenant", {"of": tenants[1:]})):
         grants(**kw)
@@ -868,6 +863,12 @@ def _genesis(leaves) -> tuple[bytes, list[bytes]]:
     return gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
 
 
+def signed_genesis(handle: str, n: int = 0, seal: tuple[bytes, bytes] | None = None) -> tuple[bytes, list[bytes]]:
+    """Payments 0-1 as a shard's first checkpoint (genesis n), signed by the epoch key or, with ``seal`` = (root key, cert), by custody; and its tokens."""
+    header, tokens = _genesis(batch_leaves(0, 2, n))
+    return gate.attach_signature(header, signer.seal(handle, *seal, None, header, tokens) if seal else signer.sign(handle, header)), tokens
+
+
 def _u16(n: int) -> bytes:
     return n.to_bytes(2, "big")
 
@@ -1014,8 +1015,7 @@ class GateVerifyModeTests(unittest.TestCase):
         def release(pinned: bool = True, released: bool = False, token: bytes = tokens[0], tenant: str = TENANT,
                     mode: int = 5, grant: bytes | None = None) -> str:
             frame = root + _list([signer.framed(cert)]) + _u16(0) + signer.framed(signed) + NOW.to_bytes(8, "big")
-            frame += _list([_blob(tenant.encode()) + untenanted if grant is None else grant])
-            frame += bytes([released, pinned]) + (member(0) if pinned else b"")
+            frame += _list([_blob(tenant.encode()) + untenanted if grant is None else grant]) + bytes([released, pinned]) + (member(0) if pinned else b"")
             return signer.gate_verify(mode, frame + signer.framed(request) + signer.framed(token))
 
         self.assertEqual(release(), "GATE_VERIFY=ACCEPT")

@@ -36,11 +36,8 @@ def _image(store: payer.PayerStore) -> dict[str, list[tuple]]:
 class HostileGatePayerTests(fx.Scratch):
     def _keys(self, tmp: str) -> None:
         handle, self.root_pk, self.cert = fx.custody(tmp)
-        checkpoint, tokens = fx.build(fx.batch_leaves(0, 2))
-        header = gate.encode_checkpoint_header(checkpoint)
-        self.signed = gate.attach_signature(header, signer.seal(handle, self.root_pk, self.cert, None, header,
-                                                                [gate.encode_token(t) for t in tokens]))
-        self.request, self.token = fx.payment_request(0), gate.encode_token(tokens[0])
+        self.signed, tokens = fx.signed_genesis(handle, seal=(self.root_pk, self.cert))
+        self.request, self.token = fx.payment_request(0), tokens[0]
 
     def _store(self, tmp: str, name: str = "payer", *, ready: bool = True) -> payer.PayerStore:
         """A store with the clean certificate; ``ready``: also the clean checkpoint stored and the request sent."""

@@ -69,10 +69,8 @@ class PayerStore:
     def __init__(self, path: Path | str, *, root_keys: Mapping[str, bytes],
                  grants: Sequence[tuple[str, bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
         self._roots = dict(root_keys)
-        for tenant, *_ in grants:  # a grant's tenant is a canonical ident, refused before anything is written
-            gate._Writer(b"").ident(tenant, "grant_tenant")
-        self._grants = _list([_blob(t.encode()) + _blob(g) + _list([_blob(v) for v in rs]) + _list([_blob(r) for r in es])
-                              for t, g, rs, es in grants])  # (tenant, id, rules, engines); no default tenant
+        for tenant, *_ in grants: gate._Writer(b"").ident(tenant, "grant_tenant")  # a canonical ident, refused before any write
+        self._grants = _list([_blob(t.encode()) + _blob(g) + _list([*map(_blob, rs)]) + _list([*map(_blob, es)]) for t, g, rs, es in grants])
         self._db = sqlite3.connect(path, isolation_level=None, timeout=60)  # Lean may hold the write lock up to 30 s
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)

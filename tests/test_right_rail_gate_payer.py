@@ -36,8 +36,7 @@ class PayerTests(fx.Scratch):
     """The payer reference adapter: pin before send, Lean decides every release, anything else holds."""
 
     def _store(self, tmp: str, grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)) -> payer.PayerStore:
-        return self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]},
-                                grants=grants))
+        return self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]}, grants=grants))
 
     def test_kill_between_pin_persist_and_send_leaves_a_pin_and_no_command(self) -> None:
         with self.scratch() as tmp:
@@ -89,46 +88,35 @@ class PayerTests(fx.Scratch):
 
     def test_release_is_lean_decided_once_and_holds_otherwise(self) -> None:
         with self.scratch() as tmp:
-            handle, root_pk, cert = fx.custody(tmp)
+            request, (token, token1) = self._ready(tmp, send=False)  # payments 0 and 1, in order
             store = self._store(tmp)
-            store.install_cert(cert)
-            leaves = fx.batch_leaves(0, 2)
-            checkpoint, tokens = fx.build(leaves)
-            header = gate.encode_checkpoint_header(checkpoint)
-            signed = gate.attach_signature(header, signer.seal(handle, root_pk, cert, None, header,
-                                                               [gate.encode_token(t) for t in tokens]))
-            self.assertEqual(store.store_checkpoint(signed), "stored")
-            request, token = fx.payment_request(0), gate.encode_token(tokens[0])  # leaves are payments 0 and 1, in order
             self.assertEqual(store.release(request, token, now=fx.NOW), "pin")  # never sent: check 12 holds it
             store.send(request, transmit=lambda data: None)
             self.assertIsNone(store.release(request, token, now=fx.NOW))
             self.assertEqual(store.release(request, token, now=fx.NOW), "released")
             other = replace(fx.payment_request(1), period="2026-10")  # still a canonical request; the token says 2026-09
             store.send(other, transmit=lambda data: None)
-            self.assertEqual(store.release(other, gate.encode_token(tokens[1]), now=fx.NOW), "payment")
-            self.assertEqual(store.holds(), [(request.payment_id, "pin"), (request.payment_id, "released"),
-                                             (other.payment_id, "payment")])
+            self.assertEqual(store.release(other, token1, now=fx.NOW), "payment")
+            self.assertEqual(store.holds(), [(request.payment_id, "pin"), (request.payment_id, "released"), (other.payment_id, "payment")])
 
-    def _ready(self, tmp: str) -> tuple[gate.DecideRequest, bytes]:
-        """A stored checkpoint and payment 0 sent, in a closed store: the request and its token."""
+    def _ready(self, tmp: str, send: bool = True) -> tuple[gate.DecideRequest, list[bytes]]:
+        """A stored checkpoint of payments 0 and 1 (and payment 0 sent), in a closed store: payment 0's request, both tokens."""
         handle, root_pk, cert = fx.custody(tmp)
         store = self._store(tmp)
         store.install_cert(cert)
-        checkpoint, tokens = fx.build(fx.batch_leaves(0, 2))
-        header = gate.encode_checkpoint_header(checkpoint)
-        store.store_checkpoint(gate.attach_signature(header, signer.seal(handle, root_pk, cert, None, header,
-                                                                         [gate.encode_token(t) for t in tokens])))
+        signed, tokens = fx.signed_genesis(handle, seal=(root_pk, cert))
+        self.assertEqual(store.store_checkpoint(signed), "stored")
         request = fx.payment_request(0)
-        store.send(request, transmit=lambda data: None)
+        if send:
+            store.send(request, transmit=lambda data: None)
         store.close()
-        return request, gate.encode_token(tokens[0])
+        return request, tokens
 
     def test_a_grant_of_another_tenant_releases_nothing(self) -> None:
-        """Check 9 matches the grant's tenant: the token's grant id under another tenant, beside another grant of its
-        own tenant, holds it and moves nothing; with its own tenant's grant it releases once.  A grant's tenant is
-        required and canonical, refused when the store is built."""
+        """Check 9 matches the grant's tenant: its grant id under another tenant holds the token and moves nothing, under its
+        own tenant it releases once.  A grant's tenant is required and canonical, refused when the store is built."""
         with self.scratch() as tmp:
-            request, token = self._ready(tmp)
+            request, (token, _) = self._ready(tmp)
             approves = ((fx.D[4],), (fx.D[6],))
             foreign = self._store(tmp, ((fx.OTHER, fx.D[3], *approves), (fx.TENANT, fx.D[9], *approves)))
             self.assertEqual(foreign.release(request, token, now=fx.NOW), "grant")
@@ -143,8 +131,7 @@ class PayerTests(fx.Scratch):
 
     def _raw(self, tmp: str, *statements: str) -> None:
         with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as db:
-            for statement in statements:
-                db.execute(statement)
+            for statement in statements: db.execute(statement)
 
     def _race(self, tmp: str, *calls: Callable[[payer.PayerStore], object]) -> list[object]:
         """Run each call on its own connection and thread, started together; the results, in finishing order."""
@@ -158,10 +145,8 @@ class PayerTests(fx.Scratch):
             store.close()  # a connection closes in its own thread
 
         threads = [threading.Thread(target=run, args=(call,)) for call in calls]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        for thread in threads: thread.start()
+        for thread in threads: thread.join()
         return outcomes
 
     def _count(self, tmp: str, *tables: str) -> list[int]:
@@ -170,7 +155,7 @@ class PayerTests(fx.Scratch):
 
     def test_two_connections_release_one_key_once(self) -> None:
         with self.scratch() as tmp:
-            request, token = self._ready(tmp)
+            request, (token, _) = self._ready(tmp)
             outcomes = self._race(tmp, *[lambda store: store.release(request, token, now=fx.NOW)] * 2)
             self.assertEqual(sorted(outcomes, key=str), [None, "released"])  # the loser sees the winner's row under the lock
             self.assertEqual(self._count(tmp, "closed", "releases", "holds"), [1, 1, 1])  # the winner's two rows, the loser's one hold
@@ -181,17 +166,14 @@ class PayerTests(fx.Scratch):
         with self.scratch() as tmp:
             handle, _, cert = fx.custody(tmp)
             self._store(tmp).install_cert(cert)
-            signed = []
-            for n in (0, 5):  # two different geneses of one shard and epoch, signed by an equivocating writer
-                header = gate.encode_checkpoint_header(fx.build(fx.batch_leaves(0, 2, n))[0])
-                signed.append(gate.attach_signature(header, signer.sign(handle, header)))
+            signed = [fx.signed_genesis(handle, n)[0] for n in (0, 5)]  # two geneses of one shard and epoch, by an equivocating writer
             outcomes = self._race(tmp, *[lambda store, one=one: store.store_checkpoint(one) for one in signed])
             self.assertEqual(sorted(outcomes), ["fork", "stored"])
             self.assertEqual(self._count(tmp, "checkpoints", "forks"), [1, 1])
 
     def test_a_failed_commit_rolls_back_and_leaves_the_connection_usable(self) -> None:
         with self.scratch() as tmp:
-            request, token = self._ready(tmp)
+            request, (token, _) = self._ready(tmp)
             store = self._store(tmp)
             store._db.execute("PRAGMA busy_timeout=100")
             with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as reader:
@@ -225,12 +207,14 @@ class PayerTests(fx.Scratch):
             store.pin("t", "p", "pay", b"k")  # the connection is usable
             self.assertEqual(self._count(tmp, "pins"), [1])
 
-    def test_concurrent_installs_cannot_pass_the_cert_cap(self) -> None:
-        root, root_pk = f"root-{fx.TENANT}", fx.keypair(f"root-{fx.TENANT}")[0]
+    @staticmethod
+    def _self_cert(epoch: int) -> bytes:  # the root key certifying itself, signed by the root
+        body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, fx.keypair(f"root-{fx.TENANT}")[0])
+        return gate.attach_signature(body, fx.det_sign(f"root-{fx.TENANT}", body))
 
+    def test_concurrent_installs_cannot_pass_the_cert_cap(self) -> None:
         def install(epoch: int) -> Callable[[payer.PayerStore], str]:
-            body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, root_pk)
-            cert = gate.attach_signature(body, fx.det_sign(root, body))
+            cert = self._self_cert(epoch)
 
             def call(store: payer.PayerStore) -> str:
                 try:
@@ -259,7 +243,7 @@ class PayerTests(fx.Scratch):
 
     def test_a_closed_key_is_already_closed_and_records_one_hold_each_time(self) -> None:
         with self.scratch() as tmp:
-            request, token = self._ready(tmp)
+            request, (token, _) = self._ready(tmp)
             # a closed key of the same payment_id under another program does not close this one (R4.1-13)
             self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','other-program','{request.payment_id}','DENIED','x',1)")
             store = self._store(tmp)
@@ -272,19 +256,18 @@ class PayerTests(fx.Scratch):
             self.assertEqual(store.release(request, token, now=fx.NOW), "already_closed")  # the connection stays usable
             self.assertEqual(len(store.holds()), 2)
         with self.scratch() as tmp:
-            request, token = self._ready(tmp)
+            request, (token, _) = self._ready(tmp)
             self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','other-program','{request.payment_id}','DENIED','x',1)")
             self.assertIsNone(self._store(tmp).release(request, token, now=fx.NOW))
 
     def test_an_integrity_error_on_releases_rolls_back_closed_and_fails_loudly(self) -> None:
         with self.scratch() as tmp:
-            request, token = self._ready(tmp)
+            request, (token, _) = self._ready(tmp)
             self._raw(tmp, "CREATE TRIGGER boom BEFORE INSERT ON releases BEGIN SELECT RAISE(ABORT, 'boom'); END")
             store = self._store(tmp)
             with self.assertRaises(sqlite3.IntegrityError):
                 store.release(request, token, now=fx.NOW)
-            self.assertEqual([store._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("closed", "releases", "holds")],
-                             [0, 0, 0])
+            self.assertEqual(self._count(tmp, "closed", "releases", "holds"), [0, 0, 0])
             self._raw(tmp, "DROP TRIGGER boom")
             self.assertIsNone(store.release(request, token, now=fx.NOW))  # the connection is usable and the key still free
 
@@ -305,42 +288,30 @@ class PayerTests(fx.Scratch):
             handle, root_pk, cert = fx.custody(tmp)
             store = self._store(tmp)
             store.install_cert(cert)
-            outcomes = []
-            for n in (0, 5):  # two different geneses of one shard and epoch, signed by an equivocating writer
-                header = gate.encode_checkpoint_header(fx.build(fx.batch_leaves(0, 2, n))[0])
-                outcomes.append(store.store_checkpoint(gate.attach_signature(header, signer.sign(handle, header))))
+            outcomes = [store.store_checkpoint(fx.signed_genesis(handle, n)[0]) for n in (0, 5)]  # two geneses, one equivocating writer
             self.assertEqual(outcomes, ["stored", "fork"])
             self.assertEqual(store.holds(), [])  # nothing is released or held by storing
 
     def test_a_root_signed_self_certificate_still_fences_and_equivocates(self) -> None:
         """M4 refuses the root key only as a checkpoint key: a root-signed certificate of the root key itself still
         raises its tenant's fence, and with another key for the same epoch still blocks that epoch, in either order."""
-        root, root_pk = f"root-{fx.TENANT}", fx.keypair(f"root-{fx.TENANT}")[0]
-
-        def self_cert(epoch: int) -> bytes:
-            body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, root_pk)
-            return gate.attach_signature(body, fx.det_sign(root, body))
-
         with self.scratch() as tmp:
             handle, _, cert = fx.custody(tmp)
             store = self._store(tmp)
             store.install_cert(cert)
-            checkpoint, tokens = fx.build(fx.batch_leaves(0, 2))
-            header = gate.encode_checkpoint_header(checkpoint)
-            self.assertEqual(store.store_checkpoint(gate.attach_signature(header, signer.sign(handle, header))), "stored")
+            signed, tokens = fx.signed_genesis(handle)
+            self.assertEqual(store.store_checkpoint(signed), "stored")
             store.send(fx.payment_request(0), transmit=lambda data: None)
-            store.install_cert(self_cert(fx.EPOCH + 1))
-            self.assertEqual(store.release(fx.payment_request(0), gate.encode_token(tokens[0]), now=fx.NOW), "fence")
+            store.install_cert(self._self_cert(fx.EPOCH + 1))
+            self.assertEqual(store.release(fx.payment_request(0), tokens[0], now=fx.NOW), "fence")
         for self_first in (True, False):
             with self.subTest(self_first=self_first), self.scratch() as tmp:
                 handle, _, cert = fx.custody(tmp)
                 store = self._store(tmp)
-                for one in (self_cert(fx.EPOCH), cert)[:: 1 if self_first else -1]:
+                for one in (self._self_cert(fx.EPOCH), cert)[:: 1 if self_first else -1]:
                     store.install_cert(one)
-                header = gate.encode_checkpoint_header(fx.build(fx.batch_leaves(0, 2))[0])
                 with self.assertRaisesRegex(payer.GatePayerError, "checkpoint_rejected"):
-                    store.store_checkpoint(gate.attach_signature(header, signer.sign(handle, header)))
-
+                    store.store_checkpoint(fx.signed_genesis(handle)[0])
 
 
 if __name__ == "__main__":
