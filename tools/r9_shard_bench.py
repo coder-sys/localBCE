@@ -16,10 +16,13 @@ import json
 import multiprocessing
 import os
 import pickle
+import queue
 import shutil
 import sqlite3
 import statistics
+import struct
 import sys
+import threading
 import time
 import zlib
 from ctypes import wintypes
@@ -77,6 +80,34 @@ def prewrite_mode() -> int:
     """0 off; 1 flush + fsync of the WAL after each built part; 2 the same flush without the fsync; 3 flush only, once per group per database (the shard on the spine's PREFLUSH, the spine at its first wait)."""
     mode = os.environ.get("RR_SHARD_PREWRITE", "0")  # read at call time: spawned workers inherit the environment
     return int(mode) if mode in ("1", "2", "3") else 0
+
+
+def sender_on() -> bool:
+    """I1 and I3 (default on); RR_SHARD_SENDER=0 is the earlier path: every message pickled and written by the spine's own thread."""
+    return os.environ.get("RR_SHARD_SENDER", "1") != "0"
+
+
+PART_HEAD = struct.Struct("<4sqqqHHH")  # b"PART", n, index, t_f, then the lengths of pool, pre_head and verdict; the bytes of those three follow, then the blob (the rest)
+
+
+def encode(message: tuple) -> bytes:
+    """One spine -> shard message as bytes. PART is a fixed header with the blob copied in once (the blob is already a pickle; Connection.send would pickle it a second time); the rest are pickled."""
+    if message[0] != "PART":
+        return ForkingPickler.dumps(message)
+    _, n, index, pool, t_f, blob, pre, verdict = message
+    name = pool.encode()
+    return b"".join((PART_HEAD.pack(b"PART", n, index, t_f, len(name), len(pre), len(verdict)), name, pre, verdict, blob))
+
+
+def decode(buf: bytes) -> tuple:
+    """The inverse of encode (a pickle starts with 0x80, never with PART): the same tuple the shard got from Connection.recv before."""
+    if buf[:4] != b"PART":
+        return ForkingPickler.loads(buf)
+    _, n, index, t_f, a, b, c = PART_HEAD.unpack_from(buf)
+    o = PART_HEAD.size
+    if len(buf) < o + a + b + c:
+        raise ValueError("part message truncated")
+    return ("PART", n, index, buf[o:o + a].decode(), t_f, buf[o + a + b + c:], buf[o + a:o + a + b], buf[o + a + b:o + a + b + c])
 
 
 class Prewriter:
@@ -235,9 +266,10 @@ def shard_main(conn, k: int, db: str) -> None:
     conn.send(("READY", shard.w.head))
     while True:
         i0 = time.perf_counter()
-        message = conn.recv()
+        raw = conn.recv_bytes()
         shard.idle_s += time.perf_counter() - i0
         try:
+            message = decode(raw)
             if message[0] == "PART":
                 conn.send(("BUILT", *shard.build(*message[1:])))
                 if mode != 3:
@@ -419,6 +451,30 @@ class PrepPool:
         return sum(s[0] for s in stats), sum(s[1] for s in stats), sum(s[2] for s in stats)
 
 
+class Sender:
+    """I1: one FIFO queue and one thread per shard. The spine puts each encoded message on the queue and the thread writes it; the write ends only as the shard drains the pipe (on Windows),
+    so the spine no longer stands in a shard's COMMIT. A write error is kept and the thread drops what follows (the pipe is gone); the spine raises it at its next pump and before its COMMIT."""
+
+    def __init__(self, k: int, conn, owed: dict) -> None:
+        self.k, self.conn, self.owed, self.queue, self.error, self.seconds = k, conn, owed, queue.SimpleQueue(), None, {"owed": 0.0, "free": 0.0}
+        self.thread = threading.Thread(target=self.run, name=f"shard-sender-{k}", daemon=True)
+        self.thread.start()
+
+    def run(self) -> None:
+        while (buf := self.queue.get()) is not None:
+            if self.error is None:
+                t0, kind = time.perf_counter(), "owed" if self.k in self.owed else "free"  # a write while the shard's COMMIT is owed is time spent waiting on that commit
+                try:
+                    self.conn.send_bytes(buf)
+                except BaseException as error:  # kept for the spine's thread
+                    self.error = error
+                self.seconds[kind] += time.perf_counter() - t0
+
+    def stop(self) -> None:
+        self.queue.put(None)
+        self.thread.join()
+
+
 class Spine:
     """Spine process: membership check, spine rows, record R_n, spine check, COMMIT; shards 0..K-1 are worker processes, and the per-row pure work is in the prep stage."""
 
@@ -450,6 +506,7 @@ class Spine:
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
+        self.senders = {k: Sender(k, conn, self.owed) for k, (_, conn) in self.workers.items()} if sender_on() else {}
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
         self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes")}
         self.commit_sent, self.ack_ms = 0.0, {k: [] for k in range(k_count)}  # per shard: ms from the spine's COMMIT send to the spine reading that shard's ACK, per group
@@ -475,16 +532,23 @@ class Spine:
             self.ack_mark = None
 
     def send(self, k: int, message: tuple) -> None:
-        """Connection.send in two steps (the same bytes on the pipe): pickle, then the write, which on Windows ends only as the worker drains the pipe. A write to a worker whose
-        COMMIT is still owed is counted apart from a write to a free worker: the first is time spent waiting on that commit."""
-        t0 = time.perf_counter()
-        buf = ForkingPickler.dumps(message)
+        """The message to shard k, in the order given: encoded here and queued for k's sender thread (I1, I3), or, with RR_SHARD_SENDER=0, pickled and written here, which on
+        Windows ends only as the worker drains the pipe (a write to a worker whose COMMIT is still owed is counted apart: it is time spent waiting on that commit)."""
+        t0, sender, tt = time.perf_counter(), self.senders.get(k), self.tt
+        buf = encode(message) if sender else ForkingPickler.dumps(message)
         t1 = time.perf_counter()
-        self.workers[k][1].send_bytes(buf)
-        tt = self.tt
         tt["ipc_pickle"] += t1 - t0
-        tt["ipc_send_owed" if k in self.owed else "ipc_send_free"] += time.perf_counter() - t1
         tt["ipc_bytes"] += len(buf)
+        if sender:
+            sender.queue.put(buf)
+        else:
+            self.workers[k][1].send_bytes(buf)
+            tt["ipc_send_owed" if k in self.owed else "ipc_send_free"] += time.perf_counter() - t1
+
+    def check_senders(self) -> None:
+        for k, sender in self.senders.items():
+            if sender.error is not None:
+                raise rb.FinancialIntegrityError(f"shard_send:{k}:{sender.error!r}")
 
     def ship(self, f, k: int) -> None:
         """Step 3: PART of file f to shard k; its pre_head is the head k last reported (the committed head, or the post head of k's previous part of this group)."""
@@ -497,6 +561,7 @@ class Spine:
 
     def pump(self, block: bool, bucket: str = "wait_built") -> None:
         """Handle every reply that is ready (or wait for one), and keep the prep stage's outputs flowing in."""
+        self.check_senders()
         t0, g = time.perf_counter(), self.g
         conns = {self.workers[k][1]: k for k in (*self.owed, *(g.busy if g else ()))}
         feed = self.feed.waiting() if self.feed else []
@@ -507,12 +572,20 @@ class Spine:
         if block and self.pre and self.dirty and not (self.mode == 3 and self.pre_done) and not connection.wait([*conns, *feed], 0):  # about to wait with nothing ready: the wait is the time to push the spine's pages to the WAL
             self.pre.flush()
             self.dirty, self.pre_done = False, True
-        ready = connection.wait([*conns, *feed], None if block else 0)
+        timeout = 0.5 if block and self.senders else (None if block else 0)
+        ready = connection.wait([*conns, *feed], timeout)
+        while block and self.senders and not ready:  # a failed write is not a reply: look at the senders now and then while waiting
+            self.check_senders()
+            ready = connection.wait([*conns, *feed], timeout)
         if block:
             self.tt[bucket] += time.perf_counter() - t0
         for conn in ready:
             if conn in conns:
-                self.handle(conns[conn], conn.recv())
+                try:
+                    m = conn.recv()
+                except (EOFError, OSError) as error:  # the shard's end of the pipe is closed
+                    raise rb.FinancialIntegrityError(f"shard_lost:{conns[conn]}") from error
+                self.handle(conns[conn], m)
         if any(conn not in conns for conn in ready):
             f0 = time.perf_counter()
             self.feed.drain()
@@ -619,6 +692,7 @@ class Spine:
             if self.mode == 3:  # every part is built: the shards push their pages while the spine commits
                 for k in sorted(g.sent):
                     self.send(k, ("PREFLUSH",))
+            self.check_senders()
         except BaseException:
             self.fail(g, undo, heads0, prev0)
             raise
@@ -645,11 +719,17 @@ class Spine:
         """Step 6/7: abort the shards that were asked, roll the spine back, forget the group's keys and heads."""
         sent = sorted(g.sent)
         for k in sent:
-            self.workers[k][1].send(("ABORT",))
-        for k in sent:  # replies in flight (a commit ACK still owed, BUILT or ERR) come first; the last ACK is the abort's
-            conn, acks = self.workers[k][1], 1 + (k in self.owed)
-            while acks:
-                acks -= conn.recv()[0] == "ACK"
+            self.send(k, ("ABORT",))
+        for k in sent:  # replies in flight (a commit ACK still owed, BUILT or ERR) come first; the last ACK is the abort's. A shard whose pipe is gone, or whose ABORT could not be written, owes none.
+            conn, sender, acks = self.workers[k][1], self.senders.get(k), 1 + (k in self.owed)
+            try:
+                while acks:
+                    if sender is None or conn.poll(0.5):
+                        acks -= conn.recv()[0] == "ACK"
+                    elif sender.error is not None:
+                        raise EOFError("abort_unsent")
+            except (EOFError, OSError):
+                continue  # a lost shard keeps its debt: the next wait for acks says shard_lost, and nothing more goes to it
             self.owed.pop(k, None)
         self.c.execute("ROLLBACK")
         self.dirty = self.pre_done = False
@@ -689,18 +769,29 @@ class Spine:
         self.prev_head = head
 
     def snapshot(self, k: int, path: Path) -> None:
-        self.workers[k][1].send(("SNAPSHOT", str(path)))
+        self.send(k, ("SNAPSHOT", str(path)))
         self.expect(self.workers[k][1], "ACK")
 
     def close(self) -> list[dict]:
-        self.wait_acks()
         stats = []
-        for k, (process, conn) in self.workers.items():
-            conn.send(("STOP",))
-            stats.append(self.expect(conn, "STATS")[0])
-            process.join()
-        self.ckpt.close()
-        self.c.close()
+        try:
+            self.check_senders()  # a STOP that cannot be written gets no STATS: say so, and stop the shards below
+            self.wait_acks()
+            for k, (process, conn) in self.workers.items():
+                self.send(k, ("STOP",))
+                stats.append(self.expect(conn, "STATS")[0])
+                process.join()
+        finally:  # after a failure too: no shard process and no sender thread outlives the spine
+            for process, _ in self.workers.values():
+                if process.is_alive():
+                    process.terminate()
+                    process.join()
+            for sender in self.senders.values():
+                sender.stop()
+                for kind, seconds in sender.seconds.items():
+                    self.tt[f"ipc_send_{kind}"] += seconds
+            self.ckpt.close()
+            self.c.close()
         return stats
 
 
@@ -810,10 +901,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--files", type=int, default=2)
     ap.add_argument("--prep", type=int, default=1, help="prep-stage processes")
     ap.add_argument("--suffix", default="")
+    ap.add_argument("--sender", choices=["0", "1"], help="I1 and I3 for this run (1 default: a sender thread per shard, PART as header plus blob; 0: the earlier path) (sets RR_SHARD_SENDER)")
     ap.add_argument("--prewrite", choices=["0", "1", "2", "3"], help="G1 mode for this run (0 off, 1 flush+fsync per part, 2 flush per part, 3 flush once per group) (sets RR_SHARD_PREWRITE; workers inherit it)")
     a = ap.parse_args(argv)
     if a.prewrite:
         os.environ["RR_SHARD_PREWRITE"] = a.prewrite
+    if a.sender:
+        os.environ["RR_SHARD_SENDER"] = a.sender
     SCRATCH.mkdir(parents=True, exist_ok=True)
     template = SCRATCH / "template.sqlite3"
     if not template.exists():

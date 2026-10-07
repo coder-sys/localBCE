@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import multiprocessing
 import os
 import pickle
 import shutil
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +70,63 @@ def faulty_main(conn, k: int, db: str) -> None:
 
     sb.Shard.check = check
     sb.shard_main(conn, k, db)
+
+
+DIE_SHARD = 1
+
+
+def die_in_commit(conn, k: int, db: str, after: bool) -> None:
+    """A shard worker that dies on its COMMIT message: before it commits, or just after (so the commit is durable but never ACKed); patched here, in the child."""
+    real = sb.Shard.commit
+
+    def commit(self):
+        if k == DIE_SHARD:
+            if after:
+                real(self)
+            os._exit(3)
+        return real(self)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
+def die_before_commit_main(conn, k: int, db: str) -> None:
+    die_in_commit(conn, k, db, False)
+
+
+def die_after_commit_main(conn, k: int, db: str) -> None:
+    die_in_commit(conn, k, db, True)
+
+
+class Gated:
+    """A sender's connection that writes only once the gate is open: the messages behind the one it holds stay queued."""
+
+    def __init__(self, conn, gate: threading.Event) -> None:
+        self.conn, self.gate = conn, gate
+
+    def send_bytes(self, buf: bytes) -> None:
+        self.gate.wait()
+        self.conn.send_bytes(buf)
+
+
+class Broken:
+    def send_bytes(self, buf: bytes) -> None:
+        raise BrokenPipeError("forced_send")
+
+
+# pinned() of the spine and shard0..K-1 for 12 files x 300 lines (FL seed 20261006, DE seed 20261007), recorded at HEAD 311fdb75, before the sender thread and the PART header existed
+# (rrb/state/owc-s12-pre-digests-20261007.json)
+PRE_S12_PINNED = {
+    "FL": {1: ["dfdd4e92e9efd849", "7fc4dc1ee1faece2"],
+           8: ["9a4c1166e7188b16", "d062278907301bf2", "593392b320dfc9bd", "6828f53803c03c2b", "39c2ff0ad60210b0", "ddcabdf158b3f8bb", "ee6903a355fda141", "5ee45e9d03ef4d15", "ccc6d48ba2792f87"],
+           12: ["49de65dab44af122", "d7a1f008b3d7b219", "5327a0867229cb2f", "5a7ea2674af49802", "afbd0cd96cfa612f", "05a169b941d16c71", "69609bc8e945376a", "9a05ed648c72dd9b", "f11a29c4a6332efe",
+                "4bf6616496e14456", "ed5f00673cdd2160", "50185d80d51165ae", "b62854f6398e2d0c"]},
+    "DE": {1: ["41fad92ff03045f1", "37274a28b4c745af"],
+           8: ["9ae8998ee7b51143", "33dada86348a1a28", "b87997f77b72694d", "ab7768b333be88ea", "ae46023e8d08ce2d", "1ff39de894fb9964", "8e8591aecfcb3b21", "1c948e844ab4a693", "d24dbcfa5f82e5e7"],
+           12: ["ceae8dde505dd8b9", "60e993e8fd7e8d04", "81854c9fa5718ea4", "b512c94851b89bef", "708f4cfc9680bd8d", "202226326aae6378", "2695f3194c1836d8", "cf2f5048e6a48dd1", "10db8f34cbab32fb",
+                "a38af31228892647", "4d943c49a17489d0", "6a028072bb69a523", "206300ac874796a7"]},
+}
+PRE_S12_CLASSES = {"NEGATIVE": 239, "applied": 3384, "HELD": 24, "ZERO": 24}
 
 
 class ShardBench(unittest.TestCase):
@@ -430,6 +489,200 @@ class ShardBench(unittest.TestCase):
                 sb.Prewriter(c, self.tmp / "g1-not-it.sqlite3")
         finally:
             c.close()
+
+    # S12: one sender thread per shard (I1) and PART as a fixed header plus the blob (I3); RR_SHARD_SENDER=0 is the earlier path
+
+    def sender_env(self, on: bool):
+        return mock.patch.dict(os.environ, {"RR_SHARD_SENDER": "1" if on else "0"})  # the spine reads it at start; spawned workers inherit it
+
+    def quiet(self, spine=None) -> None:
+        """No shard process and no sender thread of the spine (or any) is left alive."""
+        if spine:
+            self.assertEqual([k for k, (p, _) in spine.workers.items() if p.is_alive()], [])
+            self.assertEqual([k for k, s in spine.senders.items() if s.thread.is_alive()], [])
+        self.assertEqual([t.name for t in threading.enumerate() if t.name.startswith("shard-sender-")], [])
+        self.assertEqual(multiprocessing.active_children(), [])
+
+    def watchdog(self, spine, seconds: int = 120):
+        """A hang must be a failure, not a stuck run: after `seconds` the shards are terminated (their pipes then end) and the fired flag fails the test."""
+        fired = []
+
+        def kill() -> None:
+            fired.append(1)
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+
+        timer = threading.Timer(seconds, kill)
+        timer.daemon = True
+        timer.start()
+        return timer, fired
+
+    def spine_with(self, main, name: str, on: bool = True) -> "sb.Spine":
+        work, real = self.tmp / name, sb.shard_main
+        sb.shard_main = main
+        try:
+            with self.sender_env(on):
+                return sb.Spine(work, 4, self.template)
+        finally:
+            sb.shard_main = real
+
+    def replay_identical(self, work: Path, k: int, name: str, expect_records: int | None = None) -> dict:
+        """Recovery from a copy of shard k's files as they stand (a killed worker leaves db and wal): the replay equals the spine's head."""
+        copy = self.tmp / f"{name}-replay{k}.sqlite3"
+        shutil.copyfile(work / f"shard{k}.sqlite3", copy)
+        wal = Path(str(work / f"shard{k}.sqlite3") + "-wal")
+        if wal.exists():
+            shutil.copyfile(wal, str(copy) + "-wal")
+        result = sb.replay(work / "spine.sqlite3", copy, k)
+        self.assertTrue(result["identical"], result)
+        if expect_records is not None:
+            self.assertEqual(result["records"] > 0, expect_records > 0, result)
+        return result
+
+    def test_s12_part_header_decodes_to_the_same_tuple_and_holds_the_blob_once(self) -> None:
+        record, _ = self.files[0]
+        p = sb.prepare(sb.tables(self.template, 3), 0, record.rows, 1)
+        for k, blob in p.blobs.items():
+            message = ("PART", 1, 0, f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}", sb.T0_MS, blob, bytes(range(64)), p.verdicts[k])
+            buf = sb.encode(message)
+            self.assertEqual(sb.decode(buf), message)
+            self.assertTrue(buf.startswith(b"PART") and buf.endswith(blob) and buf.count(blob) == 1)
+            self.assertEqual(len(buf), sb.PART_HEAD.size + len(message[3].encode()) + 64 + len(p.verdicts[k]) + len(blob))  # nothing but the header and the bytes themselves
+            with self.assertRaises(ValueError):
+                sb.decode(buf[:sb.PART_HEAD.size + 3])
+        for message in (("COMMIT",), ("ABORT",), ("PREFLUSH",), ("STOP",), ("SNAPSHOT", "snap.sqlite3")):
+            self.assertEqual(sb.decode(sb.encode(message)), message)  # every other message stays a pickle
+        self.assertEqual(sb.decode(pickle.dumps(("PART", 1, 0, "p", 5, b"b", b"h", b"v"), 5)), ("PART", 1, 0, "p", 5, b"b", b"h", b"v"))  # and a pickled PART (the earlier form) still decodes
+
+    def test_s12_sender_on_stores_exactly_what_off_and_the_pre_s12_code_store_at_k1_8_12(self) -> None:
+        for name, seed in (("FL", 20261006), ("DE", 20261007)):
+            files = sb.corpus(seed, LINES, 12)
+            for k in (1, 8, 12):
+                runs = {}
+                for on in (False, True):
+                    with self.sender_env(on):
+                        work = self.tmp / f"s12-{name}-{k}-{int(on)}"
+                        r = sb.run_once(k, files, self.template, work, True, 2)
+                    r["tables"] = {p.name: digests(p) for p in sorted(work.glob("*.sqlite3")) if p.name != "snapshot.sqlite3"}
+                    r["pinned"] = [pinned(work / "spine.sqlite3", False)] + [pinned(work / f"shard{i}.sqlite3", True) for i in range(k)]
+                    runs[on] = r
+                    self.quiet()
+                label = f"{name} K={k}"
+                off, on = runs[False], runs[True]
+                self.assertEqual(off["classes"], on["classes"], label)
+                self.assertEqual(on["classes"], PRE_S12_CLASSES, label)
+                self.assertTrue(off["replay"]["identical"] and on["replay"]["identical"], label)
+                self.assertEqual(off["tables"], on["tables"], label)  # every table of the spine and of each shard, records and heads included
+                self.assertEqual(on["pinned"], PRE_S12_PINNED[name][k], label)  # and the input-derived tables are what the code before S12 stored
+                self.assertEqual(off["pinned"], PRE_S12_PINNED[name][k], label)
+
+    def test_s12_shard_err_mid_group_gives_the_same_stores_with_the_sender_and_leaves_nothing_alive(self) -> None:
+        files = sb.corpus(20261006, LINES, 12)
+        with self.sender_env(False):
+            off, r_off, g_off = self.group_run("s12-err-off", files, 8, fault=True)
+        with self.sender_env(True):
+            on, r_on, g_on = self.group_run("s12-err-on", files, 8, fault=True)
+        self.assertEqual((g_off, g_on), ([1] * 7 + [4],) * 2)
+        self.assertEqual([repr(r) if isinstance(r, Exception) else r for r in r_on], [repr(r) if isinstance(r, Exception) else r for r in r_off])
+        self.assertTrue(isinstance(r_on[FAULT_FILE], rb.FinancialIntegrityError) and "forced_shard_check" in str(r_on[FAULT_FILE]))
+        self.assertEqual(self.all_digests(off), self.all_digests(on))
+        self.replay_identical(on, 3, "s12-err")
+        self.quiet()
+
+    def test_s12_shard_killed_in_commit_stops_the_run_cleanly_and_replay_recovers_it(self) -> None:
+        files = sb.corpus(20261007, LINES, 12)
+        clean, _, _ = self.group_run("s12-kill-clean", files[:8], 8)  # what the first group alone stores
+        for after, main in ((False, die_before_commit_main), (True, die_after_commit_main)):
+            name = f"s12-kill-{int(after)}"
+            spine = self.spine_with(main, name)
+            timer, fired = self.watchdog(spine)
+            try:
+                prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+                first = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(8)])  # the spine commits; shard 1 is told to commit and dies
+                self.assertTrue(all(isinstance(r, dict) for r in first), first)
+                rest = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(8, 12)])
+                self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and ("shard_lost" in str(r) or "shard_send" in str(r)) for r in rest), rest)
+                with self.assertRaises(rb.FinancialIntegrityError):
+                    spine.close()  # the dead shard never ACKed: close says so, and stops what is left
+            finally:
+                timer.cancel()
+                for p, _ in spine.workers.values():
+                    if p.is_alive():
+                        p.terminate()
+            self.assertEqual(fired, [], name)  # no hang
+            self.quiet(spine)
+            work = self.tmp / name
+            for k in (0, 2, 3):  # the other shards and the spine hold exactly the first group
+                self.assertEqual(digests(work / f"shard{k}.sqlite3"), digests(clean / f"shard{k}.sqlite3"), (name, k))
+            self.assertEqual(digests(work / "spine.sqlite3"), digests(clean / "spine.sqlite3"), name)
+            result = self.replay_identical(work, DIE_SHARD, name, 0 if after else 8)  # the dead shard comes back: committed already (after) or from the spine's records (before)
+            self.assertEqual(result["owed"], not after, name)
+
+    def test_s12_abort_with_parts_still_queued_leaves_the_pre_state_and_a_retry_equals_the_clean_run(self) -> None:
+        files = sb.corpus(20261006, LINES, 4)
+        clean, _, _ = self.group_run("s12-abort-clean", files[:2], 1)
+        spine = self.spine_with(sb.shard_main, "s12-abort")
+        timer, fired = self.watchdog(spine)
+        gate, seen, calls = threading.Event(), [], [0]
+        try:
+            for sender in spine.senders.values():
+                sender.conn = Gated(sender.conn, gate)  # every PART waits in its sender; what the spine enqueues next stays behind it
+            before = self.all_digests(self.tmp / "s12-abort")
+            real_send, real_rows = spine.send, spine.write_rows
+
+            def send(k, message):
+                real_send(k, message)
+                if message[0] == "ABORT":
+                    seen.append((k, spine.senders[k].queue.qsize(), gate.is_set()))
+
+            def write_rows(*args, **kwargs):
+                calls[0] += 1
+                if calls[0] == 2:  # the second file of the group fails in the spine while the first file's PARTs are unwritten
+                    threading.Timer(0.5, gate.set).start()
+                    raise rb.FinancialIntegrityError("forced_spine_rows")
+                return real_rows(*args, **kwargs)
+
+            spine.send, spine.write_rows = send, write_rows
+            prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files[:2])]
+            results = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(2)])  # fails whole (ABORTs behind the PARTs), then one file at a time
+            self.assertTrue(seen and all(size >= 1 and not opened for _, size, opened in seen), seen)  # the ABORTs really queued behind unwritten PARTs
+            self.assertTrue(all(isinstance(r, dict) for r in results), results)  # the retries, one file at a time, went in
+            self.assertNotEqual(self.all_digests(self.tmp / "s12-abort"), before)
+            self.assertEqual(spine.groups, [1, 1])
+            spine.close()
+        finally:
+            gate.set()
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+        self.assertEqual(self.all_digests(self.tmp / "s12-abort"), self.all_digests(clean))  # the abort left nothing behind: the retry stored what a clean run stores
+        self.replay_identical(self.tmp / "s12-abort", 3, "s12-abort")
+
+    def test_s12_a_failed_write_is_raised_before_anything_commits_and_close_stops_everything(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        spine = self.spine_with(sb.shard_main, "s12-send")
+        timer, fired = self.watchdog(spine)
+        try:
+            before = self.all_digests(self.tmp / "s12-send")
+            spine.senders[1].conn = Broken()
+            prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+            results = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(2)])
+            self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and "shard_send:1" in str(r) for r in results), results)
+            self.assertEqual((spine.n, spine.keys), (0, {}))
+            self.assertEqual(self.all_digests(self.tmp / "s12-send"), before)  # nothing committed anywhere
+            with self.assertRaises(rb.FinancialIntegrityError):
+                spine.close()
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
 
 
 if __name__ == "__main__":
