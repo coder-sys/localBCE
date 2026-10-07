@@ -154,6 +154,14 @@ class ShardBench(unittest.TestCase):
             spine.close()
             self.assertEqual(seen, JUDGE_HASHES[name], name)
 
+    def test_stored_command_evidence_and_payment_rows_are_byte_identical_to_the_json_dumps_writer(self) -> None:
+        work = self.drive(3, "bytes")  # sha256[:16] of every row of three tables per shard, recorded at HEAD 6224a94c (json.dumps body, runs spp8 and spp9)
+        pinned = [("c60825022bf049a6", "ca6d98ea9725aaf0", "1aaebb83b7c38f5e"), ("6b7b5c6d15a5a3e5", "5a57d418562f8fba", "f9a130bd1fde486d"), ("9a41da5c1fc2587b", "693d32ac2130929f", "e1272ede2d2119db")]
+        for k, want in enumerate(pinned):
+            with sqlite3.connect(str(work / f"shard{k}.sqlite3")) as c:
+                got = tuple(hashlib.sha256(repr(c.execute(f"SELECT * FROM {t} ORDER BY 1").fetchall()).encode()).hexdigest()[:16] for t in ("commands", "evidence", "payments"))
+            self.assertEqual(got, want, k)
+
     def test_resend_is_all_duplicates_and_moves_no_head(self) -> None:
         work = self.tmp / "resend"
         spine = sb.Spine(work, 3, self.template)

@@ -229,7 +229,6 @@ class Spine:
 
     def judge(self, index: int, rows: list, pool: str, n: int):
         """Spine judge: cell directory dedup, routing by item hash, classification (the PERF-B Writer.chunk rules, no Lean)."""
-        t0 = time.perf_counter()
         base, sp = index * rb.KEY, {name: [] for name in ("cell_rows", "holds", "links", "resolutions", "charges")}
         dirs, parts, pending, resolved, classes = [], {}, {}, set(), {}
         keys, overlay, obl, obl_ids, sha512, sha256 = self.keys, self.overlay, self.obl, self.obl_ids, hashlib.sha3_512, hashlib.sha3_256
@@ -268,7 +267,6 @@ class Spine:
                 classes["applied"] = classes.get("applied", 0) + 1
         j = hashlib.sha3_256(b"".join(d[0] for d in dirs)).digest()
         source = hashlib.sha256(b"".join(d[5] for d in dirs)).digest()
-        self.tt["judge"] += time.perf_counter() - t0
         return sp, dirs, parts, j, source, classes
 
     def judged(self, index: int, record, n: int):

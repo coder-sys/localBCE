@@ -194,6 +194,9 @@ def make_owner_db(path: Path) -> None:
         _setup(owner, random.Random(1), OBLIGATIONS, authority)
 
 
+quote = json.encoder.encode_basestring_ascii  # json.dumps's own string encoder
+
+
 def sha(*parts: object) -> bytes:
     return hashlib.sha3_512("\x1f".join(map(str, parts)).encode()).digest()
 
@@ -325,10 +328,12 @@ class Writer:
         touched[ob] = touched.get(ob, 0) + cents
         ev = f"ev:{index:06d}:{key}"  # zero-padded, so the owner ids the adapter mints are monotone over the day
         pay = f"pay:{index:06d}:{key}"
-        request = {"command": "PAYMENT" if kind == "PAYMENT_RECEIVED" else "PAYMENT_REVERSAL", "key": pay if kind == "PAYMENT_RECEIVED" else ev, "item_id": self.obl[ob],
-                   "evidence_id": ev, "common_origin_id": f"x12/{key}", "amount_cents": cents, "event_at_ms": now, "source_id": "x12", "source_version": "v1", "local_ref": ""}
-        body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("ascii")  # the owner's commands row (owner._record_command): canonical request, domain digest
-        t["commands"].append((f"{request['command']}:{request['key']}", request["command"], body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
+        command, ckey = ("PAYMENT", pay) if kind == "PAYMENT_RECEIVED" else ("PAYMENT_REVERSAL", ev)
+        # the owner's commands row (owner._record_command): the canonical request (keys sorted, ascii strings, compact) then its domain digest; the fixed
+        # shape is written out by hand to skip json.dumps (the test pins the stored bytes)
+        body = (f'{{"amount_cents":{cents},"command":"{command}","common_origin_id":{quote(f"x12/{key}")},"event_at_ms":{now},"evidence_id":{quote(ev)},'
+                f'"item_id":{quote(self.obl[ob])},"key":{quote(ckey)},"local_ref":"","source_id":"x12","source_version":"v1"}}').encode("ascii")
+        t["commands"].append((f"{command}:{ckey}", command, body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
         t["evidence"].append((ev, self.obl[ob], "PAYMENT", f"x12/{key}", "x12", "v1", "", now, now, now, sha(ev, 1), sha(ev, 2), cents, None, None))
         t["payments"].append((pay, ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
         self.seq += 1  # one history event per mutation, hash-chained (SHA3-512)
