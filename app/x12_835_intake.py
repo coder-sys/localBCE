@@ -16,6 +16,11 @@ and the file `balance_unverified` (one unknown amount can absorb another's error
 still refuses the file: nothing can balance. A folded amount of 0 is a zero row (a receipt fact: S3, not this parser, gives it no
 cell). Raw text is a canonical re-encoding (element, repeat, component and segment ends are control characters, trailing empties
 dropped) so the key does not depend on the file's delimiters; the S3 line_digest covers this canonical form, not the wire bytes.
+
+Fast lane. A plain CLP (nine elements, two-decimal money) or one-triple CAS is read whole by one anchored pattern built from the
+very classes above; a match proves the slow path would accept the segment with exactly these fields, so the lane only skips work.
+A CLP block of lane segments that balances is folded straight from the match; every other block, and every file whose separators
+could appear in a lane class, runs the full code above. `fold_835` returns the header, totals and rows without `claims`.
 """
 
 from __future__ import annotations
@@ -26,7 +31,8 @@ import hashlib
 import re
 
 from app.mirror.error_boundary import raise_redacted
-from app.x12_tokenizer import Segment, X12Error, refuse, tokenize
+import app.x12_tokenizer as _tok
+from app.x12_tokenizer import Segment, X12Error, refuse
 
 _MONEY = re.compile(r"(-?)(0|[1-9][0-9]{0,11})(?:\.([0-9]{1,2}))?")
 _QUANTITY = re.compile(r"-?(0|[1-9][0-9]{0,9})(\.[0-9]{1,4})?")
@@ -36,6 +42,10 @@ _CODE = re.compile(r"[A-Z0-9]{1,5}")
 _DTM_QUALIFIER = re.compile(r"[0-9]{3}")
 _PLB_REASON = re.compile(r"[A-Z0-9]{2}")
 _CREDIT = re.compile(r"C")  # credit only: a debit needs an owner design first
+_LANE_MONEY = r"(?:-(?!0\.00)|)(?:0|[1-9][0-9]{0,11})\.[0-9]{2}"  # a strict subset of _MONEY: two decimals, no -0.00, so equal text is equal cents
+_LANE_CLASSES = "._,&'/-"  # the punctuation the lane patterns use; a file with one of these as a separator never takes the lane
+_CHILD = frozenset(("CAS", "DTM", "SVC"))
+_LANES: dict = {}
 
 
 @dataclass(frozen=True)
@@ -133,6 +143,34 @@ class Remittance:
     balance_unverified: bool  # a block amount was unreadable, so BPR02 was not checked: S3 holds every row
 
 
+@dataclass(frozen=True)
+class Fold:
+    """What S3 reads of a remittance: the same header, totals and rows as `Remittance`, and no claims or adjustments at all."""
+    interchange_control: str
+    group_control: str
+    set_control: str
+    interchange_sender: str
+    interchange_receiver: str
+    group_sender: str
+    group_receiver: str
+    handling: str
+    total_cents: int
+    credit_debit: str
+    method: str
+    format: str
+    effective_date: str
+    trace: str
+    trace_origin: str
+    dates: tuple[Dtm, ...]
+    payer: Party
+    payee: Party
+    claims_paid_cents: int | None
+    plb_total_cents: int | None
+    forward_balance_cents: int | None
+    rows: tuple[Row, ...]
+    balance_unverified: bool
+
+
 def cents(text: str) -> int:
     match = _MONEY.fullmatch(text)
     if match is None:
@@ -212,13 +250,21 @@ def _guard(raw: str, amount: int | None, read, key) -> tuple[object, Part]:
 
 
 def _fold(parts: list[Part]) -> tuple[Row, ...]:
-    folded: dict[tuple[str, ...], tuple[list, list, set]] = {}
-    for key, amount, raw, flags in parts:
-        amounts, texts, seen = folded.setdefault(key, ([], [], set()))
-        amounts.append(amount)
-        texts.append(raw)
-        seen.update(flags)
-    return tuple(Row(k, None if None in a else sum(a), "".join(t), tuple(sorted(f))) for k, (a, t, f) in folded.items())
+    groups: dict[tuple[str, ...], list[Part]] = {}
+    for part in parts:
+        group = groups.get(part[0])
+        if group is None:
+            groups[part[0]] = [part]
+        else:
+            group.append(part)
+    rows = []
+    for k, group in groups.items():
+        if len(group) == 1:  # a part's flags are one code or none, so they are already sorted and unique
+            rows.append(Row(k, group[0][1], group[0][2], group[0][3]))
+        else:
+            amounts = [p[1] for p in group]
+            rows.append(Row(k, None if None in amounts else sum(amounts), "".join(p[2] for p in group), tuple(sorted({f for p in group for f in p[3]}))))
+    return tuple(rows)
 
 
 def _quantity(text: str) -> str:
@@ -276,17 +322,17 @@ def _pair(seg: Segment, k: int) -> PlbAdjustment:
 
 
 class _Cursor:
-    def __init__(self, segments: tuple[Segment, ...]) -> None:
-        self._segments, self._at = segments, 0
+    def __init__(self, tags: list[str], items: list) -> None:
+        self._tags, self._items, self.at = tags, items, 0
 
     def peek(self) -> str:
-        return self._segments[self._at].tag if self._at < len(self._segments) else ""
+        return self._tags[self.at] if self.at < len(self._tags) else ""
 
     def next(self, tag: str) -> Segment:
         if self.peek() != tag:
             refuse("835:segment")
-        self._at += 1
-        return self._segments[self._at - 1]
+        self.at += 1
+        return self._items[self.at - 1]
 
     def take(self, *tags: str) -> list[Segment]:
         taken = []
@@ -321,7 +367,7 @@ def _service(cursor: _Cursor) -> Service:
 
 
 def _claim(segments: list[Segment]) -> Claim:
-    cursor, seg = _Cursor(tuple(segments)), segments[0]
+    cursor, seg = _Cursor([s.tag for s in segments], segments), segments[0]
     cursor.next("CLP")
     seg.blank(10)
     fields = (_text(seg, 1), _text(seg, 2, _CODE), cents(seg.value(3)), cents(seg.value(4)), cents(seg.value(5)),
@@ -342,8 +388,54 @@ def _paid(seg: Segment) -> int | None:
     return None if None in amounts else amounts[1]
 
 
+def _lane(esep: str, rsep: str, csep: str, term: str) -> dict | None:
+    """tag -> the bound fullmatch of the segment shape the lane reads whole, or None when a separator could occur inside a lane
+    class. Otherwise no lane class holds a separator, so the groups align with the element split and each is one plain component."""
+    key = (esep, rsep, csep, term)
+    if key not in _LANES:
+        if len(_LANES) > 64:
+            _LANES.clear()
+        if any(c in _LANE_CLASSES for c in key):
+            _LANES[key] = None
+        else:
+            e, text, code, money = re.escape(esep), "(" + _TEXT.pattern + ")", "(" + _CODE.pattern + ")", "(" + _LANE_MONEY + ")"
+            maybe = "(" + _CODE.pattern + "|)"
+            _LANES[key] = {"CLP": re.compile(e.join(("CLP", text, code, money, money, money, code, text, maybe, maybe))).fullmatch,
+                           "CAS": re.compile(e.join(("CAS", code, code, money))).fullmatch}
+    return _LANES[key]
+
+
+def _clp_key(claim: Claim) -> tuple[str, str]:
+    return ("REV" if claim.status == "22" else "CLP", claim.payer_control)
+
+
+def _segment_of(tag: str, item) -> Segment:
+    """A lane match back as the Segment the tokenizer would have built from the same text."""
+    return item if type(item) is not tuple else Segment(tag, tuple(((g,),) for g in item))
+
+
+def _tokens(data: bytes):
+    """The tokenizer's checks in its order, with lane segments kept as their match groups. Returns (interchange, tags, items)."""
+    isa, (esep, rsep, csep, term), chunks, tags = _tok._scan(data)
+    lane = _lane(esep, rsep, csep, term)
+    items = []
+    for chunk, tag in zip(chunks, tags):
+        match = lane.get(tag) if lane else None
+        found = match(chunk) if match else None
+        items.append(found.groups() if found else _tok._segment(chunk, esep, rsep, csep))
+    return _tok._envelope(isa, tags, items), tags
+
+
+def fold_835(data: bytes) -> Fold:
+    return _read(data, False)
+
+
 def parse_835(data: bytes) -> Remittance:
-    interchange = tokenize(data)
+    return _read(data, True)
+
+
+def _read(data: bytes, keep_claims: bool) -> Remittance | Fold:
+    interchange, tags = _tokens(data)
     if interchange.isa.value(15) != "T":
         refuse("835:production")
     if len(interchange.groups) != 1 or len(interchange.groups[0].transactions) != 1:
@@ -354,7 +446,8 @@ def parse_835(data: bytes) -> Remittance:
         refuse("835:version")
     if transaction[0].value(1) != "835":
         refuse("835:envelope")
-    cursor = _Cursor(transaction[1:-1])
+    body, tags = transaction[1:-1], tags[2:-3]  # one group with one set is exactly GS ST body SE GE IEA
+    cursor = _Cursor(tags, body)
     bpr, trn = cursor.next("BPR"), cursor.next("TRN")
     bpr.blank(6, 15)
     bpr.blank(17)
@@ -369,14 +462,30 @@ def parse_835(data: bytes) -> Remittance:
     dates = tuple(_dtm(s) for s in cursor.take("DTM"))
     payer, payee = _party(cursor.next("N1"), "PR"), _party(cursor.next("N1"), "PE")
     claims, adjustments, parts, paid, withheld = [], [], [], [], []
-    while cursor.peek() == "CLP":
-        segments = [cursor.next("CLP"), *cursor.take("CAS", "DTM", "SVC")]
-        amount = _paid(segments[0])
-        claim, part = _guard("".join(_raw(s, *range(1, len(s.elements) + 1)) for s in segments), amount, lambda: _claim(segments),
-                             lambda c: ("REV" if c.status == "22" else "CLP", c.payer_control))
-        claims += [claim] if claim else []
+    at, count = cursor.at, len(tags)
+    while at < count and tags[at] == "CLP":
+        end = at + 1
+        while end < count and tags[end] in _CHILD:
+            end += 1
+        clp, kids = body[at], body[at + 1:end]
+        if type(clp) is tuple and (clp[2] == clp[3] if not kids else all(type(k) is tuple for k in kids)
+                                   and int(clp[2].replace(".", "")) - sum(int(k[2].replace(".", "")) for k in kids) == int(clp[3].replace(".", ""))):
+            amount = int(clp[3].replace(".", ""))
+            key = ("REV" if clp[1] == "22" else "CLP", clp[6])
+            raw = "CLP\x1f" + "\x1f".join(clp).rstrip("\x1f") + "\n" + "".join("CAS\x1f" + "\x1f".join(k) + "\n" for k in kids)
+            parts.append((key, amount, raw, ("rev_sign",) if key[0] == "REV" and amount > 0 else ("clp_sign",) if key[0] == "CLP" and amount < 0 else ()))
+            if keep_claims:
+                claims.append(Claim(clp[0], clp[1], int(clp[2].replace(".", "")), amount, int(clp[4].replace(".", "")), clp[5], clp[6], clp[7], clp[8],
+                                    tuple(Cas(k[0], k[1], int(k[2].replace(".", "")), "") for k in kids), (), ()))
+        else:
+            segments = [_segment_of(t, x) for t, x in zip(tags[at:end], body[at:end])]
+            amount = _paid(segments[0])
+            claim, part = _guard("".join(_raw(s, *range(1, len(s.elements) + 1)) for s in segments), amount, lambda: _claim(segments), _clp_key)
+            claims += [claim] if claim else []
+            parts.append(part)
         paid.append(amount)
-        parts.append(part)
+        at = end
+    cursor.at = at
     for seg in cursor.take("PLB"):
         try:
             ks = _pairs(seg)
@@ -400,7 +509,7 @@ def parse_835(data: bytes) -> Remittance:
         if total != claims_paid - plb_total:
             refuse("835:balance")
         forward_balance = sum(a.amount_cents for a in adjustments if a.reason == "FB")  # a RAW pair is not here: its RAW row is the record
-    return Remittance(interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), interchange.isa.value(6).rstrip(" "),
-                      interchange.isa.value(8).rstrip(" "), group.gs.value(2), group.gs.value(3), *head, dates, payer, payee,
-                      tuple(claims), tuple(adjustments), claims_paid, plb_total, forward_balance,
-                      _fold(parts), unverified)
+    top = (interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), interchange.isa.value(6).rstrip(" "),
+           interchange.isa.value(8).rstrip(" "), group.gs.value(2), group.gs.value(3), *head, dates, payer, payee)
+    tail = (claims_paid, plb_total, forward_balance, _fold(parts), unverified)
+    return Remittance(*top, tuple(claims), tuple(adjustments), *tail) if keep_claims else Fold(*top, *tail)

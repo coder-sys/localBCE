@@ -133,9 +133,9 @@ def _match(close: Segment, opened: Segment, close_at: int, open_at: int, count: 
         refuse("x12:count")
 
 
-def _scan(data: bytes) -> tuple[Segment, str, str, str, list[str], list[str]]:
+def _scan(data: bytes) -> tuple[Segment, tuple[str, str, str, str], list[str], list[str]]:
     """Every check before the first segment is split: input, caps, ISA, separators, segment count, trailing or truncated bytes.
-    Returns the ISA, the three separators the segments use, each segment's text and its tag (not yet validated)."""
+    Returns the ISA, the separators (element, repeat, component, segment), each segment's text and its tag (not yet validated)."""
     if type(data) is not bytes:
         refuse("x12:input")
     if len(data) > MAX_BYTES:
@@ -172,7 +172,7 @@ def _scan(data: bytes) -> tuple[Segment, str, str, str, list[str], list[str]]:
         refuse("x12:truncated")
     if tail:
         refuse("x12:trailing")
-    return isa, esep, rsep, csep, chunks, tags
+    return isa, (esep, rsep, csep, term), chunks, tags
 
 
 def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
@@ -230,5 +230,5 @@ def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
 
 
 def tokenize(data: bytes) -> Interchange:
-    isa, esep, rsep, csep, chunks, tags = _scan(data)
+    isa, (esep, rsep, csep, _), chunks, tags = _scan(data)
     return _envelope(isa, tags, [_segment(chunk, esep, rsep, csep) for chunk in chunks])
