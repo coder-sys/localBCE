@@ -8,6 +8,7 @@ import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
+import BlindLedger.Financial.ShardSplit
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -275,3 +276,11 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.pathOf_verifies
 /-- info: 'BlindLedger.Gate.publishOkTree_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_sound
+/-- info: 'BlindLedger.Financial.ShardSplit.rollforward_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Financial.ShardSplit.rollforward_eq
+/-- info: 'BlindLedger.Financial.ShardSplit.reader_cut' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Financial.ShardSplit.reader_cut
+/-- info: 'BlindLedger.Financial.ShardSplit.applied_missing' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Financial.ShardSplit.applied_missing
+/-- info: 'BlindLedger.Financial.ShardSplit.rollforward_closed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Financial.ShardSplit.rollforward_closed
