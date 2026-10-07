@@ -5107,8 +5107,80 @@ private theorem c10_yoe (doe : Nat) (h : doe ≤ 146096) :
     · rw [ha, hc, e0]; exact Nat.div_eq_of_lt_le (by omega) (by omega)
     · rw [q4, q100]; exact ⟨by omega, by omega, by omega, fun h3 => by omega⟩
 
+/-- A CCYYMMDD built from in-range parts is a valid date. -/
+private theorem c11_vd (Y m d : Nat) (hY : 0 < Y) (hY' : Y ≤ 9999) (hm : 0 < m) (hm' : m ≤ 12) (hd : 0 < d)
+    (hd' : d ≤ monthDays Y m) : validDate (Y * 10000 + m * 100 + d) = true := by
+  have h31 := c4_monthDays_le Y m
+  have e1 : (Y * 10000 + m * 100 + d) / 10000 = Y := by omega
+  have e2 : (Y * 10000 + m * 100 + d) / 100 % 100 = m := by omega
+  have e3 : (Y * 10000 + m * 100 + d) % 100 = d := by omega
+  simp only [validDate, e1, e2, e3]
+  simp [hY, hY', hm, hm', hd, hd']
+
+/-- `civilOf` names a valid date for every second before 10000-01-01T00:00:00Z. -/
+private theorem c11_civ_valid (secs : Nat) (h : secs < 253402300800) : validDate (civilOf secs) = true := by
+  simp only [civilOf]
+  generalize hz : secs / 86400 + 719468 = z
+  generalize he : z / 146097 = era
+  generalize hdoe : z - era * 146097 = doe
+  have hb : 4 ≤ era ∧ era ≤ 24 ∧ doe ≤ 146096 ∧ (era < 24 ∨ doe ≤ 146036) := by omega
+  clear hz he hdoe h
+  obtain ⟨yoe, hy, hy1, hy2, hy3, hy4⟩ := c10_yoe doe hb.2.2.1
+  rw [hy]
+  clear hy
+  generalize hdoy : doe - (365 * yoe + yoe / 4 - yoe / 100) = doy at hy3 hy4 ⊢
+  generalize hmp : (5 * doy + 2) / 153 = mp
+  generalize hd : doy - (153 * mp + 2) / 5 + 1 = d
+  obtain ⟨t1, t2, t3, t4, t5, t6⟩ := c10_month doy mp d hy3 hmp.symm hd.symm
+  have edge : era < 24 ∨ yoe < 399 ∨ mp < 10 := by omega
+  clear hmp hd hdoy hy2
+  by_cases hlt : mp < 10
+  · rw [if_pos hlt, if_neg (show ¬ mp + 3 ≤ 2 by omega)]
+    refine c11_vd _ _ _ (by omega) (by omega) (by omega) (by omega) (by omega) ?_
+    have t4' : d ≤ 30 ∨ ¬(mp = 1 ∨ mp = 3 ∨ mp = 6 ∨ mp = 8) := by
+      by_cases hq : mp = 1 ∨ mp = 3 ∨ mp = 6 ∨ mp = 8
+      · exact Or.inl (t4 hq)
+      · exact Or.inr hq
+    have h10 : mp = 0 ∨ mp = 1 ∨ mp = 2 ∨ mp = 3 ∨ mp = 4 ∨ mp = 5 ∨ mp = 6 ∨ mp = 7 ∨ mp = 8 ∨ mp = 9 := by
+      omega
+    rcases h10 with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp [monthDays] <;> omega
+  · rw [if_neg hlt, if_pos (show mp - 9 ≤ 2 by omega)]
+    refine c11_vd _ _ _ (by omega) (by omega) (by omega) (by omega) (by omega) ?_
+    rcases (show mp = 10 ∨ mp = 11 by omega) with rfl | rfl
+    · simp [monthDays] <;> omega
+    · have t5' := t5 rfl
+      by_cases h29 : d = 29
+      · obtain ⟨l4, l100⟩ := hy4 (t6 rfl h29)
+        have hl : leap (yoe + era * 400 + 1) = true := by
+          have a4 : (yoe + era * 400 + 1) % 4 = 0 := by omega
+          have a1 : ((yoe + era * 400 + 1) % 100 != 0 || (yoe + era * 400 + 1) % 400 == 0) = true := by
+            rcases l100 with l | l
+            · have : (yoe + era * 400 + 1) % 100 ≠ 0 := by omega
+              simp [this]
+            · have : (yoe + era * 400 + 1) % 400 = 0 := by omega
+              simp [this]
+          unfold leap; rw [a4, a1]; rfl
+        simp [monthDays, hl] <;> omega
+      · have h28 : 28 ≤ monthDays (yoe + era * 400 + 1) (11 - 9) := by
+          unfold monthDays; split <;> split <;> omega
+        omega
+
+/-- The UTC offset in force at any instant is within `maxOff` on a `tableOk` table. -/
+private theorem c11_off (tbl : OffsetTable) (hT : tableOk tbl = true) (s : Nat) :
+    -maxOff ≤ offsetAt tbl s ∧ offsetAt tbl s ≤ maxOff := by
+  simp only [tableOk, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hT
+  unfold offsetAt
+  cases hl : (tbl.filter (·.1 ≤ s)).getLast? with
+  | none => unfold maxOff; simp
+  | some e => exact hT.1.2 e (List.mem_filter.mp (List.mem_of_getLast? hl)).1
+
 theorem localDay_valid (tbl : OffsetTable) (hT : tableOk tbl = true) (s : Nat) (hs : s + 50400 < 253402300800) :
-    validDate (localDay tbl s) = true := sorry
+    validDate (localDay tbl s) = true := by
+  have ho := c11_off tbl hT s
+  unfold maxOff at ho
+  unfold localDay
+  apply c11_civ_valid
+  omega
 
 theorem localDay_mono (tbl : OffsetTable) (hT : tableOk tbl = true) (s s' : Nat) (h : s ≤ s') :
     localDay tbl s ≤ localDay tbl s' := sorry
