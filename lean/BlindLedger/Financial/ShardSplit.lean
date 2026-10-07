@@ -104,11 +104,11 @@ structure Judgment where
   dir : Dir
   out : List (Row × Verdict)
   t : Nat
-  ok : Bool            -- clock not below the previous record's
+  ok : Bool            -- pack well-formed (every K ≥ 1) and clock not below the previous record's
 
 def judge (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) : Judgment :=
   let a := judgeRows pk cx sv.dir inp.rows
-  ⟨a.1, a.2, inp.t, decide (sv.t ≤ inp.t)⟩
+  ⟨a.1, a.2, inp.t, packOk pk && decide (sv.t ≤ inp.t)⟩
 
 /-- `I_h`: the admitted rows homed at `h`. -/
 def part (J : Judgment) (h : Home) : List Row := (J.out.filter fun x => x.2 == .admit h).map (·.1)
@@ -856,6 +856,15 @@ theorem merge_congr (pk : Pack) (cx : Ctx) (sp : SpineDB) (sh sh2 : Nat → Shar
 /-- K_p is positive under a well-formed pack. -/
 theorem k_pos (pk : Pack) (p : PartId) (h : packOk pk = true) : 0 < pk.k p := by
   exact kOf_pos pk.ks p h
+
+/-- K = 0 is refused: with no shard for partition `p`, neither the sharded nor the single store admits a row. -/
+theorem k_zero_refused (pk : Pack) (cx : Ctx) (hK : pk.k cx.p = 0) (ss : SS) (s : Single) (inp : Input) :
+    stepS pk cx ss inp = none ∧ stepSingle pk cx s inp = s := by
+  have hp : packOk pk = false := by
+    cases h : packOk pk with
+    | false => rfl
+    | true => have := k_pos pk cx.p h; omega
+  simp [stepS, checkAll, stepSingle, judgeSingle, judge, hp]
 
 /-- A new cell's home is the spine or exactly one shard below K. -/
 theorem route_total (pk : Pack) (cx : Ctx) (r : Row) (h : packOk pk = true) :
