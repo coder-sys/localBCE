@@ -3958,6 +3958,69 @@ private theorem c8_root (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : L
   · obtain ⟨x, hx, hqx⟩ := List.mem_flatMap.mp hq'
     exact (hq x hx).2 q hqx
 
+private theorem c8_mapM_some {α β : Type} (F : α → Option β) :
+    ∀ xs : List α, (∀ x ∈ xs, ∃ y, F x = some y) → ∃ ys, xs.mapM F = some ys
+  | [], _ => ⟨[], by simp⟩
+  | x :: xs, h => by
+    obtain ⟨y, hy⟩ := h x (by simp)
+    obtain ⟨ys, hys⟩ := c8_mapM_some F xs fun z hz => h z (by simp [hz])
+    exact ⟨y :: ys, by simp [List.mapM_cons, hy, hys]⟩
+
+/-- Index-blind filters commute with shifting `zipIdx` positions into the mapped function. -/
+private theorem c8_shift {α β : Type} (Q Q' : α × Nat → Bool) (hQ : ∀ x i j, Q (x, i) = Q' (x, j))
+    (F G : α × Nat → Option β) (n : Nat) (hFG : ∀ x j, G (x, j) = F (x, n + j)) :
+    ∀ (l : List α) (k : Nat), ((l.zipIdx (n + k)).filter Q).mapM F = ((l.zipIdx k).filter Q').mapM G
+  | [], _ => by simp
+  | x :: l, k => by
+    rw [List.zipIdx_cons, List.zipIdx_cons, List.filter_cons, List.filter_cons, hQ x (n + k) k,
+      show n + k + 1 = n + (k + 1) by omega]
+    have ih := c8_shift Q Q' hQ F G n hFG l (k + 1)
+    split
+    · simp only [List.mapM_cons, ih, hFG]
+    · exact ih
+
+/-- Postings over an appended set: the old postings, then the new rows' postings at shifted positions. -/
+private theorem c8_postings_append (u : Bool) (s f : List Line) (q : Key) (P : Line × Nat → Bool)
+    (hP : ∀ x j, P (x, j) = (rowKeys u x).contains q) (G : Line × Nat → Option Bytes)
+    (hG : ∀ x j, G (x, j) = postEntry (s.length + j) x.id) :
+    postings u (s ++ f) q = (do
+      let a ← postings u s q
+      let b ← (f.zipIdx.filter P).mapM G
+      pure (a ++ b)) := by
+  have e := c8_shift (fun (x, _) => (rowKeys u x).contains q) P (fun x i j => (hP x j).symm)
+    (fun (x, i) => postEntry i x.id) G s.length hG f 0
+  rw [Nat.add_zero] at e
+  unfold postings
+  rw [List.zipIdx_append, List.filter_append, List.mapM_append, Nat.zero_add]
+  rw [← e]
+
+/-- Row leaves over an appended set: the old rows, then the new rows at shifted positions. -/
+private theorem c8_rows_append {α β : Type} (F G : α × Nat → Option β) (s f : List α)
+    (hG : ∀ x j, G (x, j) = F (x, s.length + j)) :
+    (s ++ f).zipIdx.mapM F = (do
+      let a ← s.zipIdx.mapM F
+      let b ← f.zipIdx.mapM G
+      pure (a ++ b)) := by
+  have e := c8_shift (fun _ => true) (fun _ => true) (fun _ _ _ => rfl) F G s.length hG f 0
+  have ft : ∀ l : List (α × Nat), l.filter (fun _ => true) = l := fun l => by
+    induction l <;> simp_all [List.filter_cons]
+  simp only [ft, Nat.add_zero] at e
+  rw [List.zipIdx_append, List.mapM_append, Nat.zero_add, e]
+
+private theorem c8_nodup_of_map {α β : Type} (g : α → β) {l : List α} (h : (l.map g).Nodup) : l.Nodup :=
+  (List.pairwise_map.1 h).imp fun hne e => hne (congrArg g e)
+
+private theorem c8_inj_of_nodup_map {α β : Type} (g : α → β) :
+    ∀ (l : List α), (l.map g).Nodup → ∀ a b, a ∈ l → b ∈ l → g a = g b → a = b
+  | [], _, _, _, ha, _, _ => by simp at ha
+  | x :: l, h, a, b, ha, hb, e => by
+    rw [List.map_cons, List.nodup_cons] at h
+    rcases List.mem_cons.mp ha with rfl | ha' <;> rcases List.mem_cons.mp hb with rfl | hb'
+    · rfl
+    · exact (h.1 (by rw [e]; exact List.mem_map_of_mem hb')).elim
+    · exact (h.1 (by rw [← e]; exact List.mem_map_of_mem ha')).elim
+    · exact c8_inj_of_nodup_map g l h.2 a b ha' hb' e
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
