@@ -2,8 +2,8 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `fd7ccf72` with branch `test-speed`
-merged on it (a test-only branch; no `app/` or `lean/` file differs from trunk).
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `85e4b097` (merge-b2: hold-release
+slices S0, S2, S3a, S7a on `fd7ccf72`).
 
 ## Product and standing claims
 
@@ -14,23 +14,23 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 ## What landed since d7192b0
 
-Trunk `fd7ccf72`, full suite `b1f3`: 883 run: 868 pass, 0 fail, 15 skips. The
-merge with `test-speed` is checked on the touched modules only.
+Trunk `85e4b097`, full suite `mb2full1`: 909 run: 894 pass, 0 fail, 15 skips. Semantic gate `mb2sem1` PASS (26 properties;
+artifact `061b5cad...`).
 
+- **Deployment slots (S0, founder D7).** Five slots in one table with one reader. An unauthored or authored-empty slot reads
+  its strictest value, logs `DEPLOYMENT_SLOT_EMPTY`, and activation is refused. Contradictory packs are refused, each with its own code. No consumer yet.
+- **APPROVAL/v1 line digest (S2).** Each move carries a raw 64-byte `line_digest` (SHA3-512, domain `RR/APPROVAL/LINE/v1`); no
+  other length has an encoding. Lean `Approval.admitMoves` checks the stored digest, then decodes the stored bytes, never
+  re-encodes. Four canonical-decoder theorems (`ApprovalLaws.lean`) are `#guard_msgs` pins: a sorry fails the build.
+- **835 absorb (S3a).** Both parsers agree row for row with no shared code. A faulty claim or PLB
+  block becomes a RAW row; an unreadable amount leaves totals `None` with `balance_unverified`, which holds the file. Only an
+  unreadable BPR02 refuses the whole file.
+- **Payer release (S7a).** `release()` runs the Lean decision and every write under one write lock; an append-only `closed`
+  table is the only double-release guard. Every refusal writes exactly one hold row.
 - **Absorb ladder (cash file).** A bad row is held with a reason (`conflict`, `already_recorded`, `unknown_item`,
   `depends_on_held`), a repeat is a `DUPLICATE`, and the rest of the file records. A file that cannot be absorbed whole (revision
-  conflict, unknown action, payment past the unpaid balance) is still refused with nothing written. Intake binds scope, authority and
-  baseline only; a row names the revision it expects, not the baseline's age. Receipt contract v3. The change log covers every store
-  table. The 2,000-row month test now times `cash.apply_cash_file`, the production route.
+  conflict, unknown action, payment past the unpaid balance) is still refused with nothing written. Receipt contract v3.
 - **XI.2 amendment: a bypass only per verified payment** (I.2, target 6).
-- **Human loop.** Named synthetic staff and an acting person on commands; staff roles enforced by the server; item timeline from
-  the verified snapshot; read-only synthetic 835 intake with an independent verifier.
-- **Mirror.** Typed refusal of hostile input at six intakes (corrupt FHIR pages, deep nesting); the v1 trust-graph and receipt grammar
-  retired; Provider App one-page fix list from a check result; one canonical-JSON helper.
-- **Slimming.** Table-driven owner and checker validation (owner 6,756 lines, checker 4,451); prose cut 15,002 bytes.
-- **Test speed (`test-speed`).** Fixtures and servers are reused across the cash, acceptance, hostile and gate modules; the
-  mirror crawl runs up to three fresh browser contexts at once in one browser (module 590.7 s -> 469 s under load); the scorecard
-  browser launches with fewer processes. Every assertion, bound, row count, role and control kept.
 - **Python decider retired (M3 step 5).** Payments are decided only in the contained Lean worker.
 - **Gate.** Per-shard decider lease (`shard_busy`); an open row is never settled or freed; a reproducible throughput bench with a pinned digest.
 - **Cash file (design d).** Plan on a copy, commit under the lock; a stale plan re-plans (3 tries, then `cash_file_busy`).
@@ -61,7 +61,7 @@ merge with `test-speed` is checked on the touched modules only.
   crosswalk, PLB balances, death after release, upward retro rates).
 - **Gate:** 145-166 lines/s at batch 100, 628-690 at batch 2,000 (target 50,000). Before live use the rules worker
   needs a pinned `RULES_SOURCE` and a memory cap, BLFPAY01 a Lean length check (re-pin). Unbuilt: payer pin before send,
-  prior-digest check, integrated payer gate, durable token or release path. Failover TLC is a bounded model.
+  prior-digest check, integrated payer gate, durable token (the payer release path is S7a, above). Failover TLC is a bounded model.
 - **Unbuilt:** financial file adapters (MCO reports, X12 820, MMIS extracts), payee-identity consumption, a second synthetic state,
   a Lean seal codec. The NC capture path is synthetic file intake.
 - **Carried, not re-measured:** the staff role header is a claim the server enforces, not a login; no cancel or reduce command for stale corrections; receipt
@@ -71,5 +71,5 @@ merge with `test-speed` is checked on the touched modules only.
 - **Acknowledger not stored (open, needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so the rule that a decider may not
   acknowledge is claim-level and cannot be re-verified by the checker or Lean; fixing it needs a versioned ACK record.
 
-Next: STATE/v2 and the cash-line hold ledger.
+Next: STATE/v2 (proofs in progress on `state-v2`), hold-release S3b+ (slot consumers), the cash-line hold ledger.
 A local commit, not a qualified release; no local check activates production.
