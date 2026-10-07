@@ -160,6 +160,21 @@ class Broken:
         raise BrokenPipeError("forced_send")
 
 
+class FailingCommit:
+    """The spine's connection, whose COMMIT fails as on a full disk; every other call goes to the real one."""
+
+    def __init__(self, c) -> None:
+        self.c = c
+
+    def __getattr__(self, name: str):
+        return getattr(self.c, name)
+
+    def execute(self, sql: str, *args):
+        if sql == "COMMIT":
+            raise sqlite3.OperationalError("database or disk is full")
+        return self.c.execute(sql, *args)
+
+
 # pinned() of the spine and shard0..K-1 for 12 files x 300 lines (FL seed 20261006, DE seed 20261007), recorded at HEAD 311fdb75, before the sender thread and the PART header existed
 # (rrb/state/owc-s12-pre-digests-20261007.json)
 PRE_S12_PINNED = {
@@ -784,30 +799,131 @@ class ShardBench(unittest.TestCase):
 
     def test_s12_a_silent_shard_ends_snapshot_and_abort_in_a_named_error_at_the_deadline(self) -> None:
         files = sb.corpus(20261006, LINES, 2)
-        for on in (True, False):  # without the sender a write to a worker that does not read blocks (Windows), so the abort's deadline is the sender's case; the snapshot's is both
-            name = f"s12-stuck-{int(on)}"
+        # without the sender a write to a worker that does not read blocks (Windows), so the abort's deadline is the sender's case; the snapshot's and the wait for BUILT are both
+        for on, step in ((True, "snapshot"), (True, "abort"), (True, "built"), (False, "snapshot"), (False, "built")):
+            name = f"s12-stuck-{int(on)}-{step}"
             spine = self.spine_with(stuck_main, name, on)
             timer, fired = self.watchdog(spine)
             try:
                 with mock.patch.object(sb, "REPLY_DEADLINE", 1.0):
-                    with self.assertRaises(rb.FinancialIntegrityError) as raised:
-                        spine.snapshot(1, self.tmp / f"{name}-snapshot.sqlite3")
-                    self.assertIn("snapshot_timeout:1", str(raised.exception), name)
-                    if on:
-                        spine.write_rows = mock.Mock(side_effect=rb.FinancialIntegrityError("forced_spine_rows"))  # PARTs are out and never answered; the abort gets no ACK
+                    if step == "snapshot":
+                        with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                            spine.snapshot(1, self.tmp / f"{name}-snapshot.sqlite3")
+                        self.assertIn("snapshot_timeout:1", str(raised.exception), name)
+                        self.assertEqual(list(spine.dead), [1], name)
+                    else:
+                        if step == "abort":
+                            spine.write_rows = mock.Mock(side_effect=rb.FinancialIntegrityError("forced_spine_rows"))  # PARTs are out and never answered; the abort gets no ACK
                         results = spine.ingest_group([(0, *files[0], sb.prepare(spine.tbl, 0, files[0][0].rows, 1))])
-                        self.assertTrue(isinstance(results[0], rb.FinancialIntegrityError) and "shard_reply_timeout" in str(results[0]), (name, results))
+                        expected = "shard_reply_timeout" if step == "abort" else "reply_timeout:["  # built: the spine's own wait for the parts ends at the deadline
+                        self.assertTrue(isinstance(results[0], rb.FinancialIntegrityError) and str(results[0]).startswith(expected), (name, results))
                         self.assertTrue(spine.dead, name)
+                        self.assertEqual((spine.n, spine.keys), (0, {}), name)
+                    with self.assertRaises(rb.FinancialIntegrityError):  # the silent shard is dead: close stops the workers itself, never waits for a STATS
+                        spine.close()
             finally:
                 timer.cancel()
                 for p, _ in spine.workers.values():
                     if p.is_alive():
                         p.terminate()
                         p.join()
-            with self.assertRaises(Exception):  # the workers are gone: close says so and stops the threads
-                spine.close()
             self.assertEqual(fired, [], name)
             self.quiet(spine)
+
+    def test_s12_close_a_failure_from_the_spine_commit_on_ends_the_run_and_no_shard_holds_a_group_the_spine_lost(self) -> None:
+        files = sb.corpus(20261006, LINES, 4)
+        clean = self.all_digests(self.group_run("s12-post-clean", files[:2], 2)[0])  # what the first group alone stores
+        for on in (False, True):
+            for fault in ("spine", "pipe"):
+                name = f"s12-post-{int(on)}-{fault}"
+                spine = self.spine_with(sb.shard_main, name, on)
+                timer, fired = self.watchdog(spine)
+                try:
+                    before = self.all_digests(self.tmp / name)
+                    prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+                    items = [(i, *files[i], prepared[i]) for i in range(4)]
+                    if fault == "spine":
+                        spine.c = FailingCommit(spine.c)
+                    else:  # shard 1's COMMIT is never written (sender 0: in the spine's call; sender 1: in its thread): the same connection either way
+                        conn = spine.workers[1][1]
+
+                        def send_bytes(buf, real=conn.send_bytes) -> None:
+                            if sb.decode(bytes(buf)) == ("COMMIT",):
+                                raise BrokenPipeError("forced_commit_send")
+                            real(buf)
+
+                        conn.send_bytes = send_bytes
+                    if on and fault == "pipe":  # the thread fails after the spine's call returned: the next group finds it
+                        first = spine.ingest_group(items[:2])
+                        self.assertTrue(all(isinstance(r, dict) for r in first), (name, first))
+                        reason = "shard_send:1:BrokenPipeError('forced_commit_send')"
+                    else:
+                        with self.assertRaises(sb.GroupCommitFailed) as raised:  # never retried one file at a time
+                            spine.ingest_group(items[:2])
+                        reason = "group_commit_failed:" + ("OperationalError('database or disk is full')" if fault == "spine" else "BrokenPipeError('forced_commit_send')")
+                        self.assertEqual(str(raised.exception), reason, name)
+                    rest = spine.ingest_group(items[2:])
+                    self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and str(r) == reason for r in rest), (name, rest))
+                    self.assertEqual(spine.dead, dict.fromkeys(range(4), reason), name)  # every shard is dead: nothing more goes in
+                    with self.assertRaises(rb.FinancialIntegrityError) as closed:
+                        spine.close()
+                    self.assertEqual(str(closed.exception), reason, name)
+                finally:
+                    timer.cancel()
+                    for p, _ in spine.workers.values():
+                        if p.is_alive():
+                            p.terminate()
+                self.assertEqual(fired, [], name)  # no hang
+                self.quiet(spine)
+                now = self.all_digests(self.tmp / name)
+                if fault == "spine":
+                    self.assertEqual(now, before, name)  # the spine lost the group and no shard committed it
+                    continue
+                self.assertEqual(now["spine.sqlite3"], clean["spine.sqlite3"], name)
+                self.assertEqual(now["shard1.sqlite3"], before["shard1.sqlite3"], name)  # shard 1 never got its COMMIT
+                for k in range(4):  # a shard told to commit may have been stopped before its commit ended: either way replay brings each to the spine's head
+                    self.assertIn(now[f"shard{k}.sqlite3"], (before[f"shard{k}.sqlite3"], clean[f"shard{k}.sqlite3"]), (name, k))
+                    self.replay_identical(self.tmp / name, k, name)
+
+    def test_s12_close_an_abort_that_cannot_be_written_still_rolls_the_spine_back(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        spine = self.spine_with(sb.shard_main, "s12-abort-send", False)
+        timer, fired = self.watchdog(spine)
+        try:
+            before = self.all_digests(self.tmp / "s12-abort-send")
+            conn = spine.workers[1][1]
+
+            def send_bytes(buf, real=conn.send_bytes) -> None:
+                if sb.decode(bytes(buf)) == ("ABORT",):
+                    raise BrokenPipeError("forced_abort_send")
+                real(buf)
+
+            conn.send_bytes = send_bytes
+            spine.write_rows = mock.Mock(side_effect=rb.FinancialIntegrityError("forced_spine_rows"))
+            prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+            results = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(2)])
+            reason = "shard_send:1:BrokenPipeError('forced_abort_send')"
+            self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and str(r) == reason for r in results), results)  # the retries meet the dead shard
+            self.assertEqual((spine.n, spine.keys, spine.dead), (0, {}, {1: reason}))
+            self.assertFalse(spine.c.in_transaction)  # the rollback ran
+            with self.assertRaises(rb.FinancialIntegrityError):
+                spine.close()
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+        self.assertEqual(self.all_digests(self.tmp / "s12-abort-send"), before)
+
+    def test_s12_close_run_once_stops_every_process_on_an_error(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        with mock.patch.object(sb.Spine, "attempt", side_effect=rb.FinancialIntegrityError("forced_attempt")):
+            with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                sb.run_once(2, files, self.template, self.tmp / "s12-run-error", False, 2)
+        self.assertEqual(str(raised.exception), "forced_attempt")
+        self.quiet()
 
     def test_s12_snapshot_raises_a_failed_write_at_once(self) -> None:
         spine = self.spine_with(sb.shard_main, "s12-snap-send")

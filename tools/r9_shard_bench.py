@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
 import ctypes
 import hashlib
 import json
@@ -54,6 +55,10 @@ class ShardDiverged(Exception):
     """A shard head is not the spine's expected head: loud refusal, nothing written."""
 
 
+class GroupCommitFailed(Exception):
+    """A failure once the spine's COMMIT has started: every shard is dead and the run ends, never retried (the shards replay the group from the spine's records, or never had it)."""
+
+
 def io_write_bytes() -> int:
     class Counters(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in ("ro", "wo", "oo", "rb", "wb", "ob")]
@@ -83,8 +88,8 @@ def prewrite_mode() -> int:
 
 
 def sender_on() -> bool:
-    """I1 and I3 (default on); RR_SHARD_SENDER=0 is the earlier path: every message pickled and written by the spine's own thread."""
-    return os.environ.get("RR_SHARD_SENDER", "1") != "0"
+    """I1 and I3 with RR_SHARD_SENDER=1; the default (lead 2026-10-07: no gain beyond noise) is the earlier path: every message pickled and written by the spine's own thread."""
+    return os.environ.get("RR_SHARD_SENDER", "0") == "1"
 
 
 PART_HEAD = struct.Struct("<4sqqqHHHq")  # b"PART", n, index, t_f, then the lengths of pool, pre_head, verdict and blob; the bytes of those four follow, and nothing else
@@ -556,7 +561,10 @@ class Spine:
     def check_senders(self) -> None:
         for k, sender in self.senders.items():
             if sender.error is not None:
-                raise rb.FinancialIntegrityError(f"shard_send:{k}:{sender.error!r}")
+                reason = f"shard_send:{k}:{sender.error!r}"
+                if k in self.owed:  # a write failed after the spine committed (k's COMMIT, or one before it): as in attempt's post-commit section, the run ends
+                    self.dead = dict.fromkeys(self.workers, reason)
+                raise rb.FinancialIntegrityError(reason)
 
     def ship(self, f, k: int) -> None:
         """Step 3: PART of file f to shard k; its pre_head is the head k last reported (the committed head, or the post head of k's previous part of this group)."""
@@ -580,11 +588,15 @@ class Spine:
         if block and self.pre and self.dirty and not (self.mode == 3 and self.pre_done) and not connection.wait([*conns, *feed], 0):  # about to wait with nothing ready: the wait is the time to push the spine's pages to the WAL
             self.pre.flush()
             self.dirty, self.pre_done = False, True
-        timeout = 0.5 if block and self.senders else (None if block else 0)
-        ready = connection.wait([*conns, *feed], timeout)
-        while block and self.senders and not ready:  # a failed write is not a reply: look at the senders now and then while waiting
+        deadline = time.monotonic() + REPLY_DEADLINE
+        ready = connection.wait([*conns, *feed], 0.5 if block else 0)
+        while block and not ready:  # a failed write is not a reply, and a silent shard must not hold the run: look at the senders and the clock now and then
             self.check_senders()
-            ready = connection.wait([*conns, *feed], timeout)
+            if time.monotonic() > deadline:
+                reason = f"reply_timeout:{sorted(conns.values())}"
+                self.dead.update(dict.fromkeys(conns.values(), reason))
+                raise rb.FinancialIntegrityError(reason)
+            ready = connection.wait([*conns, *feed], 0.5)
         if block:
             self.tt[bucket] += time.perf_counter() - t0
         for conn in ready:
@@ -663,7 +675,7 @@ class Spine:
             try:
                 for entry, classes in zip(plan, self.attempt(plan)):
                     results[entry[0]] = classes
-            except ShardDiverged:
+            except (ShardDiverged, GroupCommitFailed):
                 raise
             except Exception as error:
                 if len(plan) > 1:
@@ -672,7 +684,7 @@ class Spine:
         return results
 
     def attempt(self, plan: list) -> list[dict]:
-        """Steps 2-6 for one group. On any failure every shard asked is aborted, the spine rolled back and the keys undone, then it raises."""
+        """Steps 2-6 for one group. On a failure before the spine's COMMIT every shard asked is aborted, the spine rolled back and the keys undone, then it raises; from the COMMIT on, GroupCommitFailed."""
         if self.dead:
             raise rb.FinancialIntegrityError(next(iter(self.dead.values())))
         started = time.perf_counter()
@@ -717,17 +729,24 @@ class Spine:
             raise
         finally:
             self.g = None
-        t0 = time.perf_counter()
-        self.c.execute("COMMIT")  # the only commit point
-        self.dirty = self.pre_done = False
-        self.ckpt.kick()
-        self.tt["spine_commit"] += time.perf_counter() - t0
-        self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
-        t0 = self.commit_sent = time.perf_counter()
-        for k in sorted(g.sent):
-            self.owed[k] = self.heads[k]  # before the write, so that the write is counted as the wait on this commit
-            self.send(k, ("COMMIT",))
-        self.tt["ipc"] += time.perf_counter() - t0
+        try:
+            t0 = time.perf_counter()
+            self.c.execute("COMMIT")  # the only commit point
+            self.dirty = self.pre_done = False
+            self.ckpt.kick()
+            self.tt["spine_commit"] += time.perf_counter() - t0
+            self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
+            t0 = self.commit_sent = time.perf_counter()
+            for k in sorted(g.sent):
+                self.owed[k] = self.heads[k]  # before the write: should it fail (here, or in k's sender), k owes the commit and the run ends; send() counts the COMMIT write itself as free
+                self.send(k, ("COMMIT",))
+            self.tt["ipc"] += time.perf_counter() - t0
+        except BaseException as error:  # the spine may or may not hold the group, and the shards told to commit hold it: never retried, every shard is dead (replay recovers each from the spine)
+            reason = f"group_commit_failed:{error!r}"
+            self.dead = dict.fromkeys(self.workers, reason)
+            if not isinstance(error, Exception):
+                raise
+            raise GroupCommitFailed(reason) from error
         self.groups.append(len(plan))
         self.ack_mark = (started, len(plan))
         if not self.owed:
@@ -746,9 +765,13 @@ class Spine:
 
     def fail(self, g, undo: list, heads0: dict, prev0: bytes) -> None:
         """Step 6/7: abort the shards that were asked, roll the spine back, forget the group's keys and heads; then raise what the replies showed (a shard that diverged or went silent)."""
-        sent, problems, deadline = sorted(g.sent), [], time.monotonic() + REPLY_DEADLINE
-        for k in sent:
-            self.send(k, ("ABORT",))
+        sent, problems, deadline = [k for k in sorted(g.sent) if k not in self.dead], [], time.monotonic() + REPLY_DEADLINE  # a dead shard is not written to or waited on again: close stops it
+        for k in list(sent):
+            try:
+                self.send(k, ("ABORT",))
+            except OSError as error:  # sender 0, the pipe is gone: k is dead, and the rollback below still runs
+                self.dead[k] = f"shard_send:{k}:{error!r}"
+                sent.remove(k)
         for k in sent:  # a shard still owing a COMMIT answers it first (ACK, or ERR: refused), then BUILT or ERR of its part, the last ACK being the abort's
             commit = k in self.owed
             try:
@@ -773,7 +796,7 @@ class Spine:
             self.keys.pop(cid, None)
         self.heads, self.prev_head = heads0, prev0
         if problems:
-            raise problems[0]
+            raise next((p for p in problems if isinstance(p, ShardDiverged)), problems[0])
 
     def write_rows(self, index, pool, deposit, p: Prepared, tick=lambda: None) -> int:
         c, base, added, self.dirty = self.c, index * rb.KEY, 0, True
@@ -812,7 +835,8 @@ class Spine:
         while not conn.poll(0.5):  # a failed write is not a reply, and a silent shard must not hold the run: look at the senders and the clock now and then
             self.check_senders()
             if time.monotonic() > deadline:
-                raise rb.FinancialIntegrityError(f"snapshot_timeout:{k}")
+                self.dead[k] = f"snapshot_timeout:{k}"  # close stops it, never waits for its STATS
+                raise rb.FinancialIntegrityError(self.dead[k])
         self.expect(conn, "ACK")
 
     def close(self) -> list[dict]:
@@ -884,29 +908,37 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
     s0_cpu = system_cpu()
     time.sleep(0.25)
     load_before = load_pct(s0_cpu, system_cpu())  # what the machine was doing before this run, other processes included
-    spine = Spine(work, k_count, template)
-    prep = PrepPool(spine.tbl, {i: r.rows for i, (r, _) in enumerate(files)}, prep_procs)
-    db_bytes = lambda: sum(p.stat().st_size for p in work.glob("*.sqlite3*"))  # noqa: E731
-    size0, io0 = db_bytes(), io_write_bytes()
-    lines, classes, kk, snap, snap_s, recv_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0, 0.0
-    spine.feed = prep
-    sys0, cpu0, t0 = system_cpu(), time.process_time(), time.perf_counter()
-    while prep.taken < len(files):
-        r0 = time.perf_counter()
-        group = prep.take()  # the files already prepared and queued, up to GROUP_LINES; never waits past the first
-        recv_s += time.perf_counter() - r0
-        if with_replay and prep.taken == len(files):  # the last group: shard kk is snapshotted at its start, so the replay has the group's records pending
-            s0 = time.perf_counter()
-            spine.wait_acks()
-            spine.snapshot(kk, snap)
-            snap_s = time.perf_counter() - s0  # the replay setup is not throughput
-        for result in spine.ingest_group([(p.index, *files[p.index], p) for p in group]):
-            if isinstance(result, Exception):
-                raise result
-            for name, value in result.items():
-                classes[name] = classes.get(name, 0) + value
-        lines += sum(len(files[p.index][0].rows) for p in group)
-    spine.wait_acks()
+    spine, prep = Spine(work, k_count, template), None
+    try:
+        prep = PrepPool(spine.tbl, {i: r.rows for i, (r, _) in enumerate(files)}, prep_procs)
+        db_bytes = lambda: sum(p.stat().st_size for p in work.glob("*.sqlite3*"))  # noqa: E731
+        size0, io0 = db_bytes(), io_write_bytes()
+        lines, classes, kk, snap, snap_s, recv_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0, 0.0
+        spine.feed = prep
+        sys0, cpu0, t0 = system_cpu(), time.process_time(), time.perf_counter()
+        while prep.taken < len(files):
+            r0 = time.perf_counter()
+            group = prep.take()  # the files already prepared and queued, up to GROUP_LINES; never waits past the first
+            recv_s += time.perf_counter() - r0
+            if with_replay and prep.taken == len(files):  # the last group: shard kk is snapshotted at its start, so the replay has the group's records pending
+                s0 = time.perf_counter()
+                spine.wait_acks()
+                spine.snapshot(kk, snap)
+                snap_s = time.perf_counter() - s0  # the replay setup is not throughput
+            for result in spine.ingest_group([(p.index, *files[p.index], p) for p in group]):
+                if isinstance(result, Exception):
+                    raise result
+                for name, value in result.items():
+                    classes[name] = classes.get(name, 0) + value
+            lines += sum(len(files[p.index][0].rows) for p in group)
+        spine.wait_acks()
+    except BaseException:  # no process, thread or connection outlives a failed run; the first error is the one raised
+        for process in prep.processes if prep else ():
+            process.terminate()
+            process.join()
+        with contextlib.suppress(Exception):
+            spine.close()
+        raise
     wall = time.perf_counter() - t0 - snap_s
     load_during, spine_cpu = load_pct(sys0, system_cpu()), time.process_time() - cpu0
     grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
@@ -946,7 +978,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--files", type=int, default=2)
     ap.add_argument("--prep", type=int, default=1, help="prep-stage processes")
     ap.add_argument("--suffix", default="")
-    ap.add_argument("--sender", choices=["0", "1"], help="I1 and I3 for this run (1 default: a sender thread per shard, PART as header plus blob; 0: the earlier path) (sets RR_SHARD_SENDER)")
+    ap.add_argument("--sender", choices=["0", "1"], help="I1 and I3 for this run (0 default: the earlier path; 1: a sender thread per shard, PART as header plus blob) (sets RR_SHARD_SENDER)")
     ap.add_argument("--prewrite", choices=["0", "1", "2", "3"], help="G1 mode for this run (0 off, 1 flush+fsync per part, 2 flush per part, 3 flush once per group) (sets RR_SHARD_PREWRITE; workers inherit it)")
     a = ap.parse_args(argv)
     if a.prewrite:
