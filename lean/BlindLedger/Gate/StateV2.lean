@@ -5658,7 +5658,176 @@ theorem decideIdx_complete (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (
     (hb : (ready k os b).all (fun l => (keyBytes (rowKey l)).isSome) = true)
     (hn : (let r := decideRegT (carried c₀ rel unr) k os b; (headOf H r.released r.unresolved).bind headIn).isSome) :
     (decideIdx H c₀ k os b d (witnessOf H c₀ k os b rel unr h)).isSome ∨
-      Collision H (witnessInputs H c₀ k os b (witnessOf H c₀ k os b rel unr h)) (stateInputs H rel unr) := sorry
+      Collision H (witnessInputs H c₀ k os b (witnessOf H c₀ k os b rel unr h)) (stateInputs H rel unr) := by
+  by_cases nc : Collision H (witnessInputs H c₀ k os b (witnessOf H c₀ k os b rel unr h)) (stateInputs H rel unr)
+  · exact Or.inr nc
+  left
+  obtain ⟨mr, mu, hmr, hmu, hh⟩ := c5_headOf ha
+  have L0 := c13_lists H c₀ k os b rel unr h false
+  have L1 := c13_lists H c₀ k os b rel unr h true
+  obtain ⟨wA, wR, wU⟩ := c14_wit H c₀ k os b rel unr h
+  generalize witnessOf H c₀ k os b rel unr h = w at nc L0 L1 wA wR wU ⊢
+  subst hh
+  have hpl : ∀ (qs : List Key), ∀ p ∈ qs.filterMap (fun q => (keyBytes q).map (pathOf H)), p.length = digestBytes := by
+    intro qs p hp
+    obtain ⟨q, -, hq⟩ := List.mem_filterMap.mp hp
+    cases hk : keyBytes q with
+    | none => rw [hk] at hq; cases hq
+    | some kb => rw [hk] at hq; cases hq; exact hH _
+  have gv1 : verifyMulti H (root H mr)
+      ((probeKeys c₀ k os (ready k os b)).1.filterMap fun q => (keyBytes q).map (pathOf H)) w.relPf = true := by
+    rw [wR, hmr]; exact prune_complete H hH mr (setMap_ok H hH false _ mr hmr) _ (hpl _)
+  have gv2 : verifyMulti H (root H mu)
+      ((probeKeys c₀ k os (ready k os b)).2.filterMap fun q => (keyBytes q).map (pathOf H)) w.unrPf = true := by
+    rw [wU, hmu]; exact prune_complete H hH mu (setMap_ok H hH true _ mu hmu) _ (hpl _)
+  have hA1 : ∀ q ∈ (probeKeys c₀ k os (ready k os b)).1 ++ (probeKeys c₀ k os (ready k os b)).2, ∀ kb,
+      keyBytes q = some kb → KD ++ kb ∈ witnessInputs H c₀ k os b w := fun q hq kb hk => by
+    rw [c5_wIn, List.mem_append, List.mem_append, List.mem_append, List.mem_append]
+    exact Or.inl (Or.inl (Or.inl (Or.inr (List.mem_filterMap.mpr ⟨q, hq, by rw [hk]; rfl⟩))))
+  have hA2r : ∀ y ∈ pfInputs H w.relPf, y ∈ witnessInputs H c₀ k os b w := fun y hy => by
+    rw [c5_wIn, List.mem_append, List.mem_append, List.mem_append]
+    exact Or.inl (Or.inl (Or.inr hy))
+  have hA2u : ∀ y ∈ pfInputs H w.unrPf, y ∈ witnessInputs H c₀ k os b w := fun y hy => by
+    rw [c5_wIn, List.mem_append, List.mem_append]
+    exact Or.inl (Or.inr hy)
+  have hBr : ∀ y ∈ setInputs H false rel.entries, y ∈ stateInputs H rel unr := fun y hy => by
+    unfold stateInputs
+    rw [List.mem_append, List.mem_append]
+    exact Or.inl (Or.inr hy)
+  have hBu : ∀ y ∈ setInputs H true unr.entries, y ∈ stateInputs H rel unr := fun y hy => by
+    unfold stateInputs
+    rw [List.mem_append]
+    exact Or.inr hy
+  refine c14_some H c₀ k os b d w (by rw [wA]; exact hd) hb (by rw [wA]; exact gv1) (by rw [wA]; exact gv2)
+    (c8_mapM_some _ _ fun q hq => ?_) (c8_mapM_some _ _ fun q hq => ?_) ?_
+  · cases hk : keyBytes q with
+    | none => exact ⟨none, by simp only [probe, hk]⟩
+    | some kb =>
+      exact c13_probe H hH false rel.entries mr hmr w.relPf w _ gv1 q kb hk
+        (List.mem_filterMap.mpr ⟨q, hq, by rw [hk]; rfl⟩) _ _ (hA1 q (List.mem_append_left _ hq) kb hk) hA2r hBr nc
+        (fun es he hne h7 => L0.1 q hq kb es hk he hne h7) L0.2
+  · cases hk : keyBytes q with
+    | none => exact ⟨none, by simp only [probe, hk]⟩
+    | some kb =>
+      exact c13_probe H hH true unr.entries mu hmu w.unrPf w _ gv2 q kb hk
+        (List.mem_filterMap.mpr ⟨q, hq, by rw [hk]; rfl⟩) _ _ (hA1 q (List.mem_append_right _ hq) kb hk) hA2u hBu nc
+        (fun es he hne h7 => L1.1 q hq kb es hk he hne h7) L1.2
+  intro hr' hu' ghr ghu x hxc hxs hxr hxu hxb
+  simp only [wA] at hxr hxu ⊢
+  have gK : ∀ l ∈ ready k os b, (keyBytes (rowKey l)).isSome = true := List.all_eq_true.mp hb
+  obtain ⟨hT, hN⟩ := c5_hits H hH c₀ k os b rel unr hmr hmu w gv1 gv2 ghr ghu nc
+  rw [← hxs] at hT hN
+  have hF : ∀ (u : Bool) (q : Key) kb, keyBytes q = some kb →
+      ((∃ l ∈ x.bb, q ∈ keys l ∨ q = rowKey l ∨
+        (u = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) ∨ ∃ i ∈ pendingOf k os, q = [4, i]) →
+      findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb)) :=
+    fun u q kb hk hm => hT u q kb hk (c7_probe_mem c₀ k os _ u q (hxb ▸ hm))
+  obtain ⟨hR, hS, hP⟩ := c4_hyps x c₀ rel unr hi hmr hmu hxc (fun u q kb hk hm => hF u q kb hk (Or.inl hm)) hN
+    (fun l hl => gK l (hxb ▸ hl))
+  generalize hD : Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb) = ds
+  have hDec : ds.map (fun d => (d.line, d.outcome, d.reasons)) =
+      (decideRegT (carried c₀ rel unr) k os b).decisions.map (fun d => (d.line, d.outcome, d.reasons)) := by
+    rw [← hD]; exact c4_decisions H x c₀ k os b rel unr hi hxc hxb hxr hxu hR hS hP
+  have hQ := c7_lines H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb)
+  rw [hD] at hQ
+  have hO : ∀ d ∈ ds, x.ownQ d.line = own (carried c₀ rel unr) d.line := fun d hd' =>
+    c4_ownQ x c₀ rel unr hxc hR d.line (by
+      have hm : d.line ∈ ds.map (·.line) := List.mem_map_of_mem hd'
+      rw [hQ.1] at hm
+      exact c7_ord x hm)
+  obtain ⟨-, hRel, hUnr⟩ := c7_sel x (carried c₀ rel unr) ds _ hDec hO (by rw [hxc]; rfl)
+  obtain ⟨f1, f2, hS1, hS2, hBF⟩ := decideRegT_sets c₀ k os b rel unr
+  have hBF' := hBF
+  rw [c5_fresh_spec] at hBF'
+  obtain ⟨hf1, hf2⟩ := Prod.mk.inj hBF'
+  rw [hRel, hUnr, hf1, hf2, hi.2.1, hi.2.2]
+  have hL : ds.map (·.line) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (·.line) := by
+    simpa only [List.map_map, Function.comp_def] using congrArg (List.map Prod.fst) hDec
+  have hsub : ∀ l, l ∈ f1 ∨ l ∈ f2 → l ∈ ready k os b := fun l hl => by
+    have h1 := c9_fresh_sub (carried c₀ rel unr) k os b (l := l) (by rw [hBF]; exact hl)
+    rw [← hL, hQ.1] at h1
+    exact hxb ▸ c7_ord x h1
+  have hn' : ((headOf H (decideRegT (carried c₀ rel unr) k os b).released
+      (decideRegT (carried c₀ rel unr) k os b).unresolved).bind headIn).isSome = true := hn
+  rw [hS1, hS2] at hn'
+  cases hh0 : headOf H ⟨bumpSet c₀.today rel, rel.entries.length + f1.length, rel.entries ++ f1⟩
+      ⟨bumpSet c₀.today unr, unr.entries.length + f2.length, unr.entries ++ f2⟩ with
+  | none => rw [hh0] at hn'; cases hn'
+  | some hd0 =>
+  rw [hh0] at hn'
+  obtain ⟨m1, m2, hm1, hm2, hd0e⟩ := c5_headOf hh0
+  have hTw : ∀ (u : Bool) (s f : List Line) (m : Map), (if u then unr.entries else rel.entries) = s →
+      (∀ l ∈ f, l ∈ ready k os b) → setMap H u (s ++ f) = some m → ∀ q ∈ f.flatMap (rowKeys u), ∃ h,
+        findHit x.hs u q = some h ∧ h.n = ((postings u s q).getD []).length ∧
+          h.peaks = ((postings u s q).getD []).foldl (frontierPush H) [] := by
+    intro u s f m hs hf hm q hq
+    obtain ⟨l, hl, hql⟩ := List.mem_flatMap.mp hq
+    obtain ⟨kb, hk⟩ := c14_kb hm (List.mem_flatMap.mpr ⟨l, List.mem_append_right _ hl, hql⟩)
+    have hqp : q ∈ (if u then (probeKeys c₀ k os (ready k os b)).2 else (probeKeys c₀ k os (ready k os b)).1) := by
+      cases u
+      · exact (c9_probeQ c₀ k os (hf l hl)).1.2 q hql
+      · exact (c9_probeQ c₀ k os (hf l hl)).2.2 q hql
+    have e := hT u q kb hk hqp
+    rw [hs] at e
+    exact ⟨_, e, by simp [c3T, c3_rowKeys_head u l q hql], by simp [c3T, c3_rowKeys_head u l q hql]⟩
+  obtain ⟨wr, hwr⟩ := c13_writes H false rel.entries f1 x.hs m1 hm1
+    (hTw false rel.entries f1 m1 rfl (fun l hl => hsub l (Or.inl hl)) hm1)
+  obtain ⟨wu, hwu⟩ := c13_writes H true unr.entries f2 x.hs m2 hm2
+    (hTw true unr.entries f2 m2 rfl (fun l hl => hsub l (Or.inr hl)) hm2)
+  refine ⟨wr, wu, hwr, hwu, ?_⟩
+  have hI : Inv (decideRegT (carried c₀ rel unr) k os b).released (decideRegT (carried c₀ rel unr) k os b).unresolved :=
+    inv_step c₀ k os b rel unr hi
+  rw [hS1, hS2] at hI
+  have hId : ((rel.entries ++ f1 ++ (unr.entries ++ f2)).map (·.id)).Nodup := hI.1
+  simp only [List.map_append] at hId
+  obtain ⟨n1, n2, -⟩ := List.nodup_append.mp hId
+  have rk : ∀ x y : Line, rowKey x = rowKey y → x.id = y.id := fun x y e => by
+    have := congrArg (fun q : Key => q[1]?) e
+    simpa [rowKey, Line.fields] using this
+  obtain ⟨m1', hm1', r1⟩ : ∃ m1', setMap H false (rel.entries ++ f1) = some m1' ∧
+      hashPf H (upsertPf 513 0 w.relPf wr) = root H m1' := by
+    refine (c9_set H hH false rel.entries f1 mr hmr x.hs wr hwr _ w.relPf gv1
+      (fun y hy => (c9_probeQ c₀ k os (hsub y (Or.inl hy))).1) (fun q kb hk hq => hT false q kb hk hq) (hN false)
+      (fun y hy z hz e => (List.nodup_append.mp n1).2.2 _ (List.mem_map_of_mem hz) _ (List.mem_map_of_mem hy)
+        (rk y z e).symm)).resolve_right fun e => nc (coll_mono H ?_ ?_ e)
+    · intro y hy
+      rw [c5_wIn]
+      rcases List.mem_append.mp hy with hy | hy
+      · exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ hy))
+      · refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_)))
+        rw [List.filterMap_append]
+        exact List.mem_append_left _ hy
+    · intro y hy
+      exact List.mem_append_left _ (List.mem_append_right _ hy)
+  obtain ⟨m2', hm2', r2⟩ : ∃ m2', setMap H true (unr.entries ++ f2) = some m2' ∧
+      hashPf H (upsertPf 513 0 w.unrPf wu) = root H m2' := by
+    refine (c9_set H hH true unr.entries f2 mu hmu x.hs wu hwu _ w.unrPf gv2
+      (fun y hy => (c9_probeQ c₀ k os (hsub y (Or.inr hy))).2) (fun q kb hk hq => hT true q kb hk hq) (hN true)
+      (fun y hy z hz e => (List.nodup_append.mp n2).2.2 _ (List.mem_map_of_mem hz) _ (List.mem_map_of_mem hy)
+        (rk y z e).symm)).resolve_right fun e => nc (coll_mono H ?_ ?_ e)
+    · intro y hy
+      rw [c5_wIn]
+      rcases List.mem_append.mp hy with hy | hy
+      · exact List.mem_append_left _ (List.mem_append_right _ hy)
+      · refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_)))
+        rw [List.filterMap_append]
+        exact List.mem_append_right _ hy
+    · intro y hy
+      exact List.mem_append_right _ hy
+  obtain rfl := Option.some.inj (hm1'.symm.trans hm1)
+  obtain rfl := Option.some.inj (hm2'.symm.trans hm2)
+  have e1 : bumpSet c₀.today rel = bumpIf x.relOk c₀.today rel.asOf := by rw [hxr]; exact c8_bumpSet _ _ hi.2.1
+  have e2 : bumpSet c₀.today unr = bumpIf x.unrOk c₀.today unr.asOf := by rw [hxu]; exact c8_bumpSet _ _ hi.2.2
+  obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp hn'
+  have hy' : headIn hd0 = some y := hy
+  rw [r1, r2, ← e1, ← e2]
+  refine ⟨H y, ?_⟩
+  have e3 : (⟨bumpSet c₀.today rel, bumpSet c₀.today unr, rel.entries.length + f1.length,
+      unr.entries.length + f2.length, root H m1', root H m2'⟩ : Head) = hd0 := hd0e.symm
+  rw [e3]
+  unfold digestV2
+  rw [hy']
+  rfl
 
 /-! ## 8. r4: time, order independence, the signed-package log, permit, rows, custody, crash model, chain -/
 
