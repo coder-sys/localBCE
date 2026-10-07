@@ -1,5 +1,8 @@
 import BlindLedger.Gate.Batch
 import BlindLedger.Gate.ProducerTheorems
+import BlindLedger.Gate.ApprovalLaws
+import BlindLedger.Gate.Theorems
+import BlindLedger.Sha3FastEq
 
 /-! Theorems of payer-batch-release-v1 (§A RELEASE-BATCH, §B one-tree PUBLISH).  Statements: the design's
     `payer-batch-release-goals.lean`, fixed. -/
@@ -347,6 +350,26 @@ private theorem pairUp_getD {H : Bytes → Bytes} {d : Bytes} :
     · rw [if_pos hlt, if_pos (by omega)]
     · rw [if_neg hlt, if_neg (by omega)]
 
+/-- A carried odd last node is its own parent. -/
+private theorem carry_node {H : Bytes → Bytes} {d : Bytes} {hs : List Bytes} {i : Nat}
+    (hc : i % 2 = 0 ∧ i + 1 = hs.length) : (pairUp H d hs).getD (i / 2) [] = hs.getD i [] := by
+  rw [pairUp_getD, if_neg (by omega), show 2 * (i / 2) = i by omega]
+
+/-- A path step with the right sibling lands on the parent node. -/
+private theorem step_node {H : Bytes → Bytes} {d : Bytes} {hs : List Bytes} {i : Nat} (hi : i < hs.length)
+    (hc : ¬(i % 2 = 0 ∧ i + 1 = hs.length)) :
+    H (stepInput d i (hs.getD i []) (hs.getD (if i % 2 == 0 then i + 1 else i - 1) [])) =
+      (pairUp H d hs).getD (i / 2) [] := by
+  rw [pairUp_getD, if_pos (show 2 * (i / 2) + 1 < hs.length by omega)]
+  simp only [nodeHash, stepInput]
+  by_cases he : i % 2 = 0
+  · have hb2 : (i % 2 == 0) = true := by simp [he]
+    simp only [hb2, ↓reduceIte]
+    rw [show 2 * (i / 2) = i by omega]
+  · have hb2 : ¬(i % 2 == 0) = true := by simpa using he
+    simp only [hb2, Bool.false_eq_true, ↓reduceIte]
+    rw [show 2 * (i / 2) = i - 1 by omega, show i - 1 + 1 = i by omega]
+
 private theorem pathOf_root {H : Bytes → Bytes} {d r : Bytes} (g : Nat) :
     ∀ (f : Nat) (hs : List Bytes) (i : Nat), i < hs.length → hs.length ≤ 2 ^ g →
       (levels H d f hs).getLast? = some [r] →
@@ -380,22 +403,11 @@ private theorem pathOf_root {H : Bytes → Bytes} {d r : Bytes} (g : Nat) :
       by_cases hc : i % 2 = 0 ∧ i + 1 = hs.length
       · have hb : (i % 2 == 0 && i + 1 == hs.length) = true := by simp [hc]
         simp only [hb, ↓reduceIte]
-        rw [pairUp_getD, if_neg (by omega), show 2 * (i / 2) = i by omega] at hih
+        rw [carry_node hc] at hih
         exact hih
       · have hb : ¬(i % 2 == 0 && i + 1 == hs.length) = true := by simpa using hc
         simp only [hb, Bool.false_eq_true, ↓reduceIte]
-        have hnode : H (stepInput d i (hs.getD i []) (hs.getD (if i % 2 == 0 then i + 1 else i - 1) [])) =
-            (pairUp H d hs).getD (i / 2) [] := by
-          rw [pairUp_getD, if_pos (show 2 * (i / 2) + 1 < hs.length by omega)]
-          simp only [nodeHash, stepInput]
-          by_cases he : i % 2 = 0
-          · have hb2 : (i % 2 == 0) = true := by simp [he]
-            simp only [hb2, ↓reduceIte]
-            rw [show 2 * (i / 2) = i by omega]
-          · have hb2 : ¬(i % 2 == 0) = true := by simpa using he
-            simp only [hb2, Bool.false_eq_true, ↓reduceIte]
-            rw [show 2 * (i / 2) = i - 1 by omega, show i - 1 + 1 = i by omega]
-        rw [hnode]
+        rw [step_node (H := H) (d := d) hi hc]
         exact hih
 
 /-- The expected path verifies to the tree's root (needs at most 2^16 leaves, which `maxBatch` gives). -/
@@ -405,7 +417,7 @@ theorem pathOf_verifies {H : Bytes → Bytes} {d : Bytes} {hs : List Bytes} {i :
   pathOf_root 16 treeFuel hs i hi (Nat.le_trans hn (by decide)) hr
 
 private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
-    (h : pCheckpointFields.run b = some (cp, rest)) : cp.count ≤ maxBatch := by
+    (h : pCheckpointFields.run b = some (cp, rest)) : 1 ≤ cp.count ∧ cp.count ≤ maxBatch := by
   simp only [pCheckpointFields, StateT.run_bind] at h
   obtain ⟨a3, -, h⟩ := bind_some h
   obtain ⟨a4, -, h⟩ := bind_some h
@@ -425,10 +437,10 @@ private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
   obtain ⟨a18, -, h⟩ := bind_some h
   simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
   obtain ⟨rfl, -⟩ := h
-  exact (nat_ok hc).2
+  exact nat_ok hc
 
 private theorem storedOf_count {b : Bytes} {x : Stored} (h : storedOf sha3 b = some x) :
-    x.checkpoint.count ≤ maxBatch := by
+    1 ≤ x.checkpoint.count ∧ x.checkpoint.count ≤ maxBatch := by
   unfold storedOf at h
   cases hd : decodeCheckpoint b with
   | none => simp [hd] at h
@@ -520,5 +532,310 @@ theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tok
         refine ⟨⟨⟨h1, h2⟩, ⟨⟨⟨⟨⟨h3, h4⟩, h5⟩, h6⟩, by omega⟩, ?_⟩⟩, h8⟩
         rw [h2, Nat.add_sub_cancel_left, h7]
         exact ⟨by omega, hpv⟩
+
+/-! ### Completeness up to a SHA3 collision -/
+
+private theorem sha3_length (x : Bytes) : (sha3 x).length = digestBytes := by
+  unfold sha3
+  rw [← Semantic.sha3_512_eq]
+  exact Semantic.sha3_512_toList_length _
+
+private theorem getD_len {hs : List Bytes} {i : Nat} (h : ∀ x ∈ hs, x.length = digestBytes)
+    (hi : i < hs.length) : (hs.getD i []).length = digestBytes := by
+  rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hi]
+  exact h _ (by simp)
+
+private theorem pairUp_len {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H z).length = digestBytes) :
+    ∀ hs : List Bytes, (∀ x ∈ hs, x.length = digestBytes) → ∀ x ∈ pairUp H d hs, x.length = digestBytes
+  | [], h => h
+  | [_], h => h
+  | a :: b :: rest, h => by
+    intro x hx
+    simp only [pairUp, List.mem_cons] at hx
+    rcases hx with rfl | hx
+    · exact hlen _
+    · exact pairUp_len hlen rest (fun y hy => h y (by simp [hy])) x hx
+
+/-- `pathCollision`'s pair is drawn from the two folds' hash inputs. -/
+private theorem pathCollision_mem {H : Bytes → Bytes} {d : Bytes} (fuel : Nat) :
+    ∀ (i n : Nat) (a b : Bytes) (p q : List Bytes) (x y : Bytes),
+      pathCollision H d fuel i n a b p q = some (x, y) →
+        x ∈ pathInputs H d fuel i n a p ∧ y ∈ pathInputs H d fuel i n b q := by
+  induction fuel with
+  | zero => intro i n a b p q x y h; simp [pathCollision] at h
+  | succ fuel ih =>
+    intro i n a b p q x y h
+    simp only [pathCollision] at h
+    simp only [pathInputs]
+    by_cases hn : n ≤ 1
+    · rw [if_pos hn] at h
+      exact absurd h (by simp)
+    simp only [if_neg hn] at h ⊢
+    by_cases hc : (i % 2 == 0 && i + 1 == n) = true
+    · simp only [if_pos hc] at h ⊢
+      exact ih _ _ _ _ _ _ _ _ h
+    simp only [if_neg hc] at h ⊢
+    cases p with
+    | nil => simp at h
+    | cons s ps =>
+    cases q with
+    | nil => simp at h
+    | cons t qs =>
+    simp only at h ⊢
+    by_cases hx : stepInput d i a s ≠ stepInput d i b t ∧
+        H (stepInput d i a s) = H (stepInput d i b t)
+    · rw [if_pos hx] at h
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj h)
+      exact ⟨by simp, by simp⟩
+    · rw [if_neg hx] at h
+      obtain ⟨h1, h2⟩ := ih _ _ _ _ _ _ _ _ h
+      exact ⟨List.mem_cons_of_mem _ h1, List.mem_cons_of_mem _ h2⟩
+
+/-- Two equal-length nodes folding to one root at one position are equal, unless two hash inputs of the folds
+    collide. -/
+private theorem fold_eq {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H z).length = digestBytes)
+    {S : Bytes → Prop} (hS : ∀ x y, S x → S y → H x = H y → x = y) {f k m : Nat} {a b R : Bytes}
+    {p q : List Bytes} (hl : a.length = b.length) (ha : pathRoot H d f k m a p = some R)
+    (hb : pathRoot H d f k m b q = some R) (hsa : ∀ x ∈ pathInputs H d f k m a p, S x)
+    (hsb : ∀ x ∈ pathInputs H d f k m b q, S x) : a = b := by
+  refine Classical.byContradiction fun hne => ?_
+  cases hc : pathCollision H d f k m a b p q with
+  | none => exact pathCollision_complete hlen f k m a b p q R hne hl ha hb hc
+  | some xy =>
+    obtain ⟨x, y⟩ := xy
+    obtain ⟨hxy, hh⟩ := pathCollision_sound f k m a b p q x y hc
+    obtain ⟨hx, hy⟩ := pathCollision_mem f k m a b p q x y hc
+    exact hxy (hS _ _ (hsa _ hx) (hsb _ hy) hh)
+
+private theorem decodeToken_siblings {b : Bytes} {t : Token} (h : decodeToken b = some t) :
+    ∀ s ∈ t.siblings, s.length = digestBytes := by
+  have hr := parse_run (p := pToken) h
+  obtain ⟨⟨leaf, lb⟩, r1, -, hr⟩ := Approval.bind_run hr
+  obtain ⟨k, r2, -, hr⟩ := Approval.bind_run hr
+  obtain ⟨sibs, r3, hs, hr⟩ := Approval.bind_run hr
+  obtain ⟨cd, r4, -, hr⟩ := Approval.bind_run hr
+  obtain ⟨rfl, -⟩ := Approval.pure_run hr
+  exact (Approval.many_run (e := id) (Q := fun x : Bytes => x.length = digestBytes)
+    (fun hd => Approval.take_run hd) k hs).2.2
+
+private theorem mapM_some : ∀ {l : List Bytes}, (∀ b ∈ l, (decodeToken b).isSome) →
+    l.mapM decodeToken = some (l.filterMap decodeToken)
+  | [], _ => by simp
+  | a :: l, h => by
+    obtain ⟨t, ht⟩ := Option.isSome_iff_exists.1 (h a (by simp))
+    simp [ht, mapM_some (l := l) fun b hb => h b (List.mem_cons_of_mem _ hb)]
+
+/-- One tree level at a time: if every position of `hs` holds a path (`W`) folding to `R` with no colliding
+    hash inputs, the tree of `hs` has root `R` and every such path is the tree's own path. -/
+private theorem tree_agrees {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H z).length = digestBytes)
+    {S : Bytes → Prop} (hS : ∀ x y, S x → S y → H x = H y → x = y) {R : Bytes} :
+    ∀ (f : Nat) (hs : List Bytes) (W : Nat → List Bytes → Prop), 0 < hs.length →
+      (∀ x ∈ hs, x.length = digestBytes) → (∀ j < hs.length, ∃ p, W j p) →
+      (∀ i p, W i p → i < hs.length ∧ (∀ s ∈ p, s.length = digestBytes) ∧
+        pathRoot H d f i hs.length (hs.getD i []) p = some R ∧
+        ∀ x ∈ pathInputs H d f i hs.length (hs.getD i []) p, S x) →
+      (levels H d f hs).getLast? = some [R] ∧ ∀ i p, W i p → p = pathOf (levels H d f hs) i := by
+  intro f
+  induction f with
+  | zero =>
+    intro hs W h0 _ hcov hW
+    obtain ⟨p, hp⟩ := hcov 0 h0
+    have hr := (hW 0 p hp).2.2.1
+    simp [pathRoot] at hr
+  | succ f ih =>
+    intro hs W h0 hhs hcov hW
+    by_cases h1 : hs.length ≤ 1
+    · obtain ⟨x, rfl⟩ := eq_single h0 h1
+      have hone : ∀ i p, W i p → p = [] ∧ x = R := by
+        intro i p hp
+        obtain ⟨hi, -, hr, -⟩ := hW i p hp
+        obtain rfl : i = 0 := by simp at hi; omega
+        cases p with
+        | nil => simpa [pathRoot] using hr
+        | cons s rest => simp [pathRoot] at hr
+      obtain ⟨p, hp⟩ := hcov 0 (by simp)
+      obtain ⟨-, rfl⟩ := hone 0 p hp
+      refine ⟨rfl, fun i p hp => ?_⟩
+      rw [(hone i p hp).1]
+      rfl
+    have h2 : 2 ≤ hs.length := by omega
+    -- A path not carried here starts with a sibling; its first hash input is in `S`.
+    have hstep : ∀ i p, W i p → ¬(i % 2 = 0 ∧ i + 1 = hs.length) → ∃ s rest, p = s :: rest ∧
+        pathRoot H d f (i / 2) ((hs.length + 1) / 2) (H (stepInput d i (hs.getD i []) s)) rest = some R ∧
+        S (stepInput d i (hs.getD i []) s) ∧
+        ∀ x ∈ pathInputs H d f (i / 2) ((hs.length + 1) / 2) (H (stepInput d i (hs.getD i []) s)) rest, S x := by
+      intro i p hp hc
+      obtain ⟨-, -, hr, hx⟩ := hW i p hp
+      have hb : ¬(i % 2 == 0 && i + 1 == hs.length) = true := by simpa using hc
+      simp only [pathRoot] at hr
+      simp only [pathInputs] at hx
+      rw [if_neg h1, if_neg hb] at hr hx
+      cases p with
+      | nil => simp at hr
+      | cons s rest =>
+        simp only at hr hx
+        exact ⟨s, rest, rfl, hr, hx _ (by simp), fun x h => hx x (List.mem_cons_of_mem _ h)⟩
+    -- Its sibling is the partner's node: the partner's path folds to `R` from the same parent position.
+    have hpart : ∀ i p, W i p → ¬(i % 2 = 0 ∧ i + 1 = hs.length) → ∃ rest,
+        p = hs.getD (if i % 2 == 0 then i + 1 else i - 1) [] :: rest ∧
+        pathRoot H d f (i / 2) ((hs.length + 1) / 2) ((pairUp H d hs).getD (i / 2) []) rest = some R ∧
+        ∀ x ∈ pathInputs H d f (i / 2) ((hs.length + 1) / 2) ((pairUp H d hs).getD (i / 2) []) rest, S x := by
+      intro i p hp hc
+      obtain ⟨hi, hsl, -, -⟩ := hW i p hp
+      obtain ⟨s, rest, rfl, hr, hsx, hx⟩ := hstep i p hp hc
+      suffices hs' : s = hs.getD (if i % 2 == 0 then i + 1 else i - 1) [] by
+        subst hs'
+        rw [step_node (H := H) (d := d) hi hc] at hr hx
+        exact ⟨rest, rfl, hr, hx⟩
+      have hsl' : s.length = digestBytes := hsl s (by simp)
+      by_cases he : i % 2 = 0
+      · obtain ⟨q, hq⟩ := hcov (i + 1) (by omega)
+        obtain ⟨t, rest', rfl, hr', htx, hx'⟩ := hstep (i + 1) q hq (by omega)
+        have htl : t.length = digestBytes := (hW _ _ hq).2.1 t (by simp)
+        rw [show (i + 1) / 2 = i / 2 by omega] at hr' hx'
+        have hin := hS _ _ hsx htx (fold_eq hlen hS ((hlen _).trans (hlen _).symm) hr hr' hx hx')
+        have hb2 : (i % 2 == 0) = true := by rw [beq_iff_eq]; exact he
+        have hb3 : ¬((i + 1) % 2 == 0) = true := by rw [beq_iff_eq]; omega
+        unfold stepInput at hin
+        rw [if_pos hb2, if_neg hb3] at hin
+        rw [if_pos hb2]
+        exact (List.append_inj (List.cons.inj (List.append_cancel_left hin)).2
+          ((getD_len hhs hi).trans htl.symm)).2
+      · obtain ⟨q, hq⟩ := hcov (i - 1) (by omega)
+        obtain ⟨t, rest', rfl, hr', htx, hx'⟩ := hstep (i - 1) q hq (by omega)
+        rw [show (i - 1) / 2 = i / 2 by omega] at hr' hx'
+        have hin := hS _ _ hsx htx (fold_eq hlen hS ((hlen _).trans (hlen _).symm) hr hr' hx hx')
+        have hb2 : ¬(i % 2 == 0) = true := by rw [beq_iff_eq]; exact he
+        have hb3 : ((i - 1) % 2 == 0) = true := by rw [beq_iff_eq]; omega
+        unfold stepInput at hin
+        rw [if_neg hb2, if_pos hb3] at hin
+        rw [if_neg hb2]
+        exact (List.append_inj (List.cons.inj (List.append_cancel_left hin)).2
+          (hsl'.trans (getD_len hhs (by omega : i - 1 < hs.length)).symm)).1
+    have hlp := pairUp_length (H := H) (d := d) hs
+    rw [levels_succ h2, getLast?_cons_of_ne (levels_ne_nil f (pairUp H d hs))]
+    obtain ⟨hroot, hpaths⟩ := ih (pairUp H d hs)
+      (fun j p' => ∃ i p, W i p ∧ i / 2 = j ∧ p' = if i % 2 = 0 ∧ i + 1 = hs.length then p else p.tail)
+      (by rw [hlp]; omega) (pairUp_len hlen hs hhs)
+      (fun j hj => by
+        rw [hlp] at hj
+        obtain ⟨p, hp⟩ := hcov (2 * j) (by omega)
+        exact ⟨_, 2 * j, p, hp, by omega, rfl⟩)
+      (fun j p' hp' => by
+        obtain ⟨i, p, hp, rfl, rfl⟩ := hp'
+        obtain ⟨hi, hsl, hr, hx⟩ := hW i p hp
+        rw [hlp]
+        by_cases hc : i % 2 = 0 ∧ i + 1 = hs.length
+        · have hb : (i % 2 == 0 && i + 1 == hs.length) = true := by simp [hc]
+          rw [if_pos hc, carry_node hc]
+          simp only [pathRoot] at hr
+          simp only [pathInputs] at hx
+          rw [if_neg h1, if_pos hb] at hr hx
+          exact ⟨by omega, hsl, hr, hx⟩
+        · rw [if_neg hc]
+          obtain ⟨rest, rfl, hr', hx'⟩ := hpart i p hp hc
+          exact ⟨by omega, fun s hs' => hsl s (List.mem_cons_of_mem _ hs'), hr', hx'⟩)
+    refine ⟨hroot, fun i p hp => ?_⟩
+    simp only [pathOf, h1, ↓reduceIte]
+    by_cases hc : i % 2 = 0 ∧ i + 1 = hs.length
+    · have hb : (i % 2 == 0 && i + 1 == hs.length) = true := by simp [hc]
+      simp only [hb, ↓reduceIte]
+      exact hpaths (i / 2) p ⟨i, p, hp, rfl, by rw [if_pos hc]⟩
+    · have hb : ¬(i % 2 == 0 && i + 1 == hs.length) = true := by simpa using hc
+      simp only [hb, Bool.false_eq_true, ↓reduceIte]
+      obtain ⟨rest, rfl, -, -⟩ := hpart i p hp hc
+      exact congrArg (List.cons _) (hpaths (i / 2) _ ⟨i, _, hp, rfl, by rw [if_neg hc, List.tail_cons]⟩)
+
+/-- Completeness: whatever `publishOk` accepts, the one-tree check accepts too, unless the batch's tokens
+    carry a SHA3-512 collision, which `publishCollision` returns. -/
+theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
+    (h : publishOk rootPk cert last new tokens = true) :
+    publishOkTree rootPk cert last new tokens = true ∨
+      ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y := by
+  unfold publishOk at h
+  cases he : decodeKeyCert cert with
+  | none => simp [he] at h
+  | some e =>
+  cases hn : storedOf sha3 new with
+  | none => simp [he, hn] at h
+  | some n =>
+  simp only [he, hn, Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hall⟩, hasc⟩ := h
+  rw [List.all_eq_true] at hall
+  have hdec : ∀ b ∈ tokens, (decodeToken b).isSome := by
+    intro b hb
+    obtain ⟨i, hi⟩ := List.mem_iff_getElem?.1 hb
+    have hf : tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true :=
+      hall (b, i) (List.mem_zipIdx_iff_getElem?.2 hi)
+    unfold tokenFits at hf
+    cases hd : decodeToken b with
+    | none => simp [hd] at hf
+    | some _ => rfl
+  obtain ⟨ts, hm⟩ : ∃ ts, tokens.mapM decodeToken = some ts := ⟨_, mapM_some hdec⟩
+  obtain ⟨hl1, hfm, hget⟩ := mapM_decode hm
+  have hcnt : ts.length = n.checkpoint.count := by omega
+  have hc1 := (storedOf_count hn).1
+  -- Each decoded token: digest-length siblings, a path folding to the root, and every other check.
+  have htok : ∀ t i, (t, i) ∈ ts.zipIdx → (∀ s ∈ t.siblings, s.length = digestBytes) ∧ i < n.checkpoint.count ∧
+      pathRoot sha3 (domain "MERKLE-NODE") treeFuel i n.checkpoint.count
+        (leafHash sha3 (domain "MERKLE-NODE") t.leafBytes) t.siblings = some n.checkpoint.tokenRoot ∧
+      ∀ lv, t.siblings = pathOf lv i →
+        tokenFitsTree (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n lv i t = true := by
+    intro t i hti
+    have hit : ts[i]? = some t := List.mem_zipIdx_iff_getElem?.1 hti
+    have hlt : i < ts.length := (List.getElem?_eq_some_iff.1 hit).1
+    obtain ⟨b, hb⟩ : ∃ b, tokens[i]? = some b := ⟨tokens[i]'(by omega), List.getElem?_eq_getElem (by omega)⟩
+    have hd : decodeToken b = some t := by rw [hget i b hb, hit]
+    have hf : tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true :=
+      hall (b, i) (List.mem_zipIdx_iff_getElem?.2 hb)
+    unfold tokenFits at hf
+    rw [hd] at hf
+    simp only [inBatch, verifyPath, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at hf
+    obtain ⟨⟨⟨h1, h2⟩, ⟨⟨⟨⟨⟨h3, h4⟩, h5⟩, h6⟩, -⟩, hlt2, hpr⟩⟩, h8⟩ := hf
+    rw [h2, Nat.add_sub_cancel_left] at hlt2 hpr
+    refine ⟨decodeToken_siblings hd, hlt2, hpr, fun lv hp => ?_⟩
+    simp only [tokenFitsTree, Bool.and_eq_true, beq_iff_eq]
+    exact ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, hp⟩, h8⟩
+  cases hpc : publishCollision tokens with
+  | some xy =>
+    right
+    obtain ⟨x, y⟩ := xy
+    refine ⟨x, y, rfl, ?_⟩
+    simp only [publishCollision] at hpc
+    simpa using List.find?_some hpc
+  | none =>
+    left
+    simp only [publishCollision, hfm, List.find?_eq_none] at hpc
+    have hS : ∀ x y, x ∈ batchInputs ts → y ∈ batchInputs ts → sha3 x = sha3 y → x = y := by
+      intro x y hx hy hxy
+      refine Classical.byContradiction fun hne =>
+        hpc (x, y) (List.mem_flatMap.2 ⟨x, hx, List.mem_map.2 ⟨y, hy, rfl⟩⟩) ?_
+      simp [hne, hxy]
+    obtain ⟨hroot, hpath⟩ := tree_agrees (H := sha3) (d := domain "MERKLE-NODE") (S := (· ∈ batchInputs ts))
+      (R := n.checkpoint.tokenRoot) sha3_length hS treeFuel
+      (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes)
+      (fun i p => ∃ t, (t, i) ∈ ts.zipIdx ∧ p = t.siblings) (by rw [List.length_map]; omega)
+      (fun x hx => by
+        obtain ⟨t, -, rfl⟩ := List.mem_map.1 hx
+        exact sha3_length _)
+      (fun j hj => by
+        rw [List.length_map] at hj
+        exact ⟨ts[j].siblings, ts[j], List.mem_zipIdx_iff_getElem?.2 (List.getElem?_eq_getElem hj), rfl⟩)
+      (fun i p hp => by
+        obtain ⟨t, hti, rfl⟩ := hp
+        obtain ⟨hsib, hlt, hpr, -⟩ := htok t i hti
+        have hit : ts[i]? = some t := List.mem_zipIdx_iff_getElem?.1 hti
+        have hg : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).getD i [] =
+            leafHash sha3 (domain "MERKLE-NODE") t.leafBytes := by
+          simp [List.getD_eq_getElem?_getD, hit]
+        rw [List.length_map, hg, hcnt]
+        refine ⟨hlt, hsib, hpr, fun x hx => ?_⟩
+        exact List.mem_flatMap.2 ⟨(t, i), hti, by rw [hcnt]; exact hx⟩)
+    unfold publishOkTree
+    simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq]
+    refine ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hcnt⟩, hroot⟩, ?_⟩, by rw [← hfm]; exact hasc⟩
+    rw [List.all_eq_true]
+    rintro ⟨t, i⟩ hti
+    exact (htok t i hti).2.2.2 _ (hpath i t.siblings ⟨t, hti, rfl⟩)
 
 end BlindLedger.Gate
