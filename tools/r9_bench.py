@@ -1,6 +1,6 @@
 """R9a speed bench (hold-release r4.2 section 11): synthetic, seeded, non-PHI. Measures; changes no product code.
 
-Stages, each run alone (`--stage a|b|c|d|e|gen|report`):
+Stages, each run alone (`--stage a|b|c|d|gen|report`; e rides on b):
   a  trunk parse_835 + fold over the corpus.
   b  per-row judge + the corrected per-line writes, plain SQL, in 1,000-row chunks, into a real trunk owner database
      (owner tables) plus bench-side store tables. The trunk has no store v9 (cells, holds, links, verdicts, pool rule):
@@ -8,7 +8,7 @@ Stages, each run alone (`--stage a|b|c|d|e|gen|report`):
   c  trunk FinancialOwner.record_payment_evidence (Lean decides, one command per call) at k_pre payments in one obligation.
   d  the pinned Lean worker. It has no multi-command BLFPAY frame (batchFast is S1); this times 1,000 single-command round
      trips and the 1,000 frame-rejection floor, a proxy that cannot be read as a PASS of the bar.
-  e  write-lock hold (BEGIN IMMEDIATE to COMMIT) per 1,000-row chunk, from the same code as b.
+  e  write-lock hold (BEGIN IMMEDIATE to COMMIT) per 1,000-row chunk: timed inside each (b) run and read from those runs by `report`.
 Corpus: 835 files by the repo's tests.test_x12_835_intake.build; one 1-line deposit file per file (its pool).
 Results: JSON `runs` list, one record per guarded run; `--stage report` sums slices.
 """
@@ -34,7 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 SCRATCH = Path("C:/Users/neers/rrb/state/scratch-r9")
-FILES, PER_FILE, OBLIGATIONS, CHUNK = 200, 5000, 1000, 1000
+# trunk x12_tokenizer.MAX_SEGMENTS is 5,000 per file, so 5,000 CLP per file is refused (x12:cap-segments): 250 files x 4,000 CLP = 1M lines
+FILES, PER_FILE, OBLIGATIONS, CHUNK = 250, 4000, 1000, 1000
 BARS = {"a": ("lines_per_s", ">=", 250_000), "b": ("lines_per_s", ">=", 80_000), "d": ("ms_per_1000_commands", "<=", 20), "e": ("max_hold_s", "<", 1.0)}
 
 
@@ -43,6 +44,8 @@ def peak_rss_bytes() -> int:
         _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD), ("PeakWorkingSetSize", ctypes.c_size_t)] + [(n, ctypes.c_size_t) for n in ("WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
     c = Counters()
     c.cb = ctypes.sizeof(c)
+    ctypes.windll.kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    ctypes.windll.psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
     ctypes.windll.psapi.GetProcessMemoryInfo(ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(c), c.cb)
     return int(c.PeakWorkingSetSize)
 
@@ -72,8 +75,6 @@ def gen_file(index: int, seed: int, per_file: int) -> tuple[bytes, dict]:
         segs = [f"CLP*C{index:03d}{key}*{status}*{money(charge)}*{money(paid)}*0.00*MC*{key}*11*1"]
         if charge != paid:
             segs.append(f"CAS*PR*1*{money(charge - paid)}")
-        elif rng.random() < 0.3:
-            segs += ["DTM*232*20261001"]
         return segs
 
     for i in range(n_plain + n_re + n_zero):
@@ -202,6 +203,7 @@ class Writer:
         self.cols = [r[1] for r in cur.execute("PRAGMA table_info(evaluations)")]
         self.base = {r[1]: r for r in cur.execute("SELECT * FROM evaluations e WHERE evaluation_id IN (SELECT current_evaluation_id FROM obligations)")}
         self.seq, self.head = cur.execute("SELECT COALESCE(MAX(event_sequence),0),COALESCE((SELECT head FROM financial_events ORDER BY event_sequence DESC LIMIT 1),zeroblob(64)) FROM financial_events").fetchone()
+        self.commit_s: list[float] = []  # COMMIT alone (fsync, deferred FK check, WAL checkpoint) of each chunk
         self.tally: dict[str, int] = {}
         self.classes: dict[str, int] = {}
 
@@ -219,7 +221,9 @@ class Writer:
             if start == 0:
                 self.write("deposit_rows", [(deposit["entry_id"], pool, deposit["amount_cents"])])
             self.chunk(index, pool, rows[start:start + CHUNK], pending, resolved)
+            c0 = time.perf_counter()
             self.c.execute("COMMIT")
+            self.commit_s.append(time.perf_counter() - c0)
             hold_times.append(time.perf_counter() - t0)
         t0 = time.perf_counter()  # the per-file financial_meta UPDATE rides the file's last transaction in the owner; here its own
         self.c.execute("BEGIN IMMEDIATE")
@@ -334,7 +338,7 @@ def stage_b(first: int, count: int, seed: int, per_file: int, db: Path, fresh: b
         lines += per_file
     c.close()
     out = {"files": count, "lines": lines, "seconds": sum(per_file_s), "lines_per_s": lines / sum(per_file_s), "per_file_s": per_file_s, "hold_s": holds,
-           "p50_hold_s": pct(holds, 50), "p99_hold_s": pct(holds, 99), "max_hold_s": max(holds), "writes_by_table": w.tally,
+           "p50_hold_s": pct(holds, 50), "p99_hold_s": pct(holds, 99), "max_hold_s": max(holds), "commit_share_of_hold": sum(w.commit_s) / sum(holds), "writes_by_table": w.tally,
            "writes_per_line": sum(w.tally.values()) / lines, "row_classes": w.classes, "db": str(db)}
     return {**out, "profile": _top(prof)} if prof else out
 
@@ -422,16 +426,14 @@ def stage_d(rounds: int) -> dict:
     out: dict = {"k_pre": 10, "worker": str(engine.EVALUATOR_PATH), "rounds": rounds}
     try:
         with open_owner_for(copy) as owner:
-            connection = owner._connect()
-            connection.execute("BEGIN")
-            oid, item_id = connection.execute("SELECT obligation_id,item_id FROM obligations").fetchone()
-            command = {"kind": "record", "item_id": item_id, "payment_id": "d-p1", "evidence_id": "d-e1", "common_origin_id": "d-o1", "source_id": "d-source", "source_version": "v1",
-                       "local_ref": None, "amount_cents": 100, "event_at_ms": owner.clock.now_ms() if hasattr(owner, "clock") else 5_000_000, "pays_action_id": None}
-            item, data = adapter.live_payment_input(connection, obligation_id=oid, authority_context=adapter.TrustedAuthorityContext.from_authority(owner.trusted_authority),
-                                                    now_ms=owner._now() + 1, verification={"scope": owner._scope_value(), "owner_id": owner.owner_id, "mode": owner.mode},
-                                                    expected_revision=None, command=command, receipts=owner_module._payment_receipts(connection, oid))
-            connection.execute("ROLLBACK")
-            connection.close()
+            with owner._write() as connection:  # builds the item from the owner's own transaction; writes nothing
+                row = connection.execute("SELECT obligation_id,updated_at_ms FROM obligations").fetchone()
+                command = {"kind": "record", "payment_id": "d-p1", "evidence_id": "d-e1", "common_origin_id": "d-o1", "source_id": "synthetic-payment-source", "source_version": "fixture-v1",
+                           "local_ref": None, "amount_cents": 100, "event_at_ms": 1_500, "pays_action_id": None}
+                item, data = adapter.live_payment_input(
+                    connection, obligation_id=row[0], authority_context=adapter.TrustedAuthorityContext.from_authority(owner.trusted_authority), now_ms=max(owner._now(), row[1]),
+                    verification={"scope": owner._scope_value(), "owner_id": owner.owner_id, "mode": owner.mode}, expected_revision=None, command=command,
+                    receipts=owner_module._payment_receipts(connection, row[0]))
         answer = engine._evaluate_wire(item)  # warm the worker
         t = time.perf_counter()
         for _ in range(rounds):
@@ -474,7 +476,7 @@ def report(out: Path) -> dict:
     runs = json.loads(out.read_text(encoding="utf-8"))["runs"] if out.exists() else []
     summary: dict = {}
     for stage in ("a", "b", "e"):
-        mine = [r for r in runs if r["stage"] == stage and "lines" in r["result"]]
+        mine = [r for r in runs if r["stage"] == ("b" if stage == "e" else stage) and "lines" in r["result"]]  # (e) is read from the (b) runs' chunk timings
         if mine:
             lines, secs = sum(r["result"]["lines"] for r in mine), sum(r["result"]["seconds"] for r in mine)
             per_file = [x for r in mine for x in r["result"]["per_file_s"]]
@@ -483,6 +485,8 @@ def report(out: Path) -> dict:
                  "peak_rss_mb": max(r["peak_rss_bytes"] for r in mine) / 2**20, "suffixes": [r.get("suffix") for r in mine]}
             if holds:
                 s |= {"max_hold_s": max(holds), "p99_hold_s": pct(holds, 99)}
+            if stage == "e":
+                s = {k: v for k, v in s.items() if k not in ("lines_per_s", "p50_file_s", "p99_file_s")}
             s["verdict"] = verdict(stage, s)
             summary[stage] = s
     summary["c"] = sorted((r["result"] for r in runs if r["stage"] == "c" and "ms_per_command" in r["result"]), key=lambda r: r["k_pre"])
@@ -494,7 +498,7 @@ def report(out: Path) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=("gen", "a", "b", "c", "d", "e", "report"))
+    ap.add_argument("--stage", required=True, choices=("gen", "a", "b", "c", "d", "report"))
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--first", type=int, default=0)
     ap.add_argument("--files", type=int, default=FILES)
@@ -518,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     db = a.db or SCRATCH / f"{a.stage}_store.sqlite3"
     result = {"a": lambda: stage_a(a.first, a.files, a.seed, a.per_file, a.profile), "b": lambda: stage_b(a.first, a.files, a.seed, a.per_file, db, a.fresh, a.profile),
-              "e": lambda: stage_b(a.first, a.files, a.seed, a.per_file, db, a.fresh, a.profile), "c": lambda: stage_c(a.kpre, a.commands, a.seed_seconds), "d": lambda: stage_d(a.rounds)}[a.stage]()
+              "c": lambda: stage_c(a.kpre, a.commands, a.seed_seconds), "d": lambda: stage_d(a.rounds)}[a.stage]()
     record = {"stage": a.stage, "suffix": a.suffix, "args": {k: str(v) for k, v in vars(a).items()}, "peak_rss_bytes": peak_rss_bytes(), "result": result}
     prior = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
     prior["runs"].append(record)
