@@ -2,8 +2,8 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `30ab7e3b` (payer-batch: BATCH-P1
-release-batch theorems and BATCH-F1 axiom pin on `85e4b097`).
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `fe031708` (STATE/v2
+custody proofs on `6249dd75`).
 
 ## Product and standing claims
 
@@ -14,9 +14,11 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 ## What landed since d7192b0
 
-Trunk `30ab7e3b`, guarded Lean build `tm30ab-1` exit 0 (119 jobs, gate axiom check passes); full suite `tm30full2` + `tm30atk1`
-(tests/attacks): 909 run: 894 pass, 0 fail, 15 skips. The delta is Lean only, so semantic gate `mb2sem1` (`85e4b097`, PASS, 26
-properties; artifact `061b5cad...`) was not rerun.
+Trunk `fe031708`: Lean build `sv2t1` exit 0 (120 jobs, axiom check), semantic gate `sv2t3` 23/23, full suite
+`sv2full1` 909 run: 894 pass, 0 fail, 15 skips.
+
+- **STATE/v2 custody (Lean, unwired).** Custody state folds one append-only off-machine log; an epoch-keyed TPM
+  counter catches rollback; activation once per shard; a payment's ALLOWs share one checkpoint (`never_twice`).
 
 - **Payer release batch (BATCH-P1, Lean).** A batch answers each item exactly as single-token RELEASE (`releaseBatch_eq`);
   ACCEPT is exactly the payer's twelve checks, earned in the call (`releaseBatch_spec`, `_accept_verified`); a bad item or
@@ -65,5 +67,5 @@ properties; artifact `061b5cad...`) was not rerun.
 - **Acknowledger not stored (open, needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so the rule that a decider may not
   acknowledge is claim-level and cannot be re-verified by the checker or Lean; fixing it needs a versioned ACK record.
 
-Next: STATE/v2 (proofs in progress on `state-v2`), hold-release S3b+ (slot consumers), the cash-line hold ledger.
+Next: STATE/v2 wiring, hold-release S3b+ (slot consumers), cash-line hold ledger.
 A local commit, not a qualified release; no local check activates production.
