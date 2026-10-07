@@ -73,15 +73,18 @@ def load_pct(a: tuple[int, int], b: tuple[int, int]) -> float:
     return 100.0 * (b[0] - a[0]) / max(1, b[1] - a[1])
 
 
-def prewrite_on() -> bool:
-    return os.environ.get("RR_SHARD_PREWRITE") == "1"  # read at call time: spawned workers inherit the environment
+def prewrite_mode() -> int:
+    """0 off; 1 flush + fsync of the WAL after each built part; 2 the same flush without the fsync; 3 flush only, once per group per database (the shard on the spine's PREFLUSH, the spine at its first wait)."""
+    mode = os.environ.get("RR_SHARD_PREWRITE", "0")  # read at call time: spawned workers inherit the environment
+    return int(mode) if mode in ("1", "2", "3") else 0
 
 
 class Prewriter:
     """G1: while a transaction is open and the process would otherwise wait, push its dirty pages into the WAL and fsync the WAL, so the COMMIT writes and syncs
     only what changed since. sqlite3_db_cacheflush appends uncommitted frames, which recovery ignores (they carry no commit marker): stored bytes and formats are unchanged."""
 
-    def __init__(self, conn: sqlite3.Connection, db: Path) -> None:
+    def __init__(self, conn: sqlite3.Connection, db: Path, fsync: bool = True) -> None:
+        self.fsync = fsync
         self.lib = ctypes.CDLL(os.path.join(sys.base_prefix, "DLLs", "sqlite3.dll"))
         self.lib.sqlite3_db_cacheflush.argtypes = [ctypes.c_void_p]
         self.lib.sqlite3_db_filename.argtypes, self.lib.sqlite3_db_filename.restype = [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_char_p
@@ -97,12 +100,13 @@ class Prewriter:
         t1 = time.perf_counter()
         if rc:
             raise RuntimeError(f"prewrite: sqlite3_db_cacheflush returned {rc}")
-        fd = os.open(self.wal, os.O_RDWR | os.O_BINARY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        self.count, self.flush_s, self.fsync_s = self.count + 1, self.flush_s + t1 - t0, self.fsync_s + time.perf_counter() - t1
+        if self.fsync:
+            fd = os.open(self.wal, os.O_RDWR | os.O_BINARY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        self.count, self.flush_s, self.fsync_s = self.count + 1, self.flush_s + t1 - t0, self.fsync_s + (time.perf_counter() - t1 if self.fsync else 0.0)
 
     def stats(self) -> dict:
         return {"count": self.count, "flush_s": self.flush_s, "fsync_s": self.fsync_s}
@@ -125,9 +129,9 @@ class Shard:
         self.undo = None
         self.pre, self.pre_mark = None, 0  # G1 prewriter (set by shard_main when on); lines of the open transaction already pushed to the WAL
 
-    def prewrite(self, conn) -> None:
-        """After BUILT is sent, with nothing queued for this worker: push the open transaction's new pages to the WAL."""
-        if self.pre and self.undo and self.undo[3] > self.pre_mark and not conn.poll(0):
+    def prewrite(self, conn, group_end: bool = False) -> None:
+        """Modes 1 and 2, after BUILT is sent with nothing queued for this worker, or mode 3 on the spine's PREFLUSH (group_end): push the open transaction's new pages to the WAL."""
+        if self.pre and self.undo and self.undo[3] > self.pre_mark and (group_end or not conn.poll(0)):
             self.pre.flush()
             self.pre_mark = self.undo[3]
 
@@ -226,7 +230,8 @@ class Shard:
 
 def shard_main(conn, k: int, db: str) -> None:
     shard = Shard(k, Path(db))
-    shard.pre = Prewriter(shard.c, Path(db)) if prewrite_on() else None
+    mode = prewrite_mode()
+    shard.pre = Prewriter(shard.c, Path(db), mode == 1) if mode else None
     conn.send(("READY", shard.w.head))
     while True:
         i0 = time.perf_counter()
@@ -235,7 +240,11 @@ def shard_main(conn, k: int, db: str) -> None:
         try:
             if message[0] == "PART":
                 conn.send(("BUILT", *shard.build(*message[1:])))
-                shard.prewrite(conn)
+                if mode != 3:
+                    shard.prewrite(conn)
+            elif message[0] == "PREFLUSH":  # mode 3: every part of the group is built and the spine is committing; no reply
+                if mode == 3:
+                    shard.prewrite(conn, True)
             elif message[0] == "COMMIT":
                 shard.commit()
                 conn.send(("ACK", shard.w.head))
@@ -423,7 +432,8 @@ class Spine:
             self.c.execute(f"PRAGMA {pragma}")
         self.c.executescript(SPINE_DDL + rb.STORE_DDL)
         self.ckpt = rb.Checkpointer(db)
-        self.pre, self.dirty = Prewriter(self.c, db) if prewrite_on() else None, False  # G1: dirty = the open transaction has pages written since the last prewrite
+        self.mode = prewrite_mode()
+        self.pre, self.dirty = Prewriter(self.c, db, self.mode == 1) if self.mode else None, False  # G1: dirty = the open transaction has pages written since the last prewrite
         self.tbl = tables(template, k_count)
         self.keys = dict(self.c.execute("SELECT cell_id, raw_digest FROM cells"))  # the directory's cell id -> raw digest, loaded once and kept equal to main.cells at every commit
         self.workers: dict[int, tuple] = {}
@@ -438,6 +448,7 @@ class Spine:
         self.heads = {k: self.expect(conn, "READY")[0] for k, (_, conn) in self.workers.items()}
         self.c.executemany("INSERT INTO heads VALUES (?,?)", sorted(self.heads.items()))
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
+        self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
         self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes")}
@@ -493,9 +504,9 @@ class Spine:
             if block:
                 raise rb.FinancialIntegrityError("relay_stalled")
             return
-        if block and self.pre and self.dirty and not connection.wait([*conns, *feed], 0):  # about to wait with nothing ready: the wait is the time to push the spine's pages to the WAL
+        if block and self.pre and self.dirty and not (self.mode == 3 and self.pre_done) and not connection.wait([*conns, *feed], 0):  # about to wait with nothing ready: the wait is the time to push the spine's pages to the WAL
             self.pre.flush()
-            self.dirty = False
+            self.dirty, self.pre_done = False, True
         ready = connection.wait([*conns, *feed], None if block else 0)
         if block:
             self.tt[bucket] += time.perf_counter() - t0
@@ -605,6 +616,9 @@ class Spine:
                 self.flush()
             while g.flushed < len(g.files):
                 self.pump(True)
+            if self.mode == 3:  # every part is built: the shards push their pages while the spine commits
+                for k in sorted(g.sent):
+                    self.send(k, ("PREFLUSH",))
         except BaseException:
             self.fail(g, undo, heads0, prev0)
             raise
@@ -612,7 +626,7 @@ class Spine:
             self.g = None
         t0 = time.perf_counter()
         self.c.execute("COMMIT")  # the only commit point
-        self.dirty = False
+        self.dirty = self.pre_done = False
         self.ckpt.kick()
         self.tt["spine_commit"] += time.perf_counter() - t0
         self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
@@ -638,7 +652,7 @@ class Spine:
                 acks -= conn.recv()[0] == "ACK"
             self.owed.pop(k, None)
         self.c.execute("ROLLBACK")
-        self.dirty = False
+        self.dirty = self.pre_done = False
         for cid in undo:
             self.keys.pop(cid, None)
         self.heads, self.prev_head = heads0, prev0
@@ -780,7 +794,7 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
            "store_bytes_per_s": grown / wall, "io_write_bytes_per_s": (spine_io + sum(s["io_write"] for s in stats)) / wall,
            "peak_rss_spine_mb": spine_rss / 2**20, "peak_rss_shards_mb": [s["peak_rss"] / 2**20 for s in shard_stats],
            "peak_rss_prep_mb": prep_rss / 2**20, "peak_rss_total_mb": (spine_rss + prep_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1 + prep_procs,
-           "prewrite": {"on": prewrite_on(), "spine": pre_stats(spine.pre), "shards": {key: sum(s["prewrite"][key] for s in shard_stats) for key in ("count", "flush_s", "fsync_s")}, "shard_counts": [s["prewrite"]["count"] for s in shard_stats]}}
+           "prewrite": {"on": prewrite_mode(), "spine": pre_stats(spine.pre), "shards": {key: sum(s["prewrite"][key] for s in shard_stats) for key in ("count", "flush_s", "fsync_s")}, "shard_counts": [s["prewrite"]["count"] for s in shard_stats]}}
     if with_replay:
         out["replay"] = replay(work / "spine.sqlite3", snap, kk)
     return out
@@ -796,7 +810,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--files", type=int, default=2)
     ap.add_argument("--prep", type=int, default=1, help="prep-stage processes")
     ap.add_argument("--suffix", default="")
-    ap.add_argument("--prewrite", choices=["0", "1"], help="G1 on/off for this run (sets RR_SHARD_PREWRITE; workers inherit it)")
+    ap.add_argument("--prewrite", choices=["0", "1", "2", "3"], help="G1 mode for this run (0 off, 1 flush+fsync per part, 2 flush per part, 3 flush once per group) (sets RR_SHARD_PREWRITE; workers inherit it)")
     a = ap.parse_args(argv)
     if a.prewrite:
         os.environ["RR_SHARD_PREWRITE"] = a.prewrite
