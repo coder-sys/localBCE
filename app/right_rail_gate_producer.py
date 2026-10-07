@@ -193,3 +193,18 @@ def newest(path: Path) -> tuple[int, bytes] | None:
     finally:
         db.close()
     return row and (row[0], row[1][-64:])
+
+
+def holds(path: Path, digest: bytes) -> bool:
+    """Read-only, for the registry boot check (B3): whether the store holds the batch ``digest``, sealed or open (as
+    ``newest``).  No store holds nothing; a store that cannot be read is ``store_unavailable``, never an answer."""
+    if not path.exists():
+        return False
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return db.execute("SELECT 1 FROM batches WHERE digest=?", (digest,)).fetchone() is not None
+        finally:
+            db.close()
+    except sqlite3.Error as error:
+        raise GateProducerError("store_unavailable") from error

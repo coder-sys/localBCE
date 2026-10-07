@@ -254,6 +254,25 @@ class ProducerTests(fx.Scratch):
             self.assertEqual(producer.newest(Path(tmp) / "shard.sqlite3"), (n, head))
             self.assertEqual(cb.evidence_root, gate.ZERO_DIGEST)
 
+    def test_holds_only_its_own_batches(self) -> None:
+        with self.scratch() as tmp:
+            digests = []
+            for sub, start in (("a", 0), ("b", 5)):  # two stores, each with its own batch
+                (Path(tmp) / sub).mkdir()
+                p = self._open(str(Path(tmp) / sub), fx.custody(str(Path(tmp) / sub)))
+                cb, _, _ = p.commit(fx.PROGRAM, fx.batch_leaves(0, 1, start), state_digest=fx.STATE, created_at=fx.NOW,
+                                    idreg=IDREG, free=(), adds=b"")
+                p.close()
+                digests.append(gate.checkpoint_digest(cb))
+            a, b = Path(tmp) / "a" / "shard.sqlite3", Path(tmp) / "b" / "shard.sqlite3"
+            self.assertNotEqual(digests[0], digests[1])
+            self.assertEqual([producer.holds(a, digests[0]), producer.holds(b, digests[1])], [True, True])
+            self.assertEqual([producer.holds(a, digests[1]), producer.holds(b, digests[0])], [False, False])  # the other dir's
+            self.assertFalse(producer.holds(Path(tmp) / "none.sqlite3", digests[0]))  # no store holds nothing
+            (Path(tmp) / "junk.sqlite3").write_bytes(b"not a database" * 64)
+            with self.assertRaisesRegex(producer.GateProducerError, "store_unavailable"):
+                producer.holds(Path(tmp) / "junk.sqlite3", digests[0])
+
     def test_pre_decide_store_refused(self) -> None:
         with self.scratch() as tmp:
             with sqlite3.connect(Path(tmp) / "shard.sqlite3") as db:
