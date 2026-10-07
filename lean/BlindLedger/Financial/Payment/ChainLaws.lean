@@ -1056,6 +1056,30 @@ private theorem evalPaymentSum_eq : ∀ ps : List Payment,
       · rw [if_neg h1] at ih
         simp [evalPaymentSum, ih, hs, h1]
 
+/-- `evaluate` succeeds iff the input is well formed, both claim sums exist and cash + lawful fits. -/
+theorem evaluate_isSome (i : FinancialInput) :
+    (evaluate i).isSome = (financialInputWellFormed i &&
+      ((evalClaimedSum i.claims).bind fun _ => evalLawfulSum i.claims).any
+        fun l => activeCents i.payments + l ≤ maxCents) := by
+  unfold evaluate
+  cases hw : financialInputWellFormed i with
+  | false => simp
+  | true =>
+    simp only [if_true, Bool.true_and, evaluateWellFormed, Option.isSome_map]
+    unfold evaluateTotals
+    rw [evalPaymentSum_eq]
+    cases hc : evalClaimedSum i.claims with
+    | none => by_cases h1 : activeCents i.payments ≤ maxCents <;> simp [h1]
+    | some cl =>
+      cases hl : evalLawfulSum i.claims with
+      | none => by_cases h1 : activeCents i.payments ≤ maxCents <;> simp [h1]
+      | some la =>
+        by_cases h1 : activeCents i.payments ≤ maxCents
+        · simp only [if_pos h1, evalAdd_eq']
+          by_cases h2 : activeCents i.payments + la ≤ maxCents <;> simp [h2]
+        · have h2 : ¬ activeCents i.payments + la ≤ maxCents := by omega
+          simp [h1, h2]
+
 private theorem evaluateTotals_payments {i : FinancialInput} {t} (h : evaluateTotals i = some t)
     (P : List Payment) :
     evaluateTotals { i with payments := P } =
@@ -1890,12 +1914,12 @@ private theorem S_facts {i : FinancialInput} {rs b S} (h : summarize i rs b = so
 
 /-! ## The evidence write of a record: a fresh confirmation, or a stored retry of it -/
 
-private def EvCase (i : FinancialInput) (c : RecordCommand) (ev : Option EvidenceRecord) : Prop :=
+def EvCase (i : FinancialInput) (c : RecordCommand) (ev : Option EvidenceRecord) : Prop :=
   (ev = some (confirmation i c i.evaluatedAt) ∧ findEvidence i.evidence c.evidenceId = none ∧
     formRefusal (confirmation i c i.evaluatedAt) = none ∧ c.eventAt ≤ i.evaluatedAt) ∨
   (ev = none ∧ ∃ t, findEvidence i.evidence c.evidenceId = some (confirmation i c t))
 
-private theorem evCase_of {r : PaymentRequest} {c ev} (h : EvidenceWrite r c ev) : EvCase r.input c ev := by
+theorem evCase_of {r : PaymentRequest} {c ev} (h : EvidenceWrite r c ev) : EvCase r.input c ev := by
   obtain ⟨hf, hle, -, h | h⟩ := h
   · exact Or.inl ⟨h.1, h.2, hf, hle⟩
   · obtain ⟨hn, s, hs, -, hc⟩ := h
@@ -1992,6 +2016,76 @@ private theorem evOf_canon {i : FinancialInput} {ev : Option EvidenceRecord}
     subst this
     exact hcE
 
+private theorem post_recorded {i : FinancialInput} {c : RecordCommand}
+    (hpid : findPayment i.payments c.paymentId = none) (ev : Option EvidenceRecord) :
+    applyWrites i ⟨ev, some (recordedPayment i c), none, some (recordedReceipt i c)⟩ =
+      upd i (insertBy Payment.paymentId (recordedPayment i c) i.payments) (evOf i ev) i.conflicts := by
+  unfold applyWrites upd evOf
+  simp [recordedPayment, hpid]
+
+/-- A RECORDED write keeps a well-formed input well formed iff the evidence count fits. -/
+theorem recorded_post_wf {i : FinancialInput} (hwf : financialInputWellFormed i = true)
+    {c : RecordCommand} (hc : commandWellFormed (.record c) = true) (h0 : c.amountCents ≠ 0)
+    (hpid : findPayment i.payments c.paymentId = none)
+    (hno : ∀ q ∈ i.payments, q.commonOriginId ≠ c.commonOriginId)
+    {ev : Option EvidenceRecord} (hev : EvCase i c ev) :
+    financialInputWellFormed (applyWrites i ⟨ev, some (recordedPayment i c), none, some (recordedReceipt i c)⟩) =
+      decide (i.evidence.length + (if ev.isSome then 1 else 0) ≤ maxRows) := by
+  rw [post_recorded hpid, ← evOf_length]
+  by_cases hl : (evOf i ev).length ≤ maxRows
+  · rw [decide_eq_true hl]
+    obtain ⟨hE, ⟨t, hEt⟩, hEnew, hEcan⟩ := ev_facts hwf hc hev
+    obtain ⟨-, -, hC1, -, -, -, hNo, -⟩ := wf_facts hwf
+    obtain ⟨hcP, hcE, hcC⟩ := wf_canon hwf
+    obtain ⟨hid1, hid2, -⟩ := wf_ctx hwf
+    obtain ⟨hcid, -⟩ := cmd_record hc
+    refine wf_grow hwf hE (fun id q h => ⟨q, ?_, rfl, rfl, rfl⟩) (fun id q h _ => ?_) (fun x hx => hx) hl hC1
+      (fun hlen => ?_) ?_ hcC ?_ ?_ ?_ (fun q hq hn => absurd hq hn)
+    · rw [findPayment_insertBy hpid]
+      by_cases e : (recordedPayment i c).paymentId = id
+      · exact absurd (e ▸ h) (by simp [recordedPayment, hpid])
+      · rw [if_neg e]; exact h
+    · rw [findPayment_insertBy hpid]
+      by_cases e : (recordedPayment i c).paymentId = id
+      · exact absurd (e ▸ h) (by simp [recordedPayment, hpid])
+      · rw [if_neg e]; exact h
+    · rw [ids_insert]
+      refine canonical_insert hcP hcid ?_ ?_
+      · intro hm
+        obtain ⟨q, hq, e⟩ := List.mem_map.1 hm
+        exact findPayment_none_ne hpid q hq e
+      · rw [List.length_map]; rw [length_insertBy] at hlen; omega
+    · exact evOf_canon hcE hEcan hl
+    · rw [noDup_iff]
+      refine ((insertBy_perm Payment.paymentId (recordedPayment i c) i.payments).map
+        Payment.commonOriginId).nodup_iff.2 (List.nodup_cons.2 ⟨?_, (noDup_iff _).1 hNo⟩)
+      intro hm
+      obtain ⟨q, hq, e⟩ := List.mem_map.1 hm
+      exact hno q hq e
+    · intro q hq hn
+      rcases (mem_insertBy _ _ q _).1 hq with rfl | h
+      · refine ⟨recordedPayment_wf ⟨hid1, hid2⟩ hc h0, ?_, rfl⟩
+        have hfe : findEvidence (evOf i ev) (recordedPayment i c).evidenceId =
+            some (confirmation i c t) := hEt
+        unfold paymentEvidenceWellFormed
+        simp only [upd]
+        rw [hfe]
+        simp [confirmation, recordedPayment]
+      · exact absurd h hn
+    · intro x hx hn
+      obtain ⟨a, b, d, e, -, -⟩ := hEnew x hx hn
+      refine ⟨a, b, ?_⟩
+      have hany : (upd i (insertBy Payment.paymentId (recordedPayment i c) i.payments)
+          (evOf i ev) i.conflicts).payments.any (fun q => decide (q.evidenceId = x.evidenceId)) = true :=
+        List.any_eq_true.2 ⟨recordedPayment i c, (mem_insertBy _ _ _ _).2 (Or.inl rfl),
+          decide_eq_true (by rw [d]; rfl)⟩
+      unfold accLam
+      rw [if_pos e]
+      unfold paymentConfirmationAccounted
+      simp [hany]
+  · rw [decide_eq_false hl]
+    exact Bool.eq_false_iff.2 fun hw => hl (by simpa only [upd] using (wf_facts hw).2.1)
+
 private theorem shape_recorded {r : PaymentRequest} {V : PaymentView} {S : ItemState}
     (hwf : financialInputWellFormed r.input = true)
     (hrec : r.receipts.map Receipt.paymentId = r.input.payments.map Payment.paymentId)
@@ -2005,65 +2099,10 @@ private theorem shape_recorded {r : PaymentRequest} {V : PaymentView} {S : ItemS
     some (commitView V S .RECORDED ⟨ev, some (recordedPayment r.input c), none, some (recordedReceipt r.input c)⟩) =
       project r (mutate r .RECORDED ⟨ev, some (recordedPayment r.input c), none, some (recordedReceipt r.input c)⟩) := by
   obtain ⟨hSe, hSc, hScash, hSle, hSctr, hSreq, hSab⟩ := S_facts hS
-  obtain ⟨hE, ⟨t, hEt⟩, hEnew, hEcan⟩ := ev_facts hwf hc hev
-  obtain ⟨hP1, hE1, hC1, hPwf, hPew, hPrew, hNo, hcases⟩ := wf_facts hwf
-  obtain ⟨hcP, hcE, hcC⟩ := wf_canon hwf
-  obtain ⟨hid1, hid2, hnow⟩ := wf_ctx hwf
+  obtain ⟨-, -, hC1, -, -, -, -, hcases⟩ := wf_facts hwf
   have hnd := nodup_ids_of_wf hwf
-  obtain ⟨hcid, -⟩ := cmd_record hc
-  have hpost : applyWrites r.input ⟨ev, some (recordedPayment r.input c), none, some (recordedReceipt r.input c)⟩ =
-      upd r.input (insertBy Payment.paymentId (recordedPayment r.input c) r.input.payments)
-        (evOf r.input ev) r.input.conflicts := by
-    unfold applyWrites upd evOf
-    simp [recordedPayment, hpid]
+  have hpost := post_recorded hpid ev
   have hxact : (recordedPayment r.input c).status = .ACTIVE := rfl
-  have hwfpost : (evOf r.input ev).length ≤ maxRows →
-      financialInputWellFormed (upd r.input (insertBy Payment.paymentId (recordedPayment r.input c) r.input.payments)
-        (evOf r.input ev) r.input.conflicts) = true := fun hl => by
-    refine wf_grow hwf hE (fun id q h => ⟨q, ?_, rfl, rfl, rfl⟩) (fun id q h _ => ?_) (fun x hx => hx) hl hC1
-      (fun hlen => ?_) ?_ hcC ?_ ?_ ?_ (fun q hq hn => absurd hq hn)
-    · rw [findPayment_insertBy hpid]
-      by_cases e : (recordedPayment r.input c).paymentId = id
-      · exact absurd (e ▸ h) (by simp [recordedPayment, hpid])
-      · rw [if_neg e]; exact h
-    · rw [findPayment_insertBy hpid]
-      by_cases e : (recordedPayment r.input c).paymentId = id
-      · exact absurd (e ▸ h) (by simp [recordedPayment, hpid])
-      · rw [if_neg e]; exact h
-    · rw [ids_insert]
-      refine canonical_insert hcP hcid ?_ ?_
-      · intro hm
-        obtain ⟨q, hq, e⟩ := List.mem_map.1 hm
-        exact findPayment_none_ne hpid q hq e
-      · rw [List.length_map]; rw [length_insertBy] at hlen; omega
-    · exact evOf_canon hcE hEcan hl
-    · rw [noDup_iff]
-      refine ((insertBy_perm Payment.paymentId (recordedPayment r.input c) r.input.payments).map
-        Payment.commonOriginId).nodup_iff.2 (List.nodup_cons.2 ⟨?_, (noDup_iff _).1 hNo⟩)
-      intro hm
-      obtain ⟨q, hq, e⟩ := List.mem_map.1 hm
-      exact hno q hq e
-    · intro q hq hn
-      rcases (mem_insertBy _ _ q _).1 hq with rfl | h
-      · refine ⟨recordedPayment_wf ⟨hid1, hid2⟩ hc h0, ?_, rfl⟩
-        have hfe : findEvidence (evOf r.input ev) (recordedPayment r.input c).evidenceId =
-            some (confirmation r.input c t) := hEt
-        unfold paymentEvidenceWellFormed
-        simp only [upd]
-        rw [hfe]
-        simp [confirmation, recordedPayment]
-      · exact absurd h hn
-    · intro x hx hn
-      obtain ⟨a, b, d, e, -, -⟩ := hEnew x hx hn
-      refine ⟨a, b, ?_⟩
-      have hany : (upd r.input (insertBy Payment.paymentId (recordedPayment r.input c) r.input.payments)
-          (evOf r.input ev) r.input.conflicts).payments.any (fun q => decide (q.evidenceId = x.evidenceId)) = true :=
-        List.any_eq_true.2 ⟨recordedPayment r.input c, (mem_insertBy _ _ _ _).2 (Or.inl rfl),
-          decide_eq_true (by rw [d]; rfl)⟩
-      unfold accLam
-      rw [if_pos e]
-      unfold paymentConfirmationAccounted
-      simp [hany]
   have hold : oldPay r.input ⟨ev, some (recordedPayment r.input c), none, some (recordedReceipt r.input c)⟩ = 0 := by
     simp [oldPay, recordedPayment, hpid]
   refine commit_core hb hS hVenv ?_ ?_ hcases ?_ ?_
@@ -2076,8 +2115,8 @@ private theorem shape_recorded {r : PaymentRequest} {V : PaymentView} {S : ItemS
     rw [hold] at this ⊢
     omega
   · intro s' h
-    rw [hpost]
-    refine hwfpost ?_
+    rw [recorded_post_wf hwf hc h0 hpid hno hev, ← evOf_length]
+    refine decide_eq_true ?_
     rw [adv_rec] at h
     by_cases h1 : ((ev.map fun e => insertBy (fun x => x) e.evidenceId S.evidenceIds).getD S.evidenceIds).length > maxRows ||
         S.conflictCount > maxRows
