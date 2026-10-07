@@ -673,6 +673,184 @@ theorem inv4_init (pk : Pack) (cx : Ctx) : Inv4 pk cx initS :=
   ⟨(Partition.sum_zero (fun k => (initS.2 k).gross) _ fun _ _ => rfl).symm,
     by rw [Partition.sum_zero (fun k => (initS.2 k).mc) _ fun _ _ => rfl]; rfl⟩
 
+theorem view_eq {a b : View} (h1 : a.dir = b.dir) (h2 : a.t = b.t) (h3 : a.used = b.used)
+    (h4 : a.budget = b.budget) (h5 : a.lc = b.lc) (h6 : a.spineRows = b.spineRows) (h7 : a.chg = b.chg)
+    (h8 : a.gross = b.gross) (h9 : a.mc = b.mc) : a = b := by
+  cases a; cases b; simp only [View.mk.injEq]; exact ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+
+/-- MOVE charges `finalize` puts on cell `c` (stateless). -/
+def vchg (c : Cell) : List Row → List Bool → Nat
+  | [], _ => 0
+  | r :: rs, vs => (if vs.headD false = true ∧ r.cell = c then 1 else 0) + vchg c rs vs.tail
+
+theorem finRows_vchg (c : Cell) : ∀ (rs : List Row) (vs : List Bool) (chg : Cell → Nat),
+    rs.Pairwise (fun a b => a.cell ≠ b.cell) → (∀ r ∈ rs, chg r.cell = 0) →
+    (finRows chg rs vs).1 c = chg c + vchg c rs vs
+  | [], _, _, _, _ => rfl
+  | r :: rs, vs, chg, hp, hz => by
+    rw [List.pairwise_cons] at hp
+    have h0 := hz r (List.mem_cons_self ..)
+    simp only [finRows, vchg]
+    rw [finRows_vchg c rs vs.tail _ hp.2]
+    · by_cases hc : r.cell = c
+      · subst hc
+        cases vs.headD false <;> simp [bump, h0]
+      · cases vs.headD false <;> simp [bump, h0, hc, Ne.symm hc]
+    · intro r' hr'
+      split
+      · simp only [bump]; rw [if_neg (Ne.symm (hp.1 r' hr'))]; exact hz r' (List.mem_cons_of_mem _ hr')
+      · exact hz r' (List.mem_cons_of_mem _ hr')
+
+theorem vchg_zero (c : Cell) : ∀ (rs : List Row) (vs : List Bool), (∀ r ∈ rs, r.cell ≠ c) → vchg c rs vs = 0
+  | [], _, _ => rfl
+  | r :: rs, vs, h => by
+    simp [vchg, vchg_zero c rs vs.tail fun r' hr' => h r' (List.mem_cons_of_mem _ hr'),
+      h r (List.mem_cons_self ..)]
+
+theorem sum_filterN (p : Nat → Bool) (f : Nat → Nat) : ∀ l : List Nat,
+    ((l.filter p).map f).sum = (l.map fun k => if p k then f k else 0).sum
+  | [] => rfl
+  | k :: l => by
+    rw [List.filter_cons, List.map_cons, List.sum_cons, ← sum_filterN p f l]
+    cases p k <;> simp
+
+theorem sum_map_addN {α} (f g : α → Nat) : ∀ l : List α,
+    (l.map fun x => f x + g x).sum = (l.map f).sum + (l.map g).sum
+  | [] => rfl
+  | x :: l => by simp only [List.map_cons, List.sum_cons, sum_map_addN f g l]; omega
+
+theorem sum_touched (pk : Pack) (cx : Ctx) (J : Judgment) (f : Nat → Int) : ((touched pk cx J).map f).sum =
+    ((List.range (pk.k cx.p)).map fun k => if (!(part J (.shard k)).isEmpty) = true then f k else 0).sum :=
+  sum_filter _ f _
+
+theorem sum_touchedN (pk : Pack) (cx : Ctx) (J : Judgment) (f : Nat → Nat) : ((touched pk cx J).map f).sum =
+    ((List.range (pk.k cx.p)).map fun k => if (!(part J (.shard k)).isEmpty) = true then f k else 0).sum :=
+  sum_filterN _ f _
+
+/-- The single store's `finAll` over distinct shards whose parts are fresh, distinct and pairwise disjoint charges
+    exactly `vsum` and adds exactly `vchg`. -/
+theorem finAll_eq (J : Judgment) (V : Nat → List Bool) : ∀ (ks : List Nat) (chg : Cell → Nat), ks.Nodup →
+    (∀ k ∈ ks, (part J (.shard k)).Pairwise (fun a b => a.cell ≠ b.cell)) →
+    (∀ k ∈ ks, ∀ r ∈ part J (.shard k), chg r.cell = 0) →
+    (∀ k ∈ ks, ∀ k' ∈ ks, k ≠ k' → ∀ r ∈ part J (.shard k), ∀ r' ∈ part J (.shard k'), r.cell ≠ r'.cell) →
+    (finAll J V chg ks).2 = (ks.map fun k => vsum (part J (.shard k)) (V k)).sum ∧
+    ∀ c, (finAll J V chg ks).1 c = chg c + (ks.map fun k => vchg c (part J (.shard k)) (V k)).sum
+  | [], _, _, _, _, _ => ⟨rfl, fun _ => rfl⟩
+  | k :: ks, chg, hn, hp, hz, hd => by
+    rw [List.nodup_cons] at hn
+    have hk : k ∈ k :: ks := List.mem_cons_self ..
+    have ih := finAll_eq J V ks (finRows chg (part J (.shard k)) (V k)).1 hn.2
+      (fun k' h' => hp k' (List.mem_cons_of_mem _ h'))
+      (fun k' h' r hr => by
+        have e1 := finRows_vchg r.cell _ (V k) _ (hp k hk) (hz k hk)
+        have e2 := hz k' (List.mem_cons_of_mem _ h') r hr
+        have e3 := vchg_zero r.cell (part J (.shard k)) (V k) fun r0 h0 =>
+          hd k hk k' (List.mem_cons_of_mem _ h') (fun e => hn.1 (by rw [e]; exact h')) r0 h0 r hr
+        omega)
+      (fun a ha b hb => hd a (List.mem_cons_of_mem _ ha) b (List.mem_cons_of_mem _ hb))
+    refine ⟨?_, fun c => ?_⟩
+    · show (finRows chg (part J (.shard k)) (V k)).2 +
+          (finAll J V (finRows chg (part J (.shard k)) (V k)).1 ks).2 = _
+      rw [ih.1, finRows_vsum _ _ _ (hp k hk) (hz k hk), List.map_cons, List.sum_cons]
+    · show (finAll J V (finRows chg (part J (.shard k)) (V k)).1 ks).1 c = _
+      rw [ih.2 c, finRows_vchg c _ _ _ (hp k hk) (hz k hk), List.map_cons, List.sum_cons]
+      omega
+
+theorem commit_chg (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) (c : Cell) {k : Nat}
+    (hk : k ∈ List.range (pk.k cx.p)) :
+    (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).chg c = (ss.2 k).chg c +
+      if (!(part (judge pk cx ss.1.view inp) (.shard k)).isEmpty) = true then
+        vchg c (part (judge pk cx ss.1.view inp) (.shard k)) (verdicts cx (judge pk cx ss.1.view inp) k) else 0 := by
+  unfold commitShards
+  by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
+  · rw [if_pos ht, if_pos ((commit_mem pk cx ss inp hk).1 ht)]
+    obtain ⟨hp, hf⟩ := part_fresh pk cx ss.1.view inp (.shard k)
+    exact finRows_vchg c _ _ _ hp fun r hr => inv_zero hI r.cell (hf r hr) k
+  · rw [if_neg ht, if_neg fun h => ht ((commit_mem pk cx ss inp hk).2 h), Nat.add_zero]
+
+/-- A spine commit plus every touched shard's part merges to the single store's apply. -/
+theorem merge_commit (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) :
+    merge pk cx (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
+      commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) =
+    applySingle pk cx (merge pk cx ss) (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp)) := by
+  have hF := finAll_eq (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
+    (touched pk cx (judge pk cx ss.1.view inp)) (merge pk cx ss).chg
+    (List.Pairwise.filter _ List.nodup_range)
+    (fun k _ => (part_fresh pk cx ss.1.view inp (.shard k)).1)
+    (fun k _ r hr => sum_zeroN (fun k' => (ss.2 k').chg r.cell) (List.range (pk.k cx.p)) fun k' _ =>
+      inv_zero hI r.cell ((part_fresh pk cx ss.1.view inp (.shard k)).2 r hr) k')
+    (fun a _ b _ hab r hr r' hr' he => by
+      obtain ⟨x, hx, hxh⟩ := part_home pk cx ss.1.view inp (.shard a) hr
+      obtain ⟨y, hy, hyh⟩ := part_home pk cx ss.1.view inp (.shard b) hr'
+      rw [he, hy] at hx
+      cases hx
+      exact hab (Home.shard.inj (hxh.symm.trans hyh)))
+  refine view_eq rfl rfl rfl ?_ rfl rfl (funext fun c => ?_) ?_ ?_
+  · show ss.1.budget + ((touched pk cx (judge pk cx ss.1.view inp)).map fun k =>
+        vsum (part (judge pk cx ss.1.view inp) (.shard k)) (verdicts cx (judge pk cx ss.1.view inp) k)).sum +
+        gsum (part (judge pk cx ss.1.view inp) .spine) =
+      ss.1.budget + (finAll (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
+        (merge pk cx ss).chg (touched pk cx (judge pk cx ss.1.view inp))).2 +
+        gsum (part (judge pk cx ss.1.view inp) .spine)
+    rw [hF.1]
+  · show ((List.range (pk.k cx.p)).map fun k =>
+        (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).chg c).sum =
+      (finAll (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
+        (merge pk cx ss).chg (touched pk cx (judge pk cx ss.1.view inp))).1 c
+    rw [hF.2 c]
+    show _ = ((List.range (pk.k cx.p)).map fun k => (ss.2 k).chg c).sum +
+      ((touched pk cx (judge pk cx ss.1.view inp)).map fun k =>
+        vchg c (part (judge pk cx ss.1.view inp) (.shard k)) (verdicts cx (judge pk cx ss.1.view inp) k)).sum
+    rw [List.map_congr_left fun k hk => commit_chg pk cx ss inp hI c hk, sum_map_addN, sum_touchedN]
+  · show ((List.range (pk.k cx.p)).map fun k =>
+        (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).gross).sum =
+      ((List.range (pk.k cx.p)).map fun k => (ss.2 k).gross).sum +
+        ((touched pk cx (judge pk cx ss.1.view inp)).map fun k =>
+          gsum (part (judge pk cx ss.1.view inp) (.shard k))).sum
+    rw [List.map_congr_left fun k hk => commit_gross pk cx ss inp hk, Partition.sum_map_add, sum_touched]
+  · show ((List.range (pk.k cx.p)).map fun k =>
+        (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k).mc).sum =
+      ((List.range (pk.k cx.p)).map fun k => (ss.2 k).mc).sum +
+        (finAll (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
+          (merge pk cx ss).chg (touched pk cx (judge pk cx ss.1.view inp))).2
+    rw [hF.1, List.map_congr_left fun k hk => commit_mc pk cx ss inp hI hk, Partition.sum_map_add, sum_touched]
+
+theorem merge_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) (h3 : Inv3 ss) :
+    merge pk cx (stepT pk cx ss inp) = stepSingle pk cx (merge pk cx ss) inp := by
+  have hh : headsOk pk cx ss = true := by
+    simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
+  show merge pk cx ((stepS pk cx ss inp).getD ss) =
+    if (judge pk cx ss.1.view inp).ok = true then
+      applySingle pk cx (merge pk cx ss) (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
+    else merge pk cx ss
+  unfold stepS
+  by_cases hok : (judge pk cx ss.1.view inp).ok = true
+  · rw [if_pos (show checkAll pk cx ss inp = true by simp only [checkAll, hh, hok, Bool.and_self]), if_pos hok]
+    exact merge_commit pk cx ss inp hI
+  · rw [if_neg (show ¬checkAll pk cx ss inp = true by simp only [checkAll, hh, Bool.and_true]; exact hok),
+      if_neg hok, Option.getD_none]
+
+theorem merge_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv ss → Inv3 ss →
+    merge pk cx (runS pk cx ss rs) = runSingle pk cx (merge pk cx ss) rs
+  | _, [], _, _ => rfl
+  | ss, r :: rs, hI, h3 => by
+    show merge pk cx (runS pk cx (stepT pk cx ss r) rs) = runSingle pk cx (stepSingle pk cx (merge pk cx ss) r) rs
+    rw [← merge_step pk cx ss r hI h3]
+    exact merge_run pk cx _ rs (inv_step pk cx ss r hI) (inv3_step pk cx ss r h3)
+
+theorem merge_congr (pk : Pack) (cx : Ctx) (sp : SpineDB) (sh sh2 : Nat → ShardDB)
+    (h : ∀ k ∈ List.range (pk.k cx.p), sh k = sh2 k) : merge pk cx (sp, sh) = merge pk cx (sp, sh2) := by
+  refine view_eq rfl rfl rfl rfl rfl rfl (funext fun c => ?_) ?_ ?_
+  · show ((List.range (pk.k cx.p)).map fun k => (sh k).chg c).sum =
+      ((List.range (pk.k cx.p)).map fun k => (sh2 k).chg c).sum
+    rw [List.map_congr_left fun k hk => congrArg (fun s => ShardDB.chg s c) (h k hk)]
+  · show ((List.range (pk.k cx.p)).map fun k => (sh k).gross).sum =
+      ((List.range (pk.k cx.p)).map fun k => (sh2 k).gross).sum
+    rw [List.map_congr_left fun k hk => congrArg ShardDB.gross (h k hk)]
+  · show ((List.range (pk.k cx.p)).map fun k => (sh k).mc).sum =
+      ((List.range (pk.k cx.p)).map fun k => (sh2 k).mc).sum
+    rw [List.map_congr_left fun k hk => congrArg ShardDB.mc (h k hk)]
+
 /-! ## §9 statements -/
 
 /-- K_p is positive under a well-formed pack. -/
@@ -796,7 +974,13 @@ theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp
     (sh' : Nat → ShardDB) (hsp : checkSpine pk cx ss inp sp')
     (hsh : ∀ k < pk.k cx.p, checkShard (mkRec pk cx ss inp).2 k (ss.2 k) (sh' k)) :
     checkSingle pk cx (merge pk cx ss) inp (merge pk cx (sp', sh')) := by
-  sorry
+  obtain ⟨rs, hrs⟩ := hr
+  have hI : Inv ss := by rw [hrs]; exact inv_run pk cx initS rs inv_init
+  obtain ⟨hc, rfl⟩ := hsp
+  refine ⟨?_, ?_⟩
+  · simp only [checkAll, Bool.and_eq_true] at hc; exact hc.1
+  · rw [merge_congr pk cx _ sh' _ fun k hk => hsh k (List.mem_range.1 hk)]
+    exact merge_commit pk cx ss inp hI
 
 /-- The single step factors as judge, Lean, finalize. -/
 theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judgeSingle pk cx s inp).ok = true) :
@@ -807,7 +991,11 @@ theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judg
 /-- Sharded = single: the merged sharded run is the single-store run. -/
 theorem shard_run_eq (pk : Pack) (cx : Ctx) (rs : List Input) :
     merge pk cx (runS pk cx initS rs) = runSingle pk cx initSingle rs := by
-  sorry
+  have h0 : merge pk cx initS = initSingle := view_eq rfl rfl rfl rfl rfl rfl
+    (funext fun c => sum_zeroN (fun k => (initS.2 k).chg c) (List.range (pk.k cx.p)) fun _ _ => rfl)
+    (Partition.sum_zero (fun k => (initS.2 k).gross) (List.range (pk.k cx.p)) fun _ _ => rfl)
+    (Partition.sum_zero (fun k => (initS.2 k).mc) (List.range (pk.k cx.p)) fun _ _ => rfl)
+  rw [merge_run pk cx initS rs inv_init (fun _ => ⟨rfl, rfl⟩), h0]
 
 /-- A crash after the spine COMMIT converges: recovery yields the committed step. -/
 theorem rollforward_eq (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List Nat)
