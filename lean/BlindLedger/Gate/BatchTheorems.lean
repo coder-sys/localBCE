@@ -464,7 +464,7 @@ private theorem mapM_decode : ∀ {tokens : List Bytes} {ts : List Token}, token
         simp [ha, hl] at h
         subst h
         obtain ⟨h1, h2, h3⟩ := mapM_decode hl
-        refine ⟨by simp [h1], by simp [List.filterMap_cons, ha, h2], ?_⟩
+        refine ⟨by simp [h1], by simp [ha, h2], ?_⟩
         intro i b hb
         cases i with
         | zero =>
