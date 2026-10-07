@@ -11,9 +11,12 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app.x12_835_independent import IndependentX12Error, origin_id as independent_origin_id, pool as independent_pool, rederive_835, verify_835
-from app.x12_835_intake import Cas, Dtm, PlbAdjustment, Remittance, cents, origin_id, parse_835, pool
+import app.x12_835_intake as intake
+import app.x12_tokenizer as tokenizer
+from app.x12_835_intake import Cas, Dtm, Fold, PlbAdjustment, Remittance, cents, fold_835, origin_id, parse_835, pool
 from app.x12_tokenizer import MAX_BYTES, X12Error, tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -561,6 +564,105 @@ class Intake(unittest.TestCase):
             for row in record.rows:
                 self.assertEqual(independent_origin_id("S", list(row.key)), origin_id("S", row.key), name)
             self.assertEqual(independent_pool("S", rederive_835(data)), pool("S", record), name)
+
+
+    # ---- PERF-A fast lane: the lane may only skip work, never change an outcome ----
+
+    LANE_SEED = build(remit("79.50", "CLP*A001*1*100.00*100.00*0.00*MC*P1*11*1", "CLP*A002*22*-50.00*-50.00*0.00*MC*R1*11*1", "CLP*A003*1*30.00*0.00*0.00*MC*P4*11*1", "CAS*CO*45*30.00",
+                            "CLP*A004*1*20.00*20.00*0.00*MC*P1*11*1", "CLP*A005*1*20.00*20.00*0.00*MC*P1*11*1", "CLP*A006*22*10.00*10.00*0.00*MC*P6*11*1",
+                            "CLP*A007*1*5.00*5.00*0.00*MC*P7*11*1", "CAS*PR*1*5.00", f"PLB*{PROVIDER}*20261231*FB:CARRY0001*25.50")).decode()
+
+    def outcome(self, data, slow=False):
+        """('ok', record, fold) or ('err', code); the fold must agree with the record's own fields and refuse with the same code."""
+        with mock.patch.object(intake, "_lane", (lambda *args: None) if slow else intake._lane):
+            try:
+                record = parse_835(data)
+            except X12Error as error:
+                with self.assertRaises(X12Error) as again:
+                    fold_835(data)
+                self.assertEqual(code_of(again.exception), code_of(error))
+                return "err", code_of(error)
+            fold = fold_835(data)
+        self.assertFalse(hasattr(fold, "claims") or hasattr(fold, "adjustments"))
+        self.assertEqual(fold, Fold(**{f.name: getattr(record, f.name) for f in dataclasses.fields(Fold)}))
+        return "ok", record, fold
+
+    def agree(self, data, via_both=False):
+        fast, slow = self.outcome(data), self.outcome(data, slow=True)
+        self.assertEqual(fast, slow, data[:300])
+        if via_both:
+            self.both(data)
+        return fast
+
+    def test_lane_agrees_with_slow_lane(self):
+        seed = self.LANE_SEED
+        lane = intake._lane("*", "^", ":", "~")
+        for segment in seed.split("~"):
+            if segment[:3] in ("CLP", "CAS"):
+                self.assertIsNotNone(lane[segment[:3]](segment), segment)  # every seed block takes the lane, so the mutations below test it
+        self.assertEqual(self.agree(seed.encode(), True)[0], "ok")
+        self.assertEqual(len(parse_835(seed.encode()).rows), 6)  # P1 folds three blocks; a REV, a zero row, a RAW, P7 and the PLB are the rest
+        segments = seed.split("~")
+        money = ["0.00", "-0.00", "-0.01", "0.0", "1.5", "00.10", "1" * 12 + ".00", "1" * 13 + ".00", "0.001", ".50", "5", "", "+1.00", "-", "1,00", "-1.00", "100.00", "30.00"]
+        text = ["A", "A" * 60, "A" * 61, " A", "A ", "A B", "", "A%", "a", "-", *(f"A{c}B" for c in "._,&'/-")]
+        code = ["ABCDE", "ABCDEF", "", "ab", "1", "A B", "A-B", "22"]
+        fields = {"CLP": {1: text, 2: code, 3: money, 4: money, 5: money, 6: code, 7: text, 8: code, 9: code}, "CAS": {1: code, 2: code, 3: money}}
+        for at, segment in enumerate(segments):
+            tag = segment.split("*")[0]
+            if tag not in fields or segment.split("*")[1] not in ("A001", "A003", "A007", "CO", "PR"):
+                continue
+            elements = segment.split("*")
+            for i, values in fields[tag].items():
+                for value in values:
+                    changed = elements + [""] * (i + 1 - len(elements))
+                    changed[i] = value
+                    self.agree("~".join([*segments[:at], "*".join(changed), *segments[at + 1:]]).encode(), via_both=(i + len(value)) % 5 == 0)
+            shapes = [elements[:-1], [*elements, ""], [*elements, "", ""], [*elements, "1"], [*elements, "1", "2", "3", "4"], elements[:3], elements * 2]
+            for shape in shapes:
+                self.agree("~".join([*segments[:at], "*".join(shape), *segments[at + 1:]]).encode(), via_both=True)
+            self.agree("~".join([*segments[:at], "*".join(elements) + "*", *segments[at + 1:]]).encode(), via_both=True)
+
+    def test_lane_agrees_on_seeded_mutations(self):
+        rng, seen, accepted = random.Random(8350), set(), 0
+        alphabet = "*~^:ABZ09.-, %\x00\n"
+        for _ in range(5000):
+            data = bytearray(self.LANE_SEED.encode())
+            for _ in range(rng.randint(1, 3)):
+                at, kind = rng.randrange(106, len(data)), rng.randrange(4)
+                if kind == 0:
+                    del data[at]
+                elif kind == 1:
+                    data.insert(at, ord(rng.choice(alphabet)))
+                elif kind == 2:
+                    data[at] = ord(rng.choice(alphabet))
+                else:
+                    data[at:at] = data[at:at + rng.randint(1, 40)]
+            result = self.agree(bytes(data))
+            seen.add(result[-1] if result[0] == "err" else "ok")
+            accepted += result[0] == "ok"
+        self.assertGreaterEqual(len(seen), 8)
+        self.assertTrue(0 < accepted < 5000)
+
+    def test_lane_is_off_for_separators_it_uses(self):
+        seed = self.LANE_SEED
+        for seps in ("&^:~", "*-:~", "*^.~", "*^:/", "*^_~", "*^:,", "*^:'", "|!;$", "#%@!"):
+            data = seed.translate(str.maketrans("*^:~", seps)).encode()
+            self.assertEqual(intake._lane(*seps) is None, any(c in "._,&'/-" for c in seps), seps)
+            self.agree(data, via_both=True)
+
+    def test_lane_fires(self):
+        body = [f"CLP*L{i:05d}*1*1.00*1.00*0.00*MC*K{i:05d}*11*1" for i in range(4000)]
+        data = build(remit("4000.00", *body))
+        for lane_on, calls in ((True, 10), (False, 4010)):  # the 10 envelope and header segments, or every segment
+            with mock.patch.object(tokenizer, "_segment", wraps=tokenizer._segment) as counted:
+                with mock.patch.object(intake, "_lane", intake._lane if lane_on else (lambda *args: None)):
+                    record = fold_835(data)
+            self.assertEqual((counted.call_count, len(record.rows)), (calls, 4000))
+        self.assertEqual(self.outcome(data), self.outcome(data, slow=True))
+
+    def test_fold_matches_the_record_on_every_fixture(self):
+        for name, data in FIXTURES.items():
+            self.assertEqual(self.agree(data, True)[0], "ok", name)
 
 
 if __name__ == "__main__":
