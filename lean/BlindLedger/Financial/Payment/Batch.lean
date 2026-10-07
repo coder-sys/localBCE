@@ -33,4 +33,32 @@ def Erased.ofStep : StepOutcome → Erased
   | .conflictUnchanged id => .conflictUnchanged id
   | .refused f => .refused f
 
+/-- What one write needs to know of the pre-state to decide `evaluate (applyWrites i w)`: the head,
+    three row counts and the totals. O(1) to carry per call. -/
+structure Summary where
+  env : Env
+  payments : Nat
+  evidence : Nat
+  conflicts : Nat
+  totals : Option EvaluatedTotals
+
+/-- The specification of the carried summary (O(input); `batchFast` never calls it per call). -/
+def summary (i : FinancialInput) : Summary :=
+  { env := envOf i, payments := i.payments.length, evidence := i.evidence.length,
+    conflicts := i.conflicts.length, totals := evaluateTotals i }
+
+/-- `evaluate (applyWrites i w)` is `some`, read from the summary (`evaluate_delta`). The head is
+    re-checked whole (it carries the revision bound and the clock); the new rows are checked
+    against the context, so an ill-formed command is still POST_REJECTED. A payment write with a
+    receipt inserts (RECORDED); without one it replaces an ACTIVE row by its REVERSED image. -/
+def deltaOk (s : Summary) (w : Writes) : Bool :=
+  let ins := w.payment.isSome && w.receipt.isSome
+  envWellFormed s.env &&
+    s.payments + (if ins then 1 else 0) ≤ maxRows &&
+    s.evidence + (if w.evidence.isSome then 1 else 0) ≤ maxRows &&
+    s.conflicts + (if w.conflict.isSome then 1 else 0) ≤ maxRows &&
+    w.payment.all (paymentWellFormed s.env.context) &&
+    w.evidence.all (evidenceWellFormed s.env.context) &&
+    s.totals.any fun t => !ins || (w.payment.all fun p => t.cash + p.amountCents + t.lawful ≤ maxCents)
+
 end BlindLedger.Financial.Payment
