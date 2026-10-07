@@ -178,7 +178,32 @@ def runSingle (pk : Pack) (cx : Ctx) : Single → List Input → Single
   | s, [] => s
   | s, r :: rs => runSingle pk cx (stepSingle pk cx s r) rs
 
-def initSingle : Single := ⟨fun _ => none, 0, 0, 0, 0, [], fun _ => 0, 0, 0⟩
+/-- A pre-shard store (§1 migration): one database with its cells (raw digest, gross), MOVE charges, totals and
+    chain head.  The last four fields are the well-formedness the single store keeps: at most one MOVE charge per
+    cell, charges only on known cells, pool used = gross, budget = machine charges + LINK charges.  A store born
+    empty is the legacy store with no cells. -/
+structure Legacy where
+  cells : Cell → Option (Dg × Int)
+  t : Nat
+  used : Int
+  budget : Int
+  lc : Int
+  spineRows : List Row
+  chg : Cell → Nat
+  gross : Int
+  mc : Int
+  head : Dg
+  chg_le : ∀ c, chg c ≤ 1
+  chg_cell : ∀ c, 0 < chg c → cells c ≠ none
+  used_eq : used = gross
+  budget_eq : budget = mc + lc
+
+/-- The backfilled directory: every legacy cell, home shard 0, its legacy raw digest and gross. -/
+def backfill (L : Legacy) : Dir := fun c => (L.cells c).map fun x => ⟨.shard 0, x.1, x.2⟩
+
+/-- The migrated single store: the legacy rows with the backfilled directory. -/
+def initSingle (L : Legacy) : Single :=
+  ⟨backfill L, L.t, L.used, L.budget, L.lc, L.spineRows, L.chg, L.gross, L.mc⟩
 
 /-! ## The sharded store -/
 
@@ -221,7 +246,7 @@ def applyPart (R : Rec) (k : Nat) (sh : ShardDB) : ShardDB :=
 
 def mkRec (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) : Judgment × Rec :=
   let J := judge pk cx ss.1.view inp
-  let n := ss.1.recs.length + 1
+  let n := ss.1.recs.length
   (J, { n := n, t := inp.t, I := fun k => part J (.shard k), V := verdicts cx J,
         pre := fun k => (ss.2 k).head,
         post := fun k => cx.hs (ss.2 k).head n (part J (.shard k)) (verdicts cx J k),
@@ -264,9 +289,34 @@ def runS (pk : Pack) (cx : Ctx) : SS → List Input → SS
   | ss, r :: rs => runS pk cx (stepT pk cx ss r) rs
 
 def initShard : ShardDB := ⟨fun _ => 0, 0, 0, 0, []⟩
-def initS : SS := (⟨fun _ => none, 0, 0, 0, 0, [], fun _ => 0, []⟩, fun _ => initShard)
 
-def reachS (pk : Pack) (cx : Ctx) (ss : SS) : Prop := ∃ rs, ss = runS pk cx initS rs
+/-- Shards after migration: shard 0 is the legacy store (its charges, totals and head; APPLIED empty). -/
+def initShards (L : Legacy) : Nat → ShardDB :=
+  fun k => if k = 0 then ⟨L.chg, L.gross, L.mc, L.head, []⟩ else initShard
+
+/-- GENESIS `R_0`: touches no shard; its pre and post heads are every shard's opening head (shard 0: the legacy
+    head). -/
+def genesis (L : Legacy) : Rec :=
+  { n := 0, t := L.t, I := fun _ => [], V := fun _ => [], pre := fun k => (initShards L k).head,
+    post := fun k => (initShards L k).head, touched := [] }
+
+/-- The migrated store (§1 as amended 2026-10-07): the legacy store opens as `K = 1` (`Pack.k` of an unnamed
+    partition) and becomes shard 0; the directory is backfilled from every legacy cell with home shard 0; the spine
+    holds the legacy totals, `heads(k)` = each shard's opening head, and the one record GENESIS `R_0`. -/
+def initS (L : Legacy) : SS :=
+  (⟨backfill L, L.t, L.used, L.budget, L.lc, L.spineRows, fun k => (initShards L k).head, [genesis L]⟩,
+    initShards L)
+
+def reachS (pk : Pack) (cx : Ctx) (ss : SS) : Prop := ∃ L rs, ss = runS pk cx (initS L) rs
+
+/-- The merge sums shards `0..K-1`, so it accounts for the migrated store when K ≥ 1, or when the legacy store
+    holds no MOVE charge and no totals (a store born empty, any K).  At K = 0 nothing is admitted
+    (`k_zero_refused`). -/
+def openOk (pk : Pack) (cx : Ctx) (L : Legacy) : Prop :=
+  0 < pk.k cx.p ∨ ((∀ c, L.chg c = 0) ∧ L.gross = 0 ∧ L.mc = 0)
+
+/-- Reachable from a migrated store with `openOk`. -/
+def reachOk (pk : Pack) (cx : Ctx) (ss : SS) : Prop := ∃ L rs, openOk pk cx L ∧ ss = runS pk cx (initS L) rs
 
 /-- Replay of `R` on shard `k`: only from `pre_head_k` when it differs from `post_head_k`; any other head is left
     as is (`shard_diverged` halts). -/
@@ -423,6 +473,52 @@ theorem sum_le_one (f : Nat → Nat) (hf : ∀ k, f k ≤ 1) (hu : ∀ k k', 0 <
           exact absurd hx hn.1
       have := hf k; omega
 
+theorem sum_range_zeroI (f : Nat → Int) : ∀ K : Nat, 0 < K → (∀ k, k ≠ 0 → f k = 0) →
+    ((List.range K).map f).sum = f 0
+  | 0, h, _ => absurd h (Nat.lt_irrefl 0)
+  | n + 1, _, hf => by
+    rw [List.range_succ_eq_map, List.map_cons, List.sum_cons, List.map_map,
+      Partition.sum_zero (f ∘ Nat.succ) (List.range n) fun k _ => hf _ (Nat.succ_ne_zero k), Int.add_zero]
+
+theorem sum_range_zeroN (f : Nat → Nat) : ∀ K : Nat, 0 < K → (∀ k, k ≠ 0 → f k = 0) →
+    ((List.range K).map f).sum = f 0
+  | 0, h, _ => absurd h (Nat.lt_irrefl 0)
+  | n + 1, _, hf => by
+    rw [List.range_succ_eq_map, List.map_cons, List.sum_cons, List.map_map,
+      sum_zeroN (f ∘ Nat.succ) (List.range n) fun k _ => hf _ (Nat.succ_ne_zero k), Nat.add_zero]
+
+theorem initShards_ne (L : Legacy) {k : Nat} (hk : k ≠ 0) : initShards L k = initShard := if_neg hk
+
+/-- Summing a shard field over `0..K-1` right after migration gives shard 0's value, when K ≥ 1 or that value
+    is 0. -/
+theorem init_sumI (f : ShardDB → Int) (L : Legacy) (K : Nat) (hf : f initShard = 0)
+    (h : 0 < K ∨ f (initShards L 0) = 0) :
+    ((List.range K).map fun k => f (initShards L k)).sum = f (initShards L 0) := by
+  cases h with
+  | inl hK =>
+    exact sum_range_zeroI (fun k => f (initShards L k)) K hK fun k hk => by
+      show f (initShards L k) = 0; rw [initShards_ne L hk]; exact hf
+  | inr h0 =>
+    rw [h0]
+    exact Partition.sum_zero (fun k => f (initShards L k)) _ fun k _ => by
+      by_cases hk : k = 0
+      · subst hk; exact h0
+      · show f (initShards L k) = 0; rw [initShards_ne L hk]; exact hf
+
+theorem init_sumN (f : ShardDB → Nat) (L : Legacy) (K : Nat) (hf : f initShard = 0)
+    (h : 0 < K ∨ f (initShards L 0) = 0) :
+    ((List.range K).map fun k => f (initShards L k)).sum = f (initShards L 0) := by
+  cases h with
+  | inl hK =>
+    exact sum_range_zeroN (fun k => f (initShards L k)) K hK fun k hk => by
+      show f (initShards L k) = 0; rw [initShards_ne L hk]; exact hf
+  | inr h0 =>
+    rw [h0]
+    exact sum_zeroN (fun k => f (initShards L k)) _ fun k _ => by
+      by_cases hk : k = 0
+      · subst hk; exact h0
+      · show f (initShards L k) = 0; rw [initShards_ne L hk]; exact hf
+
 /-- The gate invariant: a shard holds at most one MOVE charge per cell, and only for cells the directory homes
     at that shard. -/
 def Inv (ss : SS) : Prop :=
@@ -455,7 +551,20 @@ theorem inv_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv ss
   | _, [], h => h
   | ss, r :: rs, h => inv_run pk cx _ rs (inv_step pk cx ss r h)
 
-theorem inv_init : Inv initS := fun _ => ⟨fun _ => Nat.zero_le 1, fun _ h => (Nat.lt_irrefl 0 h).elim⟩
+theorem inv_init (L : Legacy) : Inv (initS L) := fun c => by
+  refine ⟨fun k => ?_, fun k hk => ?_⟩
+  · show (initShards L k).chg c ≤ 1
+    by_cases h0 : k = 0
+    · subst h0; exact L.chg_le c
+    · rw [initShards_ne L h0]; exact Nat.zero_le 1
+  · change 0 < (initShards L k).chg c at hk
+    change ∃ x, backfill L c = some x ∧ x.home = .shard k
+    by_cases h0 : k = 0
+    · subst h0
+      cases hc : L.cells c with
+      | none => exact absurd hc (L.chg_cell c hk)
+      | some y => exact ⟨⟨.shard 0, y.1, y.2⟩, by simp [backfill, hc], rfl⟩
+    · rw [initShards_ne L h0] at hk; exact absurd hk (Nat.lt_irrefl 0)
 
 /-- After a committed step, shard `k`'s head is the last record's `post_head_k` for every touched `k`. -/
 def Inv2 (ss : SS) : Prop := ∀ R rs, ss.1.recs = R :: rs → ∀ k ∈ R.touched, (ss.2 k).head = R.post k
@@ -475,6 +584,10 @@ theorem inv2_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : Inv2 ss) :
 theorem inv2_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv2 ss → Inv2 (runS pk cx ss rs)
   | _, [], h => h
   | ss, r :: rs, h => inv2_run pk cx _ rs (inv2_step pk cx ss r h)
+
+theorem inv2_init (L : Legacy) : Inv2 (initS L) := fun R rs h k hk => by
+  obtain ⟨rfl, -⟩ := List.cons.inj h
+  simp [genesis] at hk
 
 theorem replay_commit (R : Rec) (sh : Nat → ShardDB) (C : List Nat) (hC : ∀ k ∈ C, k ∈ R.touched)
     (hpre : ∀ k, R.pre k = (sh k).head) (hadv : ∀ k, R.post k ≠ R.pre k) (k : Nat) :
@@ -511,6 +624,16 @@ theorem inv3_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : Inv3 ss) :
 theorem inv3_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv3 ss → Inv3 (runS pk cx ss rs)
   | _, [], h => h
   | ss, r :: rs, h => inv3_run pk cx _ rs (inv3_step pk cx ss r h)
+
+theorem inv3_init (L : Legacy) : Inv3 (initS L) := fun k => by
+  refine ⟨rfl, ?_⟩
+  show (initShards L k).applied = _
+  have ha : (initShards L k).applied = [] := by
+    by_cases h0 : k = 0
+    · subst h0; rfl
+    · rw [initShards_ne L h0]; rfl
+  rw [ha]
+  simp [initS, genesis]
 
 theorem judgeRow_new (pk : Pack) (cx : Ctx) (d : Dir) (r : Row) (h : Home)
     (hv : (judgeRow pk cx d r).2 = .admit h) : d r.cell = none ∧ ∃ x, (judgeRow pk cx d r).1 r.cell = some x := by
@@ -669,9 +792,14 @@ theorem inv4_run (pk : Pack) (cx : Ctx) :
   | _, [], _, h => h
   | ss, r :: rs, hI, h => inv4_run pk cx _ rs (inv_step pk cx ss r hI) (inv4_step pk cx ss r hI h)
 
-theorem inv4_init (pk : Pack) (cx : Ctx) : Inv4 pk cx initS :=
-  ⟨(Partition.sum_zero (fun k => (initS.2 k).gross) _ fun _ _ => rfl).symm,
-    by rw [Partition.sum_zero (fun k => (initS.2 k).mc) _ fun _ _ => rfl]; rfl⟩
+theorem inv4_init (pk : Pack) (cx : Ctx) (L : Legacy) (hL : openOk pk cx L) : Inv4 pk cx (initS L) := by
+  refine ⟨?_, ?_⟩
+  · show L.used = ((List.range (pk.k cx.p)).map fun k => (initShards L k).gross).sum
+    rw [init_sumI (·.gross) L _ rfl (hL.imp_right fun e => e.2.1)]
+    exact L.used_eq
+  · show L.budget = ((List.range (pk.k cx.p)).map fun k => (initShards L k).mc).sum + L.lc
+    rw [init_sumI (·.mc) L _ rfl (hL.imp_right fun e => e.2.2)]
+    exact L.budget_eq
 
 theorem view_eq {a b : View} (h1 : a.dir = b.dir) (h2 : a.t = b.t) (h3 : a.used = b.used)
     (h4 : a.budget = b.budget) (h5 : a.lc = b.lc) (h6 : a.spineRows = b.spineRows) (h7 : a.chg = b.chg)
@@ -888,6 +1016,35 @@ theorem dir_route_stable (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (c : Cel
   · exact judgeRows_keep pk cx ss.1.dir inp.rows c x h
   · exact h
 
+theorem dir_run (pk : Pack) (cx : Ctx) (c : Cell) (x : DirRow) :
+    ∀ (ss : SS) (rs : List Input), ss.1.dir c = some x → (runS pk cx ss rs).1.dir c = some x
+  | _, [], h => h
+  | ss, r :: rs, h => dir_run pk cx c x _ rs (dir_route_stable pk cx ss r c x h)
+
+/-- A row on a cell the directory already holds is DUPLICATE (equal raw) or CONFLICT, never ADMITTED. -/
+theorem judgeRows_known (pk : Pack) (cx : Ctx) (c : Cell) (x : DirRow) :
+    ∀ (d : Dir) (rs : List Row) (a : Row × Verdict), d c = some x → a ∈ (judgeRows pk cx d rs).2 →
+      a.1.cell = c → a.2 = if x.raw = a.1.raw then .duplicate else .conflict
+  | _, [], _, _, ha, _ => by simp [judgeRows] at ha
+  | d, r :: rs, a, hd, ha, hc => by
+    change a ∈ (r, (judgeRow pk cx d r).2) :: (judgeRows pk cx (judgeRow pk cx d r).1 rs).2 at ha
+    cases List.mem_cons.1 ha with
+    | inl h =>
+      subst h
+      change r.cell = c at hc
+      show (judgeRow pk cx d r).2 = if x.raw = r.raw then .duplicate else .conflict
+      simp only [judgeRow, hc, hd]
+    | inr h => exact judgeRows_known pk cx c x _ rs a (judgeRows_keep pk cx d [r] c x hd) h hc
+
+/-- Migration gate: a legacy cell resent at any point after migration is DUPLICATE when its raw digest equals the
+    legacy one and CONFLICT otherwise; it is never ADMITTED. -/
+theorem legacy_resend (pk : Pack) (cx : Ctx) (L : Legacy) (rs : List Input) (inp : Input) {c : Cell} {raw : Dg}
+    {g : Int} (hc : L.cells c = some (raw, g)) {a : Row × Verdict}
+    (ha : a ∈ (judge pk cx (runS pk cx (initS L) rs).1.view inp).out) (hac : a.1.cell = c) :
+    a.2 = if raw = a.1.raw then .duplicate else .conflict :=
+  judgeRows_known pk cx c ⟨.shard 0, raw, g⟩ (runS pk cx (initS L) rs).1.dir inp.rows a
+    (dir_run pk cx c _ (initS L) rs (by simp [initS, backfill, hc])) ha hac
+
 /-- Admitted rows of different homes in one judgment name different cells. -/
 theorem parts_disjoint (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) {h h' : Home} (hh : h ≠ h')
     {r r' : Row} (hr : r ∈ part (judge pk cx sv inp) h) (hr' : r' ∈ part (judge pk cx sv inp) h') :
@@ -967,10 +1124,11 @@ theorem dir_dedup (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) :
 /-- No double move: across all shards a cell carries at most one MOVE charge. -/
 theorem no_cross_shard_duplicate (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) (c : Cell) :
     moves c (merge pk cx ss) ≤ 1 := by
-  obtain ⟨rs, rfl⟩ := h
-  have hI := inv_run pk cx initS rs inv_init
-  show ((List.range (pk.k cx.p)).map fun k => ((runS pk cx initS rs).2 k).chg c).sum ≤ 1
-  refine sum_le_one (fun k => ((runS pk cx initS rs).2 k).chg c) (fun k => (hI c).1 k) ?_ _ (List.nodup_range ..)
+  obtain ⟨L, rs, rfl⟩ := h
+  have hI := inv_run pk cx (initS L) rs (inv_init L)
+  show ((List.range (pk.k cx.p)).map fun k => ((runS pk cx (initS L) rs).2 k).chg c).sum ≤ 1
+  refine sum_le_one (fun k => ((runS pk cx (initS L) rs).2 k).chg c) (fun k => (hI c).1 k) ?_ _
+    (List.nodup_range ..)
   intro k k' hk hk'
   obtain ⟨x, hx, hh⟩ := (hI c).2 k hk
   obtain ⟨y, hy, hh'⟩ := (hI c).2 k' hk'
@@ -983,8 +1141,8 @@ theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp
     (sh' : Nat → ShardDB) (hsp : checkSpine pk cx ss inp sp')
     (hsh : ∀ k < pk.k cx.p, checkShard (mkRec pk cx ss inp).2 k (ss.2 k) (sh' k)) :
     checkSingle pk cx (merge pk cx ss) inp (merge pk cx (sp', sh')) := by
-  obtain ⟨rs, hrs⟩ := hr
-  have hI : Inv ss := by rw [hrs]; exact inv_run pk cx initS rs inv_init
+  obtain ⟨L, rs, hrs⟩ := hr
+  have hI : Inv ss := by rw [hrs]; exact inv_run pk cx (initS L) rs (inv_init L)
   obtain ⟨hc, rfl⟩ := hsp
   refine ⟨?_, ?_⟩
   · simp only [checkAll, Bool.and_eq_true] at hc; exact hc.1
@@ -998,13 +1156,13 @@ theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judg
   simp [stepSingle, h]
 
 /-- Sharded = single: the merged sharded run is the single-store run. -/
-theorem shard_run_eq (pk : Pack) (cx : Ctx) (rs : List Input) :
-    merge pk cx (runS pk cx initS rs) = runSingle pk cx initSingle rs := by
-  have h0 : merge pk cx initS = initSingle := view_eq rfl rfl rfl rfl rfl rfl
-    (funext fun c => sum_zeroN (fun k => (initS.2 k).chg c) (List.range (pk.k cx.p)) fun _ _ => rfl)
-    (Partition.sum_zero (fun k => (initS.2 k).gross) (List.range (pk.k cx.p)) fun _ _ => rfl)
-    (Partition.sum_zero (fun k => (initS.2 k).mc) (List.range (pk.k cx.p)) fun _ _ => rfl)
-  rw [merge_run pk cx initS rs inv_init (fun _ => ⟨rfl, rfl⟩), h0]
+theorem shard_run_eq (pk : Pack) (cx : Ctx) (L : Legacy) (hL : openOk pk cx L) (rs : List Input) :
+    merge pk cx (runS pk cx (initS L) rs) = runSingle pk cx (initSingle L) rs := by
+  have h0 : merge pk cx (initS L) = initSingle L := view_eq rfl rfl rfl rfl rfl rfl
+    (funext fun c => init_sumN (·.chg c) L _ rfl (hL.imp_right fun e => e.1 c))
+    (init_sumI (·.gross) L _ rfl (hL.imp_right fun e => e.2.1))
+    (init_sumI (·.mc) L _ rfl (hL.imp_right fun e => e.2.2))
+  rw [merge_run pk cx (initS L) rs (inv_init L) (inv3_init L), h0]
 
 /-- A crash after the spine COMMIT converges: recovery yields the committed step. -/
 theorem rollforward_eq (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List Nat)
@@ -1022,16 +1180,16 @@ theorem rollforward_eq (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : L
 
 /-- A crash before the spine COMMIT leaves a reachable state, and recovery changes nothing in it. -/
 theorem crash_before_spine (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) : recoverAll ss = ss := by
-  obtain ⟨rs, rfl⟩ := h
-  have h2 := inv2_run pk cx initS rs (fun _ _ h => by cases h)
+  obtain ⟨L, rs, rfl⟩ := h
+  have h2 := inv2_run pk cx (initS L) rs (inv2_init L)
   refine Prod.ext rfl (funext fun k => ?_)
   show recover _ k _ = _
-  cases hr : (runS pk cx initS rs).1.recs with
+  cases hr : (runS pk cx (initS L) rs).1.recs with
   | nil => simp only [recover, hr]
   | cons R rs' =>
     rw [recover_pure _ R rs' hr]
-    have hn : ¬(k ∈ R.touched ∧ ((runS pk cx initS rs).2 k).head = R.pre k ∧
-        ((runS pk cx initS rs).2 k).head ≠ R.post k) := fun ⟨hk, _, hne⟩ => hne (h2 R rs' hr k hk)
+    have hn : ¬(k ∈ R.touched ∧ ((runS pk cx (initS L) rs).2 k).head = R.pre k ∧
+        ((runS pk cx (initS L) rs).2 k).head ≠ R.post k) := fun ⟨hk, _, hne⟩ => hne (h2 R rs' hr k hk)
     unfold replay
     rw [if_neg hn]
 
@@ -1066,17 +1224,17 @@ theorem reader_cut (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List 
   · cases h
 
 /-- Pool used is the shards' gross; the budget is the shards' machine charges plus the spine's LINK charges. -/
-theorem pool_budget_merge (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
+theorem pool_budget_merge (pk : Pack) (cx : Ctx) (ss : SS) (h : reachOk pk cx ss) :
     ss.1.used = ((List.range (pk.k cx.p)).map fun k => (ss.2 k).gross).sum ∧
     ss.1.budget = ((List.range (pk.k cx.p)).map fun k => (ss.2 k).mc).sum + ss.1.lc := by
-  obtain ⟨rs, rfl⟩ := h
-  exact inv4_run pk cx initS rs inv_init (inv4_init pk cx)
+  obtain ⟨L, rs, hL, rfl⟩ := h
+  exact inv4_run pk cx (initS L) rs (inv_init L) (inv4_init pk cx L hL)
 
 /-- The spine binds the shard chains: heads match and each shard's APPLIED list is its records, in order. -/
 theorem spine_chain_binds (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
     headsOk pk cx ss = true ∧ appliedOk pk cx ss := by
-  obtain ⟨rs, rfl⟩ := h
-  have h3 := inv3_run pk cx initS rs (fun _ => ⟨rfl, rfl⟩)
+  obtain ⟨L, rs, rfl⟩ := h
+  have h3 := inv3_run pk cx (initS L) rs (inv3_init L)
   refine ⟨?_, fun k _ => (h3 k).2⟩
   simp only [headsOk, List.all_eq_true, beq_iff_eq]
   exact fun k _ => (h3 k).1
