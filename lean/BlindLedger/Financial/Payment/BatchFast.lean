@@ -497,11 +497,19 @@ structure Rel (F : Fast) (M : Ledger) : Prop where
   env : F.env = envOf M.input
   pays : F.pays.get? = findPayment M.input.payments
   rcpts : F.rcpts.get? = receiptOf M.receipts
-  origins : ∀ o, (F.origins.get? o).bind (findPayment M.input.payments) =
-    M.input.payments.find? (·.commonOriginId = o)
+  origins : ∀ o, F.origins.get? o = (M.input.payments.find? (·.commonOriginId = o)).map (·.paymentId)
   rows : F.rows.get? = findEvidence M.input.evidence
   conflicts : ∀ x, F.conflictIds.contains x = M.input.conflicts.any (·.conflictId = x)
   agree : ∃ S, summaryOf M.input M.receipts = some S ∧ Agree F S
+  inv : Inv M
+
+/-- The origin index read through the payment index, as `viewOfAnchor` reads it. -/
+theorem Rel.origins_bind {F : Fast} {M : Ledger} (hR : Rel F M) (o : String) :
+    (F.origins.get? o).bind (findPayment M.input.payments) = M.input.payments.find? (·.commonOriginId = o) := by
+  rw [hR.origins o]
+  cases hf : M.input.payments.find? (fun x => decide (x.commonOriginId = o)) with
+  | none => rfl
+  | some p => exact findPayment_of_mem hR.inv.1 (List.mem_of_find?_eq_some hf)
 
 /-- The request's summary is the ledger's: only `evaluatedAt` moves, and no summary field reads it. -/
 theorem summarize_request (M : Ledger) (c : Call) :
@@ -523,7 +531,7 @@ theorem view_link {F : Fast} {M : Ledger} (hR : Rel F M) (c : Call) :
   cases c.command with
   | record r =>
     dsimp only
-    rw [hR.origins, hR.conflicts]
+    rw [hR.origins_bind, hR.conflicts]
     rfl
   | reverse r => rfl
 
@@ -574,17 +582,14 @@ theorem Rel_init {L : Ledger} (hI : Inv L) {t : EvaluatedTotals} (ht : evaluateT
   pays := funext fun pid => by
     rw [findPayment_eq]; exact (get?_foldr_insert Payment.paymentId (fun p => p) pid _).trans (map_self _)
   rcpts := funext fun pid => (get?_foldr_insert Receipt.paymentId (fun k => k) pid _).trans (map_self _)
-  origins o := by
-    refine (congrArg (Option.bind · _) (get?_foldr_insert Payment.commonOriginId Payment.paymentId o _)).trans ?_
-    cases hf : L.input.payments.find? (fun x => decide (x.commonOriginId = o)) with
-    | none => rfl
-    | some p => exact findPayment_of_mem hI.1 (List.mem_of_find?_eq_some hf)
+  origins o := get?_foldr_insert Payment.commonOriginId Payment.paymentId o _
   rows := funext fun id => by
     rw [findEvidence_eq]; exact (get?_foldr_insert EvidenceRecord.evidenceId (fun e => e) id _).trans (map_self _)
   conflicts x := contains_foldr_insert FinancialConflict.conflictId x _
   agree := by
     rw [summaryOf, summarize, ht, Option.map_some]
     exact ⟨_, rfl, rfl, rfl, by simp only [Fast.init, List.length_map], rfl, rfl, rfl⟩
+  inv := hI
 
 /-! ## Preservation -/
 
@@ -642,6 +647,7 @@ theorem Rel_alias {F : Fast} {M : Ledger} {c : Call} {pid e post} (hR : Rel F M)
       rw [findEvidence_insertBy hfresh', ← hR.rows]
       exact get?_insertIfNew_fresh (by rw [hR.rows]; exact hfresh') id
     conflicts := hR.conflicts
+    inv := hR.inv
     agree := ⟨_, hS'.symm, hA.cash, hA.lawful,
       by show (insertBy (fun x => x) e.evidenceId S.evidenceIds).length = F.evidence + 1
          rw [length_insertBy, hA.evidence],
