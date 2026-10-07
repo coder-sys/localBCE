@@ -403,8 +403,10 @@ class ShardTests(fx.Scratch):
         transaction, so the refusal fences the running nonce and shard 1's X HOLDs (before: the caller read them first,
         boot raised before its fence and the old nonce ALLOWed X again)."""
         for target, name, error, label in ((None, "newest_stored", sqlite3.OperationalError("disk I/O error"), "payer_unavailable"),
-                                           (producer, "newest", PermissionError(13, "denied"), "denied")):
-            with self.subTest(name), self.released_then_restored(restart=False) as (c, store):
+                                           (producer, "newest", PermissionError(13, "denied"), "inputs_unavailable"),
+                                           (producer, "newest", sqlite3.OperationalError("disk I/O error"), "inputs_unavailable"),
+                                           (producer, "newest", producer.GateProducerError("store_unavailable"), "store_unavailable")):
+            with self.subTest(label, error=error), self.released_then_restored(restart=False) as (c, store):
                 if target:
                     c.store(1).touch()  # a store to read: the copy predates every batch
                 with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(Exception) as refused:
@@ -456,13 +458,18 @@ class ShardTests(fx.Scratch):
                     self.assertEqual(c.send(0, {2: [10]}), {10: "HOLD registry_restored"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
 
-    @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
-    def test_r5_restore_while_running_no_boot(self) -> None:
+    def test_r5_restore_while_running_no_boot_today(self) -> None:
         """The directory comes back under a running process that never reboots: it holds the copy's newest nonce, so
-        nothing fences it and shard 1 ALLOWs X again; it must HOLD.  The setup is asserted first (review L-D), so only
-        the final check can be the expected failure."""
+        nothing fences it.  The setup and today's known-bad result are pinned (review L-D, LOW-1): a fixture regression
+        fails here, and S3 flips the ALLOW to HOLD."""
         with self.released_then_restored(restart=False) as (c, store):
             self.assertEqual((bool(c.nonce), self.releases(store), c.store(0).exists()), (True, ["pay-0001"], False))
+            self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})  # HIGH-2 open; S3 flips to HOLD
+
+    @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
+    def test_r5_restore_while_running_no_boot(self) -> None:
+        """The same restore: shard 1 must HOLD, so X is released once.  Only this final check is the expected failure."""
+        with self.released_then_restored(restart=False) as (c, store):
             self.assertTrue(c.send(1, {2: [10]})[10].startswith("HOLD"))
             self.assertEqual(self.releases(store), ["pay-0001"])
 

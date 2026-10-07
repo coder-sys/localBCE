@@ -111,6 +111,7 @@ class _Tail:
         self.n, self.head = db.execute("SELECT n, head FROM log ORDER BY n DESC LIMIT 1").fetchone() or (0, gate.ZERO_DIGEST)
 
     def add(self, kind: int, key: bytes, shard: int) -> None:
+        if not self.db.in_transaction: raise IdRegistryError("registry_unavailable")  # SQLite rolled back: never write unlocked
         self.head = _head(self.head, kind, key, shard)
         self.n += 1
         self.db.execute("INSERT INTO log VALUES (?, ?, ?, ?, ?)", (self.n, kind, key, shard, self.head))
@@ -148,7 +149,10 @@ Inputs = Callable[[], tuple[Mapping[int, tuple[int, bytes]], Mapping[int, Path],
 def _admit(db: sqlite3.Connection, inputs: Inputs) -> None:
     """``boot``'s reads and checks, inside its transaction."""
     try:
-        commitments, stores, checkpoints = inputs()
+        try:
+            commitments, stores, checkpoints = inputs()
+        except Exception as error:  # not a registry read: whatever the payer or a store raised
+            raise IdRegistryError("store_unavailable" if isinstance(error, producer.GateProducerError) else "inputs_unavailable") from error
         head = gate.ZERO_DIGEST
         for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
             head = _head(head, kind, key, shard)
@@ -184,8 +188,8 @@ def boot(path: Path, inputs: Inputs) -> bytes:
     ``store_unsealed`` (open its producer to reseal, then boot), an unreadable one ``store_unavailable``.
     A refusal, including any exception from ``inputs``, appends the same BOOT row in the same transaction, its nonce
     returned to nobody (a fence: every running handle then HOLDs ``registry_not_booted`` until a boot passes), then
-    raises; if that commit fails, ``registry_unavailable`` chained from the refusal.  A registry that cannot be opened
-    or locked raises ``registry_unavailable`` before any input is read, and can be fenced by nothing."""
+    raises; if that commit fails or SQLite rolled back first, ``registry_unavailable`` chained from the refusal; an
+    ``inputs`` error that is no store's is ``inputs_unavailable``.  A registry that cannot be opened or locked raises ``registry_unavailable`` before any input is read, and can be fenced by nothing."""
     db, nonce, refusal = _open(path), os.urandom(32), None
     try:
         with _txn(db, None):

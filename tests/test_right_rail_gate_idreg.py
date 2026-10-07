@@ -161,6 +161,20 @@ class IdRegistryTests(unittest.TestCase):
             self.reg.reserve(0, [1], sealed=None)
         self.assertEqual(second.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
 
+    def test_boot_writes_no_fence_outside_its_transaction(self) -> None:
+        """Review LOW-2: SQLite rolled the transaction back inside the checks (disk full, I/O error); the fence must not be
+        written unlocked in autocommit (before: it was, and COMMIT then failed 'no transaction is active')."""
+        for refuse in (False, True):
+            def admit(db, inputs):
+                db.execute("ROLLBACK")  # what SQLite does itself on SQLITE_FULL or SQLITE_IOERR mid-statement
+                if refuse:
+                    raise idreg.IdRegistryError("registry_rewound")
+            before = self.tail()
+            with self.subTest(refuse=refuse), mock.patch.object(idreg, "_admit", admit), \
+                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                idreg.boot(self.path, lambda: ({}, {}, {}))
+            self.assertEqual(self.tail(), before)
+
     def test_boot_commitments(self) -> None:
         n, head = self.reg.genesis({0: [1], 1: [2]})  # rows 2-3: RESERVE 1, SETTLE of shard 0; rows 4-5: the same for shard 1
         at = lambda i: (i, self.reg._db.execute("SELECT head FROM log WHERE n = ?", (i,)).fetchone()[0])
