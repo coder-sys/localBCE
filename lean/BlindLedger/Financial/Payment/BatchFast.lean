@@ -7,7 +7,8 @@ namespace BlindLedger.Financial.Payment
 open BlindLedger.Financial BlindLedger.Financial.CorrectionTransition
 
 /-! Owner batch, fast lane (S1g). `batchFast` runs the fast lane only where the premises of
-    `chain_fold_eq_full` hold (`ok`), and `trace` otherwise, so `batchFast_eq_trace` is premise-free.
+    `chain_fold_eq_full` hold (`ok`) and `evaluateTotals` succeeds, and `trace` otherwise, so
+    `batchFast_eq_trace` is premise-free.
     The fast lane keeps of the item state only what a stored call (`Erased`) reads: no contributions,
     no sorted evidence-id list, no evaluation per call. -/
 
@@ -71,10 +72,10 @@ structure FView where
   expectedRevision : Option Nat
   command : Command
 
-def Fast.init (L : Ledger) : Fast :=
+/-- The carried state of `L`, whose totals `t` are `evaluateTotals L.input` (`batchFast`). -/
+def Fast.init (L : Ledger) (t : EvaluatedTotals) : Fast :=
   let i := L.input
-  let t := evaluateTotals i
-  { env := envOf i, cash := (t.map (·.cash)).getD 0, lawful := (t.map (·.lawful)).getD 0,
+  { env := envOf i, cash := t.cash, lawful := t.lawful,
     evidence := i.evidence.length, conflicts := i.conflicts.length,
     requests := (i.actions.filter (·.kind = "CORRECTION_PAYMENT_REQUEST")).map
       (requestPaidOf i.payments (linksOf L.receipts)),
@@ -256,11 +257,12 @@ def fastFrom : Fast → List Call → List Erased
     let o := stepFast F v
     o :: fastFrom (F.post v o) cs
 
-def fast (L : Ledger) (calls : List Call) : List Erased := fastFrom (Fast.init L) calls
-
-/-- The batch: the fast lane where its premises hold, `trace` otherwise. -/
+/-- The batch: the fast lane where its premises hold and the ledger has totals (so the trace has a
+    view to agree with), `trace` otherwise. The totals are computed once and seed `Fast.init`. -/
 def batchFast (L : Ledger) (calls : List Call) : List Erased :=
-  if ok L calls then fast L calls else (trace L calls).map erase
+  match evaluateTotals L.input, ok L calls with
+  | some t, true => fastFrom (Fast.init L t) calls
+  | _, _ => (trace L calls).map erase
 
 /-! ## The fast step is the view step on a state that agrees with the carried scalars -/
 
@@ -536,15 +538,19 @@ theorem link_step {F : Fast} {M : Ledger} (hR : Rel F M) (c : Call)
   rw [stepFast_eq hA]
   exact h2
 
-theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} (h : ok L calls = true) :
-    fast L calls = (trace L calls).map erase := by
+theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
+    (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
+    fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
   sorry
 
 theorem batchFast_eq_trace (L : Ledger) (calls : List Call) :
     batchFast L calls = (trace L calls).map erase := by
   unfold batchFast
-  split
-  · exact fast_eq_trace_of_ok ‹_›
-  · rfl
+  cases ht : evaluateTotals L.input with
+  | none => rfl
+  | some t =>
+    cases h : ok L calls with
+    | false => rfl
+    | true => exact fast_eq_trace_of_ok ht h
 
 end BlindLedger.Financial.Payment
