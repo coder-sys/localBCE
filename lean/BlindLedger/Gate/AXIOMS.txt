@@ -129,3 +129,7 @@
 'BlindLedger.Gate.releaseBatch_once' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.pathOf_verifies' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.publishOkTree_sound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Financial.ShardSplit.rollforward_eq' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Financial.ShardSplit.reader_cut' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Financial.ShardSplit.applied_missing' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Financial.ShardSplit.rollforward_closed' depends on axioms: [propext, Classical.choice, Quot.sound]
