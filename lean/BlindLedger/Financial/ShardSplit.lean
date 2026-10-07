@@ -351,8 +351,9 @@ def applyPart (R : Rec) (k : Nat) (sh : ShardDB) : ShardDB :=
   { chg := f.1, gross := sh.gross + gsum (R.I k), mc := sh.mc + f.2, head := R.post k,
     applied := sh.applied ++ [R.n] }
 
-/-- A chain step that would return its own pre head `d` moves it to `d + 1` instead (port: any fixed deterministic
-    value other than `d`), so a touched shard head always moves. -/
+/-- A chain step that would return its own pre head `d` moves it to `d + 1` instead, so a touched shard head always
+    moves. Port: Python does not port `adv`; it must refuse a part whose post head equals its pre head, which
+    differs from this model only at a hash fixed point. -/
 def adv (h d : Dg) : Dg := if h = d then d + 1 else h
 
 theorem adv_ne (h d : Dg) : adv h d ≠ d := by
