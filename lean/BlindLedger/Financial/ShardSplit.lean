@@ -24,7 +24,7 @@ def kOf : List (PartId × Nat) → PartId → Nat
   | [], _ => 1
   | (q, n) :: t, p => if p = q then n else kOf t p
 
-/-- The shard pack: `K_p` per partition; a partition it does not name opens as `K = 1` (migration, §1). -/
+/-- The shard pack: `K_p` per partition, set when the store opens; a partition it does not name has `K = 1`. -/
 structure Pack where
   ks : List (PartId × Nat)
 
@@ -351,8 +351,9 @@ def genesis (L : Legacy) : Rec :=
   { n := 0, t := L.t, I := fun _ => [], V := fun _ => [], pre := fun k => (initShards L k).head,
     post := fun k => (initShards L k).head, touched := [] }
 
-/-- The migrated store (§1 as amended 2026-10-07): the legacy store opens as `K = 1` (`Pack.k` of an unnamed
-    partition) and becomes shard 0; the directory is backfilled from every legacy cell with home shard 0; the spine
+/-- The migrated store (§1 as amended 2026-10-07, lead decision on K): the legacy store opens at the target
+    `K = pk.k cx.p`, set at open and fixed for the store's life (`shard_stable_run`); `K = 1` (an unnamed
+    partition) is the special case.  The legacy store becomes shard 0; the directory is backfilled from every legacy cell with home shard 0; the spine
     holds the legacy totals, `heads(k)` = each shard's opening head, and the one record GENESIS `R_0`. -/
 def initS (L : Legacy) : SS :=
   (⟨backfill L, L.t, L.used, L.budget, L.lc, L.spineRows, fun k => (initShards L k).head, [genesis L]⟩,
@@ -1129,11 +1130,46 @@ theorem route_total (pk : Pack) (cx : Ctx) (r : Row) (h : packOk pk = true) :
   · exact .inr ⟨_, Nat.mod_lt _ (k_pos pk cx.p h), rfl⟩
   · exact .inl rfl
 
-/-- Over the given `hist` list: a pack update `packUpdateOk hist` accepts keeps `K_p` for every `p` in `hist`. -/
+/-- Over the given `hist` list: a pack update `packUpdateOk hist` accepts keeps `K_p` for every `p` in `hist`.
+    `shard_stable_run` instantiates `hist` from the store's records. -/
 theorem shard_stable (hist : List PartId) (pk pk' : Pack) (p : PartId) (hu : packUpdateOk hist pk pk' = true)
     (hp : p ∈ hist) : pk'.k p = pk.k p := by
   simp only [packUpdateOk, Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at hu
   exact hu.2 p hp
+
+/-- The partitions with history in a store, read from its records: `[cx.p]` once the spine holds any record,
+    else `[]`. -/
+def histS (cx : Ctx) (ss : SS) : List PartId := if ss.1.recs = [] then [] else [cx.p]
+
+/-- A step never empties the spine's records. -/
+theorem recs_ne_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : ss.1.recs ≠ []) :
+    (stepT pk cx ss inp).1.recs ≠ [] := by
+  unfold stepT stepS
+  split
+  · simp [commitSpine]
+  · exact h
+
+/-- A run never empties the spine's records. -/
+theorem recs_ne_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), ss.1.recs ≠ [] →
+    (runS pk cx ss rs).1.recs ≠ []
+  | _, [], h => h
+  | ss, r :: rs, h => recs_ne_run pk cx _ rs (recs_ne_step pk cx ss r h)
+
+/-- Every reachable store has history: its records hold at least GENESIS, so `histS cx ss = [cx.p]`. -/
+theorem reach_hist (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) : histS cx ss = [cx.p] := by
+  obtain ⟨L, rs, rfl⟩ := hr
+  have h := recs_ne_run pk cx (initS L) rs (by simp [initS])
+  unfold histS
+  rw [if_neg h]
+
+/-- `K` is fixed for the life of a store (review fix 8, lead 2026-10-07): for any store reachable from a migrated
+    store, a pack update that `packUpdateOk` accepts against the history read from the store's records
+    (`histS cx ss`) keeps `K` of the store's partition.  `K` is set when the store opens; changing it is an
+    explicit reshard step, not modelled here. -/
+theorem shard_stable_run (pk pk' : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss)
+    (hu : packUpdateOk (histS cx ss) pk pk' = true) : pk'.k cx.p = pk.k cx.p := by
+  rw [reach_hist pk cx ss hr] at hu
+  exact shard_stable [cx.p] pk pk' cx.p hu (by simp)
 
 /-- Routes never move: a directory row survives every step unchanged. -/
 theorem dir_route_stable (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (c : Cell) (x : DirRow)
@@ -1683,7 +1719,8 @@ theorem rcpts_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs :
 /-- From a migrated store with `openOk`, the merged sharded run equals the single-store run (Lean per shard part).
     Under `Local` (restricting a file to any set of items leaves Lean's verdicts on the kept rows unchanged), the merged run also
     equals the whole-file reference (Lean once on all the file's shard-admitted rows), and the sharded run's per-row
-    MOVE receipts equal the whole-file receipts. -/
+    MOVE receipts equal the whole-file receipts.  The first half needs no assumption on Lean; the whole-file half
+    ASSUMES `Local cx`, a hypothesis on Lean that this module does not prove. -/
 theorem shard_run_eq (pk : Pack) (cx : Ctx) (L : Legacy) (hL : openOk pk cx L) (rs : List Input) :
     merge pk cx (runS pk cx (initS L) rs) = runSingle pk cx (initSingle L) rs ∧
     (Local cx → merge pk cx (runS pk cx (initS L) rs) = runWhole pk cx (initSingle L) rs ∧
