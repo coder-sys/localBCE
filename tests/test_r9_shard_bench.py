@@ -125,6 +125,37 @@ def wrong_ack_main(conn, k: int, db: str) -> None:
     sb.shard_main(conn, k, db)
 
 
+def slow_commit_main(conn, k: int, db: str) -> None:
+    """A shard worker whose COMMIT never ends (a stalled disk)."""
+    real = sb.Shard.commit
+
+    def commit(self):
+        if k == DIE_SHARD:
+            time.sleep(3600)
+        return real(self)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
+def wrong_ack_and_stuck_main(conn, k: int, db: str) -> None:
+    """Shard DIE_SHARD ACKs a wrong head after its commit; shard 0 is stuck in building any part after file 1 (n >= 2)."""
+    real_commit, real_build = sb.Shard.commit, sb.Shard.build
+
+    def commit(self):
+        real_commit(self)
+        if k == DIE_SHARD:
+            self.w.head = bytes(64)
+
+    def build(self, n, *args):
+        if k == 0 and n >= 2:
+            time.sleep(3600)
+        return real_build(self, n, *args)
+
+    sb.Shard.commit, sb.Shard.build = commit, build
+    sb.shard_main(conn, k, db)
+
+
 def stuck_main(conn, k: int, db: str) -> None:
     """A shard worker that is stuck in the middle of a PART or a SNAPSHOT and answers nothing."""
     sb.Shard.build = sb.Shard.snapshot = lambda self, *args: time.sleep(3600)
@@ -799,7 +830,9 @@ class ShardBench(unittest.TestCase):
                         with self.assertRaises(sb.ShardDiverged):
                             spine.ingest_group(rest_items)
                         self.assertEqual((spine.n, spine.keys), (8, directory(self.tmp / name / "spine.sqlite3")))  # the failed group left no trace in the spine or its keys
-                        spine.close()
+                        self.assertEqual(list(spine.dead), list(range(4)), name)  # a shard that ACKed a head the spine did not expect: every shard is dead, the run is over
+                        with self.assertRaises(rb.FinancialIntegrityError):  # S12-CLOSE M1: close() used to return the STATS of a run whose shard had diverged
+                            spine.close()
                     else:
                         rest = spine.ingest_group(rest_items)
                         self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and "shard_commit_refused:1" in str(r) for r in rest), (name, rest))
@@ -849,6 +882,54 @@ class ShardBench(unittest.TestCase):
                         p.join()
             self.assertEqual(fired, [], name)
             self.quiet(spine)
+
+    def test_s12_close_6a_a_commit_that_never_acks_ends_wait_acks_at_the_deadline(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        spine = self.spine_with(slow_commit_main, "s12-6a")
+        timer, fired = self.watchdog(spine)
+        try:
+            with mock.patch.object(sb, "REPLY_DEADLINE", 1.0):
+                prepared = sb.prepare(spine.tbl, 0, files[0][0].rows, 1)
+                self.assertIn(1, prepared.blobs)  # shard 1 is asked to commit and never answers
+                results = spine.ingest_group([(0, *files[0], prepared)])
+                self.assertTrue(all(isinstance(r, dict) for r in results), results)
+                with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                    spine.wait_acks()
+                self.assertTrue(str(raised.exception).startswith("reply_timeout:[1]"), str(raised.exception))
+                self.assertEqual(list(spine.dead), [1])
+                with self.assertRaises(rb.FinancialIntegrityError):
+                    spine.close()
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+
+    def test_s12_close_6b_a_diverged_ack_wins_over_a_timeout_raised_in_the_same_abort(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        spine = self.spine_with(wrong_ack_and_stuck_main, "s12-6b")
+        timer, fired = self.watchdog(spine)
+        try:
+            with mock.patch.object(sb, "REPLY_DEADLINE", 1.0):
+                prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+                self.assertTrue({0, DIE_SHARD} <= set(prepared[0].blobs) and {0, DIE_SHARD} <= set(prepared[1].blobs))
+                first = spine.ingest_group([(0, *files[0], prepared[0])])  # the spine commits; shard 1's ACK will carry a wrong head
+                self.assertTrue(isinstance(first[0], dict), first)
+                spine.write_rows = mock.Mock(side_effect=rb.FinancialIntegrityError("forced_spine_rows"))
+                with self.assertRaises(sb.ShardDiverged):  # abort: shard 0 (first) times out, then shard 1's pending wrong ACK is read: the divergence is the error
+                    spine.ingest_group([(1, *files[1], prepared[1])])
+                self.assertEqual(list(spine.dead), list(range(4)))
+                with self.assertRaises(rb.FinancialIntegrityError):
+                    spine.close()
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
 
     def test_s12_close_a_failure_from_the_spine_commit_on_ends_the_run_and_no_shard_holds_a_group_the_spine_lost(self) -> None:
         files = sb.corpus(20261006, LINES, 4)

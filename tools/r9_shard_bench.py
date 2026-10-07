@@ -611,6 +611,12 @@ class Spine:
             self.tt["feed"] += time.perf_counter() - f0
         self.nested += time.perf_counter() - t0
 
+    def diverged(self, k: int) -> ShardDiverged:
+        """A shard's ACK of the spine's COMMIT carries a head other than the one owed: the spine committed, so which shard holds what is no longer known and the run ends (every shard dead; close raises)."""
+        error = ShardDiverged(f"shard {k}: head differs after commit")
+        self.dead = dict.fromkeys(self.workers, str(error))
+        return error
+
     def handle(self, k: int, m: tuple) -> None:
         if m[0] == "ERR":
             if k in self.owed:  # a shard's first reply after COMMIT is the COMMIT's: it was refused after the spine committed, so the shard is lost to this run and replay recovers it
@@ -620,7 +626,7 @@ class Spine:
             raise rb.FinancialIntegrityError(f"shard_refused:{m[1]}")
         if m[0] == "ACK":
             if m[1] != self.owed.pop(k):
-                raise ShardDiverged(f"shard {k}: head differs after commit")
+                raise self.diverged(k)
             self.ack_ms[k].append((time.perf_counter() - self.commit_sent) * 1000)
             if not self.owed:
                 self.acked()
@@ -781,7 +787,7 @@ class Spine:
                         if m[0] != "ACK":
                             self.dead[k] = f"shard_commit_refused:{k}:{m[1]}"
                         elif m[1] != expected:
-                            problems.append(ShardDiverged(f"shard {k}: head differs after commit"))
+                            problems.append(self.diverged(k))
                     elif m[0] == "ACK":
                         break
             except TimeoutError as error:
