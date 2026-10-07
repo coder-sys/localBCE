@@ -5479,6 +5479,83 @@ def witnessOf (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b 
       prune H 513 0 ((setMap H true unr.entries).getD []) (paths qu),
       lists false rel.entries qr ++ lists true unr.entries qu⟩
 
+/-- One entry of `witnessOf`'s lists, read back. -/
+private theorem c13_entry (H : Bytes → Bytes) (u : Bool) (s : List Line) (q : Key)
+    (e : Bool × Bytes × Nat × List Bytes × List Bytes)
+    (h : (do
+      let kb ← keyBytes q
+      guard (q.head? ≠ some 7)
+      let es ← postings u s q
+      guard (es ≠ [])
+      pure (u, pathOf H kb, es.length, es.take K, firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD)))) =
+      some e) :
+    ∃ kb es, keyBytes q = some kb ∧ postings u s q = some es ∧ es ≠ [] ∧
+      e = (u, pathOf H kb, es.length, es.take K, firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD))) := by
+  cases hk : keyBytes q with
+  | none => simp [hk] at h
+  | some kb =>
+    by_cases h7 : q.head? = some 7
+    · first | simp [hk, h7, guard, failure] at h | (simp [hk, h7, guard] at h; cases h)
+    cases hp : postings u s q with
+    | none => simp [hk, hp, h7, guard] at h
+    | some es =>
+      by_cases he : es = []
+      · first | simp [hk, hp, h7, he, guard, failure] at h | (simp [hk, hp, h7, he, guard] at h; cases h)
+      simp [hk, hp, h7, he, guard] at h
+      exact ⟨kb, es, rfl, rfl, he, h.symm⟩
+
+/-- `witnessOf`'s lists, as `c13_probe` needs them: every nonempty probed posting is listed, every entry is one. -/
+private theorem c13_lists (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
+    (rel unr : Snapshot Line) (h : Head) (u : Bool) :
+    (∀ q ∈ (if u then (probeKeys c₀ k os (ready k os b)).2 else (probeKeys c₀ k os (ready k os b)).1),
+      ∀ kb es, keyBytes q = some kb → postings u (if u then unr.entries else rel.entries) q = some es → es ≠ [] →
+      q.head? ≠ some 7 →
+      (u, pathOf H kb, es.length, es.take K, firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD))) ∈
+        (witnessOf H c₀ k os b rel unr h).lists) ∧
+    (∀ e ∈ (witnessOf H c₀ k os b rel unr h).lists, e.1 = u → ∃ q' kb' es', keyBytes q' = some kb' ∧
+      postings u (if u then unr.entries else rel.entries) q' = some es' ∧ es' ≠ [] ∧
+      e = (u, pathOf H kb', es'.length, es'.take K, firstKPf H PD 64 (min K es'.length) (es'.map (leafHash H PD)))) := by
+  generalize hpk : probeKeys c₀ k os (ready k os b) = p
+  obtain ⟨qr, qu⟩ := p
+  have hw : (witnessOf H c₀ k os b rel unr h).lists =
+      qr.filterMap (fun q => do
+        let kb ← keyBytes q
+        guard (q.head? ≠ some 7)
+        let es ← postings false rel.entries q
+        guard (es ≠ [])
+        pure (false, pathOf H kb, es.length, es.take K, firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD)))) ++
+      qu.filterMap (fun q => do
+        let kb ← keyBytes q
+        guard (q.head? ≠ some 7)
+        let es ← postings true unr.entries q
+        guard (es ≠ [])
+        pure (true, pathOf H kb, es.length, es.take K, firstKPf H PD 64 (min K es.length) (es.map (leafHash H PD)))) := by
+    unfold witnessOf
+    rw [hpk]
+    try rfl
+  rw [hw]
+  constructor
+  · intro q hq kb es hk hp hne h7
+    cases u
+    · have hq : q ∈ qr := hq
+      have hp : postings false rel.entries q = some es := hp
+      exact List.mem_append_left _ (List.mem_filterMap.mpr ⟨q, hq, by simp [hk, hp, hne, h7, guard]⟩)
+    · have hq : q ∈ qu := hq
+      have hp : postings true unr.entries q = some es := hp
+      exact List.mem_append_right _ (List.mem_filterMap.mpr ⟨q, hq, by simp [hk, hp, hne, h7, guard]⟩)
+  · intro e he hu
+    rcases List.mem_append.mp he with he | he
+    · obtain ⟨q, -, hq⟩ := List.mem_filterMap.mp he
+      obtain ⟨kb, es, hk, hp, hne, rfl⟩ := c13_entry H false rel.entries q e hq
+      cases u
+      · exact ⟨q, kb, es, hk, hp, hne, rfl⟩
+      · simp at hu
+    · obtain ⟨q, -, hq⟩ := List.mem_filterMap.mp he
+      obtain ⟨kb, es, hk, hp, hne, rfl⟩ := c13_entry H true unr.entries q e hq
+      cases u
+      · simp at hu
+      · exact ⟨q, kb, es, hk, hp, hne, rfl⟩
+
 /-- Liveness: an honest witness is refused only on a named collision or an unrepresentable next state. -/
 theorem decideIdx_complete (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
