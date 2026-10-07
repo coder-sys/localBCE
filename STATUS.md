@@ -3,7 +3,7 @@
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records: `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` maps the code. Git state, raw guard logs and artifact provenance
 govern; a branch's pass verifies no other branch or combination. Describes trunk
-`b54ed204`.
+`3d060931`.
 
 ## Product and standing claims
 
@@ -14,7 +14,7 @@ level in it. Existing payment systems move money. Synthetic, state-local, non-PH
 
 ## What landed since d7192b0
 
-Trunk `b54ed204`: full suite `bpmfull2` 914 run, 899 pass, 0 fail, 15 skip; Lean `bp33`,
+Trunk `3d060931`: full suite `cfl10` 921 run, 0 fail, 15 skip; Lean `bp33`,
 real-candidate semgate `bp35` 23/23.
 
 - **Shard laws (Lean, unwired):** an owner split keeps each owner's fold; open: hash no-fixed-point assumption.
@@ -34,10 +34,10 @@ real-candidate semgate `bp35` 23/23.
 - **Absorb ladder (cash file).** A bad row is held with a reason, a repeat is a `DUPLICATE`, the rest record; an
   unabsorbable file is refused, nothing written.
 - **Bypass only per verified payment** (XI.2); Python decider retired.
-- **Gate/cash file.** Per-shard decider lease; plan on a copy, commit under the lock (quarter-end lock 1.44-1.65 s, bound 5 s).
+- **Gate/cash file.** Per-shard decider lease; plan on a copy, commit under the lock (quarter-end lock 1.44-1.65 s, bound 5 s);
+  keyed begin (CFI-C1; 2.9x history: same `sql_ops`, plan begin +14%).
 - **Lean decides every payment (M3);** ByteArray frames proved equal; M4 claim and offset laws; M1 offset cap.
-- **Pins.** Worker `7C1EAB94...`, `gate_verify` `a9f47312...` (`artifacts/`), `tcb_pin` passes. Superseded: PROVENANCE,
-  `RETIRED_PINS`.
+- **Pins.** Worker `7C1EAB94...`, `gate_verify` `a9f47312...` (`artifacts/`), `tcb_pin` passes. Superseded: PROVENANCE, `RETIRED_PINS`.
 
 ## Standing design
 
@@ -55,19 +55,19 @@ real-candidate semgate `bp35` 23/23.
 - **Correction result cap:** a BLFCRES3 result embeds its input, so a correction near 7 MB is refused (tag 3).
 - **Cash residuals:** a foreign commit before the first write costs a whole-store verify under the lock (~10 s at 6,000
   payments); a raising ROLLBACK fails the next write once (untested). Fallback `run_batch` grows with
-  item history (2.7 -> 4.6 s over four files); the production route is flat (~1 s).
+  item history (2.7 -> 4.6 s, four files); production route flat (~1 s).
 - **Real-world data:** a dirty Medicaid corpus (branch `dirty-corpus`) shows unrepresentable cases (advance payments, member
   crosswalk, PLB balances, death after release, upward retro rates).
 - **Gate:** 145-166 lines/s at batch 100, 628-690 at batch 2,000 (target 50,000). Before live use the rules worker
   needs a pinned `RULES_SOURCE` and a memory cap, BLFPAY01 a Lean length check (re-pin). Unbuilt: payer pin before send,
   prior-digest check, integrated payer gate, durable token. Failover TLC is a bounded model.
 - **Unbuilt:** financial file adapters (MCO reports, X12 820, MMIS extracts), payee-identity consumption, a second synthetic state,
-  a Lean seal codec. NC capture is synthetic file intake.
+  a Lean seal codec.
 - **Carried, not re-measured:** the staff role header is server-enforced, not a login; no cancel or reduce command for stale corrections; receipt
   `delivery_status` is the newest action's, not the verdict; core over size target (owner 6,756/~3,000,
   checker 4,451/~1,800 lines); TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`); a dead decider worker is not
   restarted (fails safe).
-- **Acknowledger not stored (open, needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so "a decider may not acknowledge"
-  is claim-level, not re-verifiable by checker or Lean; the fix is a versioned ACK record.
+- **Acknowledger not stored (needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so "a decider may not acknowledge"
+  is claim-level, not re-verifiable by checker or Lean; the fix: a versioned ACK record.
 
 Next: STATE/v2 wiring, hold-release S3b+ (slot consumers), cash-line hold ledger.
