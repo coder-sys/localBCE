@@ -8776,6 +8776,285 @@ private theorem c15_hb_some (P : Pins) (log : List Entry) (k : Nat) (hist : List
     obtain ⟨rs, bt, _, _, _, hbt, _⟩ := c15_peel P st k x.1 x.2.1 new tokens x.2.2 hc
     exact ⟨bt, by simp [hst, hbt]⟩
 
+/-- push on its own shard: seal and resume need it not live; resume makes it live on the activation base; sign
+    needs it live, keeps it live and sets the base to the checkpoint's state digest. -/
+private theorem c16_push_k (P : Pins) (s s' : LogState) (e : Entry) (h : push P s e = some s') :
+    (∀ t, e.body = .seal t → (s.shard e.shard).live = false) ∧
+    (∀ p, e.body = .resume p → (s.shard e.shard).live = false ∧ (s'.shard e.shard).live = true ∧
+      ∃ g, activation P e.shard p = some g ∧
+        some (s'.shard e.shard).base = (headOf sha3 g.1 g.2).bind (digestV2 sha3)) ∧
+    (∀ cert new tokens f, e.body = .sign cert new tokens f → (s.shard e.shard).live = true ∧
+      (s'.shard e.shard).live = true ∧
+      ∃ n, storedOfAny sha3 new = some n ∧ (s'.shard e.shard).base = n.checkpoint.stateDigest) := by
+  unfold push at h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  refine ⟨fun t hb => ?_, fun p hb => ?_, fun cert new tokens f hb => ?_⟩
+  · rw [hb] at h
+    obtain ⟨_, hg, -⟩ := Option.bind_eq_some_iff.mp h
+    exact ((guard_some _ _).mp hg).2.2.2.2
+  · rw [hb] at h
+    obtain ⟨_, hg, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨g, hact, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨hd, hhd, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨base, hbase, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨sh', hsh, h⟩ := Option.bind_eq_some_iff.mp h
+    have hs : s'.shard e.shard = sh' := by rw [← Option.some.inj h]; simp [upd]
+    rw [← Option.some.inj hsh] at hs
+    refine ⟨((guard_some _ _).mp hg).1, by simp only [hs], g, hact, ?_⟩
+    rw [hs, hhd]
+    exact hbase.symm
+  · rw [hb] at h
+    obtain ⟨_, hg, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨⟨_, _⟩, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨n, hn, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨sh', hsh, h⟩ := Option.bind_eq_some_iff.mp h
+    have hs : s'.shard e.shard = sh' := by rw [← Option.some.inj h]; simp [upd]
+    rw [← Option.some.inj hsh] at hs
+    exact ⟨(guard_some _ _).mp hg, by simp only [hs]; exact (guard_some _ _).mp hg, n, hn, by simp only [hs]⟩
+
+/-- A live shard stays live: no push sets live to false. -/
+private theorem c16_live (P : Pins) (s s' : LogState) (e : Entry) (h : push P s e = some s') (j : Nat)
+    (hl : (s.shard j).live = true) : (s'.shard j).live = true := by
+  by_cases hj : j = e.shard
+  · subst hj
+    obtain ⟨h1, h2, h3⟩ := c16_push_k P s s' e h
+    cases hb : e.body with
+    | «seal» t => rw [h1 t hb] at hl; cases hl
+    | resume p => exact (h2 p hb).2.1
+    | sign cert new tokens f => exact (h3 cert new tokens f hb).2.1
+  · rw [(cust_push P s s' e h).2.2.1 j hj]; exact hl
+
+/-- The entry at position m of a log: the prefix before it folds and pushes it, and its index is m. -/
+private theorem c16_step (P : Pins) (log : List Entry) (m : Nat) (e : Entry) (hm : log[m]? = some e)
+    (s' : LogState) (h : fold P (log.take (m + 1)) = some s') :
+    ∃ s, fold P (log.take m) = some s ∧ push P s e = some s' ∧ e.idx = m := by
+  have hlt : m < log.length := (List.getElem?_eq_some_iff.mp hm).1
+  have ht : log.take (m + 1) = log.take m ++ [e] := by simp [List.take_add_one, hm]
+  rw [ht] at h
+  obtain ⟨s, h1, h2⟩ := (cust_fold_snoc P _ e s').mp h
+  refine ⟨s, h1, h2, ?_⟩
+  rw [(cust_push P s s' e h2).1, cust_fold_len P _ s h1, List.length_take]
+  omega
+
+private theorem c16_live_mono (P : Pins) (log : List Entry) (k m : Nat) (s : LogState)
+    (hs : fold P (log.take m) = some s) (hl : (s.shard k).live = true) :
+    ∀ (d : Nat) (s' : LogState), fold P (log.take (m + d)) = some s' → (s'.shard k).live = true
+  | 0, s', h => by
+    rw [Nat.add_zero, hs] at h
+    rw [← Option.some.inj h]; exact hl
+  | d + 1, s', h => by
+    cases hm : log[m + d]? with
+    | none =>
+      have hle := List.getElem?_eq_none_iff.mp hm
+      have e1 : log.take (m + (d + 1)) = log.take (m + d) := by
+        rw [List.take_of_length_le hle]; exact List.take_of_length_le (by omega)
+      rw [e1] at h
+      exact c16_live_mono P log k m s hs hl d s' h
+    | some e =>
+      obtain ⟨s0, h0, hp, -⟩ := c16_step P log (m + d) e hm s' (by rw [← Nat.add_assoc] at h; exact h)
+      exact c16_live P s0 s' e hp k (c16_live_mono P log k m s hs hl d s0 h0)
+
+private theorem c16_filter_take {α : Type} (f : α → Bool) (l : List α) (m : Nat) :
+    (l.take m).filter f = (l.filter f).take ((l.take m).filter f).length := by
+  have h : l.filter f = (l.take m).filter f ++ (l.drop m).filter f := by
+    rw [← List.filter_append, List.take_append_drop]
+  rw [h, List.take_append_length]
+
+private theorem c16_cnt0 {α : Type} (f : α → Bool) (l : List α) (m : Nat) (e : α) (hm : l[m]? = some e)
+    (hf : f e = false) : ((l.take (m + 1)).filter f).length = ((l.take m).filter f).length := by
+  have ht : l.take (m + 1) = l.take m ++ [e] := by simp [List.take_add_one, hm]
+  rw [ht, List.filter_append]; simp [hf]
+
+private theorem c16_cnt1 {α : Type} (f : α → Bool) (l : List α) (m : Nat) (e : α) (hm : l[m]? = some e)
+    (hf : f e = true) : ((l.take (m + 1)).filter f).length = ((l.take m).filter f).length + 1 := by
+  have ht : l.take (m + 1) = l.take m ++ [e] := by simp [List.take_add_one, hm]
+  rw [ht, List.filter_append]; simp [hf]
+
+/-- A kept entry at position m sits in the filter at the count kept before m. -/
+private theorem c16_pos {α : Type} (f : α → Bool) (l : List α) (m : Nat) (e : α) (hm : l[m]? = some e)
+    (hf : f e = true) : (l.filter f)[((l.take m).filter f).length]? = some e := by
+  have h1 := c16_filter_take f l (m + 1)
+  have ht : l.take (m + 1) = l.take m ++ [e] := by simp [List.take_add_one, hm]
+  rw [ht, List.filter_append, List.filter_cons_of_pos hf, List.filter_nil] at h1
+  rw [← List.getElem?_take_of_lt (i := ((l.take m).filter f).length)
+    (j := ((l.take m).filter f ++ [e]).length) (by simp), ← h1]
+  exact List.getElem?_concat_length
+
+/-- chain (d): Inv holds along shardSetsT. -/
+private theorem c16_inv (k : Nat) : ∀ (ts : List Batch) (g : Snapshot Line × Snapshot Line),
+    Inv g.1 g.2 → Inv (shardSetsT k g ts).1 (shardSetsT k g ts).2
+  | [], _, h => h
+  | t :: ts, g, h => c16_inv k ts ((decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).released,
+      (decideRegT (carried t.ctx g.1 g.2) k t.owners t.lines).unresolved)
+      (inv_step t.ctx k t.owners t.lines g.1 g.2 h)
+
+/-- Shard-k signed entries among the first m log entries. -/
+private def c16cnt (log : List Entry) (k m : Nat) : Nat :=
+  ((log.take m).filter (fun e => e.shard == k && e.body.signed?.isSome)).length
+
+/-- chain_sound's left disjunct at step i. -/
+private abbrev c16G (k : Nat) (g : Snapshot Line × Snapshot Line) (hist : List (Bytes × SignIn × Entry))
+    (bs : List Batch) (i : Nat) : Prop :=
+  ∀ (x : Bytes × SignIn × Entry) (new : Bytes), hist[i]? = some x → x.2.2.body.signed? = some new →
+    ∃ (n : Stored) (hd : Head), storedOfAny sha3 new = some n ∧
+      headOf sha3 (shardSetsT k g (bs.take (i + 1))).1 (shardSetsT k g (bs.take (i + 1))).2 = some hd ∧
+      digestV2 sha3 hd = some n.checkpoint.stateDigest
+
+/-- chain_sound's collision at step i. -/
+private abbrev c16C (k : Nat) (g : Snapshot Line × Snapshot Line) (hist : List (Bytes × SignIn × Entry))
+    (bs : List Batch) (i : Nat) : Prop :=
+  ∃ (x : Bytes × SignIn × Entry) (b : Batch), hist[i]? = some x ∧ bs[i]? = some b ∧
+    Collision sha3 (witnessInputs sha3 b.ctx k b.owners b.lines x.2.1.witness)
+      (stateInputs sha3 (shardSetsT k g (bs.take i)).1 (shardSetsT k g (bs.take i)).2)
+
+/-- chain (b, c, e) by induction on the log prefix: before the resume no shard-k signed; after it the shard is
+    live and every signed so far is good with the base the digest of the true sets so far, or a collision. -/
+private theorem c16_chain (hH : HashLen sha3) (P : Pins) (log : List Entry) (k : Nat)
+    (hist : List (Bytes × SignIn × Entry)) (hm : MadeBy P log k hist) (er : Entry) (p : Permit)
+    (her : log[er.idx]? = some er) (hk : er.shard = k) (hp : er.body = .resume p)
+    (g : Snapshot Line × Snapshot Line) (hg : activation P k p = some g) (hi : Inv g.1 g.2) (bs : List Batch)
+    (hbs : histBatches P log k hist = some bs)
+    (hpre : ∀ m s, m ≤ er.idx → fold P (log.take m) = some s → (s.shard k).live = false) :
+    ∀ m s, fold P (log.take m) = some s → (m ≤ er.idx → c16cnt log k m = 0) ∧
+      (er.idx < m → (s.shard k).live = true ∧
+        (((∀ i < c16cnt log k m, c16G k g hist bs i) ∧
+          some (s.shard k).base = (headOf sha3 (shardSetsT k g (bs.take (c16cnt log k m))).1
+            (shardSetsT k g (bs.take (c16cnt log k m))).2).bind (digestV2 sha3)) ∨
+         ∃ i < c16cnt log k m, c16C k g hist bs i)) := by
+  intro m
+  induction m with
+  | zero =>
+    intro s _
+    exact ⟨fun _ => rfl, fun h => absurd h (Nat.not_lt_zero _)⟩
+  | succ m ih =>
+    intro s' hs'
+    cases hme : log[m]? with
+    | none =>
+      have hle := List.getElem?_eq_none_iff.mp hme
+      have hlt : er.idx < log.length := (List.getElem?_eq_some_iff.mp her).1
+      have e1 : log.take (m + 1) = log.take m := by
+        rw [List.take_of_length_le hle]; exact List.take_of_length_le (by omega)
+      have hc : c16cnt log k (m + 1) = c16cnt log k m := by unfold c16cnt; rw [e1]
+      rw [e1] at hs'
+      rw [hc]
+      exact ⟨fun h => absurd h (by omega), fun _ => (ih s' hs').2 (by omega)⟩
+    | some e =>
+      obtain ⟨s, hs, hpu, hei⟩ := c16_step P log m e hme s' hs'
+      obtain ⟨ih1, ih2⟩ := ih s hs
+      obtain ⟨hseal, hres, hsign⟩ := c16_push_k P s s' e hpu
+      have hee : er.idx = m → e = er := fun h => by
+        rw [h, hme] at her; exact Option.some.inj her
+      by_cases hek : e.shard = k
+      · cases hb : e.body with
+        | «seal» t =>
+          have hl := hseal t hb
+          rw [hek] at hl
+          have hc : c16cnt log k (m + 1) = c16cnt log k m :=
+            c16_cnt0 (fun e : Entry => e.shard == k && e.body.signed?.isSome) log m e hme
+              (by simp [hb, Body.signed?])
+          rw [hc]
+          refine ⟨fun h => ih1 (by omega), fun h => ?_⟩
+          have hne : er.idx ≠ m := fun h' => by rw [hee h', hp] at hb; cases hb
+          rw [(ih2 (by omega)).1] at hl; cases hl
+        | resume p' =>
+          obtain ⟨hl, hl', g', hact, hbase⟩ := hres p' hb
+          rw [hek] at hl hl' hact hbase
+          have hc : c16cnt log k (m + 1) = c16cnt log k m :=
+            c16_cnt0 (fun e : Entry => e.shard == k && e.body.signed?.isSome) log m e hme
+              (by simp [hb, Body.signed?])
+          rw [hc]
+          have hge : m ≤ er.idx := by
+            cases Nat.lt_or_ge er.idx m with
+            | inl h => rw [(ih2 h).1] at hl; cases hl
+            | inr h => exact h
+          have hle : er.idx ≤ m := by
+            cases Nat.lt_or_ge m er.idx with
+            | inl h => rw [hpre (m + 1) s' h hs'] at hl'; cases hl'
+            | inr h => exact h
+          rw [hee (Nat.le_antisymm hle hge), hp] at hb
+          rw [← Body.resume.inj hb, hg] at hact
+          rw [← Option.some.inj hact] at hbase
+          have h0 : c16cnt log k m = 0 := ih1 hge
+          refine ⟨fun _ => h0, fun _ => ⟨hl', Or.inl ⟨fun i hi' => absurd hi' (by omega), ?_⟩⟩⟩
+          rw [h0]
+          exact hbase
+        | sign cert new tokens f =>
+          obtain ⟨hl, hl', n', hn', hbase'⟩ := hsign cert new tokens f hb
+          rw [hek] at hl hl' hbase'
+          have hfe : (e.shard == k && e.body.signed?.isSome) = true := by simp [hek, hb, Body.signed?]
+          have hc : c16cnt log k (m + 1) = c16cnt log k m + 1 :=
+            c16_cnt1 (fun e : Entry => e.shard == k && e.body.signed?.isSome) log m e hme hfe
+          rw [hc]
+          have hlt : er.idx < m := by
+            cases Nat.lt_or_ge er.idx m with
+            | inl h => exact h
+            | inr h => rw [hpre m s h hs] at hl; cases hl
+          refine ⟨fun h => absurd h (by omega), fun _ => ⟨hl', ?_⟩⟩
+          have hpos := c16_pos (fun e : Entry => e.shard == k && e.body.signed?.isSome) log m e hme hfe
+          rw [← hm.1, List.getElem?_map] at hpos
+          obtain ⟨x, hxj, hxe⟩ := Option.map_eq_some_iff.mp hpos
+          have hxj : hist[c16cnt log k m]? = some x := hxj
+          have hxe : x.2.2 = e := hxe
+          obtain ⟨st0, new0, tokens0, hst0, hc0⟩ := hm.2 x (List.mem_of_getElem? hxj)
+          rw [hxe, hei, hs] at hst0
+          rw [← Option.some.inj hst0] at hc0
+          obtain ⟨st1, rs, b, hst1, hbt, hbj⟩ := c15_hb_idx P log k hist bs hbs _ x hxj
+          rw [hxe, hei, hs] at hst1
+          rw [← Option.some.inj hst1] at hbt
+          rcases (ih2 hlt).2 with ⟨hG, hbase⟩ | ⟨i, hi', hC⟩
+          · rcases custody_binds hH P s k x.1 x.2.1 new0 tokens0 x.2.2 hc0 _ _
+                (c16_inv k (bs.take (c16cnt log k m)) g hi) hbase with
+              ⟨rs', bt, rset, n0, hbt', -, hn0, ⟨⟨hd, hhd, hdd⟩, -, -, hbody⟩ | hcol⟩
+            · have hbb : bt = b := by
+                rw [hbt] at hbt'
+                exact (Prod.mk.inj (Option.some.inj hbt')).2.symm
+              rw [hbb] at hhd
+              have hs1 : shardSetsT k g (bs.take (c16cnt log k m + 1)) =
+                  shardSetsT k (shardSetsT k g (bs.take (c16cnt log k m))) [b] := by
+                unfold shardSetsT; rw [List.take_add_one, hbj]; exact List.foldl_append
+              have hh : headOf sha3 (shardSetsT k g (bs.take (c16cnt log k m + 1))).1
+                  (shardSetsT k g (bs.take (c16cnt log k m + 1))).2 = some hd := by
+                rw [hs1]; exact hhd
+              rw [hxe, hb] at hbody
+              have hnn : new = new0 := (Body.sign.inj hbody).2.1
+              rw [hnn, hn0] at hn'
+              rw [← Option.some.inj hn'] at hbase'
+              refine Or.inl ⟨fun i hi' => ?_, ?_⟩
+              · cases Nat.lt_or_ge i (c16cnt log k m) with
+                | inl h => exact hG i h
+                | inr h =>
+                  have hij : i = c16cnt log k m := by omega
+                  rw [hij]
+                  intro x' new' hx' hsg
+                  rw [hxj] at hx'
+                  rw [← Option.some.inj hx', hxe, hb] at hsg
+                  simp only [Body.signed?, Option.some.injEq] at hsg
+                  exact ⟨n0, hd, by rw [← hsg, hnn]; exact hn0, hh, hdd⟩
+              · rw [hh, hbase']
+                exact hdd.symm
+            · have hbb : bt = b := by
+                rw [hbt] at hbt'
+                exact (Prod.mk.inj (Option.some.inj hbt')).2.symm
+              rw [hbb] at hcol
+              exact Or.inr ⟨c16cnt log k m, Nat.lt_succ_self _, x, b, hxj, hbj, hcol⟩
+          · exact Or.inr ⟨i, by omega, hC⟩
+      · have hfe : (e.shard == k && e.body.signed?.isSome) = false := by simp [hek]
+        have hc : c16cnt log k (m + 1) = c16cnt log k m :=
+          c16_cnt0 (fun e : Entry => e.shard == k && e.body.signed?.isSome) log m e hme hfe
+        rw [hc, (cust_push P s s' e hpu).2.2.1 k (fun h => hek h.symm)]
+        have hne : er.idx ≠ m := fun h => hek (by rw [hee h]; exact hk)
+        exact ⟨fun h => ih1 (by omega), fun h => ih2 (by omega)⟩
+
 /-- Every signed of shard k carries the stateDigest of the true sets after its batch (owners from the folded
     registry); else a named collision at some step. Token rows per step: custody_binds on this base. -/
 theorem chain_sound (hH : HashLen sha3) (P : Pins) (log : List Entry) (st : LogState) (hf : fold P log = some st)
@@ -8790,7 +9069,31 @@ theorem chain_sound (hH : HashLen sha3) (P : Pins) (log : List Entry) (st : LogS
             digestV2 sha3 hd = some n.checkpoint.stateDigest) ∨
        ∃ (i : Nat) (x : Bytes × SignIn × Entry) (b : Batch), hist[i]? = some x ∧ bs[i]? = some b ∧
          Collision sha3 (witnessInputs sha3 b.ctx k b.owners b.lines x.2.1.witness)
-           (stateInputs sha3 (shardSetsT k g (bs.take i)).1 (shardSetsT k g (bs.take i)).2)) := sorry
+           (stateInputs sha3 (shardSetsT k g (bs.take i)).1 (shardSetsT k g (bs.take i)).2)) := by
+  obtain ⟨bs, hbs⟩ := c15_hb_some P log k hist hm
+  refine ⟨bs, hbs, ?_⟩
+  obtain ⟨i0, hi0⟩ := List.mem_iff_getElem?.mp her
+  obtain ⟨s0, s1, hs0, hp0, hix, -⟩ := cust_fold_at P log (by simp [hf]) i0 er hi0
+  have her' : log[er.idx]? = some er := by rw [hix]; exact hi0
+  have hpre : ∀ m s, m ≤ er.idx → fold P (log.take m) = some s → (s.shard k).live = false := by
+    intro m s hle hs
+    have hl0 := ((c16_push_k P s0 s1 er hp0).2.1 p hp).1
+    rw [hk] at hl0
+    cases hl : (s.shard k).live with
+    | false => rfl
+    | true =>
+      have h2 := c16_live_mono P log k m s hs hl (er.idx - m) s0
+        (by rw [Nat.add_sub_of_le hle, hix]; exact hs0)
+      rw [hl0] at h2; cases h2
+  have hlen : er.idx < log.length := (List.getElem?_eq_some_iff.mp her').1
+  have hc : c16cnt log k log.length = hist.length := by
+    unfold c16cnt; rw [List.take_length, ← hm.1, List.length_map]
+  obtain ⟨-, h2⟩ := c16_chain hH P log k hist hm er p her' hk hp g hg hi bs hbs hpre log.length st
+    (by rw [List.take_length]; exact hf)
+  rw [hc] at h2
+  rcases (h2 hlen).2 with ⟨hG, -⟩ | ⟨i, -, hC⟩
+  · exact Or.inl fun i x new hx hs => hG i (List.getElem?_eq_some_iff.mp hx).1 x new hx hs
+  · exact Or.inr ⟨i, hC⟩
 
 /-- The log alone (activation base + fresh rows) rebuilds the chain's true sets; else the same collision. -/
 theorem rebuild_sound (hH : HashLen sha3) (P : Pins) (log : List Entry) (st : LogState)
