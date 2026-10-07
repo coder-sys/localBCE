@@ -319,6 +319,46 @@ class Writer:
         self.c.executemany("INSERT INTO temp.probe VALUES (?)", [(cid,) for cid in cids])
         return {r[0] for r in self.c.execute("SELECT p.k FROM temp.probe p JOIN main.cells c ON c.cell_id=p.k")}
 
+    def mutate(self, t, touched, index, now, ob: str, key: str, cents: int, kind: str) -> None:
+        rev = self.revision[ob]
+        self.revision[ob] = rev + 1
+        touched[ob] = touched.get(ob, 0) + cents
+        ev = f"ev:{index:06d}:{key}"  # zero-padded, so the owner ids the adapter mints are monotone over the day
+        pay = f"pay:{index:06d}:{key}"
+        request = {"command": "PAYMENT" if kind == "PAYMENT_RECEIVED" else "PAYMENT_REVERSAL", "key": pay if kind == "PAYMENT_RECEIVED" else ev, "item_id": self.obl[ob],
+                   "evidence_id": ev, "common_origin_id": f"x12/{key}", "amount_cents": cents, "event_at_ms": now, "source_id": "x12", "source_version": "v1", "local_ref": ""}
+        body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("ascii")  # the owner's commands row (owner._record_command): canonical request, domain digest
+        t["commands"].append((f"{request['command']}:{request['key']}", request["command"], body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
+        t["evidence"].append((ev, self.obl[ob], "PAYMENT", f"x12/{key}", "x12", "v1", "", now, now, now, sha(ev, 1), sha(ev, 2), cents, None, None))
+        t["payments"].append((pay, ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
+        self.seq += 1  # one history event per mutation, hash-chained (SHA3-512)
+        payload = f'{{"kind":"{kind}","obligation":"{ob}","before":{rev},"after":{rev + 1},"ref":"{key}"}}'
+        pd, previous = sha(payload), self.head
+        self.head = sha(previous, pd)
+        t["financial_events"].append((self.seq, sha("event", self.seq), "OBLIGATION", ob, kind, rev, rev + 1, payload, pd, previous, self.head, now))
+
+    def finish(self, index, now, touched, began) -> None:
+        evals, cases, obls = [], [], []
+        for ob in sorted(touched) if self.fast else touched:  # per touched obligation, once per chunk: cases UPDATE, final evaluation INSERT, guarded obligations UPDATE
+            rev, cents = self.revision[ob], touched[ob]
+            eid = f"eval:{index:06d}:{ob}:{rev}"
+            row = list(self.base[ob])
+            for name, value in (("evaluation_id", eid), ("revision", rev), ("evaluated_at_ms", now), ("result_digest", sha(eid, 1)), ("input_snapshot_digest", sha(eid, 2)), ("receipt_digest", sha(eid, 3))):
+                row[self.cols.index(name)] = value
+            evals.append(tuple(row))
+            cases.append((now, ob))
+            obls.append((rev, max(cents, 0), eid, now, ob, began[ob]))
+        self.write("evaluations", evals)
+        guarded = [("UPDATE cases SET updated_at_ms=? WHERE obligation_id=?", cases),
+                   ("UPDATE obligations SET revision=?,received_cash_cents=received_cash_cents+?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?", obls)]
+        for sql, args in guarded:
+            if self.fast:
+                changed = self.c.executemany(sql, args).rowcount  # the sum over the batch; each statement matches one primary key, so the sum is the count only if every one hit
+            else:
+                changed = sum(self.c.execute(sql, a).rowcount for a in args)
+            if changed != len(args):
+                raise FinancialIntegrityError("obligation_revision_moved")
+
     def chunk(self, index: int, pool: str, rows, pending, resolved) -> None:
         t = {k: [] for k in ("cell_rows", "cells", "resolutions", "charges", "holds", "links", "evidence", "payments", "financial_events", "commands")}
         touched: dict[str, int] = {}  # obligation -> cents received in this chunk
@@ -326,23 +366,7 @@ class Writer:
         began = dict(self.revision)
         base = index * KEY
 
-        def mutate(ob: str, key: str, cents: int, kind: str) -> None:
-            rev = self.revision[ob]
-            self.revision[ob] = rev + 1
-            touched[ob] = touched.get(ob, 0) + cents
-            ev = f"ev:{index:06d}:{key}"  # zero-padded, so the owner ids the adapter mints are monotone over the day
-            pay = f"pay:{index:06d}:{key}"
-            request = {"command": "PAYMENT" if kind == "PAYMENT_RECEIVED" else "PAYMENT_REVERSAL", "key": pay if kind == "PAYMENT_RECEIVED" else ev, "item_id": self.obl[ob],
-                       "evidence_id": ev, "common_origin_id": f"x12/{key}", "amount_cents": cents, "event_at_ms": now, "source_id": "x12", "source_version": "v1", "local_ref": ""}
-            body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("ascii")  # the owner's commands row (owner._record_command): canonical request, domain digest
-            t["commands"].append((f"{request['command']}:{request['key']}", request["command"], body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
-            t["evidence"].append((ev, self.obl[ob], "PAYMENT", f"x12/{key}", "x12", "v1", "", now, now, now, sha(ev, 1), sha(ev, 2), cents, None, None))
-            t["payments"].append((pay, ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
-            self.seq += 1  # one history event per mutation, hash-chained (SHA3-512)
-            payload = f'{{"kind":"{kind}","obligation":"{ob}","before":{rev},"after":{rev + 1},"ref":"{key}"}}'
-            pd, previous = sha(payload), self.head
-            self.head = sha(previous, pd)
-            t["financial_events"].append((self.seq, sha("event", self.seq), "OBLIGATION", ob, kind, rev, rev + 1, payload, pd, previous, self.head, now))
+        mutate = lambda ob, key, cents, kind: self.mutate(t, touched, index, now, ob, key, cents, kind)  # noqa: E731
 
         prep = []
         for row_index, row in rows:
@@ -393,27 +417,7 @@ class Writer:
             self.classes[cls] = self.classes.get(cls, 0) + 1
         for table, data in t.items():
             self.write(table, data)
-        evals, cases, obls = [], [], []
-        for ob in sorted(touched) if self.fast else touched:  # per touched obligation, once per chunk: cases UPDATE, final evaluation INSERT, guarded obligations UPDATE
-            rev, cents = self.revision[ob], touched[ob]
-            eid = f"eval:{index:06d}:{ob}:{rev}"
-            row = list(self.base[ob])
-            for name, value in (("evaluation_id", eid), ("revision", rev), ("evaluated_at_ms", now), ("result_digest", sha(eid, 1)), ("input_snapshot_digest", sha(eid, 2)), ("receipt_digest", sha(eid, 3))):
-                row[self.cols.index(name)] = value
-            evals.append(tuple(row))
-            cases.append((now, ob))
-            obls.append((rev, max(cents, 0), eid, now, ob, began[ob]))
-        self.write("evaluations", evals)
-        guarded = [("UPDATE cases SET updated_at_ms=? WHERE obligation_id=?", cases),
-                   ("UPDATE obligations SET revision=?,received_cash_cents=received_cash_cents+?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?", obls)]
-        for sql, args in guarded:
-            if self.fast:
-                changed = self.c.executemany(sql, args).rowcount  # the sum over the batch; each statement matches one primary key, so the sum is the count only if every one hit
-            else:
-                changed = sum(self.c.execute(sql, a).rowcount for a in args)
-            if changed != len(args):
-                raise FinancialIntegrityError("obligation_revision_moved")
-
+        self.finish(index, now, touched, began)
 
 def open_store(db: Path, fast: bool, checkpointer: bool) -> tuple[sqlite3.Connection, Writer]:
     """The writer connection (foreign_keys, recursive_triggers, synchronous=FULL, WAL, unchanged) and its Writer; checkpointer=True moves checkpoints off the commit path."""
