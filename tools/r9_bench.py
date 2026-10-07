@@ -2,13 +2,13 @@
 
 Stages, each run alone (`--stage a|b|c|d|gen|report`; e rides on b):
   a  trunk parse_835 + fold over the corpus.
-  b  per-row judge + the corrected per-line writes, plain SQL, in 1,000-row chunks, into a real trunk owner database
+  b  per-row judge + the corrected per-line writes, plain SQL, one transaction per chunk (a file, up to 8,192 lines), into a real trunk owner database
      (owner tables) plus bench-side store tables. The trunk has no store v9 (cells, holds, links, verdicts, pool rule):
      the judge here is a stand-in that decides only the write class, so (b) measures write cost, not judge cost.
   c  trunk FinancialOwner.record_payment_evidence (Lean decides, one command per call) at k_pre payments in one obligation.
   d  the pinned Lean worker. It has no multi-command BLFPAY frame (batchFast is S1); this times 1,000 single-command round
      trips and the 1,000 frame-rejection floor, a proxy that cannot be read as a PASS of the bar.
-  e  write-lock hold (BEGIN IMMEDIATE to COMMIT) per 1,000-row chunk: timed inside each (b) run and read from those runs by `report`.
+  e  write-lock hold (BEGIN IMMEDIATE to COMMIT) per chunk: timed inside each (b) run and read from those runs by `report`.
 Corpus: 835 files by the repo's tests.test_x12_835_intake.build; one 1-line deposit file per file (its pool).
 Results: JSON `runs` list, one record per guarded run; `--stage report` sums slices.
 """
@@ -25,17 +25,21 @@ import sqlite3
 import statistics
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from ctypes import wintypes
+from operator import itemgetter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from app.right_rail_financial_owner import FinancialIntegrityError  # noqa: E402
+
 SCRATCH = Path("C:/Users/neers/rrb/state/scratch-r9")
 # trunk x12_tokenizer.MAX_SEGMENTS is 5,000 per file, so 5,000 CLP per file is refused (x12:cap-segments): 250 files x 4,000 CLP = 1M lines
-FILES, PER_FILE, OBLIGATIONS, CHUNK = 250, 4000, 1000, 1000
+FILES, PER_FILE, OBLIGATIONS, C_MAX = 250, 4000, 1000, 8192  # a chunk is one transaction: the file, or 8,192 lines of a longer one
 BARS = {"a": ("lines_per_s", ">=", 250_000), "b": ("lines_per_s", ">=", 80_000), "d": ("ms_per_1000_commands", "<=", 20), "e": ("max_hold_s", "<", 1.0)}
 
 
@@ -168,14 +172,17 @@ def _top(prof) -> list[str]:
 
 # ---------------------------------------------------------------- stage b / e
 STORE_DDL = """
-CREATE TABLE IF NOT EXISTS cell_rows (origin_id TEXT PRIMARY KEY, file_id INTEGER NOT NULL, row_index INTEGER NOT NULL, tag TEXT NOT NULL, amount_cents INTEGER, raw TEXT NOT NULL, line_digest BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS cells (cell_id BLOB PRIMARY KEY, origin_id TEXT NOT NULL, pool TEXT NOT NULL, obligation_id TEXT NOT NULL, state TEXT NOT NULL, amount_cents INTEGER);
-CREATE TABLE IF NOT EXISTS resolutions (resolution_id TEXT PRIMARY KEY, cell_id BLOB NOT NULL, act TEXT, cents INTEGER NOT NULL, basis TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS charges (charge_id TEXT PRIMARY KEY, resolution_id TEXT NOT NULL, obligation_id TEXT NOT NULL, cents INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS holds (hold_id TEXT PRIMARY KEY, cell_id BLOB NOT NULL, reason TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS links (link_id TEXT PRIMARY KEY, negative_cell_id BLOB NOT NULL, target_origin_id TEXT NOT NULL, status TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS deposit_rows (entry_id TEXT PRIMARY KEY, pool TEXT NOT NULL, amount_cents INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS cell_rows (row_key INTEGER PRIMARY KEY, origin_id TEXT NOT NULL, tag TEXT NOT NULL, amount_cents INTEGER, raw TEXT NOT NULL, line_digest BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS cells (row_key INTEGER PRIMARY KEY, cell_id BLOB NOT NULL UNIQUE, origin_id TEXT NOT NULL, pool TEXT NOT NULL, obligation_id TEXT NOT NULL, state TEXT NOT NULL, amount_cents INTEGER);
+CREATE TABLE IF NOT EXISTS resolutions (row_key INTEGER PRIMARY KEY, cell_id BLOB NOT NULL, act TEXT, cents INTEGER NOT NULL, basis TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS charges (row_key INTEGER PRIMARY KEY, resolution_key INTEGER NOT NULL, obligation_id TEXT NOT NULL, cents INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS holds (row_key INTEGER PRIMARY KEY, cell_id BLOB NOT NULL, reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS links (row_key INTEGER PRIMARY KEY, negative_cell_id BLOB NOT NULL, target_origin_id TEXT NOT NULL, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS deposit_rows (row_key INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, pool TEXT NOT NULL, amount_cents INTEGER NOT NULL);
 """
+# The store tables are bench-only (S3 is not stored anywhere yet), so keys are chosen for append order: row_key = file index * 2^20 + row index, monotone over the day.
+# cells keeps the one inherent random index, UNIQUE(cell_id), which is also the dedup key.
+KEY = 1 << 20
 
 
 def make_owner_db(path: Path) -> None:
@@ -191,11 +198,63 @@ def sha(*parts: object) -> bytes:
     return hashlib.sha3_512("\x1f".join(map(str, parts)).encode()).digest()
 
 
-class Writer:
-    """The corrected per-line writes (section 11), as plain SQL on one connection, one transaction per chunk."""
+class Checkpointer:
+    """WAL checkpoints (PASSIVE) on their own connection and thread, so a commit never copies pages into the database (PERF-B design 2.7).
+    A checkpoint copies only committed frames and fsyncs the database before the WAL may reset, so committed state is unchanged."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.c = connection
+    def __init__(self, path: Path, wal_limit: int = 256 * 2**20) -> None:
+        self.wal, self.limit, self.seconds, self.runs, self.errors = Path(str(path) + "-wal"), wal_limit, 0.0, 0, []
+        self.wake, self.idle, self.stopping = threading.Event(), threading.Event(), False
+        self.idle.set()
+        self.thread = threading.Thread(target=self._run, args=(str(path),), daemon=True)
+        self.thread.start()
+
+    def _run(self, path: str) -> None:
+        c = sqlite3.connect(path, isolation_level=None)
+        c.execute("PRAGMA busy_timeout=5000")
+        while True:
+            self.wake.wait()
+            self.wake.clear()
+            if self.stopping:
+                break
+            t = time.perf_counter()
+            try:
+                c.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
+            except sqlite3.Error as error:  # reported, never silent
+                self.errors.append(repr(error))
+            self.seconds += time.perf_counter() - t
+            self.runs += 1
+            if not self.wake.is_set():
+                self.idle.set()
+        c.close()
+
+    def kick(self) -> None:
+        self.idle.clear()
+        self.wake.set()
+
+    def before_begin(self) -> None:
+        """The writer waits for a checkpoint only when the WAL is past the limit."""
+        if self.wal.exists() and self.wal.stat().st_size > self.limit:
+            self.kick()
+            self.idle.wait()
+
+    def close(self) -> None:
+        self.stopping = True
+        self.wake.set()
+        self.thread.join()
+
+
+class Crash(BaseException):
+    """Test hook: stands for the process dying inside a chunk (nothing rolls back; the connection is just dropped)."""
+
+
+class Writer:
+    """The corrected per-line writes (section 11), as plain SQL on one connection: one transaction per chunk (a file, or C_MAX lines).
+    fast=True is the PERF-B path (set-based dedup probe, one executemany per table in key order, per-obligation writes once, checkpointer);
+    fast=False is the reference (one execute per row in file order, one dedup SELECT per row). Both write identical rows."""
+
+    def __init__(self, connection: sqlite3.Connection, fast: bool = True, checkpointer: Checkpointer | None = None) -> None:
+        self.c, self.fast, self.ckpt = connection, fast, checkpointer
         cur = connection
         self.obl = {r[0]: r[1] for r in cur.execute("SELECT obligation_id,item_id FROM obligations ORDER BY item_id")}  # obligation -> item
         self.obl_ids = list(self.obl)
@@ -203,9 +262,11 @@ class Writer:
         self.cols = [r[1] for r in cur.execute("PRAGMA table_info(evaluations)")]
         self.base = {r[1]: r for r in cur.execute("SELECT * FROM evaluations e WHERE evaluation_id IN (SELECT current_evaluation_id FROM obligations)")}
         self.seq, self.head = cur.execute("SELECT COALESCE(MAX(event_sequence),0),COALESCE((SELECT head FROM financial_events ORDER BY event_sequence DESC LIMIT 1),zeroblob(64)) FROM financial_events").fetchone()
-        self.commit_s: list[float] = []  # COMMIT alone (fsync, deferred FK check, WAL checkpoint) of each chunk
+        cur.execute("CREATE TEMP TABLE IF NOT EXISTS probe (k BLOB NOT NULL)")
+        self.commit_s: list[float] = []  # COMMIT alone (fsync, deferred FK check, WAL checkpoint when the writer does it) of each chunk
         self.tally: dict[str, int] = {}
         self.classes: dict[str, int] = {}
+        self.before_commit = None  # test hook: called (file index, chunk start) inside the transaction, before COMMIT
 
     def obligation(self, ref: str) -> str:
         return self.obl_ids[zlib.crc32(ref.encode()) % len(self.obl_ids)]
@@ -213,105 +274,157 @@ class Writer:
     def run_file(self, index: int, record, deposit: dict, hold_times: list[float]) -> int:
         rows = sorted(enumerate(record.rows), key=lambda p: (0 if (p[1].amount_cents or 0) < 0 else 1, p[0]))  # negatives first, then file order
         pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
-        pending: dict[str, list[tuple[str, bytes]]] = {}
+        pending: dict[str, list[tuple[str, bytes, int]]] = {}
         resolved: set[str] = set()
-        for start in range(0, len(rows), CHUNK):
+        for start in range(0, len(rows), C_MAX):
             t0 = time.perf_counter()
+            if self.ckpt:
+                self.ckpt.before_begin()
             self.c.execute("BEGIN IMMEDIATE")
-            if start == 0:
-                self.write("deposit_rows", [(deposit["entry_id"], pool, deposit["amount_cents"])])
-            self.chunk(index, pool, rows[start:start + CHUNK], pending, resolved)
+            try:
+                if start == 0 and self.c.execute("SELECT 1 FROM deposit_rows WHERE row_key=?", (index * KEY,)).fetchone() is None:
+                    self.write("deposit_rows", [(index * KEY, deposit["entry_id"], pool, deposit["amount_cents"])])
+                self.chunk(index, pool, rows[start:start + C_MAX], pending, resolved)
+                if start + C_MAX >= len(rows):  # financial_meta rides the file's last transaction
+                    self.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (self.seq, self.head))
+                if self.before_commit:
+                    self.before_commit(index, start)
+            except Exception as error:  # the judge and the store disagree: an integrity defect, never a hold. The Writer is dead; reopen it.
+                self.c.execute("ROLLBACK")
+                if isinstance(error, sqlite3.Error):
+                    raise FinancialIntegrityError(f"store_constraint:{error}") from error
+                raise
             c0 = time.perf_counter()
             self.c.execute("COMMIT")
             self.commit_s.append(time.perf_counter() - c0)
+            if self.ckpt:
+                self.ckpt.kick()
             hold_times.append(time.perf_counter() - t0)
-        t0 = time.perf_counter()  # the per-file financial_meta UPDATE rides the file's last transaction in the owner; here its own
-        self.c.execute("BEGIN IMMEDIATE")
-        self.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (self.seq, self.head))
-        self.c.execute("COMMIT")
-        hold_times.append(time.perf_counter() - t0)
         return len(rows)
 
     def write(self, table: str, rows: list[tuple]) -> None:
-        if rows:
-            self.tally[table] = self.tally.get(table, 0) + len(rows)
-            self.c.executemany(f"INSERT INTO {table} VALUES ({','.join('?' * len(rows[0]))})", rows)
+        if not rows:
+            return
+        self.tally[table] = self.tally.get(table, 0) + len(rows)
+        sql = f"INSERT INTO {table} VALUES ({','.join('?' * len(rows[0]))})"
+        if self.fast:
+            self.c.executemany(sql, sorted(rows, key=itemgetter(0)))
+        else:
+            for row in rows:
+                self.c.execute(sql, row)
+
+    def known_cells(self, cids: list[bytes]) -> set[bytes]:
+        """One probe per chunk: the chunk's cell ids into a temp key table, one JOIN against cells."""
+        self.c.execute("DELETE FROM temp.probe")
+        self.c.executemany("INSERT INTO temp.probe VALUES (?)", [(cid,) for cid in cids])
+        return {r[0] for r in self.c.execute("SELECT p.k FROM temp.probe p JOIN main.cells c ON c.cell_id=p.k")}
 
     def chunk(self, index: int, pool: str, rows, pending, resolved) -> None:
         t = {k: [] for k in ("cell_rows", "cells", "resolutions", "charges", "holds", "links", "evidence", "payments", "financial_events", "commands")}
         touched: dict[str, int] = {}  # obligation -> cents received in this chunk
         now = 1_700_000_000_000 + index
         began = dict(self.revision)
+        base = index * KEY
 
         def mutate(ob: str, key: str, cents: int, kind: str) -> None:
             rev = self.revision[ob]
             self.revision[ob] = rev + 1
             touched[ob] = touched.get(ob, 0) + cents
-            ev = f"ev:{index}:{key}"
-            request = {"command": "PAYMENT" if kind == "PAYMENT_RECEIVED" else "PAYMENT_REVERSAL", "key": f"pay:{index}:{key}" if kind == "PAYMENT_RECEIVED" else ev, "item_id": self.obl[ob],
+            ev = f"ev:{index:06d}:{key}"  # zero-padded, so the owner ids the adapter mints are monotone over the day
+            pay = f"pay:{index:06d}:{key}"
+            request = {"command": "PAYMENT" if kind == "PAYMENT_RECEIVED" else "PAYMENT_REVERSAL", "key": pay if kind == "PAYMENT_RECEIVED" else ev, "item_id": self.obl[ob],
                        "evidence_id": ev, "common_origin_id": f"x12/{key}", "amount_cents": cents, "event_at_ms": now, "source_id": "x12", "source_version": "v1", "local_ref": ""}
             body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("ascii")  # the owner's commands row (owner._record_command): canonical request, domain digest
             t["commands"].append((f"{request['command']}:{request['key']}", request["command"], body.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + body).digest(), self.seq + 1))
             t["evidence"].append((ev, self.obl[ob], "PAYMENT", f"x12/{key}", "x12", "v1", "", now, now, now, sha(ev, 1), sha(ev, 2), cents, None, None))
-            t["payments"].append((f"pay:{index}:{key}", ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
+            t["payments"].append((pay, ob, self.obl[ob], ev, f"x12/{key}", abs(cents) or 1, now, 1, None))
             self.seq += 1  # one history event per mutation, hash-chained (SHA3-512)
             payload = f'{{"kind":"{kind}","obligation":"{ob}","before":{rev},"after":{rev + 1},"ref":"{key}"}}'
             pd, previous = sha(payload), self.head
             self.head = sha(previous, pd)
             t["financial_events"].append((self.seq, sha("event", self.seq), "OBLIGATION", ob, kind, rev, rev + 1, payload, pd, previous, self.head, now))
 
+        prep = []
         for row_index, row in rows:
             tag, key = row.key[0], "/".join(row.key[1:])
             origin = f"{index}/{tag}/{key}"
-            amount = row.amount_cents
             ref = row.key[4] if tag == "PLB" else row.key[1]
             ob = self.obligation(ref)
             cid = sha("RR/CELL/CASH/v2", "bench-tenant", self.obl[ob], origin)  # the real cell id: a random-looking 64-byte digest, so the UNIQUE index on it is the random one
-            t["cell_rows"].append((origin, index, row_index, tag, amount, row.raw, hashlib.sha3_256(row.raw.encode()).digest()))
+            prep.append((row_index, row, tag, key, origin, ref, ob, cid))
+        known = self.known_cells([p[7] for p in prep]) if self.fast else None
+        seen: set[bytes] = set()  # keys this chunk creates are answered from memory
+        for row_index, row, tag, key, origin, ref, ob, cid in prep:
+            amount, rk = row.amount_cents, base + row_index
+            if cid in seen or (cid in known if known is not None else self.c.execute("SELECT 1 FROM cells WHERE cell_id=?", (cid,)).fetchone() is not None):
+                self.classes["duplicate"] = self.classes.get("duplicate", 0) + 1  # a row already judged (a replayed file) writes nothing
+                continue
+            seen.add(cid)
+            t["cell_rows"].append((rk, origin, tag, amount, row.raw, hashlib.sha3_256(row.raw.encode()).digest()))
             if amount == 0:
                 cls = "zero"
+                t["cells"].append((rk, cid, origin, pool, ob, "ZERO", amount))
             elif tag == "RAW" or amount is None:
                 cls = "held"
-                t["cells"].append((cid, origin, pool, ob, "HELD", amount))
+                t["cells"].append((rk, cid, origin, pool, ob, "HELD", amount))
             elif amount < 0:
                 target = f"{index}/CLP/{ref}"  # "negatives first, then file order": a REV's target is resolved only if it came earlier
-                t["cells"].append((cid, origin, pool, ob, "NEGATIVE", amount))
-                t["holds"].append((f"hold:{origin}", cid, "TARGET"))
-                t["links"].append((f"link:{origin}", cid, target, "EFFECTIVE" if target in resolved else "PENDING"))
+                t["cells"].append((rk, cid, origin, pool, ob, "NEGATIVE", amount))
+                t["holds"].append((rk, cid, "TARGET"))
+                t["links"].append((rk, cid, target, "EFFECTIVE" if target in resolved else "PENDING"))
                 if target in resolved:
                     cls = "negative_applied"
-                    t["resolutions"].append((f"res:{origin}", cid, None, amount, "INTAKE"))
-                    t["charges"].append((f"chg:{origin}", f"res:{origin}", ob, amount))
+                    t["resolutions"].append((rk, cid, None, amount, "INTAKE"))
+                    t["charges"].append((rk, rk, ob, amount))
                     mutate(ob, key, amount, "PAYMENT_REVERSED")
                 else:
                     cls = "negative_pending"
-                    pending.setdefault(target, []).append((origin, cid))
+                    pending.setdefault(target, []).append((origin, cid, rk))
             else:
                 cls = "applied"
-                t["cells"].append((cid, origin, pool, ob, "RESOLVED", amount))
-                t["resolutions"].append((f"res:{origin}", cid, None, amount, "INTAKE"))
-                t["charges"].append((f"chg:{origin}", f"res:{origin}", ob, amount))
-                for neg, negcid in pending.pop(origin, ()):  # the target's resolution nets each pending link: its resolution and charge only
-                    t["resolutions"].append((f"res:{neg}", negcid, None, 0, "NET"))
-                    t["charges"].append((f"chg:{neg}", f"res:{neg}", ob, 0))
+                t["cells"].append((rk, cid, origin, pool, ob, "RESOLVED", amount))
+                t["resolutions"].append((rk, cid, None, amount, "INTAKE"))
+                t["charges"].append((rk, rk, ob, amount))
+                for _, negcid, negrk in pending.pop(origin, ()):  # the target's resolution nets each pending link: its resolution and charge only
+                    t["resolutions"].append((negrk, negcid, None, 0, "NET"))
+                    t["charges"].append((negrk, negrk, ob, 0))
                 resolved.add(origin)
                 mutate(ob, key, amount, "PAYMENT_RECEIVED")
             self.classes[cls] = self.classes.get(cls, 0) + 1
         for table, data in t.items():
             self.write(table, data)
-        for ob, cents in touched.items():  # per touched obligation, once per chunk: cases UPDATE, final evaluation INSERT, guarded obligations UPDATE
-            rev = self.revision[ob]
-            eid = f"eval:{index}:{ob}:{rev}"
+        evals, cases, obls = [], [], []
+        for ob in sorted(touched) if self.fast else touched:  # per touched obligation, once per chunk: cases UPDATE, final evaluation INSERT, guarded obligations UPDATE
+            rev, cents = self.revision[ob], touched[ob]
+            eid = f"eval:{index:06d}:{ob}:{rev}"
             row = list(self.base[ob])
             for name, value in (("evaluation_id", eid), ("revision", rev), ("evaluated_at_ms", now), ("result_digest", sha(eid, 1)), ("input_snapshot_digest", sha(eid, 2)), ("receipt_digest", sha(eid, 3))):
                 row[self.cols.index(name)] = value
-            self.write("evaluations", [tuple(row)])
-            self.c.execute("UPDATE cases SET updated_at_ms=? WHERE obligation_id=?", (now, ob))
-            self.c.execute("UPDATE obligations SET revision=?,received_cash_cents=received_cash_cents+?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?",
-                           (rev, max(cents, 0), eid, now, ob, began[ob]))
+            evals.append(tuple(row))
+            cases.append((now, ob))
+            obls.append((rev, max(cents, 0), eid, now, ob, began[ob]))
+        self.write("evaluations", evals)
+        guarded = [("UPDATE cases SET updated_at_ms=? WHERE obligation_id=?", cases),
+                   ("UPDATE obligations SET revision=?,received_cash_cents=received_cash_cents+?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?", obls)]
+        for sql, args in guarded:
+            if self.fast:
+                changed = self.c.executemany(sql, args).rowcount  # the sum over the batch; each statement matches one primary key, so the sum is the count only if every one hit
+            else:
+                changed = sum(self.c.execute(sql, a).rowcount for a in args)
+            if changed != len(args):
+                raise FinancialIntegrityError("obligation_revision_moved")
 
 
-def stage_b(first: int, count: int, seed: int, per_file: int, db: Path, fresh: bool, profile: bool) -> dict:
+def open_store(db: Path, fast: bool, checkpointer: bool) -> tuple[sqlite3.Connection, Writer]:
+    """The writer connection (foreign_keys, recursive_triggers, synchronous=FULL, WAL, unchanged) and its Writer; checkpointer=True moves checkpoints off the commit path."""
+    c = sqlite3.connect(str(db), isolation_level=None)
+    for pragma in ("foreign_keys=ON", "recursive_triggers=ON", "synchronous=FULL", "cache_size=-65536", "busy_timeout=5000") + (("wal_autocheckpoint=0",) if checkpointer else ()):
+        c.execute(f"PRAGMA {pragma}")
+    c.executescript(STORE_DDL)
+    return c, Writer(c, fast, Checkpointer(db) if checkpointer else None)
+
+
+def stage_b(first: int, count: int, seed: int, per_file: int, db: Path, fresh: bool, profile: bool, reference: bool = False) -> dict:
     from app.x12_835_intake import parse_835
     ensure_corpus(first, count, seed, per_file)
     if fresh and db.exists():
@@ -319,11 +432,9 @@ def stage_b(first: int, count: int, seed: int, per_file: int, db: Path, fresh: b
             p.unlink()
     if not db.exists():
         make_owner_db(db)
-    c = sqlite3.connect(str(db), isolation_level=None)
-    for pragma in ("foreign_keys=ON", "recursive_triggers=ON", "synchronous=FULL", "cache_size=-65536", "busy_timeout=5000"):
-        c.execute(f"PRAGMA {pragma}")
-    c.executescript(STORE_DDL)
-    w = Writer(c)
+    c, w = open_store(db, not reference, not reference)
+    size = lambda: db.stat().st_size + (Path(str(db) + "-wal").stat().st_size if Path(str(db) + "-wal").exists() else 0)  # noqa: E731
+    size0 = size()
     holds: list[float] = []
     per_file_s, lines = [], 0
     prof = None
@@ -341,10 +452,14 @@ def stage_b(first: int, count: int, seed: int, per_file: int, db: Path, fresh: b
             prof.disable()
         per_file_s.append(time.perf_counter() - t)
         lines += per_file
+    grown = size() - size0
+    if w.ckpt:
+        w.ckpt.close()
     c.close()
     out = {"files": count, "lines": lines, "seconds": sum(per_file_s), "lines_per_s": lines / sum(per_file_s), "per_file_s": per_file_s, "hold_s": holds,
            "p50_hold_s": pct(holds, 50), "p99_hold_s": pct(holds, 99), "max_hold_s": max(holds), "commit_share_of_hold": sum(w.commit_s) / sum(holds), "writes_by_table": w.tally,
-           "writes_per_line": sum(w.tally.values()) / lines, "row_classes": w.classes, "db": str(db)}
+           "writes_per_line": sum(w.tally.values()) / lines, "row_classes": w.classes, "db": str(db), "reference": reference, "db_bytes_per_line": grown / lines,
+           "checkpoint_s": w.ckpt.seconds if w.ckpt else None, "checkpoint_runs": w.ckpt.runs if w.ckpt else None, "checkpoint_errors": w.ckpt.errors if w.ckpt else None}
     return {**out, "profile": _top(prof)} if prof else out
 
 
@@ -513,6 +628,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--db", type=Path, default=None)
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--profile", action="store_true")
+    ap.add_argument("--reference", action="store_true", help="stage b: the per-row reference writer (default autocheckpoint) instead of the PERF-B chunk path")
     ap.add_argument("--kpre", type=int, default=10)
     ap.add_argument("--commands", type=int, default=200)
     ap.add_argument("--seed-seconds", type=float, default=420)
@@ -526,7 +642,7 @@ def main(argv: list[str] | None = None) -> int:
         ensure_corpus(a.first, a.files, a.seed, a.per_file)
         return 0
     db = a.db or SCRATCH / f"{a.stage}_store.sqlite3"
-    result = {"a": lambda: stage_a(a.first, a.files, a.seed, a.per_file, a.profile), "b": lambda: stage_b(a.first, a.files, a.seed, a.per_file, db, a.fresh, a.profile),
+    result = {"a": lambda: stage_a(a.first, a.files, a.seed, a.per_file, a.profile), "b": lambda: stage_b(a.first, a.files, a.seed, a.per_file, db, a.fresh, a.profile, a.reference),
               "c": lambda: stage_c(a.kpre, a.commands, a.seed_seconds), "d": lambda: stage_d(a.rounds)}[a.stage]()
     record = {"stage": a.stage, "suffix": a.suffix, "args": {k: str(v) for k, v in vars(a).items()}, "peak_rss_bytes": peak_rss_bytes(), "result": result}
     prior = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
