@@ -178,6 +178,57 @@ def runSingle (pk : Pack) (cx : Ctx) : Single → List Input → Single
   | s, [] => s
   | s, r :: rs => runSingle pk cx (stepSingle pk cx s r) rs
 
+/-! ## The whole-file reference: Lean runs once on every shard-admitted row of the file -/
+
+/-- The shard index an item hashes to (an itemless row is never shard-admitted; `0` is a placeholder). -/
+def sidx (pk : Pack) (cx : Ctx) : Option Item → Nat
+  | some i => shardOf pk cx i
+  | none => 0
+
+def isSh : Verdict → Bool
+  | .admit (.shard _) => true
+  | _ => false
+
+/-- The file's shard-admitted rows, in file order. -/
+def wrows (o : List (Row × Verdict)) : List Row := (o.filter fun x => isSh x.2).map (·.1)
+
+/-- The verdicts of the rows `q` selects, read off a verdict list for all of `rs`. -/
+def sel (q : Row → Bool) : List Row → List Bool → List Bool
+  | [], _ => []
+  | r :: rs, W => if q r then W.headD false :: sel q rs W.tail else sel q rs W.tail
+
+/-- Locality of Lean (the stated hypothesis of the whole-file reference): for every item predicate, the verdicts
+    Lean gives the selected rows inside a batch equal the verdicts it gives those rows alone. -/
+def Local (cx : Ctx) : Prop := ∀ (q : Option Item → Bool) (rows : List Row),
+  sel (fun r => q r.item) rows (cx.lean rows) = cx.lean (rows.filter fun r => q r.item)
+
+def applyWhole (cx : Ctx) (s : Single) (J : Judgment) : Single :=
+  let w := wrows J.out
+  let f := finRows s.chg w (cx.lean w)
+  let l := gsum (part J .spine)
+  { dir := J.dir, t := J.t, used := s.used + gsum w, budget := s.budget + f.2 + l, lc := s.lc + l,
+    spineRows := s.spineRows ++ part J .spine, chg := f.1, gross := s.gross + gsum w, mc := s.mc + f.2 }
+
+def stepWhole (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) : Single :=
+  let J := judgeSingle pk cx s inp
+  if J.ok then applyWhole cx s J else s
+
+def runWhole (pk : Pack) (cx : Ctx) : Single → List Input → Single
+  | s, [] => s
+  | s, r :: rs => runWhole pk cx (stepWhole pk cx s r) rs
+
+/-- Per-row MOVE receipts from one whole-file verdict list `W` (false for a row not shard-admitted). -/
+def rcptW : List (Row × Verdict) → List Bool → List Bool
+  | [], _ => []
+  | x :: o, W => if isSh x.2 then W.headD false :: rcptW o W.tail else false :: rcptW o W
+
+/-- Per-row MOVE receipts from per-shard verdict lists `V` (each shard's list read in its own order). -/
+def rcptS : List (Row × Verdict) → (Nat → List Bool) → List Bool
+  | [], _ => []
+  | x :: o, V => match x.2 with
+    | .admit (.shard k) => (V k).headD false :: rcptS o fun j => if j = k then (V k).tail else V j
+    | _ => false :: rcptS o V
+
 /-- A pre-shard store (§1 migration): one database with its cells (raw digest, gross), MOVE charges, totals and
     chain head.  The last four fields are the well-formedness the single store keeps: at most one MOVE charge per
     cell, charges only on known cells, pool used = gross, budget = machine charges + LINK charges.  A store born
@@ -681,13 +732,15 @@ theorem judgeRow_new (pk : Pack) (cx : Ctx) (d : Dir) (r : Row) (h : Home)
   | some y => intro hv; dsimp only at hv; split at hv <;> cases hv
   | none => intro _; exact ⟨rfl, ⟨routeNew pk cx r, r.raw, r.gross⟩, by simp [setDir]⟩
 
-/-- Rows admitted at `h` were new to the directory the judgment started from, and their cells are distinct. -/
-theorem judgeRows_fresh (pk : Pack) (cx : Ctx) (h : Home) : ∀ (d : Dir) (rs : List Row),
-    (∀ a ∈ (judgeRows pk cx d rs).2, a.2 = .admit h → d a.1.cell = none) ∧
-    ((judgeRows pk cx d rs).2.filter fun x => x.2 == .admit h).Pairwise (fun a b => a.1.cell ≠ b.1.cell)
+/-- Rows whose verdict `p` selects (every selected verdict an admit) were new to the directory the judgment
+    started from, and their cells are distinct. -/
+theorem judgeRows_freshP (pk : Pack) (cx : Ctx) (p : Verdict → Bool) (hp : ∀ v, p v = true → ∃ h, v = .admit h) :
+    ∀ (d : Dir) (rs : List Row),
+    (∀ a ∈ (judgeRows pk cx d rs).2, p a.2 = true → d a.1.cell = none) ∧
+    ((judgeRows pk cx d rs).2.filter fun x => p x.2).Pairwise (fun a b => a.1.cell ≠ b.1.cell)
   | d, [] => ⟨fun _ hm => by simp [judgeRows] at hm, by simp [judgeRows]⟩
   | d, r :: rs => by
-    obtain ⟨ih1, ih2⟩ := judgeRows_fresh pk cx h (judgeRow pk cx d r).1 rs
+    obtain ⟨ih1, ih2⟩ := judgeRows_freshP pk cx p hp (judgeRow pk cx d r).1 rs
     have hmono : ∀ c, (judgeRow pk cx d r).1 c = none → d c = none := fun c hc => by
       cases hd : d c with
       | none => rfl
@@ -696,17 +749,18 @@ theorem judgeRows_fresh (pk : Pack) (cx : Ctx) (h : Home) : ∀ (d : Dir) (rs : 
         change (judgeRow pk cx d r).1 c = some x at hk
         rw [hc] at hk; cases hk
     show (∀ a ∈ (r, (judgeRow pk cx d r).2) :: (judgeRows pk cx (judgeRow pk cx d r).1 rs).2,
-        a.2 = .admit h → d a.1.cell = none) ∧
+        p a.2 = true → d a.1.cell = none) ∧
       (((r, (judgeRow pk cx d r).2) :: (judgeRows pk cx (judgeRow pk cx d r).1 rs).2).filter
-        fun x => x.2 == .admit h).Pairwise (fun a b => a.1.cell ≠ b.1.cell)
+        fun x => p x.2).Pairwise (fun a b => a.1.cell ≠ b.1.cell)
     refine ⟨fun a hm hv => ?_, ?_⟩
     · rcases List.mem_cons.1 hm with rfl | ht
-      · exact (judgeRow_new pk cx d r h hv).1
+      · obtain ⟨h, e⟩ := hp _ hv
+        exact (judgeRow_new pk cx d r h e).1
       · exact hmono _ (ih1 a ht hv)
     · rw [List.filter_cons]
       split
       · next hv =>
-        have hv' : (judgeRow pk cx d r).2 = .admit h := by simpa using hv
+        obtain ⟨h, hv'⟩ := hp _ hv
         obtain ⟨_, x, hx⟩ := judgeRow_new pk cx d r h hv'
         refine List.Pairwise.cons (fun b hb => ?_) ih2
         have hb' := List.mem_filter.1 hb
@@ -716,6 +770,40 @@ theorem judgeRows_fresh (pk : Pack) (cx : Ctx) (h : Home) : ∀ (d : Dir) (rs : 
         rw [← he', hx] at h0
         cases h0
       · exact ih2
+
+/-- Rows admitted at `h` were new to the directory the judgment started from, and their cells are distinct. -/
+theorem judgeRows_fresh (pk : Pack) (cx : Ctx) (h : Home) (d : Dir) (rs : List Row) :
+    (∀ a ∈ (judgeRows pk cx d rs).2, a.2 = .admit h → d a.1.cell = none) ∧
+    ((judgeRows pk cx d rs).2.filter fun x => x.2 == .admit h).Pairwise (fun a b => a.1.cell ≠ b.1.cell) :=
+  let e := judgeRows_freshP pk cx (· == .admit h) (fun _ hv => ⟨h, beq_iff_eq.1 hv⟩) d rs
+  ⟨fun a ha hv => e.1 a ha (beq_iff_eq.2 hv), e.2⟩
+
+theorem isSh_admit (v : Verdict) (hv : isSh v = true) : ∃ h, v = .admit h := by
+  cases v with
+  | admit h => exact ⟨h, rfl⟩
+  | duplicate => cases hv
+  | conflict => cases hv
+
+/-- An admitted row's home is its route. -/
+theorem judgeRows_route (pk : Pack) (cx : Ctx) : ∀ (d : Dir) (rs : List Row),
+    ∀ a ∈ (judgeRows pk cx d rs).2, ∀ h, a.2 = .admit h → h = routeNew pk cx a.1
+  | _, [] => fun _ hm => by simp [judgeRows] at hm
+  | d, r :: rs => fun a hm h hv => by
+    have hm' : a ∈ (r, (judgeRow pk cx d r).2) :: (judgeRows pk cx (judgeRow pk cx d r).1 rs).2 := hm
+    rcases List.mem_cons.1 hm' with rfl | ht
+    · revert hv
+      show (judgeRow pk cx d r).2 = .admit h → h = routeNew pk cx r
+      unfold judgeRow
+      cases d r.cell with
+      | some y => intro hv; dsimp only at hv; split at hv <;> cases hv
+      | none => intro hv; dsimp only at hv; exact (Verdict.admit.inj hv).symm
+    · exact judgeRows_route pk cx _ rs a ht h hv
+
+theorem route_sidx (pk : Pack) (cx : Ctx) (r : Row) (j : Nat) (h : routeNew pk cx r = .shard j) :
+    sidx pk cx r.item = j ∧ (0 < pk.k cx.p → j < pk.k cx.p) := by
+  unfold routeNew at h
+  cases hp : r.positive <;> cases hi : r.item <;> simp only [hp, hi] at h <;>
+    first | exact ⟨Home.shard.inj h, fun hk => by rw [← Home.shard.inj h]; exact Nat.mod_lt _ hk⟩ | cases h
 
 theorem part_fresh (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (h : Home) :
     (part (judge pk cx sv inp) h).Pairwise (fun a b => a.cell ≠ b.cell) ∧
@@ -1197,15 +1285,291 @@ theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judg
       applySingle pk cx s (judgeSingle pk cx s inp) (verdicts cx (judgeSingle pk cx s inp)) := by
   simp [stepSingle, h]
 
-/-- From a migrated store with `openOk`, the merged sharded run equals the single-store run.  The reference runs
-    Lean per shard part (`verdicts`), not on the whole file; receipts are not compared. -/
+/-! ### The whole-file reference agrees with the per-shard runs under `Local` -/
+
+/-- A per-row sum over rows and their verdicts. -/
+def lsum (φ : Row → Bool → Int) : List Row → List Bool → Int
+  | [], _ => 0
+  | r :: rs, W => φ r (W.headD false) + lsum φ rs W.tail
+
+theorem gsum_lsum : ∀ (rs : List Row) (W : List Bool), gsum rs = lsum (fun r _ => r.gross) rs W
+  | [], _ => rfl
+  | r :: rs, W => by
+    show r.gross + gsum rs = r.gross + lsum (fun r _ => r.gross) rs W.tail
+    rw [gsum_lsum rs W.tail]
+
+theorem vsum_lsum : ∀ (rs : List Row) (W : List Bool), vsum rs W = lsum (fun r b => if b then r.gross else 0) rs W
+  | [], _ => rfl
+  | r :: rs, W => by
+    show (if W.headD false then r.gross else 0) + vsum rs W.tail =
+      (if W.headD false then r.gross else 0) + lsum (fun r b => if b then r.gross else 0) rs W.tail
+    rw [vsum_lsum rs W.tail]
+
+theorem vchg_lsum (c : Cell) : ∀ (rs : List Row) (W : List Bool),
+    ((vchg c rs W : Nat) : Int) = lsum (fun r b => if b = true ∧ r.cell = c then 1 else 0) rs W
+  | [], _ => rfl
+  | r :: rs, W => by
+    show (((if W.headD false = true ∧ r.cell = c then 1 else 0) + vchg c rs W.tail : Nat) : Int) =
+      (if W.headD false = true ∧ r.cell = c then 1 else 0) +
+        lsum (fun r b => if b = true ∧ r.cell = c then 1 else 0) rs W.tail
+    rw [← vchg_lsum c rs W.tail]
+    by_cases h : W.headD false = true ∧ r.cell = c
+    · rw [if_pos h, if_pos h]; omega
+    · rw [if_neg h, if_neg h]; omega
+
+theorem cast_sum {α} (f : α → Nat) : ∀ l : List α, (((l.map f).sum : Nat) : Int) = (l.map fun x => (f x : Int)).sum
+  | [] => rfl
+  | x :: l => by
+    simp only [List.map_cons, List.sum_cons]
+    rw [← cast_sum f l]
+    omega
+
+theorem sum_zeroI : ∀ l : List Nat, (l.map fun _ => (0 : Int)).sum = 0
+  | [] => rfl
+  | _ :: l => by rw [List.map_cons, List.sum_cons, sum_zeroI l, Int.add_zero]
+
+theorem sum_ite (j : Nat) (a : Int) : ∀ K : Nat,
+    ((List.range K).map fun k => if (j == k) = true then a else 0).sum = if j < K then a else 0
+  | 0 => by rw [if_neg (Nat.not_lt_zero j)]; rfl
+  | K + 1 => by
+    rw [List.range_succ, List.map_append, List.sum_append, sum_ite j a K]
+    simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil]
+    by_cases h1 : j < K
+    · rw [if_pos h1, if_pos (show j < K + 1 by omega), if_neg (fun e => Nat.ne_of_lt h1 (beq_iff_eq.1 e))]
+      omega
+    · by_cases h2 : j = K
+      · subst h2
+        rw [if_neg h1, if_pos (beq_self_eq_true j), if_pos (show j < j + 1 by omega)]
+        omega
+      · rw [if_neg h1, if_neg (fun e => h2 (beq_iff_eq.1 e)), if_neg (show ¬j < K + 1 by omega)]
+        omega
+
+theorem lsum_cons_sel (φ : Row → Bool → Int) (q : Row → Bool) (r : Row) (rs : List Row) (W : List Bool) :
+    lsum φ ((r :: rs).filter q) (sel q (r :: rs) W) =
+      (if q r = true then φ r (W.headD false) else 0) + lsum φ (rs.filter q) (sel q rs W.tail) := by
+  by_cases hq : q r = true
+  · rw [List.filter_cons_of_pos hq]
+    show lsum φ (r :: rs.filter q) (if q r = true then W.headD false :: sel q rs W.tail else sel q rs W.tail) = _
+    rw [if_pos hq, if_pos hq]
+    rfl
+  · rw [List.filter_cons_of_neg hq]
+    show lsum φ (rs.filter q) (if q r = true then W.headD false :: sel q rs W.tail else sel q rs W.tail) = _
+    rw [if_neg hq, if_neg hq, Int.zero_add]
+
+/-- Splitting a per-row sum by shard index: the whole list's sum is the sum over shards of each part's sum, each
+    part read with the verdicts `sel` picks for it. -/
+theorem lsum_split (φ : Row → Bool → Int) (σ : Row → Nat) (K : Nat) : ∀ (rs : List Row) (W : List Bool),
+    (∀ r ∈ rs, σ r < K) →
+    lsum φ rs W = ((List.range K).map fun k => lsum φ (rs.filter fun r => σ r == k) (sel (fun r => σ r == k) rs W)).sum
+  | [], _, _ => (sum_zeroI (List.range K)).symm
+  | r :: rs, W, h => by
+    show φ r (W.headD false) + lsum φ rs W.tail = _
+    rw [List.map_congr_left fun k _ => lsum_cons_sel φ (fun r => σ r == k) r rs W, Partition.sum_map_add,
+      sum_ite (σ r) _ K, if_pos (h r (List.mem_cons_self ..)),
+      ← lsum_split φ σ K rs W.tail fun r' hr' => h r' (List.mem_cons_of_mem _ hr')]
+
+theorem ite_lsum (φ : Row → Bool → Int) (l : List Row) (W : List Bool) :
+    (if (!l.isEmpty) = true then lsum φ l W else 0) = lsum φ l W := by
+  cases l <;> rfl
+
+/-- A shard part is the file's shard-admitted rows with that shard index. -/
+theorem part_wrows (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (k : Nat) :
+    part (judge pk cx sv inp) (.shard k) = (wrows (judge pk cx sv inp).out).filter fun r => sidx pk cx r.item == k := by
+  unfold part wrows
+  rw [List.filter_map, List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro ⟨r, v⟩ hx
+  have hroute := judgeRows_route pk cx sv.dir inp.rows (r, v) hx
+  cases v with
+  | admit h =>
+    cases h with
+    | spine => simp [isSh]
+    | shard j =>
+      have hs := (route_sidx pk cx r j (hroute _ rfl).symm).1
+      by_cases hjk : j = k
+      · subst hjk; simp [isSh, hs]
+      · simp [isSh, hs]
+        rw [Bool.eq_false_iff.2 fun e => hjk (Home.shard.inj (Verdict.admit.inj (beq_iff_eq.1 e))),
+          Bool.eq_false_iff.2 fun e => hjk (beq_iff_eq.1 e)]
+  | duplicate => simp [isSh]
+  | conflict => simp [isSh]
+
+theorem wrows_lt (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (hk : 0 < pk.k cx.p) :
+    ∀ r ∈ wrows (judge pk cx sv inp).out, sidx pk cx r.item < pk.k cx.p := fun r hr => by
+  obtain ⟨⟨r', v⟩, ha, rfl⟩ := List.mem_map.1 hr
+  have ha' := List.mem_filter.1 ha
+  obtain ⟨h, rfl⟩ := isSh_admit v ha'.2
+  cases h with
+  | spine => have e := ha'.2; simp [isSh] at e
+  | shard j =>
+    have e := route_sidx pk cx r' j (judgeRows_route pk cx sv.dir inp.rows _ ha'.1 _ rfl).symm
+    show sidx pk cx r'.item < _
+    rw [e.1]; exact e.2 hk
+
+theorem verdicts_sel (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (hLoc : Local cx) :
+    verdicts cx (judge pk cx sv inp) = fun k =>
+      sel (fun r => sidx pk cx r.item == k) (wrows (judge pk cx sv inp).out) (cx.lean (wrows (judge pk cx sv inp).out)) :=
+  funext fun k => by
+    show cx.lean (part (judge pk cx sv inp) (.shard k)) = _
+    rw [part_wrows, hLoc (fun o => sidx pk cx o == k)]
+
+theorem touched_lsum (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (hok : (judge pk cx sv inp).ok = true)
+    (hLoc : Local cx) (φ : Row → Bool → Int) :
+    ((touched pk cx (judge pk cx sv inp)).map fun k =>
+      lsum φ (part (judge pk cx sv inp) (.shard k)) (verdicts cx (judge pk cx sv inp) k)).sum =
+    lsum φ (wrows (judge pk cx sv inp).out) (cx.lean (wrows (judge pk cx sv inp).out)) := by
+  have hp : packOk pk = true := by simp only [judge, Bool.and_eq_true] at hok; exact hok.1
+  rw [sum_touched, List.map_congr_left fun k _ => ite_lsum φ _ _, verdicts_sel pk cx sv inp hLoc,
+    List.map_congr_left fun k _ => congrArg (lsum φ · _) (part_wrows pk cx sv inp k)]
+  exact (lsum_split φ (fun r => sidx pk cx r.item) _ _ _ (wrows_lt pk cx sv inp (k_pos pk cx.p hp))).symm
+
+/-- One ok judgment: the whole-file apply equals the per-shard apply, on a store with no charge on a new cell. -/
+theorem whole_apply (pk : Pack) (cx : Ctx) (sv : SpineView) (inp : Input) (s : Single)
+    (hok : (judge pk cx sv inp).ok = true) (hz : ∀ c, sv.dir c = none → s.chg c = 0) (hLoc : Local cx) :
+    applyWhole cx s (judge pk cx sv inp) = applySingle pk cx s (judge pk cx sv inp) (verdicts cx (judge pk cx sv inp)) := by
+  obtain ⟨hw1, hw2⟩ := judgeRows_freshP pk cx isSh isSh_admit sv.dir inp.rows
+  have hpw : (wrows (judge pk cx sv inp).out).Pairwise (fun a b => a.cell ≠ b.cell) := List.pairwise_map.2 hw2
+  have hzw : ∀ r ∈ wrows (judge pk cx sv inp).out, s.chg r.cell = 0 := fun r hr => by
+    obtain ⟨a, ha, rfl⟩ := List.mem_map.1 hr
+    exact hz _ (hw1 a (List.mem_filter.1 ha).1 (List.mem_filter.1 ha).2)
+  have hF := finAll_eq (judge pk cx sv inp) (verdicts cx (judge pk cx sv inp)) (touched pk cx (judge pk cx sv inp))
+    s.chg (List.Pairwise.filter _ List.nodup_range)
+    (fun k _ => (part_fresh pk cx sv inp (.shard k)).1)
+    (fun k _ r hr => hz r.cell ((part_fresh pk cx sv inp (.shard k)).2 r hr))
+    (fun a _ b _ hab r hr r' hr' he => by
+      obtain ⟨x, hx, hxh⟩ := part_home pk cx sv inp (.shard a) hr
+      obtain ⟨y, hy, hyh⟩ := part_home pk cx sv inp (.shard b) hr'
+      rw [he, hy] at hx
+      cases hx
+      exact hab (Home.shard.inj (hxh.symm.trans hyh)))
+  have hg : gsum (wrows (judge pk cx sv inp).out) = ((touched pk cx (judge pk cx sv inp)).map fun k =>
+      gsum (part (judge pk cx sv inp) (.shard k))).sum := by
+    rw [List.map_congr_left fun k _ => gsum_lsum _ (verdicts cx (judge pk cx sv inp) k),
+      touched_lsum pk cx sv inp hok hLoc, gsum_lsum _ (cx.lean (wrows (judge pk cx sv inp).out))]
+  have hv : vsum (wrows (judge pk cx sv inp).out) (cx.lean (wrows (judge pk cx sv inp).out)) =
+      ((touched pk cx (judge pk cx sv inp)).map fun k =>
+        vsum (part (judge pk cx sv inp) (.shard k)) (verdicts cx (judge pk cx sv inp) k)).sum := by
+    rw [List.map_congr_left fun k _ => vsum_lsum _ _, touched_lsum pk cx sv inp hok hLoc, vsum_lsum]
+  have hc : ∀ c, ((vchg c (wrows (judge pk cx sv inp).out) (cx.lean (wrows (judge pk cx sv inp).out)) : Nat) : Int) =
+      (((touched pk cx (judge pk cx sv inp)).map fun k =>
+        vchg c (part (judge pk cx sv inp) (.shard k)) (verdicts cx (judge pk cx sv inp) k)).sum : Nat) := fun c => by
+    rw [cast_sum, List.map_congr_left fun k _ => vchg_lsum c _ _, touched_lsum pk cx sv inp hok hLoc, vchg_lsum]
+  generalize judge pk cx sv inp = J at hpw hzw hF hg hv hc ⊢
+  refine view_eq rfl rfl ?_ ?_ rfl rfl (funext fun c => ?_) ?_ ?_
+  · show s.used + gsum (wrows J.out) = s.used + ((touched pk cx J).map fun k => gsum (part J (.shard k))).sum
+    rw [hg]
+  · show s.budget + (finRows s.chg (wrows J.out) (cx.lean (wrows J.out))).2 + gsum (part J .spine) =
+      s.budget + (finAll J (verdicts cx J) s.chg (touched pk cx J)).2 + gsum (part J .spine)
+    rw [hF.1, finRows_vsum _ _ _ hpw hzw, hv]
+  · show (finRows s.chg (wrows J.out) (cx.lean (wrows J.out))).1 c = (finAll J (verdicts cx J) s.chg (touched pk cx J)).1 c
+    rw [hF.2 c, finRows_vchg c _ _ _ hpw hzw]
+    have := hc c
+    omega
+  · show s.gross + gsum (wrows J.out) = s.gross + ((touched pk cx J).map fun k => gsum (part J (.shard k))).sum
+    rw [hg]
+  · show s.mc + (finRows s.chg (wrows J.out) (cx.lean (wrows J.out))).2 =
+      s.mc + (finAll J (verdicts cx J) s.chg (touched pk cx J)).2
+    rw [hF.1, finRows_vsum _ _ _ hpw hzw, hv]
+
+theorem whole_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) (hLoc : Local cx) :
+    stepWhole pk cx (merge pk cx ss) inp = stepSingle pk cx (merge pk cx ss) inp := by
+  show (if (judge pk cx ss.1.view inp).ok = true then applyWhole cx (merge pk cx ss) (judge pk cx ss.1.view inp)
+      else merge pk cx ss) =
+    if (judge pk cx ss.1.view inp).ok = true then
+      applySingle pk cx (merge pk cx ss) (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
+    else merge pk cx ss
+  by_cases hok : (judge pk cx ss.1.view inp).ok = true
+  · rw [if_pos hok, if_pos hok]
+    exact whole_apply pk cx ss.1.view inp _ hok (fun c hc => sum_zeroN (fun k => (ss.2 k).chg c)
+      (List.range (pk.k cx.p)) fun k _ => inv_zero hI c hc k) hLoc
+  · rw [if_neg hok, if_neg hok]
+
+theorem whole_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs : List Input), Inv ss → Inv3 ss →
+    merge pk cx (runS pk cx ss rs) = runWhole pk cx (merge pk cx ss) rs
+  | _, [], _, _ => rfl
+  | ss, r :: rs, hI, h3 => by
+    show merge pk cx (runS pk cx (stepT pk cx ss r) rs) = runWhole pk cx (stepWhole pk cx (merge pk cx ss) r) rs
+    rw [whole_step pk cx ss r hI hLoc, ← merge_step pk cx ss r hI h3]
+    exact whole_run pk cx hLoc _ rs (inv_step pk cx ss r hI) (inv3_step pk cx ss r h3)
+
+/-- Per-shard receipts read back in file order equal the whole-file receipts. -/
+theorem rcpt_eq (pk : Pack) (cx : Ctx) : ∀ (o : List (Row × Verdict)) (W : List Bool),
+    (∀ a ∈ o, ∀ h, a.2 = .admit h → h = routeNew pk cx a.1) →
+    rcptS o (fun k => sel (fun r => sidx pk cx r.item == k) (wrows o) W) = rcptW o W
+  | [], _, _ => rfl
+  | (r, v) :: o, W, hr => by
+    have ih := fun W' => rcpt_eq pk cx o W' fun a ha => hr a (List.mem_cons_of_mem _ ha)
+    cases v with
+    | duplicate => exact congrArg (false :: ·) (ih W)
+    | conflict => exact congrArg (false :: ·) (ih W)
+    | admit h =>
+      cases h with
+      | spine => exact congrArg (false :: ·) (ih W)
+      | shard j =>
+        have hj := (route_sidx pk cx r j (hr _ (List.mem_cons_self ..) _ rfl).symm).1
+        have hV : ∀ k, sel (fun r' => sidx pk cx r'.item == k) (r :: wrows o) W =
+            if k = j then W.headD false :: sel (fun r' => sidx pk cx r'.item == k) (wrows o) W.tail
+            else sel (fun r' => sidx pk cx r'.item == k) (wrows o) W.tail := fun k => by
+          show (if (sidx pk cx r.item == k) = true then _ else _) = _
+          rw [hj]
+          by_cases hk : k = j
+          · rw [if_pos (beq_iff_eq.2 hk.symm), if_pos hk]
+          · rw [if_neg (fun e => hk (beq_iff_eq.1 e).symm), if_neg hk]
+        show (sel (fun r' => sidx pk cx r'.item == j) (r :: wrows o) W).headD false ::
+            rcptS o (fun k => if k = j then (sel (fun r' => sidx pk cx r'.item == j) (r :: wrows o) W).tail
+              else sel (fun r' => sidx pk cx r'.item == k) (r :: wrows o) W) = W.headD false :: rcptW o W.tail
+        rw [← ih W.tail]
+        refine congr (congrArg List.cons ?_) (congrArg (rcptS o) (funext fun k => ?_))
+        · rw [hV j, if_pos rfl, List.headD_cons]
+        · by_cases hk : k = j
+          · rw [if_pos hk, hk, hV j, if_pos rfl, List.tail_cons]
+          · rw [if_neg hk, hV k, if_neg hk]
+
+/-- Receipts of a sharded run: per input, none if refused, else per-row MOVE flags from the per-shard verdicts. -/
+def rcptsS (pk : Pack) (cx : Ctx) : SS → List Input → List (Option (List Bool))
+  | _, [] => []
+  | ss, i :: is => (if checkAll pk cx ss i then some (rcptS (judge pk cx ss.1.view i).out
+      (verdicts cx (judge pk cx ss.1.view i))) else none) :: rcptsS pk cx (stepT pk cx ss i) is
+
+/-- Receipts of the whole-file reference run. -/
+def rcptsW (pk : Pack) (cx : Ctx) : Single → List Input → List (Option (List Bool))
+  | _, [] => []
+  | s, i :: is => (if (judgeSingle pk cx s i).ok then some (rcptW (judgeSingle pk cx s i).out
+      (cx.lean (wrows (judgeSingle pk cx s i).out))) else none) :: rcptsW pk cx (stepWhole pk cx s i) is
+
+theorem rcpts_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs : List Input), Inv ss → Inv3 ss →
+    rcptsS pk cx ss rs = rcptsW pk cx (merge pk cx ss) rs
+  | _, [], _, _ => rfl
+  | ss, i :: is, hI, h3 => by
+    have hh : headsOk pk cx ss = true := by
+      simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
+    show (if checkAll pk cx ss i = true then some (rcptS (judge pk cx ss.1.view i).out
+        (verdicts cx (judge pk cx ss.1.view i))) else none) :: rcptsS pk cx (stepT pk cx ss i) is =
+      (if (judge pk cx ss.1.view i).ok = true then some (rcptW (judge pk cx ss.1.view i).out
+        (cx.lean (wrows (judge pk cx ss.1.view i).out))) else none) :: rcptsW pk cx (stepWhole pk cx (merge pk cx ss) i) is
+    rw [whole_step pk cx ss i hI hLoc, ← merge_step pk cx ss i hI h3,
+      ← rcpts_run pk cx hLoc _ is (inv_step pk cx ss i hI) (inv3_step pk cx ss i h3),
+      verdicts_sel pk cx ss.1.view i hLoc,
+      rcpt_eq pk cx (judge pk cx ss.1.view i).out _ (judgeRows_route pk cx ss.1.view.dir i.rows)]
+    simp only [checkAll, hh, Bool.and_true]
+
+/-- From a migrated store with `openOk`, the merged sharded run equals the single-store run (Lean per shard part).
+    Under `Local` (restricting a file to any set of items leaves Lean's verdicts on the kept rows unchanged), the merged run also
+    equals the whole-file reference (Lean once on all the file's shard-admitted rows), and the sharded run's per-row
+    MOVE receipts equal the whole-file receipts. -/
 theorem shard_run_eq (pk : Pack) (cx : Ctx) (L : Legacy) (hL : openOk pk cx L) (rs : List Input) :
-    merge pk cx (runS pk cx (initS L) rs) = runSingle pk cx (initSingle L) rs := by
+    merge pk cx (runS pk cx (initS L) rs) = runSingle pk cx (initSingle L) rs ∧
+    (Local cx → merge pk cx (runS pk cx (initS L) rs) = runWhole pk cx (initSingle L) rs ∧
+      rcptsS pk cx (initS L) rs = rcptsW pk cx (initSingle L) rs) := by
   have h0 : merge pk cx (initS L) = initSingle L := view_eq rfl rfl rfl rfl rfl rfl
     (funext fun c => init_sumN (·.chg c) L _ rfl (hL.imp_right fun e => e.1 c))
     (init_sumI (·.gross) L _ rfl (hL.imp_right fun e => e.2.1))
     (init_sumI (·.mc) L _ rfl (hL.imp_right fun e => e.2.2))
-  rw [merge_run pk cx (initS L) rs (inv_init L) (inv3_init L), h0]
+  refine ⟨?_, fun hLoc => ⟨?_, ?_⟩⟩
+  · rw [merge_run pk cx (initS L) rs (inv_init L) (inv3_init L), h0]
+  · rw [whole_run pk cx hLoc (initS L) rs (inv_init L) (inv3_init L), h0]
+  · rw [rcpts_run pk cx hLoc (initS L) rs (inv_init L) (inv3_init L), h0]
 
 /-- A crash after the spine COMMIT converges: recovery yields the committed step. -/
 theorem rollforward_eq (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List Nat)
