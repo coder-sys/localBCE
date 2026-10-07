@@ -5062,6 +5062,51 @@ def tableOk (tbl : OffsetTable) : Bool :=
   (tbl.zip tbl.tail).all fun (a, b) => decide (a.1 < b.1) &&
     decide (civilOf ((b.1 : Int) - 1 + a.2).toNat ≤ civilOf ((b.1 : Int) + b.2).toNat)
 
+/-- Month step of `civilOf`: month index and day bounds from the day of the March-based year. -/
+private theorem c10_month (doy mp d : Nat) (h : doy ≤ 365) (hmp : mp = (5 * doy + 2) / 153)
+    (hd : d = doy - (153 * mp + 2) / 5 + 1) :
+    mp ≤ 11 ∧ 1 ≤ d ∧ d ≤ 31 ∧ ((mp = 1 ∨ mp = 3 ∨ mp = 6 ∨ mp = 8) → d ≤ 30) ∧ (mp = 11 → d ≤ 29) ∧
+      (mp = 11 → d = 29 → doy = 365) := by
+  omega
+
+/-- Year-of-era step of `civilOf`: bounds and the leap condition at day-of-year 365. -/
+private theorem c10_yoe (doe : Nat) (h : doe ≤ 146096) :
+    ∃ yoe, (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365 = yoe ∧ yoe ≤ 399 ∧
+      365 * yoe + yoe / 4 - yoe / 100 ≤ doe ∧ doe - (365 * yoe + yoe / 4 - yoe / 100) ≤ 365 ∧
+      (doe - (365 * yoe + yoe / 4 - yoe / 100) = 365 →
+        (yoe + 1) % 4 = 0 ∧ ((yoe + 1) % 100 ≠ 0 ∨ (yoe + 1) % 400 = 0)) := by
+  by_cases he : doe = 146096
+  · subst he; exact ⟨399, by decide, by decide, by decide, by decide, fun _ => by decide⟩
+  have e0 : doe / 146096 = 0 := Nat.div_eq_of_lt (by omega)
+  obtain ⟨c, r, hr, hdoe⟩ : ∃ c r, r < 36524 ∧ doe = 36524 * c + r :=
+    ⟨_, _, Nat.mod_lt _ (by decide), (Nat.div_add_mod doe 36524).symm⟩
+  obtain ⟨f, g, hg, hrr⟩ : ∃ f g, g < 1461 ∧ r = 1461 * f + g :=
+    ⟨_, _, Nat.mod_lt _ (by decide), (Nat.div_add_mod r 1461).symm⟩
+  have hc : doe / 36524 = c := Nat.div_eq_of_lt_le (by omega) (by omega)
+  by_cases hd : 1460 ≤ 24 * c + f + g
+  · have ha : doe / 1460 = 25 * c + f + 1 := Nat.div_eq_of_lt_le (by omega) (by omega)
+    obtain ⟨y, k, hk, hgk⟩ : ∃ y k, k < 365 ∧ g - 1 = 365 * y + k :=
+      ⟨_, _, Nat.mod_lt _ (by decide), (Nat.div_add_mod (g - 1) 365).symm⟩
+    have q4 : (100 * c + 4 * f + y) / 4 = 25 * c + f := Nat.div_eq_of_lt_le (by omega) (by omega)
+    have q100 : (100 * c + 4 * f + y) / 100 = c := Nat.div_eq_of_lt_le (by omega) (by omega)
+    refine ⟨100 * c + 4 * f + y, ?_, ?_⟩
+    · rw [ha, hc, e0]; exact Nat.div_eq_of_lt_le (by omega) (by omega)
+    · have hs : 365 * (100 * c + 4 * f + y) + (25 * c + f) - c = 36524 * c + 1461 * f + 365 * y := by omega
+      rw [q4, q100, hs]
+      refine ⟨by omega, by omega, by omega, fun h3 => ?_⟩
+      have hy3 : y = 3 := by omega
+      have hf : f ≤ 23 := by omega
+      subst hy3
+      exact ⟨by omega, Or.inl (by omega)⟩
+  · have ha : doe / 1460 = 25 * c + f := Nat.div_eq_of_lt_le (by omega) (by omega)
+    obtain ⟨y, k, hk, hgk⟩ : ∃ y k, k < 365 ∧ g = 365 * y + k :=
+      ⟨_, _, Nat.mod_lt _ (by decide), (Nat.div_add_mod g 365).symm⟩
+    have q4 : (100 * c + 4 * f + y) / 4 = 25 * c + f := Nat.div_eq_of_lt_le (by omega) (by omega)
+    have q100 : (100 * c + 4 * f + y) / 100 = c := Nat.div_eq_of_lt_le (by omega) (by omega)
+    refine ⟨100 * c + 4 * f + y, ?_, ?_⟩
+    · rw [ha, hc, e0]; exact Nat.div_eq_of_lt_le (by omega) (by omega)
+    · rw [q4, q100]; exact ⟨by omega, by omega, by omega, fun h3 => by omega⟩
+
 theorem localDay_valid (tbl : OffsetTable) (hT : tableOk tbl = true) (s : Nat) (hs : s + 50400 < 253402300800) :
     validDate (localDay tbl s) = true := sorry
 
