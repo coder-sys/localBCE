@@ -58,6 +58,13 @@ def _blob(data: bytes) -> bytes:
     return len(data).to_bytes(2, "big") + data
 
 
+def _grant(tenant: str, grant_id: bytes, rules: Sequence[bytes], engines: Sequence[bytes]) -> bytes:
+    """One RELEASE-frame grant: its tenant (a canonical ident, refused here like Lean's `ident`), id, rules, engines."""
+    out = gate._Writer(b"")
+    out.ident(tenant, "grant_tenant")
+    return bytes(out.out) + _blob(grant_id) + _list([_blob(v) for v in rules]) + _list([_blob(r) for r in engines])
+
+
 # A RELEASE frame's tail after its certs: no forks, no checkpoint, now 0, no grants, unreleased and unpinned, a
 # canonical request and no token.  Lean decodes all of it and then each cert, so only a cert it cannot decode fails it.
 _CERT_PROBE: Final = (_list([]) + signer.framed(b"") + bytes(8) + _list([]) + bytes(2) + signer.framed(
@@ -67,10 +74,9 @@ _CERT_PROBE: Final = (_list([]) + signer.framed(b"") + bytes(8) + _list([]) + by
 
 class PayerStore:
     def __init__(self, path: Path | str, *, root_keys: Mapping[str, bytes],
-                 grants: Sequence[tuple[bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
+                 grants: Sequence[tuple[str, bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
         self._roots = dict(root_keys)
-        self._grants = _list([_blob(g) + _list([_blob(v) for v in rules]) + _list([_blob(r) for r in engines])
-                              for g, rules, engines in grants])
+        self._grants = _list([_grant(*g) for g in grants])  # (tenant, id, rules, engines); no default tenant
         self._db = sqlite3.connect(path, isolation_level=None, timeout=60)  # Lean may hold the write lock up to 30 s
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)
@@ -138,7 +144,7 @@ class PayerStore:
             if not self._db.execute("SELECT 1 FROM certs WHERE cert=?", (cert,)).fetchone():
                 if self._db.execute("SELECT COUNT(*) FROM certs").fetchone()[0] >= MAX_CERTS:
                     raise GatePayerError("cert_store_full")
-            signer.gate_verify(4, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
+            signer.gate_verify(5, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
             self._db.execute("INSERT OR IGNORE INTO certs VALUES(?)", (cert,))
 
     def _all(self, column: str, table: str) -> bytes:
@@ -181,7 +187,7 @@ class PayerStore:
                  + self._grants + bytes([bool(released), bool(pin)]) + (pin[0] if pin else b"")
                  + signer.framed(data) + signer.framed(token))
         try:
-            answer = signer.gate_verify(4, frame)
+            answer = signer.gate_verify(5, frame)
         except signer.GateSignerError:
             return "verifier_error"
         if answer == signer.ACCEPT:

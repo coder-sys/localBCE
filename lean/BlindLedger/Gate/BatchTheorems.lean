@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Batch
 import BlindLedger.Gate.ProducerTheorems
+import BlindLedger.Gate.Theorems
 
 /-! Theorems of payer-batch-release-v1 (§A RELEASE-BATCH, §B one-tree PUBLISH).  Statements: the design's
     `payer-batch-release-goals.lean`, fixed. -/
@@ -283,6 +284,20 @@ theorem releaseBatch_once {c : Crypto} {r : ReleaseRun} {items : List Item} {ten
           simp only [paymentMatches, Bool.and_eq_true, beq_iff_eq] at hpm
           obtain ⟨⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, -⟩, h3⟩, -⟩, -⟩, -⟩, -⟩, -⟩ := hpm
           simp [unreleased, itemState, hrel, payKey, Payment.key, h1, h2, h3] at hun
+
+/-- Check 9 in a batch: an accepted item was approved by a frame grant of its payment's tenant, which is its
+    token's tenant, under its token's grant id. -/
+theorem releaseBatch_grant_tenant {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : Item}
+    (hi : items[i]? = some it) (ha : (releaseBatch c r items)[i]? = some none) :
+    ∃ t, decodeToken it.token = some t ∧ ∃ g ∈ r.grants,
+      g.tenantId = it.payment.tenantId ∧ g.tenantId = t.leaf.tenantId ∧ g.grantId = t.leaf.grantId := by
+  have hv := (releaseBatch_spec hi).1 ha
+  obtain ⟨t, hd⟩ : ∃ t, decodeToken it.token = some t := by
+    cases hd : decodeToken it.token with
+    | none => unfold verifyToken at hv; simp [hd] at hv
+    | some t => exact ⟨t, rfl⟩
+  obtain ⟨g, hgs, hten, hp, hid, -⟩ := verifyToken_grant_tenant hv hd
+  exact ⟨t, hd, g, hgs, hp, hten, hid⟩
 
 /-! ## §B  One-tree PUBLISH -/
 

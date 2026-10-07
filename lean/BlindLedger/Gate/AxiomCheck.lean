@@ -37,6 +37,10 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_pinned
 /-- info: 'BlindLedger.Gate.verifyToken_route' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_route
+/-- info: 'BlindLedger.Gate.verifyToken_grant_tenant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_grant_tenant
+/-- info: 'BlindLedger.Gate.verifyToken_foreign_grant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_foreign_grant
 /-- info: 'BlindLedger.Gate.installCert_shardCount' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.installCert_shardCount
 /-- info: 'BlindLedger.Gate.storeCheckpoint_keeps' depends on axioms: [propext] -/
@@ -271,6 +275,8 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_accept_verified
 /-- info: 'BlindLedger.Gate.releaseBatch_once' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_once
+/-- info: 'BlindLedger.Gate.releaseBatch_grant_tenant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_grant_tenant
 /-- info: 'BlindLedger.Gate.pathOf_verifies' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.pathOf_verifies
 /-- info: 'BlindLedger.Gate.publishOkTree_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/

@@ -45,7 +45,7 @@ class HostileGatePayerTests(fx.Scratch):
     def _store(self, tmp: str, name: str = "payer", *, ready: bool = True) -> payer.PayerStore:
         """A store with the clean certificate; ``ready``: also the clean checkpoint stored and the request sent."""
         store = self.track(payer.PayerStore(Path(tmp) / f"{name}.sqlite3", root_keys={fx.TENANT: self.root_pk},
-                                            grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),)))
+                                            grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)))
         store.install_cert(self.cert)
         if ready:
             self.assertEqual(store.store_checkpoint(self.signed), "stored")

@@ -35,9 +35,9 @@ store.send(fx.payment_request(1), transmit=lambda data: os._exit(9))
 class PayerTests(fx.Scratch):
     """The payer reference adapter: pin before send, Lean decides every release, anything else holds."""
 
-    def _store(self, tmp: str) -> payer.PayerStore:
+    def _store(self, tmp: str, grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)) -> payer.PayerStore:
         return self.track(payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]},
-                                grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),)))
+                                grants=grants))
 
     def test_kill_between_pin_persist_and_send_leaves_a_pin_and_no_command(self) -> None:
         with self.scratch() as tmp:
@@ -123,6 +123,24 @@ class PayerTests(fx.Scratch):
         store.close()
         return request, gate.encode_token(tokens[0])
 
+    def test_a_grant_of_another_tenant_releases_nothing(self) -> None:
+        """Check 9 matches the grant's tenant: the token's grant id under another tenant, beside another grant of its
+        own tenant, holds it and moves nothing; with its own tenant's grant it releases once.  A grant's tenant is
+        required and canonical, refused when the store is built."""
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            approves = ((fx.D[4],), (fx.D[6],))
+            foreign = self._store(tmp, ((fx.OTHER, fx.D[3], *approves), (fx.TENANT, fx.D[9], *approves)))
+            self.assertEqual(foreign.release(request, token, now=fx.NOW), "grant")
+            self.assertEqual(foreign.holds()[-1], (request.payment_id, "grant"))
+            self.assertEqual(self._count(tmp, "closed", "releases"), [0, 0])
+            own = self._store(tmp, ((fx.OTHER, fx.D[3], *approves), (fx.TENANT, fx.D[3], *approves)))
+            self.assertIsNone(own.release(request, token, now=fx.NOW))
+            self.assertEqual(own.release(request, token, now=fx.NOW), "released")
+            for bad in ((fx.D[3], *approves), ("-" + fx.TENANT, fx.D[3], *approves), (fx.TENANT.encode(), fx.D[3], *approves)):
+                with self.subTest(bad=bad[0]), self.assertRaises((TypeError, gate.GateCodecError)):
+                    payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={}, grants=(bad,))
+
     def _raw(self, tmp: str, *statements: str) -> None:
         with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as db:
             for statement in statements:
@@ -134,7 +152,7 @@ class PayerTests(fx.Scratch):
 
         def run(call: Callable[[payer.PayerStore], object]) -> None:
             store = payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]},
-                                     grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),))
+                                     grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),))
             barrier.wait()
             outcomes.append(call(store))
             store.close()  # a connection closes in its own thread
