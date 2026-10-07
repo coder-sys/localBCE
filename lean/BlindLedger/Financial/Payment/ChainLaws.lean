@@ -2645,7 +2645,7 @@ private theorem shape_alias {r : PaymentRequest} {V : PaymentView} {S : ItemStat
       · rw [if_pos hlt, if_pos (hwfiff.2 hlt)]; rfl
       · rw [if_neg hlt, if_neg (fun h => hlt (hwfiff.1 h))]; rfl
 
-private theorem faithful_unpack {r : PaymentRequest} {v : PaymentView}
+theorem faithful_unpack {r : PaymentRequest} {v : PaymentView}
     (hb : r.inputBytes = (rawEncodeFinancialInput r.input).length) (hv : Faithful r v) :
     ∃ S, summarize r.input r.receipts (anchorItemLength r.input r.receipts) = some S ∧
       absorb v.state v.pending = S ∧ v.env = envOf r.input ∧
@@ -3125,7 +3125,7 @@ private theorem detWF_now {i : FinancialInput} {t : Nat} {x : OffsetDeterminatio
   simp only [decide_eq_true_eq] at hD ⊢
   omega
 
-private theorem wf_now {i : FinancialInput} {t : Nat} (h : financialInputWellFormed i = true)
+theorem wf_now {i : FinancialInput} {t : Nat} (h : financialInputWellFormed i = true)
     (hle : i.evaluatedAt ≤ t) (ht : t ≤ maxTime) :
     financialInputWellFormed { i with evaluatedAt := t } = true := by
   unfold financialInputWellFormed at h ⊢
@@ -3133,14 +3133,14 @@ private theorem wf_now {i : FinancialInput} {t : Nat} (h : financialInputWellFor
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25, h26, h27, h28, h29, h30, h31, h32, h33, h34, h35, h36, h37, h38, h39, h40, h41, h42, h43, h44, h45, h46, h47, h48, h49, h50, h51, h52, h53, h54, h55⟩ := h
   exact ⟨h1, h2, h3, h4, h5, h6, (by simp only [timeWellFormed, decide_eq_true_eq]; exact ht), h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18, h19, h20, h21, h22, h23, h24, h25, h26, h27, h28, h29, h30, h31, h32, h33, h34, fun x hx => detWF_now (h35 x hx) hle, h36, h37, fun x hx => actWF_now (h38 x hx) hle, h39, h40, h41, h42, h43, h44, fun x hx => detAct_now (h45 x hx) hle, h46, h47, h48, fun x hx => Nat.le_trans (h49 x hx) hle, fun x hx => Nat.le_trans (h50 x hx) hle, h51, h52, h53, h54, h55⟩
 
-private theorem step_eval (L : Ledger) (c : Call) :
+theorem step_eval (L : Ledger) (c : Call) :
     (step L c).input.evaluatedAt = L.input.evaluatedAt ∨ (step L c).input.evaluatedAt = c.now := by
   rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
   · right; rw [(paymentTransition_mutated_post ho).1]; rfl
   · right; rw [(alias_shape ho).1]; rfl
   · left; rfl
 
-private theorem step_before_le (L : Ledger) (c : Call) :
+theorem step_before_le (L : Ledger) (c : Call) :
     (step L c).input.beforeRevision ≤ L.input.beforeRevision + 1 := by
   rcases step_cases L c with ⟨k, w, post, res, ho, he⟩ | ⟨pid, e, post, ho, he⟩ | ⟨-, -, he⟩ <;> rw [he]
   · have hb : post.beforeRevision = L.input.beforeRevision := by
