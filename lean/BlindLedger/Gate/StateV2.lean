@@ -7742,9 +7742,6 @@ def custodyOk (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (
   guard ((push P st e).isSome = true)
   pure e
 
-private theorem cust_guard (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
-  by_cases hc : c <;> simp [guard, hc]
-
 /-- custodyOk's binds: the batch, Lean's output on the shard base, the read set, the stored checkpoint carrying
     Lean's digest, the token check on the rows custody built, and the sign body with Lean's fresh rows. -/
 private theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
@@ -7770,7 +7767,7 @@ private theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i 
   obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
   have he := Option.some.inj h
   subst he
-  exact ⟨rs, bt, o, rset, n, hbt, ho, hrs, hn, ((cust_guard _ _).mp g1).2.2, (cust_guard _ _).mp g3, rfl⟩
+  exact ⟨rs, bt, o, rset, n, hbt, ho, hrs, hn, ((guard_some _ _).mp g1).2.2, (guard_some _ _).mp g3, rfl⟩
 
 /-- On a true base, the signed state digest is the true next state's, the tokens are the true rows (with the
     fold's revisions) up to order, and the entry carries the true fresh rows; else a named collision. -/
@@ -7890,15 +7887,15 @@ private theorem cust_push (P : Pins) (st st' : LogState) (e : Entry) (h : push P
   unfold push at h
   cases hb : e.body with
   | «seal» t =>
-    simp [hb, Option.bind_eq_some_iff, cust_guard] at h
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
     obtain ⟨hg, a, _, _, rfl⟩ := h
     exact ⟨hg.1, rfl, fun j hj => by simp [upd, hj], fun _ => by simp [upd], fun _ _ _ _ h => by cases h⟩
   | resume p =>
-    simp [hb, Option.bind_eq_some_iff, cust_guard] at h
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
     obtain ⟨hg, a, _, _, _, _, _, _, _, _, _, _, _, rfl⟩ := h
     exact ⟨hg.1, rfl, fun j hj => by simp [upd, hj], fun _ => by simp [upd], fun _ _ _ _ h => by cases h⟩
   | sign cert new tokens fresh =>
-    simp [hb, Option.bind_eq_some_iff, cust_guard] at h
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
     obtain ⟨hg, a, _, _, _, _, _, _, n, hn, c, hc, hts, _, _, _, ps, _, rfl⟩ := h
     refine ⟨hg.1, rfl, fun j hj => by simp [upd, hj], fun h => by simp [Body.signed?] at h, ?_⟩
     intro cert' new' tokens' f' h
@@ -7947,7 +7944,7 @@ private theorem cust_custodyOk (P : Pins) (st : LogState) (k : Nat) (cert : Byte
   obtain ⟨_, hp, h⟩ := Option.bind_eq_some_iff.mp h
   have he := Option.some.inj h
   subst he
-  exact ⟨rfl, ⟨_, rfl⟩, Option.isSome_iff_exists.mp ((cust_guard _ _).mp hp)⟩
+  exact ⟨rfl, ⟨_, rfl⟩, Option.isSome_iff_exists.mp ((guard_some _ _).mp hp)⟩
 
 private theorem cust_boot (P : Pins) (s : Cust) (k : Nat) (st : LogState) (b v : Nat) (c : EpochCert)
     (hf : fold P s.off = some st) (hc : s.ctr k = some (b, v)) (hd : decodeKeyCert (s.cert k) = some c) :
@@ -7976,7 +7973,7 @@ private theorem cust_leaf_eq (P : Pins) (st st' : LogState) (e : Entry) (h : pus
   cases hb : e.body with
   | sign cert new tokens fresh =>
     rw [hb] at hl hl'
-    simp [hb, Option.bind_eq_some_iff, cust_guard] at h
+    simp [hb, Option.bind_eq_some_iff, guard_some] at h
     obtain ⟨_, _, _, _, _, _, _, _, n, hn, c, hc, _, hpub, -⟩ := h
     simp only [publishOkAny, hc, hn, Bool.and_eq_true] at hpub
     have hnd := ascending_nodup _ hpub.1.2
@@ -8735,6 +8732,49 @@ theorem custody_signed (P : Pins) (cert₀ : Bytes) (s : Cust) (hr : ReachH P ce
     ∃ st, fold P s.off = some st ∧ ∀ k, ∃ hist, MadeBy P s.off k hist := by
   obtain ⟨⟨st, hst⟩, -, hm⟩ := cust_signed_inv P cert₀ s hr
   exact ⟨st, hst, hm⟩
+
+private theorem c15_mapM_idx {α β : Type} (F : α → Option β) :
+    ∀ (xs : List α) (ys : List β) (i : Nat) (x : α), xs.mapM F = some ys → xs[i]? = some x →
+      ∃ y, F x = some y ∧ ys[i]? = some y
+  | [], _, _, _, _, hx => by simp at hx
+  | a :: xs, ys, i, x, h, hx => by
+    rw [List.mapM_cons] at h
+    obtain ⟨y, hy, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨ys', hys', h⟩ := Option.bind_eq_some_iff.mp h
+    have he := Option.some.inj h
+    subst he
+    cases i with
+    | zero =>
+      simp only [List.getElem?_cons_zero, Option.some.injEq] at hx
+      subst hx
+      exact ⟨y, hy, by simp⟩
+    | succ i =>
+      simp only [List.getElem?_cons_succ] at hx
+      obtain ⟨z, hz, hz'⟩ := c15_mapM_idx F xs ys' i x hys' hx
+      exact ⟨z, hz, by simpa using hz'⟩
+
+/-- chain (a): the i-th batch is batchAt on the fold of the log before the i-th signed. -/
+private theorem c15_hb_idx (P : Pins) (log : List Entry) (k : Nat) (hist : List (Bytes × SignIn × Entry))
+    (bs : List Batch) (h : histBatches P log k hist = some bs) (i : Nat) (x : Bytes × SignIn × Entry)
+    (hx : hist[i]? = some x) :
+    ∃ (st : LogState) (rs : List Request) (b : Batch), fold P (log.take x.2.2.idx) = some st ∧
+      batchAt P st k x.2.1 = some (rs, b) ∧ bs[i]? = some b := by
+  unfold histBatches at h
+  obtain ⟨b, hF, hb⟩ := c15_mapM_idx _ hist bs i x h hx
+  obtain ⟨st, hst, hF⟩ := Option.bind_eq_some_iff.mp hF
+  obtain ⟨⟨rs, b'⟩, hbt, hF⟩ := Option.bind_eq_some_iff.mp hF
+  have he := Option.some.inj hF
+  subst he
+  exact ⟨st, rs, b', hst, hbt, hb⟩
+
+/-- chain (a): MadeBy makes histBatches defined (each custodyOk ran batchAt on its prefix fold). -/
+private theorem c15_hb_some (P : Pins) (log : List Entry) (k : Nat) (hist : List (Bytes × SignIn × Entry))
+    (hm : MadeBy P log k hist) : ∃ bs, histBatches P log k hist = some bs := by
+  unfold histBatches
+  exact c8_mapM_some _ hist fun x hx => by
+    obtain ⟨st, new, tokens, hst, hc⟩ := hm.2 x hx
+    obtain ⟨rs, bt, _, _, _, hbt, _⟩ := c15_peel P st k x.1 x.2.1 new tokens x.2.2 hc
+    exact ⟨bt, by simp [hst, hbt]⟩
 
 /-- Every signed of shard k carries the stateDigest of the true sets after its batch (owners from the folded
     registry); else a named collision at some step. Token rows per step: custody_binds on this base. -/
