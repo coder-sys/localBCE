@@ -50,10 +50,12 @@ class ShardBench(unittest.TestCase):
     def drive(self, k: int, name: str, pipelined: bool = True) -> Path:
         work = self.tmp / name
         spine = sb.Spine(work, k, self.template)
+        prep = sb.PrepPool(spine.tbl, {i: r.rows for i, (r, _) in enumerate(self.files)}, 2) if pipelined else None
         for position, (record, deposit) in enumerate(self.files):
-            spine.ingest(position, record, deposit, (position + 1, self.files[position + 1][0]) if pipelined and position + 1 < len(self.files) else None)
+            spine.ingest(position, record, deposit, prep.get(position) if prep else None)
             self.assertEqual(spine.keys, directory(work / "spine.sqlite3"))  # the in-memory keys equal the cells table after every commit
-            self.assertFalse(spine.overlay)
+        if prep:
+            prep.close()
         spine.close()
         return work
 
@@ -73,7 +75,7 @@ class ShardBench(unittest.TestCase):
     def test_routing_and_merge_equals_single(self) -> None:
         one, three = self.drive(1, "k1"), self.drive(3, "k3")
         self.assertEqual(self.merged(one, 1), self.merged(three, 3))  # sharded = single, row for row
-        plain = self.drive(3, "k3plain", pipelined=False)  # judging file n+1 while n builds changes nothing stored
+        plain = self.drive(3, "k3plain", pipelined=False)  # preparing files in other processes changes nothing stored
         for name in ("spine.sqlite3", "shard0.sqlite3", "shard1.sqlite3", "shard2.sqlite3"):
             self.assertEqual(digests(plain / name), digests(three / name), name)
         spine = sqlite3.connect(str(three / "spine.sqlite3"))
@@ -116,7 +118,7 @@ class ShardBench(unittest.TestCase):
         clean = self.drive(3, "clean")
         work = self.tmp / "abort"
         spine = sb.Spine(work, 3, self.template)
-        spine.ingest(0, *self.files[0], (1, self.files[1][0]))  # file 1 is judged ahead, then the commit of file 1 fails
+        spine.ingest(0, *self.files[0], sb.prepare(spine.tbl, 0, self.files[0][0].rows, 1))  # file 1 is prepared ahead, then the commit of file 1 fails
         spine.wait_acks()
         before = {p.name: digests(p) for p in sorted(work.glob("*.sqlite3")) if p.name != "template.sqlite3"}
         real = spine.write_spine
@@ -126,10 +128,9 @@ class ShardBench(unittest.TestCase):
 
         spine.write_spine = crash
         with self.assertRaises(rb.Crash):
-            spine.ingest(1, *self.files[1])
+            spine.ingest(1, *self.files[1], sb.prepare(spine.tbl, 1, self.files[1][0].rows, 2))
         self.assertEqual(spine.n, 1)
         self.assertEqual(spine.keys, directory(work / "spine.sqlite3"))  # the aborted file left no key behind, in memory or stored
-        self.assertFalse(spine.overlay or spine.ahead)
         self.assertEqual({p.name: digests(p) for p in sorted(work.glob("*.sqlite3"))}, before)  # spine rolled back, every shard rolled back
         spine.write_spine = real
         spine.ingest(1, *self.files[1])
@@ -141,18 +142,32 @@ class ShardBench(unittest.TestCase):
         for name, seed in (("FL", 20261006), ("DE", 20261007)):
             files, seen = sb.corpus(seed, LINES, 2), []
             spine = sb.Spine(self.tmp / f"judge{name}", 3, self.template)
-            real = spine.judge
+            real = sb.judge_rows
 
             def recording(*args, real=real):
                 out = real(*args)
                 seen.append(hashlib.sha256(repr(out).encode()).hexdigest()[:16])
                 return out
 
-            spine.judge = recording
-            for position, ahead in ((0, (0, files[0][0])), (0, (1, files[1][0])), (1, None)):  # the resend and the next file are judged ahead
-                spine.ingest(position, *files[position], ahead)
+            sb.judge_rows = recording
+            try:
+                spine.ingest(0, *files[0], sb.prepare(spine.tbl, 0, files[0][0].rows, 1))  # the prep stage's judge against nothing
+                spine.ingest(0, *files[0])  # the resend: judged by the spine against the directory (all duplicates)
+                spine.ingest(1, *files[1])  # n is 3, not the index + 1 the prep stage assumes
+            finally:
+                sb.judge_rows = real
             spine.close()
             self.assertEqual(seen, JUDGE_HASHES[name], name)
+
+    def test_prep_process_output_equals_in_process_output_byte_for_byte(self) -> None:
+        for seed in (20261006, 20261007):
+            files, tbl = sb.corpus(seed, LINES, 2), sb.tables(self.template, 3)
+            pool = sb.PrepPool(tbl, {i: r.rows for i, (r, _) in enumerate(files)}, 2)
+            try:
+                for i, (record, _) in enumerate(files):
+                    self.assertEqual(pool.get(i), sb.prepare(tbl, i, record.rows, i + 1), (seed, i))  # blobs, verdicts, directory rows, digests
+            finally:
+                pool.close()
 
     def test_stored_command_evidence_and_payment_rows_are_byte_identical_to_the_json_dumps_writer(self) -> None:
         work = self.drive(3, "bytes")  # sha256[:16] of every row of three tables per shard, recorded at HEAD 6224a94c (json.dumps body, runs spp8 and spp9)
@@ -168,7 +183,7 @@ class ShardBench(unittest.TestCase):
         spine.ingest(0, *self.files[0])
         spine.wait_acks()
         heads = dict(spine.heads)
-        classes = spine.ingest(0, *self.files[0])
+        classes = spine.ingest(0, *self.files[0], sb.prepare(spine.tbl, 0, self.files[0][0].rows, 2))  # a prepared file that meets held cells is judged again
         spine.wait_acks()
         self.assertEqual(set(classes), {"duplicate"})
         self.assertEqual(classes["duplicate"], len(self.files[0][0].rows))

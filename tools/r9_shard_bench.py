@@ -1,13 +1,15 @@
 """OS-B0 prototype (owner-scale-3 design sections 1, 2, 4, 8): one spine plus K item-shard SQLite stores, in the bench only.
-The spine process judges (cell directory, routing by item hash, REV/PLB/RAW/zero on the spine), writes the directory, the spine rows and
-the record R_n (each shard's input bytes, digests, heads), and is the only commit point; every shard, shard 0 too, is its own process. The spine
-judges file n+1 and writes file n's rows while the shards build file n (the in-memory cell keys equal the cells table at every commit). The shard build reuses the PERF-B Writer (mutate/finish). Lean is NOT modelled (no multi-command frame exists):
+A prep stage (its own process, where the product's parser runs) does the per-row pure work: keys, cell ids, raw digests, classification, routing by item
+hash and each shard's input bytes. The spine process checks the file's cell ids against its in-memory directory keys (equal to the cells table at every
+commit), writes the directory, the spine rows and the record R_n (each shard's input bytes, digests, heads), and is the only commit point; every shard
+is its own process. The shard build reuses the PERF-B Writer (mutate/finish). Lean is NOT modelled (no multi-command frame exists):
 w is measured without it. Synthetic, non-PHI; moves no money. Results: JSON list, append-only.
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import ctypes
 import hashlib
 import json
@@ -72,7 +74,7 @@ class Shard:
         if w.head != pre_head:
             raise ShardDiverged(f"shard {self.k}: head differs from the spine's expected head")
         parts = pickle.loads(blob)
-        if hashlib.sha3_256(b"".join(p[1].encode() for p in parts)).digest() != verdict:
+        if verdict_of(parts) != verdict:
             raise ShardDiverged(f"shard {self.k}: verdicts differ from the record")
         seq0 = w.seq
         w.ckpt.before_begin()
@@ -173,8 +175,119 @@ def shard_main(conn, k: int, db: str) -> None:
             conn.send(("ERR", repr(error)))
 
 
+Prepared = collections.namedtuple("Prepared", "index n sp dirs j source classes blobs verdicts")
+
+
+def tables(template: Path, k_count: int) -> SimpleNamespace:
+    with sqlite3.connect(str(template)) as t:
+        obl = {r[0]: r[1] for r in t.execute("SELECT obligation_id,item_id FROM obligations ORDER BY item_id")}
+    return SimpleNamespace(obl=obl, obl_ids=list(obl), route={item: int.from_bytes(rb.sha("RR/SHARD/v1", PAYER, item)[:8], "big") % k_count for item in obl.values()})
+
+
+def verdict_of(part: list) -> bytes:
+    return hashlib.sha3_256(b"".join(p[1].encode() for p in part)).digest()
+
+
+def judge_rows(tbl: SimpleNamespace, index: int, rows: list, n: int, known) -> tuple:
+    """The judge of one file: dedup against `known` (a container of cell ids) and itself, routing by item hash, classification (the PERF-B Writer.chunk rules, no Lean)."""
+    base, sp = index * rb.KEY, {name: [] for name in ("cell_rows", "holds", "links", "resolutions", "charges")}
+    dirs, parts, pending, resolved, classes = [], {}, {}, set(), {}
+    obl, obl_ids, route, sha512, sha256 = tbl.obl, tbl.obl_ids, tbl.route, hashlib.sha3_512, hashlib.sha3_256
+    seen: set[bytes] = set()
+    for row_index, row in rows:
+        tag, key = row.key[0], "/".join(row.key[1:])
+        origin = f"{index}/{tag}/{key}"
+        ref = row.key[4] if tag == "PLB" else row.key[1]
+        ob = obl_ids[zlib.crc32(ref.encode()) % len(obl_ids)]
+        item = obl[ob]
+        cid = sha512(f"RR/CELL/CASH/v2\x1fbench-tenant\x1f{item}\x1f{origin}".encode()).digest()  # = rb.sha("RR/CELL/CASH/v2", "bench-tenant", item, origin)
+        amount, rk = row.amount_cents, base + row_index
+        if cid in seen or cid in known:
+            classes["duplicate"] = classes.get("duplicate", 0) + 1
+            continue
+        seen.add(cid)
+        rawdig = sha256(row.raw.encode()).digest()
+        if amount == 0 or tag == "RAW" or amount is None or amount < 0:
+            state = "ZERO" if amount == 0 else "HELD" if (tag == "RAW" or amount is None) else "NEGATIVE"
+            sp["cell_rows"].append((rk, origin, tag, amount, row.raw, rawdig))
+            dirs.append((cid, SPINE, item, state, amount, rawdig, n, rk))
+            if state == "NEGATIVE":
+                target = f"{index}/CLP/{ref}"
+                sp["holds"].append((rk, cid, "TARGET"))
+                sp["links"].append((rk, cid, target, "EFFECTIVE" if target in resolved else "PENDING"))
+                pending.setdefault(target, []).append((origin, cid, rk, ob))
+            classes[state] = classes.get(state, 0) + 1
+        else:
+            k = route[item]
+            dirs.append((cid, k, item, "RESOLVED", amount, rawdig, n, rk))
+            parts.setdefault(k, []).append((rk, origin, tag, key, amount, row.raw, rawdig, ob, cid))
+            for _, negcid, negrk, negob in pending.pop(origin, ()):
+                sp["resolutions"].append((negrk, negcid, None, 0, "NET"))
+                sp["charges"].append((negrk, negrk, negob, 0))
+            resolved.add(origin)
+            classes["applied"] = classes.get("applied", 0) + 1
+    j = hashlib.sha3_256(b"".join(d[0] for d in dirs)).digest()
+    source = hashlib.sha256(b"".join(d[5] for d in dirs)).digest()
+    return sp, dirs, parts, j, source, classes
+
+
+def prepare(tbl: SimpleNamespace, index: int, rows: list, n: int, known=frozenset()) -> Prepared:
+    """Everything about one file that does not depend on the shards' state: the judge (sorted: negatives first, then file order), the insert order of the
+    spine rows, and each shard's input bytes with their verdict digest. The prep stage runs it against nothing; the spine runs it against the directory
+    only when the file meets a cell it already holds."""
+    ordered = sorted(enumerate(rows), key=lambda p: (0 if (p[1].amount_cents or 0) < 0 else 1, p[0]))
+    sp, dirs, parts, j, source, classes = judge_rows(tbl, index, ordered, n, known)
+    return Prepared(index, n, {t: sorted(d, key=itemgetter(0)) for t, d in sp.items()}, sorted(dirs, key=itemgetter(0)), j, source, classes,
+                    {k: pickle.dumps(p, 5) for k, p in parts.items()}, {k: verdict_of(p) for k, p in parts.items()})
+
+
+def prep_main(conn, tbl: SimpleNamespace, rows: dict) -> None:
+    """Prep-stage process (where the product's parser runs): file index in, Prepared out; the parsed rows are loaded at start, parsing is not timed."""
+    conn.send(("READY",))
+    busy = 0.0
+    while True:
+        message = conn.recv()
+        if message[0] == "STOP":
+            conn.send(("STATS", busy, rb.peak_rss_bytes()))
+            return
+        t0 = time.perf_counter()
+        out = prepare(tbl, message[1], rows[message[1]], message[1] + 1)
+        busy += time.perf_counter() - t0
+        conn.send(("PREPARED", out))
+
+
+class PrepPool:
+    """P prep processes; file i goes to process i % P and is requested a few files ahead of the spine."""
+
+    def __init__(self, tbl: SimpleNamespace, rows: dict, procs: int) -> None:
+        context = multiprocessing.get_context("spawn")
+        self.files, self.procs, self.next, self.conns, self.processes = len(rows), procs, 0, [], []
+        for i in range(procs):
+            parent, child = context.Pipe()
+            process = context.Process(target=prep_main, args=(child, tbl, {x: r for x, r in rows.items() if x % procs == i}), daemon=True)
+            process.start()
+            self.conns.append(parent)
+            self.processes.append(process)
+        for conn in self.conns:
+            Spine.expect(conn, "READY")
+
+    def get(self, index: int) -> Prepared:
+        while self.next < min(self.files, index + 2 * self.procs):
+            self.conns[self.next % self.procs].send(("PREP", self.next))
+            self.next += 1
+        return Spine.expect(self.conns[index % self.procs], "PREPARED")[0]
+
+    def close(self) -> tuple[float, float]:
+        stats = []
+        for conn, process in zip(self.conns, self.processes):
+            conn.send(("STOP",))
+            stats.append(Spine.expect(conn, "STATS"))
+            process.join()
+        return sum(s[0] for s in stats), sum(s[1] for s in stats)
+
+
 class Spine:
-    """Spine process: judge, spine write, record R_n, spine check, COMMIT; shards 0..K-1 are worker processes."""
+    """Spine process: membership check, spine rows, record R_n, spine check, COMMIT; shards 0..K-1 are worker processes, and the per-row pure work is in the prep stage."""
 
     def __init__(self, work: Path, k_count: int, template: Path) -> None:
         self.K, self.work = k_count, work
@@ -186,14 +299,8 @@ class Spine:
             self.c.execute(f"PRAGMA {pragma}")
         self.c.executescript(SPINE_DDL + rb.STORE_DDL)
         self.ckpt = rb.Checkpointer(db)
-        with sqlite3.connect(str(template)) as t:
-            self.obl = {r[0]: r[1] for r in t.execute("SELECT obligation_id,item_id FROM obligations ORDER BY item_id")}
-        self.obl_ids = list(self.obl)
-        self.route = {item: int.from_bytes(rb.sha("RR/SHARD/v1", PAYER, item)[:8], "big") % k_count for item in self.obl.values()}
-        # the cell directory's keys, loaded once and kept equal to main.cells at every commit; `overlay` holds the open transaction's new keys
-        self.keys = {r[0] for r in self.c.execute("SELECT cell_id FROM cells")}
-        self.overlay: set[bytes] = set()
-        self.ahead: tuple | None = None  # (index, record, n, judged): the next file, judged while the shards built this one
+        self.tbl = tables(template, k_count)
+        self.keys = {r[0] for r in self.c.execute("SELECT cell_id FROM cells")}  # the cell directory's keys, loaded once and kept equal to main.cells at every commit
         self.workers: dict[int, tuple] = {}
         context = multiprocessing.get_context("spawn")
         for k in range(k_count):  # every shard is a worker process; the spine process only judges, ships, writes its record and commits
@@ -227,95 +334,41 @@ class Spine:
                 raise ShardDiverged(f"shard {k}: head differs after commit")
         self.tt["ack_wait"] += time.perf_counter() - t0
 
-    def judge(self, index: int, rows: list, pool: str, n: int):
-        """Spine judge: cell directory dedup, routing by item hash, classification (the PERF-B Writer.chunk rules, no Lean)."""
-        base, sp = index * rb.KEY, {name: [] for name in ("cell_rows", "holds", "links", "resolutions", "charges")}
-        dirs, parts, pending, resolved, classes = [], {}, {}, set(), {}
-        keys, overlay, obl, obl_ids, sha512, sha256 = self.keys, self.overlay, self.obl, self.obl_ids, hashlib.sha3_512, hashlib.sha3_256
-        seen: set[bytes] = set()
-        for row_index, row in rows:
-            tag, key = row.key[0], "/".join(row.key[1:])
-            origin = f"{index}/{tag}/{key}"
-            ref = row.key[4] if tag == "PLB" else row.key[1]
-            ob = obl_ids[zlib.crc32(ref.encode()) % len(obl_ids)]
-            item = obl[ob]
-            cid = sha512(f"RR/CELL/CASH/v2\x1fbench-tenant\x1f{item}\x1f{origin}".encode()).digest()  # = rb.sha("RR/CELL/CASH/v2", "bench-tenant", item, origin)
-            amount, rk = row.amount_cents, base + row_index
-            if cid in seen or cid in keys or cid in overlay:  # the directory in memory (committed keys + the open transaction's)
-                classes["duplicate"] = classes.get("duplicate", 0) + 1
-                continue
-            seen.add(cid)
-            rawdig = sha256(row.raw.encode()).digest()
-            if amount == 0 or tag == "RAW" or amount is None or amount < 0:
-                state = "ZERO" if amount == 0 else "HELD" if (tag == "RAW" or amount is None) else "NEGATIVE"
-                sp["cell_rows"].append((rk, origin, tag, amount, row.raw, rawdig))
-                dirs.append((cid, SPINE, item, state, amount, rawdig, n, rk))
-                if state == "NEGATIVE":
-                    target = f"{index}/CLP/{ref}"
-                    sp["holds"].append((rk, cid, "TARGET"))
-                    sp["links"].append((rk, cid, target, "EFFECTIVE" if target in resolved else "PENDING"))
-                    pending.setdefault(target, []).append((origin, cid, rk, ob))
-                classes[state] = classes.get(state, 0) + 1
-            else:
-                k = self.route[item]
-                dirs.append((cid, k, item, "RESOLVED", amount, rawdig, n, rk))
-                parts.setdefault(k, []).append((rk, origin, tag, key, amount, row.raw, rawdig, ob, cid))
-                for _, negcid, negrk, negob in pending.pop(origin, ()):
-                    sp["resolutions"].append((negrk, negcid, None, 0, "NET"))
-                    sp["charges"].append((negrk, negrk, negob, 0))
-                resolved.add(origin)
-                classes["applied"] = classes.get("applied", 0) + 1
-        j = hashlib.sha3_256(b"".join(d[0] for d in dirs)).digest()
-        source = hashlib.sha256(b"".join(d[5] for d in dirs)).digest()
-        return sp, dirs, parts, j, source, classes
-
-    def judged(self, index: int, record, n: int):
-        """The sorted judge of one file (negatives first, then file order), against the committed keys plus `overlay`."""
-        t0 = time.perf_counter()
-        rows = sorted(enumerate(record.rows), key=lambda p: (0 if (p[1].amount_cents or 0) < 0 else 1, p[0]))
-        pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
-        out = self.judge(index, rows, pool, n)
-        self.tt["judge"] += time.perf_counter() - t0
-        return pool, out
-
-    def ingest(self, index: int, record, deposit: dict, ahead: tuple | None = None) -> dict:
-        """One file. `ahead` = (index, record) of the next file: it is judged while the shards build this one (its judge reads this file's
-        new keys through `overlay`), and used by the next call only if that call is for the same file and this one committed."""
+    def ingest(self, index: int, record, deposit: dict, prepared: Prepared | None = None) -> dict:
+        """One file. `prepared` is the prep stage's output for it (made against nothing but the file itself); it is used when it was made for this
+        index and this n and meets no cell the directory already holds, else the file is judged here against the committed keys, by the same code."""
         n, t_f = self.n + 1, T0_MS + index
         if t_f < self.last_t_f:
             raise rb.FinancialIntegrityError("clock_regressed")
+        t0 = time.perf_counter()
+        p = prepared
+        cids = {d[0] for d in p.dirs} if p else None
+        if p is None or p.index != index or p.n != n or not self.keys.isdisjoint(cids):
+            p = prepare(self.tbl, index, record.rows, n, self.keys)
+            cids = {d[0] for d in p.dirs}
+        pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
+        self.tt["judge"] += time.perf_counter() - t0
         self.ckpt.before_begin()
         self.c.execute("BEGIN IMMEDIATE")
         sent: list[int] = []
         try:
-            ready, self.ahead = self.ahead, None
-            if ready and ready[0] == index and ready[1] is record and ready[2] == n:
-                pool, (sp, dirs, parts, j, source, classes) = ready[3]
-            else:
-                pool, (sp, dirs, parts, j, source, classes) = self.judged(index, record, n)
             pre = dict(self.heads)
             t0 = time.perf_counter()
-            blobs = {k: pickle.dumps(p, 5) for k, p in parts.items()}
-            verdicts = {k: hashlib.sha3_256(b"".join(p[1].encode() for p in parts[k])).digest() for k in parts}
-            for k in parts:  # each worker commits n-1, then builds n; its expected-head compare is the step-2 head check
-                self.workers[k][1].send(("PART", n, index, pool, t_f, blobs[k], pre[k], verdicts[k]))
+            for k, blob in p.blobs.items():  # each worker commits n-1, then builds n; its expected-head compare is the step-2 head check
+                self.workers[k][1].send(("PART", n, index, pool, t_f, blob, pre[k], p.verdicts[k]))
                 sent.append(k)
             self.tt["ipc"] += time.perf_counter() - t0
             t0 = time.perf_counter()
-            self.write_rows(index, pool, deposit, sp, dirs)  # the spine's rows go in while the shards build
-            self.overlay = {d[0] for d in dirs}
+            self.write_rows(index, pool, deposit, p)  # the spine's rows go in while the shards build
             self.tt["spine_rows"] += time.perf_counter() - t0
-            if ahead:
-                self.ahead = (ahead[0], ahead[1], n + 1, self.judged(ahead[0], ahead[1], n + 1))
             self.wait_acks()  # step 2, for the shards that committed n-1 and have been building n since
             t0 = time.perf_counter()
             built = {k: self.expect(self.workers[k][1], "BUILT") for k in sent}
             self.tt["wait_built"] += time.perf_counter() - t0
             t0 = time.perf_counter()
-            self.write_spine(index, pool, n, t_f, dirs, j, source, pre, built, blobs, verdicts)
+            self.write_spine(index, pool, n, t_f, p, pre, built)
             self.tt["spine_write"] += time.perf_counter() - t0
         except BaseException:
-            self.overlay, self.ahead = set(), None
             for k in sent:  # step 6: abort the shards that were asked, roll the spine back
                 self.workers[k][1].send(("ABORT",))
             for k in sent:  # replies in flight (a commit ACK still owed, BUILT or ERR) come first; the last ACK is the abort's
@@ -329,27 +382,26 @@ class Spine:
         self.c.execute("COMMIT")  # the only commit point
         self.ckpt.kick()
         self.tt["spine_commit"] += time.perf_counter() - t0
-        self.keys |= self.overlay
-        self.overlay = set()
+        self.keys |= cids
         self.n, self.last_t_f, self.prev_head = n, t_f, self.prev_head_next
         for k, (head, _) in built.items():
             self.heads[k] = head
             self.workers[k][1].send(("COMMIT",))
             self.owed.append(k)
-        return classes
+        return p.classes
 
-    def write_rows(self, index, pool, deposit, sp, dirs) -> None:
+    def write_rows(self, index, pool, deposit, p: Prepared) -> None:
         c, base = self.c, index * rb.KEY
         if c.execute("SELECT 1 FROM deposit_rows WHERE row_key=?", (base,)).fetchone() is None:  # a resent file keeps its deposit row
             c.execute("INSERT INTO deposit_rows VALUES (?,?,?,?)", (base, deposit["entry_id"], pool, deposit["amount_cents"]))
-        self.added = c.executemany("INSERT INTO cells VALUES (?,?,?,?,?,?,?,?)", sorted(dirs, key=itemgetter(0))).rowcount
-        for table, data in sp.items():
+        self.added = c.executemany("INSERT INTO cells VALUES (?,?,?,?,?,?,?,?)", p.dirs).rowcount
+        for table, data in p.sp.items():
             if data:
-                c.executemany(f"INSERT INTO {table} VALUES ({','.join('?' * len(data[0]))})", sorted(data, key=itemgetter(0)))
+                c.executemany(f"INSERT INTO {table} VALUES ({','.join('?' * len(data[0]))})", data)
 
-    def write_spine(self, index, pool, n, t_f, dirs, j, source, pre, built, blobs, verdicts) -> None:
-        c = self.c
-        body = pickle.dumps({k: (blobs[k], verdicts[k], pre[k], built[k][1], built[k][0]) for k in built}, 5)
+    def write_spine(self, index, pool, n, t_f, p: Prepared, pre, built) -> None:
+        c, dirs, j, source = self.c, p.dirs, p.j, p.source
+        body = pickle.dumps({k: (p.blobs[k], p.verdicts[k], pre[k], built[k][1], built[k][0]) for k in built}, 5)
         rd = rb.sha(n, index, pool, t_f, BUILD_ID, source, j, hashlib.sha3_256(body).digest())
         self.prev_head_next = head = rb.sha(self.prev_head, rd)
         c.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)", (n, index, pool, t_f, BUILD_ID, source, j, body, head))
@@ -410,11 +462,12 @@ def corpus(seed: int, lines: int, files: int) -> list[tuple[SimpleNamespace, dic
     return out
 
 
-def run_once(k_count: int, files: list, template: Path, work: Path, with_replay: bool = True) -> dict:
+def run_once(k_count: int, files: list, template: Path, work: Path, with_replay: bool = True, prep_procs: int = 1) -> dict:
     spine = Spine(work, k_count, template)
+    prep = PrepPool(spine.tbl, {i: r.rows for i, (r, _) in enumerate(files)}, prep_procs)
     db_bytes = lambda: sum(p.stat().st_size for p in work.glob("*.sqlite3*"))  # noqa: E731
     size0, io0 = db_bytes(), io_write_bytes()
-    lines, classes, kk, snap, snap_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0
+    lines, classes, kk, snap, snap_s, recv_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0, 0.0
     t0 = time.perf_counter()
     for position, (record, deposit) in enumerate(files):
         if with_replay and position == len(files) - 1:
@@ -422,23 +475,28 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
             spine.wait_acks()
             spine.snapshot(kk, snap)
             snap_s = time.perf_counter() - s0  # the replay setup is not throughput
-        for name, value in spine.ingest(position, record, deposit, (position + 1, files[position + 1][0]) if position + 1 < len(files) else None).items():
+        r0 = time.perf_counter()
+        prepared = prep.get(position)
+        recv_s += time.perf_counter() - r0
+        for name, value in spine.ingest(position, record, deposit, prepared).items():
             classes[name] = classes.get(name, 0) + value
         lines += len(record.rows)
     spine.wait_acks()
     wall = time.perf_counter() - t0 - snap_s
     grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
+    prep_busy, prep_rss = prep.close()
+    spine.tt["prep_wait"] = recv_s
     stats = spine.close()
     shard_stats = sorted(stats, key=lambda s: s["k"])
     busy = sum(s["busy_s"] for s in shard_stats)
     out = {"K": k_count, "lines": lines, "wall_s": wall, "lines_per_s": lines / wall, "classes": classes,
-           "j_us": spine.tt["judge"] / lines * 1e6, "s_us": (spine.tt["spine_rows"] + spine.tt["spine_write"]) / lines * 1e6, "ipc_us": spine.tt["ipc"] / lines * 1e6,
+           "j_us": spine.tt["judge"] / lines * 1e6, "prep_us": prep_busy / lines * 1e6, "prep_wait_us": recv_s / lines * 1e6, "s_us": (spine.tt["spine_rows"] + spine.tt["spine_write"]) / lines * 1e6, "ipc_us": spine.tt["ipc"] / lines * 1e6,
            "w_us": busy / lines * 1e6, "shard_check_us": sum(s["check_s"] for s in shard_stats) / lines * 1e6,
            "shard_busy_s": [s["busy_s"] for s in shard_stats], "shard_lines": [s["lines"] for s in shard_stats], "imbalance": max(s["busy_s"] for s in shard_stats) / (busy / k_count),
            "phase_s": spine.tt, "commit_ms_per_file": [(spine.tt["spine_commit"] / len(files)) * 1000, sum(s["commit_s"] for s in shard_stats) / (k_count * len(files)) * 1000],
            "store_bytes_per_s": grown / wall, "io_write_bytes_per_s": (spine_io + sum(s["io_write"] for s in stats)) / wall,
            "peak_rss_spine_mb": spine_rss / 2**20, "peak_rss_shards_mb": [s["peak_rss"] / 2**20 for s in shard_stats],
-           "peak_rss_total_mb": (spine_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1}
+           "peak_rss_prep_mb": prep_rss / 2**20, "peak_rss_total_mb": (spine_rss + prep_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1 + prep_procs}
     if with_replay:
         out["replay"] = replay(work / "spine.sqlite3", snap, kk)
     return out
@@ -452,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--lines", type=int, default=5000)
     ap.add_argument("--files", type=int, default=2)
+    ap.add_argument("--prep", type=int, default=1, help="prep-stage processes")
     ap.add_argument("--suffix", default="")
     a = ap.parse_args(argv)
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -464,9 +523,9 @@ def main(argv: list[str] | None = None) -> int:
         files = corpus(seeds[name], a.lines, a.files)
         for k in a.k:
             for rep in range(a.reps + 1):  # the last rep also snapshots one shard and replays its last record; its setup time is cut from the wall
-                r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}", rep == a.reps)}
+                r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}", rep == a.reps, a.prep)}
                 runs.append(r)
-                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
+                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
     previous = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
     previous["runs"].extend(runs)
     a.out.write_text(json.dumps(previous, indent=1, default=str), encoding="utf-8")
