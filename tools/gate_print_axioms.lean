@@ -7,7 +7,6 @@ import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
-import BlindLedger.Financial.ShardSplit
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -139,7 +138,3 @@ import BlindLedger.Financial.ShardSplit
 #print axioms BlindLedger.Gate.releaseBatch_once
 #print axioms BlindLedger.Gate.pathOf_verifies
 #print axioms BlindLedger.Gate.publishOkTree_sound
-#print axioms BlindLedger.Financial.ShardSplit.rollforward_eq
-#print axioms BlindLedger.Financial.ShardSplit.reader_cut
-#print axioms BlindLedger.Financial.ShardSplit.applied_missing
-#print axioms BlindLedger.Financial.ShardSplit.rollforward_closed
