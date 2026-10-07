@@ -334,6 +334,30 @@ class ShardBench(unittest.TestCase):
         shard.stats()
         self.assertEqual(sqlite3.connect(str(work / "s.sqlite3")).execute("SELECT COUNT(*) FROM applied").fetchone()[0], 0)
 
+    def test_shard_refuses_a_part_whose_post_head_equals_its_pre_head_and_writes_nothing(self) -> None:
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        work = self.tmp / "fixed-point"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir()
+        shutil.copyfile(self.template, work / "s.sqlite3")
+        shard = sb.Shard(0, work / "s.sqlite3")
+        head, w = shard.w.head, shard.w
+        real_mutations = w.mutations
+
+        def mutations(t, *args):  # the sha is patched so the last link is the pre-head (store and built agree, the chain is closed on itself)
+            real_mutations(t, *args)
+            e = t["financial_events"][-1]
+            t["financial_events"][-1] = e[:10] + (head,) + e[11:]
+            w.head = head
+        w.mutations = mutations
+        with self.assertRaises(rb.FinancialIntegrityError) as caught:
+            shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
+        self.assertIn("shard_fixed_point", str(caught.exception))
+        self.assertFalse(shard.c.in_transaction)
+        self.assertEqual(w.head, head)
+        shard.stats()
+        self.assertEqual(sqlite3.connect(str(work / "s.sqlite3")).execute("SELECT COUNT(*) FROM applied").fetchone()[0], 0)
+
     def test_shard_check_refuses_a_stored_event_that_differs_from_the_built_one_and_a_broken_link(self) -> None:
         prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
         for fault in ("stored_digest", "broken_link"):

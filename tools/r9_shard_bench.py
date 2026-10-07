@@ -192,6 +192,8 @@ class Shard:
                  "evidence": [], "payments": [], "financial_events": [], "commands": []}
             touched: dict[str, int] = {}
             w.mutations(t, touched, index, t_f, [(ob, key, amount, "PAYMENT_RECEIVED") for _, _, _, key, amount, _, _, ob, _ in parts])
+            if parts and w.head == pre_head:  # a part that adds events must move the head (ShardSplit.lean `adv`): a closed chain is refused before anything is written
+                raise rb.FinancialIntegrityError("shard_fixed_point")
             digest = hashlib.sha3_256()
             for name, data in t.items():
                 digest.update(pickle.dumps(data, 5))
