@@ -129,6 +129,9 @@
   const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
   const hId = () => snapshot.h.obligation.item_id; // the one obligation that carries a decision package
   const usd = (cents) => asMoney(cents);
+  // Every money label takes its status word from the class of evidence behind it. No release or payment-system record exists, so no word for them exists.
+  const EVIDENCE_WORD = { cash: "recorded as cash", offset: "accepted as an offset" };
+  const said = (evidenceClass) => EVIDENCE_WORD[evidenceClass];
 
   function el(tag, attrs, ...kids) {
     const node = document.createElement(tag);
@@ -168,7 +171,7 @@
   // kind: need (a person must decide), wait (money or follow-through is outstanding), ok (settled).
   function statusOf(item) {
     if (item.item_id !== hId()) {
-      const state = item.shortfall_cents > 0 ? "Short " + usd(item.shortfall_cents) : "Paid in full";
+      const state = item.shortfall_cents > 0 ? "Short " + usd(item.shortfall_cents) : "Cash recorded in full";
       return { kind: item.shortfall_cents > 0 ? "wait" : "ok", state, sub: state };
     }
     const view = hView();
@@ -183,7 +186,7 @@
         sub: "Offset claim " + usd(view.claim.amount_cents) + " · " + view.support,
       };
     }
-    const state = view.ob.shortfall_cents > 0 ? "Waiting on the payer for " + usd(view.ob.shortfall_cents) : "Paid. Follow-through is still open";
+    const state = view.ob.shortfall_cents > 0 ? "Waiting on the payer for " + usd(view.ob.shortfall_cents) : "Cash recorded. Follow-through is still open";
     return { kind: "wait", state, sub: state };
   }
 
@@ -234,9 +237,9 @@
     const source = snapshot.source_assessment;
     const sourceCheck = [false, "Source authenticity", "Not verified. " + sentence(words(source.status)) + ": " + source.reason];
     if (!isH) {
-      R.claim = short > 0 ? name + " is short " + usd(short) + " for the period." : name + " was paid " + usd(item.received_cash_cents) + " in full.";
+      R.claim = short > 0 ? name + " is short " + usd(short) + " for the period." : name + " has " + usd(item.received_cash_cents) + " " + said("cash") + ", the full amount owed.";
       R.more = short > 0 ? "" : "That matches the amount owed, so nothing is waiting on anyone.";
-      R.ledger.push(["Owed to " + name, "", amt(item.owed_cents)], ["Cash recorded", "", MINUS + amt(item.received_cash_cents)], ["Shortfall", short > 0 ? "Still owed" : "Paid in full", amt(short), "total"]);
+      R.ledger.push(["Owed to " + name, "", amt(item.owed_cents)], ["Cash recorded", "", MINUS + amt(item.received_cash_cents)], ["Shortfall", short > 0 ? "Still owed" : "Cash recorded in full", amt(short), "total"]);
       R.checks.push([true, "Amount owed", usd(item.owed_cents)], [short === 0, "Cash received", usd(item.received_cash_cents) + " recorded of " + usd(item.owed_cents) + " owed; shortfall " + usd(short)], sourceCheck);
     } else {
       const v = hView();
@@ -244,16 +247,16 @@
       const amount = claim ? usd(claim.amount_cents) : "Unknown";
       const payments = v.pkg.cash ? v.pkg.cash.active_payment_count : 0;
       R.claim = short > 0 && claim && claim.status === "CLAIMED"
-        ? "The payer paid " + name + " " + usd(short) + " less than it owes and claims an offset of " + amount + " with " + v.support + "."
-        : v.kase && v.kase.status === "RESOLVED" ? name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed."
+        ? name + " has " + usd(item.received_cash_cents) + " " + said("cash") + ", " + usd(short) + " less than the payer owes, and the payer claims an offset of " + amount + " with " + v.support + "."
+        : v.kase && v.kase.status === "RESOLVED" ? name + " has " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed " + said("cash") + "."
           : short > 0 ? "The payer owes " + name + " " + usd(short) + " after the offset was " + (v.det && v.det.decision === REJECTED ? "rejected." : "decided.")
-            : name + " is paid " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed. The case is not closed yet.";
+            : name + " has " + usd(item.received_cash_cents) + " of " + usd(item.owed_cents) + " owed " + said("cash") + ". The case is not closed yet.";
       R.more = v.missing.length ? "Still needed: " + v.missing.map(words).join(", ") + "." : "Owner assessment: " + words(v.assessment) + ", nothing outstanding.";
       if (v.act && v.act.open_cents !== null && v.act.open_cents !== v.act.payload_fields.amount_cents) R.more += " Requested " + usd(v.act.payload_fields.amount_cents) + ", open " + usd(v.act.open_cents) + ".";
       R.ledger.push(["Owed to " + name, rule.source_refs[0], amt(item.owed_cents)],
         ["Cash recorded", payments + (payments === 1 ? " payment" : " payments") + " recorded", MINUS + amt(item.received_cash_cents)]);
       if (claim) R.ledger.push(["Offset claimed by the payer", "claim " + words(claim.status) + " · " + v.support, amt(claim.amount_cents)]);
-      if (item.lawful_adjustment_cents > 0) R.ledger.push(["Offset accepted, counted as paid", "", MINUS + amt(item.lawful_adjustment_cents)]);
+      if (item.lawful_adjustment_cents > 0) R.ledger.push(["Offset " + said("offset"), "", MINUS + amt(item.lawful_adjustment_cents)]);
       R.ledger.push(["Shortfall", !v.det && short > 0 ? "Depends on the decision" : short > 0 ? "The payer must pay it" : "Nothing left to pay", amt(short), "total"]);
       R.checks.push([true, "Amount owed", usd(item.owed_cents) + " from " + rule.source_refs[0]],
         [short === 0, "Cash received", usd(item.received_cash_cents) + " recorded of " + usd(item.owed_cents) + " owed; shortfall " + usd(short)]);
@@ -262,7 +265,7 @@
       R.caseLine = v.kase ? words(v.kase.status) + " · " + words(v.kase.reason) + " · owner: " + words(v.kase.next_action_owner) : "No case opened";
       R.facts.push(["Case", R.caseLine], ["Rule", rule.adjustment_rule_id]);
       if (claim && can("reject-offset") && (unresolvedDecision || (!v.det && st.kind === "need"))) {
-        const left = short - claim.amount_cents; // what stays unpaid once the offset counts as paid
+        const left = short - claim.amount_cents; // what stays owed once the offset counts toward it
         R.decide = {
           options: [["authorize-offset", "1", "Accept the offset", "The " + usd(claim.amount_cents) + " offset counts toward " + name + "'s payment. "
             + (left > 0 ? name + " is still owed " + usd(left) + "." : name + " is owed nothing more.")],
@@ -289,7 +292,7 @@
         R.activity.push([at(event.committed_at_ms), sentence(words(event.kind)), " · Owner event " + event.event_sequence
           + (event.after_revision === null || event.after_revision === undefined ? "" : ", revision " + event.before_revision + " → " + event.after_revision)]);
       }
-      if (snapshot.h.timeline_truncated) R.activity.push(["", "Showing " + events.length + " recent events of " + snapshot.h.timeline_total_count + "; older history is omitted.", ""]);
+      if (snapshot.h.timeline_truncated) R.activity.push(["", "Timeline cut short: showing " + events.length + " recent events of " + snapshot.h.timeline_total_count + "; older history is omitted.", ""]);
       R.followup = followupRows();
     }
     R.facts.push(["Obligation", item.obligation_id], ["Read", "sequence " + env.sequence + " · snapshot " + env.snapshot_id.slice(0, 16)]);
@@ -425,8 +428,8 @@
     const open = items.filter((item) => statusOf(item).kind !== "ok");
     const totals = [["Population", summary.obligation_count + " / " + population.expected_count + " obligations · roster " + words(population.completeness)],
       ["Total owed", usd(summary.owed_cents)], ["Cash recorded", usd(summary.received_cash_cents)], ["Program shortfall", usd(summary.shortfall_cents)],
-      ["Open items", open.length + (open.length === 1 ? " obligation" : " obligations") + " not paid in full"]];
-    const claim = summary.shortfall_cents > 0 ? usd(summary.shortfall_cents) + " of " + usd(summary.owed_cents) + " is still short." : "Every obligation is paid in full.";
+      ["Open items", open.length + (open.length === 1 ? " obligation" : " obligations") + " without full cash recorded"]];
+    const claim = summary.shortfall_cents > 0 ? usd(summary.shortfall_cents) + " of " + usd(summary.owed_cents) + " is still short." : "Recorded cash covers every obligation.";
     byId("page").replaceChildren(el("div", { class: "page", "data-record": "summary" }, el("div", { class: "main" },
       el("h1", { class: "sr", text: "Program summary" }),
       el("header", {}, backLink(), stateLine(open.length ? "wait" : "ok", open.length ? "Program summary: " + open.length + " open" : "Program summary: nothing open"),
@@ -672,6 +675,8 @@
     const declared = name && model.controls[name] && model.controls[name].responses[code];
     if (declared && declared.message) return declared.message;
     return {
+      staff_role_refused: "Your role can't do this. Nothing changed.",
+      staff_person_refused: "That person can't do this here. Nothing changed.",
       authority_actor_not_authorized: "Owner denied the command because the fixed synthetic reporter role cannot make a financial decision.",
       obligation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",
       evaluation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",

@@ -52,6 +52,7 @@ class HostileOwnerIntakeTests(unittest.TestCase):
         cash.setUp()
         self.addCleanup(cash.doCleanups)
         self.cash = cash
+        self._after = None
 
     def _timed(self, bad: list, label, call) -> object:
         """The call's typed refusal (its text), or None for an accepted call; anything else is recorded as a defect."""
@@ -68,12 +69,15 @@ class HostileOwnerIntakeTests(unittest.TestCase):
                 bad.append((label, "slow"))
 
     def _refusal_leaves_the_store(self, bad: list, label, call) -> None:
-        before = cash_tests._tables(self.cash.store.path)
+        path = self.cash.store.path
+        before, self._after = self._after if self._after is not None else cash_tests._tables(path), None  # the image the last refusal left is this case's start: nothing runs between cases
         refused = self._timed(bad, label, call)
         if refused is None:
             bad.append((label, "accepted"))
-        elif cash_tests._tables(self.cash.store.path) != before:
-            bad.append((label, "store_changed", refused))
+        else:
+            self._after = cash_tests._tables(path)
+            if self._after != before:
+                bad.append((label, "store_changed", refused))
 
     def test_mutated_cash_file_bytes_get_a_typed_refusal(self) -> None:
         cash, bad, rng = self.cash, [], random.Random("hostile-cash-bytes")

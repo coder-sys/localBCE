@@ -5,6 +5,8 @@ import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.Rules.DecideLayer
+import BlindLedger.Gate.ApprovalLaws
+import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -122,3 +124,17 @@ import BlindLedger.Gate.Rules.DecideLayer
 #print axioms BlindLedger.Gate.decide_ok
 #print axioms BlindLedger.Gate.decide_run_fold
 #print axioms BlindLedger.Gate.loadAdds_binds
+#print axioms BlindLedger.Gate.Approval.decodeMoves_canonical
+#print axioms BlindLedger.Gate.Approval.decodeMoves_lineDigest
+#print axioms BlindLedger.Gate.Approval.decodeMoves_ascending
+#print axioms BlindLedger.Gate.Approval.decodeApproval_canonical
+#print axioms BlindLedger.Gate.certsInstalled_mem
+#print axioms BlindLedger.Gate.frameOrdered_nodup
+#print axioms BlindLedger.Gate.releaseBatch_eq
+#print axioms BlindLedger.Gate.releaseBatch_spec
+#print axioms BlindLedger.Gate.releaseBatch_isolation
+#print axioms BlindLedger.Gate.releaseBatch_cp_isolation
+#print axioms BlindLedger.Gate.releaseBatch_accept_verified
+#print axioms BlindLedger.Gate.releaseBatch_once
+#print axioms BlindLedger.Gate.pathOf_verifies
+#print axioms BlindLedger.Gate.publishOkTree_sound

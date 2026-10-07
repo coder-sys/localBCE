@@ -261,16 +261,11 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             owner._EVIDENCE_DOMAIN,
             owner._canonical(
                 {
-                    "evidence_id": str(row["evidence_id"]),
-                    "item_id": str(row["item_id"]),
-                    "kind": str(row["kind"]),
-                    "common_origin_id": str(row["common_origin_id"]),
-                    "source_id": str(row["source_id"]),
-                    "source_version": str(row["source_version"]),
-                    "local_ref": str(row["local_ref"]),
-                    "applicable_at_ms": int(row["applicable_at_ms"]),
-                    "event_at_ms": int(row["event_at_ms"]),
-                    "received_at_ms": int(row["received_at_ms"]),
+                    **{
+                        key: str(row[key])
+                        for key in ("evidence_id", "item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref")
+                    },
+                    **{key: int(row[key]) for key in ("applicable_at_ms", "event_at_ms", "received_at_ms")},
                     "content_digest": bytes(row["content_digest"]).hex().upper(),
                     "amount_cents": row["amount_cents"],
                     "reversal_of": row["reversal_of"],

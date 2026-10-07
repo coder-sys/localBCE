@@ -8,8 +8,11 @@ from dataclasses import replace
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
+import threading
+from typing import Callable
 import unittest
 
 from app import right_rail_gate_codec as gate
@@ -105,6 +108,179 @@ class PayerTests(fx.Scratch):
             self.assertEqual(store.release(other, gate.encode_token(tokens[1]), now=fx.NOW), "payment")
             self.assertEqual(store.holds(), [(request.payment_id, "pin"), (request.payment_id, "released"),
                                              (other.payment_id, "payment")])
+
+    def _ready(self, tmp: str) -> tuple[gate.DecideRequest, bytes]:
+        """A stored checkpoint and payment 0 sent, in a closed store: the request and its token."""
+        handle, root_pk, cert = fx.custody(tmp)
+        store = self._store(tmp)
+        store.install_cert(cert)
+        checkpoint, tokens = fx.build(fx.batch_leaves(0, 2))
+        header = gate.encode_checkpoint_header(checkpoint)
+        store.store_checkpoint(gate.attach_signature(header, signer.seal(handle, root_pk, cert, None, header,
+                                                                         [gate.encode_token(t) for t in tokens])))
+        request = fx.payment_request(0)
+        store.send(request, transmit=lambda data: None)
+        store.close()
+        return request, gate.encode_token(tokens[0])
+
+    def _raw(self, tmp: str, *statements: str) -> None:
+        with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as db:
+            for statement in statements:
+                db.execute(statement)
+
+    def _race(self, tmp: str, *calls: Callable[[payer.PayerStore], object]) -> list[object]:
+        """Run each call on its own connection and thread, started together; the results, in finishing order."""
+        barrier, outcomes = threading.Barrier(len(calls)), []
+
+        def run(call: Callable[[payer.PayerStore], object]) -> None:
+            store = payer.PayerStore(Path(tmp) / "payer.sqlite3", root_keys={fx.TENANT: fx.keypair(f"root-{fx.TENANT}")[0]},
+                                     grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),))
+            barrier.wait()
+            outcomes.append(call(store))
+            store.close()  # a connection closes in its own thread
+
+        threads = [threading.Thread(target=run, args=(call,)) for call in calls]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return outcomes
+
+    def _count(self, tmp: str, *tables: str) -> list[int]:
+        with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3")) as db:
+            return [db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in tables]
+
+    def test_two_connections_release_one_key_once(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            outcomes = self._race(tmp, *[lambda store: store.release(request, token, now=fx.NOW)] * 2)
+            self.assertEqual(sorted(outcomes, key=str), [None, "released"])  # the loser sees the winner's row under the lock
+            self.assertEqual(self._count(tmp, "closed", "releases", "holds"), [1, 1, 1])  # the winner's two rows, the loser's one hold
+            with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3")) as db:
+                self.assertEqual(db.execute("SELECT reason FROM holds").fetchall(), [("released",)])
+
+    def test_two_connections_storing_forking_checkpoints_store_one_and_record_the_fork(self) -> None:
+        with self.scratch() as tmp:
+            handle, _, cert = fx.custody(tmp)
+            self._store(tmp).install_cert(cert)
+            signed = []
+            for n in (0, 5):  # two different geneses of one shard and epoch, signed by an equivocating writer
+                header = gate.encode_checkpoint_header(fx.build(fx.batch_leaves(0, 2, n))[0])
+                signed.append(gate.attach_signature(header, signer.sign(handle, header)))
+            outcomes = self._race(tmp, *[lambda store, one=one: store.store_checkpoint(one) for one in signed])
+            self.assertEqual(sorted(outcomes), ["fork", "stored"])
+            self.assertEqual(self._count(tmp, "checkpoints", "forks"), [1, 1])
+
+    def test_a_failed_commit_rolls_back_and_leaves_the_connection_usable(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            store = self._store(tmp)
+            store._db.execute("PRAGMA busy_timeout=100")
+            with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3", isolation_level=None)) as reader:
+                reader.execute("BEGIN")
+                reader.execute("SELECT count(*) FROM pins").fetchone()  # a reader's SHARED lock: COMMIT cannot get EXCLUSIVE
+                with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                    store.release(request, token, now=fx.NOW)
+            self.assertEqual(self._count(tmp, "closed", "releases", "holds"), [0, 0, 0])
+            self.assertIsNone(store.release(request, token, now=fx.NOW))  # no transaction was left open
+
+    def test_a_commit_that_fails_after_the_transaction_ended_raises_the_commit_error(self) -> None:
+        class Gone:  # COMMIT fails the way a full disk does: SQLite has already rolled the transaction back
+            def __init__(self, db: sqlite3.Connection) -> None:
+                self.db = db
+
+            def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+                if sql == "COMMIT":
+                    self.db.execute("ROLLBACK")
+                    raise sqlite3.OperationalError("disk I/O error")
+                return self.db.execute(sql, *args)
+
+        with self.scratch() as tmp:
+            store = self._store(tmp)
+            real, store._db = store._db, Gone(store._db)
+            try:
+                with self.assertRaisesRegex(sqlite3.OperationalError, "disk I/O error") as caught:
+                    store.pin("t", "p", "pay", b"k")
+            finally:
+                store._db = real
+            self.assertRegex(str(caught.exception.__cause__), "no transaction is active")  # the ROLLBACK error is chained, not raised
+            store.pin("t", "p", "pay", b"k")  # the connection is usable
+            self.assertEqual(self._count(tmp, "pins"), [1])
+
+    def test_concurrent_installs_cannot_pass_the_cert_cap(self) -> None:
+        root, root_pk = f"root-{fx.TENANT}", fx.keypair(f"root-{fx.TENANT}")[0]
+
+        def install(epoch: int) -> Callable[[payer.PayerStore], str]:
+            body = gate.encode_key_cert(fx.TENANT, epoch, fx.SHARDS, root_pk)
+            cert = gate.attach_signature(body, fx.det_sign(root, body))
+
+            def call(store: payer.PayerStore) -> str:
+                try:
+                    store.install_cert(cert)
+                except payer.GatePayerError as refusal:
+                    return str(refusal)
+                return "installed"
+            return call
+
+        with self.scratch() as tmp:
+            self._store(tmp).close()
+            self._raw(tmp, *(f"INSERT INTO certs VALUES(x'{n:04x}')" for n in range(payer.MAX_CERTS - 1)))
+            outcomes = self._race(tmp, *[install(fx.EPOCH + n) for n in range(4)])
+            self.assertEqual(sorted(outcomes), ["cert_store_full"] * 3 + ["installed"])
+            self.assertEqual(self._count(tmp, "certs"), [payer.MAX_CERTS])
+
+    def test_a_complete_store_opens_without_a_write(self) -> None:
+        with self.scratch() as tmp:
+            self._store(tmp).close()
+            path = Path(tmp) / "payer.sqlite3"
+            path.chmod(stat.S_IREAD)
+            try:
+                self._store(tmp).close()
+            finally:
+                path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+    def test_a_closed_key_is_already_closed_and_records_one_hold_each_time(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            # a closed key of the same payment_id under another program does not close this one (R4.1-13)
+            self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','other-program','{request.payment_id}','DENIED','x',1)")
+            store = self._store(tmp)
+            # the same key already closed (a DENIED, so no releases row): the PK hit is caught, one hold and no payment row
+            self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','{request.program_id}','{request.payment_id}','DENIED','x',1)")
+            self.assertEqual(store.release(request, token, now=fx.NOW), "already_closed")
+            self.assertEqual((store.holds(), store._db.execute("SELECT count(*) FROM releases").fetchone()[0]),
+                             ([(request.payment_id, "already_closed")], 0))
+            self.assertEqual(store._db.execute("SELECT count(*) FROM closed").fetchone()[0], 2)
+            self.assertEqual(store.release(request, token, now=fx.NOW), "already_closed")  # the connection stays usable
+            self.assertEqual(len(store.holds()), 2)
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            self._raw(tmp, f"INSERT INTO closed VALUES('{fx.TENANT}','other-program','{request.payment_id}','DENIED','x',1)")
+            self.assertIsNone(self._store(tmp).release(request, token, now=fx.NOW))
+
+    def test_an_integrity_error_on_releases_rolls_back_closed_and_fails_loudly(self) -> None:
+        with self.scratch() as tmp:
+            request, token = self._ready(tmp)
+            self._raw(tmp, "CREATE TRIGGER boom BEFORE INSERT ON releases BEGIN SELECT RAISE(ABORT, 'boom'); END")
+            store = self._store(tmp)
+            with self.assertRaises(sqlite3.IntegrityError):
+                store.release(request, token, now=fx.NOW)
+            self.assertEqual([store._db.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in ("closed", "releases", "holds")],
+                             [0, 0, 0])
+            self._raw(tmp, "DROP TRIGGER boom")
+            self.assertIsNone(store.release(request, token, now=fx.NOW))  # the connection is usable and the key still free
+
+    def test_closed_is_migrated_from_releases_without_loss_and_idempotently(self) -> None:
+        with self.scratch() as tmp:
+            self._store(tmp).close()
+            self._raw(tmp, "DROP TABLE closed", *(
+                f"INSERT INTO releases VALUES('t{n % 2}','p{n}','pay-{n}',x'00','payee',{n},'2026-09',{100 + n})" for n in range(5)))
+            for _ in range(2):  # the second open changes nothing
+                store = self._store(tmp)
+                self.assertEqual(store._db.execute("SELECT tenant, program, payment_id, outcome, ref, closed_at FROM closed "
+                                                   "ORDER BY closed_at").fetchall(),
+                                 [(f"t{n % 2}", f"p{n}", f"pay-{n}", "RELEASED", "payee", 100 + n) for n in range(5)])
+                store.close()
 
     def test_a_second_genesis_is_recorded_as_a_fork(self) -> None:
         with self.scratch() as tmp:

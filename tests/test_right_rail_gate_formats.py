@@ -41,7 +41,7 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS),
          "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS), "e0": (0, TENANT, SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
-           "decision-id", "input", "lines-root", "state")
+           "decision-id", "input", "lines-root", "state", "moves", "admit-moves", "approval", "line-digest")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
 PINS = tuple(bytes.fromhex(gate_rules_data.pin([f"snap {kind} 20270315 0 ?"])[0].split()[4])
              for kind in ("released", "unresolved"))
@@ -689,7 +689,70 @@ def build_v2_vectors() -> str:
     return "\n".join(out) + "\n"
 
 
+def build_approval_vectors() -> str:
+    """APPROVAL/v1 (hold-release S2): each move binds its payment line by a 64-byte line digest; Lean decodes."""
+    h, at = bytes.hex, len(gate.APPROVAL)
+    out = ["# RR/APPROVAL/v1 golden vectors (hold-release S2). Synthetic, non-PHI, activation=false."]
+    add = out.append
+    raws = [gate.encode_decide_request(_request("FFS_CLAIM", n, _lines(n))) for n in range(3)]
+    moves = tuple(gate.Move(cell, f"pay-{n:04d}".encode(), f"claim-{n}".encode(), f"payee-{n % 3}".encode(),
+                            125_000 + n, raws[n]) for n, cell in enumerate(sorted(D[7:10])))
+
+    def fields(ms: tuple[gate.Move, ...]) -> str:
+        return " ".join(f"{h(m.cell)} {h(m.payment_id)} {h(m.claim_key)} {h(m.payee_key)} {m.cents} "
+                        f"{h(gate.line_digest(m.line))}" for m in ms)
+
+    for n, raw in enumerate(raws):
+        add(f"line-digest l{n} {h(raw)} {h(gate.line_digest(raw))}")
+    for name, ms in (("none", ()), ("one", moves[:1]), ("three", moves), ("cents-max", (replace(moves[0], cents=gate.MAX_NAT),))):
+        add(f"moves accept {name} {h(gate.encode_moves(ms))} {fields(ms)}".rstrip())
+    one, three = gate.encode_moves(moves[:1]), gate.encode_moves(moves)
+    body = [gate.encode_moves((m,))[len(gate.APPROVAL_MOVES) + 2 :] for m in moves]
+    end, two = len(one), gate.APPROVAL_MOVES + b"\x00\x02"  # move 0 ends where `one` ends
+    key = len(gate.APPROVAL_MOVES) + 2 + 64  # move 0's payment_id field
+    for name, data in (
+        ("line-digest-32", one[:-32]),
+        ("line-digest-65", one + b"\x5a"),
+        ("first-line-digest-32", three[: end - 32] + three[end:]),
+        ("first-line-digest-65", three[:end] + b"\x5a" + three[end:]),
+        ("trailing-byte", three + b"\x00"),
+        ("cents-zero", one[:-72] + bytes(8) + one[-64:]),
+        ("cells-descending", two + body[1] + body[0]),
+        ("cell-repeated", two + body[0] + body[0]),
+        ("count-too-high", two + body[0]),
+        ("approval-domain", gate.APPROVAL + one[len(gate.APPROVAL_MOVES) :]),
+        ("cents-over-max", one[:-72] + (1 << 63).to_bytes(8, "big") + one[-64:]),
+        ("payment-id-empty", one[:key] + bytes(2) + one[key + 2 + len(moves[0].payment_id) :]),
+    ):
+        add(f"moves reject {name} {h(data)}")
+    digest = gate.moves_digest(moves)
+    add(f"admit-moves accept three {h(digest)} {h(three)} {fields(moves)}")
+    for name, d, data in (("other-moves", digest, one), ("undecodable", gate.sha3_512(three + b"\x00"), three + b"\x00")):
+        add(f"admit-moves reject {name} {h(d)} {h(data)}")
+    for n, kind in enumerate(gate.KINDS):
+        a = gate.Approval(kind, D[11], bytes(range(n)), digest, f"owner-{n}", "dual", D[13], NOW + 600 * n)
+        add(f"approval accept {kind.lower()} {h(gate.encode_approval(a))} {kind} {h(a.subject)} {h(a.arg) or '-'} "
+            f"{h(a.moves_digest)} {a.owner_id} {a.mode} {h(a.pack_digest)} {a.not_after_s}")
+    base = gate.encode_approval(gate.Approval("RELEASE", D[11], b"", D[12], "zz-owner", "dual", D[13], NOW))
+    for name, data in (
+        ("kind-0", base[:at] + b"\x00" + base[at + 1 :]),
+        ("kind-8", base[:at] + b"\x08" + base[at + 1 :]),
+        ("owner-not-ident", base.replace(b"zz-owner", b"-z-owner")),
+        ("trailing-byte", base + b"\x00"),
+        ("truncated", base[:-1]),
+        ("moves-domain", gate.APPROVAL_MOVES + base[at:]),
+        ("owner-empty", base.replace(b"\x00\x08zz-owner", bytes(2))),
+        ("mode-empty", base.replace(b"\x00\x04dual", bytes(2))),
+        ("mode-not-ident", base.replace(b"dual", b"-ual")),
+        ("not-after-over-max", base[:-8] + (1 << 63).to_bytes(8, "big")),
+    ):
+        add(f"approval reject {name} {h(data)}")
+    add(f"end {sum(line.split(' ', 1)[0] in CHECKED for line in out)}")
+    return "\n".join(out) + "\n"
+
+
 V2_VECTORS = VECTORS.with_name("checkpoint_v2.vectors")
+APPROVAL_VECTORS = VECTORS.with_name("approval_v1.vectors")
 LEAN_VECTORS = signer.ROOT / "lean" / ".lake" / "build" / "bin" / "gate_vectors.exe"
 
 
@@ -697,9 +760,16 @@ class GoldenVectorTests(unittest.TestCase):
     def test_python_reproduces_every_vector_byte(self) -> None:
         self.assertEqual(build_vectors(), VECTORS.read_text("ascii"))
         self.assertEqual(build_v2_vectors(), V2_VECTORS.read_text("ascii"))
+        self.assertEqual(build_approval_vectors(), APPROVAL_VECTORS.read_text("ascii"))
+
+    def test_python_digests_only_a_raw_line(self) -> None:
+        with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
+            gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, "raw"),))
+        with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
+            gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, b""),))
 
     def test_lean_judges_every_golden_vector(self) -> None:
-        for path in (VECTORS, V2_VECTORS):
+        for path in (VECTORS, V2_VECTORS, APPROVAL_VECTORS):
             done = subprocess.run([str(LEAN_VECTORS), str(path)], capture_output=True, text=True, timeout=1800, check=False)
             self.assertRegex(done.stdout.strip(), r"^GATE_VECTORS=PASS checked=(\d+) expected=\1 failed=0$", path.name)
 
@@ -1006,7 +1076,8 @@ class AxiomRecordTests(unittest.TestCase):
                   if (m := re.match(r"'BlindLedger\.Gate\.(\S+)' depends", line))}
         for name in ("storedOf_wf", "forks_comm", "chain_no_fork", "follows_twice_forks", "publishOk_sound",
                      "publish_payer_local", "verifyToken_slice", "storeCheckpoint_slice", "firstFailure_none",
-                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat"):
+                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat",
+                     "Approval.decodeMoves_canonical", "Approval.decodeMoves_lineDigest", "Approval.decodeMoves_ascending", "Approval.decodeApproval_canonical"):
             with self.subTest(name):
                 self.assertIn(name, record)
                 self.assertNotIn("sorryAx", record[name])

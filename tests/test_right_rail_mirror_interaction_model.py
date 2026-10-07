@@ -6,7 +6,10 @@ import re
 import socket
 import tempfile
 import threading
+import queue
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,6 +101,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         cls.driver_path.write_text(scorecard.DRIVER_JS, encoding="utf-8")
         cls.browser = scorecard._Browser(0, cls.driver_path)
         cls.addClassCleanup(cls.browser.close)
+        cls.tabs = queue.Queue()  # three more pages of the one browser, for steps that run side by side
+        for _ in range(3):
+            cls.tabs.put(cls.browser.tab())
         cls.workflow, cls.server, cls.thread = cls._start_workflow(Path(cls.temp.name) / "owner")
         cls.addClassCleanup(cls._stop_workflow, cls.workflow, cls.server, cls.thread)
 
@@ -118,14 +124,26 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         server.server_close()
         workflow.close()
 
-    def _open_path(self, path: str, server: Any = None) -> scorecard._Browser:
-        self.browser.port = (server or self.server).server_address[1]
-        self.browser.open(path)
-        return self.browser
+    def _side_by_side(self, jobs):
+        """Run each (key, job) as job(tab), up to three at once, each in a fresh page of the one browser; yield (key, future) in the order given, so the caller asserts in that order."""
+        def run(job):
+            tab = self.tabs.get()
+            try:
+                return job(tab)
+            finally:
+                self.tabs.put(tab)
+        with ThreadPoolExecutor(3) as pool:
+            yield from [(key, pool.submit(run, job)) for key, job in jobs]
 
-    def _open(self, role: str, server: Any = None) -> scorecard._Browser:
+    def _open_path(self, path: str, server: Any = None, browser: Any = None) -> scorecard._Browser:
+        browser = browser or self.browser
+        browser.port = (server or self.server).server_address[1]
+        browser.open(path)
+        return browser
+
+    def _open(self, role: str, server: Any = None, browser: Any = None) -> scorecard._Browser:
         """A fresh page on H's record: the address names the state, so it does not depend on the queue order."""
-        return self._open_path(f"/role/{role}#item-h", server)
+        return self._open_path(f"/role/{role}#item-h", server, browser)
 
     def test_each_role_sees_exactly_its_declared_controls(self) -> None:
         for role in _MODEL["roles"]:
@@ -212,20 +230,23 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-download")
         link, able, same = _MODEL["local_controls"]["download-record"]["name"], set(), {}
 
+        def read(role: str, item: str, tab) -> bytes:  # one role's page, file and text view, in a page of its own; asserted here, reported in order by check
+            found = self._open_path(f"/role/{role}#{item}", server, tab).role("link", link)
+            self.assertEqual((found["found"], found["visible"], found["disabled"]), (1, True, False))
+            name, data = tab.download(link)
+            shown = self._open_path(f"/role/{role}#{item}.txt", server, tab).view()["texts"]["text-view"]
+            neutral = re.sub(r"\n\n(?:YOUR DECISION|NEXT STEPS)\n.*?(?=\n\n|\Z)", "", shown, flags=re.S)  # the on-page view's own sections; its STATUS wording is set aside below
+            unstated = lambda text: re.sub(r"(?m)^STATUS .*\n", "", text)  # noqa: E731
+            self.assertEqual((name, unstated(data.decode("utf-8"))), (f"record-{item}.txt", unstated(neutral)))
+            return data
+
         def check(stage: str) -> None:
-            for role in _MODEL["roles"]:
-                for item in ("item-h", "item-01"):
-                    with self.subTest(stage=stage, role=role, item=item):
-                        found = self._open_path(f"/role/{role}#{item}", server).role("link", link)
-                        self.assertEqual((found["found"], found["visible"], found["disabled"]), (1, True, False))
-                        name, data = self.browser.download(link)
-                        shown = self._open_path(f"/role/{role}#{item}.txt", server).view()["texts"]["text-view"]
-                        neutral = re.sub(r"\n\n(?:YOUR DECISION|NEXT STEPS)\n.*?(?=\n\n|\Z)", "", shown, flags=re.S)  # the on-page view's own sections; its STATUS wording is set aside below
-                        unstated = lambda text: re.sub(r"(?m)^STATUS .*\n", "", text)  # noqa: E731
-                        self.assertEqual((name, unstated(data.decode("utf-8"))), (f"record-{item}.txt", unstated(neutral)))
-                        self.assertEqual(same.setdefault((stage, item), data), data)  # role-neutral: one record, whoever downloads it
-                        self.assertTrue(data.startswith(b"OBLIGATION") and "−".encode() in data)  # a real file, non-ASCII bytes intact
-                        able.add(role)
+            for (role, item), future in self._side_by_side([((role, item), partial(read, role, item)) for role in _MODEL["roles"] for item in ("item-h", "item-01")]):
+                with self.subTest(stage=stage, role=role, item=item):
+                    data = future.result()
+                    self.assertEqual(same.setdefault((stage, item), data), data)  # role-neutral: one record, whoever downloads it
+                    self.assertTrue(data.startswith(b"OBLIGATION") and "−".encode() in data)  # a real file, non-ASCII bytes intact
+                    able.add(role)
         try:
             check("start")
             for role, step in _JOURNEY:
@@ -316,10 +337,10 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
                 act(browser, "switch-role")
                 self.assertEqual((browser.view()["path"], browser.last_view["screens"]["picker"]), ("/", True))
 
-    def _check_state(self, pkg: dict[str, Any], test_mode: bool, server: Any = None) -> None:
+    def _check_state(self, pkg: dict[str, Any], test_mode: bool, server: Any = None, browser: Any = None) -> None:
         ns = _state(pkg, test_mode)
         for role in _MODEL["roles"]:
-            self._check_buttons(self._open(role, server).view(), role, ns)
+            self._check_buttons(self._open(role, server, browser).view(), role, ns)
 
     def _check_buttons(self, view, role, ns) -> None:
         for name, control in _MODEL["controls"].items():
@@ -332,9 +353,9 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self.assertFalse(button["hidden"], f"{role}/{name}")
             self.assertEqual(not button["disabled"], eval(control["enabled_when"], {"__builtins__": {}}, ns), f"{role}/{name}: state={ns}")
 
-    def _run_step(self, workflow, server, role: str, name: str, response: str = "success", before_click=None) -> None:
+    def _run_step(self, workflow, server, role: str, name: str, response: str = "success", before_click=None, browser=None) -> None:
         control = _MODEL["controls"][name]
-        browser = self._open(role, server)
+        browser = self._open(role, server, browser)
         if before_click is not None:
             before_click()
         self.assertTrue(browser.action(name), f"{name}: enabled but not clickable")
@@ -342,32 +363,34 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         expected = _say(control["responses"][response]["message"])
         self.assertIn(expected.split(". ")[0].rstrip(".") if response == "success" else expected, status, f"{name}: {status}")
 
-    def _walk(self, workflow, server, sequence, position=None) -> None:
+    def _walk(self, workflow, server, sequence, position=None, browser=None) -> None:
         truth = lambda: workflow.decision_view()["decision_package"]  # noqa: E731
         test_mode = cash_recorded = False
-        self._check_state(truth(), test_mode, server)
+        self._check_state(truth(), test_mode, server, browser)
         for role, name in sequence:
-            self._run_step(workflow, server, role, name)
+            self._run_step(workflow, server, role, name, browser=browser)
             if name == "restore-test":
                 if not cash_recorded:
                     self.assertGreater(truth()["obligation"]["shortfall_cents"], 0, f"position={position}: restore-test must be proven while H's shortfall is still open")
                 test_mode = True
             cash_recorded = cash_recorded or name == "record-cash"
-            self._check_state(truth(), test_mode, server)
+            self._check_state(truth(), test_mode, server, browser)
 
     def test_walk_every_reachable_state_and_transition(self) -> None:
         self._walk(self.workflow, self.server, _JOURNEY)
 
     def test_restore_test_at_every_position_still_completes_the_journey(self) -> None:
         """restore-test is the only non-linear control (Art. XIII.4): at every position, every later step and state still matches the model."""
-        for position in range(len(_JOURNEY) + 1):
+        def walk(position: int, tab) -> None:  # each position on its own store and server, up to three at once
+            sequence = _JOURNEY[:position] + (("operator", "restore-test"),) + _JOURNEY[position:]
+            workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"owner-restore-at-{position}")
+            try:
+                self._walk(workflow, server, sequence, position, tab)
+            finally:
+                self._stop_workflow(workflow, server, thread)
+        for position, future in self._side_by_side([(position, partial(walk, position)) for position in range(len(_JOURNEY) + 1)]):
             with self.subTest(restore_test_position=position):
-                sequence = _JOURNEY[:position] + (("operator", "restore-test"),) + _JOURNEY[position:]
-                workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"owner-restore-at-{position}")
-                try:
-                    self._walk(workflow, server, sequence, position)
-                finally:
-                    self._stop_workflow(workflow, server, thread)
+                future.result()
 
     def test_stale_revision_conflict_shows_the_declared_message_on_every_command(self) -> None:
         """A stale snapshot (Art. XIII.4.d) on every command shows the model's own per-control words, not a raw code."""
@@ -399,10 +422,10 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         real = workflow.reject_offset_and_authorize_correction
 
         def busy_after(commit):
-            def command(body):
+            def command(body, *actor):  # the server now passes the acting person
                 del workflow.reject_offset_and_authorize_correction  # busy once
                 if commit:
-                    real(body)
+                    real(body, *actor)
                 raise FinancialBusyError("store_busy")
             return command
         try:
@@ -650,44 +673,57 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         expected = {(role, name, code) for name, control in _MODEL["controls"].items()
                     for role in control["roles"] for code in control["responses"]}
         observed = set()
-        for name, control in _MODEL["controls"].items():
+
+        def run(name, control, browser):  # up to three controls at once, each on its own store and server; every case of one, in order, its outcome kept for the ordered report below
+            cases = []
             workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"responses-{name}")
             try:
-                self._prepare_command(workflow, server, name)
+                self._prepare_command(workflow, server, name, browser)
                 for role in control["roles"]:
-                    codes = [code for code in control["responses"] if code != "success"] + ["success"]
-                    for code in codes:
-                        with self.subTest(role=role, control=name, response=code):
-                            browser = self._open(role, server)
-                            before = workflow.mirror.owner.export_continuity()
-                            package = workflow.decision_view()["decision_package"]
-                            server.fault_requests.clear()
-                            server.fault = None if code == "success" else {"route": control["route"], "code": code}
-                            try:
-                                self.assertTrue(browser.action(name)) if control["route"].startswith("POST") else browser.tick()  # else the page's own next read
-                                view = browser.view()
-                            finally:
-                                server.fault = None
-                            self._check_response(view, name, code)
-                            if code != "success":
-                                self.assertTrue(server.fault_requests, "injection did not reach the real HTTP handler")
-                                self.assertEqual(workflow.mirror.owner.export_continuity(), before)
-                            elif control["route"].startswith("POST"):
-                                self._check_success(workflow, name, package)
-                            browser.tick()  # unavailable recovers on the next real read, with no reload
-                            self.assertTrue(browser.view()["screens"]["overview"])
-                            self.assertTrue(browser.last_view["screens"]["decision"], role)
-                            observed.add((role, name, code))
-                            print("BROWSER_RESPONSE_CASE=" + json.dumps([role, name, code]), flush=True)
+                    for code in [code for code in control["responses"] if code != "success"] + ["success"]:
+                        try:
+                            self._response_case(browser, workflow, server, name, control, role, code)
+                            cases.append((role, code, None))
+                        except Exception as error:  # noqa: BLE001 - reported under its own subTest below
+                            cases.append((role, code, error))
+                return cases
             finally:
                 self._stop_workflow(workflow, server, thread)
+        for name, future in self._side_by_side([(name, partial(run, name, control)) for name, control in _MODEL["controls"].items()]):
+            for role, code, error in future.result():
+                with self.subTest(role=role, control=name, response=code):
+                    if error is not None:
+                        raise error
+                    observed.add((role, name, code))
+                    print("BROWSER_RESPONSE_CASE=" + json.dumps([role, name, code]), flush=True)
         self.assertEqual(observed, expected)
 
-    def _prepare_command(self, workflow, server, name) -> None:
+    def _response_case(self, browser, workflow, server, name, control, role, code) -> None:
+        self._open(role, server, browser)
+        before = workflow.mirror.owner.export_continuity()
+        package = workflow.decision_view()["decision_package"]
+        server.fault_requests.clear()
+        server.fault = None if code == "success" else {"route": control["route"], "code": code}
+        try:
+            self.assertTrue(browser.action(name)) if control["route"].startswith("POST") else browser.tick()  # else the page's own next read
+            view = browser.view()
+        finally:
+            server.fault = None
+        self._check_response(view, name, code)
+        if code != "success":
+            self.assertTrue(server.fault_requests, "injection did not reach the real HTTP handler")
+            self.assertEqual(workflow.mirror.owner.export_continuity(), before)
+        elif control["route"].startswith("POST"):
+            self._check_success(workflow, name, package)
+        browser.tick()  # unavailable recovers on the next real read, with no reload
+        self.assertTrue(browser.view()["screens"]["overview"])
+        self.assertTrue(browser.last_view["screens"]["decision"], role)
+
+    def _prepare_command(self, workflow, server, name, browser=None) -> None:
         for role, step in _JOURNEY:
             if name not in {action for _, action in _JOURNEY} or step == name:
                 return
-            self._run_step(workflow, server, role, step)
+            self._run_step(workflow, server, role, step, browser=browser)
 
     def _check_response(self, view, name, code) -> None:
         outcome = _MODEL["controls"][name]["responses"][code]
@@ -719,47 +755,50 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         workflow.mirror.owner.verify_integrity()
 
     def test_pending_and_lost_responses_retain_exact_correction_and_cash_bodies(self) -> None:
-        for name, role in (("reject-offset", "approver"), ("authorize-offset", "approver"), ("record-cash", "analyst")):
-            for code in ("transport_failure", "owner_command_unavailable", "command_response_unverified", "store_busy_outcome_unknown"):
-                with self.subTest(control=name, response=code):
-                    workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"lost-{name}-{code}")
-                    release = threading.Event()
-                    entered = threading.Event()
-                    try:
-                        self._prepare_command(workflow, server, name)
-                        browser = self._open(role, server)
-                        before = workflow.decision_view()["decision_package"]
-                        server.fault = {"route": _MODEL["controls"][name]["route"], "code": code,
-                                        "commit": True, "entered": entered, "release": release}
-                        self.assertTrue(browser.call({"op": "begin-action", "name": name})["clicked"])
-                        self.assertTrue(entered.wait(5), "command did not reach the HTTP boundary")
-                        pending = browser.call({"op": "view", "wait": False})["view"]
-                        ns = _state(before, False)
-                        retry_flag = "unresolved_cash_body" if name == "record-cash" else "unresolved_decision_body"
-                        ns.update(reviewed=False, command_pending=True, **{retry_flag: True})
-                        self._check_buttons(pending, role, ns)
-                        self.assertTrue(pending["disabled"]["confirm"])
-                        release.set()
-                        self._check_response(browser.view(), name, code)
-                        server.fault = None
-                        self._check_success(workflow, name, before)
-                        committed = workflow.mirror.owner.export_continuity()
-                        original = server.fault_requests[0]["body"]
-                        browser.tick()
-                        ns = _state(workflow.decision_view()["decision_package"], False)
-                        ns.update(reviewed=False, **{retry_flag: True})
-                        self._check_buttons(browser.view(), role, ns)
-                        server.fault = {"route": _MODEL["controls"][name]["route"], "code": "success", "commit": True}
-                        self.assertTrue(browser.action(name))
-                        server.fault = None
-                        self.assertEqual(server.fault_requests[-1]["body"], original)
-                        self.assertEqual(workflow.mirror.owner.export_continuity(), committed)
-                        self._check_response(browser.view(), name, "success")
-                        print("BROWSER_EXACT_RETRY=" + json.dumps([name, code]), flush=True)
-                    finally:
-                        release.set()
-                        server.fault = None
-                        self._stop_workflow(workflow, server, thread)
+        def lost(name: str, role: str, code: str, tab) -> None:  # each case on its own store and server, up to three at once
+            workflow, server, thread = self._start_workflow(Path(self.temp.name) / f"lost-{name}-{code}")
+            release = threading.Event()
+            entered = threading.Event()
+            try:
+                self._prepare_command(workflow, server, name, tab)
+                browser = self._open(role, server, tab)
+                before = workflow.decision_view()["decision_package"]
+                server.fault = {"route": _MODEL["controls"][name]["route"], "code": code,
+                                "commit": True, "entered": entered, "release": release}
+                self.assertTrue(browser.call({"op": "begin-action", "name": name})["clicked"])
+                self.assertTrue(entered.wait(5), "command did not reach the HTTP boundary")
+                pending = browser.call({"op": "view", "wait": False})["view"]
+                ns = _state(before, False)
+                retry_flag = "unresolved_cash_body" if name == "record-cash" else "unresolved_decision_body"
+                ns.update(reviewed=False, command_pending=True, **{retry_flag: True})
+                self._check_buttons(pending, role, ns)
+                self.assertTrue(pending["disabled"]["confirm"])
+                release.set()
+                self._check_response(browser.view(), name, code)
+                server.fault = None
+                self._check_success(workflow, name, before)
+                committed = workflow.mirror.owner.export_continuity()
+                original = server.fault_requests[0]["body"]
+                browser.tick()
+                ns = _state(workflow.decision_view()["decision_package"], False)
+                ns.update(reviewed=False, **{retry_flag: True})
+                self._check_buttons(browser.view(), role, ns)
+                server.fault = {"route": _MODEL["controls"][name]["route"], "code": "success", "commit": True}
+                self.assertTrue(browser.action(name))
+                server.fault = None
+                self.assertEqual(server.fault_requests[-1]["body"], original)
+                self.assertEqual(workflow.mirror.owner.export_continuity(), committed)
+                self._check_response(browser.view(), name, "success")
+                print("BROWSER_EXACT_RETRY=" + json.dumps([name, code]), flush=True)
+            finally:
+                release.set()
+                server.fault = None
+                self._stop_workflow(workflow, server, thread)
+        cases = [(name, role, code) for name, role in (("reject-offset", "approver"), ("authorize-offset", "approver"), ("record-cash", "analyst"))
+                 for code in ("transport_failure", "owner_command_unavailable", "command_response_unverified", "store_busy_outcome_unknown")]
+        for (name, _, code), future in self._side_by_side([(case, partial(lost, *case)) for case in cases]):
+            with self.subTest(control=name, response=code):
+                future.result()
 
 _JOURNEY = (("approver", "reject-offset"), ("analyst", "acknowledge"),
             ("analyst", "record-cash"), ("analyst", "record-report"))

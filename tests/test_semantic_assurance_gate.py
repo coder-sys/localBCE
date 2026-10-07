@@ -88,20 +88,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
     @classmethod
     def _git_mutation(cls, root: Path, *arguments: str) -> None:
-        command = ["git", *arguments]
-        result = subprocess.run(
-            command,
-            cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise AssertionError(
-                f"command failed exit={result.returncode}: {command!r}\n"
-                f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
-            )
+        cls._git_command(root, *arguments)
 
     @classmethod
     def _commit_fixture(cls, root: Path, message: str) -> tuple[str, str]:
@@ -187,6 +174,34 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             and Path(str(command[0])).name.lower() == "blind_financial.exe"
             and list(command[1:]) == list(self.manifest.native["arguments"])
         )
+
+    def _run_then_mutate_once(self, evidence, mutate):
+        """Wrap gate._run: after the first successful native run, call mutate(command)."""
+        original_run = gate._run
+
+        def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
+            result = original_run(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                env=env,
+                input_bytes=input_bytes,
+            )
+            if not evidence and result.returncode == 0 and self._native_invocation(command):
+                mutate(command)
+            return result
+
+        return run_and_mutate
+
+    def _append_byte_with_identity(self, evidence, path: Path, noun: str) -> None:
+        evidence["before"] = gate._file_identity(path, f"real {noun} before mutation")
+        with path.open("ab") as handle:
+            handle.write(b"\x00")
+        evidence["after"] = gate._file_identity(path, f"real {noun} after mutation")
+
+    def _assert_one_byte_appended(self, evidence) -> None:
+        self.assertEqual(evidence["before"].bytes + 1, evidence["after"].bytes)
+        self.assertNotEqual(evidence["before"].sha256, evidence["after"].sha256)
 
     def _namespace(self) -> str:
         return str(self.manifest.candidate["namespace"])
@@ -619,33 +634,24 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
         with self._fresh_candidate(mutate) as (candidate, head, tree):
             source_path = self._lean_dir(candidate) / "BlindLedger" / "Sha3.lean"
-            original_run = gate._run
             evidence: dict[str, str] = {}
 
-            def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
-                result = original_run(
-                    command,
-                    cwd=cwd,
-                    timeout=timeout,
-                    env=env,
-                    input_bytes=input_bytes,
+            def mutate_source(command) -> None:
+                before_head = self._git_command(candidate, "rev-parse", "HEAD")
+                before_tree = self._git_command(candidate, "rev-parse", "HEAD^{tree}")
+                with source_path.open("a", encoding="utf-8", newline="") as handle:
+                    handle.write("\n-- real source identity mutation during verification\n")
+                after_head, after_tree = self._commit_fixture(
+                    candidate, "mutate source identity during verifier test"
                 )
-                if not evidence and result.returncode == 0 and self._native_invocation(command):
-                    before_head = self._git_command(candidate, "rev-parse", "HEAD")
-                    before_tree = self._git_command(candidate, "rev-parse", "HEAD^{tree}")
-                    with source_path.open("a", encoding="utf-8", newline="") as handle:
-                        handle.write("\n-- real source identity mutation during verification\n")
-                    after_head, after_tree = self._commit_fixture(
-                        candidate, "mutate source identity during verifier test"
-                    )
-                    evidence.update(
-                        before_head=before_head,
-                        before_tree=before_tree,
-                        after_head=after_head,
-                        after_tree=after_tree,
-                    )
-                return result
+                evidence.update(
+                    before_head=before_head,
+                    before_tree=before_tree,
+                    after_head=after_head,
+                    after_tree=after_tree,
+                )
 
+            run_and_mutate = self._run_then_mutate_once(evidence, mutate_source)
             with patch.object(gate, "_run", side_effect=run_and_mutate):
                 with self.assertRaisesRegex(
                     gate.AssuranceError,
@@ -667,24 +673,11 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
     @_REQUIRES_REAL_CANDIDATE
     def test_real_artifact_change_during_verification_reaches_containing_identity_gate(self) -> None:
         with self._fresh_candidate(lambda root: None) as (candidate, head, tree):
-            original_run = gate._run
             evidence: dict[str, gate.FileIdentity] = {}
-
-            def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
-                result = original_run(
-                    command,
-                    cwd=cwd,
-                    timeout=timeout,
-                    env=env,
-                    input_bytes=input_bytes,
-                )
-                if not evidence and result.returncode == 0 and self._native_invocation(command):
-                    artifact = Path(str(command[0]))
-                    evidence["before"] = gate._file_identity(artifact, "real artifact before mutation")
-                    with artifact.open("ab") as handle:
-                        handle.write(b"\x00")
-                    evidence["after"] = gate._file_identity(artifact, "real artifact after mutation")
-                return result
+            run_and_mutate = self._run_then_mutate_once(
+                evidence,
+                lambda command: self._append_byte_with_identity(evidence, Path(str(command[0])), "artifact"),
+            )
 
             with patch.object(gate, "_run", side_effect=run_and_mutate):
                 with self.assertRaisesRegex(
@@ -692,8 +685,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                     "native artifact changed during execution",
                 ) as raised:
                     gate._verify_candidate(candidate, self.manifest)
-            self.assertEqual(evidence["before"].bytes + 1, evidence["after"].bytes)
-            self.assertNotEqual(evidence["before"].sha256, evidence["after"].sha256)
+            self._assert_one_byte_appended(evidence)
             print(
                 "INTEGRATION_NEGATIVE "
                 f"stage=artifact_identity mutation=real_artifact_byte_append head={head} tree={tree} "
@@ -758,24 +750,11 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             self.skipTest("copied Lean toolchain integration requires Windows x86_64")
         with self._fresh_candidate(lambda root: None) as (candidate, head, tree):
             with self._copied_toolchain() as (home, copied_bin):
-                original_run = gate._run
                 evidence: dict[str, gate.FileIdentity] = {}
-
-                def run_and_mutate(command, *, cwd, timeout, env=None, input_bytes=b""):
-                    result = original_run(
-                        command,
-                        cwd=cwd,
-                        timeout=timeout,
-                        env=env,
-                        input_bytes=input_bytes,
-                    )
-                    if not evidence and result.returncode == 0 and self._native_invocation(command):
-                        tool = copied_bin / "lean.exe"
-                        evidence["before"] = gate._file_identity(tool, "real copied tool before mutation")
-                        with tool.open("ab") as handle:
-                            handle.write(b"\x00")
-                        evidence["after"] = gate._file_identity(tool, "real copied tool after mutation")
-                    return result
+                run_and_mutate = self._run_then_mutate_once(
+                    evidence,
+                    lambda command: self._append_byte_with_identity(evidence, copied_bin / "lean.exe", "copied tool"),
+                )
 
                 with patch.object(gate.Path, "home", return_value=home), patch.object(
                     gate, "_run", side_effect=run_and_mutate
@@ -785,8 +764,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                         "pinned lean executable changed during execution",
                     ) as raised:
                         gate._verify_candidate(candidate, self.manifest)
-                self.assertEqual(evidence["before"].bytes + 1, evidence["after"].bytes)
-                self.assertNotEqual(evidence["before"].sha256, evidence["after"].sha256)
+                self._assert_one_byte_appended(evidence)
                 print(
                     "INTEGRATION_NEGATIVE "
                     f"stage=toolchain_identity mutation=real_copied_lean_byte_append "

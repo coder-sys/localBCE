@@ -13,21 +13,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 35_368
+PRODUCT_CODE_LINES = 36_241  # 35,823 trunk + 78 S2 codec + 103 D7 slots + 13 S7a payer + 214 S3a 835 fold (one bad claim no longer sinks the remittance) + 10 b2 review fixes (cert cap and totals under one rule)
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 31_723
+EVIDENCE_CODE_LINES = 33_110  # 32,533 trunk + 71 S2 + 101 test-speed (fixture/server reuse; measured net) + 99 D7 slots (empty slots refuse activation loudly) + 131 S7a payer tests + 121 S3a fold tests + 6 A1 empty-table slot test + 48 b2 review-fix tests
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 90_932
+MARKDOWN_BYTES = 92_740  # 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)
 CONFORMANCE_MARKDOWN_BYTES = 30_970
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 6_713,
+    "app/right_rail_financial_owner.py": 6_756,
     "app/right_rail_financial_owner_independent.py": 4_451,
     "app/right_rail_financial_semantic_adapter.py": 2_279,
-    "app/right_rail_financial_mirror.py": 1_367,
+    "app/right_rail_financial_mirror.py": 1_369,
     "app/right_rail_financial_engine.py": 1_249,
-    "app/right_rail_financial_switch.py": 1_113,
+    "app/right_rail_financial_switch.py": 1_098,
     "app/right_rail_financial_line_pack.py": 253,
     "app/right_rail_financial_followthrough.py": 336,
 }

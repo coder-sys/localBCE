@@ -5,6 +5,8 @@ import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Gate.StateV2
 import BlindLedger.Gate.Rules.DecideLayer
+import BlindLedger.Gate.ApprovalLaws
+import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
@@ -245,3 +247,31 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.decide_run_fold
 /-- info: 'BlindLedger.Gate.loadAdds_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.loadAdds_binds
+/-- info: 'BlindLedger.Gate.Approval.decodeMoves_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeMoves_canonical
+/-- info: 'BlindLedger.Gate.Approval.decodeMoves_lineDigest' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeMoves_lineDigest
+/-- info: 'BlindLedger.Gate.Approval.decodeMoves_ascending' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeMoves_ascending
+/-- info: 'BlindLedger.Gate.Approval.decodeApproval_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Approval.decodeApproval_canonical
+/-- info: 'BlindLedger.Gate.certsInstalled_mem' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.certsInstalled_mem
+/-- info: 'BlindLedger.Gate.frameOrdered_nodup' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.frameOrdered_nodup
+/-- info: 'BlindLedger.Gate.releaseBatch_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_eq
+/-- info: 'BlindLedger.Gate.releaseBatch_spec' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_spec
+/-- info: 'BlindLedger.Gate.releaseBatch_isolation' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_isolation
+/-- info: 'BlindLedger.Gate.releaseBatch_cp_isolation' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_cp_isolation
+/-- info: 'BlindLedger.Gate.releaseBatch_accept_verified' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_accept_verified
+/-- info: 'BlindLedger.Gate.releaseBatch_once' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_once
+/-- info: 'BlindLedger.Gate.pathOf_verifies' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.pathOf_verifies
+/-- info: 'BlindLedger.Gate.publishOkTree_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_sound

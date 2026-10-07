@@ -38,7 +38,8 @@ from app.right_rail_financial_owner import (
     FinancialRevisionError,
     PopulationItem,
     PopulationManifest,
-    SyntheticTrustedAuthority,
+    SYNTHETIC_STAFF,
+    staff_authority,
 )
 
 
@@ -128,7 +129,20 @@ _READ_ROUTES = {
     "/api/workspace": "workspace",
     "/api/decision-package": "decision_view",
     "/api/correction-followup": "correction_followup",
+    "/api/item-timeline": "item_timeline",
 }
+# The owner role each actor-bearing command needs. X-Staff-Person names the acting person; with no header nobody is named and the command records its role's synthetic actor.
+_ACTOR_ROLE = {
+    "authorize_offset": "FINANCE_DECISION", "reject_offset_and_authorize_correction": "FINANCE_DECISION",
+    "acknowledge_correction_action": "RECEIVER", "record_reporting_evidence": "REPORTING_EDITOR",
+}
+_PEOPLE = {person[0]: person for person in SYNTHETIC_STAFF}
+_DECISION_EVENTS = ("OFFSET_AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED")
+
+
+def _person_fits(staff_role: str, owner_role: str, named: list[str]) -> bool:
+    """Exactly one named roster person of this staff role who holds the owner role."""
+    return len(named) == 1 and any(i == named[0] and role == staff_role and owner_role in owner_roles for i, _n, role, owner_roles in SYNTHETIC_STAFF)
 # The record only that command writes: its appearance after a busy error proves the command committed.
 _OWN_RECORD = {
     "authorize_offset": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_OFFSET_ACTION_ID),
@@ -200,7 +214,7 @@ class StaffWorkflow:
 
         self._lock = threading.RLock()
         self._clock = _DemoClock()
-        self._authority = SyntheticTrustedAuthority()
+        self._authority = staff_authority()
         self._restore_number = 0
         owner_path = self.workspace_dir / "financial-owner.sqlite"
         owner_exists = owner_path.exists() or owner_path.is_symlink()
@@ -520,7 +534,7 @@ class StaffWorkflow:
             raise RuntimeError("owner_cash_unavailable")
         return value
 
-    def command(self, name: str, body: object) -> dict[str, Any]:
+    def command(self, name: str, body: object, actor: str | None = None) -> dict[str, Any]:
         """Run one staff command. On a busy store, changed is true only when this command's own record appeared,
         false only when the store did not move at all, and otherwise None: another process may have written."""
         with self._lock:
@@ -531,7 +545,7 @@ class StaffWorkflow:
                 error.changed = False  # nothing has run yet
                 raise
             try:
-                return getattr(self, name)(body)
+                return getattr(self, name)(body, *(() if actor is None else (actor,)))
             except FinancialBusyError as error:  # the command's own write, or its read-back after a commit
                 try:
                     position, own = self._store_position(name)
@@ -550,14 +564,14 @@ class StaffWorkflow:
             position = (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
             return position, connection.execute(query, arguments).fetchone()[0] > 0
 
-    def reject_offset_and_authorize_correction(self, body: object) -> dict[str, Any]:
+    def reject_offset_and_authorize_correction(self, body: object, actor: str = "synthetic-official") -> dict[str, Any]:
         with self._lock:
             revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
             self._clock.advance_to(DECISION_AT_MS)
             result = self._mirror.reject_offset_and_authorize_correction(
                 item_id=H_ITEM_ID,
                 claim_id=H_CLAIM_ID,
-                actor_id="synthetic-official",
+                actor_id=actor,
                 actor_role="FINANCE_DECISION",
                 expected_revision=revision,
                 action_id=H_ACTION_ID,
@@ -568,7 +582,7 @@ class StaffWorkflow:
             )
             return {"command": result, "workspace": self._workspace_locked()}
 
-    def authorize_offset(self, body: object) -> dict[str, Any]:
+    def authorize_offset(self, body: object, actor: str = "synthetic-official") -> dict[str, Any]:
         """Accept Plan A's offset. Bound to the read the approver saw, like restore-test; a resend returns the first result."""
         revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
         with self._lock:
@@ -580,7 +594,7 @@ class StaffWorkflow:
             result = self._mirror.authorize_offset(
                 item_id=H_ITEM_ID,
                 claim_id=H_CLAIM_ID,
-                actor_id="synthetic-official",
+                actor_id=actor,
                 actor_role="FINANCE_DECISION",
                 expected_revision=revision,
                 action_id=H_OFFSET_ACTION_ID,
@@ -590,7 +604,7 @@ class StaffWorkflow:
             )
             return {"command": result, "workspace": self._workspace_locked()}
 
-    def acknowledge_correction_action(self, body: object) -> dict[str, Any]:
+    def acknowledge_correction_action(self, body: object, actor: str = "synthetic-receiver") -> dict[str, Any]:
         revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
             current = self._mirror.decision_package(H_ITEM_ID, limit=100, offset=0).get("current_action")
@@ -599,7 +613,7 @@ class StaffWorkflow:
             result = self._mirror.acknowledge_action(
                 action_id,
                 ACK_REFS[action_id],
-                actor_id="synthetic-receiver",
+                actor_id=actor,
                 actor_role="RECEIVER",
                 expected_revision=revision,
             )
@@ -626,7 +640,7 @@ class StaffWorkflow:
             )
             return {"command": result, "money_movement": False, "workspace": self._workspace_locked()}
 
-    def record_reporting_evidence(self, body: object) -> dict[str, Any]:
+    def record_reporting_evidence(self, body: object, actor: str = "synthetic-reporter") -> dict[str, Any]:
         revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
             self._clock.advance_to(REPORT_EVENT_MS)
@@ -634,7 +648,7 @@ class StaffWorkflow:
                 item_id=H_ITEM_ID,
                 report_id="report:h:v1",
                 evidence_id="evidence:report:h:original",
-                actor_id="synthetic-reporter",
+                actor_id=actor,
                 actor_role="REPORTING_EDITOR",
                 expected_revision=revision,
                 event_at_ms=REPORT_EVENT_MS,
@@ -719,6 +733,27 @@ class StaffWorkflow:
                 "status": "AVAILABLE",
                 "followup": self._mirror.correction_followup_outputs(H_ITEM_ID, H_ACTION_ID),
             }
+
+    def item_timeline(self) -> dict[str, Any]:
+        """Item H's record chain, read-only, from the verified staff snapshot. A step with no record is named in ``absent``, never filled in.
+        Every person is ``claimed``: the session named them and nobody signed. ``incomplete`` is true when older events are not shown."""
+        with self._lock:
+            h = self._workspace_locked()["h"]
+        events = h["timeline"]
+
+        def by(actor_id: str) -> dict[str, str]:
+            return {"by": actor_id, "by_name": _PEOPLE.get(actor_id, (None, actor_id))[1], "attribution": "claimed"}
+
+        # A decision is placed by its own owner event (the one that reached its resulting revision); older than the window sorts first.
+        decided = {e["after_revision"]: e["event_sequence"] for e in events if e["kind"] in _DECISION_EVENTS}
+        steps = [{"step": "decision", "seq": decided.get(d["resulting_revision"], 0), "at_ms": d["decided_at_ms"], "what": d["decision"], "amount_cents": d["amount_cents"], **by(d["actor_id"])} for d in h["detail"]["determinations"]]
+        steps += [{"step": "assign", "seq": e["event_sequence"], "at_ms": e["committed_at_ms"], "owner_id": e["followthrough"]["owner_id"], **by(e["followthrough"]["actor_id"])}
+                  for e in events if e["kind"] == "FOLLOWTHROUGH_DECIDED" and e["followthrough"]["act"] == "ASSIGN"]
+        steps.sort(key=lambda step: step["seq"])
+        # No release or payment-system confirmation record exists in the stack, so those steps are always absent: cash recorded
+        # from the payer (the payments table) is a different fact and never reads as "Paid" here.
+        chain = ("hold", "assign", "ask", "reply", "decision", "release", "payment_confirmation")
+        return {"contract": "RR/FINANCIAL/STAFF-ITEM-TIMELINE/v1", "item_id": H_ITEM_ID, "steps": steps, "incomplete": h["timeline_truncated"], "absent": [n for n in chain if n not in {x["step"] for x in steps}]}
 
     def restore_test(self, body: object) -> dict[str, Any]:
         revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
@@ -942,17 +977,22 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
             if command is None:
                 self._respond(404, {"error": {"code": "not_found"}})
                 return
-            claimed = self.headers.get_all("X-Staff-Role", [])  # exactly one role, in this command's row; refused before the body is read
+            claimed = self.headers.get_all("X-Staff-Role", [])  # a caller claim, not a login: it can only narrow access to this command's row, never grant it; refused before the body is read
             if len(claimed) != 1 or claimed[0] not in COMMAND_ROLES.get(self.path, ()):
                 self._respond(403, {"error": {"code": "staff_role_refused"}, "changed": False})
                 return
+            named = self.headers.get_all("X-Staff-Person", []) if command in _ACTOR_ROLE else []
+            if named and not _person_fits(claimed[0], _ACTOR_ROLE[command], named):
+                self._respond(403, {"error": {"code": "staff_person_refused"}, "changed": False})
+                return
+            actor = named[0] if named else None
             try:
                 body = self._json_request()
             except (ValueError, RecursionError, OSError):  # malformed, truncated or timed-out body
                 self._respond(400, {"error": {"code": "invalid_request"}})
                 return
             try:
-                result = workflow.command(command, body)
+                result = workflow.command(command, body, actor)
             except FinancialBusyError as exc:  # a transient lock: retry only a command that provably did not commit
                 changed = getattr(exc, "changed", None)
                 code = "store_busy_outcome_unknown" if changed is None else str(exc)
@@ -961,7 +1001,7 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 self._respond(409, {"error": {"code": str(exc)}, "changed": False})
             except FinancialAuthorityError as exc:
                 self._respond(403, {"error": {"code": str(exc)}, "changed": False})
-            except (FinancialError, FinancialMirrorError) as exc:  # a failed restore also carries its safe support package
+            except FinancialError as exc:  # a failed restore also carries its safe support package
                 self._respond(409, {"error": {"code": str(exc), **({"corporate_support": s} if (s := getattr(exc, "corporate_support", None)) else {})}})
             except ValueError:
                 self._respond(400, {"error": {"code": "invalid_request"}})
@@ -1030,7 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_dir=args.workspace,
             resume_existing=args.resume_existing_workspace,
         )
-    except (OSError, ValueError, financial_engine.FinancialEngineError) as error:
+    except (OSError, ValueError, FinancialError, financial_engine.FinancialEngineError) as error:
         parser.error(str(error))
     return 0
 
