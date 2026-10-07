@@ -2,8 +2,8 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `85e4b097` (merge-b2: hold-release
-slices S0, S2, S3a, S7a on `fd7ccf72`).
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `30ab7e3b` (payer-batch: BATCH-P1
+release-batch theorems and BATCH-F1 axiom pin on `85e4b097`).
 
 ## Product and standing claims
 
@@ -14,8 +14,17 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 ## What landed since d7192b0
 
-Trunk `85e4b097`, full suite `mb2full1`: 909 run: 894 pass, 0 fail, 15 skips. Semantic gate `mb2sem1` PASS (26 properties;
-artifact `061b5cad...`).
+Trunk `30ab7e3b`, guarded Lean build `tm30ab-1` exit 0 (119 jobs, gate axiom check passes); full suite `tm30full2` + `tm30atk1`
+(tests/attacks): 909 run: 894 pass, 0 fail, 15 skips. The delta is Lean only, so semantic gate `mb2sem1` (`85e4b097`, PASS, 26
+properties; artifact `061b5cad...`) was not rerun.
+
+- **Payer release batch (BATCH-P1, Lean).** `Gate/Batch.lean` defines a payer release batch; `Gate/BatchTheorems.lean` proves that a
+  batch answers each item exactly as single-token RELEASE does (`releaseBatch_eq`); ACCEPT is exactly the payer's twelve checks
+  (`releaseBatch_spec`) and is earned in the call, with signature and chain verified there (`releaseBatch_accept_verified`); a bad
+  item or an unnamed checkpoint changes no other answer (`releaseBatch_isolation`, `releaseBatch_cp_isolation`); accepted payment
+  keys are distinct and an already-released item never accepts (`releaseBatch_once`); also `frameOrdered_nodup`,
+  `pathOf_verifies`, `publishOkTree_sound`. Installed certs
+  are only those whose chain verifies (`certsInstalled_mem`). All ten axiom sets are pinned in `Gate/AXIOMS.txt` (BATCH-F1).
 
 - **Deployment slots (S0, founder D7).** Five slots in one table with one reader. An unauthored or authored-empty slot reads
   its strictest value, logs `DEPLOYMENT_SLOT_EMPTY`, and activation is refused. Contradictory packs are refused, each with its own code. No consumer yet.
