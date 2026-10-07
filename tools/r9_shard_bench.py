@@ -14,6 +14,7 @@ import ctypes
 import hashlib
 import json
 import multiprocessing
+import os
 import pickle
 import shutil
 import sqlite3
@@ -23,6 +24,7 @@ import time
 import zlib
 from ctypes import wintypes
 from multiprocessing import connection
+from multiprocessing.reduction import ForkingPickler
 from operator import itemgetter
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,6 +61,18 @@ def io_write_bytes() -> int:
     return int(c.wb)
 
 
+def system_cpu() -> tuple[int, int]:
+    """(busy, total) CPU time of the whole machine in 100 ns ticks; the difference of two samples is the machine load over that time (other processes included)."""
+    idle, kernel, user = (wintypes.FILETIME() for _ in range(3))
+    ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user))
+    t = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime  # noqa: E731
+    return t(kernel) + t(user) - t(idle), t(kernel) + t(user)
+
+
+def load_pct(a: tuple[int, int], b: tuple[int, int]) -> float:
+    return 100.0 * (b[0] - a[0]) / max(1, b[1] - a[1])
+
+
 class Shard:
     """One item shard: an owner database plus the bench store. build() is steps 4a-4c (apply the part, digest, check); commit() is step 7."""
 
@@ -66,7 +80,8 @@ class Shard:
         self.k, self.db = k, db
         self.c, self.w = rb.open_store(db, True, True)
         self.c.executescript(SHARD_DDL)
-        self.busy = self.check_s = self.commit_s = 0.0
+        self.busy = self.check_s = self.commit_s = self.idle_s = 0.0
+        self.commit_log: list[tuple[float, int]] = []  # per group: COMMIT ms and bytes the process wrote during it (the checkpointer thread's writes are in it too)
         self.lines = 0
         self.undo = None
 
@@ -133,10 +148,11 @@ class Shard:
             raise rb.FinancialIntegrityError("shard_check")
 
     def commit(self) -> None:
-        c0 = time.perf_counter()
+        c0, b0 = time.perf_counter(), io_write_bytes()
         self.w.c.execute("COMMIT")
         self.undo = None
         self.commit_s += time.perf_counter() - c0
+        self.commit_log.append(((time.perf_counter() - c0) * 1000, io_write_bytes() - b0))
         self.w.ckpt.kick()
 
     def abort(self) -> None:
@@ -158,14 +174,17 @@ class Shard:
     def stats(self) -> dict:
         self.w.ckpt.close()
         self.c.close()
-        return {"k": self.k, "busy_s": self.busy, "check_s": self.check_s, "commit_s": self.commit_s, "lines": self.lines, "peak_rss": rb.peak_rss_bytes(), "io_write": io_write_bytes()}
+        return {"k": self.k, "busy_s": self.busy, "check_s": self.check_s, "commit_s": self.commit_s, "idle_s": self.idle_s, "commit_log": self.commit_log, "cpu_s": time.process_time(),
+                "lines": self.lines, "peak_rss": rb.peak_rss_bytes(), "io_write": io_write_bytes()}
 
 
 def shard_main(conn, k: int, db: str) -> None:
     shard = Shard(k, Path(db))
     conn.send(("READY", shard.w.head))
     while True:
+        i0 = time.perf_counter()
         message = conn.recv()
+        shard.idle_s += time.perf_counter() - i0
         try:
             if message[0] == "PART":
                 conn.send(("BUILT", *shard.build(*message[1:])))
@@ -261,7 +280,7 @@ def prep_main(conn, tbl: SimpleNamespace, rows: dict) -> None:
     while True:
         message = conn.recv()
         if message[0] == "STOP":
-            conn.send(("STATS", busy, rb.peak_rss_bytes()))
+            conn.send(("STATS", busy, rb.peak_rss_bytes(), time.process_time()))
             return
         t0 = time.perf_counter()
         out = prepare(tbl, message[1], rows[message[1]], message[1] + 1)
@@ -331,7 +350,7 @@ class PrepPool:
         self.request()
         return out
 
-    def close(self) -> tuple[float, float]:
+    def close(self) -> tuple[float, float, float]:
         stats = []
         for conn, process, queue in zip(self.conns, self.processes, self.pending):
             while queue:  # outputs of files that were requested and never taken
@@ -340,7 +359,7 @@ class PrepPool:
             conn.send(("STOP",))
             stats.append(Spine.expect(conn, "STATS"))
             process.join()
-        return sum(s[0] for s in stats), sum(s[1] for s in stats)
+        return sum(s[0] for s in stats), sum(s[1] for s in stats), sum(s[2] for s in stats)
 
 
 class Spine:
@@ -372,7 +391,8 @@ class Spine:
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
-        self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed")}
+        self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes")}
+        self.commit_sent, self.ack_ms = 0.0, {k: [] for k in range(k_count)}  # per shard: ms from the spine's COMMIT send to the spine reading that shard's ACK, per group
 
     @staticmethod
     def expect(conn, kind: str):
@@ -394,11 +414,23 @@ class Spine:
             self.latency += [time.perf_counter() - started] * files
             self.ack_mark = None
 
+    def send(self, k: int, message: tuple) -> None:
+        """Connection.send in two steps (the same bytes on the pipe): pickle, then the write, which on Windows ends only as the worker drains the pipe. A write to a worker whose
+        COMMIT is still owed is counted apart from a write to a free worker: the first is time spent waiting on that commit."""
+        t0 = time.perf_counter()
+        buf = ForkingPickler.dumps(message)
+        t1 = time.perf_counter()
+        self.workers[k][1].send_bytes(buf)
+        tt = self.tt
+        tt["ipc_pickle"] += t1 - t0
+        tt["ipc_send_owed" if k in self.owed else "ipc_send_free"] += time.perf_counter() - t1
+        tt["ipc_bytes"] += len(buf)
+
     def ship(self, f, k: int) -> None:
         """Step 3: PART of file f to shard k; its pre_head is the head k last reported (the committed head, or the post head of k's previous part of this group)."""
         t0, g = time.perf_counter(), self.g
         f.pre[k] = g.tip[k]
-        self.workers[k][1].send(("PART", f.n, f.index, f.pool, f.t_f, f.p.blobs[k], f.pre[k], f.p.verdicts[k]))
+        self.send(k, ("PART", f.n, f.index, f.pool, f.t_f, f.p.blobs[k], f.pre[k], f.p.verdicts[k]))
         g.busy[k] = f.pos  # at most one PART is outstanding per worker
         g.sent.add(k)
         self.tt["ipc"] += time.perf_counter() - t0
@@ -430,6 +462,7 @@ class Spine:
         if m[0] == "ACK":
             if m[1] != self.owed.pop(k):
                 raise ShardDiverged(f"shard {k}: head differs after commit")
+            self.ack_ms[k].append((time.perf_counter() - self.commit_sent) * 1000)
             if not self.owed:
                 self.acked()
             return
@@ -530,9 +563,9 @@ class Spine:
         self.ckpt.kick()
         self.tt["spine_commit"] += time.perf_counter() - t0
         self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
-        t0 = time.perf_counter()
+        t0 = self.commit_sent = time.perf_counter()
         for k in sorted(g.sent):
-            self.workers[k][1].send(("COMMIT",))
+            self.send(k, ("COMMIT",))
             self.owed[k] = self.heads[k]
         self.tt["ipc"] += time.perf_counter() - t0
         self.groups.append(len(plan))
@@ -644,13 +677,16 @@ def corpus(seed: int, lines: int, files: int) -> list[tuple[SimpleNamespace, dic
 
 
 def run_once(k_count: int, files: list, template: Path, work: Path, with_replay: bool = True, prep_procs: int = 1) -> dict:
+    s0_cpu = system_cpu()
+    time.sleep(0.25)
+    load_before = load_pct(s0_cpu, system_cpu())  # what the machine was doing before this run, other processes included
     spine = Spine(work, k_count, template)
     prep = PrepPool(spine.tbl, {i: r.rows for i, (r, _) in enumerate(files)}, prep_procs)
     db_bytes = lambda: sum(p.stat().st_size for p in work.glob("*.sqlite3*"))  # noqa: E731
     size0, io0 = db_bytes(), io_write_bytes()
     lines, classes, kk, snap, snap_s, recv_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0, 0.0
     spine.feed = prep
-    t0 = time.perf_counter()
+    sys0, cpu0, t0 = system_cpu(), time.process_time(), time.perf_counter()
     while prep.taken < len(files):
         r0 = time.perf_counter()
         group = prep.take()  # the files already prepared and queued, up to GROUP_LINES; never waits past the first
@@ -668,9 +704,10 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
         lines += sum(len(files[p.index][0].rows) for p in group)
     spine.wait_acks()
     wall = time.perf_counter() - t0 - snap_s
+    load_during, spine_cpu = load_pct(sys0, system_cpu()), time.process_time() - cpu0
     grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
     spine.feed = None
-    prep_busy, prep_rss = prep.close()
+    prep_busy, prep_rss, prep_cpu = prep.close()
     latency = sorted(spine.latency)
     pct = lambda q: latency[min(len(latency) - 1, int(q * len(latency)))] * 1000  # noqa: E731
     spine.tt["prep_wait"] = recv_s
@@ -683,6 +720,9 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
            "shard_busy_s": [s["busy_s"] for s in shard_stats], "shard_lines": [s["lines"] for s in shard_stats], "imbalance": max(s["busy_s"] for s in shard_stats) / (busy / k_count),
            "phase_s": spine.tt, "commit_ms_per_group": [(spine.tt["spine_commit"] / len(spine.groups)) * 1000, sum(s["commit_s"] for s in shard_stats) / (k_count * len(spine.groups)) * 1000],
            "groups": spine.groups, "ack_p50_ms": pct(0.5), "ack_p99_ms": pct(0.99),
+           "cpu_count": os.cpu_count(), "load_before_pct": load_before, "load_during_pct": load_during,  # of all logical CPUs, other processes included
+           "cpu_s": {"spine_during_loop": spine_cpu, "prep_total": prep_cpu, "shards_total": sum(s["cpu_s"] for s in shard_stats)},  # shard and prep CPU is whole-process time, startup included
+           "shard_idle_s": [s["idle_s"] for s in shard_stats], "shard_commit_log": [s["commit_log"] for s in shard_stats], "ack_ms_by_shard": spine.ack_ms,
            "store_bytes_per_s": grown / wall, "io_write_bytes_per_s": (spine_io + sum(s["io_write"] for s in stats)) / wall,
            "peak_rss_spine_mb": spine_rss / 2**20, "peak_rss_shards_mb": [s["peak_rss"] / 2**20 for s in shard_stats],
            "peak_rss_prep_mb": prep_rss / 2**20, "peak_rss_total_mb": (spine_rss + prep_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1 + prep_procs}
@@ -714,7 +754,7 @@ def main(argv: list[str] | None = None) -> int:
             for rep in range(a.reps + 1):  # the last rep also snapshots one shard and replays its last record; its setup time is cut from the wall
                 r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}", rep == a.reps, a.prep)}
                 runs.append(r)
-                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us ack p50/p99={r['ack_p50_ms']:.0f}/{r['ack_p99_ms']:.0f} ms groups={len(r['groups'])} rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
+                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us ack p50/p99={r['ack_p50_ms']:.0f}/{r['ack_p99_ms']:.0f} ms groups={len(r['groups'])} load={r['load_before_pct']:.0f}/{r['load_during_pct']:.0f}% rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
     previous = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
     previous["runs"].extend(runs)
     a.out.write_text(json.dumps(previous, indent=1, default=str), encoding="utf-8")
