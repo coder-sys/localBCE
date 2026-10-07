@@ -100,7 +100,7 @@ class Shard:
             w.c.execute("INSERT INTO applied VALUES (?,?,?,?)", (n, SPINE_ID, rb.sha("RR/SHARD/RCORE/v1", n, index, pool, t_f), hashlib.sha3_256(blob).digest()))
             w.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (w.seq, w.head))
             c0 = time.perf_counter()
-            self.check(index, parts, seq0, pre_head)
+            self.check(index, parts, seq0, pre_head, t["financial_events"])
             self.check_s += time.perf_counter() - c0
         except BaseException:
             if w.c.in_transaction:
@@ -117,12 +117,15 @@ class Shard:
         self.busy += time.perf_counter() - t0
         return w.head, digest.digest()
 
-    def check(self, index: int, parts: list, seq0: int, pre_head: bytes) -> None:
-        """Shard check: the chain recomputes link by link from the pre-head, and rows, charges and amounts equal the part."""
+    def check(self, index: int, parts: list, seq0: int, pre_head: bytes, built: list) -> None:
+        """Shard check: the stored events equal the events mutate built (so every digest in them is the one mutate hashed), the links run from the pre-head,
+        and rows, charges and amounts equal the part. The hashes are not computed a second time."""
         w, previous = self.w, pre_head
         events = w.c.execute("SELECT * FROM financial_events WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall()
+        if events != built:
+            raise rb.FinancialIntegrityError("shard_chain")
         for e in events:
-            if e[9] != previous or e[8] != rb.sha(e[7]) or e[10] != rb.sha(previous, e[8]):
+            if e[9] != previous:
                 raise rb.FinancialIntegrityError("shard_chain")
             previous = e[10]
         count, cents = w.c.execute("SELECT COUNT(*),COALESCE(SUM(cents),0) FROM charges WHERE row_key BETWEEN ? AND ?", (index * rb.KEY, (index + 1) * rb.KEY - 1)).fetchone()

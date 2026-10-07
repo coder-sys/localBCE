@@ -147,6 +147,31 @@ class ShardBench(unittest.TestCase):
         shard.stats()
         self.assertEqual(sqlite3.connect(str(work / "s.sqlite3")).execute("SELECT COUNT(*) FROM applied").fetchone()[0], 0)
 
+    def test_shard_check_refuses_a_stored_event_that_differs_from_the_built_one_and_a_broken_link(self) -> None:
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        for fault in ("stored_digest", "broken_link"):
+            work = self.tmp / f"check-{fault}"
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir()
+            shutil.copyfile(self.template, work / "s.sqlite3")
+            shard = sb.Shard(0, work / "s.sqlite3")
+            head, w = shard.w.head, shard.w
+            real_write, real_mutate = w.write, w.mutate
+            if fault == "stored_digest":  # the store holds a payload digest that mutate did not build
+                w.write = lambda table, rows: real_write(table, [r[:8] + (bytes(64),) + r[9:] for r in rows] if table == "financial_events" else rows)
+            else:  # the last built event does not link to the one before it (store and built agree, the link does not)
+                def mutate(t, *args):
+                    real_mutate(t, *args)
+                    e = t["financial_events"][-1]
+                    t["financial_events"][-1] = e[:9] + (bytes(64),) + e[10:]
+                w.mutate = mutate
+            with self.assertRaises(rb.FinancialIntegrityError) as caught:
+                shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
+            self.assertIn("shard_chain", str(caught.exception), fault)
+            self.assertFalse(shard.c.in_transaction)
+            self.assertEqual(w.head, head)
+            shard.stats()
+
     def test_abort_after_shards_built_leaves_every_database_unchanged_and_retry_matches(self) -> None:
         clean = self.drive(3, "clean")
         work = self.tmp / "abort"
