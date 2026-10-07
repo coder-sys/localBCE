@@ -374,6 +374,113 @@ theorem linkFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (c :
       · have h0 : v.env.obligation.owedCents - t = 0 := by omega
         simp [ht, h0]
 
+theorem ofStep_refused (r : Refusal) : Erased.ofStep (.refused r) = .refused r := rfl
+theorem ofStep_duplicate (p : Option String) : Erased.ofStep (.duplicate p) = .duplicate p := rfl
+theorem ofStep_conflictUnchanged (x : String) :
+    Erased.ofStep (.conflictUnchanged x) = .conflictUnchanged x := rfl
+
+section
+variable (v : FView) (s : ItemState)
+theorem FView.toView_env : (v.toView s).env = v.env := rfl
+theorem FView.toView_byId : (v.toView s).byId = v.byId := rfl
+theorem FView.toView_byOrigin : (v.toView s).byOrigin = v.byOrigin := rfl
+theorem FView.toView_evidence : (v.toView s).evidence = v.evidence := rfl
+theorem FView.toView_conflictVisible : (v.toView s).conflictVisible = v.conflictVisible := rfl
+theorem FView.toView_expectedRevision : (v.toView s).expectedRevision = v.expectedRevision := rfl
+theorem FView.toView_foreign_evidenceId : (v.toView s).foreign.evidenceId = false := rfl
+theorem FView.toView_foreign_paymentId : (v.toView s).foreign.paymentId = false := rfl
+end
+
+/-- Split the left side; each split's hypotheses rewrite the matching branch of the right side. -/
+macro "split_both" : tactic => `(tactic|
+  (repeat' (split <;> (try simp only [*, ofStep_refused, ofStep_duplicate, ofStep_conflictUnchanged,
+      Bool.false_eq_true, ↓reduceIte] at ⊢))))
+
+theorem retryFast_eq (v : FView) (s : ItemState) (c : RecordCommand) (p : Payment) (k : Receipt) :
+    retryFast v c p k = Erased.ofStep (viewRecordRetry (v.toView s) c p k) := by
+  unfold retryFast viewRecordRetry
+  dsimp only [FView.toView_env, FView.toView_evidence, FView.toView_expectedRevision]
+  split_both
+  all_goals (first | contradiction | (simp_all [ofStep_refused, ofStep_duplicate]; done))
+
+theorem newFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (c : RecordCommand) :
+    newFast F v c = Erased.ofStep (viewRecordNew (v.toView s) s c) := by
+  have hAl : ∀ pid e, aliasFast F v pid e = Erased.ofStep (aliasView (v.toView s) s pid e) := aliasFast_eq hA v
+  have hCf : ∀ k (w : Writes), w.payment = none →
+      commitFast F v k w = Erased.ofStep (commitView (v.toView s) s k w) :=
+    fun k w hw => commitFast_eq hA v k w fun _ h _ => by simp [hw] at h
+  have hCr : ∀ k (w : Writes), w.receipt.isSome = true →
+      commitFast F v k w = Erased.ofStep (commitView (v.toView s) s k w) :=
+    fun k w hw => commitFast_eq hA v k w fun _ _ h => by simp [h] at hw
+  unfold newFast viewRecordNew
+  rw [linkFast_eq hA v c]
+  rw [FView.toView_env, FView.toView_byOrigin, FView.toView_evidence, FView.toView_conflictVisible,
+    FView.toView_expectedRevision, FView.toView_foreign_evidenceId]
+  simp only [Bool.or_false, Bool.and_false, Bool.false_eq_true, ↓reduceIte]
+  clear hA
+  cases hO : v.byOrigin with
+  | none =>
+    simp only [Option.any_none, Option.isSome_none, Bool.false_and, Bool.not_false, Bool.true_and,
+      Bool.false_eq_true, ↓reduceIte]
+    split_both
+    all_goals first
+      | contradiction
+      | (refine hCr _ _ ?_; rfl)
+      | (simp_all [ofStep_refused, ofStep_duplicate, ofStep_conflictUnchanged]; done)
+      | skip
+  | some x =>
+    obtain ⟨p, k, r⟩ := x
+    simp only [Option.any_some, Option.isSome_some, Bool.true_and]
+    by_cases hs : decide (p.amountCents = c.amountCents) = true <;>
+      by_cases he : v.evidence.isSome = true <;>
+      (try simp only [Bool.not_eq_true] at hs he) <;>
+      (try simp only [hs, he, Bool.true_and, Bool.false_and, Bool.and_true, Bool.and_false, Bool.not_true,
+        Bool.not_false, Bool.false_eq_true, ↓reduceIte]) <;>
+      split_both
+    all_goals first
+      | contradiction
+      | exact hAl _ _
+      | (refine hCf _ _ ?_; rfl)
+      | (simp_all [ofStep_refused, ofStep_duplicate, ofStep_conflictUnchanged]; done)
+      | skip
+
+theorem reverseFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (c : ReverseCommand) :
+    reverseFast F v c = Erased.ofStep (viewReverse (v.toView s) s c) := by
+  cases hb : v.byId with
+  | none => simp only [reverseFast, viewReverse, FView.toView, hb, Erased.ofStep]
+  | some pk =>
+    obtain ⟨p, k'⟩ := pk
+    have hC : ∀ k (w : Writes), w.payment = some (reversedImage p c) →
+        commitFast F v k w = Erased.ofStep (commitView (v.toView s) s k w) :=
+      fun k w hw => commitFast_eq hA v k w fun q hq _ => ⟨p, k', hb, by rw [hw] at hq; cases hq; rfl⟩
+    unfold reverseFast viewReverse
+    rw [FView.toView_env, FView.toView_byId, FView.toView_evidence, FView.toView_expectedRevision,
+      FView.toView_foreign_evidenceId]
+    simp only [hb, Bool.false_eq_true, ↓reduceIte]
+    clear hA
+    split_both
+    all_goals first
+      | contradiction
+      | (refine hC _ _ ?_; rfl)
+      | (simp_all [ofStep_refused, ofStep_duplicate]; done)
+
+/-- The fast step is the stored part of the view step on any item state that agrees with `F`. -/
+theorem stepFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) :
+    stepFast F v = Erased.ofStep (stepView (v.toView s)) := by
+  have habs : absorb (v.toView s).state (v.toView s).pending = s := rfl
+  have hcmd : (v.toView s).command = v.command := rfl
+  unfold stepFast stepView
+  simp only [habs, hcmd, FView.toView_foreign_paymentId, FView.toView_byId, Bool.false_eq_true, ↓reduceIte]
+  cases v.command with
+  | record c =>
+    by_cases h0 : c.amountCents = 0
+    · simp only [h0, ↓reduceIte, Erased.ofStep]
+    · simp only [h0, ↓reduceIte]
+      cases v.byId with
+      | some pk => exact retryFast_eq v s c pk.1 pk.2
+      | none => exact newFast_eq hA v c
+  | reverse c => exact reverseFast_eq hA v c
+
 /-- The foreign flags are false on every call the trace steps, with or without `ok`:
     `Ledger.request` sets `foreign := ⟨false, false⟩`, so `FView.toView` drops nothing. -/
 theorem viewOfAnchor_foreign (L : Ledger) (c : Call) {v : PaymentView}
