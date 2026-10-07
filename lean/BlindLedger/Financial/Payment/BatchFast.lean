@@ -23,6 +23,29 @@ def ok (L : Ledger) (calls : List Call) : Bool :=
     decide (L.input.beforeRevision + calls.length ≤ maxRevision) &&
     calls.all fun c => commandWellFormed c.command && c.expectedRevision.all (· < 2 ^ 63)
 
+theorem clocksFrom_spec : ∀ (t : Nat) (cs : List Call), clocksFrom t cs = true →
+    (t :: cs.map Call.now).Pairwise (· ≤ ·) ∧ cs.all (·.now < 2 ^ 63) = true
+  | _, [], _ => ⟨List.pairwise_singleton _ _, rfl⟩
+  | t, c :: cs, h => by
+    simp only [clocksFrom, Bool.and_eq_true, decide_eq_true_eq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    obtain ⟨ih1, ih2⟩ := clocksFrom_spec c.now cs h3
+    rw [List.map_cons]
+    refine ⟨List.Pairwise.cons (fun b hb => ?_) ih1, ?_⟩
+    · rcases List.mem_cons.1 hb with rfl | hb
+      · exact h1
+      · exact Nat.le_trans h1 ((List.pairwise_cons.1 ih1).1 b hb)
+    · simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq]; exact ⟨h2, ih2⟩
+
+/-- `ok` decides exactly `hL`, `hc`, `hR` of `chain_fold_eq_full`, and `hw` at the call level
+    (`faithful_unpack` gives `v.command = c.command` and `v.expectedRevision = c.expectedRevision`). -/
+theorem ok_spec {L : Ledger} {calls : List Call} (h : ok L calls = true) :
+    ledgerWellFormed L ∧ clocksOk L calls ∧ L.input.beforeRevision + calls.length ≤ maxRevision ∧
+      (calls.all fun c => commandWellFormed c.command && c.expectedRevision.all (· < 2 ^ 63)) = true := by
+  simp only [ok, Bool.and_eq_true, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩ := h
+  exact ⟨⟨h1, h2⟩, clocksFrom_spec _ _ h3, h4, h5⟩
+
 /-- The carried state. Each index answers the list read of `viewOfAnchor` it replaces. -/
 structure Fast where
   env : Env
