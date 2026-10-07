@@ -277,7 +277,9 @@ class Spine:
         return sp, dirs, parts, j, source, classes
 
     def ingest(self, index: int, record, deposit: dict) -> dict:
+        t0 = time.perf_counter()
         rows = sorted(enumerate(record.rows), key=lambda p: (0 if (p[1].amount_cents or 0) < 0 else 1, p[0]))
+        self.tt["judge"] += time.perf_counter() - t0
         pool, n, t_f = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}", self.n + 1, T0_MS + index
         if t_f < self.last_t_f:
             raise rb.FinancialIntegrityError("clock_regressed")
@@ -288,9 +290,9 @@ class Spine:
             sp, dirs, parts, j, source, classes = self.judge(index, rows, pool, n)
             self.wait_acks()  # judge(n+1) overlapped the shards' commits of n
             pre = dict(self.heads)
+            t0 = time.perf_counter()
             blobs = {k: pickle.dumps(p, 5) for k, p in parts.items()}
             verdicts = {k: hashlib.sha3_256(b"".join(p[1].encode() for p in parts[k])).digest() for k in parts}
-            t0 = time.perf_counter()
             for k in parts:
                 if k:
                     self.workers[k][1].send(("PART", n, index, pool, t_f, blobs[k], pre[k], verdicts[k]))
@@ -409,17 +411,19 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
     spine = Spine(work, k_count, template)
     db_bytes = lambda: sum(p.stat().st_size for p in work.glob("*.sqlite3*"))  # noqa: E731
     size0, io0 = db_bytes(), io_write_bytes()
-    lines, classes, kk, snap = 0, {}, k_count - 1, work / "snapshot.sqlite3"
+    lines, classes, kk, snap, snap_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0
     t0 = time.perf_counter()
     for position, (record, deposit) in enumerate(files):
         if with_replay and position == len(files) - 1:
+            s0 = time.perf_counter()
             spine.wait_acks()
             spine.snapshot(kk, snap)
+            snap_s = time.perf_counter() - s0  # the replay setup is not throughput
         for name, value in spine.ingest(position, record, deposit).items():
             classes[name] = classes.get(name, 0) + value
         lines += len(record.rows)
     spine.wait_acks()
-    wall = time.perf_counter() - t0
+    wall = time.perf_counter() - t0 - snap_s
     grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
     stats = spine.close()
     spine_row = {"k": "spine+shard0", "io_write": spine_io, "peak_rss": spine_rss}
@@ -457,10 +461,10 @@ def main(argv: list[str] | None = None) -> int:
     for name in a.corpus:
         files = corpus(seeds[name], a.lines, a.files)
         for k in a.k:
-            for rep in range(a.reps):
-                r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}")}
+            for rep in range(a.reps + 1):  # the last rep also snapshots one shard and replays its last record; its setup time is cut from the wall
+                r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}", rep == a.reps)}
                 runs.append(r)
-                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us rss={r['peak_rss_total_mb']:.0f} MB replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}", flush=True)
+                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
     previous = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
     previous["runs"].extend(runs)
     a.out.write_text(json.dumps(previous, indent=1, default=str), encoding="utf-8")
