@@ -1048,7 +1048,8 @@ theorem fast_eq_trace_of_rel (calls : List Call) (F : Fast) (M : Ledger) (hR : R
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
-  sorry
+  obtain ⟨hL, hc, hRv, hw⟩ := ok_spec h
+  exact fast_eq_trace_of_rel calls _ L (Rel_init (Inv_of_wf hL) ht) hL hc hRv hw
 
 theorem batchFast_eq_trace (L : Ledger) (calls : List Call) :
     batchFast L calls = (trace L calls).map erase := by
