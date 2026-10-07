@@ -193,7 +193,7 @@ def judge_rows(tbl: SimpleNamespace, index: int, rows: list, n: int, known) -> t
     base, sp = index * rb.KEY, {name: [] for name in ("cell_rows", "holds", "links", "resolutions", "charges")}
     dirs, parts, pending, resolved, classes = [], {}, {}, set(), {}
     obl, obl_ids, route, sha512, sha256 = tbl.obl, tbl.obl_ids, tbl.route, hashlib.sha3_512, hashlib.sha3_256
-    seen: set[bytes] = set()
+    seen: dict[bytes, bytes] = {}  # cell id -> raw digest, for the cells this file creates
     for row_index, row in rows:
         tag, key = row.key[0], "/".join(row.key[1:])
         origin = f"{index}/{tag}/{key}"
@@ -202,11 +202,13 @@ def judge_rows(tbl: SimpleNamespace, index: int, rows: list, n: int, known) -> t
         item = obl[ob]
         cid = sha512(f"RR/CELL/CASH/v2\x1fbench-tenant\x1f{item}\x1f{origin}".encode()).digest()  # = rb.sha("RR/CELL/CASH/v2", "bench-tenant", item, origin)
         amount, rk = row.amount_cents, base + row_index
-        if cid in seen or cid in known:
-            classes["duplicate"] = classes.get("duplicate", 0) + 1
-            continue
-        seen.add(cid)
         rawdig = sha256(row.raw.encode()).digest()
+        held = seen.get(cid) or known.get(cid)  # owner-scale-3 design 1 (line 10) and 3 (line 37): a known cell with the same raw is a DUPLICATE, with other raw a CONFLICT; neither writes
+        if held is not None:
+            cls = "duplicate" if held == rawdig else "conflict"
+            classes[cls] = classes.get(cls, 0) + 1
+            continue
+        seen[cid] = rawdig
         if amount == 0 or tag == "RAW" or amount is None or amount < 0:
             state = "ZERO" if amount == 0 else "HELD" if (tag == "RAW" or amount is None) else "NEGATIVE"
             sp["cell_rows"].append((rk, origin, tag, amount, row.raw, rawdig))
@@ -231,12 +233,12 @@ def judge_rows(tbl: SimpleNamespace, index: int, rows: list, n: int, known) -> t
     return sp, dirs, parts, j, source, classes
 
 
-def prepare(tbl: SimpleNamespace, index: int, rows: list, n: int, known=frozenset()) -> Prepared:
+def prepare(tbl: SimpleNamespace, index: int, rows: list, n: int, known: dict | None = None) -> Prepared:
     """Everything about one file that does not depend on the shards' state: the judge (sorted: negatives first, then file order), the insert order of the
     spine rows, and each shard's input bytes with their verdict digest. The prep stage runs it against nothing; the spine runs it against the directory
     only when the file meets a cell it already holds."""
     ordered = sorted(enumerate(rows), key=lambda p: (0 if (p[1].amount_cents or 0) < 0 else 1, p[0]))
-    sp, dirs, parts, j, source, classes = judge_rows(tbl, index, ordered, n, known)
+    sp, dirs, parts, j, source, classes = judge_rows(tbl, index, ordered, n, known or {})
     return Prepared(index, n, {t: sorted(d, key=itemgetter(0)) for t, d in sp.items()}, sorted(dirs, key=itemgetter(0)), j, source, classes,
                     {k: pickle.dumps(p, 5) for k, p in parts.items()}, {k: verdict_of(p) for k, p in parts.items()})
 
@@ -300,7 +302,7 @@ class Spine:
         self.c.executescript(SPINE_DDL + rb.STORE_DDL)
         self.ckpt = rb.Checkpointer(db)
         self.tbl = tables(template, k_count)
-        self.keys = {r[0] for r in self.c.execute("SELECT cell_id FROM cells")}  # the cell directory's keys, loaded once and kept equal to main.cells at every commit
+        self.keys = dict(self.c.execute("SELECT cell_id, raw_digest FROM cells"))  # the directory's cell id -> raw digest, loaded once and kept equal to main.cells at every commit
         self.workers: dict[int, tuple] = {}
         context = multiprocessing.get_context("spawn")
         for k in range(k_count):  # every shard is a worker process; the spine process only judges, ships, writes its record and commits
@@ -342,10 +344,8 @@ class Spine:
             raise rb.FinancialIntegrityError("clock_regressed")
         t0 = time.perf_counter()
         p = prepared
-        cids = {d[0] for d in p.dirs} if p else None
-        if p is None or p.index != index or p.n != n or not self.keys.isdisjoint(cids):
+        if p is None or p.index != index or p.n != n or not self.keys.keys().isdisjoint([d[0] for d in p.dirs]):
             p = prepare(self.tbl, index, record.rows, n, self.keys)
-            cids = {d[0] for d in p.dirs}
         pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
         self.tt["judge"] += time.perf_counter() - t0
         self.ckpt.before_begin()
@@ -382,7 +382,7 @@ class Spine:
         self.c.execute("COMMIT")  # the only commit point
         self.ckpt.kick()
         self.tt["spine_commit"] += time.perf_counter() - t0
-        self.keys |= cids
+        self.keys.update((d[0], d[5]) for d in p.dirs)
         self.n, self.last_t_f, self.prev_head = n, t_f, self.prev_head_next
         for k, (head, _) in built.items():
             self.heads[k] = head

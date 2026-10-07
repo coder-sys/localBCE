@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from tools import r9_bench as rb
 from tools import r9_shard_bench as sb
@@ -25,9 +26,9 @@ def digests(db: Path) -> dict[str, str]:
         c.close()
 
 
-def directory(db: Path) -> set[bytes]:
+def directory(db: Path) -> dict[bytes, bytes]:
     with sqlite3.connect(str(db)) as c:
-        return {r[0] for r in c.execute("SELECT cell_id FROM cells")}
+        return dict(c.execute("SELECT cell_id, raw_digest FROM cells"))
 
 
 # sha256[:16] of repr(judge output) for each judge call (file 0, file 0 again as a resend, file 1), K=3, recorded from the judge that probed the
@@ -188,6 +189,27 @@ class ShardBench(unittest.TestCase):
         self.assertEqual(set(classes), {"duplicate"})
         self.assertEqual(classes["duplicate"], len(self.files[0][0].rows))
         self.assertEqual(spine.heads, heads)
+        spine.close()
+
+    def test_resend_with_other_raw_is_a_conflict_and_writes_nothing(self) -> None:
+        work = self.tmp / "conflict"
+        spine = sb.Spine(work, 3, self.template)
+        record, deposit = self.files[0]
+        spine.ingest(0, record, deposit)
+        spine.wait_acks()
+        heads, cells, before = dict(spine.heads), dict(spine.keys), digests(work / "spine.sqlite3")
+        rows = list(record.rows)
+        tampered = [i for i, r in enumerate(rows) if (r.amount_cents or 0) > 0][:2]
+        for i in tampered:  # a resend whose raw differs on a shard cell
+            rows[i] = SimpleNamespace(key=rows[i].key, amount_cents=rows[i].amount_cents, raw=rows[i].raw + "X")
+        classes = spine.ingest(0, SimpleNamespace(rows=rows, trace_origin=record.trace_origin, trace=record.trace), deposit)
+        spine.wait_acks()
+        self.assertEqual(classes, {"conflict": len(tampered), "duplicate": len(rows) - len(tampered)})
+        self.assertEqual(spine.heads, heads)
+        self.assertEqual(spine.keys, cells)
+        after = digests(work / "spine.sqlite3")
+        for table in ("cells", "cell_rows", "holds", "links", "resolutions", "charges"):
+            self.assertEqual(after[table], before[table], table)  # no row written for a conflict
         spine.close()
 
     def test_replay_of_last_record_reproduces_digest_and_head(self) -> None:
