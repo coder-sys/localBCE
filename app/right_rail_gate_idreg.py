@@ -10,8 +10,9 @@ process dies; any other handle is refused ``shard_busy``, so nothing reserves fo
 check and its seal.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
 (row n and head, the checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard
 after it, else ``registry_rewound``.  A whole directory restored together passes that; ``boot`` refuses it
-``store_rewound`` when a shard's store lacks the payer's newest stored checkpoint (design idreg-restore B3), and the
-decide layer then answers HOLD (``decide`` with no registry).
+``store_rewound`` when a shard's store lacks the payer's newest stored checkpoint (design idreg-restore B3).  Every
+refused boot appends a fence BOOT row (a nonce nobody holds), so a running handle's batches HOLD ``registry_not_booted``
+until a boot passes, and a restarted process holds no nonce (``decide`` with no registry HOLDs).
 """
 
 from __future__ import annotations
@@ -140,6 +141,13 @@ def _rewound(db: sqlite3.Connection, shard: int, n: int, head: bytes) -> bool:
         "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (shard, n)).fetchone() is not None
 
 
+def _fence(db: sqlite3.Connection) -> None:
+    """Append a BOOT row whose nonce nobody holds: every running handle fails ``registry_not_booted``.  BOOT rows never
+    enter ``_rewound`` or ``commitment_missing``, so a fence never refuses the next boot."""
+    with _txn(db, None):
+        _Tail(db).add(_BOOT, os.urandom(32).rjust(ID_LEN, b"\0"), 0)
+
+
 def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
          anchors: Mapping[int, tuple[Path, bytes | None]]) -> bytes:
     """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
@@ -148,7 +156,8 @@ def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
     ``anchors`` names, for exactly those shards, the producer store the commitment came from and the payer's newest
     stored checkpoint digest (``None``: the payer stored none); a store that lacks it is ``store_rewound`` (B3, design
     idreg-restore 1), so a store, registry and mark restored together to before a released checkpoint cannot boot.
-    Every refusal writes nothing: no BOOT row, no nonce, so no shard can reserve until a boot passes."""
+    Every refusal after the registry opens commits one fence BOOT row (``_fence``), then raises: no RESERVE, FREE or
+    SETTLE, and no running handle reserves again until a boot passes."""
     db = _open(path)
     try:
         with _txn(db, None):
@@ -169,6 +178,9 @@ def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]],
             nonce = os.urandom(32)
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
         return nonce
+    except BaseException:
+        _fence(db)
+        raise
     finally:
         db.close()
 

@@ -48,7 +48,8 @@ class Cluster:
     def boot(self) -> None:
         """Boot the registry against every shard's newest signed commitment, else the tenant genesis commitment, which
         the first boot takes from the then-empty registry, and each shard's store against the payer's newest stored
-        checkpoint (B3; none without a payer).  A refusal leaves ``nonce`` as it was: a process still running keeps it."""
+        checkpoint (B3; none without a payer).  A refusal leaves ``nonce`` as it was (a process still running keeps it),
+        but its fence BOOT row makes every batch on it HOLD registry_not_booted."""
         stored = self.payer.newest_stored(fx.TENANT) if self.payer else {}
         self.nonce = idreg.boot(self.reg, {k: (self.store(k).exists() and producer.newest(self.store(k))) or self.genesis
                                            for k in range(self.shards)},
@@ -90,7 +91,7 @@ def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], 
         status[i] = " ".join(f[9:11])
         pay.setdefault(p, []).append(f[9])
     return ans, [fx._leaf(p, 0, "ALLOW" if set(o) == {"ALLOW"} else "HOLD", shard=k, member_key=fx.member(p, k))
-                 for p, o in pay.items() if "WAIT" not in o], status
+                 for p, o in pay.items() if "WAIT" not in o] if ans.digest else [], status
 
 
 def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dict[int, str]:

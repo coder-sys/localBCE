@@ -314,10 +314,11 @@ class ShardTests(fx.Scratch):
                     restore(path, files)
                 if point is None:  # NEXT paid 20
                     with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                        c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
-                    with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                        c.send(0, {9: [20]})  # each batch too: the old BOOT nonce still opens the registry
+                        c.send(0, {9: [20]})  # each batch checks too: the running nonce still opens the registry
                     self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD ALREADY_DECIDED"})  # the refusal freed nothing
+                    with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                        c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
+                    self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD registry_not_booted"})  # the refusal fenced the nonce
                 else:
                     c.boot()  # the store is behind only a batch whose tokens never left
                     self.finish(c, NEXT)  # 20 freed, decided again and paid once; inv holds
@@ -328,8 +329,8 @@ class ShardTests(fx.Scratch):
             old = snapshot(c.reg)
             c.boot()
             restore(c.reg, old)
-            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
-                c.send(0, NEXT)
+            reserved = count(c, 0)
+            self.assertEqual((c.send(0, NEXT), count(c, 0)), ({20: "HOLD registry_not_booted"}, reserved))
 
     def pay(self, c: g.Cluster, store: payer.PayerStore, k: int, p: int) -> str | None:
         """Shard k decides payment p (line 10, X) and seals it; the payer stores the checkpoint, sends p and releases it."""
@@ -345,9 +346,9 @@ class ShardTests(fx.Scratch):
         return store.release(request(p, k), gate.encode_token(tokens[0]), now=fx.NOW)
 
     @contextlib.contextmanager
-    def released_then_restored(self):
+    def released_then_restored(self, restart: bool = True):
         """Copy the whole directory; shard 0 pays X in payment 1 (sealed, stored and released by the payer).  Then the
-        copy comes back and the process restarts: it holds no nonce until a boot passes."""
+        copy comes back and, with ``restart``, the process restarts: it holds no nonce until a boot passes."""
         with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
             shutil.copytree(c.dir, Path(keep) / "copy")
             c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
@@ -357,7 +358,8 @@ class ShardTests(fx.Scratch):
             for f in c.dir.iterdir():
                 f.unlink()
             shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
-            c.nonce = b""
+            if restart:
+                c.nonce = b""
             yield c, store
 
     def test_r5_restore_after_release_holds(self) -> None:
@@ -376,6 +378,23 @@ class ShardTests(fx.Scratch):
             self.assertEqual(store._db.execute("SELECT COUNT(*) FROM commands WHERE command_key=?",
                                                (request(2, 1).command_key,)).fetchone()[0], 1)
             self.assertEqual(store._db.execute("SELECT payment_id FROM releases").fetchall(), [("pay-0001",)])
+
+    def releases(self, store: payer.PayerStore) -> list[str]:
+        return [p for (p,) in store._db.execute("SELECT payment_id FROM releases ORDER BY payment_id")]
+
+    def test_r5_refused_boot_fences_the_running_nonce(self) -> None:
+        """Review HIGH-1: the process keeps running with the copy's newest nonce; the refused boot's BOOT row fences it,
+        so shard 1's X HOLDs and X is released once.  Mutant: without that row the old nonce reserves and X pays twice."""
+        for mutant in (False, True):
+            fence = mock.patch.object(idreg, "_fence", lambda db: None) if mutant else contextlib.nullcontext()
+            with self.subTest(mutant=mutant), self.released_then_restored(restart=False) as (c, store), fence:
+                with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
+                    c.boot()
+                if mutant:
+                    self.assertIsNone(self.pay(c, store, 1, 2))
+                else:
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the

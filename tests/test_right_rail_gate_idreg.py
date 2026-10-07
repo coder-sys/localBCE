@@ -164,7 +164,8 @@ class IdRegistryTests(unittest.TestCase):
         n, head = self.reg.genesis({0: [1], 1: [2]})  # rows 2-3: RESERVE 1, SETTLE of shard 0; rows 4-5: the same for shard 1
         at = lambda i: (i, self.reg._db.execute("SELECT head FROM log WHERE n = ?", (i,)).fetchone()[0])
         idreg.boot(self.path, {0: (n, head), 1: (n, head)}, ANCHORS)
-        idreg.boot(self.path, {0: at(2), 1: (n, head)}, ANCHORS)  # a batch ending at its RESERVE, then the next batch's settle
+        live = self.open(idreg.boot(self.path, {0: at(2), 1: (n, head)}, ANCHORS))  # a batch ending at its RESERVE, then the next batch's settle
+        self.addCleanup(live.close)
         before = self.tail()
         for bad in ({0: (n, head)}, {0: (0, gate.ZERO_DIGEST), 1: (n, head)}):  # a shard with rows needs its commitment
             with self.subTest(bad), self.assertRaisesRegex(idreg.IdRegistryError, "commitment_missing"):
@@ -178,7 +179,10 @@ class IdRegistryTests(unittest.TestCase):
                                ({**ANCHORS, 1: (ANCHORS[1][0], bytes(64))}, "store_rewound")):  # a missing store holds nothing
             with self.subTest(error), self.assertRaisesRegex(idreg.IdRegistryError, error):
                 idreg.boot(self.path, {0: (n, head), 1: (n, head)}, anchors)
-        self.assertEqual(self.tail(), before)  # every refusal wrote nothing: no BOOT row
+        added = self.reg._db.execute("SELECT kind, id FROM log WHERE n > ?", (before[0],)).fetchall()
+        self.assertEqual(([kind for kind, _ in added], len({nonce for _, nonce in added})), ([3] * 8, 8))  # one fence each
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            live.reserve(0, [9], sealed=None)  # the last passing boot's nonce is fenced; nothing reserves
         self._edit("DROP TRIGGER log_no_update")
         self._edit("UPDATE log SET shard = 5 WHERE n = 3")  # a middle row edited, stored heads kept
         with self.assertRaisesRegex(idreg.IdRegistryError, "chain_broken"):
