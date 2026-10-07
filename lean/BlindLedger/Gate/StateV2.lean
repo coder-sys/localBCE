@@ -4448,6 +4448,88 @@ private theorem c8_setMap_append (H : Bytes → Bytes) (u : Bool) (s f : List Li
           ⟨List.mem_append_right _ (c8_mapM_mem hkS (List.mem_eraseDups.mpr hqs) hy), ?_⟩)
         rw [h1, noShadow q kb hk (Or.inr ⟨hqs, hqf⟩)] <;> rfl
 
+/-- Every fresh row of a carried-style result is the line of one of its decisions. -/
+private theorem c9_fresh_sub (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) {l : Line}
+    (h : l ∈ (batchFresh c (decideRegT c k os b)).1 ∨ l ∈ (batchFresh c (decideRegT c k os b)).2) :
+    l ∈ (decideRegT c k os b).decisions.map (·.line) := by
+  rw [c5_fresh_spec] at h
+  rcases h with h | h
+  · obtain ⟨h, -⟩ := List.mem_filter.mp h
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+    exact List.mem_map_of_mem (List.mem_filter.mp hd).1
+  · obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+    exact List.mem_map_of_mem (List.mem_filter.mp hd).1
+
+/-- A ready line's ROW key and stored keys are probed in its set. -/
+private theorem c9_probeQ (c₀ : Ctx) (k : Nat) (os : List Owner) {bb : List Line} {l : Line} (hl : l ∈ bb) :
+    (rowKey l ∈ (probeKeys c₀ k os bb).1 ∧ ∀ q ∈ rowKeys false l, q ∈ (probeKeys c₀ k os bb).1) ∧
+      (rowKey l ∈ (probeKeys c₀ k os bb).2 ∧ ∀ q ∈ rowKeys true l, q ∈ (probeKeys c₀ k os bb).2) := by
+  have e1 : ∀ q, (q ∈ keys l ∨ q = rowKey l) → q ∈ (probeKeys c₀ k os bb).1 := fun q hq =>
+    List.mem_eraseDups.mpr (List.mem_append_left _ (List.mem_flatMap.mpr ⟨l, hl, by
+      rcases hq with hq | rfl
+      · exact List.mem_append_left _ hq
+      · exact List.mem_append_right _ (List.mem_singleton.mpr rfl)⟩))
+  have e2 : ∀ q, (q ∈ rowKeys true l ∨ q = rowKey l) → q ∈ (probeKeys c₀ k os bb).2 := fun q hq =>
+    List.mem_eraseDups.mpr (List.mem_append_left _ (List.mem_flatMap.mpr ⟨l, hl, by
+      rcases hq with hq | rfl
+      · exact List.mem_append_left _ (List.mem_append_left _ hq)
+      · exact List.mem_append_left _ (List.mem_append_right _ (List.mem_singleton.mpr rfl))⟩))
+  exact ⟨⟨e1 _ (Or.inr rfl), fun q hq => e1 q (Or.inl (by simpa [rowKeys] using hq))⟩,
+    ⟨e2 _ (Or.inr rfl), fun q hq => e2 q (Or.inl hq)⟩⟩
+
+/-- One set's step: the appended set's map exists and the courier's updated root is its root, unless the proof
+    or a probed key path collides with the set's inputs. -/
+private theorem c9_set (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s f : List Line) (m : Map)
+    (hm : setMap H u s = some m) (hs : List Hit) (wm : Map) (hw : writes H u hs s.length f = some wm)
+    (qs : List Key) (pf : Proof)
+    (hv : verifyMulti H (root H m) (qs.filterMap fun q => (keyBytes q).map (pathOf H)) pf = true)
+    (hq : ∀ x ∈ f, rowKey x ∈ qs ∧ ∀ q ∈ rowKeys u x, q ∈ qs)
+    (hT : ∀ q kb, keyBytes q = some kb → q ∈ qs → findHit hs u q = some (c3T H u s q (pathOf H kb)))
+    (hN : ∀ q, keyBytes q = none → findHit hs u q = none)
+    (hR : ∀ x ∈ f, ∀ y ∈ s, rowKey x ≠ rowKey y) :
+    (∃ m', setMap H u (s ++ f) = some m' ∧ hashPf H (upsertPf 513 0 pf wm) = root H m') ∨
+      Collision H (pfInputs H pf ++ qs.filterMap fun q => (keyBytes q).map (KD ++ ·)) (setInputs H u s) := by
+  by_cases nc : Collision H (pfInputs H pf ++ qs.filterMap fun q => (keyBytes q).map (KD ++ ·)) (setInputs H u s)
+  · exact Or.inr nc
+  left
+  have hT' : ∀ q ∈ f.flatMap (rowKeys u), ∀ h, findHit hs u q = some h →
+      h.n = ((postings u s q).getD []).length ∧ h.peaks = ((postings u s q).getD []).foldl (frontierPush H) [] := by
+    intro q hq0 h hh
+    obtain ⟨x, hx, hqx⟩ := List.mem_flatMap.mp hq0
+    cases hk : keyBytes q with
+    | none => rw [hN q hk] at hh; cases hh
+    | some kb =>
+      rw [hT q kb hk ((hq x hx).2 q hqx)] at hh
+      obtain rfl := Option.some.inj hh
+      exact ⟨by simp [c3T, c3_rowKeys_head u x q hqx], by simp [c3T, c3_rowKeys_head u x q hqx]⟩
+  have hP : ∀ a b ka kb, a ∈ f.map rowKey ++ f.flatMap (rowKeys u) → b ∈ s.map rowKey ++ s.flatMap (rowKeys u) →
+      keyBytes a = some ka → keyBytes b = some kb → pathOf H ka = pathOf H kb → a = b := by
+    intro a b ka kb ha hb hka hkb he
+    refine Classical.byContradiction fun hne => nc ⟨KD ++ ka, ?_, KD ++ kb, ?_, ?_, he⟩
+    · have haq : a ∈ qs := by
+        rcases List.mem_append.mp ha with ha | ha
+        · obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
+          exact (hq x hx).1
+        · obtain ⟨x, hx, hax⟩ := List.mem_flatMap.mp ha
+          exact (hq x hx).2 a hax
+      exact List.mem_append_right _ (List.mem_filterMap.mpr ⟨a, haq, by rw [hka]; rfl⟩)
+    · unfold setInputs
+      dsimp only
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_filterMap.mpr ⟨b, ?_, by rw [hkb]; rfl⟩))
+      rcases List.mem_append.mp hb with hb | hb
+      · exact List.mem_append_left _ hb
+      · exact List.mem_append_right _ (List.mem_eraseDups.mpr hb)
+    · intro e
+      exact hne (keyBytes_inj hka (by rw [hkb, List.append_cancel_left e]))
+  obtain ⟨m', hm', hp⟩ := c8_setMap_append H u s f hs m wm hm hw hT' hR hP
+  refine ⟨m', hm', ?_⟩
+  rcases c8_root H hH u s m hm hs s.length f wm hw qs pf hv hq hT hN with e | e
+  · rw [e]
+    exact (root_perm H m' _ (setMap_ok H hH u _ m' hm') hp.symm).symm
+  · refine absurd (coll_mono H (fun y hy => List.mem_append_left _ hy) (fun y hy => ?_) e) nc
+    unfold setInputs
+    simp [hm, hy]
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
@@ -4460,7 +4542,72 @@ theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k
      o.decisions.map (·.hits) = r.decisions.map (trueHits H rel unr ·.line) ∧
      o.fresh = batchFresh c r ∧ o.pays = paysOf c r.decisions ∧
      headOf H r.released r.unresolved = some o.head ∧ digestV2 H o.head = some o.digest) ∨
-    Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr) := sorry
+    Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr) := by
+  by_cases nc : Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr)
+  · exact Or.inr nc
+  left
+  obtain ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, -, -, hxb, -, hN, hD, hDec, hPs, hFresh, hW1, hW2, hHd, hxr, hxu,
+    hDg, -, hHit, hT⟩ := c7_core H hH c₀ k os b rel unr hi h ha d hd w o hr nc
+  obtain ⟨f1, f2, hRel, hUnr, hBF⟩ := decideRegT_sets c₀ k os b rel unr
+  have hI : Inv (decideRegT (carried c₀ rel unr) k os b).released (decideRegT (carried c₀ rel unr) k os b).unresolved :=
+    inv_step c₀ k os b rel unr hi
+  rw [hRel, hUnr] at hI
+  have hId : ((rel.entries ++ f1 ++ (unr.entries ++ f2)).map (·.id)).Nodup := hI.1
+  simp only [List.map_append] at hId
+  obtain ⟨n1, n2, -⟩ := List.nodup_append.mp hId
+  have rk : ∀ x y : Line, rowKey x = rowKey y → x.id = y.id := fun x y e => by
+    have := congrArg (fun q : Key => q[1]?) e
+    simpa [rowKey, Line.fields] using this
+  have hof : o.fresh = (f1, f2) := hFresh.trans hBF
+  simp only [hof, hi.2.1, hi.2.2] at hW1 hW2 hHd
+  have hL : o.decisions.map (·.line) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (·.line) := by
+    simpa only [List.map_map, Function.comp_def] using congrArg (List.map Prod.fst) hDec
+  have hsub : ∀ l, l ∈ f1 ∨ l ∈ f2 → l ∈ ready k os b := fun l hl => by
+    have h1 := c9_fresh_sub (carried c₀ rel unr) k os b (l := l) (by rw [hBF]; exact hl)
+    rw [← hL, hD, (c7_lines H x _ _).1] at h1
+    exact hxb ▸ c7_ord x h1
+  obtain ⟨m1, hm1, r1⟩ : ∃ m1, setMap H false (rel.entries ++ f1) = some m1 ∧
+      hashPf H (upsertPf 513 0 w.relPf wr) = root H m1 := by
+    refine (c9_set H hH false rel.entries f1 mr hmr x.hs wr hW1 _ w.relPf gv1
+      (fun y hy => (c9_probeQ c₀ k os (hsub y (Or.inl hy))).1) (fun q kb hk hq => hT false q kb hk hq) (hN false)
+      (fun y hy z hz e => (List.nodup_append.mp n1).2.2 _ (List.mem_map_of_mem hz) _ (List.mem_map_of_mem hy)
+        (rk y z e).symm)).resolve_right fun e => nc (coll_mono H ?_ ?_ e)
+    · intro y hy
+      rw [c5_wIn]
+      rcases List.mem_append.mp hy with hy | hy
+      · exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ hy))
+      · refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_)))
+        rw [List.filterMap_append]
+        exact List.mem_append_left _ hy
+    · intro y hy
+      exact List.mem_append_left _ (List.mem_append_right _ hy)
+  obtain ⟨m2, hm2, r2⟩ : ∃ m2, setMap H true (unr.entries ++ f2) = some m2 ∧
+      hashPf H (upsertPf 513 0 w.unrPf wu) = root H m2 := by
+    refine (c9_set H hH true unr.entries f2 mu hmu x.hs wu hW2 _ w.unrPf gv2
+      (fun y hy => (c9_probeQ c₀ k os (hsub y (Or.inr hy))).2) (fun q kb hk hq => hT true q kb hk hq) (hN true)
+      (fun y hy z hz e => (List.nodup_append.mp n2).2.2 _ (List.mem_map_of_mem hz) _ (List.mem_map_of_mem hy)
+        (rk y z e).symm)).resolve_right fun e => nc (coll_mono H ?_ ?_ e)
+    · intro y hy
+      rw [c5_wIn]
+      rcases List.mem_append.mp hy with hy | hy
+      · exact List.mem_append_left _ (List.mem_append_right _ hy)
+      · refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_)))
+        rw [List.filterMap_append]
+        exact List.mem_append_right _ hy
+    · intro y hy
+      exact List.mem_append_right _ hy
+  have e1 : bumpSet c₀.today rel = bumpIf x.relOk c₀.today rel.asOf := by rw [hxr]; exact c8_bumpSet _ _ hi.2.1
+  have e2 : bumpSet c₀.today unr = bumpIf x.unrOk c₀.today unr.asOf := by rw [hxu]; exact c8_bumpSet _ _ hi.2.2
+  have hHead : headOf H (decideRegT (carried c₀ rel unr) k os b).released
+      (decideRegT (carried c₀ rel unr) k os b).unresolved = some o.head := by
+    rw [hRel, hUnr, hHd, r1, r2, ← e1, ← e2]
+    show (do
+      let a ← setMap H false (rel.entries ++ f1)
+      let b' ← setMap H true (unr.entries ++ f2)
+      pure (⟨bumpSet c₀.today rel, bumpSet c₀.today unr, rel.entries.length + f1.length,
+        unr.entries.length + f2.length, root H a, root H b'⟩ : Head)) = _
+    rw [hm1, hm2] <;> rfl
+  exact ⟨hDec, sorry, hHit, hFresh, hPs, hHead, hDg⟩
 
 /-- A set has no row under id key [4, i] iff no row has id i (kinds 5, 6 never equal [4, i]). -/
 private theorem c7_cnt0 (u : Bool) (s : List Line) (i : Nat) :
