@@ -1772,7 +1772,7 @@ private theorem reversedImage_wf {i : FinancialInput} {p : Payment} (hp : paymen
 
 /-! ## Facts read off a well-formed input -/
 
-private theorem wf_facts {i : FinancialInput} (h : financialInputWellFormed i = true) :
+theorem wf_facts {i : FinancialInput} (h : financialInputWellFormed i = true) :
     i.payments.length ≤ maxRows ∧ i.evidence.length ≤ maxRows ∧ i.conflicts.length ≤ maxRows ∧
     (∀ q ∈ i.payments, paymentWellFormed i.context q = true) ∧
     (∀ q ∈ i.payments, paymentEvidenceWellFormed i q = true) ∧
@@ -1880,11 +1880,11 @@ private theorem summarize_upd {i : FinancialInput} {rs b0 S} (hS : summarize i r
   · rw [if_pos hc, if_pos hc]; rfl
   · rw [if_neg hc, if_neg hc]; rfl
 
-private theorem activeCents_insert {x : Payment} (hx : x.status = .ACTIVE) (P : List Payment) :
+theorem activeCents_insert {x : Payment} (hx : x.status = .ACTIVE) (P : List Payment) :
     activeCents (insertBy Payment.paymentId x P) = x.amountCents + activeCents P := by
   rw [activeCents_eq, activeCents_eq, sum_insertBy, if_pos hx]
 
-private theorem activeCents_replace {P : List Payment} {q p0 : Payment} (hn : (P.map Payment.paymentId).Nodup)
+theorem activeCents_replace {P : List Payment} {q p0 : Payment} (hn : (P.map Payment.paymentId).Nodup)
     (hq : findPayment P p0.paymentId = some q) (hact : q.status = .ACTIVE) (hp0 : p0.status ≠ .ACTIVE) :
     activeCents (P.map fun x => if x.paymentId = p0.paymentId then p0 else x) + q.amountCents =
       activeCents P := by
