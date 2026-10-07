@@ -5556,6 +5556,101 @@ private theorem c13_lists (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : Lis
       · simp at hu
       · exact ⟨q, kb, es, hk, hp, hne, rfl⟩
 
+private theorem c14_guard {p : Prop} [Decidable p] (hp : p) : (guard p : Option Unit) = some () := by
+  unfold guard; exact if_pos hp
+
+/-- Every key of a set with a map has a key encoding. -/
+private theorem c14_kb {H : Bytes → Bytes} {u : Bool} {s : List Line} {m : Map} {q : Key}
+    (hm : setMap H u s = some m) (hq : q ∈ s.flatMap (rowKeys u)) : ∃ kb, keyBytes q = some kb := by
+  obtain ⟨-, kA, -, hkA, -, -⟩ := c9_dec hm
+  obtain ⟨y, -, hy⟩ := c3_mapM_all _ _ _ hkA q (List.mem_eraseDups.mpr hq)
+  cases hk : keyBytes q with
+  | none => simp [hk] at hy
+  | some kb => exact ⟨kb, rfl⟩
+
+/-- `witnessOf`'s anchor and proofs, read back. -/
+private theorem c14_wit (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
+    (rel unr : Snapshot Line) (h : Head) :
+    (witnessOf H c₀ k os b rel unr h).anchor = h ∧
+    (witnessOf H c₀ k os b rel unr h).relPf = prune H 513 0 ((setMap H false rel.entries).getD [])
+      ((probeKeys c₀ k os (ready k os b)).1.filterMap fun q => (keyBytes q).map (pathOf H)) ∧
+    (witnessOf H c₀ k os b rel unr h).unrPf = prune H 513 0 ((setMap H true unr.entries).getD [])
+      ((probeKeys c₀ k os (ready k os b)).2.filterMap fun q => (keyBytes q).map (pathOf H)) := by
+  unfold witnessOf
+  generalize probeKeys c₀ k os (ready k os b) = p
+  obtain ⟨qr, qu⟩ := p
+  exact ⟨rfl, rfl, rfl⟩
+
+/-- `decideIdx` built back up (converse of `c5_peel`): every guard holds, both probe runs return, and for the
+    resulting index the writes and the next head's digest exist. -/
+private theorem c14_some (H : Bytes → Bytes) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line) (d : Bytes)
+    (w : Witness) (g1 : digestV2 H w.anchor = some d)
+    (g2 : (ready k os b).all (fun l => (keyBytes (rowKey l)).isSome) = true)
+    (g3 : verifyMulti H w.anchor.relRoot
+      ((probeKeys c₀ k os (ready k os b)).1.filterMap fun q => (keyBytes q).map (pathOf H)) w.relPf = true)
+    (g4 : verifyMulti H w.anchor.unrRoot
+      ((probeKeys c₀ k os (ready k os b)).2.filterMap fun q => (keyBytes q).map (pathOf H)) w.unrPf = true)
+    (P1 : ∃ hr', (probeKeys c₀ k os (ready k os b)).1.mapM (probe H w.relPf w false) = some hr')
+    (P2 : ∃ hu', (probeKeys c₀ k os (ready k os b)).2.mapM (probe H w.unrPf w true) = some hu')
+    (hW : ∀ hr' hu', (probeKeys c₀ k os (ready k os b)).1.mapM (probe H w.relPf w false) = some hr' →
+      (probeKeys c₀ k os (ready k os b)).2.mapM (probe H w.unrPf w true) = some hu' →
+      ∀ x : Ix, x.c₀ = c₀ → x.hs = hr'.filterMap id ++ hu'.filterMap id →
+      x.relOk = (validDate w.anchor.relAsOf && decide (w.anchor.relAsOf ≤ c₀.today)) →
+      x.unrOk = (validDate w.anchor.unrAsOf && decide (w.anchor.unrAsOf ≤ c₀.today)) → x.bb = ready k os b →
+      ∃ wr wu, writes H false x.hs w.anchor.relCount
+          (x.releasedQ (Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb))) = some wr ∧
+        writes H true x.hs w.anchor.unrCount
+          (x.unresolvedQ (Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb))) = some wu ∧
+        ∃ dg, digestV2 H ⟨bumpIf x.relOk c₀.today w.anchor.relAsOf, bumpIf x.unrOk c₀.today w.anchor.unrAsOf,
+          w.anchor.relCount + (x.releasedQ (Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb))).length,
+          w.anchor.unrCount +
+            (x.unresolvedQ (Ix.decideAllQ H x (idSeen (foreignOf k os x.bb)) (x.orderQ x.bb))).length,
+          hashPf H (upsertPf 513 0 w.relPf wr), hashPf H (upsertPf 513 0 w.unrPf wu)⟩ = some dg) :
+    (decideIdx H c₀ k os b d w).isSome = true := by
+  cases hX : decideIdx H c₀ k os b d w with
+  | some _ => rfl
+  | none =>
+  exfalso
+  unfold decideIdx at hX
+  simp only [bind, Option.bind] at hX
+  split at hX
+  · rename_i e; exact Option.some_ne_none _ ((c14_guard g1).symm.trans e)
+  split at hX
+  · rename_i e; exact Option.some_ne_none _ ((c14_guard g2).symm.trans e)
+  generalize hq : probeKeys c₀ k os (ready k os b) = qq at hX g3 g4 P1 P2 hW
+  obtain ⟨qr, qu⟩ := qq
+  dsimp only at hX
+  have g34 : (verifyMulti H w.anchor.relRoot (qr.filterMap fun q => (keyBytes q).map (pathOf H)) w.relPf &&
+      verifyMulti H w.anchor.unrRoot (qu.filterMap fun q => (keyBytes q).map (pathOf H)) w.unrPf) = true := by
+    simp only [Bool.and_eq_true]; exact ⟨g3, g4⟩
+  split at hX
+  · rename_i e; exact Option.some_ne_none _ ((c14_guard g34).symm.trans e)
+  dsimp only at hX
+  split at hX
+  · rename_i e; obtain ⟨_, h⟩ := P1; exact Option.some_ne_none _ (h.symm.trans e)
+  rename_i hr' ghr
+  dsimp only at hX
+  split at hX
+  · rename_i e; obtain ⟨_, h⟩ := P2; exact Option.some_ne_none _ (h.symm.trans e)
+  rename_i hu' ghu
+  dsimp only at hX
+  obtain ⟨wr0, wu0, h1, h2, dg0, h3⟩ := hW hr' hu' ghr ghu ⟨c₀, hr'.filterMap id ++ hu'.filterMap id,
+    validDate w.anchor.relAsOf && decide (w.anchor.relAsOf ≤ c₀.today),
+    validDate w.anchor.unrAsOf && decide (w.anchor.unrAsOf ≤ c₀.today), ready k os b⟩ rfl rfl rfl rfl rfl
+  split at hX
+  · rename_i e; exact Option.some_ne_none _ (h1.symm.trans e)
+  rename_i wr gwr
+  obtain rfl := Option.some.inj (h1.symm.trans gwr)
+  dsimp only at hX
+  split at hX
+  · rename_i e; exact Option.some_ne_none _ (h2.symm.trans e)
+  rename_i wu gwu
+  obtain rfl := Option.some.inj (h2.symm.trans gwu)
+  dsimp only at hX
+  split at hX
+  · rename_i e; exact Option.some_ne_none _ (h3.symm.trans e)
+  cases hX
+
 /-- Liveness: an honest witness is refused only on a named collision or an unrepresentable next state. -/
 theorem decideIdx_complete (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
