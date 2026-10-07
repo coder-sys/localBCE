@@ -404,4 +404,121 @@ theorem pathOf_verifies {H : Bytes → Bytes} {d : Bytes} {hs : List Bytes} {i :
     pathRoot H d treeFuel i hs.length (hs.getD i []) (pathOf (levels H d treeFuel hs) i) = some r :=
   pathOf_root 16 treeFuel hs i hi (Nat.le_trans hn (by decide)) hr
 
+private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
+    (h : pCheckpointFields.run b = some (cp, rest)) : cp.count ≤ maxBatch := by
+  simp only [pCheckpointFields, StateT.run_bind] at h
+  obtain ⟨a3, -, h⟩ := bind_some h
+  obtain ⟨a4, -, h⟩ := bind_some h
+  obtain ⟨a5, -, h⟩ := bind_some h
+  obtain ⟨a6, -, h⟩ := bind_some h
+  obtain ⟨a7, -, h⟩ := bind_some h
+  obtain ⟨a8, -, h⟩ := bind_some h
+  obtain ⟨a9, -, h⟩ := bind_some h
+  obtain ⟨a10, -, h⟩ := bind_some h
+  obtain ⟨a11, -, h⟩ := bind_some h
+  obtain ⟨a12, -, h⟩ := bind_some h
+  obtain ⟨a13, -, h⟩ := bind_some h
+  obtain ⟨a14, hc, h⟩ := bind_some h
+  obtain ⟨a15, -, h⟩ := bind_some h
+  obtain ⟨a16, -, h⟩ := bind_some h
+  obtain ⟨a17, -, h⟩ := bind_some h
+  obtain ⟨a18, -, h⟩ := bind_some h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨rfl, -⟩ := h
+  exact (nat_ok hc).2
+
+private theorem storedOf_count {b : Bytes} {x : Stored} (h : storedOf sha3 b = some x) :
+    x.checkpoint.count ≤ maxBatch := by
+  unfold storedOf at h
+  cases hd : decodeCheckpoint b with
+  | none => simp [hd] at h
+  | some y =>
+    simp only [hd, Option.map_some, Option.some.injEq] at h
+    subst h
+    have hr := parse_run (p := pSignedCheckpoint) hd
+    simp only [pSignedCheckpoint, StateT.run_bind] at hr
+    obtain ⟨c, hc, hr⟩ := bind_some hr
+    obtain ⟨s, -, hr⟩ := bind_some hr
+    simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
+    obtain ⟨rfl, -⟩ := hr
+    have hp := consumed_run hc
+    simp only [pCheckpoint, StateT.run_bind] at hp
+    obtain ⟨a1, -, hp⟩ := bind_some hp
+    obtain ⟨a2, -, hp⟩ := bind_some hp
+    exact pCheckpointFields_count hp
+
+private theorem mapM_decode : ∀ {tokens : List Bytes} {ts : List Token}, tokens.mapM decodeToken = some ts →
+    tokens.length = ts.length ∧ tokens.filterMap decodeToken = ts ∧
+      ∀ (i : Nat) (b : Bytes), tokens[i]? = some b → decodeToken b = ts[i]?
+  | [], ts, h => by
+    simp at h
+    subst h
+    simp
+  | a :: l, ts, h => by
+    cases ha : decodeToken a with
+    | none => simp [ha] at h
+    | some t =>
+      cases hl : l.mapM decodeToken with
+      | none => simp [ha, hl] at h
+      | some ts' =>
+        simp [ha, hl] at h
+        subst h
+        obtain ⟨h1, h2, h3⟩ := mapM_decode hl
+        refine ⟨by simp [h1], by simp [List.filterMap_cons, ha, h2], ?_⟩
+        intro i b hb
+        cases i with
+        | zero =>
+          simp at hb
+          subst hb
+          simp [ha]
+        | succ i =>
+          simp at hb
+          simpa using h3 i b hb
+
+/-- Soundness, the only direction safety needs: the one-tree check never publishes what `publishOk`
+    refuses, so `publishOk_sound` and `publish_payer_local` carry over unchanged. -/
+theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
+    (h : publishOkTree rootPk cert last new tokens = true) : publishOk rootPk cert last new tokens = true := by
+  unfold publishOkTree at h
+  cases he : decodeKeyCert cert with
+  | none => simp [he] at h
+  | some e =>
+    cases hn : storedOf sha3 new with
+    | none => simp [he, hn] at h
+    | some n =>
+      cases hm : tokens.mapM decodeToken with
+      | none => simp [he, hn, hm] at h
+      | some ts =>
+        simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq] at h
+        obtain ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hroot⟩, hall⟩, hasc⟩ := h
+        obtain ⟨hl1, hfm, hget⟩ := mapM_decode hm
+        have hcnt := storedOf_count hn
+        unfold publishOk
+        simp only [he, hn, Bool.and_eq_true, beq_iff_eq]
+        refine ⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, by rw [hl1]; exact hlen⟩, ?_⟩, by rw [hfm]; exact hasc⟩
+        rw [List.all_eq_true]
+        rintro ⟨b, i⟩ hbi
+        have hi : tokens[i]? = some b := List.mem_zipIdx_iff_getElem?.1 hbi
+        obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hi
+        have hit : i < ts.length := by omega
+        have hd : decodeToken b = some ts[i] := by rw [hget i b hi]; exact List.getElem?_eq_getElem hit
+        have hmem : (ts[i], i) ∈ ts.zipIdx := List.mem_zipIdx_iff_getElem?.2 (List.getElem?_eq_getElem hit)
+        have hft := List.all_eq_true.1 hall _ hmem
+        simp only [tokenFitsTree, Bool.and_eq_true, beq_iff_eq] at hft
+        obtain ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, h7⟩, h8⟩ := hft
+        have hpv := pathOf_verifies (by simpa using hit) (by rw [List.length_map]; omega) hroot
+        have e1 : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).length =
+            n.checkpoint.count := by rw [List.length_map]; omega
+        have e2 : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).getD i [] =
+            leafHash sha3 (domain "MERKLE-NODE") ts[i].leafBytes := by
+          simp [List.getD_eq_getElem?_getD, hit]
+        rw [e1, e2] at hpv
+        show tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true
+        unfold tokenFits
+        rw [hd]
+        simp only [inBatch, verifyPath, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq]
+        refine ⟨⟨⟨h1, h2⟩, ⟨⟨⟨⟨⟨h3, h4⟩, h5⟩, h6⟩, by omega⟩, ?_⟩⟩, h8⟩
+        rw [h2, Nat.add_sub_cancel_left, h7]
+        exact ⟨by omega, hpv⟩
+
 end BlindLedger.Gate
