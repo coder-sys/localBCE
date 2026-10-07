@@ -173,6 +173,34 @@ def wrong_ack_and_stuck_main(conn, k: int, db: str) -> None:
     sb.shard_main(conn, k, db)
 
 
+def die_and_refuse_main(conn, k: int, db: str) -> None:
+    """Shard DIE_SHARD dies inside its COMMIT; shard 0 answers its COMMIT with an ERR (it stays at the state before the group)."""
+    real = sb.Shard.commit
+
+    def commit(self):
+        if k == DIE_SHARD:
+            os._exit(3)
+        if k == 0:
+            raise rb.FinancialIntegrityError("forced_commit")
+        return real(self)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
+def gated_commit_main(conn, k: int, db: str) -> None:
+    """Every shard holds its COMMIT until the file `gate` in its directory exists."""
+    real, gate = sb.Shard.commit, Path(db).parent / "gate"
+
+    def commit(self):
+        while not gate.exists():
+            time.sleep(0.05)
+        return real(self)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
 def refuse_ready_main(conn, k: int, db: str) -> None:
     """Shard 1 answers its start with an error."""
     if k == 1:
@@ -1129,7 +1157,75 @@ class ShardBench(unittest.TestCase):
                 self.assertEqual(now["shard1.sqlite3"], before["shard1.sqlite3"], name)  # shard 1 never got its COMMIT
                 for k in range(4):  # a shard told to commit may have been stopped before its commit ended: either way replay brings each to the spine's head
                     self.assertIn(now[f"shard{k}.sqlite3"], (before[f"shard{k}.sqlite3"], clean[f"shard{k}.sqlite3"]), (name, k))
+                    if on and fault == "pipe" and k != 1:  # the healthy shards were drained, not stopped inside their COMMIT
+                        self.assertEqual(now[f"shard{k}.sqlite3"], clean[f"shard{k}.sqlite3"], (name, k))
                     self.replay_identical(self.tmp / name, k, name)
+
+    def test_s12_close_drains_a_healthy_shard_before_stopping_it_when_the_failure_starts_in_close(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        clean = self.all_digests(self.group_run("s12-drain-clean", files, 2)[0])
+        spine = self.spine_with(gated_commit_main, "s12-drain")
+        timer, fired = self.watchdog(spine)
+        try:
+            before = self.all_digests(self.tmp / "s12-drain")
+            conn, real_reply = spine.workers[1][1], spine.reply
+
+            def send_bytes(buf, real=conn.send_bytes) -> None:  # shard 1's COMMIT is never written: the failure is found in close, on the last group
+                if sb.decode(bytes(buf)) == ("COMMIT",):
+                    raise BrokenPipeError("forced_commit_send")
+                real(buf)
+
+            def reply(k, deadline):  # the shards hold their COMMIT until the drain, and only the drain, reads a reply
+                (self.tmp / "s12-drain" / "gate").touch()
+                return real_reply(k, deadline)
+
+            conn.send_bytes, spine.reply = send_bytes, reply
+            prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+            first = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(2)])
+            self.assertTrue(all(isinstance(r, dict) for r in first), first)
+            with self.assertRaises(rb.FinancialIntegrityError) as closed:
+                spine.close()
+            self.assertIn("shard_send:1", str(closed.exception))
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+        now = self.all_digests(self.tmp / "s12-drain")
+        for k in (0, 2, 3):
+            self.assertNotEqual(clean[f"shard{k}.sqlite3"], before[f"shard{k}.sqlite3"], k)  # the group does reach this shard: the next check is not vacuous
+            self.assertEqual(now[f"shard{k}.sqlite3"], clean[f"shard{k}.sqlite3"], k)
+
+    def test_s12_close_names_every_shard_the_drain_lost_to_the_caller(self) -> None:
+        files = sb.corpus(20261007, LINES, 4)
+        with self.sender_env(True), mock.patch.object(sb, "shard_main", die_and_refuse_main):
+            with self.assertRaises(rb.FinancialIntegrityError) as raised:  # the last group commits; shard 1 dies in its COMMIT and shard 0 refuses its own
+                sb.run_once(4, files, self.template, self.tmp / "s12-drain-lost", False, 1)
+        self.assertRegex(str(raised.exception), r"shard_commit_refused:0.*shard_(lost|reply|send):1")
+        self.quiet()
+
+    def test_s12_close_raises_shard_diverged_for_a_wrong_head_found_in_the_drain(self) -> None:
+        files = sb.corpus(20261007, LINES, 2)
+        spine = self.spine_with(wrong_ack_main, "s12-drain-diverged")
+        timer, fired = self.watchdog(spine)
+        try:
+            prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+            first = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(2)])
+            self.assertTrue(all(isinstance(r, dict) for r in first), first)  # the spine committed; shard 1's ACK will carry a wrong head
+            with mock.patch.object(spine, "wait_acks", side_effect=rb.FinancialIntegrityError("forced_wait")):  # the failure is in close, before any ACK is read
+                with self.assertRaises(sb.ShardDiverged) as raised:
+                    spine.close()
+            self.assertIsInstance(raised.exception.__cause__, rb.FinancialIntegrityError)
+            self.assertEqual(list(spine.dead), list(range(4)))
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
 
     def test_s12_close_an_abort_that_cannot_be_written_still_rolls_the_spine_back(self) -> None:
         files = sb.corpus(20261006, LINES, 2)

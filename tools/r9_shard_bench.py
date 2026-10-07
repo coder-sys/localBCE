@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import contextlib
 import ctypes
 import hashlib
 import json
@@ -646,8 +645,11 @@ class Spine:
     def diverged(self, k: int) -> ShardDiverged:
         """A shard's ACK of the spine's COMMIT carries a head other than the one owed: the spine committed, so which shard holds what is no longer known and the run ends (every shard dead; close raises)."""
         error = ShardDiverged(f"shard {k}: head differs after commit")
-        self.dead = dict.fromkeys(self.workers, str(error))
+        self.dead = {**dict.fromkeys(self.workers, str(error)), **self.dead}  # a shard already lost keeps its own reason
         return error
+
+    def lost(self) -> str:
+        return "; ".join(dict.fromkeys(self.dead[k] for k in sorted(self.dead)))  # every dead shard, by shard
 
     def handle(self, k: int, m: tuple) -> None:
         if m[0] == "ERR":
@@ -885,26 +887,27 @@ class Spine:
         self.await_reply(k, "snapshot")
         self.expect(self.workers[k][1], "ACK")
 
-    def drain_owed(self) -> None:
+    def drain_owed(self) -> ShardDiverged | None:
         """M-1: a shard that is alive and whose write has not failed was told to commit what the spine committed: its reply is read before any shard is stopped, so that its COMMIT is never killed half-way. A refusal (ERR) or a
-        silent shard is lost to this run, a wrong head diverges; every such shard is already named by close's error."""
-        deadline = time.monotonic() + REPLY_DEADLINE
+        silent shard is lost to this run (self.dead), a wrong head diverges (returned): close raises either, so the caller hears of every shard lost here."""
+        deadline, wrong = time.monotonic() + REPLY_DEADLINE, None
         for k in [k for k in self.owed if k not in self.dead and not (k in self.senders and self.senders[k].error)]:
             try:
                 m = self.reply(k, deadline)
                 if m[0] != "ACK":
                     self.dead[k] = f"shard_commit_refused:{k}:{m[1:]}"
                 elif m[1] != self.owed.pop(k):
-                    self.diverged(k)
+                    wrong = self.diverged(k)
             except Exception as error:  # a silent, lost or garbled shard
                 self.dead[k] = f"shard_reply:{k}:{error!r}"
+        return wrong
 
     def close(self) -> list[dict]:
         stats = []
         try:
             self.check_senders()  # a STOP that cannot be written gets no STATS: say so, and stop the shards below
             if self.dead:
-                raise rb.FinancialIntegrityError(next(iter(self.dead.values())))
+                raise rb.FinancialIntegrityError(self.lost())
             self.wait_acks()
             for k, (process, conn) in self.workers.items():
                 self.send(k, ("STOP",))
@@ -915,19 +918,24 @@ class Spine:
                     self.dead[k] = f"stop_timeout:{k}"
                     raise rb.FinancialIntegrityError(self.dead[k])
         finally:  # after a failure too: no shard process and no sender thread outlives the spine
+            first, wrong = sys.exception(), None
             try:
-                self.drain_owed()  # first: a healthy shard is not stopped inside its COMMIT
+                try:
+                    wrong = self.drain_owed()  # first: a healthy shard is not stopped inside its COMMIT
+                finally:
+                    for process, _ in self.workers.values():
+                        if process.is_alive():
+                            process.terminate()
+                            process.join()
             finally:
-                for process, _ in self.workers.values():
-                    if process.is_alive():
-                        process.terminate()
-                        process.join()
-            for sender in self.senders.values():
-                sender.stop()
-                for kind, seconds in sender.seconds.items():
-                    self.tt[f"thread_send_{kind}"] += seconds
-            self.ckpt.close()
-            self.c.close()
+                for sender in self.senders.values():
+                    sender.stop()
+                    for kind, seconds in sender.seconds.items():
+                        self.tt[f"thread_send_{kind}"] += seconds
+                self.ckpt.close()
+                self.c.close()
+            if wrong or (self.dead and str(first) != self.lost()):  # the error in flight (if any) does not name every shard lost to this run
+                raise (ShardDiverged if wrong else rb.FinancialIntegrityError)(self.lost()) from first
         return stats
 
 
@@ -1004,12 +1012,15 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
         grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
         spine.feed = None
         prep_busy, prep_rss, prep_cpu = prep.close()
-    except BaseException:  # no process, thread or connection outlives a failed run; the first error is the one raised
+    except BaseException as error:  # no process, thread or connection outlives a failed run; the first error is the one raised, unless close lost more shards
         for process in prep.processes if prep else ():
             process.terminate()
             process.join()
-        with contextlib.suppress(Exception):
+        try:
             spine.close()
+        except Exception as closed:
+            if spine.dead and str(error) != spine.lost():  # this error does not name every shard lost: the caller must hear of all of them
+                raise closed from error
         raise
     latency = sorted(spine.latency)
     pct = lambda q: latency[min(len(latency) - 1, int(q * len(latency)))] * 1000  # noqa: E731
