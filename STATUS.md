@@ -2,8 +2,8 @@
 
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk `85e4b097` (merge-b2: hold-release
-slices S0, S2, S3a, S7a on `fd7ccf72`).
+govern; a branch's pass does not verify another branch or their combination. Describes trunk `30ab7e3b` (payer-batch: BATCH-P1
+release-batch theorems and BATCH-F1 axiom pin on `85e4b097`).
 
 ## Product and standing claims
 
@@ -14,29 +14,23 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 ## What landed since d7192b0
 
-Trunk `85e4b097`, full suite `mb2full1`: 909 run: 894 pass, 0 fail, 15 skips. Semantic gate `mb2sem1` PASS (26 properties;
-artifact `061b5cad...`).
+Trunk `30ab7e3b`, guarded Lean build `tm30ab-1` exit 0 (119 jobs, gate axiom check passes); full suite `tm30full2` + `tm30atk1`
+(tests/attacks): 909 run: 894 pass, 0 fail, 15 skips. The delta is Lean only, so semantic gate `mb2sem1` (`85e4b097`, PASS, 26
+properties; artifact `061b5cad...`) was not rerun.
 
-- **Deployment slots (S0, founder D7).** Five slots in one table with one reader. An unauthored or authored-empty slot reads
-  its strictest value, logs `DEPLOYMENT_SLOT_EMPTY`, and activation is refused. Contradictory packs are refused, each with its own code. No consumer yet.
-- **APPROVAL/v1 line digest (S2).** Each move carries a raw 64-byte `line_digest` (SHA3-512, domain `RR/APPROVAL/LINE/v1`); no
-  other length has an encoding. Lean `Approval.admitMoves` checks the stored digest, then decodes the stored bytes, never
-  re-encodes. Four canonical-decoder theorems (`ApprovalLaws.lean`) are `#guard_msgs` pins: a sorry fails the build.
-- **835 absorb (S3a).** Both parsers agree row for row with no shared code. A faulty claim or PLB
-  block becomes a RAW row; an unreadable amount leaves totals `None` with `balance_unverified`, which holds the file. Only an
-  unreadable BPR02 refuses the whole file.
-- **Payer release (S7a).** `release()` runs the Lean decision and every write under one write lock; an append-only `closed`
-  table is the only double-release guard. Every refusal writes exactly one hold row.
-- **Absorb ladder (cash file).** A bad row is held with a reason (`conflict`, `already_recorded`, `unknown_item`,
-  `depends_on_held`), a repeat is a `DUPLICATE`, and the rest of the file records. A file that cannot be absorbed whole (revision
-  conflict, unknown action, payment past the unpaid balance) is still refused with nothing written. Receipt contract v3.
-- **XI.2 amendment: a bypass only per verified payment** (I.2, target 6).
-- **Python decider retired (M3 step 5).** Payments are decided only in the contained Lean worker.
-- **Gate.** Per-shard decider lease (`shard_busy`); an open row is never settled or freed; a reproducible throughput bench with a pinned digest.
-- **Cash file (design d).** Plan on a copy, commit under the lock; a stale plan re-plans (3 tries, then `cash_file_busy`).
-  Quarter-end lock 1.44-1.65 s (bound 5 s).
-- **Lean decides every payment (M3 step 4);** ByteArray frames (proved equal); M4 claim and offset laws; M1 offset cap;
-  multi-shard decide layer.
+- **Payer release batch (BATCH-P1, Lean).** A batch answers each item exactly as single-token RELEASE (`releaseBatch_eq`);
+  ACCEPT is exactly the payer's twelve checks, earned in the call (`releaseBatch_spec`, `_accept_verified`); a bad item or
+  unnamed checkpoint changes no other answer; an already-released item never accepts (`releaseBatch_once`). Axioms pinned.
+- **Deployment slots (D7).** An empty slot reads its strictest value, logs `DEPLOYMENT_SLOT_EMPTY`, refuses activation.
+- **APPROVAL/v1 line digest.** Raw 64-byte SHA3-512 `line_digest`; Lean checks it, then decodes stored bytes, never re-encodes.
+- **835 absorb.** Two parsers, no shared code, agree row for row; a faulty claim or PLB block becomes a RAW row; an unreadable
+  amount holds the file; only an unreadable BPR02 refuses it.
+- **Payer release (S7a).** Lean decision and every write under one lock; append-only `closed` table; one hold row per refusal.
+- **Absorb ladder (cash file).** A bad row is held with a reason, a repeat is a `DUPLICATE`, the rest records; a file that
+  cannot be absorbed whole is refused with nothing written.
+- **Bypass only per verified payment** (XI.2). **Python decider retired:** only the contained Lean worker decides.
+- **Gate/cash file.** Per-shard decider lease; plan on a copy, commit under the lock (quarter-end lock 1.44-1.65 s, bound 5 s).
+- **Lean decides every payment (M3);** ByteArray frames proved equal; M4 claim and offset laws; M1 offset cap.
 - **Pins.** Worker `7C1EAB94...`, `gate_verify` `a9f47312...` (see `artifacts/`), `tcb_pin` passes. Superseded pins: each
   PROVENANCE file and `RETIRED_PINS`.
 
