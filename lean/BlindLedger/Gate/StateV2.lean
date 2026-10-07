@@ -3772,7 +3772,10 @@ private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
       digestV2 H o.head = some o.digest ∧
       o.free = (pendingOf k os).filter (fun i => !((o.fresh.1 ++ o.fresh.2).map (·.id)).contains i &&
         x.cnt false [4, i] == 0 && x.cnt true [4, i] == 0) ∧
-      o.decisions.map (·.hits) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (trueHits H rel unr ·.line) := by
+      o.decisions.map (·.hits) = (decideRegT (carried c₀ rel unr) k os b).decisions.map (trueHits H rel unr ·.line) ∧
+      (∀ (u : Bool) (q : Key) kb, keyBytes q = some kb →
+        q ∈ (if u then (probeKeys c₀ k os (ready k os b)).2 else (probeKeys c₀ k os (ready k os b)).1) →
+        findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb))) := by
   obtain ⟨hr', hu', wr, wu, x, g1, gK, gv1, gv2, ghr, ghu, hxc, hxs, hxr, hxu, hxb, hD, hFr, hW1, hW2, hHd, hDg,
     hFree, hPays⟩ := c5_peel H c₀ k os b d w o hr
   obtain ⟨mr, mu, hmr, hmu, rfl⟩ := c5_headOf ha
@@ -3821,7 +3824,7 @@ private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
     exact List.map_congr_left fun l hl => c3_hitsQ H x rel unr hmr hmu l
       (fun u q hq kb hk => hF u q kb hk (Or.inl ⟨l, c7_ord x hl, Or.inl hq⟩)) hN
   exact ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, hA, hxc, hxb, hF, hN, hD, hDec, hPs, hFresh, hW1, hW2, hHd, hxr,
-    hxu, hDg, hFree, hHit⟩
+    hxu, hDg, hFree, hHit, hT⟩
 
 /-- A write map is well formed when every hit it extends is a frontier fold from `[]` (as `c3T` gives). -/
 private theorem c7_wok (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (hs : List Hit) (c0 : Nat) (xs : List Line)
@@ -3876,6 +3879,85 @@ private theorem c7_wok (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (hs : L
       exact ⟨hH _, keyVal_len H hH (L ++ es) v hv⟩
   · simp [guard, hg] at h
 
+/-- Every leaf a batch writes sits at the path of a new row's ROW key or of one of its index keys. -/
+private theorem c8_writes_keys {H : Bytes → Bytes} {u : Bool} {hs : List Hit} {c0 : Nat} {xs : List Line}
+    {wm : Map} (h : writes H u hs c0 xs = some wm) :
+    ∀ e ∈ wm, ∃ q kb, ((∃ x ∈ xs, q = rowKey x) ∨ q ∈ xs.flatMap (rowKeys u)) ∧ keyBytes q = some kb ∧
+      e.1 = pathOf H kb := by
+  unfold writes at h
+  simp only [bind, Option.bind] at h
+  split at h
+  · simp at h
+  rename_i rows hrows
+  dsimp only at h
+  split at h
+  · simp at h
+  rename_i ks hks
+  dsimp only at h
+  by_cases hg : (rows.map (·.1) ++ ks.map (·.1)).Nodup
+  · simp [guard, hg] at h
+    subst h
+    intro e he
+    rcases List.mem_append.mp he with he | he
+    · obtain ⟨⟨x, i⟩, hx, hf⟩ := g1_mapM_mem _ _ _ hrows e he
+      cases hk : keyBytes (rowKey x) with
+      | none => simp [hk] at hf
+      | some kb =>
+        cases hb : be 8 (c0 + i) with
+        | none => simp [hk, hb] at hf
+        | some v =>
+          simp [hk, hb] at hf
+          subst hf
+          exact ⟨rowKey x, kb, Or.inl ⟨x, c3_mem_zipIdx hx, rfl⟩, hk, rfl⟩
+    · obtain ⟨q, hq, hf⟩ := g1_mapM_mem _ _ _ hks e he
+      split at hf
+      · simp at hf
+      rename_i kb hk
+      dsimp only at hf
+      split at hf
+      · simp at hf
+      dsimp only at hf
+      split at hf
+      · simp at hf
+      dsimp only at hf
+      split at hf
+      · simp at hf
+      simp at hf
+      subst hf
+      exact ⟨q, kb, Or.inr (List.mem_eraseDups.mp hq), hk, rfl⟩
+  · simp [guard, hg] at h
+
+/-- H1: writes over verified probe paths update the old root, unless the proof collides with the tree. -/
+private theorem c8_root (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (s : List Line) (m : Map)
+    (hm : setMap H u s = some m) (hs : List Hit) (c0 : Nat) (f : List Line) (wm : Map)
+    (hw : writes H u hs c0 f = some wm) (qs : List Key) (pf : Proof)
+    (hv : verifyMulti H (root H m) (qs.filterMap fun q => (keyBytes q).map (pathOf H)) pf = true)
+    (hq : ∀ x ∈ f, rowKey x ∈ qs ∧ ∀ q ∈ rowKeys u x, q ∈ qs)
+    (hT : ∀ q kb, keyBytes q = some kb → q ∈ qs → findHit hs u q = some (c3T H u s q (pathOf H kb)))
+    (hN : ∀ q, keyBytes q = none → findHit hs u q = none) :
+    hashPf H (upsertPf 513 0 pf wm) = root H (upsert m wm) ∨
+      Collision H (pfInputs H pf) (treeInputs H 513 0 m) := by
+  have hP : ∀ q ∈ (f.flatMap (rowKeys u)).eraseDups, ∀ h, findHit hs u q = some h →
+      ∃ L : List Bytes, h.n = L.length ∧ h.peaks = L.foldl (frontierPush H) [] := by
+    intro q hq0 h hh
+    obtain ⟨x, hx, hqx⟩ := List.mem_flatMap.mp (List.mem_eraseDups.mp hq0)
+    cases hk : keyBytes q with
+    | none => rw [hN q hk] at hh; cases hh
+    | some kb =>
+      rw [hT q kb hk ((hq x hx).2 q hqx)] at hh
+      obtain rfl := Option.some.inj hh
+      exact ⟨(postings u s q).getD [], by simp [c3T, c3_rowKeys_head u x q hqx],
+        by simp [c3T, c3_rowKeys_head u x q hqx]⟩
+  refine multi_update_sound H hH m wm (setMap_ok H hH u s m hm) (c7_wok H hH u hs c0 f wm hP hw) _ pf hv ?_
+  intro e he
+  obtain ⟨q, kb, hq', hk, he1⟩ := c8_writes_keys hw e he
+  rw [he1]
+  refine List.mem_filterMap.mpr ⟨q, ?_, by simp [hk]⟩
+  rcases hq' with ⟨x, hx, rfl⟩ | hq'
+  · exact (hq x hx).1
+  · obtain ⟨x, hx, hqx⟩ := List.mem_flatMap.mp hq'
+    exact (hq x hx).2 q hqx
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
@@ -3911,7 +3993,7 @@ theorem freeIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
   by_cases nc : Collision H (witnessInputs H c₀ k os b w) (stateInputs H rel unr)
   · exact Or.inr nc
   left
-  obtain ⟨x, mr, mu, -, -, hmr, hmu, -, -, -, -, -, hF, hN, -, -, -, hFresh, -, -, -, -, -, -, hFree, -⟩ :=
+  obtain ⟨x, mr, mu, -, -, hmr, hmu, -, -, -, -, -, hF, hN, -, -, -, hFresh, -, -, -, -, -, -, hFree, -, -⟩ :=
     c7_core H hH c₀ k os b rel unr hi h ha d hd w o hr nc
   obtain ⟨f1, f2, e1, e2, e3⟩ := decideRegT_sets c₀ k os b rel unr
   simp only [hFree, hFresh, e1, e2, e3, settleFree]
