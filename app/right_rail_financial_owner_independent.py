@@ -4241,7 +4241,7 @@ def _verify_connection(
     restore_source_package: bytes | None,
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
-    # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row. The pre-COMMIT modes read the touched obligation's evidence, determinations, actions and outbox NOT INDEXED and check only the touched obligation (a malformed event or row of another obligation is the whole-store verify's to find).
+    # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row; the keyed cash-file begin (right_rail_financial_cash_file_independent._find) trusts its indexes on the same footing, after this check on the same store file. The pre-COMMIT modes read the touched obligation's evidence, determinations, actions and outbox NOT INDEXED and check only the touched obligation (a malformed event or row of another obligation is the whole-store verify's to find).
     if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         _fail("schema:index-integrity")
     try:
