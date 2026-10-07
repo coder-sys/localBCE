@@ -36,7 +36,7 @@ class Cluster:
 
     def __init__(self, tmp: str, custody: tuple[str, bytes, bytes], shards: int = 2, nonce: bytes = b"") -> None:
         self.dir, self.custody, self.shards, self.nonce, self.lines = Path(tmp), custody, shards, nonce, {}
-        self.genesis = (0, gate.ZERO_DIGEST)
+        self.genesis, self.payer = (0, gate.ZERO_DIGEST), None  # payer: the PayerStore whose stored checkpoints anchor boot
 
     def store(self, k: int) -> Path:
         return self.dir / f"s{k}.sqlite3"
@@ -47,9 +47,18 @@ class Cluster:
 
     def boot(self) -> None:
         """Boot the registry against every shard's newest signed commitment, else the tenant genesis commitment, which
-        the first boot takes from the then-empty registry."""
-        self.nonce = idreg.boot(self.reg, {k: (self.store(k).exists() and producer.newest(self.store(k))) or self.genesis
-                                           for k in range(self.shards)})
+        the first boot takes from the then-empty registry, and each shard's store against the payer's newest stored
+        checkpoint map (B3; empty without a payer; a payer read error is ``None``, payer_unavailable), all read inside
+        boot's transaction.  A refusal, including a read that raises, leaves ``nonce`` as it was (a process still running
+        keeps it), but its fence BOOT row makes every batch on it HOLD registry_not_booted."""
+        def inputs():
+            try:
+                checkpoints = self.payer.newest_stored(fx.TENANT) if self.payer else {}
+            except (sqlite3.Error, OSError):
+                checkpoints = None
+            return ({k: producer.newest(self.store(k)) or self.genesis for k in range(self.shards)},
+                    {k: self.store(k) for k in range(self.shards)}, checkpoints)
+        self.nonce = idreg.boot(self.reg, inputs)
         if self.genesis[0] == 0:
             reg = idreg.IdRegistry(self.reg, boot=self.nonce)
             self.genesis = reg.genesis({})
@@ -87,10 +96,13 @@ def decide_batch(c: Cluster, prod, reg, k: int, payments: dict[int, list[int]], 
         status[i] = " ".join(f[9:11])
         pay.setdefault(p, []).append(f[9])
     return ans, [fx._leaf(p, 0, "ALLOW" if set(o) == {"ALLOW"} else "HOLD", shard=k, member_key=fx.member(p, k))
-                 for p, o in pay.items() if "WAIT" not in o], status
+                 for p, o in pay.items() if "WAIT" not in o] if ans.digest else [], status
 
 
 def run_batch(c: Cluster, k: int, payments: dict[int, list[int]], bad=()) -> dict[int, str]:
+    """A process with no nonce (no boot passed) opens no store or registry: every line HOLDs and nothing is sealed."""
+    if not c.nonce:
+        return decide_batch(c, None, None, k, payments, bad)[2]
     prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
     try:
         ans, leaves, status = decide_batch(c, prod, reg, k, payments, bad)
