@@ -5182,8 +5182,194 @@ theorem localDay_valid (tbl : OffsetTable) (hT : tableOk tbl = true) (s : Nat) (
   apply c11_civ_valid
   omega
 
+/-- Order of `civilOf` keys: an earlier (year, day-of-year) gives a smaller CCYYMMDD. -/
+private theorem c11_keyle (y y' doy doy' : Nat) (h3 : doy ≤ 365) (h3' : doy' ≤ 365)
+    (hlex : y < y' ∨ (y = y' ∧ doy ≤ doy')) :
+    (if (if (5 * doy + 2) / 153 < 10 then (5 * doy + 2) / 153 + 3 else (5 * doy + 2) / 153 - 9) ≤ 2
+        then y + 1 else y) * 10000 +
+      (if (5 * doy + 2) / 153 < 10 then (5 * doy + 2) / 153 + 3 else (5 * doy + 2) / 153 - 9) * 100 +
+      (doy - (153 * ((5 * doy + 2) / 153) + 2) / 5 + 1) ≤
+    (if (if (5 * doy' + 2) / 153 < 10 then (5 * doy' + 2) / 153 + 3 else (5 * doy' + 2) / 153 - 9) ≤ 2
+        then y' + 1 else y') * 10000 +
+      (if (5 * doy' + 2) / 153 < 10 then (5 * doy' + 2) / 153 + 3 else (5 * doy' + 2) / 153 - 9) * 100 +
+      (doy' - (153 * ((5 * doy' + 2) / 153) + 2) / 5 + 1) := by
+  generalize hmp : (5 * doy + 2) / 153 = mp
+  generalize hmp' : (5 * doy' + 2) / 153 = mp'
+  generalize hd : doy - (153 * mp + 2) / 5 + 1 = d
+  generalize hd' : doy' - (153 * mp' + 2) / 5 + 1 = d'
+  obtain ⟨t1, t2, t3, -, -, -⟩ := c10_month doy mp d h3 hmp.symm hd.symm
+  obtain ⟨u1, u2, u3, -, -, -⟩ := c10_month doy' mp' d' h3' hmp'.symm hd'.symm
+  have hsame : y = y' ∧ doy ≤ doy' → mp ≤ mp' ∧ (mp = mp' → d ≤ d') := by
+    rintro ⟨-, hle⟩
+    have hmm : mp ≤ mp' := by
+      rw [← hmp, ← hmp']
+      exact Nat.div_le_div_right (by omega)
+    refine ⟨hmm, fun he => ?_⟩
+    subst he
+    omega
+  clear hmp hmp' hd hd'
+  generalize hm : (if mp < 10 then mp + 3 else mp - 9) = m
+  generalize hm' : (if mp' < 10 then mp' + 3 else mp' - 9) = m'
+  have em : (mp < 10 ∧ m = mp + 3) ∨ (10 ≤ mp ∧ m = mp - 9) := by rw [← hm]; split <;> omega
+  have em' : (mp' < 10 ∧ m' = mp' + 3) ∨ (10 ≤ mp' ∧ m' = mp' - 9) := by rw [← hm']; split <;> omega
+  split <;> split <;> omega
+
+/-- Day count before year of era `y` grows by at least a year per year. -/
+private theorem c11_F (y : Nat) :
+    365 * y + y / 4 - y / 100 + 365 ≤ 365 * (y + 1) + (y + 1) / 4 - (y + 1) / 100 := by
+  omega
+
+private theorem c11_Fmono (a b : Nat) (h : a ≤ b) :
+    365 * a + a / 4 - a / 100 ≤ 365 * b + b / 4 - b / 100 := by
+  induction b with
+  | zero =>
+    have : a = 0 := by omega
+    subst this; exact Nat.le_refl _
+  | succ n ih =>
+    rcases Nat.lt_or_ge a (n + 1) with h' | h'
+    · have := ih (by omega)
+      have := c11_F n
+      omega
+    · have : a = n + 1 := by omega
+      subst this; exact Nat.le_refl _
+
+/-- Within one 400-year era an earlier day of era never has a later year of era. -/
+private theorem c11_yoe_le (doe doe' yoe yoe' : Nat) (h : doe ≤ doe') (hy : yoe ≤ 399)
+    (h1 : 365 * yoe + yoe / 4 - yoe / 100 ≤ doe) (h1' : 365 * yoe' + yoe' / 4 - yoe' / 100 ≤ doe')
+    (h3' : doe' - (365 * yoe' + yoe' / 4 - yoe' / 100) ≤ 365)
+    (h4' : doe' - (365 * yoe' + yoe' / 4 - yoe' / 100) = 365 →
+      (yoe' + 1) % 4 = 0 ∧ ((yoe' + 1) % 100 ≠ 0 ∨ (yoe' + 1) % 400 = 0)) :
+    yoe ≤ yoe' := by
+  apply Nat.le_of_not_lt
+  intro hc
+  have m1 := c11_Fmono (yoe' + 1) yoe hc
+  have m2 := c11_F yoe'
+  have e : doe' - (365 * yoe' + yoe' / 4 - yoe' / 100) = 365 := by omega
+  obtain ⟨l4, l100⟩ := h4' e
+  have m3 : 365 * yoe' + yoe' / 4 - yoe' / 100 + 366 ≤ 365 * (yoe' + 1) + (yoe' + 1) / 4 - (yoe' + 1) / 100 := by
+    omega
+  omega
+
+/-- `civilOf` is monotone in the second count. -/
+private theorem c11_civ_mono (a b : Nat) (h : a ≤ b) : civilOf a ≤ civilOf b := by
+  simp only [civilOf]
+  generalize hz : a / 86400 + 719468 = z
+  generalize hz' : b / 86400 + 719468 = z'
+  generalize he : z / 146097 = era
+  generalize he' : z' / 146097 = era'
+  generalize hdoe : z - era * 146097 = doe
+  generalize hdoe' : z' - era' * 146097 = doe'
+  have hb : doe ≤ 146096 ∧ doe' ≤ 146096 ∧ (era < era' ∨ (era = era' ∧ doe ≤ doe')) := by omega
+  clear hz hz' he he' hdoe hdoe' h
+  obtain ⟨yoe, hy, hy1, hy2, hy3, hy4⟩ := c10_yoe doe hb.1
+  obtain ⟨yoe', hy', hy1', hy2', hy3', hy4'⟩ := c10_yoe doe' hb.2.1
+  rw [hy, hy']
+  clear hy hy'
+  apply c11_keyle _ _ _ _ hy3 hy3'
+  rcases hb.2.2 with hlt | ⟨rfl, hle⟩
+  · left; omega
+  · rcases Nat.lt_or_eq_of_le (c11_yoe_le doe doe' yoe yoe' hle hy1 hy2 hy2' hy3' hy4') with hlt | rfl
+    · left; omega
+    · right; exact ⟨rfl, by omega⟩
+
+private theorem c11_civI (x y : Int) (h : x ≤ y) : civilOf x.toNat ≤ civilOf y.toNat :=
+  c11_civ_mono _ _ (by omega)
+
+/-- The entry in force before every later change start. -/
+private theorem c11_offHead (a : Nat × Int) (l : OffsetTable) (s : Nat) (ha : a.1 ≤ s) (hl : ∀ e ∈ l, s < e.1) :
+    offsetAt (a :: l) s = a.2 := by
+  have hn : l.filter (·.1 ≤ s) = [] := List.filter_eq_nil_iff.mpr fun e he => by
+    have := hl e he
+    simp only [decide_eq_true_eq, Nat.not_le]
+    exact this
+  have hg : (a :: l).filter (·.1 ≤ s) = a :: l.filter (·.1 ≤ s) := List.filter_cons_of_pos (by simpa using ha)
+  unfold offsetAt
+  rw [hg, hn]
+  rfl
+
+/-- From the second entry's start on, the first entry no longer matters. -/
+private theorem c11_offTail (a b : Nat × Int) (rest : OffsetTable) (s : Nat) (hb : b.1 ≤ s) :
+    offsetAt (a :: b :: rest) s = offsetAt (b :: rest) s := by
+  have hf : (b :: rest).filter (·.1 ≤ s) = b :: rest.filter (·.1 ≤ s) :=
+    List.filter_cons_of_pos (by simpa using hb)
+  unfold offsetAt
+  by_cases ha : a.1 ≤ s
+  · have hg : (a :: b :: rest).filter (·.1 ≤ s) = a :: (b :: rest).filter (·.1 ≤ s) :=
+      List.filter_cons_of_pos (by simpa using ha)
+    rw [hg, hf]
+    simp
+  · have hg : (a :: b :: rest).filter (·.1 ≤ s) = (b :: rest).filter (·.1 ≤ s) :=
+      List.filter_cons_of_neg (by simpa using ha)
+    rw [hg]
+
+/-- Consecutive ascending starts give every later start above the head's. -/
+private theorem c11_lt (l : OffsetTable) (b : Nat × Int) (h : ∀ p ∈ (b :: l).zip l, p.1.1 < p.2.1) :
+    ∀ e ∈ l, b.1 < e.1 := by
+  induction l generalizing b with
+  | nil => simp
+  | cons c l ih =>
+    have hbc : b.1 < c.1 := h (b, c) (by simp)
+    have hc := ih c fun p hp => h p (List.mem_cons_of_mem _ hp)
+    intro e he
+    rcases List.mem_cons.mp he with he | he
+    · rw [he]; exact hbc
+    · have := hc e he; omega
+
+/-- Local day is monotone from the head entry's start on, given each change's clause. -/
+private theorem c11_seg (l : OffsetTable) (a : Nat × Int)
+    (hC : ∀ p ∈ (a :: l).zip l, p.1.1 < p.2.1 ∧
+      civilOf ((p.2.1 : Int) - 1 + p.1.2).toNat ≤ civilOf ((p.2.1 : Int) + p.2.2).toNat)
+    (s s' : Nat) (ha : a.1 ≤ s) (h : s ≤ s') :
+    civilOf ((s : Int) + offsetAt (a :: l) s).toNat ≤ civilOf ((s' : Int) + offsetAt (a :: l) s').toNat := by
+  induction l generalizing a s with
+  | nil =>
+    rw [c11_offHead a [] s ha (by simp), c11_offHead a [] s' (by omega) (by simp)]
+    exact c11_civI _ _ (by omega)
+  | cons b rest ih =>
+    have hab := hC (a, b) (by simp)
+    have hC' : ∀ p ∈ (b :: rest).zip rest, p.1.1 < p.2.1 ∧
+        civilOf ((p.2.1 : Int) - 1 + p.1.2).toNat ≤ civilOf ((p.2.1 : Int) + p.2.2).toNat :=
+      fun p hp => hC p (List.mem_cons_of_mem _ hp)
+    have hr := c11_lt rest b fun p hp => (hC' p hp).1
+    by_cases h1 : b.1 ≤ s
+    · rw [c11_offTail a b rest s h1, c11_offTail a b rest s' (by omega)]
+      exact ih b hC' s h1 h
+    · have hl : ∀ e ∈ b :: rest, s < e.1 := by
+        intro e he
+        rcases List.mem_cons.mp he with he | he
+        · rw [he]; omega
+        · have := hr e he; omega
+      by_cases h2 : b.1 ≤ s'
+      · have hb0 : offsetAt (b :: rest) b.1 = b.2 := c11_offHead b rest b.1 (Nat.le_refl _) hr
+        rw [c11_offHead a (b :: rest) s ha hl, c11_offTail a b rest s' h2]
+        calc civilOf ((s : Int) + a.2).toNat ≤ civilOf ((b.1 : Int) - 1 + a.2).toNat := c11_civI _ _ (by omega)
+          _ ≤ civilOf ((b.1 : Int) + b.2).toNat := hab.2
+          _ = civilOf ((b.1 : Int) + offsetAt (b :: rest) b.1).toNat := by rw [hb0]
+          _ ≤ civilOf ((s' : Int) + offsetAt (b :: rest) s').toNat := ih b hC' b.1 (Nat.le_refl _) h2
+      · have hl' : ∀ e ∈ b :: rest, s' < e.1 := by
+          intro e he
+          rcases List.mem_cons.mp he with he | he
+          · rw [he]; omega
+          · have := hr e he; omega
+        rw [c11_offHead a (b :: rest) s ha hl, c11_offHead a (b :: rest) s' (by omega) hl']
+        exact c11_civI _ _ (by omega)
+
 theorem localDay_mono (tbl : OffsetTable) (hT : tableOk tbl = true) (s s' : Nat) (h : s ≤ s') :
-    localDay tbl s ≤ localDay tbl s' := sorry
+    localDay tbl s ≤ localDay tbl s' := by
+  simp only [tableOk, Bool.and_eq_true, List.all_eq_true] at hT
+  obtain ⟨⟨h0, -⟩, hC⟩ := hT
+  have hC' : ∀ p ∈ tbl.zip tbl.tail, p.1.1 < p.2.1 ∧
+      civilOf ((p.2.1 : Int) - 1 + p.1.2).toNat ≤ civilOf ((p.2.1 : Int) + p.2.2).toNat := by
+    rintro ⟨p1, p2⟩ hp
+    have hp' := hC _ hp
+    simp only [decide_eq_true_eq] at hp'
+    exact hp'
+  cases tbl with
+  | nil => simp at h0
+  | cons a l =>
+    have ha : a.1 = 0 := by simpa using h0
+    unfold localDay
+    exact c11_seg l a hC' s s' (by omega) h
 
 /-- Custody signs only within `eps` seconds of its own clock reading `secs`; Lean decides on `localDay tbl secs`. -/
 def eps : Nat := 120
