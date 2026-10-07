@@ -3823,6 +3823,59 @@ private theorem c7_core (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k :
   exact ⟨x, mr, mu, wr, wu, hmr, hmu, gv1, gv2, hA, hxc, hxb, hF, hN, hD, hDec, hPs, hFresh, hW1, hW2, hHd, hxr,
     hxu, hDg, hFree, hHit⟩
 
+/-- A write map is well formed when every hit it extends is a frontier fold from `[]` (as `c3T` gives). -/
+private theorem c7_wok (H : Bytes → Bytes) (hH : HashLen H) (u : Bool) (hs : List Hit) (c0 : Nat) (xs : List Line)
+    (wm : Map) (hP : ∀ q ∈ (xs.flatMap (rowKeys u)).eraseDups, ∀ h, findHit hs u q = some h →
+      ∃ L : List Bytes, h.n = L.length ∧ h.peaks = L.foldl (frontierPush H) [])
+    (h : writes H u hs c0 xs = some wm) : MapOk wm := by
+  unfold writes at h
+  simp only [bind, Option.bind] at h
+  split at h
+  · simp at h
+  rename_i rows hrows
+  dsimp only at h
+  split at h
+  · simp at h
+  rename_i ks hks
+  dsimp only at h
+  by_cases hg : (rows.map (·.1) ++ ks.map (·.1)).Nodup
+  · simp [guard, hg] at h
+    subst h
+    refine ⟨by simpa [List.map_append] using hg, ?_⟩
+    intro e he
+    rcases List.mem_append.mp he with he | he
+    · obtain ⟨⟨x, i⟩, hx, hf⟩ := g1_mapM_mem _ _ _ hrows e he
+      cases hk : keyBytes (rowKey x) with
+      | none => simp [hk] at hf
+      | some kb =>
+        cases hb : be 8 (c0 + i) with
+        | none => simp [hk, hb] at hf
+        | some v =>
+          simp [hk, hb] at hf
+          subst hf
+          exact ⟨hH _, by simp [be_len hb]⟩
+    · obtain ⟨q, hq, hf⟩ := g1_mapM_mem _ _ _ hks e he
+      split at hf
+      · simp at hf
+      dsimp only at hf
+      split at hf
+      · simp at hf
+      rename_i ht hh
+      dsimp only at hf
+      split at hf
+      · simp at hf
+      rename_i es _
+      dsimp only at hf
+      split at hf
+      · simp at hf
+      rename_i v hv
+      simp at hf
+      subst hf
+      obtain ⟨L, hn, hpk⟩ := hP q hq ht hh
+      rw [hn, hpk, ← List.foldl_append, ← List.length_append] at hv
+      exact ⟨hH _, keyVal_len H hH (L ++ es) v hv⟩
+  · simp [guard, hg] at h
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
