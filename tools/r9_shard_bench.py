@@ -88,8 +88,9 @@ def prewrite_mode() -> int:
 
 
 def sender_on() -> bool:
-    """I1 and I3 with RR_SHARD_SENDER=1; the default (lead 2026-10-07: no gain beyond noise) is the earlier path: every message pickled and written by the spine's own thread."""
-    return os.environ.get("RR_SHARD_SENDER", "0") == "1"
+    """I1 and I3, the default (lead 2026-10-07): only a sender thread keeps a silent shard from blocking the spine in a write (a Windows pipe write has no deadline once the pipe is full).
+    RR_SHARD_SENDER=0 is the earlier path, every message pickled and written by the spine's own thread: no write deadline, test and bench only."""
+    return os.environ.get("RR_SHARD_SENDER", "1") == "1"
 
 
 PART_HEAD = struct.Struct("<4sqqqHHHq")  # b"PART", n, index, t_f, then the lengths of pool, pre_head, verdict and blob; the bytes of those four follow, and nothing else
@@ -541,7 +542,7 @@ class Spine:
             self.ack_mark = None
 
     def send(self, k: int, message: tuple) -> None:
-        """The message to shard k, in the order given: encoded here and queued for k's sender thread (I1, I3), or, with RR_SHARD_SENDER=0, pickled and written here, which on
+        """The message to shard k, in the order given: encoded here and queued for k's sender thread (I1, I3), or, with RR_SHARD_SENDER=0 (no write deadline: test and bench only), pickled and written here, which on
         Windows ends only as the worker drains the pipe (a write to a worker whose COMMIT is still owed is counted apart: it is time spent waiting on that commit)."""
         t0, sender, tt, counted = time.perf_counter(), self.senders.get(k), self.tt, message[0] in ("PART", "PREFLUSH", "COMMIT")  # as at 311fdb75 only these are timed
         buf = encode(message) if sender else ForkingPickler.dumps(message)
@@ -986,7 +987,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--files", type=int, default=2)
     ap.add_argument("--prep", type=int, default=1, help="prep-stage processes")
     ap.add_argument("--suffix", default="")
-    ap.add_argument("--sender", choices=["0", "1"], help="I1 and I3 for this run (0 default: the earlier path; 1: a sender thread per shard, PART as header plus blob) (sets RR_SHARD_SENDER)")
+    ap.add_argument("--sender", choices=["0", "1"], help="I1 and I3 for this run (1 default: a sender thread per shard, PART as header plus blob; 0: the earlier path, the spine writes itself, no write deadline, test and bench only) (sets RR_SHARD_SENDER)")
     ap.add_argument("--prewrite", choices=["0", "1", "2", "3"], help="G1 mode for this run (0 off, 1 flush+fsync per part, 2 flush per part, 3 flush once per group) (sets RR_SHARD_PREWRITE; workers inherit it)")
     a = ap.parse_args(argv)
     if a.prewrite:

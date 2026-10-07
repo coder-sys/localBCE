@@ -852,8 +852,8 @@ class ShardBench(unittest.TestCase):
 
     def test_s12_a_silent_shard_ends_snapshot_and_abort_in_a_named_error_at_the_deadline(self) -> None:
         files = sb.corpus(20261006, LINES, 2)
-        # without the sender a write to a worker that does not read blocks (Windows), so the abort's deadline is the sender's case; the snapshot's and the wait for BUILT are both
-        for on, step in ((True, "snapshot"), (True, "abort"), (True, "built"), (False, "snapshot"), (False, "built")):
+        # sender 0 has no write deadline (a write to a worker that does not read blocks on Windows): here the stuck worker has read its PART, so the small ABORT and SNAPSHOT writes complete and the reply deadline is what ends each wait
+        for on, step in ((True, "snapshot"), (True, "abort"), (True, "built"), (False, "snapshot"), (False, "abort"), (False, "built")):
             name = f"s12-stuck-{int(on)}-{step}"
             spine = self.spine_with(stuck_main, name, on)
             timer, fired = self.watchdog(spine)
@@ -930,6 +930,19 @@ class ShardBench(unittest.TestCase):
                     p.terminate()
         self.assertEqual(fired, [])
         self.quiet(spine)
+
+    def test_s12_close_the_sender_thread_is_the_default_so_a_silent_shard_cannot_block_the_spine_in_a_write(self) -> None:
+        with mock.patch.dict(os.environ):
+            os.environ.pop("RR_SHARD_SENDER", None)
+            self.assertTrue(sb.sender_on())
+            spine = sb.Spine(self.tmp / "s12-default", 2, self.template)
+            try:
+                self.assertEqual(sorted(spine.senders), [0, 1])
+            finally:
+                spine.close()
+            os.environ["RR_SHARD_SENDER"] = "0"
+            self.assertFalse(sb.sender_on())  # still there, for tests and the bench: no write deadline
+        self.quiet()
 
     def test_s12_close_a_failure_from_the_spine_commit_on_ends_the_run_and_no_shard_holds_a_group_the_spine_lost(self) -> None:
         files = sb.corpus(20261006, LINES, 4)
