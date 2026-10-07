@@ -115,7 +115,8 @@ class Row:
 
 
 @dataclass(frozen=True)
-class Remittance:
+class Fold:
+    """What S3 reads of a remittance: header, totals and rows, and no claims or adjustments at all."""
     interchange_control: str
     group_control: str
     set_control: str
@@ -134,8 +135,6 @@ class Remittance:
     dates: tuple[Dtm, ...]
     payer: Party
     payee: Party
-    claims: tuple[Claim, ...]
-    adjustments: tuple[PlbAdjustment, ...]
     claims_paid_cents: int | None  # None with balance_unverified
     plb_total_cents: int | None
     forward_balance_cents: int | None
@@ -144,31 +143,9 @@ class Remittance:
 
 
 @dataclass(frozen=True)
-class Fold:
-    """What S3 reads of a remittance: the same header, totals and rows as `Remittance`, and no claims or adjustments at all."""
-    interchange_control: str
-    group_control: str
-    set_control: str
-    interchange_sender: str
-    interchange_receiver: str
-    group_sender: str
-    group_receiver: str
-    handling: str
-    total_cents: int
-    credit_debit: str
-    method: str
-    format: str
-    effective_date: str
-    trace: str
-    trace_origin: str
-    dates: tuple[Dtm, ...]
-    payer: Party
-    payee: Party
-    claims_paid_cents: int | None
-    plb_total_cents: int | None
-    forward_balance_cents: int | None
-    rows: tuple[Row, ...]
-    balance_unverified: bool
+class Remittance(Fold):
+    claims: tuple[Claim, ...]
+    adjustments: tuple[PlbAdjustment, ...]
 
 
 def cents(text: str) -> int:
@@ -252,11 +229,7 @@ def _guard(raw: str, amount: int | None, read, key) -> tuple[object, Part]:
 def _fold(parts: list[Part]) -> tuple[Row, ...]:
     groups: dict[tuple[str, ...], list[Part]] = {}
     for part in parts:
-        group = groups.get(part[0])
-        if group is None:
-            groups[part[0]] = [part]
-        else:
-            group.append(part)
+        groups.setdefault(part[0], []).append(part)
     rows = []
     for k, group in groups.items():
         if len(group) == 1:  # a part's flags are one code or none, so they are already sorted and unique
@@ -410,23 +383,6 @@ def _clp_key(claim: Claim) -> tuple[str, str]:
     return ("REV" if claim.status == "22" else "CLP", claim.payer_control)
 
 
-def _segment_of(tag: str, item) -> Segment:
-    """A lane match back as the Segment the tokenizer would have built from the same text."""
-    return item if type(item) is not tuple else Segment(tag, tuple(((g,),) for g in item))
-
-
-def _tokens(data: bytes):
-    """The tokenizer's checks in its order, with lane segments kept as their match groups. Returns (interchange, tags, items)."""
-    isa, (esep, rsep, csep, term), chunks, tags = _tok._scan(data)
-    lane = _lane(esep, rsep, csep, term)
-    items = []
-    for chunk, tag in zip(chunks, tags):
-        match = lane.get(tag) if lane else None
-        found = match(chunk) if match else None
-        items.append(found.groups() if found else _tok._segment(chunk, esep, rsep, csep))
-    return _tok._envelope(isa, tags, items), tags
-
-
 def fold_835(data: bytes) -> Fold:
     return _read(data, False)
 
@@ -436,7 +392,10 @@ def parse_835(data: bytes) -> Remittance:
 
 
 def _read(data: bytes, keep_claims: bool) -> Remittance | Fold:
-    interchange, tags = _tokens(data)
+    isa, (esep, rsep, csep, term), chunks, tags = _tok._scan(data)  # the tokenizer's checks in its order; lane segments stay as match groups
+    lane = _lane(esep, rsep, csep, term)
+    items = [m.groups() if lane and tag in lane and (m := lane[tag](chunk)) else _tok._segment(chunk, esep, rsep, csep) for chunk, tag in zip(chunks, tags)]
+    interchange = _tok._envelope(isa, tags, items)
     if interchange.isa.value(15) != "T":
         refuse("835:production")
     if len(interchange.groups) != 1 or len(interchange.groups[0].transactions) != 1:
@@ -479,7 +438,7 @@ def _read(data: bytes, keep_claims: bool) -> Remittance | Fold:
                 claims.append(Claim(clp[0], clp[1], int(clp[2].replace(".", "")), amount, int(clp[4].replace(".", "")), clp[5], clp[6], clp[7], clp[8],
                                     tuple(Cas(k[0], k[1], int(k[2].replace(".", "")), "") for k in kids), (), ()))
         else:
-            segments = [_segment_of(t, x) for t, x in zip(tags[at:end], body[at:end])]
+            segments = [Segment(t, tuple(((g,),) for g in x)) if type(x) is tuple else x for t, x in zip(tags[at:end], body[at:end])]  # a lane match back as its Segment
             amount = _paid(segments[0])
             claim, part = _guard("".join(_raw(s, *range(1, len(s.elements) + 1)) for s in segments), amount, lambda: _claim(segments), _clp_key)
             claims += [claim] if claim else []
@@ -513,4 +472,4 @@ def _read(data: bytes, keep_claims: bool) -> Remittance | Fold:
     top = (interchange.isa.value(13), group.gs.value(6), transaction[0].value(2), interchange.isa.value(6).rstrip(" "),
            interchange.isa.value(8).rstrip(" "), group.gs.value(2), group.gs.value(3), *head, dates, payer, payee)
     tail = (claims_paid, plb_total, forward_balance, _fold(parts), unverified)
-    return Remittance(*top, tuple(claims), tuple(adjustments), *tail) if keep_claims else Fold(*top, *tail)
+    return Remittance(*top, *tail, tuple(claims), tuple(adjustments)) if keep_claims else Fold(*top, *tail)

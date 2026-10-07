@@ -179,16 +179,14 @@ def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
     """Envelope checks over the segments in file order. A segment is read only at the envelope tags (ISA GS ST SE GE IEA);
     every other item is carried through whole, so the caller may hand an already-split form of it."""
     groups, gs, sets, txn = [], None, [], None
-    for i in range(len(tags) - 1):
-        tag = tags[i]
+    for tag, seg in zip(tags[:-1], items):
         if tag not in _ENVELOPE:
             if txn is None:
                 refuse("x12:envelope")
-            txn.append(items[i])
+            txn.append(seg)
         elif tag == "ISA":
             refuse("x12:envelope")
         elif tag == "GS":
-            seg = items[i]
             if gs is not None:
                 refuse("x12:envelope")
             seg.blank(9)
@@ -196,7 +194,6 @@ def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
                 refuse("x12:envelope")
             gs, sets = seg, []
         elif tag == "ST":
-            seg = items[i]
             if gs is None or txn is not None:
                 refuse("x12:envelope")
             seg.blank(4)
@@ -204,7 +201,6 @@ def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
                 refuse("x12:version")
             txn = [seg]
         elif tag == "SE":
-            seg = items[i]
             if txn is None:
                 refuse("x12:envelope")
             txn.append(seg)
@@ -212,7 +208,6 @@ def _envelope(isa: Segment, tags: list[str], items: list) -> Interchange:
             sets.append(tuple(txn))
             txn = None
         else:
-            seg = items[i]
             if gs is None or txn is not None:
                 refuse("x12:envelope")
             _match(seg, gs, 2, 6, len(sets))
