@@ -357,6 +357,41 @@ def checkShard (R : Rec) (k : Nat) (sh sh' : ShardDB) : Prop :=
 def appliedOk (pk : Pack) (cx : Ctx) (ss : SS) : Prop :=
   ∀ k < pk.k cx.p, (ss.2 k).applied = (ss.1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)
 
+/-- Spine records are numbered `0, 1, 2, ...` in commit order (`R_0` = GENESIS, next = last + 1). -/
+def chainsOk (ss : SS) : Prop := ss.1.recs.reverse.map (·.n) = List.range' 0 ss.1.recs.length
+
+/-- One event of the merged history: a shard's tip (its head and the spine's `heads(k)`), a spine record with the
+    shards whose next APPLIED entry is its number, ascending, or a shard's APPLIED entries no record claims. -/
+inductive Ev where
+  | tip (k : Nat) (shard spine : Dg)
+  | record (R : Rec) (parts : List Nat)
+  | orphan (k : Nat) (left : List Nat)
+
+/-- Shard `k`'s next pending APPLIED entry is `n`. -/
+def nextIs (pend : Nat → List Nat) (n k : Nat) : Bool := decide ((pend k).head? = some n)
+
+/-- Interleave the spine records (oldest first) with the shards' pending APPLIED lists. -/
+def mergeGo (K : Nat) : List Rec → (Nat → List Nat) → List Ev
+  | [], pend => ((List.range K).filter fun k => !(pend k).isEmpty).map fun k => .orphan k (pend k)
+  | R :: rs, pend => .record R ((List.range K).filter (nextIs pend R.n)) ::
+      mergeGo K rs fun k => if nextIs pend R.n k then (pend k).tail else pend k
+
+/-- `mergeHist`: every shard's tip, then per record (oldest first) the record and its parts, ascending `k`. -/
+def mergeHist (pk : Pack) (cx : Ctx) (ss : SS) : List Ev :=
+  ((List.range (pk.k cx.p)).map fun k => Ev.tip k (ss.2 k).head (ss.1.heads k)) ++
+    mergeGo (pk.k cx.p) ss.1.recs.reverse fun k => (ss.2 k).applied
+
+/-- One pass over a merged history from record number `i`: each tip's heads agree, record numbers run `i, i+1, ...`,
+    each record's parts are exactly the shards below `K` it touches, and no APPLIED entry is left over. -/
+def evOk (K : Nat) : Nat → List Ev → Bool
+  | _, [] => true
+  | i, .tip _ a b :: t => (a == b) && evOk K i t
+  | i, .record R ks :: t =>
+      decide (R.n = i) && decide (ks = (List.range K).filter fun k => decide (k ∈ R.touched)) && evOk K (i + 1) t
+  | _, .orphan _ _ :: _ => false
+
+def historyOk (pk : Pack) (cx : Ctx) (h : List Ev) : Bool := evOk (pk.k cx.p) 0 h
+
 /-! ## Helpers -/
 
 theorem kOf_pos : ∀ (l : List (PartId × Nat)) (p : PartId), (l.all fun x => 0 < x.2) = true → 0 < kOf l p
@@ -1230,13 +1265,125 @@ theorem pool_budget_merge (pk : Pack) (cx : Ctx) (ss : SS) (h : reachOk pk cx ss
   obtain ⟨L, rs, hL, rfl⟩ := h
   exact inv4_run pk cx (initS L) rs (inv_init L) (inv4_init pk cx L hL)
 
-/-- The spine binds the shard chains: heads match and each shard's APPLIED list is its records, in order. -/
+theorem chain_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : chainsOk ss) :
+    chainsOk (stepT pk cx ss inp) := by
+  unfold stepT stepS
+  split
+  · show ((mkRec pk cx ss inp).2 :: ss.1.recs).reverse.map (·.n) = List.range' 0 (ss.1.recs.length + 1)
+    rw [List.reverse_cons, List.map_append, h, List.range'_concat]
+    simp [mkRec]
+  · exact h
+
+theorem chain_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), chainsOk ss → chainsOk (runS pk cx ss rs)
+  | _, [], h => h
+  | ss, r :: rs, h => chain_run pk cx _ rs (chain_step pk cx ss r h)
+
+theorem chain_init (L : Legacy) : chainsOk (initS L) := rfl
+
+theorem evOk_tips (K i : Nat) (a b : Nat → Dg) (t : List Ev) : ∀ l : List Nat,
+    evOk K i ((l.map fun k => Ev.tip k (a k) (b k)) ++ t) = ((l.all fun k => a k == b k) && evOk K i t)
+  | [] => by simp [evOk]
+  | k :: l => by
+    simp only [List.map_cons, List.cons_append, evOk, List.all_cons, evOk_tips K i a b t l, Bool.and_assoc]
+
+theorem filter_eq_at {p q : Nat → Bool} {K k : Nat} (h : (List.range K).filter p = (List.range K).filter q)
+    (hk : k < K) : p k = q k := by
+  have e : k ∈ (List.range K).filter p ↔ k ∈ (List.range K).filter q := by rw [h]
+  simp only [List.mem_filter, List.mem_range, hk, true_and] at e
+  cases hp : p k <;> cases hq : q k <;> simp_all
+
+/-- Under consecutive numbering after `i`, no later record's number is `i`. -/
+theorem filt_ge (rs : List Rec) (i k : Nat) (hr : rs.map (·.n) = List.range' (i + 1) rs.length) :
+    ((rs.filter fun R => decide (k ∈ R.touched)).map (·.n)).head? ≠ some i := by
+  intro h
+  have hm : i ∈ (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := List.mem_of_mem_head? h
+  have hm2 : i ∈ rs.map (·.n) := by
+    obtain ⟨R, hR, he⟩ := List.mem_map.1 hm
+    exact List.mem_map.2 ⟨R, (List.mem_filter.1 hR).1, he⟩
+  rw [hr, List.mem_range'_1] at hm2
+  omega
+
+theorem filt_cons (k : Nat) (R : Rec) (rs : List Rec) :
+    ((R :: rs).filter fun R => decide (k ∈ R.touched)).map (·.n) =
+      if decide (k ∈ R.touched) then R.n :: (rs.filter fun R => decide (k ∈ R.touched)).map (·.n)
+      else (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := by
+  by_cases h : k ∈ R.touched <;> simp [List.filter_cons, h]
+
+/-- One shard at one record: its pending list is the record's number (iff touched) before the rest, exactly when the
+    merge step claims it iff touched and leaves the rest. -/
+theorem step_k (n : Nat) (b : Bool) (l F : List Nat) (hne : F.head? ≠ some n) :
+    l = (if b then n :: F else F) ↔
+      decide (l.head? = some n) = b ∧ (if decide (l.head? = some n) = true then l.tail else l) = F := by
+  cases b
+  · simp only [Bool.false_eq_true, ↓reduceIte]
+    constructor
+    · intro h; subst h; simp [hne]
+    · intro ⟨h1, h2⟩
+      rw [h1] at h2
+      simpa using h2
+  · simp only [↓reduceIte]
+    constructor
+    · intro h; subst h; simp
+    · intro ⟨h1, h2⟩
+      rw [h1] at h2
+      simp only [↓reduceIte] at h2
+      cases l with
+      | nil => simp at h1
+      | cons a t => simp at h1 h2; simp [h1, h2]
+
+/-- The merge pass accepts exactly consecutive numbering from `i` and pending lists equal to each shard's records. -/
+theorem evOk_go (K : Nat) : ∀ (rs : List Rec) (i : Nat) (pend : Nat → List Nat),
+    evOk K i (mergeGo K rs pend) = true ↔
+      rs.map (·.n) = List.range' i rs.length ∧
+        ∀ k < K, pend k = (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := by
+  intro rs
+  induction rs with
+  | nil =>
+    intro i pend
+    have e : ∀ l : List Nat, evOk K i (l.map fun k => Ev.orphan k (pend k)) = true ↔ l = [] := by
+      intro l; cases l <;> simp [evOk]
+    show evOk K i (((List.range K).filter fun k => !(pend k).isEmpty).map fun k => Ev.orphan k (pend k)) = true ↔ _
+    rw [e]
+    simp [List.filter_eq_nil_iff]
+  | cons R rs ih =>
+    intro i pend
+    simp only [mergeGo, evOk, Bool.and_eq_true, decide_eq_true_eq, ih, List.map_cons, List.length_cons,
+      List.range'_succ, List.cons.injEq]
+    constructor
+    · rintro ⟨⟨hn, hks⟩, hr, hp⟩
+      subst hn
+      refine ⟨⟨rfl, hr⟩, fun k hk => ?_⟩
+      rw [filt_cons]
+      exact (step_k R.n _ (pend k) _ (filt_ge rs R.n k hr)).2 ⟨filter_eq_at hks hk, hp k hk⟩
+    · rintro ⟨⟨hn, hr⟩, hp⟩
+      subst hn
+      have hs : ∀ k, k < K → nextIs pend R.n k = decide (k ∈ R.touched) ∧
+          (if nextIs pend R.n k = true then (pend k).tail else pend k) =
+            (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := fun k hk =>
+        (step_k R.n _ (pend k) _ (filt_ge rs R.n k hr)).1 (by have := hp k hk; rwa [filt_cons] at this)
+      exact ⟨⟨rfl, List.filter_congr fun k hk => (hs k (List.mem_range.1 hk)).1⟩, hr, fun k hk => (hs k hk).2⟩
+
+/-- The merged-history check is exactly: records numbered in order, every shard head equals the spine's, and every
+    shard's APPLIED list is the records touching it, in order (both directions, any state). -/
+theorem spine_chain_binds_iff (pk : Pack) (cx : Ctx) (ss : SS) :
+    chainsOk ss ∧ headsOk pk cx ss = true ∧ appliedOk pk cx ss ↔ historyOk pk cx (mergeHist pk cx ss) = true := by
+  unfold historyOk mergeHist
+  rw [evOk_tips (pk.k cx.p) 0 (fun k => (ss.2 k).head) ss.1.heads, Bool.and_eq_true, evOk_go]
+  unfold chainsOk headsOk appliedOk
+  rw [List.length_reverse]
+  exact ⟨fun ⟨a, b, c⟩ => ⟨b, a, c⟩, fun ⟨b, a, c⟩ => ⟨a, b, c⟩⟩
+
+/-- The spine binds the shard chains: on every reachable state heads match, each shard's APPLIED list is its
+    records in order, records are numbered in order, and the merged history passes `historyOk`. -/
 theorem spine_chain_binds (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
-    headsOk pk cx ss = true ∧ appliedOk pk cx ss := by
+    headsOk pk cx ss = true ∧ appliedOk pk cx ss ∧ chainsOk ss ∧ historyOk pk cx (mergeHist pk cx ss) = true := by
   obtain ⟨L, rs, rfl⟩ := h
   have h3 := inv3_run pk cx (initS L) rs (inv3_init L)
-  refine ⟨?_, fun k _ => (h3 k).2⟩
-  simp only [headsOk, List.all_eq_true, beq_iff_eq]
-  exact fun k _ => (h3 k).1
+  have hc := chain_run pk cx (initS L) rs (chain_init L)
+  have hh : headsOk pk cx (runS pk cx (initS L) rs) = true := by
+    simp only [headsOk, List.all_eq_true, beq_iff_eq]
+    exact fun k _ => (h3 k).1
+  have ha : appliedOk pk cx (runS pk cx (initS L) rs) := fun k _ => (h3 k).2
+  exact ⟨hh, ha, hc, (spine_chain_binds_iff pk cx _).1 ⟨hc, hh, ha⟩⟩
 
 end BlindLedger.Financial.ShardSplit
