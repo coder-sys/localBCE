@@ -3,7 +3,7 @@
 Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
 `CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
 govern; a branch's pass does not verify another branch or their combination. Describes trunk
-`237940be`.
+`0c01cb6c`.
 
 ## Product and standing claims
 
@@ -14,11 +14,12 @@ level within that product. Existing payment systems move money. Synthetic, state
 
 ## What landed since d7192b0
 
-Trunk `237940be`: full suite `pfafull2` 914 run, 899 pass, 0 fail, 15 skip. `fe031708`: Lean `sv2t1` 120 jobs,
-semgate `sv2t3` 23/23.
+Trunk `0c01cb6c`: full suite `obfull1` 914 run, 899 pass, 0 fail, 15 skip; Lean `obm1` 120 jobs, semgate
+`obtsg1` 23/23.
 
 - **STATE/v2 custody (Lean, unwired).** Custody state folds one append-only off-machine log; an epoch-keyed TPM
   counter catches rollback; activation once per shard; a payment's ALLOWs share one checkpoint (`never_twice`).
+- **Owner batch fast lane (Lean):** where `ok` passes, the fast fold equals the trace (`fast_eq_trace_of_ok`).
 - **Payer release batch (BATCH-P1, Lean).** A batch answers each item exactly as single-token RELEASE (`releaseBatch_eq`);
   ACCEPT is exactly the payer's twelve checks, earned in the call (`releaseBatch_spec`, `_accept_verified`); a bad item or
   unnamed checkpoint changes no other answer; an already-released item never accepts (`releaseBatch_once`). Axioms pinned.
@@ -57,7 +58,7 @@ semgate `sv2t3` 23/23.
   crosswalk, PLB balances, death after release, upward retro rates).
 - **Gate:** 145-166 lines/s at batch 100, 628-690 at batch 2,000 (target 50,000). Before live use the rules worker
   needs a pinned `RULES_SOURCE` and a memory cap, BLFPAY01 a Lean length check (re-pin). Unbuilt: payer pin before send,
-  prior-digest check, integrated payer gate, durable token (payer release: S7a, above). Failover TLC is a bounded model.
+  prior-digest check, integrated payer gate, durable token. Failover TLC is a bounded model.
 - **Unbuilt:** financial file adapters (MCO reports, X12 820, MMIS extracts), payee-identity consumption, a second synthetic state,
   a Lean seal codec. The NC capture path is synthetic file intake.
 - **Carried, not re-measured:** the staff role header is a claim the server enforces, not a login; no cancel or reduce command for stale corrections; receipt
@@ -68,4 +69,3 @@ semgate `sv2t3` 23/23.
   acknowledge is claim-level and cannot be re-verified by checker or Lean; fixing it needs a versioned ACK record.
 
 Next: STATE/v2 wiring, hold-release S3b+ (slot consumers), cash-line hold ledger.
-A local commit, not a qualified release; no local check activates production.
