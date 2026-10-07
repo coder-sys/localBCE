@@ -46,6 +46,7 @@ Every def is concrete; `sorry` stands only in theorem bodies. No axioms. PQ only
 
 import BlindLedger.Gate.Producer
 import BlindLedger.Gate.Anchor
+import BlindLedger.Gate.AnchorTheorems
 import BlindLedger.Gate.Rules.ShardRun
 
 namespace BlindLedger.Gate.StateV2
@@ -2760,6 +2761,51 @@ def activation (P : Pins) (k : Nat) (p : Permit) : Option (Snapshot Line × Snap
     guard (validDate m = true)
     pure (redate m (canon p.rel, canon p.unr))
 
+/-- Equal set digests: the same pin inputs, or a hash collision among them (`anchored_binding_witness`). -/
+private theorem sv_digest_pins (hH : HashLen sha3) {a b r u : Snapshot Line} {D : Bytes}
+    (h : setsDigest sha3 a b = some D) (h' : setsDigest sha3 r u = some D) :
+    (∃ A B, pinInput "RR/GATE/RELEASED/v1" 5 Line.fields a = some A ∧
+        pinInput "RR/GATE/RELEASED/v1" 5 Line.fields r = some A ∧
+        pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields b = some B ∧
+        pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields u = some B) ∨
+      V1Collision sha3 a b r u := by
+  unfold setsDigest setPins at h h'
+  cases hA : pinInput "RR/GATE/RELEASED/v1" 5 Line.fields a <;>
+    cases hB : pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields b <;>
+    cases hA' : pinInput "RR/GATE/RELEASED/v1" 5 Line.fields r <;>
+    cases hB' : pinInput "RR/GATE/UNRESOLVED/v1" 6 Line.fields u <;>
+    simp [hA, hB, hA', hB'] at h h'
+  rename_i A B A' B'
+  have e : stateDigest sha3 (sha3 A) (sha3 B) = stateDigest sha3 (sha3 A') (sha3 B') := h.trans h'.symm
+  unfold stateDigest at e
+  by_cases hq : domain "STATE" ++ sha3 A ++ sha3 B = domain "STATE" ++ sha3 A' ++ sha3 B'
+  · obtain ⟨hq1, hq2⟩ := List.append_inj' hq (by rw [hH, hH])
+    have hq3 := List.append_cancel_left hq1
+    by_cases hAA : A = A'
+    · by_cases hBB : B = B'
+      · subst hAA hBB; exact Or.inl ⟨A, B, rfl, rfl, rfl, rfl⟩
+      · exact Or.inr ⟨A, B, A', B', hA, hB, hA', hB', B, B', hBB, hq2, Or.inr (Or.inl rfl)⟩
+    · exact Or.inr ⟨A, B, A', B', hA, hB, hA', hB', A, A', hAA, hq3, Or.inl rfl⟩
+  · exact Or.inr ⟨A, B, A', B', hA, hB, hA', hB', _, _, hq, e, Or.inr (Or.inr rfl)⟩
+
+/-- `canon` keeps the count and permutes the entries (stated through `canon.eq_1` so the kernel never unfolds
+`List.mergeSort`). -/
+private theorem sv_canon (s : Snapshot Line) : (canon s).count = s.count ∧ (canon s).entries.Perm s.entries :=
+  have e : ∀ (a c : Nat) (E : List Line), (Snapshot.mk a c E).count = c ∧ (Snapshot.mk a c E).entries = E :=
+    fun _ _ _ => ⟨rfl, rfl⟩
+  ⟨(congrArg Snapshot.count (canon.eq_1 s)).trans (e _ _ _).1,
+    Eq.mpr (congrArg (List.Perm · s.entries) ((congrArg Snapshot.entries (canon.eq_1 s)).trans (e _ _ _).2))
+      (List.mergeSort_perm _ _)⟩
+
+/-- Redating sets that permute `(r, u)` with equal counts keeps `Inv` and the run. -/
+private theorem sv_redate_bind (k m : Nat) {a b r u : Snapshot Line} (ha : a.entries.Perm r.entries)
+    (hb : b.entries.Perm u.entries) (hc : a.count = r.count) (hd : b.count = u.count) (hi : Inv r u)
+    (ts : List Batch) :
+    (redate m (a, b)).1.entries.Perm r.entries ∧ (redate m (a, b)).2.entries.Perm u.entries ∧
+      Inv (redate m (a, b)).1 (redate m (a, b)).2 ∧ runT k (redate m (a, b)) ts = runT k (redate m (r, u)) ts :=
+  ⟨ha, hb, ⟨((ha.append hb).map _).nodup_iff.mpr hi.1, hc.trans (hi.2.1.trans ha.length_eq.symm),
+    hd.trans (hi.2.2.trans hb.length_eq.symm)⟩, runT_perm k (redate m (a, b)) (redate m (r, u)) ha hb ⟨hc, hd, rfl, rfl⟩ ts⟩
+
 /-- RESTATED (review: m pinned): the activation sets are the true v1 sets up to order, dated by the tip's
     createdAt, and every later batch decides and pays as on the true sets; else a v1 collision. -/
 theorem migrate_binds (hH : HashLen sha3) (P : Pins) (k : Nat) (p : Permit) (b cert : Bytes)
@@ -2768,7 +2814,19 @@ theorem migrate_binds (hH : HashLen sha3) (P : Pins) (k : Nat) (p : Permit) (b c
     (hd : setsDigest sha3 r u = some n.checkpoint.stateDigest) (ts : List Batch) :
     (g.1.entries.Perm r.entries ∧ g.2.entries.Perm u.entries ∧ Inv g.1 g.2 ∧
        runT k g ts = runT k (redate (localDay P.tbl n.checkpoint.createdAt) (r, u)) ts) ∨
-      V1Collision sha3 p.rel p.unr r u := sorry
+      V1Collision sha3 p.rel p.unr r u := by
+  obtain ⟨⟨hS, -⟩, rfl⟩ :
+      (setsDigest sha3 p.rel p.unr = some n.checkpoint.stateDigest ∧ invB p.rel p.unr = true) ∧
+        redate (localDay P.tbl n.checkpoint.createdAt) (canon p.rel, canon p.unr) = g := by
+    simp only [activation, hp, hn, Option.bind_eq_bind, Option.bind_some, guard] at hg
+    repeat' split at hg
+    all_goals first | (cases hg; done) | exact ⟨‹_›, Option.some.inj hg⟩
+  rcases sv_digest_pins hH hS hd with ⟨A, B, hA, hA', hB, hB'⟩ | hc
+  · obtain ⟨-, rc, rp⟩ := pinInput_lines hA hA'
+    obtain ⟨-, uc, up⟩ := pinInput_lines hB hB'
+    exact Or.inl (sv_redate_bind k _ ((sv_canon _).2.trans rp) ((sv_canon _).2.trans up)
+      ((sv_canon _).1.trans rc) ((sv_canon _).1.trans uc) hi ts)
+  · exact Or.inr hc
 
 /-! ### 8f. The tenant log and its fold (H1-H3, F1, F2, F4, F8) -/
 
