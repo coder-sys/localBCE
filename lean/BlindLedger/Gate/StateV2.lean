@@ -763,6 +763,105 @@ private theorem build_hash (H : Bytes → Bytes) (hH : HashLen H) : ∀ (f d : N
       show H (nodeIn (hashPf H (build f (d + 1) _)) (hashPf H (build f (d + 1) _))) = _
       rw [ih (d + 1) _ (by omega) hag0 (mapOk_filter hm _), ih (d + 1) _ (by omega) hag1 (mapOk_filter hm _)]
 
+/-- The top hash input of `rootAt` and its shape (fuel 0 only for at most one key). -/
+private theorem c12_top (H : Bytes → Bytes) (f d : Nat) (m : Map) (h : f = 0 → m.length ≤ 1) :
+    ∃ Y ∈ treeInputs H f d m, rootAt H f d m = H Y ∧
+      ((m = [] ∧ Y = emptyIn) ∨ (∃ p v, m = [(p, v)] ∧ Y = leafIn p v) ∨
+       (∃ f' a b t, f = f' + 1 ∧ m = a :: b :: t ∧
+         Y = nodeIn (rootAt H f' (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+               (rootAt H f' (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)))) := by
+  rcases m with _ | ⟨a, _ | ⟨b, t⟩⟩
+  · exact ⟨emptyIn, by simp [treeInputs_nil], rootAt_nil H f d, Or.inl ⟨rfl, rfl⟩⟩
+  · obtain ⟨p, v⟩ := a
+    exact ⟨leafIn p v, by simp [treeInputs_one], rootAt_one H f d p v, Or.inr (Or.inl ⟨p, v, rfl, rfl⟩)⟩
+  · cases f with
+    | zero => simp at h
+    | succ f =>
+      refine ⟨nodeIn (rootAt H f (d + 1) ((a :: b :: t).filter fun e => !bit e.1 d))
+        (rootAt H f (d + 1) ((a :: b :: t).filter fun e => bit e.1 d)), ?_, rootAt_succ2 H f d a b t,
+        Or.inr (Or.inr ⟨f, a, b, t, rfl, rfl, rfl⟩)⟩
+      rw [treeInputs_succ2]; simp
+
+/-- Root binding at fuel `f`: equal roots give the same entries up to order, or a collision. -/
+private def C12P (H : Bytes → Bytes) (f : Nat) : Prop :=
+  ∀ (d : Nat) (m m' : Map), f + d = 513 → Agree d m → Agree d m' → MapOk m → MapOk m' →
+    rootAt H f d m = rootAt H f d m' → m.Perm m' ∨ Collision H (treeInputs H f d m) (treeInputs H f d m')
+
+private theorem c12_step (H : Bytes → Bytes) (hH : HashLen H) (f : Nat)
+    (ih : ∀ f', f = f' + 1 → C12P H f') : C12P H f := by
+  intro d m m' hf ha ha' hm hm' hr
+  obtain ⟨Y, hY, hrY, hs⟩ := c12_top H f d m
+    (fun _ => agree_small (by omega) ha (fun e he => (hm.2 e he).1) hm.1)
+  obtain ⟨Y', hY', hrY', hs'⟩ := c12_top H f d m'
+    (fun _ => agree_small (by omega) ha' (fun e he => (hm'.2 e he).1) hm'.1)
+  by_cases hne : Y = Y'
+  case neg => exact Or.inr ⟨Y, hY, Y', hY', hne, by rw [← hrY, ← hrY', hr]⟩
+  subst hne
+  rcases hs with ⟨rfl, rfl⟩ | ⟨p, v, rfl, rfl⟩ | ⟨f1, a, b, t, rfl, rfl, rfl⟩ <;>
+    rcases hs' with ⟨rfl, he⟩ | ⟨p', v', rfl, he⟩ | ⟨f2, a', b', t', hf2, rfl, he⟩
+  · exact Or.inl (List.Perm.refl _)
+  · exact absurd he (emptyIn_ne_leafIn _ _)
+  · exact absurd he (emptyIn_ne_nodeIn _ _)
+  · exact absurd he.symm (emptyIn_ne_leafIn _ _)
+  · obtain ⟨rfl, rfl⟩ := leafIn_inj (hm.2 (p, v) (by simp)).1 (hm'.2 (p', v') (by simp)).1 he
+    exact Or.inl (List.Perm.refl _)
+  · exact absurd he (leafIn_ne_nodeIn _ _ _ _)
+  · exact absurd he.symm (emptyIn_ne_nodeIn _ _)
+  · exact absurd he.symm (leafIn_ne_nodeIn _ _ _ _)
+  · have hf12 : f2 = f1 := by omega
+    subst f2
+    have p0 : ∀ (L : Map), ∀ e ∈ L, ∀ e' ∈ L, (fun e : Bytes × Bytes => !bit e.1 d) e = true →
+        (fun e : Bytes × Bytes => !bit e.1 d) e' = true → bit e.1 d = bit e'.1 d :=
+      fun _ e _ e' _ h h' => by simp at h h'; rw [h, h']
+    have p1 : ∀ (L : Map), ∀ e ∈ L, ∀ e' ∈ L, (fun e : Bytes × Bytes => bit e.1 d) e = true →
+        (fun e : Bytes × Bytes => bit e.1 d) e' = true → bit e.1 d = bit e'.1 d := by
+      intro _ e _ e' _ h h'
+      have h1 : bit e.1 d = true := h
+      have h2 : bit e'.1 d = true := h'
+      rw [h1, h2]
+    have hl : ∀ (L : Map) (q : Bytes × Bytes → Bool), Agree d L → MapOk L →
+        (∀ e ∈ L, ∀ e' ∈ L, q e = true → q e' = true → bit e.1 d = bit e'.1 d) →
+        (rootAt H f1 (d + 1) (L.filter q)).length = digestBytes := fun L q hL hmL hq =>
+      rootAt_len64 H hH f1 (d + 1) _ (fun _ => agree_small (by omega) (agree_filter hL q hq)
+        (fun e he => ((mapOk_filter hmL q).2 e he).1) (mapOk_filter hmL q).1)
+    unfold nodeIn at he
+    have h1 := (List.cons.inj (List.append_cancel_left he)).2
+    obtain ⟨q1, q2⟩ := List.append_inj h1 ((hl _ _ ha hm (p0 _)).trans (hl _ _ ha' hm' (p0 _)).symm)
+    have r0 := ih f1 rfl (d + 1) _ _ (by omega) (agree_filter ha _ (p0 _)) (agree_filter ha' _ (p0 _))
+      (mapOk_filter hm _) (mapOk_filter hm' _) q1
+    have r1 := ih f1 rfl (d + 1) _ _ (by omega) (agree_filter ha _ (p1 _)) (agree_filter ha' _ (p1 _))
+      (mapOk_filter hm _) (mapOk_filter hm' _) q2
+    rcases r0 with e0 | c0
+    · rcases r1 with e1 | c1
+      · left
+        exact ((List.filter_append_perm (fun e => bit e.1 d) _).symm.trans (e1.append e0)).trans
+          (List.filter_append_perm (fun e => bit e.1 d) _)
+      · right
+        refine col_mono (fun x hx => ?_) (fun x hx => ?_) c1
+        · rw [treeInputs_succ2]; simp [hx]
+        · rw [treeInputs_succ2]; simp [hx]
+    · right
+      refine col_mono (fun x hx => ?_) (fun x hx => ?_) c0
+      · rw [treeInputs_succ2]; simp [hx]
+      · rw [treeInputs_succ2]; simp [hx]
+
+/-- Root binding (c11 plan step 2): two well-formed maps with equal roots hold the same entries up to
+    order, or their tree inputs contain an explicit collision. -/
+private theorem c12_root_bind (H : Bytes → Bytes) (hH : HashLen H) (m m' : Map) (hm : MapOk m)
+    (hm' : MapOk m') (hr : root H m = root H m') :
+    m.Perm m' ∨ Collision H (treeInputs H 513 0 m) (treeInputs H 513 0 m') := by
+  have hall : ∀ f, C12P H f := by
+    intro f
+    induction f with
+    | zero => exact c12_step H hH 0 (fun _ h => absurd h (by omega))
+    | succ f ih =>
+      refine c12_step H hH (f + 1) (fun f' h => ?_)
+      have hf : f' = f := by omega
+      subst f'
+      exact ih
+  have a0 : ∀ L : Map, Agree 0 L := fun _ _ _ _ _ j hj => absurd hj (Nat.not_lt_zero j)
+  exact hall 513 0 m m' rfl (a0 m) (a0 m') hm hm' hr
+
 /-- Upsert result as a list: the writes, then the old rows whose key is not overwritten. -/
 private def upM (m ws : Map) : Map := ws ++ m.filter fun e => !ws.any (·.1 == e.1)
 
