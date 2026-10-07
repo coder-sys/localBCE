@@ -538,6 +538,54 @@ theorem link_step {F : Fast} {M : Ledger} (hR : Rel F M) (c : Call)
   rw [stepFast_eq hA]
   exact h2
 
+/-! ## The initial carried state -/
+
+/-- A `foldr` of inserts answers a lookup with the first row of that key. -/
+theorem get?_foldr_insert {α β} (key : α → String) (val : α → β) (id : String) :
+    ∀ xs : List α, Std.TreeMap.get? (xs.foldr (fun x (m : Std.TreeMap String β) => m.insert (key x) (val x)) ∅) id =
+      (xs.find? fun x => decide (key x = id)).map val
+  | [] => by
+    simp only [List.foldr_nil, Std.TreeMap.get?_eq_getElem?, Std.TreeMap.getElem?_emptyc, List.find?_nil,
+      Option.map_none]
+  | x :: xs => by
+    have ih := get?_foldr_insert key val id xs
+    simp only [List.foldr_cons, Std.TreeMap.get?_eq_getElem?, Std.TreeMap.getElem?_insert,
+      Std.LawfulEqCmp.compare_eq_iff_eq, List.find?_cons] at ih ⊢
+    rw [ih]
+    by_cases h : key x = id <;> simp [h]
+
+theorem contains_foldr_insert {α} (key : α → String) (id : String) :
+    ∀ xs : List α, Std.TreeSet.contains (xs.foldr (fun x (s : Std.TreeSet String) => s.insert (key x)) ∅) id =
+      xs.any fun x => decide (key x = id)
+  | [] => by simp only [List.foldr_nil, Std.TreeSet.contains_emptyc, List.any_nil]
+  | x :: xs => by
+    simp only [List.foldr_cons, Std.TreeSet.contains_insert, List.any_cons, contains_foldr_insert key id xs]
+    by_cases h : key x = id
+    · subst h; simp
+    · have hc : compare (key x) id ≠ .eq := fun e => h (Std.LawfulEqCmp.compare_eq_iff_eq.1 e)
+      cases hx : compare (key x) id <;> simp only [h, decide_false] <;> first | exact absurd hx hc | rfl
+
+theorem map_self {α} (o : Option α) : o.map (fun x => x) = o := by cases o <;> rfl
+
+/-- The carried state built from `L` and its totals answers every read of `L`. -/
+theorem Rel_init {L : Ledger} (hI : Inv L) {t : EvaluatedTotals} (ht : evaluateTotals L.input = some t) :
+    Rel (Fast.init L t) L where
+  env := rfl
+  pays := funext fun pid => by
+    rw [findPayment_eq]; exact (get?_foldr_insert Payment.paymentId (fun p => p) pid _).trans (map_self _)
+  rcpts := funext fun pid => (get?_foldr_insert Receipt.paymentId (fun k => k) pid _).trans (map_self _)
+  origins o := by
+    refine (congrArg (Option.bind · _) (get?_foldr_insert Payment.commonOriginId Payment.paymentId o _)).trans ?_
+    cases hf : L.input.payments.find? (fun x => decide (x.commonOriginId = o)) with
+    | none => rfl
+    | some p => exact findPayment_of_mem hI.1 (List.mem_of_find?_eq_some hf)
+  rows := funext fun id => by
+    rw [findEvidence_eq]; exact (get?_foldr_insert EvidenceRecord.evidenceId (fun e => e) id _).trans (map_self _)
+  conflicts x := contains_foldr_insert FinancialConflict.conflictId x _
+  agree := by
+    rw [summaryOf, summarize, ht, Option.map_some]
+    exact ⟨_, rfl, rfl, rfl, by simp only [Fast.init, List.length_map], rfl, rfl, rfl⟩
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
