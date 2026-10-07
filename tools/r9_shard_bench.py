@@ -385,7 +385,7 @@ def prep_main(conn, tbl: SimpleNamespace, rows: dict) -> None:
 
 GROUP_LINES = 40_000  # one group: the prepared files already queued when the spine is free, up to this many lines (the first file always goes); it never waits for a file
 PREP_AHEAD = 16  # files requested from the prep stage beyond the last one taken
-REPLY_DEADLINE = 120.0  # seconds a wait for a shard's reply to an ABORT or a SNAPSHOT may last before it is a named error, never a hang
+REPLY_DEADLINE = 120.0  # seconds a wait for a shard's reply (BUILT, ACK, an ABORT's or a SNAPSHOT's answer, STATS) may last before it is a named error, never a hang
 ROW_SLICE = 1024  # rows per executemany of the spine's rows; the spine takes the workers' replies between slices
 
 
@@ -503,14 +503,22 @@ class Spine:
         self.keys = dict(self.c.execute("SELECT cell_id, raw_digest FROM cells"))  # the directory's cell id -> raw digest, loaded once and kept equal to main.cells at every commit
         self.workers: dict[int, tuple] = {}
         context = multiprocessing.get_context("spawn")
-        for k in range(k_count):  # every shard is a worker process; the spine process only judges, ships, writes its record and commits
-            path = work / f"shard{k}.sqlite3"
-            shutil.copyfile(template, path)
-            parent, child = context.Pipe()
-            process = context.Process(target=shard_main, args=(child, k, str(path)), daemon=True)
-            process.start()
-            self.workers[k] = (process, parent)
-        self.heads = {k: self.expect(conn, "READY")[0] for k, (_, conn) in self.workers.items()}
+        try:
+            for k in range(k_count):  # every shard is a worker process; the spine process only judges, ships, writes its record and commits
+                path = work / f"shard{k}.sqlite3"
+                shutil.copyfile(template, path)
+                parent, child = context.Pipe()
+                process = context.Process(target=shard_main, args=(child, k, str(path)), daemon=True)
+                process.start()
+                self.workers[k] = (process, parent)
+            self.heads = {k: self.expect(conn, "READY")[0] for k, (_, conn) in self.workers.items()}
+        except BaseException:  # a spine that did not start leaves no shard process, and its databases are closed
+            for process, _ in self.workers.values():
+                process.terminate()
+                process.join()
+            self.ckpt.close()
+            self.c.close()
+            raise
         self.c.executemany("INSERT INTO heads VALUES (?,?)", sorted(self.heads.items()))
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
@@ -838,15 +846,18 @@ class Spine:
         self.heads = {**self.heads, **{k: built[k][0] for k in built}}
         self.prev_head = head
 
-    def snapshot(self, k: int, path: Path) -> None:
-        self.send(k, ("SNAPSHOT", str(path)))
+    def await_reply(self, k: int, what: str) -> None:
         conn, deadline = self.workers[k][1], time.monotonic() + REPLY_DEADLINE
         while not conn.poll(0.5):  # a failed write is not a reply, and a silent shard must not hold the run: look at the senders and the clock now and then
             self.check_senders()
             if time.monotonic() > deadline:
-                self.dead[k] = f"snapshot_timeout:{k}"  # close stops it, never waits for its STATS
+                self.dead[k] = f"{what}_timeout:{k}"  # close stops it, never waits for its STATS
                 raise rb.FinancialIntegrityError(self.dead[k])
-        self.expect(conn, "ACK")
+
+    def snapshot(self, k: int, path: Path) -> None:
+        self.send(k, ("SNAPSHOT", str(path)))
+        self.await_reply(k, "snapshot")
+        self.expect(self.workers[k][1], "ACK")
 
     def close(self) -> list[dict]:
         stats = []
@@ -857,6 +868,7 @@ class Spine:
             self.wait_acks()
             for k, (process, conn) in self.workers.items():
                 self.send(k, ("STOP",))
+                self.await_reply(k, "stats")
                 stats.append(self.expect(conn, "STATS")[0])
                 process.join()
         finally:  # after a failure too: no shard process and no sender thread outlives the spine
@@ -941,6 +953,11 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
                     classes[name] = classes.get(name, 0) + value
             lines += sum(len(files[p.index][0].rows) for p in group)
         spine.wait_acks()
+        wall = time.perf_counter() - t0 - snap_s
+        load_during, spine_cpu = load_pct(sys0, system_cpu()), time.process_time() - cpu0
+        grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
+        spine.feed = None
+        prep_busy, prep_rss, prep_cpu = prep.close()
     except BaseException:  # no process, thread or connection outlives a failed run; the first error is the one raised
         for process in prep.processes if prep else ():
             process.terminate()
@@ -948,11 +965,6 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
         with contextlib.suppress(Exception):
             spine.close()
         raise
-    wall = time.perf_counter() - t0 - snap_s
-    load_during, spine_cpu = load_pct(sys0, system_cpu()), time.process_time() - cpu0
-    grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
-    spine.feed = None
-    prep_busy, prep_rss, prep_cpu = prep.close()
     latency = sorted(spine.latency)
     pct = lambda q: latency[min(len(latency) - 1, int(q * len(latency)))] * 1000  # noqa: E731
     spine.tt["prep_wait"] = recv_s

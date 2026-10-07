@@ -156,6 +156,20 @@ def wrong_ack_and_stuck_main(conn, k: int, db: str) -> None:
     sb.shard_main(conn, k, db)
 
 
+def refuse_ready_main(conn, k: int, db: str) -> None:
+    """Shard 1 answers its start with an error."""
+    if k == 1:
+        conn.send(("ERR", "forced_ready"))
+        return
+    sb.shard_main(conn, k, db)
+
+
+def stats_stuck_main(conn, k: int, db: str) -> None:
+    """A shard worker that never answers its STOP (stuck while it closes)."""
+    sb.Shard.stats = lambda self: time.sleep(3600)
+    sb.shard_main(conn, k, db)
+
+
 def stuck_main(conn, k: int, db: str) -> None:
     """A shard worker that is stuck in the middle of a PART or a SNAPSHOT and answers nothing."""
     sb.Shard.build = sb.Shard.snapshot = lambda self, *args: time.sleep(3600)
@@ -943,6 +957,37 @@ class ShardBench(unittest.TestCase):
             os.environ["RR_SHARD_SENDER"] = "0"
             self.assertFalse(sb.sender_on())  # still there, for tests and the bench: no write deadline
         self.quiet()
+
+    def test_s12_close_a_failure_in_start_or_after_the_loop_leaves_no_shard_alive_and_a_silent_stop_ends_at_the_deadline(self) -> None:
+        files = sb.corpus(20261006, LINES, 2)
+        real = sb.shard_main
+        sb.shard_main = refuse_ready_main  # L3: Spine() itself fails once some shards are running
+        try:
+            with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                sb.Spine(self.tmp / "s12-start", 3, self.template)
+        finally:
+            sb.shard_main = real
+        self.assertIn("shard_refused:forced_ready", str(raised.exception))
+        self.quiet()
+        with mock.patch.object(sb.PrepPool, "close", side_effect=rb.FinancialIntegrityError("forced_prep_close")):  # L3: the run's own end fails, after the loop
+            with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                sb.run_once(2, files, self.template, self.tmp / "s12-run-end", False, 2)
+        self.assertEqual(str(raised.exception), "forced_prep_close")
+        self.quiet()
+        spine = self.spine_with(stats_stuck_main, "s12-stop")  # L2: close() waits for a STATS the shard never sends
+        timer, fired = self.watchdog(spine, 20)
+        try:
+            with mock.patch.object(sb, "REPLY_DEADLINE", 1.0):
+                with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                    spine.close()
+            self.assertTrue(str(raised.exception).startswith("stats_timeout:"), str(raised.exception))
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
 
     def test_s12_close_a_failure_from_the_spine_commit_on_ends_the_run_and_no_shard_holds_a_group_the_spine_lost(self) -> None:
         files = sb.corpus(20261006, LINES, 4)
