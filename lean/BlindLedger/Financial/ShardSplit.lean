@@ -376,7 +376,8 @@ def mergeGo (K : Nat) : List Rec → (Nat → List Nat) → List Ev
   | R :: rs, pend => .record R ((List.range K).filter (nextIs pend R.n)) ::
       mergeGo K rs fun k => if nextIs pend R.n k then (pend k).tail else pend k
 
-/-- `mergeHist`: every shard's tip, then per record (oldest first) the record and its parts, ascending `k`. -/
+/-- `mergeHist`: every shard's tip (`k < K`), then per record, oldest first, the record and the shards `k < K` whose
+    next pending APPLIED entry is its number, ascending `k`; then one orphan per shard with APPLIED entries left. -/
 def mergeHist (pk : Pack) (cx : Ctx) (ss : SS) : List Ev :=
   ((List.range (pk.k cx.p)).map fun k => Ev.tip k (ss.2 k).head (ss.1.heads k)) ++
     mergeGo (pk.k cx.p) ss.1.recs.reverse fun k => (ss.2 k).applied
@@ -390,6 +391,8 @@ def evOk (K : Nat) : Nat → List Ev → Bool
       decide (R.n = i) && decide (ks = (List.range K).filter fun k => decide (k ∈ R.touched)) && evOk K (i + 1) t
   | _, .orphan _ _ :: _ => false
 
+/-- `evOk` from record number 0 with `K = pk.k cx.p`: tips agree, records run `0, 1, ...`, each record's parts are
+    exactly the shards below `K` it touches, and there is no orphan. -/
 def historyOk (pk : Pack) (cx : Ctx) (h : List Ev) : Bool := evOk (pk.k cx.p) 0 h
 
 /-! ## Helpers -/
@@ -1020,7 +1023,8 @@ theorem merge_congr (pk : Pack) (cx : Ctx) (sp : SpineDB) (sh sh2 : Nat → Shar
 theorem k_pos (pk : Pack) (p : PartId) (h : packOk pk = true) : 0 < pk.k p := by
   exact kOf_pos pk.ks p h
 
-/-- K = 0 is refused: with no shard for partition `p`, neither the sharded nor the single store admits a row. -/
+/-- K = 0 is refused: when `pk.k cx.p = 0`, the sharded step refuses every input on every state (`none`) and the
+    single step leaves every store unchanged. -/
 theorem k_zero_refused (pk : Pack) (cx : Ctx) (hK : pk.k cx.p = 0) (ss : SS) (s : Single) (inp : Input) :
     stepS pk cx ss inp = none ∧ stepSingle pk cx s inp = s := by
   have hp : packOk pk = false := by
@@ -1037,7 +1041,7 @@ theorem route_total (pk : Pack) (cx : Ctx) (r : Row) (h : packOk pk = true) :
   · exact .inr ⟨_, Nat.mod_lt _ (k_pos pk cx.p h), rfl⟩
   · exact .inl rfl
 
-/-- K is fixed once the partition has history. -/
+/-- Over the given `hist` list: a pack update `packUpdateOk hist` accepts keeps `K_p` for every `p` in `hist`. -/
 theorem shard_stable (hist : List PartId) (pk pk' : Pack) (p : PartId) (hu : packUpdateOk hist pk pk' = true)
     (hp : p ∈ hist) : pk'.k p = pk.k p := by
   simp only [packUpdateOk, Bool.and_eq_true, List.all_eq_true, beq_iff_eq] at hu
@@ -1071,8 +1075,8 @@ theorem judgeRows_known (pk : Pack) (cx : Ctx) (c : Cell) (x : DirRow) :
       simp only [judgeRow, hc, hd]
     | inr h => exact judgeRows_known pk cx c x _ rs a (judgeRows_keep pk cx d [r] c x hd) h hc
 
-/-- Migration gate: a legacy cell resent at any point after migration is DUPLICATE when its raw digest equals the
-    legacy one and CONFLICT otherwise; it is never ADMITTED. -/
+/-- Migration gate: judging any input on any state run from the migrated store, every row naming a legacy cell is
+    DUPLICATE when its raw digest equals the legacy one and CONFLICT otherwise; it is never ADMITTED. -/
 theorem legacy_resend (pk : Pack) (cx : Ctx) (L : Legacy) (rs : List Input) (inp : Input) {c : Cell} {raw : Dg}
     {g : Int} (hc : L.cells c = some (raw, g)) {a : Row × Verdict}
     (ha : a ∈ (judge pk cx (runS pk cx (initS L) rs).1.view inp).out) (hac : a.1.cell = c) :
@@ -1151,7 +1155,8 @@ theorem recover_idem (sp : SpineDB) (k : Nat) (sh : ShardDB) :
       rw [if_pos hc, if_neg hn]
     · simp only [if_neg hc]
 
-/-- The spine judge is the single-store judge: the spine alone is the dedup authority. -/
+/-- Definitional: `judgeSingle` is the spine judge, so judging on the spine view equals judging on the merged view
+    (`rfl`).  Dedup authority is the model's choice, not proved here. -/
 theorem dir_dedup (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) :
     judge pk cx ss.1.view inp = judgeSingle pk cx (merge pk cx ss) inp := by
   rfl
@@ -1171,7 +1176,9 @@ theorem no_cross_shard_duplicate (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk
   subst hxy
   exact Home.shard.inj (hh.symm.trans hh')
 
-/-- Not weakened: whatever the spine and shard checks accept, the single-store check accepts. -/
+/-- Sound direction only: on a reachable state, a spine state and shard states that `checkSpine` (against the honest
+    `mkRec`, not a stored record) and `checkShard` accept merge to a state `checkSingle` accepts.  The converse is
+    false because `merge` forgets heads, APPLIED and charge placement. -/
 theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp : Input) (sp' : SpineDB)
     (sh' : Nat → ShardDB) (hsp : checkSpine pk cx ss inp sp')
     (hsh : ∀ k < pk.k cx.p, checkShard (mkRec pk cx ss inp).2 k (ss.2 k) (sh' k)) :
@@ -1184,13 +1191,14 @@ theorem check_split (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) (inp
   · rw [merge_congr pk cx _ sh' _ fun k hk => hsh k (List.mem_range.1 hk)]
     exact merge_commit pk cx ss inp hI
 
-/-- The single step factors as judge, Lean, finalize. -/
+/-- Definitional unfolding: when the judgment is ok, `stepSingle` is `applySingle` with Lean's verdicts. -/
 theorem step_factor (pk : Pack) (cx : Ctx) (s : Single) (inp : Input) (h : (judgeSingle pk cx s inp).ok = true) :
     stepSingle pk cx s inp =
       applySingle pk cx s (judgeSingle pk cx s inp) (verdicts cx (judgeSingle pk cx s inp)) := by
   simp [stepSingle, h]
 
-/-- Sharded = single: the merged sharded run is the single-store run. -/
+/-- From a migrated store with `openOk`, the merged sharded run equals the single-store run.  The reference runs
+    Lean per shard part (`verdicts`), not on the whole file; receipts are not compared. -/
 theorem shard_run_eq (pk : Pack) (cx : Ctx) (L : Legacy) (hL : openOk pk cx L) (rs : List Input) :
     merge pk cx (runS pk cx (initS L) rs) = runSingle pk cx (initSingle L) rs := by
   have h0 : merge pk cx (initS L) = initSingle L := view_eq rfl rfl rfl rfl rfl rfl
@@ -1228,7 +1236,8 @@ theorem crash_before_spine (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss
     unfold replay
     rw [if_neg hn]
 
-/-- The reader cut is real: a crash state whose shard heads all equal the spine's is the committed step. -/
+/-- One `afterSpine` step: a crash after the spine COMMIT of an accepted step, with only shards `C ⊆ touched`
+    committed, whose shard heads below `K` all equal the spine's, is the committed step. -/
 theorem reader_cut (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C : List Nat)
     (h : stepS pk cx ss inp = some ss') (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched)
     (hh : ∀ k < pk.k cx.p, ((afterSpine pk cx ss inp C).2 k).head = (afterSpine pk cx ss inp C).1.heads k) :
@@ -1282,7 +1291,7 @@ theorem chain_init (L : Legacy) : chainsOk (initS L) := rfl
 
 theorem evOk_tips (K i : Nat) (a b : Nat → Dg) (t : List Ev) : ∀ l : List Nat,
     evOk K i ((l.map fun k => Ev.tip k (a k) (b k)) ++ t) = ((l.all fun k => a k == b k) && evOk K i t)
-  | [] => by simp [evOk]
+  | [] => by simp
   | k :: l => by
     simp only [List.map_cons, List.cons_append, evOk, List.all_cons, evOk_tips K i a b t l, Bool.and_assoc]
 
@@ -1307,7 +1316,7 @@ theorem filt_cons (k : Nat) (R : Rec) (rs : List Rec) :
     ((R :: rs).filter fun R => decide (k ∈ R.touched)).map (·.n) =
       if decide (k ∈ R.touched) then R.n :: (rs.filter fun R => decide (k ∈ R.touched)).map (·.n)
       else (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := by
-  by_cases h : k ∈ R.touched <;> simp [List.filter_cons, h]
+  by_cases h : k ∈ R.touched <;> simp [h]
 
 /-- One shard at one record: its pending list is the record's number (iff touched) before the rest, exactly when the
     merge step claims it iff touched and leaves the rest. -/
@@ -1363,8 +1372,9 @@ theorem evOk_go (K : Nat) : ∀ (rs : List Rec) (i : Nat) (pend : Nat → List N
         (step_k R.n _ (pend k) _ (filt_ge rs R.n k hr)).1 (by have := hp k hk; rwa [filt_cons] at this)
       exact ⟨⟨rfl, List.filter_congr fun k hk => (hs k (List.mem_range.1 hk)).1⟩, hr, fun k hk => (hs k hk).2⟩
 
-/-- The merged-history check is exactly: records numbered in order, every shard head equals the spine's, and every
-    shard's APPLIED list is the records touching it, in order (both directions, any state). -/
+/-- On any state: `historyOk (mergeHist ss)` holds iff records are numbered `0 .. n-1` oldest first (`chainsOk`),
+    every shard `k < K` has head = the spine's `heads k` (`headsOk`), and every shard `k < K` has APPLIED = the
+    numbers of the records touching it, oldest first (`appliedOk`).  Shard hash chains stay abstract (`cx.hs`). -/
 theorem spine_chain_binds_iff (pk : Pack) (cx : Ctx) (ss : SS) :
     chainsOk ss ∧ headsOk pk cx ss = true ∧ appliedOk pk cx ss ↔ historyOk pk cx (mergeHist pk cx ss) = true := by
   unfold historyOk mergeHist
