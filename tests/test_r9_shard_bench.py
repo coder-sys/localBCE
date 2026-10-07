@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import pickle
 import shutil
 import sqlite3
@@ -10,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from tools import r9_bench as rb
 from tools import r9_shard_bench as sb
@@ -347,6 +349,76 @@ class ShardBench(unittest.TestCase):
         spine.heads[0] = real[0]
         self.assertTrue(all(isinstance(r, dict) for r in spine.ingest_group([(0, *files[0], prepared[0])])))  # the shards are intact: the right head goes in
         spine.close()
+
+    def prewrite_run(self, on: bool, k: int, files: list, name: str) -> dict:
+        """run_once with G1 on or off (spawned workers inherit the environment of the moment); the stores are returned as table digests, snapshot.sqlite3 excluded (its content depends on group timing)."""
+        with mock.patch.dict(os.environ):
+            os.environ.pop("RR_SHARD_PREWRITE", None)
+            if on:
+                os.environ["RR_SHARD_PREWRITE"] = "1"
+            work = self.tmp / name
+            r = sb.run_once(k, files, self.template, work, True, 2)
+        r["tables"] = {p.name: digests(p) for p in sorted(work.glob("*.sqlite3")) if p.name != "snapshot.sqlite3"}
+        r["pinned"] = [pinned(work / "spine.sqlite3", False)] + [pinned(work / f"shard{i}.sqlite3", True) for i in range(k)]
+        return r
+
+    def test_g1_prewrite_on_stores_exactly_what_off_stores_at_k1_8_12(self) -> None:
+        for name, seed in (("FL", 20261006), ("DE", 20261007)):
+            files, classes = sb.corpus(seed, LINES, 12), []
+            for k in (1, 8, 12):
+                off, on = self.prewrite_run(False, k, files, f"g1-{name}-{k}-off"), self.prewrite_run(True, k, files, f"g1-{name}-{k}-on")
+                label = f"{name} K={k}"
+                self.assertEqual(off["classes"], on["classes"], label)
+                self.assertTrue(off["replay"]["identical"] and on["replay"]["identical"], label)
+                self.assertEqual(off["tables"], on["tables"], label)  # every table of the spine and of each shard, records and heads included
+                self.assertEqual(off["pinned"], on["pinned"], label)
+                self.assertEqual((off["prewrite"]["shards"]["count"], off["prewrite"]["spine"]["count"]), (0, 0), label)  # off does nothing
+                self.assertGreater(on["prewrite"]["shards"]["count"] + on["prewrite"]["spine"]["count"], 0, label)  # on really flushed
+                classes.append(on["classes"])
+            self.assertTrue(all(c == classes[0] for c in classes), name)  # the same per-class counts at every K
+
+    def test_g1_crash_with_pushed_pages_leaves_the_committed_state_and_commit_applies_the_part(self) -> None:
+        record, deposit = self.files[0]
+        work = self.tmp / "g1-crash"
+        work.mkdir()
+        db = work / "shard0.sqlite3"
+        shutil.copyfile(self.template, db)
+        tbl = sb.tables(self.template, 1)
+        p = sb.prepare(tbl, 0, record.rows, 1)
+        shard = sb.Shard(0, db)
+        shard.pre = sb.Prewriter(shard.c, db)
+        before = digests(db)  # the committed state before the part
+        shard.build(1, 0, f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}", sb.T0_MS, p.blobs[0], shard.w.head, p.verdicts[0])
+        wal = Path(str(db) + "-wal")
+        wal_before = wal.stat().st_size
+        shard.prewrite(SimpleNamespace(poll=lambda timeout: False))
+        self.assertEqual(shard.pre.count, 1)
+        self.assertGreater(wal.stat().st_size, wal_before)  # the pages are in the WAL: the image below is not vacuous
+        crash = work / "crash"
+        crash.mkdir()
+        shutil.copyfile(db, crash / "shard0.sqlite3")
+        shutil.copyfile(wal, crash / "shard0.sqlite3-wal")  # the process dies here: the transaction is open, its frames are in the WAL, no commit marker
+        self.assertEqual(digests(crash / "shard0.sqlite3"), before)  # recovery ignores the frames
+        shard.commit()
+        done = work / "done"
+        done.mkdir()
+        shutil.copyfile(db, done / "shard0.sqlite3")
+        shutil.copyfile(wal, done / "shard0.sqlite3-wal")
+        after = digests(done / "shard0.sqlite3")
+        self.assertNotEqual(after, before)
+        with sqlite3.connect(str(done / "shard0.sqlite3")) as c:
+            self.assertEqual(c.execute("SELECT n FROM applied").fetchall(), [(1,)])
+        self.assertEqual(after, digests(db))  # the committed image is the live store
+        shard.stats()
+
+    def test_g1_prewriter_refuses_a_connection_that_is_not_the_named_database(self) -> None:
+        other = self.tmp / "g1-other.sqlite3"
+        c = sqlite3.connect(str(other))
+        try:
+            with self.assertRaises(RuntimeError):
+                sb.Prewriter(c, self.tmp / "g1-not-it.sqlite3")
+        finally:
+            c.close()
 
 
 if __name__ == "__main__":

@@ -73,6 +73,45 @@ def load_pct(a: tuple[int, int], b: tuple[int, int]) -> float:
     return 100.0 * (b[0] - a[0]) / max(1, b[1] - a[1])
 
 
+def prewrite_on() -> bool:
+    return os.environ.get("RR_SHARD_PREWRITE") == "1"  # read at call time: spawned workers inherit the environment
+
+
+class Prewriter:
+    """G1: while a transaction is open and the process would otherwise wait, push its dirty pages into the WAL and fsync the WAL, so the COMMIT writes and syncs
+    only what changed since. sqlite3_db_cacheflush appends uncommitted frames, which recovery ignores (they carry no commit marker): stored bytes and formats are unchanged."""
+
+    def __init__(self, conn: sqlite3.Connection, db: Path) -> None:
+        self.lib = ctypes.CDLL(os.path.join(sys.base_prefix, "DLLs", "sqlite3.dll"))
+        self.lib.sqlite3_db_cacheflush.argtypes = [ctypes.c_void_p]
+        self.lib.sqlite3_db_filename.argtypes, self.lib.sqlite3_db_filename.restype = [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_char_p
+        self.handle = ctypes.c_void_p.from_address(id(conn) + 16).value  # pysqlite_Connection: PyObject_HEAD, then sqlite3 *db (CPython 3.11); verified below
+        name = self.lib.sqlite3_db_filename(self.handle, b"main") if self.handle else None
+        if name is None or os.path.normcase(os.path.abspath(name.decode())) != os.path.normcase(os.path.abspath(db)):
+            raise RuntimeError("prewrite: the connection handle does not name the database")
+        self.wal, self.count, self.flush_s, self.fsync_s = str(db) + "-wal", 0, 0.0, 0.0
+
+    def flush(self) -> None:
+        t0 = time.perf_counter()
+        rc = self.lib.sqlite3_db_cacheflush(self.handle)
+        t1 = time.perf_counter()
+        if rc:
+            raise RuntimeError(f"prewrite: sqlite3_db_cacheflush returned {rc}")
+        fd = os.open(self.wal, os.O_RDWR | os.O_BINARY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        self.count, self.flush_s, self.fsync_s = self.count + 1, self.flush_s + t1 - t0, self.fsync_s + time.perf_counter() - t1
+
+    def stats(self) -> dict:
+        return {"count": self.count, "flush_s": self.flush_s, "fsync_s": self.fsync_s}
+
+
+def pre_stats(p: Prewriter | None) -> dict:
+    return p.stats() if p else {"count": 0, "flush_s": 0.0, "fsync_s": 0.0}
+
+
 class Shard:
     """One item shard: an owner database plus the bench store. build() is steps 4a-4c (apply the part, digest, check); commit() is step 7."""
 
@@ -84,6 +123,13 @@ class Shard:
         self.commit_log: list[tuple[float, int]] = []  # per group: COMMIT ms and bytes the process wrote during it (the checkpointer thread's writes are in it too)
         self.lines = 0
         self.undo = None
+        self.pre, self.pre_mark = None, 0  # G1 prewriter (set by shard_main when on); lines of the open transaction already pushed to the WAL
+
+    def prewrite(self, conn) -> None:
+        """After BUILT is sent, with nothing queued for this worker: push the open transaction's new pages to the WAL."""
+        if self.pre and self.undo and self.undo[3] > self.pre_mark and not conn.poll(0):
+            self.pre.flush()
+            self.pre_mark = self.undo[3]
 
     def build(self, n: int, index: int, pool: str, t_f: int, blob: bytes, pre_head: bytes, verdict: bytes) -> tuple[bytes, bytes]:
         t0, w = time.perf_counter(), self.w
@@ -96,7 +142,7 @@ class Shard:
         if not w.c.in_transaction:  # the first part of a group opens the shard's one transaction; the group is only a commit boundary
             w.ckpt.before_begin()
             w.c.execute("BEGIN IMMEDIATE")
-            self.undo = [seq0, pre_head, began, 0]
+            self.undo, self.pre_mark = [seq0, pre_head, began, 0], 0
         w.c.execute("SAVEPOINT part")  # a refused part leaves no trace, the parts before it in the group stay until the spine aborts the group
         try:
             t = {name: [] for name in ("cell_rows", "resolutions", "charges", "evidence", "payments", "financial_events", "commands")}
@@ -175,11 +221,12 @@ class Shard:
         self.w.ckpt.close()
         self.c.close()
         return {"k": self.k, "busy_s": self.busy, "check_s": self.check_s, "commit_s": self.commit_s, "idle_s": self.idle_s, "commit_log": self.commit_log, "cpu_s": time.process_time(),
-                "lines": self.lines, "peak_rss": rb.peak_rss_bytes(), "io_write": io_write_bytes()}
+                "lines": self.lines, "peak_rss": rb.peak_rss_bytes(), "io_write": io_write_bytes(), "prewrite": pre_stats(self.pre)}
 
 
 def shard_main(conn, k: int, db: str) -> None:
     shard = Shard(k, Path(db))
+    shard.pre = Prewriter(shard.c, Path(db)) if prewrite_on() else None
     conn.send(("READY", shard.w.head))
     while True:
         i0 = time.perf_counter()
@@ -188,6 +235,7 @@ def shard_main(conn, k: int, db: str) -> None:
         try:
             if message[0] == "PART":
                 conn.send(("BUILT", *shard.build(*message[1:])))
+                shard.prewrite(conn)
             elif message[0] == "COMMIT":
                 shard.commit()
                 conn.send(("ACK", shard.w.head))
@@ -375,6 +423,7 @@ class Spine:
             self.c.execute(f"PRAGMA {pragma}")
         self.c.executescript(SPINE_DDL + rb.STORE_DDL)
         self.ckpt = rb.Checkpointer(db)
+        self.pre, self.dirty = Prewriter(self.c, db) if prewrite_on() else None, False  # G1: dirty = the open transaction has pages written since the last prewrite
         self.tbl = tables(template, k_count)
         self.keys = dict(self.c.execute("SELECT cell_id, raw_digest FROM cells"))  # the directory's cell id -> raw digest, loaded once and kept equal to main.cells at every commit
         self.workers: dict[int, tuple] = {}
@@ -444,6 +493,9 @@ class Spine:
             if block:
                 raise rb.FinancialIntegrityError("relay_stalled")
             return
+        if block and self.pre and self.dirty and not connection.wait([*conns, *feed], 0):  # about to wait with nothing ready: the wait is the time to push the spine's pages to the WAL
+            self.pre.flush()
+            self.dirty = False
         ready = connection.wait([*conns, *feed], None if block else 0)
         if block:
             self.tt[bucket] += time.perf_counter() - t0
@@ -560,6 +612,7 @@ class Spine:
             self.g = None
         t0 = time.perf_counter()
         self.c.execute("COMMIT")  # the only commit point
+        self.dirty = False
         self.ckpt.kick()
         self.tt["spine_commit"] += time.perf_counter() - t0
         self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
@@ -585,12 +638,13 @@ class Spine:
                 acks -= conn.recv()[0] == "ACK"
             self.owed.pop(k, None)
         self.c.execute("ROLLBACK")
+        self.dirty = False
         for cid in undo:
             self.keys.pop(cid, None)
         self.heads, self.prev_head = heads0, prev0
 
     def write_rows(self, index, pool, deposit, p: Prepared, tick=lambda: None) -> int:
-        c, base, added = self.c, index * rb.KEY, 0
+        c, base, added, self.dirty = self.c, index * rb.KEY, 0, True
         if c.execute("SELECT 1 FROM deposit_rows WHERE row_key=?", (base,)).fetchone() is None:  # a resent file keeps its deposit row
             c.execute("INSERT INTO deposit_rows VALUES (?,?,?,?)", (base, deposit["entry_id"], pool, deposit["amount_cents"]))
         for data in slices(p.dirs):
@@ -603,7 +657,7 @@ class Spine:
         return added
 
     def write_spine(self, index, pool, n, t_f, p: Prepared, pre, built) -> None:
-        c, dirs, j, source, prev = self.c, p.dirs, p.j, p.source, self.prev_head
+        c, dirs, j, source, prev, self.dirty = self.c, p.dirs, p.j, p.source, self.prev_head, True
         if any(pre[k] != self.heads[k] for k in built):  # the head shipped for k is the post head of k's previous record, in order
             raise rb.FinancialIntegrityError("spine_check")
         body = pickle.dumps({k: (p.blobs[k], p.verdicts[k], pre[k], built[k][1], built[k][0]) for k in p.blobs}, 5)
@@ -725,7 +779,8 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
            "shard_idle_s": [s["idle_s"] for s in shard_stats], "shard_commit_log": [s["commit_log"] for s in shard_stats], "ack_ms_by_shard": spine.ack_ms,
            "store_bytes_per_s": grown / wall, "io_write_bytes_per_s": (spine_io + sum(s["io_write"] for s in stats)) / wall,
            "peak_rss_spine_mb": spine_rss / 2**20, "peak_rss_shards_mb": [s["peak_rss"] / 2**20 for s in shard_stats],
-           "peak_rss_prep_mb": prep_rss / 2**20, "peak_rss_total_mb": (spine_rss + prep_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1 + prep_procs}
+           "peak_rss_prep_mb": prep_rss / 2**20, "peak_rss_total_mb": (spine_rss + prep_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1 + prep_procs,
+           "prewrite": {"on": prewrite_on(), "spine": pre_stats(spine.pre), "shards": {key: sum(s["prewrite"][key] for s in shard_stats) for key in ("count", "flush_s", "fsync_s")}, "shard_counts": [s["prewrite"]["count"] for s in shard_stats]}}
     if with_replay:
         out["replay"] = replay(work / "spine.sqlite3", snap, kk)
     return out
@@ -741,7 +796,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--files", type=int, default=2)
     ap.add_argument("--prep", type=int, default=1, help="prep-stage processes")
     ap.add_argument("--suffix", default="")
+    ap.add_argument("--prewrite", choices=["0", "1"], help="G1 on/off for this run (sets RR_SHARD_PREWRITE; workers inherit it)")
     a = ap.parse_args(argv)
+    if a.prewrite:
+        os.environ["RR_SHARD_PREWRITE"] = a.prewrite
     SCRATCH.mkdir(parents=True, exist_ok=True)
     template = SCRATCH / "template.sqlite3"
     if not template.exists():
@@ -754,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
             for rep in range(a.reps + 1):  # the last rep also snapshots one shard and replays its last record; its setup time is cut from the wall
                 r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}", rep == a.reps, a.prep)}
                 runs.append(r)
-                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us ack p50/p99={r['ack_p50_ms']:.0f}/{r['ack_p99_ms']:.0f} ms groups={len(r['groups'])} load={r['load_before_pct']:.0f}/{r['load_during_pct']:.0f}% rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
+                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us ack p50/p99={r['ack_p50_ms']:.0f}/{r['ack_p99_ms']:.0f} ms groups={len(r['groups'])} load={r['load_before_pct']:.0f}/{r['load_during_pct']:.0f}% rss={r['peak_rss_total_mb']:.0f} MB pre={r['prewrite']['shards']['count']}+{r['prewrite']['spine']['count']}" +(f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
     previous = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
     previous["runs"].extend(runs)
     a.out.write_text(json.dumps(previous, indent=1, default=str), encoding="utf-8")
