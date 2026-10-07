@@ -3410,6 +3410,116 @@ private theorem c4_decisions (H : Bytes → Bytes) (x : Ix) (c₀ : Ctx) (k : Na
   · exact (List.mem_filter.mp ((List.mergeSort_perm _ _).mem_iff.mp h)).1
   · exact (List.mem_filter.mp ((List.mergeSort_perm _ _).mem_iff.mp h)).1
 
+private theorem c4_cnt {H : Bytes → Bytes} {x : Ix} {u : Bool} {s : List Line} {m : Map}
+    (hm : setMap H u s = some m) {q : Key} (h7 : q.head? ≠ some 7)
+    (hF : ∀ kb, keyBytes q = some kb → findHit x.hs u q = some (c3T H u s q (pathOf H kb)))
+    (hN : keyBytes q = none → findHit x.hs u q = none) :
+    x.cnt u q = (s.filter fun y => (rowKeys u y).contains q).length := by
+  unfold Ix.cnt
+  cases hk : keyBytes q with
+  | none =>
+    rw [hN hk]
+    have e : s.filter (fun y => (rowKeys u y).contains q) = [] := List.filter_eq_nil_iff.mpr fun y hy hc => by
+      obtain ⟨kb, -, hkb, -⟩ := (c3_setMap_mem hm).2.2.1 q (List.mem_flatMap.mpr ⟨y, hy, List.contains_iff_mem.mp hc⟩)
+      rw [hk] at hkb; cases hkb
+    rw [e]; rfl
+  | some kb =>
+    rw [hF kb hk]
+    exact c3T_n hm h7 _
+
+private theorem c4_inRel {H : Bytes → Bytes} {x : Ix} {s : List Line} (l : Line) (kb : Bytes)
+    (hk : keyBytes (rowKey l) = some kb)
+    (hF : findHit x.hs false (rowKey l) = some (c3T H false s (rowKey l) (pathOf H kb))) :
+    x.inRel l = s.contains l := by
+  have e : (s.any fun y => rowKey y == rowKey l) = s.contains l := by
+    apply Bool.eq_iff_iff.mpr
+    rw [List.any_eq_true, List.contains_iff_mem]
+    constructor
+    · rintro ⟨y, hy, he⟩
+      have e' : rowKey y = rowKey l := beq_iff_eq.mp he
+      have hyl : y = l := rowKey_inj (by rw [e']; exact hk) hk
+      rw [hyl] at hy
+      exact hy
+    · intro hl; exact ⟨l, hl, beq_self_eq_true _⟩
+  unfold Ix.inRel Ix.cnt
+  rw [hF]
+  have h7 : (rowKey l).head? = some 7 := rfl
+  unfold c3T
+  rw [if_pos h7]
+  dsimp only [Option.map, Option.getD]
+  rw [e]
+  cases s.contains l <;> rfl
+
+private theorem c4_pendQ (x : Ix) (q : Key) (h0 : q.head? ≠ some 0) : x.pendQ q = decide (0 < x.cnt true q) := by
+  unfold Ix.pendQ
+  split
+  · simp at h0
+  · rfl
+
+private theorem c4_capProbes_head {c₀ : Ctx} {m mo : Nat} {q : Key} (h : q ∈ capProbes c₀ m mo) :
+    q.head? ≠ some 7 := by
+  unfold capProbes at h
+  split at h
+  · simp at h; subst h; simp
+  · simp only [List.mem_cons, List.mem_flatMap, List.mem_map] at h
+    rcases h with rfl | ⟨_, _, _, _, rfl⟩ <;> simp
+
+/-- The index reads of `decideIdx` agree with the spec once every probed key's hit is the true hit. -/
+private theorem c4_hyps {H : Bytes → Bytes} (x : Ix) (c₀ : Ctx) (rel unr : Snapshot Line) (hi : Inv rel unr)
+    {mr mu : Map} (hmr : setMap H false rel.entries = some mr) (hmu : setMap H true unr.entries = some mu)
+    (hx : x.c₀ = c₀)
+    (hF : ∀ (u : Bool) (q : Key) kb, keyBytes q = some kb → (∃ l ∈ x.bb, q ∈ keys l ∨ q = rowKey l ∨
+        (u = true ∧ isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) →
+      findHit x.hs u q = some (c3T H u (if u then unr.entries else rel.entries) q (pathOf H kb)))
+    (hN : ∀ u q, keyBytes q = none → findHit x.hs u q = none)
+    (hK : ∀ l ∈ x.bb, (keyBytes (rowKey l)).isSome = true) :
+    (∀ l ∈ x.bb, x.inRel l = rel.entries.contains l) ∧
+    (∀ l ∈ x.bb, ∀ q ∈ keys l, x.seen0Has q = (seen0 (carried c₀ rel unr) x.bb).contains q) ∧
+    (∀ l ∈ x.bb, ∀ q ∈ keys l, x.pendQ q = (pending (carried c₀ rel unr)).contains q) := by
+  have hR : ∀ l ∈ x.bb, x.inRel l = rel.entries.contains l := by
+    intro l hl
+    obtain ⟨kb, hk⟩ := Option.isSome_iff_exists.mp (hK l hl)
+    exact c4_inRel (s := rel.entries) l kb hk (hF false _ kb hk ⟨l, hl, Or.inr (Or.inl rfl)⟩)
+  have h7 : ∀ l (q : Key), q ∈ keys l → q.head? ≠ some 7 := by
+    intro l q hq
+    simp only [keys, List.mem_cons, List.mem_nil_iff, or_false] at hq
+    rcases hq with rfl | rfl | rfl <;> by_cases hc : isCap l = true <;> simp [exactKey, nearKey, idKey, hc]
+  have cntU : ∀ l ∈ x.bb, ∀ q : Key, q.head? ≠ some 7 →
+      (q ∈ keys l ∨ (isCap l = true ∧ q ∈ capProbes c₀ l.member (l.date / 100))) →
+      x.cnt true q = (unr.entries.filter fun y => (rowKeys true y).contains q).length := by
+    intro l hl q hq7 hq
+    refine c4_cnt hmu hq7 (fun kb hk => hF true q kb hk ⟨l, hl, ?_⟩) (hN true q)
+    rcases hq with hq | hq
+    · exact Or.inl hq
+    · exact Or.inr (Or.inr ⟨rfl, hq⟩)
+  refine ⟨hR, ?_, ?_⟩
+  · intro l hl q hq
+    exact c4_seen0Has x c₀ rel unr hi hx hR q
+      (c4_cnt hmr (h7 l q hq) (fun kb hk => hF false q kb hk ⟨l, hl, Or.inl hq⟩) (hN false q))
+  · intro l hl q hq
+    have e14 : (q.head? = some 1 ∨ q.head? = some 2 ∨ q.head? = some 3 ∨ q.head? = some 4) →
+        x.pendQ q = (pending (carried c₀ rel unr)).contains q := fun h => by
+      rw [c4_pendQ x q (by rcases h with h | h | h | h <;> simp [h]), c4_pend c₀ rel unr q h,
+        cntU l hl q (h7 l q hq) (Or.inl hq)]
+    simp only [keys, List.mem_cons, List.mem_nil_iff, or_false] at hq
+    rcases hq with rfl | rfl | rfl
+    · apply e14; by_cases hc : isCap l = true <;> simp [exactKey, hc]
+    · by_cases hc : isCap l = true
+      · have hn : nearKey l = [0, l.member, l.date / 100] := by simp [nearKey, hc]
+        have ec : ∀ q' ∈ capProbes c₀ l.member (l.date / 100),
+            x.cnt true q' = (unr.entries.filter fun y => (rowKeys true y).contains q').length :=
+          fun q' hq' => cntU l hl q' (c4_capProbes_head hq') (Or.inr ⟨hc, hq'⟩)
+        rw [hn, c4_pend_cap c₀ rel unr hi]
+        show ((capProbes x.c₀ _ _).any fun q => decide (0 < x.cnt true q)) = _
+        rw [hx]
+        apply Bool.eq_iff_iff.mpr
+        simp only [List.any_eq_true]
+        constructor
+        · rintro ⟨q', hq', h'⟩; exact ⟨q', hq', by rw [← ec q' hq']; exact h'⟩
+        · rintro ⟨q', hq', h'⟩; exact ⟨q', hq', by rw [ec q' hq']; exact h'⟩
+      · apply e14; simp [nearKey, hc]
+    · apply e14; simp [idKey]
+
 /-- RESTATED: + `o.pays = paysOf`. -/
 theorem decideIdx_refines (H : Bytes → Bytes) (hH : HashLen H) (c₀ : Ctx) (k : Nat) (os : List Owner)
     (b : List Line) (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf H rel unr = some h)
