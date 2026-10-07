@@ -23,4 +23,11 @@ theorem len_applyWrites (i : FinancialInput) (w : Writes)
   simp only [addedBytes]
   omega
 
+/-- REVERSE discharges `len_applyWrites`' `hgrow`: the reversed image only fills the empty
+    reversal evidence slot (`[0]` becomes `1 :: encodeString id`) and swaps one status byte. -/
+theorem oldPay_le_newPay_reversed (i : FinancialInput) (p : Payment) (c : ReverseCommand) (w : Writes)
+    (hw : w.payment = some (reversedImage p c)) (hp : findPayment i.payments p.paymentId = some p)
+    (hr : p.reversalEvidenceId = none) : oldPay i w ≤ newPay w := by
+  simp [oldPay, newPay, hw, reversedImage, hp, encodePayment, encodeOptionString, hr]
+
 end BlindLedger.Financial.Payment
