@@ -649,6 +649,106 @@ theorem Rel_alias {F : Fast} {M : Ledger} {c : Call} {pid e post} (hR : Rel F M)
       by show S.anchorBytes + (encodeEvidence e).length = F.anchorBytes + (encodeEvidence e).length
          rw [hA.anchorBytes]⟩ }
 
+/-! ## Mutated calls -/
+
+/-- A mutated view outcome is `settle` of an `advance` of the view's item state (Fits pattern, ChainLaws). -/
+def Settles (v : PaymentView) (s : ItemState) (o : StepOutcome) : Prop :=
+  ∀ k w s' r, o = .mutated k w s' r → ∃ s0, advance v s w = some s0 ∧ s' = settle s0 r
+
+theorem settles_commit {v s k w} : Settles v s (commitView v s k w) := by
+  intro k' w' s' r h
+  by_cases hs : v.env.context.mode = .SHADOW
+  · simp [commitView, hs] at h
+  by_cases hc : s.anchorBytes + anchorGrowth v w + maxCallTailBytes > maxTotalEncodedBytes
+  · simp [commitView, hs, hc] at h
+  cases hadv : advance v s w with
+  | none => simp [commitView, hs, hc, hadv] at h
+  | some s2 =>
+    cases hev : evaluateState v.env s2 with
+    | none => simp [commitView, hs, hc, hadv, hev] at h
+    | some r2 =>
+      simp only [commitView, hs, hc, hadv, hev, ↓reduceIte] at h
+      cases h
+      exact ⟨s2, hadv, rfl⟩
+theorem settles_refused {v s x} : Settles v s (.refused x) := fun _ _ _ _ h => by cases h
+theorem settles_dup {v s x} : Settles v s (.duplicate x) := fun _ _ _ _ h => by cases h
+theorem settles_cu {v s x} : Settles v s (.conflictUnchanged x) := fun _ _ _ _ h => by cases h
+theorem settles_alias {v s x y} : Settles v s (.alias x y) := fun _ _ _ _ h => by cases h
+
+theorem settles_ite {v s} {c : Prop} [Decidable c] {a b : StepOutcome} (ha : Settles v s a)
+    (hb : Settles v s b) : Settles v s (if c then a else b) := by
+  by_cases h : c
+  · rw [if_pos h]; exact ha
+  · rw [if_neg h]; exact hb
+
+theorem settles_aliasView {v s v' s' p e} : Settles v s (aliasView v' s' p e) := by
+  unfold aliasView
+  refine settles_ite settles_refused (settles_ite settles_refused (settles_ite settles_alias settles_refused))
+
+set_option maxHeartbeats 1000000 in
+theorem settles_reverse {v s c} : Settles v s (viewReverse v s c) := by
+  unfold viewReverse; dsimp only; repeat' split
+  all_goals first | exact settles_refused | exact settles_dup | exact settles_commit | skip
+
+set_option maxHeartbeats 1000000 in
+theorem settles_retry {v s v' c p k} : Settles v s (viewRecordRetry v' c p k) := by
+  unfold viewRecordRetry; dsimp only; repeat' split
+  all_goals first | exact settles_refused | exact settles_dup | skip
+
+set_option maxHeartbeats 1000000 in
+theorem settles_new {v s c} : Settles v s (viewRecordNew v s c) := by
+  unfold viewRecordNew
+  dsimp only
+  refine settles_ite settles_refused (settles_ite settles_cu (settles_ite settles_refused
+    (settles_ite settles_refused ?_)))
+  split
+  · exact settles_refused
+  · refine settles_ite settles_refused ?_
+    split
+    · exact settles_refused
+    · split
+      · exact settles_ite (settles_ite settles_refused (settles_ite settles_aliasView settles_dup))
+          (settles_ite settles_cu (settles_ite settles_refused settles_commit))
+      · split
+        · exact settles_refused
+        · exact settles_commit
+
+theorem settles_step {v : PaymentView} : Settles v (absorb v.state v.pending) (stepView v) := by
+  unfold stepView
+  dsimp only
+  split
+  · refine settles_ite settles_refused (settles_ite settles_refused ?_)
+    split
+    · exact settles_retry
+    · exact settles_new
+  · exact settles_reverse
+
+/-- The carried scalars after a mutated call agree with `settle` of the `advance` it stored. -/
+theorem advance_agree {F : Fast} {v : FView} {S s0 : ItemState} {w : Writes} (k : Mutation) (b a : Nat)
+    (hA : Agree F S) (h : advance (v.toView S) S w = some s0) (r : FinancialResult) :
+    Agree (F.post v (.mutated k w b a)) (settle s0 r) := by
+  obtain ⟨hc, hl, he, hcf, hrq, hab⟩ := hA
+  obtain ⟨env, byId, byOrigin, evid, cv, er, cmd⟩ := v
+  obtain ⟨we, wp, wc, wk⟩ := w
+  have hev : ((we.map fun e => insertBy (fun x => x) e.evidenceId S.evidenceIds).getD S.evidenceIds).length =
+      F.evidence + (if we.isSome then 1 else 0) := by
+    cases we <;> simp [length_insertBy, he]
+  have hpay : ∀ (x : Option String) (f : Nat → Nat),
+      S.requests.map (fun q => if x = some q.actionId then { q with paidCents := f q.paidCents } else q) =
+        (if x.isNone then F.requests else
+          F.requests.map fun q => if x = some q.actionId then { q with paidCents := f q.paidCents } else q) := by
+    intro x f; rw [hrq]; cases x <;> simp
+  rcases wp with _ | p <;> rcases wk with _ | kk <;> rcases byId with _ | ⟨q, k'⟩ <;>
+    rcases wc with _ | x <;>
+    simp only [advance, FView.toView, Option.isSome_none, Option.isSome_some, Bool.false_eq_true,
+      ↓reduceIte] at h <;>
+    (repeat' split at h) <;> cases h <;>
+    exact ⟨by first | exact hc | exact congrArg (· + _) hc | exact congrArg (· - _) hc, hl, hev,
+      by first | exact congrArg (· + 1) hcf | exact congrArg (· + 0) hcf | exact hcf,
+      by first | exact hrq | exact hpay kk.paysActionId (· + p.amountCents)
+               | exact hpay k'.paysActionId (· - q.amountCents),
+      congrArg (· + _) hab⟩
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
