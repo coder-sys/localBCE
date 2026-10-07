@@ -36,6 +36,38 @@ def directory(db: Path) -> dict[bytes, bytes]:
 JUDGE_HASHES = {"FL": ["5ccf079b6a787f7d", "3ba8899fc760fd46", "fdf5e4726a800644"], "DE": ["a02c8b38ef59e725", "3ba8899fc760fd46", "600340a668f07ecc"]}
 
 
+SHARD_PINNED_TABLES = ("applied", "cell_rows", "charges", "commands", "evidence", "payments", "resolutions")
+
+
+def pinned(db: Path, shard: bool) -> str:
+    """sha256[:16] of the tables that do not depend on the owner template (its wall-clock stamps move every head): a shard's input-derived tables; the spine's
+    tables but heads, and its records without build_id (which hashes the bench source), parts and head."""
+    with sqlite3.connect(str(db)) as c:
+        names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        names = [n for n in names if (n in SHARD_PINNED_TABLES if shard else n != "heads")]
+        out = {n: hashlib.sha256(repr(c.execute(f"SELECT {'n,file_index,pool,t_f,source_sha,j' if n == 'records' else '*'} FROM {n} ORDER BY 1").fetchall()).encode()).hexdigest()[:16] for n in names}
+    return hashlib.sha256(repr(sorted(out.items())).encode()).hexdigest()[:16]
+
+
+# spine, shard0..shard3 of 12 files x 300 lines at K=4, recorded from the per-file code at HEAD 83a79331 (script scratch-spine3/pin_tables.py), before any group existed
+GROUP_PINNED = {"FL": ["a3ad9c4cbccc3ff1", "8d7e5b0aa7a55d05", "59802cdeb36c4859", "447c83213a0e82ec", "ed63467592ab5a8c"],
+                "DE": ["ccc7eb40344c7153", "f8069f7e6d4c431f", "85a3986dab841d57", "8e06fdff80af5e0a", "46842524f7b28356"]}
+FAULT_FILE = 2  # the third file: its shard check fails (test only)
+
+
+def faulty_main(conn, k: int, db: str) -> None:
+    """A shard worker whose check refuses file FAULT_FILE; spawned workers do not see the parent's patches, so the patch is made here, in the child."""
+    real = sb.Shard.check
+
+    def check(self, index, *args):
+        if index == FAULT_FILE:
+            raise rb.FinancialIntegrityError("forced_shard_check")
+        return real(self, index, *args)
+
+    sb.Shard.check = check
+    sb.shard_main(conn, k, db)
+
+
 class ShardBench(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -53,7 +85,7 @@ class ShardBench(unittest.TestCase):
         spine = sb.Spine(work, k, self.template)
         prep = sb.PrepPool(spine.tbl, {i: r.rows for i, (r, _) in enumerate(self.files)}, 2) if pipelined else None
         for position, (record, deposit) in enumerate(self.files):
-            spine.ingest(position, record, deposit, prep.get(position) if prep else None)
+            spine.ingest(position, record, deposit, prep.take(0)[0] if prep else None)
             self.assertEqual(spine.keys, directory(work / "spine.sqlite3"))  # the in-memory keys equal the cells table after every commit
         if prep:
             prep.close()
@@ -166,7 +198,7 @@ class ShardBench(unittest.TestCase):
             pool = sb.PrepPool(tbl, {i: r.rows for i, (r, _) in enumerate(files)}, 2)
             try:
                 for i, (record, _) in enumerate(files):
-                    self.assertEqual(pool.get(i), sb.prepare(tbl, i, record.rows, i + 1), (seed, i))  # blobs, verdicts, directory rows, digests
+                    self.assertEqual(pool.take(0)[0], sb.prepare(tbl, i, record.rows, i + 1), (seed, i))  # blobs, verdicts, directory rows, digests
             finally:
                 pool.close()
 
@@ -221,6 +253,75 @@ class ShardBench(unittest.TestCase):
             self.assertEqual(result["lines"], sum(len(r.rows) for r, _ in self.files))
             self.assertEqual(sum(result["shard_lines"]), result["classes"]["applied"])
             self.assertEqual(sum(result["classes"].values()), result["lines"])
+
+    def group_run(self, name: str, files: list, group: int, fault: bool = False, snapshot_before: int | None = None):
+        """All files prepared first (in process), then ingested `group` at a time. With snapshot_before=i, shard 3 is snapshotted once the group starting at file i
+        is about to begin (every ACK in, so the snapshot is the last committed state)."""
+        work, real = self.tmp / name, sb.shard_main
+        sb.shard_main = faulty_main if fault else real
+        try:
+            spine = sb.Spine(work, 4, self.template)
+        finally:
+            sb.shard_main = real
+        prepared, results = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)], []
+        for start in range(0, len(files), group):
+            if start == snapshot_before:
+                spine.wait_acks()
+                spine.snapshot(3, self.tmp / f"{name}-snapshot.sqlite3")
+            results += spine.ingest_group([(i, *files[i], prepared[i]) for i in range(start, min(start + group, len(files)))])
+            self.assertEqual(spine.keys, directory(work / "spine.sqlite3"))  # the keys equal the cells table after every spine commit, grouped or not
+        groups = list(spine.groups)
+        spine.close()
+        return work, results, groups
+
+    def all_digests(self, work: Path) -> dict[str, dict]:
+        return {p.name: digests(p) for p in sorted(work.glob("*.sqlite3"))}
+
+    def test_t1_group_of_eight_stores_what_group_of_one_stores(self) -> None:
+        for name, seed in (("FL", 20261006), ("DE", 20261007)):
+            files = sb.corpus(seed, LINES, 12)
+            one, r1, g1 = self.group_run(f"t1-{name}-1", files, 1)
+            eight, r8, g8 = self.group_run(f"t1-{name}-8", files, 8)
+            self.assertEqual((g1, g8), ([1] * 12, [8, 4]), name)  # the groups really formed
+            self.assertEqual(r1, r8, name)  # equal verdicts (class counts per file)
+            self.assertEqual(self.all_digests(one), self.all_digests(eight), name)  # every row of the spine and of each shard: records bytes, heads, cells, shard rows
+            got = [pinned(eight / "spine.sqlite3", False)] + [pinned(eight / f"shard{k}.sqlite3", True) for k in range(4)]
+            self.assertEqual(got, GROUP_PINNED[name], name)  # and both equal what the per-file code stored before groups existed
+
+    def test_t2_failed_shard_check_on_file_three_gives_the_group_of_one_stores(self) -> None:
+        files = sb.corpus(20261006, LINES, 12)
+        one, r1, _ = self.group_run("t2-1", files, 1, fault=True)
+        eight, r8, g8 = self.group_run("t2-8", files, 8, fault=True)
+        self.assertEqual(g8, [1] * 7 + [4])  # the first group failed whole, was rolled back, and its files ran one at a time: file 3 refused, the other seven went in
+        self.assertEqual([repr(r) if isinstance(r, Exception) else r for r in r8], [repr(r) if isinstance(r, Exception) else r for r in r1])
+        self.assertTrue(isinstance(r8[FAULT_FILE], rb.FinancialIntegrityError) and "forced_shard_check" in str(r8[FAULT_FILE]))
+        self.assertTrue(all(isinstance(r, dict) for i, r in enumerate(r8) if i != FAULT_FILE))
+        self.assertEqual(self.all_digests(one), self.all_digests(eight))
+        with sqlite3.connect(str(eight / "spine.sqlite3")) as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM records").fetchone()[0], 11)
+
+    def test_t3_spine_commit_without_shard_commit_replays_the_pending_suffix(self) -> None:
+        files = sb.corpus(20261007, LINES, 12)
+        work, results, groups = self.group_run("t3", files, 8, snapshot_before=8)
+        self.assertEqual(groups, [8, 4])
+        snapshot = self.tmp / "t3-snapshot.sqlite3"  # shard 3 as it was when the second group began: the spine commit of that group is not in it
+        result = sb.replay(work / "spine.sqlite3", snapshot, 3)
+        self.assertEqual((result["records"], result["owed"], result["identical"]), (4, True, True))
+        self.assertEqual(digests(snapshot), digests(work / "shard3.sqlite3"))  # same rows, same heads, same applied as the shard that committed itself
+
+    def test_t4_stale_head_at_group_start_is_refused_with_no_write(self) -> None:
+        files, work = sb.corpus(20261006, LINES, 3), self.tmp / "t4"
+        spine = sb.Spine(work, 4, self.template)
+        prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+        before, real = self.all_digests(work), dict(spine.heads)
+        spine.heads[0] = bytes(64)  # the spine's head for shard 0 is not the head shard 0 holds
+        results = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(3)])  # refused whole, then one at a time: refused again each time
+        self.assertTrue(all(isinstance(r, rb.FinancialIntegrityError) and "shard_refused" in str(r) for r in results), results)
+        self.assertEqual((spine.n, spine.keys), (0, {}))
+        self.assertEqual(self.all_digests(work), before)
+        spine.heads[0] = real[0]
+        self.assertTrue(all(isinstance(r, dict) for r in spine.ingest_group([(0, *files[0], prepared[0])])))  # the shards are intact: the right head goes in
+        spine.close()
 
 
 if __name__ == "__main__":

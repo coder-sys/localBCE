@@ -22,6 +22,7 @@ import sys
 import time
 import zlib
 from ctypes import wintypes
+from multiprocessing import connection
 from operator import itemgetter
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,13 +77,15 @@ class Shard:
         parts = pickle.loads(blob)
         if verdict_of(parts) != verdict:
             raise ShardDiverged(f"shard {self.k}: verdicts differ from the record")
-        seq0 = w.seq
-        w.ckpt.before_begin()
-        w.c.execute("BEGIN IMMEDIATE")
+        seq0, began = w.seq, dict(w.revision)
+        if not w.c.in_transaction:  # the first part of a group opens the shard's one transaction; the group is only a commit boundary
+            w.ckpt.before_begin()
+            w.c.execute("BEGIN IMMEDIATE")
+            self.undo = [seq0, pre_head, began, 0]
+        w.c.execute("SAVEPOINT part")  # a refused part leaves no trace, the parts before it in the group stay until the spine aborts the group
         try:
             t = {name: [] for name in ("cell_rows", "resolutions", "charges", "evidence", "payments", "financial_events", "commands")}
             touched: dict[str, int] = {}
-            began = dict(w.revision)
             for rk, origin, tag, key, amount, raw, rawdig, ob, cid in parts:
                 t["cell_rows"].append((rk, origin, tag, amount, raw, rawdig))
                 t["resolutions"].append((rk, cid, None, amount, "INTAKE"))
@@ -101,10 +104,15 @@ class Shard:
             self.check_s += time.perf_counter() - c0
         except BaseException:
             if w.c.in_transaction:
-                w.c.execute("ROLLBACK")
+                w.c.execute("ROLLBACK TO part")
+                w.c.execute("RELEASE part")
+                if not self.undo[3]:  # nothing of the group is built: leave no open transaction
+                    w.c.execute("ROLLBACK")
+                    self.undo = None
             w.seq, w.head, w.revision = seq0, pre_head, began  # the part leaves no trace in memory either
             raise
-        self.undo = (seq0, pre_head, began, len(parts))
+        w.c.execute("RELEASE part")
+        self.undo[3] += len(parts)
         self.lines += len(parts)
         self.busy += time.perf_counter() - t0
         return w.head, digest.digest()
@@ -131,7 +139,7 @@ class Shard:
     def abort(self) -> None:
         if self.c.in_transaction:
             self.c.execute("ROLLBACK")
-        if self.undo:  # a built part that never committed: memory goes back with the database
+        if self.undo:  # the parts of a group that never committed: memory goes back with the database
             (self.w.seq, self.w.head, self.w.revision, built), self.undo = self.undo, None
             self.lines -= built
 
@@ -258,12 +266,23 @@ def prep_main(conn, tbl: SimpleNamespace, rows: dict) -> None:
         conn.send(("PREPARED", out))
 
 
+GROUP_LINES = 40_000  # one group: the prepared files already queued when the spine is free, up to this many lines (the first file always goes); it never waits for a file
+PREP_AHEAD = 16  # files requested from the prep stage beyond the last one taken
+ROW_SLICE = 1024  # rows per executemany of the spine's rows; the spine takes the workers' replies between slices
+
+
+def slices(data: list):
+    return (data[i:i + ROW_SLICE] for i in range(0, len(data), ROW_SLICE))
+
+
 class PrepPool:
-    """P prep processes; file i goes to process i % P and is requested a few files ahead of the spine."""
+    """P prep processes; file i goes to process i % P. Their outputs are drained into memory as they arrive (a process blocks in send until its output is read)
+    and `take` hands the spine the next group: the files in order that are already prepared, never waiting for more than the first."""
 
     def __init__(self, tbl: SimpleNamespace, rows: dict, procs: int) -> None:
         context = multiprocessing.get_context("spawn")
-        self.files, self.procs, self.next, self.conns, self.processes = len(rows), procs, 0, [], []
+        self.files, self.procs, self.next, self.taken, self.conns, self.processes = len(rows), procs, 0, 0, [], []
+        self.sizes, self.done, self.pending = {i: len(r) for i, r in rows.items()}, {}, [collections.deque() for _ in range(procs)]
         for i in range(procs):
             parent, child = context.Pipe()
             process = context.Process(target=prep_main, args=(child, tbl, {x: r for x, r in rows.items() if x % procs == i}), daemon=True)
@@ -273,15 +292,48 @@ class PrepPool:
         for conn in self.conns:
             Spine.expect(conn, "READY")
 
-    def get(self, index: int) -> Prepared:
-        while self.next < min(self.files, index + 2 * self.procs):
+    def request(self) -> None:
+        while self.next < min(self.files, self.taken + PREP_AHEAD):
             self.conns[self.next % self.procs].send(("PREP", self.next))
+            self.pending[self.next % self.procs].append(self.next)
             self.next += 1
-        return Spine.expect(self.conns[index % self.procs], "PREPARED")[0]
+
+    def waiting(self) -> list:
+        return [c for c, q in zip(self.conns, self.pending) if q]
+
+    def drain(self) -> None:
+        """Receive every output that is ready, then keep the processes busy."""
+        for conn, queue in zip(self.conns, self.pending):
+            while queue and conn.poll():
+                self.done[queue.popleft()] = Spine.expect(conn, "PREPARED")[0]
+        self.request()
+
+    def take(self, max_lines: int = GROUP_LINES) -> list[Prepared]:
+        """The next group, in file order. The first file is waited for; after it only files already prepared, within `max_lines`."""
+        self.request()
+        out, lines = [], 0
+        while self.taken < self.files:
+            if self.taken not in self.done:
+                self.drain()
+            if self.taken not in self.done:
+                if out:
+                    break
+                queue = self.pending[self.taken % self.procs]
+                self.done[queue.popleft()] = Spine.expect(self.conns[self.taken % self.procs], "PREPARED")[0]
+            if out and lines + self.sizes[self.taken] > max_lines:
+                break
+            lines += self.sizes[self.taken]
+            out.append(self.done.pop(self.taken))
+            self.taken += 1
+        self.request()
+        return out
 
     def close(self) -> tuple[float, float]:
         stats = []
-        for conn, process in zip(self.conns, self.processes):
+        for conn, process, queue in zip(self.conns, self.processes, self.pending):
+            while queue:  # outputs of files that were requested and never taken
+                queue.popleft()
+                Spine.expect(conn, "PREPARED")
             conn.send(("STOP",))
             stats.append(Spine.expect(conn, "STATS"))
             process.join()
@@ -315,8 +367,9 @@ class Spine:
         self.heads = {k: self.expect(conn, "READY")[0] for k, (_, conn) in self.workers.items()}
         self.c.executemany("INSERT INTO heads VALUES (?,?)", sorted(self.heads.items()))
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
-        self.owed: list[int] = []
-        self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait")}
+        self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
+        self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
+        self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed")}
 
     @staticmethod
     def expect(conn, kind: str):
@@ -328,90 +381,208 @@ class Spine:
         return message[1:]
 
     def wait_acks(self) -> None:
-        """Step 2: every shard is past its last commit and its head equals heads(k), else a loud halt."""
-        t0 = time.perf_counter()
+        """Step 2: every shard is past its last commit and its head equals the head the commit was made at, else a loud halt."""
         while self.owed:
-            k = self.owed.pop(0)
-            if self.expect(self.workers[k][1], "ACK")[0] != self.heads[k]:
+            self.pump(True, "ack_wait")
+
+    def acked(self) -> None:
+        if self.ack_mark:  # every ACK of the last group is in: each of its files is acknowledged now
+            started, files = self.ack_mark
+            self.latency += [time.perf_counter() - started] * files
+            self.ack_mark = None
+
+    def ship(self, f, k: int) -> None:
+        """Step 3: PART of file f to shard k; its pre_head is the head k last reported (the committed head, or the post head of k's previous part of this group)."""
+        t0, g = time.perf_counter(), self.g
+        f.pre[k] = g.tip[k]
+        self.workers[k][1].send(("PART", f.n, f.index, f.pool, f.t_f, f.p.blobs[k], f.pre[k], f.p.verdicts[k]))
+        g.busy[k] = f.pos  # at most one PART is outstanding per worker
+        g.sent.add(k)
+        self.tt["ipc"] += time.perf_counter() - t0
+
+    def pump(self, block: bool, bucket: str = "wait_built") -> None:
+        """Handle every reply that is ready (or wait for one), and keep the prep stage's outputs flowing in."""
+        t0, g = time.perf_counter(), self.g
+        conns = {self.workers[k][1]: k for k in (*self.owed, *(g.busy if g else ()))}
+        feed = self.feed.waiting() if self.feed else []
+        if not conns and (block or not feed):
+            if block:
+                raise rb.FinancialIntegrityError("relay_stalled")
+            return
+        ready = connection.wait([*conns, *feed], None if block else 0)
+        if block:
+            self.tt[bucket] += time.perf_counter() - t0
+        for conn in ready:
+            if conn in conns:
+                self.handle(conns[conn], conn.recv())
+        if any(conn not in conns for conn in ready):
+            f0 = time.perf_counter()
+            self.feed.drain()
+            self.tt["feed"] += time.perf_counter() - f0
+        self.nested += time.perf_counter() - t0
+
+    def handle(self, k: int, m: tuple) -> None:
+        if m[0] == "ERR":
+            raise rb.FinancialIntegrityError(f"shard_refused:{m[1]}")
+        if m[0] == "ACK":
+            if m[1] != self.owed.pop(k):
                 raise ShardDiverged(f"shard {k}: head differs after commit")
-        self.tt["ack_wait"] += time.perf_counter() - t0
+            if not self.owed:
+                self.acked()
+            return
+        if m[0] != "BUILT":
+            raise rb.FinancialIntegrityError(f"shard_protocol:{m[0]}")
+        g = self.g
+        f = g.files[g.busy.pop(k)]
+        f.built[k], g.tip[k] = (m[1], m[2]), m[1]
+        f.need.discard(k)
+        if g.queue[k]:  # k is free: the group's next part for it goes out on the head it just reported
+            self.ship(g.files[g.queue[k].popleft()], k)
+        self.flush()
+
+    def flush(self) -> None:
+        """Step 5: record R_n goes in, in n order, once file n's rows are written and every BUILT of it is in."""
+        g = self.g
+        while g.flushed < len(g.files):
+            f = g.files[g.flushed]
+            if not f.rows_done or f.need:
+                return
+            t0 = time.perf_counter()
+            self.added = f.added
+            self.write_spine(f.index, f.pool, f.n, f.t_f, f.p, f.pre, f.built)
+            self.tt["spine_write"] += time.perf_counter() - t0
+            g.flushed += 1
 
     def ingest(self, index: int, record, deposit: dict, prepared: Prepared | None = None) -> dict:
-        """One file. `prepared` is the prep stage's output for it (made against nothing but the file itself); it is used when it was made for this
-        index and this n and meets no cell the directory already holds, else the file is judged here against the committed keys, by the same code."""
-        n, t_f = self.n + 1, T0_MS + index
-        if t_f < self.last_t_f:
-            raise rb.FinancialIntegrityError("clock_regressed")
-        t0 = time.perf_counter()
-        p = prepared
-        if p is None or p.index != index or p.n != n or not self.keys.keys().isdisjoint([d[0] for d in p.dirs]):
-            p = prepare(self.tbl, index, record.rows, n, self.keys)
-        pool = f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}"
-        self.tt["judge"] += time.perf_counter() - t0
+        """One file as a group of one."""
+        result = self.ingest_group([(index, record, deposit, prepared)])[0]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def ingest_group(self, items: list) -> list:
+        """Files (index, record, deposit, prepared) in order, one spine commit for all that go through; the result per file is its classes or the
+        exception that refused it. `prepared` is the prep stage's output (made against nothing but the file); it is used when it was made for this index
+        and this n and meets no cell the directory holds, else the file is judged here against the keys, by the same code. A group that fails after
+        shipping is rolled back whole and its files run one at a time (step 7), so each is refused or applied as if no group had been formed."""
+        results, plan, last = [None] * len(items), [], self.last_t_f
+        for pos, (index, record, deposit, prepared) in enumerate(items):
+            t_f = T0_MS + index
+            if t_f < last:
+                results[pos] = rb.FinancialIntegrityError("clock_regressed")
+                continue
+            plan.append((pos, index, record, deposit, prepared, t_f))
+            last = t_f
+        if plan:
+            try:
+                for entry, classes in zip(plan, self.attempt(plan)):
+                    results[entry[0]] = classes
+            except ShardDiverged:
+                raise
+            except Exception as error:
+                if len(plan) > 1:
+                    return [self.ingest_group([item])[0] for item in items]
+                results[plan[0][0]] = error
+        return results
+
+    def attempt(self, plan: list) -> list[dict]:
+        """Steps 2-6 for one group. On any failure every shard asked is aborted, the spine rolled back and the keys undone, then it raises."""
+        started = time.perf_counter()
         self.ckpt.before_begin()
         self.c.execute("BEGIN IMMEDIATE")
-        sent: list[int] = []
+        undo, heads0, prev0 = [], dict(self.heads), self.prev_head
+        g = self.g = SimpleNamespace(files=[], busy={}, queue={k: collections.deque() for k in self.workers}, tip=dict(self.heads), sent=set(), flushed=0)
         try:
-            pre = dict(self.heads)
-            t0 = time.perf_counter()
-            for k, blob in p.blobs.items():  # each worker commits n-1, then builds n; its expected-head compare is the step-2 head check
-                self.workers[k][1].send(("PART", n, index, pool, t_f, blob, pre[k], p.verdicts[k]))
-                sent.append(k)
-            self.tt["ipc"] += time.perf_counter() - t0
-            t0 = time.perf_counter()
-            self.write_rows(index, pool, deposit, p)  # the spine's rows go in while the shards build
-            self.tt["spine_rows"] += time.perf_counter() - t0
-            self.wait_acks()  # step 2, for the shards that committed n-1 and have been building n since
-            t0 = time.perf_counter()
-            built = {k: self.expect(self.workers[k][1], "BUILT") for k in sent}
-            self.tt["wait_built"] += time.perf_counter() - t0
-            t0 = time.perf_counter()
-            self.write_spine(index, pool, n, t_f, p, pre, built)
-            self.tt["spine_write"] += time.perf_counter() - t0
+            for pos, (_, index, record, deposit, prepared, t_f) in enumerate(plan):
+                n, t0 = self.n + 1 + pos, time.perf_counter()
+                p = prepared
+                if p is None or p.index != index or p.n != n or not self.keys.keys().isdisjoint([d[0] for d in p.dirs]):
+                    p = prepare(self.tbl, index, record.rows, n, self.keys)
+                f = SimpleNamespace(pos=pos, index=index, n=n, t_f=t_f, p=p, pool=f"x12/SYNTHPAYER/{record.trace_origin}/{record.trace}", need=set(p.blobs), built={}, pre={}, added=0, rows_done=False)
+                g.files.append(f)
+                self.keys.update((d[0], d[5]) for d in p.dirs)  # the next file of the group is judged against these cells; a rollback takes them out again
+                undo.extend(d[0] for d in p.dirs)
+                self.tt["judge"] += time.perf_counter() - t0
+                for k in p.blobs:
+                    if k in g.busy:
+                        g.queue[k].append(pos)
+                    else:
+                        self.ship(f, k)
+                t0, nested = time.perf_counter(), self.nested
+                f.added = self.write_rows(index, f.pool, deposit, p, lambda: self.pump(False))  # the spine's rows go in while the shards build
+                self.tt["spine_rows"] += time.perf_counter() - t0 - (self.nested - nested)
+                f.rows_done = True
+                if pos == 0:
+                    self.wait_acks()  # step 2: the shards that committed the last group have been building this one since
+                self.flush()
+            while g.flushed < len(g.files):
+                self.pump(True)
         except BaseException:
-            for k in sent:  # step 6: abort the shards that were asked, roll the spine back
-                self.workers[k][1].send(("ABORT",))
-            for k in sent:  # replies in flight (a commit ACK still owed, BUILT or ERR) come first; the last ACK is the abort's
-                conn, acks = self.workers[k][1], 1 + (k in self.owed)
-                while acks:
-                    acks -= conn.recv()[0] == "ACK"
-            self.owed = [k for k in self.owed if k not in sent]
-            self.c.execute("ROLLBACK")
+            self.fail(g, undo, heads0, prev0)
             raise
+        finally:
+            self.g = None
         t0 = time.perf_counter()
         self.c.execute("COMMIT")  # the only commit point
         self.ckpt.kick()
         self.tt["spine_commit"] += time.perf_counter() - t0
-        self.keys.update((d[0], d[5]) for d in p.dirs)
-        self.n, self.last_t_f, self.prev_head = n, t_f, self.prev_head_next
-        for k, (head, _) in built.items():
-            self.heads[k] = head
+        self.n, self.last_t_f = g.files[-1].n, g.files[-1].t_f
+        t0 = time.perf_counter()
+        for k in sorted(g.sent):
             self.workers[k][1].send(("COMMIT",))
-            self.owed.append(k)
-        return p.classes
+            self.owed[k] = self.heads[k]
+        self.tt["ipc"] += time.perf_counter() - t0
+        self.groups.append(len(plan))
+        self.ack_mark = (started, len(plan))
+        if not self.owed:
+            self.acked()
+        return [f.p.classes for f in g.files]
 
-    def write_rows(self, index, pool, deposit, p: Prepared) -> None:
-        c, base = self.c, index * rb.KEY
+    def fail(self, g, undo: list, heads0: dict, prev0: bytes) -> None:
+        """Step 6/7: abort the shards that were asked, roll the spine back, forget the group's keys and heads."""
+        sent = sorted(g.sent)
+        for k in sent:
+            self.workers[k][1].send(("ABORT",))
+        for k in sent:  # replies in flight (a commit ACK still owed, BUILT or ERR) come first; the last ACK is the abort's
+            conn, acks = self.workers[k][1], 1 + (k in self.owed)
+            while acks:
+                acks -= conn.recv()[0] == "ACK"
+            self.owed.pop(k, None)
+        self.c.execute("ROLLBACK")
+        for cid in undo:
+            self.keys.pop(cid, None)
+        self.heads, self.prev_head = heads0, prev0
+
+    def write_rows(self, index, pool, deposit, p: Prepared, tick=lambda: None) -> int:
+        c, base, added = self.c, index * rb.KEY, 0
         if c.execute("SELECT 1 FROM deposit_rows WHERE row_key=?", (base,)).fetchone() is None:  # a resent file keeps its deposit row
             c.execute("INSERT INTO deposit_rows VALUES (?,?,?,?)", (base, deposit["entry_id"], pool, deposit["amount_cents"]))
-        self.added = c.executemany("INSERT INTO cells VALUES (?,?,?,?,?,?,?,?)", p.dirs).rowcount
-        for table, data in p.sp.items():
-            if data:
+        for data in slices(p.dirs):
+            added += c.executemany("INSERT INTO cells VALUES (?,?,?,?,?,?,?,?)", data).rowcount
+            tick()  # between statements the spine takes the replies that came in, so a worker is not left idle for a whole executemany
+        for table, rows in p.sp.items():
+            for data in slices(rows):
                 c.executemany(f"INSERT INTO {table} VALUES ({','.join('?' * len(data[0]))})", data)
+                tick()
+        return added
 
     def write_spine(self, index, pool, n, t_f, p: Prepared, pre, built) -> None:
-        c, dirs, j, source = self.c, p.dirs, p.j, p.source
-        body = pickle.dumps({k: (p.blobs[k], p.verdicts[k], pre[k], built[k][1], built[k][0]) for k in built}, 5)
+        c, dirs, j, source, prev = self.c, p.dirs, p.j, p.source, self.prev_head
+        if any(pre[k] != self.heads[k] for k in built):  # the head shipped for k is the post head of k's previous record, in order
+            raise rb.FinancialIntegrityError("spine_check")
+        body = pickle.dumps({k: (p.blobs[k], p.verdicts[k], pre[k], built[k][1], built[k][0]) for k in p.blobs}, 5)
         rd = rb.sha(n, index, pool, t_f, BUILD_ID, source, j, hashlib.sha3_256(body).digest())
-        self.prev_head_next = head = rb.sha(self.prev_head, rd)
+        head = rb.sha(prev, rd)
         c.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?)", (n, index, pool, t_f, BUILD_ID, source, j, body, head))
         c.executemany("UPDATE heads SET head=? WHERE k=?", [(built[k][0], k) for k in built])
         # spine check: the record recomputes and chains; one directory row per new cell; heads moved only for touched shards
         stored = c.execute("SELECT n,file_index,pool,t_f,build_id,source_sha,j,parts,head FROM records WHERE n=?", (n,)).fetchone()
         again = rb.sha(stored[0], stored[1], stored[2], stored[3], stored[4], stored[5], stored[6], hashlib.sha3_256(stored[7]).digest())
-        expected = {k: (built[k][0] if k in built else pre[k]) for k in pre}
-        if rb.sha(self.prev_head, again) != stored[8] or self.added != len(dirs) or dict(c.execute("SELECT k,head FROM heads")) != expected or stored[4] != BUILD_ID:
+        expected = {k: (built[k][0] if k in built else v) for k, v in self.heads.items()}
+        if rb.sha(prev, again) != stored[8] or self.added != len(dirs) or dict(c.execute("SELECT k,head FROM heads")) != expected or stored[4] != BUILD_ID:
             raise rb.FinancialIntegrityError("spine_check")
+        self.heads = {**self.heads, **{k: built[k][0] for k in built}}
+        self.prev_head = head
 
     def snapshot(self, k: int, path: Path) -> None:
         self.workers[k][1].send(("SNAPSHOT", str(path)))
@@ -430,21 +601,28 @@ class Spine:
 
 
 def replay(spine_db: Path, snapshot: Path, k: int) -> dict:
-    """Recovery (design section 4): shard k holds its pre-R_last state; replay R_last's recorded input bytes from the committed spine and require the same digests."""
+    """Recovery (design section 3): shard k holds some committed state with applied max n = a. Its pending records are the committed spine records after a that touch k
+    (at most the last group). Replay each from its recorded input bytes, in order, with its own t_f; the head must be the first pre_head and every digest and post head
+    must equal the record's, and the last post head must be heads(k)."""
     t0 = time.perf_counter()
-    with sqlite3.connect(str(spine_db)) as s:
-        n, index, pool, t_f, build_id, body = s.execute("SELECT n,file_index,pool,t_f,build_id,parts FROM records ORDER BY n DESC LIMIT 1").fetchone()
-        heads = dict(s.execute("SELECT k,head FROM heads"))
-    blob, verdict, pre, digest, post = pickle.loads(body)[k]
     shard = Shard(k, snapshot)
-    pending = shard.w.head == pre and shard.w.head != heads[k]
-    t1 = time.perf_counter()
-    head, got = shard.build(n, index, pool, t_f, blob, pre, verdict)
-    shard.commit()
+    applied = shard.c.execute("SELECT COALESCE(MAX(n),0) FROM applied").fetchone()[0]
+    with sqlite3.connect(str(spine_db)) as s:
+        records = s.execute("SELECT n,file_index,pool,t_f,build_id,parts FROM records WHERE n>? ORDER BY n", (applied,)).fetchall()
+        heads = dict(s.execute("SELECT k,head FROM heads"))
+    pending = [(r, part) for r in records for part in [pickle.loads(r[5]).get(k)] if part]
+    owed = bool(pending) and shard.w.head == pending[0][1][2] and shard.w.head != heads[k]
+    t1, same, lines, input_bytes = time.perf_counter(), True, 0, 0
+    for (n, index, pool, t_f, build_id, _), (blob, verdict, pre, digest, post) in pending:
+        head, got = shard.build(n, index, pool, t_f, blob, pre, verdict)
+        same = same and head == post and got == digest and build_id == BUILD_ID
+        lines, input_bytes = lines + len(pickle.loads(blob)), input_bytes + len(blob)
+    if pending:
+        shard.commit()
     done = time.perf_counter()
-    same = head == post == heads[k] and got == digest and build_id == BUILD_ID
+    same = same and shard.w.head == heads[k]
     shard.stats()
-    return {"k": k, "n": n, "lines": len(pickle.loads(blob)), "owed": pending, "identical": same, "replay_ms": (done - t0) * 1000, "replay_ms_excl_open": (done - t1) * 1000, "input_bytes": len(blob)}
+    return {"k": k, "n": pending[-1][0][0] if pending else applied, "records": len(pending), "lines": lines, "owed": owed, "identical": same, "replay_ms": (done - t0) * 1000, "replay_ms_excl_open": (done - t1) * 1000, "input_bytes": input_bytes}
 
 
 def corpus(seed: int, lines: int, files: int) -> list[tuple[SimpleNamespace, dict]]:
@@ -468,23 +646,30 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
     db_bytes = lambda: sum(p.stat().st_size for p in work.glob("*.sqlite3*"))  # noqa: E731
     size0, io0 = db_bytes(), io_write_bytes()
     lines, classes, kk, snap, snap_s, recv_s = 0, {}, k_count - 1, work / "snapshot.sqlite3", 0.0, 0.0
+    spine.feed = prep
     t0 = time.perf_counter()
-    for position, (record, deposit) in enumerate(files):
-        if with_replay and position == len(files) - 1:
+    while prep.taken < len(files):
+        r0 = time.perf_counter()
+        group = prep.take()  # the files already prepared and queued, up to GROUP_LINES; never waits past the first
+        recv_s += time.perf_counter() - r0
+        if with_replay and prep.taken == len(files):  # the last group: shard kk is snapshotted at its start, so the replay has the group's records pending
             s0 = time.perf_counter()
             spine.wait_acks()
             spine.snapshot(kk, snap)
             snap_s = time.perf_counter() - s0  # the replay setup is not throughput
-        r0 = time.perf_counter()
-        prepared = prep.get(position)
-        recv_s += time.perf_counter() - r0
-        for name, value in spine.ingest(position, record, deposit, prepared).items():
-            classes[name] = classes.get(name, 0) + value
-        lines += len(record.rows)
+        for result in spine.ingest_group([(p.index, *files[p.index], p) for p in group]):
+            if isinstance(result, Exception):
+                raise result
+            for name, value in result.items():
+                classes[name] = classes.get(name, 0) + value
+        lines += sum(len(files[p.index][0].rows) for p in group)
     spine.wait_acks()
     wall = time.perf_counter() - t0 - snap_s
     grown, spine_io, spine_rss = db_bytes() - size0, io_write_bytes() - io0, rb.peak_rss_bytes()
+    spine.feed = None
     prep_busy, prep_rss = prep.close()
+    latency = sorted(spine.latency)
+    pct = lambda q: latency[min(len(latency) - 1, int(q * len(latency)))] * 1000  # noqa: E731
     spine.tt["prep_wait"] = recv_s
     stats = spine.close()
     shard_stats = sorted(stats, key=lambda s: s["k"])
@@ -493,7 +678,8 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
            "j_us": spine.tt["judge"] / lines * 1e6, "prep_us": prep_busy / lines * 1e6, "prep_wait_us": recv_s / lines * 1e6, "s_us": (spine.tt["spine_rows"] + spine.tt["spine_write"]) / lines * 1e6, "ipc_us": spine.tt["ipc"] / lines * 1e6,
            "w_us": busy / lines * 1e6, "shard_check_us": sum(s["check_s"] for s in shard_stats) / lines * 1e6,
            "shard_busy_s": [s["busy_s"] for s in shard_stats], "shard_lines": [s["lines"] for s in shard_stats], "imbalance": max(s["busy_s"] for s in shard_stats) / (busy / k_count),
-           "phase_s": spine.tt, "commit_ms_per_file": [(spine.tt["spine_commit"] / len(files)) * 1000, sum(s["commit_s"] for s in shard_stats) / (k_count * len(files)) * 1000],
+           "phase_s": spine.tt, "commit_ms_per_group": [(spine.tt["spine_commit"] / len(spine.groups)) * 1000, sum(s["commit_s"] for s in shard_stats) / (k_count * len(spine.groups)) * 1000],
+           "groups": spine.groups, "ack_p50_ms": pct(0.5), "ack_p99_ms": pct(0.99),
            "store_bytes_per_s": grown / wall, "io_write_bytes_per_s": (spine_io + sum(s["io_write"] for s in stats)) / wall,
            "peak_rss_spine_mb": spine_rss / 2**20, "peak_rss_shards_mb": [s["peak_rss"] / 2**20 for s in shard_stats],
            "peak_rss_prep_mb": prep_rss / 2**20, "peak_rss_total_mb": (spine_rss + prep_rss + sum(s["peak_rss"] for s in stats)) / 2**20, "python_processes": k_count + 1 + prep_procs}
@@ -525,7 +711,7 @@ def main(argv: list[str] | None = None) -> int:
             for rep in range(a.reps + 1):  # the last rep also snapshots one shard and replays its last record; its setup time is cut from the wall
                 r = {"suffix": a.suffix, "corpus": name, "rep": rep, **run_once(k, files, template, SCRATCH / f"run-{a.suffix}-{name}-{k}", rep == a.reps, a.prep)}
                 runs.append(r)
-                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
+                print(f"{name} K={k} rep={rep} {r['lines_per_s']:,.0f} lines/s j={r['j_us']:.1f} pw={r['prep_wait_us']:.1f} prep={r['prep_us']:.1f} s={r['s_us']:.1f} ipc={r['ipc_us']:.1f} w={r['w_us']:.1f} us ack p50/p99={r['ack_p50_ms']:.0f}/{r['ack_p99_ms']:.0f} ms groups={len(r['groups'])} rss={r['peak_rss_total_mb']:.0f} MB" + (f" replay={r['replay']['replay_ms']:.0f} ms ok={r['replay']['identical']}" if "replay" in r else ""), flush=True)
     previous = json.loads(a.out.read_text(encoding="utf-8")) if a.out.exists() else {"runs": []}
     previous["runs"].extend(runs)
     a.out.write_text(json.dumps(previous, indent=1, default=str), encoding="utf-8")
