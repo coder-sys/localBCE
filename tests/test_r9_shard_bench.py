@@ -188,6 +188,21 @@ def die_and_refuse_main(conn, k: int, db: str) -> None:
     sb.shard_main(conn, k, db)
 
 
+def refuse_and_wrong_ack_main(conn, k: int, db: str) -> None:
+    """Shard 1 refuses its COMMIT; shard 2 commits and ACKs a head that is not the one the spine expects."""
+    real = sb.Shard.commit
+
+    def commit(self):
+        if k == 1:
+            raise rb.FinancialIntegrityError("forced_commit")
+        real(self)
+        if k == 2:
+            self.w.head = bytes(64)
+
+    sb.Shard.commit = commit
+    sb.shard_main(conn, k, db)
+
+
 def gated_commit_main(conn, k: int, db: str) -> None:
     """Every shard holds its COMMIT until the file `gate` in its directory exists."""
     real, gate = sb.Shard.commit, Path(db).parent / "gate"
@@ -1226,6 +1241,103 @@ class ShardBench(unittest.TestCase):
                     p.terminate()
         self.assertEqual(fired, [])
         self.quiet(spine)
+
+    def owed_spine(self, name: str, errors: tuple) -> "sb.Spine":
+        """A spine whose group is committed and whose shards still hold their COMMIT (gated); the senders of `errors` have failed, as a thread records a dead pipe."""
+        files = sb.corpus(20261006, LINES, 2)
+        spine = self.spine_with(gated_commit_main, name)
+        prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+        first = spine.ingest_group([(i, *files[i], prepared[i]) for i in range(2)])
+        self.assertTrue(all(isinstance(r, dict) for r in first), first)
+        self.assertTrue({1, 2} <= set(spine.owed), spine.owed)
+        for k in errors:
+            spine.senders[k].error = BrokenPipeError(f"forced_{k}")
+        return spine
+
+    def test_of4_close_names_every_owed_shard_whose_sender_failed_not_only_the_first(self) -> None:
+        for name, errors, owed, gate in (("of4-two-dead", (1, 2), None, True), ("of4-non-owed-first", (0, 2), (2,), False)):
+            spine = self.owed_spine(name, errors)
+            timer, fired = self.watchdog(spine)
+            try:
+                if owed:  # only shard 2 owes a COMMIT; shard 0, which owes none, fails first
+                    spine.owed = {k: v for k, v in spine.owed.items() if k in owed}
+                if gate:
+                    (self.tmp / name / "gate").touch()
+                with self.assertRaises(rb.FinancialIntegrityError) as raised:
+                    spine.close()
+                for k in (k for k in errors if k in (owed or errors)):
+                    self.assertIn(f"shard_send:{k}:BrokenPipeError('forced_{k}')", str(raised.exception), name)
+                self.assertEqual(sorted(spine.dead), sorted(owed or errors), name)
+            finally:
+                timer.cancel()
+                for p, _ in spine.workers.values():
+                    if p.is_alive():
+                        p.terminate()
+            self.assertEqual(fired, [], name)
+            self.quiet(spine)
+
+    def test_of4_ctrl_c_in_close_with_a_lost_shard_stays_ctrl_c_with_the_lost_shards_in_a_note(self) -> None:
+        spine = self.spine_with(sb.shard_main, "of4-ctrl-c")
+
+        def check_senders() -> None:
+            spine.dead[1] = "shard_send:1:forced"
+            raise KeyboardInterrupt
+
+        with mock.patch.object(spine, "check_senders", check_senders), self.assertRaises(KeyboardInterrupt) as raised:
+            spine.close()
+        self.assertEqual(raised.exception.__notes__, ["shard_send:1:forced"])
+        self.quiet(spine)
+
+        def attempt(self, *args, **kwargs) -> None:  # run_once: Ctrl-C with a lost shard; close raises its own error, the interrupt is what the caller gets
+            self.dead[1] = "shard_send:1:forced"
+            raise KeyboardInterrupt
+
+        with mock.patch.object(sb.Spine, "attempt", attempt), self.assertRaises(KeyboardInterrupt) as raised:
+            sb.run_once(2, sb.corpus(20261006, LINES, 2), self.template, self.tmp / "of4-ctrl-c-run", False, 1)
+        self.assertEqual(raised.exception.__notes__, ["shard_send:1:forced"])
+        self.quiet()
+
+    def test_of4_run_once_keeps_shard_diverged_when_another_shard_refused_in_the_same_abort(self) -> None:
+        files, real, calls = sb.corpus(20261007, LINES, 4), sb.Spine.ingest_group, []
+
+        def ingest_group(self, items):  # one file per group; the second group fails in the spine while shard 1's refusal and shard 2's wrong ACK of the first group are in flight
+            results = []
+            for item in items:
+                calls.append(1)
+                if len(calls) == 2:
+                    self.write_rows = mock.Mock(side_effect=rb.FinancialIntegrityError("forced_spine_rows"))
+                results += real(self, [item])
+            return results
+
+        with self.sender_env(True), mock.patch.object(sb, "shard_main", refuse_and_wrong_ack_main), mock.patch.object(sb.Spine, "ingest_group", ingest_group):
+            with self.assertRaises(sb.ShardDiverged) as raised:
+                sb.run_once(4, files, self.template, self.tmp / "of4-diverged", False, 1)
+        self.assertRegex(str(raised.exception), r"shard 2: head differs after commit.*shard_commit_refused:1")
+        self.assertIsInstance(raised.exception.__cause__, rb.FinancialIntegrityError)
+        self.quiet()
+
+    def test_of4_run_once_names_a_shard_the_drain_lost_when_cleanup_then_raises(self) -> None:
+        files, real, real_ingest, calls = sb.corpus(20261007, LINES, 4), rb.Checkpointer.close, sb.Spine.ingest_group, []
+
+        def close(self) -> None:
+            real(self)
+            raise sqlite3.OperationalError("forced_cleanup")
+
+        def ingest_group(self, items):  # one file per group; the second group fails at once, while shard 1's COMMIT of the first is owed and shard 1 is dying in it
+            results = []
+            for item in items:
+                calls.append(1)
+                if len(calls) == 2:
+                    raise rb.FinancialIntegrityError("forced_group")
+                results += real_ingest(self, [item])
+            return results
+
+        with self.sender_env(True), mock.patch.object(sb, "shard_main", die_before_commit_main), mock.patch.object(sb.Spine, "ingest_group", ingest_group), mock.patch.object(rb.Checkpointer, "close", close):
+            with self.assertRaises(rb.FinancialIntegrityError) as raised:  # the drain at close loses shard 1; the cleanup then raises another message
+                sb.run_once(4, files, self.template, self.tmp / "of4-cleanup", False, 1)
+        self.assertRegex(str(raised.exception), r"shard_(lost|reply|send):1")
+        self.assertIsInstance(raised.exception.__cause__, sqlite3.OperationalError)
+        self.quiet()
 
     def test_s12_close_an_abort_that_cannot_be_written_still_rolls_the_spine_back(self) -> None:
         files = sb.corpus(20261006, LINES, 2)

@@ -589,12 +589,10 @@ class Spine:
             tt[f"ipc_send_{kind}"] += time.perf_counter() - t1  # the spine's own time in the call; the sender thread's write time is thread_send_*
 
     def check_senders(self) -> None:
-        for k, sender in self.senders.items():
-            if sender.error is not None:
-                reason = f"shard_send:{k}:{sender.error!r}"
-                if k in self.owed:  # a write to k failed after the spine committed: k is lost to this run (as in handle's ERR), the healthy shards are drained at close
-                    self.dead[k] = reason
-                raise rb.FinancialIntegrityError(reason)
+        failed = {k: f"shard_send:{k}:{sender.error!r}" for k, sender in self.senders.items() if sender.error is not None}
+        self.dead.update((k, reason) for k, reason in failed.items() if k in self.owed)  # a write to k failed after the spine committed: k is lost to this run (as in handle's ERR), every such k before the raise, the healthy shards are drained at close
+        if failed:
+            raise rb.FinancialIntegrityError(next(iter(failed.values())))
 
     def ship(self, f, k: int) -> None:
         """Step 3: PART of file f to shard k; its pre_head is the head k last reported (the committed head, or the post head of k's previous part of this group)."""
@@ -934,8 +932,11 @@ class Spine:
                         self.tt[f"thread_send_{kind}"] += seconds
                 self.ckpt.close()
                 self.c.close()
-            if wrong or (self.dead and str(first) != self.lost()):  # the error in flight (if any) does not name every shard lost to this run
-                raise (ShardDiverged if wrong else rb.FinancialIntegrityError)(self.lost()) from first
+            if first is not None and not isinstance(first, Exception):  # Ctrl-C, SystemExit: not turned into another error, it carries the shards lost
+                if self.dead:
+                    first.add_note(self.lost())
+            elif wrong or (self.dead and str(first) != self.lost()):  # the error in flight (if any) does not name every shard lost to this run
+                raise (ShardDiverged if wrong or isinstance(first, ShardDiverged) else rb.FinancialIntegrityError)(self.lost()) from first
         return stats
 
 
@@ -1020,7 +1021,9 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
             spine.close()
         except Exception as closed:
             if spine.dead and str(error) != spine.lost():  # this error does not name every shard lost: the caller must hear of all of them
-                raise closed from error
+                if isinstance(error, Exception):
+                    raise (ShardDiverged if isinstance(error, ShardDiverged) or isinstance(closed, ShardDiverged) else rb.FinancialIntegrityError)(spine.lost()) from closed
+                error.add_note(spine.lost())  # Ctrl-C, SystemExit: raised as it is
         raise
     latency = sorted(spine.latency)
     pct = lambda q: latency[min(len(latency) - 1, int(q * len(latency)))] * 1000  # noqa: E731
