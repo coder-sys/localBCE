@@ -161,19 +161,25 @@ class IdRegistryTests(unittest.TestCase):
             self.reg.reserve(0, [1], sealed=None)
         self.assertEqual(second.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
 
-    def test_boot_writes_no_fence_outside_its_transaction(self) -> None:
-        """Review LOW-2: SQLite rolled the transaction back inside the checks (disk full, I/O error); the fence must not be
-        written unlocked in autocommit (before: it was, and COMMIT then failed 'no transaction is active')."""
+    def test_boot_fences_under_the_lock_after_a_sqlite_rollback(self) -> None:
+        """Review LOW-2 and LOW-A: SQLite rolled the transaction back inside the checks (disk full, I/O error); the fence is
+        still written, under a fresh lock (never unlocked in autocommit, and never skipped: the running nonce must HOLD)."""
         for refuse in (False, True):
             def admit(db, inputs):
                 db.execute("ROLLBACK")  # what SQLite does itself on SQLITE_FULL or SQLITE_IOERR mid-statement
                 if refuse:
                     raise idreg.IdRegistryError("registry_rewound")
-            before = self.tail()
+            before = self.tail()[0]
             with self.subTest(refuse=refuse), mock.patch.object(idreg, "_admit", admit), \
-                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable") as refused:
                 idreg.boot(self.path, lambda: ({}, {}, {}))
-            self.assertEqual(self.tail(), before)
+            self.assertEqual(self.reg._db.execute("SELECT kind FROM log WHERE n > ?", (before,)).fetchall(), [(idreg._BOOT,)])  # exactly one new row: the fence
+            cause = refused.exception.__cause__
+            if refuse:
+                self.assertIsInstance(cause, idreg.IdRegistryError)
+                self.assertRegex(str(cause), "registry_rewound")
+            else:
+                self.assertIsNone(cause)
 
     def test_boot_commitments(self) -> None:
         n, head = self.reg.genesis({0: [1], 1: [2]})  # rows 2-3: RESERVE 1, SETTLE of shard 0; rows 4-5: the same for shard 1

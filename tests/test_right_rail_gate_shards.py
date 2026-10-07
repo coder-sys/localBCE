@@ -409,11 +409,13 @@ class ShardTests(fx.Scratch):
             with self.subTest(label, error=error), self.released_then_restored(restart=False) as (c, store):
                 if target:
                     c.store(1).touch()  # a store to read: the copy predates every batch
-                with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(Exception) as refused:
+                with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(idreg.IdRegistryError) as refused:
                     c.boot()
                 self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001"])
                 self.assertRegex(str(refused.exception), label)
+                if target:
+                    self.assertIsInstance(refused.exception.__cause__, type(error))
 
     def test_r5_the_refusal_and_its_fence_are_one_transaction(self) -> None:
         """Review M-A: the moment the refused boot's connection gives up the write lock, the running nonce's shard 1 tries

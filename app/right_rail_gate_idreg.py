@@ -197,6 +197,10 @@ def boot(path: Path, inputs: Inputs) -> bytes:
                 _admit(db, inputs)
             except BaseException as error:
                 refusal = error
+            if not db.in_transaction:  # SQLite rolled back inside the checks: lock again so the fence is still written under the lock
+                db.execute("BEGIN IMMEDIATE")
+                cause, refusal = refusal, IdRegistryError("registry_unavailable")
+                refusal.__cause__ = cause
             _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
     except IdRegistryError as error:
         raise error from refusal
