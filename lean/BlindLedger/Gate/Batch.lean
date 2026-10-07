@@ -35,11 +35,15 @@ structure ReleaseRun where
   now : Nat
   grants : List Grant
 
-/-- The installed certificates: `installCert` on each that decodes, in order.  Replaces `VerifyCli.certState`,
-    which refused the whole frame on one undecodable certificate; such a certificate can never pass
-    `certChainOk`, so skipping it is exactly an `installCert` that refuses. -/
+/-- The installed certificates: `installCert` on each that decodes, in order, then only those that pass
+    `certChainOk` kept.  Fence and equivocations are `installCert`'s, so a root-signed certificate whose key is
+    not usable (a root key certified as an epoch key) still raises its tenant's fence, still blocks the epoch
+    it conflicts with, and still keeps a later certificate of its epoch out, but is never installed.  Replaces
+    `VerifyCli.certState`, which refused the whole frame on one undecodable certificate; such a certificate can
+    never pass `certChainOk`, so skipping it is exactly an `installCert` that refuses. -/
 def certsInstalled (c : Crypto) (certs : List Bytes) : PayerState :=
-  (certs.filterMap decodeKeyCert).foldl (fun s e => (installCert c s e).1) emptyState
+  let s := (certs.filterMap decodeKeyCert).foldl (fun s e => (installCert c s e).1) emptyState
+  { s with certs := s.certs.filter c.certChainOk }
 
 /-- The signature step for one checkpoint: ML-DSA-87 under an installed certificate of its tenant and epoch
     (`storeCheckpoint`'s check 2), against no stored checkpoint.  Fork detection is STORE's job, done when

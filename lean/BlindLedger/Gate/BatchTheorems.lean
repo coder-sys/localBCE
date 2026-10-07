@@ -192,12 +192,13 @@ private theorem foldl_install_certs (c : Crypto) :
       · exact Or.inl h
     · exact Or.inr ⟨List.mem_cons_of_mem _ h.1, h.2⟩
 
-private theorem certsInstalled_rootSigned {c : Crypto} {certs : List Bytes} {e : EpochCert}
+theorem certsInstalled_mem {c : Crypto} {certs : List Bytes} {e : EpochCert}
     (h : e ∈ (certsInstalled c certs).certs) :
-    c.rootSigned e = true ∧ ∃ b ∈ certs, decodeKeyCert b = some e := by
-  rcases foldl_install_certs c _ _ e h with h | ⟨hm, hr⟩
+    c.certChainOk e = true ∧ ∃ b ∈ certs, decodeKeyCert b = some e := by
+  obtain ⟨h, hc⟩ := List.mem_filter.1 h
+  rcases foldl_install_certs c _ _ e h with h | ⟨hm, -⟩
   · simp [emptyState] at h
-  · exact ⟨hr, List.mem_filterMap.1 hm⟩
+  · exact ⟨hc, List.mem_filterMap.1 hm⟩
 
 /-- No stored "verified" flag: an ACCEPT was earned in this call.  The token's checkpoint is among the
     frame's bytes, its ML-DSA-87 signature verified here under a certificate of the same tenant and epoch,
@@ -235,9 +236,8 @@ theorem releaseBatch_accept_verified {c : Crypto} {r : ReleaseRun} {items : List
           subst hvb
           obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany
           simp only [Bool.and_eq_true, beq_iff_eq] at hm
-          obtain ⟨hrs, hcb⟩ := certsInstalled_rootSigned he
-          exact ⟨t, b, x, e, rfl, hb, hx, hdig, hcb, by simp [Crypto.certChainOk, hrs, hm.2.1], hm.1.1,
-            hm.1.2, hm.2.2⟩
+          obtain ⟨hco, hcb⟩ := certsInstalled_mem he
+          exact ⟨t, b, x, e, rfl, hb, hx, hdig, hcb, hco, hm.1.1, hm.1.2, hm.2.2⟩
         · simp at hvb
 
 private theorem zip_map_self {α β : Type} (f : α → β) :
