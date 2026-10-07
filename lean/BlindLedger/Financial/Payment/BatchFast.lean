@@ -349,6 +349,31 @@ theorem commitFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (k
           obtain ⟨e1, e2⟩ := evaluateState_rev hr
           simp only [Option.bind_some, hr, Option.isSome_some, ↓reduceIte, Erased.ofStep, e1, e2]
 
+theorem aliasFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (pid : String)
+    (e : EvidenceRecord) : aliasFast F v pid e = Erased.ofStep (aliasView (v.toView s) s pid e) := by
+  unfold aliasFast aliasView
+  rw [hA.anchorBytes, hA.evidence]
+  (repeat' split) <;> simp_all [FView.toView, Erased.ofStep]
+
+/-- The link refusal reads only `cash`, `lawful` and `requests`; its shortfall is `owed - total`. -/
+theorem linkFast_eq {F : Fast} {s : ItemState} (hA : Agree F s) (v : FView) (c : RecordCommand) :
+    linkFast F v c = linkRefusalView v.env s c := by
+  unfold linkFast linkRefusalView
+  rw [← hA.requests, ← hA.cash, ← hA.lawful]
+  congr 1
+  funext a
+  cases List.find? (fun x => decide (x.actionId = a)) s.requests with
+  | none => rfl
+  | some q =>
+    unfold evaluateState
+    cases evalAdd s.cash s.lawful with
+    | none => rfl
+    | some t =>
+      by_cases ht : v.env.obligation.owedCents > t
+      · simp [ht]
+      · have h0 : v.env.obligation.owedCents - t = 0 := by omega
+        simp [ht, h0]
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} (h : ok L calls = true) :
     fast L calls = (trace L calls).map erase := by
   sorry
