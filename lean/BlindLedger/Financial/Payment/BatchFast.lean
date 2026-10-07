@@ -1003,6 +1003,48 @@ theorem Rel_step {F : Fast} {M : Ledger} {c : Call} (hR : Rel F M)
   case alias pid e post => exact Rel_alias hR hr ho
   all_goals exact Rel_post_other hR hr (fun _ _ _ _ h => by rw [ho] at h; cases h) (fun _ _ _ h => by rw [ho] at h; cases h)
 
+/-- Under `Rel` and the premises `ok` decides (carried as in `chain_fold_eq_full`), the fast lane is
+    the erased trace: `link_step` per call, `Rel_step` + `step_wellFormed` to the next. -/
+theorem fast_eq_trace_of_rel (calls : List Call) (F : Fast) (M : Ledger) (hR : Rel F M)
+    (hL : ledgerWellFormed M) (hc : clocksOk M calls) (hRv : M.input.beforeRevision + calls.length ≤ maxRevision)
+    (hw : (calls.all fun c => commandWellFormed c.command && c.expectedRevision.all (· < 2 ^ 63)) = true) :
+    fastFrom F calls = (trace M calls).map erase := by
+  induction calls generalizing F M with
+  | nil => rfl
+  | cons c cs ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at hw
+    obtain ⟨⟨hcmd, hexp⟩, hw2⟩ := hw
+    have hpw := (List.pairwise_cons.1 hc.1).1 c.now (by simp)
+    have hnow : c.now < 2 ^ 63 := by
+      have := hc.2
+      simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at this
+      exact this.1
+    have hmax : c.now ≤ maxTime := by simp only [maxTime, maxCents]; omega
+    have hrq : requestWellFormed (M.request c) = true := by
+      simp only [requestWellFormed, Bool.and_eq_true]
+      exact ⟨⟨⟨wf_now hL.1 hpw hmax, hL.2⟩, hcmd⟩, hexp⟩
+    show stepFast F (F.view c) :: fastFrom (F.post (F.view c) (stepFast F (F.view c))) cs =
+      erase (M.outcome c) :: (trace (step M c) cs).map erase
+    refine List.cons_eq_cons.2 ⟨link_step hR c hrq, ?_⟩
+    cases cs with
+    | nil => rfl
+    | cons c' cs' =>
+      have hRs : M.input.beforeRevision + 1 < maxRevision := by
+        simp only [List.length_cons] at hRv; omega
+      have hclk : clocksOk M [c] := ⟨by simp [List.pairwise_cons, hpw], by simpa using hnow⟩
+      refine ih _ _ (Rel_step hR hrq) (step_wellFormed M hL c hclk hRs) ?_ ?_ hw2
+      · obtain ⟨hp1, hp2⟩ := hc
+        simp only [List.all_cons, Bool.and_eq_true] at hp2
+        refine ⟨?_, by simp only [List.all_cons, Bool.and_eq_true]; exact hp2.2⟩
+        have h1 := List.pairwise_cons.1 hp1
+        have h2 := List.pairwise_cons.1 h1.2
+        refine List.pairwise_cons.2 ⟨fun b hb => ?_, h2.2⟩
+        rcases step_eval M c with he | he <;> rw [he]
+        · exact h1.1 b (List.mem_cons_of_mem _ hb)
+        · exact h2.1 b hb
+      · have := step_before_le M c
+        simp only [List.length_cons] at hRv ⊢; omega
+
 theorem fast_eq_trace_of_ok {L : Ledger} {calls : List Call} {t : EvaluatedTotals}
     (ht : evaluateTotals L.input = some t) (h : ok L calls = true) :
     fastFrom (Fast.init L t) calls = (trace L calls).map erase := by
