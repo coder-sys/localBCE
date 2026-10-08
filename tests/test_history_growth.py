@@ -46,7 +46,6 @@ GROWS = {  # operation: (counters that grow, owner branch, listed, strength of t
     "reverse": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
     "evaluate": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
     "audit": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
-    "cash_file": ("sql_ops peak_kib", "hist-flat", "2026-10-01", "EXACT: the whole-store before/after diff becomes a diff of the auth-state map, which commits to every row"),
     "export": ("sql_ops peak_kib", "none", "2026-10-01", "WEAKENS: earlier exported segments stop being re-compared; a tampered copy is caught by its reader's chain check, not by the next export"),
     "continuity": ("sql_ops hashed peak_kib refused", "auth-state K1", "2026-10-01", "EXACT: a manifest of sealed segments plus current state, each verified against its digest on restore"),
     "open": ("sql_ops hashed peak_kib", "auth-state R1/R2", "2026-10-01", "EXACT only if the off-lock history sweep gates release; else WEAKENS: tamper in unread history found after open"),
@@ -58,7 +57,7 @@ PINNED = {  # operation: (small-history work, large-history work) on trunk 70f96
     "decision": ((11747, 30506, 2216, 104, 0), (31530, 30506, 2216, 113, 0)),
     "reverse": ((11964, 32205, 2516, 112, 0), (31747, 32205, 2516, 120, 0)),
     "evaluate": ((11670, 35621, 2208, 141, 0), (31453, 35621, 2208, 134, 0)),
-    "cash_file": ((137715, 133818, 23304, 3084, 0), (286031, 133459, 22908, 29362, 0)),  # F2: +12 armed triggers (4 tables); fixed +19806 at both sizes, measured b1t2
+    "cash_file": ((126299, 136410, 23304, 528, 0), (163372, 136033, 22908, 522, 0)),  # CFI-C1 keyed begin: flat in history, measured cfl7 (was 137715/286031 sql_ops, 3084/29362 peak_kib)
     "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
     "continuity": ((32004, 2226225, 0, 10760, 0), (229802, 44523292, 0, 141728, 1)),
     "package": ((3152, 18608, 0, 112, 0), (3152, 18608, 0, 112, 0)),

@@ -109,7 +109,7 @@ class Chaos:
                 self.close(s)
             try:
                 self.c.boot()
-            except idreg.IdRegistryError as error:  # a rewound store halts the boot; the running nonce stays
+            except idreg.IdRegistryError as error:  # a rewound store halts the boot and fences the running nonce
                 self.t.assertTrue(self.restored and str(error) == "registry_rewound", error)
         elif act in ("snapshot", "restore"):
             if k in self.live:
@@ -143,8 +143,14 @@ class Chaos:
         self.t.assertEqual(len(lines), len(set(lines)), f"a line id was ALLOWed twice: {lines}")
         self.t.assertEqual(self.intruded, [], "a second decider reserved inside a commit")
         g.owned(self.c, self.t)
-        with contextlib.suppress(idreg.IdRegistryError) if self.restored else contextlib.nullcontext():
+        try:
             self.c.boot()
+        except idreg.IdRegistryError:
+            if not self.restored:
+                raise
+            self.p += 1  # the refusal fenced the running nonce: every shard HOLDs until a boot passes
+            self.t.assertEqual(self.c.send(0, {self.p: [PROBE[0]]}), {PROBE[0]: "HOLD registry_not_booted"})
+            return
         for k in set(range(SHARDS)) - self.restored:  # no healthy shard wedges
             self.p += 1
             self.t.assertEqual(self.c.send(k, {self.p: [PROBE[k]]}), {PROBE[k]: "ALLOW -"}, f"shard {k} is wedged")

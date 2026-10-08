@@ -1,42 +1,45 @@
 # RightRail status
 
-Current truth only, replaced once per trunk merge. History is `git log`; protected-change records are `git log --grep '^XI.2:'`.
-`CONSTITUTION.md` is supreme; `ARCHITECTURE.md` says how the code fits together. Git state, raw guard logs and artifact provenance
-govern; a branch's pass does not verify another branch or their combination. Describes trunk
-`5929a93d`.
+Current truth only, replaced once per trunk merge. History is `git log`; protected-change records: `git log --grep '^XI.2:'`.
+`CONSTITUTION.md` is supreme; `ARCHITECTURE.md` maps the code. Git state, raw guard logs and artifact provenance
+govern; a branch's pass verifies no other branch or combination. Describes trunk
+`56cca319`.
 
 ## Product and standing claims
 
 One state-controlled record connects approved rules, evidence, unresolved work, official decisions and follow-through. Control Pack,
 Blind Ledger, Mirror, Continuity and Switch share the financial owner; Provider App is separate. The payment gate is one authority
-level within that product. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
+level in it. Existing payment systems move money. Synthetic, state-local, non-PHI, nonpayment; `proofSuiteId=null`,
 `production_usable=false`, `activation=false`. Guarded local runs are merge evidence, not release qualification.
 
 ## What landed since d7192b0
 
-Trunk `5929a93d`: full suite `shlfull1` 914 run, 899 pass, 0 fail, 15 skip; Lean `shl8`, axscan `shl9`, semgate
-`shl10` exit 0.
+Trunk `56cca319`: full suite `idl10` 932 run, 0 fail, 15 skip, 1 expected (HIGH-2); Lean `bp33`,
+real-candidate semgate `bp35` 23/23.
 
+- **Gate restore (IDREG S1-S2).** A boot raises the fencer epoch, then anchors on the payer's newest stored checkpoint per
+  shard and refuses `store_rewound`; a refused boot fences the running nonce and HOLDs.
 - **Shard laws (Lean, unwired):** an owner split keeps each owner's fold; open: hash no-fixed-point assumption.
 - **STATE/v2 custody (Lean, unwired).** Custody folds one append-only off-machine log; an epoch-keyed TPM
   counter catches rollback; activation once per shard; a payment's ALLOWs share one checkpoint (`never_twice`).
-- **Owner batch fast lane (Lean):** where `ok` passes, the fast fold equals the trace (`fast_eq_trace_of_ok`).
-- **Payer release batch (BATCH-P1, Lean).** Each batch answer equals single-token RELEASE (`releaseBatch_eq`);
-  ACCEPT is exactly the payer's twelve checks, earned in the call (`releaseBatch_spec`, `_accept_verified`); a bad item or
-  unnamed checkpoint changes no other answer; a released item never accepts (`releaseBatch_once`). Axioms pinned.
+- **Owner batch fast lane (Lean, unwired):** where `ok` passes, the fast fold equals the trace (`fast_eq_trace_of_ok`).
+- **Payer release batch (BATCH-P1/P3, Lean, unwired).** Batch answers equal single-token RELEASE (`releaseBatch_eq`);
+  ACCEPT is the payer's twelve checks, earned in the call (`releaseBatch_spec`, `_accept_verified`); a bad item or
+  unnamed checkpoint changes no other answer; a released item never accepts (`releaseBatch_once`);
+  a token pass implies a tree pass or a named SHA3-512 collision (`publishOkTree_complete`). Axioms pinned.
 - **Deployment slots (D7).** An empty slot reads its strictest value, logs `DEPLOYMENT_SLOT_EMPTY`, refuses activation.
 - **APPROVAL/v1 line digest.** Raw 64-byte SHA3-512 `line_digest`; Lean checks it, then decodes stored bytes, never re-encodes.
 - **835 absorb.** Two parsers, no shared code, agree row for row; a faulty claim or PLB block becomes a RAW row; an unreadable
   amount holds the file; only an unreadable BPR02 refuses it. A 6.9x fast fold (92.2k lines/s/core)
-  matches the slow parser on all fixtures and mutations.
+  matches it on all fixtures and mutations.
 - **Payer release (S7a).** Lean decision and every write under one lock; append-only `closed` table; one hold row per refusal.
-- **Absorb ladder (cash file).** A bad row is held with a reason, a repeat is a `DUPLICATE`, the rest records; an
-  unabsorbable file is refused with nothing written.
-- **Bypass only per verified payment** (XI.2). **Python decider retired:** only the contained Lean worker decides.
-- **Gate/cash file.** Per-shard decider lease; plan on a copy, commit under the lock (quarter-end lock 1.44-1.65 s, bound 5 s).
+- **Absorb ladder (cash file).** A bad row is held with a reason, a repeat is a `DUPLICATE`, the rest record; an
+  unabsorbable file is refused.
+- **Bypass only per verified payment** (XI.2); Python decider retired.
+- **Gate/cash file.** Per-shard decider lease; plan on a copy, commit under the lock (quarter-end lock 1.44-1.65 s, bound 5 s);
+  keyed begin (CFI-C1; 2.9x history: same `sql_ops`, plan begin +14%).
 - **Lean decides every payment (M3);** ByteArray frames proved equal; M4 claim and offset laws; M1 offset cap.
-- **Pins.** Worker `7C1EAB94...`, `gate_verify` `a9f47312...` (`artifacts/`), `tcb_pin` passes. Superseded: PROVENANCE,
-  `RETIRED_PINS`.
+- **Pins.** Worker `7C1EAB94...`, `gate_verify` `a9f47312...` (`artifacts/`), `tcb_pin` passes. 
 
 ## Standing design
 
@@ -51,22 +54,24 @@ Trunk `5929a93d`: full suite `shlfull1` 914 run, 899 pass, 0 fail, 15 skip; Lean
 
 ## Open items
 
+- **IDREG S3 (double-pay routes):** restore while running, no boot (HIGH-2, pinned expected failure); a failed BEGIN
+  leaves no fence (MEDIUM-1).
 - **Correction result cap:** a BLFCRES3 result embeds its input, so a correction near 7 MB is refused (tag 3).
 - **Cash residuals:** a foreign commit before the first write costs a whole-store verify under the lock (~10 s at 6,000
   payments); a raising ROLLBACK fails the next write once (untested). Fallback `run_batch` grows with
-  item history (2.7 -> 4.6 s over four files); the production route is flat (~1 s).
+  item history (2.7 -> 4.6 s, four files); production route flat (~1 s).
 - **Real-world data:** a dirty Medicaid corpus (branch `dirty-corpus`) shows unrepresentable cases (advance payments, member
   crosswalk, PLB balances, death after release, upward retro rates).
 - **Gate:** 145-166 lines/s at batch 100, 628-690 at batch 2,000 (target 50,000). Before live use the rules worker
   needs a pinned `RULES_SOURCE` and a memory cap, BLFPAY01 a Lean length check (re-pin). Unbuilt: payer pin before send,
   prior-digest check, integrated payer gate, durable token. Failover TLC is a bounded model.
 - **Unbuilt:** financial file adapters (MCO reports, X12 820, MMIS extracts), payee-identity consumption, a second synthetic state,
-  a Lean seal codec. NC capture is synthetic file intake.
+  a Lean seal codec.
 - **Carried, not re-measured:** the staff role header is server-enforced, not a login; no cancel or reduce command for stale corrections; receipt
   `delivery_status` is the newest action's, not the verdict; core over size target (owner 6,756/~3,000,
   checker 4,451/~1,800 lines); TEST restore uses the system clock; published items cannot be re-stated (`item:duplicate`); a dead decider worker is not
   restarted (fails safe).
-- **Acknowledger not stored (open, needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so "a decider may not acknowledge"
-  is claim-level, not re-verifiable by checker or Lean; fixing it needs a versioned ACK record.
+- **Acknowledger not stored (needs rr-core):** `ACTION_ACKNOWLEDGED` records no actor, so "a decider may not acknowledge"
+  is claim-level, not re-verifiable by checker or Lean; the fix: a versioned ACK record.
 
 Next: STATE/v2 wiring, hold-release S3b+ (slot consumers), cash-line hold ledger.

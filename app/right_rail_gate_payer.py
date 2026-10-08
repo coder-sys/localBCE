@@ -213,5 +213,15 @@ class PayerStore:
     def holds(self) -> list[tuple[str, str]]:
         return self._db.execute("SELECT payment_id, reason FROM holds ORDER BY id").fetchall()
 
+    def newest_stored(self, tenant: str) -> dict[int, bytes]:
+        """The registry boot anchor (B2): per shard, the digest of the stored checkpoint with the highest epoch, then the
+        highest seq_to.  A tie (two at one epoch and seq_to; ``store_checkpoint`` records a fork instead of storing it)
+        goes to the lowest digest bytes, so the answer never depends on row order."""
+        newest: dict[int, bytes] = {}
+        for shard, digest in self._db.execute("SELECT shard, digest FROM checkpoints WHERE tenant=? "
+                                              "ORDER BY shard, epoch DESC, seq_to DESC, digest", (tenant,)):
+            newest.setdefault(shard, digest)
+        return newest
+
     def close(self) -> None:
         self._db.close()

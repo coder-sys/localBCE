@@ -162,6 +162,17 @@ class PayerTests(fx.Scratch):
         with contextlib.closing(sqlite3.connect(Path(tmp) / "payer.sqlite3")) as db:
             return [db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in tables]
 
+    def test_newest_stored_per_shard_epoch_then_seq_to_then_lowest_digest(self) -> None:
+        with self.scratch() as tmp:
+            store = self._store(tmp)
+            self.assertEqual(store.newest_stored(fx.TENANT), {})
+            rows = [(fx.TENANT, 0, 7, 9, "02"), (fx.TENANT, 0, 8, 1, "03"), (fx.TENANT, 0, 7, 5, "01"),  # epoch beats seq_to
+                    (fx.TENANT, 1, 7, 4, "0b"), (fx.TENANT, 1, 7, 4, "0a"),  # a tie: the lowest digest, not row order
+                    (fx.OTHER, 0, 9, 9, "0c"), (fx.OTHER, 2, 9, 9, "0d")]  # another tenant's newer rows are ignored
+            self._raw(tmp, *(f"INSERT INTO checkpoints VALUES(X'{d}', '{t}', {s}, {e}, 0, {q}, X'', X'')" for t, s, e, q, d in rows))
+            self.assertEqual(store.newest_stored(fx.TENANT), {0: b"\x03", 1: b"\x0a"})
+            self.assertEqual(store.newest_stored(fx.OTHER), {0: b"\x0c", 2: b"\x0d"})
+
     def test_two_connections_release_one_key_once(self) -> None:
         with self.scratch() as tmp:
             request, (token, _) = self._ready(tmp)
