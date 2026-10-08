@@ -318,7 +318,8 @@ class ShardTests(fx.Scratch):
                     self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD ALREADY_DECIDED"})  # the refusal freed nothing
                     with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
                         c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
-                    self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD registry_not_booted"})  # the refusal fenced the nonce
+                    with self.other_process():
+                        self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD registry_not_booted"})  # the refusal fenced the nonce
                 else:
                     c.boot()  # the store is behind only a batch whose tokens never left
                     self.finish(c, NEXT)  # 20 freed, decided again and paid once; inv holds
@@ -382,8 +383,13 @@ class ShardTests(fx.Scratch):
     def releases(self, store: payer.PayerStore) -> list[str]:
         return [p for (p,) in store._db.execute("SELECT payment_id FROM releases ORDER BY payment_id")]
 
+    @staticmethod
+    def other_process():
+        """Run as another process on the same nonce whose registry memory predates the copy: only a fence stops it."""
+        return mock.patch.multiple(idreg, _SEEN={}, _STOPPED=set())
+
     def test_r5_refused_boot_fences_the_running_nonce(self) -> None:
-        """Review HIGH-1: the process keeps running with the copy's newest nonce; the refused boot's BOOT row fences it,
+        """Review HIGH-1: processes keep running with the copy's newest nonce; the refused boot's BOOT row fences them,
         so shard 1's X HOLDs and X is released once.  Mutant: without that row the old nonce reserves and X pays twice."""
         add = idreg._Tail.add
         for mutant in (False, True):
@@ -392,10 +398,11 @@ class ShardTests(fx.Scratch):
             with self.subTest(mutant=mutant), self.released_then_restored(restart=False) as (c, store), fence:
                 with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
                     c.boot()
-                if mutant:
-                    self.assertIsNone(self.pay(c, store, 1, 2))
-                else:
-                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                with self.other_process():
+                    if mutant:
+                        self.assertIsNone(self.pay(c, store, 1, 2))
+                    else:
+                        self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
 
     def test_r5_a_boot_that_cannot_read_its_inputs_fences(self) -> None:
@@ -411,7 +418,8 @@ class ShardTests(fx.Scratch):
                     c.store(1).touch()  # a store to read: the copy predates every batch
                 with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(idreg.IdRegistryError) as refused:
                     c.boot()
-                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                with self.other_process():
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001"])
                 self.assertRegex(str(refused.exception), label)
                 if target:
@@ -435,7 +443,8 @@ class ShardTests(fx.Scratch):
                     cursor = self.db.execute(sql, *args)
                     if sql in ("COMMIT", "ROLLBACK") and not seen:
                         seen.append(None)
-                        seen[0] = c.send(1, {2: [10]})
+                        with ShardTests.other_process():
+                            seen[0] = c.send(1, {2: [10]})
                     return cursor
             with mock.patch.object(idreg, "_open", lambda *a: Hooked(real(*a))), \
                     self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
@@ -460,20 +469,59 @@ class ShardTests(fx.Scratch):
                     self.assertEqual(c.send(0, {2: [10]}), {10: "HOLD registry_restored"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
 
-    def test_r5_restore_while_running_no_boot_today(self) -> None:
-        """The directory comes back under a running process that never reboots: it holds the copy's newest nonce, so
-        nothing fences it.  The setup and today's known-bad result are pinned (review L-D, LOW-1): a fixture regression
-        fails here, and S3 flips the ALLOW to HOLD."""
-        with self.released_then_restored(restart=False) as (c, store):
-            self.assertEqual((bool(c.nonce), self.releases(store), c.store(0).exists()), (True, ["pay-0001"], False))
-            self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})  # HIGH-2 open; S3 flips to HOLD
+    def fenced(self, c: g.Cluster) -> bool:
+        """The registry's newest BOOT row is not the running nonce's."""
+        with contextlib.closing(sqlite3.connect(f"file:{c.reg}?mode=ro", uri=True)) as db:
+            newest = db.execute("SELECT id FROM log WHERE kind = 3 ORDER BY n DESC LIMIT 1").fetchone()[0]
+        return newest != c.nonce.rjust(idreg.ID_LEN, b"\0")
 
-    @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
     def test_r5_restore_while_running_no_boot(self) -> None:
-        """The same restore: shard 1 must HOLD, so X is released once.  Only this final check is the expected failure."""
+        """Review HIGH-2: the directory comes back under a running process that never reboots.  It holds the copy's
+        newest nonce, but the row it last wrote is gone, so shard 1's X HOLDs before any reserve, and the fence that
+        check commits stops the other processes on the nonce too.  X is released once."""
         with self.released_then_restored(restart=False) as (c, store):
-            self.assertTrue(c.send(1, {2: [10]})[10].startswith("HOLD"))
-            self.assertEqual(self.releases(store), ["pay-0001"])
+            reserved = count(c, idreg._RESERVE)
+            self.assertEqual((self.fenced(c), self.releases(store), c.store(0).exists()), (False, ["pay-0001"], False))
+            self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+            with self.other_process():
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+            self.assertEqual((count(c, idreg._RESERVE), self.releases(store), g.sealed_allows(c, 1)), (reserved, ["pay-0001"], {}))
+
+    def test_r5_a_boot_that_cannot_lock_or_commit_stops_the_process(self) -> None:
+        """Review MEDIUM-1: another writer holds the lock past boot's timeout, or boot's COMMIT fails (always, or once),
+        so its fence may not land and boot raises ``registry_unavailable``.  Every handle of this process then HOLDs
+        until a boot passes, and the first to lock commits the fence (a COMMIT that failed once: the boot's own retry
+        did), which stops the other processes on the nonce.  The memory of the restored-away row is cleared, so the
+        HIGH-2 check is not what HOLDs here.  X is released once."""
+        real = idreg._open
+
+        class Failing:  # boot's connection: COMMIT raises ``left`` times
+            def __init__(self, db, left):
+                self.db, self.left = db, left
+
+            def __getattr__(self, name):
+                return getattr(self.db, name)
+
+            def execute(self, sql, *args):
+                if sql == "COMMIT" and self.left:
+                    self.left -= 1
+                    raise sqlite3.OperationalError("disk I/O error")
+                return self.db.execute(sql, *args)
+        for trigger, hook in (("lock", lambda path, timeout=5.0: real(path, 0.1)), ("commit", lambda *a: Failing(real(*a), 2)),
+                              ("commit once", lambda *a: Failing(real(*a), 1))):
+            with self.subTest(trigger), self.released_then_restored(restart=False) as (c, store), \
+                    mock.patch.object(idreg, "_SEEN", {}), contextlib.closing(sqlite3.connect(c.reg, isolation_level=None)) as writer:
+                if trigger == "lock":
+                    writer.execute("BEGIN IMMEDIATE")
+                with mock.patch.object(idreg, "_open", hook), self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                    c.boot()
+                if trigger == "lock":
+                    writer.execute("ROLLBACK")
+                self.assertEqual(self.fenced(c), trigger == "commit once")
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                with self.other_process():
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(self.releases(store), ["pay-0001"])
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the
