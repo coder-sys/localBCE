@@ -1339,6 +1339,81 @@ class ShardBench(unittest.TestCase):
         self.assertIsInstance(raised.exception.__cause__, sqlite3.OperationalError)
         self.quiet()
 
+    def test_of4_ctrl_c_in_the_close_drain_names_every_owing_shard_and_reraises(self) -> None:  # FIX4b MEDIUM-1: the interrupt goes on with the shards it left owing
+        spine = self.owed_spine("of4-drain-ctrlc", ())
+        timer, fired = self.watchdog(spine)
+        try:
+            owing = sorted(spine.owed)
+            with mock.patch.object(spine, "wait_acks", side_effect=rb.FinancialIntegrityError("forced_wait")), mock.patch.object(spine, "reply", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    spine.close()
+            self.assertEqual(sorted(spine.dead), owing)
+            note = " ".join(raised.exception.__notes__)
+            for k in owing:
+                self.assertIn(f"shard_unconfirmed:{k}", note)
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+
+    def group_two_fails_with_a_wrong_ack(self, out: str, cleanup=None) -> None:
+        """run_once over four files: the second group fails in the spine while shard 1 ACKs a wrong head, so the divergence is found only in close's drain."""
+        files, real_ingest, calls = sb.corpus(20261007, LINES, 4), sb.Spine.ingest_group, []
+
+        def ingest_group(self, items):
+            results = []
+            for item in items:
+                calls.append(1)
+                if len(calls) == 2:
+                    raise rb.FinancialIntegrityError("forced_group")
+                results += real_ingest(self, [item])
+            return results
+
+        with self.sender_env(True), mock.patch.object(sb, "shard_main", wrong_ack_main), mock.patch.object(sb.Spine, "ingest_group", ingest_group), mock.patch.object(rb.Checkpointer, "close", cleanup or rb.Checkpointer.close):
+            sb.run_once(4, files, self.template, self.tmp / out, False, 1)
+
+    def test_of4_run_once_raises_shard_diverged_when_close_finds_the_wrong_head_after_another_error(self) -> None:  # FIX4b LOW-2
+        with self.assertRaises(sb.ShardDiverged) as raised:
+            self.group_two_fails_with_a_wrong_ack("of4-close-diverged")
+        self.assertRegex(str(raised.exception), r"head differs after commit")
+        self.quiet()
+
+    def test_of4_run_once_stays_shard_diverged_when_checkpoint_cleanup_raises_after_the_wrong_head(self) -> None:  # FIX4b LOW-3
+        real = rb.Checkpointer.close
+
+        def close(self) -> None:
+            real(self)
+            raise sqlite3.OperationalError("forced_cleanup")
+
+        with self.assertRaises(sb.ShardDiverged) as raised:
+            self.group_two_fails_with_a_wrong_ack("of4-cleanup-diverged", close)
+        self.assertRegex(str(raised.exception), r"head differs after commit")
+        self.assertIsInstance(raised.exception.__cause__, sqlite3.OperationalError)
+        self.quiet()
+
+    def test_of4_check_senders_keeps_the_first_reason_a_shard_already_lost(self) -> None:  # FIX4b LOW-4
+        spine = self.owed_spine("of4-first-reason", (1,))
+        timer, fired = self.watchdog(spine)
+        try:
+            spine.dead[1] = "shard_commit_refused:1:first"
+            with self.assertRaises(rb.FinancialIntegrityError):
+                spine.check_senders()
+            self.assertEqual(spine.dead[1], "shard_commit_refused:1:first")
+            (self.tmp / "of4-first-reason" / "gate").touch()
+            with self.assertRaises(rb.FinancialIntegrityError):
+                spine.close()  # stops the senders and shards too: a test that leaves a sender thread alive fails every later quiet()
+            self.assertEqual(spine.dead[1], "shard_commit_refused:1:first")
+        finally:
+            timer.cancel()
+            for p, _ in spine.workers.values():
+                if p.is_alive():
+                    p.terminate()
+        self.assertEqual(fired, [])
+        self.quiet(spine)
+
     def test_s12_close_an_abort_that_cannot_be_written_still_rolls_the_spine_back(self) -> None:
         files = sb.corpus(20261006, LINES, 2)
         spine = self.spine_with(sb.shard_main, "s12-abort-send", False)

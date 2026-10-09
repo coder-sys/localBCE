@@ -538,6 +538,7 @@ class Spine:
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
+        self.diverged_seen = False  # a wrong head after a commit was found: run_once ends in ShardDiverged, whatever else failed in the same run
         self.dead: dict[int, str] = {}  # shards lost to this run (their COMMIT was refused, or they stopped answering) -> the error every later attempt and close raises
         self.feed, self.g, self.nested, self.ack_mark, self.latency, self.groups = None, None, 0.0, None, [], []
         self.tt = {name: 0.0 for name in ("judge", "ipc", "spine_rows", "wait_built", "spine_write", "spine_commit", "ack_wait", "feed", "ipc_pickle", "ipc_send_owed", "ipc_send_free", "ipc_bytes", "thread_send_owed", "thread_send_free")}
@@ -590,7 +591,7 @@ class Spine:
 
     def check_senders(self) -> None:
         failed = {k: f"shard_send:{k}:{sender.error!r}" for k, sender in self.senders.items() if sender.error is not None}
-        self.dead.update((k, reason) for k, reason in failed.items() if k in self.owed)  # a write to k failed after the spine committed: k is lost to this run (as in handle's ERR), every such k before the raise, the healthy shards are drained at close
+        self.dead.update((k, reason) for k, reason in failed.items() if k in self.owed and k not in self.dead)  # a write to k failed after the spine committed: k is lost to this run (as in handle's ERR), every such k before the raise, the healthy shards are drained at close
         if failed:
             raise rb.FinancialIntegrityError(next(iter(failed.values())))
 
@@ -642,6 +643,7 @@ class Spine:
 
     def diverged(self, k: int) -> ShardDiverged:
         """A shard's ACK of the spine's COMMIT carries a head other than the one owed: the spine committed, so which shard holds what is no longer known and the run ends (every shard dead; close raises)."""
+        self.diverged_seen = True
         error = ShardDiverged(f"shard {k}: head differs after commit")
         self.dead = {**dict.fromkeys(self.workers, str(error)), **self.dead}  # a shard already lost keeps its own reason
         return error
@@ -898,6 +900,11 @@ class Spine:
                     wrong = self.diverged(k)
             except Exception as error:  # a silent, lost or garbled shard
                 self.dead[k] = f"shard_reply:{k}:{error!r}"
+            except BaseException as interrupt:  # Ctrl-C or SystemExit in the drain: every shard still owing its COMMIT is lost to this run, and the interrupt goes on with the list
+                for j in self.owed:
+                    self.dead.setdefault(j, f"shard_unconfirmed:{j}")
+                interrupt.add_note(self.lost())
+                raise
         return wrong
 
     def close(self) -> list[dict]:
@@ -1022,7 +1029,7 @@ def run_once(k_count: int, files: list, template: Path, work: Path, with_replay:
         except Exception as closed:
             if spine.dead and str(error) != spine.lost():  # this error does not name every shard lost: the caller must hear of all of them
                 if isinstance(error, Exception):
-                    raise (ShardDiverged if isinstance(error, ShardDiverged) or isinstance(closed, ShardDiverged) else rb.FinancialIntegrityError)(spine.lost()) from closed
+                    raise (ShardDiverged if spine.diverged_seen else rb.FinancialIntegrityError)(spine.lost()) from closed
                 error.add_note(spine.lost())  # Ctrl-C, SystemExit: raised as it is
         raise
     latency = sorted(spine.latency)

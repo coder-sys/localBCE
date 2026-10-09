@@ -431,14 +431,8 @@ class Writer:
                 t["cells"].append((rk, cid, origin, pool, ob, "NEGATIVE", amount))
                 t["holds"].append((rk, cid, "TARGET"))
                 t["links"].append((rk, cid, target, "EFFECTIVE" if target in resolved else "PENDING"))
-                if target in resolved:
-                    cls = "negative_applied"
-                    t["resolutions"].append((rk, cid, None, amount, "INTAKE"))
-                    t["charges"].append((rk, rk, ob, amount))
-                    muts.append((ob, key, amount, "PAYMENT_REVERSED"))
-                else:
-                    cls = "negative_pending"
-                    pending.setdefault(target, []).append((origin, cid, rk))
+                cls = "negative_pending"  # run_file judges a file's negatives before any positive row resolves a target: the EFFECTIVE link above is always PENDING
+                pending.setdefault(target, []).append((origin, cid, rk))
             else:
                 cls = "applied"
                 t["cells"].append((rk, cid, origin, pool, ob, "RESOLVED", amount))

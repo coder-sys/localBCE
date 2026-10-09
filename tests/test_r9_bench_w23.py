@@ -104,6 +104,28 @@ class OracleWriter(rb.Writer):
             self.write(table, data)
         self.finish(index, now, touched, began)
 
+    def finish(self, index, now, touched, began) -> None:  # the 568ba4e1 finish: the three receipt digests are sha(eid, 1..3); S13's sha_tags(eid, 1, 2, 3) must store the same bytes
+        evals, cases, obls = [], [], []
+        for ob in sorted(touched) if self.fast else touched:
+            rev, cents = self.revision[ob], touched[ob]
+            eid = f"eval:{index:06d}:{ob}:{rev}"
+            row = list(self.base[ob])
+            for name, value in (("evaluation_id", eid), ("revision", rev), ("evaluated_at_ms", now), ("result_digest", sha(eid, 1)), ("input_snapshot_digest", sha(eid, 2)), ("receipt_digest", sha(eid, 3))):
+                row[self.cols.index(name)] = value
+            evals.append(tuple(row))
+            cases.append((now, ob))
+            obls.append((rev, max(cents, 0), eid, now, ob, began[ob]))
+        self.write("evaluations", evals)
+        guarded = [("UPDATE cases SET updated_at_ms=? WHERE obligation_id=?", cases),
+                   ("UPDATE obligations SET revision=?,received_cash_cents=received_cash_cents+?,current_evaluation_id=?,updated_at_ms=? WHERE obligation_id=? AND revision=?", obls)]
+        for sql, args in guarded:
+            if self.fast:
+                changed = self.c.executemany(sql, args).rowcount
+            else:
+                changed = sum(self.c.execute(sql, a).rowcount for a in args)
+            if changed != len(args):
+                raise rb.FinancialIntegrityError("obligation_revision_moved")
+
 
 class OracleShard(sb.Shard):
     def __init__(self, k: int, db: Path) -> None:
