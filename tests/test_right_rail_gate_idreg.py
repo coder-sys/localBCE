@@ -292,6 +292,15 @@ class IdRegistryTests(unittest.TestCase):
         self.assertEqual((done["A"], len(done["B"])), ("registry_unavailable", 32))
         self.assertEqual(self.open(done["B"]).reserve(0, [1], sealed=None)[0], [(1, 0, False)])  # B passed last
 
+    def test_a_boot_that_waits_too_long_for_another_is_a_typed_refusal(self) -> None:
+        """Review L-1 (s3fix1): another boot of this process holds the boot lock past 5 s: ``registry_unavailable``,
+        nothing written, and the running handle still works."""
+        before = self.tail()
+        with idreg._BOOTING, self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+            idreg.boot(self.path, lambda: ({}, {}, {}))
+        self.assertEqual(self.tail(), before)
+        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
     def test_bad_input_is_refused_before_anything_is_written(self) -> None:
         before = self.tail()
         for shard, ids in ((-1, [1]), (1 << 32, [1]), (True, [1]), (0, [1, -1]), (0, [1, True]), (0, [1, 2 ** 1032]),

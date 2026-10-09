@@ -9,6 +9,7 @@ import contextlib
 import cProfile
 import hashlib
 import io
+import itertools
 import os
 import pstats
 import random
@@ -31,6 +32,7 @@ from tests import test_right_rail_gate_formats as fx
 N, BATCH = int(os.environ.get("RR_GATE_BENCH_N", 2000)), int(os.environ.get("RR_GATE_BENCH_BATCH", 100))
 PER_PAYMENT, SEED = 4, 20261005
 # sha256 of the stored outputs of the 2,000-line corpus by batch size, taken before any speed change (suffixes gs-1, gs-3b2000)
+NONCES = itertools.count(int.from_bytes(bytes(range(32)), "big"))  # the patched os.urandom: seeded, unique per call, first bytes(range(32))
 OUTPUT_DIGEST = {100: "9e7563e9d853b49c6d640580615eddfcf3c4b72e333aaaeb96093f24ac4399d0",
                  2000: "a5af4402a537bfd77fc66faa81ac6144ee0cd4d23b80572f32d44dc587a87b73"}
 STAGES = {"leaves": None, "decide": None, "  registry reserve": (idreg.IdRegistry, "reserve"), "  rules worker": (decider.RulesWorker, "run"), "  one-shot exe": None,
@@ -79,7 +81,7 @@ class GateThroughput(fx.Scratch):
         self.addCleanup(worker.close)
         with self.scratch() as tmp, contextlib.ExitStack() as stack:
             c = g.Cluster(tmp, fx.custody(tmp), shards=1)
-            with mock.patch.object(idreg.os, "urandom", lambda n: bytes(range(n))):  # the BOOT nonce is the only random byte in the stored outputs
+            with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):  # the BOOT nonce is the only random byte in the stored outputs
                 c.boot()
             stack.enter_context(mock.patch.object(decider, "subprocess", types.SimpleNamespace(
                 run=timed("  one-shot exe", subprocess.run), TimeoutExpired=subprocess.TimeoutExpired)))

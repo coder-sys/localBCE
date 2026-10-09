@@ -510,7 +510,9 @@ class ShardTests(fx.Scratch):
             with self.subTest(repoint=repoint), self.released_then_restored(restart=False, repoint=repoint) as (c, store):
                 reserved = count(c, idreg._RESERVE)
                 self.assertEqual((self.fenced(c), self.releases(store), c.store(0).exists()), (False, ["pay-0001"], False))
+                self.assertNotIn(c.nonce.rjust(idreg.ID_LEN, b"\0"), idreg._STOPPED)
                 self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertIn(c.nonce.rjust(idreg.ID_LEN, b"\0"), idreg._STOPPED)  # review M-2: the memory mismatch stops the nonce
                 with self.other_process():
                     self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual((count(c, idreg._RESERVE), self.releases(store), g.sealed_allows(c, 1)), (reserved, ["pay-0001"], {}))
@@ -572,6 +574,47 @@ class ShardTests(fx.Scratch):
             with self.other_process():
                 c.boot()
             self.assertEqual(c.send(1, NEXT), {20: "ALLOW -"})
+
+    def test_r5_a_worker_that_never_boots_pays_x_once(self) -> None:
+        """Review M-1 (s3fix1): worker W, never booting, commits shard 0 under N1; a copy is taken; this process reboots
+        (N2); W's shard 0 pays X under N2, W's shard 1 still on N1 HOLDs; the copy comes back (newest BOOT N1, no boot).
+        W's first pass on N2 stopped every older nonce in W, so shard 1 on N1 HOLDs (before: W's N1 memory matched the
+        copy, and X paid twice)."""
+        w = {"_SEEN": {}, "_STOPPED": set()}  # W's process memory
+        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+            n1 = c.nonce
+            with mock.patch.multiple(idreg, **w):
+                self.assertEqual(c.send(0, NEXT), {20: "ALLOW -"})
+            shutil.copytree(c.dir, Path(keep) / "copy")
+            c.boot()
+            with mock.patch.multiple(idreg, **w):
+                self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
+                c.nonce = n1
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                for f in c.dir.iterdir():
+                    f.unlink()
+                shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
+                reserved = count(c, idreg._RESERVE)
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+            self.assertEqual(count(c, idreg._RESERVE), reserved)
+
+    def test_r5_a_handle_open_across_a_copy_and_repoint_holds(self) -> None:
+        """Review M-2 (s3fix1): handle P, opened through a directory link, lives on while the operator copies the
+        directory and re-points the link; another process boots the copy and its shard 1 pays X.  P's next transaction
+        finds another file at its path, so P's X HOLDs (before: P never saw the copy's BOOT and paid X again)."""
+        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+            c.dir = link(Path(keep) / "current", c.dir)
+            try:
+                with contextlib.closing(c.producer(0)) as prod, contextlib.closing(idreg.IdRegistry(c.reg, boot=c.nonce)) as p:
+                    shutil.copytree(c.dir, Path(keep) / "copy")
+                    link(c.dir, Path(keep) / "copy")
+                    with self.other_process():
+                        c.boot()
+                        self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})
+                    self.assertEqual(g.decide_batch(c, prod, p, 0, {1: [10]})[2], {10: "HOLD registry_not_booted"})
+                    self.assertIn(p._boot, idreg._STOPPED)
+            finally:
+                link(c.dir, None)
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the
