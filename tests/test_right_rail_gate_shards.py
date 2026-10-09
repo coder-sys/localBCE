@@ -372,7 +372,7 @@ class ShardTests(fx.Scratch):
             copy, at = Path(keep) / "copy", Path(keep) / "current"
             shutil.copytree(c.dir, copy)
             c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
-                                                          grants=((fx.D[3], (fx.D[4],), (fx.D[6],)),)))
+                                                          grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)))
             store.install_cert(c.custody[2])
             try:
                 if repoint:

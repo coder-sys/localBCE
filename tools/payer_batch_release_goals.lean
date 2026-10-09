@@ -61,7 +61,7 @@ def itemState (s0 : PayerState) (cps : List Stored) (r : ReleaseRun) (it : Item)
             released := if it.released then [it.payment.key] else [],
             pins := it.pin.toList.map fun m => (it.payment.key, m) }
 
-/-- The single-token RELEASE (mode 0x04 today) as a function: install the certificates, verify the one
+/-- The single-token RELEASE (mode 0x05 today) as a function: install the certificates, verify the one
     checkpoint, decide the one item.  Kept only as the specification `releaseBatch` is proved against. -/
 def releaseOne (c : Crypto) (r : ReleaseRun) (cp : Bytes) (it : Item) : Option Failure :=
   let s0 := certsInstalled c r.certs
