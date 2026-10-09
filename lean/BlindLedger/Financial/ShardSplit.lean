@@ -11,11 +11,15 @@ import BlindLedger.Financial.Partition
     `pi(spine) ∪ pi(shard_k)` and `Single` carries no DROP field, so `pi` is the identity here.  The hashes are
     parameters (`Ctx.hsh`, `Ctx.hs`) with no assumption.  The writer never stores a touched shard head that does not
     move: `post_head_k = adv (hs ..) pre_head_k` (`post_ne_pre`), so a fixed point of `hs` (which no real hash rules
-    out) cannot leave a shard part the writer accepts unapplied (`accepted_applied`).  Records commit in groups
-    (`stepG`: one spine COMMIT, one transaction per shard); recovery replays, oldest first and head-guarded, every
-    record above a shard's APPLIED entries, so a crash leaving any set of records unapplied converges
-    (`rollforward_group`, `rollforward_any`) and a mismatch writes nothing (`recover_diverged`).  Not imported by
-    any pinned executable. -/
+    out) cannot leave one record's shard part the writer accepts unapplied (`accepted_applied`).  Records commit in
+    groups (`stepG`: one spine COMMIT, one transaction per shard), and a group can return a head to its old value,
+    so the writer also checks APPLIED: it accepts only if every shard `fits` the spine (head = `heads k`, APPLIED =
+    the `n` of every spine record touching `k`).  Then no group part is left unapplied while writes go on
+    (`accepted_applied_group`, `group_crash_refused`).  Recovery replays, oldest first and head-guarded, every record
+    above a shard's APPLIED entries and commits only a result that `fits`, so a crash leaving any set of records
+    unapplied converges (`rollforward_group`, `rollforward_any`), and a pre-head mismatch, a final head the spine
+    disagrees with, or an APPLIED gap writes nothing (`recover_diverged`, `recover_diverged_tail`, `recover_gap`).
+    Not imported by any pinned executable. -/
 
 namespace BlindLedger.Financial.ShardSplit
 
@@ -380,8 +384,18 @@ theorem post_ne_pre (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (k : Nat) :
 def headsOk (pk : Pack) (cx : Ctx) (ss : SS) : Bool :=
   (List.range (pk.k cx.p)).all fun k => (ss.2 k).head == ss.1.heads k
 
+/-- Shard `k` agrees with the spine: its head is `heads k` and its APPLIED list is the `n` of every spine record
+    touching `k`, oldest first.  So no record is missing and none is skipped (no gap below the newest entry); a
+    head alone cannot show this, since a group can move a head `h0 -> h1 -> h0`.  `Inv3` is this for every `k`. -/
+abbrev fits (sp : SpineDB) (k : Nat) (sh : ShardDB) : Prop :=
+  sh.head = sp.heads k ∧ sh.applied = (sp.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)
+
+def fitsOk (pk : Pack) (cx : Ctx) (ss : SS) : Bool :=
+  (List.range (pk.k cx.p)).all fun k => decide (fits ss.1 k (ss.2 k))
+
+/-- The writer accepts only if every shard below `K` fits the spine (head and APPLIED, `fitsOk`). -/
 def checkAll (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) : Bool :=
-  (judge pk cx ss.1.view inp).ok && headsOk pk cx ss
+  (judge pk cx ss.1.view inp).ok && fitsOk pk cx ss
 
 def commitSpine (sp : SpineDB) (J : Judgment) (R : Rec) : SpineDB :=
   let l := gsum (part J .spine)
@@ -469,10 +483,14 @@ def replays (k : Nat) : List Rec → ShardDB → Option ShardDB
 def pending (sp : SpineDB) (k : Nat) (sh : ShardDB) : List Rec :=
   sp.recs.reverse.filter fun R => decide (k ∈ R.touched) && sh.applied.all fun m => decide (m < R.n)
 
-/-- Replays every pending record in order, in one transaction: a head mismatch anywhere writes nothing
-    (`recover_diverged`).  APPLIED, not the head, decides what is owed, so a part never applies twice. -/
+/-- Replays every pending record in order, in one transaction, and commits only if the result fits the spine
+    (`fits`: head = `heads k`, APPLIED = every record touching `k`).  Otherwise it writes nothing: a pre-head
+    mismatch (`recover_diverged`), a final head the spine disagrees with (`recover_diverged_tail`), or a record
+    APPLIED skipped (`recover_gap`).  APPLIED, not the head, decides what is owed, so a part never applies twice. -/
 def recover (sp : SpineDB) (k : Nat) (sh : ShardDB) : ShardDB :=
-  (replays k (pending sp k sh) sh).getD sh
+  match replays k (pending sp k sh) sh with
+  | some s => if fits sp k s then s else sh
+  | none => sh
 
 def recoverAll (ss : SS) : SS := (ss.1, fun k => recover ss.1 k (ss.2 k))
 
@@ -777,6 +795,12 @@ theorem inv3_init (L : Legacy) : Inv3 (initS L) := fun k => by
     · rw [initShards_ne L h0]; rfl
   rw [ha]
   simp [initS, genesis]
+
+/-- On an `Inv3` state (every reachable one) the shard check passes, so the writer decides by the judgement alone. -/
+theorem checkAll_of_inv3 (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h3 : Inv3 ss) :
+    checkAll pk cx ss inp = (judge pk cx ss.1.view inp).ok := by
+  have hf : fitsOk pk cx ss = true := List.all_eq_true.2 fun k _ => decide_eq_true (h3 k)
+  rw [checkAll, hf, Bool.and_true]
 
 theorem judgeRow_new (pk : Pack) (cx : Ctx) (d : Dir) (r : Row) (h : Home)
     (hv : (judgeRow pk cx d r).2 = .admit h) : d r.cell = none ∧ ∃ x, (judgeRow pk cx d r).1 r.cell = some x := by
@@ -1125,18 +1149,16 @@ theorem merge_commit (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss
 
 theorem merge_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) (h3 : Inv3 ss) :
     merge pk cx (stepT pk cx ss inp) = stepSingle pk cx (merge pk cx ss) inp := by
-  have hh : headsOk pk cx ss = true := by
-    simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
   show merge pk cx ((stepS pk cx ss inp).getD ss) =
     if (judge pk cx ss.1.view inp).ok = true then
       applySingle pk cx (merge pk cx ss) (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
     else merge pk cx ss
   unfold stepS
+  rw [checkAll_of_inv3 pk cx ss inp h3]
   by_cases hok : (judge pk cx ss.1.view inp).ok = true
-  · rw [if_pos (show checkAll pk cx ss inp = true by simp only [checkAll, hh, hok, Bool.and_self]), if_pos hok]
+  · rw [if_pos hok, if_pos hok]
     exact merge_commit pk cx ss inp hI
-  · rw [if_neg (show ¬checkAll pk cx ss inp = true by simp only [checkAll, hh, Bool.and_true]; exact hok),
-      if_neg hok, Option.getD_none]
+  · rw [if_neg hok, if_neg hok, Option.getD_none]
 
 theorem merge_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv ss → Inv3 ss →
     merge pk cx (runS pk cx ss rs) = runSingle pk cx (merge pk cx ss) rs
@@ -1308,8 +1330,8 @@ theorem commit_requires_heads (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input)
   unfold stepS at h
   split at h
   · next hc =>
-    simp only [checkAll, headsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range, beq_iff_eq] at hc
-    exact hc.2 k hk
+    simp only [checkAll, fitsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range, decide_eq_true_eq] at hc
+    exact (hc.2 k hk).1
   · cases h
 
 /-- Definitional: `judgeSingle` is the spine judge, so judging on the spine view equals judging on the merged view
@@ -1416,8 +1438,6 @@ theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) 
       os3Bar pk cx ss inp sp' sh' := by
   have hI : Inv ss := by obtain ⟨L, rs, rfl⟩ := hr; exact inv_run pk cx (initS L) rs (inv_init L)
   have h3 : Inv3 ss := by obtain ⟨L, rs, rfl⟩ := hr; exact inv3_run pk cx (initS L) rs (inv3_init L)
-  have hh : headsOk pk cx ss = true := by
-    simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
   have hst : checkAll pk cx ss inp = true → stepT pk cx ss inp =
       (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
         commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := fun hc => by
@@ -1445,7 +1465,7 @@ theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) 
       · simp [commitShards, applyPart, ht]
       · simp [commitShards, ht]
   · rintro ⟨⟨hok, hm⟩, hrec, hhd, hH, hA, hsh⟩
-    have hc : checkAll pk cx ss inp = true := by simp only [checkAll, hh, Bool.and_true]; exact hok
+    have hc : checkAll pk cx ss inp = true := (checkAll_of_inv3 pk cx ss inp h3).trans hok
     rw [hst hc] at hI1 h31
     have hm' := hm.trans (merge_commit pk cx ss inp hI).symm
     have hsp : sp' = commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2 :=
@@ -1740,8 +1760,6 @@ theorem rcpts_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs :
     rcptsS pk cx ss rs = rcptsW pk cx (merge pk cx ss) rs
   | _, [], _, _ => rfl
   | ss, i :: is, hI, h3 => by
-    have hh : headsOk pk cx ss = true := by
-      simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
     show (if checkAll pk cx ss i = true then some (rcptS (judge pk cx ss.1.view i).out
         (verdicts cx (judge pk cx ss.1.view i))) else none) :: rcptsS pk cx (stepT pk cx ss i) is =
       (if (judge pk cx ss.1.view i).ok = true then some (rcptW (judge pk cx ss.1.view i).out
@@ -1749,8 +1767,8 @@ theorem rcpts_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs :
     rw [whole_step pk cx ss i hI hLoc, ← merge_step pk cx ss i hI h3,
       ← rcpts_run pk cx hLoc _ is (inv_step pk cx ss i hI) (inv3_step pk cx ss i h3),
       verdicts_sel pk cx ss.1.view i hLoc,
-      rcpt_eq pk cx (judge pk cx ss.1.view i).out _ (judgeRows_route pk cx ss.1.view.dir i.rows)]
-    simp only [checkAll, hh, Bool.and_true]
+      rcpt_eq pk cx (judge pk cx ss.1.view i).out _ (judgeRows_route pk cx ss.1.view.dir i.rows),
+      checkAll_of_inv3 pk cx ss i h3]
 
 /-- From a migrated store with `openOk`, the merged sharded run equals the single-store run (Lean per shard part).
     Under `Local` (restricting a file to any set of items leaves Lean's verdicts on the kept rows unchanged), the merged run also
@@ -1997,29 +2015,45 @@ private theorem replays_applied (k : Nat) : ∀ (l : List Rec) (sh s : ShardDB),
       simp [applyPart]
     · cases h
 
-/-- Under `Inv3` a shard owes no record: each spine record touching it is in its APPLIED list. -/
-private theorem filter_old (ss : SS) (h3 : Inv3 ss) (k : Nat) :
-    ss.1.recs.reverse.filter (fun R => decide (k ∈ R.touched) && (ss.2 k).applied.all fun m => decide (m < R.n)) =
-      [] := by
+/-- A shard whose APPLIED lists every spine record touching it owes nothing. -/
+private theorem pending_nil (sp : SpineDB) (k : Nat) (sh : ShardDB)
+    (ha : sh.applied = (sp.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)) : pending sp k sh = [] := by
+  unfold pending
   rw [List.filter_eq_nil_iff]
   intro R hR hp
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hp
-  have hm : R.n ∈ (ss.2 k).applied := by
-    rw [(h3 k).2]
+  have hm : R.n ∈ sh.applied := by
+    rw [ha]
     exact List.mem_map.2 ⟨R, List.mem_filter.2 ⟨hR, decide_eq_true hp.1⟩, rfl⟩
   exact Nat.lt_irrefl _ (hp.2 _ hm)
 
-theorem recover_done (ss : SS) (h3 : Inv3 ss) (k : Nat) : recover ss.1 k (ss.2 k) = ss.2 k := by
-  unfold recover pending
-  rw [filter_old ss h3 k]
-  rfl
+private theorem recover_some (sp : SpineDB) (k : Nat) (sh s : ShardDB)
+    (hs : replays k (pending sp k sh) sh = some s) : recover sp k sh = if fits sp k s then s else sh := by
+  simp only [recover, hs]
+
+private theorem recover_none (sp : SpineDB) (k : Nat) (sh : ShardDB)
+    (hs : replays k (pending sp k sh) sh = none) : recover sp k sh = sh := by
+  simp only [recover, hs]
+
+/-- A shard that fits the spine owes nothing, and recovery leaves it as is. -/
+theorem recover_fits (sp : SpineDB) (k : Nat) (sh : ShardDB) (hf : fits sp k sh) : recover sp k sh = sh := by
+  rw [recover_some sp k sh sh (by rw [pending_nil sp k sh hf.2]; rfl), if_pos hf]
+
+theorem recover_done (ss : SS) (h3 : Inv3 ss) (k : Nat) : recover ss.1 k (ss.2 k) = ss.2 k :=
+  recover_fits ss.1 k (ss.2 k) (h3 k)
 
 /-- On the pre-group shard state, recovery replays exactly the group's records and reaches the post-group state. -/
 theorem recover_group (pk : Pack) (cx : Ctx) (ss ss' : SS) (inps : List Input) (h3 : Inv3 ss) (hn : chainsOk ss)
     (h : stepG pk cx ss inps = some ss') (k : Nat) : recover ss'.1 k (ss.2 k) = ss'.2 k := by
   obtain ⟨G, hG, hb, hr⟩ := replay_commit pk cx ss ss' inps h
-  unfold recover pending
-  rw [hG, List.reverse_append, List.filter_append, filter_old ss h3 k, List.nil_append]
+  have h3' : Inv3 ss' := by
+    rw [← stepG_run pk cx ss ss' inps h]
+    exact inv3_run pk cx ss inps h3
+  have h0 := pending_nil ss.1 k (ss.2 k) (h3 k).2
+  unfold pending at h0
+  rw [recover_some ss'.1 k (ss.2 k) (ss'.2 k) ?_, if_pos (show fits ss'.1 k (ss'.2 k) from h3' k)]
+  unfold pending
+  rw [hG, List.reverse_append, List.filter_append, h0, List.nil_append]
   have hc : (G.reverse.filter fun R => decide (k ∈ R.touched) && (ss.2 k).applied.all fun m => decide (m < R.n)) =
       G.reverse.filter fun R => decide (k ∈ R.touched) := by
     apply List.filter_congr
@@ -2037,7 +2071,6 @@ theorem recover_group (pk : Pack) (cx : Ctx) (ss ss' : SS) (inps : List Input) (
       omega
     rw [hall, Bool.and_true]
   rw [hc, hr]
-  rfl
 
 /-- A crash after a group's spine COMMIT, whichever shards `C` committed, converges: recovery yields the committed
     group, under any `hs`.  No bound on what is pending is needed (`rollforward_any`). -/
@@ -2107,41 +2140,63 @@ theorem crash_before_spine (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss
 /-- Recovery is idempotent. -/
 theorem recover_idem (sp : SpineDB) (k : Nat) (sh : ShardDB) :
     recover sp k (recover sp k sh) = recover sp k sh := by
-  have key : ∀ s, replays k (pending sp k sh) sh = some s → pending sp k s = [] := by
-    intro s hs
-    have ha := replays_applied k _ sh s hs
-    unfold pending
-    rw [List.filter_eq_nil_iff]
-    intro R hR hp
-    simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hp
-    have hin : R ∈ pending sp k sh := by
-      unfold pending
-      rw [List.mem_filter]
-      refine ⟨hR, ?_⟩
-      simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
-      exact ⟨hp.1, fun m hm => hp.2 m (by rw [ha]; exact List.mem_append_left _ hm)⟩
-    exact Nat.lt_irrefl _ (hp.2 R.n (by rw [ha]; exact List.mem_append_right _ (List.mem_map.2 ⟨R, hin, rfl⟩)))
-  unfold recover
   cases hr : replays k (pending sp k sh) sh with
-  | none => simp [hr]
-  | some s => simp [key s hr, replays]
+  | none => rw [recover_none sp k sh hr, recover_none sp k sh hr]
+  | some s =>
+    rw [recover_some sp k sh s hr]
+    by_cases hf : fits sp k s
+    · rw [if_pos hf, recover_fits sp k s hf]
+    · rw [if_neg hf, recover_some sp k sh s hr, if_neg hf]
 
-/-- The old last-record recovery is the one-record case: a single pending record replays from its pre head, any
-    other head is left as is.  (Replaces `recover_pure`, whose `replay` returned a shard.) -/
+/-- The old last-record recovery is the one-record case: a single pending record replays from its pre head and
+    commits if the result fits the spine; anything else is left as is.  CHANGED (2026-10-08, RGL-FIX): the
+    condition gains `∧ fits sp k (applyPart R k sh)`, since `recover` now checks the final head and APPLIED. -/
 theorem recover_one (sp : SpineDB) (k : Nat) (sh : ShardDB) (R : Rec) (h : pending sp k sh = [R]) :
-    recover sp k sh = if sh.head = R.pre k then applyPart R k sh else sh := by
-  unfold recover
-  rw [h]
-  by_cases hh : sh.head = R.pre k <;> simp [replays, replay, hh]
+    recover sp k sh = if sh.head = R.pre k ∧ fits sp k (applyPart R k sh) then applyPart R k sh else sh := by
+  by_cases hh : sh.head = R.pre k
+  · rw [recover_some sp k sh (applyPart R k sh) (by rw [h]; simp [replays, replay, hh])]
+    by_cases hf : fits sp k (applyPart R k sh)
+    · rw [if_pos hf, if_pos (And.intro hh hf)]
+    · rw [if_neg hf, if_neg (fun c : sh.head = R.pre k ∧ fits sp k (applyPart R k sh) => hf c.2)]
+  · rw [recover_none sp k sh (by rw [h]; simp [replays, replay, hh]),
+      if_neg (fun c : sh.head = R.pre k ∧ fits sp k (applyPart R k sh) => hh c.1)]
 
 /-- Fail closed: if a pending record's `pre_head_k` differs from the head reached by replaying the records before
     it, recovery leaves shard `k` unchanged (osbench: any mismatch writes nothing). -/
 theorem recover_diverged (sp : SpineDB) (k : Nat) (sh s : ShardDB) (a b : List Rec) (R : Rec)
     (hp : pending sp k sh = a ++ R :: b) (ha : replays k a sh = some s) (hne : s.head ≠ R.pre k) :
+    recover sp k sh = sh :=
+  recover_none sp k sh (by rw [hp, replays_append, ha]; simp [replays, replay, hne])
+
+/-- Fail closed on the tail: if every pending record replays but the final head is not the spine's `heads k` (a
+    torn or tampered heads row), recovery leaves shard `k` unchanged. -/
+theorem recover_diverged_tail (sp : SpineDB) (k : Nat) (sh s : ShardDB)
+    (hs : replays k (pending sp k sh) sh = some s) (hne : s.head ≠ sp.heads k) : recover sp k sh = sh := by
+  rw [recover_some sp k sh s hs, if_neg (fun hf : fits sp k s => hne hf.1)]
+
+/-- Fail closed on a gap: if APPLIED skips a spine record touching `k` (its `n` lies below an APPLIED entry `m` but
+    is not in APPLIED), that record is never pending again, so recovery leaves shard `k` unchanged. -/
+theorem recover_gap (sp : SpineDB) (k : Nat) (sh : ShardDB) (R : Rec) (m : Nat) (hR : R ∈ sp.recs)
+    (hk : k ∈ R.touched) (hm : m ∈ sh.applied) (hlt : R.n < m) (hnot : R.n ∉ sh.applied) :
     recover sp k sh = sh := by
-  unfold recover
-  rw [hp, replays_append, ha]
-  simp [replays, replay, hne]
+  cases hs : replays k (pending sp k sh) sh with
+  | none => exact recover_none sp k sh hs
+  | some s =>
+    rw [recover_some sp k sh s hs, if_neg]
+    intro hf
+    have hin : R.n ∈ s.applied := by
+      rw [hf.2]
+      exact List.mem_map.2 ⟨R, List.mem_filter.2 ⟨List.mem_reverse.2 hR, decide_eq_true hk⟩, rfl⟩
+    rw [replays_applied k _ sh s hs] at hin
+    rcases List.mem_append.1 hin with h | h
+    · exact hnot h
+    · obtain ⟨R', hR', he⟩ := List.mem_map.1 h
+      have he' : R'.n = R.n := he
+      unfold pending at hR'
+      have hp := (List.mem_filter.1 hR').2
+      simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hp
+      have := hp.2 m hm
+      omega
 
 theorem evOk_tips (K i : Nat) (a b : Nat → Dg) (t : List Ev) : ∀ l : List Nat,
     evOk K i ((l.map fun k => Ev.tip k (a k) (b k)) ++ t) = ((l.all fun k => a k == b k) && evOk K i t)
@@ -2290,17 +2345,18 @@ theorem rollforward_closed (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C
   exact ⟨applied_missing pk cx ss _ inp h3 (by rw [hA]) k ht (by rw [hA]; simp [commitShards, hk]),
     rollforward_eq pk cx ss ss' inp C h3 hn h hC⟩
 
-/-- Under any `hs` (the identity included): if the writer's check accepts a next input on the state a crash after
-    the spine COMMIT left, then every touched shard has applied the record.  So a step whose shard part did not
-    commit stops all later writes until recovery replays it. -/
+/-- One record, any `hs` (the identity included): if the writer's check accepts a next input on the state a crash
+    after the spine COMMIT left, every touched shard has applied the record, so an unapplied part stops all later
+    writes until recovery replays it.  This uses only the head half of `fitsOk` and `post_ne_pre`.  For a group,
+    where a head can return to its old value, see `accepted_applied_group` (it uses the APPLIED half). -/
 theorem accepted_applied (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp inp' : Input) (C : List Nat)
     (h : stepS pk cx ss inp = some ss') (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched)
     (hc : checkAll pk cx (afterSpine pk cx ss inp C) inp' = true) :
     ∀ k ∈ (mkRec pk cx ss inp).2.touched,
       (mkRec pk cx ss inp).2.n ∈ ((afterSpine pk cx ss inp C).2 k).applied := by
   have hh : ∀ k < pk.k cx.p, ((afterSpine pk cx ss inp C).2 k).head = (afterSpine pk cx ss inp C).1.heads k := by
-    simp only [checkAll, headsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range, beq_iff_eq] at hc
-    exact hc.2
+    simp only [checkAll, fitsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range, decide_eq_true_eq] at hc
+    exact fun k hk => (hc.2 k hk).1
   rw [reader_cut pk cx ss ss' inp C h hC hh]
   intro k hk
   unfold stepS at h
@@ -2311,5 +2367,60 @@ theorem accepted_applied (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp inp' : Input)
     rw [if_pos hk]
     exact List.mem_append_right _ (List.mem_singleton_self _)
   · cases h
+
+/-- If the writer accepts on a group crash state, a shard `k < K` that did not commit owes nothing of the group. -/
+private theorem group_check_owes (pk : Pack) (cx : Ctx) (ss ss' : SS) (inps : List Input) (C : List Nat)
+    (inp' : Input) (h3 : Inv3 ss) (h : stepG pk cx ss inps = some ss')
+    (hc : checkAll pk cx (afterSpineG pk cx ss inps C) inp' = true) (G : List Rec)
+    (hG : ss'.1.recs = G ++ ss.1.recs) (k : Nat) (hk : k < pk.k cx.p) (hkC : k ∉ C) :
+    (G.reverse.filter fun R => decide (k ∈ R.touched)) = [] := by
+  simp only [afterSpineG, h, checkAll, fitsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range,
+    decide_eq_true_eq] at hc
+  have hf : (ss.2 k).applied = (ss'.1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n) := by
+    have h1 := (hc.2 k hk).2
+    simp only [if_neg hkC] at h1
+    exact h1
+  rw [(h3 k).2, hG, List.reverse_append, List.filter_append, List.map_append] at hf
+  have hl := congrArg List.length hf
+  rw [List.length_append, List.length_map, List.length_map] at hl
+  exact List.length_eq_zero_iff.1 (by omega)
+
+/-- A group, any `hs` and any heads (a group may move a head `h0 -> h1 -> h0`): if the writer's check accepts a next
+    input on the state a crash after the group's spine COMMIT left (shards in `C` committed), every shard `k < K`
+    holds the committed state, so no part of the group is left unapplied while writes go on.  The APPLIED half of
+    `fitsOk` decides this, not the head. -/
+theorem accepted_applied_group (pk : Pack) (cx : Ctx) (ss ss' : SS) (inps : List Input) (C : List Nat)
+    (inp' : Input) (h3 : Inv3 ss) (h : stepG pk cx ss inps = some ss')
+    (hc : checkAll pk cx (afterSpineG pk cx ss inps C) inp' = true) :
+    ∀ k < pk.k cx.p, (afterSpineG pk cx ss inps C).2 k = ss'.2 k := by
+  intro k hk
+  obtain ⟨G, hG, -, hr⟩ := replay_commit pk cx ss ss' inps h
+  have hA : (afterSpineG pk cx ss inps C).2 k = if k ∈ C then ss'.2 k else ss.2 k := by
+    simp only [afterSpineG, h]
+  rw [hA]
+  by_cases hkC : k ∈ C
+  · rw [if_pos hkC]
+  · rw [if_neg hkC]
+    have hr := hr k
+    rw [group_check_owes pk cx ss ss' inps C inp' h3 h hc G hG k hk hkC] at hr
+    simp only [replays, Option.some.injEq] at hr
+    exact hr
+
+/-- The RGL review's MED-1 crash is refused: a group committed on the spine with a record touching shard `k < K`,
+    and shard `k` did not commit it.  Whatever `hs` does to the head (back to `h0` included), the writer refuses
+    every next input until recovery replays the group. -/
+theorem group_crash_refused (pk : Pack) (cx : Ctx) (ss ss' : SS) (inps : List Input) (C : List Nat)
+    (inp' : Input) (h3 : Inv3 ss) (h : stepG pk cx ss inps = some ss') (k : Nat) (hk : k < pk.k cx.p)
+    (hkC : k ∉ C) (R : Rec) (hR : R ∈ ss'.1.recs) (hR' : R ∉ ss.1.recs) (hRk : k ∈ R.touched) :
+    checkAll pk cx (afterSpineG pk cx ss inps C) inp' = false := by
+  cases hc : checkAll pk cx (afterSpineG pk cx ss inps C) inp'
+  · rfl
+  · obtain ⟨G, hG, -, -⟩ := replay_commit pk cx ss ss' inps h
+    have he := group_check_owes pk cx ss ss' inps C inp' h3 h hc G hG k hk hkC
+    rw [hG, List.mem_append] at hR
+    have hm : R ∈ G.reverse.filter fun R => decide (k ∈ R.touched) :=
+      List.mem_filter.2 ⟨List.mem_reverse.2 (hR.resolve_right hR'), decide_eq_true hRk⟩
+    rw [he] at hm
+    cases hm
 
 end BlindLedger.Financial.ShardSplit
