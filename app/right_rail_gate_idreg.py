@@ -14,9 +14,10 @@ after it, else ``registry_rewound``.  A whole directory restored together passes
 reads its inputs inside its write transaction, and every refused boot commits a fence BOOT row (a nonce nobody holds)
 in that same transaction, so a running handle's batches HOLD ``registry_not_booted`` until a boot passes, and a
 restarted process holds no nonce (``decide`` with no registry HOLDs).  Without a fence too: each process remembers,
-per registry, the row (n, head) it last committed or booted at, and a transaction that finds that row gone or changed
-(the file restored under it), or that runs after this process's newest boot of it failed, commits the fence itself
-and is refused ``registry_not_booted``.
+per boot nonce (random, so the same under every path to the file and in a copy of it), the row (n, head) it last
+committed or booted at, and a transaction that finds that row gone or changed (the file restored under it), or that
+runs after this process's newest boot of it failed, commits the fence itself and is refused ``registry_not_booted``.
+A new nonce comes only from a passed boot (store check B3 included), so it starts with no memory.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import contextlib
 import os
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Callable, Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
@@ -42,8 +44,9 @@ CREATE INDEX IF NOT EXISTS log_boot ON log(n) WHERE kind = 3;
 CREATE TRIGGER IF NOT EXISTS log_no_update BEFORE UPDATE ON log BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS log_no_delete BEFORE DELETE ON log BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 """
-_SEEN: dict[str, tuple[int, bytes]] = {}  # registry -> the row (n, head) this process last committed or booted at
-_STOPPED: set[str] = set()  # registries whose newest boot in this process has not passed
+_SEEN: dict[bytes, tuple[int, bytes]] = {}  # boot nonce -> the row (n, head) this process last committed or booted at
+_STOPPED: set[str | bytes] = set()  # paths, and the newest nonces they held, of boots in this process that did not pass
+_BOOTING = threading.Lock()  # one boot at a time per process: a pass never clears a boot still running
 
 
 def _where(path: Path) -> str:
@@ -96,24 +99,24 @@ def _open(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
 @contextlib.contextmanager
 def _txn(db: sqlite3.Connection, boot: bytes | None, where: str | None = None):
     """One write transaction (BEGIN IMMEDIATE, one fsync at COMMIT) whose newest BOOT row must carry ``boot``.  A
-    handle's (``where``) is also refused ``registry_not_booted``, after committing a fence, if the row it last saw is
-    gone or changed or its process's newest boot failed; after its COMMIT it remembers the new tail."""
+    handle's is also refused ``registry_not_booted``, after committing a fence, if the row its process last saw on
+    that nonce is gone or changed, or a boot of its path (``where``) or nonce in its process did not pass; before its
+    COMMIT, under the write lock, the process remembers the new tail (a COMMIT that then fails fences: fail closed)."""
     try:
         db.execute("BEGIN IMMEDIATE")
         try:
             row = db.execute("SELECT id FROM log WHERE kind = 3 ORDER BY n DESC LIMIT 1").fetchone()
             if boot is not None and (not row or row[0] != boot):
                 raise IdRegistryError("registry_not_booted")
-            n, head = _SEEN.get(where, (0, b""))
-            if where in _STOPPED or n and db.execute("SELECT head FROM log WHERE n = ?", (n,)).fetchone() != (head,):
+            n, head = _SEEN.get(boot, (0, b""))
+            if {boot, where} & _STOPPED or n and db.execute("SELECT head FROM log WHERE n = ?", (n,)).fetchone() != (head,):
                 _fence(db)
                 db.execute("COMMIT")
                 raise IdRegistryError("registry_not_booted")
             yield
-            tail = db.execute("SELECT n, head FROM log ORDER BY n DESC LIMIT 1").fetchone()
+            if boot:
+                _SEEN[boot] = db.execute("SELECT n, head FROM log ORDER BY n DESC LIMIT 1").fetchone()
             db.execute("COMMIT")
-            if where:  # the highest row: another thread's handle may have committed a later one first
-                _SEEN[where] = max(tail, _SEEN.get(where, tail))
         except BaseException:
             if db.in_transaction:
                 db.execute("ROLLBACK")
@@ -215,33 +218,38 @@ def boot(path: Path, inputs: Inputs) -> bytes:
     raises; if that commit fails or SQLite rolled back first, ``registry_unavailable`` chained from the refusal; an
     ``inputs`` error that is no store's is ``inputs_unavailable``.  A registry that cannot be opened, locked or
     committed raises ``registry_unavailable`` (after one fence-only retry in a fresh transaction once it is open);
-    from the start of a boot until one passes, every handle of this process on the registry fences and HOLDs."""
-    where = _where(path)
-    _STOPPED.add(where)
-    db, nonce, refusal = _open(path), os.urandom(32), None
-    try:
-        with _txn(db, None):
-            try:
-                _admit(db, inputs)
-            except BaseException as error:
-                refusal = error
-            if not db.in_transaction:  # SQLite rolled back inside the checks: lock again so the fence is still written under the lock
-                db.execute("BEGIN IMMEDIATE")
-                cause, refusal = refusal, IdRegistryError("registry_unavailable")
-                refusal.__cause__ = cause
-            tail = _Tail(db)
-            tail.add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
-    except IdRegistryError as error:
-        with contextlib.suppress(IdRegistryError), _txn(db, None):
-            _fence(db)
-        raise error from refusal
-    finally:
-        db.close()
-    if refusal is not None:
-        raise refusal
-    _SEEN[where] = tail.n, tail.head
-    _STOPPED.discard(where)
-    return nonce
+    from the start of a boot until one passes, every handle of this process on the registry's path, or on the newest
+    nonce the boot could read there (so also through any other path to the same file), fences and HOLDs.  Boots of
+    one process run one at a time."""
+    with _BOOTING:
+        where = _where(path)
+        _STOPPED.add(where)
+        db, nonce, refusal = _open(path), os.urandom(32), None
+        try:
+            with contextlib.suppress(sqlite3.Error):  # a WAL read: it waits for no writer
+                _STOPPED.update(*db.execute("SELECT id FROM log WHERE kind = 3 ORDER BY n DESC LIMIT 1"))
+            with _txn(db, None):
+                try:
+                    _admit(db, inputs)
+                except BaseException as error:
+                    refusal = error
+                if not db.in_transaction:  # SQLite rolled back inside the checks: lock again so the fence is still written under the lock
+                    db.execute("BEGIN IMMEDIATE")
+                    cause, refusal = refusal, IdRegistryError("registry_unavailable")
+                    refusal.__cause__ = cause
+                tail = _Tail(db)
+                tail.add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
+                _SEEN[nonce.rjust(ID_LEN, b"\0")] = tail.n, tail.head  # before COMMIT, under the write lock
+        except IdRegistryError as error:
+            with contextlib.suppress(IdRegistryError), _txn(db, None):
+                _fence(db)
+            raise error from refusal
+        finally:
+            db.close()
+        if refusal is not None:
+            raise refusal
+        _STOPPED.discard(where)
+        return nonce
 
 
 class IdRegistry:

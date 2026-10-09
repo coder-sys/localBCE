@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -242,16 +243,54 @@ class IdRegistryTests(unittest.TestCase):
         self.reg._db = _Dying(self.reg._db, die=True)
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             self.reg.reserve(1, [1, 2], sealed=None)
-        again = self.open(self.nonce)
-        self.assertEqual(again.reserve(0, [1, 2], sealed=None)[0], [(1, 0, False), (2, 0, False)])
+        with mock.patch.object(idreg, "_SEEN", {}):  # the next process on the nonce
+            again = self.open(self.nonce)
+            self.assertEqual(again.reserve(0, [1, 2], sealed=None)[0], [(1, 0, False), (2, 0, False)])
 
     def test_failed_commit_rolls_back_and_the_registry_still_works(self) -> None:
+        """Review LOW-1: the process remembers the new tail before COMMIT, under the write lock, so a COMMIT that fails
+        leaves the memory ahead of the file: the nonce then fences (fail closed) and the registry works after a boot."""
         live = self.reg._db
         self.reg._db = _Dying(live, die=False)
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             self.reg.reserve(1, [1], sealed=None)
         self.reg._db = live
-        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.reserve(0, [1], sealed=None)
+        again = self.open(idreg.boot(self.path, lambda: ({}, {}, {})))
+        self.assertEqual(again.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    def test_boots_in_one_process_run_one_at_a_time(self) -> None:
+        """Review LOW-2: boot A is inside its open (its COMMIT will fail, so no fence lands) when boot B starts.  B waits
+        for A, so B's pass, which ends the process's stop, never comes before A's failure, which must leave it set."""
+        inside, go, real, done = threading.Event(), threading.Event(), idreg._open, {}
+
+        def hooked(path, *a):
+            if threading.current_thread().name != "A":
+                return real(path, *a)
+            inside.set()
+            go.wait(30)
+            return _Dying(real(path, *a), die=False)
+
+        def run():
+            try:
+                done[threading.current_thread().name] = idreg.boot(self.path, lambda: ({}, {}, {}))
+            except idreg.IdRegistryError as error:
+                done[threading.current_thread().name] = str(error)
+        a, b = threading.Thread(target=run, name="A"), threading.Thread(target=run, name="B")
+        with mock.patch.object(idreg, "_open", hooked):
+            a.start()
+            try:
+                inside.wait(30)
+                b.start()
+                b.join(1.0)
+                self.assertTrue(b.is_alive())  # B waits while A is inside its open
+            finally:
+                go.set()
+                a.join(30)
+                b.join(30)
+        self.assertEqual((done["A"], len(done["B"])), ("registry_unavailable", 32))
+        self.assertEqual(self.open(done["B"]).reserve(0, [1], sealed=None)[0], [(1, 0, False)])  # B passed last
 
     def test_bad_input_is_refused_before_anything_is_written(self) -> None:
         before = self.tail()
