@@ -949,27 +949,46 @@ class Spine:
 
 def replay(spine_db: Path, snapshot: Path, k: int) -> dict:
     """Recovery (design section 3): shard k holds some committed state with applied max n = a. Its pending records are the committed spine records after a that touch k
-    (at most the last group). Replay each from its recorded input bytes, in order, with its own t_f; the head must be the first pre_head and every digest and post head
-    must equal the record's, and the last post head must be heads(k)."""
+    (at most the last group), replayed in n order from their recorded input bytes, with their own t_f. Refused, with the shard rolled back before any commit, when a spine
+    record touching k below a is not applied (gap), the pending n are not strictly increasing, a pending pre head equals its post head, a replayed head or digest is not
+    its record's, or the head after the last part is not heads(k), or the applied n's are not exactly the spine records touching k (the Lean fits rule)."""
     t0 = time.perf_counter()
     shard = Shard(k, snapshot)
     applied = shard.c.execute("SELECT COALESCE(MAX(n),0) FROM applied").fetchone()[0]
+    have = {n for (n,) in shard.c.execute("SELECT n FROM applied")}
     with sqlite3.connect(str(spine_db)) as s:
-        records = s.execute("SELECT n,file_index,pool,t_f,build_id,parts FROM records WHERE n>? ORDER BY n", (applied,)).fetchall()
+        records = s.execute("SELECT n,file_index,pool,t_f,build_id,parts FROM records ORDER BY n").fetchall()
         heads = dict(s.execute("SELECT k,head FROM heads"))
-    pending = [(r, part) for r in records for part in [pickle.loads(r[5]).get(k)] if part]
+    touching = [(r, part) for r in records for part in [pickle.loads(r[5]).get(k)] if part]
+    gaps = [r[0] for r, _ in touching if r[0] < applied and r[0] not in have]
+    if gaps:
+        raise ShardDiverged(f"shard {k}: spine records {gaps} touch the shard below its applied max and are not applied")
+    pending = [(r, part) for r, part in touching if r[0] > applied]
+    ns = [r[0] for r, _ in pending]
+    if any(a >= b for a, b in zip(ns, ns[1:])):
+        raise ShardDiverged(f"shard {k}: pending spine records are not strictly increasing in n (duplicate or out of order)")
+    if any(part[2] == part[4] for _, part in pending):
+        raise ShardDiverged(f"shard {k}: a pending spine record has pre head equal to post head")
     owed = bool(pending) and shard.w.head == pending[0][1][2] and shard.w.head != heads[k]
-    t1, same, lines, input_bytes = time.perf_counter(), True, 0, 0
-    for (n, index, pool, t_f, build_id, _), (blob, verdict, pre, digest, post) in pending:
-        head, got = shard.build(n, index, pool, t_f, blob, pre, verdict)
-        same = same and head == post and got == digest and build_id == BUILD_ID
-        lines, input_bytes = lines + len(pickle.loads(blob)), input_bytes + len(blob)
+    t1, lines, input_bytes = time.perf_counter(), 0, 0
+    try:
+        for (n, index, pool, t_f, build_id, _), (blob, verdict, pre, digest, post) in pending:
+            head, got = shard.build(n, index, pool, t_f, blob, pre, verdict)
+            if head != post or got != digest or build_id != BUILD_ID:
+                raise ShardDiverged(f"shard {k}: record {n} does not replay to its recorded head and digest")
+            lines, input_bytes = lines + len(pickle.loads(blob)), input_bytes + len(blob)
+        if shard.w.head != heads[k]:
+            raise ShardDiverged(f"shard {k}: the replayed head is not the spine's head for the shard")
+        if [n for (n,) in shard.c.execute("SELECT n FROM applied ORDER BY n")] != [r[0] for r, _ in touching]:
+            raise ShardDiverged(f"shard {k}: applied n's do not fit the spine: they are not exactly the spine records touching the shard")
+    except BaseException:
+        shard.abort()
+        raise
     if pending:
         shard.commit()
     done = time.perf_counter()
-    same = same and shard.w.head == heads[k]
     shard.stats()
-    return {"k": k, "n": pending[-1][0][0] if pending else applied, "records": len(pending), "lines": lines, "owed": owed, "identical": same, "replay_ms": (done - t0) * 1000, "replay_ms_excl_open": (done - t1) * 1000, "input_bytes": input_bytes}
+    return {"k": k, "n": pending[-1][0][0] if pending else applied, "records": len(pending), "lines": lines, "owed": owed, "identical": True, "replay_ms": (done - t0) * 1000, "replay_ms_excl_open": (done - t1) * 1000, "input_bytes": input_bytes}
 
 
 def corpus(seed: int, lines: int, files: int) -> list[tuple[SimpleNamespace, dict]]:

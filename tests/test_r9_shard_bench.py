@@ -315,6 +315,35 @@ PRE_S12_PINNED = {
 PRE_S12_CLASSES = {"NEGATIVE": 239, "applied": 3384, "HELD": 24, "ZERO": 24}
 
 
+def f5_pending_ns(spine: Path, shard: Path, k: int) -> list[int]:
+    """The spine's records after the shard's applied max that touch shard k, in n order."""
+    c = sqlite3.connect(str(shard))
+    applied = c.execute("SELECT COALESCE(MAX(n),0) FROM applied").fetchone()[0]
+    c.close()
+    s = sqlite3.connect(str(spine))
+    rows = s.execute("SELECT n,parts FROM records WHERE n>? ORDER BY n", (applied,)).fetchall()
+    s.close()
+    return [n for n, parts in rows if pickle.loads(parts).get(k)]
+
+
+def f5_part(c: sqlite3.Connection, n: int, k: int, field: int, value: bytes) -> None:
+    """Replace one field of spine record n's part for shard k in a copy of the spine (2 = pre, 4 = post)."""
+    parts = pickle.loads(c.execute("SELECT parts FROM records WHERE n=?", (n,)).fetchone()[0])
+    part = list(parts[k])
+    part[field] = value
+    parts[k] = tuple(part)
+    c.execute("UPDATE records SET parts=? WHERE n=?", (pickle.dumps(parts, 5), n))
+
+
+def f5_state(shard: Path) -> tuple:
+    """What a refused replay must leave alone: the shard's applied rows and its meta (sequence, history head)."""
+    c = sqlite3.connect(str(shard))
+    try:
+        return (c.execute("SELECT n,spine_id,rcore,i_digest FROM applied ORDER BY n").fetchall(), c.execute("SELECT sequence,history_head FROM financial_meta").fetchall())
+    finally:
+        c.close()
+
+
 class ShardBench(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -609,6 +638,103 @@ class ShardBench(unittest.TestCase):
         result = sb.replay(work / "spine.sqlite3", snapshot, 3)
         self.assertEqual((result["records"], result["owed"], result["identical"]), (4, True, True))
         self.assertEqual(digests(snapshot), digests(work / "shard3.sqlite3"))  # same rows, same heads, same applied as the shard that committed itself
+
+    def f5_base(self) -> tuple[Path, Path, list[int]]:
+        """The T:604 run, once: shard 3 snapshotted before the second group, so its pending records are the second group's (4 of them)."""
+        if not hasattr(ShardBench, "_f5"):
+            work, _, _ = self.group_run("f5base", sb.corpus(20261007, LINES, 12), 8, snapshot_before=8)
+            snap = self.tmp / "f5base-snapshot.sqlite3"
+            ShardBench._f5 = (work / "spine.sqlite3", snap, f5_pending_ns(work / "spine.sqlite3", snap, 3))
+        return ShardBench._f5
+
+    def f5_copy(self, name: str, edit=None) -> tuple[Path, Path]:
+        """Private copies of the base spine and shard 3's snapshot; edit(connection) changes the spine copy."""
+        spine_src, snap, _ = self.f5_base()
+        spine, shard = self.tmp / f"{name}-spine.sqlite3", self.tmp / f"{name}-shard3.sqlite3"
+        shutil.copyfile(spine_src, spine)
+        if Path(str(spine_src) + "-wal").exists():  # the spine's committed pages may still sit in its WAL
+            shutil.copyfile(str(spine_src) + "-wal", str(spine) + "-wal")
+        shutil.copyfile(snap, shard)
+        if edit:
+            c = sqlite3.connect(str(spine))
+            try:
+                edit(c)
+                c.commit()
+            finally:
+                c.close()
+        return spine, shard
+
+    def test_f5a_bad_post_mid_group_is_refused_with_no_commit(self) -> None:
+        pending = self.f5_base()[2]
+        self.assertGreaterEqual(len(pending), 2)
+        spine, shard = self.f5_copy("f5a", lambda c: f5_part(c, pending[1], 3, 4, bytes(64)))  # the second of 4 records: its post is not what it replays to
+        before = f5_state(shard)
+        with self.assertRaisesRegex(sb.ShardDiverged, "does not replay to its recorded head"):
+            sb.replay(spine, shard, 3)
+        self.assertEqual(f5_state(shard), before)
+
+    def test_f5b_gap_below_applied_max_is_refused(self) -> None:
+        spine, shard = self.f5_copy("f5b")
+        c = sqlite3.connect(str(shard))
+        try:
+            low, high = c.execute("SELECT MIN(n),MAX(n) FROM applied").fetchone()
+            self.assertLess(low, high)
+            c.execute("DELETE FROM applied WHERE n=?", (low,))  # a record touching shard 3 below its max applied is no longer applied
+            c.commit()
+        finally:
+            c.close()
+        before = f5_state(shard)
+        with self.assertRaisesRegex(sb.ShardDiverged, "below its applied max"):
+            sb.replay(spine, shard, 3)
+        self.assertEqual(f5_state(shard), before)
+
+    def test_f5c_duplicate_n_is_refused(self) -> None:
+        pending = self.f5_base()[2]
+
+        def duplicate(c: sqlite3.Connection) -> None:
+            c.execute("CREATE TABLE records_dup AS SELECT * FROM records")  # CREATE TABLE AS has no primary key: a malformed spine may hold n twice
+            c.execute("INSERT INTO records_dup SELECT * FROM records WHERE n=?", (pending[1],))
+            c.execute("DROP TABLE records")
+            c.execute("ALTER TABLE records_dup RENAME TO records")
+
+        spine, shard = self.f5_copy("f5c1", duplicate)
+        before = f5_state(shard)
+        with self.assertRaisesRegex(sb.ShardDiverged, "strictly increasing"):
+            sb.replay(spine, shard, 3)
+        self.assertEqual(f5_state(shard), before)
+
+    def test_f5c_post_equal_to_pre_is_refused(self) -> None:
+        pending = self.f5_base()[2]
+
+        def post_is_pre(c: sqlite3.Connection) -> None:
+            pre = pickle.loads(c.execute("SELECT parts FROM records WHERE n=?", (pending[1],)).fetchone()[0])[3][2]
+            f5_part(c, pending[1], 3, 4, pre)
+
+        spine, shard = self.f5_copy("f5c2", post_is_pre)
+        before = f5_state(shard)
+        with self.assertRaisesRegex(sb.ShardDiverged, "pre head equal to post head"):
+            sb.replay(spine, shard, 3)
+        self.assertEqual(f5_state(shard), before)
+
+    def test_f5d_tail_head_not_the_spines_is_refused_before_commit(self) -> None:
+        spine, shard = self.f5_copy("f5d", lambda c: c.execute("UPDATE heads SET head=? WHERE k=3", (bytes(64),)))  # every record replays; the spine's head for shard 3 is not where they end
+        before = f5_state(shard)
+        with self.assertRaisesRegex(sb.ShardDiverged, "not the spine's head"):
+            sb.replay(spine, shard, 3)
+        self.assertEqual(f5_state(shard), before)
+
+    def test_f5e_applied_row_no_spine_record_wrote_is_refused_before_commit(self) -> None:
+        spine, shard = self.f5_copy("f5e")
+        c = sqlite3.connect(str(shard))
+        try:
+            c.execute("INSERT INTO applied VALUES (0,?,?,?)", (bytes(32), bytes(32), bytes(32)))  # n 0 is no spine record; the head is untouched, so only the applied list differs
+            c.commit()
+        finally:
+            c.close()
+        before = f5_state(shard)
+        with self.assertRaisesRegex(sb.ShardDiverged, "do not fit the spine"):
+            sb.replay(spine, shard, 3)
+        self.assertEqual(f5_state(shard), before)
 
     def test_t4_stale_head_at_group_start_is_refused_with_no_write(self) -> None:
         files, work = sb.corpus(20261006, LINES, 3), self.tmp / "t4"
