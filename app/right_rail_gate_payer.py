@@ -67,10 +67,10 @@ _CERT_PROBE: Final = (_list([]) + signer.framed(b"") + bytes(8) + _list([]) + by
 
 class PayerStore:
     def __init__(self, path: Path | str, *, root_keys: Mapping[str, bytes],
-                 grants: Sequence[tuple[bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
-        self._roots = dict(root_keys)
-        self._grants = _list([_blob(g) + _list([_blob(v) for v in rules]) + _list([_blob(r) for r in engines])
-                              for g, rules, engines in grants])
+                 grants: Sequence[tuple[str, bytes, Sequence[bytes], Sequence[bytes]]]) -> None:
+        self._roots, grants = dict(root_keys), tuple(grants)  # grants is walked twice
+        for tenant, *_ in grants: gate._Writer(b"").ident(tenant, "grant_tenant")  # a canonical ident, refused before any write
+        self._grants = _list([_blob(t.encode()) + _blob(g) + _list([*map(_blob, rs)]) + _list([*map(_blob, es)]) for t, g, rs, es in grants])
         self._db = sqlite3.connect(path, isolation_level=None, timeout=60)  # Lean may hold the write lock up to 30 s
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)
@@ -138,7 +138,7 @@ class PayerStore:
             if not self._db.execute("SELECT 1 FROM certs WHERE cert=?", (cert,)).fetchone():
                 if self._db.execute("SELECT COUNT(*) FROM certs").fetchone()[0] >= MAX_CERTS:
                     raise GatePayerError("cert_store_full")
-            signer.gate_verify(4, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
+            signer.gate_verify(5, bytes(gate.ML_DSA_87_PUBLIC_KEY) + _list([signer.framed(cert)]) + _CERT_PROBE)
             self._db.execute("INSERT OR IGNORE INTO certs VALUES(?)", (cert,))
 
     def _all(self, column: str, table: str) -> bytes:
@@ -181,7 +181,7 @@ class PayerStore:
                  + self._grants + bytes([bool(released), bool(pin)]) + (pin[0] if pin else b"")
                  + signer.framed(data) + signer.framed(token))
         try:
-            answer = signer.gate_verify(4, frame)
+            answer = signer.gate_verify(5, frame)
         except signer.GateSignerError:
             return "verifier_error"
         if answer == signer.ACCEPT:
@@ -212,6 +212,16 @@ class PayerStore:
 
     def holds(self) -> list[tuple[str, str]]:
         return self._db.execute("SELECT payment_id, reason FROM holds ORDER BY id").fetchall()
+
+    def newest_stored(self, tenant: str) -> dict[int, bytes]:
+        """The registry boot anchor (B2): per shard, the digest of the stored checkpoint with the highest epoch, then the
+        highest seq_to.  A tie (two at one epoch and seq_to; ``store_checkpoint`` records a fork instead of storing it)
+        goes to the lowest digest bytes, so the answer never depends on row order."""
+        newest: dict[int, bytes] = {}
+        for shard, digest in self._db.execute("SELECT shard, digest FROM checkpoints WHERE tenant=? "
+                                              "ORDER BY shard, epoch DESC, seq_to DESC, digest", (tenant,)):
+            newest.setdefault(shard, digest)
+        return newest
 
     def close(self) -> None:
         self._db.close()

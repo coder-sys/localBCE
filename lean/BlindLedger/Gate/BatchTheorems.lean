@@ -287,6 +287,20 @@ theorem releaseBatch_once {c : Crypto} {r : ReleaseRun} {items : List Item} {ten
           obtain ⟨⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, -⟩, h3⟩, -⟩, -⟩, -⟩, -⟩, -⟩ := hpm
           simp [unreleased, itemState, hrel, payKey, Payment.key, h1, h2, h3] at hun
 
+/-- Check 9 in a batch: an accepted item was approved by a frame grant of its payment's tenant, which is its
+    token's tenant, under its token's grant id. -/
+theorem releaseBatch_grant_tenant {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : Item}
+    (hi : items[i]? = some it) (ha : (releaseBatch c r items)[i]? = some none) :
+    ∃ t, decodeToken it.token = some t ∧ ∃ g ∈ r.grants,
+      g.tenantId = it.payment.tenantId ∧ g.tenantId = t.leaf.tenantId ∧ g.grantId = t.leaf.grantId := by
+  have hv := (releaseBatch_spec hi).1 ha
+  obtain ⟨t, hd⟩ : ∃ t, decodeToken it.token = some t := by
+    cases hd : decodeToken it.token with
+    | none => unfold verifyToken at hv; simp [hd] at hv
+    | some t => exact ⟨t, rfl⟩
+  obtain ⟨g, hgs, hten, hp, hid, -⟩ := verifyToken_grant_tenant hv hd
+  exact ⟨t, hd, g, hgs, hp, hten, hid⟩
+
 /-! ## §B  One-tree PUBLISH -/
 
 private theorem eq_single {hs : List Bytes} (h0 : 0 < hs.length) (h1 : hs.length ≤ 1) : ∃ x, hs = [x] := by

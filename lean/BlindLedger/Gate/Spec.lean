@@ -613,7 +613,9 @@ structure Crypto where
 
 def Crypto.certChainOk (c : Crypto) (e : EpochCert) : Bool := c.rootSigned e && c.keyUsable e
 
+/-- A payer's approval of rule versions and engine releases, for one tenant: tenant and id are its identity. -/
 structure Grant where
+  tenantId : Bytes
   grantId : Bytes
   ruleVersions : List Bytes
   engineReleases : List Bytes
@@ -796,10 +798,10 @@ def routed (c : Crypto) (s : PayerState) (p : Payment) (t : Token) : Bool :=
 /-- Check 8. -/
 def allows (t : Token) : Bool := t.leaf.outcome == .ALLOW
 
-/-- Check 9: an active grant approves the leaf's rule version and the engine
-    release that decided it. -/
+/-- Check 9: an active grant of the token's own tenant approves the leaf's rule
+    version and the engine release that decided it. -/
 def granted (s : PayerState) (t : Token) : Bool :=
-  s.grants.any fun g => g.grantId == t.leaf.grantId &&
+  s.grants.any fun g => g.grantId == t.leaf.grantId && g.tenantId == t.leaf.tenantId &&
     g.ruleVersions.contains t.leaf.ruleVersion && g.engineReleases.contains t.leaf.engineRelease
 
 /-- Check 10. -/

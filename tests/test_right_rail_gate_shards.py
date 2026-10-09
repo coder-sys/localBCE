@@ -11,8 +11,10 @@ import tempfile
 import unittest
 from unittest import mock
 
+from app import right_rail_gate_codec as gate
 from app import right_rail_gate_decide as decider
 from app import right_rail_gate_idreg as idreg
+from app import right_rail_gate_payer as payer
 from app import right_rail_gate_producer as producer
 from app import right_rail_gate_signer as signer
 from tests import _gate_shards as g
@@ -28,6 +30,12 @@ def count(c: g.Cluster, kind: int) -> int:
         return db.execute("SELECT COUNT(*) FROM log WHERE kind = ?", (kind,)).fetchone()[0]
     finally:
         db.close()
+
+
+def request(p: int, k: int):
+    """The payer's request for harness payment p on shard k: the one its ALLOW leaf (``g.decide_batch``) carries."""
+    key, flow = fx.member(p, k), "FFS_CLAIM" if p % 4 else "FFS_CYCLE"
+    return fx._request(flow, p, fx._lines(p, flow, key), member_key=key)
 
 
 def snapshot(path: Path) -> dict[str, bytes]:
@@ -65,9 +73,9 @@ def head_at(c: g.Cluster, n: int) -> bytes:
 
 class ShardTests(fx.Scratch):
     @contextlib.contextmanager
-    def cluster(self):
+    def cluster(self, shards: int = 2):
         with self.scratch() as tmp:
-            c = g.Cluster(tmp, fx.custody(tmp))
+            c = g.Cluster(tmp, fx.custody(tmp), shards=shards)
             c.boot()
             yield c
 
@@ -306,10 +314,11 @@ class ShardTests(fx.Scratch):
                     restore(path, files)
                 if point is None:  # NEXT paid 20
                     with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                        c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
-                    with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
-                        c.send(0, {9: [20]})  # each batch too: the old BOOT nonce still opens the registry
+                        c.send(0, {9: [20]})  # each batch checks too: the running nonce still opens the registry
                     self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD ALREADY_DECIDED"})  # the refusal freed nothing
+                    with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
+                        c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
+                    self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD registry_not_booted"})  # the refusal fenced the nonce
                 else:
                     c.boot()  # the store is behind only a batch whose tokens never left
                     self.finish(c, NEXT)  # 20 freed, decided again and paid once; inv holds
@@ -320,28 +329,166 @@ class ShardTests(fx.Scratch):
             old = snapshot(c.reg)
             c.boot()
             restore(c.reg, old)
-            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
-                c.send(0, NEXT)
+            reserved = count(c, 0)
+            self.assertEqual((c.send(0, NEXT), count(c, 0)), ({20: "HOLD registry_not_booted"}, reserved))
 
-    def test_r5_whole_directory_restore_boots_and_forks(self) -> None:
-        with self.cluster() as c, tempfile.TemporaryDirectory() as keep:
-            c.send(0, T, BAD)
-            shutil.copytree(c.dir, keep, dirs_exist_ok=True)
-            c.send(0, NEXT)
-            published = c.producer(0)
-            original = published.published()[-1]
-            published.close()
+    def pay(self, c: g.Cluster, store: payer.PayerStore, k: int, p: int) -> str | None:
+        """Shard k decides payment p (line 10, X) and seals it; the payer stores the checkpoint, sends p and releases it."""
+        prod, reg = c.producer(k), idreg.IdRegistry(c.reg, boot=c.nonce)
+        try:
+            ans, leaves, status = g.decide_batch(c, prod, reg, k, {p: [10]})
+            _, signed, tokens = decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+        finally:
+            prod.close()
+            reg.close()
+        self.assertEqual((status, store.store_checkpoint(signed)), ({10: "ALLOW -"}, "stored"))
+        store.send(request(p, k), transmit=lambda data: None)
+        return store.release(request(p, k), gate.encode_token(tokens[0]), now=fx.NOW)
+
+    @contextlib.contextmanager
+    def released_then_restored(self, restart: bool = True, shards: int = 2, k: int = 0):
+        """Copy the whole directory; shard ``k`` pays X in payment 1 (sealed, stored and released by the payer).  Then the
+        copy comes back and, with ``restart``, the process restarts: it holds no nonce until a boot passes."""
+        with tempfile.TemporaryDirectory() as keep, self.cluster(shards) as c:
+            shutil.copytree(c.dir, Path(keep) / "copy")
+            c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
+                                                          grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)))
+            store.install_cert(c.custody[2])
+            self.assertIsNone(self.pay(c, store, k, 1))
             for f in c.dir.iterdir():
                 f.unlink()
-            shutil.copytree(keep, c.dir, dirs_exist_ok=True)
-            c.boot()  # documented residual (design 9, R5): a whole-directory restore passes the boot check
+            shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
+            if restart:
+                c.nonce = b""
+            yield c, store
+
+    def test_r5_restore_after_release_holds(self) -> None:
+        """Design idreg-restore T1 (was ``test_r5_whole_directory_restore_boots_and_forks``, the residual): the restored
+        store lacks the payer's newest stored checkpoint, so boot is refused and the gate HOLDs; X is released once."""
+        with self.released_then_restored() as (c, store):
+            with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
+                c.boot()
+            reserved = count(c, 0)
+            self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_restored"})  # shard 1 tries X for payment 2
+            ans = g.decide_batch(c, None, None, 1, {2: [10]})[0]
+            with self.assertRaisesRegex(decider.GateDecideError, "registry_restored"):
+                decider.commit(None, None, fx.PROGRAM, [], ans, fx.NOW)  # a HOLD answer is never sealed
+            self.assertEqual((count(c, 0), c.store(1).exists()), (reserved, False))  # no reserve, no checkpoint
+            store.send(request(2, 1), transmit=lambda data: None)  # intake during HOLD is accepted
+            self.assertEqual(store._db.execute("SELECT COUNT(*) FROM commands WHERE command_key=?",
+                                               (request(2, 1).command_key,)).fetchone()[0], 1)
+            self.assertEqual(store._db.execute("SELECT payment_id FROM releases").fetchall(), [("pay-0001",)])
+
+    def releases(self, store: payer.PayerStore) -> list[str]:
+        return [p for (p,) in store._db.execute("SELECT payment_id FROM releases ORDER BY payment_id")]
+
+    def test_r5_refused_boot_fences_the_running_nonce(self) -> None:
+        """Review HIGH-1: the process keeps running with the copy's newest nonce; the refused boot's BOOT row fences it,
+        so shard 1's X HOLDs and X is released once.  Mutant: without that row the old nonce reserves and X pays twice."""
+        add = idreg._Tail.add
+        for mutant in (False, True):
+            fence = mock.patch.object(idreg._Tail, "add", lambda t, kind, *a: kind == idreg._BOOT or add(t, kind, *a)) \
+                if mutant else contextlib.nullcontext()
+            with self.subTest(mutant=mutant), self.released_then_restored(restart=False) as (c, store), fence:
+                with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
+                    c.boot()
+                if mutant:
+                    self.assertIsNone(self.pay(c, store, 1, 2))
+                else:
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
+
+    def test_r5_a_boot_that_cannot_read_its_inputs_fences(self) -> None:
+        """Review HIGH-1b: the payer or a shard's store cannot be read while booting.  Boot reads them inside its
+        transaction, so the refusal fences the running nonce and shard 1's X HOLDs (before: the caller read them first,
+        boot raised before its fence and the old nonce ALLOWed X again)."""
+        for target, name, error, label in ((None, "newest_stored", sqlite3.OperationalError("disk I/O error"), "payer_unavailable"),
+                                           (producer, "newest", PermissionError(13, "denied"), "inputs_unavailable"),
+                                           (producer, "newest", sqlite3.OperationalError("disk I/O error"), "inputs_unavailable"),
+                                           (producer, "newest", producer.GateProducerError("store_unavailable"), "store_unavailable")):
+            with self.subTest(label, error=error), self.released_then_restored(restart=False) as (c, store):
+                if target:
+                    c.store(1).touch()  # a store to read: the copy predates every batch
+                with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(idreg.IdRegistryError) as refused:
+                    c.boot()
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(self.releases(store), ["pay-0001"])
+                self.assertRegex(str(refused.exception), label)
+                if target:
+                    self.assertIsInstance(refused.exception.__cause__, type(error))
+
+    def test_r5_the_refusal_and_its_fence_are_one_transaction(self) -> None:
+        """Review M-A: the moment the refused boot's connection gives up the write lock, the running nonce's shard 1 tries
+        X.  The fence committed with the refusal, so X HOLDs (before: ROLLBACK freed the lock, X ALLOWed, and only then
+        did a second transaction write the fence)."""
+        with self.released_then_restored(restart=False) as (c, store):
+            seen, real = [], idreg._open
+
+            class Hooked:  # the registry connection; the first COMMIT or ROLLBACK on it runs shard 1's batch
+                def __init__(self, db):
+                    self.db = db
+
+                def __getattr__(self, name):
+                    return getattr(self.db, name)
+
+                def execute(self, sql, *args):
+                    cursor = self.db.execute(sql, *args)
+                    if sql in ("COMMIT", "ROLLBACK") and not seen:
+                        seen.append(None)
+                        seen[0] = c.send(1, {2: [10]})
+                    return cursor
+            with mock.patch.object(idreg, "_open", lambda *a: Hooked(real(*a))), \
+                    self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
+                c.boot()
+            self.assertEqual((seen, self.releases(store)), ([{10: "HOLD registry_not_booted"}], ["pay-0001"]))
+
+    def test_r5_a_payer_shard_outside_the_boot_is_refused(self) -> None:
+        """Review MEDIUM-1: shard 2 of 3 pays X, the directory comes back and boots with 2 shards; the payer holds shard
+        2 outside the commitments, so boot is ``anchor_missing`` and X is released once.  Mutant: an anchor map cut to
+        the booted shards checks nothing, and shard 0 pays X again."""
+        for mutant in (False, True):
+            with self.subTest(mutant=mutant), self.released_then_restored(shards=3, k=2) as (c, store):
+                c.shards = 2
+                if mutant:
+                    stored = store.newest_stored
+                    with mock.patch.object(store, "newest_stored", lambda t: {s: d for s, d in stored(t).items() if s < 2}):
+                        c.boot()
+                    self.assertIsNone(self.pay(c, store, 0, 2))
+                else:
+                    with self.assertRaisesRegex(idreg.IdRegistryError, "anchor_missing"):
+                        c.boot()
+                    self.assertEqual(c.send(0, {2: [10]}), {10: "HOLD registry_restored"})
+                self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
+
+    def test_r5_restore_while_running_no_boot_today(self) -> None:
+        """The directory comes back under a running process that never reboots: it holds the copy's newest nonce, so
+        nothing fences it.  The setup and today's known-bad result are pinned (review L-D, LOW-1): a fixture regression
+        fails here, and S3 flips the ALLOW to HOLD."""
+        with self.released_then_restored(restart=False) as (c, store):
+            self.assertEqual((bool(c.nonce), self.releases(store), c.store(0).exists()), (True, ["pay-0001"], False))
+            self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})  # HIGH-2 open; S3 flips to HOLD
+
+    @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
+    def test_r5_restore_while_running_no_boot(self) -> None:
+        """The same restore: shard 1 must HOLD, so X is released once.  Only this final check is the expected failure."""
+        with self.released_then_restored(restart=False) as (c, store):
+            self.assertTrue(c.send(1, {2: [10]})[10].startswith("HOLD"))
+            self.assertEqual(self.releases(store), ["pay-0001"])
+
+    def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
+        """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the
+        payer sees no fork (two shards); only shard 0 re-publishing its seq is a fork."""
+        with self.released_then_restored() as (c, store):
+            with mock.patch.object(producer, "holds", return_value=True):
+                c.boot()
+            self.assertIsNone(self.pay(c, store, 1, 2))
+            self.assertEqual(store._db.execute("SELECT payment_id FROM releases ORDER BY payment_id").fetchall(),
+                             [("pay-0001",), ("pay-0002",)])
             c.send(0, {3: [30]})  # the restored shard publishes a different batch at the same seq
             again = c.producer(0)
             new = again.published()[-1]
             again.close()
-            handle, root_pk, cert = c.custody
-            frame = root_pk + fx._list([signer.framed(cert)]) + fx._list([signer.framed(original)]) + fx._u16(0) + signer.framed(new)
-            self.assertTrue(signer.gate_verify(3, frame).startswith("GATE_VERIFY=FORK"))
+            self.assertEqual(store.store_checkpoint(new), "fork")
 
     def test_d7_lost_adds_stop_the_shard(self) -> None:
         with self.cluster() as c:
