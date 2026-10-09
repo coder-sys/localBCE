@@ -15,6 +15,7 @@ appended, Lean's bytes, never decoded here) come from the decide layer and are s
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 from pathlib import Path
 import sqlite3
 from typing import Final, Sequence
@@ -185,11 +186,30 @@ class ShardProducer:
         self._db.close()
 
 
-def newest(path: Path) -> tuple[int, bytes] | None:
-    """Read-only, for the registry boot check: the newest batch's (idreg_n, registry head), sealed or open."""
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+def _read(path: Path, sql: str, args: tuple = ()):
+    """Read-only, for the registry boot check: the query's first row, None for no row or no file (only
+    ``FileNotFoundError`` is absent); any other path, file or database error is ``store_unavailable``."""
     try:
-        row = db.execute("SELECT idreg_n, header FROM batches ORDER BY id DESC LIMIT 1").fetchone()
-    finally:
-        db.close()
+        os.stat(path)
+        db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            return db.execute(sql, args).fetchone()
+        finally:
+            db.close()
+    except FileNotFoundError:
+        return None
+    except (sqlite3.Error, OSError, ValueError) as error:  # ValueError: a NUL in the path
+        raise GateProducerError("store_unavailable") from error
+
+
+def newest(path: Path) -> tuple[int, bytes] | None:
+    """The newest batch's (idreg_n, registry head), sealed or open; None: no store or no batch."""
+    row = _read(path, "SELECT idreg_n, header FROM batches ORDER BY id DESC LIMIT 1")
     return row and (row[0], row[1][-64:])
+
+
+def holds(path: Path, digest: bytes) -> bool | None:
+    """B3: True when the store holds the batch ``digest`` sealed, False when only as an open row (not yet a batch: boot
+    is ``store_unsealed`` until a reopen reseals or voids it), None when not at all (no store holds nothing)."""
+    row = _read(path, "SELECT signature IS NOT NULL FROM batches WHERE digest=?", (digest,))
+    return row and bool(row[0])
