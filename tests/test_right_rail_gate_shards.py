@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -472,7 +473,7 @@ class ShardTests(fx.Scratch):
                         with ShardTests.other_process():
                             seen[0] = c.send(1, {2: [10]})
                     return cursor
-            with mock.patch.object(idreg, "_open", lambda *a: Hooked(real(*a))), \
+            with mock.patch.object(idreg, "_open", lambda *a, **k: Hooked(real(*a, **k))), \
                     self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
                 c.boot()
             self.assertEqual((seen, self.releases(store)), ([{10: "HOLD registry_not_booted"}], ["pay-0001"]))
@@ -539,10 +540,10 @@ class ShardTests(fx.Scratch):
                     self.left -= 1
                     raise sqlite3.OperationalError("disk I/O error")
                 return self.db.execute(sql, *args)
-        lock = lambda path, timeout=5.0: real(path, 0.1)
-        for trigger, hook in (("lock", lock), ("lock, re-pointed", lock), ("commit", lambda *a: Failing(real(*a), 2)),
-                              ("commit once", lambda *a: Failing(real(*a), 1)),
-                              ("open", lambda path, *a: real(path.parent / "missing" / path.name, *a))):
+        lock = lambda path, timeout=5.0, **k: real(path, 0.1, **k)
+        for trigger, hook in (("lock", lock), ("lock, re-pointed", lock), ("commit", lambda *a, **k: Failing(real(*a, **k), 2)),
+                              ("commit once", lambda *a, **k: Failing(real(*a, **k), 1)),
+                              ("open", lambda path, *a, **k: real(path.parent / "missing" / path.name, *a, **k))):
             with self.subTest(trigger), self.released_then_restored(restart=False, repoint="re-pointed" in trigger) as (c, store), \
                     mock.patch.object(idreg, "_SEEN", {}), contextlib.closing(sqlite3.connect(c.reg, isolation_level=None)) as writer:
                 if trigger.startswith("lock"):
@@ -622,6 +623,59 @@ class ShardTests(fx.Scratch):
                     idreg.IdRegistry(c.reg, boot=c.nonce)  # before: Q took the copy's identity while writing the other file
             finally:
                 link(c.dir, None)
+
+    def test_r5_a_boot_ends_only_the_stop_of_the_file_it_booted(self) -> None:
+        """Review L-a (s3fix3): link J names registry A, which this process stopped (a boot of it timed out).  A boot
+        through J waits for the boot lock while J is re-pointed to B: it boots B and A stays stopped (before: it read
+        J's target before the wait, so its pass on B ended A's stop and A's nonce reserved again).  J re-pointed to A
+        inside boot's open: it is refused and B's stop stays (before: it booted A and ended B's stop)."""
+        class Waiting:  # the boot lock, held by the test; says when a boot waits on it
+            def __init__(self):
+                self.lock, self.waiting = threading.Lock(), threading.Event()
+
+            def acquire(self, timeout):
+                self.waiting.set()
+                return self.lock.acquire(timeout=timeout)
+
+            def release(self):
+                self.lock.release()
+
+        def attempt(f):
+            try:
+                return f()
+            except idreg.IdRegistryError as error:
+                return str(error)
+
+        def reserve(d: Path, nonce: bytes):
+            with contextlib.closing(idreg.IdRegistry(d / "ids.sqlite3", boot=nonce)) as r:
+                return attempt(lambda: r.reserve(0, [1], sealed=None)[0])
+        none, real = lambda: ({}, {}, {}), idreg._open
+        for during in ("lock wait", "open"):
+            with self.subTest(during), tempfile.TemporaryDirectory() as keep:
+                a, b, got, lock = Path(keep) / "a", Path(keep) / "b", [], Waiting()
+                for d in (a, b):
+                    d.mkdir()
+                nonces = {d: idreg.boot(d / "ids.sqlite3", none) for d in (a, b)}
+                j = link(Path(keep) / "j", a if during == "lock wait" else b)
+                try:
+                    with mock.patch.multiple(idreg, _SEEN={}, _STOPPED={idreg._where(j / "ids.sqlite3")}, _BOOTING=lock):
+                        if during == "lock wait":
+                            lock.lock.acquire()
+                            t = threading.Thread(target=lambda: got.append(attempt(lambda: idreg.boot(j / "ids.sqlite3", none))))
+                            t.start()
+                            lock.waiting.wait(30)
+                            link(j, b)
+                            lock.lock.release()
+                            t.join(30)
+                            self.assertEqual(len(got[0]), 32, got)  # it booted B
+                            self.assertEqual((reserve(a, nonces[a]), reserve(b, got[0])), ("registry_not_booted", [(1, 0, False)]))
+                        else:
+                            with mock.patch.object(idreg, "_open", lambda *x, **k: (link(j, a), real(*x, **k))[1]), \
+                                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                                idreg.boot(j / "ids.sqlite3", none)
+                            self.assertEqual((reserve(a, nonces[a]), reserve(b, nonces[b])), ("registry_not_booted",) * 2)
+                finally:
+                    link(j, None)
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the

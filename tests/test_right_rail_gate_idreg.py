@@ -266,12 +266,12 @@ class IdRegistryTests(unittest.TestCase):
         for A, so B's pass, which ends the process's stop, never comes before A's failure, which must leave it set."""
         inside, go, real, done = threading.Event(), threading.Event(), idreg._open, {}
 
-        def hooked(path, *a):
+        def hooked(path, *a, **k):
             if threading.current_thread().name != "A":
-                return real(path, *a)
+                return real(path, *a, **k)
             inside.set()
             go.wait(30)
-            return _Dying(real(path, *a), die=False)
+            return _Dying(real(path, *a, **k), die=False)
 
         def run():
             try:
@@ -355,6 +355,26 @@ class IdRegistryTests(unittest.TestCase):
         self.assertEqual(self.reg._db.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             idreg.IdRegistry(Path(":memory:"), boot=self.nonce)  # journal_mode stays 'memory'
+
+    def test_only_boot_creates_or_writes_the_registry_file(self) -> None:
+        """Review L-b (s3fix3): a handle open writes no registry file: a missing one is not created, an empty one (a
+        restore mid-copy) is refused unwritten (before: both got WAL and the schema), and a refused handle is closed."""
+        new = self.path.with_name("new.sqlite3")
+        for exists in (False, True):
+            if exists:
+                new.touch()
+            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                idreg.IdRegistry(new, boot=self.nonce)
+            self.assertEqual([(p.name, p.stat().st_size) for p in new.parent.glob("new.*")], [("new.sqlite3", 0)] * exists)
+        real_open, real_ident = idreg._open, idreg._ident
+        for idents in ([None], [real_ident(self.path), None]):  # no file before the connect, or none after it
+            opened = []
+            with mock.patch.object(idreg, "_open", lambda *a: opened.append(real_open(*a)) or opened[-1]), \
+                    mock.patch.object(idreg, "_ident", side_effect=idents), \
+                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                idreg.IdRegistry(self.path, boot=self.nonce)
+            with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed"):
+                opened[0].execute("SELECT 1")
 
 
 if __name__ == "__main__":

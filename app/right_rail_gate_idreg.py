@@ -93,18 +93,22 @@ def _key(id_: int) -> bytes:
     return id_.to_bytes(ID_LEN, "big")
 
 
-def _open(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
+def _open(path: Path, timeout: float = 5.0, *, create: bool = False) -> sqlite3.Connection:
+    """Only ``boot`` (``create``) may create the file or write its journal mode and schema; a handle opens an existing
+    WAL registry and writes nothing (an empty file, e.g. a restore mid-copy, is refused unwritten)."""
     try:
-        db = sqlite3.connect(path, timeout=timeout, isolation_level=None)
-    except sqlite3.OperationalError as error:  # e.g. the directory is missing: same typed refusal
+        db = sqlite3.connect(f"{Path(path).absolute().as_uri()}?mode={'rwc' if create else 'rw'}", timeout=timeout,
+                             isolation_level=None, uri=True)
+    except sqlite3.OperationalError as error:  # e.g. the directory or (for a handle) the file is missing
         raise IdRegistryError("registry_unavailable") from error
     try:
-        if db.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'ids'").fetchone():  # a read: the WAL header is seen
+            raise IdRegistryError("store_version")  # the v1 table: refused, never migrated
+        if db.execute("PRAGMA journal_mode=WAL" if create else "PRAGMA journal_mode").fetchone()[0] != "wal":
             raise IdRegistryError("registry_unavailable")  # a rollback journal is not the durability promised
         db.execute("PRAGMA synchronous=FULL")
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'ids'").fetchone():
-            raise IdRegistryError("store_version")  # the v1 table: refused, never migrated
-        db.executescript(_SCHEMA)
+        if create:
+            db.executescript(_SCHEMA)
     except sqlite3.Error as error:
         db.close()
         raise IdRegistryError("registry_unavailable") from error
@@ -246,14 +250,17 @@ def boot(path: Path, inputs: Inputs) -> bytes:
     from the start of a boot until one passes, every handle of this process on the registry's path, or on any nonce
     the boot could read there (so also through any other path to the same file), fences and HOLDs.  Boots of one
     process run one at a time; one that waits more than 5 s for another stops the path and raises ``registry_unavailable``."""
-    where = _where(path)
     if not _BOOTING.acquire(timeout=5.0):
-        _STOPPED.add(where)
+        _STOPPED.add(_where(path))
         raise IdRegistryError("registry_unavailable")
     try:
+        where = _where(path)  # read under the lock: a link re-pointed during the wait names the file this boot opens
         _STOPPED.add(where)
-        db, nonce, refusal = _open(path), os.urandom(32), None
+        db, nonce, refusal = _open(path, create=True), os.urandom(32), None
         try:
+            if (moved := _where(path)) != where:  # re-pointed during the open: either file may be the one opened
+                _STOPPED.add(moved)
+                raise IdRegistryError("registry_unavailable")  # fenced below, in the file opened
             with contextlib.suppress(sqlite3.Error):  # a WAL read: it waits for no writer
                 _stop_boots(db)
             with _txn(db, None):
