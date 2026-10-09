@@ -117,9 +117,9 @@ def _open(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
 @contextlib.contextmanager
 def _txn(db: sqlite3.Connection, boot: bytes | None, path: Path | None = None, ident: tuple[str, int, int] | None = None):
     """One write transaction (BEGIN IMMEDIATE, one fsync at COMMIT) whose newest BOOT row must carry ``boot``.  A
-    handle's first on a nonce in its process stops every other nonce in the log.  It stops its own nonce if ``path``
-    no longer names the file it opened (``ident``) or the row its process last saw on the nonce is gone or changed,
-    and is refused ``registry_not_booted``, after committing a fence, while its nonce or opened path is stopped (or a
+    handle's first on a nonce in its process stops every other nonce in the log.  It stops its own nonce if the newest
+    BOOT row is not it (refused, nothing written), if ``path`` no longer names the file it opened (``ident``) or the
+    row its process last saw on the nonce is gone or changed, and is refused ``registry_not_booted``, after committing a fence, while its nonce or opened path is stopped (or a
     boot of either in its process did not pass); before its COMMIT, under the write lock, the process remembers the new
     tail (a COMMIT that then fails fences: fail closed)."""
     try:
@@ -127,6 +127,7 @@ def _txn(db: sqlite3.Connection, boot: bytes | None, path: Path | None = None, i
         try:
             row = db.execute("SELECT id FROM log WHERE kind = 3 ORDER BY n DESC LIMIT 1").fetchone()
             if boot is not None and (not row or row[0] != boot):
+                _STOPPED.add(boot)  # displaced: only a rewind makes it newest again
                 raise IdRegistryError("registry_not_booted")
             if boot is not None and boot not in _SEEN:
                 _stop_boots(db, boot)
@@ -244,11 +245,12 @@ def boot(path: Path, inputs: Inputs) -> bytes:
     committed raises ``registry_unavailable`` (after one fence-only retry in a fresh transaction once it is open);
     from the start of a boot until one passes, every handle of this process on the registry's path, or on any nonce
     the boot could read there (so also through any other path to the same file), fences and HOLDs.  Boots of one
-    process run one at a time; one that waits more than 5 s for another raises ``registry_unavailable``."""
+    process run one at a time; one that waits more than 5 s for another stops the path and raises ``registry_unavailable``."""
+    where = _where(path)
     if not _BOOTING.acquire(timeout=5.0):
+        _STOPPED.add(where)
         raise IdRegistryError("registry_unavailable")
     try:
-        where = _where(path)
         _STOPPED.add(where)
         db, nonce, refusal = _open(path), os.urandom(32), None
         try:
@@ -283,8 +285,11 @@ def boot(path: Path, inputs: Inputs) -> bytes:
 
 class IdRegistry:
     def __init__(self, path: Path, *, boot: bytes, timeout: float = 5.0) -> None:
+        self._ident = _ident(path)  # read before and after the connect: a link re-pointed between them is refused
         self._db, self._boot, self._path, self._leases = _open(path, timeout), boot.rjust(ID_LEN, b"\0"), path, {}
-        self._ident = _ident(path)
+        if self._ident is None or _ident(path) != self._ident:  # (sqlite3 exposes no handle identity: A->B->A is not seen)
+            self._db.close()
+            raise IdRegistryError("registry_unavailable")
 
     def close(self) -> None:
         for lock in self._leases.values():

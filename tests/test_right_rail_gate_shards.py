@@ -579,31 +579,34 @@ class ShardTests(fx.Scratch):
         """Review M-1 (s3fix1): worker W, never booting, commits shard 0 under N1; a copy is taken; this process reboots
         (N2); W's shard 0 pays X under N2, W's shard 1 still on N1 HOLDs; the copy comes back (newest BOOT N1, no boot).
         W's first pass on N2 stopped every older nonce in W, so shard 1 on N1 HOLDs (before: W's N1 memory matched the
-        copy, and X paid twice)."""
-        w = {"_SEEN": {}, "_STOPPED": set()}  # W's process memory
-        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
-            n1 = c.nonce
-            with mock.patch.multiple(idreg, **w):
-                self.assertEqual(c.send(0, NEXT), {20: "ALLOW -"})
-            shutil.copytree(c.dir, Path(keep) / "copy")
-            c.boot()
-            with mock.patch.multiple(idreg, **w):
-                self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
-                c.nonce = n1
-                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
-                for f in c.dir.iterdir():
-                    f.unlink()
-                shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
-                reserved = count(c, idreg._RESERVE)
-                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
-            self.assertEqual(count(c, idreg._RESERVE), reserved)
+        copy, and X paid twice).  Review M-1 (s3fix2): this process pays X, outside W; W never runs on N2, but its
+        shard 1 found N1 displaced, which stops N1 in W, so after the copy comes back X HOLDs (before: W paid X again)."""
+        for in_w in (True, False):
+            w = {"_SEEN": {}, "_STOPPED": set()}  # W's process memory
+            with self.subTest(in_w=in_w), tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+                n1 = c.nonce
+                with mock.patch.multiple(idreg, **w):
+                    self.assertEqual(c.send(0, NEXT), {20: "ALLOW -"})
+                shutil.copytree(c.dir, Path(keep) / "copy")
+                c.boot()
+                with mock.patch.multiple(idreg, **w) if in_w else contextlib.nullcontext():
+                    self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
+                with mock.patch.multiple(idreg, **w):
+                    c.nonce = n1
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                    for f in c.dir.iterdir():
+                        f.unlink()
+                    shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
+                    reserved = count(c, idreg._RESERVE)
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(count(c, idreg._RESERVE), reserved)
 
     def test_r5_a_handle_open_across_a_copy_and_repoint_holds(self) -> None:
         """Review M-2 (s3fix1): handle P, opened through a directory link, lives on while the operator copies the
         directory and re-points the link; another process boots the copy and its shard 1 pays X.  P's next transaction
         finds another file at its path, so P's X HOLDs (before: P never saw the copy's BOOT and paid X again)."""
         with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
-            c.dir = link(Path(keep) / "current", c.dir)
+            home, c.dir = c.dir, link(Path(keep) / "current", c.dir)
             try:
                 with contextlib.closing(c.producer(0)) as prod, contextlib.closing(idreg.IdRegistry(c.reg, boot=c.nonce)) as p:
                     shutil.copytree(c.dir, Path(keep) / "copy")
@@ -613,6 +616,10 @@ class ShardTests(fx.Scratch):
                         self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})
                     self.assertEqual(g.decide_batch(c, prod, p, 0, {1: [10]})[2], {10: "HOLD registry_not_booted"})
                     self.assertIn(p._boot, idreg._STOPPED)
+                real = idreg._open  # review M-2 (s3fix2): the link moves back between Q's connect and its identity read
+                with mock.patch.object(idreg, "_open", lambda *a: (real(*a), link(c.dir, home))[0]), \
+                        self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                    idreg.IdRegistry(c.reg, boot=c.nonce)  # before: Q took the copy's identity while writing the other file
             finally:
                 link(c.dir, None)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -294,12 +295,28 @@ class IdRegistryTests(unittest.TestCase):
 
     def test_a_boot_that_waits_too_long_for_another_is_a_typed_refusal(self) -> None:
         """Review L-1 (s3fix1): another boot of this process holds the boot lock past 5 s: ``registry_unavailable``,
-        nothing written, and the running handle still works."""
+        nothing written.  Review L-1 (s3fix2): it stops the path like every other boot that does not pass, so the
+        running handle HOLDs until a boot passes (before: it kept reserving on a file nobody checked)."""
         before = self.tail()
         with idreg._BOOTING, self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             idreg.boot(self.path, lambda: ({}, {}, {}))
         self.assertEqual(self.tail(), before)
-        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.reserve(0, [1], sealed=None)
+        self.assertEqual(self.open(idreg.boot(self.path, lambda: ({}, {}, {}))).reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    def test_boot_stops_old_nonces_inside_its_transaction(self) -> None:
+        """Review L-2 (s3fix2): boot's pre-read fails (suppressed), so only its in-transaction sweep stops the old nonce;
+        a copy taken before the boot, reached later, must not let that nonce reserve again."""
+        copy = self.path.with_name("copy.sqlite3")
+        for s in ("", "-wal"):
+            shutil.copyfile(f"{self.path}{s}", f"{copy}{s}")
+        with mock.patch.object(idreg, "_stop_boots", wraps=idreg._stop_boots,
+                               side_effect=[sqlite3.OperationalError("database is locked"), mock.DEFAULT]):
+            idreg.boot(self.path, lambda: ({}, {}, {}))
+        with contextlib.closing(idreg.IdRegistry(copy, boot=self.nonce)) as old, self.assertRaisesRegex(
+                idreg.IdRegistryError, "registry_not_booted"):
+            old.reserve(0, [1], sealed=None)
 
     def test_bad_input_is_refused_before_anything_is_written(self) -> None:
         before = self.tail()
