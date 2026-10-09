@@ -162,6 +162,7 @@ class Shard:
         self.k, self.db = k, db
         self.c, self.w = rb.open_store(db, True, True)
         self.c.executescript(SHARD_DDL)
+        self.applied_count, self.last_applied_n = self.c.execute("SELECT COUNT(*),COALESCE(MAX(n),0) FROM applied").fetchone()  # seeded once, as the database is when the shard opens; build keeps them, a refused part or an abort puts them back
         self.busy = self.check_s = self.commit_s = self.idle_s = 0.0
         self.commit_log: list[tuple[float, int]] = []  # per group: COMMIT ms and bytes the process wrote during it (the checkpointer thread's writes are in it too)
         self.lines = 0
@@ -181,11 +182,11 @@ class Shard:
         parts = pickle.loads(blob)
         if verdict_of(parts) != verdict:
             raise ShardDiverged(f"shard {self.k}: verdicts differ from the record")
-        seq0, began = w.seq, dict(w.revision)
+        seq0, began, count0, last0 = w.seq, dict(w.revision), self.applied_count, self.last_applied_n
         if not w.c.in_transaction:  # the first part of a group opens the shard's one transaction; the group is only a commit boundary
             w.ckpt.before_begin()
             w.c.execute("BEGIN IMMEDIATE")
-            self.undo, self.pre_mark = [seq0, pre_head, began, 0], 0
+            self.undo, self.pre_mark = [seq0, pre_head, began, 0, count0, last0], 0
         w.c.execute("SAVEPOINT part")  # a refused part leaves no trace, the parts before it in the group stay until the spine aborts the group
         try:
             t = {"cell_rows": [(rk, origin, tag, amount, raw, rawdig) for rk, origin, tag, _, amount, raw, rawdig, _, _ in parts],
@@ -204,6 +205,7 @@ class Shard:
             digest.update(pickle.dumps(sorted(touched.items()), 5) + w.head)
             self.seen = hashlib.sha3_256(blob).digest()  # what the shard was sent: BUILT returns it and the spine checks it against its own copy
             w.c.execute("INSERT INTO applied VALUES (?,?,?,?)", (n, SPINE_ID, rb.sha("RR/SHARD/RCORE/v1", n, index, pool, t_f), self.seen))
+            self.applied_count, self.last_applied_n = count0 + 1, n
             w.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (w.seq, w.head))
             c0 = time.perf_counter()
             self.check(index, parts, seq0, pre_head, t["financial_events"])
@@ -216,6 +218,7 @@ class Shard:
                     w.c.execute("ROLLBACK")
                     self.undo = None
             w.seq, w.head, w.revision = seq0, pre_head, began  # the part leaves no trace in memory either
+            self.applied_count, self.last_applied_n = count0, last0
             raise
         w.c.execute("RELEASE part")
         self.undo[3] += len(parts)
@@ -250,7 +253,7 @@ class Shard:
         if self.c.in_transaction:
             self.c.execute("ROLLBACK")
         if self.undo:  # the parts of a group that never committed: memory goes back with the database
-            (self.w.seq, self.w.head, self.w.revision, built), self.undo = self.undo, None
+            (self.w.seq, self.w.head, self.w.revision, built, self.applied_count, self.last_applied_n), self.undo = self.undo, None
             self.lines -= built
 
     def snapshot(self, path: Path) -> None:
@@ -285,7 +288,7 @@ def shard_main(conn, k: int, db: str) -> None:
         try:
             message = decode(raw)
             if message[0] == "PART":
-                conn.send(("BUILT", *shard.build(*message[1:]), shard.seen))
+                conn.send(("BUILT", *shard.build(*message[1:]), shard.seen, shard.applied_count, shard.last_applied_n))
                 if mode != 3:
                     shard.prewrite(conn)
             elif message[0] == "PREFLUSH":  # mode 3: every part of the group is built and the spine is committing; no reply
@@ -536,6 +539,7 @@ class Spine:
             self.c.close()
             raise
         self.n, self.prev_head, self.last_t_f = 0, bytes(64), 0
+        self.tally = {k: (0, 0) for k in range(k_count)}  # per shard: (count, last n) of the spine records written that touch it; a fresh spine's shards hold no applied rows
         self.pre_done = False  # mode 3: the spine has pushed its pages once in this group
         self.owed: dict[int, bytes] = {}  # shards whose group COMMIT is not yet ACKed -> the head the ACK must carry
         self.diverged_seen = False  # a wrong head after a commit was found: run_once ends in ShardDiverged, whatever else failed in the same run
@@ -671,7 +675,7 @@ class Spine:
         f = g.files[g.busy.pop(k)]
         if m[3] != hashlib.sha3_256(f.p.blobs[k]).digest():  # the shard built from other bytes than the spine sent
             raise rb.FinancialIntegrityError(f"shard_blob_mismatch:{k}")
-        f.built[k], g.tip[k] = (m[1], m[2]), m[1]
+        f.built[k], g.tip[k] = (m[1], m[2], m[4], m[5]), m[1]
         f.need.discard(k)
         if g.queue[k]:  # k is free: the group's next part for it goes out on the head it just reported
             self.ship(g.files[g.queue[k].popleft()], k)
@@ -729,7 +733,7 @@ class Spine:
         started = time.perf_counter()
         self.ckpt.before_begin()
         self.c.execute("BEGIN IMMEDIATE")
-        undo, heads0, prev0 = [], dict(self.heads), self.prev_head
+        undo, heads0, prev0, tally0 = [], dict(self.heads), self.prev_head, dict(self.tally)
         g = self.g = SimpleNamespace(files=[], busy={}, queue={k: collections.deque() for k in self.workers}, tip=dict(self.heads), sent=set(), flushed=0)
         try:
             for pos, (_, index, record, deposit, prepared, t_f) in enumerate(plan):
@@ -764,6 +768,7 @@ class Spine:
                     self.send(k, ("PREFLUSH",))
             self.check_senders()
         except BaseException:
+            self.tally = tally0  # the group's records are not written: the writer's per-shard count and last n go back with the heads
             self.fail(g, undo, heads0, prev0)
             raise
         finally:
@@ -860,6 +865,8 @@ class Spine:
         c, dirs, j, source, prev, self.dirty = self.c, p.dirs, p.j, p.source, self.prev_head, True
         if any(pre[k] != self.heads[k] for k in built):  # the head shipped for k is the post head of k's previous record, in order
             raise rb.FinancialIntegrityError("spine_check")
+        if any(built[k][2:] != (self.tally[k][0] + 1, n) for k in built):  # the shard holds one applied row more than the spine's records touching it, and n is the last of them
+            raise ShardDiverged(f"shard applied count or last n is not the spine's records touching it (record {n})")
         body = pickle.dumps({k: (p.blobs[k], p.verdicts[k], pre[k], built[k][1], built[k][0]) for k in p.blobs}, 5)
         rd = rb.sha(n, index, pool, t_f, BUILD_ID, source, j, hashlib.sha3_256(body).digest())
         head = rb.sha(prev, rd)
@@ -872,6 +879,7 @@ class Spine:
         if rb.sha(prev, again) != stored[8] or self.added != len(dirs) or dict(c.execute("SELECT k,head FROM heads")) != expected or stored[4] != BUILD_ID:
             raise rb.FinancialIntegrityError("spine_check")
         self.heads = {**self.heads, **{k: built[k][0] for k in built}}
+        self.tally = {**self.tally, **{k: (self.tally[k][0] + 1, n) for k in built}}
         self.prev_head = head
 
     def await_reply(self, k: int, what: str) -> None:

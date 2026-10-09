@@ -736,6 +736,28 @@ class ShardBench(unittest.TestCase):
             sb.replay(spine, shard, 3)
         self.assertEqual(f5_state(shard), before)
 
+    def test_f5n_shard_with_an_applied_row_no_spine_record_wrote_is_refused_before_commit(self) -> None:
+        """A shard reads its applied table when it opens: a template whose applied table already holds row 0 (no spine record wrote it) gives every shard one applied row the spine lacks, so the first group is refused before any commit."""
+        files, work, template = sb.corpus(20261006, LINES, 1), self.tmp / "f5n", self.tmp / "f5n-template.sqlite3"
+        shutil.copyfile(self.template, template)
+        c = sqlite3.connect(str(template))
+        try:
+            c.executescript(sb.SHARD_DDL)
+            c.execute("INSERT INTO applied VALUES (0,?,?,?)", (bytes(32), bytes(32), bytes(32)))
+            c.commit()
+        finally:
+            c.close()
+        spine = sb.Spine(work, 2, template)
+        try:
+            prepared = sb.prepare(spine.tbl, 0, files[0][0].rows, 1)
+            before = self.all_digests(work)
+            with self.assertRaisesRegex(sb.ShardDiverged, "applied count or last n"):
+                spine.ingest_group([(0, *files[0], prepared)])
+            self.assertEqual((spine.n, spine.keys), (0, {}))
+            self.assertEqual(self.all_digests(work), before)
+        finally:
+            spine.close()
+
     def test_t4_stale_head_at_group_start_is_refused_with_no_write(self) -> None:
         files, work = sb.corpus(20261006, LINES, 3), self.tmp / "t4"
         spine = sb.Spine(work, 4, self.template)
