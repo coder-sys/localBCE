@@ -1,0 +1,322 @@
+{
+  "checkpoint_sha256": "f757ab3d69759ebe5fc7fa971b8261b1bdef50adc7c1d109844c8fa31e9ab9f4",
+  "control_count": 10,
+  "controls": [
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-AUTHORITY-SEPARATION",
+      "evidence_text": "Any power to approve, hold, release or redirect an external action needs separate, explicit state authority.",
+      "human_approved": false,
+      "line_end": 25,
+      "line_start": 24,
+      "local_evidence": [
+        {
+          "path": "blind-ledger/test/StarkGovernedV2.t.sol",
+          "required_markers": [
+            "test_EmergencyPauseIsImmediateButUnpauseIsTimelocked",
+            "test_AttestorPolicyVerifierAndAllowlistChangesAreTimelocked",
+            "test_TreasuryTransferIsTimelockedAndTwoStep"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "governance roles, timelock controls, and treasury separation",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "Explicit authority for consequential actions"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-SINGLE-WRITER",
+      "evidence_text": "Each responsibility has exactly one authoritative writer.",
+      "human_approved": false,
+      "line_end": 45,
+      "line_start": 44,
+      "local_evidence": [
+        {
+          "path": "right-rail-integration/DATABASE_CROSSWALK.md",
+          "required_markers": [
+            "No second active writer",
+            "PostgreSQL remains the sole bulk rules/source/review database"
+          ],
+          "status": "documented_boundary"
+        },
+        {
+          "path": "stark-engine/tests/phase8_production_nullifier_state.rs",
+          "required_markers": [
+            "file_provider_is_atomic_and_exclusive"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "PostgreSQL rules ownership, Rust proof state, and settlement journal boundaries",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "One authoritative writer per state domain"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-ATOMIC-COMMIT",
+      "evidence_text": "History, current projection and the action/outbox identity commit together, atomically.",
+      "human_approved": false,
+      "line_end": 47,
+      "line_start": 46,
+      "local_evidence": [
+        {
+          "path": "stark-engine/src/production_stark_settlement.rs",
+          "required_markers": [
+            "write_json_atomic",
+            "local_state_committed"
+          ],
+          "status": "implemented_and_tested"
+        },
+        {
+          "path": "stark-engine/tests/phase8_production_nullifier_state.rs",
+          "required_markers": [
+            "approved_transition_persists_and_advances_generation",
+            "file_provider_is_atomic_and_exclusive"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "settlement journal and state compare-and-swap tests",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "Atomic history, projection, and outbox identity"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-IDEMPOTENT-RETRY",
+      "evidence_text": "An exact retry is a duplicate; changed meaning is a conflict.",
+      "human_approved": false,
+      "line_end": 50,
+      "line_start": 48,
+      "local_evidence": [
+        {
+          "path": "stark-engine/tests/phase8_production_nullifier_state.rs",
+          "required_markers": [
+            "duplicate_and_deterministic_index_collision_are_rejected",
+            "stale_transition_fails_compare_and_swap"
+          ],
+          "status": "implemented_and_tested"
+        },
+        {
+          "path": "stark-engine/src/production_stark_settlement.rs",
+          "required_markers": [
+            "possible reorg or wrong RPC chain",
+            "conflicts with both sides of the finalized transition"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "settlement request idempotency and reconciliation conflict tests",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "Exact retry is duplicate; changed retry conflicts"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-APPEND-ONLY-HISTORY",
+      "evidence_text": "History is never rewound; corrections are new, linked facts.",
+      "human_approved": false,
+      "line_end": 52,
+      "line_start": 51,
+      "local_evidence": [
+        {
+          "path": "ops/monitoring_events.json",
+          "required_markers": [
+            "previousHash",
+            "newHash",
+            "transactionHash",
+            "blockNumber"
+          ],
+          "status": "monitoring_contract_only"
+        },
+        {
+          "path": "right-rail-integration/HARDENING_CONTROLS.md",
+          "required_markers": [
+            "append-only, linked corrections"
+          ],
+          "status": "documented_boundary"
+        }
+      ],
+      "local_target": "append-only audit records and hash-linked reconciliation evidence",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "History is append-only"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-INDEPENDENT-REPLAY",
+      "evidence_text": "independent checker, read-only; Switch: read-only replay and comparison",
+      "human_approved": false,
+      "line_end": 21,
+      "line_start": 16,
+      "local_evidence": [
+        {
+          "path": "scripts/generate_stark_pilot_reconciliation_report.py",
+          "required_markers": [
+            "reconciliation",
+            "chain"
+          ],
+          "status": "implemented_read_only_report"
+        },
+        {
+          "path": "stark-engine/src/bin/reconcile_production_stark_settlement.rs",
+          "required_markers": [
+            "reconcile_production_stark_settlement"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "read-only reconciliation and deterministic replay validation",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "ARCHITECTURE.md",
+      "source_sha256": "d2e705874d6d2f6b25d581c1bc2d124687c7226fcd014aac7aa5e71555683785",
+      "title": "Independent read-only verification and replay"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-FINALITY-BOUND-SETTLEMENT",
+      "evidence_text": "States move to released or denied only by a new determination revision.",
+      "human_approved": false,
+      "line_end": 177,
+      "line_start": 173,
+      "local_evidence": [
+        {
+          "path": "stark-engine/src/production_stark_settlement.rs",
+          "required_markers": [
+            "wait_for_finality",
+            "local_state_committed"
+          ],
+          "status": "implemented_and_tested"
+        },
+        {
+          "path": "stark-engine/tests/phase8_production_nullifier_state.rs",
+          "required_markers": [
+            "denied_transition_is_a_valid_no_op"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "existing finalized settlement journal; approved advances and denied preserves roots",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "docs/RIGHTRAIL_FULL_STACK_TARGET.md",
+      "source_sha256": "e72e726d5476cb89f35c6bc6307a02863f4e95454fc24d64d00529f76437ef9e",
+      "title": "Settlement changes state only after finality"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-NO-SILENT-FALLBACK",
+      "evidence_text": "When Lean fails, nothing silently falls back to another implementation.",
+      "human_approved": false,
+      "line_end": 72,
+      "line_start": 71,
+      "local_evidence": [
+        {
+          "path": "rust-engine/src/main.rs",
+          "required_markers": [
+            "config_missing_proof_backend_preserves_groth16_default",
+            "run_stark_attested_app"
+          ],
+          "status": "implemented_and_tested"
+        },
+        {
+          "path": "scripts/validate_stark_runtime_settlement.sh",
+          "required_markers": [
+            "proof_backend",
+            "stark_attested",
+            "replay unexpectedly succeeded"
+          ],
+          "status": "implemented_and_tested"
+        }
+      ],
+      "local_target": "no automatic STARK-to-Groth16 fallback",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "Recovery never silently selects another implementation"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-PRIVACY-ALLOWLIST",
+      "evidence_text": "Outputs are built from approved fields; support works from approved packages and fictional reproductions.",
+      "human_approved": false,
+      "line_end": 63,
+      "line_start": 60,
+      "local_evidence": [
+        {
+          "path": "right-rail-integration/HARDENING_CONTROLS.md",
+          "required_markers": [
+            "allowlisted, non-sensitive support and analytics material"
+          ],
+          "status": "documented_boundary"
+        },
+        {
+          "path": "right-rail-integration/reports/operating_plan_safety_review_packet_v1.json",
+          "required_markers": [
+            "privacy-owner review",
+            "approved non-sensitive material"
+          ],
+          "status": "risk_tracked"
+        }
+      ],
+      "local_target": "rules evidence and operations reporting privacy controls",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "Support and outputs receive approved material only"
+    },
+    {
+      "adoption_status": "selected_for_localbce_hardening",
+      "control_id": "RRH-HONEST-EVIDENCE",
+      "evidence_text": "Verified locally is not qualified; production_usable=false and activation=false remain explicit.",
+      "human_approved": false,
+      "line_end": 85,
+      "line_start": 80,
+      "local_evidence": [
+        {
+          "path": "ops/stark_v2_release_profile.example.json",
+          "required_markers": [
+            "production_usable",
+            "legal_approval_recorded",
+            "independent_audits_complete"
+          ],
+          "status": "release_gate_enforced"
+        },
+        {
+          "path": "right-rail-integration/reports/handoff_20261003_integration_checkpoint_v1.json",
+          "required_markers": [
+            "formal_runtime_dependency",
+            "ml_dsa_runtime_activation"
+          ],
+          "status": "integration_status_enforced"
+        }
+      ],
+      "local_target": "STARK, rules, formal, and PQ status reporting",
+      "proof_binding": false,
+      "runtime_behavior_changed": false,
+      "source_path": "CONSTITUTION.md",
+      "source_sha256": "e560cf60e7dc7e5eca204e767cc861670650359e2f7b958312802fe9d34968c2",
+      "title": "Prototype evidence is not production qualification"
+    }
+  ],
+  "human_approval_count": 0,
+  "proof_binding": false,
+  "runtime_behavior_changed": false,
+  "schema_version": "localbce-rightrail-hardening-controls-v1"
+}

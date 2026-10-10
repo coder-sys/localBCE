@@ -3,6 +3,10 @@
 This directory tracks the controlled assimilation of the
 `RightRail-Agent-20260919` evidence bundle into localBCE.
 
+It also tracks the separate `RightRail-handoff-2026-10-03_0916` package. That
+handoff remains external and hash-pinned: its archive, Git bundle, patches,
+executables, SQLite runtime, UI, and signing code are not copied or executed.
+
 The source bundle is not an active runtime dependency. Archived instructions,
 preserved binaries, generated builds, synthetic authorities, formal candidates,
 and post-quantum research remain inactive until their individual reproduction
@@ -51,6 +55,14 @@ python3 scripts/extract_rightrail_requirements.py \
 python3 scripts/build_rightrail_operating_plan_review_queue.py
 
 python3 scripts/build_rightrail_safety_review_packet.py
+
+python3 scripts/catalog_rightrail_handoff.py \
+  /path/to/RightRail-handoff-2026-10-03_0916
+
+python3 scripts/build_rightrail_handoff_crosswalk.py
+
+RIGHTRAIL_HANDOFF_ROOT=/path/to/RightRail-handoff-2026-10-03_0916 \
+  bash scripts/validate_rightrail_hardening.sh
 ```
 
 The generated reports are intentional checkpoint artifacts:
@@ -66,6 +78,14 @@ The generated reports are intentional checkpoint artifacts:
 - `reports/operating_plan_review_queue_v1.jsonl`
 - `reports/operating_plan_review_queue_summary_v1.json`
 - `reports/operating_plan_safety_review_packet_v1.json`
+- `reports/handoff_20261003_catalog_v1.jsonl`
+- `reports/handoff_20261003_catalog_summary_v1.json`
+- `reports/handoff_20261003_security_report_v1.json`
+- `reports/handoff_20261003_port_queue_v1.jsonl`
+- `reports/handoff_20261003_crosswalk_summary_v1.json`
+- `reports/handoff_20261003_hardening_controls_v1.json`
+- `reports/handoff_20261003_pq_compatibility_v1.json`
+- `reports/handoff_20261003_integration_checkpoint_v1.json`
 
 The static workspace analysis inventories build descriptors, tests, language
 surfaces, preserved binaries, and review markers across all 73 workspaces. It
@@ -89,6 +109,14 @@ candidates and records non-binding `adopt` or `adapt` recommendations. It does
 not record human approval: all four remain pending named architecture, security,
 privacy, rules, or settlement review as applicable, and none is executable,
 runtime eligible, or proof bound.
+
+The October handoff catalog accounts for 322 manifest entries plus the manifest
+itself, 637 trunk files, and 148 Git refs without extracting or executing the
+handoff. Its one-to-one review queue defines complete integration as complete
+inventory and disposition, not automatic copying or activation. The database
+crosswalk preserves PostgreSQL as the rules/source/review corpus and Rust/STARK
+state as the proof and settlement boundary. Its Lean/TLA+ and ML-DSA material is
+kept in isolated formal and research lanes.
 
 ## Safety Boundaries
 

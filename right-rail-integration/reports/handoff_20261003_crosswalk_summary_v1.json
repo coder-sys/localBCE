@@ -1,0 +1,41 @@
+{
+  "catalog_checkpoint_sha256": "b368c1a142f0585b878664f1ce30ec6aac395dbb974bfa3c6c83f4d975207551",
+  "checkpoint_sha256": "638b827db1ea4a0d33b4f60ce3214ffe6991c6feac5051426f8bf5625a885036",
+  "complete_catalog_coverage": true,
+  "disposition_counts": {
+    "adapt_specification": 82,
+    "adopt_control": 4,
+    "quarantine": 27,
+    "reference_only": 629,
+    "shadow_candidate": 366
+  },
+  "domain_counts": {
+    "adjudication_and_rules": 19,
+    "authorization_and_governance": 426,
+    "formal_verification": 199,
+    "post_quantum_research": 184,
+    "privacy_and_source_evidence": 52,
+    "settlement_and_recovery": 61,
+    "state_and_audit_history": 138,
+    "ui_and_operations": 29
+  },
+  "execution_allowed_count": 0,
+  "git_ref_count": 148,
+  "hardening_control_count": 10,
+  "hardening_controls_checkpoint_sha256": "f757ab3d69759ebe5fc7fa971b8261b1bdef50adc7c1d109844c8fa31e9ab9f4",
+  "human_decision_count": 0,
+  "package_file_count": 323,
+  "pq_candidate_count": 184,
+  "pq_checkpoint_sha256": "c6c5606f80d3010fc8a1b2869ce3d28234b482e248219dc26e524df0eeb55fe6",
+  "proof_binding_count": 0,
+  "queue_record_count": 1108,
+  "queue_sha256": "1f9cd0dd26dfde26267b56f59273768511d8538e0be19322c21521a3780022a2",
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-handoff-crosswalk-v1",
+  "source_surface_counts": {
+    "git_ref": 148,
+    "package_file": 323,
+    "trunk_member": 637
+  },
+  "trunk_file_count": 637
+}

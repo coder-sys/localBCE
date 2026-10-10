@@ -1,0 +1,63 @@
+{
+  "catalog_checkpoint_sha256": "b368c1a142f0585b878664f1ce30ec6aac395dbb974bfa3c6c83f4d975207551",
+  "checkpoint_sha256": "6ea209ecfc696bbde3e0f1972890b456796c1bf9ceaf31688938fcf187e3fd18",
+  "complete_catalog_record_count": 1108,
+  "complete_disposition_count": 1108,
+  "controlled_attestation_scheme": "secp256k1",
+  "crosswalk_checkpoint_sha256": "638b827db1ea4a0d33b4f60ce3214ffe6991c6feac5051426f8bf5625a885036",
+  "execution_allowed_count": 0,
+  "external_handoff_committed": false,
+  "formal_runtime_dependency": false,
+  "groth16_default_preserved": true,
+  "hardcoded_g1_g10_default_preserved": true,
+  "human_decision_count": 0,
+  "ml_dsa_runtime_activation": false,
+  "proof_binding_count": 0,
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-integration-checkpoint-v1",
+  "selected_integration_files": [
+    {
+      "path": "right-rail-integration/DATABASE_CROSSWALK.md",
+      "sha256": "9efde5202abea24c06e04316f3ac28ae4a1e6463e2a7c3dd9cd923c6131c3974"
+    },
+    {
+      "path": "right-rail-integration/HARDENING_CONTROLS.md",
+      "sha256": "685d5bc3f26241f73b8f26de0f887680ced3bf469810f686908648e6e5114cf1"
+    },
+    {
+      "path": "right-rail-integration/formal/README.md",
+      "sha256": "23bc85a6eae51e249649f016afb1f3c1daf96e2fd89211402219834af7f178dd"
+    },
+    {
+      "path": "right-rail-integration/formal/lean-toolchain",
+      "sha256": "3aac669c7a910ec2389f4e4f921b605adf6ebf2d1e0c9b9cd0be4d33f3f5db71"
+    },
+    {
+      "path": "right-rail-integration/formal/lakefile.toml",
+      "sha256": "78cb3a2187d9c3a94f47a5b8d32d1f83ec0af357affd7c37de03638d9ccbd775"
+    },
+    {
+      "path": "right-rail-integration/formal/LocalBCE/Settlement.lean",
+      "sha256": "51c547ccd8f5b77eb64e5f4a0c4beeaab0e8d177db4732f04f04d6c32ce6556f"
+    },
+    {
+      "path": "right-rail-integration/formal/Settlement.tla",
+      "sha256": "d1a201953f0d44889303e3954144e9aa0ec7d2c0e65bd454a2dd3edc114d812f"
+    },
+    {
+      "path": "right-rail-integration/formal/Settlement.cfg",
+      "sha256": "7ddd907a13b722aed5ee9788ee5b2034bc2023886fb4f4473469fdc2c225ef9d"
+    },
+    {
+      "path": "right-rail-integration/formal/settlement_model_v1.json",
+      "sha256": "7883a04225f415294ac30000b64acb60bf8fe56f233df8b95a324afd76634a3d"
+    },
+    {
+      "path": "right-rail-integration/pq/README.md",
+      "sha256": "0507531974965ac8525ab24ba160ff164462831f0728065914619929ec01f5e8"
+    }
+  ],
+  "sqlite_runtime_imported": false,
+  "stark_attested_explicitly_gated": true,
+  "stark_envelope_bytes": 129
+}

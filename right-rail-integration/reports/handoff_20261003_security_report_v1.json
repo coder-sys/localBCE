@@ -1,0 +1,245 @@
+{
+  "archive_extraction_allowed": false,
+  "binary_execution_allowed": false,
+  "checkpoint_sha256": "8baeefefe41784c672f75986229d9c8f2ccb750eb9869c225c86653859c30f37",
+  "history_scan_blob_count": 8024,
+  "history_scan_hit_count": 0,
+  "schema_version": "localbce-rightrail-handoff-security-v1",
+  "security_status": "quarantine_required",
+  "skipped_large_blob_count": 29,
+  "skipped_large_blobs": [
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6462464,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "246e8382202e37e68356100b1d210e1000375b2c",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6420480,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "7598909800a80bdd1757aa211364ba4bfaa080fe",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6438400,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "587e392d69c16d02dbb2c2aa6040c4680c11004c",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6417408,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "3abf9137f5607597e6889db78c9806da21e19065",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6421504,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "65c9491d39684b1aac89aeb1ae0935498c0e1e1f",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6418432,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "55c3ef85986b73c94420f435def734c4885d7326",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6439936,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "ffc5d322ec368372f00280fc363d9a44a8259b0f",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6433792,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "e9342946e0e0f5846662d7b3483e3559fe567e66",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6020608,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "7f3da1c7141aa6b00f4f2bef3c5fecf4b28c4ad8",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6460416,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "57d7df4c7ac75f96ac4df663752dcefb001c2f61",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6433792,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "73af0417dff128e01edc5dd8e38289359225e275",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6431232,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "c66eae240c3dd407e9492bc17433fea9e2412da0",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5724160,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "39921450c93c32ec0e6ba8c898371bfa9eb5b14c",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6298624,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "93a17e3cdde04055242e19235f014b4b449132a4",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6298624,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "fbd365d4897ec986d4b908061de7e2ea29d6277a",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6300160,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "7c34f3ec83eb55b1990566159927539d30072364",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6297088,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "2895804fda11794b9ccecac3edb1cde7c1cb31b5",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6298112,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "9ad6aa5bf41ef6b5d59feacc0c8b74ab413d35ad",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5727744,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "2d1070eee0e8967bb46ce899647c9d269e354107",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5727744,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "57194f41cccec995eddf06a948c512c7b7849135",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5728256,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "792545a950f741787134bbd85e19fa858aaf7d93",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6279168,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "6f5cfedcff2165398db6f28b8cf2447c18dcce98",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5709824,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "3c931e9dd05ed1eda923b65f8dd4acc5c9276541",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5709312,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "c160264aea2ca3b596e742f6e023cb30e7744672",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5707776,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "13a514f88a6ad374bdb97f9bb83c2ca95d1ce200",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 5707264,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "b5cb2fa676cb4d9ed17595eb4325ec96239030db",
+      "path": "artifacts/engine-evaluator/blind_financial_worker.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6245376,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "6e8baf8413ad6499086038aca0701d2e4efff41a",
+      "path": "artifacts/engine-correction-e911/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6266368,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "7e11b5fec6bfd5dc3fb2f5888561cc15f0b42534",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    },
+    {
+      "blocker": "history_blob_not_secret_scanned_due_to_size",
+      "bytes": 6237184,
+      "disposition": "quarantine",
+      "execution_allowed": false,
+      "git_object_id": "dda4ab1de2a089e11d967eb7f4976ce9d4bc6070",
+      "path": "artifacts/engine-correction/blind_financial_correction.exe"
+    }
+  ],
+  "source_bundle": "RightRail-handoff-2026-10-03_0916"
+}

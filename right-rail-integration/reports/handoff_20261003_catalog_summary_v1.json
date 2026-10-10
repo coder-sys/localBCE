@@ -1,0 +1,50 @@
+{
+  "catalog_record_count": 1108,
+  "catalog_sha256": "e4bcd563dd1f046a6f4f7260bcc438caa4d6b6a4a84594482b746e167d62933b",
+  "checkpoint_sha256": "b368c1a142f0585b878664f1ce30ec6aac395dbb974bfa3c6c83f4d975207551",
+  "complete_disposition": true,
+  "disposition_counts": {
+    "adapt_specification": 82,
+    "adopt_control": 4,
+    "quarantine": 27,
+    "reference_only": 629,
+    "shadow_candidate": 366
+  },
+  "domain_counts": {
+    "adjudication_and_rules": 19,
+    "authorization_and_governance": 426,
+    "formal_verification": 199,
+    "post_quantum_research": 184,
+    "privacy_and_source_evidence": 52,
+    "settlement_and_recovery": 61,
+    "state_and_audit_history": 138,
+    "ui_and_operations": 29
+  },
+  "execution_allowed_count": 0,
+  "git_ref_count": 148,
+  "git_ref_counts": {
+    "HEAD": 1,
+    "head": 144,
+    "note": 1,
+    "other": 1,
+    "tag": 1
+  },
+  "manifest_entry_count": 322,
+  "new_or_changed_trunk_file_count": 459,
+  "package_file_count": 323,
+  "prior_catalog_content_match_count": 178,
+  "proof_binding_count": 0,
+  "runtime_eligible_count": 0,
+  "schema_version": "localbce-rightrail-handoff-summary-v1",
+  "security_checkpoint_sha256": "8baeefefe41784c672f75986229d9c8f2ccb750eb9869c225c86653859c30f37",
+  "security_status": "quarantine_required",
+  "source_bundle": "RightRail-handoff-2026-10-03_0916",
+  "source_bundle_path_committed": false,
+  "source_surface_counts": {
+    "git_ref": 148,
+    "package_file": 323,
+    "trunk_member": 637
+  },
+  "trunk_commit": "058ff4e9a7b4547d25fd0de9a1177c53357b2ea3",
+  "trunk_file_count": 637
+}

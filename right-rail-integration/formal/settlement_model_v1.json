@@ -1,0 +1,31 @@
+{
+  "authorization": {
+    "configuration": ["governance"],
+    "emergency_pause": ["pauser"],
+    "treasury_transfer": ["treasury"]
+  },
+  "backend_recovery": "preserve_selected_backend",
+  "decisions": {
+    "approved": "root_may_advance_after_finality",
+    "denied": "root_must_be_preserved"
+  },
+  "legal_transitions": [
+    ["prepared", "submitted"],
+    ["submitted", "mined"],
+    ["mined", "finalized"],
+    ["finalized", "local_state_committed"]
+  ],
+  "retry_policy": {
+    "changed_input": "conflict",
+    "exact_retry": "duplicate",
+    "stale_generation": "reject"
+  },
+  "schema_version": "localbce-rightrail-settlement-model-v1",
+  "states": [
+    "prepared",
+    "submitted",
+    "mined",
+    "finalized",
+    "local_state_committed"
+  ]
+}

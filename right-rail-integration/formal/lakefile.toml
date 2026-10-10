@@ -1,0 +1,6 @@
+name = "localbce-rightrail-formal"
+version = "0.1.0"
+defaultTargets = ["LocalBCE"]
+
+[[lean_lib]]
+name = "LocalBCE"
