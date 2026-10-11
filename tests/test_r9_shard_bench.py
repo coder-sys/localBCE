@@ -791,6 +791,51 @@ class ShardBench(unittest.TestCase):
         finally:
             spine.close()
 
+    def test_f5f_restored_earlier_copy_of_a_shard_is_refused_before_commit(self) -> None:
+        """Restart stand-in (the bench has no mid-run restart path): a second run starts all four shards from shard 3's earlier copy, the snapshot taken before the base run's second group. Its applied rows are the base run's first group, so the second run's group (a file the base run never held) is refused on the BUILT compare before any spine COMMIT. A shard's applied n is its primary key, so the second run numbers its records after the copy's last applied n."""
+        snap = self.f5_base()[1]
+        with sqlite3.connect(str(snap)) as c:
+            last = c.execute("SELECT MAX(n) FROM applied").fetchone()[0]
+        self.assertGreaterEqual(last, 1)
+        files, work = sb.corpus(20261007, LINES, 13)[12:], self.tmp / "f5f"
+        spine = sb.Spine(work, 4, snap)
+        try:
+            spine.n = last
+            before = self.all_digests(work)
+            with self.assertRaisesRegex(sb.ShardDiverged, "applied count or last n"):
+                spine.ingest_group([(12, *files[0], None)])  # file 12: the base run applied files 0-11, so no key of it is in the copy
+            self.assertEqual((spine.n, spine.keys), (last, {}))
+            self.assertEqual(self.all_digests(work), before)
+        finally:
+            spine.close()
+
+    def test_f5g_a_refused_group_puts_the_writers_tally_back(self) -> None:
+        """Rollback: file 1 of a two-file group is written in memory (the writer's per-shard tally moves), then file 2 is refused. attempt must put the tally back with the heads. The refusal is injected in process on the second write_spine call, so the shards only see the normal ABORT."""
+        files, work = sb.corpus(20261006, LINES, 2), self.tmp / "f5g"
+        spine = sb.Spine(work, 4, self.template)
+        real, calls, seen = spine.write_spine, [0], {}
+
+        def refuse_second(*args) -> None:
+            calls[0] += 1
+            if calls[0] == 2:
+                seen["tally"] = dict(spine.tally)  # what file 1 left in the writer before the refusal
+                raise sb.ShardDiverged("injected refusal of file 2")
+            real(*args)
+
+        try:
+            prepared = [sb.prepare(spine.tbl, i, r.rows, i + 1) for i, (r, _) in enumerate(files)]
+            plan = [(i, i, r, d, prepared[i], sb.T0_MS + i) for i, (r, d) in enumerate(files)]
+            spine.write_spine = refuse_second
+            pre = dict(spine.tally)
+            with self.assertRaises(sb.ShardDiverged):
+                spine.attempt(plan)
+            self.assertEqual(calls[0], 2)
+            self.assertNotEqual(seen["tally"], pre)  # file 1 really moved the tally before the refusal
+            self.assertEqual(spine.tally, pre)
+            self.assertEqual((spine.n, spine.keys), (0, {}))
+        finally:
+            spine.close()
+
     def test_t4_stale_head_at_group_start_is_refused_with_no_write(self) -> None:
         files, work = sb.corpus(20261006, LINES, 3), self.tmp / "t4"
         spine = sb.Spine(work, 4, self.template)
