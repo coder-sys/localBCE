@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import unittest
 
+from app import right_rail_financial_engine as engine
 from app import right_rail_financial_semantic_adapter as adapter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -135,6 +136,77 @@ BLFIN02 = {name: globals()["_" + name] for name in (
     "blfin02_reversed_conflict_shadow_restore", "blfin02_max_length")}
 
 
+# BLFCMD03: CorrectionTransition/KAT.lean's correctionKatRequest (and two variants), the engine encoder against Lean.
+BOUND = ("BF620150B21060DDFBA787A7DC8F2A38499294F3DD57DBFFC267FC4072031151831E9E083F0A0BA20EC10F7CFBCDAA85E764A17A09F6873EB93CD7D632DDFE99")
+EVAL_ID, ACT = "evaluation:obligation:item-h:period-01:r4", "action:correction:h:v1"
+DET = "determination:action:correction:h:v1"
+OBLIGATION = "obligation:item-h:period-01"
+
+
+def _dig(byte):
+    return ("%02X" % byte) * 64
+
+
+def _receipt():
+    return {"contract_version": "RR/FINANCIAL/EVALUATION-RECEIPT/v1",
+            "scope": {"state_id": "fixture-state", "deployment_id": "fixture-rightrail",
+                      "program_id": "fixture-provider-payment", "period_id": "fixture-2026-period-01", "currency": "USD"},
+            "control_pack": {"pack_id": "control-pack:fixture-2026-01:v1", "version": 1, "digest": _pack()["digest"]},
+            "evidence_bindings": [{"evidence_id": "evidence:cash", "record_digest": _dig(68)},
+                                  {"evidence_id": "evidence:offset", "record_digest": _dig(68)}],
+            "input_snapshot_digest": _dig(91), "authority": {"epoch": 1, "digest": BOUND},
+            "evaluation_id": EVAL_ID, "obligation_id": OBLIGATION, "revision": 4, "rule_version": 1,
+            "evidence_ids": ["evidence:cash", "evidence:offset"], "authority_id": "synthetic-authority-v1",
+            "evaluated_at_ms": 1_774_922_400_000, "owed_cents": 10_000_000, "claimed_adjustment_cents": 300_000,
+            "lawful_adjustment_cents": 0, "received_cash_cents": 9_700_000, "shortfall_cents": 300_000,
+            "overage_cents": 0, "cash_satisfied": 0, "amount_satisfied": 0, "timely": 0, "reporting_complete": 0,
+            "verification_status": "SUPPORTED", "case_status": "OPEN", "delivery_status": "NONE",
+            "result_digest": _dig(165), "evaluation_result_digest": _dig(165), "receipt_digest": _dig(90)}
+
+
+def _query(predicate, subject, identity=None):
+    return {"predicate": predicate, "subject": subject, "complete": True, "match_count": int(identity is not None),
+            "result_identity": identity, "version_sequence": 10, "version_head": _dig(42)}
+
+
+def _blfcmd03(variant):
+    data = _blfin02_base()
+    data["authority"]["digest"] = BOUND
+    data["pre_evaluation"]["revision"] = 3
+    data.update(payments=[dict(PAYMENT)], claims=[{**CLAIM, "status": "CLAIMED"}], evidence=[dict(CASH), dict(OFFSET)])
+    data["current_evaluation"] = {"receipt": _receipt()}
+    command = {"item_id": "item-h", "claim_id": "claim:h:offset", "action_id": ACT, "actor_id": "synthetic-official",
+               "actor_role": "FINANCE_DECISION", "current_authority_id": "synthetic-authority-v1",
+               "current_authority_epoch": 1, "current_authority_digest": BOUND, "expected_revision": 4,
+               "evaluation_id": EVAL_ID, "evaluation_result_digest": _dig(165), "decision_at_ms": 1_774_922_400_010,
+               "owner_now_ms": 1_774_922_400_020}
+    lookup = {"kind": "absent"}
+    queries = {"action_id": _query("ACTION_ID", ACT), "determination_id": _query("DETERMINATION_ID", "determination:" + ACT),
+               "evaluation_consumed": _query("EVALUATION_CONSUMED", EVAL_ID)}
+    sequence, head, links = 10, bytes([42]) * 64, []
+    if variant == "conflicting":
+        lookup = {"kind": "conflicting"}
+    if variant == "existing_links":
+        lookup = {"kind": "existing", "identity": {
+            "action_id": ACT, "action_obligation_id": OBLIGATION, "determination_id": DET,
+            "determination_obligation_id": OBLIGATION, "action_kind": "CORRECTION_PAYMENT_REQUEST",
+            "claim_id": "claim:h:offset", "actor_id": "synthetic-official", "actor_role": "FINANCE_DECISION",
+            "authority_id": "synthetic-authority-v1", "authority_epoch": 1, "authority_digest": BOUND,
+            "decision": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "input_evaluation_id": EVAL_ID,
+            "input_evaluation_result_digest": _dig(165), "expected_revision": 4, "decided_at_ms": 1_774_922_400_010}}
+        queries = {"action_id": _query("ACTION_ID", ACT, ACT), "determination_id": _query("DETERMINATION_ID", DET, DET),
+                   "evaluation_consumed": _query("EVALUATION_CONSUMED", EVAL_ID, DET)}
+        for query in queries.values():
+            query.update(version_sequence=11, version_head=_dig(43))
+        sequence, head = 11, bytes([43]) * 64
+        links = [{"payment_id": "payment:h:cash", "action_id": ACT}, {"payment_id": "payment:h:later", "action_id": ACT}]
+    return engine.encode_correction_transition_request(
+        snapshot=adapter._make_snapshot(data), command=command, action_lookup=lookup, query_observations=queries,
+        current_event_sequence=sequence, previous_history_head=head, payment_links=links)
+
+BLFCMD03 = {"blfcmd03_absent": "absent", "blfcmd03_existing_links": "existing_links", "blfcmd03_conflicting": "conflicting"}
+
+
 def _lean_hex():
     run = subprocess.run([EXE], capture_output=True, text=True, timeout=120)
     lines = [line.split(" ") for line in run.stdout.split("\n") if line]
@@ -155,13 +227,18 @@ class WireVectors(unittest.TestCase):
 
     def test_lean_accepts_every_vector(self):
         self.assertEqual(self.code, 0, f"Lean refused a vector (NONE): {self.lean}")
-        for name in BLFIN02:
+        for name in (*BLFIN02, *BLFCMD03):
             self.assertIn(name, self.lean)
 
     def test_blfin02(self):
         for name, build in BLFIN02.items():
             with self.subTest(name):
                 self.assertEqual(adapter._encode_blfin02(build()).hex(), self.lean[name])
+
+    def test_blfcmd03(self):
+        for name, variant in BLFCMD03.items():
+            with self.subTest(name):
+                self.assertEqual(_blfcmd03(variant).hex(), self.lean[name])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import BlindLedger.Financial.Theorems.Vectors
+import BlindLedger.Financial.CorrectionTransition.KAT
 
 /-! `wire_vectors` (test-only, not pinned): prints `<name> <hex>` of the Lean-encoded request bytes for fixed inputs.
     `tests/test_wire_vectors.py` encodes the same logical inputs with the live Python encoders and requires equal bytes. -/
@@ -42,13 +43,52 @@ def wvInputs : List (String × FinancialInput) := [
                   updatedAt := 1_774_864_800_000 }]
       actions := [{ katAuthorizedAction with actionId := wvActId, determinationId := some wvDetId }] })]
 
+open CorrectionTransition in
+/-- `correctionKatRequest` (BLFCMD03, absent lookup) over the Python-matching pack digest. -/
+def wvCorrection : CorrectionTransitionRequest :=
+  { correctionKatRequest with
+    currentInput := wvFix correctionKatInput
+    currentReceipt := { correctionKatCurrentReceipt with
+      controlPack := { correctionKatCurrentReceipt.controlPack with digest := wvPackDigest } } }
+
+open CorrectionTransition in
+def wvQuery (p : CorrectionQueryPredicate) (subject : String) (id : Option String) : CorrectionQueryObservation :=
+  { predicate := p, subject, complete := true, matchCount := if id.isSome then 1 else 0, resultIdentity := id,
+    versionSequence := 11, versionHead := List.replicate digestBytes (UInt8.ofNat 43) }
+
+open CorrectionTransition in
+/-- The existing-action lookup, found query rows and two payment links. -/
+def wvCorrectionExisting : CorrectionTransitionRequest :=
+  { wvCorrection with command := { wvCorrection.command with
+    actionLookup := .existing correctionKatStoredIdentity
+    queryObservations := {
+      actionId := wvQuery .ACTION_ID "action:correction:h:v1" (some "action:correction:h:v1")
+      determinationId := wvQuery .DETERMINATION_ID "determination:action:correction:h:v1"
+        (some "determination:action:correction:h:v1")
+      evaluationConsumed := wvQuery .EVALUATION_CONSUMED "evaluation:obligation:item-h:period-01:r4"
+        (some "determination:action:correction:h:v1") }
+    currentEventSequence := 11
+    previousHistoryHead := List.replicate digestBytes (UInt8.ofNat 43)
+    paymentLinks := [⟨"payment:h:cash", "action:correction:h:v1"⟩, ⟨"payment:h:later", "action:correction:h:v1"⟩] } }
+
+open CorrectionTransition in
+def wvCorrectionConflicting : CorrectionTransitionRequest :=
+  { wvCorrection with command := { wvCorrection.command with actionLookup := .conflicting } }
+
+def wvOthers : List (String × Option Bytes) := [
+  ("blfcmd03_absent", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrection),
+  ("blfcmd03_existing_links", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrectionExisting),
+  ("blfcmd03_conflicting", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrectionConflicting)]
+
+def wvAll : List (String × Option Bytes) := wvInputs.map (fun (n, i) => (n, encodeFinancialInput i)) ++ wvOthers
+
 end BlindLedger.Financial
 
 open BlindLedger.Financial in
 def main : IO UInt32 := do
   let mut bad : UInt32 := 0
-  for (name, input) in wvInputs do
-    match encodeFinancialInput input with
+  for (name, encoded) in wvAll do
+    match encoded with
     | some w => IO.println s!"{name} {wvHex w}"
     | none => IO.println s!"{name} NONE"; bad := 1
   return bad
