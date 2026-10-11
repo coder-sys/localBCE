@@ -53,20 +53,29 @@ SEGMENT_FORMAT = "RR/GATE/SEGMENT/v1"  # docs/CORE_REDESIGN.md "History segments
 SEGMENT_DOMAIN = b"RR/GATE/SEGMENT/v1\x00"
 MAX_SEGMENT_BYTES = 2 * MAX_PACKAGE_BYTES
 SEAL_SEGMENT_EVENTS, SEAL_SEGMENT_BYTES = 4096, MAX_PACKAGE_BYTES // 2  # every Owner write leaves the open segment below both
-PRIVATE_INDEX_DEFS_V1 = {  # name -> (table, key columns); each is exactly CREATE INDEX name ON table(columns)
-    "rr_financial_v1_evidence_item_id": ("evidence", ("item_id", "evidence_id")),
-    "rr_financial_v1_claims_obligation_id": ("claimed_adjustments", ("obligation_id", "claim_id")),
-    "rr_financial_v1_cases_obligation_id": ("cases", ("obligation_id", "case_id")),
-    "rr_financial_v1_actions_obligation_id": ("actions", ("obligation_id", "action_id")),
-    "rr_financial_v1_conflicts_obligation_id": ("financial_conflicts", ("obligation_id", "conflict_id")),
-    "rr_financial_v1_evaluations_obligation_revision": ("evaluations", ("obligation_id", "revision")),
-    "rr_financial_v1_determinations_obligation_id": ("determinations", ("obligation_id", "determination_id")),
+PRIVATE_INDEX_DEFS_V1 = {  # name -> (table, keys, unique, where): exactly CREATE [UNIQUE] INDEX name ON table(keys) [WHERE where]
+    name: (table, columns, False, None)
+    for name, (table, columns) in {
+        "rr_financial_v1_evidence_item_id": ("evidence", ("item_id", "evidence_id")),
+        "rr_financial_v1_claims_obligation_id": ("claimed_adjustments", ("obligation_id", "claim_id")),
+        "rr_financial_v1_cases_obligation_id": ("cases", ("obligation_id", "case_id")),
+        "rr_financial_v1_actions_obligation_id": ("actions", ("obligation_id", "action_id")),
+        "rr_financial_v1_conflicts_obligation_id": ("financial_conflicts", ("obligation_id", "conflict_id")),
+        "rr_financial_v1_evaluations_obligation_revision": ("evaluations", ("obligation_id", "revision")),
+        "rr_financial_v1_determinations_obligation_id": ("determinations", ("obligation_id", "determination_id")),
+    }.items()
 }
-PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; a writing Owner upgrades 1 and 2 to 3 on open
+PRIVATE_INDEX_DEFS = {  # user_version -> its exact index set; a writing Owner upgrades 1 to 3 to 4 on open
     1: PRIVATE_INDEX_DEFS_V1,
-    2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": ("financial_events", ("aggregate_type", "aggregate_id", "kind"))},
+    2: {**PRIVATE_INDEX_DEFS_V1, "rr_financial_v2_events_aggregate_kind": ("financial_events", ("aggregate_type", "aggregate_id", "kind"), False, None)},
 }
-PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind": ("financial_events", ("kind", "aggregate_type"))}
+PRIVATE_INDEX_DEFS[3] = {**PRIVATE_INDEX_DEFS[2], "rr_financial_v3_events_kind": ("financial_events", ("kind", "aggregate_type"), False, None)}
+PRIVATE_INDEX_DEFS[4] = {  # one receipt per payment id and one alias per evidence id, store-wide; history_row_counts from here
+    **PRIVATE_INDEX_DEFS[3],
+    "rr_financial_v4_events_received_payment": ("financial_events", ("json_extract(payload_json,'$.payment_id')",), True, "kind='PAYMENT_RECEIVED' AND aggregate_type='OBLIGATION'"),
+    "rr_financial_v4_events_alias_evidence": ("financial_events", ("json_extract(payload_json,'$.candidate_evidence_id')",), True, "kind='PAYMENT_DUPLICATE_EVIDENCE' AND aggregate_type='OBLIGATION'"),
+    "rr_financial_v4_obligations_item_id": ("obligations", ("item_id",), False, None),
+}
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 CORRECTION_TRANSITION_ARTIFACT_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the evaluator worker
@@ -286,6 +295,7 @@ _HISTORY_TABLE_DEFS = _parse_table_specs({
     "history_pending": "T table_name@1 I row_key@2 I record_bytes",
     "history_open": "I id@1 I event_count I byte_count",
 })
+_ROW_COUNTS_DEF = _parse_table_specs({"history_row_counts": "T table_name@1 I n"})  # from index set 4: rows per history table
 # Rows whose every write the next event carries in ``rows``; they must equal replay of the chain.
 CAPTURED_TABLES = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
 
@@ -423,6 +433,7 @@ _TABLE_SQL_SHA256 = {
     "financial_identity": "A4DD84D295F23838298AC50DC43BB2B84E6049D3D9ED9D412AAECD1298CDF276",
     "financial_meta": "9EC6484329A635988B71FB227E06E792D95547B5C6D897671F14AC415DE0A8C2",
     "history_open": "73F86E8BF5374287A8BCB42659D0B7C9E0F38240DEEA2310468482C5BD68B862",
+    "history_row_counts": "27BFD34474035ECD4986D1444894E13D2A91BFE74284AD56CCD4797308EDF720",
     "history_pending": "49E753E0FADFD9EA3F30531BB990745701079124AA4BC56FD22DC035A523966C",
     "history_segments": "3A2409FFBE13EB6E3E06C77D5BA85F2013BBBA7A2A293064E893024F8F08D312",
     "obligations": "051611B1E93AB8470F6DF0B56751527D8F507BD4F4B174E5A78ECB2DEE894BC8",
@@ -786,22 +797,23 @@ def _verify_private_index_schema(connection: sqlite3.Connection) -> None:
     }
     if set(actual) != set(defs):
         _fail("schema:private-indexes")
-    for name, (table, columns) in defs.items():
-        if _normal_sql(actual[name]) != _normal_sql(f"CREATE INDEX {name} ON {table}({','.join(columns)})"):
-            _fail(f"schema:private-index:{name}")
+    for name, (table, keys, unique, where) in defs.items():
+        expected = f"CREATE {'UNIQUE ' if unique else ''}INDEX {name} ON {table}({','.join(keys)})" + (f" WHERE {where}" if where is not None else "")
+        if _normal_sql(actual[name]) != _normal_sql(expected) or re.findall("'[^']*'", actual[name]) != re.findall("'[^']*'", expected):
+            _fail(f"schema:private-index:{name}")  # string literals keep their case: 'payment_received' matches no event
         listed = [
             row
             for row in connection.execute(f'PRAGMA index_list("{table}")')
             if str(row[1]) == name
         ]
-        if len(listed) != 1 or int(listed[0][2]) != 0 or str(listed[0][3]) != "c" or int(listed[0][4]) != 0:
+        if len(listed) != 1 or int(listed[0][2]) != int(unique) or str(listed[0][3]) != "c" or int(listed[0][4]) != int(where is not None):
             _fail(f"schema:private-index:{name}")
         key_parts = tuple(
-            (str(row[2]), int(row[3]), str(row[4]).upper())
+            (row[2], int(row[3]), str(row[4]).upper())
             for row in connection.execute(f'PRAGMA index_xinfo("{name}")')
             if int(row[5]) == 1
-        )
-        if key_parts != tuple((column, 0, "BINARY") for column in columns):
+        )  # an expression key has no column name; its text is bound above
+        if key_parts != tuple((None if "(" in key else key, 0, "BINARY") for key in keys):
             _fail(f"schema:private-index:{name}")
 
 
@@ -970,9 +982,10 @@ def _verify_schema(connection: sqlite3.Connection) -> int:
         if connection.execute("SELECT 1 FROM sqlite_master WHERE type IS NULL OR type NOT IN ('table','index','trigger') OR (name GLOB 'sqlite_*' AND (type<>'index' OR sql IS NOT NULL))").fetchone():
             _fail("schema:objects")
         tables = {str(row[0]): row[1] for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'")}
-        if set(tables) != TABLES | set(_HISTORY_TABLE_DEFS):
+        history = {**_HISTORY_TABLE_DEFS, **(_ROW_COUNTS_DEF if connection.execute("PRAGMA user_version").fetchone()[0] >= 4 else {})}
+        if set(tables) != TABLES | set(history):
             _fail("schema:tables")
-        for table, definition in {**_TABLE_DEFS, **_HISTORY_TABLE_DEFS}.items():
+        for table, definition in {**_TABLE_DEFS, **history}.items():
             actual = tuple(
                 (str(row[1]), str(row[2]).upper(), int(row[5]))
                 for row in connection.execute(f"PRAGMA table_info({table})")
@@ -1182,6 +1195,21 @@ def _verify_events(connection: sqlite3.Connection, meta: dict[str, object]) -> l
         if anchor_sequence > len(rows) or bytes(rows[anchor_sequence - 1]["head"]) != identity["anchor_head"]:
             _fail("identity:history-anchor")
     return rows
+
+
+def _verify_row_counts(connection: sqlite3.Connection) -> None:
+    """From index set 4 the Owner opens on its committed rows per history table instead of counting: each is recounted."""
+    try:
+        if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
+            return
+        counts = dict(connection.execute("SELECT table_name,n FROM history_row_counts").fetchall())
+        if set(counts) != {"financial_events", *PROJECTION_TABLES}:
+            _fail("rows:counter:set")
+        for table in sorted(counts):
+            if type(counts[table]) is not int or counts[table] != connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]:
+                _fail(f"rows:counter:{table}")
+    except sqlite3.Error as error:
+        _fail("rows:counter:read", error)
 
 
 def _verify_history_tables(connection: sqlite3.Connection, events: list[sqlite3.Row]) -> None:
@@ -4242,7 +4270,9 @@ def _verify_connection(
 ) -> dict[str, object]:
     schema_version = _verify_schema(connection)
     # Whole-store mode only: the lookups below trust index contents the Owner wrote, so every index entry must match its row; the keyed cash-file begin (right_rail_financial_cash_file_independent._find) trusts its indexes on the same footing, after this check on the same store file. The pre-COMMIT modes read the touched obligation's evidence, determinations, actions and outbox NOT INDEXED and check only the touched obligation (a malformed event or row of another obligation is the whole-store verify's to find).
-    if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
+    if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)] or any(  # nor does it count the entries of a partial index: one for a row its WHERE omits is read as a match, since SQLite skips the WHERE terms the index implies
+            connection.execute(f'SELECT count(*) FROM "{table}" INDEXED BY "{name}" WHERE {where}').fetchone()[0] != connection.execute(f'SELECT count(*) FROM "{table}" NOT INDEXED WHERE {where}').fetchone()[0]
+            for name, (table, _keys, _unique, where) in PRIVATE_INDEX_DEFS[connection.execute("PRAGMA user_version").fetchone()[0]].items() if where is not None):
         _fail("schema:index-integrity")
     try:
         orphan = connection.execute("PRAGMA foreign_key_check").fetchone()
@@ -4297,6 +4327,7 @@ def _verify_connection(
         _verify_exact_input(connection, obligation, _evaluation_input_snapshot(current[key]["input_snapshot_json"], "evaluation:input"))
     _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
     _verify_history_tables(connection, events)  # bookkeeping last: a replay finding is the sharper diagnosis
+    _verify_row_counts(connection)
     package_result: dict[str, object] | None = None
     if current_snapshot_package is not None and restore_source_package is not None:
         _fail("continuity:duplicate-input")

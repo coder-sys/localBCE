@@ -168,13 +168,19 @@ def _table(connection: sqlite3.Connection, table: str, rowids: list[int] | None 
     return {row[0]: dict(zip(columns, row[1:])) for row in stored}
 
 
-def _find(connection: sqlite3.Connection, table: str, columns: tuple[str, ...], keys, where: str = "") -> list[dict]:  # the rows of one package table whose `columns` equal one of `keys` (tuples; a NULL key matches nothing): keyed reads in chunks of at most 999 variables, inside the caller's transaction. They trust the indexes they use (PK, UNIQUE, private index v2) because the whole-store check, whose PRAGMA integrity_check matches every index entry to its row, has run on the store file before every begin: each caller opened its owner under it (apply_cash_file also on its private copy, preview on one), and a forged store is refused at that open or, for an owner open before another writer moved the data version, by its run_batch re-verify, whose failure is deferred and raised before COMMIT after the begin has read (the tampering owner's own run_batch is the accepted owner-wide limit: RETRY, no money written); tests/test_cfi_keyed_begin.py pins every route
+def _find(connection: sqlite3.Connection, table: str, columns: tuple[str, ...], keys, where: str = "", index: str = "") -> list[dict]:  # the rows of one package table whose `columns` equal one of `keys` (tuples; a NULL key matches nothing): keyed reads in chunks of at most 999 variables, inside the caller's transaction. They trust the indexes they use (PK, UNIQUE, private index v2) because the whole-store check, whose PRAGMA integrity_check matches every index entry to its row, has run on the store file before every begin: each caller opened its owner under it (apply_cash_file also on its private copy, preview on one), and a forged store is refused at that open or, for an owner open before another writer moved the data version, by its run_batch re-verify, whose failure is deferred and raised before COMMIT after the begin has read (the tampering owner's own run_batch is the accepted owner-wide limit: RETRY, no money written); tests/test_cfi_keyed_begin.py pins every route
     cursor, names, keys, size, found = connection.cursor(), ledger.TABLE_COLUMNS[table], sorted({key for key in keys if None not in key}), 999 // len(columns), []
     cursor.row_factory = None
     for start in range(0, len(keys), size):
         chunk = keys[start:start + size]
-        found += cursor.execute(f"SELECT {','.join(names)} FROM main.{table} WHERE ({','.join(columns)}) IN (VALUES {','.join(['(' + ','.join('?' * len(columns)) + ')'] * len(chunk))}){where}", [value for key in chunk for value in key]).fetchall()
+        found += cursor.execute(f"SELECT {','.join(names)} FROM main.{table}{index and f' INDEXED BY {index}'} WHERE ({','.join(columns)}) IN (VALUES {','.join(['(' + ','.join('?' * len(columns)) + ')'] * len(chunk))}){where}", [value for key in chunk for value in key]).fetchall()
     return [dict(zip(names, row)) for row in found]
+
+
+def _keyed(connection: sqlite3.Connection, index: str, keys) -> list[dict]:
+    """The events one v4 unique index holds for these keys, read through it: its key expression and its WHERE terms verbatim."""
+    _table_name, (expression,), _unique, where = ledger.PRIVATE_INDEX_DEFS[4][index]
+    return _find(connection, "financial_events", (expression,), [(key,) for key in keys], f" AND {where}", index)  # INDEXED BY: unforced, the planner takes rr_financial_v3_events_kind and walks every such event (design R5)
 
 
 def _unchanged(old: Mapping, new: Mapping, except_fields: set[str] = frozenset()) -> None:
@@ -399,14 +405,18 @@ class CashFileCheck:
         self._payments, origins = {row["payment_id"]: row for row in found}, {(row["obligation_id"], row["common_origin_id"]): row for row in found}
         evidence = {row["evidence_id"]: row for row in _find(connection, "evidence", ("evidence_id",), [(argument["evidence_id"],) for argument in arguments] + [(row["reversed_by_evidence_id"],) for row in found])}
         self._actions = {row["action_id"]: row for row in _find(connection, "actions", ("action_id",), [(argument["pays_action_id"],) for argument in arguments])}
-        received, aliases = {}, {}  # the file's obligations' own PAYMENT_RECEIVED events and stored alias confirmations (private index v2), the last alias of an evidence id wins
-        for event in sorted(_find(connection, "financial_events", ("aggregate_id",), [(row["obligation_id"],) for row in found] + [(obligations[argument["item_id"]],) for argument in known], " AND aggregate_type='OBLIGATION' AND kind IN ('PAYMENT_RECEIVED','PAYMENT_DUPLICATE_EVIDENCE')"), key=lambda event: event["event_sequence"]):
+        item_of = {row["obligation_id"]: row["item_id"] for row in self._obligations.values()}
+        received, aliases = {}, {}  # index set 4 holds one PAYMENT_RECEIVED per payment id and one alias per evidence id, store-wide: each read by its key, then bound
+        for event in _keyed(connection, "rr_financial_v4_events_received_payment", self._payments):
             payload = json.loads(event["payload_json"])
-            if event["kind"] == "PAYMENT_DUPLICATE_EVIDENCE":
-                aliases[payload["candidate_evidence_id"]] = payload["existing_payment_id"]
-                continue
-            _require(payload["payment_id"] not in received, "cash_file_failed")
+            _require(event["aggregate_id"] == self._payments[payload["payment_id"]]["obligation_id"], "cash_file_failed")  # a receipt filed under another obligation
             received[payload["payment_id"]] = (event, payload)
+        for event in _keyed(connection, "rr_financial_v4_events_alias_evidence", [argument["evidence_id"] for argument in arguments]):
+            payload = json.loads(event["payload_json"])
+            item = evidence[payload["candidate_evidence_id"]]["item_id"]
+            _require(item_of.get(event["aggregate_id"]) == item, "cash_file_failed")  # an alias filed under an obligation of another item
+            if event["aggregate_id"] == obligations.get(item):  # another period's alias is not this file's
+                aliases[payload["candidate_evidence_id"]] = payload["existing_payment_id"]
         _require(all(row["payment_id"] in received for row in found), "cash_file_failed")  # a stored payment with no PAYMENT_RECEIVED event under its obligation is a store this check will not read as absent
         plan = []
         for argument in arguments:

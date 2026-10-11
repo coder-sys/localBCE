@@ -13,17 +13,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {".git", ".lake", "__pycache__", "node_modules", "target", "parked", ".venv", "build", ".pytest_cache"}
 CODE_EXTS = {".py", ".lean", ".js", ".rs", ".c", ".h", ".cpp", ".ps1", ".css", ".html"}
 # Product code (what runs and must be read to be trusted); lower it as the code shrinks.
-PRODUCT_CODE_LINES = 36_569  # 95 IDREG restore fence (boot anchor reads, store_rewound, fence-before-read, typed store/inputs errors; lead call: exact actual) + 36,474 trunk CFI-C1 = 35,823 trunk + 78 S2 codec + 103 D7 slots + 13 S7a payer + 214 S3a 835 fold (one bad claim no longer sinks the remittance) + 10 b2 review fixes (cert cap and totals under one rule) + 82 PERF-A 835 fast lane (remittance fold 6.9x faster, 13.4k->92.2k lines/s/core) + 151 CFI-C1 history bench (measures a cash file's begin against history size: begin sql_ops identical at 2,560 and 7,500 history rows)
+PRODUCT_CODE_LINES = 36_655  # 86 CFI-C-L1 (v4 unique receipt/alias indexes, committed row counter, keyed begin through them; exact actual) + 36,569: 95 IDREG restore fence (boot anchor reads, store_rewound, fence-before-read, typed store/inputs errors; lead call: exact actual) + 36,474 trunk CFI-C1 = 35,823 trunk + 78 S2 codec + 103 D7 slots + 13 S7a payer + 214 S3a 835 fold (one bad claim no longer sinks the remittance) + 10 b2 review fixes (cert cap and totals under one rule) + 82 PERF-A 835 fast lane (remittance fold 6.9x faster, 13.4k->92.2k lines/s/core) + 151 CFI-C1 history bench (measures a cash file's begin against history size: begin sql_ops identical at 2,560 and 7,500 history rows)
 # Test code and the Python gate tools under lean/; Lean files are not counted.
-EVIDENCE_CODE_LINES = 33_907  # exact actual of the merged tree: 33,889 trunk (idreg-restore + CFI-C1) + 18 grant-tenant LOW tests net; earlier: 32,533 trunk + 71 S2 + 101 test-speed (fixture/server reuse; measured net) + 99 D7 slots (empty slots refuse activation loudly) + 131 S7a payer tests + 121 S3a fold tests + 6 A1 empty-table slot test + 48 b2 review-fix tests + 102 PERF-A lane-vs-slow-path differential tests
+EVIDENCE_CODE_LINES = 34_305  # 398 CFI-C-L1 tests (test_cfi_cl_history + E1/E2/partial-index updates; exact actual) + 33,907: exact actual of the merged tree: 33,889 trunk (idreg-restore + CFI-C1) + 18 grant-tenant LOW tests net; earlier: 32,533 trunk + 71 S2 + 101 test-speed (fixture/server reuse; measured net) + 99 D7 slots (empty slots refuse activation loudly) + 131 S7a payer tests + 121 S3a fold tests + 6 A1 empty-table slot test + 48 b2 review-fix tests + 102 PERF-A lane-vs-slow-path differential tests
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
 MARKDOWN_BYTES = 92_740  # 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)
 CONFORMANCE_MARKDOWN_BYTES = 30_970
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
-    "app/right_rail_financial_owner.py": 6_756,
-    "app/right_rail_financial_owner_independent.py": 4_451,
+    "app/right_rail_financial_owner.py": 6_801,
+    "app/right_rail_financial_owner_independent.py": 4_482,
     "app/right_rail_financial_semantic_adapter.py": 2_279,
     "app/right_rail_financial_mirror.py": 1_369,
     "app/right_rail_financial_engine.py": 1_249,
