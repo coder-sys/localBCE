@@ -4,10 +4,13 @@ with crashes as child processes.  After every scenario ``_gate_shards.inv`` hold
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -53,6 +56,20 @@ def tear(path: Path) -> None:
     wal = Path(f"{path}-wal")
     if wal.exists() and wal.stat().st_size > 100:
         wal.write_bytes(wal.read_bytes()[:-100])
+
+
+def link(at: Path, to: Path | None) -> Path:
+    """Point the directory link ``at`` to ``to`` (None: remove it), replacing it if present; on Windows a junction."""
+    if os.path.lexists(at):
+        (os.rmdir if os.name == "nt" else os.unlink)(at)
+    try:
+        if to and os.name == "nt":
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(at), str(to)], check=True, capture_output=True)
+        elif to:
+            os.symlink(to, at, target_is_directory=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise unittest.SkipTest(f"LOUD SKIP: the OS refused a directory link: {error}") from error
+    return at
 
 
 def newest_row(c: g.Cluster, k: int):
@@ -318,7 +335,8 @@ class ShardTests(fx.Scratch):
                     self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD ALREADY_DECIDED"})  # the refusal freed nothing
                     with self.assertRaisesRegex(idreg.IdRegistryError, "registry_rewound"):
                         c.boot()  # lazily settled, boot passed and the next reserve freed the paid 20
-                    self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD registry_not_booted"})  # the refusal fenced the nonce
+                    with self.other_process():
+                        self.assertEqual(c.send(1, {9: [20]}), {20: "HOLD registry_not_booted"})  # the refusal fenced the nonce
                 else:
                     c.boot()  # the store is behind only a batch whose tokens never left
                     self.finish(c, NEXT)  # 20 freed, decided again and paid once; inv holds
@@ -346,21 +364,31 @@ class ShardTests(fx.Scratch):
         return store.release(request(p, k), gate.encode_token(tokens[0]), now=fx.NOW)
 
     @contextlib.contextmanager
-    def released_then_restored(self, restart: bool = True, shards: int = 2, k: int = 0):
+    def released_then_restored(self, restart: bool = True, shards: int = 2, k: int = 0, repoint: bool = False):
         """Copy the whole directory; shard ``k`` pays X in payment 1 (sealed, stored and released by the payer).  Then the
-        copy comes back and, with ``restart``, the process restarts: it holds no nonce until a boot passes."""
+        copy comes back and, with ``restart``, the process restarts: it holds no nonce until a boot passes.  With
+        ``repoint`` the cluster reaches its directory through a link, and the copy comes back by re-pointing the link."""
         with tempfile.TemporaryDirectory() as keep, self.cluster(shards) as c:
-            shutil.copytree(c.dir, Path(keep) / "copy")
+            copy, at = Path(keep) / "copy", Path(keep) / "current"
+            shutil.copytree(c.dir, copy)
             c.payer = store = self.track(payer.PayerStore(Path(keep) / "payer.sqlite3", root_keys={fx.TENANT: c.custody[1]},
                                                           grants=((fx.TENANT, fx.D[3], (fx.D[4],), (fx.D[6],)),)))
             store.install_cert(c.custody[2])
-            self.assertIsNone(self.pay(c, store, k, 1))
-            for f in c.dir.iterdir():
-                f.unlink()
-            shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
-            if restart:
-                c.nonce = b""
-            yield c, store
+            try:
+                if repoint:
+                    c.dir = link(at, c.dir)
+                self.assertIsNone(self.pay(c, store, k, 1))
+                if repoint:
+                    link(at, copy)
+                else:
+                    for f in c.dir.iterdir():
+                        f.unlink()
+                    shutil.copytree(copy, c.dir, dirs_exist_ok=True)
+                if restart:
+                    c.nonce = b""
+                yield c, store
+            finally:
+                link(at, None)
 
     def test_r5_restore_after_release_holds(self) -> None:
         """Design idreg-restore T1 (was ``test_r5_whole_directory_restore_boots_and_forks``, the residual): the restored
@@ -382,8 +410,13 @@ class ShardTests(fx.Scratch):
     def releases(self, store: payer.PayerStore) -> list[str]:
         return [p for (p,) in store._db.execute("SELECT payment_id FROM releases ORDER BY payment_id")]
 
+    @staticmethod
+    def other_process():
+        """Run as another process on the same nonce whose registry memory predates the copy: only a fence stops it."""
+        return mock.patch.multiple(idreg, _SEEN={}, _STOPPED=set())
+
     def test_r5_refused_boot_fences_the_running_nonce(self) -> None:
-        """Review HIGH-1: the process keeps running with the copy's newest nonce; the refused boot's BOOT row fences it,
+        """Review HIGH-1: processes keep running with the copy's newest nonce; the refused boot's BOOT row fences them,
         so shard 1's X HOLDs and X is released once.  Mutant: without that row the old nonce reserves and X pays twice."""
         add = idreg._Tail.add
         for mutant in (False, True):
@@ -392,10 +425,11 @@ class ShardTests(fx.Scratch):
             with self.subTest(mutant=mutant), self.released_then_restored(restart=False) as (c, store), fence:
                 with self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
                     c.boot()
-                if mutant:
-                    self.assertIsNone(self.pay(c, store, 1, 2))
-                else:
-                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                with self.other_process():
+                    if mutant:
+                        self.assertIsNone(self.pay(c, store, 1, 2))
+                    else:
+                        self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
 
     def test_r5_a_boot_that_cannot_read_its_inputs_fences(self) -> None:
@@ -411,7 +445,8 @@ class ShardTests(fx.Scratch):
                     c.store(1).touch()  # a store to read: the copy predates every batch
                 with mock.patch.object(target or store, name, side_effect=error), self.assertRaises(idreg.IdRegistryError) as refused:
                     c.boot()
-                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                with self.other_process():
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
                 self.assertEqual(self.releases(store), ["pay-0001"])
                 self.assertRegex(str(refused.exception), label)
                 if target:
@@ -435,9 +470,10 @@ class ShardTests(fx.Scratch):
                     cursor = self.db.execute(sql, *args)
                     if sql in ("COMMIT", "ROLLBACK") and not seen:
                         seen.append(None)
-                        seen[0] = c.send(1, {2: [10]})
+                        with ShardTests.other_process():
+                            seen[0] = c.send(1, {2: [10]})
                     return cursor
-            with mock.patch.object(idreg, "_open", lambda *a: Hooked(real(*a))), \
+            with mock.patch.object(idreg, "_open", lambda *a, **k: Hooked(real(*a, **k))), \
                     self.assertRaisesRegex(idreg.IdRegistryError, "store_rewound"):
                 c.boot()
             self.assertEqual((seen, self.releases(store)), ([{10: "HOLD registry_not_booted"}], ["pay-0001"]))
@@ -460,20 +496,186 @@ class ShardTests(fx.Scratch):
                     self.assertEqual(c.send(0, {2: [10]}), {10: "HOLD registry_restored"})
                 self.assertEqual(self.releases(store), ["pay-0001", "pay-0002"][: 1 + mutant])
 
-    def test_r5_restore_while_running_no_boot_today(self) -> None:
-        """The directory comes back under a running process that never reboots: it holds the copy's newest nonce, so
-        nothing fences it.  The setup and today's known-bad result are pinned (review L-D, LOW-1): a fixture regression
-        fails here, and S3 flips the ALLOW to HOLD."""
-        with self.released_then_restored(restart=False) as (c, store):
-            self.assertEqual((bool(c.nonce), self.releases(store), c.store(0).exists()), (True, ["pay-0001"], False))
-            self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})  # HIGH-2 open; S3 flips to HOLD
+    def fenced(self, c: g.Cluster) -> bool:
+        """The registry's newest BOOT row is not the running nonce's."""
+        with contextlib.closing(sqlite3.connect(f"file:{c.reg}?mode=ro", uri=True)) as db:
+            newest = db.execute("SELECT id FROM log WHERE kind = 3 ORDER BY n DESC LIMIT 1").fetchone()[0]
+        return newest != c.nonce.rjust(idreg.ID_LEN, b"\0")
 
-    @unittest.expectedFailure  # review HIGH-2, owned by S3 (restore-while-running detection): recorded here, not fixed
     def test_r5_restore_while_running_no_boot(self) -> None:
-        """The same restore: shard 1 must HOLD, so X is released once.  Only this final check is the expected failure."""
-        with self.released_then_restored(restart=False) as (c, store):
-            self.assertTrue(c.send(1, {2: [10]})[10].startswith("HOLD"))
-            self.assertEqual(self.releases(store), ["pay-0001"])
+        """Review HIGH-2: the directory comes back under a running process that never reboots.  It holds the copy's
+        newest nonce, but the row it last wrote is gone, so shard 1's X HOLDs before any reserve, and the fence that
+        check commits stops the other processes on the nonce too.  X is released once.  Review HIGH-1: the same when the
+        restore re-points a directory link (the memory is keyed by the nonce, not the path)."""
+        for repoint in (False, True):
+            with self.subTest(repoint=repoint), self.released_then_restored(restart=False, repoint=repoint) as (c, store):
+                reserved = count(c, idreg._RESERVE)
+                self.assertEqual((self.fenced(c), self.releases(store), c.store(0).exists()), (False, ["pay-0001"], False))
+                self.assertNotIn(c.nonce.rjust(idreg.ID_LEN, b"\0"), idreg._STOPPED)
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertIn(c.nonce.rjust(idreg.ID_LEN, b"\0"), idreg._STOPPED)  # review M-2: the memory mismatch stops the nonce
+                with self.other_process():
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual((count(c, idreg._RESERVE), self.releases(store), g.sealed_allows(c, 1)), (reserved, ["pay-0001"], {}))
+
+    def test_r5_a_boot_that_cannot_lock_or_commit_stops_the_process(self) -> None:
+        """Review MEDIUM-1: another writer holds the lock past boot's timeout, or boot's COMMIT fails (always, or once),
+        so its fence may not land and boot raises ``registry_unavailable``.  Every handle of this process then HOLDs
+        until a boot passes, and the first to lock commits the fence (a COMMIT that failed once: the boot's own retry
+        did), which stops the other processes on the nonce.  The memory of the restored-away row is cleared, so the
+        HIGH-2 check is not what HOLDs here.  X is released once.  Review LOW-4: a boot that cannot open the registry
+        (its directory missing) stops the process too; review HIGH-1: so does a boot that cannot lock, when the next
+        restore re-points the directory link to a fresh copy (the stop is keyed by the newest nonce, not the path)."""
+        real = idreg._open
+
+        class Failing:  # boot's connection: COMMIT raises ``left`` times
+            def __init__(self, db, left):
+                self.db, self.left = db, left
+
+            def __getattr__(self, name):
+                return getattr(self.db, name)
+
+            def execute(self, sql, *args):
+                if sql == "COMMIT" and self.left:
+                    self.left -= 1
+                    raise sqlite3.OperationalError("disk I/O error")
+                return self.db.execute(sql, *args)
+        lock = lambda path, timeout=5.0, **k: real(path, 0.1, **k)
+        for trigger, hook in (("lock", lock), ("lock, re-pointed", lock), ("commit", lambda *a, **k: Failing(real(*a, **k), 2)),
+                              ("commit once", lambda *a, **k: Failing(real(*a, **k), 1)),
+                              ("open", lambda path, *a, **k: real(path.parent / "missing" / path.name, *a, **k))):
+            with self.subTest(trigger), self.released_then_restored(restart=False, repoint="re-pointed" in trigger) as (c, store), \
+                    mock.patch.object(idreg, "_SEEN", {}), contextlib.closing(sqlite3.connect(c.reg, isolation_level=None)) as writer:
+                if trigger.startswith("lock"):
+                    writer.execute("BEGIN IMMEDIATE")
+                with mock.patch.object(idreg, "_open", hook), self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                    c.boot()
+                if trigger.startswith("lock"):
+                    writer.execute("ROLLBACK")
+                if "re-pointed" in trigger:  # restored again from the same copy, through the link
+                    shutil.copytree(c.dir, c.dir.parent / "again")
+                    link(c.dir, c.dir.parent / "again")
+                self.assertEqual(self.fenced(c), trigger == "commit once")
+                self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                with self.other_process():
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(self.releases(store), ["pay-0001"])
+
+    def test_r5_a_boot_after_a_restore_starts_a_fresh_memory(self) -> None:
+        """Review LOW-3: worker W, handed its nonces and never booting, commits shard 0's batch; the directory then comes
+        back from a copy taken at the boot and another process boots it (no payer, so B3 has nothing to check).  W's
+        memory is kept per nonce, and a new nonce comes only from a passed boot, so W's shard 1 ALLOWs on it (before: W
+        found its row gone and fenced this boot and every later one)."""
+        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+            shutil.copytree(c.dir, Path(keep) / "copy")
+            c.send(0, T, BAD)
+            for f in c.dir.iterdir():
+                f.unlink()
+            shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
+            with self.other_process():
+                c.boot()
+            self.assertEqual(c.send(1, NEXT), {20: "ALLOW -"})
+
+    def test_r5_a_worker_that_never_boots_pays_x_once(self) -> None:
+        """Review M-1 (s3fix1): worker W, never booting, commits shard 0 under N1; a copy is taken; this process reboots
+        (N2); W's shard 0 pays X under N2, W's shard 1 still on N1 HOLDs; the copy comes back (newest BOOT N1, no boot).
+        W's first pass on N2 stopped every older nonce in W, so shard 1 on N1 HOLDs (before: W's N1 memory matched the
+        copy, and X paid twice).  Review M-1 (s3fix2): this process pays X, outside W; W never runs on N2, but its
+        shard 1 found N1 displaced, which stops N1 in W, so after the copy comes back X HOLDs (before: W paid X again)."""
+        for in_w in (True, False):
+            w = {"_SEEN": {}, "_STOPPED": set()}  # W's process memory
+            with self.subTest(in_w=in_w), tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+                n1 = c.nonce
+                with mock.patch.multiple(idreg, **w):
+                    self.assertEqual(c.send(0, NEXT), {20: "ALLOW -"})
+                shutil.copytree(c.dir, Path(keep) / "copy")
+                c.boot()
+                with mock.patch.multiple(idreg, **w) if in_w else contextlib.nullcontext():
+                    self.assertEqual(c.send(0, {1: [10]}), {10: "ALLOW -"})
+                with mock.patch.multiple(idreg, **w):
+                    c.nonce = n1
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                    for f in c.dir.iterdir():
+                        f.unlink()
+                    shutil.copytree(Path(keep) / "copy", c.dir, dirs_exist_ok=True)
+                    reserved = count(c, idreg._RESERVE)
+                    self.assertEqual(c.send(1, {2: [10]}), {10: "HOLD registry_not_booted"})
+                self.assertEqual(count(c, idreg._RESERVE), reserved)
+
+    def test_r5_a_handle_open_across_a_copy_and_repoint_holds(self) -> None:
+        """Review M-2 (s3fix1): handle P, opened through a directory link, lives on while the operator copies the
+        directory and re-points the link; another process boots the copy and its shard 1 pays X.  P's next transaction
+        finds another file at its path, so P's X HOLDs (before: P never saw the copy's BOOT and paid X again)."""
+        with tempfile.TemporaryDirectory() as keep, self.cluster() as c:
+            home, c.dir = c.dir, link(Path(keep) / "current", c.dir)
+            try:
+                with contextlib.closing(c.producer(0)) as prod, contextlib.closing(idreg.IdRegistry(c.reg, boot=c.nonce)) as p:
+                    shutil.copytree(c.dir, Path(keep) / "copy")
+                    link(c.dir, Path(keep) / "copy")
+                    with self.other_process():
+                        c.boot()
+                        self.assertEqual(c.send(1, {2: [10]}), {10: "ALLOW -"})
+                    self.assertEqual(g.decide_batch(c, prod, p, 0, {1: [10]})[2], {10: "HOLD registry_not_booted"})
+                    self.assertIn(p._boot, idreg._STOPPED)
+                real = idreg._open  # review M-2 (s3fix2): the link moves back between Q's connect and its identity read
+                with mock.patch.object(idreg, "_open", lambda *a: (real(*a), link(c.dir, home))[0]), \
+                        self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                    idreg.IdRegistry(c.reg, boot=c.nonce)  # before: Q took the copy's identity while writing the other file
+            finally:
+                link(c.dir, None)
+
+    def test_r5_a_boot_ends_only_the_stop_of_the_file_it_booted(self) -> None:
+        """Review L-a (s3fix3): link J names registry A, which this process stopped (a boot of it timed out).  A boot
+        through J waits for the boot lock while J is re-pointed to B: it boots B and A stays stopped (before: it read
+        J's target before the wait, so its pass on B ended A's stop and A's nonce reserved again).  J re-pointed to A
+        inside boot's open: it is refused and B's stop stays (before: it booted A and ended B's stop)."""
+        class Waiting:  # the boot lock, held by the test; says when a boot waits on it
+            def __init__(self):
+                self.lock, self.waiting = threading.Lock(), threading.Event()
+
+            def acquire(self, timeout):
+                self.waiting.set()
+                return self.lock.acquire(timeout=timeout)
+
+            def release(self):
+                self.lock.release()
+
+        def attempt(f):
+            try:
+                return f()
+            except idreg.IdRegistryError as error:
+                return str(error)
+
+        def reserve(d: Path, nonce: bytes):
+            with contextlib.closing(idreg.IdRegistry(d / "ids.sqlite3", boot=nonce)) as r:
+                return attempt(lambda: r.reserve(0, [1], sealed=None)[0])
+        none, real = lambda: ({}, {}, {}), idreg._open
+        for during in ("lock wait", "open"):
+            with self.subTest(during), tempfile.TemporaryDirectory() as keep:
+                a, b, got, lock = Path(keep) / "a", Path(keep) / "b", [], Waiting()
+                for d in (a, b):
+                    d.mkdir()
+                nonces = {d: idreg.boot(d / "ids.sqlite3", none) for d in (a, b)}
+                j = link(Path(keep) / "j", a if during == "lock wait" else b)
+                try:
+                    with mock.patch.multiple(idreg, _SEEN={}, _STOPPED={idreg._where(j / "ids.sqlite3")}, _BOOTING=lock):
+                        if during == "lock wait":
+                            lock.lock.acquire()
+                            t = threading.Thread(target=lambda: got.append(attempt(lambda: idreg.boot(j / "ids.sqlite3", none))))
+                            t.start()
+                            lock.waiting.wait(30)
+                            link(j, b)
+                            lock.lock.release()
+                            t.join(30)
+                            self.assertEqual(len(got[0]), 32, got)  # it booted B
+                            self.assertEqual((reserve(a, nonces[a]), reserve(b, got[0])), ("registry_not_booted", [(1, 0, False)]))
+                        else:
+                            with mock.patch.object(idreg, "_open", lambda *x, **k: (link(j, a), real(*x, **k))[1]), \
+                                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                                idreg.boot(j / "ids.sqlite3", none)
+                            self.assertEqual((reserve(a, nonces[a]), reserve(b, nonces[b])), ("registry_not_booted",) * 2)
+                finally:
+                    link(j, None)
 
     def test_r5_mutant_without_the_store_check_pays_twice(self) -> None:
         """Mutant M1: with B3 a no-op the restored directory boots, shard 1 releases X again in payment 2, and the

@@ -14,11 +14,13 @@ level in it. Existing payment systems move money. Synthetic, state-local, non-PH
 
 ## What landed since d7192b0
 
-Trunk `56cca319`: full suite `idl10` 932 run, 0 fail, 15 skip, 1 expected (HIGH-2); Lean `bp33`,
-real-candidate semgate `bp35` 23/23.
+IDREG S3 `7a43ea70`: full `is5full` 946/0/15; Lean `is5lake1` 122 jobs, pin match. Was:
+`idl10` 932/0/15; semgate `bp35` 23/23.
 
 - **Gate restore (IDREG S1-S2).** A boot raises the fencer epoch, then anchors on the payer's newest stored checkpoint per
   shard and refuses `store_rewound`; a refused boot fences the running nonce and HOLDs.
+- **Gate restore (IDREG S3).** Memory is keyed by boot nonce; restore without boot, failed BEGIN, displaced nonce
+  or re-pointed registry HOLDs. Only boot creates the registry.
 - **Shard laws (Lean, unwired):** an owner split keeps each owner's fold; open: hash no-fixed-point assumption.
 - **STATE/v2 custody (Lean, unwired).** Custody folds one append-only off-machine log; an epoch-keyed TPM
   counter catches rollback; activation once per shard; a payment's ALLOWs share one checkpoint (`never_twice`).
@@ -54,8 +56,8 @@ real-candidate semgate `bp35` 23/23.
 
 ## Open items
 
-- **IDREG S3 (double-pay routes):** restore while running, no boot (HIGH-2, pinned expected failure); a failed BEGIN
-  leaves no fence (MEDIUM-1).
+- **IDREG S3 residuals:** moved-file check is realpath only (A->B->A swap in one open unseen); readers create
+  -wal/-shm; `register_at_fork`, POSIX in-place replace untested; UNC refused.
 - **Correction result cap:** a BLFCRES3 result embeds its input, so a correction near 7 MB is refused (tag 3).
 - **Cash residuals:** a foreign commit before the first write costs a whole-store verify under the lock (~10 s at 6,000
   payments); a raising ROLLBACK fails the next write once (untested). Fallback `run_batch` grows with
