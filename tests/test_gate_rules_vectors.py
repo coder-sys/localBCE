@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import unittest
 
+from tools import gate_rules_data
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEAN = os.path.join(ROOT, "lean")
 EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name == "nt" else "gate_rules")
@@ -14,7 +16,8 @@ EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name ==
 SOURCES = ["BlindLedger/Gate/Rules/Spec.lean", "BlindLedger/Gate/Rules/Fast.lean", "BlindLedger/Gate/Rules/Run.lean",
            "BlindLedger/Gate/Anchor.lean", "BlindLedger/Gate/Spec.lean", "BlindLedger/Sha3.lean", "BlindLedger/Sha3Fast.lean", "lakefile.toml", "lean-toolchain"]
 # The twin's equality proof and the Spec's theorems; the runner does not import them, so only this test notices a stale proof.
-PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Theorems", "BlindLedger.Sha3FastEq"]
+PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Theorems", "BlindLedger.Sha3FastEq",
+          "BlindLedger.Gate.ReadManifest"]
 
 
 @unittest.skipUnless(os.path.isfile(EXE),
@@ -72,6 +75,47 @@ class GateRulesVectors(unittest.TestCase):
         bad = run("case dash", f"load {load[1]} - {load[3]}")
         self.assertEqual(bad.returncode, 1)
         self.assertIn("RULES_STATE_MISMATCH load", bad.stdout)
+
+    def test_reads_are_the_read_set_bytes(self):
+        """`RULES_READS` is recomputed here: pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes (kind absent, a redo, two commits)."""
+        frame = ["today 20270315", "snap released 20270315 0 ?", "snap unresolved 20270315 0 ?",
+                 "snap dmf 20270301 2 ?", "dmf 9002 20261120", "dmf 9001 20270110",
+                 "snap pdeath 20270301 1 ?", "pdeath 7701 20270120",
+                 "snap excl 20270310 2 ?", "excl 7802 20260101 20270131", "excl 504 20260101 99991231",
+                 "case reads", "line 901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "owners 0 901:0:0", "commit",
+                 "redo 11", "redo 12", "line 902 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "owners 0 902:0:0",
+                 "commit", "end 0"]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reads.vectors")
+            open(path, "w").write("\n".join(gate_rules_data.pin(frame)))
+            run = subprocess.run([EXE, path], capture_output=True, text=True, timeout=600)
+        out = run.stdout.split("\n")
+        digests = [r.split(" ")[1] for r in out if r.startswith("RULES_DIGEST ")]
+        reads = [r.split(" ")[1] for r in out if r.startswith("RULES_READS ")]
+        self.assertEqual((len(digests), len(reads)), (2, 2), run.stdout[-1500:])
+
+        def be4(*ns):
+            return b"".join(n.to_bytes(4, "big") for n in ns)
+
+        def hashed(domain, kind, asof, rows):
+            return hashlib.sha3_512(domain.encode() + b"\0" + be4(kind, asof, len(rows)) + b"".join(sorted(rows))).digest()
+
+        kinds = [("dmf", 1, "DMF", 20270301, [("9002", "20261120"), ("9001", "20270110")]),
+                 ("pdeath", 2, "PROVIDER-DEATH", 20270301, [("7701", "20270120")]),
+                 ("excl", 3, "EXCLUSION", 20270310, [("7802", "20260101", "20270131"), ("504", "20260101", "99991231")]),
+                 ("span", 4, "ENROLLMENT", None, None)]
+        pins, slots = b"", b""
+        for name, k, tag, asof, rows in kinds:
+            if rows is None:
+                pins, slots = pins + bytes(64), slots + b"\0"
+                continue
+            rs = [gate_rules_data.row(name, r) for r in rows]
+            pins += hashed("RR/GATE/SNAPSHOT/v1", k, asof, rs)
+            slots += b"" + hashed(f"RR/GATE/READ-{tag}/v2", k, asof, rs)
+        for i, (redo, base) in enumerate([([], bytes(64)), ([12, 11], bytes.fromhex(digests[0]))]):
+            pre = b"RR/GATE/READ-SET/v2\0" + slots + be4(len(redo)) + b"".join(
+                r.to_bytes(gate_rules_data.PAY, "big") for r in redo) + base
+            self.assertEqual(reads[i], (pins + be4(len(pre)) + pre).hex(), f"commit {i}")
 
 
 if __name__ == "__main__":

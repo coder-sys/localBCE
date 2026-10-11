@@ -33,7 +33,7 @@ Residuals (not closed by Lean; each loud): total loss of the store followed by a
   ceremony + rollback (payer check 10 and its fork check); an adversary who READS unreleased store entries inside
   the CAS-to-bump window and rolls back forks one position (payer fork check only); a HOLD is never re-decided and a
   v1-era payment is never redone on v2 (refused, loudly); `fresh` rows are not signed: a forged copy breaks only the
-  witness (refusal), never a decision; evidenceRoot stays unchecked (trunk writes zero); never_twice is per shard,
+  witness (refusal), never a decision; evidenceRoot stays unchecked (trunk writes zero) until MAN-0 S2 binds it to the read manifest; never_twice is per shard,
   cross-shard identity is the registry + payer check 10; any foreign junk makes the fold none and every shard
   stops; a v1 signature past the seal is refused by the payer's follows check (v2 follows the tip).
 Dropped (r4): Entry (old), logHead, logOk + its lemmas, ZeroPre, log_binds, PermitBase, permitBase, baseDigest,

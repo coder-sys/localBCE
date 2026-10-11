@@ -103,7 +103,7 @@ token and no bypass is a payer-side violation visible in Mirror.
 ## 5. Batch signing, checkpoints, and inclusion tokens
 
 **Batching is a hard invariant, not a tuning option.** One SQLite commit and
-one ML-DSA-87 checkpoint signature cover an entire batch (up to 1,000 items,
+one ML-DSA-87 checkpoint signature cover a whole batch (up to 1,000 items,
 closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
 of a few hundred bytes against that checkpoint's `token_root`, not a
 separately signed token.
@@ -118,13 +118,13 @@ unresolved pins, count, time), signed with the epoch's ML-DSA-87 key. The rules 
 sets of the payment's shard's latest signed checkpoint. A runtime verifier
 that the priors hash to the checkpoint's `state_digest` is not built.
 There is one sequence counter per (tenant, shard, epoch), shared by the
-tenant's programs and starting at 0: each checkpoint names the one ending just
+tenant's programs, from 0: each checkpoint names the one just
 before it as its previous (all-zero for an epoch's first); a link to a
-non-adjacent checkpoint is a fork. The producer persists each checkpoint before signing and checks its stored
-checkpoints for a fork before publishing.
-The KEY-CERT signs every field, the shard count included; a payer accepts one certificate per (tenant, epoch); a second with another
-key or shard count is recorded as equivocation and blocks it (a re-signature of
-the same body is not one).
+non-adjacent checkpoint is a fork. The producer persists a checkpoint before signing it and checks its stored
+ones for a fork before publishing.
+The KEY-CERT signs every field, shard count included; a payer accepts one certificate per (tenant, epoch); a second with another
+key or shard count is equivocation and blocks it (re-signing the
+same body is not).
 
 Every `RR/GATE` hash or signature input starts with its name, `/v1` (unless
 shown) and a NUL byte:
@@ -135,8 +135,8 @@ shown) and a NUL byte:
 | DECISION-ID, INPUT, SHARD | decision identity, decided-input digest, shard routing |
 | MERKLE-NODE, LINES-NODE | token and claim-line Merkle trees |
 | STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
-| SEGMENT | financial history segments |
-| KEY-CERT | epoch key certificate |
+| SEGMENT, KEY-CERT | financial history segments; epoch key certificate |
+| READ-<kind>/v2, READ-SET/v2, READ-MANIFEST/v1 | read manifest |
 | CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 
@@ -146,10 +146,10 @@ after checking sequence and epoch monotonicity and that no two checkpoints of
 one (tenant, shard, epoch) share a sequence with different digests or break the
 link. A mismatch raises a fork alarm; payers holding one refuse the whole
 (tenant, epoch). Payers never wait for the witness. History is sealed into
-segments bound to the checkpoint that closes them. Records are retained 7 years
+segments, each bound to the closing checkpoint. Records are retained 7 years
 (Pub 1075 AU-11) in WORM storage, onshore, in the state tenant. A daily anchor
 checkpoint carries an extra LMS/XMSS signature so a 7-year-old record stays
-verifiable under hash-based assumptions alone.
+verifiable on hash-based assumptions alone.
 
 ## 6. Hold, release, fail policy, and bypass
 

@@ -3,7 +3,7 @@ import BlindLedger.Gate.Rules.Fast
 import BlindLedger.Sha3Fast
 import BlindLedger.Sha3
 
-/-! The test-only vector runner: decides with `Fast.decideBatchFIn` (= `decideBatchIn`, `FastEq.decideBatchFIn_eq`; no reversed re-run, order independence `Theorems.decideBatchIn_perm`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
+/-! The vector runner (runs per gate batch; emits `RULES_READS`, `ReadManifest.run_reads_eq`): decides with `Fast.decideBatchFIn` (= `decideBatchIn`, `FastEq.decideBatchFIn_eq`; no reversed re-run, order independence `Theorems.decideBatchIn_perm`) and pins with `Fast.pinBytes` (`pin_run_eq`). Lines marked `-- FAST` differ from the pre-twin runner. -/
 
 namespace BlindLedger.Gate.Rules.Run
 
