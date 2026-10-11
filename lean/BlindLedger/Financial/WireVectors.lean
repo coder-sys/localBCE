@@ -1,6 +1,7 @@
 import BlindLedger.Financial.Theorems.Vectors
 import BlindLedger.Financial.CorrectionTransition.KAT
 import BlindLedger.Financial.Payment.Codec
+import BlindLedger.Financial.Worker
 
 /-! `wire_vectors` (test-only, not pinned): prints `<name> <hex>` of the Lean-encoded request bytes for fixed inputs.
     `tests/test_wire_vectors.py` encodes the same logical inputs with the live Python encoders and requires equal bytes. -/
@@ -100,7 +101,8 @@ def wvOthers : List (String × Option Bytes) := [
   ("blfpay01_reverse", some (wvPay ⟨"payment:h:cash", 2, none⟩ ⟨false, true⟩ (some 2)
     (.reverse ⟨"payment:h:cash", "evidence:reversal", some "reversal:payment:h:cash", some 1_774_900_000_000⟩))),
   ("blfpay01_reverse_minimal", some (wvPay ⟨"payment:h:cash", 2, none⟩ ⟨true, true⟩ none
-    (.reverse ⟨"payment:h:cash", "evidence:reversal", none, none⟩)))]
+    (.reverse ⟨"payment:h:cash", "evidence:reversal", none, none⟩))),
+  ("blfofa01_absent", encodeOffsetAuthorizationRequest wvCorrection)]
 
 def wvAll : List (String × Option Bytes) := wvInputs.map (fun (n, i) => (n, encodeFinancialInput i)) ++ wvOthers
 

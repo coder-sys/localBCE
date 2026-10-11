@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import unittest
+from unittest import mock
 
 from app import right_rail_financial_engine as engine
 from app import right_rail_financial_semantic_adapter as adapter
@@ -252,7 +253,7 @@ class WireVectors(unittest.TestCase):
 
     def test_lean_accepts_every_vector(self):
         self.assertEqual(self.code, 0, f"Lean refused a vector (NONE): {self.lean}")
-        for name in (*BLFIN02, *BLFCMD03, *BLFPAY01):
+        for name in (*BLFIN02, *BLFCMD03, *BLFPAY01, "blfofa01_absent"):
             self.assertIn(name, self.lean)
 
     def test_blfin02(self):
@@ -269,6 +270,19 @@ class WireVectors(unittest.TestCase):
         for name, build in BLFPAY01.items():
             with self.subTest(name):
                 self.assertEqual(build().hex(), self.lean[name])
+
+    def test_blfofa01(self):
+        """The frame the live offset-authorization worker call sends: the engine's own frame + request, captured at the worker."""
+
+        class Sent(Exception):
+            pass
+
+        def capture(wire, _rejections):
+            raise Sent(wire)
+
+        with mock.patch.object(engine, "_evaluate_wire", capture), self.assertRaises(Sent) as sent:
+            engine.run_offset_authorization_v1(request=_blfcmd03("absent"))
+        self.assertEqual(sent.exception.args[0].hex(), self.lean["blfofa01_absent"])
 
 
 if __name__ == "__main__":
