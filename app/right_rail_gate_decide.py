@@ -33,7 +33,7 @@ class GateDecideError(RuntimeError):
     ``rules_refused``: any other refusal, timeout included.  ``frame_injection`` and ``genesis_sets`` come before the
     registry reserve, so they write nothing.  ``commit``: ``stale_answer``, a batch was sealed or the shard's in-flight
     rows changed since the answer (nothing sealed; decide again); ``settle_pending``, sealed but not settled (no token
-    out; the next ``decide`` settles it, never re-commit)."""
+    out; the next ``decide`` settles it, never re-commit); ``registry_restored``, a HOLD answer (nothing to seal)."""
 
 
 FRAME_CAP = 1 << 20  # the largest frame the worker takes; Lean's own limit (``process.WORKER_MAX_FRAME_BYTES``) is far above it
@@ -95,18 +95,31 @@ class Answer(NamedTuple):
     rows: list[int]  # the registry rows the reserve wrote: the shard's whole in-flight set after it
 
 
-def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer.ShardProducer, reg: idreg.IdRegistry,
-           ids: Sequence[int], lines: Sequence[str], worker: RulesWorker | None = None) -> Answer:
+def _hold(lines: Sequence[str], reason: str) -> Answer:
+    return Answer([f"{line} HOLD {reason}" for line in lines], [], b"", b"", (0, b""), None, [])
+
+
+def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer.ShardProducer | None,
+           reg: idreg.IdRegistry | None, ids: Sequence[int], lines: Sequence[str], worker: RulesWorker | None = None) -> Answer:
     """Settle the producer's shard's previous batch and reserve ``ids`` (the registry transaction), then decide ``lines`` (the
     ``line`` directive bodies) against the shard's verified sets: on ``worker`` (no frame file) when the frame fits its cap,
-    else on the one-shot ``exe``."""
+    else on the one-shot ``exe``.  With no registry (a refused boot: design idreg-restore 4) every line is HOLD
+    ``registry_restored`` and nothing is reserved, decided, sealed or checkpointed; a registry whose nonce a refused boot
+    fenced HOLDs every line ``registry_not_booted`` the same way."""
     if any("\n" in s or "\r" in s for s in [*head, *lines]):
         raise GateDecideError("frame_injection")
+    if reg is None:
+        return _hold(lines, "registry_restored")
     k, anchor = prod.shard, prod.anchor()
     if anchor is None and reg.settled(k):
         raise GateDecideError("genesis_sets")
     seen = prod.tip()
-    owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
+    try:
+        owners, n, reg_head = reg.reserve(k, ids, sealed=prod.sealed_frees())
+    except idreg.IdRegistryError as e:  # a refused boot fenced this handle's nonce
+        if str(e) != "registry_not_booted":
+            raise
+        return _hold(lines, str(e))
     f = len({i for i, s, w in owners if s == k and not w})  # fresh RESERVE rows: the reserve's last f, nothing before in flight
     text = "\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
                        "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
@@ -138,7 +151,9 @@ def commit(prod: producer.ShardProducer, reg: idreg.IdRegistry, program: str, le
     settle between the two loses nothing: no token is out, and the next ``decide`` settles the sealed batch first.  The
     answer is sealed only while the shard's last seal and in-flight rows are those it saw: a later decide's reserve
     frees its ids (a seal would pay them while another shard may reserve them), and a re-commit of a sealed answer would
-    put its ids in two token sets."""
+    put its ids in two token sets.  A HOLD answer (no state digest) is never sealed."""
+    if not ans.digest:
+        raise GateDecideError("registry_restored")
     if prod.tip() != ans.seen or reg.in_flight(prod.shard) != ans.rows:
         raise GateDecideError("stale_answer")
     out = prod.commit(program, leaves, state_digest=ans.digest, created_at=created_at, idreg=ans.idreg, free=ans.free,

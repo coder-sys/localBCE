@@ -37,6 +37,24 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_pinned
 /-- info: 'BlindLedger.Gate.verifyToken_route' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_route
+/-- info: 'BlindLedger.Gate.verifyToken_grant_tenant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_grant_tenant
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token},
+    verifyToken c s p bytes = true → decodeToken bytes = some t →
+    ∃ g ∈ s.grants, g.tenantId = t.leaf.tenantId ∧ g.tenantId = p.tenantId ∧ g.grantId = t.leaf.grantId ∧
+      t.leaf.ruleVersion ∈ g.ruleVersions ∧ t.leaf.engineRelease ∈ g.engineReleases :=
+  @BlindLedger.Gate.verifyToken_grant_tenant
+/-- info: 'BlindLedger.Gate.verifyToken_foreign_grant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_foreign_grant
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token},
+    decodeToken bytes = some t →
+    (∀ g ∈ s.grants, g.grantId = t.leaf.grantId → g.tenantId ≠ t.leaf.tenantId) →
+    verifyToken c s p bytes = false :=
+  @BlindLedger.Gate.verifyToken_foreign_grant
 /-- info: 'BlindLedger.Gate.installCert_shardCount' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.installCert_shardCount
 /-- info: 'BlindLedger.Gate.storeCheckpoint_keeps' depends on axioms: [propext] -/
@@ -271,6 +289,15 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_accept_verified
 /-- info: 'BlindLedger.Gate.releaseBatch_once' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_once
+/-- info: 'BlindLedger.Gate.releaseBatch_grant_tenant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_grant_tenant
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : Item},
+    items[i]? = some it → (releaseBatch c r items)[i]? = some none →
+    ∃ t, decodeToken it.token = some t ∧ ∃ g ∈ r.grants,
+      g.tenantId = it.payment.tenantId ∧ g.tenantId = t.leaf.tenantId ∧ g.grantId = t.leaf.grantId :=
+  @BlindLedger.Gate.releaseBatch_grant_tenant
 /-- info: 'BlindLedger.Gate.pathOf_verifies' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.pathOf_verifies
 /-- info: 'BlindLedger.Gate.publishOkTree_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/

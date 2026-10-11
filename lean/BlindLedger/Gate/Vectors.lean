@@ -140,10 +140,11 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
       pure ({ x with state := s }, some (ok == (← verdict expect)))
   | ["mldsa87", expect, pk, msg, sig] =>
     pure (x, some (MlDsa87.verify (← hex pk).toByteArray (← hex msg).toByteArray (← hex sig).toByteArray == (← verdict expect)))
-  | ["grants", id, rules, releases] =>
-    let g : Grant := { grantId := (← hex id), ruleVersions := (← list hex rules),
-                       engineReleases := (← list hex releases) }
-    pure ({ x with state := { x.state with grants := [g] } }, none)
+  | ["grants", tenants, id, rules, releases] =>  -- the same grant for each listed tenant
+    let (gid, rs, es) := ((← hex id), (← list hex rules), (← list hex releases))
+    let gs := (tenants.splitOn ",").map fun t =>
+      ({ tenantId := ascii t, grantId := gid, ruleVersions := rs, engineReleases := es } : Grant)
+    pure ({ x with state := { x.state with grants := gs } }, none)
   | ["now", now] => pure ({ x with state := { x.state with now := (← now.toNat?) } }, none)
   | ["payment", expect, name, tenant, program, flow, id, member, payee, amount, period, lines] =>
     let p : Payment := { tenantId := ascii tenant, programId := ascii program,

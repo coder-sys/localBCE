@@ -19,6 +19,8 @@ import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.verifyToken_fence_eq_epoch
 #print axioms BlindLedger.Gate.verifyToken_pinned
 #print axioms BlindLedger.Gate.verifyToken_route
+#print axioms BlindLedger.Gate.verifyToken_grant_tenant
+#print axioms BlindLedger.Gate.verifyToken_foreign_grant
 #print axioms BlindLedger.Gate.installCert_shardCount
 #print axioms BlindLedger.Gate.storeCheckpoint_keeps
 #print axioms BlindLedger.Gate.release_keeps
@@ -136,6 +138,7 @@ import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.releaseBatch_cp_isolation
 #print axioms BlindLedger.Gate.releaseBatch_accept_verified
 #print axioms BlindLedger.Gate.releaseBatch_once
+#print axioms BlindLedger.Gate.releaseBatch_grant_tenant
 #print axioms BlindLedger.Gate.pathOf_verifies
 #print axioms BlindLedger.Gate.publishOkTree_sound
 #print axioms BlindLedger.Gate.publishOkTree_complete
