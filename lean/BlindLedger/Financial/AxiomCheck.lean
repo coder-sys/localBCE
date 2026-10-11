@@ -561,3 +561,19 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.accepted_applied_group
 /-- info: 'BlindLedger.Financial.ShardSplit.group_crash_refused' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.group_crash_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.dup_n_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.dup_n_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.recoverAll_refused' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recoverAll_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.merge_step' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.merge_step
+/-- info: 'BlindLedger.Financial.ShardSplit.merge_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.merge_run
+/-- info: 'BlindLedger.Financial.ShardSplit.whole_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.whole_run
+/-- info: 'BlindLedger.Financial.ShardSplit.rcpts_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.rcpts_run
+/-- info: 'BlindLedger.Financial.ShardSplit.check_split' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.check_split
+/-- info: 'BlindLedger.Financial.ShardSplit.check_split_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.check_split_iff
