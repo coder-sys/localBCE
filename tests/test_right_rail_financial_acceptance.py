@@ -62,7 +62,10 @@ from tests.financial_decision_package_oracle import verify_decision_package
 _RETIRED_CORRECTION_ARTIFACT_SHA256 = "E911E8844130155E4615D284D6D29A597B6E441DC45101D411EE8422EAE684B9"
 _B2_CORRECTION_ARTIFACT_SHA256 = "88D853961AB127EE33C65A57F6E35D03244FB5CCE2067F4A0FDF592ECC730992"
 _ACTION_B = "action:obligation-item-h:correction-b"
-_EXPECTED_PRIVATE_INDEX_SET_VERSION = 3
+_EXPECTED_PRIVATE_INDEX_SET_VERSION = 4
+_PRE_SEGMENT = (  # a store from before history segments, so from before index set 4 and its counter, which came after them
+    *(f"DROP TABLE {table}" for table in ("history_segments", "history_pending", "history_open")), "DROP TABLE history_row_counts",
+    *(f'DROP INDEX "{entry[0]}"' for entry in owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[3]):]), "PRAGMA user_version=3")
 _EXPECTED_PRIVATE_INDEXES = (
     (
         "rr_financial_v1_evidence_item_id",
@@ -117,6 +120,26 @@ _EXPECTED_PRIVATE_INDEXES = (
         "financial_events",
         ("kind", "aggregate_type"),
         "CREATE INDEX rr_financial_v3_events_kind ON financial_events(kind,aggregate_type)",
+    ),
+    (
+        "rr_financial_v4_events_received_payment",
+        "financial_events",
+        ("json_extract(payload_json,'$.payment_id')",),
+        "CREATE UNIQUE INDEX rr_financial_v4_events_received_payment ON financial_events(json_extract(payload_json,'$.payment_id'))"
+        " WHERE kind='PAYMENT_RECEIVED' AND aggregate_type='OBLIGATION'",
+    ),
+    (
+        "rr_financial_v4_events_alias_evidence",
+        "financial_events",
+        ("json_extract(payload_json,'$.candidate_evidence_id')",),
+        "CREATE UNIQUE INDEX rr_financial_v4_events_alias_evidence ON financial_events(json_extract(payload_json,'$.candidate_evidence_id'))"
+        " WHERE kind='PAYMENT_DUPLICATE_EVIDENCE' AND aggregate_type='OBLIGATION'",
+    ),
+    (
+        "rr_financial_v4_obligations_item_id",
+        "obligations",
+        ("item_id",),
+        "CREATE INDEX rr_financial_v4_obligations_item_id ON obligations(item_id)",
     ),
 )
 
@@ -469,6 +492,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
             for index, _table, _columns, _sql in _EXPECTED_PRIVATE_INDEXES:
                 connection.execute(f'DROP INDEX "{index}"')
+            connection.execute("DROP TABLE history_row_counts")
             connection.execute("PRAGMA user_version=0")
         return path
 
@@ -1951,20 +1975,26 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         source = self._make_owner()
         source_package = source.export_continuity()
         current = owner._PRIVATE_INDEX_SETS[_EXPECTED_PRIVATE_INDEX_SET_VERSION]
-        for version in (1, 2):
+        for version in (1, 2, 3):
             with self.subTest(version=version):
                 path = self._copy(f"private-index-v{version}.sqlite", source)
                 with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
-                    for name, _table, _columns in current[len(owner._PRIVATE_INDEX_SETS[version]):]:
-                        connection.execute(f'DROP INDEX "{name}"')
+                    for entry in current[len(owner._PRIVATE_INDEX_SETS[version]):]:
+                        connection.execute(f'DROP INDEX "{entry[0]}"')
+                    connection.execute("DROP TABLE history_row_counts")
                     connection.execute(f"PRAGMA user_version={version}")
                 verify_database(path, expected_config=source.config, expected_authority=self.authority)
+                counter = (owner._ROW_COUNTS_SQL,) if version + 1 >= 4 else ()  # set 4 brings its counter table: only its indexes are missing
                 with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    for sql in counter:
+                        connection.execute(sql)
                     connection.execute(f"PRAGMA user_version={version + 1}")  # the next set claimed without its index
                 self._assert_checker_refuses(path, source, "schema:private-indexes")
                 with self.assertRaisesRegex(FinancialIntegrityError, "schema_private_indexes"):
                     self._make_owner(path=path)
                 with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                    for _ in counter:
+                        connection.execute("DROP TABLE history_row_counts")
                     connection.execute(f"PRAGMA user_version={version}")
                 upgraded = self._make_owner(path=path)
                 self._assert_private_index_schema(path)
@@ -1975,10 +2005,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         source = self._make_owner()
         package = source.export_continuity()
         stores = {  # a v1 index set is read as it is; a store a writing owner would migrate is refused
-            None: (*(f'DROP INDEX "{name}"' for name, _table, _columns in owner._PRIVATE_INDEX_SETS[3][len(owner._PRIVATE_INDEX_SETS[1]):]), "PRAGMA user_version=1"),
-            "pre-segment": tuple(f"DROP TABLE {table}" for table in ("history_segments", "history_pending", "history_open")),
+            None: (*(f'DROP INDEX "{entry[0]}"' for entry in owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[1]):]), "DROP TABLE history_row_counts", "PRAGMA user_version=1"),
+            "pre-segment": _PRE_SEGMENT,
             "no-append-only": tuple(f'DROP TRIGGER "{name}"' for name in owner._HISTORY_APPEND_ONLY_TRIGGERS),
-            "no-index-set": (*(f'DROP INDEX "{name}"' for name, _table, _columns in owner._PRIVATE_INDEX_SETS[3]), "PRAGMA user_version=0"),
+            "no-index-set": (*(f'DROP INDEX "{entry[0]}"' for entry in owner._PRIVATE_INDEX_SETS[4]), "DROP TABLE history_row_counts", "PRAGMA user_version=0"),
         }
         for refusal, statements in stores.items():
             with self.subTest(refusal=refusal):
@@ -1992,7 +2022,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     FinancialOwner(path=path, config=source.config, trusted_authority=self.authority, clock=_Clock(), mode="SHADOW", owner_id=owner._SHADOW_OWNER_ID).close()
                 self.assertEqual(hashlib.sha256(_image(path)).hexdigest(), before)
                 with closing(sqlite3.connect(str(path))) as connection:
-                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0 if refusal == "no-index-set" else 1 if refusal is None else 3)
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], {"no-index-set": 0, None: 1, "pre-segment": 3}.get(refusal, 4))
 
     def test_private_snapshot_index_upgrade_serializes_concurrent_openers(self) -> None:
         source = self._make_owner(schema_version=8)
@@ -2231,8 +2261,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         source_package = source.export_continuity()
         legacy_path = self._copy("admission-migration-legacy.sqlite", source)
         with closing(sqlite3.connect(legacy_path, isolation_level=None)) as connection:
-            for table in ("history_segments", "history_pending", "history_open"):
-                connection.execute(f"DROP TABLE {table}")
+            for statement in _PRE_SEGMENT:
+                connection.execute(statement)
         legacy_bytes = _image(legacy_path)
         self._assert_wrong_scope_leaves_untouched(legacy_path, legacy_bytes, config, "state:wrong-admission-scope", _Clock(initial=1_700_000_000_000))
 
@@ -5655,17 +5685,25 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._make_owner(path=self._path("hidden-trigger-case.sqlite"))
 
     def test_checker_refuses_a_hidden_partial_index(self) -> None:
-        # The checker's event lookups use an index the Owner wrote: one that silently omits rows must not pass.
+        # The checker's event lookups use an index the Owner wrote: one that silently omits rows, or (partial) holds rows its WHERE omits, must not pass.
         store = self._build_base()
-        for name, table, columns in owner._PRIVATE_INDEX_SETS[3][len(owner._PRIVATE_INDEX_SETS[1]):]:
-            with self.subTest(name):
-                path = self._copy(f"partial-{name}.sqlite", store)
-                with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
-                    connection.execute(f'DROP INDEX "{name}"')
-                    connection.execute(owner._private_index_sql(name, table, columns) + " WHERE aggregate_type<>'OBLIGATION'")
-                    connection.execute("PRAGMA writable_schema=ON")
-                    connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, table, columns), name))
-                self._assert_checker_refuses(path, store, "^schema:index-integrity$")
+        self._prepare_final(store)
+        repeat = expected.P2_CONFIRMATION_EVIDENCE  # a receipt and an alias for the two payload indexes to hold
+        store.record_payment_evidence(item_id=repeat.item_id, payment_id="payment:h:p2-repeat", common_origin_id=repeat.common_origin_id, amount_cents=repeat.amount_cents or 0, evidence_id="evidence:p2-repeat",
+                                      event_at_ms=repeat.event_at_ms, source_id=repeat.source_id, source_version=repeat.source_version, local_ref="ref:p2-repeat")
+        for name, table, columns, unique, where in owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[1]):]:
+            hidden = f"NOT ({where})" if where else "aggregate_type<>'OBLIGATION'" if table == "financial_events" else f"{columns[0]} IS NULL"
+            for kind, built in (("hidden", hidden), ("extra", f"({where}) OR {columns[0]} IS NULL" if where else None)):
+                if built is None:
+                    continue
+                with self.subTest(name, kind=kind):
+                    path = self._copy(f"partial-{kind}-{name}.sqlite", store)
+                    with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
+                        connection.execute(f'DROP INDEX "{name}"')
+                        connection.execute(owner._private_index_sql(name, table, columns, False, built))
+                        connection.execute("PRAGMA writable_schema=ON")
+                        connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, table, columns, unique, where), name))
+                    self._assert_checker_refuses(path, store, "^schema:index-integrity$")
 
     def test_owner_open_refuses_an_index_whose_keys_do_not_match_its_rows(self) -> None:
         # Right entry count, wrong keys, canonical SQL: quick_check passes it and the index answers without one evidence row.
@@ -5675,7 +5713,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             connection.execute(f'DROP INDEX "{name}"')
             connection.execute(f"CREATE INDEX {name} ON evidence(CASE WHEN evidence_id='{hidden.evidence_id}' THEN '' ELSE item_id END,evidence_id)")
             connection.execute("PRAGMA writable_schema=ON")
-            connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, "evidence", ("item_id", "evidence_id")), name))
+            connection.execute("UPDATE sqlite_master SET sql=? WHERE name=?", (owner._private_index_sql(name, "evidence", ("item_id", "evidence_id"), False, None), name))
         with closing(sqlite3.connect(str(store.path))) as connection:
             self.assertEqual(connection.execute("PRAGMA quick_check").fetchall(), [("ok",)])
             self.assertNotIn((hidden.evidence_id,), connection.execute("SELECT evidence_id FROM evidence WHERE item_id=?", (hidden.item_id,)).fetchall())

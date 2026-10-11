@@ -54,8 +54,8 @@ GROWS = {  # operation: (counters that grow, owner branch, listed, strength of t
 }
 SQLITE = "3.53.1"  # sql_ops counts this library's VM steps; another version changes them, so re-measure
 PINNED = {  # operation: (small-history work, large-history work) on trunk 70f9606 (run hy-growth4), deterministic counters lowered on m4-int (run m4int-4); lower it when an operation gets cheaper
-    "decision": ((11747, 30506, 2216, 104, 0), (31530, 30506, 2216, 113, 0)),
-    "reverse": ((11964, 32205, 2516, 112, 0), (31747, 32205, 2516, 120, 0)),
+    "decision": ((11948, 30615, 2216, 110, 0), (31731, 30615, 2216, 116, 0)),  # re-pinned cll6: C-L1 committed row counter adds 109 sql_ops and 6 KiB peak per write
+    "reverse": ((12127, 32314, 2516, 118, 0), (31910, 32314, 2516, 118, 0)),  # re-pinned cll6, same cause
     "evaluate": ((11670, 35621, 2208, 141, 0), (31453, 35621, 2208, 134, 0)),
     "cash_file": ((126299, 136410, 23304, 528, 0), (163372, 136033, 22908, 522, 0)),  # CFI-C1 keyed begin: flat in history, measured cfl7 (was 137715/286031 sql_ops, 3084/29362 peak_kib)
     "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
