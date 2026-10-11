@@ -18,7 +18,7 @@ PRODUCT_CODE_LINES = 36_652  # exact actual of the merged tree with trunk 442de4
 EVIDENCE_CODE_LINES = 34_489  # exact actual of the merge with trunk afbce35a: 34,483 (prior merge, trunk 81f58a22) + 6 trunk shard-h tests (RGL-FIX2); earlier: 34,192 LINKFIX-ENC + 291 trunk IDREG S3 tests net; LINKFIX-ENC wire_vectors and BLFCMD03/BLFPAY01/BLFOFA01 vector tests are inside the 34,192
 MARKDOWN_FILES = 18
 # Prose Markdown outside conformance/ (the normative wire spec has its own limit).
-MARKDOWN_BYTES = 92_901  # exact actual after merging trunk afbce35a (its STATUS.md grew 163 bytes; trunk's own 92,740 ceiling is 161 under that tree); earlier 92,740 = 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)
+MARKDOWN_BYTES = 92_740  # 91,150 trunk + 305 absorb-ladder + 1,285 amend-bypass (D6 bypass amendment text; its base had 29 bytes of slack: true delta +1,285, not +1,256)
 CONFORMANCE_MARKDOWN_BYTES = 30_970
 STATUS_BYTES = 8_000
 CORE_FILE_LINES = {
