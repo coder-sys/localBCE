@@ -307,12 +307,12 @@ class HistoryIndexTests(unittest.TestCase):
 
     def test_migrate_v3_store_with_e1_refused_typed_unchanged(self):
         self._alias()
-        for label, kind, payload in (("received", "PAYMENT_RECEIVED", None), ("alias", "PAYMENT_DUPLICATE_EVIDENCE", None), ("malformed", "PAYMENT_RECEIVED", "{")):
+        for label, kind, payload in (("received", "PAYMENT_RECEIVED", None), ("alias", "PAYMENT_DUPLICATE_EVIDENCE", None), ("malformed", "PAYMENT_RECEIVED", "{")):  # the malformed payload is its own fault class, history_payload_malformed (review LOW-4)
             with self.subTest(label):
                 path = self._copy(f"v3-e1-{label}", V3)
                 with closing(sqlite3.connect(str(path), isolation_level=None)) as connection:
                     self.assertEqual(_forge(connection, kind, self._other(), payload).rowcount, 1)
-                self._owner_refuses(path, "history_payload_unique")
+                self._owner_refuses(path, "history_payload_malformed" if label == "malformed" else "history_payload_unique")
 
     def test_old_reader_refuses_v4_without_mutation(self):
         """A v3-era Owner and checker, as their index constants: both fail closed before any write. (The real v3-era Owner refuses earlier still, at its

@@ -318,6 +318,33 @@ class KeyedBeginTests(unittest.TestCase):
         self.assertEqual(self._raw_begin(fx, prepared, path, True), ["RETRY", "ALIAS"])
         self.assertEqual(self._raw_begin(fx, prepared, path, False), "cash_file_failed")  # v4: the alias is read by its evidence id and bound to that evidence's item
 
+    def test_a_forged_receipt_store_refuses_the_begin(self):
+        """Review LOW-1/LOW-2, on a copy edited under the immutability trigger and (for the first case) without the unique index, as a raw edit of a file would be. A second
+        receipt of one payment is refused, never silently overwriting the first. json_extract keys a payload on its FIRST payment_id and json.loads keeps its LAST: a
+        payload repeating its key with another requested payment's id, or an unrequested one, is refused."""
+        fx = self._fixture()
+        fx._apply()
+        prepared = fx._prepare()
+        events = fx._query("SELECT event_sequence, payload_json FROM financial_events WHERE kind='PAYMENT_RECEIVED' ORDER BY event_sequence")
+        first, second = (json.loads(payload)["payment_id"] for _, payload in events[:2])
+        for label, last in (("a second receipt of the payment", None), ("another requested payment", second), ("an unrequested payment", "not-in-the-file")):
+            with self.subTest(label):
+                path = self._copy(fx)
+                self.assertIsInstance(self._raw_begin(fx, prepared, path, False), list)  # the untouched copy is a clean RETRY plan
+                with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                    connection.execute("DROP TRIGGER financial_event_update_immutable")
+                    if last is None:
+                        entry = owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[3])]
+                        connection.execute(f'DROP INDEX "{entry[0]}"')
+                        connection.execute(owner._private_index_sql(*entry[:3], False, entry[4]))  # the same index, made plain
+                        row = connection.execute("SELECT * FROM financial_events WHERE event_sequence=?", (events[0][0],)).fetchone()
+                        copied = connection.execute("INSERT INTO financial_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (row[0] + 1000, bytes(row[1][:63]) + bytes([row[1][63] ^ 1]), *row[2:])).rowcount
+                    else:
+                        forged = events[0][1][:-1] + ',"payment_id":' + json.dumps(last) + "}"
+                        copied = connection.execute("UPDATE financial_events SET payload_json=? WHERE event_sequence=?", (forged, events[0][0])).rowcount
+                self.assertEqual(copied, 1)
+                self.assertEqual(self._raw_begin(fx, prepared, path, False), "cash_file_failed")
+
     def test_every_route_into_begin_runs_the_whole_store_check_first(self):
         """The keyed reads trust the store's indexes (LOW-1, accepted design) because the whole-store check, whose PRAGMA integrity_check sees every index entry, has run on the
         file before each begin: apply_cash_file (on its private copy, then on the live store its owner opened under the check), run_batch(cash_file_context=...) on an owner

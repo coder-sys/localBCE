@@ -1568,8 +1568,10 @@ def _install_private_index_set(connection: sqlite3.Connection) -> None:
             if entry[0] not in present:
                 connection.execute(_private_index_sql(*entry))
     except (sqlite3.IntegrityError, sqlite3.OperationalError) as error:
-        if isinstance(error, sqlite3.OperationalError) and "malformed JSON" not in str(error):
-            raise  # a lock or I/O failure keeps its own error
+        if isinstance(error, sqlite3.OperationalError):
+            if "malformed JSON" not in str(error):
+                raise  # a lock or I/O failure keeps its own error
+            _fail(FinancialIntegrityError, "history_payload_malformed")
         _fail(FinancialIntegrityError, "history_payload_unique")
     connection.execute(_ROW_COUNTS_SQL)  # absent below v4: the open refuses the table there (schema_tables)
     connection.executemany("INSERT INTO history_row_counts(table_name,n) VALUES (?,?)", _count_rows(connection).items())

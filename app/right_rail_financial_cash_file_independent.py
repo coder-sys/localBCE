@@ -409,6 +409,7 @@ class CashFileCheck:
         received, aliases = {}, {}  # index set 4 holds one PAYMENT_RECEIVED per payment id and one alias per evidence id, store-wide: each read by its key, then bound
         for event in _keyed(connection, "rr_financial_v4_events_received_payment", self._payments):
             payload = json.loads(event["payload_json"])
+            _require(payload["payment_id"] in self._payments and payload["payment_id"] not in received, "cash_file_failed")  # json_extract keys on a payload's first payment_id, json.loads keeps its last: the id must be a requested one, received once
             _require(event["aggregate_id"] == self._payments[payload["payment_id"]]["obligation_id"], "cash_file_failed")  # a receipt filed under another obligation
             received[payload["payment_id"]] = (event, payload)
         for event in _keyed(connection, "rr_financial_v4_events_alias_evidence", [argument["evidence_id"] for argument in arguments]):
