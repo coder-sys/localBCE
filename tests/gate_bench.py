@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import ctypes
+import itertools
 import json
 import os
 import random
@@ -35,6 +36,7 @@ from tests import test_gate_rules_worker as w
 from tests import test_right_rail_gate_formats as fx
 
 SEED, PER_PAYMENT, MEM_PER_FRAME_BYTE = 20261005, 4, 700
+NONCES = itertools.count(int.from_bytes(bytes(range(32)), "big"))  # the patched os.urandom: seeded, unique per call, first bytes(range(32))
 REPORT = ("parse", "frame", "registry", "storage", "lean_decide", "lean_replay", "canon", "sign", "verify", "seal_other")
 
 
@@ -105,7 +107,7 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, contextlib.ExitStack() as stack:
         stack.callback(worker.close)
         c = g.Cluster(tmp, fx.custody(tmp), shards=1)
-        with mock.patch.object(idreg.os, "urandom", lambda n: bytes(range(n))):
+        with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):
             c.boot()
         real_run, real_exe = decider.RulesWorker.run, subprocess.run
         if probe:
