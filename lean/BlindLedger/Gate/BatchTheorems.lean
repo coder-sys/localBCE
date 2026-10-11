@@ -549,7 +549,7 @@ theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tok
 
 /-! ### Completeness up to a SHA3 collision -/
 
-private theorem sha3_length (x : Bytes) : (sha3 x).length = digestBytes := by
+theorem sha3_length (x : Bytes) : (sha3 x).length = digestBytes := by
   unfold sha3
   rw [← Semantic.sha3_512_eq]
   exact Semantic.sha3_512_toList_length _

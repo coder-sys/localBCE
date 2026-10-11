@@ -32,8 +32,9 @@ open BlindLedger.Gate.Rules
     which then decides only if the checkpoints it extends hash to it
     (`Gate.decideAnchored`); without one, the runner's own last commit is that
     checkpoint.  `commit UNANCHORED` expects the refusal.  An `owners` commit also prints the state
-    digest after it (`RULES_DIGEST`, `Gate.setsDigest`) and the rows it appended (`RULES_ADDS`: per row
-    `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex).  `load G_ASOF ADDSHEX ANCHORHEX`
+    digest after it (`RULES_DIGEST`, `Gate.setsDigest`), the rows it appended (`RULES_ADDS`: per row
+    `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex) and what it read (`RULES_READS`, `reads`
+    on the checkpoint it extends, zero before the first).  `load G_ASOF ADDSHEX ANCHORHEX`
     drops the released and unresolved sets and replays those rows onto empty sets dated G_ASOF
     (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  Arrival
     order cannot change a decision (`decideBatchIn_perm`).  `report`
@@ -129,6 +130,8 @@ structure St where
   checked : Nat := 0
   failed : Nat := 0
   expected : Option Nat := none
+  /-- A checkpoint (`load`, `anchor` or a commit) precedes the next commit; else its read-set base is zero. -/
+  sealed : Bool := false
 
 def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option α)
     (fields : α → List (Nat × Nat)) : Option (Snapshot α) := do
@@ -204,6 +207,27 @@ def uniq (ids : List Nat) : List Nat :=
   (ids.foldl (fun (s, r) i => if s.contains i then (s, r) else (s.insert i, i :: r))
     ((∅ : Std.HashSet Nat), ([] : List Nat))).2.reverse
 
+/-- One kind's SNAPSHOT/v1 pin (zero if none; refused if it hashes to zero) and READ-*/v2 slot (`ReadManifest.kindOf`). -/
+def readPin {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) :
+    Option (Snapshot α) → Option (List UInt8 × List UInt8)
+  | none => some (Gate.zeroDigest, [0])
+  | some s => do
+    let p := hB (← Fast.pinBytes "RR/GATE/SNAPSHOT/v1" k f s)
+    guard (p ≠ Gate.zeroDigest)
+    let q ← Fast.pinBytes d k f s
+    pure (p, 1 :: hB q)
+
+def readPins (c : Ctx) : Option (List (List UInt8 × List UInt8)) := do
+  pure [← readPin "RR/GATE/READ-DMF/v2" 1 Death.fields c.dmf, ← readPin "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields c.providerDeaths,
+    ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c.exclusions, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c.enrollment]
+
+/-- `RULES_READS`: the four SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the bytes `StateV2.readSetOf` hashes (`ReadManifest.run_reads_eq`). -/
+def reads (c : Ctx) (base : List UInt8) : Option (List UInt8) := do
+  let ks ← readPins c
+  let pre := "RR/GATE/READ-SET/v2".toUTF8.toList ++ [0] ++ (ks.map (·.2)).flatten ++ (← be 4 c.redo.length) ++
+    (← c.redo.mapM (be payWidth)).flatten ++ base
+  pure ((ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
+
 def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
@@ -238,12 +262,12 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
   let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
   let adds := do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten
-  
-  
+  let base := if st.sealed then Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior else some Gate.zeroDigest
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
     (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
-    adds.toList.map fun b => s!"RULES_ADDS {hexOf b.toByteArray}"
-  ({ st with pinned := some p, anchor := none,
+    adds.toList.map (fun b => s!"RULES_ADDS {hexOf b.toByteArray}") ++
+    (base.bind (reads c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
+  ({ st with pinned := some p, anchor := none, sealed := true,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
              held := st.held ++ fresh.2,
              rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], owners := none,
@@ -262,10 +286,10 @@ def parseOwner (o : String) : Option Owner := match o.splitOn ":" with
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
                                    anchor := none, batch := #[], redo := [], foreign := [], owners := none, free := none,
-                                   pays := [], done := [] }, [])
+                                   pays := [], done := [], sealed := false }, [])
   | ["anchor", h] => do
     guard (h.length == 128)
-    pure ({ st with anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
+    pure ({ st with sealed := true, anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
   | ["load", a, adds, h] => do
     guard (h.length == 128)
     let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
@@ -278,7 +302,7 @@ def step (st : St) : List String → Option (St × List String)
     | some s => pure ({ st with
         snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
         rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2 }, [])
+        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),

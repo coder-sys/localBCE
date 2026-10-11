@@ -7247,7 +7247,7 @@ def push (P : Pins) (st : LogState) (e : Entry) : Option LogState := do
 /-- All custody state: the fold of the off-machine log, once, at boot (H3). -/
 def fold (P : Pins) (log : List Entry) : Option LogState := log.foldlM (push P) LogState.init
 
-private theorem guard_some (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
+theorem guard_some (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
   by_cases hc : c <;> simp [guard, hc]
 
 private theorem push_shape (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st') :
@@ -7744,7 +7744,7 @@ def custodyOk (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (
 
 /-- custodyOk's binds: the batch, Lean's output on the shard base, the read set, the stored checkpoint carrying
     Lean's digest, the token check on the rows custody built, and the sign body with Lean's fresh rows. -/
-private theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
+theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
     (tokens : List Bytes) (e : Entry) (h : custodyOk P st k cert i new tokens = some e) :
     ∃ (rs : List Request) (bt : Batch) (o : OutV2) (rset : Bytes) (n : Stored), batchAt P st k i = some (rs, bt) ∧
       decideIdx sha3 bt.ctx k bt.owners bt.lines (st.shard k).base i.witness = some o ∧
