@@ -922,7 +922,8 @@ raise SystemExit(main(sys.argv[2:]))
         excused = {**dict.fromkeys(("_verify_packs", "_verify_population_manifest_rows", "_verify_populations", "_verify_population_history", "_verify_program_funding", "_verify_adjustments", "_verify_current_snapshot", "_verify_restore_source_binding"), untouched),
                    **dict.fromkeys(("_verify_events", "_verify_payments", "_verify_conflicts", "_verify_duplicate_evidence", "_verify_event_references", "_verify_commands", "_verify_replayed_rows", "_verify_history_tables"), written),
                    **dict.fromkeys(("_verify_obligations", "_verify_evaluations", "_verify_evaluation_history_events", "_verify_projections"), current),
-                   "_verify_followups_in": "only reads whole tables into _verify_correction_followup_records, which runs before commit on the touched rows"}
+                   "_verify_followups_in": "only reads whole tables into _verify_correction_followup_records, which runs before commit on the touched rows",
+                   "_verify_row_counts": "the owner writes the counter after this check, from the write's own insert log; each open checks it against the events' highest sequence"}
         unreached = {name for name in names("_verify_connection") if name.startswith("_verify_") and name not in reached}
         self.assertEqual(sorted(unreached - set(excused)), [], "a whole-store rule that neither runs before commit nor has a written reason")
         self.assertEqual(sorted(set(excused) - unreached), [], "an excused rule that is now reachable or gone: delete its line")
@@ -993,10 +994,10 @@ raise SystemExit(main(sys.argv[2:]))
 
     def test_cli_refusal_never_migrates_or_creates_store(self):
         directory, _, args = self._cli_fixture()
-        changes = [tuple(f"DROP TABLE {name}" for name in ("history_segments", "history_pending", "history_open")),
+        changes = [fixtures._PRE_SEGMENT,
                    tuple(f'DROP TRIGGER "{name}"' for name in owner._HISTORY_APPEND_ONLY_TRIGGERS),
-                   tuple(f'DROP INDEX "{name}"' for name, _, _ in owner._PRIVATE_INDEX_SETS[3]) + ("PRAGMA user_version=0",),
-                   (f'DROP INDEX "{owner._PRIVATE_INDEX_SETS[3][-1][0]}"', "PRAGMA user_version=2")]  # L2: an older index set is never written
+                   tuple(f'DROP INDEX "{entry[0]}"' for entry in owner._PRIVATE_INDEX_SETS[4]) + ("DROP TABLE history_row_counts", "PRAGMA user_version=0"),
+                   tuple(f'DROP INDEX "{entry[0]}"' for entry in owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[3]):]) + ("DROP TABLE history_row_counts", "PRAGMA user_version=3")]  # L2: an older index set is never written
         for index, statements in enumerate(changes):
             path = directory / f"old-{index}.sqlite"
             path.write_bytes(fixtures._image(self.store.path))

@@ -19,7 +19,7 @@ from app.right_rail_financial_cash_file_independent import MAX_ROWS, REFUSALS, C
 
 MAX_FILE_BYTES = 1_048_576
 PLAN_WINDOW_MS = 60_000  # a plan commits only while the live clock is within this of the plan's own last reading
-_DERIVED = ("history_pending", "history_open")  # the owner's triggers keep these: replayed rows rebuild them, never written directly
+_DERIVED = ("history_pending", "history_open", "history_row_counts")  # the owner keeps these (its triggers, its commit's counter): replayed rows rebuild them, never written directly
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 

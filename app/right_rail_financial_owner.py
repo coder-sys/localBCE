@@ -130,18 +130,21 @@ _SEAL_SEGMENT_BYTES: Final[int] = _MAX_PACKAGE_BYTES // 2  # soft bounds: seal a
 _SEAL_SEGMENT_EVENTS: Final[int] = 4096
 _SEGMENT_FRAME_BYTES: Final[int] = 4096  # seal, digests and framing, which records do not count
 _SEGMENT_TABLES: Final[frozenset[str]] = frozenset({"history_segments", "history_pending", "history_open"})
+# v4: committed rows per history table, derived like an index (not captured, not in segments or packages); every write
+# adds its temp.rr_row_inserts at commit, so open adopts it instead of counting, and verify_database recounts it.
+_ROW_COUNTS_SQL: Final[str] = "CREATE TABLE history_row_counts(table_name TEXT PRIMARY KEY, n INTEGER NOT NULL CHECK (n >= 0)) WITHOUT ROWID"
 # Moves on every committed insert into a history table (a new pending key, or a seal adds a segment), and names
 # the exact history: the chain head differs between any two histories, so a swapped-in fork never matches.
 _HISTORY_MARK: Final[str] = "SELECT (SELECT MAX(segment_index) FROM history_segments),(SELECT COUNT(*) FROM history_pending),sequence,history_head FROM financial_meta WHERE id=1"
 _CHECK_ROW_CACHE: Final[bool] = os.environ.get("RIGHTRAIL_CHECK_ROW_CACHE") == "1"  # tests: recount after every write
-_PRIVATE_INDEX_SET_VERSION: Final[int] = 3  # v2 adds the events lookup the checker runs per obligation; v3 its store-wide lookups by kind
+_PRIVATE_INDEX_SET_VERSION: Final[int] = 4  # v2 adds the events lookup the checker runs per obligation; v3 its store-wide lookups by kind; v4 below
 # The history is append-only in the database itself (Art. III.4); stores
 # created before these triggers get them once, atomically, on open.
 _HISTORY_APPEND_ONLY_TRIGGERS: Final[dict[str, str]] = {
     "financial_event_update_immutable": "CREATE TRIGGER financial_event_update_immutable BEFORE UPDATE ON financial_events BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END",
     "financial_event_delete_immutable": "CREATE TRIGGER financial_event_delete_immutable BEFORE DELETE ON financial_events BEGIN SELECT RAISE(ABORT,'financial_event_immutable'); END",
 }
-_PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
+_PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...], bool, str | None], ...]] = tuple((name, table, keys, False, None) for name, table, keys in (
     ("rr_financial_v1_evidence_item_id", "evidence", ("item_id", "evidence_id")),
     ("rr_financial_v1_claims_obligation_id", "claimed_adjustments", ("obligation_id", "claim_id")),
     ("rr_financial_v1_cases_obligation_id", "cases", ("obligation_id", "case_id")),
@@ -149,12 +152,22 @@ _PRIVATE_INDEX_SET_V1: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
     ("rr_financial_v1_conflicts_obligation_id", "financial_conflicts", ("obligation_id", "conflict_id")),
     ("rr_financial_v1_evaluations_obligation_revision", "evaluations", ("obligation_id", "revision")),
     ("rr_financial_v1_determinations_obligation_id", "determinations", ("obligation_id", "determination_id")),
-)
-_PRIVATE_INDEX_SETS: Final[dict[int, tuple[tuple[str, str, tuple[str, ...]], ...]]] = {
+))
+_PRIVATE_INDEX_SETS: Final[dict[int, tuple[tuple[str, str, tuple[str, ...], bool, str | None], ...]]] = {
     1: _PRIVATE_INDEX_SET_V1,
-    2: (*_PRIVATE_INDEX_SET_V1, ("rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind"))),
+    2: (*_PRIVATE_INDEX_SET_V1, ("rr_financial_v2_events_aggregate_kind", "financial_events", ("aggregate_type", "aggregate_id", "kind"), False, None)),
 }
-_PRIVATE_INDEX_SETS[3] = (*_PRIVATE_INDEX_SETS[2], ("rr_financial_v3_events_kind", "financial_events", ("kind", "aggregate_type")))
+_PRIVATE_INDEX_SETS[3] = (*_PRIVATE_INDEX_SETS[2], ("rr_financial_v3_events_kind", "financial_events", ("kind", "aggregate_type"), False, None))
+# v4: one PAYMENT_RECEIVED per payment id and one duplicate-evidence alias per evidence id, store-wide, so the keyed
+# begin reads at most one event per key; the WHERE terms are repeated verbatim by every reader so the planner uses them.
+_RECEIVED_WHERE: Final[str] = "kind='PAYMENT_RECEIVED' AND aggregate_type='OBLIGATION'"
+_ALIAS_WHERE: Final[str] = "kind='PAYMENT_DUPLICATE_EVIDENCE' AND aggregate_type='OBLIGATION'"
+_PRIVATE_INDEX_SETS[4] = (
+    *_PRIVATE_INDEX_SETS[3],
+    ("rr_financial_v4_events_received_payment", "financial_events", ("json_extract(payload_json,'$.payment_id')",), True, _RECEIVED_WHERE),
+    ("rr_financial_v4_events_alias_evidence", "financial_events", ("json_extract(payload_json,'$.candidate_evidence_id')",), True, _ALIAS_WHERE),
+    ("rr_financial_v4_obligations_item_id", "obligations", ("item_id",), False, None),
+)
 _CORRECTION_FOLLOWUP_CONTRACT: Final[str] = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 _CORRECTION_FOLLOWUP_DEPENDENCIES: Final[tuple[str, ...]] = (
     "OBLIGATION_REVISION",
@@ -388,6 +401,7 @@ _PACKAGE_TABLES: Final[frozenset[str]] = _TABLES - {"commands"}  # the command l
 _CAPTURED_TABLES: Final = ("action_outbox", "cases", "claimed_adjustments", "evidence", "financial_conflicts")
 # A history segment carries its events and the end-of-segment image of every row these tables changed in it.
 _PROJECTION_TABLES: Final = tuple(sorted(_PACKAGE_TABLES - {"financial_events", "financial_identity", "financial_meta"}))
+_COUNTED_TABLES: Final = ("financial_events", *_PROJECTION_TABLES)  # the history tables the row cap and history_row_counts cover
 
 # The command log (Art. III.3): one row per request the Owner accepted, keyed by
 # the caller's natural key and bound to the history event that request produced.
@@ -1478,8 +1492,8 @@ class ProgramFundingReceipt:
         return _digest(_PROGRAM_FUNDING_RECEIPT_DOMAIN, self.canonical_bytes)
 
 
-def _private_index_sql(name: str, table: str, columns: tuple[str, ...]) -> str:
-    return f"CREATE INDEX {name} ON {table}({','.join(columns)})"
+def _private_index_sql(name: str, table: str, keys: tuple[str, ...], unique: bool, where: str | None) -> str:
+    return f"CREATE {'UNIQUE ' if unique else ''}INDEX {name} ON {table}({','.join(keys)})" + (f" WHERE {where}" if where is not None else "")
 
 
 def _normalized_schema_sql(value: str) -> str:
@@ -1502,41 +1516,65 @@ def _private_index_set_version(connection: sqlite3.Connection) -> int:
         return 0
     if type(version) is not int or version not in _PRIVATE_INDEX_SETS:
         _fail(FinancialIntegrityError, "schema_private_indexes")
-    expected = {name: _private_index_sql(name, table, columns) for name, table, columns in _PRIVATE_INDEX_SETS[version]}
+    expected = {entry[0]: _private_index_sql(*entry) for entry in _PRIVATE_INDEX_SETS[version]}
     if set(actual) != set(expected):
         _fail(FinancialIntegrityError, "schema_private_indexes")
-    if any(_normalized_schema_sql(actual[name]) != _normalized_schema_sql(sql) for name, sql in expected.items()):
+    if any(_normalized_schema_sql(actual[name]) != _normalized_schema_sql(sql) or re.findall("'[^']*'", actual[name]) != re.findall("'[^']*'", sql) for name, sql in expected.items()):  # literals keep their case
         _fail(FinancialIntegrityError, "schema_private_indexes")
-    for name, table, columns in _PRIVATE_INDEX_SETS[version]:
+    for name, table, keys, unique, where in _PRIVATE_INDEX_SETS[version]:
         listed = [
             row
             for row in connection.execute(f'PRAGMA index_list("{table}")')
             if str(row[1]) == name
         ]
-        if len(listed) != 1 or int(listed[0][2]) != 0 or str(listed[0][3]) != "c" or int(listed[0][4]) != 0:
+        if len(listed) != 1 or int(listed[0][2]) != int(unique) or str(listed[0][3]) != "c" or int(listed[0][4]) != int(where is not None):
             _fail(FinancialIntegrityError, "schema_private_indexes")
         key_parts = tuple(
-            (str(row[2]), int(row[3]), str(row[4]).upper())
+            (row[2], int(row[3]), str(row[4]).upper())
             for row in connection.execute(f'PRAGMA index_xinfo("{name}")')
             if int(row[5]) == 1
-        )
-        if key_parts != tuple((column, 0, "BINARY") for column in columns):
+        )  # an expression key has no column name; its text is bound by the SQL equality above
+        if key_parts != tuple((None if "(" in key else key, 0, "BINARY") for key in keys):
             _fail(FinancialIntegrityError, "schema_private_indexes")
     return version
 
 
 def _count_rows(connection: sqlite3.Connection) -> dict[str, int]:
-    return {table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in ("financial_events", *_PROJECTION_TABLES)}
+    return {table: connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in _COUNTED_TABLES}
+
+
+def _adopted_rows(connection: sqlite3.Connection) -> dict[str, int]:
+    """The committed counter from v4 (a read-only open of an older store counts), cross-checked in O(1): events are
+    contiguous from 1, so their count is their highest sequence. A full recount is verify_database's."""
+    if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
+        return _count_rows(connection)
+    rows = dict(connection.execute("SELECT table_name,n FROM history_row_counts").fetchall())
+    if (
+        rows.keys() != set(_COUNTED_TABLES)
+        or any(type(n) is not int for n in rows.values())
+        or rows["financial_events"] != connection.execute("SELECT COALESCE(MAX(event_sequence),0) FROM financial_events").fetchone()[0]
+    ):
+        _fail(FinancialIntegrityError, "history_row_counts")
+    return rows
 
 
 def _install_private_index_set(connection: sqlite3.Connection) -> None:
     found = _private_index_set_version(connection)
     if found == _PRIVATE_INDEX_SET_VERSION:
         return
-    present = {name for name, _table, _columns in _PRIVATE_INDEX_SETS.get(found, ())}
-    for name, table, columns in _PRIVATE_INDEX_SETS[_PRIVATE_INDEX_SET_VERSION]:
-        if name not in present:
-            connection.execute(_private_index_sql(name, table, columns))
+    present = {entry[0] for entry in _PRIVATE_INDEX_SETS.get(found, ())}
+    try:  # a v3 store holding two receipts of one payment, two aliases of one evidence id, or a payload json_extract cannot read is a store fault
+        for entry in _PRIVATE_INDEX_SETS[_PRIVATE_INDEX_SET_VERSION]:
+            if entry[0] not in present:
+                connection.execute(_private_index_sql(*entry))
+    except (sqlite3.IntegrityError, sqlite3.OperationalError) as error:
+        if isinstance(error, sqlite3.OperationalError):
+            if "malformed JSON" not in str(error):
+                raise  # a lock or I/O failure keeps its own error
+            _fail(FinancialIntegrityError, "history_payload_malformed")
+        _fail(FinancialIntegrityError, "history_payload_unique")
+    connection.execute(_ROW_COUNTS_SQL)  # absent below v4: the open refuses the table there (schema_tables)
+    connection.executemany("INSERT INTO history_row_counts(table_name,n) VALUES (?,?)", _count_rows(connection).items())
     connection.execute(f"PRAGMA user_version={_PRIVATE_INDEX_SET_VERSION}")
     if _private_index_set_version(connection) != _PRIVATE_INDEX_SET_VERSION:
         _fail(FinancialIntegrityError, "schema_private_indexes")
@@ -2259,7 +2297,7 @@ class FinancialOwner:
     def _install_capture_triggers(self, connection: sqlite3.Connection) -> None:
         connection.execute("CREATE TEMP TABLE rr_row_inserts(table_name TEXT PRIMARY KEY, n INTEGER NOT NULL)")  # rolls back with the write
         # The open history segment tracks each event and changed row with its record size: O(this write) (IX.3).
-        for table in ("financial_events", *_PROJECTION_TABLES):
+        for table in _COUNTED_TABLES:
             new_values = ",".join(f'NEW."{column}"' for column in _TABLE_COLUMNS[table])
             track = f"INSERT INTO history_pending VALUES ('{table}',NEW.rowid,rr_segment_bytes('{table}',{new_values})) ON CONFLICT (table_name,row_key) DO UPDATE SET record_bytes=excluded.record_bytes"
             changed = " OR ".join(f'NEW."{column}" IS NOT OLD."{column}"' for column in _TABLE_COLUMNS[table])  # as capture: an UPDATE that changes nothing is not a write
@@ -2289,7 +2327,7 @@ class FinancialOwner:
 
     def _track_all(self, connection: sqlite3.Connection) -> None:
         """Seal a store from before segments as one segment, inside the conversion transaction."""
-        for table in ("financial_events", *_PROJECTION_TABLES):
+        for table in _COUNTED_TABLES:
             connection.executemany(
                 "INSERT INTO history_pending VALUES (?,?,?)",
                 ((table, row[0], len(_canonical(self._segment_record(table, tuple(row)[1:]))) + 1) for row in connection.execute(f'SELECT rowid,* FROM "{table}"').fetchall()),
@@ -2319,7 +2357,7 @@ class FinancialOwner:
         mark, history = self._read_mark(connection)
         if self._rewound(history):
             _fail(FinancialIntegrityError, "store_replaced")
-        self._mark, self._writer, self._row_cache, self._high = mark, connection, (history, _count_rows(connection)), history[2:]
+        self._mark, self._writer, self._row_cache, self._high = mark, connection, (history, _adopted_rows(connection)), history[2:]
 
     def _head_at(self, sequence: int) -> bytes | None:
         """The store's history head at ``sequence`` (0: its genesis), for the custody check."""
@@ -2464,7 +2502,7 @@ class FinancialOwner:
                 connection.execute("DROP TABLE IF EXISTS right_rail_continuity_admission")
                 _execute_script(connection, _SEGMENT_SCHEMA)
                 self._track_all(connection)
-            elif tables != _TABLES | _SEGMENT_TABLES:
+            elif tables != _TABLES | _SEGMENT_TABLES | ({"history_row_counts"} if connection.execute("PRAGMA user_version").fetchone()[0] >= 4 else set()):
                 _fail(FinancialIntegrityError, "schema_tables")
             if not no_migration:
                 _install_private_index_set(connection)
@@ -2614,6 +2652,10 @@ class FinancialOwner:
                         self._seal_segment(connection, force=True)  # its seal-time checks speak too (history_segment_chain)
                         raise self._refusal
                     conclude and conclude()  # a cash-file preview reports only after the check above, then rolls back
+                    connection.execute(
+                        "UPDATE history_row_counts SET n=n+(SELECT n FROM temp.rr_row_inserts r WHERE r.table_name=history_row_counts.table_name)"
+                        " WHERE table_name IN (SELECT table_name FROM temp.rr_row_inserts)"
+                    )  # after the cash-file check disarmed, so its write log never sees it; it commits with the rows it counts
                     connection.execute("DELETE FROM temp.rr_row_inserts")  # the next write counts its own
                     connection.execute("COMMIT")
                     self._row_cache, self._high = after, after[0][2:]
@@ -2791,10 +2833,15 @@ class FinancialOwner:
             payload_digest,
         )
         head = _digest(_HEAD_DOMAIN, previous_head, event_id, header, payload_digest)
-        connection.execute(
-            "INSERT INTO financial_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (sequence, event_id, aggregate_type, aggregate_id, kind, before_revision, after_revision, payload_bytes.decode("ascii"), payload_digest, previous_head, head, committed_at_ms),
-        )
+        try:
+            connection.execute(
+                "INSERT INTO financial_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (sequence, event_id, aggregate_type, aggregate_id, kind, before_revision, after_revision, payload_bytes.decode("ascii"), payload_digest, previous_head, head, committed_at_ms),
+            )
+        except sqlite3.IntegrityError as error:  # a second receipt or alias for one key: the store or planner is wrong, never the file
+            if "index 'rr_financial_v4_events_" in str(error):
+                _fail(FinancialIntegrityError, "history_payload_unique")
+            raise
         connection.execute("UPDATE financial_meta SET sequence=?,history_head=? WHERE id=1", (sequence, head))
         self._record_command(connection, sequence=sequence, kind=kind, aggregate_id=aggregate_id, payload=event_payload)
         return event_id

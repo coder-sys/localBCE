@@ -16,7 +16,7 @@ from unittest import mock
 import app.right_rail_financial_owner as owner_module
 from app.right_rail_financial_owner import FinancialContinuityError, FinancialIntegrityError, FinancialOwner, FinancialOwnerConfig, SyntheticTrustedAuthority, _checker_authority
 from app.right_rail_financial_owner_independent import IndependentFinancialError, verify_database, verify_history_export
-from tests.test_right_rail_financial_acceptance import _image
+from tests.test_right_rail_financial_acceptance import _PRE_SEGMENT, _image
 from tests.instruments.load_synthetic import _SCOPE as SCOPE, _setup
 
 AUTHORITY = SyntheticTrustedAuthority()
@@ -248,8 +248,8 @@ class HistorySegmentTests(unittest.TestCase):
 
     def test_store_from_before_segments_seals_its_whole_history(self) -> None:
         with closing(sqlite3.connect(self.owner.path, isolation_level=None)) as connection:
-            for table in ("history_segments", "history_pending", "history_open"):
-                connection.execute(f"DROP TABLE {table}")
+            for statement in _PRE_SEGMENT:
+                connection.execute(statement)
             connection.execute("CREATE TABLE right_rail_continuity_admission (table_name TEXT PRIMARY KEY, row_count INTEGER NOT NULL, row_bytes INTEGER NOT NULL)")
         tampered = self.root / "legacy-tampered.sqlite3"  # conversion replays first: an edit history does not explain is not sealed
         tampered.write_bytes(_image(self.owner.path))
