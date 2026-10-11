@@ -207,6 +207,31 @@ def _blfcmd03(variant):
 BLFCMD03 = {"blfcmd03_absent": "absent", "blfcmd03_existing_links": "existing_links", "blfcmd03_conflicting": "conflicting"}
 
 
+def _blfpay01(receipt, foreign, expected_revision, command):
+    return adapter.encode_payment_item(blfin02=adapter._encode_blfin02(_blfin02_authorized()), receipts=[receipt],
+                                       foreign=foreign, expected_revision=expected_revision, command=command)
+
+
+def _record(local_ref, pays_action_id):
+    return {"kind": "record", "payment_id": "payment:h:new", "evidence_id": "evidence:new", "common_origin_id": "origin:new",
+            "source_id": "fixture-payment-file", "source_version": "cash-v2", "local_ref": local_ref, "amount_cents": 250_000,
+            "event_at_ms": REVERSAL_AT, "pays_action_id": pays_action_id}
+
+
+def _reverse(origin, event_at):
+    return {"kind": "reverse", "payment_id": "payment:h:cash", "evidence_id": "evidence:reversal",
+            "common_origin_id": origin, "event_at_ms": event_at}
+
+
+BLFPAY01 = {
+    "blfpay01_record": lambda: _blfpay01(("payment:h:cash", 1, None), (False, False), 1, _record("ref:new", "action:h:offset")),
+    "blfpay01_record_minimal": lambda: _blfpay01(("payment:h:cash", 0, "action:h:offset"), (True, False), None, _record(None, None)),
+    "blfpay01_reverse": lambda: _blfpay01(("payment:h:cash", 2, None), (False, True), 2,
+                                          _reverse("reversal:payment:h:cash", REVERSAL_AT)),
+    "blfpay01_reverse_minimal": lambda: _blfpay01(("payment:h:cash", 2, None), (True, True), None, _reverse(None, None)),
+}
+
+
 def _lean_hex():
     run = subprocess.run([EXE], capture_output=True, text=True, timeout=120)
     lines = [line.split(" ") for line in run.stdout.split("\n") if line]
@@ -227,7 +252,7 @@ class WireVectors(unittest.TestCase):
 
     def test_lean_accepts_every_vector(self):
         self.assertEqual(self.code, 0, f"Lean refused a vector (NONE): {self.lean}")
-        for name in (*BLFIN02, *BLFCMD03):
+        for name in (*BLFIN02, *BLFCMD03, *BLFPAY01):
             self.assertIn(name, self.lean)
 
     def test_blfin02(self):
@@ -239,6 +264,11 @@ class WireVectors(unittest.TestCase):
         for name, variant in BLFCMD03.items():
             with self.subTest(name):
                 self.assertEqual(_blfcmd03(variant).hex(), self.lean[name])
+
+    def test_blfpay01(self):
+        for name, build in BLFPAY01.items():
+            with self.subTest(name):
+                self.assertEqual(build().hex(), self.lean[name])
 
 
 if __name__ == "__main__":

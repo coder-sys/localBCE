@@ -1,5 +1,6 @@
 import BlindLedger.Financial.Theorems.Vectors
 import BlindLedger.Financial.CorrectionTransition.KAT
+import BlindLedger.Financial.Payment.Codec
 
 /-! `wire_vectors` (test-only, not pinned): prints `<name> <hex>` of the Lean-encoded request bytes for fixed inputs.
     `tests/test_wire_vectors.py` encodes the same logical inputs with the live Python encoders and requires equal bytes. -/
@@ -75,10 +76,31 @@ open CorrectionTransition in
 def wvCorrectionConflicting : CorrectionTransitionRequest :=
   { wvCorrection with command := { wvCorrection.command with actionLookup := .conflicting } }
 
+open Payment in
+/-- A BLFPAY01 form-A item over `blfin02_authorized` (one payment row, so one receipt). -/
+def wvPay (receipt : Receipt) (foreign : Foreign) (expectedRevision : Option Nat) (command : Command) : Bytes :=
+  let input := wvFix katAuthorized
+  encodePaymentRequest
+    { input, inputBytes := (rawEncodeFinancialInput input).length, receipts := [receipt], foreign, expectedRevision, command }
+
+open Payment in
+def wvPayRecord (localRef paysActionId : Option String) : Command :=
+  .record { paymentId := "payment:h:new", evidenceId := "evidence:new", commonOriginId := "origin:new",
+            sourceId := "fixture-payment-file", sourceVersion := "cash-v2", localRef, amountCents := 250_000,
+            eventAt := 1_774_900_000_000, paysActionId }
+
 def wvOthers : List (String × Option Bytes) := [
   ("blfcmd03_absent", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrection),
   ("blfcmd03_existing_links", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrectionExisting),
-  ("blfcmd03_conflicting", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrectionConflicting)]
+  ("blfcmd03_conflicting", CorrectionTransition.encodeCorrectionTransitionRequest wvCorrectionConflicting),
+  ("blfpay01_record", some (wvPay ⟨"payment:h:cash", 1, none⟩ ⟨false, false⟩ (some 1)
+    (wvPayRecord (some "ref:new") (some "action:h:offset")))),
+  ("blfpay01_record_minimal", some (wvPay ⟨"payment:h:cash", 0, some "action:h:offset"⟩ ⟨true, false⟩ none
+    (wvPayRecord none none))),
+  ("blfpay01_reverse", some (wvPay ⟨"payment:h:cash", 2, none⟩ ⟨false, true⟩ (some 2)
+    (.reverse ⟨"payment:h:cash", "evidence:reversal", some "reversal:payment:h:cash", some 1_774_900_000_000⟩))),
+  ("blfpay01_reverse_minimal", some (wvPay ⟨"payment:h:cash", 2, none⟩ ⟨true, true⟩ none
+    (.reverse ⟨"payment:h:cash", "evidence:reversal", none, none⟩)))]
 
 def wvAll : List (String × Option Bytes) := wvInputs.map (fun (n, i) => (n, encodeFinancialInput i)) ++ wvOthers
 
