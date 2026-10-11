@@ -227,14 +227,15 @@ class Shard:
         return w.head, digest.digest()
 
     def check(self, index: int, parts: list, seq0: int, pre_head: bytes, built: list) -> None:
-        """Shard check: the stored events equal the events mutations built (so every digest in them is the one mutations hashed), the links run from the pre-head,
-        and rows, charges and amounts equal the part. The hashes are not computed a second time."""
+        """Shard check: the stored events equal the events mutations built, and each event's id, payload digest and head are recomputed from its row and its
+        predecessor (the product checker's rule, so a builder that is wrong but self-consistent is refused); the links run from the pre-head, and rows, charges
+        and amounts equal the part."""
         w, previous = self.w, pre_head
         events = w.c.execute("SELECT * FROM financial_events WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall()
         if events != built:
             raise rb.FinancialIntegrityError("shard_chain")
         for e in events:
-            if e[9] != previous:
+            if e[9] != previous or e[1] != rb.sha("event", e[0]) or e[8] != rb.sha(e[7]) or e[10] != rb.sha(previous, e[8]):
                 raise rb.FinancialIntegrityError("shard_chain")
             previous = e[10]
         count, cents = w.c.execute("SELECT COUNT(*),COALESCE(SUM(cents),0) FROM charges WHERE row_key BETWEEN ? AND ?", (index * rb.KEY, (index + 1) * rb.KEY - 1)).fetchone()

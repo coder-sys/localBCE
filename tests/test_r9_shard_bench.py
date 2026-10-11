@@ -477,6 +477,39 @@ class ShardBench(unittest.TestCase):
             self.assertEqual(w.head, head)
             shard.stats()
 
+    def test_shard_check_refuses_a_self_consistent_wrong_builder(self) -> None:
+        """The store and the built events agree and the links run, but the builder is wrong: its heads hash the arguments swapped, or its event ids are not sha("event", seq). Only the recompute refuses it."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        for fault in ("swapped_head", "wrong_event_id"):
+            work = self.tmp / f"wrong-{fault}"
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir()
+            shutil.copyfile(self.template, work / "s.sqlite3")
+            shard = sb.Shard(0, work / "s.sqlite3")
+            head, w = shard.w.head, shard.w
+            real_mutations = w.mutations
+
+            def mutations(t, *args, fault=fault):
+                real_mutations(t, *args)
+                previous, out = head, []
+                for e in t["financial_events"]:
+                    if fault == "swapped_head":
+                        e = e[:9] + (previous, rb.sha(e[8], previous)) + e[11:]
+                    else:
+                        e = (e[0], rb.sha("event", e[0], 1)) + e[2:]
+                    out.append(e)
+                    previous = e[10]
+                t["financial_events"][:] = out
+                w.head = previous
+            w.mutations = mutations
+            with self.assertRaises(rb.FinancialIntegrityError) as caught:
+                shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
+            self.assertIn("shard_chain", str(caught.exception), fault)
+            self.assertFalse(shard.c.in_transaction)
+            self.assertEqual(w.head, head)
+            shard.stats()
+            self.assertEqual(sqlite3.connect(str(work / "s.sqlite3")).execute("SELECT COUNT(*) FROM applied").fetchone()[0], 0, fault)
+
     def test_abort_after_shards_built_leaves_every_database_unchanged_and_retry_matches(self) -> None:
         clean = self.drive(3, "clean")
         work = self.tmp / "abort"
