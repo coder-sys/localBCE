@@ -469,6 +469,12 @@ def _run(
     return subprocess.CompletedProcess(list(command), process.returncode, stdout, stderr)
 
 
+def _echo(text: str, end: str = "\n") -> None:
+    # Diagnostic echo only: a non-UTF-8 stdout (in-process callers) escapes what it cannot encode instead of crashing.
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    sys.stdout.write((text + end).encode(encoding, "backslashreplace").decode(encoding))
+
+
 def _decode(data: bytes, label: str, *, encoding: str = "utf-8") -> str:
     try:
         return data.decode(encoding)
@@ -501,7 +507,7 @@ def _require_success(label: str, result: subprocess.CompletedProcess[bytes]) -> 
         )
     if b"warning" in result.stderr.lower():
         print(f"{label.upper()}_WARNINGS_BEGIN")
-        print(_decode(result.stderr, f"{label} stderr"), end="" if result.stderr.endswith(b"\n") else "\n")
+        _echo(_decode(result.stderr, f"{label} stderr"), end="" if result.stderr.endswith(b"\n") else "\n")
         print(f"{label.upper()}_WARNINGS_END")
 
 
@@ -1119,11 +1125,11 @@ def _verify_candidate(
             )
 
         print("DECLARATION_CHECK_OUTPUT_BEGIN")
-        print(declaration_output, end="" if declaration_output.endswith("\n") else "\n")
+        _echo(declaration_output, end="" if declaration_output.endswith("\n") else "\n")
         print("DECLARATION_CHECK_OUTPUT_END")
         axiom_output = _decode(axiom_check.stdout, "axiom closure")
         print("AXIOM_CLOSURE_OUTPUT_BEGIN")
-        print(axiom_output, end="" if axiom_output.endswith("\n") else "\n")
+        _echo(axiom_output, end="" if axiom_output.endswith("\n") else "\n")
         print("AXIOM_CLOSURE_OUTPUT_END")
         print("NATIVE_OUTPUT_BEGIN")
         print(_decode(native.stdout, "native semantic diagnostic", encoding="ascii"), end="")

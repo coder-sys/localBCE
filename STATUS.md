@@ -14,14 +14,15 @@ level in it. Existing payment systems move money. Synthetic, state-local, non-PH
 
 ## What landed since d7192b0
 
-IDREG S3 `7a43ea70`: full `is5full` 946/0/15; Lean `is5lake1` 122 jobs, pin match. Was:
-`idl10` 932/0/15; semgate `bp35` 23/23.
+SHARD-H + RECOVERY-GROUP `8afa7a37`: full `rgmfull2` 946/0/15; Lean `rgmlean1` 125 jobs; semgate `rgf34` 23/23.
+Was IDREG S3 `7a43ea70`: `is5full` 946/0/15.
 
 - **Gate restore (IDREG S1-S2).** A boot raises the fencer epoch, then anchors on the payer's newest stored checkpoint per
   shard and refuses `store_rewound`; a refused boot fences the running nonce and HOLDs.
 - **Gate restore (IDREG S3).** Memory is keyed by boot nonce; restore without boot, failed BEGIN, displaced nonce
   or re-pointed registry HOLDs. Only boot creates the registry.
-- **Shard laws (Lean, unwired):** an owner split keeps each owner's fold; open: hash no-fixed-point assumption.
+- **Shard laws (Lean, unwired):** an owner split keeps each owner's fold, with no hash no-fixed-point assumption; group
+  commit and multi-record recovery check each shard fits the spine; a broken chain fails closed; recovery refusal is visible.
 - **STATE/v2 custody (Lean, unwired).** Custody folds one append-only off-machine log; an epoch-keyed TPM
   counter catches rollback; activation once per shard; a payment's ALLOWs share one checkpoint (`never_twice`).
 - **Owner batch fast lane (Lean, unwired):** where `ok` passes, the fast fold equals the trace (`fast_eq_trace_of_ok`).
