@@ -8,6 +8,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sha3::Keccak256;
 
 use crate::{
     StarkBridgeInput,
@@ -82,6 +83,8 @@ pub struct ProductionStarkSettlementJournalV2 {
     pub batch_root: String,
     pub nullifier_root_before: String,
     pub nullifier_root_after: String,
+    #[serde(default)]
+    pub signed_transaction: Option<String>,
     #[serde(default)]
     pub request_fingerprint: Option<String>,
     #[serde(default)]
@@ -259,6 +262,7 @@ impl ProductionStarkSettlementJournalV2 {
         }
         if ![
             "prepared",
+            "signed",
             "submitted",
             "mined",
             "finalized",
@@ -285,8 +289,13 @@ impl ProductionStarkSettlementJournalV2 {
         {
             errors.push("request_fingerprint must be a bytes32 hex value".to_string());
         }
-        if self.status == "prepared" && self.transaction_hash.is_some() {
-            errors.push("prepared journal must not contain a transaction hash".to_string());
+        if self.status == "prepared"
+            && (self.transaction_hash.is_some() || self.signed_transaction.is_some())
+        {
+            errors.push(
+                "prepared journal must not contain a transaction hash or signed transaction"
+                    .to_string(),
+            );
         }
         if self.status != "prepared"
             && self
@@ -296,11 +305,32 @@ impl ProductionStarkSettlementJournalV2 {
         {
             errors.push("submitted journal requires a transaction hash".to_string());
         }
+        if self.status == "signed" && self.signed_transaction.is_none() {
+            errors.push("signed journal requires the exact signed transaction".to_string());
+        }
+        if let Some(signed_transaction) = self.signed_transaction.as_deref() {
+            match signed_transaction_hash(signed_transaction) {
+                Ok(hash)
+                    if self
+                        .transaction_hash
+                        .as_deref()
+                        .is_none_or(|value| normalize_hex(value) != hash) =>
+                {
+                    errors.push(
+                        "signed transaction hash does not match transaction_hash".to_string(),
+                    );
+                }
+                Ok(_) => {}
+                Err(mut signed_transaction_errors) => {
+                    errors.append(&mut signed_transaction_errors);
+                }
+            }
+        }
         if self.local_state_committed != (self.status == "local_state_committed") {
             errors.push("local_state_committed flag must match journal status".to_string());
         }
         if self.request_fingerprint.is_some()
-            && self.status != "prepared"
+            && !["prepared", "signed"].contains(&self.status.as_str())
             && !self.submission_started
         {
             errors.push(
@@ -347,6 +377,16 @@ pub fn reconcile_production_stark_settlement(
     }
 
     let status_before = journal.status.clone();
+    let signed_transaction = if journal.status == "signed" {
+        Some(
+            journal
+                .signed_transaction
+                .clone()
+                .expect("validated signed transaction"),
+        )
+    } else {
+        None
+    };
     let transaction_hash = journal
         .transaction_hash
         .clone()
@@ -354,12 +394,27 @@ pub fn reconcile_production_stark_settlement(
     journal.retry_count = journal.retry_count.saturating_add(1);
     write_json_atomic(request.journal_path, &journal)?;
 
+    let publish_error = if let Some(signed_transaction) = signed_transaction.as_deref() {
+        journal.submission_started = true;
+        write_json_atomic(request.journal_path, &journal)?;
+        publish_signed_transaction(request.rpc_url, signed_transaction, &transaction_hash).err()
+    } else {
+        None
+    };
     let receipt = load_chain_receipt(
         request.rpc_url,
         &transaction_hash,
         request.finality_timeout,
         request.finality_poll_interval,
-    )?;
+    )
+    .map_err(|mut receipt_errors| {
+        if let Some(mut publish_errors) = publish_error {
+            publish_errors.append(&mut receipt_errors);
+            publish_errors
+        } else {
+            receipt_errors
+        }
+    })?;
     if journal
         .transaction_block_number
         .is_some_and(|value| value != receipt.block_number)
@@ -572,6 +627,7 @@ pub fn execute_production_stark_settlement(
         batch_root: envelope.public_inputs.batch_root.clone(),
         nullifier_root_before: envelope.public_inputs.nullifier_root_before.clone(),
         nullifier_root_after: envelope.public_inputs.nullifier_root_after.clone(),
+        signed_transaction: None,
         request_fingerprint: Some(request_fingerprint),
         submission_started: false,
         retry_count: 0,
@@ -601,27 +657,17 @@ pub fn execute_production_stark_settlement(
         request.output_directory.join("attestation_envelope.json"),
         &envelope,
     )?;
-    journal.submission_started = true;
+    let signed_transaction = build_signed_transaction(request, &bridge, &envelope, value)?;
+    let transaction_hash = signed_transaction_hash(&signed_transaction)?;
+    journal.status = "signed".to_string();
+    journal.transaction_hash = Some(transaction_hash.clone());
+    journal.signed_transaction = Some(signed_transaction.clone());
     write_json_atomic(&journal_path, &journal)?;
 
-    let cast_output = run_cast(&[
-        "send",
-        request.registry_address,
-        SUBMIT_STARK_CLAIM_SIGNATURE,
-        &envelope.public_inputs.cast_tuple(),
-        &envelope.proof_envelope_hex,
-        &bridge.claim.claim_amount.to_string(),
-        "--value",
-        value,
-        "--private-key",
-        request.submitter_private_key,
-        "--rpc-url",
-        request.rpc_url,
-        "--json",
-    ])?;
-    let transaction_hash = extract_transaction_hash(&cast_output)?;
+    journal.submission_started = true;
+    write_json_atomic(&journal_path, &journal)?;
+    publish_signed_transaction(request.rpc_url, &signed_transaction, &transaction_hash)?;
     journal.status = "submitted".to_string();
-    journal.transaction_hash = Some(transaction_hash.clone());
     write_json_atomic(&journal_path, &journal)?;
 
     let transaction_receipt = load_chain_receipt(
@@ -882,6 +928,75 @@ fn cast_call(
     run_cast(&args)
 }
 
+fn build_signed_transaction(
+    request: &ProductionStarkSettlementRequest<'_>,
+    bridge: &StarkBridgeInput,
+    envelope: &ProductionStarkAttestationEnvelopeV2,
+    value: &str,
+) -> Result<String, Vec<String>> {
+    let public_inputs = envelope.public_inputs.cast_tuple();
+    let claim_amount = bridge.claim.claim_amount.to_string();
+    let signed_transaction = run_cast(&[
+        "mktx",
+        request.registry_address,
+        SUBMIT_STARK_CLAIM_SIGNATURE,
+        &public_inputs,
+        &envelope.proof_envelope_hex,
+        &claim_amount,
+        "--value",
+        value,
+        "--private-key",
+        request.submitter_private_key,
+        "--rpc-url",
+        request.rpc_url,
+    ])?;
+    signed_transaction_hash(&signed_transaction)?;
+    Ok(signed_transaction)
+}
+
+fn publish_signed_transaction(
+    rpc_url: &str,
+    signed_transaction: &str,
+    expected_transaction_hash: &str,
+) -> Result<(), Vec<String>> {
+    let transaction_hash = run_cast(&[
+        "publish",
+        signed_transaction,
+        "--rpc-url",
+        rpc_url,
+        "--async",
+    ])?;
+    if !is_bytes32_hex(&transaction_hash)
+        || normalize_hex(&transaction_hash) != normalize_hex(expected_transaction_hash)
+    {
+        return Err(vec![
+            "published transaction hash does not match the journaled signed transaction"
+                .to_string(),
+        ]);
+    }
+    Ok(())
+}
+
+fn signed_transaction_hash(signed_transaction: &str) -> Result<String, Vec<String>> {
+    let encoded = signed_transaction.trim();
+    let encoded = encoded
+        .strip_prefix("0x")
+        .ok_or_else(|| vec!["signed transaction must be a 0x-prefixed hex value".to_string()])?;
+    if encoded.is_empty() || encoded.len() % 2 != 0 {
+        return Err(vec![
+            "signed transaction must contain complete encoded bytes".to_string(),
+        ]);
+    }
+    let mut bytes = Vec::with_capacity(encoded.len() / 2);
+    for offset in (0..encoded.len()).step_by(2) {
+        bytes.push(
+            u8::from_str_radix(&encoded[offset..offset + 2], 16)
+                .map_err(|_| vec!["signed transaction contains invalid hex".to_string()])?,
+        );
+    }
+    Ok(format!("0x{}", encode_lower_hex(&Keccak256::digest(bytes))))
+}
+
 fn run_cast(args: &[&str]) -> Result<String, Vec<String>> {
     let output = Command::new("cast")
         .args(args)
@@ -897,16 +1012,6 @@ fn run_cast(args: &[&str]) -> Result<String, Vec<String>> {
     String::from_utf8(output.stdout)
         .map(|value| value.trim().to_string())
         .map_err(|error| vec![format!("cast output was not UTF-8: {error}")])
-}
-
-fn extract_transaction_hash(output: &str) -> Result<String, Vec<String>> {
-    let value: serde_json::Value = serde_json::from_str(output)
-        .map_err(|error| vec![format!("cast send did not return JSON: {error}")])?;
-    value
-        .get("transactionHash")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| vec!["cast send JSON did not include transactionHash".to_string()])
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(
@@ -994,7 +1099,7 @@ fn prepare_settlement_journal(
             write_json_atomic(journal_path, &existing)?;
             Ok(SettlementJournalAction::Proceed(existing))
         }
-        "submitted" | "mined" | "finalized" => Err(vec![
+        "signed" | "submitted" | "mined" | "finalized" => Err(vec![
             "settlement already has an in-flight transaction; run reconciliation instead of submitting again"
                 .to_string(),
         ]),
@@ -1091,12 +1196,23 @@ fn first_cast_bool(value: &str) -> Result<bool, Vec<String>> {
 mod journal_tests {
     use super::*;
 
+    const TEST_SIGNED_TRANSACTION: &str = "0x02f867827a69800184773594018252089400000000000000000000000000000000000000010180c001a01d619f870b127ad98c0024591299d2cd88766ae2d5fc8095e3698cb21add17ec9fb6d223ac533cdf70d2215b7f760ff574a480aea3689f80495671bb27b8323c";
+    const TEST_SIGNED_TRANSACTION_HASH: &str =
+        "0x4252c142d95058d67cecd54b0dd95ef8349ee99db36930556ad3f62e7c1076ef";
+
     fn sample(status: &str) -> ProductionStarkSettlementJournalV2 {
         let submitted = status != "prepared";
+        let signed_transaction = (status == "signed").then(|| TEST_SIGNED_TRANSACTION.to_string());
         ProductionStarkSettlementJournalV2 {
             schema_version: ProductionStarkSettlementJournalV2::SCHEMA_VERSION.to_string(),
             status: status.to_string(),
-            transaction_hash: submitted.then(|| format!("0x{}", "11".repeat(32))),
+            transaction_hash: submitted.then(|| {
+                if status == "signed" {
+                    TEST_SIGNED_TRANSACTION_HASH.to_string()
+                } else {
+                    format!("0x{}", "11".repeat(32))
+                }
+            }),
             transaction_block_number: None,
             transaction_block_hash: None,
             finalized_block_number: None,
@@ -1105,8 +1221,9 @@ mod journal_tests {
             batch_root: format!("0x{}", "33".repeat(32)),
             nullifier_root_before: format!("0x{}", "44".repeat(32)),
             nullifier_root_after: format!("0x{}", "55".repeat(32)),
+            signed_transaction,
             request_fingerprint: None,
-            submission_started: status != "prepared",
+            submission_started: !["prepared", "signed"].contains(&status),
             retry_count: 0,
             local_state_committed: status == "local_state_committed",
         }
@@ -1116,6 +1233,7 @@ mod journal_tests {
     fn settlement_journal_accepts_every_versioned_state() {
         for status in [
             "prepared",
+            "signed",
             "submitted",
             "mined",
             "finalized",
@@ -1145,6 +1263,22 @@ mod journal_tests {
         value.request_fingerprint = Some(format!("0x{}", "66".repeat(32)));
         value.submission_started = false;
         assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn signed_transaction_hash_is_stable_and_mismatch_is_rejected() {
+        assert_eq!(
+            signed_transaction_hash(TEST_SIGNED_TRANSACTION).expect("signed transaction hash"),
+            TEST_SIGNED_TRANSACTION_HASH
+        );
+
+        let mut value = sample("signed");
+        value.transaction_hash = Some(format!("0x{}", "77".repeat(32)));
+        let error = value
+            .validate()
+            .err()
+            .expect("mismatched signed transaction must fail");
+        assert!(error.join(" ").contains("does not match"));
     }
 
     #[test]
@@ -1192,6 +1326,14 @@ mod journal_tests {
             .err()
             .expect("ambiguous retry must fail");
         assert!(error.join(" ").contains("may already have started"));
+
+        let mut signed = sample("signed");
+        signed.request_fingerprint = expected.request_fingerprint.clone();
+        write_json_atomic(&path, &signed).expect("write signed journal");
+        let error = prepare_settlement_journal(&path, &expected)
+            .err()
+            .expect("signed retry must reconcile");
+        assert!(error.join(" ").contains("run reconciliation"));
 
         let mut submitted = sample("submitted");
         submitted.request_fingerprint = expected.request_fingerprint.clone();

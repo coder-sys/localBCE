@@ -185,6 +185,37 @@ PY
 APPROVED_ARTIFACT_DIR="${TMP_DIR}/runtime-artifacts/${APPROVED_CLAIM_HASH#0x}"
 cp "${APPROVED_ARTIFACT_DIR}/settlement_journal.json" "${TMP_DIR}/approved_journal.json"
 cp "${APPROVED_ARTIFACT_DIR}/nullifier_transition.json" "${TMP_DIR}/approved_transition.json"
+cp "${TMP_DIR}/approved_journal.json" "${TMP_DIR}/signed_recovery_journal.json"
+python3 - "${TMP_DIR}/signed_recovery_journal.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+journal = json.load(open(path, encoding="utf-8"))
+assert journal["signed_transaction"].startswith("0x")
+journal["status"] = "signed"
+journal["transaction_block_number"] = None
+journal["transaction_block_hash"] = None
+journal["finalized_block_number"] = None
+journal["finalized_block_hash"] = None
+journal["local_state_committed"] = False
+open(path, "w", encoding="utf-8").write(json.dumps(journal, indent=2) + "\n")
+PY
+STARK_CHAIN_ID="${CHAIN_ID}" STARK_FINALITY_MODE=test_mined \
+  STARK_FINALITY_TIMEOUT_SECONDS=30 STARK_FINALITY_POLL_SECONDS=1 \
+  "${RECONCILER}" \
+    "${TMP_DIR}/signed_recovery_journal.json" \
+    "${TMP_DIR}/approved_transition.json" \
+    "${TMP_DIR}/nullifier_state.json" \
+    "${TMP_DIR}/signed_recovery_report.json" \
+    "${REGISTRY}" "${RPC_URL}" >/dev/null
+python3 - "${TMP_DIR}/signed_recovery_report.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["status"] == "finalized_chain_and_local_state_reconciled"
+assert report["journal_status_before"] == "signed"
+assert report["journal_status_after"] == "local_state_committed"
+assert report["local_state_committed_now"] is False
+assert report["retry_count"] == 1
+PY
 STARK_CHAIN_ID="${CHAIN_ID}" STARK_FINALITY_MODE=test_mined \
   STARK_FINALITY_TIMEOUT_SECONDS=30 STARK_FINALITY_POLL_SECONDS=1 \
   "${RECONCILER}" \
