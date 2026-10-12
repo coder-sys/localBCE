@@ -1,7 +1,7 @@
 """CFI begin reads by key (cfi-history-design-20261007 s2, C1). The oracle is today's begin, kept here whole: it loads every table and walks every event.
 CORPUS replays 17 of the 56 ReceiverCashFileTests under it; each of the other 39 is in EXCLUDED with its reason, and a test that is in neither fails the module."""
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
 import sqlite3
@@ -105,6 +105,14 @@ def _old_begin_and_classify(self, connection):
     self._arm(connection)
     self._connection = connection
     return [skip for _, _, skip in self._plan]
+
+
+@contextmanager
+def _nonunique():
+    """Index set 4 with its two payload indexes made plain, in the owner and both checkers: a store forged under it holds what the real set refuses."""
+    with patch.dict(owner._PRIVATE_INDEX_SETS, {4: tuple((*entry[:3], entry[3] and entry[4] is None, entry[4]) for entry in owner._PRIVATE_INDEX_SETS[4])}), \
+            patch.dict(independent.PRIVATE_INDEX_DEFS, {4: {name: (table, keys, unique and where is None, where) for name, (table, keys, unique, where) in independent.PRIVATE_INDEX_DEFS[4].items()}}):
+        yield
 
 
 def _dump(connection):
@@ -243,35 +251,47 @@ class KeyedBeginTests(unittest.TestCase):
             owner.FinancialOwner._append_event(store, connection, aggregate_type="OBLIGATION", aggregate_id=other, kind="PAYMENT_RECEIVED", before_revision=revision, after_revision=revision, payload=payload, committed_at_ms=store._now())
 
     def test_e1_duplicate_received_other_obligation_refused_at_open(self):
-        """E1 (design s4): the tamper of _tamper_e1. Today's walk over every event refuses a file naming the payment; the keyed begin reads the payment's own
-        obligation and answers RETRY. The store is refused at every open, so no open route reaches the begin (the owner that wrote it, and an owner already open
-        before it, are the next test). C-L adds the payload-id uniqueness index that makes it impossible."""
-        fx = self._fixture()
-        fx._apply()
-        self._tamper_e1(fx, fx.store)
-        fx.baseline = fx._manifest()
-        prepared = fx._prepare()  # the same file again
-        self._refused(fx, prepared, "commands:duplicate")
-        path = self._copy(fx)
-        self.assertEqual(self._raw_begin(fx, prepared, path, True), "cash_file_failed")
-        self.assertEqual(self._raw_begin(fx, prepared, path, False), ["RETRY", "RETRY"])
+        """E1 (design s4): the tamper of _tamper_e1, which index set 4 refuses at the insert, so it is forged under _nonunique. There the store is refused at
+        every open and both begins refuse it: the keyed one reads both receipts by the payment id. Under the real set the same store is refused for its index,
+        and a v3 copy of it is refused, unchanged, by the open that would upgrade it."""
+        with _nonunique():
+            fx = self._fixture()
+            fx._apply()
+            self._tamper_e1(fx, fx.store)
+            fx.baseline = fx._manifest()
+            prepared = fx._prepare()  # the same file again
+            self._refused(fx, prepared, "commands:duplicate")
+            path = self._copy(fx)
+            self.assertEqual(self._raw_begin(fx, prepared, path, True), "cash_file_failed")
+            self.assertEqual(self._raw_begin(fx, prepared, path, False), "cash_file_failed")
+        with self.assertRaisesRegex(owner.FinancialIntegrityError, "^schema_private_indexes$"):
+            fx.fixture._make_owner(path=path, clock=fx.store.clock)
+        with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+            for entry in owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[3]):]:
+                connection.execute(f'DROP INDEX "{entry[0]}"')
+            connection.execute("DROP TABLE history_row_counts")
+            connection.execute("PRAGMA user_version=3")
+        image = fixtures._image(path)
+        with self.assertRaisesRegex(owner.FinancialIntegrityError, "^history_payload_unique$"):
+            fx.fixture._make_owner(path=path, clock=fx.store.clock)
+        self.assertEqual(fixtures._image(path), image)
 
     def test_e1_run_batch_on_an_owner_open_before_the_tamper_is_refused_and_writes_nothing(self):
         """The deferred re-verify path: owner A is open, a second owner writes the E1 tamper and moves the data version. A's run_batch re-verifies, defers the failure, runs the
-        begin over the bad indexes and refuses before COMMIT. (Direct run_batch by the tampering owner itself, whose mark did not move, answers RETRY with no money written:
-        the accepted owner-wide limit.)"""
-        fx = self._fixture()
-        fx._apply()
-        with fx.fixture._make_owner(path=fx.store.path, clock=fx.store.clock) as second:
-            self._tamper_e1(fx, second)
-            first, fx.store = fx.store, second
-            fx.baseline = fx._manifest()
-            fx.store = first
-        prepared, image = fx._prepare(), fixtures._image(first.path)
-        with self.assertRaises(owner.FinancialIntegrityError) as raised:
-            fx._apply(prepared)
-        self.assertEqual(str(raised.exception), "open_verification:commands:duplicate")
-        self.assertEqual(fixtures._image(first.path), image)
+        begin, which reads both receipts by the payment id and refuses first, so its own code is kept (_begin). (Direct run_batch by the tampering owner itself, whose mark
+        did not move, answers RETRY with no money written: the accepted owner-wide limit.) Forged under _nonunique, as the test above."""
+        with _nonunique():
+            fx = self._fixture()
+            fx._apply()
+            with fx.fixture._make_owner(path=fx.store.path, clock=fx.store.clock) as second:
+                self._tamper_e1(fx, second)
+                first, fx.store = fx.store, second
+                fx.baseline = fx._manifest()
+                fx.store = first
+            prepared, image = fx._prepare(), fixtures._image(first.path)
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+                fx._apply(prepared)
+            self.assertEqual(fixtures._image(first.path), image)
 
     def test_e2_misfiled_alias_refused_at_open(self):
         """E2 (design s4): an alias confirmation filed, by the owner's own event writer, under the wrong obligation: hash chain, schema and digests intact, only the
@@ -296,7 +316,34 @@ class KeyedBeginTests(unittest.TestCase):
         self._refused(fx, prepared, "duplicate-evidence:binding")
         path = self._copy(fx)
         self.assertEqual(self._raw_begin(fx, prepared, path, True), ["RETRY", "ALIAS"])
-        self.assertEqual(self._raw_begin(fx, prepared, path, False), ["RETRY", "HELD"])
+        self.assertEqual(self._raw_begin(fx, prepared, path, False), "cash_file_failed")  # v4: the alias is read by its evidence id and bound to that evidence's item
+
+    def test_a_forged_receipt_store_refuses_the_begin(self):
+        """Review LOW-1/LOW-2, on a copy edited under the immutability trigger and (for the first case) without the unique index, as a raw edit of a file would be. A second
+        receipt of one payment is refused, never silently overwriting the first. json_extract keys a payload on its FIRST payment_id and json.loads keeps its LAST: a
+        payload repeating its key with another requested payment's id, or an unrequested one, is refused."""
+        fx = self._fixture()
+        fx._apply()
+        prepared = fx._prepare()
+        events = fx._query("SELECT event_sequence, payload_json FROM financial_events WHERE kind='PAYMENT_RECEIVED' ORDER BY event_sequence")
+        first, second = (json.loads(payload)["payment_id"] for _, payload in events[:2])
+        for label, last in (("a second receipt of the payment", None), ("another requested payment", second), ("an unrequested payment", "not-in-the-file")):
+            with self.subTest(label):
+                path = self._copy(fx)
+                self.assertIsInstance(self._raw_begin(fx, prepared, path, False), list)  # the untouched copy is a clean RETRY plan
+                with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+                    connection.execute("DROP TRIGGER financial_event_update_immutable")
+                    if last is None:
+                        entry = owner._PRIVATE_INDEX_SETS[4][len(owner._PRIVATE_INDEX_SETS[3])]
+                        connection.execute(f'DROP INDEX "{entry[0]}"')
+                        connection.execute(owner._private_index_sql(*entry[:3], False, entry[4]))  # the same index, made plain
+                        row = connection.execute("SELECT * FROM financial_events WHERE event_sequence=?", (events[0][0],)).fetchone()
+                        copied = connection.execute("INSERT INTO financial_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (row[0] + 1000, bytes(row[1][:63]) + bytes([row[1][63] ^ 1]), *row[2:])).rowcount
+                    else:
+                        forged = events[0][1][:-1] + ',"payment_id":' + json.dumps(last) + "}"
+                        copied = connection.execute("UPDATE financial_events SET payload_json=? WHERE event_sequence=?", (forged, events[0][0])).rowcount
+                self.assertEqual(copied, 1)
+                self.assertEqual(self._raw_begin(fx, prepared, path, False), "cash_file_failed")
 
     def test_every_route_into_begin_runs_the_whole_store_check_first(self):
         """The keyed reads trust the store's indexes (LOW-1, accepted design) because the whole-store check, whose PRAGMA integrity_check sees every index entry, has run on the
@@ -335,10 +382,10 @@ class KeyedBeginTests(unittest.TestCase):
         Rows 330..499 are the 2nd key chunk's (499 keys to a chunk): row 499 is OVERLAP in file 2 and ALIAS in file 3, found only by the 2-column lookup."""
         widest, find = [], check._find
 
-        def spy(connection, table, columns, keys, where=""):
+        def spy(connection, table, columns, keys, where="", index=""):
             keys = list(keys)
             widest.append((len(columns), len({key for key in keys if None not in key})))
-            return find(connection, table, columns, keys, where)
+            return find(connection, table, columns, keys, where, index)
 
         def resend():
             fx = self._fixture()

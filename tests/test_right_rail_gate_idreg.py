@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -242,16 +244,79 @@ class IdRegistryTests(unittest.TestCase):
         self.reg._db = _Dying(self.reg._db, die=True)
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             self.reg.reserve(1, [1, 2], sealed=None)
-        again = self.open(self.nonce)
-        self.assertEqual(again.reserve(0, [1, 2], sealed=None)[0], [(1, 0, False), (2, 0, False)])
+        with mock.patch.object(idreg, "_SEEN", {}):  # the next process on the nonce
+            again = self.open(self.nonce)
+            self.assertEqual(again.reserve(0, [1, 2], sealed=None)[0], [(1, 0, False), (2, 0, False)])
 
     def test_failed_commit_rolls_back_and_the_registry_still_works(self) -> None:
+        """Review LOW-1: the process remembers the new tail before COMMIT, under the write lock, so a COMMIT that fails
+        leaves the memory ahead of the file: the nonce then fences (fail closed) and the registry works after a boot."""
         live = self.reg._db
         self.reg._db = _Dying(live, die=False)
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             self.reg.reserve(1, [1], sealed=None)
         self.reg._db = live
-        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.reserve(0, [1], sealed=None)
+        again = self.open(idreg.boot(self.path, lambda: ({}, {}, {})))
+        self.assertEqual(again.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    def test_boots_in_one_process_run_one_at_a_time(self) -> None:
+        """Review LOW-2: boot A is inside its open (its COMMIT will fail, so no fence lands) when boot B starts.  B waits
+        for A, so B's pass, which ends the process's stop, never comes before A's failure, which must leave it set."""
+        inside, go, real, done = threading.Event(), threading.Event(), idreg._open, {}
+
+        def hooked(path, *a, **k):
+            if threading.current_thread().name != "A":
+                return real(path, *a, **k)
+            inside.set()
+            go.wait(30)
+            return _Dying(real(path, *a, **k), die=False)
+
+        def run():
+            try:
+                done[threading.current_thread().name] = idreg.boot(self.path, lambda: ({}, {}, {}))
+            except idreg.IdRegistryError as error:
+                done[threading.current_thread().name] = str(error)
+        a, b = threading.Thread(target=run, name="A"), threading.Thread(target=run, name="B")
+        with mock.patch.object(idreg, "_open", hooked):
+            a.start()
+            try:
+                inside.wait(30)
+                b.start()
+                b.join(1.0)
+                self.assertTrue(b.is_alive())  # B waits while A is inside its open
+            finally:
+                go.set()
+                a.join(30)
+                b.join(30)
+        self.assertEqual((done["A"], len(done["B"])), ("registry_unavailable", 32))
+        self.assertEqual(self.open(done["B"]).reserve(0, [1], sealed=None)[0], [(1, 0, False)])  # B passed last
+
+    def test_a_boot_that_waits_too_long_for_another_is_a_typed_refusal(self) -> None:
+        """Review L-1 (s3fix1): another boot of this process holds the boot lock past 5 s: ``registry_unavailable``,
+        nothing written.  Review L-1 (s3fix2): it stops the path like every other boot that does not pass, so the
+        running handle HOLDs until a boot passes (before: it kept reserving on a file nobody checked)."""
+        before = self.tail()
+        with idreg._BOOTING, self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+            idreg.boot(self.path, lambda: ({}, {}, {}))
+        self.assertEqual(self.tail(), before)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.reserve(0, [1], sealed=None)
+        self.assertEqual(self.open(idreg.boot(self.path, lambda: ({}, {}, {}))).reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    def test_boot_stops_old_nonces_inside_its_transaction(self) -> None:
+        """Review L-2 (s3fix2): boot's pre-read fails (suppressed), so only its in-transaction sweep stops the old nonce;
+        a copy taken before the boot, reached later, must not let that nonce reserve again."""
+        copy = self.path.with_name("copy.sqlite3")
+        for s in ("", "-wal"):
+            shutil.copyfile(f"{self.path}{s}", f"{copy}{s}")
+        with mock.patch.object(idreg, "_stop_boots", wraps=idreg._stop_boots,
+                               side_effect=[sqlite3.OperationalError("database is locked"), mock.DEFAULT]):
+            idreg.boot(self.path, lambda: ({}, {}, {}))
+        with contextlib.closing(idreg.IdRegistry(copy, boot=self.nonce)) as old, self.assertRaisesRegex(
+                idreg.IdRegistryError, "registry_not_booted"):
+            old.reserve(0, [1], sealed=None)
 
     def test_bad_input_is_refused_before_anything_is_written(self) -> None:
         before = self.tail()
@@ -290,6 +355,26 @@ class IdRegistryTests(unittest.TestCase):
         self.assertEqual(self.reg._db.execute("PRAGMA synchronous").fetchone()[0], 2)  # FULL
         with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
             idreg.IdRegistry(Path(":memory:"), boot=self.nonce)  # journal_mode stays 'memory'
+
+    def test_only_boot_creates_or_writes_the_registry_file(self) -> None:
+        """Review L-b (s3fix3): a handle open writes no registry file: a missing one is not created, an empty one (a
+        restore mid-copy) is refused unwritten (before: both got WAL and the schema), and a refused handle is closed."""
+        new = self.path.with_name("new.sqlite3")
+        for exists in (False, True):
+            if exists:
+                new.touch()
+            with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                idreg.IdRegistry(new, boot=self.nonce)
+            self.assertEqual([(p.name, p.stat().st_size) for p in new.parent.glob("new.*")], [("new.sqlite3", 0)] * exists)
+        real_open, real_ident = idreg._open, idreg._ident
+        for idents in ([None], [real_ident(self.path), None]):  # no file before the connect, or none after it
+            opened = []
+            with mock.patch.object(idreg, "_open", lambda *a: opened.append(real_open(*a)) or opened[-1]), \
+                    mock.patch.object(idreg, "_ident", side_effect=idents), \
+                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                idreg.IdRegistry(self.path, boot=self.nonce)
+            with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed"):
+                opened[0].execute("SELECT 1")
 
 
 if __name__ == "__main__":
