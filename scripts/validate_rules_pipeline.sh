@@ -25,6 +25,9 @@ export PYTHONPATH="${ROOT_DIR}/gov-rules-kg-prototype/src${PYTHONPATH:+:${PYTHON
 echo "==> Validate tracked rules baseline integrity"
 "${PYTHON}" "${ROOT_DIR}/scripts/validate_rules_baseline.py"
 
+echo "==> Validate committed PostgreSQL rules checkpoint integrity"
+"${PYTHON}" "${ROOT_DIR}/scripts/validate_rules_corpus_checkpoint.py"
+
 echo "==> Government rules mapping tests"
 (
   cd "${ROOT_DIR}/gov-rules-kg-prototype"
@@ -86,5 +89,6 @@ echo "- active G1-G10 bundle is hash-pinned and parity-gated"
 echo "- Claude QA-passed candidates are Rust-validated shadow rules"
 echo "- Claude shadow runtime activation and proof binding remain false"
 echo "- all 226 source candidates are queued across 51 programs"
+echo "- committed PostgreSQL checkpoint counts and source hashes are internally consistent"
 echo "- canonical evidence, review, legal, and runtime promotion gates fail closed"
 echo "- all-program evaluation is diagnostic only and has no adjudication effect"

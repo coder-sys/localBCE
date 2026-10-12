@@ -377,3 +377,15 @@ deterministic for a fixed database state and includes all 51 programs, queue sta
 provenance coverage, conflicts, review and quality status, Medicaid state/family
 coverage, source-registry hashes, and its own canonical SHA-256. It is not a corpus
 release and never changes runtime or proof behavior.
+
+When PostgreSQL is unavailable, the committed snapshot can be checked without
+starting workers or inference:
+
+```bash
+python3 scripts/validate_rules_corpus_checkpoint.py
+```
+
+This offline command verifies the pinned checkpoint hash, internal count totals,
+source-registry and Medicaid preflight hashes, zero expired leases, the unchanged
+G1-G10 rules pin, and all non-activation boundaries. It validates only the committed
+snapshot; it does not claim to have recounted the live PostgreSQL database.
