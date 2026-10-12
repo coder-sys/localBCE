@@ -89,6 +89,12 @@ class TcbReportTests(unittest.TestCase):
         """No KAT or `native_decide` module sits in any pinned executable's import closure, gate_verify included."""
         self.assertGreater(gate._check_pinned_exe_closure(LEAN, TCB_EXES), 20)
 
+    def test_semantic_gate_pins_the_engine_worker(self) -> None:
+        """The semantic gate's worker pin is the engine's: same bytes, same SHA-256, same file."""
+        pin = gate.PINNED_EXE_IDENTITIES["blind_financial_worker"]
+        self.assertEqual((pin.bytes, pin.sha256), (engine.EVALUATOR_ARTIFACT_SIZE_BYTES, EXE_PINS["blind_financial_worker"]))
+        self.assertEqual(ROOT / pin.artifact, engine.EVALUATOR_PATH)
+
     def test_manifest_covers_the_pinned_closures_and_build_files_only(self) -> None:
         """An edit to a lean file no pinned exe imports leaves the manifest alone; one to a closure file or a build file moves it."""
         closure = {module.replace(".", "/") + ".lean" for module in gate._pinned_exe_modules(LEAN, TCB_EXES)}

@@ -10,8 +10,12 @@ correction transition (`candidate.namespace`) and their proof bodies with the
 pinned Lean toolchain, checks the axiom closure of every declaration, checks the
 independent Lean checker, and fingerprints the freshly built native diagnostic
 artifact (`blind_financial --correction-transition-kat`) before and after
-execution.  The native diagnostic output is conformance evidence only; it is
-never used as proof evidence.  An unapproved axiom does not stop the run: every
+execution.  It also builds each pinned executable (`PINNED_EXE_IDENTITIES`:
+`blind_financial_worker`, the exe the engine runs) and fails unless the fresh
+build and the commit's committed binary both equal the pinned bytes and SHA-256;
+`blind_financial` is not pinned (nothing ships it), only fingerprinted.  The
+native diagnostic output is conformance evidence only; it is never used as
+proof evidence.  An unapproved axiom does not stop the run: every
 check still runs and the gate then fails, naming each declaration and each
 unapproved axiom it depends on.
 
@@ -70,9 +74,26 @@ THEOREM_DECLARATION_RE = re.compile(
 AXIOM_LINE_RE = re.compile(
     r"^'(?P<name>[^']+)' (?:(?:does not depend on any axioms)|(?:depends on axioms: \[(?P<axioms>.*)\]))$"
 )
-# A pinned executable's import closure holds no proof-side module (theorems, KATs, vectors, axiom checks), so a proof
-# edit never changes its bytes. The roots are those executables' `root` entries in lakefile.toml.
-PINNED_EXES = ("blind_financial_worker",)
+@dataclass(frozen=True)
+class PinnedExe:
+    artifact: str  # repository path of the committed binary
+    bytes: int
+    sha256: str
+
+
+# Every pinned executable, by name. Each is held to three checks, and any missing file or mismatch fails the gate:
+# its import closure (from its lakefile.toml `root`) holds no proof-side module (theorems, KATs, vectors, axiom
+# checks), so a proof edit never changes its bytes; the gate's fresh build of it equals the pin; and the candidate
+# commit carries the pinned bytes at `artifact`. A re-pin edits this table with the engine's pin (tests/test_tcb_gate.py
+# holds the two equal).
+PINNED_EXE_IDENTITIES = {
+    "blind_financial_worker": PinnedExe(
+        "artifacts/engine-evaluator/blind_financial_worker.exe",
+        6_462_464,
+        "7c1eab94be614e584aed0d5aa388490481ac3766b085c89c2e982b8925d559e2",
+    ),
+}
+PINNED_EXES = tuple(PINNED_EXE_IDENTITIES)
 PROOF_MODULE_RE = re.compile(r"(?:^|\.)(?:Theorems|KAT|Vectors|CodecLaws\w*|\w*Check)(?:\.|$)")
 PROOF_COMMAND_RE = re.compile(r"(?m)^\s*(?:#print\s+axioms|#guard_msgs)\b")
 LEAN_TOKEN_RE = re.compile(r"/-|-/|--[^\n]*|(?:(?!/-|-/|--)\S)+")
@@ -708,6 +729,25 @@ def pinned_source_manifest(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) ->
     return digest.hexdigest()
 
 
+def _check_pinned_exe_identities(candidate_root: Path, head: str, build_root: Path) -> dict[str, Any]:
+    """Each pinned exe's fresh build and the candidate commit's committed binary both equal its pin."""
+    records: dict[str, Any] = {}
+    for name, pin in PINNED_EXE_IDENTITIES.items():
+        fresh = _file_identity(build_root / ".lake" / "build" / "bin" / f"{name}.exe", f"fresh pinned {name} executable")
+        committed = _git_bytes(candidate_root, "cat-file", "blob", f"{head}:{pin.artifact}")
+        for source, observed in (
+            ("fresh build", (fresh.bytes, fresh.sha256)),
+            (f"committed {pin.artifact}", (len(committed), hashlib.sha256(committed).hexdigest())),
+        ):
+            if observed != (pin.bytes, pin.sha256):
+                raise AssuranceError(
+                    f"pinned {name} executable mismatch ({source}): "
+                    f"expected=({pin.bytes}, {pin.sha256}) got={observed}"
+                )
+        records[name] = {"artifact": pin.artifact, "bytes": pin.bytes, "sha256": pin.sha256, "fresh_path": fresh.path}
+    return records
+
+
 def _toolchain_paths(manifest: Manifest) -> tuple[dict[str, Path], dict[str, Any]]:
     if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise AssuranceError(
@@ -987,6 +1027,7 @@ def _verify_candidate(
         str(tool_paths["lake"]),
         "build",
         *(str(item) for item in manifest.build["targets"]),
+        *PINNED_EXES,
     ]
     declarations = tuple(item.name for item in manifest.declarations)
 
@@ -1012,6 +1053,7 @@ def _verify_candidate(
         artifact_identity_before = _file_identity(artifact, "fresh native artifact")
         if artifact_identity_before.bytes < manifest.build["artifact"]["minimum_bytes"]:
             raise AssuranceError(f"fresh native artifact is below its minimum size: {artifact}")
+        pinned_executables = _check_pinned_exe_identities(candidate_root, head, build_root)
 
         check_environment = dict(environment)
         check_environment["LEAN_PATH"] = str(lib_path)
@@ -1169,6 +1211,7 @@ def _verify_candidate(
                     "sha256": artifact_identity_before.sha256,
                     "identity_unchanged": artifact_identity_before == artifact_identity_after,
                 },
+                "pinned_executables": pinned_executables,
                 "proof_body_checks": proof_body_checks,
                 "declaration_check": {
                     "exit": declaration_check.returncode,
