@@ -7,6 +7,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{
     StarkBridgeInput,
@@ -81,6 +82,10 @@ pub struct ProductionStarkSettlementJournalV2 {
     pub batch_root: String,
     pub nullifier_root_before: String,
     pub nullifier_root_after: String,
+    #[serde(default)]
+    pub request_fingerprint: Option<String>,
+    #[serde(default)]
+    pub submission_started: bool,
     pub retry_count: u32,
     pub local_state_committed: bool,
 }
@@ -273,6 +278,13 @@ impl ProductionStarkSettlementJournalV2 {
                 errors.push(format!("{field} must be a bytes32 hex value"));
             }
         }
+        if self
+            .request_fingerprint
+            .as_deref()
+            .is_some_and(|value| !is_bytes32_hex(value))
+        {
+            errors.push("request_fingerprint must be a bytes32 hex value".to_string());
+        }
         if self.status == "prepared" && self.transaction_hash.is_some() {
             errors.push("prepared journal must not contain a transaction hash".to_string());
         }
@@ -286,6 +298,14 @@ impl ProductionStarkSettlementJournalV2 {
         }
         if self.local_state_committed != (self.status == "local_state_committed") {
             errors.push("local_state_committed flag must match journal status".to_string());
+        }
+        if self.request_fingerprint.is_some()
+            && self.status != "prepared"
+            && !self.submission_started
+        {
+            errors.push(
+                "versioned journal states after prepared require a submission fence".to_string(),
+            );
         }
         if errors.is_empty() {
             Ok(())
@@ -532,6 +552,42 @@ pub fn execute_production_stark_settlement(
         ]);
     }
 
+    let value = if envelope.public_inputs.decision == 1 {
+        request.transaction_value
+    } else {
+        "0"
+    };
+    let request_fingerprint = settlement_request_fingerprint(&envelope, value)?;
+    let journal_path = request.output_directory.join("settlement_journal.json");
+    let receipt_path = request.output_directory.join("settlement_receipt.json");
+    let expected_journal = ProductionStarkSettlementJournalV2 {
+        schema_version: "stark-production-settlement-journal-v2".to_string(),
+        status: "prepared".to_string(),
+        transaction_hash: None,
+        transaction_block_number: None,
+        transaction_block_hash: None,
+        finalized_block_number: None,
+        finalized_block_hash: None,
+        claim_hash: envelope.public_inputs.claim_hash.clone(),
+        batch_root: envelope.public_inputs.batch_root.clone(),
+        nullifier_root_before: envelope.public_inputs.nullifier_root_before.clone(),
+        nullifier_root_after: envelope.public_inputs.nullifier_root_after.clone(),
+        request_fingerprint: Some(request_fingerprint),
+        submission_started: false,
+        retry_count: 0,
+        local_state_committed: false,
+    };
+    let mut journal = match prepare_settlement_journal(&journal_path, &expected_journal)? {
+        SettlementJournalAction::Proceed(journal) => journal,
+        SettlementJournalAction::ReuseCommitted => {
+            let receipt = read_json::<ProductionStarkSettlementReceiptV1>(
+                &receipt_path,
+                "settlement receipt",
+            )?;
+            validate_reused_settlement_receipt(&receipt, &envelope)?;
+            return Ok(receipt);
+        }
+    };
     write_json(
         request.output_directory.join("nullifier_transition.json"),
         &transition,
@@ -545,30 +601,9 @@ pub fn execute_production_stark_settlement(
         request.output_directory.join("attestation_envelope.json"),
         &envelope,
     )?;
-
-    let journal_path = request.output_directory.join("settlement_journal.json");
-    let mut journal = ProductionStarkSettlementJournalV2 {
-        schema_version: "stark-production-settlement-journal-v2".to_string(),
-        status: "prepared".to_string(),
-        transaction_hash: None,
-        transaction_block_number: None,
-        transaction_block_hash: None,
-        finalized_block_number: None,
-        finalized_block_hash: None,
-        claim_hash: envelope.public_inputs.claim_hash.clone(),
-        batch_root: envelope.public_inputs.batch_root.clone(),
-        nullifier_root_before: envelope.public_inputs.nullifier_root_before.clone(),
-        nullifier_root_after: envelope.public_inputs.nullifier_root_after.clone(),
-        retry_count: 0,
-        local_state_committed: false,
-    };
+    journal.submission_started = true;
     write_json_atomic(&journal_path, &journal)?;
 
-    let value = if envelope.public_inputs.decision == 1 {
-        request.transaction_value
-    } else {
-        "0"
-    };
     let cast_output = run_cast(&[
         "send",
         request.registry_address,
@@ -701,10 +736,7 @@ pub fn execute_production_stark_settlement(
         groth16_executed: false,
     };
     receipt.validate()?;
-    write_json(
-        request.output_directory.join("settlement_receipt.json"),
-        &receipt,
-    )?;
+    write_json(receipt_path, &receipt)?;
     Ok(receipt)
 }
 
@@ -887,6 +919,125 @@ fn read_json<T: for<'de> Deserialize<'de>>(
     serde_json::from_str(&json).map_err(|error| vec![format!("invalid {label} JSON: {error}")])
 }
 
+#[derive(Serialize)]
+struct SettlementRequestFingerprintPreimage<'a> {
+    schema_version: &'a str,
+    attestation_digest: &'a str,
+    attestor_address: &'a str,
+    signer_backend: &'a str,
+    signer_key_id: Option<&'a str>,
+    transaction_value: &'a str,
+}
+
+enum SettlementJournalAction {
+    Proceed(ProductionStarkSettlementJournalV2),
+    ReuseCommitted,
+}
+
+fn settlement_request_fingerprint(
+    envelope: &ProductionStarkAttestationEnvelopeV2,
+    transaction_value: &str,
+) -> Result<String, Vec<String>> {
+    let preimage = SettlementRequestFingerprintPreimage {
+        schema_version: "stark-production-settlement-request-fingerprint-v1",
+        attestation_digest: &envelope.attestation_digest,
+        attestor_address: &envelope.attestor_address,
+        signer_backend: &envelope.signer_backend,
+        signer_key_id: envelope.signer_key_id.as_deref(),
+        transaction_value,
+    };
+    let encoded = serde_json::to_vec(&preimage)
+        .map_err(|error| vec![format!("could not serialize settlement request: {error}")])?;
+    Ok(format!("0x{}", encode_lower_hex(&Sha256::digest(encoded))))
+}
+
+fn prepare_settlement_journal(
+    journal_path: &Path,
+    expected: &ProductionStarkSettlementJournalV2,
+) -> Result<SettlementJournalAction, Vec<String>> {
+    if !journal_path.exists() {
+        write_json_atomic(journal_path, expected)?;
+        return Ok(SettlementJournalAction::Proceed(expected.clone()));
+    }
+
+    let mut existing =
+        read_json::<ProductionStarkSettlementJournalV2>(journal_path, "settlement journal")?;
+    existing.validate()?;
+    if existing.claim_hash != expected.claim_hash
+        || existing.batch_root != expected.batch_root
+        || existing.nullifier_root_before != expected.nullifier_root_before
+        || existing.nullifier_root_after != expected.nullifier_root_after
+    {
+        return Err(vec![
+            "existing settlement journal conflicts with this request; changed retries are forbidden"
+                .to_string(),
+        ]);
+    }
+    if let Some(fingerprint) = existing.request_fingerprint.as_deref() {
+        if Some(fingerprint) != expected.request_fingerprint.as_deref() {
+            return Err(vec![
+                "existing settlement journal request fingerprint conflicts with this retry"
+                    .to_string(),
+            ]);
+        }
+    }
+
+    match existing.status.as_str() {
+        "prepared" => {
+            if existing.request_fingerprint.is_none() || existing.submission_started {
+                return Err(vec![
+                    "settlement submission may already have started without a recorded transaction hash; fail closed and reconcile before retrying"
+                        .to_string(),
+                ]);
+            }
+            existing.retry_count = existing.retry_count.saturating_add(1);
+            write_json_atomic(journal_path, &existing)?;
+            Ok(SettlementJournalAction::Proceed(existing))
+        }
+        "submitted" | "mined" | "finalized" => Err(vec![
+            "settlement already has an in-flight transaction; run reconciliation instead of submitting again"
+                .to_string(),
+        ]),
+        "local_state_committed" => Ok(SettlementJournalAction::ReuseCommitted),
+        _ => Err(vec!["settlement journal status is unsupported".to_string()]),
+    }
+}
+
+fn validate_reused_settlement_receipt(
+    receipt: &ProductionStarkSettlementReceiptV1,
+    envelope: &ProductionStarkAttestationEnvelopeV2,
+) -> Result<(), Vec<String>> {
+    receipt.validate()?;
+    if receipt.chain_id != envelope.chain_id
+        || normalize_hex(&receipt.verifier_address) != normalize_hex(&envelope.verifier_address)
+        || normalize_hex(&receipt.registry_address) != normalize_hex(&envelope.registry_address)
+        || normalize_hex(&receipt.claim_hash) != normalize_hex(&envelope.public_inputs.claim_hash)
+        || normalize_hex(&receipt.batch_root) != normalize_hex(&envelope.public_inputs.batch_root)
+        || normalize_hex(&receipt.nullifier_root_before)
+            != normalize_hex(&envelope.public_inputs.nullifier_root_before)
+        || normalize_hex(&receipt.nullifier_root_after)
+            != normalize_hex(&envelope.public_inputs.nullifier_root_after)
+        || normalize_hex(&receipt.proof_sha256) != normalize_hex(&envelope.winterfell_proof_sha256)
+        || receipt.policy_manifest_hash != envelope.policy_manifest_hash
+        || receipt.signer_backend != envelope.signer_backend
+        || receipt.signer_key_id != envelope.signer_key_id
+    {
+        return Err(vec![
+            "committed settlement receipt conflicts with the exact retry request".to_string(),
+        ]);
+    }
+    Ok(())
+}
+
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
+}
+
 fn write_json(path: impl Into<PathBuf>, value: &impl Serialize) -> Result<(), Vec<String>> {
     let path = path.into();
     let json = serde_json::to_string_pretty(value)
@@ -954,6 +1105,8 @@ mod journal_tests {
             batch_root: format!("0x{}", "33".repeat(32)),
             nullifier_root_before: format!("0x{}", "44".repeat(32)),
             nullifier_root_after: format!("0x{}", "55".repeat(32)),
+            request_fingerprint: None,
+            submission_started: status != "prepared",
             retry_count: 0,
             local_state_committed: status == "local_state_committed",
         }
@@ -980,5 +1133,110 @@ mod journal_tests {
         let mut value = sample("finalized");
         value.local_state_committed = true;
         assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn settlement_journal_rejects_invalid_fingerprint_and_unfenced_new_state() {
+        let mut value = sample("prepared");
+        value.request_fingerprint = Some("0x12".to_string());
+        assert!(value.validate().is_err());
+
+        let mut value = sample("submitted");
+        value.request_fingerprint = Some(format!("0x{}", "66".repeat(32)));
+        value.submission_started = false;
+        assert!(value.validate().is_err());
+    }
+
+    #[test]
+    fn fresh_journal_is_written_and_safe_prepared_retry_is_resumable() {
+        let directory = test_directory("fresh");
+        let path = directory.join("settlement_journal.json");
+        let mut expected = sample("prepared");
+        expected.request_fingerprint = Some(format!("0x{}", "66".repeat(32)));
+
+        let first = prepare_settlement_journal(&path, &expected).expect("fresh journal");
+        assert!(matches!(first, SettlementJournalAction::Proceed(_)));
+        let second = prepare_settlement_journal(&path, &expected).expect("safe retry");
+        let SettlementJournalAction::Proceed(second) = second else {
+            panic!("prepared retry must proceed");
+        };
+        assert_eq!(second.retry_count, 1);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn completed_exact_retry_reuses_the_committed_settlement() {
+        let directory = test_directory("committed");
+        let path = directory.join("settlement_journal.json");
+        let mut expected = sample("prepared");
+        expected.request_fingerprint = Some(format!("0x{}", "66".repeat(32)));
+
+        let mut committed = sample("local_state_committed");
+        committed.request_fingerprint = expected.request_fingerprint.clone();
+        write_json_atomic(&path, &committed).expect("write committed journal");
+
+        let action = prepare_settlement_journal(&path, &expected).expect("exact retry");
+        assert!(matches!(action, SettlementJournalAction::ReuseCommitted));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn ambiguous_or_in_flight_retry_fails_closed() {
+        let directory = test_directory("fenced");
+        let path = directory.join("settlement_journal.json");
+        let mut expected = sample("prepared");
+        expected.request_fingerprint = Some(format!("0x{}", "66".repeat(32)));
+        expected.submission_started = true;
+        write_json_atomic(&path, &expected).expect("write fenced journal");
+        let error = prepare_settlement_journal(&path, &expected)
+            .err()
+            .expect("ambiguous retry must fail");
+        assert!(error.join(" ").contains("may already have started"));
+
+        let mut submitted = sample("submitted");
+        submitted.request_fingerprint = expected.request_fingerprint.clone();
+        write_json_atomic(&path, &submitted).expect("write submitted journal");
+        let error = prepare_settlement_journal(&path, &expected)
+            .err()
+            .expect("in-flight retry must fail");
+        assert!(error.join(" ").contains("run reconciliation"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn changed_retry_cannot_overwrite_existing_journal() {
+        let directory = test_directory("conflict");
+        let path = directory.join("settlement_journal.json");
+        let mut expected = sample("prepared");
+        expected.request_fingerprint = Some(format!("0x{}", "66".repeat(32)));
+        write_json_atomic(&path, &expected).expect("write expected journal");
+
+        let mut changed = expected.clone();
+        changed.request_fingerprint = Some(format!("0x{}", "77".repeat(32)));
+        let error = prepare_settlement_journal(&path, &changed)
+            .err()
+            .expect("changed retry must fail");
+        assert!(error.join(" ").contains("fingerprint conflicts"));
+
+        changed.request_fingerprint = expected.request_fingerprint.clone();
+        changed.batch_root = format!("0x{}", "88".repeat(32));
+        let error = prepare_settlement_journal(&path, &changed)
+            .err()
+            .expect("changed roots must fail");
+        assert!(error.join(" ").contains("changed retries are forbidden"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    fn test_directory(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "localbce-settlement-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create test directory");
+        path
     }
 }
