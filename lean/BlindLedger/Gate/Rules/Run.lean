@@ -34,7 +34,7 @@ open BlindLedger.Gate.Rules
     checkpoint.  `commit UNANCHORED` expects the refusal.  An `owners` commit also prints the state
     digest after it (`RULES_DIGEST`, `Gate.setsDigest`), the rows it appended (`RULES_ADDS`: per row
     `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex) and what it read (`RULES_READS`, `reads`
-    on the checkpoint it extends, zero before the first).  `load G_ASOF ADDSHEX ANCHORHEX`
+    on the checkpoint it extends, or before the first on the sets it declares; redo order is part of the record).  `load G_ASOF ADDSHEX ANCHORHEX`
     drops the released and unresolved sets and replays those rows onto empty sets dated G_ASOF
     (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  Arrival
     order cannot change a decision (`decideBatchIn_perm`).  `report`
@@ -98,14 +98,15 @@ def emptyPin (kind : String) (a : Nat) : Option String :=
   (Fast.pinBytes s!"RR/GATE/{kind.toUpper}/v1" (if kind == "released" then 5 else 6) Line.fields
     (⟨a, 0, []⟩ : Snapshot Line)).map fun b => hexOf (BlindLedger.Semantic.sha3_512Fast b)
 
-/-- The six pinned inputs, parsed and pin-checked once per declaration.  -- FAST -/
+/-- The six pinned inputs with their checked pins, and the four kinds' `readPin`s, once per declaration.  -- FAST -/
 structure Pinned where
-  dmf : Option (Snapshot Death)
-  pdeath : Option (Snapshot Death)
-  excl : Option (Snapshot Exclusion)
-  span : Option (Snapshot Span)
-  released : Option (Snapshot Line)
-  unresolved : Option (Snapshot Line)
+  dmf : Option (Snapshot Death × List UInt8)
+  pdeath : Option (Snapshot Death × List UInt8)
+  excl : Option (Snapshot Exclusion × List UInt8)
+  span : Option (Snapshot Span × List UInt8)
+  released : Option (Snapshot Line × List UInt8)
+  unresolved : Option (Snapshot Line × List UInt8)
+  kinds : Option (List (List UInt8 × List UInt8))
 
 structure St where
   today : Nat := 0
@@ -130,19 +131,17 @@ structure St where
   checked : Nat := 0
   failed : Nat := 0
   expected : Option Nat := none
-  /-- A checkpoint (`load`, `anchor` or a commit) precedes the next commit; else its read-set base is zero. -/
+  /-- A checkpoint (`load`, `anchor` or a commit) precedes the next commit; else its read-set base is the declared sets'. -/
   sealed : Bool := false
 
-def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option α)
-    (fields : α → List (Nat × Nat)) : Option (Snapshot α) := do
+/-- A declared snapshot and its pin, checked against the declared one. -/
+def snapshot {α : Type} (st : St) (kind : String) (row : List String → Option α) (domain : String) (k : Nat)
+    (fields : α → List (Nat × Nat)) : Option (Snapshot α × List UInt8) := do
   let (asOf, count, pin) ← st.snaps.lookup kind
   let s : Snapshot α := ⟨asOf, count, ← ((st.rows.filter (·.1 == kind)).toList.map (·.2)).mapM row⟩
-  let domain := if kind == "released" || kind == "unresolved" then s!"RR/GATE/{kind.toUpper}/v1"
-    else "RR/GATE/SNAPSHOT/v1"
-  let kinds := ["dmf", "pdeath", "excl", "span", "released", "unresolved"]
-  let bytes ← Fast.pinBytes domain (kinds.idxOf kind + 1) fields s   -- FAST: `pin_run_eq`
-  guard (hexOf (BlindLedger.Semantic.sha3_512Fast bytes) == pin)
-  pure s
+  let h := BlindLedger.Semantic.sha3_512Fast (← Fast.pinBytes domain k fields s)   -- FAST: `pin_run_eq`
+  guard (hexOf h == pin)
+  pure (s, h.toList)
 
 def parseLine : List String → Option Line
   | [i, f, m, p, r, d, c, u, a] => do
@@ -159,26 +158,38 @@ def death (r : List String) : Option Death := match r.mapM String.toNat? with
 def grow (o : Option (Snapshot Line)) (xs : List Line) : Option (Snapshot Line) :=
   o.map fun s => { s with count := s.count + xs.length, entries := s.entries ++ xs }
 
-def St.pin (st : St) : Pinned where
-  dmf := snapshot st "dmf" death Death.fields
-  pdeath := snapshot st "pdeath" death Death.fields
-  excl := snapshot st "excl" (fun r => match r.mapM String.toNat? with
+/-- One kind's SNAPSHOT/v1 pin (zero if none; refused if zero) and READ-*/v2 slot (`ReadManifest.kindOf`). -/
+def readPin {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) :
+    Option (Snapshot α × List UInt8) → Option (List UInt8 × List UInt8)
+  | none => some (Gate.zeroDigest, [0])
+  | some (s, p) => do
+    guard (p ≠ Gate.zeroDigest)
+    let q ← Fast.pinBytes d k f s
+    pure (p, 1 :: hB q)
+
+def St.pin (st : St) : Pinned :=
+  let dmf := snapshot st "dmf" death "RR/GATE/SNAPSHOT/v1" 1 Death.fields
+  let pdeath := snapshot st "pdeath" death "RR/GATE/SNAPSHOT/v1" 2 Death.fields
+  let excl := snapshot st "excl" (fun r => match r.mapM String.toNat? with
     | some [i, a, b] => some ⟨i, a, b⟩
-    | _ => none) Exclusion.fields
-  span := snapshot st "span" (fun r => match r.mapM String.toNat? with
+    | _ => none) "RR/GATE/SNAPSHOT/v1" 3 Exclusion.fields
+  let span := snapshot st "span" (fun r => match r.mapM String.toNat? with
     | some [m, p, a, b] => some ⟨m, p, a, b⟩
-    | _ => none) Span.fields
-  released := snapshot st "released" parseLine Line.fields
-  unresolved := snapshot st "unresolved" parseLine Line.fields
+    | _ => none) "RR/GATE/SNAPSHOT/v1" 4 Span.fields
+  { dmf, pdeath, excl, span,
+    released := snapshot st "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields
+    unresolved := snapshot st "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields
+    kinds := do pure [← readPin "RR/GATE/READ-DMF/v2" 1 Death.fields dmf, ← readPin "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields pdeath,
+      ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields excl, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields span] }
 
 def St.ctx (st : St) (p : Pinned) : Ctx where
   today := st.today
-  dmf := p.dmf
-  providerDeaths := p.pdeath
-  exclusions := p.excl
-  enrollment := p.span
-  released := grow p.released st.extra
-  unresolved := grow p.unresolved st.held
+  dmf := p.dmf.map (·.1)
+  providerDeaths := p.pdeath.map (·.1)
+  exclusions := p.excl.map (·.1)
+  enrollment := p.span.map (·.1)
+  released := grow (p.released.map (·.1)) st.extra
+  unresolved := grow (p.unresolved.map (·.1)) st.held
   releasedPrior := st.rprior
   unresolvedPrior := st.uprior
   anchor := 0
@@ -207,26 +218,13 @@ def uniq (ids : List Nat) : List Nat :=
   (ids.foldl (fun (s, r) i => if s.contains i then (s, r) else (s.insert i, i :: r))
     ((∅ : Std.HashSet Nat), ([] : List Nat))).2.reverse
 
-/-- One kind's SNAPSHOT/v1 pin (zero if none; refused if it hashes to zero) and READ-*/v2 slot (`ReadManifest.kindOf`). -/
-def readPin {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) :
-    Option (Snapshot α) → Option (List UInt8 × List UInt8)
-  | none => some (Gate.zeroDigest, [0])
-  | some s => do
-    let p := hB (← Fast.pinBytes "RR/GATE/SNAPSHOT/v1" k f s)
-    guard (p ≠ Gate.zeroDigest)
-    let q ← Fast.pinBytes d k f s
-    pure (p, 1 :: hB q)
-
-def readPins (c : Ctx) : Option (List (List UInt8 × List UInt8)) := do
-  pure [← readPin "RR/GATE/READ-DMF/v2" 1 Death.fields c.dmf, ← readPin "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields c.providerDeaths,
-    ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c.exclusions, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c.enrollment]
-
-/-- `RULES_READS`: the four SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the bytes `StateV2.readSetOf` hashes (`ReadManifest.run_reads_eq`). -/
-def reads (c : Ctx) (base : List UInt8) : Option (List UInt8) := do
-  let ks ← readPins c
+/-- `RULES_READS`: u32 today ‖ the four SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes over `base`, redo in
+    the order read (`ReadManifest.run_reads_eq`). -/
+def reads (p : Pinned) (c : Ctx) (base : List UInt8) : Option (List UInt8) := do
+  let ks ← p.kinds
   let pre := "RR/GATE/READ-SET/v2".toUTF8.toList ++ [0] ++ (ks.map (·.2)).flatten ++ (← be 4 c.redo.length) ++
     (← c.redo.mapM (be payWidth)).flatten ++ base
-  pure ((ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
+  pure ((← be 4 c.today) ++ (ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
 
 def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
@@ -262,11 +260,16 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
   let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
   let adds := do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten
-  let base := if st.sealed then Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior else some Gate.zeroDigest
+  -- The checkpoint extended; before the first, the declared sets (pins from declaration) or the empty priors.
+  let pinOf (o : Option (Snapshot Line × List UInt8)) (d : String) (k : Nat) (s : Snapshot Line) :=
+    o.elim ((Fast.pinBytes d k Line.fields s).map hB) (some ·.2)
+  let base := if st.sealed then Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior else do
+    pure (Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (← pinOf p.released "RR/GATE/RELEASED/v1" 5 c.releasedPrior)
+      (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior))
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
     (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
     adds.toList.map (fun b => s!"RULES_ADDS {hexOf b.toByteArray}") ++
-    (base.bind (reads c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
+    (base.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
   ({ st with pinned := some p, anchor := none, sealed := true,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
              held := st.held ++ fresh.2,

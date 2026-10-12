@@ -76,8 +76,28 @@ class GateRulesVectors(unittest.TestCase):
         self.assertEqual(bad.returncode, 1)
         self.assertIn("RULES_STATE_MISMATCH load", bad.stdout)
 
+    def reads(self, frame):
+        """The frame's (`RULES_DIGEST`s, `RULES_READS`s), with `?` pins filled."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "reads.vectors")
+            open(path, "w").write("\n".join(gate_rules_data.pin(frame)))
+            run = subprocess.run([EXE, path], capture_output=True, text=True, timeout=600)
+        out = run.stdout.split("\n")
+        return [[r.split(" ")[1] for r in out if r.startswith(t)] for t in ("RULES_DIGEST ", "RULES_READS ")]
+
+    def test_genesis_reads_bind_the_starting_sets(self):
+        """Two genesis batches differing only in the declared `released` rows read different bases."""
+        line = "901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500"
+        body = ["snap unresolved 20270315 0 ?", "case g", "line 902 FFS_CLAIM 1002 7002 7002 20270306 99214 1 300",
+                "owners 0 902:0:0", "commit", "end 0"]
+        a = self.reads(["today 20270315", "snap released 20270315 0 ?", *body])[1]
+        b = self.reads(["today 20270315", "snap released 20270315 1 ?", "released " + line, *body])[1]
+        self.assertEqual((len(a), len(b)), (1, 1))
+        self.assertNotEqual(a, b)
+
     def test_reads_are_the_read_set_bytes(self):
-        """`RULES_READS` is recomputed here: pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes (kind absent, a redo, two commits)."""
+        """`RULES_READS` is recomputed here: u32 today ‖ pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes over the declared
+        sets' STATE/v1 digest, then the first commit's (kind absent, a redo in the order read, two commits)."""
         frame = ["today 20270315", "snap released 20270315 0 ?", "snap unresolved 20270315 0 ?",
                  "snap dmf 20270301 2 ?", "dmf 9002 20261120", "dmf 9001 20270110",
                  "snap pdeath 20270301 1 ?", "pdeath 7701 20270120",
@@ -85,14 +105,8 @@ class GateRulesVectors(unittest.TestCase):
                  "case reads", "line 901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "owners 0 901:0:0", "commit",
                  "redo 11", "redo 12", "line 902 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "owners 0 902:0:0",
                  "commit", "end 0"]
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "reads.vectors")
-            open(path, "w").write("\n".join(gate_rules_data.pin(frame)))
-            run = subprocess.run([EXE, path], capture_output=True, text=True, timeout=600)
-        out = run.stdout.split("\n")
-        digests = [r.split(" ")[1] for r in out if r.startswith("RULES_DIGEST ")]
-        reads = [r.split(" ")[1] for r in out if r.startswith("RULES_READS ")]
-        self.assertEqual((len(digests), len(reads)), (2, 2), run.stdout[-1500:])
+        digests, reads = self.reads(frame)
+        self.assertEqual((len(digests), len(reads)), (2, 2))
 
         def be4(*ns):
             return b"".join(n.to_bytes(4, "big") for n in ns)
@@ -111,11 +125,13 @@ class GateRulesVectors(unittest.TestCase):
                 continue
             rs = [gate_rules_data.row(name, r) for r in rows]
             pins += hashed("RR/GATE/SNAPSHOT/v1", k, asof, rs)
-            slots += b"" + hashed(f"RR/GATE/READ-{tag}/v2", k, asof, rs)
-        for i, (redo, base) in enumerate([([], bytes(64)), ([12, 11], bytes.fromhex(digests[0]))]):
+            slots += b"\x01" + hashed(f"RR/GATE/READ-{tag}/v2", k, asof, rs)
+        genesis = hashlib.sha3_512(b"RR/GATE/STATE/v1\0" + hashed("RR/GATE/RELEASED/v1", 5, 20270315, []) +
+                                   hashed("RR/GATE/UNRESOLVED/v1", 6, 20270315, [])).digest()
+        for i, (redo, base) in enumerate([([], genesis), ([12, 11], bytes.fromhex(digests[0]))]):
             pre = b"RR/GATE/READ-SET/v2\0" + slots + be4(len(redo)) + b"".join(
                 r.to_bytes(gate_rules_data.PAY, "big") for r in redo) + base
-            self.assertEqual(reads[i], (pins + be4(len(pre)) + pre).hex(), f"commit {i}")
+            self.assertEqual(reads[i], (be4(20270315) + pins + be4(len(pre)) + pre).hex(), f"commit {i}")
 
 
 if __name__ == "__main__":

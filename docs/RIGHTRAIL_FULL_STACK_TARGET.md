@@ -136,7 +136,7 @@ shown) and a NUL byte:
 | MERKLE-NODE, LINES-NODE | token and claim-line Merkle trees |
 | STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
 | SEGMENT, KEY-CERT | financial history segments; epoch key certificate |
-| READ-<kind>/v2, READ-SET/v2, READ-MANIFEST/v1 | read manifest |
+| READ-<kind>/v2, READ-SET/v2, READ-MANIFEST/v2 | read manifest |
 | CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 

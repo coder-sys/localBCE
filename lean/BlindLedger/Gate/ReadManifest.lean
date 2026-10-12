@@ -3,18 +3,24 @@ import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Gate.Rules.Run
 import BlindLedger.Gate.Rules.FastEq
 
-/-! The per-batch read manifest `RR/GATE/READ-MANIFEST/v1` (MAN-0 S1): the exe constants, the four SNAPSHOT/v1 pins
-    of what `readSetOf` read (zero for a kind it did not read), and the bytes `P` it hashes, length-prefixed:
-    `tag ‖ grant ‖ rule ‖ engine ‖ pin₁..₄ ‖ u32 |P| ‖ P`, each const and pin 64 bytes. The header's `evidenceRoot`
-    signs `sha3` of it (`manifestOk`). `reads_exact`: a stored record hashing to that root decodes to exact pins
-    and to the `P` every token's input commitment binds, or names a SHA3 collision. `run_reads_eq`: the runner's
-    `RULES_READS` is `readsOf`. Not imported by the runner. -/
+/-! The per-batch read manifest `RR/GATE/READ-MANIFEST/v2` (MAN-0 S1; v1, without authority and `today`, was never
+    signed; S2's pay/reg roots take v3): `tag ‖ grant ‖ rule ‖ engine ‖ authority ‖ u32 today ‖ pin₁..₄ ‖ u32 |P| ‖ P`,
+    each const and pin 64 bytes, the authority one byte (`authorities` order from 1), the pins the SNAPSHOT/v1 digests
+    of what `readSetOf` read (zero for a kind it did not read), `P` the bytes it hashes (redo in the order read: the
+    order is part of the record). `run_reads_eq`: the runner's `RULES_READS` is `readsOf` over the base it is given;
+    that base is STATE/v1, not custody's STATE/v2 `base` (STATE/v2 wiring). `reads_exact` assumes `manifestOk`, which
+    nothing establishes until S2 has custody check `evidenceRoot`. Not imported by the runner. -/
 
 namespace BlindLedger.Gate.ReadManifest
 
 open BlindLedger.Gate BlindLedger.Gate.Rules BlindLedger.Gate.StateV2
 
-def manifestTag : Bytes := "RR/GATE/READ-MANIFEST/v1".toUTF8.toList ++ [0]
+def manifestTag : Bytes := "RR/GATE/READ-MANIFEST/v2".toUTF8.toList ++ [0]
+
+def authorityByte : Authority → UInt8
+  | .OBSERVE => 1 | .HOLD => 2 | .TRANSFER => 3
+
+def authorityOf (x : Bytes) : Option Authority := authorities.find? ([authorityByte ·] == x)
 
 /-- One kind: its SNAPSHOT/v1 pin (zero when Lean read none; a snapshot pinning to zero is refused) and its
     `readSetOf` slot (`optPin`). -/
@@ -41,15 +47,15 @@ def readSetPre (c₀ : Ctx) (base : Bytes) : Option Bytes := do
   let rs ← c₀.redo.mapM (be payWidth)
   pure (dom2 "READ-SET" ++ a ++ b ++ e ++ n ++ r ++ rs.flatten ++ base)
 
-/-- pins ‖ u32 |P| ‖ P: what Lean emits (`RULES_READS`); the producer prefixes the tag and constants. -/
+/-- u32 today ‖ pins ‖ u32 |P| ‖ P: what Lean emits (`RULES_READS`); the producer prefixes the tag and constants. -/
 def readsOf (c : Ctx) (base : Bytes) : Option Bytes := do
   let ks ← kindPins c
   let pre ← readSetPre c base
-  pure ((ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
+  pure ((← be 4 c.today) ++ (ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
 
 def encodeReads (k : Consts) (c : Ctx) (base : Bytes) : Option Bytes := do
   guard (k.grant.length = digestBytes ∧ k.rule.length = digestBytes ∧ k.engine.length = digestBytes)
-  pure (manifestTag ++ k.grant ++ k.rule ++ k.engine ++ (← readsOf c base))
+  pure (manifestTag ++ k.grant ++ k.rule ++ k.engine ++ [authorityByte k.authority] ++ (← readsOf c base))
 
 def cut (n : Nat) (x : Bytes) : Option (Bytes × Bytes) := if n ≤ x.length then some (x.take n, x.drop n) else none
 
@@ -63,6 +69,8 @@ structure Manifest where
   grant : Bytes
   rule : Bytes
   engine : Bytes
+  authority : Authority
+  today : Nat
   pins : List Bytes
   pre : Bytes
 
@@ -72,7 +80,10 @@ def decodeReads (x : Bytes) : Option Manifest := do
   let g ← cut digestBytes t.2
   let r ← cut digestBytes g.2
   let e ← cut digestBytes r.2
-  let p1 ← cut digestBytes e.2
+  let a ← cut 1 e.2
+  let au ← authorityOf a.1
+  let t ← cut 4 a.2
+  let p1 ← cut digestBytes t.2
   let p2 ← cut digestBytes p1.2
   let p3 ← cut digestBytes p2.2
   let p4 ← cut digestBytes p3.2
@@ -84,14 +95,14 @@ def decodeReads (x : Bytes) : Option Manifest := do
   let y ← slot p2.1 y
   let y ← slot p3.1 y
   let _ ← slot p4.1 y
-  pure ⟨g.1, r.1, e.1, [p1.1, p2.1, p3.1, p4.1], l.2⟩
+  pure ⟨g.1, r.1, e.1, au, beNat t.1, [p1.1, p2.1, p3.1, p4.1], l.2⟩
 
 /-- Pin `p` is exactly what Lean read of one kind: zero iff none, else the SNAPSHOT/v1 digest of that snapshot. -/
 def Exact {α : Type} (k : Nat) (f : α → List (Nat × Nat)) (o : Option (Snapshot α)) (p : Bytes) : Prop :=
   (p = zeroDigest ↔ o = none) ∧
     ∀ d, d ≠ zeroDigest → (p = d ↔ ∃ s x, o = some s ∧ pinInput "RR/GATE/SNAPSHOT/v1" k f s = some x ∧ sha3 x = d)
 
-/-- The checkpoint custody signs carries `sha3` of the manifest in `evidenceRoot`. -/
+/-- The checkpoint custody signs carries `sha3` of the manifest in `evidenceRoot` (custody checks it from S2). -/
 def manifestOk (P : Pins) (st : LogState) (k : Nat) (i : SignIn) (new : Bytes) : Prop :=
   ∃ n m, storedOfAny sha3 new = some n ∧ encodeReads P.c i.ctx (st.shard k).base = some m ∧
     n.checkpoint.evidenceRoot = sha3 m
@@ -104,13 +115,38 @@ theorem hB_mk (bs : Bytes) : Run.hB ⟨bs.toArray⟩ = sha3 bs := by
 theorem dom2_eq : dom2 "READ-SET" = "RR/GATE/READ-SET/v2".toUTF8.toList ++ [0] := by
   simp [dom2]
 
-theorem readPin_eq {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) (o : Option (Snapshot α)) :
-    Run.readPin d k f o = kindOf d k f o := by
-  cases o with
-  | none => rfl
-  | some s =>
-    simp only [Run.readPin, kindOf, ← Fast.pin_run_eq]
-    cases pinInput "RR/GATE/SNAPSHOT/v1" k f s <;> cases pinInput d k f s <;> simp [hB_mk]
+theorem authorityOf_byte (a : Authority) : authorityOf [authorityByte a] = some a := by
+  cases a <;> decide
+
+/-- A declared snapshot's pin is the hash of its pin bytes. -/
+theorem snapshot_pin {α : Type} {st : Run.St} {kind d : String} {row : List String → Option α} {k : Nat}
+    {f : α → List (Nat × Nat)} {s : Snapshot α} {p : List UInt8} (h : Run.snapshot st kind row d k f = some (s, p)) :
+    ∃ b, Fast.pinBytes d k f s = some b ∧ p = Run.hB b := by
+  unfold Run.snapshot at h
+  obtain ⟨⟨asOf, count, pin⟩, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨es, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨b, hb, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj h).symm
+  exact ⟨b, hb, rfl⟩
+
+/-- `readPin` of a snapshot carrying its SNAPSHOT/v1 pin is `kindOf` of the snapshot. -/
+theorem readPin_eq {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) (o : Option (Snapshot α × List UInt8))
+    (ho : ∀ s p, o = some (s, p) → ∃ b, Fast.pinBytes "RR/GATE/SNAPSHOT/v1" k f s = some b ∧ p = Run.hB b) :
+    Run.readPin d k f o = kindOf d k f (o.map (·.1)) := by
+  rcases o with _ | ⟨s, p⟩
+  · rfl
+  · obtain ⟨b, hb, rfl⟩ := ho s p rfl
+    rw [← Fast.pin_run_eq, Option.map_eq_some_iff] at hb
+    obtain ⟨x, hx, rfl⟩ := hb
+    simp only [Run.readPin, kindOf, Option.map_some, hx, hB_mk, ← Fast.pin_run_eq]
+    cases pinInput d k f s <;> simp [hB_mk]
+
+theorem readPin_snapshot {α : Type} (st : Run.St) (kind d : String) (row : List String → Option α) (k : Nat)
+    (f : α → List (Nat × Nat)) :
+    Run.readPin d k f (Run.snapshot st kind row "RR/GATE/SNAPSHOT/v1" k f) =
+      kindOf d k f ((Run.snapshot st kind row "RR/GATE/SNAPSHOT/v1" k f).map (·.1)) :=
+  readPin_eq d k f _ fun _ _ => snapshot_pin
 
 theorem cut_app {n : Nat} {l y : Bytes} (h : l.length = n) : cut n (l ++ y) = some (l, y) := by
   subst h; simp [cut]
@@ -170,20 +206,24 @@ theorem readSetOf_pre (c : Ctx) (base : Bytes) : readSetOf c base = (readSetPre 
     cases optPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c.enrollment <;>
     cases be 4 c.redo.length <;> cases c.redo.mapM (be payWidth) <;> rfl
 
-/-- The runner's `RULES_READS` bytes are `readsOf` of its context. -/
-theorem run_reads_eq (c : Ctx) (base : Bytes) : Run.reads c base = readsOf c base := by
-  have hk : Run.readPins c = kindPins c := by simp only [Run.readPins, kindPins, readPin_eq]
+/-- The runner's `RULES_READS` bytes (pins cached at declaration) are `readsOf` of its context over the same
+    `base`, any base: it does not say the runner's STATE/v1 base is custody's STATE/v2 one. -/
+theorem run_reads_eq (st : Run.St) (base : Bytes) :
+    Run.reads st.pin (st.ctx st.pin) base = readsOf (st.ctx st.pin) base := by
+  have hk : st.pin.kinds = kindPins (st.ctx st.pin) := by
+    simp only [Run.St.pin, Run.St.ctx, kindPins, readPin_snapshot]
   unfold Run.reads readsOf
   rw [hk]
+  generalize st.ctx st.pin = c
   cases h : kindPins c with
   | none => rfl
   | some ks =>
     simp only [kindPins_pre h, dom2_eq]
-    cases be 4 c.redo.length <;> cases c.redo.mapM (be payWidth) <;> simp [List.append_assoc]
+    cases be 4 c.today <;> cases be 4 c.redo.length <;> cases c.redo.mapM (be payWidth) <;> simp [List.append_assoc]
 
 theorem decodeReads_encode {k : Consts} {c : Ctx} {base x : Bytes} (h : encodeReads k c base = some x) :
     ∃ ks P, kindPins c = some ks ∧ readSetPre c base = some P ∧
-      decodeReads x = some ⟨k.grant, k.rule, k.engine, ks.map (·.1), P⟩ := by
+      decodeReads x = some ⟨k.grant, k.rule, k.engine, k.authority, c.today, ks.map (·.1), P⟩ := by
   unfold encodeReads at h
   obtain ⟨_, hg, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨hg1, hg2, hg3⟩ := (guard_some _ _).mp hg
@@ -192,6 +232,7 @@ theorem decodeReads_encode {k : Consts} {c : Ctx} {base x : Bytes} (h : encodeRe
   unfold readsOf at hR
   obtain ⟨ks, hks, hR⟩ := Option.bind_eq_some_iff.mp hR
   obtain ⟨P, hP, hR⟩ := Option.bind_eq_some_iff.mp hR
+  obtain ⟨T, hT, hR⟩ := Option.bind_eq_some_iff.mp hR
   obtain ⟨L, hL, hR⟩ := Option.bind_eq_some_iff.mp hR
   obtain rfl := (Option.some.inj hR).symm
   refine ⟨ks, P, hks, hP, ?_⟩
@@ -208,24 +249,28 @@ theorem decodeReads_encode {k : Consts} {c : Ctx} {base x : Bytes} (h : encodeRe
   obtain ⟨hLe, hLt⟩ := be_eq hL
   have hb := beNat_natBE 4 _ hLt
   rw [← hLe] at hb
+  obtain ⟨hTe, hTt⟩ := be_eq hT
+  have ht := beNat_natBE 4 _ hTt
+  rw [← hTe] at ht
   simp only [List.map_cons, List.map_nil, List.flatten_cons, List.flatten_nil, List.append_nil, List.append_assoc] at hb
   simp only [decodeReads, List.map_cons, List.map_nil, List.flatten_cons, List.flatten_nil, List.append_nil,
-    List.append_assoc, cut_app rfl, cut_app hg1, cut_app hg2, cut_app hg3, cut_app l1, cut_app l2, cut_app l3,
-    cut_app l4, cut_app (be_length hL), s1, s2, s3, s4, guard, hb, Option.bind_eq_bind,
+    List.append_assoc, cut_app rfl, cut_app hg1, cut_app hg2, cut_app hg3,
+    cut_app (n := 1) (l := [authorityByte k.authority]) rfl, authorityOf_byte, cut_app (be_length hT), ht,
+    cut_app l1, cut_app l2, cut_app l3, cut_app l4, cut_app (be_length hL), s1, s2, s3, s4, guard, hb, Option.bind_eq_bind,
     Option.bind_some, Option.pure_def, ↓reduceIte]
 
-/-- Fixed widths: one record is one (constants, pins, `P`). -/
+/-- Fixed widths: one record is one (constants, authority, today, pins, `P`). -/
 theorem encodeReads_inj {k k' : Consts} {c c' : Ctx} {base base' x : Bytes} (h : encodeReads k c base = some x)
     (h' : encodeReads k' c' base' = some x) :
-    k.grant = k'.grant ∧ k.rule = k'.rule ∧ k.engine = k'.engine ∧
+    k.grant = k'.grant ∧ k.rule = k'.rule ∧ k.engine = k'.engine ∧ k.authority = k'.authority ∧ c.today = c'.today ∧
       (kindPins c).map (·.map (·.1)) = (kindPins c').map (·.map (·.1)) ∧ readSetPre c base = readSetPre c' base' := by
   obtain ⟨ks, P, hk, hP, hd⟩ := decodeReads_encode h
   obtain ⟨ks', P', hk', hP', hd'⟩ := decodeReads_encode h'
   rw [hd] at hd'
   simp only [Option.some.injEq, Manifest.mk.injEq] at hd'
-  obtain ⟨e1, e2, e3, e4, e5⟩ := hd'
+  obtain ⟨e1, e2, e3, ea, et, e4, e5⟩ := hd'
   rw [hk, hk', hP, hP', e5]
-  exact ⟨e1, e2, e3, by simp [e4], rfl⟩
+  exact ⟨e1, e2, e3, ea, et, by simp [e4], rfl⟩
 
 private theorem rowOf_commit {rev : Nat → Nat} {pays : List (Nat × Outcome × Nat)}
     {ds : List (Line × Outcome × List Reason)} {rset : Bytes} {raw : Bytes} {r : Request} {w : PayRow}
@@ -238,13 +283,14 @@ private theorem rowOf_commit {rev : Nat → Nat} {pays : List (Nat × Outcome ×
     simp only [Option.pure_def, Option.some.injEq] at h
     subst h; rfl
 
-/-- A stored record hashing to the signed `evidenceRoot` of a checkpoint custody accepted decodes to custody's
-    constants, four pins each `Exact` for what Lean read, and the `P` whose hash every token's input
-    commitment binds to its raw request; or it names a SHA3 collision with the true manifest. -/
+/-- Given `manifestOk` (custody checks `evidenceRoot` from S2; today nothing establishes it), a stored record
+    hashing to the signed `evidenceRoot` of a checkpoint custody accepted decodes to custody's constants and authority,
+    `today`, four pins each `Exact` for what Lean read, and the `P` whose hash every token's input commitment binds to
+    its raw request; or it names a SHA3 collision with the true manifest. -/
 theorem reads_exact {P : Pins} {st : LogState} {k : Nat} {cert : Bytes} {i : SignIn} {new : Bytes}
     {tokens : List Bytes} {e : Entry} {n : Stored} {row : Bytes} (h : custodyOk P st k cert i new tokens = some e)
     (hm : manifestOk P st k i new) (hn : storedOfAny sha3 new = some n) (hroot : n.checkpoint.evidenceRoot = sha3 row) :
-    (∃ p1 p2 p3 p4 Pre, decodeReads row = some ⟨P.c.grant, P.c.rule, P.c.engine, [p1, p2, p3, p4], Pre⟩ ∧
+    (∃ p1 p2 p3 p4 Pre, decodeReads row = some ⟨P.c.grant, P.c.rule, P.c.engine, P.c.authority, i.ctx.today, [p1, p2, p3, p4], Pre⟩ ∧
       Exact 1 Death.fields i.ctx.dmf p1 ∧ Exact 2 Death.fields i.ctx.providerDeaths p2 ∧
       Exact 3 Exclusion.fields i.ctx.exclusions p3 ∧ Exact 4 Span.fields i.ctx.enrollment p4 ∧
       readSetPre i.ctx (st.shard k).base = some Pre ∧
