@@ -656,6 +656,8 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.dup_n_refused
 /-- info: 'BlindLedger.Financial.ShardSplit.recoverAll_refused' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recoverAll_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.readS_some' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.readS_some
 /-- info: 'BlindLedger.Financial.ShardSplit.merge_step' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.merge_step
 /-- info: 'BlindLedger.Financial.ShardSplit.merge_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/

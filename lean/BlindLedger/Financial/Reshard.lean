@@ -606,8 +606,8 @@ theorem heads_reshard (h : reshard pk K' cx ss = some ss') : headsOk (setK pk cx
   rfl
 
 theorem history_reshard (hc : chainsOk ss) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') :
-    historyOk (setK pk cx.p K') cx (mergeHist (setK pk cx.p K') cx ss') = true :=
-  (spine_chain_binds_iff (setK pk cx.p K') cx ss').1
+    historyOk ss' (mergeHist (setK pk cx.p K') cx ss') = true :=
+  (spine_chain_binds_iff (setK pk cx.p K') cx ss' (by rw [reshard_k h, setK_k_self])).1
     ⟨chain_reshard hc h, heads_reshard h, fun k _ => (inv3_reshard h3 h k).2⟩
 
 theorem reachR_run : ∀ (rs : List Input) {ss : SS}, ReachR cx pk ss → ReachR cx pk (runS pk cx ss rs)
@@ -1199,6 +1199,16 @@ example : (reshard ⟨[]⟩ 2 cxW (initS 1 LW)).map (fun ss =>
 example : (reshard ⟨[]⟩ 2 cxW (initS 1 LW)).map (fun ss =>
       ((merge ⟨[]⟩ cxW ss).chg "a", ((List.range (Pack.k ⟨[]⟩ cxW.p)).map fun k => (ss.2 k).chg "a").sum))
     = some (1, 0) := by
+  decide
+
+/-- The r2 MED: raw `merge` over the unrecovered store (shard 1 committed, shard 0 not) reads the charge twice
+    (`2`); `readS` refuses it, and after `recoverAll` it reads the charge once. -/
+example : (merge ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) [1])).chg "a" = 2 ∧
+    readS ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) [1]) = none := by
+  decide
+
+example : ((recoverAll ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) [1])).bind
+      fun ss => readS ⟨[(0, 2)]⟩ cxW ss).map (·.chg "a") = some 1 := by
   decide
 
 /-- After RESHARD K = 1 to K = 2, a pack with K = 2 saves and the old pack (K = 1) is refused. -/
