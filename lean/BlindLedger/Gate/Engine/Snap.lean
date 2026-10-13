@@ -13,9 +13,12 @@ import BlindLedger.Gate.StateV2
     seal tip is `lp` (be4) because the S1 decoder accepts a seal tip of any length.  v1 (S2: sealed and
     live only) is refused by its tag.  `snapDigest = sha3_512(all)`.  The literal tag avoids `dom2`'s
     `/v1/v2`.  The encoder is in `Log.lean` (a segment binds `snapDigest`).  The decoder refuses an own
-    count of 0, a live shard on the zero base, an `rhead` that is not `chainHead sha3 zeroDigest reg`
-    and a pay leaf that is not one whole Spec `pLeaf` keyed by its `payNat programId paymentId` (S3b
-    review L3, M1, M2): states no fold reaches.
+    count of 0, a live shard on the zero base, an `rhead` that is not `chainHead sha3 zeroDigest reg`,
+    pays on a shard with no `last`, and a pay leaf that is not one whole Spec `pLeaf` of this shard keyed
+    by its `payNat programId paymentId` (S3b review L3, M1, M2; S3d review MED-2): states StateV2 never
+    reaches.  The engine fold does reach a live shard on the zero base (its resume does not yet compute
+    StateV2's base: that needs `Pins` and the permit's rel/unr sets), so no snapshot follows a resume
+    until it does (S3d review HIGH-2, kept refusal).
 
     The state is a `Std.TreeMap`, whose tree shape is not canonical, so E4 and E5 hold up to `abs`
     (the sorted row list), as the design's `abs` and `foldFrom P (abs m')` already read. -/
@@ -34,11 +37,12 @@ structure LogState3 where
 
 def abs (m : LogStateM) : LogState3 := ⟨m.len, m.head, m.reg, m.rhead, m.shards.toList⟩
 
-/-- A pay row's leaf is one whole Spec leaf whose key is its `payNat programId paymentId` (S3b review
-    L3): no pay row whose key names another payment, or whose leaf is not a decision. -/
-def payKeyOk (n : Nat) (x : Bytes) : Bool :=
+/-- A pay row of shard `k` is one whole Spec leaf of shard `k` keyed by its `payNat programId paymentId`
+    (S3b review L3, S3d review MED-2): no pay row whose key names another payment, whose leaf is not a
+    decision, or whose decision belongs to another shard. -/
+def payKeyOk (k n : Nat) (x : Bytes) : Bool :=
   match pLeaf.run x with
-  | some (l, []) => n == StateV2.payNat l.programId l.paymentId
+  | some (l, []) => n == StateV2.payNat l.programId l.paymentId && l.shardId == k
   | _ => false
 
 def ascKeys {α : Type} : List (Nat × α) → Bool
@@ -53,9 +57,11 @@ def ShardM.fits (x : Nat × ShardM) : Prop :=
     (∀ t, x.2.sealed = some t → t.length < 256 ^ 4) ∧
     (∀ s c, x.2.last = some (s, c) → s.length < 256 ^ 4 ∧ c.length < 256 ^ 4) ∧
     x.2.base.length = digestBytes ∧ (x.2.live = true → x.2.base ≠ zeroDigest) ∧
-    ascFits (fun e => e.1 < 256 ^ payWidth ∧ e.2.length < 256 ^ 4 ∧ payKeyOk e.1 e.2 = true) x.2.pays
+    ascFits (fun e => e.1 < 256 ^ payWidth ∧ e.2.length < 256 ^ 4 ∧ payKeyOk x.1 e.1 e.2 = true) x.2.pays ∧
+    (x.2.last = none → x.2.pays = [])
 /-- A snapshot follows at least one record, every field fits its width, own counts are positive, a live
-    shard has a base (M1, L3) and `rhead` is the registry head of `reg` (M2, kept by `pushM_fold_rhead`). -/
+    shard has a base (M1, L3), pays need a `last` and `rhead` is the registry head of `reg` (M2, kept by
+    `pushM_fold_rhead`). -/
 def LogStateM.wf (m : LogStateM) : Prop :=
   0 < m.len ∧ m.len - 1 < 256 ^ 8 ∧ m.head.length = digestBytes ∧ m.rhead.length = digestBytes ∧
     (rows m.reg).length < 256 ^ 4 ∧ (∀ x ∈ m.reg, rowFits x) ∧ m.shards.toList.length < 256 ^ 4 ∧
@@ -84,10 +90,10 @@ def pOwn : P (Nat × Nat) := do
   let c ← rd 8
   need (decide (0 < c))
   pure (e, c)
-def pPay : P (Nat × Bytes) := do
+def pPay (k : Nat) : P (Nat × Bytes) := do
   let n ← rd payWidth
   let x ← pLp
-  need (payKeyOk n x)
+  need (payKeyOk k n x)
   pure (n, x)
 def pShard : P (Nat × ShardM) := do
   let k ← rd 4
@@ -97,7 +103,8 @@ def pShard : P (Nat × ShardM) := do
   let last ← pTip
   let base ← digest
   need (!live || base != zeroDigest)
-  let pays ← pAsc pPay
+  let pays ← pAsc (pPay k)
+  need (last.isSome || pays.isEmpty)
   pure (k, ⟨own, sealed, live, last, base, pays⟩)
 def pState : P (Bytes × List Row × List (Nat × ShardM)) := do
   let rhead ← digest
@@ -155,19 +162,21 @@ theorem pOwn_app (x : Nat × Nat) (h : x.1 < 256 ^ 8 ∧ 0 < x.2 ∧ x.2 < 256 ^
   simp only [pOwn, ownRow, List.append_assoc, seq_app (rd_app h.1), seq_app (rd_app h.2.2),
     decide_eq_true h.2.1, need_seq] <;> rfl
 
-theorem pPay_app (x : Nat × Bytes) (h : x.1 < 256 ^ payWidth ∧ x.2.length < 256 ^ 4 ∧ payKeyOk x.1 x.2 = true)
-    (r : Bytes) : pPay.run (payRow x ++ r) = some (x, r) := by
+theorem pPay_app (k : Nat) (x : Nat × Bytes)
+    (h : x.1 < 256 ^ payWidth ∧ x.2.length < 256 ^ 4 ∧ payKeyOk k x.1 x.2 = true) (r : Bytes) :
+    (pPay k).run (payRow x ++ r) = some (x, r) := by
   simp only [pPay, payRow, List.append_assoc, seq_app (rd_app h.1), seq_app (pLp_app _ h.2.1), h.2.2,
     need_seq] <;> rfl
 
 theorem pShard_app (x : Nat × ShardM) (h : ShardM.fits x) (r : Bytes) :
     pShard.run (shardRow x ++ r) = some (x, r) := by
   obtain ⟨k, o, s, l, t, b, ps⟩ := x
-  obtain ⟨hk, ho, hs, ht, hb, hz, hp⟩ := h
+  obtain ⟨hk, ho, hs, ht, hb, hz, hp, hn⟩ := h
   have hz' : (!l || b != zeroDigest) = true := by cases l <;> simp_all
+  have hn' : (t.isSome || ps.isEmpty) = true := by cases t <;> simp_all
   simp only [pShard, shardRow, List.append_assoc, seq_app (rd_app hk), seq_app (pAsc_app pOwn_app o ho),
     seq_app (pSealed_app s hs), seq_app (pBit_app l), seq_app (pTip_app t ht), seq_app (digest_app hb), hz',
-    need_seq, seq_app (pAsc_app pPay_app ps hp)] <;> rfl
+    need_seq, seq_app (pAsc_app (pPay_app k) ps hp), hn'] <;> rfl
 
 theorem ascKeys_of {α : Type} : ∀ l : List (Nat × α), l.Pairwise (fun a b => compare a.1 b.1 = .lt) →
     ascKeys l = true
@@ -221,10 +230,11 @@ theorem decode_encodeSnap (m : LogStateM) (h : m.wf) : decodeSnap (encodeSnap m)
 theorem E4_snap_roundtrip (m : LogStateM) (h : m.wf) : (decodeSnap (encodeSnap m)).map abs = some (abs m) := by
   rw [decode_encodeSnap m h, Option.map_some, abs_canon]
 
-/-- L2 (S3b review): accepted bytes are the encoding of what they decode to, so one state has one
-    snapshot and one `snapDigest`; a second byte form of a state (a malleable snapshot) is refused. -/
+/-- L2 (S3b review, S3d review MED-1): accepted bytes decode to a well-formed state and are its
+    encoding, so one state has one snapshot and one `snapDigest` (a malleable snapshot is refused), and
+    E4b and E5 apply to every accepted snapshot. -/
 theorem decodeSnap_canonical {b : ByteArray} {m : LogStateM} (h : decodeSnap b = some m) :
-    encodeSnap m = b := by
+    m.wf ∧ encodeSnap m = b := by
   sorry
 
 /-- E4b: equal snapshot digests mean equal states, or the two distinct encodings are an explicit
@@ -290,24 +300,39 @@ theorem foldM_abs (es : List ByteArray) :
       | exact ih (by simpa using hp)
       | rfl
 
-/-- E5: replaying the log tail from the snapshot of the folded prefix gives the full fold. -/
-theorem E5_replay_from_snap (log : List ByteArray) (i : Nat) {m : LogStateM}
-    (h : (log.take i).foldlM pushM LogStateM.init = some m) (hw : m.wf) :
+/-- E5: from any start `m0` (`init` or a decoded snapshot), replaying the log tail from the snapshot of
+    the folded prefix gives the full fold.  `hw` fails on every state after a RESUME until the resume
+    computes StateV2's base (see the module note), so today E5 has content from a well-formed `m0` over
+    batches, seals and segments (`pushM_wf`), not from `init` across a resume. -/
+theorem E5_replay_from_snap (log : List ByteArray) (i : Nat) {m0 m : LogStateM}
+    (h : (log.take i).foldlM pushM m0 = some m) (hw : m.wf) :
     ((decodeSnap (encodeSnap m)).bind fun m' => (log.drop i).foldlM pushM m').map abs =
-      (log.foldlM pushM LogStateM.init).map abs := by
+      (log.foldlM pushM m0).map abs := by
   rw [decode_encodeSnap m hw, ← List.take_append_drop i log, List.foldlM_append, h,
     List.take_append_drop]
   exact foldM_abs _ (abs_canon m)
 
-/-- L4 (S3b review): the per-entry fold of a run of BATCH entries is one registry update, the batches'
-    rows newest batch first ahead of `reg`, `rhead` moved over exactly those rows and the shards
-    untouched.  It rules out a fold that drops, reorders or replays a batch's rows or lets a batch move
-    a shard; E5 over this path is the 2x2 vector pair `fold_batch_2x2{,_mid}`. -/
+/-- S3d review HIGH-2: a push keeps a state well formed while it fits its widths (`stateIn` under
+    `256 ^ 4` bytes; a batch grows `reg`), except a RESUME, which leaves a live shard on the zero base
+    until it computes StateV2's base. -/
+theorem pushM_wf {m m' : LogStateM} {b : ByteArray} (hw : m.wf) (h : pushM m b = some m')
+    (hr : ∀ e, decodeEntry3B b = some e → ∀ k p, e.body ≠ .resume k p) (hs : (stateIn m').length < 256 ^ 4) :
+    m'.wf := by
+  sorry
+
+/-- L4 (S3b review, restated by S3d review HIGH-1): the per-entry fold of a run of BATCH entries is one
+    registry update, the batches' rows newest batch first ahead of `reg` and `rhead` moved over exactly
+    those rows; every batched shard is live and a shard no batch names is untouched.  It rules out a
+    fold that drops, reorders or replays a batch's rows.  It is not a custody property: the engine batch
+    does not yet run StateV2 `payStep` over its leaves (nor set `last`, `base`, `own`), so two ALLOW
+    leaves on one payment are both accepted (open, S3e).  `hb` is batch-only (no SEGMENT between), so
+    this is not E5; E5 over this path is the vector pair `fold_batch_2x2{,_mid}`. -/
 theorem foldM_batches (es : List ByteArray) (bs : List Batch3) {m m' : LogStateM}
     (hb : (es.mapM decodeEntry3B).map (·.map Entry3.body) = some (bs.map Body3.batch))
     (h : es.foldlM pushM m = some m') :
     m'.reg = bs.reverse.flatMap Batch3.regRows ++ m.reg ∧
-      m'.rhead = chainHead sha3 m.rhead (bs.reverse.flatMap Batch3.regRows) ∧ m'.shards = m.shards := by
+      m'.rhead = chainHead sha3 m.rhead (bs.reverse.flatMap Batch3.regRows) ∧
+      (∀ b ∈ bs, (m.shard b.shard).live = true) ∧ ∀ k, k ∉ bs.map Batch3.shard → m'.shard k = m.shard k := by
   sorry
 
 end BlindLedger.Gate.Engine

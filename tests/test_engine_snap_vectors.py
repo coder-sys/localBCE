@@ -1,17 +1,15 @@
-"""ENGINE-0 S2/S3b: the ENGINE-SNAP/v2 snapshot codec and the S3b push fold against
-lean/BlindLedger/Gate/Engine/Snap.lean and Log.lean.
-Synthetic, nonpayment, non-PHI; test-only reference (Lean decides, this only conforms to it).
+"""ENGINE-0 S2/S3b: the ENGINE-SNAP/v2 snapshot codec and the S3b push fold against lean/BlindLedger/Gate/Engine/Snap.lean and
+Log.lean.  Synthetic, nonpayment, non-PHI; test-only reference (Lean decides, this only conforms to it).
 
-``tag || be8 (len-1) || head || lp(rhead || lp(reg rows) || be4 n || rows)``, a row ``be4 shard || own
-|| sealed || live || last || base || pays``: own ``be4 n || (be8 epoch || be8 count)*``, sealed ``0 | 1 || lp tip``,
-live ``0 | 1``, last ``0 | 1 || lp s || lp c``, base 64 bytes, pays ``be4 n || (be261 key || lp leaf)*``;
-shard, epoch and pay keys strictly ascending.  The decoder also refuses an own count of 0, a live shard on
-the zero base, an rhead that is not the registry chain head of reg and a pay leaf that is not one whole Spec leaf keyed by its
-``payNat`` (the encoder raises on the same).  A ``fold`` vector pushes v3 entries from the empty state, or from a leading snapshot
-(a BATCH needs a live shard and puts its rows ahead of reg, a SEAL no resume tip, a SEGMENT its snap equal to the digest of the
-state before it) and prints the snapshot digest of the result.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean
-<vectors>` in lean/ and checks its output against the Python verdicts and the saved LEAN_OUT.  Emit
-the vector file from the repo root with `python -m tests.test_engine_snap_vectors --emit <path>`.
+``tag || be8 (len-1) || head || lp(rhead || lp(reg rows) || be4 n || rows)``, a row ``be4 shard || own || sealed || live ||
+last || base || pays``: own ``be4 n || (be8 epoch || be8 count)*``, sealed ``0 | 1 || lp tip``, live ``0 | 1``, last ``0 | 1
+|| lp s || lp c``, base 64 bytes, pays ``be4 n || (be261 key || lp leaf)*``; shard, epoch and pay keys strictly ascending.
+The decoder also refuses an own count of 0, a live shard on the zero base, an rhead other than reg's chain head, pays with no
+last and a pay leaf that is not one whole Spec leaf of its shard keyed by its ``payNat`` (the encoder raises on the same).  A
+``fold`` vector pushes v3 entries from the empty state or a leading snapshot (a BATCH needs a live shard and puts its rows
+ahead of reg, a SEAL no resume tip, a SEGMENT a snap equal to the prior state's digest) and prints the result's snapshot
+digest.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean <vectors>` in lean/ against the
+Python verdicts and LEAN_OUT.  Emit from the repo root with `python -m tests.test_engine_snap_vectors --emit <path>`.
 """
 
 from __future__ import annotations
@@ -62,23 +60,23 @@ def pay_nat(program: str, payment: str) -> int:
     return int.from_bytes(bytes([1]) + b"".join(be(2, len(x)) + x.encode() for x in (program, payment)), "big")
 
 
-def leaf_key(x: bytes) -> "int | None":
-    """Spec `pLeaf` on all of x, by reading its fields and re-encoding them with the product codec, then `payNat`."""
+def leaf_key(x: bytes) -> "tuple[int, int] | None":
+    """Spec `pLeaf` on all of x, by reading its fields and re-encoding them with the product codec, then (shard, `payNat`)."""
     r = _R(x)
     ident, tag = lambda: r.take(r.num(2)).decode("latin-1"), lambda names: dict(enumerate(names, 1)).get(r.num(1))
     try:
         f = [r.take(len(codec.TOKEN)), ident(), ident(), r.num(4), tag(codec.FLOWS), r.num(8), ident(), r.take(32), ident(),
              r.num(8), ident(), r.take(DIGEST), tag(codec.OUTCOMES), tuple(ident() for _ in range(r.num(1))),
              tag(codec.AUTHORITIES)] + [r.take(DIGEST) for _ in range(4)] + [r.num(8) for _ in range(5)]
-        return pay_nat(f[2], f[6]) if codec.encode_token_leaf(codec.TokenLeaf(*f[1:])) == x else None
+        return (f[3], pay_nat(f[2], f[6])) if codec.encode_token_leaf(codec.TokenLeaf(*f[1:])) == x else None
     except (Log3Error, codec.GateCodecError):
         return None
 
 
 def wf(reg: list, rhead: bytes, shards: dict[int, Shard]) -> None:
-    """Refusals beyond layout: rhead is the registry head, no own count 0, no live zero base, pays keyed by leaf payNat."""
-    if rhead != log3.chain_head(reg) or any(s.live and s.base == ZERO or not all(c for _, c in s.own)
-                                             or any(leaf_key(x) != n for n, x in s.pays) for s in shards.values()):
+    """Beyond layout: rhead = registry head, own counts > 0, no live zero base, pays need a last and leaf (shard, payNat)."""
+    if rhead != log3.chain_head(reg) or any(s.live and s.base == ZERO or not all(c for _, c in s.own) or s.pays and not s.last
+                                             or any(leaf_key(x) != (k, n) for n, x in s.pays) for k, s in shards.items()):
         raise Log3Error("wf")
 
 
@@ -160,15 +158,15 @@ def fold(entries: list[bytes]) -> tuple[int, bytes, list, bytes, dict[int, Shard
     return n, head, reg, rhead, shards
 
 
-def pay(payment: str, seq: int = 1, key: "int | None" = None) -> tuple[int, bytes]:
-    """A pay row: an SDP payment held for review in program P1, keyed by its payNat unless `key` is given."""
-    leaf = codec.TokenLeaf("T1", "P1", 0, "SDP", 0, payment, d(5)[:32], "R1", 1, "M1", ZERO, "HUMAN_REVIEW", (), "HOLD",
+def pay(payment: str, shard: int = 1, seq: int = 1) -> tuple[int, bytes]:
+    """A pay row: an SDP payment of `shard` held for review in program P1, keyed by its payNat."""
+    leaf = codec.TokenLeaf("T1", "P1", shard, "SDP", 0, payment, d(5)[:32], "R1", 1, "M1", ZERO, "HUMAN_REVIEW", (), "HOLD",
                            d(1), d(2), d(3), d(4), 0, 1, seq, 2, 3)
-    return (pay_nat("P1", payment) if key is None else key), codec.encode_token_leaf(leaf)
+    return pay_nat("P1", payment), codec.encode_token_leaf(leaf)
 
 
 REG = [(1, 5, 6), (255, 256**129 - 1, 2**32 - 1)]
-TOP = Shard(((0, 1), (2**64 - 1, 2**64 - 1)), b"", True, (b"", b"c"), d(9), (pay("A"), pay("B" * 128)))
+TOP = Shard(((0, 1), (2**64 - 1, 2**64 - 1)), b"", True, (b"", b"c"), d(9), (pay("A", 2**32 - 1), pay("B" * 128, 2**32 - 1)))
 THREE = {2**32 - 1: TOP, 0: Shard(live=True, base=d(6)), 7: Shard(sealed=d(2), base=d(7))}
 GOOD = {
     "empty": (1, d(1), [], ZERO, {}),
@@ -176,6 +174,7 @@ GOOD = {
     "sealed_live": (5, d(4), [], ZERO, {9: Shard(sealed=b"tip", live=True, last=(b"tip", b"cert"), base=d(2))}),
 }
 T1, T2 = d(8), d(10)
+SEAL = ("seal", (3, T1))
 
 
 def chain(*bodies: tuple[str, tuple], at: "tuple[int, bytes]" = (0, ZERO)) -> list[bytes]:
@@ -190,9 +189,6 @@ def resume(t: "tuple[bytes, bytes] | None", shard: int = 3) -> tuple:
     return "resume", (shard, tip_in(t) + b"opaque sets")
 
 
-SEAL = ("seal", (3, T1))
-
-
 def segment(*before: tuple[str, tuple], bad: bool = False) -> tuple:
     """A SEGMENT whose snap is the digest of the state after `before` (a wrong one if bad)."""
     return "segment", (0, 0, d(1), d(2), d(3), d(4) if bad else sdig(*fold(chain(*before)), check=False))
@@ -203,8 +199,8 @@ def lead(last: "tuple[bytes, bytes] | None", *bodies: tuple[str, tuple]) -> list
     return [encode(2, d(1), [], ZERO, {3: Shard(last=last)})] + chain(*bodies, at=(2, d(1)))
 
 
-LIVE = encode(2, d(1), [], ZERO, {3: Shard(live=True, base=d(3)), 4: Shard(live=True, base=d(4))})
-# 2 shards x 2 batches of 2 registry rows each; MID is the state after the first two (E5 on the batch path).
+LIVE = encode(2, d(1), [], ZERO, {3: Shard(live=True, base=d(3)), 4: Shard(live=True, base=d(4)), 7: THREE[7]})
+# Sealed shard 7 and 2 shards x 2 batches of 2 registry rows each; MID is the state after the first two (E5 on the batch path).
 BATCHES = [("batch", (k, b"h", b"m", [b"r"], [(1, 2 * i, k), (2, 2 * i + 1, k)], [b"l"])) for i, k in enumerate((3, 4, 3, 4))]
 MID = fold([LIVE] + chain(*BATCHES[:2], at=(2, d(1))))
 FOLDS = {
@@ -216,6 +212,7 @@ FOLDS = {
     "fold_batch_2x2": [LIVE] + chain(*BATCHES, at=(2, d(1))),
     "fold_batch_2x2_mid": [encode(*MID)] + chain(*BATCHES[2:], at=MID[:2]),
     "refuse_fold_batch_parked": chain(BATCHES[0]),
+    "refuse_fold_batch_sealed": [LIVE] + chain(("batch", (7, *BATCHES[0][1][1:])), at=(2, d(1))),
     "refuse_fold_seal_resume_other_tip": chain(SEAL, resume((T2, b"cert"))),
     "refuse_fold_seal_resume_no_tip": chain(SEAL, resume(None)),
     "refuse_fold_fresh_resume_with_tip": chain(resume((T1, b"cert"), 4)),
@@ -245,6 +242,7 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
 
     def rows(*rs: bytes) -> bytes:  # raw rows, no ordering
         return state(one, state_in([], ZERO, b"".join(rs), len(rs)))
+    paid = lambda *ps: rows(row(1, Shard(last=(b"", b"c"), pays=ps)))  # shard 1 with a last and these pays
 
     out += [
         ("refuse_empty", b"", False),
@@ -265,10 +263,12 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_keys_descending", rows(row(7, Shard()), row(0, Shard())), False),
         ("refuse_own_epochs_equal", rows(row(1, Shard(own=((5, 1), (5, 2))))), False),
         ("refuse_own_epochs_descending", rows(row(1, Shard(own=((6, 1), (5, 2))))), False),
-        ("refuse_pays_keys_equal", rows(row(1, Shard(pays=(pay("A"), pay("A", 2))))), False),
-        ("refuse_pays_keys_descending", rows(row(1, Shard(pays=(pay("B"), pay("A"))))), False),
-        ("refuse_pay_key_mismatch", rows(row(1, Shard(pays=(pay("A", key=pay("B")[0]),)))), False),
-        ("refuse_pay_leaf_trailing", rows(row(1, Shard(pays=((pay("A")[0], pay("A")[1] + b"\x00"),)))), False),
+        ("refuse_pays_keys_equal", paid(pay("A"), pay("A", seq=2)), False),
+        ("refuse_pays_keys_descending", paid(pay("B"), pay("A")), False),
+        ("refuse_pay_key_mismatch", paid((pay("B")[0], pay("A")[1])), False),
+        ("refuse_pay_leaf_trailing", paid((pay("A")[0], pay("A")[1] + b"\x00")), False),
+        ("refuse_pay_shard_mismatch", paid(pay("A", 0)), False),
+        ("refuse_pays_no_last", rows(row(1, Shard(pays=(pay("A"),)))), False),
         ("refuse_rhead_forged", state(three, d(3) + s3[DIGEST:]), False),
         ("refuse_own_count_0", rows(row(1, Shard(own=((5, 0),)))), False),
         ("refuse_live_zero_base", rows(row(1, Shard(live=True))), False),
