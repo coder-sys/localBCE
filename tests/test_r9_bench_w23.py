@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools import r9_bench as rb  # noqa: E402
-from tools import r9_shard_bench as sb  # noqa: E402
+from tests import r9_bench as rb  # noqa: E402
+from tests import r9_shard_bench as sb  # noqa: E402
 
 sha, quote, ShardDiverged, verdict_of, SPINE_ID = rb.sha, rb.quote, sb.ShardDiverged, sb.verdict_of, sb.SPINE_ID
 LINES = 300

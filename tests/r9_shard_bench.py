@@ -35,7 +35,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tools import r9_bench as rb  # noqa: E402
+from tests import r9_bench as rb  # noqa: E402
 
 SCRATCH = Path("C:/Users/neers/rrb/state/scratch-osbench")
 PAYER, SPINE = "bench-payer", -1

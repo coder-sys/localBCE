@@ -1,4 +1,4 @@
-"""OS-B0 shard harness (tools/r9_shard_bench.py): routing, merge equivalence with K=1, refusal and abort atomicity, resend, recovery replay."""
+"""OS-B0 shard harness (tests/r9_shard_bench.py): routing, merge equivalence with K=1, refusal and abort atomicity, resend, recovery replay."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from tools import r9_bench as rb
-from tools import r9_shard_bench as sb
+from tests import r9_bench as rb
+from tests import r9_shard_bench as sb
 
 LINES = 300  # two parsed files of 150 lines per logical file; the sweep uses 5,000
 
