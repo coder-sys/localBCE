@@ -2209,26 +2209,10 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "identity_contract_destination")
         if not existed:
             if identity_contract is None:
-                identity_digest = _identity_digest(
-                    provenance="ROOT",
-                    bound_mode=mode,
-                    bound_owner_id=self.owner_id,
-                    anchor_sequence=0,
-                    source_package_digest=_ZERO_DIGEST,
-                )
+                bound = {"provenance": "ROOT", "bound_mode": mode, "bound_owner_id": self.owner_id, "anchor_sequence": 0, "source_package_digest": _ZERO_DIGEST}  # digested and stored alike
+                identity_digest = _identity_digest(**bound)
                 genesis = _digest(_GENESIS_DOMAIN, config.canonical_bytes, trusted_authority.digest, identity_digest)
-                identity = {
-                    "id": 1,
-                    "schema_version": self.schema_version,
-                    "provenance": "ROOT",
-                    "bound_mode": mode,
-                    "bound_owner_id": self.owner_id,
-                    "anchor_sequence": 0,
-                    "anchor_head": genesis,
-                    "genesis_head": genesis,
-                    "source_package_digest": _ZERO_DIGEST,
-                    "identity_digest": identity_digest,
-                }
+                identity = {"id": 1, "schema_version": self.schema_version, **bound, "anchor_head": genesis, "genesis_head": genesis, "identity_digest": identity_digest}
                 initial_sequence = 0
                 initial_history_head = genesis
             else:
@@ -6495,19 +6479,33 @@ class FinancialOwner:
             _fail(FinancialContinuityError, "continuity_package_size")
         return encoded
 
-    def export_continuity(self) -> bytes:
-        """Export only bounded, allowlisted responsibility state, from history a full verification covers (R1a, M5)."""
+    def _verified_read(self, read):
+        """``read`` on the writer at its mark, rolled back: a foreign change is verified (and refused) first, as a write's would be (R1a, M5)."""
         with self._lock:
             try:
-                package = self._continuity_package_bytes(self._begin("BEGIN"))
+                result = read(self._begin("BEGIN"))
                 if self._refusal is not None:
                     raise self._refusal
                 self._writer.execute("ROLLBACK")
-                return package
+                return result
             except BaseException as error:
                 self._discard_writer()
                 _raise_if_busy(error)
                 raise
+
+    def export_continuity(self) -> bytes:
+        """Export only bounded, allowlisted responsibility state, from history a full verification covers (R1a, M5)."""
+        return self._verified_read(self._continuity_package_bytes)
+
+    def _manifest(self, connection: sqlite3.Connection) -> tuple[bytes, dict]:
+        rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
+        count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
+        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        return _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))}), body
+
+    def history_baseline(self) -> bytes:
+        """A cash file's baseline at the committed head, written by nothing: the history manifest with the open segment left open."""
+        return self._verified_read(lambda connection: self._manifest(connection)[0])
 
     def export_history(self, directory: Path) -> bytes:
         """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
@@ -6519,10 +6517,8 @@ class FinancialOwner:
         """
         with self._write() as connection:
             self._seal_segment(connection, force=True)
-            rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
-            count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
-        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
-        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
+            manifest, body = self._manifest(connection)
+        count = body["segment_count"]
         directory.mkdir(exist_ok=True)
         target = directory / "manifest.json"
         with self._read_snapshot() as connection:

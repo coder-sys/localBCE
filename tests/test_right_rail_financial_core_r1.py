@@ -83,7 +83,7 @@ class CoreR1aMarkTests(unittest.TestCase):
         calls, original = [], independent.verify_database_connection
 
         def counted(connection, **expectations):
-            calls.append(1)
+            calls.append(Path(connection.execute("PRAGMA database_list").fetchone()[2]).resolve())  # the file verified: a cash plan's private copy is not the store
             return original(connection, **expectations)
 
         with patch.object(independent, "verify_database_connection", counted):
@@ -200,9 +200,8 @@ class CoreR1aMarkTests(unittest.TestCase):
             store.record_payment_evidence(**_pay("item-06", amount=2))  # a write the owner refuses inside its transaction (intake would hold it)
         _foreign(store.path, "BEGIN IMMEDIATE; ROLLBACK;", timeout=0.5)
         with self._counting_verifies() as calls:
-            store.export_history(Path(store.path).parent / "seal")  # the next write: a payment's baseline seal
-        self.assertEqual(len(calls), 1)
-        self.assertIn("status", pay(store, **_pay("item-05")))
+            self.assertIn("status", pay(store, **_pay("item-05")))
+        self.assertEqual((calls.count(Path(store.path).resolve()), len(calls)), (1, 2))  # the store once, the cash plan's private copy once, no other
 
     def test_a_raw_page_edit_while_the_owner_is_open_is_not_committed_on_top_of(self):
         # safety red team S1: a byte edit of a payments page moves no data_version and the writer's cached pages may
@@ -240,7 +239,6 @@ class CoreR1aMarkTests(unittest.TestCase):
             wall[0] += owner._CLOCK_SKEW_MS - 1  # a small skew inside the bound
             pay(store, **_pay("item-04"))
             wall[0] += 3_600_000  # an hour's step ahead
-            store.export_history(Path(store.path).parent / "seal")  # the baseline seal reads no clock; what is refused is the payment
             before = acceptance._image(store.path)
             with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
                 pay(store, **_pay("item-03"))

@@ -2,8 +2,6 @@
 record was (RECORDED or DUPLICATE with the projection), or HELD with its reason. An exact resend returns its first answer."""
 
 import hashlib
-from pathlib import Path
-import tempfile
 
 from app import right_rail_financial_intake as intake
 from app.right_rail_financial_canonical_json import encode
@@ -24,7 +22,7 @@ def pay(store, *, item_id, payment_id, common_origin_id, amount_cents, evidence_
            "amount_cents": amount_cents, "event_at_ms": event_at_ms, "pays_action_id": pays_action_id, "expected_revision": expected_revision}
     raw = encode({"contract": "RR/FINANCIAL/RECEIVER-CASH-FILE/v1", "source_class": "SYNTHETIC_RECEIVER_CASH", "scope": scope,
                   "source": source, "row_count": 1, "total_cents": amount_cents, "rows": [row]})
-    baseline = owner.export_history(Path(tempfile.mkdtemp(dir=Path(owner.path).resolve().parent)) / "history")
+    baseline = owner.history_baseline()  # read only: a payment adds no commit but its own
     receipt = intake.ingest_cash_file(owner, raw, baseline, expected_source_sha256=hashlib.sha256(raw).hexdigest().upper(), expected_baseline_sha256=hashlib.sha256(baseline).hexdigest().upper(), expected_scope=scope,
                                       expected_source=source, expected_owner_id=owner.owner_id, expected_mode=owner.mode, trusted_authority=owner.trusted_authority)
     (outcome,) = receipt["rows"]

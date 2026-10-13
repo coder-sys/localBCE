@@ -711,8 +711,8 @@ raise SystemExit(main(sys.argv[2:]))
     def test_manifest_baseline_binds_digest_owner_and_the_live_chain(self):
         manifest = json.loads(self.baseline)
 
-        def sealed(**changes):  # the manifest with its digest recomputed, as a forger would
-            body = {key: value for key, value in {**manifest, **changes}.items() if key != "manifest_digest"}
+        def sealed(base=manifest, **changes):  # the manifest with its digest recomputed, as a forger would
+            body = {key: value for key, value in {**base, **changes}.items() if key != "manifest_digest"}
             return canonical({**body, "manifest_digest": independent._digest(independent.SEGMENT_DOMAIN, b"manifest", canonical(body)).hex().upper()})
         foreign = sealed(meta={**manifest["meta"], "owner_id": "other-owner"})
         for change in ({"meta": {**manifest["meta"], "sequence": None}}, {"meta": {**manifest["meta"], "history_head": None}}, {"identity": {**manifest["identity"], "schema_version": 0}}):
@@ -727,6 +727,8 @@ raise SystemExit(main(sys.argv[2:]))
                 with self.subTest(code=code, size=len(raw)), self.assertRaisesRegex(check.CashFileError, f"^{code}$"):
                     self._prepare(baseline=raw)
         self._unchanged(lambda: self._apply(self._prepare(baseline=forged)), "^cash_file_binding$")
+        self._apply(self._prepare())  # the open segment now holds this file: a read-only baseline at its head may not name a segment older than the last sealed before it
+        self._unchanged(lambda: self._apply(self._prepare(baseline=sealed(json.loads(self.store.history_baseline()), segment_count=0, last_segment_digest=independent.ZERO_DIGEST.hex().upper()))), "^cash_file_binding$")
 
     def test_preview_refuses_a_copy_with_a_dangling_key_and_lives_beside_the_store(self):
         folders, finishing, connect, finish = [], [], sqlite3.connect, check.CashFileCheck.finish

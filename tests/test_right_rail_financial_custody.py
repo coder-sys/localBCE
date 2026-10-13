@@ -19,6 +19,7 @@ from app import right_rail_financial_custody as custody_module
 from app.right_rail_financial_custody import Custody
 from app.right_rail_financial_owner import FinancialInputError, FinancialIntegrityError, FinancialOwner
 from tests import test_right_rail_financial_acceptance as acceptance
+from tests.rightrail_intake_rows import pay
 from tests.test_right_rail_financial_core_r1 import _pay
 
 
@@ -111,14 +112,15 @@ class CustodyTests(unittest.TestCase):
     def _rewound(self):
         """The red team's attack: copy the store and its -wal at T0, commit later, close, put T0 back."""
         store = self._base()
-        store.record_payment_evidence(**_pay("item-05", "t0"))
+        pay(store, **_pay("item-05", "t0"))
         copy = Path(self.fixture.temp_dir.name) / "t0"
         self._copy(store.path, copy)
         t0 = store._high
-        store.record_payment_evidence(**_pay("item-06", "later"))
-        store.record_payment_evidence(**_pay("item-07", "later"))
+        pay(store, **_pay("item-06", "later"))
+        pay(store, **_pay("item-07", "later"))
         store.close()
         self._assert_names_committed_heads(self._log(store), store.path)
+        with closing(sqlite3.connect(str(store.path))) as connection: self.lost = connection.execute("SELECT event_sequence,kind,head FROM financial_events WHERE event_sequence>?", (t0[0],)).fetchall()  # what the restore will lose, read before it
         self._restore(copy, store.path)
         return store, t0
 
@@ -138,11 +140,11 @@ class CustodyTests(unittest.TestCase):
         store = self._base()
         copy = Path(self.fixture.temp_dir.name) / "fork"
         self._copy(store.path, copy)
-        store.record_payment_evidence(**_pay("item-05", "live"))
+        pay(store, **_pay("item-05", "live"))
         store.close()
         self._restore(copy, store.path)
         other = self._open(store.path, store.clock)  # opened without custody: another history at the same sequence
-        other.record_payment_evidence(**_pay("item-05", "fork"))
+        pay(other, **_pay("item-05", "fork"))
         other.close()
         with self.assertRaisesRegex(FinancialIntegrityError, "^store_forked$"):
             self._open(store.path, store.clock, self._custody())
@@ -163,8 +165,8 @@ class CustodyTests(unittest.TestCase):
 
     def test_a_reordered_cut_or_torn_log(self) -> None:
         store = self._base()
-        store.record_payment_evidence(**_pay("item-05", "a"))
-        store.record_payment_evidence(**_pay("item-06", "b"))
+        pay(store, **_pay("item-05", "a"))
+        pay(store, **_pay("item-06", "b"))
         store.close()
         log = self._log(store)
         lines = log.read_bytes().splitlines(keepends=True)
@@ -175,7 +177,7 @@ class CustodyTests(unittest.TestCase):
                     self._open(store.path, store.clock, self._custody())
         log.write_bytes(b"".join(lines) + lines[-2][:40])  # a torn append (a crash mid-write) is ignored, then cut
         reopened = self._open(store.path, store.clock, self._custody())
-        reopened.record_payment_evidence(**_pay("item-07", "c"))
+        pay(reopened, **_pay("item-07", "c"))
         reopened.close()
         self.assertTrue(log.read_bytes().endswith(b"\n"))
         self._assert_names_committed_heads(log, store.path)
@@ -189,7 +191,7 @@ class CustodyTests(unittest.TestCase):
 
     def test_a_deleted_log_fails_closed_until_an_operator_adopts(self) -> None:
         store = self._base()
-        store.record_payment_evidence(**_pay("item-05", "a"))
+        pay(store, **_pay("item-05", "a"))
         store.close()
         self._log(store).unlink()
         with self.assertRaisesRegex(FinancialIntegrityError, "^custody_missing$"):
@@ -231,9 +233,9 @@ class CustodyTests(unittest.TestCase):
         record = _records(self._log(store))[-1]
         self.assertEqual((record["kind"], record["actor_id"], record["reason_ref"], record["sequence"], record["head"], record["from_sequence"], record["from_head"]),
                          ("REWIND_ACCEPTED", "operator:ana", "restore-7", t0[0], t0[1].hex(), tail["sequence"], tail["head"]))
-        self.assertEqual(record["from_sequence"] - record["sequence"], 2)  # what the restore lost, on the record
+        self.assertEqual(([(sequence, kind) for sequence, kind, _ in self.lost], bytes(self.lost[-1][2]).hex()), ([(record["sequence"] + n, kind) for n, kind in enumerate(["PAYMENT_RECEIVED", "INTAKE_RECEIVED"] * 2, 1)], record["from_head"]))  # the record names every event the restore lost: two payments, each with its intake
         reopened = self._open(store.path, store.clock, self._custody())
-        reopened.record_payment_evidence(**_pay("item-06", "re-entered"))
+        pay(reopened, **_pay("item-06", "re-entered"))
         reopened.close()
         self._assert_names_committed_heads(self._log(store), store.path)
         again = self._open(store.path, store.clock)
@@ -242,11 +244,11 @@ class CustodyTests(unittest.TestCase):
 
     def test_after_an_accepted_rewind_the_abandoned_store_cannot_catch_up(self) -> None:
         store = self._base()
-        store.record_payment_evidence(**_pay("item-05", "t0"))
+        pay(store, **_pay("item-05", "t0"))
         early, late = (Path(self.fixture.temp_dir.name) / name for name in ("t0", "late"))
         self._copy(store.path, early)
         t0 = store._high
-        store.record_payment_evidence(**_pay("item-06", "later"))
+        pay(store, **_pay("item-06", "later"))
         store.close()
         self._copy(store.path, late)
         self._restore(early, store.path)
@@ -271,12 +273,12 @@ class CustodyTests(unittest.TestCase):
         store = self._base()
         copy = Path(self.fixture.temp_dir.name) / "fork"
         self._copy(store.path, copy)
-        store.record_payment_evidence(**_pay("item-05", "live"))
+        pay(store, **_pay("item-05", "live"))
         store.close()
         self._restore(copy, store.path)
         other = self._open(store.path, store.clock)
-        other.record_payment_evidence(**_pay("item-05", "fork"))
-        other.record_payment_evidence(**_pay("item-06", "fork"))
+        pay(other, **_pay("item-05", "fork"))
+        pay(other, **_pay("item-06", "fork"))
         fork = other._high
         other.close()
         keyless = self._custody(str(Path(self.fixture.temp_dir.name) / "no-such.key"))
@@ -289,10 +291,10 @@ class CustodyTests(unittest.TestCase):
         log = self._log(store)
         before = log.read_bytes()
         with patch.object(Custody, "_append", side_effect=OSError("disk full")):  # the MARK append fails after COMMIT
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-05", "a")))  # committed: never failed after COMMIT
+            self.assertIn("status", pay(store, **_pay("item-05", "a")))  # committed: never failed after COMMIT
             committed = self._meta(store.path)
             with self.assertRaisesRegex(FinancialIntegrityError, "^custody_unwritable$"):  # no further write while custody is owed
-                store.record_payment_evidence(**_pay("item-06", "b"))
+                pay(store, **_pay("item-06", "b"))
         self.assertEqual(self._meta(store.path), committed)  # b never began
         self.assertEqual(log.read_bytes(), before)
         self.assertLess(_records(log)[-1]["sequence"], committed[0])
