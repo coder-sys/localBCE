@@ -10,6 +10,7 @@ import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.ReadManifest
 import BlindLedger.Gate.Engine.Log
+import BlindLedger.Gate.Engine.Snap
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -362,3 +363,9 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold
 /-- info: 'BlindLedger.Gate.Engine.decodeEntry3B_canonical' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical
+/-- info: 'BlindLedger.Gate.Engine.E4_snap_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E4_snap_roundtrip
+/-- info: 'BlindLedger.Gate.Engine.E4b_snapDigest_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E4b_snapDigest_binds
+/-- info: 'BlindLedger.Gate.Engine.E5_replay_from_snap' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E5_replay_from_snap
