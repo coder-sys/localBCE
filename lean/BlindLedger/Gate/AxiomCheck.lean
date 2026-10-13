@@ -10,6 +10,7 @@ import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.Engine.Log
 import BlindLedger.Gate.Engine.Snap
+import BlindLedger.Gate.Engine.Frame
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -328,3 +329,17 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.E4b_snapDigest_binds
 /-- info: 'BlindLedger.Gate.Engine.E5_replay_from_snap' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.E5_replay_from_snap
+/-- info: 'BlindLedger.Gate.Engine.pushM_step' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_step
+/-- info: 'BlindLedger.Gate.Engine.stepM_parked' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_parked
+/-- info: 'BlindLedger.Gate.Engine.stepM_sealed_final' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_sealed_final
+/-- info: 'BlindLedger.Gate.Engine.pushM_parked' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_parked
+/-- info: 'BlindLedger.Gate.Engine.E8_frame_total' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E8_frame_total
+/-- info: 'BlindLedger.Gate.Engine.decodeFrame_app' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeFrame_app
+/-- info: 'BlindLedger.Gate.Engine.C5_bytes_refine' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.C5_bytes_refine

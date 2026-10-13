@@ -11,8 +11,9 @@ import BlindLedger.Gate.ApprovalLaws
     1 + 129 + 4 = 134 bytes.  Domain tag `RR/GATE/TENANT-LOG/v3\0`.
 
     `stepM` keeps only the S1 guards (live shard for a batch, no double resume, seal once on a
-    parked shard).  They are necessary, not sufficient: custody, permit decode, activation,
-    resume reserve rows, seal-of-v1-only and `last` are owed to S3. -/
+    parked shard) and the L6 rule that a sealed shard is final (no resume reopens it).  They are
+    necessary, not sufficient: custody, permit decode, activation, resume reserve rows,
+    seal-of-v1-only and `last` are owed to `push3`. -/
 
 namespace BlindLedger.Gate.Engine
 
@@ -444,7 +445,7 @@ def stepM (m : LogStateM) : Body3 → Option LogStateM
   | .batch b =>
     if (m.shard b.shard).live then some { m with rhead := chainHead sha3 m.rhead b.regRows } else none
   | .resume k _ =>
-    if (m.shard k).live then none
+    if (m.shard k).live ∨ (m.shard k).sealed.isSome then none
     else some { m with shards := m.shards.insert k { m.shard k with live := true } }
   | .seal k t =>
     if (m.shard k).live = false ∧ (m.shard k).sealed = none then
@@ -513,12 +514,11 @@ theorem stepM_keep {m m' : LogStateM} {b : Body3} (h : stepM m b = some m') : Ke
     simp only [stepM] at h
     cases h; exact ⟨fun _ => rfl, id⟩
 
-/-- A push decodes `b` to one entry (well formed and canonical by `decodeEntry3B_canonical`), links
-    it to the current head at the next index, grows the log by one, moves the head to the SHA3 of
-    `b` and keeps every shard seal and live mark. -/
-theorem pushM_chain {m m' : LogStateM} {b : ByteArray} (h : pushM m b = some m') :
-    ∃ e, decodeEntry3B b = some e ∧ e.idx = m.len ∧ e.prev = m.head ∧ m'.len = m.len + 1 ∧
-      m'.head = sha3 b.data.toList ∧ Keeps m m' := by
+/-- L3 (S1 review 2): a push is exactly one `stepM` on the decoded body, then the new length and
+    head; `rhead` and the shards come from the step alone. -/
+theorem pushM_step {m m' : LogStateM} {b : ByteArray} (h : pushM m b = some m') :
+    ∃ e s, decodeEntry3B b = some e ∧ e.idx = m.len ∧ e.prev = m.head ∧ stepM m e.body = some s ∧
+      m' = { s with len := m.len + 1, head := sha3 b.data.toList } := by
   cases hd : decodeEntry3B b with
   | none => simp [pushM, hd] at h
   | some e =>
@@ -531,9 +531,77 @@ theorem pushM_chain {m m' : LogStateM} {b : ByteArray} (h : pushM m b = some m')
         rw [hs] at h
         have h' : some { s with len := m.len + 1, head := sha3 b.data.toList } = some m' := h
         cases h'
-        have hk : Keeps m s := stepM_keep hs
-        exact ⟨e, rfl, hc.1, hc.2, rfl, rfl, hk⟩
+        exact ⟨e, s, rfl, hc.1, hc.2, hs, rfl⟩
     next => cases h
+
+/-- A sealed shard is parked: the invariant every reachable state keeps. -/
+def SealedParked (m : LogStateM) : Prop := ∀ k, (m.shard k).sealed.isSome → (m.shard k).live = false
+
+theorem stepM_parked {m m' : LogStateM} {b : Body3} (hi : SealedParked m) (h : stepM m b = some m') :
+    SealedParked m' := by
+  intro a
+  cases b with
+  | batch bt =>
+    simp only [stepM] at h
+    split at h
+    · cases h; exact hi a
+    · cases h
+  | resume k p =>
+    simp only [stepM] at h
+    split at h
+    · cases h
+    next hc =>
+      cases h
+      rw [shard_insert]
+      by_cases hka : k = a
+      · rw [if_pos hka]; subst hka
+        intro hs
+        exact absurd (Or.inr hs) hc
+      · rw [if_neg hka]; exact hi a
+  | «seal» k t =>
+    simp only [stepM] at h
+    split at h
+    next hc =>
+      cases h
+      rw [shard_insert]
+      by_cases hka : k = a
+      · rw [if_pos hka]; subst hka; exact fun _ => hc.1
+      · rw [if_neg hka]; exact hi a
+    next => cases h
+  | segment s =>
+    simp only [stepM] at h
+    cases h; exact hi a
+
+/-- L6: a sealed shard is final.  On a reachable state no batch, resume or second seal is taken on
+    it, so nothing after its seal can change it. -/
+theorem stepM_sealed_final {m : LogStateM} {k : Nat} (hi : SealedParked m)
+    (hs : (m.shard k).sealed.isSome) :
+    (∀ bt : Batch3, bt.shard = k → stepM m (.batch bt) = none) ∧ (∀ p, stepM m (.resume k p) = none) ∧
+      ∀ t, stepM m (.seal k t) = none := by
+  have hl := hi k hs
+  refine ⟨fun bt hb => ?_, fun p => ?_, fun t => ?_⟩
+  · subst hb; simp [stepM, hl]
+  · simp [stepM, hs]
+  · exact if_neg fun hc => by rw [hc.2] at hs; cases hs
+
+theorem pushM_parked {m m' : LogStateM} {b : ByteArray} (hi : SealedParked m) (h : pushM m b = some m') :
+    SealedParked m' := by
+  obtain ⟨e, s, -, -, -, hs, rfl⟩ := pushM_step h
+  have hp := stepM_parked hi hs
+  exact hp
+
+theorem init_parked : SealedParked LogStateM.init := fun _ h => by
+  simp [LogStateM.init, LogStateM.shard, ShardM.init] at h
+
+/-- A push decodes `b` to one entry (well formed and canonical by `decodeEntry3B_canonical`), links
+    it to the current head at the next index, grows the log by one, moves the head to the SHA3 of
+    `b` and keeps every shard seal and live mark. -/
+theorem pushM_chain {m m' : LogStateM} {b : ByteArray} (h : pushM m b = some m') :
+    ∃ e, decodeEntry3B b = some e ∧ e.idx = m.len ∧ e.prev = m.head ∧ m'.len = m.len + 1 ∧
+      m'.head = sha3 b.data.toList ∧ Keeps m m' := by
+  obtain ⟨e, s, hd, hi, hp, hs, rfl⟩ := pushM_step h
+  have hk := stepM_keep hs
+  exact ⟨e, hd, hi, hp, rfl, rfl, hk⟩
 
 /-- Folding pushes over a list: the log grows by exactly the list length, append-only. -/
 theorem pushM_fold (es : List ByteArray) : ∀ {m m' : LogStateM}, es.foldlM pushM m = some m' →
