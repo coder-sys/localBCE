@@ -4,8 +4,9 @@ Log.lean.  Synthetic, nonpayment, non-PHI; test-only reference (Lean decides, th
 ``tag || be8 (len-1) || head || lp(rhead || lp(reg rows) || be4 n || rows)``, a row ``be4 shard || own || sealed || live ||
 last || base || pays``: own ``be4 n || (be8 epoch || be8 count)*``, sealed ``0 | 1 || lp tip``, live ``0 | 1``, last ``0 | 1
 || lp s || lp c``, base 64 bytes, pays ``be4 n || (be261 key || lp leaf)*``; shard, epoch and pay keys strictly ascending.
-The decoder also refuses an own count of 0, a live shard on the zero base, an rhead other than reg's chain head, pays with no
-last and a pay leaf that is not one whole Spec leaf of its shard keyed by its ``payNat`` (the encoder raises on the same).  A
+The decoder also refuses an own count of 0, a live shard on the zero base, a parked shard with own rows, a last or a nonzero
+base (StateV2 parks only Shard.init plus a seal), an rhead other than reg's chain head, pays with no last and a pay leaf that
+is not one whole Spec leaf of its shard keyed by its ``payNat`` (the encoder raises on the same).  A
 ``fold`` vector pushes v3 entries from the empty state or a leading snapshot (a BATCH needs a live shard and puts its rows
 ahead of reg, a SEAL no resume tip, a SEGMENT a snap equal to the prior state's digest) and prints the result's snapshot
 digest.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean <vectors>` in lean/ against the
@@ -74,8 +75,10 @@ def leaf_key(x: bytes) -> "tuple[int, int] | None":
 
 
 def wf(reg: list, rhead: bytes, shards: dict[int, Shard]) -> None:
-    """Beyond layout: rhead = registry head, own counts > 0, no live zero base, pays need a last and leaf (shard, payNat)."""
+    """Beyond layout: rhead = registry head, own counts > 0, no live zero base, a parked shard is Shard() plus a seal, pays need a
+    last and leaf (shard, payNat)."""
     if rhead != log3.chain_head(reg) or any(s.live and s.base == ZERO or not all(c for _, c in s.own) or s.pays and not s.last
+                                             or not s.live and (s.own or s.last or s.base != ZERO)
                                              or any(leaf_key(x) != (k, n) for n, x in s.pays) for k, s in shards.items()):
         raise Log3Error("wf")
 
@@ -167,7 +170,7 @@ def pay(payment: str, shard: int = 1, seq: int = 1) -> tuple[int, bytes]:
 
 REG = [(1, 5, 6), (255, 256**129 - 1, 2**32 - 1)]
 TOP = Shard(((0, 1), (2**64 - 1, 2**64 - 1)), b"", True, (b"", b"c"), d(9), (pay("A", 2**32 - 1), pay("B" * 128, 2**32 - 1)))
-THREE = {2**32 - 1: TOP, 0: Shard(live=True, base=d(6)), 7: Shard(sealed=d(2), base=d(7))}
+THREE = {2**32 - 1: TOP, 0: Shard(live=True, base=d(6)), 7: Shard(sealed=d(2))}
 GOOD = {
     "empty": (1, d(1), [], ZERO, {}),
     "three": (2**64, d(1), REG, log3.chain_head(REG), THREE),
@@ -194,13 +197,14 @@ def segment(*before: tuple[str, tuple], bad: bool = False) -> tuple:
     return "segment", (0, 0, d(1), d(2), d(3), d(4) if bad else sdig(*fold(chain(*before)), check=False))
 
 
-def lead(last: "tuple[bytes, bytes] | None", *bodies: tuple[str, tuple]) -> list[bytes]:
-    """A fold that starts from a snapshot of shard 3 (parked, unsealed, `last` as given)."""
-    return [encode(2, d(1), [], ZERO, {3: Shard(last=last)})] + chain(*bodies, at=(2, d(1)))
+def lead(*bodies: tuple[str, tuple]) -> list[bytes]:
+    """A fold that starts from a snapshot of shard 3 (parked, unsealed)."""
+    return [encode(2, d(1), [], ZERO, {3: Shard()})] + chain(*bodies, at=(2, d(1)))
 
 
 LIVE = encode(2, d(1), [], ZERO, {3: Shard(live=True, base=d(3)), 4: Shard(live=True, base=d(4)), 7: THREE[7]})
-# Sealed shard 7 and 2 shards x 2 batches of 2 registry rows each; MID is the state after the first two (E5 on the batch path).
+# Sealed shard 7 and 2 shards x 2 batches of 2 registry rows each; MID is the state after the first two.  PRE-S3e pins (review
+# r2 HIGH-2): hand-built live shards, leaf b"l" is no Spec leaf, the batch writes no shard; S3e changes them.  Not E5 evidence.
 BATCHES = [("batch", (k, b"h", b"m", [b"r"], [(1, 2 * i, k), (2, 2 * i + 1, k)], [b"l"])) for i, k in enumerate((3, 4, 3, 4))]
 MID = fold([LIVE] + chain(*BATCHES[:2], at=(2, d(1))))
 FOLDS = {
@@ -208,7 +212,7 @@ FOLDS = {
     "fold_resume_fresh": chain(resume(None, 4)),
     "fold_seg_ok": chain(segment()),
     "fold_seal_segment_resume_tip": chain(SEAL, segment(SEAL), resume((T1, b""))),
-    "fold_lead_seal": lead(None, SEAL),
+    "fold_lead_seal": lead(SEAL),
     "fold_batch_2x2": [LIVE] + chain(*BATCHES, at=(2, d(1))),
     "fold_batch_2x2_mid": [encode(*MID)] + chain(*BATCHES[2:], at=MID[:2]),
     "refuse_fold_batch_parked": chain(BATCHES[0]),
@@ -223,7 +227,6 @@ FOLDS = {
     "refuse_fold_tip_truncated": chain(SEAL, ("resume", (3, resume((T1, b"cert"))[1][1][:-12]))),
     "refuse_fold_seg_wrong_snap": chain(SEAL, segment(SEAL, bad=True)),
     "refuse_fold_seg_snap_before_seal": chain(SEAL, segment()),
-    "refuse_fold_seal_after_last": lead((T1, b"c"), SEAL),
     "refuse_fold_bad_prev": chain(SEAL) + [log3.encode(1, ZERO, *resume((T1, b"")))],
 }
 
@@ -242,7 +245,8 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
 
     def rows(*rs: bytes) -> bytes:  # raw rows, no ordering
         return state(one, state_in([], ZERO, b"".join(rs), len(rs)))
-    paid = lambda *ps: rows(row(1, Shard(last=(b"", b"c"), pays=ps)))  # shard 1 with a last and these pays
+    live = lambda **f: Shard(live=True, base=d(6), **f)  # so a parked-shard refusal does not mask the one under test
+    paid = lambda *ps: rows(row(1, live(last=(b"", b"c"), pays=ps)))  # shard 1 with a last and these pays
 
     out += [
         ("refuse_empty", b"", False),
@@ -261,8 +265,8 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_last_flag_2", rows(r9[:17] + b"\x02" + r9[18:]), False),
         ("refuse_keys_equal", rows(r9, r9), False),
         ("refuse_keys_descending", rows(row(7, Shard()), row(0, Shard())), False),
-        ("refuse_own_epochs_equal", rows(row(1, Shard(own=((5, 1), (5, 2))))), False),
-        ("refuse_own_epochs_descending", rows(row(1, Shard(own=((6, 1), (5, 2))))), False),
+        ("refuse_own_epochs_equal", rows(row(1, live(own=((5, 1), (5, 2))))), False),
+        ("refuse_own_epochs_descending", rows(row(1, live(own=((6, 1), (5, 2))))), False),
         ("refuse_pays_keys_equal", paid(pay("A"), pay("A", seq=2)), False),
         ("refuse_pays_keys_descending", paid(pay("B"), pay("A")), False),
         ("refuse_pay_key_mismatch", paid((pay("B")[0], pay("A")[1])), False),
@@ -270,7 +274,10 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_pay_shard_mismatch", paid(pay("A", 0)), False),
         ("refuse_pays_no_last", rows(row(1, Shard(pays=(pay("A"),)))), False),
         ("refuse_rhead_forged", state(three, d(3) + s3[DIGEST:]), False),
-        ("refuse_own_count_0", rows(row(1, Shard(own=((5, 0),)))), False),
+        ("refuse_own_count_0", rows(row(1, live(own=((5, 0),)))), False),
+        ("refuse_parked_forged", rows(row(1, Shard(sealed=b"t", base=d(7)))), False),
+        ("refuse_parked_forged_own", rows(row(1, Shard(own=((5, 1),)))), False),
+        ("refuse_parked_forged_last", rows(row(1, Shard(last=(b"", b"c")))), False),
         ("refuse_live_zero_base", rows(row(1, Shard(live=True))), False),
         ("refuse_base_short", rows(row(1, Shard())[:-4 - DIGEST] + d(1)[:-1] + be(4, 0)), False),
     ]
@@ -301,18 +308,19 @@ class SnapCodec(unittest.TestCase):
                 self.assertEqual(verdict(data).startswith("ok"), ok)
 
     def test_seal_then_matching_resume_keeps_seal_and_sets_live(self) -> None:
+        # PRE-S3e pin (review r2 HIGH-2): base stays ZERO after a resume; S3e computes StateV2's base and changes this.
         shard = fold(FOLDS["fold_seal_resume_tip"])[4][3]
         self.assertEqual(shard, Shard(sealed=T1, live=True, last=(T1, b"cert")))
 
-    def test_batch_fold_replays_from_mid_snapshot(self) -> None:
+    def test_batch_fold_replays_from_mid_snapshot(self) -> None:  # PRE-S3e pin, not E5 evidence (see BATCHES)
         self.assertEqual(verdict(FOLDS["fold_batch_2x2"]), verdict(FOLDS["fold_batch_2x2_mid"]))
         self.assertEqual(fold(FOLDS["fold_batch_2x2"])[2], [r for _, f in BATCHES[::-1] for r in f[4]])
 
     def test_encoder_refuses_values_that_do_not_fit(self) -> None:
         for args in [(0, d(1), [], ZERO, {}), (2**64 + 1, d(1), [], ZERO, {}), (1, d(1)[:-1], [], ZERO, {}),
                      (1, d(1), [], ZERO + b"\x00", {}), (1, d(1), [], ZERO, {2**32: Shard()}),
-                     (1, d(1), [], ZERO, {0: Shard(base=b"")}), (1, d(1), [(256, 0, 0)], ZERO, {}),
-                     (1, d(1), [], d(5), {}), (1, d(1), [], ZERO, {0: Shard(own=((1, 0),))}),
+                     (1, d(1), [], ZERO, {0: Shard(live=True, base=b"")}), (1, d(1), [(256, 0, 0)], ZERO, {}),
+                     (1, d(1), [], d(5), {}), (1, d(1), [], ZERO, {0: Shard(live=True, base=d(6), own=((1, 0),))}),
                      (1, d(1), [], ZERO, {0: Shard(live=True)})]:
             with self.subTest(args), self.assertRaises(Log3Error):
                 encode(*args)
