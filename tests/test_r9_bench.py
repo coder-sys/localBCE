@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.x12_835_intake import parse_835  # noqa: E402
-from tools import r9_bench  # noqa: E402
+from tests import r9_bench  # noqa: E402
 
 PER_FILE = 400
 
