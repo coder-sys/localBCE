@@ -8,6 +8,7 @@ import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Gate.ReadManifest
+import BlindLedger.Gate.Engine.Log
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -149,3 +150,11 @@ import BlindLedger.Gate.ReadManifest
 #print axioms BlindLedger.Gate.ReadManifest.encodeReads_inj
 #print axioms BlindLedger.Gate.ReadManifest.kindOf_some
 #print axioms BlindLedger.Gate.ReadManifest.reads_exact
+#print axioms BlindLedger.Gate.Engine.E1_entry3_roundtrip
+#print axioms BlindLedger.Gate.Engine.E2_entryIn3_inj
+#print axioms BlindLedger.Gate.Engine.decode_encode
+#print axioms BlindLedger.Gate.Engine.pBody_app
+#print axioms BlindLedger.Gate.Engine.stepM_keep
+#print axioms BlindLedger.Gate.Engine.pushM_chain
+#print axioms BlindLedger.Gate.Engine.pushM_fold
+#print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical

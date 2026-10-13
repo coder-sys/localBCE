@@ -138,6 +138,7 @@ shown) and a NUL byte:
 | SEGMENT, KEY-CERT | financial history segments; epoch key certificate |
 | READ-<kind>/v2, READ-SET/v2, READ-MANIFEST/v2 | read manifest |
 | CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
+| TENANT-LOG/v3 | engine tenant-log entry (no `/v2` suffix; codec `Gate/Engine/Log.lean`) |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 
 Checkpoints stream to an independent witness (a separate state agency or

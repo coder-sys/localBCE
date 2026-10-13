@@ -9,6 +9,7 @@ import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.ReadManifest
+import BlindLedger.Gate.Engine.Log
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -317,3 +318,19 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.kindOf_some
 /-- info: 'BlindLedger.Gate.ReadManifest.reads_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.reads_exact
+/-- info: 'BlindLedger.Gate.Engine.E1_entry3_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E1_entry3_roundtrip
+/-- info: 'BlindLedger.Gate.Engine.E2_entryIn3_inj' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E2_entryIn3_inj
+/-- info: 'BlindLedger.Gate.Engine.decode_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decode_encode
+/-- info: 'BlindLedger.Gate.Engine.pBody_app' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pBody_app
+/-- info: 'BlindLedger.Gate.Engine.stepM_keep' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_keep
+/-- info: 'BlindLedger.Gate.Engine.pushM_chain' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_chain
+/-- info: 'BlindLedger.Gate.Engine.pushM_fold' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold
+/-- info: 'BlindLedger.Gate.Engine.decodeEntry3B_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical
