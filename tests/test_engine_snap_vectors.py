@@ -6,9 +6,10 @@ Synthetic, nonpayment, non-PHI; test-only reference (Lean decides, this only con
 || sealed || live || last || base || pays``: own ``be4 n || (be8 epoch || be8 count)*``, sealed ``0 | 1 || lp tip``,
 live ``0 | 1``, last ``0 | 1 || lp s || lp c``, base 64 bytes, pays ``be4 n || (be261 key || lp leaf)*``;
 shard, epoch and pay keys strictly ascending.  The decoder also refuses an own count of 0, a live shard on
-the zero base and an rhead that is not the registry chain head of reg (the encoder raises on the same).  A ``fold`` vector pushes v3
-entries from the empty state, or from a leading snapshot, (SEAL, RESUME and SEGMENT only; the batch rhead step is not modelled here;
-a SEAL needs no resume tip, a SEGMENT its snap equal to the digest of the state before it) and prints the snapshot digest of the result.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean
+the zero base, an rhead that is not the registry chain head of reg and a pay leaf that is not one whole Spec leaf keyed by its
+``payNat`` (the encoder raises on the same).  A ``fold`` vector pushes v3 entries from the empty state, or from a leading snapshot
+(a BATCH needs a live shard and puts its rows ahead of reg, a SEAL no resume tip, a SEGMENT its snap equal to the digest of the
+state before it) and prints the snapshot digest of the result.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean
 <vectors>` in lean/ and checks its output against the Python verdicts and the saved LEAN_OUT.  Emit
 the vector file from the repo root with `python -m tests.test_engine_snap_vectors --emit <path>`.
 """
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import NamedTuple
 import unittest
 
+from app import right_rail_gate_codec as codec
 from tests import right_rail_gate_log3 as log3
 from tests.right_rail_gate_log3 import DIGEST, Log3Error, be, d, lp
 
@@ -56,10 +58,27 @@ def state_in(reg: list, rhead: bytes, rows: bytes, n: int) -> bytes:
     return rhead + lp(log3.reg_rows(reg)) + be(4, n) + rows
 
 
+def pay_nat(program: str, payment: str) -> int:
+    return int.from_bytes(bytes([1]) + b"".join(be(2, len(x)) + x.encode() for x in (program, payment)), "big")
+
+
+def leaf_key(x: bytes) -> "int | None":
+    """Spec `pLeaf` on all of x, by reading its fields and re-encoding them with the product codec, then `payNat`."""
+    r = _R(x)
+    ident, tag = lambda: r.take(r.num(2)).decode("latin-1"), lambda names: dict(enumerate(names, 1)).get(r.num(1))
+    try:
+        f = [r.take(len(codec.TOKEN)), ident(), ident(), r.num(4), tag(codec.FLOWS), r.num(8), ident(), r.take(32), ident(),
+             r.num(8), ident(), r.take(DIGEST), tag(codec.OUTCOMES), tuple(ident() for _ in range(r.num(1))),
+             tag(codec.AUTHORITIES)] + [r.take(DIGEST) for _ in range(4)] + [r.num(8) for _ in range(5)]
+        return pay_nat(f[2], f[6]) if codec.encode_token_leaf(codec.TokenLeaf(*f[1:])) == x else None
+    except (Log3Error, codec.GateCodecError):
+        return None
+
+
 def wf(reg: list, rhead: bytes, shards: dict[int, Shard]) -> None:
-    """The decoder's refusals beyond layout: rhead is the registry head, no own count 0, no live shard on the zero base."""
+    """Refusals beyond layout: rhead is the registry head, no own count 0, no live zero base, pays keyed by leaf payNat."""
     if rhead != log3.chain_head(reg) or any(s.live and s.base == ZERO or not all(c for _, c in s.own)
-                                             for s in shards.values()):
+                                             or any(leaf_key(x) != n for n, x in s.pays) for s in shards.values()):
         raise Log3Error("wf")
 
 
@@ -118,7 +137,7 @@ def sdig(n: int, *rest, check: bool = True) -> bytes:
 
 
 def fold(entries: list[bytes]) -> tuple[int, bytes, list, bytes, dict[int, Shard]]:
-    """Log.lean `pushM` on SEAL, RESUME and SEGMENT entries, after a leading snapshot if there is one."""
+    """Log.lean `pushM` on BATCH, SEAL, RESUME and SEGMENT entries, after a leading snapshot if there is one."""
     lead = bool(entries) and entries[0].startswith(TAG)
     n, head, reg, rhead, shards = decode(entries[0]) if lead else (0, ZERO, [], ZERO, {})
     for e in entries[lead:]:
@@ -126,8 +145,10 @@ def fold(entries: list[bytes]) -> tuple[int, bytes, list, bytes, dict[int, Shard
         if (idx, prev) != (n, head):
             raise Log3Error("chain")
         if kind == "batch":
-            raise NotImplementedError("batch")
-        if kind == "segment":
+            if not shards.get(f[0], Shard()).live:
+                raise Log3Error(kind)
+            reg, rhead = f[4] + reg, log3.chain_head(f[4], rhead)
+        elif kind == "segment":
             if f[5] != sdig(n, head, reg, rhead, shards, check=False):
                 raise Log3Error("snap")
         else:
@@ -139,8 +160,15 @@ def fold(entries: list[bytes]) -> tuple[int, bytes, list, bytes, dict[int, Shard
     return n, head, reg, rhead, shards
 
 
+def pay(payment: str, seq: int = 1, key: "int | None" = None) -> tuple[int, bytes]:
+    """A pay row: an SDP payment held for review in program P1, keyed by its payNat unless `key` is given."""
+    leaf = codec.TokenLeaf("T1", "P1", 0, "SDP", 0, payment, d(5)[:32], "R1", 1, "M1", ZERO, "HUMAN_REVIEW", (), "HOLD",
+                           d(1), d(2), d(3), d(4), 0, 1, seq, 2, 3)
+    return (pay_nat("P1", payment) if key is None else key), codec.encode_token_leaf(leaf)
+
+
 REG = [(1, 5, 6), (255, 256**129 - 1, 2**32 - 1)]
-TOP = Shard(((0, 1), (2**64 - 1, 2**64 - 1)), b"", True, (b"", b"c"), d(9), ((0, b""), (256**PAY - 1, b"leaf")))
+TOP = Shard(((0, 1), (2**64 - 1, 2**64 - 1)), b"", True, (b"", b"c"), d(9), (pay("A"), pay("B" * 128)))
 THREE = {2**32 - 1: TOP, 0: Shard(live=True, base=d(6)), 7: Shard(sealed=d(2), base=d(7))}
 GOOD = {
     "empty": (1, d(1), [], ZERO, {}),
@@ -175,12 +203,19 @@ def lead(last: "tuple[bytes, bytes] | None", *bodies: tuple[str, tuple]) -> list
     return [encode(2, d(1), [], ZERO, {3: Shard(last=last)})] + chain(*bodies, at=(2, d(1)))
 
 
+LIVE = encode(2, d(1), [], ZERO, {3: Shard(live=True, base=d(3)), 4: Shard(live=True, base=d(4))})
+# 2 shards x 2 batches of 2 registry rows each; MID is the state after the first two (E5 on the batch path).
+BATCHES = [("batch", (k, b"h", b"m", [b"r"], [(1, 2 * i, k), (2, 2 * i + 1, k)], [b"l"])) for i, k in enumerate((3, 4, 3, 4))]
+MID = fold([LIVE] + chain(*BATCHES[:2], at=(2, d(1))))
 FOLDS = {
     "fold_seal_resume_tip": chain(SEAL, resume((T1, b"cert"))),
     "fold_resume_fresh": chain(resume(None, 4)),
     "fold_seg_ok": chain(segment()),
     "fold_seal_segment_resume_tip": chain(SEAL, segment(SEAL), resume((T1, b""))),
     "fold_lead_seal": lead(None, SEAL),
+    "fold_batch_2x2": [LIVE] + chain(*BATCHES, at=(2, d(1))),
+    "fold_batch_2x2_mid": [encode(*MID)] + chain(*BATCHES[2:], at=MID[:2]),
+    "refuse_fold_batch_parked": chain(BATCHES[0]),
     "refuse_fold_seal_resume_other_tip": chain(SEAL, resume((T2, b"cert"))),
     "refuse_fold_seal_resume_no_tip": chain(SEAL, resume(None)),
     "refuse_fold_fresh_resume_with_tip": chain(resume((T1, b"cert"), 4)),
@@ -203,7 +238,6 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
     at = len(TAG) + 8 + DIGEST  # lp(state)
     s1, s3 = one[at + 4:], three[at + 4:]
     c1, c3 = DIGEST + 4, DIGEST + 4 + 134 * len(REG)  # shard count
-    n3 = int.from_bytes(three[at:at + 4], "big")
     r9 = row(9, GOOD["sealed_live"][4][9])
 
     def state(b: bytes, s: bytes) -> bytes:  # same snapshot head, new inner state
@@ -222,7 +256,7 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_state_trailing", state(three, s3 + b"\x00"), False),
         ("refuse_count_over", state(three, s3[:c3] + be(4, 4) + s3[c3 + 4:]), False),
         ("refuse_count_under", state(three, s3[:c3] + be(4, 2) + s3[c3 + 4:]), False),
-        ("refuse_lp_over", three[:at] + be(4, n3 + 1) + three[at + 4:], False),
+        ("refuse_lp_over", three[:at] + be(4, len(s3) + 1) + three[at + 4:], False),
         ("refuse_reg_partial_row", state(one, ZERO + lp(b"\x00" * 133) + s1[c1:]), False),
         ("refuse_sealed_flag_2", rows(r9[:8] + b"\x02" + r9[9:]), False),
         ("refuse_live_flag_2", rows(r9[:16] + b"\x02" + r9[17:]), False),
@@ -231,8 +265,10 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_keys_descending", rows(row(7, Shard()), row(0, Shard())), False),
         ("refuse_own_epochs_equal", rows(row(1, Shard(own=((5, 1), (5, 2))))), False),
         ("refuse_own_epochs_descending", rows(row(1, Shard(own=((6, 1), (5, 2))))), False),
-        ("refuse_pays_keys_equal", rows(row(1, Shard(pays=((5, b"a"), (5, b"b"))))), False),
-        ("refuse_pays_keys_descending", rows(row(1, Shard(pays=((6, b"a"), (5, b"b"))))), False),
+        ("refuse_pays_keys_equal", rows(row(1, Shard(pays=(pay("A"), pay("A", 2))))), False),
+        ("refuse_pays_keys_descending", rows(row(1, Shard(pays=(pay("B"), pay("A"))))), False),
+        ("refuse_pay_key_mismatch", rows(row(1, Shard(pays=(pay("A", key=pay("B")[0]),)))), False),
+        ("refuse_pay_leaf_trailing", rows(row(1, Shard(pays=((pay("A")[0], pay("A")[1] + b"\x00"),)))), False),
         ("refuse_rhead_forged", state(three, d(3) + s3[DIGEST:]), False),
         ("refuse_own_count_0", rows(row(1, Shard(own=((5, 0),)))), False),
         ("refuse_live_zero_base", rows(row(1, Shard(live=True))), False),
@@ -267,6 +303,10 @@ class SnapCodec(unittest.TestCase):
     def test_seal_then_matching_resume_keeps_seal_and_sets_live(self) -> None:
         shard = fold(FOLDS["fold_seal_resume_tip"])[4][3]
         self.assertEqual(shard, Shard(sealed=T1, live=True, last=(T1, b"cert")))
+
+    def test_batch_fold_replays_from_mid_snapshot(self) -> None:
+        self.assertEqual(verdict(FOLDS["fold_batch_2x2"]), verdict(FOLDS["fold_batch_2x2_mid"]))
+        self.assertEqual(fold(FOLDS["fold_batch_2x2"])[2], [r for _, f in BATCHES[::-1] for r in f[4]])
 
     def test_encoder_refuses_values_that_do_not_fit(self) -> None:
         for args in [(0, d(1), [], ZERO, {}), (2**64 + 1, d(1), [], ZERO, {}), (1, d(1)[:-1], [], ZERO, {}),

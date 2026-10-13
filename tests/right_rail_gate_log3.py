@@ -52,9 +52,8 @@ def digest(x: bytes) -> bytes:
     return x
 
 
-def chain_head(rows: list[tuple[int, int, int]]) -> bytes:
-    """Lean `chainHead sha3 zeroDigest rows` (rows newest first): `idRegStep` folded from the oldest."""
-    h = bytes(DIGEST)
+def chain_head(rows: list[tuple[int, int, int]], h: bytes = bytes(DIGEST)) -> bytes:
+    """Lean `chainHead sha3 h rows` (rows newest first): `idRegStep` folded from the oldest."""
     for k, i, s in reversed(rows):
         h = hashlib.sha3_512(b"RR/GATE/ID-REG/v2\x00" + h + be(1, k) + be(129, i) + be(4, s)).digest()
     return h
@@ -82,10 +81,6 @@ def entry_in(idx: int, prev: bytes, body: bytes) -> bytes:
     return TAG + be(8, idx) + digest(prev) + body
 
 
-def entry_digest(entry: bytes) -> bytes:
-    return hashlib.sha3_512(entry).digest()
-
-
 class _Reader:
     def __init__(self, data: bytes) -> None:
         self.data, self.pos = data, 0
@@ -102,9 +97,6 @@ class _Reader:
     def lp(self) -> bytes:
         return self.take(self.num(4))
 
-    def many(self, one, count: int) -> list:
-        return [one() for _ in range(count)]
-
     def rest(self) -> bytes:
         return self.take(len(self.data) - self.pos)
 
@@ -118,12 +110,12 @@ def decode(data: bytes) -> tuple[int, bytes, str, tuple]:
     idx, prev, kind = r.num(8), r.take(DIGEST), r.num(1)
     if kind == 0:
         shard, header, manifest = r.num(4), r.lp(), r.lp()
-        reqs = r.many(r.lp, r.num(4))
+        reqs = [r.lp() for _ in range(r.num(4))]
         n = r.num(4)
         if n % ROW:
             raise Log3Error("rows")
-        rows = r.many(lambda: (r.num(1), r.num(129), r.num(4)), n // ROW)
-        leaves = r.many(r.lp, r.num(4))
+        rows = [(r.num(1), r.num(129), r.num(4)) for _ in range(n // ROW)]
+        leaves = [r.lp() for _ in range(r.num(4))]
         out = ("batch", (shard, header, manifest, reqs, rows, leaves))
     elif kind in (1, 2):
         shard = r.num(4)

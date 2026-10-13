@@ -8,6 +8,7 @@ Emit the vector file from the repo root with `python -m tests.test_engine_log_ve
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import unittest
 
@@ -16,8 +17,7 @@ from tests import right_rail_gate_log3 as log3
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "tests" / "engine_log" / "log3_v1.vectors"
 LEAN_OUT = ROOT / "tests" / "engine_log" / "log3_v1.lean.out"
-LEAN = ROOT / "lean"
-LOG_LEAN = LEAN / "BlindLedger" / "Gate" / "Engine" / "Log.lean"
+LOG_LEAN = ROOT / "lean" / "BlindLedger" / "Gate" / "Engine" / "Log.lean"
 
 
 d = log3.d
@@ -78,7 +78,7 @@ def verdict(data: bytes) -> str:
     except log3.Log3Error:
         return "refuse"
     assert log3.encode(idx, prev, kind, fields) == data
-    return "ok " + log3.entry_digest(data).hex()
+    return "ok " + hashlib.sha3_512(data).hexdigest()
 
 
 class Log3Codec(unittest.TestCase):
@@ -87,9 +87,7 @@ class Log3Codec(unittest.TestCase):
             with self.subTest(name):
                 data = good(name)
                 idx, prev, kind, fields = log3.decode(data)
-                self.assertEqual((idx, prev, kind), (11, PREV, KIND.get(name, name)))
-                self.assertEqual(log3.encode(idx, prev, kind, fields), data)
-                self.assertTrue(data.startswith(b"RR/GATE/TENANT-LOG/v3\x00"))
+                self.assertEqual((idx, prev, kind, fields), (11, PREV, KIND.get(name, name), GOOD[name]))
 
     def test_widths_match_the_lean_spec(self) -> None:
         self.assertEqual(len(log3.reg_rows([(1, 2, 3)])), log3.ROW)
@@ -97,15 +95,13 @@ class Log3Codec(unittest.TestCase):
         for needle in ('"RR/GATE/TENANT-LOG/v3".toUTF8.toList ++ [0]', "regRowWidth : Nat := 134"):
             self.assertIn(needle, text)
 
-    def test_decoder_refuses_every_bad_vector(self) -> None:
-        for name, data, ok in vectors():
-            with self.subTest(name):
-                self.assertEqual(verdict(data).startswith("ok"), ok)
-
-    def test_vector_names_are_unique_and_deterministic(self) -> None:
+    def test_vectors_unique_deterministic_and_decided(self) -> None:
         names = [n for n, _, _ in vectors()]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(vectors(), vectors())
+        for name, data, ok in vectors():
+            with self.subTest(name):
+                self.assertEqual(verdict(data).startswith("ok"), ok)
 
     def test_encoder_refuses_values_that_do_not_fit(self) -> None:
         bad = [
