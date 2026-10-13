@@ -5,16 +5,22 @@ import BlindLedger.Financial.ShardSplit
 
 `reshard pk K' cx ss` moves a sharded store from pack `pk` to `setK pk cx.p K'`: only `cx.p`'s `K` changes, by
 construction (`setK_k_ne`).  It applies only when every shard `k < max K K'` has committed the spine's last record
-(`quiet`), `packOk pk` and `0 < K'`; otherwise it returns `none` and nothing is applied.
+(`quiet`), `packOk pk`, `0 < K'` and the store's stored `K` is the pack's (`kOk`); otherwise it returns `none` and
+nothing is applied.  The spine stores `K` (`SpineDB.k`); RESHARD sets it to `K'` (`reshard_k`), and every step and
+every RESHARD under a pack whose `K` is not the stored one is refused (`stale_pack`): a pack not saved after a
+RESHARD, or saved before one, cannot read or write the store.
 
 RESHARD is one spine record like any other.  Its part for shard `j` is an IMAGE (`Rec.img`): `j`'s charges, gross
 and machine charge after the record, written as is.  `applyPart` overwrites from the image, so applying a part is
 idempotent and independent of the order in which shards commit; the existing `replay`/`recoverAll` finishes a
 RESHARD interrupted after the spine COMMIT at any set `C` of committed shards (`reshard_rollforward`).  Until it is
-finished every later RESHARD and every step is refused, retired shards included (`lastOk`, `reshard_crash_open`);
-once recovered the store accepts both again (`reshard_live`): a crash never wedges it.  Each touched shard's post
-head is `cx.hi pre n image`, a chain separate from the step chain `cx.hs`, so the shard head alone commits to the
-shard's state after RESHARD (`reshard_head_img`).
+finished every later RESHARD and every step is refused under any pack, retired shards included (`lastOk`,
+`reshard_crash_open`); once recovered the store accepts both again (`reshard_live`): a crash never wedges it.  Every
+store a crash can leave, recovery interrupted part-way included, recovers to a reachable store (`Crash`,
+`crash_recover`, `crash_partial`).  Each touched shard's post head is `cx.hi pre n image`, a chain separate from the
+step chain `cx.hs` (`reshard_head_img`).  Replay installs a stored image only when the record's post heads are `hi`
+of it (`imgOk`); the head binds the image only under injectivity of `hi` at that image, assumed explicitly
+(`img_bind`): `Ctx` does not provide it.
 
 The directory keeps every row's raw digest, gross and admitting item; a shard-homed row is rehomed to
 `sidx pk' cx x.item`, `shardOf pk'` of the item the directory row itself carries (no caller-supplied key).  Shard
@@ -28,10 +34,11 @@ model's directory, which has no finite support); per-shard reconciliation must s
   at `tgt`; no row appears from nowhere; every shard row sits at its item's shard under the new pack.
 * (b) `reshard_merge_run`, `reshard_whole_run`, `reshard_rcpts_run`: the resharded store runs as the un-resharded
   single store up to `norm` (the shard index of directory homes).
-* (c) `inv_reshard` .. `history_reshard`, `ReachR`, `reachR_ok`, `reachR_recover`: invariants, the home bound and
-  recovery hold on every store reachable by steps and RESHARDs.
-* (d) `reshard_none`, `reshard_refuse`, `reshard_open`, `reshard_rollforward`, `reshard_crash_open`, `live_inv3`,
-  `reshard_live`, `reshard_head_img`.
+* (c) `inv_reshard` .. `history_reshard`, `inv2_reshard`, `ReachR`, `reachS_reachR`, `reachR_ok`, `reachR_recover`:
+  invariants, the stored `K`, the home bound and recovery hold on every store reachable by steps and RESHARDs.
+* (d) `reshard_none`, `reshard_refuse`, `stale_pack`, `reshard_k`, `reshard_open`, `reshard_rollforward`,
+  `reshard_crash_open`, `Crash`, `crash_recover`, `crash_partial`, `live_inv3`, `reshard_live`, `reshard_head_img`,
+  `img_bind`.
 -/
 
 namespace BlindLedger.Financial.Reshard
@@ -57,12 +64,12 @@ def rdir (pk : Pack) (cx : Ctx) (d : Dir) : Dir := fun c => (d c).map (rehome pk
 def rT (pk : Pack) (K' : Nat) (cx : Ctx) : List Nat := List.range (max (pk.k cx.p) K')
 
 /-- Quiescent boundary: every shard the record reads or writes, and every shard the spine's last record touched,
-    has committed that record. -/
+    has committed that record, and its image, if any, is the one its post heads commit to. -/
 def quiet (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Bool :=
-  ((rT pk K' cx).all fun k => (ss.2 k).head == ss.1.heads k) && lastOk ss
+  ((rT pk K' cx).all fun k => (ss.2 k).head == ss.1.heads k) && lastOk cx ss
 
 def reshardOk (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Bool :=
-  quiet pk K' cx ss && packOk pk && decide (0 < K')
+  quiet pk K' cx ss && packOk pk && decide (0 < K') && kOk pk cx ss
 
 /-- Shard `j`'s image: its rows of the merged charges under the new directory; totals at shard 0. -/
 def rImg (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) (j : Nat) : (Cell → Nat) × Int × Int :=
@@ -78,7 +85,8 @@ def rSpine (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : SpineDB :=
   { ss.1 with
     dir := rdir (setK pk cx.p K') cx ss.1.dir,
     heads := fun k => if k ∈ rT pk K' cx then (rRec pk K' cx ss).post k else ss.1.heads k,
-    recs := rRec pk K' cx ss :: ss.1.recs }
+    recs := rRec pk K' cx ss :: ss.1.recs,
+    k := K' }
 
 def reshard (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Option SS :=
   if reshardOk pk K' cx ss then some (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2)
@@ -98,10 +106,24 @@ def locDir (pk : Pack) (cx : Ctx) (d : Dir) : Prop :=
 
 /-- Stores reachable by steps and RESHARDs from a migrated store (the pack is the store's current pack). -/
 inductive ReachR (cx : Ctx) : Pack → SS → Prop
-  | init (pk : Pack) (L : Legacy) : packOk pk = true → ReachR cx pk (initS L)
+  | init (pk : Pack) (L : Legacy) : packOk pk = true → ReachR cx pk (initS (pk.k cx.p) L)
   | step {pk : Pack} {ss : SS} (inp : Input) : ReachR cx pk ss → ReachR cx pk (stepT pk cx ss inp)
   | resh {pk : Pack} {ss ss' : SS} (K' : Nat) :
       ReachR cx pk ss → reshard pk K' cx ss = some ss' → ReachR cx (setK pk cx.p K') ss'
+
+/-- Recovery interrupted part-way: only the shards in `S` were recovered. -/
+def recoverOn (cx : Ctx) (S : List Nat) (ss : SS) : SS :=
+  (ss.1, fun k => if k ∈ S then recover cx ss.1 k (ss.2 k) else ss.2 k)
+
+/-- Every store a crash can leave: a reachable store, or one interrupted after the spine COMMIT of a step or of a
+    RESHARD with any set `C` of touched shards committed.  `crash_partial`: a RESHARD recovery interrupted part-way
+    is again a `resh` store. -/
+inductive Crash (cx : Ctx) : Pack → SS → Prop
+  | ok {pk : Pack} {ss : SS} : ReachR cx pk ss → Crash cx pk ss
+  | spine {pk : Pack} {ss : SS} (inp : Input) (C : List Nat) : ReachR cx pk ss →
+      (∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) → Crash cx pk (afterSpine pk cx ss inp C)
+  | resh {pk : Pack} {ss : SS} (K' : Nat) (C : List Nat) : ReachR cx pk ss → reshardOk pk K' cx ss = true →
+      (∀ k ∈ C, k ∈ rT pk K' cx) → Crash cx (setK pk cx.p K') (afterReshard pk K' cx ss C)
 
 variable {pk : Pack} {K' : Nat} {cx : Ctx} {ss ss' : SS}
 
@@ -119,33 +141,55 @@ theorem reshard_eq (h : reshard pk K' cx ss = some ss') :
 
 theorem reshard_none (h : reshardOk pk K' cx ss = false) : reshard pk K' cx ss = none := sorry
 
-theorem reshard_refuse (h : quiet pk K' cx ss = false ∨ packOk pk = false ∨ K' = 0) :
+theorem reshard_refuse (h : quiet pk K' cx ss = false ∨ packOk pk = false ∨ K' = 0 ∨ ss.1.k ≠ pk.k cx.p) :
     reshard pk K' cx ss = none := sorry
 
 theorem ok_parts (h : reshardOk pk K' cx ss = true) :
-    quiet pk K' cx ss = true ∧ packOk pk = true ∧ 0 < K' := sorry
+    quiet pk K' cx ss = true ∧ packOk pk = true ∧ 0 < K' ∧ ss.1.k = pk.k cx.p := sorry
 
-/-- A crash after a step's spine COMMIT that left a touched shard `k` uncommitted is not quiescent: RESHARD
-    refuses. -/
+/-- HIGH-1: a pack whose `K` is not the store's (one saved before a RESHARD, or not saved after one) can neither
+    RESHARD nor step the store. -/
+theorem stale_pack (h : ss.1.k ≠ pk.k cx.p) :
+    (∀ K'', reshard pk K'' cx ss = none) ∧ ∀ inp, stepS pk cx ss inp = none := sorry
+
+/-- RESHARD stores its `K'`. -/
+theorem reshard_k (h : reshard pk K' cx ss = some ss') : ss'.1.k = K' := by
+  unfold reshard at h
+  split at h
+  · cases h; rfl
+  · cases h
+
+/-- A crash after a step's spine COMMIT that left a touched shard `k` uncommitted is not quiescent: under any
+    pack, RESHARD and every step refuse. -/
 theorem reshard_open (inp : Input) (C : List Nat) (k : Nat) (hc : checkAll pk cx ss inp = true)
     (hk : k ∈ (mkRec pk cx ss inp).2.touched) (hC : k ∉ C) :
-    reshard pk K' cx (afterSpine pk cx ss inp C) = none := sorry
+    (∀ pk'' K'', reshard pk'' K'' cx (afterSpine pk cx ss inp C) = none) ∧
+      ∀ pk'' inp', stepS pk'' cx (afterSpine pk cx ss inp C) inp' = none := sorry
 
 /-- H1: a RESHARD interrupted after its spine COMMIT, with any set `C` of shards committed, recovers to exactly
     the completed RESHARD. -/
 theorem reshard_rollforward (C : List Nat) (h : reshard pk K' cx ss = some ss') (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
-    recoverAll (afterReshard pk K' cx ss C) = ss' := sorry
+    recoverAll cx (afterReshard pk K' cx ss C) = ss' := sorry
 
 /-- Before recovery, an interrupted RESHARD with any touched shard `j` uncommitted (a retired `j ≥ K'` included)
-    blocks every later RESHARD and every step. -/
+    blocks every later RESHARD and every step, under any pack. -/
 theorem reshard_crash_open (C : List Nat) (j : Nat) (hok : reshardOk pk K' cx ss = true) (hj : j ∈ rT pk K' cx)
     (hC : j ∉ C) :
-    (∀ K'', reshard (setK pk cx.p K') K'' cx (afterReshard pk K' cx ss C) = none) ∧
-      ∀ inp, stepS (setK pk cx.p K') cx (afterReshard pk K' cx ss C) inp = none := sorry
+    (∀ pk'' K'', reshard pk'' K'' cx (afterReshard pk K' cx ss C) = none) ∧
+      ∀ pk'' inp, stepS pk'' cx (afterReshard pk K' cx ss C) inp = none := sorry
 
-/-- Never wedged: with every shard head at the spine's, RESHARD to any `K'' > 0` applies and every step the
-    judgment accepts commits. -/
-theorem live_inv3 (h3 : Inv3 ss) (hp : packOk pk = true) (K'' : Nat) (hK : 0 < K'') :
+/-- M1: recovery of every store a crash can leave is a reachable store. -/
+theorem crash_recover (h : Crash cx pk ss) : ReachR cx pk (recoverAll cx ss) := sorry
+
+/-- M1: a RESHARD recovery interrupted after recovering the shards `S` leaves the RESHARD crash with `C ++ S`
+    committed; recovery may be interrupted and resumed any number of times. -/
+theorem crash_partial (C S : List Nat) (hok : reshardOk pk K' cx ss = true) (hC : ∀ k ∈ C, k ∈ rT pk K' cx)
+    (hS : ∀ k ∈ S, k ∈ rT pk K' cx) :
+    recoverOn cx S (afterReshard pk K' cx ss C) = afterReshard pk K' cx ss (C ++ S) := sorry
+
+/-- Never wedged: with every shard head at the spine's, the stored `K` the pack's and the newest image bound
+    (`InvK`), RESHARD to any `K'' > 0` applies and every step the judgment accepts commits. -/
+theorem live_inv3 (h3 : Inv3 ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (K'' : Nat) (hK : 0 < K'') :
     (reshard pk K'' cx ss).isSome = true ∧
       ∀ inp, (judge pk cx ss.1.view inp).ok = true → (stepS pk cx ss inp).isSome = true := sorry
 
@@ -153,14 +197,24 @@ theorem live_inv3 (h3 : Inv3 ss) (hp : packOk pk = true) (K'' : Nat) (hK : 0 < K
     `K'' > 0` and every step the judgment accepts. -/
 theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss')
     (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (K'' : Nat) (hK : 0 < K'') :
-    (reshard (setK pk cx.p K') K'' cx (recoverAll (afterReshard pk K' cx ss C))).isSome = true ∧
+    (reshard (setK pk cx.p K') K'' cx (recoverAll cx (afterReshard pk K' cx ss C))).isSome = true ∧
       ∀ inp, (judge (setK pk cx.p K') cx ss'.1.view inp).ok = true →
-        (stepS (setK pk cx.p K') cx (recoverAll (afterReshard pk K' cx ss C)) inp).isSome = true := sorry
+        (stepS (setK pk cx.p K') cx (recoverAll cx (afterReshard pk K' cx ss C)) inp).isSome = true := sorry
 
-/-- The shard head alone commits to the shard's state: each touched shard's head after RESHARD is the image chain
-    over its pre head, the record number and its charges, gross and machine charge. -/
+/-- The transition's head equation: each touched shard's head after RESHARD is the image chain `cx.hi` over its
+    pre head, the record number and its charges, gross and machine charge after RESHARD.  This alone does not
+    bind the head to the state (`hi` need not be injective); see `img_bind`. -/
 theorem reshard_head_img (h : reshard pk K' cx ss = some ss') (j : Nat) (hj : j ∈ rT pk K' cx) :
     (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length ((ss'.2 j).chg, (ss'.2 j).gross, (ss'.2 j).mc) := sorry
+
+/-- M2: if `hi` at shard `j`'s pre head and record number has no collision with the true image (`hInj`, a
+    collision-resistance assumption stated pointwise: no `Ctx` hash into `Dg = Nat` is injective on all images),
+    every image whose `hi` gives `j`'s head after RESHARD is the true one. -/
+theorem img_bind (j : Nat) (v : (Cell → Nat) × Int × Int)
+    (hInj : ∀ w, cx.hi (ss.2 j).head ss.1.recs.length w = cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j) →
+      w = rImg pk K' cx ss j)
+    (h : reshard pk K' cx ss = some ss') (hj : j ∈ rT pk K' cx)
+    (hv : (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length v) : v = rImg pk K' cx ss j := sorry
 
 /-! ## Charges under the new directory -/
 
@@ -220,6 +274,8 @@ theorem merge_reshard (hI : Inv ss) (hK' : 0 < K') :
 theorem inv_reshard (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss') : Inv ss' :=
   sorry
 
+theorem inv2_reshard (h : reshard pk K' cx ss = some ss') : Inv2 ss' := sorry
+
 theorem inv3_reshard (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') : Inv3 ss' := sorry
 
 theorem inv4_reshard (hI : Inv ss) (h4 : Inv4 pk cx ss) (h : reshard pk K' cx ss = some ss') :
@@ -232,12 +288,23 @@ theorem heads_reshard (h : reshard pk K' cx ss = some ss') : headsOk (setK pk cx
 theorem history_reshard (hc : chainsOk ss) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') :
     historyOk (setK pk cx.p K') cx (mergeHist (setK pk cx.p K') cx ss') = true := sorry
 
-/-- M3: on every store reachable by steps and RESHARDs the invariants and the home bound hold. -/
+theorem reachR_run : ∀ (rs : List Input) {ss : SS}, ReachR cx pk ss → ReachR cx pk (runS pk cx ss rs)
+  | [], _, h => h
+  | r :: rs, _, h => reachR_run rs (ReachR.step r h)
+
+/-- Every store a step run reaches from a migrated store is `ReachR`. -/
+theorem reachS_reachR (hp : packOk pk = true) (h : reachS pk cx ss) : ReachR cx pk ss := by
+  obtain ⟨L, rs, rfl⟩ := h
+  exact reachR_run rs (ReachR.init pk L hp)
+
+/-- M3: on every store reachable by steps and RESHARDs the invariants and the home bound hold, and the stored `K`
+    is the pack's (`InvK`: `ss.1.k = pk.k cx.p`, and the newest image is bound). -/
 theorem reachR_ok (h : ReachR cx pk ss) :
-    packOk pk = true ∧ Inv ss ∧ Inv3 ss ∧ Inv4 pk cx ss ∧ chainsOk ss ∧ homesLt pk cx ss.1.dir := sorry
+    packOk pk = true ∧ Inv ss ∧ Inv2 ss ∧ Inv3 ss ∧ Inv4 pk cx ss ∧ chainsOk ss ∧ homesLt pk cx ss.1.dir ∧
+      InvK pk cx ss := sorry
 
 /-- A crash before any spine COMMIT leaves a `ReachR` store; recovery changes nothing in it. -/
-theorem reachR_recover (h : ReachR cx pk ss) : recoverAll ss = ss := sorry
+theorem reachR_recover (h : ReachR cx pk ss) : recoverAll cx ss = ss := sorry
 
 /-! ## (a) Every row present exactly once, at its new home -/
 
@@ -433,33 +500,40 @@ def LW : Legacy :=
     chg_cell := fun _ _ => by simp, used_eq := rfl, budget_eq := rfl }
 
 /-- K = 1 to K = 2: the one charged row moves from shard 0 to shard 1 (`1 % 2`), with its directory home. -/
-example : (reshard ⟨[]⟩ 2 cxW (initS LW)).map
+example : (reshard ⟨[]⟩ 2 cxW (initS 1 LW)).map
     (fun ss => ((ss.2 1).chg "a", (ss.2 0).chg "a", (ss.1.dir "a").map (·.home))) = some (1, 0, some (.shard 1)) := by
   decide
 
 /-- H1, the review's scenario and its mirror: a crash after the RESHARD spine COMMIT with shard 1 only, shard 0
     only, or no shard committed; after recovery "a" is charged once, at shard 1, and the merged charge is 1. -/
 example : [[1], [0], []].map (fun C =>
-      let ss := recoverAll (afterReshard ⟨[]⟩ 2 cxW (initS LW) C)
+      let ss := recoverAll cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) C)
       ((ss.2 0).chg "a", (ss.2 1).chg "a", (merge ⟨[(0, 2)]⟩ cxW ss).chg "a"))
     = [(0, 1, 1), (0, 1, 1), (0, 1, 1)] := by
   decide
 
 /-- Before recovery, shard 0 uncommitted: a later RESHARD and a step are both refused. -/
-example : (reshard ⟨[(0, 2)]⟩ 3 cxW (afterReshard ⟨[]⟩ 2 cxW (initS LW) [1])).isNone = true ∧
-    (stepS ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS LW) [1]) ⟨0, []⟩).isNone = true := by
+example : (reshard ⟨[(0, 2)]⟩ 3 cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) [1])).isNone = true ∧
+    (stepS ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) [1]) ⟨0, []⟩).isNone = true := by
   decide
 
 /-- K = 2 to K = 1 with retired shard 1 uncommitted: a step and a RESHARD to K = 1 are refused before recovery and
     accepted after it. -/
-example : let ss := afterReshard ⟨[(0, 2)]⟩ 1 cxW (initS LW) [0]
+example : let ss := afterReshard ⟨[(0, 2)]⟩ 1 cxW (initS 2 LW) [0]
     ((stepS ⟨[(0, 1), (0, 2)]⟩ cxW ss ⟨0, []⟩).isNone && (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW ss).isNone &&
-      (stepS ⟨[(0, 1), (0, 2)]⟩ cxW (recoverAll ss) ⟨0, []⟩).isSome &&
-      (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW (recoverAll ss)).isSome) = true := by
+      (stepS ⟨[(0, 1), (0, 2)]⟩ cxW (recoverAll cxW ss) ⟨0, []⟩).isSome &&
+      (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW (recoverAll cxW ss)).isSome) = true := by
   decide
 
 /-- `K' = 0` is refused. -/
-example : (reshard ⟨[]⟩ 0 cxW (initS LW)).isNone = true := by
+example : (reshard ⟨[]⟩ 0 cxW (initS 1 LW)).isNone = true := by
+  decide
+
+/-- HIGH-1, the review's scenario: after RESHARD K = 1 to K = 2, the unsaved pack (K = 1) can neither RESHARD
+    back to K = 1 nor step; the saved pack steps. -/
+example : (reshard ⟨[]⟩ 2 cxW (initS 1 LW)).map (fun ss =>
+      ((reshard ⟨[]⟩ 1 cxW ss).isNone, (stepS ⟨[]⟩ cxW ss ⟨0, []⟩).isNone, (stepS ⟨[(0, 2)]⟩ cxW ss ⟨0, []⟩).isSome))
+    = some (true, true, true) := by
   decide
 
 end BlindLedger.Financial.Reshard
