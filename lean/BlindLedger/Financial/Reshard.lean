@@ -271,19 +271,26 @@ theorem crash_partial (C S : List Nat) (hok : reshardOk pk K' cx ss = true) (hC 
     included), leaves a store a crash can leave. -/
 theorem crash_recoverOn (h : Crash cx pk ss) (S : List Nat) : Crash cx pk (recoverOn cx S ss) := sorry
 
+theorem lastOk_of (h3 : Inv3 ss) (hk : InvK pk cx ss) : lastOk cx ss = true := by
+  unfold lastOk
+  simp only [Bool.and_eq_true]
+  exact ⟨List.all_eq_true.2 fun k _ => beq_iff_eq.2 (h3 k).1, hk.2⟩
+
+theorem reshardOk_of (h3 : Inv3 ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (hK : 0 < K') :
+    reshardOk pk K' cx ss = true := by
+  have hl := lastOk_of h3 hk
+  simp only [reshardOk, quiet, kOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
+  exact ⟨⟨⟨⟨List.all_eq_true.2 fun k _ => beq_iff_eq.2 (h3 k).1, hl⟩, hp⟩, hK⟩, hk.1⟩
+
 /-- Never wedged: with every shard head at the spine's, the stored `K` the pack's and the newest image bound
     (`InvK`), RESHARD to any `K'' > 0` applies and every step the judgment accepts commits. -/
 theorem live_inv3 (h3 : Inv3 ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (K'' : Nat) (hK : 0 < K'') :
     (reshard pk K'' cx ss).isSome = true ∧
-      ∀ inp, (judge pk cx ss.1.view inp).ok = true → (stepS pk cx ss inp).isSome = true := sorry
-
-/-- After a crash inside any RESHARD (a `K` decrease included), recovery leaves a store that accepts RESHARD to any
-    `K'' > 0` and every step the judgment accepts. -/
-theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss')
-    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (K'' : Nat) (hK : 0 < K'') :
-    (reshard (setK pk cx.p K') K'' cx (recoverAll cx (afterReshard pk K' cx ss C))).isSome = true ∧
-      ∀ inp, (judge (setK pk cx.p K') cx ss'.1.view inp).ok = true →
-        (stepS (setK pk cx.p K') cx (recoverAll cx (afterReshard pk K' cx ss C)) inp).isSome = true := sorry
+      ∀ inp, (judge pk cx ss.1.view inp).ok = true → (stepS pk cx ss inp).isSome = true := by
+  refine ⟨by simp [reshard, reshardOk_of h3 hk hp hK], fun inp hj => ?_⟩
+  have hc : checkAll pk cx ss inp = true := by
+    rw [checkAll_inv3 pk cx ss inp h3 hk]; exact hj
+  simp [stepS, hc]
 
 /-- The transition's head equation: each touched shard's head after RESHARD is the image chain `cx.hi` over its
     pre head, the record number and its charges, gross and machine charge after RESHARD.  This alone does not
@@ -545,6 +552,17 @@ theorem invK_reshard (h : reshard pk K' cx ss = some ss') : InvK (setK pk cx.p K
   have hk := reshard_k h
   obtain ⟨_, rfl⟩ := reshard_eq h
   exact ⟨by rw [setK_k_self]; exact hk, rRec_imgOk⟩
+
+/-- After a crash inside any RESHARD (a `K` decrease included), recovery leaves a store that accepts RESHARD to any
+    `K'' > 0` and every step the judgment accepts. -/
+theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss')
+    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (K'' : Nat) (hK : 0 < K'') :
+    (reshard (setK pk cx.p K') K'' cx (recoverAll cx (afterReshard pk K' cx ss C))).isSome = true ∧
+      ∀ inp, (judge (setK pk cx.p K') cx ss'.1.view inp).ok = true →
+        (stepS (setK pk cx.p K') cx (recoverAll cx (afterReshard pk K' cx ss C)) inp).isSome = true := by
+  rw [reshard_rollforward C h hC]
+  obtain ⟨_, hp, hK', _⟩ := ok_parts (reshard_eq h).1
+  exact live_inv3 (inv3_reshard h3 h) (invK_reshard h) (packOk_setK hp hK' cx.p) K'' hK
 
 /-- A property of directory rows kept by every step: it holds of each new row (a `routeNew` row) and the old rows
     are kept. -/
