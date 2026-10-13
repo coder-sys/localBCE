@@ -5,10 +5,12 @@ open BlindLedger.Gate
 
 /-! `gate_engine`, the resident one-process gate (blueprint A, S4): started once per shard, it answers every frame of
     the batch loop in-process, so no batch spawns, reloads or rehashes.  A frame is a u32 BE length then its bytes; an
-    answer the same.  A frame whose first byte is 0x01 is `gate_verify`'s PUBLISH frame after its mode byte, answered
-    `GATE_VERIFY=ACCEPT`, `REJECT` or `FRAME` by `publishOkTreeAny`; any other frame is a rules vector text, answered by
-    `Run.runFrom` (the lines `gate_rules_worker` gives).  The only state kept between frames is the sets-digest `Memo`,
-    which carries its own proof (`Memo.ok`).  Decisions are the proved defs; this file only frames them. -/
+    answer the same.  The first byte tags the kind: 0x01 then `gate_verify`'s PUBLISH frame after its mode byte, answered
+    `GATE_VERIFY=ACCEPT`, `REJECT` or `FRAME` by `publishOkTreeAny`; 0x00 then a rules vector text, answered by
+    `Run.runFrom` (the lines `gate_rules_worker` gives).  The only state kept between frames is the sets-digest `Memo` of
+    the last commit, which carries its own proof (`Memo.ok`): a frame's `resume` takes those sets in place of a `load`
+    replay of the whole history, only if they hash to the frame's anchor.  Decisions are the proved defs; this file only
+    frames them.  Any other tag, like a bad length or bad UTF-8, ends the process (65). -/
 
 namespace BlindLedger.Gate.Engine.OneProc
 
@@ -25,14 +27,16 @@ def publish : P Bool := do
 
 /-- One frame's answer and the memo for the next. -/
 def answer (memo : Option Rules.Run.Memo) (f : ByteArray) : Option (String × Option Rules.Run.Memo) :=
-  if f.size > 0 && f.get! 0 == 1 then
-    let b := (f.extract 1 f.size).toList
+  let body := f.extract 1 f.size
+  if f.data[0]? == some 1 then
+    let b := body.toList
     some (match parse publish b.length b with
       | some true => "GATE_VERIFY=ACCEPT\n" | some false => "GATE_VERIFY=REJECT\n" | none => "GATE_VERIFY=FRAME\n", memo)
-  else
-    (String.fromUTF8? f).map fun text =>
+  else if f.data[0]? == some 0 then
+    (String.fromUTF8? body).map fun text =>
       let (out, _, st) := Rules.Run.runFrom memo text
       (String.join (out.toList.map (· ++ "\n")), st.memo)
+  else none
 
 partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit) (memo : Option Rules.Run.Memo) : IO UInt32 := do
   let h ← Rules.Run.readN read 4

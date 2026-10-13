@@ -1,4 +1,4 @@
-"""The persistent ``gate_rules_worker`` answers exactly as the one-shot ``gate_rules`` and fails closed (test-only exes)."""
+"""The resident ``gate_engine`` answers exactly as the one-shot ``gate_rules`` and fails closed (test-only exes)."""
 
 import os
 import random
@@ -14,7 +14,7 @@ from tests import _gate_shards as g
 from tests import test_gate_rules_vectors as rules
 from tests import test_right_rail_gate_formats as fx
 
-WORKER = Path(rules.LEAN) / ".lake" / "build" / "bin" / "gate_rules_worker.exe"
+WORKER = Path(rules.LEAN) / ".lake" / "build" / "bin" / "gate_engine.exe"
 VECTORS = Path(rules.ROOT) / "tests" / "gate_rules"
 
 
@@ -32,7 +32,7 @@ def random_batch(seed: int, n: int) -> bytes:
 
 
 @unittest.skipUnless(os.name == "nt" and os.path.isfile(rules.EXE) and WORKER.is_file(),
-                     f"GATE RULES WORKER NOT RUN: {WORKER} is missing; run `lake build gate_rules_worker` in lean/")
+                     f"GATE RULES WORKER NOT RUN: {WORKER} is missing; run `lake build gate_engine` in lean/")
 class RulesWorkerTests(fx.Scratch):
     def worker(self) -> decider.RulesWorker:
         w = decider.RulesWorker(WORKER)
@@ -86,7 +86,9 @@ class RulesWorkerTests(fx.Scratch):
         self.assertEqual(run(big), (65, b""))  # header past the cap
         self.assertEqual(run(b"\0\0"), (65, b""))  # short header
         self.assertEqual(run((10).to_bytes(4, "big") + b"abc"), (65, b""))  # short body
-        self.assertEqual(run((2).to_bytes(4, "big") + b"\xff\xfe"), (65, b""))  # not UTF-8
+        self.assertEqual(run((3).to_bytes(4, "big") + b"\0\xff\xfe"), (65, b""))  # not UTF-8
+        self.assertEqual(run((2).to_bytes(4, "big") + b"\2x"), (65, b""))  # neither tag: rules 0x00, PUBLISH 0x01
+        self.assertEqual(run((0).to_bytes(4, "big")), (65, b""))  # no tag
         w = self.worker()
         with self.assertRaises(decider.GateDecideError) as caught:
             w.run(bytes([255, 254]))
