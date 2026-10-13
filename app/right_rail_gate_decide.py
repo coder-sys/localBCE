@@ -95,6 +95,16 @@ class Answer(NamedTuple):
     rows: list[int]  # the registry rows the reserve wrote: the shard's whole in-flight set after it
 
 
+def _reads_ok(rows: list[str]) -> bool:
+    """One ``RULES_READS``, lowercase hex of u32 today ‖ four 64-byte pins ‖ u32 |P| ‖ P, P a READ-SET/v2 record."""
+    try:
+        b = bytes.fromhex(rows[0]) if len(rows) == 1 else b""
+    except ValueError:
+        return False
+    return (len(b) >= 264 and b.hex() == rows[0] and int.from_bytes(b[260:264], "big") == len(b) - 264
+            and b[264:].startswith(b"RR/GATE/READ-SET/v2\0"))
+
+
 def _hold(lines: Sequence[str], reason: str) -> Answer:
     return Answer([f"{line} HOLD {reason}" for line in lines], [], b"", b"", (0, b""), None, [])
 
@@ -137,7 +147,8 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
     for row in out:
         tag, _, body = row.partition(" ")
         got.setdefault(tag, []).append(body)
-    if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out or {"RULES_FREE", "RULES_DIGEST", "RULES_ADDS"} - got.keys():
+    if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out or {"RULES_FREE", "RULES_DIGEST", "RULES_ADDS"} - got.keys() \
+            or not _reads_ok(got.get("RULES_READS", [])):
         raise GateDecideError("state_mismatch" if "RULES_STATE_MISMATCH" in got else "rules_refused")
     return Answer(got.get("RULES_LINE", []), [int(i) for i in got["RULES_FREE"][0].split()], bytes.fromhex(got["RULES_DIGEST"][0]),
                   bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head), seen, list(range(n - f + 1, n + 1)))

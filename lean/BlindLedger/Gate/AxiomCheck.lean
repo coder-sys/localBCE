@@ -8,6 +8,7 @@ import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
+import BlindLedger.Gate.ReadManifest
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -304,3 +305,15 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_sound
 /-- info: 'BlindLedger.Gate.publishOkTree_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_complete
+/-- info: 'BlindLedger.Gate.ReadManifest.readSetOf_pre' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.readSetOf_pre
+/-- info: 'BlindLedger.Gate.ReadManifest.run_reads_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.run_reads_eq
+/-- info: 'BlindLedger.Gate.ReadManifest.decodeReads_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.decodeReads_encode
+/-- info: 'BlindLedger.Gate.ReadManifest.encodeReads_inj' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.encodeReads_inj
+/-- info: 'BlindLedger.Gate.ReadManifest.kindOf_some' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.kindOf_some
+/-- info: 'BlindLedger.Gate.ReadManifest.reads_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.reads_exact

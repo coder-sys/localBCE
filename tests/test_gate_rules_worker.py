@@ -93,6 +93,32 @@ class RulesWorkerTests(fx.Scratch):
         self.assertEqual((str(caught.exception), w._worker), ("rules_refused", None))
         self.assertEqual(w.run(b"x")[0], "RULES_VECTOR_MALFORMED line=1")  # the next call restarts it; a malformed text is answered, not killed
 
+    def test_a_missing_or_malformed_reads_line_refuses_the_batch(self):
+        h = "52522f474154452f524541442d5345542f763200"  # READ-SET/v2 and its 0 byte
+        edits = [lambda r: [], lambda r: r * 2, lambda r: [r[0][:-2]], lambda r: [r[0][:-1] + "g"],
+                 lambda r: [r[0].upper()], lambda r: [r[0].replace(h, h[:-4] + "33" + h[-2:])]]
+        with self.scratch() as tmp:
+            c = g.Cluster(tmp, fx.custody(tmp))
+            c.boot()
+            w = self.worker()
+            prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
+            real = w.run
+            try:
+                for i, edit in enumerate(edits):
+                    def run(data, edit=edit):
+                        out = real(data)
+                        reads = [r.split(" ")[1] for r in out if r.startswith("RULES_READS ")]
+                        return [r for r in out if not r.startswith("RULES_READS ")] + [f"RULES_READS {x}" for x in edit(reads)]
+                    tip, settled = prod.tip(), reg.settled(0)
+                    with self.subTest(i), mock.patch.object(w, "run", run), \
+                            self.assertRaises(decider.GateDecideError) as caught:
+                        g.decide_batch(c, prod, reg, 0, {1: [10]}, worker=w)
+                    self.assertEqual((str(caught.exception), prod.tip(), reg.settled(0)), ("rules_refused", tip, settled))
+                self.assertEqual(g.decide_batch(c, prod, reg, 0, {1: [10]}, worker=w)[2], {10: "ALLOW -"})
+            finally:
+                prod.close()
+                reg.close()
+
     def test_a_frame_over_the_worker_cap_goes_to_the_one_shot_exe(self):
         with self.scratch() as tmp:
             c = g.Cluster(tmp, fx.custody(tmp))
