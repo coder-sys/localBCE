@@ -52,6 +52,7 @@ structure DirRow where
   home : Home
   raw : Dg
   gross : Int
+  item : Option Item   -- the item of the row that first admitted the cell; RESHARD homes by it
 
 abbrev Dir := Cell → Option DirRow
 
@@ -65,6 +66,8 @@ structure Ctx where
   lean : List Row → List Bool                   -- Lean batchFast on I_k (pure); true = MOVE
   hs : Dg → Nat → List Row → List Bool → Dg     -- shard chain: post_head = hs pre_head n I_k V_k
   advances : ∀ d n I V, hs d n I V ≠ d
+  hi : Dg → Nat → (Cell → Nat) × Int × Int → Dg  -- RESHARD part: post_head = H("RR/SHARD-IMG/v1", pre, n, image)
+  advancesI : ∀ d n v, hi d n v ≠ d
 
 def shardOf (pk : Pack) (cx : Ctx) (i : Item) : Nat := cx.hsh cx.p i % pk.k cx.p
 
@@ -87,7 +90,7 @@ def setDir (d : Dir) (c : Cell) (x : DirRow) : Dir := fun c' => if c' = c then s
 def judgeRow (pk : Pack) (cx : Ctx) (d : Dir) (r : Row) : Dir × Verdict :=
   match d r.cell with
   | some x => (d, if x.raw = r.raw then .duplicate else .conflict)
-  | none => (setDir d r.cell ⟨routeNew pk cx r, r.raw, r.gross⟩, .admit (routeNew pk cx r))
+  | none => (setDir d r.cell ⟨routeNew pk cx r, r.raw, r.gross, r.item⟩, .admit (routeNew pk cx r))
 
 def judgeRows (pk : Pack) (cx : Ctx) : Dir → List Row → Dir × List (Row × Verdict)
   | d, [] => (d, [])
@@ -290,6 +293,7 @@ def rcptS : List (Row × Verdict) → (Nat → List Bool) → List Bool
     empty is the legacy store with no cells. -/
 structure Legacy where
   cells : Cell → Option (Dg × Int)
+  item : Cell → Option Item
   t : Nat
   used : Int
   budget : Int
@@ -305,7 +309,7 @@ structure Legacy where
   budget_eq : budget = mc + lc
 
 /-- The backfilled directory: every legacy cell, home shard 0, its legacy raw digest and gross. -/
-def backfill (L : Legacy) : Dir := fun c => (L.cells c).map fun x => ⟨.shard 0, x.1, x.2⟩
+def backfill (L : Legacy) : Dir := fun c => (L.cells c).map fun x => ⟨.shard 0, x.1, x.2, L.item c⟩
 
 /-- The migrated single store: the legacy rows with the backfilled directory. -/
 def initSingle (L : Legacy) : Single :=
@@ -329,6 +333,9 @@ structure Rec where
   pre : Nat → Dg
   post : Nat → Dg
   touched : List Nat
+  /-- RESHARD only: each touched shard's charges, gross and machine charge after the record, written as is.
+      `none` (every other record): the part is the transaction on `I k`, `V k`. -/
+  img : Option (Nat → (Cell → Nat) × Int × Int) := none
 
 structure SpineDB where
   dir : Dir
@@ -344,11 +351,12 @@ abbrev SS := SpineDB × (Nat → ShardDB)
 
 def SpineDB.view (sp : SpineDB) : SpineView := ⟨sp.dir, sp.t⟩
 
-/-- Shard `k`'s part of `R`: the transaction, then head := post_head_k and APPLIED(n) last. -/
+/-- Shard `k`'s part of `R`: the transaction (or, for RESHARD, the image `R.img`, an overwrite, so a replay
+    yields the same state), then head := post_head_k and APPLIED(n) last. -/
 def applyPart (R : Rec) (k : Nat) (sh : ShardDB) : ShardDB :=
   let f := finRows sh.chg (R.I k) (R.V k)
-  { chg := f.1, gross := sh.gross + gsum (R.I k), mc := sh.mc + f.2, head := R.post k,
-    applied := sh.applied ++ [R.n] }
+  let v := R.img.elim (f.1, sh.gross + gsum (R.I k), sh.mc + f.2) (· k)
+  { chg := v.1, gross := v.2.1, mc := v.2.2, head := R.post k, applied := sh.applied ++ [R.n] }
 
 def mkRec (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) : Judgment × Rec :=
   let J := judge pk cx ss.1.view inp
@@ -358,11 +366,18 @@ def mkRec (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) : Judgment × Rec :=
         post := fun k => cx.hs (ss.2 k).head n (part J (.shard k)) (verdicts cx J k),
         touched := touched pk cx J })
 
+@[simp] theorem mkRec_img (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) : (mkRec pk cx ss inp).2.img = none := rfl
+
 def headsOk (pk : Pack) (cx : Ctx) (ss : SS) : Bool :=
   (List.range (pk.k cx.p)).all fun k => (ss.2 k).head == ss.1.heads k
 
+/-- Every shard the newest spine record touches has committed it, shards `≥ K` included: a crash inside a RESHARD
+    to a smaller `K` blocks every record until recovery finishes the retired shards. -/
+def lastOk (ss : SS) : Bool :=
+  (ss.1.recs.head?.elim [] (·.touched)).all fun k => (ss.2 k).head == ss.1.heads k
+
 def checkAll (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) : Bool :=
-  (judge pk cx ss.1.view inp).ok && headsOk pk cx ss
+  (judge pk cx ss.1.view inp).ok && (headsOk pk cx ss && lastOk ss)
 
 def commitSpine (sp : SpineDB) (J : Judgment) (R : Rec) : SpineDB :=
   let l := gsum (part J .spine)
@@ -542,7 +557,7 @@ theorem judgeRows_admit (pk : Pack) (cx : Ctx) (h : Home) : ∀ (d : Dir) (rs : 
         | some y => intro hv; dsimp only at hv; split at hv <;> cases hv
         | none =>
           intro hv; dsimp only at hv ⊢; cases hv
-          exact ⟨⟨routeNew pk cx r, r.raw, r.gross⟩, by simp [setDir], rfl⟩
+          exact ⟨⟨routeNew pk cx r, r.raw, r.gross, r.item⟩, by simp [setDir], rfl⟩
       obtain ⟨x, hx, hh⟩ := key
       exact ⟨x, judgeRows_keep pk cx _ rs r.cell x hx, hh⟩
     · exact judgeRows_admit pk cx h _ rs a ht hv
@@ -708,7 +723,7 @@ theorem inv_init (L : Legacy) : Inv (initS L) := fun c => by
     · subst h0
       cases hc : L.cells c with
       | none => exact absurd hc (L.chg_cell c hk)
-      | some y => exact ⟨⟨.shard 0, y.1, y.2⟩, by simp [backfill, hc], rfl⟩
+      | some y => exact ⟨⟨.shard 0, y.1, y.2, L.item c⟩, by simp [backfill, hc], rfl⟩
     · rw [initShards_ne L h0] at hk; exact absurd hk (Nat.lt_irrefl 0)
 
 /-- After a committed step, shard `k`'s head is the last record's `post_head_k` for every touched `k`. -/
@@ -786,7 +801,7 @@ theorem judgeRow_new (pk : Pack) (cx : Ctx) (d : Dir) (r : Row) (h : Home)
   unfold judgeRow
   cases hd : d r.cell with
   | some y => intro hv; dsimp only at hv; split at hv <;> cases hv
-  | none => intro _; exact ⟨rfl, ⟨routeNew pk cx r, r.raw, r.gross⟩, by simp [setDir]⟩
+  | none => intro _; exact ⟨rfl, ⟨routeNew pk cx r, r.raw, r.gross, r.item⟩, by simp [setDir]⟩
 
 /-- Rows whose verdict `p` selects (every selected verdict an admit) were new to the directory the judgment
     started from, and their cells are distinct. -/
@@ -1125,19 +1140,25 @@ theorem merge_commit (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss
           (merge pk cx ss).chg (touched pk cx (judge pk cx ss.1.view inp))).2
     rw [hF.1, List.map_congr_left fun k hk => commit_mc pk cx ss inp hI hk, Partition.sum_map_add, sum_touched]
 
+/-- With every head at the spine's, the step check is the judgment. -/
+theorem checkAll_inv3 (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h3 : Inv3 ss) :
+    checkAll pk cx ss inp = (judge pk cx ss.1.view inp).ok := by
+  have h : ∀ l : List Nat, (l.all fun k => (ss.2 k).head == ss.1.heads k) = true :=
+    fun l => List.all_eq_true.2 fun k _ => beq_iff_eq.2 (h3 k).1
+  simp only [checkAll, headsOk, lastOk, h, Bool.and_self, Bool.and_true]
+
 theorem merge_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (hI : Inv ss) (h3 : Inv3 ss) :
     merge pk cx (stepT pk cx ss inp) = stepSingle pk cx (merge pk cx ss) inp := by
-  have hh : headsOk pk cx ss = true := by
-    simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
+  have hh := checkAll_inv3 pk cx ss inp h3
   show merge pk cx ((stepS pk cx ss inp).getD ss) =
     if (judge pk cx ss.1.view inp).ok = true then
       applySingle pk cx (merge pk cx ss) (judge pk cx ss.1.view inp) (verdicts cx (judge pk cx ss.1.view inp))
     else merge pk cx ss
   unfold stepS
   by_cases hok : (judge pk cx ss.1.view inp).ok = true
-  · rw [if_pos (show checkAll pk cx ss inp = true by simp only [checkAll, hh, hok, Bool.and_self]), if_pos hok]
+  · rw [if_pos (hh.trans hok), if_pos hok]
     exact merge_commit pk cx ss inp hI
-  · rw [if_neg (show ¬checkAll pk cx ss inp = true by simp only [checkAll, hh, Bool.and_true]; exact hok),
+  · rw [if_neg (show ¬checkAll pk cx ss inp = true by rw [hh]; exact hok),
       if_neg hok, Option.getD_none]
 
 theorem merge_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input), Inv ss → Inv3 ss →
@@ -1260,7 +1281,7 @@ theorem legacy_resend (pk : Pack) (cx : Ctx) (L : Legacy) (rs : List Input) (inp
     {g : Int} (hc : L.cells c = some (raw, g)) {a : Row × Verdict}
     (ha : a ∈ (judge pk cx (runS pk cx (initS L) rs).1.view inp).out) (hac : a.1.cell = c) :
     a.2 = if raw = a.1.raw then .duplicate else .conflict :=
-  judgeRows_known pk cx c ⟨.shard 0, raw, g⟩ (runS pk cx (initS L) rs).1.dir inp.rows a
+  judgeRows_known pk cx c ⟨.shard 0, raw, g, L.item c⟩ (runS pk cx (initS L) rs).1.dir inp.rows a
     (dir_run pk cx c _ (initS L) rs (by simp [initS, backfill, hc])) ha hac
 
 /-- Admitted rows of different homes in one judgment name different cells. -/
@@ -1311,7 +1332,7 @@ theorem commit_requires_heads (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input)
   split at h
   · next hc =>
     simp only [checkAll, headsOk, Bool.and_eq_true, List.all_eq_true, List.mem_range, beq_iff_eq] at hc
-    exact hc.2 k hk
+    exact hc.2.1 k hk
   · cases h
 
 /-- Recovery reads only the last committed spine record and shard k. -/
@@ -1438,8 +1459,6 @@ theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) 
       os3Bar pk cx ss inp sp' sh' := by
   have hI : Inv ss := by obtain ⟨L, rs, rfl⟩ := hr; exact inv_run pk cx (initS L) rs (inv_init L)
   have h3 : Inv3 ss := by obtain ⟨L, rs, rfl⟩ := hr; exact inv3_run pk cx (initS L) rs (inv3_init L)
-  have hh : headsOk pk cx ss = true := by
-    simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
   have hst : checkAll pk cx ss inp = true → stepT pk cx ss inp =
       (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
         commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := fun hc => by
@@ -1467,7 +1486,7 @@ theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) 
       · simp [commitShards, applyPart, ht]
       · simp [commitShards, ht]
   · rintro ⟨⟨hok, hm⟩, hrec, hhd, hH, hA, hsh⟩
-    have hc : checkAll pk cx ss inp = true := by simp only [checkAll, hh, Bool.and_true]; exact hok
+    have hc : checkAll pk cx ss inp = true := (checkAll_inv3 pk cx ss inp h3).trans hok
     rw [hst hc] at hI1 h31
     have hm' := hm.trans (merge_commit pk cx ss inp hI).symm
     have hsp : sp' = commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2 :=
@@ -1762,8 +1781,7 @@ theorem rcpts_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs :
     rcptsS pk cx ss rs = rcptsW pk cx (merge pk cx ss) rs
   | _, [], _, _ => rfl
   | ss, i :: is, hI, h3 => by
-    have hh : headsOk pk cx ss = true := by
-      simp only [headsOk, List.all_eq_true, beq_iff_eq]; exact fun k _ => (h3 k).1
+    have hh := checkAll_inv3 pk cx ss i h3
     show (if checkAll pk cx ss i = true then some (rcptS (judge pk cx ss.1.view i).out
         (verdicts cx (judge pk cx ss.1.view i))) else none) :: rcptsS pk cx (stepT pk cx ss i) is =
       (if (judge pk cx ss.1.view i).ok = true then some (rcptW (judge pk cx ss.1.view i).out
@@ -1772,7 +1790,7 @@ theorem rcpts_run (pk : Pack) (cx : Ctx) (hLoc : Local cx) : ∀ (ss : SS) (rs :
       ← rcpts_run pk cx hLoc _ is (inv_step pk cx ss i hI) (inv3_step pk cx ss i h3),
       verdicts_sel pk cx ss.1.view i hLoc,
       rcpt_eq pk cx (judge pk cx ss.1.view i).out _ (judgeRows_route pk cx ss.1.view.dir i.rows)]
-    simp only [checkAll, hh, Bool.and_true]
+    simp only [hh]
 
 /-- From a migrated store with `openOk`, the merged sharded run equals the single-store run (Lean per shard part).
     Under `Local` (restricting a file to any set of items leaves Lean's verdicts on the kept rows unchanged), the merged run also

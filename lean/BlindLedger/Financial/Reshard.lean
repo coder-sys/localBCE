@@ -3,23 +3,35 @@ import BlindLedger.Financial.ShardSplit
 /-!
 # RESHARD: change `K` for the record partition at a quiescent boundary
 
-`reshard hist pk pk' cx key ss` moves a sharded store from pack `pk` to pack `pk'` (which may change `K` for `cx.p`
-only; every other partition in `hist` keeps its `K`, `packUpdateOk`).  It applies only when every shard
-`k < max K K'` has committed the spine's last record (`quiet`); otherwise it returns `none` and nothing is applied.
+`reshard pk K' cx ss` moves a sharded store from pack `pk` to `setK pk cx.p K'`: only `cx.p`'s `K` changes, by
+construction (`setK_k_ne`).  It applies only when every shard `k < max K K'` has committed the spine's last record
+(`quiet`), `packOk pk` and `0 < K'`; otherwise it returns `none` and nothing is applied.
 
-The directory keeps every row's raw digest and gross; a shard-homed row is rehomed to `sidx pk' cx (key c)`, i.e.
-`shardOf pk' cx i` for its item `i` (`key` is the cell's item, which `DirRow` does not carry).  Shard rows are not
-copied but derived: shard `j` holds `restrict dir' j` of the merged charges, so a row can sit only where the new
-directory homes it.  Totals (gross, machine charges) consolidate at shard 0.  One spine record (no rows) touches
-every shard `< max K K'` and advances its head and APPLIED list as any record does.
+RESHARD is one spine record like any other.  Its part for shard `j` is an IMAGE (`Rec.img`): `j`'s charges, gross
+and machine charge after the record, written as is.  `applyPart` overwrites from the image, so applying a part is
+idempotent and independent of the order in which shards commit; the existing `replay`/`recoverAll` finishes a
+RESHARD interrupted after the spine COMMIT at any set `C` of committed shards (`reshard_rollforward`).  Until it is
+finished every later RESHARD and every step is refused, retired shards included (`lastOk`, `reshard_crash_open`);
+once recovered the store accepts both again (`reshard_live`): a crash never wedges it.  Each touched shard's post
+head is `cx.hi pre n image`, a chain separate from the step chain `cx.hs`, so the shard head alone commits to the
+shard's state after RESHARD (`reshard_head_img`).
 
-* (a) `reshard_row`, `reshard_row_src`, `reshard_dir`, `reach_high`: each charged row is present exactly once, at
-  `tgt` (`shardOf pk'` of its item); no row appears from nowhere; old shards `≥ K` hold none on a reachable store.
-* (b) `reshard_merge_run` (lifts `merge_run`), `reshard_whole_run` (lifts `whole_run`, `merge_run`),
-  `reshard_rcpts_run` (lifts `rcpts_run`): the resharded store runs as the un-resharded single store; `norm` erases
-  only the shard index of directory homes, so verdicts, receipts and every total agree exactly.
-* (c) `inv_reshard` .. `history_reshard`: `Inv`..`Inv4`, `chainsOk`, `headsOk`, `historyOk` hold after.
-* (d) `reshard_none`, `reshard_refuse`, `reshard_open`: refusal is `none`, never a partial application.
+The directory keeps every row's raw digest, gross and admitting item; a shard-homed row is rehomed to
+`sidx pk' cx x.item`, `shardOf pk'` of the item the directory row itself carries (no caller-supplied key).  Shard
+`j`'s image holds `restrict dir' j` of the merged charges, so a row can sit only where the new directory homes it.
+The record touches every shard `< max K K'`; retired shards (`K' ≤ j < K`) are imaged to zero.
+
+Limits, stated: gross and machine charge consolidate at shard 0 (a per-shard total is not a function of the
+model's directory, which has no finite support); per-shard reconciliation must sum directory rows.
+
+* (a) `reshard_row`, `reshard_row_src`, `reshard_dir`, `reshard_local`: each charged row is present exactly once,
+  at `tgt`; no row appears from nowhere; every shard row sits at its item's shard under the new pack.
+* (b) `reshard_merge_run`, `reshard_whole_run`, `reshard_rcpts_run`: the resharded store runs as the un-resharded
+  single store up to `norm` (the shard index of directory homes).
+* (c) `inv_reshard` .. `history_reshard`, `ReachR`, `reachR_ok`, `reachR_recover`: invariants, the home bound and
+  recovery hold on every store reachable by steps and RESHARDs.
+* (d) `reshard_none`, `reshard_refuse`, `reshard_open`, `reshard_rollforward`, `reshard_crash_open`, `live_inv3`,
+  `reshard_live`, `reshard_head_img`.
 -/
 
 namespace BlindLedger.Financial.Reshard
@@ -27,96 +39,132 @@ namespace BlindLedger.Financial.Reshard
 open BlindLedger.Financial.ShardSplit
 open BlindLedger.Financial.Partition (PartId)
 
-/-- The new shard of cell `c` under `pk'`. -/
-def tgt (pk' : Pack) (cx : Ctx) (key : Cell → Option Item) (c : Cell) : Nat := sidx pk' cx (key c)
+/-- The pack with `K = K'` for partition `p`, every other partition unchanged. -/
+def setK (pk : Pack) (p : PartId) (K' : Nat) : Pack := ⟨(p, K') :: pk.ks⟩
+
+/-- The shard of directory row `x` under pack `pk`: its item's shard. -/
+def tgt (pk : Pack) (cx : Ctx) (x : DirRow) : Nat := sidx pk cx x.item
 
 def rh (t : Nat) : Home → Home
   | .spine => .spine
   | .shard _ => .shard t
 
-def rehome (pk' : Pack) (cx : Ctx) (key : Cell → Option Item) (c : Cell) (x : DirRow) : DirRow :=
-  { x with home := rh (tgt pk' cx key c) x.home }
+def rehome (pk : Pack) (cx : Ctx) (x : DirRow) : DirRow := { x with home := rh (tgt pk cx x) x.home }
 
-def rdir (pk' : Pack) (cx : Ctx) (key : Cell → Option Item) (d : Dir) : Dir := fun c => (d c).map (rehome pk' cx key c)
+def rdir (pk : Pack) (cx : Ctx) (d : Dir) : Dir := fun c => (d c).map (rehome pk cx)
 
 /-- Shards touched by the RESHARD record. -/
-def rT (pk pk' : Pack) (cx : Ctx) : List Nat := List.range (max (pk.k cx.p) (pk'.k cx.p))
+def rT (pk : Pack) (K' : Nat) (cx : Ctx) : List Nat := List.range (max (pk.k cx.p) K')
 
-/-- Quiescent boundary: every shard has committed the spine's last record. -/
-def quiet (pk pk' : Pack) (cx : Ctx) (ss : SS) : Bool := (rT pk pk' cx).all fun k => (ss.2 k).head == ss.1.heads k
+/-- Quiescent boundary: every shard the record reads or writes, and every shard the spine's last record touched,
+    has committed that record. -/
+def quiet (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Bool :=
+  ((rT pk K' cx).all fun k => (ss.2 k).head == ss.1.heads k) && lastOk ss
 
-def reshardOk (hist : List PartId) (pk pk' : Pack) (cx : Ctx) (ss : SS) : Bool :=
-  quiet pk pk' cx ss && packOk pk && packUpdateOk (hist.filter (· != cx.p)) pk pk'
+def reshardOk (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Bool :=
+  quiet pk K' cx ss && packOk pk && decide (0 < K')
 
-def rRec (pk pk' : Pack) (cx : Ctx) (ss : SS) : Rec :=
+/-- Shard `j`'s image: its rows of the merged charges under the new directory; totals at shard 0. -/
+def rImg (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) (j : Nat) : (Cell → Nat) × Int × Int :=
+  (restrict (rdir (setK pk cx.p K') cx ss.1.dir) j (merge pk cx ss).chg,
+    if j = 0 then (merge pk cx ss).gross else 0, if j = 0 then (merge pk cx ss).mc else 0)
+
+def rRec (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Rec :=
   { n := ss.1.recs.length, t := ss.1.t, I := fun _ => [], V := fun _ => [], pre := fun k => (ss.2 k).head,
-    post := fun k => cx.hs (ss.2 k).head ss.1.recs.length [] [], touched := rT pk pk' cx }
+    post := fun k => cx.hi (ss.2 k).head ss.1.recs.length (rImg pk K' cx ss k), touched := rT pk K' cx,
+    img := some (rImg pk K' cx ss) }
 
-def rShard (pk pk' : Pack) (cx : Ctx) (key : Cell → Option Item) (ss : SS) (j : Nat) : ShardDB :=
-  { chg := restrict (rdir pk' cx key ss.1.dir) j (merge pk cx ss).chg,
-    gross := if j = 0 then (merge pk cx ss).gross else 0,
-    mc := if j = 0 then (merge pk cx ss).mc else 0,
-    head := if j ∈ rT pk pk' cx then (rRec pk pk' cx ss).post j else (ss.2 j).head,
-    applied := if j ∈ rT pk pk' cx then (ss.2 j).applied ++ [ss.1.recs.length] else (ss.2 j).applied }
-
-def rSpine (pk pk' : Pack) (cx : Ctx) (key : Cell → Option Item) (ss : SS) : SpineDB :=
+def rSpine (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : SpineDB :=
   { ss.1 with
-    dir := rdir pk' cx key ss.1.dir,
-    heads := fun k => if k ∈ rT pk pk' cx then (rRec pk pk' cx ss).post k else ss.1.heads k,
-    recs := rRec pk pk' cx ss :: ss.1.recs }
+    dir := rdir (setK pk cx.p K') cx ss.1.dir,
+    heads := fun k => if k ∈ rT pk K' cx then (rRec pk K' cx ss).post k else ss.1.heads k,
+    recs := rRec pk K' cx ss :: ss.1.recs }
 
-def reshard (hist : List PartId) (pk pk' : Pack) (cx : Ctx) (key : Cell → Option Item) (ss : SS) : Option SS :=
-  if reshardOk hist pk pk' cx ss then some (rSpine pk pk' cx key ss, rShard pk pk' cx key ss) else none
+def reshard (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Option SS :=
+  if reshardOk pk K' cx ss then some (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2)
+  else none
 
-variable {hist : List PartId} {pk pk' : Pack} {cx : Ctx} {key : Cell → Option Item} {ss ss' : SS}
+/-- A crash after the RESHARD spine COMMIT: only the shards in `C` committed their part. -/
+def afterReshard (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) (C : List Nat) : SS :=
+  if reshardOk pk K' cx ss then (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C ss.2) else ss
 
-/-! ## (d) Refusal -/
+/-- Every shard-homed directory row sits below `K`. -/
+def homesLt (pk : Pack) (cx : Ctx) (d : Dir) : Prop :=
+  ∀ c x j, d c = some x → x.home = .shard j → j < pk.k cx.p
 
-theorem reshard_eq (h : reshard hist pk pk' cx key ss = some ss') :
-    reshardOk hist pk pk' cx ss = true ∧ ss' = (rSpine pk pk' cx key ss, rShard pk pk' cx key ss) := by
-  by_cases hc : reshardOk hist pk pk' cx ss = true
-  · simp only [reshard, hc, ↓reduceIte, Option.some.injEq] at h
-    exact ⟨hc, h.symm⟩
-  · simp [reshard, hc] at h
+/-- Every shard-homed directory row sits at its item's shard. -/
+def locDir (pk : Pack) (cx : Ctx) (d : Dir) : Prop :=
+  ∀ c x j, d c = some x → x.home = .shard j → j = sidx pk cx x.item
 
-theorem reshard_none (h : reshardOk hist pk pk' cx ss = false) : reshard hist pk pk' cx key ss = none := by
-  simp [reshard, h]
+/-- Stores reachable by steps and RESHARDs from a migrated store (the pack is the store's current pack). -/
+inductive ReachR (cx : Ctx) : Pack → SS → Prop
+  | init (pk : Pack) (L : Legacy) : packOk pk = true → ReachR cx pk (initS L)
+  | step {pk : Pack} {ss : SS} (inp : Input) : ReachR cx pk ss → ReachR cx pk (stepT pk cx ss inp)
+  | resh {pk : Pack} {ss ss' : SS} (K' : Nat) :
+      ReachR cx pk ss → reshard pk K' cx ss = some ss' → ReachR cx (setK pk cx.p K') ss'
 
-theorem reshard_refuse
-    (h : quiet pk pk' cx ss = false ∨ packOk pk = false ∨ packUpdateOk (hist.filter (· != cx.p)) pk pk' = false) :
-    reshard hist pk pk' cx key ss = none := by
-  apply reshard_none
-  unfold reshardOk
-  rcases h with h | h | h <;> simp [h]
+variable {pk : Pack} {K' : Nat} {cx : Ctx} {ss ss' : SS}
 
-/-- A crash after a spine COMMIT that left a touched shard `k` uncommitted is not quiescent: RESHARD refuses. -/
+/-! ## The pack -/
+
+theorem setK_k_self (pk : Pack) (p : PartId) (K' : Nat) : (setK pk p K').k p = K' := sorry
+
+theorem setK_k_ne (pk : Pack) {p q : PartId} (K' : Nat) (h : q ≠ p) : (setK pk p K').k q = pk.k q := sorry
+
+/-! ## (d) Refusal and crash -/
+
+theorem reshard_eq (h : reshard pk K' cx ss = some ss') :
+    reshardOk pk K' cx ss = true ∧
+      ss' = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2) := sorry
+
+theorem reshard_none (h : reshardOk pk K' cx ss = false) : reshard pk K' cx ss = none := sorry
+
+theorem reshard_refuse (h : quiet pk K' cx ss = false ∨ packOk pk = false ∨ K' = 0) :
+    reshard pk K' cx ss = none := sorry
+
+theorem ok_parts (h : reshardOk pk K' cx ss = true) :
+    quiet pk K' cx ss = true ∧ packOk pk = true ∧ 0 < K' := sorry
+
+/-- A crash after a step's spine COMMIT that left a touched shard `k` uncommitted is not quiescent: RESHARD
+    refuses. -/
 theorem reshard_open (inp : Input) (C : List Nat) (k : Nat) (hc : checkAll pk cx ss inp = true)
     (hk : k ∈ (mkRec pk cx ss inp).2.touched) (hC : k ∉ C) :
-    reshard hist pk pk' cx key (afterSpine pk cx ss inp C) = none := by
-  simp only [mkRec] at hk
-  have hK : k < pk.k cx.p := by
-    have h0 := hk; simp only [touched, List.mem_filter, List.mem_range] at h0; exact h0.1
-  apply reshard_refuse
-  left
-  rw [Bool.eq_false_iff]
-  intro hq
-  simp only [quiet, rT, List.all_eq_true, beq_iff_eq] at hq
-  have h1 := hq k (List.mem_range.2 (Nat.lt_of_lt_of_le hK (Nat.le_max_left _ _)))
-  simp only [afterSpine, hc, ↓reduceIte, commitShards, hC, commitSpine, mkRec, hk] at h1
-  exact cx.advances _ _ _ _ h1.symm
+    reshard pk K' cx (afterSpine pk cx ss inp C) = none := sorry
 
-theorem ok_parts (h : reshardOk hist pk pk' cx ss = true) :
-    quiet pk pk' cx ss = true ∧ packOk pk = true ∧ packOk pk' = true := by
-  simp only [reshardOk, packUpdateOk, Bool.and_eq_true] at h
-  exact ⟨h.1.1, h.1.2, h.2.1⟩
+/-- H1: a RESHARD interrupted after its spine COMMIT, with any set `C` of shards committed, recovers to exactly
+    the completed RESHARD. -/
+theorem reshard_rollforward (C : List Nat) (h : reshard pk K' cx ss = some ss') (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
+    recoverAll (afterReshard pk K' cx ss C) = ss' := sorry
+
+/-- Before recovery, an interrupted RESHARD with any touched shard `j` uncommitted (a retired `j ≥ K'` included)
+    blocks every later RESHARD and every step. -/
+theorem reshard_crash_open (C : List Nat) (j : Nat) (hok : reshardOk pk K' cx ss = true) (hj : j ∈ rT pk K' cx)
+    (hC : j ∉ C) :
+    (∀ K'', reshard (setK pk cx.p K') K'' cx (afterReshard pk K' cx ss C) = none) ∧
+      ∀ inp, stepS (setK pk cx.p K') cx (afterReshard pk K' cx ss C) inp = none := sorry
+
+/-- Never wedged: with every shard head at the spine's, RESHARD to any `K'' > 0` applies and every step the
+    judgment accepts commits. -/
+theorem live_inv3 (h3 : Inv3 ss) (hp : packOk pk = true) (K'' : Nat) (hK : 0 < K'') :
+    (reshard pk K'' cx ss).isSome = true ∧
+      ∀ inp, (judge pk cx ss.1.view inp).ok = true → (stepS pk cx ss inp).isSome = true := sorry
+
+/-- After a crash inside any RESHARD (a `K` decrease included), recovery leaves a store that accepts RESHARD to any
+    `K'' > 0` and every step the judgment accepts. -/
+theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss')
+    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (K'' : Nat) (hK : 0 < K'') :
+    (reshard (setK pk cx.p K') K'' cx (recoverAll (afterReshard pk K' cx ss C))).isSome = true ∧
+      ∀ inp, (judge (setK pk cx.p K') cx ss'.1.view inp).ok = true →
+        (stepS (setK pk cx.p K') cx (recoverAll (afterReshard pk K' cx ss C)) inp).isSome = true := sorry
+
+/-- The shard head alone commits to the shard's state: each touched shard's head after RESHARD is the image chain
+    over its pre head, the record number and its charges, gross and machine charge. -/
+theorem reshard_head_img (h : reshard pk K' cx ss = some ss') (j : Nat) (hj : j ∈ rT pk K' cx) :
+    (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length ((ss'.2 j).chg, (ss'.2 j).gross, (ss'.2 j).mc) := sorry
 
 /-! ## Charges under the new directory -/
 
-theorem tgt_lt (hK : 0 < pk'.k cx.p) (c : Cell) : tgt pk' cx key c < pk'.k cx.p := by
-  unfold tgt
-  cases key c with
-  | none => exact hK
-  | some i => exact Nat.mod_lt _ hK
+theorem tgt_lt (hK : 0 < pk.k cx.p) (x : DirRow) : tgt pk cx x < pk.k cx.p := sorry
 
 theorem restrict_le {d : Dir} {k : Nat} {chg : Cell → Nat} {c : Cell} : restrict d k chg c ≤ chg c := by
   simp only [restrict]; split <;> omega
@@ -136,6 +184,10 @@ theorem inv_off (hI : Inv ss) (c : Cell) (k : Nat) (h : ∀ x, ss.1.dir c = some
   rcases Nat.eq_zero_or_pos ((ss.2 k).chg c) with h0 | h0
   · exact h0
   · obtain ⟨x, hx, hh⟩ := (hI c).2 k h0; exact absurd hh (h x hx)
+
+/-- With the home bound, shards `≥ K` hold no charge, so `reshard_row` covers every charged row. -/
+theorem high_zero (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (k : Nat) (hk : pk.k cx.p ≤ k) (c : Cell) :
+    (ss.2 k).chg c = 0 := sorry
 
 theorem merge_le1 (hI : Inv ss) (c : Cell) : (merge pk cx ss).chg c ≤ 1 := by
   show ((List.range (pk.k cx.p)).map fun k => (ss.2 k).chg c).sum ≤ 1
@@ -158,148 +210,59 @@ theorem merge_at (hI : Inv ss) (c : Cell) (x : DirRow) (hx : ss.1.dir c = some x
   subst hxy
   rw [hh]; intro he; exact hne (Home.shard.inj he).symm
 
-theorem rchg_sum (hI : Inv ss) (hK' : 0 < pk'.k cx.p) (c : Cell) :
-    ((List.range (pk'.k cx.p)).map fun j => restrict (rdir pk' cx key ss.1.dir) j (merge pk cx ss).chg c).sum
-      = (merge pk cx ss).chg c := by
-  cases hx : ss.1.dir c with
-  | none =>
-    have h0 : (merge pk cx ss).chg c = 0 := sum_zeroN _ _ fun k _ => inv_zero hI c hx k
-    rw [h0]; exact sum_zeroN _ _ fun j _ => by simp [restrict, rdir, hx]
-  | some x =>
-    cases hh : x.home with
-    | spine =>
-      have h0 : (merge pk cx ss).chg c = 0 := sum_zeroN _ _ fun k _ => inv_off hI c k fun y hy => by
-        have hxy : x = y := Option.some.inj (hx.symm.trans hy)
-        subst hxy; rw [hh]; intro he; cases he
-      rw [h0]; exact sum_zeroN _ _ fun j _ => by simp [restrict, rdir, hx, rehome, hh, rh]
-    | shard k0 =>
-      refine (sum_one (fun j => restrict (rdir pk' cx key ss.1.dir) j (merge pk cx ss).chg c) (tgt pk' cx key c) _
-        List.nodup_range (List.mem_range.2 (tgt_lt hK' c)) ?_).trans ?_
-      · intro j _ hj
-        simp [restrict, rdir, hx, rehome, hh, rh, Ne.symm hj]
-      · simp [restrict, rdir, hx, rehome, hh, rh]
-
 /-- The merged view after RESHARD is the merged view before, with the rehomed directory. -/
-theorem merge_reshard (hI : Inv ss) (hK' : 0 < pk'.k cx.p) :
-    merge pk' cx (rSpine pk pk' cx key ss, rShard pk pk' cx key ss)
-      = { merge pk cx ss with dir := rdir pk' cx key ss.1.dir } := by
-  apply view_eq <;> try rfl
-  · funext c; exact rchg_sum hI hK' c
-  · refine (sum_range_zeroI (fun j => (rShard pk pk' cx key ss j).gross) _ hK' fun j hj => ?_).trans ?_
-    · simp [rShard, hj]
-    · simp [rShard]
-  · refine (sum_range_zeroI (fun j => (rShard pk pk' cx key ss j).mc) _ hK' fun j hj => ?_).trans ?_
-    · simp [rShard, hj]
-    · simp [rShard]
+theorem merge_reshard (hI : Inv ss) (hK' : 0 < K') :
+    merge (setK pk cx.p K') cx (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2)
+      = { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } := sorry
 
-/-! ## (c) Invariants that hold before still hold after -/
+/-! ## (c) Invariants -/
 
-theorem inv_reshard (hI : Inv ss) (h : reshard hist pk pk' cx key ss = some ss') : Inv ss' := by
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  intro c
-  exact ⟨fun k => Nat.le_trans restrict_le (merge_le1 hI c), fun k hk => restrict_pos hk⟩
+theorem inv_reshard (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss') : Inv ss' :=
+  sorry
 
-theorem inv2_reshard (h : reshard hist pk pk' cx key ss = some ss') : Inv2 ss' := by
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  intro R rs hR k hk
-  simp only [rSpine, List.cons.injEq] at hR
-  obtain ⟨rfl, rfl⟩ := hR
-  have hk' : k ∈ rT pk pk' cx := hk
-  simp [rShard, hk']
+theorem inv3_reshard (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') : Inv3 ss' := sorry
 
-theorem inv3_reshard (h3 : Inv3 ss) (h : reshard hist pk pk' cx key ss = some ss') : Inv3 ss' := by
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  intro k
-  obtain ⟨h1, h2⟩ := h3 k
-  by_cases hk : k ∈ rT pk pk' cx
-  · simp [rShard, rSpine, rRec, hk, h2]
-  · simp [rShard, rSpine, rRec, hk, h1, h2]
+theorem inv4_reshard (hI : Inv ss) (h4 : Inv4 pk cx ss) (h : reshard pk K' cx ss = some ss') :
+    Inv4 (setK pk cx.p K') cx ss' := sorry
 
-theorem inv4_reshard (hI : Inv ss) (h4 : Inv4 pk cx ss) (h : reshard hist pk pk' cx key ss = some ss') :
-    Inv4 pk' cx ss' := by
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  have hm := merge_reshard (pk := pk) (key := key) hI (k_pos pk' cx.p (ok_parts hok).2.2)
-  have hg : (merge pk' cx (rSpine pk pk' cx key ss, rShard pk pk' cx key ss)).gross = (merge pk cx ss).gross := by
-    rw [hm]
-  have hc : (merge pk' cx (rSpine pk pk' cx key ss, rShard pk pk' cx key ss)).mc = (merge pk cx ss).mc := by
-    rw [hm]
-  exact ⟨h4.1.trans hg.symm, h4.2.trans (congrArg (· + ss.1.lc) hc.symm)⟩
+theorem chain_reshard (hc : chainsOk ss) (h : reshard pk K' cx ss = some ss') : chainsOk ss' := sorry
 
-theorem chain_reshard (hc : chainsOk ss) (h : reshard hist pk pk' cx key ss = some ss') : chainsOk ss' := by
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  show (rRec pk pk' cx ss :: ss.1.recs).reverse.map (·.n) = List.range' 0 (ss.1.recs.length + 1)
-  rw [List.reverse_cons, List.map_append, hc, List.range'_concat]
-  simp [rRec]
+theorem heads_reshard (h : reshard pk K' cx ss = some ss') : headsOk (setK pk cx.p K') cx ss' = true := sorry
 
-theorem heads_reshard (h : reshard hist pk pk' cx key ss = some ss') : headsOk pk' cx ss' = true := by
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  simp only [headsOk, List.all_eq_true, List.mem_range, beq_iff_eq]
-  intro k hk
-  have hk' : k ∈ rT pk pk' cx := List.mem_range.2 (Nat.lt_of_lt_of_le hk (Nat.le_max_right _ _))
-  simp [rShard, rSpine, hk']
+theorem history_reshard (hc : chainsOk ss) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') :
+    historyOk (setK pk cx.p K') cx (mergeHist (setK pk cx.p K') cx ss') = true := sorry
 
-theorem history_reshard (hc : chainsOk ss) (h3 : Inv3 ss) (h : reshard hist pk pk' cx key ss = some ss') :
-    historyOk pk' cx (mergeHist pk' cx ss') = true :=
-  (spine_chain_binds_iff pk' cx ss').1 ⟨chain_reshard hc h, heads_reshard h, fun k _ => (inv3_reshard h3 h k).2⟩
+/-- M3: on every store reachable by steps and RESHARDs the invariants and the home bound hold. -/
+theorem reachR_ok (h : ReachR cx pk ss) :
+    packOk pk = true ∧ Inv ss ∧ Inv3 ss ∧ Inv4 pk cx ss ∧ chainsOk ss ∧ homesLt pk cx ss.1.dir := sorry
+
+/-- A crash before any spine COMMIT leaves a `ReachR` store; recovery changes nothing in it. -/
+theorem reachR_recover (h : ReachR cx pk ss) : recoverAll ss = ss := sorry
 
 /-! ## (a) Every row present exactly once, at its new home -/
 
-theorem tgt_some {c : Cell} {i : Item} (h : key c = some i) : tgt pk' cx key c = shardOf pk' cx i := by
-  simp [tgt, h, sidx]
+theorem reshard_dir (h : reshard pk K' cx ss = some ss') (c : Cell) :
+    ss'.1.dir c = (ss.1.dir c).map (rehome (setK pk cx.p K') cx) := sorry
 
-theorem reshard_dir (h : reshard hist pk pk' cx key ss = some ss') (c : Cell) :
-    ss'.1.dir c = (ss.1.dir c).map (rehome pk' cx key c) := by
-  obtain ⟨_, rfl⟩ := reshard_eq h; rfl
+/-- M2: after RESHARD every shard row sits at its own item's shard under the new pack. -/
+theorem reshard_local (h : reshard pk K' cx ss = some ss') : locDir (setK pk cx.p K') cx ss'.1.dir := sorry
 
-/-- A row charged at old shard `k < K` is, after RESHARD, at `tgt < K'` with the same charge, and nowhere else. -/
-theorem reshard_row (hI : Inv ss) (h : reshard hist pk pk' cx key ss = some ss') (c : Cell) (k : Nat)
-    (hk : k < pk.k cx.p) (hpos : 0 < (ss.2 k).chg c) :
-    tgt pk' cx key c < pk'.k cx.p ∧ (ss'.2 (tgt pk' cx key c)).chg c = (ss.2 k).chg c ∧
-      ∀ j, j ≠ tgt pk' cx key c → (ss'.2 j).chg c = 0 := by
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  obtain ⟨x, hx, hh⟩ := (hI c).2 k hpos
-  have hm := merge_at hI c x hx k hh hk
-  refine ⟨tgt_lt (k_pos pk' cx.p (ok_parts hok).2.2) c, ?_, fun j hj => ?_⟩
-  · show restrict (rdir pk' cx key ss.1.dir) _ (merge pk cx ss).chg c = _
-    simp [restrict, rdir, hx, rehome, hh, rh, hm]
-  · show restrict (rdir pk' cx key ss.1.dir) j (merge pk cx ss).chg c = 0
-    simp [restrict, rdir, hx, rehome, hh, rh, Ne.symm hj]
+/-- Steps keep item locality: a new shard row is routed to its item's shard. -/
+theorem locDir_step (inp : Input) (h : locDir pk cx ss.1.dir) : locDir pk cx (stepT pk cx ss inp).1.dir := sorry
 
-/-- No row appears from nowhere: a charge at new shard `j` sits at the cell's `tgt` and came from an old shard. -/
-theorem reshard_row_src (hI : Inv ss) (h : reshard hist pk pk' cx key ss = some ss') (c : Cell) (j : Nat)
-    (hpos : 0 < (ss'.2 j).chg c) :
-    j = tgt pk' cx key c ∧ ∃ k < pk.k cx.p, (ss.2 k).chg c = (ss'.2 j).chg c := by
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  obtain ⟨y, hy, hyh⟩ := restrict_pos hpos
-  cases hx : ss.1.dir c with
-  | none => simp [rdir, hx] at hy
-  | some x =>
-    simp only [rdir, hx, Option.map_some, Option.some.injEq] at hy
-    subst hy
-    cases hh : x.home with
-    | spine => simp [rehome, hh, rh] at hyh
-    | shard k0 =>
-      have hj : j = tgt pk' cx key c := by simp [rehome, hh, rh] at hyh; exact hyh.symm
-      have hpos' := Nat.lt_of_lt_of_le hpos restrict_le
-      rcases Nat.lt_or_ge k0 (pk.k cx.p) with hk | hk
-      · refine ⟨hj, k0, hk, ?_⟩
-        show _ = restrict (rdir pk' cx key ss.1.dir) j (merge pk cx ss).chg c
-        subst hj
-        simp [restrict, rdir, hx, rehome, hh, rh, merge_at hI c x hx k0 hh hk]
-      · exfalso
-        have h0 : (merge pk cx ss).chg c = 0 := sum_zeroN _ _ fun k hk' => inv_off hI c k fun z hz => by
-          have hxz : x = z := Option.some.inj (hx.symm.trans hz)
-          subst hxz; rw [hh]; intro he
-          have := List.mem_range.1 hk'; rw [Home.shard.inj he] at hk; omega
-        exact absurd (h0 ▸ hpos') (Nat.lt_irrefl 0)
+/-- A row charged at old shard `k < K` is, after RESHARD, at its `tgt < K'` with the same charge, and nowhere
+    else. -/
+theorem reshard_row (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss') (c : Cell)
+    (k : Nat) (hk : k < pk.k cx.p) (hpos : 0 < (ss.2 k).chg c) :
+    ∃ x, ss.1.dir c = some x ∧ tgt (setK pk cx.p K') cx x < K' ∧
+      (ss'.2 (tgt (setK pk cx.p K') cx x)).chg c = (ss.2 k).chg c ∧
+      ∀ j, j ≠ tgt (setK pk cx.p K') cx x → (ss'.2 j).chg c = 0 := sorry
 
-/-- On a reachable store with `packOk pk`, old shards `≥ K` hold no charge, so `reshard_row` covers every row. -/
-theorem reach_high (hp : packOk pk = true) (hr : reachS pk cx ss) (k : Nat) (hk : pk.k cx.p ≤ k) (c : Cell) :
-    (ss.2 k).chg c = 0 := by
-  obtain ⟨L, rs, rfl⟩ := hr
-  rw [run_high pk cx k hk]
-  have : k ≠ 0 := by have := k_pos pk cx.p hp; omega
-  simp [initS, initShards, this, initShard]
+/-- No row appears from nowhere: a charge at new shard `j` sits at the row's `tgt` and came from an old shard. -/
+theorem reshard_row_src (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss')
+    (c : Cell) (j : Nat) (hpos : 0 < (ss'.2 j).chg c) :
+    ∃ x, ss.1.dir c = some x ∧ j = tgt (setK pk cx.p K') cx x ∧
+      ∃ k < pk.k cx.p, (ss.2 k).chg c = (ss'.2 j).chg c := sorry
 
 /-! ## (b) Observational equivalence -/
 
@@ -327,15 +290,9 @@ theorem cls_route (pk pk' : Pack) (cx : Ctx) (r : Row) : cls (routeNew pk cx r) 
 theorem ndir_set (d : Dir) (c : Cell) (x : DirRow) : ndir (setDir d c x) = setDir (ndir d) c (nrow x) := by
   funext c'; by_cases h : c' = c <;> simp [ndir, setDir, h]
 
-theorem nrow_rehome (c : Cell) (x : DirRow) : nrow (rehome pk' cx key c x) = nrow x := by
-  obtain ⟨h, r, g⟩ := x; cases h <;> rfl
+theorem nrow_rehome (x : DirRow) : nrow (rehome pk cx x) = nrow x := sorry
 
-theorem ndir_rdir (d : Dir) : ndir (rdir pk' cx key d) = ndir d := by
-  funext c
-  show ((d c).map (rehome pk' cx key c)).map nrow = (d c).map nrow
-  cases d c with
-  | none => rfl
-  | some x => exact congrArg some (nrow_rehome c x)
+theorem ndir_rdir (d : Dir) : ndir (rdir pk cx d) = ndir d := sorry
 
 theorem jrow_sim (pk pk' : Pack) (cx : Ctx) {d1 d2 : Dir} (h : ndir d1 = ndir d2) (r : Row) :
     ndir (judgeRow pk cx d1 r).1 = ndir (judgeRow pk' cx d2 r).1 ∧
@@ -440,90 +397,69 @@ theorem runW_sim (pk pk' : Pack) (cx : Ctx) (hp : packOk pk = packOk pk') :
       rw [← rcptW_nv _ W, hv, rcptW_nv]
     simp only [rcptsW, ho, hw, hr, ih2]
 
-theorem norm_reshard (hI : Inv ss) (hK' : 0 < pk'.k cx.p) :
-    norm (merge pk' cx (rSpine pk pk' cx key ss, rShard pk pk' cx key ss)) = norm (merge pk cx ss) := by
-  rw [merge_reshard hI hK']
-  show ({ merge pk cx ss with dir := ndir (rdir pk' cx key ss.1.dir) } : View) = { merge pk cx ss with dir := ndir ss.1.dir }
-  rw [ndir_rdir]
+theorem norm_reshard (hI : Inv ss) (hK' : 0 < K') :
+    norm (merge (setK pk cx.p K') cx (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2))
+      = norm (merge pk cx ss) := sorry
 
 /-- Lifts `merge_run`: the resharded store runs as the single store on the merged view with the rehomed directory. -/
-theorem reshard_merge_run (hI : Inv ss) (h3 : Inv3 ss) (h : reshard hist pk pk' cx key ss = some ss')
-    (rs : List Input) :
-    merge pk' cx (runS pk' cx ss' rs) = runSingle pk' cx { merge pk cx ss with dir := rdir pk' cx key ss.1.dir } rs := by
-  have hI' := inv_reshard hI h
-  have h3' := inv3_reshard h3 h
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  rw [merge_run pk' cx _ rs hI' h3', merge_reshard hI (k_pos pk' cx.p (ok_parts hok).2.2)]
+theorem reshard_merge_run (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
+    (h : reshard pk K' cx ss = some ss') (rs : List Input) :
+    merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)
+      = runSingle (setK pk cx.p K') cx { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } rs := sorry
 
 /-- Lifts `whole_run` and `merge_run`: after RESHARD the store's merged view equals, up to the shard index of
     directory homes, the un-resharded single-store and whole-file runs (verdicts, dir, clock, every total). -/
-theorem reshard_whole_run (hLoc : Local cx) (hI : Inv ss) (h3 : Inv3 ss)
-    (h : reshard hist pk pk' cx key ss = some ss') (rs : List Input) :
-    norm (merge pk' cx (runS pk' cx ss' rs)) = norm (runWhole pk cx (merge pk cx ss) rs) ∧
-      norm (merge pk' cx (runS pk' cx ss' rs)) = norm (runSingle pk cx (merge pk cx ss) rs) := by
-  have hI' := inv_reshard hI h
-  have h3' := inv3_reshard h3 h
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  have hp : packOk pk' = packOk pk := by rw [(ok_parts hok).2.1, (ok_parts hok).2.2]
-  have hw : norm (merge pk' cx (runS pk' cx (rSpine pk pk' cx key ss, rShard pk pk' cx key ss) rs))
-      = norm (runWhole pk cx (merge pk cx ss) rs) := by
-    rw [whole_run pk' cx hLoc _ rs hI' h3']
-    exact (runW_sim pk' pk cx hp rs (norm_reshard (pk := pk) (key := key) hI (k_pos pk' cx.p (ok_parts hok).2.2))).1
-  refine ⟨hw, ?_⟩
-  rw [hw, ← whole_run pk cx hLoc ss rs hI h3, merge_run pk cx ss rs hI h3]
+theorem reshard_whole_run (hLoc : Local cx) (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
+    (h : reshard pk K' cx ss = some ss') (rs : List Input) :
+    norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)) = norm (runWhole pk cx (merge pk cx ss) rs) ∧
+      norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs))
+        = norm (runSingle pk cx (merge pk cx ss) rs) := sorry
 
 /-- Lifts `rcpts_run`: per-row receipts after RESHARD are the un-resharded store's and the whole-file run's. -/
-theorem reshard_rcpts_run (hLoc : Local cx) (hI : Inv ss) (h3 : Inv3 ss)
-    (h : reshard hist pk pk' cx key ss = some ss') (rs : List Input) :
-    rcptsS pk' cx ss' rs = rcptsW pk cx (merge pk cx ss) rs ∧ rcptsS pk' cx ss' rs = rcptsS pk cx ss rs := by
-  have hI' := inv_reshard hI h
-  have h3' := inv3_reshard h3 h
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  have hp : packOk pk' = packOk pk := by rw [(ok_parts hok).2.1, (ok_parts hok).2.2]
-  have hw : rcptsS pk' cx (rSpine pk pk' cx key ss, rShard pk pk' cx key ss) rs = rcptsW pk cx (merge pk cx ss) rs := by
-    rw [rcpts_run pk' cx hLoc _ rs hI' h3']
-    exact (runW_sim pk' pk cx hp rs (norm_reshard (pk := pk) (key := key) hI (k_pos pk' cx.p (ok_parts hok).2.2))).2
-  exact ⟨hw, hw.trans (rcpts_run pk cx hLoc ss rs hI h3).symm⟩
+theorem reshard_rcpts_run (hLoc : Local cx) (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
+    (h : reshard pk K' cx ss = some ss') (rs : List Input) :
+    rcptsS (setK pk cx.p K') cx ss' rs = rcptsW pk cx (merge pk cx ss) rs ∧
+      rcptsS (setK pk cx.p K') cx ss' rs = rcptsS pk cx ss rs := sorry
 
-/-! ## Witness -/
+/-! ## Witnesses (kernel `decide`) -/
 
 def cxW : Ctx :=
   { p := 0, hsh := fun _ _ => 1, lean := fun rs => rs.map fun _ => true, hs := fun d _ _ _ => d + 1,
-    advances := fun d _ _ _ => Nat.succ_ne_self d }
+    advances := fun d _ _ _ => Nat.succ_ne_self d, hi := fun d _ _ => d + 1, advancesI := fun d _ _ => Nat.succ_ne_self d }
 
 def LW : Legacy :=
-  { cells := fun _ => some (5, 10), t := 0, used := 10, budget := 3, lc := 0, spineRows := [], chg := fun _ => 1,
-    gross := 10, mc := 3, head := 0, chg_le := fun _ => Nat.le_refl 1, chg_cell := fun _ _ => by simp,
-    used_eq := rfl, budget_eq := rfl }
+  { cells := fun _ => some (5, 10), item := fun _ => some "i", t := 0, used := 10, budget := 3, lc := 0,
+    spineRows := [], chg := fun _ => 1, gross := 10, mc := 3, head := 0, chg_le := fun _ => Nat.le_refl 1,
+    chg_cell := fun _ _ => by simp, used_eq := rfl, budget_eq := rfl }
 
 /-- K = 1 to K = 2: the one charged row moves from shard 0 to shard 1 (`1 % 2`), with its directory home. -/
-example : (reshard [0] ⟨[]⟩ ⟨[(0, 2)]⟩ cxW (fun _ => some "i") (initS LW)).map
+example : (reshard ⟨[]⟩ 2 cxW (initS LW)).map
     (fun ss => ((ss.2 1).chg "a", (ss.2 0).chg "a", (ss.1.dir "a").map (·.home))) = some (1, 0, some (.shard 1)) := by
   decide
 
-/-- Changing `K` of another partition with history is refused. -/
-example : reshard [1] ⟨[]⟩ ⟨[(1, 2)]⟩ cxW (fun _ => some "i") (initS LW) = none := by
-  apply reshard_none; decide
+/-- H1, the review's scenario and its mirror: a crash after the RESHARD spine COMMIT with shard 1 only, shard 0
+    only, or no shard committed; after recovery "a" is charged once, at shard 1, and the merged charge is 1. -/
+example : [[1], [0], []].map (fun C =>
+      let ss := recoverAll (afterReshard ⟨[]⟩ 2 cxW (initS LW) C)
+      ((ss.2 0).chg "a", (ss.2 1).chg "a", (merge ⟨[(0, 2)]⟩ cxW ss).chg "a"))
+    = [(0, 1, 1), (0, 1, 1), (0, 1, 1)] := by
+  decide
 
-/-! ## Axiom pins -/
+/-- Before recovery, shard 0 uncommitted: a later RESHARD and a step are both refused. -/
+example : (reshard ⟨[(0, 2)]⟩ 3 cxW (afterReshard ⟨[]⟩ 2 cxW (initS LW) [1])).isNone = true ∧
+    (stepS ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS LW) [1]) ⟨0, []⟩).isNone = true := by
+  decide
 
-/-- info: 'BlindLedger.Financial.Reshard.reshard_row' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms reshard_row
-/-- info: 'BlindLedger.Financial.Reshard.reshard_row_src' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms reshard_row_src
-/-- info: 'BlindLedger.Financial.Reshard.reshard_merge_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms reshard_merge_run
-/-- info: 'BlindLedger.Financial.Reshard.reshard_whole_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms reshard_whole_run
-/-- info: 'BlindLedger.Financial.Reshard.reshard_rcpts_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms reshard_rcpts_run
-/-- info: 'BlindLedger.Financial.Reshard.inv_reshard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms inv_reshard
-/-- info: 'BlindLedger.Financial.Reshard.history_reshard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms history_reshard
-/-- info: 'BlindLedger.Financial.Reshard.reshard_refuse' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms reshard_refuse
-/-- info: 'BlindLedger.Financial.Reshard.reshard_open' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms reshard_open
+/-- K = 2 to K = 1 with retired shard 1 uncommitted: a step and a RESHARD to K = 1 are refused before recovery and
+    accepted after it. -/
+example : let ss := afterReshard ⟨[(0, 2)]⟩ 1 cxW (initS LW) [0]
+    ((stepS ⟨[(0, 1), (0, 2)]⟩ cxW ss ⟨0, []⟩).isNone && (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW ss).isNone &&
+      (stepS ⟨[(0, 1), (0, 2)]⟩ cxW (recoverAll ss) ⟨0, []⟩).isSome &&
+      (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW (recoverAll ss)).isSome) = true := by
+  decide
+
+/-- `K' = 0` is refused. -/
+example : (reshard ⟨[]⟩ 0 cxW (initS LW)).isNone = true := by
+  decide
 
 end BlindLedger.Financial.Reshard
