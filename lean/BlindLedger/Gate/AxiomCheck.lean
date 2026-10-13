@@ -333,8 +333,16 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_step
 /-- info: 'BlindLedger.Gate.Engine.stepM_sealed_final' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_sealed_final
+/-- info: 'BlindLedger.Gate.Engine.stepM_seal_guard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_seal_guard
 /-- info: 'BlindLedger.Gate.Engine.stepM_seal_resume' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_seal_resume
+/-- info: 'BlindLedger.Gate.Engine.chainHead_app' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.chainHead_app
+/-- info: 'BlindLedger.Gate.Engine.stepM_rhead' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_rhead
+/-- info: 'BlindLedger.Gate.Engine.pushM_fold_rhead' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold_rhead
 /-- info: 'BlindLedger.Gate.Engine.E8_frame_total' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.E8_frame_total
 /-- info: 'BlindLedger.Gate.Engine.decodeFrame_app' depends on axioms: [propext, Classical.choice, Quot.sound] -/

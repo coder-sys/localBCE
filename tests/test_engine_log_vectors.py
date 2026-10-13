@@ -129,14 +129,8 @@ class Log3Codec(unittest.TestCase):
 
 class Log3AgainstLean(unittest.TestCase):
     def test_python_matches_lean(self) -> None:
-        self.assertEqual(VECTORS.read_text("utf-8"), render(), "stale vector file; re-emit it")
-        want = "".join(f"{name} {verdict(data)}\n" for name, data, _ in vectors())
-        log3.lean_leg(self, "Log", "LogVectors", VECTORS, LEAN_OUT, want)
-
-
-def render() -> str:
-    return "".join(f"{name} {data.hex()}\n" for name, data, _ in vectors())
+        log3.lean_leg(self, "Log", "LogVectors", VECTORS, LEAN_OUT, vectors(), verdict)
 
 
 if __name__ == "__main__":
-    log3.emit_main(render)
+    log3.emit_main(vectors)

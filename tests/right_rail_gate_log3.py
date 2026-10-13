@@ -52,6 +52,14 @@ def digest(x: bytes) -> bytes:
     return x
 
 
+def chain_head(rows: list[tuple[int, int, int]]) -> bytes:
+    """Lean `chainHead sha3 zeroDigest rows` (rows newest first): `idRegStep` folded from the oldest."""
+    h = bytes(DIGEST)
+    for k, i, s in reversed(rows):
+        h = hashlib.sha3_512(b"RR/GATE/ID-REG/v2\x00" + h + be(1, k) + be(129, i) + be(4, s)).digest()
+    return h
+
+
 def batch(shard: int, header: bytes, manifest: bytes, reqs: list[bytes], rows: list[tuple[int, int, int]],
           leaves: list[bytes]) -> bytes:
     return (be(1, 0) + be(4, shard) + lp(header) + lp(manifest) + lps(reqs) + lp(reg_rows(rows)) + lps(leaves))
@@ -138,8 +146,17 @@ def d(n: int) -> bytes:
     return hashlib.sha3_512(bytes([n])).digest()
 
 
-def lean_leg(case: unittest.TestCase, module: str, runner: str, vectors: Path, saved: Path, want: str) -> None:
-    """The built module is current, `lean --run <runner> <vectors>` prints `want`, and so does the saved output."""
+def render(vs: list) -> str:
+    """The vector file: `name hex`, or `name fold hex...` when the data is a list of entries."""
+    return "".join(f"{n} " + (" ".join(["fold"] + [e.hex() for e in x]) if isinstance(x, list) else x.hex()) + "\n"
+                   for n, x, _ in vs)
+
+
+def lean_leg(case: unittest.TestCase, module: str, runner: str, vectors: Path, saved: Path, vs: list, verdict) -> None:
+    """The vector file is current, the built module is current, `lean --run <runner> <vectors>` prints the Python
+    verdicts, and so does the saved output."""
+    case.assertEqual(vectors.read_text("utf-8"), render(vs), "stale vector file; re-emit it")
+    want = "".join(f"{n} {verdict(x)}\n" for n, x, _ in vs)
     lake = shutil.which("lake") or os.path.join(os.path.expanduser("~"), ".elan", "bin", "lake")
     lean = vectors.parents[2] / "lean"
     built = subprocess.run([lake, "build", "--no-build", f"BlindLedger.Gate.Engine.{module}"], cwd=lean,
@@ -153,8 +170,8 @@ def lean_leg(case: unittest.TestCase, module: str, runner: str, vectors: Path, s
     case.assertEqual(saved.read_text("utf-8"), want)
 
 
-def emit_main(render) -> None:
+def emit_main(vs) -> None:
     if len(sys.argv) == 3 and sys.argv[1] == "--emit":
-        Path(sys.argv[2]).write_text(render(), encoding="utf-8", newline="\n")
+        Path(sys.argv[2]).write_text(render(vs()), encoding="utf-8", newline="\n")
     else:
         unittest.main()

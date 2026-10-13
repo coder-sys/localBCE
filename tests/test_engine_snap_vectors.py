@@ -5,9 +5,10 @@ Synthetic, nonpayment, non-PHI; test-only reference (Lean decides, this only con
 ``tag || be8 (len-1) || head || lp(rhead || lp(reg rows) || be4 n || rows)``, a row ``be4 shard || own
 || sealed || live || last || base || pays``: own ``be4 n || (be8 epoch || be8 count)*``, sealed ``0 | 1 || lp tip``,
 live ``0 | 1``, last ``0 | 1 || lp s || lp c``, base 64 bytes, pays ``be4 n || (be261 key || lp leaf)*``;
-shard, epoch and pay keys strictly ascending.  A ``fold`` vector pushes v3 entries from the empty state
-(SEAL, RESUME and SEGMENT only; the batch rhead step is not modelled here) and prints the snapshot
-digest of the result.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean
+shard, epoch and pay keys strictly ascending.  The decoder also refuses an own count of 0, a live shard on
+the zero base and an rhead that is not the registry chain head of reg (the encoder raises on the same).  A ``fold`` vector pushes v3
+entries from the empty state, or from a leading snapshot, (SEAL, RESUME and SEGMENT only; the batch rhead step is not modelled here;
+a SEAL needs no resume tip, a SEGMENT its snap equal to the digest of the state before it) and prints the snapshot digest of the result.  The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean
 <vectors>` in lean/ and checks its output against the Python verdicts and the saved LEAN_OUT.  Emit
 the vector file from the repo root with `python -m tests.test_engine_snap_vectors --emit <path>`.
 """
@@ -55,9 +56,19 @@ def state_in(reg: list, rhead: bytes, rows: bytes, n: int) -> bytes:
     return rhead + lp(log3.reg_rows(reg)) + be(4, n) + rows
 
 
-def encode(length: int, head: bytes, reg: list, rhead: bytes, shards: dict[int, Shard]) -> bytes:
+def wf(reg: list, rhead: bytes, shards: dict[int, Shard]) -> None:
+    """The decoder's refusals beyond layout: rhead is the registry head, no own count 0, no live shard on the zero base."""
+    if rhead != log3.chain_head(reg) or any(s.live and s.base == ZERO or not all(c for _, c in s.own)
+                                             for s in shards.values()):
+        raise Log3Error("wf")
+
+
+def encode(length: int, head: bytes, reg: list, rhead: bytes, shards: dict[int, Shard], check: bool = True) -> bytes:
+    """check=False is Lean's total encoder: a fold keeps a resumed shard on the zero base."""
     if len(head) != DIGEST or len(rhead) != DIGEST:
         raise Log3Error("digest")
+    if check:
+        wf(reg, rhead, shards)
     rows = b"".join(row(k, s) for k, s in sorted(shards.items()))
     return TAG + be(8, length - 1) + head + lp(state_in(reg, rhead, rows, len(shards)))
 
@@ -97,41 +108,51 @@ def decode(data: bytes) -> tuple[int, bytes, list, bytes, dict[int, Shard]]:
         body.tip(), body.take(DIGEST), body.asc(lambda: (body.num(PAY), body.lp())))))
     if body.rest():
         raise Log3Error("trailing state")
+    wf(reg, rhead, dict(rows))
     return idx + 1, head, reg, rhead, dict(rows)
 
 
+def sdig(n: int, *rest, check: bool = True) -> bytes:
+    """`snapDigest`; a fold's length 0 encodes as 1, as Lean's `len - 1` does."""
+    return hashlib.sha3_512(encode(max(n, 1), *rest, check=check)).digest()
+
+
 def fold(entries: list[bytes]) -> tuple[int, bytes, list, bytes, dict[int, Shard]]:
-    """Log.lean `pushM` from the empty state on SEAL, RESUME and SEGMENT entries."""
-    n, head, shards = 0, ZERO, {}
-    for e in entries:
+    """Log.lean `pushM` on SEAL, RESUME and SEGMENT entries, after a leading snapshot if there is one."""
+    lead = bool(entries) and entries[0].startswith(TAG)
+    n, head, reg, rhead, shards = decode(entries[0]) if lead else (0, ZERO, [], ZERO, {})
+    for e in entries[lead:]:
         idx, prev, kind, f = log3.decode(e)
         if (idx, prev) != (n, head):
             raise Log3Error("chain")
         if kind == "batch":
             raise NotImplementedError("batch")
-        if kind != "segment":
+        if kind == "segment":
+            if f[5] != sdig(n, head, reg, rhead, shards, check=False):
+                raise Log3Error("snap")
+        else:
             s, t = shards.get(f[0], Shard()), _R(f[1]).tip() if kind == "resume" else None
-            if s.live or ((s.sealed is not None) if kind == "seal" else (t and t[0]) != s.sealed):
+            if s.live or ((s.sealed is not None or s.last is not None) if kind == "seal" else (t and t[0]) != s.sealed):
                 raise Log3Error(kind)
             shards[f[0]] = s._replace(sealed=f[1]) if kind == "seal" else s._replace(live=True, last=t)
         n, head = n + 1, hashlib.sha3_512(e).digest()
-    return n, head, [], ZERO, shards
+    return n, head, reg, rhead, shards
 
 
 REG = [(1, 5, 6), (255, 256**129 - 1, 2**32 - 1)]
 TOP = Shard(((0, 1), (2**64 - 1, 2**64 - 1)), b"", True, (b"", b"c"), d(9), ((0, b""), (256**PAY - 1, b"leaf")))
-THREE = {2**32 - 1: TOP, 0: Shard(live=True), 7: Shard(sealed=d(2), base=d(7))}
+THREE = {2**32 - 1: TOP, 0: Shard(live=True, base=d(6)), 7: Shard(sealed=d(2), base=d(7))}
 GOOD = {
     "empty": (1, d(1), [], ZERO, {}),
-    "three": (2**64, d(1), REG, d(3), THREE),
-    "sealed_live": (5, d(4), [], d(5), {9: Shard(sealed=b"tip", live=True, last=(b"tip", b"cert"))}),
+    "three": (2**64, d(1), REG, log3.chain_head(REG), THREE),
+    "sealed_live": (5, d(4), [], ZERO, {9: Shard(sealed=b"tip", live=True, last=(b"tip", b"cert"), base=d(2))}),
 }
 T1, T2 = d(8), d(10)
 
 
-def chain(*bodies: tuple[str, tuple]) -> list[bytes]:
-    out, head = [], ZERO
-    for i, (kind, f) in enumerate(bodies):
+def chain(*bodies: tuple[str, tuple], at: "tuple[int, bytes]" = (0, ZERO)) -> list[bytes]:
+    out, head = [], at[1]
+    for i, (kind, f) in enumerate(bodies, at[0]):
         out.append(log3.encode(i, head, kind, f))
         head = hashlib.sha3_512(out[-1]).digest()
     return out
@@ -142,10 +163,24 @@ def resume(t: "tuple[bytes, bytes] | None", shard: int = 3) -> tuple:
 
 
 SEAL = ("seal", (3, T1))
+
+
+def segment(*before: tuple[str, tuple], bad: bool = False) -> tuple:
+    """A SEGMENT whose snap is the digest of the state after `before` (a wrong one if bad)."""
+    return "segment", (0, 0, d(1), d(2), d(3), d(4) if bad else sdig(*fold(chain(*before)), check=False))
+
+
+def lead(last: "tuple[bytes, bytes] | None", *bodies: tuple[str, tuple]) -> list[bytes]:
+    """A fold that starts from a snapshot of shard 3 (parked, unsealed, `last` as given)."""
+    return [encode(2, d(1), [], ZERO, {3: Shard(last=last)})] + chain(*bodies, at=(2, d(1)))
+
+
 FOLDS = {
     "fold_seal_resume_tip": chain(SEAL, resume((T1, b"cert"))),
     "fold_resume_fresh": chain(resume(None, 4)),
-    "fold_seal_segment_resume_tip": chain(SEAL, ("segment", (0, 0, d(1), d(2), d(3), d(4))), resume((T1, b""))),
+    "fold_seg_ok": chain(segment()),
+    "fold_seal_segment_resume_tip": chain(SEAL, segment(SEAL), resume((T1, b""))),
+    "fold_lead_seal": lead(None, SEAL),
     "refuse_fold_seal_resume_other_tip": chain(SEAL, resume((T2, b"cert"))),
     "refuse_fold_seal_resume_no_tip": chain(SEAL, resume(None)),
     "refuse_fold_fresh_resume_with_tip": chain(resume((T1, b"cert"), 4)),
@@ -154,6 +189,9 @@ FOLDS = {
     "refuse_fold_seal_twice": chain(SEAL, SEAL),
     "refuse_fold_tip_flag_2": chain(("resume", (4, b"\x02"))),
     "refuse_fold_tip_truncated": chain(SEAL, ("resume", (3, resume((T1, b"cert"))[1][1][:-12]))),
+    "refuse_fold_seg_wrong_snap": chain(SEAL, segment(SEAL, bad=True)),
+    "refuse_fold_seg_snap_before_seal": chain(SEAL, segment()),
+    "refuse_fold_seal_after_last": lead((T1, b"c"), SEAL),
     "refuse_fold_bad_prev": chain(SEAL) + [log3.encode(1, ZERO, *resume((T1, b"")))],
 }
 
@@ -172,7 +210,7 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         return b[:at] + lp(s)
 
     def rows(*rs: bytes) -> bytes:  # raw rows, no ordering
-        return state(one, state_in([], d(5), b"".join(rs), len(rs)))
+        return state(one, state_in([], ZERO, b"".join(rs), len(rs)))
 
     out += [
         ("refuse_empty", b"", False),
@@ -185,7 +223,7 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_count_over", state(three, s3[:c3] + be(4, 4) + s3[c3 + 4:]), False),
         ("refuse_count_under", state(three, s3[:c3] + be(4, 2) + s3[c3 + 4:]), False),
         ("refuse_lp_over", three[:at] + be(4, n3 + 1) + three[at + 4:], False),
-        ("refuse_reg_partial_row", state(one, d(5) + lp(b"\x00" * 133) + s1[c1:]), False),
+        ("refuse_reg_partial_row", state(one, ZERO + lp(b"\x00" * 133) + s1[c1:]), False),
         ("refuse_sealed_flag_2", rows(r9[:8] + b"\x02" + r9[9:]), False),
         ("refuse_live_flag_2", rows(r9[:16] + b"\x02" + r9[17:]), False),
         ("refuse_last_flag_2", rows(r9[:17] + b"\x02" + r9[18:]), False),
@@ -195,6 +233,9 @@ def vectors() -> list[tuple[str, "bytes | list[bytes]", bool]]:
         ("refuse_own_epochs_descending", rows(row(1, Shard(own=((6, 1), (5, 2))))), False),
         ("refuse_pays_keys_equal", rows(row(1, Shard(pays=((5, b"a"), (5, b"b"))))), False),
         ("refuse_pays_keys_descending", rows(row(1, Shard(pays=((6, b"a"), (5, b"b"))))), False),
+        ("refuse_rhead_forged", state(three, d(3) + s3[DIGEST:]), False),
+        ("refuse_own_count_0", rows(row(1, Shard(own=((5, 0),)))), False),
+        ("refuse_live_zero_base", rows(row(1, Shard(live=True))), False),
         ("refuse_base_short", rows(row(1, Shard())[:-4 - DIGEST] + d(1)[:-1] + be(4, 0)), False),
     ]
     return out + [(n, es, not n.startswith("refuse")) for n, es in FOLDS.items()]
@@ -207,7 +248,7 @@ def verdict(data: "bytes | list[bytes]") -> str:
         return "refuse"
     if not isinstance(data, list):
         assert encode(*snap) == data
-    return "ok " + hashlib.sha3_512(encode(*snap)).hexdigest()
+    return "ok " + sdig(*snap, check=False).hex()
 
 
 class SnapCodec(unittest.TestCase):
@@ -228,9 +269,11 @@ class SnapCodec(unittest.TestCase):
         self.assertEqual(shard, Shard(sealed=T1, live=True, last=(T1, b"cert")))
 
     def test_encoder_refuses_values_that_do_not_fit(self) -> None:
-        for args in [(0, d(1), [], d(1), {}), (2**64 + 1, d(1), [], d(1), {}), (1, d(1)[:-1], [], d(1), {}),
-                     (1, d(1), [], d(1) + b"\x00", {}), (1, d(1), [], d(1), {2**32: Shard()}),
-                     (1, d(1), [], d(1), {0: Shard(base=b"")}), (1, d(1), [(256, 0, 0)], d(1), {})]:
+        for args in [(0, d(1), [], ZERO, {}), (2**64 + 1, d(1), [], ZERO, {}), (1, d(1)[:-1], [], ZERO, {}),
+                     (1, d(1), [], ZERO + b"\x00", {}), (1, d(1), [], ZERO, {2**32: Shard()}),
+                     (1, d(1), [], ZERO, {0: Shard(base=b"")}), (1, d(1), [(256, 0, 0)], ZERO, {}),
+                     (1, d(1), [], d(5), {}), (1, d(1), [], ZERO, {0: Shard(own=((1, 0),))}),
+                     (1, d(1), [], ZERO, {0: Shard(live=True)})]:
             with self.subTest(args), self.assertRaises(Log3Error):
                 encode(*args)
 
@@ -242,15 +285,8 @@ class SnapCodec(unittest.TestCase):
 
 class SnapAgainstLean(unittest.TestCase):
     def test_python_matches_lean(self) -> None:
-        self.assertEqual(VECTORS.read_text("utf-8"), render(), "stale vector file; re-emit it")
-        want = "".join(f"{name} {verdict(data)}\n" for name, data, _ in vectors())
-        log3.lean_leg(self, "Snap", "SnapVectors", VECTORS, LEAN_OUT, want)
-
-
-def render() -> str:
-    return "".join(f"{name} " + (" ".join(["fold"] + [e.hex() for e in data]) if isinstance(data, list) else data.hex())
-                   + "\n" for name, data, _ in vectors())
+        log3.lean_leg(self, "Snap", "SnapVectors", VECTORS, LEAN_OUT, vectors(), verdict)
 
 
 if __name__ == "__main__":
-    log3.emit_main(render)
+    log3.emit_main(vectors)

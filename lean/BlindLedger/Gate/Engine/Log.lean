@@ -14,7 +14,10 @@ import BlindLedger.Gate.ApprovalLaws
     shard) and StateV2 `push`'s resume tip rule (S3 review HIGH-1: a resume needs a parked shard and
     a permit tip naming its seal, or no tip when unsealed; it sets live and `last`).  A batch appends
     its registry rows to `reg`.  The shard also carries `own`, `base` and `pays`, the custody state
-    StateV2 `push` reads, so a snapshot holds it; `stepM` does not yet write them.  The guards are
+    StateV2 `push` reads, so a snapshot holds it; `stepM` does not yet write them (StateV2's resume base
+    needs pins and the permit sets, owed to `push3`; until then a snapshot refuses a live shard on the
+    zero base, which StateV2 never reaches, S3b review M1).  A segment steps only when its `snap` is the
+    `snapDigest` of the state before it (M3); its index and segment hashes are owed to S3c.  The guards are
     necessary, not sufficient: custody, the permit's rel/unr sets, activation, resume reserve rows
     and seal-of-v1-only are owed to `push3`. -/
 
@@ -462,6 +465,28 @@ structure LogStateM where
 def LogStateM.init : LogStateM := ⟨0, zeroDigest, [], zeroDigest, ∅⟩
 def LogStateM.shard (m : LogStateM) (k : Nat) : ShardM := m.shards.getD k ShardM.init
 
+/-! The ENGINE-SNAP/v2 encoding (layout and decoder in `Engine/Snap.lean`); here so a segment can bind it. -/
+
+def snapTag : Bytes := "RR/GATE/ENGINE-SNAP/v2".toUTF8.toList ++ [0]
+def bitIn : Bool → Bytes
+  | false => natBE 1 0
+  | true => natBE 1 1
+def sealedIn : Option Bytes → Bytes
+  | none => natBE 1 0
+  | some t => natBE 1 1 ++ lp t
+def ascIn {α : Type} (enc : Nat × α → Bytes) (xs : List (Nat × α)) : Bytes :=
+  natBE 4 xs.length ++ xs.flatMap enc
+def ownRow (x : Nat × Nat) : Bytes := natBE 8 x.1 ++ natBE 8 x.2
+def payRow (x : Nat × Bytes) : Bytes := natBE payWidth x.1 ++ lp x.2
+def shardRow (x : Nat × ShardM) : Bytes :=
+  natBE 4 x.1 ++ ascIn ownRow x.2.own ++ sealedIn x.2.sealed ++ bitIn x.2.live ++ tipIn x.2.last ++ x.2.base ++
+    ascIn payRow x.2.pays
+
+def stateIn (m : LogStateM) : Bytes := m.rhead ++ lp (rows m.reg) ++ ascIn shardRow m.shards.toList
+def snapIn (m : LogStateM) : Bytes := snapTag ++ natBE 8 (m.len - 1) ++ m.head ++ lp (stateIn m)
+def encodeSnap (m : LogStateM) : ByteArray := (snapIn m).toByteArray
+def snapDigest (m : LogStateM) : Bytes := sha3 (snapIn m)
+
 def stepM (m : LogStateM) : Body3 → Option LogStateM
   | .batch b =>
     if (m.shard b.shard).live then
@@ -475,10 +500,10 @@ def stepM (m : LogStateM) : Body3 → Option LogStateM
       else none
     | none => none
   | .seal k t =>
-    if (m.shard k).live = false ∧ (m.shard k).sealed = none then
+    if (m.shard k).live = false ∧ (m.shard k).sealed = none ∧ (m.shard k).last = none then
       some { m with shards := m.shards.insert k { m.shard k with sealed := some t } }
     else none
-  | .segment _ => some m
+  | .segment s => if s.snap = snapDigest m then some m else none
 
 /-- Appends the entry bytes `b` only at the next index and only on the current head (no replay).
     `pushM` takes bytes, not an `Entry3`: the new head is the SHA3 of exactly `b` and the step is
@@ -535,13 +560,15 @@ theorem stepM_keep {m m' : LogStateM} {b : Body3} (h : stepM m b = some m') : Ke
       by_cases hka : k = a
       · rw [if_pos hka]; subst hka
         refine ⟨fun hs => ?_, id⟩
-        rw [hc.2] at hs
+        rw [hc.2.1] at hs
         simp at hs
       · rw [if_neg hka]; exact ⟨fun _ => rfl, id⟩
     next => cases h
   | segment s =>
     simp only [stepM] at h
-    cases h; exact ⟨fun _ => rfl, id⟩
+    split at h
+    · cases h; exact ⟨fun _ => rfl, id⟩
+    · cases h
 
 /-- L3 (S1 review 2): a push is exactly one `stepM` on the decoded body, then the new length and
     head; `rhead` and the shards come from the step alone. -/
@@ -571,7 +598,7 @@ theorem stepM_sealed_final {m : LogStateM} {k : Nat} {t : Bytes} (hs : (m.shard 
     (∀ t', stepM m (.seal k t') = none) ∧
       ∀ p m', stepM m (.resume k p) = some m' → (m.shard k).live = false ∧
         ∃ c, permitTip p = some (some (t, c)) ∧ m'.shard k = { m.shard k with live := true, last := some (t, c) } := by
-  refine ⟨fun t' => if_neg (fun hc => by rw [hc.2] at hs; cases hs), fun p m' h => ?_⟩
+  refine ⟨fun t' => if_neg (fun hc => by rw [hc.2.1] at hs; cases hs), fun p m' h => ?_⟩
   simp only [stepM] at h
   split at h
   next tip htip =>
@@ -590,14 +617,23 @@ theorem stepM_sealed_final {m : LogStateM} {k : Nat} {t : Bytes} (hs : (m.shard 
     next => cases h
   next => cases h
 
+/-- StateV2 `push`'s seal guard (S3b review L1): a seal steps only on a parked, unsealed shard with no
+    resume tip recorded. -/
+theorem stepM_seal_guard {m m' : LogStateM} {k : Nat} {t : Bytes} (h : stepM m (.seal k t) = some m') :
+    (m.shard k).live = false ∧ (m.shard k).sealed = none ∧ (m.shard k).last = none := by
+  simp only [stepM] at h
+  split at h
+  next hc => exact hc
+  next => cases h
+
 /-- The post-cutover path (S3 review HIGH-1): on a parked unsealed shard a seal of `t` and then a
     resume whose permit tip is `(t, c)` both step, leaving the shard sealed at `t`, live, `last = (t, c)`. -/
 theorem stepM_seal_resume {m : LogStateM} {k : Nat} {t c p : Bytes} (hl : (m.shard k).live = false)
-    (hn : (m.shard k).sealed = none) (hp : permitTip p = some (some (t, c))) :
+    (hn : (m.shard k).sealed = none) (hlast : (m.shard k).last = none) (hp : permitTip p = some (some (t, c))) :
     ((stepM m (.seal k t)).bind fun m1 => stepM m1 (.resume k p)).map (·.shard k) =
       some { m.shard k with sealed := some t, live := true, last := some (t, c) } := by
   have h1 : stepM m (.seal k t) = some { m with shards := m.shards.insert k { m.shard k with sealed := some t } } :=
-    if_pos ⟨hl, hn⟩
+    if_pos ⟨hl, hn, hlast⟩
   rw [h1, Option.bind_some]
   have hm : ∀ a b c d s x, (LogStateM.mk a b c d s).shard x = s.getD x ShardM.init := fun _ _ _ _ _ _ => rfl
   simp [stepM, hp, hm, Std.TreeMap.getD_insert, Nat.compare_eq_eq]
@@ -631,5 +667,60 @@ theorem pushM_fold (es : List ByteArray) : ∀ {m m' : LogStateM}, es.foldlM pus
       obtain ⟨hl, hk⟩ := ih (h : es.foldlM pushM m1 = some m')
       obtain ⟨_, -, -, -, hl1, -, hk1⟩ := pushM_chain h1
       exact ⟨by rw [hl, hl1, List.length_cons]; omega, hk1.trans hk⟩
+
+theorem chainHead_app (g : Bytes) (d l : List Row) :
+    chainHead sha3 g (d ++ l) = chainHead sha3 (chainHead sha3 g l) d := by
+  induction d with
+  | nil => rfl
+  | cons r d ih => obtain ⟨kd, i, s⟩ := r; simp only [List.cons_append, chainHead, ih]
+
+/-- S3b review M2: a step keeps `rhead` the registry head of `reg` from `zeroDigest`, which a snapshot
+    decode checks. -/
+theorem stepM_rhead {m m' : LogStateM} {b : Body3} (hm : m.rhead = chainHead sha3 zeroDigest m.reg)
+    (h : stepM m b = some m') : m'.rhead = chainHead sha3 zeroDigest m'.reg := by
+  cases b with
+  | batch bt =>
+    simp only [stepM] at h
+    split at h
+    · cases h; simp only [chainHead_app, ← hm]
+    · cases h
+  | resume k p =>
+    simp only [stepM] at h
+    split at h
+    · split at h
+      · cases h; exact hm
+      · cases h
+    · cases h
+  | «seal» k t =>
+    simp only [stepM] at h
+    split at h
+    · cases h; exact hm
+    · cases h
+  | segment s =>
+    simp only [stepM] at h
+    split at h
+    · cases h; exact hm
+    · cases h
+
+/-- Every fold of pushes keeps `rhead = chainHead sha3 zeroDigest reg` (true at `init`), so each
+    reachable state passes the snapshot registry check (S3b review M2). -/
+theorem pushM_fold_rhead (es : List ByteArray) : ∀ {m m' : LogStateM},
+    m.rhead = chainHead sha3 zeroDigest m.reg → es.foldlM pushM m = some m' →
+      m'.rhead = chainHead sha3 zeroDigest m'.reg := by
+  induction es with
+  | nil =>
+    intro m m' hm h
+    have h' : some m = some m' := h
+    cases h'
+    exact hm
+  | cons e es ih =>
+    intro m m' hm h
+    cases h1 : pushM m e with
+    | none => simp [List.foldlM_cons, h1] at h
+    | some m1 =>
+      rw [List.foldlM_cons, h1] at h
+      obtain ⟨_, s, -, -, -, hs, rfl⟩ := pushM_step h1
+      have hr := stepM_rhead hm hs
+      exact ih (m := { s with len := m.len + 1, head := sha3 e.data.toList }) hr h
 
 end BlindLedger.Gate.Engine

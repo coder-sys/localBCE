@@ -5,7 +5,7 @@ import BlindLedger.Gate.Engine.Snap
     Each `name hex` line prints `name ok <snapDigest hex>` (the digest of the decoded state's own
     encoding, so a non-canonical accept shows as a digest mismatch) or `name refuse` (`name malformed`
     for bad hex, which fails the run).  A `name fold hex1 hex2 ...` line folds `pushM` over the entries
-    from `LogStateM.init` and prints `name ok <snapDigest hex>` of the result or `name refuse`.  Compared with Python by `tests/test_engine_snap_vectors.py`.
+    from `LogStateM.init` (or from the decoded snapshot if the first entry is one) and prints `name ok <snapDigest hex>` of the result or `name refuse`.  Compared with Python by `tests/test_engine_snap_vectors.py`.
     Test-only; never a release path. -/
 
 namespace BlindLedger.Gate.Engine.SnapVectors
@@ -33,7 +33,10 @@ def answer (hex : String) : Option String := do
 
 def answerFold (hexes : List String) : Option String := do
   let es ← hexes.mapM fun h => (unhex h.toList).map fun bs => ByteArray.mk bs.toArray
-  pure (match es.foldlM pushM LogStateM.init with
+  let (m0, es) := match es.head?.bind decodeSnap with
+    | some m => (m, es.tail)
+    | none => (LogStateM.init, es)
+  pure (match es.foldlM pushM m0 with
     | some m => "ok " ++ toHex (snapDigest m)
     | none => "refuse")
 

@@ -11,7 +11,9 @@ import BlindLedger.Gate.Engine.Log
     so neither is repeated inside.  Rows carry their actual bytes (lead 2026-10-13: no padding).  The
     seal tip is `lp` (be4) because the S1 decoder accepts a seal tip of any length.  v1 (S2: sealed and
     live only) is refused by its tag.  `snapDigest = sha3_512(all)`.  The literal tag avoids `dom2`'s
-    `/v1/v2`.
+    `/v1/v2`.  The encoder is in `Log.lean` (a segment binds `snapDigest`).  The decoder refuses an own
+    count of 0, a live shard on the zero base and an `rhead` that is not `chainHead sha3 zeroDigest reg`
+    (S3b review L3, M1, M2): states no fold reaches.
 
     The state is a `Std.TreeMap`, whose tree shape is not canonical, so E4 and E5 hold up to `abs`
     (the sorted row list), as the design's `abs` and `foldFrom P (abs m')` already read. -/
@@ -19,8 +21,6 @@ import BlindLedger.Gate.Engine.Log
 namespace BlindLedger.Gate.Engine
 
 open BlindLedger.Gate BlindLedger.Gate.Rules
-
-def snapTag : Bytes := "RR/GATE/ENGINE-SNAP/v2".toUTF8.toList ++ [0]
 
 /-- The canonical state: what the snapshot binds. -/
 structure LogState3 where
@@ -32,25 +32,6 @@ structure LogState3 where
 
 def abs (m : LogStateM) : LogState3 := ⟨m.len, m.head, m.reg, m.rhead, m.shards.toList⟩
 
-def bitIn : Bool → Bytes
-  | false => natBE 1 0
-  | true => natBE 1 1
-def sealedIn : Option Bytes → Bytes
-  | none => natBE 1 0
-  | some t => natBE 1 1 ++ lp t
-def ascIn {α : Type} (enc : Nat × α → Bytes) (xs : List (Nat × α)) : Bytes :=
-  natBE 4 xs.length ++ xs.flatMap enc
-def ownRow (x : Nat × Nat) : Bytes := natBE 8 x.1 ++ natBE 8 x.2
-def payRow (x : Nat × Bytes) : Bytes := natBE payWidth x.1 ++ lp x.2
-def shardRow (x : Nat × ShardM) : Bytes :=
-  natBE 4 x.1 ++ ascIn ownRow x.2.own ++ sealedIn x.2.sealed ++ bitIn x.2.live ++ tipIn x.2.last ++ x.2.base ++
-    ascIn payRow x.2.pays
-
-def stateIn (m : LogStateM) : Bytes := m.rhead ++ lp (rows m.reg) ++ ascIn shardRow m.shards.toList
-def snapIn (m : LogStateM) : Bytes := snapTag ++ natBE 8 (m.len - 1) ++ m.head ++ lp (stateIn m)
-def encodeSnap (m : LogStateM) : ByteArray := (snapIn m).toByteArray
-def snapDigest (m : LogStateM) : Bytes := sha3 (snapIn m)
-
 def ascKeys {α : Type} : List (Nat × α) → Bool
   | a :: b :: t => decide (a.1 < b.1) && ascKeys (b :: t)
   | _ => true
@@ -59,15 +40,18 @@ def ascKeys {α : Type} : List (Nat × α) → Bool
 def ascFits {α : Type} (Q : Nat × α → Prop) (xs : List (Nat × α)) : Prop :=
   xs.length < 256 ^ 4 ∧ (∀ x ∈ xs, Q x) ∧ ascKeys xs = true
 def ShardM.fits (x : Nat × ShardM) : Prop :=
-  x.1 < 256 ^ 4 ∧ ascFits (fun e => e.1 < 256 ^ 8 ∧ e.2 < 256 ^ 8) x.2.own ∧
+  x.1 < 256 ^ 4 ∧ ascFits (fun e => e.1 < 256 ^ 8 ∧ 0 < e.2 ∧ e.2 < 256 ^ 8) x.2.own ∧
     (∀ t, x.2.sealed = some t → t.length < 256 ^ 4) ∧
     (∀ s c, x.2.last = some (s, c) → s.length < 256 ^ 4 ∧ c.length < 256 ^ 4) ∧
-    x.2.base.length = digestBytes ∧ ascFits (fun e => e.1 < 256 ^ payWidth ∧ e.2.length < 256 ^ 4) x.2.pays
-/-- A snapshot follows at least one record and every field fits its width. -/
+    x.2.base.length = digestBytes ∧ (x.2.live = true → x.2.base ≠ zeroDigest) ∧
+    ascFits (fun e => e.1 < 256 ^ payWidth ∧ e.2.length < 256 ^ 4) x.2.pays
+/-- A snapshot follows at least one record, every field fits its width, own counts are positive, a live
+    shard has a base (M1, L3) and `rhead` is the registry head of `reg` (M2, kept by `pushM_fold_rhead`). -/
 def LogStateM.wf (m : LogStateM) : Prop :=
   0 < m.len ∧ m.len - 1 < 256 ^ 8 ∧ m.head.length = digestBytes ∧ m.rhead.length = digestBytes ∧
     (rows m.reg).length < 256 ^ 4 ∧ (∀ x ∈ m.reg, rowFits x) ∧ m.shards.toList.length < 256 ^ 4 ∧
-    (∀ x ∈ m.shards.toList, ShardM.fits x) ∧ (stateIn m).length < 256 ^ 4
+    (∀ x ∈ m.shards.toList, ShardM.fits x) ∧ (stateIn m).length < 256 ^ 4 ∧
+    m.rhead = chainHead sha3 zeroDigest m.reg
 
 /-! ## Decoder -/
 
@@ -89,6 +73,7 @@ def pSealed : P (Option Bytes) := do
 def pOwn : P (Nat × Nat) := do
   let e ← rd 8
   let c ← rd 8
+  need (decide (0 < c))
   pure (e, c)
 def pPay : P (Nat × Bytes) := do
   let n ← rd payWidth
@@ -101,6 +86,7 @@ def pShard : P (Nat × ShardM) := do
   let live ← pBit
   let last ← pTip
   let base ← digest
+  need (!live || base != zeroDigest)
   let pays ← pAsc pPay
   pure (k, ⟨own, sealed, live, last, base, pays⟩)
 def pState : P (Bytes × List Row × List (Nat × ShardM)) := do
@@ -114,7 +100,9 @@ def pSnap : P LogStateM := do
   let head ← digest
   let body ← pLp
   match pState.run body with
-  | some ((rhead, reg, rs), []) => pure ⟨idx + 1, head, reg, rhead, Std.TreeMap.ofList rs compare⟩
+  | some ((rhead, reg, rs), []) => do
+    need (rhead == chainHead sha3 zeroDigest reg)
+    pure ⟨idx + 1, head, reg, rhead, Std.TreeMap.ofList rs compare⟩
   | _ => fail
 
 def decodeSnap (b : ByteArray) : Option LogStateM :=
@@ -152,9 +140,10 @@ theorem pAsc_app {α : Type} {p : P (Nat × α)} {enc : Nat × α → Bytes} {Q 
   obtain ⟨hn, hq, ha⟩ := h
   simp only [pAsc, ascIn, List.append_assoc, seq_app (rd_app hn), seq_app (many_app hp xs hq), ha, need_seq] <;> rfl
 
-theorem pOwn_app (x : Nat × Nat) (h : x.1 < 256 ^ 8 ∧ x.2 < 256 ^ 8) (r : Bytes) :
+theorem pOwn_app (x : Nat × Nat) (h : x.1 < 256 ^ 8 ∧ 0 < x.2 ∧ x.2 < 256 ^ 8) (r : Bytes) :
     pOwn.run (ownRow x ++ r) = some (x, r) := by
-  simp only [pOwn, ownRow, List.append_assoc, seq_app (rd_app h.1), seq_app (rd_app h.2)] <;> rfl
+  simp only [pOwn, ownRow, List.append_assoc, seq_app (rd_app h.1), seq_app (rd_app h.2.2),
+    decide_eq_true h.2.1, need_seq] <;> rfl
 
 theorem pPay_app (x : Nat × Bytes) (h : x.1 < 256 ^ payWidth ∧ x.2.length < 256 ^ 4) (r : Bytes) :
     pPay.run (payRow x ++ r) = some (x, r) := by
@@ -163,10 +152,11 @@ theorem pPay_app (x : Nat × Bytes) (h : x.1 < 256 ^ payWidth ∧ x.2.length < 2
 theorem pShard_app (x : Nat × ShardM) (h : ShardM.fits x) (r : Bytes) :
     pShard.run (shardRow x ++ r) = some (x, r) := by
   obtain ⟨k, o, s, l, t, b, ps⟩ := x
-  obtain ⟨hk, ho, hs, ht, hb, hp⟩ := h
+  obtain ⟨hk, ho, hs, ht, hb, hz, hp⟩ := h
+  have hz' : (!l || b != zeroDigest) = true := by cases l <;> simp_all
   simp only [pShard, shardRow, List.append_assoc, seq_app (rd_app hk), seq_app (pAsc_app pOwn_app o ho),
-    seq_app (pSealed_app s hs), seq_app (pBit_app l), seq_app (pTip_app t ht), seq_app (digest_app hb),
-    seq_app (pAsc_app pPay_app ps hp)] <;> rfl
+    seq_app (pSealed_app s hs), seq_app (pBit_app l), seq_app (pTip_app t ht), seq_app (digest_app hb), hz',
+    need_seq, seq_app (pAsc_app pPay_app ps hp)] <;> rfl
 
 theorem ascKeys_of {α : Type} : ∀ l : List (Nat × α), l.Pairwise (fun a b => compare a.1 b.1 = .lt) →
     ascKeys l = true
@@ -207,11 +197,12 @@ theorem abs_canon (m : LogStateM) : abs (canon m) = abs m := by
   simp only [abs, canon, Std.TreeMap.equiv_iff_toList_eq.1 (ofList_toList_equiv m.shards)]
 
 theorem decode_encodeSnap (m : LogStateM) (h : m.wf) : decodeSnap (encodeSnap m) = some (canon m) := by
-  obtain ⟨h0, hi, hh, hr, hg, hf, hn, hs, hl⟩ := h
+  obtain ⟨h0, hi, hh, hr, hg, hf, hn, hs, hl, hc⟩ := h
+  have hc' : (m.rhead == chainHead sha3 zeroDigest m.reg) = true := beq_iff_eq.2 hc
   have hrun : pSnap.run (snapIn m ++ []) = some (canon m, []) := by
     simp only [pSnap, snapIn, List.append_assoc, seq_app (p := expect snapTag) (fun _ => expect_app),
-      seq_app (rd_app hi), seq_app (digest_app hh), seq_app (pLp_app _ hl), pState_app m hr hg hf hn hs,
-      Nat.sub_add_cancel h0] <;> rfl
+      seq_app (rd_app hi), seq_app (digest_app hh), seq_app (pLp_app _ hl), pState_app m hr hg hf hn hs, hc',
+      need_seq, Nat.sub_add_cancel h0] <;> rfl
   rw [List.append_nil] at hrun
   simp only [decodeSnap, encodeSnap, List.toList_data_toByteArray, hrun]
 
@@ -248,7 +239,9 @@ theorem stepM_abs {a b : LogStateM} (h : abs a = abs b) (body : Body3) :
   | batch bt => simp only [stepM, hk]; split <;> simp [abs, hl, hh, hg, hr, ht]
   | resume k p => simp only [stepM, hk]; split <;> (try split) <;> simp [abs, hl, hh, hg, hr, hi]
   | «seal» k t => simp only [stepM, hk]; split <;> simp [abs, hl, hh, hg, hr, hi]
-  | segment s => simp [stepM, h]
+  | segment s =>
+    have hd : snapDigest a = snapDigest b := by simp only [snapDigest, snapIn, stateIn, hl, hh, hg, hr, ht]
+    simp only [stepM, hd]; split <;> simp [h]
 
 theorem pushM_abs {a b : LogStateM} (h : abs a = abs b) (x : ByteArray) :
     (pushM a x).map abs = (pushM b x).map abs := by
