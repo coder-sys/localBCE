@@ -537,14 +537,121 @@ theorem reachS_reachR (hp : packOk pk = true) (h : reachS pk cx ss) : ReachR cx 
   obtain ⟨L, rs, rfl⟩ := h
   exact reachR_run rs (ReachR.init pk L hp)
 
+theorem packOk_setK (hp : packOk pk = true) (hK : 0 < K') (p : PartId) : packOk (setK pk p K') = true := by
+  simp only [packOk, setK, List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at hp ⊢
+  exact ⟨hK, hp⟩
+
+theorem invK_reshard (h : reshard pk K' cx ss = some ss') : InvK (setK pk cx.p K') cx ss' := by
+  have hk := reshard_k h
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  exact ⟨by rw [setK_k_self]; exact hk, rRec_imgOk⟩
+
+/-- A property of directory rows kept by every step: it holds of each new row (a `routeNew` row) and the old rows
+    are kept. -/
+theorem judgeRows_pres (pk : Pack) (cx : Ctx) (P : DirRow → Prop)
+    (hn : ∀ r, P ⟨routeNew pk cx r, r.raw, r.gross, r.item⟩) :
+    ∀ (d : Dir) (rs : List Row), (∀ c x, d c = some x → P x) →
+      ∀ c x, (judgeRows pk cx d rs).1 c = some x → P x
+  | d, [], h => h
+  | d, r :: rs, h => by
+    show ∀ c x, (judgeRows pk cx (judgeRow pk cx d r).1 rs).1 c = some x → P x
+    apply judgeRows_pres pk cx P hn _ rs
+    unfold judgeRow
+    split
+    · exact h
+    · intro c x hx
+      simp only [setDir] at hx
+      split at hx
+      · rw [← Option.some.inj hx]; exact hn r
+      · exact h c x hx
+
+theorem stepT_pres (pk : Pack) (cx : Ctx) (P : DirRow → Prop)
+    (hn : ∀ r, P ⟨routeNew pk cx r, r.raw, r.gross, r.item⟩) (ss : SS) (inp : Input)
+    (h : ∀ c x, ss.1.dir c = some x → P x) : ∀ c x, (stepT pk cx ss inp).1.dir c = some x → P x := by
+  unfold stepT stepS
+  split
+  · exact judgeRows_pres pk cx P hn ss.1.dir inp.rows h
+  · exact h
+
+theorem homesLt_step (hK : 0 < pk.k cx.p) (inp : Input) (h : homesLt pk cx ss.1.dir) :
+    homesLt pk cx (stepT pk cx ss inp).1.dir :=
+  fun c x j hx hj =>
+    stepT_pres pk cx (fun x => ∀ j, x.home = .shard j → j < pk.k cx.p)
+      (fun r j hj => (route_sidx pk cx r j hj).2 hK) ss inp (fun c x hx j hj => h c x j hx hj) c x hx j hj
+
+theorem homesLt_init (hK : 0 < pk.k cx.p) (L : Legacy) : homesLt pk cx (initS (pk.k cx.p) L).1.dir := by
+  intro c x j hx hj
+  change backfill L c = some x at hx
+  unfold backfill at hx
+  cases hc : L.cells c with
+  | none => rw [hc] at hx; cases hx
+  | some y =>
+    rw [hc] at hx
+    have e := Option.some.inj hx
+    subst e
+    have hj0 : Home.shard 0 = Home.shard j := hj
+    rw [← Home.shard.inj hj0]; exact hK
+
+theorem homesLt_reshard (hK : 0 < K') (h : reshard pk K' cx ss = some ss') :
+    homesLt (setK pk cx.p K') cx ss'.1.dir := by
+  intro c x j hx hj
+  have hd : ss'.1.dir c = (ss.1.dir c).map (rehome (setK pk cx.p K') cx) := by
+    obtain ⟨_, rfl⟩ := reshard_eq h
+    rfl
+  rw [hd] at hx
+  cases hy : ss.1.dir c with
+  | none => rw [hy] at hx; cases hx
+  | some y =>
+    rw [hy] at hx
+    have e : rehome (setK pk cx.p K') cx y = x := Option.some.inj hx
+    subst e
+    cases hh : y.home with
+    | spine =>
+      have hj' : rh (tgt (setK pk cx.p K') cx y) y.home = .shard j := hj
+      rw [hh] at hj'
+      simp [rh] at hj'
+    | shard m =>
+      have hj' : rh (tgt (setK pk cx.p K') cx y) y.home = .shard j := hj
+      rw [hh] at hj'
+      have hj'' : Home.shard (tgt (setK pk cx.p K') cx y) = Home.shard j := hj'
+      have hl := tgt_lt (pk := setK pk cx.p K') (cx := cx) (by rw [setK_k_self]; exact hK) y
+      rw [← Home.shard.inj hj'']; exact hl
+
 /-- M3: on every store reachable by steps and RESHARDs the invariants and the home bound hold, and the stored `K`
     is the pack's (`InvK`: `ss.1.k = pk.k cx.p`, and the newest image is bound). -/
 theorem reachR_ok (h : ReachR cx pk ss) :
     packOk pk = true ∧ Inv ss ∧ Inv2 ss ∧ Inv3 ss ∧ Inv4 pk cx ss ∧ chainsOk ss ∧ homesLt pk cx ss.1.dir ∧
-      InvK pk cx ss := sorry
+      InvK pk cx ss := by
+  induction h with
+  | init pk L hp =>
+    exact ⟨hp, inv_init L, inv2_init L, inv3_init L, inv4_init pk cx L (Or.inl (k_pos pk cx.p hp)),
+      chain_init L, homesLt_init (k_pos pk cx.p hp) L, invK_init pk cx L⟩
+  | step inp _ ih =>
+    obtain ⟨hp, hI, h2, h3, h4, hc, hB, hk⟩ := ih
+    exact ⟨hp, inv_step _ _ _ inp hI, inv2_step _ _ _ inp h2, inv3_step _ _ _ inp h3,
+      inv4_step _ _ _ inp hI h4, chain_step _ _ _ inp hc, homesLt_step (k_pos _ cx.p hp) inp hB,
+      invK_step _ _ _ inp hk⟩
+  | resh K' _ hr ih =>
+    obtain ⟨hp, hI, h2, h3, h4, hc, hB, hk⟩ := ih
+    obtain ⟨hok, _⟩ := reshard_eq hr
+    obtain ⟨_, _, hK', _⟩ := ok_parts hok
+    exact ⟨packOk_setK hp hK' cx.p, inv_reshard hI hB hr, inv2_reshard hr, inv3_reshard h3 hr,
+      inv4_reshard hI h4 hr, chain_reshard hc hr, homesLt_reshard hK' hr, invK_reshard hr⟩
 
 /-- A crash before any spine COMMIT leaves a `ReachR` store; recovery changes nothing in it. -/
-theorem reachR_recover (h : ReachR cx pk ss) : recoverAll cx ss = ss := sorry
+theorem reachR_recover (h : ReachR cx pk ss) : recoverAll cx ss = ss := by
+  have h2 := (reachR_ok h).2.2.1
+  show (ss.1, fun k => recover cx ss.1 k (ss.2 k)) = (ss.1, ss.2)
+  congr 1
+  funext k
+  unfold recover
+  split
+  · rfl
+  · next R rs hR =>
+    unfold replay
+    rw [if_neg]
+    rintro ⟨hk, _, hne, _⟩
+    exact hne (h2 R rs hR k hk)
 
 /-! ## (a) Every row present exactly once, at its new home -/
 
@@ -554,10 +661,31 @@ theorem reshard_dir (h : reshard pk K' cx ss = some ss') (c : Cell) :
   rfl
 
 /-- M2: after RESHARD every shard row sits at its own item's shard under the new pack. -/
-theorem reshard_local (h : reshard pk K' cx ss = some ss') : locDir (setK pk cx.p K') cx ss'.1.dir := sorry
+theorem reshard_local (h : reshard pk K' cx ss = some ss') : locDir (setK pk cx.p K') cx ss'.1.dir := by
+  intro c x j hx hj
+  rw [reshard_dir h c] at hx
+  cases hy : ss.1.dir c with
+  | none => rw [hy] at hx; cases hx
+  | some y =>
+    rw [hy] at hx
+    have e : rehome (setK pk cx.p K') cx y = x := Option.some.inj hx
+    subst e
+    cases hh : y.home with
+    | spine =>
+      have hj' : rh (tgt (setK pk cx.p K') cx y) y.home = .shard j := hj
+      rw [hh] at hj'
+      simp [rh] at hj'
+    | shard m =>
+      have hj' : rh (tgt (setK pk cx.p K') cx y) y.home = .shard j := hj
+      rw [hh] at hj'
+      have hj'' : Home.shard (tgt (setK pk cx.p K') cx y) = Home.shard j := hj'
+      exact (Home.shard.inj hj'').symm
 
 /-- Steps keep item locality: a new shard row is routed to its item's shard. -/
-theorem locDir_step (inp : Input) (h : locDir pk cx ss.1.dir) : locDir pk cx (stepT pk cx ss inp).1.dir := sorry
+theorem locDir_step (inp : Input) (h : locDir pk cx ss.1.dir) : locDir pk cx (stepT pk cx ss inp).1.dir :=
+  fun c x j hx hj =>
+    stepT_pres pk cx (fun x => ∀ j, x.home = .shard j → j = sidx pk cx x.item)
+      (fun r j hj => (route_sidx pk cx r j hj).1.symm) ss inp (fun c x hx j hj => h c x j hx hj) c x hx j hj
 
 /-- A row charged at old shard `k < K` is, after RESHARD, at its `tgt < K'` with the same charge, and nowhere
     else. -/
@@ -772,15 +900,6 @@ theorem norm_reshard (hI : Inv ss) (hK' : 0 < K') :
       = norm (merge pk cx ss) := by
   rw [merge_reshard hI hK']
   simp only [norm, ndir_rdir] <;> rfl
-
-theorem packOk_setK (hp : packOk pk = true) (hK : 0 < K') (p : PartId) : packOk (setK pk p K') = true := by
-  simp only [packOk, setK, List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at hp ⊢
-  exact ⟨hK, hp⟩
-
-theorem invK_reshard (h : reshard pk K' cx ss = some ss') : InvK (setK pk cx.p K') cx ss' := by
-  have hk := reshard_k h
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  exact ⟨by rw [setK_k_self]; exact hk, rRec_imgOk⟩
 
 theorem invK_of_ok (hok : reshardOk pk K' cx ss = true) : InvK pk cx ss := by
   obtain ⟨hq, _, _, hk⟩ := ok_parts hok
