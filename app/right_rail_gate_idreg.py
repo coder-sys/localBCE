@@ -5,11 +5,20 @@ SETTLE marks the shard's unfreed reservations as in its sealed sets, BOOT names 
 flight while its holder has no later SETTLE.  The decide layer settles each sealed batch before its tokens leave
 (``decide.commit``); ``reserve`` settles it first if a crash came between, then reserves, in one transaction, and returns the raw answer per id (Lean decides).  Every transaction requires the newest BOOT row to
 carry this handle's nonce.  One decider per shard: the handle that first writes for a shard (or reads its in-flight
-rows) holds the shard's lease, an exclusive lock on ``<path>-lease<shard>`` the OS drops when the handle closes or its
-process dies; any other handle is refused ``shard_busy``, so nothing reserves for the shard between a commit's stale
-check and its seal.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
+rows) holds the shard's lease, an exclusive lock beside the file opened the OS drops when the handle closes or its
+process dies; any other handle is refused ``shard_busy`` (a forked child ``registry_forked``, a path moved off the
+file ``registry_moved``), so nothing reserves for the shard between a commit's stale check and its seal.  ``boot``, and ``reserve`` for its shard, require each shard's newest signed commitment
 (row n and head, the checkpoint's registryHead) to lie in the chain, with no settle of a newer batch of the shard
-after it, else ``registry_rewound``; a whole directory restored together is not detectable here (design 9, R5).
+after it, else ``registry_rewound``.  A whole directory restored together passes that; ``boot`` refuses it
+``store_rewound`` when a shard's store lacks the payer's newest stored checkpoint (design idreg-restore B3).  Boot
+reads its inputs inside its write transaction, and every refused boot commits a fence BOOT row (a nonce nobody holds)
+in that same transaction, so a running handle's batches HOLD ``registry_not_booted`` until a boot passes, and a
+restarted process holds no nonce (``decide`` with no registry HOLDs).  Without a fence too: each process remembers,
+per boot nonce (random, so the same under every path to the file and in a copy of it), the row (n, head) it last
+committed or booted at, and a transaction that finds that row gone or changed (the file restored under it), its path
+naming another file than the handle opened (a link re-pointed), its nonce displaced by a newer one this process saw
+or booted, or this process's newest boot of it failed, commits the fence itself and is refused ``registry_not_booted``.
+A new nonce comes only from a passed boot (store check B3 included), so it starts with no memory.
 """
 
 from __future__ import annotations
@@ -18,9 +27,12 @@ import contextlib
 import os
 from pathlib import Path
 import sqlite3
-from typing import Final, Iterable, Mapping, Sequence
+import threading
+import weakref
+from typing import Callable, Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
+from app import right_rail_gate_producer as producer
 
 ID_LEN: Final = 129  # the Line.fields id field
 _DOMAIN: Final = b"RR/GATE/ID-REG/v2\x00"
@@ -34,6 +46,62 @@ CREATE INDEX IF NOT EXISTS log_boot ON log(n) WHERE kind = 3;
 CREATE TRIGGER IF NOT EXISTS log_no_update BEFORE UPDATE ON log BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 CREATE TRIGGER IF NOT EXISTS log_no_delete BEFORE DELETE ON log BEGIN SELECT RAISE(ABORT, 'append_only'); END;
 """
+_SEEN: dict[bytes, tuple[int, bytes]] = {}  # boot nonce -> the row (n, head) this process last committed or booted at
+_STOPPED: set[str | bytes] = set()  # paths of boots in this process that did not pass, and the nonces it stopped
+_BOOTING = threading.Lock()  # one boot at a time per process: a pass never clears a boot still running
+_OPEN: weakref.WeakSet[IdRegistry] = weakref.WeakSet()  # this process's open handles (a boot's connection: _BOOTING held)
+_FORKED = False  # a child forked while either was open: SQLite's inherited lock records would let its new one lose its -wal
+
+
+def _forked() -> None:  # in a forked child: a free boot lock, not a held copy; no boot or new handle if a registry was open
+    globals().update(_BOOTING=threading.Lock(), _FORKED=_FORKED or _BOOTING.locked() or bool(_OPEN))
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forked)
+
+
+def _bind(real: str, timeout: float = 5.0, *, create: bool = False):
+    """Open the registry at ``real`` (a path with no links; UNC refused): (connection, pin, identity of the file
+    opened).  On Windows the pin, a handle taken before the connect and held to close, bars renaming the file or any
+    directory above it, so the file SQLite opens is the one identified; POSIX keeps none (closing any descriptor of a
+    file drops this process's SQLite locks on it): a real directory swapped inside the connect is not seen there.  A
+    file with another hard-link name is ``registry_aliased`` (each name has its own -wal, -shm and leases)."""
+    if _FORKED:
+        raise IdRegistryError("registry_forked")
+    if real.startswith(2 * os.sep):  # a share or the \\?\ form (SQLite's URI refuses both): refused before the pin creates
+        raise IdRegistryError("registry_unavailable")
+    pin = db = None
+    try:
+        if os.name == "nt":
+            pin = open(os.open(real, os.O_RDONLY | os.O_CREAT * create), "rb", buffering=0)
+        db = _open(Path(real), timeout, create=create)
+        st = os.fstat(pin.fileno()) if pin else os.stat(real)
+        if st.st_nlink != 1:
+            raise IdRegistryError("registry_aliased")
+        return db, pin, (os.path.normcase(real), st.st_dev, st.st_ino, 1)
+    except BaseException as error:
+        for handle in (db, pin):
+            if handle is not None:
+                handle.close()
+        if isinstance(error, OSError):
+            raise IdRegistryError("registry_unavailable") from error
+        raise
+
+
+def _ident(path: Path) -> tuple[str, int, int, int] | None:
+    """The file behind ``path`` now: its real path, (device, inode) and name count; None if it cannot be read."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return os.path.normcase(os.path.realpath(path)), st.st_dev, st.st_ino, st.st_nlink
+
+
+def _stop_boots(db: sqlite3.Connection, keep: bytes | None = None) -> None:
+    """Stop, in this process, every BOOT nonce in the log but ``keep``: none can be newest again unless the file is
+    rewound, and then it must not vouch for the rows this process wrote after it."""
+    _STOPPED.update(i for (i,) in db.execute("SELECT id FROM log WHERE kind = 3") if i != keep)
 
 
 class IdRegistryError(RuntimeError):
@@ -58,18 +126,22 @@ def _key(id_: int) -> bytes:
     return id_.to_bytes(ID_LEN, "big")
 
 
-def _open(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
+def _open(path: Path, timeout: float = 5.0, *, create: bool = False) -> sqlite3.Connection:
+    """Only ``boot`` (``create``) may create the file or write its journal mode and schema; a handle opens an existing
+    WAL registry and writes nothing (an empty file, e.g. a restore mid-copy, is refused unwritten)."""
     try:
-        db = sqlite3.connect(path, timeout=timeout, isolation_level=None)
-    except sqlite3.OperationalError as error:  # e.g. the directory is missing: same typed refusal
+        db = sqlite3.connect(f"{Path(path).absolute().as_uri()}?mode={'rwc' if create else 'rw'}", timeout=timeout,
+                             isolation_level=None, uri=True)
+    except sqlite3.OperationalError as error:  # e.g. the directory or (for a handle) the file is missing
         raise IdRegistryError("registry_unavailable") from error
     try:
-        if db.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'ids'").fetchone():  # a read: the WAL header is seen
+            raise IdRegistryError("store_version")  # the v1 table: refused, never migrated
+        if db.execute("PRAGMA journal_mode=WAL" if create else "PRAGMA journal_mode").fetchone()[0] != "wal":
             raise IdRegistryError("registry_unavailable")  # a rollback journal is not the durability promised
         db.execute("PRAGMA synchronous=FULL")
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'ids'").fetchone():
-            raise IdRegistryError("store_version")  # the v1 table: refused, never migrated
-        db.executescript(_SCHEMA)
+        if create:
+            db.executescript(_SCHEMA)
     except sqlite3.Error as error:
         db.close()
         raise IdRegistryError("registry_unavailable") from error
@@ -80,15 +152,32 @@ def _open(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
 
 
 @contextlib.contextmanager
-def _txn(db: sqlite3.Connection, boot: bytes | None):
-    """One write transaction (BEGIN IMMEDIATE, one fsync at COMMIT) whose newest BOOT row must carry ``boot``."""
+def _txn(db: sqlite3.Connection, boot: bytes | None, path: Path | None = None, ident: tuple[str, int, int, int] | None = None):
+    """One write transaction (BEGIN IMMEDIATE, one fsync at COMMIT) whose newest BOOT row must carry ``boot``.  A
+    handle's first on a nonce in its process stops every other nonce in the log.  It stops its own nonce if the newest
+    BOOT row is not it (refused, nothing written), if ``path`` no longer names the file it opened (``ident``) or the
+    row its process last saw on the nonce is gone or changed, and is refused ``registry_not_booted``, after committing a fence, while its nonce or opened path is stopped (or a
+    boot of either in its process did not pass); before its COMMIT, under the write lock, the process remembers the new
+    tail (a COMMIT that then fails fences: fail closed)."""
     try:
         db.execute("BEGIN IMMEDIATE")
         try:
             row = db.execute("SELECT id FROM log WHERE kind = 3 ORDER BY n DESC LIMIT 1").fetchone()
             if boot is not None and (not row or row[0] != boot):
+                _STOPPED.add(boot)  # displaced: only a rewind makes it newest again
+                raise IdRegistryError("registry_not_booted")
+            if boot is not None and boot not in _SEEN:
+                _stop_boots(db, boot)
+            n, head = _SEEN.get(boot, (0, b""))
+            if boot is not None and (_ident(path) != ident or n and db.execute("SELECT head FROM log WHERE n = ?", (n,)).fetchone() != (head,)):
+                _STOPPED.add(boot)
+            if {boot, ident and ident[0]} & _STOPPED:
+                _fence(db)
+                db.execute("COMMIT")
                 raise IdRegistryError("registry_not_booted")
             yield
+            if boot:
+                _SEEN[boot] = db.execute("SELECT n, head FROM log ORDER BY n DESC LIMIT 1").fetchone()
             db.execute("COMMIT")
         except BaseException:
             if db.in_transaction:
@@ -106,6 +195,7 @@ class _Tail:
         self.n, self.head = db.execute("SELECT n, head FROM log ORDER BY n DESC LIMIT 1").fetchone() or (0, gate.ZERO_DIGEST)
 
     def add(self, kind: int, key: bytes, shard: int) -> None:
+        if not self.db.in_transaction: raise IdRegistryError("registry_unavailable")  # SQLite rolled back: never write unlocked
         self.head = _head(self.head, kind, key, shard)
         self.n += 1
         self.db.execute("INSERT INTO log VALUES (?, ?, ?, ?, ?)", (self.n, kind, key, shard, self.head))
@@ -117,6 +207,11 @@ class _Tail:
             self.add(_RESERVE, key, shard)
             return None
         return row
+
+
+def _fence(db: sqlite3.Connection) -> None:
+    """Append a BOOT row whose nonce nobody holds: every running handle then HOLDs until a boot passes."""
+    _Tail(db).add(_BOOT, os.urandom(32).rjust(ID_LEN, b"\0"), 0)
 
 
 def _pending(db: sqlite3.Connection, shard: int) -> list[tuple[int, bytes]]:
@@ -137,48 +232,135 @@ def _rewound(db: sqlite3.Connection, shard: int, n: int, head: bytes) -> bool:
         "(SELECT COALESCE(MAX(n), 0) FROM log WHERE kind = 2 AND shard = ?1)", (shard, n)).fetchone() is not None
 
 
-def boot(path: Path, commitments: Mapping[int, tuple[int, bytes]]) -> bytes:
-    """Before any shard starts: replay the chain, require each shard's newest signed commitment ``(n, head)`` (shards
-    0..count-1; a shard with rows needs a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n
-    of it with no SETTLE of the shard after a RESERVE of it past n, append BOOT with a fresh nonce and return it."""
-    db = _open(path)
+Inputs = Callable[[], tuple[Mapping[int, tuple[int, bytes]], Mapping[int, Path], Mapping[int, bytes] | None]]
+
+
+def _admit(db: sqlite3.Connection, inputs: Inputs) -> None:
+    """``boot``'s reads and checks, inside its transaction."""
     try:
-        with _txn(db, None):
-            head = gate.ZERO_DIGEST
-            for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
-                head = _head(head, kind, key, shard)
-                if head != stored:
-                    raise IdRegistryError("chain_broken")
-            if set(commitments) != set(range(len(commitments))) or any(
-                    not commitments.get(s, (0,))[0] for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
-                raise IdRegistryError("commitment_missing")
-            if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
-                raise IdRegistryError("registry_rewound")
-            nonce = os.urandom(32)
-            _Tail(db).add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
+        try:
+            commitments, stores, checkpoints = inputs()
+        except Exception as error:  # not a registry read: whatever the payer or a store raised
+            raise IdRegistryError("store_unavailable" if isinstance(error, producer.GateProducerError) else "inputs_unavailable") from error
+        head = gate.ZERO_DIGEST
+        for kind, key, shard, stored in db.execute("SELECT kind, id, shard, head FROM log ORDER BY n"):
+            head = _head(head, kind, key, shard)
+            if head != stored:
+                raise IdRegistryError("chain_broken")
+        if set(commitments) != set(range(len(commitments))) or any(
+                not commitments.get(s, (0,))[0] for (s,) in db.execute("SELECT DISTINCT shard FROM log WHERE kind < 3")):
+            raise IdRegistryError("commitment_missing")
+        if any(_rewound(db, s, n, head) for s, (n, head) in commitments.items()):
+            raise IdRegistryError("registry_rewound")
+        if checkpoints is None:
+            raise IdRegistryError("payer_unavailable")
+        if set(stores) != set(commitments) or not set(checkpoints) <= set(commitments):
+            raise IdRegistryError("anchor_missing")
+        found = [producer.holds(stores[s], digest) for s, digest in checkpoints.items()]
+    except producer.GateProducerError as error:
+        raise IdRegistryError("store_unavailable") from error
+    except sqlite3.Error as error:
+        raise IdRegistryError("registry_unavailable") from error
+    if not all(found):
+        raise IdRegistryError("store_rewound" if None in found else "store_unsealed")
+
+
+def boot(path: Path, inputs: Inputs) -> bytes:
+    """Before any shard starts, in one write transaction: read ``inputs()`` = (commitments, stores, checkpoints), replay
+    the chain, require each shard's newest signed commitment ``(n, head)`` (shards 0..count-1; a shard with rows needs
+    a batch's or the tenant genesis commitment, never ``(0, ZERO)``) to be row n of it with no SETTLE of the shard
+    after a RESERVE of it past n, append BOOT with a fresh nonce and return it.  ``stores`` names, for exactly those
+    shards, the producer store the commitment came from; ``checkpoints`` is the payer's whole map shard -> newest
+    stored checkpoint digest (``None``: unreachable, ``payer_unavailable``).  A payer shard outside the commitments is
+    ``anchor_missing``; a store that lacks its digest is ``store_rewound`` (B3, design idreg-restore 1: a store,
+    registry and mark restored together to before a released checkpoint cannot boot), one that has it only unsigned
+    ``store_unsealed`` (open its producer to reseal, then boot), an unreadable one ``store_unavailable``.
+    A refusal, including any exception from ``inputs``, appends the same BOOT row in the same transaction, its nonce
+    returned to nobody (a fence: every running handle then HOLDs ``registry_not_booted`` until a boot passes), then
+    raises; if that commit fails or SQLite rolled back first, ``registry_unavailable`` chained from the refusal; an
+    ``inputs`` error that is no store's is ``inputs_unavailable``.  A registry that cannot be opened, locked or
+    committed raises ``registry_unavailable`` (after one fence-only retry in a fresh transaction once it is open);
+    from the start of a boot until one passes, every handle of this process on the registry's path, or on any nonce
+    the boot could read there (so also through any other path to the same file), fences and HOLDs.  Boots of one
+    process run one at a time; one that waits more than 5 s for another stops the path and raises ``registry_unavailable``."""
+    if not _BOOTING.acquire(timeout=5.0):
+        _STOPPED.add(os.path.normcase(os.path.realpath(path)))
+        raise IdRegistryError("registry_unavailable")
+    try:
+        real = os.path.realpath(path)  # read under the lock: a link re-pointed during the wait names the file opened
+        where = os.path.normcase(real)
+        _STOPPED.add(where)
+        (db, pin, ident), nonce, refusal = _bind(real, create=True), os.urandom(32), None
+        try:
+            if _ident(path) != ident:  # the path names another file now: either may be the one its handles open
+                _STOPPED.add(os.path.normcase(os.path.realpath(path)))
+                raise IdRegistryError("registry_moved")  # fenced below, in the file opened
+            with contextlib.suppress(sqlite3.Error):  # a WAL read: it waits for no writer
+                _stop_boots(db)
+            with _txn(db, None):
+                try:
+                    _admit(db, inputs)
+                except BaseException as error:
+                    refusal = error
+                if not db.in_transaction:  # SQLite rolled back inside the checks: lock again so the fence is still written under the lock
+                    db.execute("BEGIN IMMEDIATE")
+                    cause, refusal = refusal, IdRegistryError("registry_unavailable")
+                    refusal.__cause__ = cause
+                _stop_boots(db)  # also any booted since the read above
+                tail = _Tail(db)
+                tail.add(_BOOT, nonce.rjust(ID_LEN, b"\0"), 0)
+                _SEEN[nonce.rjust(ID_LEN, b"\0")] = tail.n, tail.head  # before COMMIT, under the write lock
+        except IdRegistryError as error:
+            with contextlib.suppress(IdRegistryError), _txn(db, None):
+                _fence(db)
+            raise error from refusal
+        finally:
+            db.close()
+            pin and pin.close()
+        if refusal is not None:
+            raise refusal
+        _STOPPED.discard(where)
         return nonce
     finally:
-        db.close()
+        _BOOTING.release()
 
 
 class IdRegistry:
     def __init__(self, path: Path, *, boot: bytes, timeout: float = 5.0) -> None:
-        self._db, self._boot, self._path, self._leases = _open(path, timeout), boot.rjust(ID_LEN, b"\0"), path, {}
+        self._boot = boot.rjust(ID_LEN, b"\0")  # before the open: a bad nonce leaves nothing open
+        self._real, self._path, self._leases, self._pid = os.path.realpath(path), path, {}, os.getpid()
+        _OPEN.add(self)  # before the open, out after the close: a fork in between sees it (refused, it is dropped unused)
+        self._db, self._pin, self._ident = _bind(self._real, timeout)
+        if _ident(path) != self._ident:  # the path names another file than the one opened
+            self.close()
+            raise IdRegistryError("registry_moved")
 
     def close(self) -> None:
         for lock in self._leases.values():
             lock.close()
         self._db.close()
+        self._pin and self._pin.close()
+        _OPEN.discard(self)
+
+    def _own(self) -> sqlite3.Connection:
+        """The connection, in the process that opened it only: a forked child holds none of its locks or leases."""
+        if os.getpid() != self._pid:
+            raise IdRegistryError("registry_forked")
+        return self._db
 
     def _lease(self, shard: int) -> None:
-        """Hold ``shard``'s decider lease until ``close``, else ``shard_busy`` (another live handle holds it)."""
+        """Hold ``shard``'s decider lease, beside the file opened, until ``close``, else ``shard_busy`` (another live
+        handle holds it) or ``registry_moved`` (taken, the path names another file than the one opened)."""
         if shard not in self._leases:
-            lock = sqlite3.connect(f"{self._path}-lease{shard}", timeout=0, isolation_level=None)
+            lock = sqlite3.connect(f"{self._real}-lease{shard}", timeout=0, isolation_level=None)
             try:
                 lock.execute("BEGIN EXCLUSIVE")
             except sqlite3.Error as error:
                 lock.close()
                 raise IdRegistryError("shard_busy") from error
+            if _ident(self._path) != self._ident:
+                lock.close()
+                raise IdRegistryError("registry_moved")
             self._leases[shard] = lock
 
     def reserve(self, shard: int, ids: Sequence[int], *, sealed: tuple[int, bytes, Sequence[int]] | None
@@ -190,7 +372,7 @@ class IdRegistry:
         else ``settle_mismatch``, nothing written) and keep the rest recorded; otherwise (no seal, or an older batch
         whose successor died before its seal) free all of them."""
         ids = _check(shard, ids)
-        with _txn(self._db, self._boot):
+        with _txn(self._own(), self._boot, self._path, self._ident):
             self._lease(shard)
             if sealed and _rewound(self._db, shard, sealed[0], sealed[1]):
                 raise IdRegistryError("registry_rewound")
@@ -205,13 +387,14 @@ class IdRegistry:
 
     def in_flight(self, shard: int) -> list[int]:
         """The row numbers of the shard's in-flight reservations, under its lease (a commit's check holds to its seal)."""
+        db = self._own()
         self._lease(shard)
-        return [n for n, _ in _pending(self._db, shard)]
+        return [n for n, _ in _pending(db, shard)]
 
     def settle(self, shard: int, rows: list[int], free: Sequence[int]) -> None:
         """Settle the batch that reserved exactly ``rows`` (``decide.commit``, after the seal): ``settle_mismatch``,
         nothing written, unless they are the shard's in-flight rows."""
-        with _txn(self._db, self._boot):
+        with _txn(self._own(), self._boot, self._path, self._ident):
             self._lease(shard)
             pend = _pending(self._db, shard)
             if [n for n, _ in pend] != rows:
@@ -232,13 +415,13 @@ class IdRegistry:
 
     def settled(self, shard: int) -> bool:
         """Whether the shard has a SETTLE row: a sealed batch's, or ``genesis()``'s."""
-        return self._db.execute("SELECT 1 FROM log WHERE kind = 2 AND shard = ?", (shard,)).fetchone() is not None
+        return self._own().execute("SELECT 1 FROM log WHERE kind = 2 AND shard = ?", (shard,)).fetchone() is not None
 
     def genesis(self, shard_ids: Mapping[int, Sequence[int]]) -> tuple[int, bytes]:
         """Reserve and settle each shard's starting-set ids; refuse, writing nothing, if two shards' sets share an id
         (an existing double acceptance that needs a person).  Returns (n, head)."""
         groups = [(s, _check(s, ids)) for s, ids in shard_ids.items()]
-        with _txn(self._db, self._boot):
+        with _txn(self._own(), self._boot, self._path, self._ident):
             tail = _Tail(self._db)
             for shard, ids in groups:
                 for i in ids:

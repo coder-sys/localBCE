@@ -1,0 +1,16 @@
+name = "r2p_profile"
+version = "0.1.0"
+defaultTargets = ["r2p_rules"]
+
+# R2P measurement (2026-10-13), a separate package so lean/lakefile.toml (in the rules source digest) and the pinned exes are untouched.
+# `r2p_rules` is gate_rules_worker with stage timers (worker with no argument, one-shot with a path).  Not a product artifact.
+# Only the exe's import closure builds.
+[[lean_lib]]
+name = "BlindLedger"
+srcDir = "../../lean"
+roots = ["BlindLedger"]
+globs = ["BlindLedger.+"]
+
+[[lean_exe]]
+name = "r2p_rules"
+root = "RulesWorkerTimed"

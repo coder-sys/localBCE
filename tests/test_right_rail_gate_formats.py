@@ -235,7 +235,9 @@ def build_vectors() -> str:
         ("wrong-domain", gate.CHECKPOINT + good[len(gate.KEY_CERT) :]),
     ):
         add(f"cert reject {h(data)}")
-    add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
+    tenants = (TENANT, OTHER, STANDBY, SELF)  # one grant per tenant, all with id D[3]: a grant is its tenant's alone (check 9)
+    grants = lambda rule=D[4], release=D[6], grant_id=D[3], of=tenants: add(f"grants {','.join(of)} {h(grant_id)} {h(rule)} {h(release)}")
+    grants()
     add(f"now {NOW}")
 
     # #4 CHECKPOINT/v1: one signed batch plus single-field variants, each signed
@@ -375,11 +377,11 @@ def build_vectors() -> str:
     for name, t in (("other-shard", typo[0]), ("same-shard", rogue[2])):
         payment_line(f"member-changed-{name}", t.leaf, "member_key_changed")
         token("reject", f"member-changed-{name}", f"member-changed-{name}", t)
-    for name, grant in (("grant-id", (D[0], D[4], D[6])), ("grant-rule", (D[3], D[0], D[6])),
-                        ("grant-release", (D[3], D[4], D[0]))):
-        add(f"grants {' '.join(map(h, grant))}")
+    for name, kw in (("grant-id", {"grant_id": D[0]}), ("grant-rule", {"rule": D[0]}), ("grant-release", {"release": D[0]}),
+                     ("grant-tenant", {"of": tenants[1:]})):
+        grants(**kw)
         token("reject", name, "p1", tokens[1])
-    add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
+    grants()
     for now, verdict, name in ((NOW - 5 - 300, "accept", "issue-skew-edge"), (NOW - 5 - 301, "reject", "not-yet-issued"),
                                (EXPIRES + 299, "accept", "expiry-skew-edge"), (EXPIRES + 300, "reject", "expired")):
         add(f"now {now}")
@@ -437,9 +439,9 @@ def build_vectors() -> str:
     token("accept", "reissued-e8", "p1", t1_e8)
     token("reject", "released-before-failover", "p0", t0_e8)
     # The grant moves to engine D[7]: the re-issued leaf still carries D[6], its deciding release
-    add(f"grants {h(D[3])} {h(D[4])} {h(D[7])}")
+    grants(release=D[7])
     token("reject", "reissued-revoked-engine", "p1", t1_e8)
-    add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
+    grants()
     # A re-issue keeps the decision time, so a decision older than its flow's
     # maximum age is refused however fresh its token (check 5)
     age = gate.MAX_DECISION_AGE
@@ -654,7 +656,7 @@ def build_v2_vectors() -> str:
         add(f"root {tenant} {h(keypair(f'root-{tenant}')[0])}")
     for name in ("e7", "e6", "other"):
         add(f"cert accept {h(key_cert(name))}")
-    add(f"grants {h(D[3])} {h(D[4])} {h(D[6])}")
+    add(f"grants {TENANT} {h(D[3])} {h(D[4])} {h(D[6])}")
     add(f"now {NOW}")
     add(checkpoint_record("v2-genesis", base, signed_base))
     for name, data in (
@@ -861,6 +863,12 @@ def _genesis(leaves) -> tuple[bytes, list[bytes]]:
     return gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
 
 
+def signed_genesis(handle: str, n: int = 0, seal: tuple[bytes, bytes] | None = None) -> tuple[bytes, list[bytes]]:
+    """Payments 0-1 as a shard's first checkpoint (genesis n), signed by the epoch key or, with ``seal`` = (root key, cert), by custody; and its tokens."""
+    header, tokens = _genesis(batch_leaves(0, 2, n))
+    return gate.attach_signature(header, signer.seal(handle, *seal, None, header, tokens) if seal else signer.sign(handle, header)), tokens
+
+
 def _u16(n: int) -> bytes:
     return n.to_bytes(2, "big")
 
@@ -973,7 +981,7 @@ class GateVerifyModeTests(unittest.TestCase):
                     self.assertEqual(_publish(root_pk, good[0], one, tokens), "GATE_VERIFY=REJECT")
 
     def test_a_malformed_frame_is_not_an_answer(self) -> None:
-        for mode, frame in ((1, b""), (2, b"\x00\x00\x00\x05abc"), (3, bytes(2592)), (4, b"\x00"), (9, b"")):
+        for mode, frame in ((1, b""), (2, b"\x00\x00\x00\x05abc"), (3, bytes(2592)), (4, b"\x00"), (5, b"\x00"), (9, b"")):
             with self.subTest(mode), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
                 signer.gate_verify(mode, frame)
 
@@ -1002,14 +1010,19 @@ class GateVerifyModeTests(unittest.TestCase):
         root, cert = keypair(f"root-{TENANT}")[0], key_cert("e7")
         header, tokens = _genesis([_leaf(n, n) for n in range(2)])
         signed, request = gate.attach_signature(header, det_sign("e7", header)), gate.encode_decide_request(payment_request(0))
-        grant = _blob(D[3]) + _list([_blob(D[4])]) + _list([_blob(D[6])])
+        untenanted = _blob(D[3]) + _list([_blob(D[4])]) + _list([_blob(D[6])])
 
-        def release(pinned: bool = True, released: bool = False, token: bytes = tokens[0]) -> str:
+        def release(pinned: bool = True, released: bool = False, token: bytes = tokens[0], tenant: str = TENANT,
+                    mode: int = 5, grant: bytes | None = None) -> str:
             frame = root + _list([signer.framed(cert)]) + _u16(0) + signer.framed(signed) + NOW.to_bytes(8, "big")
-            frame += _list([grant]) + bytes([released, pinned]) + (member(0) if pinned else b"")
-            return signer.gate_verify(4, frame + signer.framed(request) + signer.framed(token))
+            frame += _list([_blob(tenant.encode()) + untenanted if grant is None else grant]) + bytes([released, pinned]) + (member(0) if pinned else b"")
+            return signer.gate_verify(mode, frame + signer.framed(request) + signer.framed(token))
 
         self.assertEqual(release(), "GATE_VERIFY=ACCEPT")
+        self.assertEqual(release(tenant=OTHER), "GATE_VERIFY=HOLD grant")  # another tenant's grant, same id
+        for mode, grant in ((4, untenanted), (5, untenanted), (5, _blob(b"-x") + untenanted)):
+            with self.subTest(mode=mode, grant=grant[:4]), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                release(mode=mode, grant=grant)  # the retired 0x04 frame, its grant under 0x05, a non-ident tenant
         self.assertEqual(release(pinned=False), "GATE_VERIFY=HOLD pin")
         self.assertEqual(release(released=True), "GATE_VERIFY=HOLD released")
         self.assertEqual(release(token=tokens[0][:-1]), "GATE_VERIFY=HOLD parse")
@@ -1081,6 +1094,12 @@ class AxiomRecordTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn(name, record)
                 self.assertNotIn("sorryAx", record[name])
+        # The grant-tenant theorems keep their statement pins, so weakening a theorem must change the pin in the same commit
+        check = (gate_dir / "AxiomCheck.lean").read_text("utf-8")
+        for name in ("verifyToken_grant_tenant", "verifyToken_foreign_grant", "releaseBatch_grant_tenant",
+                     "publishOkTree_sound", "publishOkTree_complete", "publishOkTree_eq", "publishOkTree_no_downgrade"):
+            with self.subTest(name):
+                self.assertRegex(check, re.compile(rf"^example : [^\n]*\n(?: [^\n]*\n)*? [^\n]*:=\n  @BlindLedger\.Gate\.{name}$", re.M))
         # The pinned verifier decides no rule: only the anchor, which runs in the decide runtime, imports them
         self.assertNotIn("Rules", (gate_dir / "Producer.lean").read_text("utf-8"))
         self.assertIn("import BlindLedger.Gate.Rules.Spec", (gate_dir / "Anchor.lean").read_text("utf-8"))

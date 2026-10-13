@@ -236,10 +236,18 @@ def decideRegF (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
 
 /-! ## Pins: `pinInput` as one ByteArray (about 0.93 KB a released row, not 22 KB of list cells). -/
 
-/-- `be w n` appended to `acc`: one shift per byte, not a power and a division. -/
+/-- The low `k ≤ 8` bytes of `x`, high byte first, appended to `acc`. -/
+def pushLow (acc : ByteArray) (k : Nat) (x : UInt64) : ByteArray :=
+  (List.range k).reverse.foldl (fun a i => a.push (x >>> (8 * i).toUInt64).toUInt8) acc
+
+/-- `w` big-endian bytes of `n` in 64-bit chunks: one big shift per 8 bytes, not a power and a division per byte. -/
+def pushHi (acc : ByteArray) (w n : Nat) : ByteArray :=
+  if _h : w ≤ 8 then pushLow acc w n.toUInt64 else pushLow (pushHi acc (w - 8) (n >>> 64)) 8 n.toUInt64
+termination_by w
+
+/-- `be w n` appended to `acc` (`pushBe_eq`). -/
 def pushBe (acc : ByteArray) (w n : Nat) : Option ByteArray :=
-  if n < 256 ^ w then some ((List.range w).reverse.foldl (fun a i => a.push ((n >>> (8 * i)) % 256).toUInt8) acc)
-  else none
+  if n < 256 ^ w then some (pushHi acc w n) else none
 
 def pushRow (acc : ByteArray) : List (Nat × Nat) → Option ByteArray
   | [] => some acc

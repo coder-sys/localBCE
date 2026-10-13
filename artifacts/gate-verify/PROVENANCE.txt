@@ -7,13 +7,15 @@ and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FR
 - 0x01 PUBLISH: `root_pk || u32|cert || u32|last (0 = genesis) || u32|signed new || u16 k || (u32|token)^k`.
 - 0x02 INDEX: `u32|signed checkpoint`; prints `GATE_VERIFY=INDEX <tenant hex> shard epoch from to <digest hex> <prev hex>`.
 - 0x03 STORE: `root_pk || u16 m || certs || u16 j || candidates || u16 f || fork evidence || u32|new`.
-- 0x04 RELEASE: `root_pk || u16 m || certs || u16 f || fork evidence || u32|checkpoint || u64 now || u16 g || grants ||
-  u8 released || u8 pinned [|| 32-byte key] || u32|DECIDE-REQUEST || u32|token`; answers ACCEPT or HOLD <first failure>.
+- 0x05 RELEASE: `root_pk || u16 m || certs || u16 f || fork evidence || u32|checkpoint || u64 now || u16 g || grants ||
+  u8 released || u8 pinned [|| 32-byte key] || u32|DECIDE-REQUEST || u32|token`, a grant being `u16|tenant ident || u16|id ||
+  u16 n || (u16|rule version)^n || u16 n || (u16|engine release)^n`; answers ACCEPT or HOLD <first failure>. A 0x04 frame (the
+  grant without a tenant) is malformed.
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,366,336 bytes
-- SHA-256: a9f4731240bfad9c2ef1171be8d17c853b5d5c4d3ce73615983ba568c502cccd
+- Size: 4,375,040 bytes
+- SHA-256: cc83a3235f02f22857ccba961c484ea52684a50453e01514396fd968fe400dce
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
@@ -47,7 +49,17 @@ The pinned worker (`8BB1C646...`) is byte-identical in all three: it imports no 
 
 Re-pin (2026-10-03, branch multi-shard-runtime, WIP 3449090): `gate_verify` moved from e3fc5fee... to the SHA-256 above (review fixes: storedOf keeps its v1 meaning, new storedOfAny, publishOkAny refuses a v1 after a v2, RULES_FREE lists each id once; statements are additions only). Byte-identity confirmed on branch decide-layer at 4f4b39b (decide layer S1-S3 moved neither this exe nor the worker): two fresh `git archive 4f4b39b lean` stage builds (C:\Users\neers\rrb\le\stage-dp-a and -b; guard suffixes dp-3a, dp-3b; `lake build gate_verify blind_financial_worker gate_rules`, 78 jobs, exit 0) and the in-tree build (dp-2) are byte-identical for gate_verify (a9f47312...), the worker (7C1EAB94...) and gate_rules.exe (737f8a9e..., not a pinned artifact). The pinned worker (`8BB1C646...`) is byte-identical to the previous pin.
 
+Re-pin (2026-10-07, branch grant-tenant, commit 206d08a1): `gate_verify` moved from a9f47312... to the SHA-256 above (a grant is its
+tenant's alone: Grant.tenantId and the check-9 tenant match; RELEASE moves from 0x04 to 0x05; statements are additions only). Two fresh
+`git archive 206d08a1 lean` stage builds (C:\Users\neers\rrb\le\stage-gt-a and -b; guard suffixes gt9a-a5-L2, gt9b-a16-L1; `lake build
+gate_verify gate_axioms`, 38 jobs, exit 0) and the in-tree build (gt5-a1-L2) are byte-identical.
+
+Re-pin (2026-10-13, branch b4-s1, commit 1349913a): `gate_verify` moved from c66117f3... to the SHA-256 above (PUBLISH now runs `publishOkTree`, the one-tree check of Gate/Batch.lean, proved equal to `publishOkAny` by `publishOkTree_eq`, with `_sound`, `_complete`, `_no_downgrade`; VerifyCli imports Batch). Two fresh `git archive 1349913a lean` stage builds (C:\Users\neers\rrb\le\stage-b4-a and -b; guard suffixes b4s5e, b4s5f; `lake build gate_verify gate_axioms`, exit 0) and the in-tree build (b4s5c) are byte-identical. The pinned worker (`7C1EAB94...`) did not move.
+
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 c66117f3a5c61ad420cd4d11b01a3f0b154844744222645b67ef3805459c8b76 (4,366,848 bytes; before PUBLISH ran the one-tree `publishOkTree`; replaced by the SHA-256 above).
+- gate_verify SHA-256 a9f4731240bfad9c2ef1171be8d17c853b5d5c4d3ce73615983ba568c502cccd (4,366,336 bytes; before the grant tenant (RELEASE 0x04);
+  recoverable at 96620d8a; replaced by the SHA-256 above).
 - gate_verify SHA-256 e3fc5fee34fb6356a1cddd1e3aed27b59b90f1b9bc8b2c9ab3c78a3fca6295c6 (4,365,824 bytes; before the multi-shard review fixes (storedOf restored, storedOfAny, publishOkAny no-downgrade, RULES_FREE once per id); replaced by the SHA-256 above; recoverable at 62e6859).
 - gate_verify SHA-256 724de1bd9a1c24b8f0c34ba2ce0cfa000df7910410d49c1f003b91d02b90e66c (4,359,680 bytes; before CHECKPOINT/v2, a 64-byte registry head after createdAt (multi-shard-runtime-v1 section A): the exe now
   decodes, stores, forks, publishes and releases both versions; recoverable at trunk 70f9606; replaced by the SHA-256 above).

@@ -8,6 +8,9 @@ import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
+import BlindLedger.Gate.ReadManifest
+import BlindLedger.Gate.Engine.Log
+import BlindLedger.Gate.Engine.Snap
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -37,6 +40,24 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_pinned
 /-- info: 'BlindLedger.Gate.verifyToken_route' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.verifyToken_route
+/-- info: 'BlindLedger.Gate.verifyToken_grant_tenant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_grant_tenant
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token},
+    verifyToken c s p bytes = true → decodeToken bytes = some t →
+    ∃ g ∈ s.grants, g.tenantId = t.leaf.tenantId ∧ g.tenantId = p.tenantId ∧ g.grantId = t.leaf.grantId ∧
+      t.leaf.ruleVersion ∈ g.ruleVersions ∧ t.leaf.engineRelease ∈ g.engineReleases :=
+  @BlindLedger.Gate.verifyToken_grant_tenant
+/-- info: 'BlindLedger.Gate.verifyToken_foreign_grant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.verifyToken_foreign_grant
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token},
+    decodeToken bytes = some t →
+    (∀ g ∈ s.grants, g.grantId = t.leaf.grantId → g.tenantId ≠ t.leaf.tenantId) →
+    verifyToken c s p bytes = false :=
+  @BlindLedger.Gate.verifyToken_foreign_grant
 /-- info: 'BlindLedger.Gate.installCert_shardCount' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.installCert_shardCount
 /-- info: 'BlindLedger.Gate.storeCheckpoint_keeps' depends on axioms: [propext] -/
@@ -271,9 +292,80 @@ import BlindLedger.Sha3FastEq
 #guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_accept_verified
 /-- info: 'BlindLedger.Gate.releaseBatch_once' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_once
+/-- info: 'BlindLedger.Gate.releaseBatch_grant_tenant' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.releaseBatch_grant_tenant
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : Item},
+    items[i]? = some it → (releaseBatch c r items)[i]? = some none →
+    ∃ t, decodeToken it.token = some t ∧ ∃ g ∈ r.grants,
+      g.tenantId = it.payment.tenantId ∧ g.tenantId = t.leaf.tenantId ∧ g.grantId = t.leaf.grantId :=
+  @BlindLedger.Gate.releaseBatch_grant_tenant
 /-- info: 'BlindLedger.Gate.pathOf_verifies' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.pathOf_verifies
 /-- info: 'BlindLedger.Gate.publishOkTree_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_sound
 /-- info: 'BlindLedger.Gate.publishOkTree_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_complete
+/-- info: 'BlindLedger.Gate.publishOkTree_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_eq
+/-- info: 'BlindLedger.Gate.publishOkTree_no_downgrade' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_no_downgrade
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes},
+    publishOkTree rootPk cert last new tokens = true → publishOkAny rootPk cert last new tokens = true :=
+  @BlindLedger.Gate.publishOkTree_sound
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes},
+    publishOkAny rootPk cert last new tokens = true →
+    publishOkTree rootPk cert last new tokens = true ∨
+      ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y :=
+  @BlindLedger.Gate.publishOkTree_complete
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes},
+    publishCollision tokens = none →
+    publishOkTree rootPk cert last new tokens = publishOkAny rootPk cert last new tokens :=
+  @BlindLedger.Gate.publishOkTree_eq
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {b : Bytes},
+    publishOkTree rootPk cert last new tokens = true → last = some b → isV2 b = true → isV2 new = true :=
+  @BlindLedger.Gate.publishOkTree_no_downgrade
+
+/-- info: 'BlindLedger.Gate.ReadManifest.readSetOf_pre' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.readSetOf_pre
+/-- info: 'BlindLedger.Gate.ReadManifest.run_reads_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.run_reads_eq
+/-- info: 'BlindLedger.Gate.ReadManifest.decodeReads_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.decodeReads_encode
+/-- info: 'BlindLedger.Gate.ReadManifest.encodeReads_inj' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.encodeReads_inj
+/-- info: 'BlindLedger.Gate.ReadManifest.kindOf_some' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.kindOf_some
+/-- info: 'BlindLedger.Gate.ReadManifest.reads_exact' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.reads_exact
+/-- info: 'BlindLedger.Gate.Engine.E1_entry3_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E1_entry3_roundtrip
+/-- info: 'BlindLedger.Gate.Engine.E2_entryIn3_inj' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E2_entryIn3_inj
+/-- info: 'BlindLedger.Gate.Engine.decode_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decode_encode
+/-- info: 'BlindLedger.Gate.Engine.pBody_app' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pBody_app
+/-- info: 'BlindLedger.Gate.Engine.stepM_keep' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_keep
+/-- info: 'BlindLedger.Gate.Engine.pushM_chain' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_chain
+/-- info: 'BlindLedger.Gate.Engine.pushM_fold' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold
+/-- info: 'BlindLedger.Gate.Engine.decodeEntry3B_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical
+/-- info: 'BlindLedger.Gate.Engine.E4_snap_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E4_snap_roundtrip
+/-- info: 'BlindLedger.Gate.Engine.E4b_snapDigest_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E4b_snapDigest_binds
+/-- info: 'BlindLedger.Gate.Engine.E5_replay_from_snap' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E5_replay_from_snap

@@ -15,8 +15,8 @@ RESHARD is one spine record like any other.  Its part for shard `j` is an IMAGE 
 and machine charge after the record, written as is.  `applyPart` overwrites from the image, so applying a part is
 idempotent and independent of the order in which shards commit; the existing `replay`/`recoverAll` finishes a
 RESHARD interrupted after the spine COMMIT at any set `C` of committed shards (`reshard_rollforward`).  Until it is
-finished every later RESHARD and every step is refused under any pack, retired shards included (`lastOk`,
-`reshard_crash_open`); once recovered the store accepts both again (`reshard_live`): a crash never wedges it.  Every
+finished every later RESHARD and every step is refused under any pack, retired shards included (`fitsOk`
+over held shards, `reshard_crash_open`); once recovered the store accepts both again (`reshard_live`): a crash never wedges it.  Every
 store a crash can leave recovers to a reachable store (`Crash`, `crash_recover`); recovery of any shard set `S`
 interrupted part-way leaves again such a store (`crash_recoverOn`), for a RESHARD crash exactly the one with the
 touched shards of `S` committed (`crash_partial`).  Each touched shard's post head is `cx.hi pre n image`, a chain
@@ -37,7 +37,7 @@ model's directory, which has no finite support); per-shard reconciliation must s
   at `tgt`; no row appears from nowhere; every shard row sits at its item's shard under the new pack.
 * (b) `reshard_merge_run`, `reshard_whole_run`, `reshard_rcpts_run`: the resharded store runs as the un-resharded
   single store up to `norm` (the shard index of directory homes).
-* (c) `inv_reshard` .. `history_reshard`, `inv2_reshard`, `ReachR`, `reachS_reachR`, `reachR_ok`, `reachR_recover`:
+* (c) `inv_reshard` .. `history_reshard`, `ReachR`, `reachS_reachR`, `reachR_ok`, `reachR_recover`:
   invariants, the stored `K`, the home bound and recovery hold on every store reachable by steps and RESHARDs.
 * (d) `reshard_none`, `reshard_refuse`, `stale_pack`, `reshard_k`, `packSave_ok`, `reshard_open`,
   `reshard_rollforward`, `reshard_crash_open`, `Crash`, `crash_recover`, `crash_partial`, `crash_recoverOn`,
@@ -66,10 +66,11 @@ def rdir (pk : Pack) (cx : Ctx) (d : Dir) : Dir := fun c => (d c).map (rehome pk
 /-- Shards touched by the RESHARD record. -/
 def rT (pk : Pack) (K' : Nat) (cx : Ctx) : List Nat := List.range (max (pk.k cx.p) K')
 
-/-- Quiescent boundary: every shard the record reads or writes, and every shard the spine's last record touched,
-    has committed that record, and its image, if any, is the one its post heads commit to. -/
+/-- Quiescent boundary: the spine records are numbered in order, and every shard the record reads or writes and
+    every held shard (`fitsOk`, retired shards included) fits the spine: head and APPLIED.  STMT-CHANGE-12 (old
+    L69-72: heads of `rT` only, and `lastOk`). -/
 def quiet (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Bool :=
-  ((rT pk K' cx).all fun k => (ss.2 k).head == ss.1.heads k) && lastOk cx ss
+  decide (chainsOk ss) && ((rT pk K' cx).all fun k => decide (fits ss.1 k (ss.2 k))) && fitsOk pk cx ss
 
 def reshardOk (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Bool :=
   quiet pk K' cx ss && packOk pk && decide (0 < K') && kOk pk cx ss
@@ -79,9 +80,12 @@ def rImg (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) (j : Nat) : (Cell → Nat) 
   (restrict (rdir (setK pk cx.p K') cx ss.1.dir) j (merge pk cx ss).chg,
     if j = 0 then (merge pk cx ss).gross else 0, if j = 0 then (merge pk cx ss).mc else 0)
 
+/-- STMT-CHANGE-13 (old L84: `post k = cx.hi pre n image`, with `Ctx.advancesI` assumed): the post head is
+    `adv (cx.hi ..) pre`, so it moves even where `hi` has a fixed point; no hypothesis on `hi`. -/
 def rRec (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : Rec :=
   { n := ss.1.recs.length, t := ss.1.t, I := fun _ => [], V := fun _ => [], pre := fun k => (ss.2 k).head,
-    post := fun k => cx.hi (ss.2 k).head ss.1.recs.length (rImg pk K' cx ss k), touched := rT pk K' cx,
+    post := fun k => adv (cx.hi (ss.2 k).head ss.1.recs.length (rImg pk K' cx ss k)) (ss.2 k).head,
+    touched := rT pk K' cx,
     img := some (rImg pk K' cx ss) }
 
 def rSpine (pk : Pack) (K' : Nat) (cx : Ctx) (ss : SS) : SpineDB :=
@@ -114,9 +118,10 @@ inductive ReachR (cx : Ctx) : Pack → SS → Prop
   | resh {pk : Pack} {ss ss' : SS} (K' : Nat) :
       ReachR cx pk ss → reshard pk K' cx ss = some ss' → ReachR cx (setK pk cx.p K') ss'
 
-/-- Recovery interrupted part-way: only the shards in `S` were recovered. -/
-def recoverOn (cx : Ctx) (S : List Nat) (ss : SS) : SS :=
-  (ss.1, fun k => if k ∈ S then recover cx ss.1 k (ss.2 k) else ss.2 k)
+/-- Recovery interrupted part-way: only the shards in `S` were recovered; a shard whose recovery refuses is left
+    as is.  STMT-CHANGE-14 (old L118: took `cx`; `recover` was total). -/
+def recoverOn (S : List Nat) (ss : SS) : SS :=
+  (ss.1, fun k => if k ∈ S then (recover ss.1 k (ss.2 k)).getD (ss.2 k) else ss.2 k)
 
 /-- Every store a crash can leave: a reachable store, or one interrupted after the spine COMMIT of a step or of a
     RESHARD with any set `C` of touched shards committed.  A recovery interrupted part-way is again a `Crash` store
@@ -192,14 +197,15 @@ theorem packSave_ok (h : reshard pk K' cx ss = some ss') (pk' : Pack) :
 theorem rRec_imgOk : imgOk cx (rRec pk K' cx ss) = true :=
   List.all_eq_true.2 fun _ _ => beq_self_eq_true _
 
-/-- A newest record touching a shard whose head is not the spine's head blocks RESHARD and every step. -/
-theorem lastOk_false {s : SS} {R : Rec} {rs : List Rec} (hr : s.1.recs = R :: rs) {k : Nat} (hk : k ∈ R.touched)
-    (hne : (s.2 k).head ≠ s.1.heads k) : lastOk cx s = false := by
-  have h : (R.touched.all fun k => (s.2 k).head == s.1.heads k) = false :=
-    Bool.eq_false_iff.2 fun h => hne (beq_iff_eq.1 (List.all_eq_true.1 h k hk))
-  simp [lastOk, hr, h]
+/-- A shard touched by any stored record that does not fit the spine fails `fitsOk` under every pack.
+    STMT-CHANGE-15 (old L195-200 `lastOk_false`: newest record only, head only). -/
+theorem fitsOk_false {s : SS} {R : Rec} (hR : R ∈ s.1.recs) {k : Nat} (hk : k ∈ R.touched)
+    (hne : ¬ fits s.1 k (s.2 k)) (pk'' : Pack) : fitsOk pk'' cx s = false := by
+  unfold fitsOk held
+  exact List.all_eq_false.2 ⟨k, List.mem_append_right _ (List.mem_flatMap.2 ⟨R, hR, hk⟩),
+    fun h => hne (of_decide_eq_true h)⟩
 
-theorem blocked {s : SS} (hl : lastOk cx s = false) :
+theorem blocked {s : SS} (hl : ∀ pk'' : Pack, fitsOk pk'' cx s = false) :
     (∀ pk'' K'', reshard pk'' K'' cx s = none) ∧ ∀ pk'' inp, stepS pk'' cx s inp = none := by
   refine ⟨fun pk'' K'' => reshard_refuse (Or.inl ?_), fun pk'' inp => ?_⟩
   · simp [quiet, hl]
@@ -216,29 +222,13 @@ theorem reshard_open (inp : Input) (C : List Nat) (k : Nat) (hc : checkAll pk cx
         commitShards (mkRec pk cx ss inp).2 C ss.2) := by
     unfold afterSpine; rw [if_pos hc]
   rw [hA]
-  apply blocked
-  refine lastOk_false (R := (mkRec pk cx ss inp).2) (rs := ss.1.recs) rfl hk ?_
+  refine blocked fun pk'' => fitsOk_false (R := (mkRec pk cx ss inp).2) (List.mem_cons.2 (Or.inl rfl)) hk ?_ pk''
   have e1 : (commitShards (mkRec pk cx ss inp).2 C ss.2 k).head = (ss.2 k).head := by simp [commitShards, hC]
   have e2 : (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).heads k =
-      cx.hs (ss.2 k).head ss.1.recs.length (part (judge pk cx ss.1.view inp) (.shard k))
-        (verdicts cx (judge pk cx ss.1.view inp) k) := by
+      (mkRec pk cx ss inp).2.post k := by
     show (if k ∈ (mkRec pk cx ss inp).2.touched then _ else _) = _
-    rw [if_pos hk]; rfl
-  show (commitShards (mkRec pk cx ss inp).2 C ss.2 k).head ≠
-    (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).heads k
-  rw [e1, e2]
-  exact fun h => cx.advances _ _ _ _ h.symm
-
-/-- H1: a RESHARD interrupted after its spine COMMIT, with any set `C` of shards committed, recovers to exactly
-    the completed RESHARD. -/
-theorem reshard_rollforward (C : List Nat) (h : reshard pk K' cx ss = some ss') (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
-    recoverAll cx (afterReshard pk K' cx ss C) = ss' := by
-  obtain ⟨hok, rfl⟩ := reshard_eq h
-  have hA : afterReshard pk K' cx ss C = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C ss.2) := by
-    unfold afterReshard; rw [if_pos hok]
-  rw [hA]
-  refine Prod.ext rfl (funext fun k => ?_)
-  exact replay_commit cx (rRec pk K' cx ss) ss.2 C hC (fun _ => rfl) (fun _ => cx.advancesI _ _ _) rRec_imgOk k
+    rw [if_pos hk]
+  exact fun h => post_ne_pre pk cx ss inp k (e2.symm.trans (h.1.symm.trans e1))
 
 /-- Before recovery, an interrupted RESHARD with any touched shard `j` uncommitted (a retired `j ≥ K'` included)
     blocks every later RESHARD and every step, under any pack. -/
@@ -249,86 +239,42 @@ theorem reshard_crash_open (C : List Nat) (j : Nat) (hok : reshardOk pk K' cx ss
   have hA : afterReshard pk K' cx ss C = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C ss.2) := by
     unfold afterReshard; rw [if_pos hok]
   rw [hA]
-  apply blocked
-  refine lastOk_false (R := rRec pk K' cx ss) (rs := ss.1.recs) rfl hj ?_
+  refine blocked fun pk'' => fitsOk_false (R := rRec pk K' cx ss) (List.mem_cons.2 (Or.inl rfl)) hj ?_ pk''
   have e1 : (commitShards (rRec pk K' cx ss) C ss.2 j).head = (ss.2 j).head := by simp [commitShards, hC]
-  show (commitShards (rRec pk K' cx ss) C ss.2 j).head ≠ (rSpine pk K' cx ss).heads j
-  rw [e1]
-  show _ ≠ (if j ∈ rT pk K' cx then _ else _)
-  rw [if_pos hj]
-  exact fun h => cx.advancesI _ _ _ h.symm
+  have e2 : (rSpine pk K' cx ss).heads j = (rRec pk K' cx ss).post j := by
+    show (if j ∈ rT pk K' cx then _ else _) = _
+    rw [if_pos hj]
+  exact fun h => adv_ne _ _ (e2.symm.trans (h.1.symm.trans e1))
 
-/-- Recovering the shards `S` of a store whose newest record is `R`, with the shards `C` of `R` committed, commits
-    the touched shards of `S` too. -/
-theorem recoverOn_commit (cx : Ctx) (sp : SpineDB) (R : Rec) (rs : List Rec) (hs : sp.recs = R :: rs)
-    (sh : Nat → ShardDB) (C S : List Nat) (hC : ∀ k ∈ C, k ∈ R.touched) (hpre : ∀ k, R.pre k = (sh k).head)
-    (hadv : ∀ k, R.post k ≠ R.pre k) (hI : imgOk cx R = true) :
-    recoverOn cx S (sp, commitShards R C sh) =
-      (sp, commitShards R (C ++ S.filter fun k => decide (k ∈ R.touched)) sh) := by
-  refine Prod.ext rfl (funext fun k => ?_)
-  show (if k ∈ S then recover cx sp k (commitShards R C sh k) else commitShards R C sh k) =
-    commitShards R (C ++ S.filter fun k => decide (k ∈ R.touched)) sh k
-  by_cases hS : k ∈ S
-  · rw [if_pos hS, recover_pure cx sp R rs hs, replay_commit cx R sh C hC hpre hadv hI k]
-    unfold commitShards
-    by_cases ht : k ∈ R.touched
-    · have hm : k ∈ C ++ S.filter (fun k => decide (k ∈ R.touched)) := by
-        simp [List.mem_append, List.mem_filter, hS, ht]
-      rw [if_pos ht, if_pos hm]
-    · have hnC : k ∉ C := fun h => ht (hC k h)
-      have hm : k ∉ C ++ S.filter (fun k => decide (k ∈ R.touched)) := by
-        simp [List.mem_append, List.mem_filter, ht, hnC]
-      rw [if_neg ht, if_neg hm]
-  · rw [if_neg hS]
-    unfold commitShards
-    have hm : (k ∈ C ++ S.filter (fun k => decide (k ∈ R.touched))) ↔ k ∈ C := by
-      simp [List.mem_append, List.mem_filter, hS]
-    by_cases hk : k ∈ C
-    · rw [if_pos hk, if_pos (hm.2 hk)]
-    · rw [if_neg hk, if_neg (fun h => hk (hm.1 h))]
-
-/-- M1: a RESHARD recovery interrupted after recovering any shards `S` leaves the RESHARD crash with `C` and the
-    touched shards of `S` committed; recovery may be interrupted and resumed any number of times. -/
-theorem crash_partial (C S : List Nat) (hok : reshardOk pk K' cx ss = true) (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
-    recoverOn cx S (afterReshard pk K' cx ss C) =
-      afterReshard pk K' cx ss (C ++ S.filter fun k => decide (k ∈ rT pk K' cx)) := by
-  have hA : ∀ C', afterReshard pk K' cx ss C' =
-      (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C' ss.2) := fun C' => by
-    unfold afterReshard; rw [if_pos hok]
-  rw [hA C, hA]
-  exact recoverOn_commit cx (rSpine pk K' cx ss) (rRec pk K' cx ss) ss.1.recs rfl ss.2 C S hC (fun _ => rfl)
-    (fun _ => cx.advancesI _ _ _) rRec_imgOk
-
-theorem lastOk_of (h3 : Inv3 ss) (hk : InvK pk cx ss) : lastOk cx ss = true := by
-  unfold lastOk
-  simp only [Bool.and_eq_true]
-  exact ⟨List.all_eq_true.2 fun k _ => beq_iff_eq.2 (h3 k).1, hk.2⟩
-
-theorem reshardOk_of (h3 : Inv3 ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (hK : 0 < K') :
+/-- STMT-CHANGE-19 (old L307: no `hn`): `quiet` checks the record numbering too. -/
+theorem reshardOk_of (h3 : Inv3 ss) (hn : chainsOk ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (hK : 0 < K') :
     reshardOk pk K' cx ss = true := by
-  have hl := lastOk_of h3 hk
-  simp only [reshardOk, quiet, kOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
-  exact ⟨⟨⟨⟨List.all_eq_true.2 fun k _ => beq_iff_eq.2 (h3 k).1, hl⟩, hp⟩, hK⟩, hk.1⟩
+  simp only [reshardOk, quiet, fitsOk, kOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, List.all_eq_true]
+  exact ⟨⟨⟨⟨⟨hn, fun k _ => h3 k⟩, fun k _ => h3 k⟩, hp⟩, hK⟩, hk.1⟩
 
 /-- Never wedged: with every shard head at the spine's, the stored `K` the pack's and the newest image bound
-    (`InvK`), RESHARD to any `K'' > 0` applies and every step the judgment accepts commits. -/
-theorem live_inv3 (h3 : Inv3 ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (K'' : Nat) (hK : 0 < K'') :
+    (`InvK`), RESHARD to any `K'' > 0` applies and every step the judgment accepts commits.  STMT-CHANGE-20
+    (old L315: no `hn`). -/
+theorem live_inv3 (h3 : Inv3 ss) (hn : chainsOk ss) (hk : InvK pk cx ss) (hp : packOk pk = true) (K'' : Nat)
+    (hK : 0 < K'') :
     (reshard pk K'' cx ss).isSome = true ∧
       ∀ inp, (judge pk cx ss.1.view inp).ok = true → (stepS pk cx ss inp).isSome = true := by
-  refine ⟨by simp [reshard, reshardOk_of h3 hk hp hK], fun inp hj => ?_⟩
+  refine ⟨by simp [reshard, reshardOk_of h3 hn hk hp hK], fun inp hj => ?_⟩
   have hc : checkAll pk cx ss inp = true := by
-    rw [checkAll_inv3 pk cx ss inp h3 hk]; exact hj
+    rw [checkAll_of_inv3 pk cx ss inp h3 hn hk.1]; exact hj
   simp [stepS, hc]
 
 /-- The transition's head equation: each touched shard's head after RESHARD is the image chain `cx.hi` over its
     pre head, the record number and its charges, gross and machine charge after RESHARD.  This alone does not
     bind the head to the state (`hi` need not be injective); see `img_bind`. -/
+-- STMT-CHANGE-32 (old L382-383: head = `cx.hi pre n image`): head = `adv (cx.hi pre n image) pre`.
 theorem reshard_head_img (h : reshard pk K' cx ss = some ss') (j : Nat) (hj : j ∈ rT pk K' cx) :
-    (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length ((ss'.2 j).chg, (ss'.2 j).gross, (ss'.2 j).mc) := by
+    (ss'.2 j).head =
+      adv (cx.hi (ss.2 j).head ss.1.recs.length ((ss'.2 j).chg, (ss'.2 j).gross, (ss'.2 j).mc)) (ss.2 j).head := by
   obtain ⟨_, rfl⟩ := reshard_eq h
-  show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length
+  show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).head = adv (cx.hi (ss.2 j).head ss.1.recs.length
     ((commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).chg, (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).gross,
-      (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).mc)
+      (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).mc)) (ss.2 j).head
   unfold commitShards
   rw [if_pos hj]
   rfl
@@ -338,12 +284,13 @@ theorem reshard_head_img (h : reshard pk K' cx ss = some ss') (j : Nat) (hj : j 
     every image whose `hi` gives `j`'s head after RESHARD is the true one.  This adds only head injectivity; the
     real guard is `imgOk` in `replay`.  A coordinated rewrite of image, post heads and spine heads on uncommitted
     shards is not ruled out (open, not a regression). -/
+-- STMT-CHANGE-33 (old L397-400: `hInj`, `hv` on `cx.hi`): both on the post head `adv (cx.hi ..) pre`.
 theorem img_bind (j : Nat) (v : (Cell → Nat) × Int × Int)
-    (hInj : ∀ w, cx.hi (ss.2 j).head ss.1.recs.length w = cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j) →
-      w = rImg pk K' cx ss j)
+    (hInj : ∀ w, adv (cx.hi (ss.2 j).head ss.1.recs.length w) (ss.2 j).head =
+      adv (cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j)) (ss.2 j).head → w = rImg pk K' cx ss j)
     (h : reshard pk K' cx ss = some ss') (hj : j ∈ rT pk K' cx)
-    (hv : (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length v) : v = rImg pk K' cx ss j := by
-  have hh : (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j) := by
+    (hv : (ss'.2 j).head = adv (cx.hi (ss.2 j).head ss.1.recs.length v) (ss.2 j).head) : v = rImg pk K' cx ss j := by
+  have hh : (ss'.2 j).head = adv (cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j)) (ss.2 j).head := by
     obtain ⟨_, rfl⟩ := reshard_eq h
     show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).head = _
     unfold commitShards
@@ -505,17 +452,6 @@ theorem inv_reshard (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk 
       have h0 := high_zero hI hB k (by omega) c
       omega
 
-theorem inv2_reshard (h : reshard pk K' cx ss = some ss') : Inv2 ss' := by
-  obtain ⟨_, rfl⟩ := reshard_eq h
-  intro R rs hR k hk
-  have hR' : rRec pk K' cx ss = R := (List.cons.inj hR).1
-  subst hR'
-  show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).head = _
-  unfold commitShards
-  have hk' : k ∈ rT pk K' cx := hk
-  rw [if_pos hk']
-  rfl
-
 theorem inv3_reshard (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') : Inv3 ss' := by
   obtain ⟨_, rfl⟩ := reshard_eq h
   intro k
@@ -523,6 +459,117 @@ theorem inv3_reshard (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') : Inv3 
   by_cases hk : k ∈ rT pk K' cx
   · simp [commitShards, rSpine, applyPart, rRec, hk, h2]
   · simp [commitShards, rSpine, rRec, hk, h1, h2]
+
+/-- After a RESHARD spine COMMIT with the shards `C` committed, every shard recovers to its completed state: a
+    committed or untouched shard fits already; an uncommitted touched one owes exactly the RESHARD record. -/
+theorem recover_resh (h3 : Inv3 ss) (hok : reshardOk pk K' cx ss = true) (C : List Nat)
+    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (k : Nat) :
+    recover (rSpine pk K' cx ss) k (commitShards (rRec pk K' cx ss) C ss.2 k) =
+      some (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k) := by
+  have hs : reshard pk K' cx ss =
+      some (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2) := by
+    unfold reshard; rw [if_pos hok]
+  have h3' := inv3_reshard h3 hs
+  have hn : chainsOk ss := by
+    have hq := (ok_parts hok).1
+    simp only [quiet, Bool.and_eq_true, decide_eq_true_eq] at hq
+    exact hq.1.1
+  by_cases hk : k ∈ C ∨ k ∉ rT pk K' cx
+  · have e : commitShards (rRec pk K' cx ss) C ss.2 k = commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k := by
+      unfold commitShards
+      rcases hk with hk | hk
+      · rw [if_pos hk, if_pos (hC k hk)]
+      · rw [if_neg (fun h => hk (hC k h)), if_neg hk]
+    rw [e]; exact recover_fits _ _ _ (h3' k)
+  · have hkC : k ∉ C := fun h => hk (Or.inl h)
+    have hkT : k ∈ rT pk K' cx := Classical.byContradiction fun h => hk (Or.inr h)
+    have e : commitShards (rRec pk K' cx ss) C ss.2 k = ss.2 k := by unfold commitShards; rw [if_neg hkC]
+    have e2 : commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k = applyPart (rRec pk K' cx ss) k (ss.2 k) := by
+      unfold commitShards; rw [if_pos hkT]
+    have hall : ((ss.2 k).applied.all fun m => decide (m < ss.1.recs.length)) = true := by
+      simp only [List.all_eq_true, decide_eq_true_eq]
+      intro m hm
+      rw [(h3 k).2] at hm
+      obtain ⟨R', hR', rfl⟩ := List.mem_map.1 hm
+      have h1 : R'.n ∈ List.range' 0 ss.1.recs.length := by
+        rw [← hn]
+        exact List.mem_map.2 ⟨R', (List.mem_filter.1 hR').1, rfl⟩
+      simp only [List.mem_range'_1] at h1
+      omega
+    have h0 := pending_nil ss.1 k (ss.2 k) (h3 k).2
+    unfold pending at h0
+    have hp : pending (rSpine pk K' cx ss) k (ss.2 k) = [rRec pk K' cx ss] := by
+      unfold pending
+      show (rRec pk K' cx ss :: ss.1.recs).reverse.filter _ = _
+      rw [List.reverse_cons, List.filter_append, h0, List.nil_append, List.filter_cons_of_pos ?_, List.filter_nil]
+      show (decide (k ∈ rT pk K' cx) && (ss.2 k).applied.all fun m => decide (m < ss.1.recs.length)) = true
+      rw [hall, Bool.and_true]; exact decide_eq_true hkT
+    have hf : fits (rSpine pk K' cx ss) k (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k) := h3' k
+    rw [e2] at hf
+    rw [e, e2, recover_some _ k (ss.2 k) (applyPart (rRec pk K' cx ss) k (ss.2 k)) ?_, if_pos hf]
+    rw [hp]
+    show (if (ss.2 k).head = (ss.2 k).head then some (applyPart (rRec pk K' cx ss) k (ss.2 k)) else none).bind
+      (replays k []) = _
+    rw [if_pos rfl]; rfl
+
+/-- H1: a RESHARD interrupted after its spine COMMIT, with any set `C` of shards committed, recovers to exactly
+    the completed RESHARD.  STMT-CHANGE-16 (old L232-235: total `recoverAll cx`, `= ss'`, no `h3`/`hg`): recovery
+    is partial now, and needs `Inv3` and bound images of the store before the RESHARD, which every reachable store
+    has (`reachR_ok`).  No hypothesis on `cx.hi`. -/
+theorem reshard_rollforward (C : List Nat) (h3 : Inv3 ss) (hg : ss.1.recs.all (imgOk cx) = true)
+    (h : reshard pk K' cx ss = some ss') (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
+    recoverAll (setK pk cx.p K') cx (afterReshard pk K' cx ss C) = some ss' := by
+  obtain ⟨hok, rfl⟩ := reshard_eq h
+  have hA : afterReshard pk K' cx ss C = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C ss.2) := by
+    unfold afterReshard; rw [if_pos hok]
+  rw [hA]
+  refine recoverAll_some _ cx _ _ rfl ?_ (recover_resh h3 hok C hC)
+  show (rRec pk K' cx ss :: ss.1.recs).all (imgOk cx) = true
+  simp only [List.all_cons, rRec_imgOk, hg, Bool.and_self]
+
+/-- Recovering the shards `S` of a store where every shard recovers to `R` committed on all its touched shards,
+    with the shards `C` of `R` committed, commits the touched shards of `S` too.  STMT-CHANGE-17 (old L261-267:
+    `hs hpre hadv hI` about the newest record, total `recover`): the recovery fact is now the hypothesis `hr`,
+    proved for a RESHARD (`recover_resh`) and a step (`recover_spine`). -/
+theorem recoverOn_commit (sp : SpineDB) (R : Rec) (sh : Nat → ShardDB) (C S : List Nat)
+    (hC : ∀ k ∈ C, k ∈ R.touched)
+    (hr : ∀ k, recover sp k (commitShards R C sh k) = some (commitShards R R.touched sh k)) :
+    recoverOn S (sp, commitShards R C sh) =
+      (sp, commitShards R (C ++ S.filter fun k => decide (k ∈ R.touched)) sh) := by
+  refine Prod.ext rfl (funext fun k => ?_)
+  show (if k ∈ S then (recover sp k (commitShards R C sh k)).getD (commitShards R C sh k)
+      else commitShards R C sh k) = commitShards R (C ++ S.filter fun k => decide (k ∈ R.touched)) sh k
+  by_cases hS : k ∈ S
+  · rw [if_pos hS, hr k, Option.getD_some]
+    unfold commitShards
+    by_cases ht : k ∈ R.touched
+    · have hm : k ∈ C ++ S.filter (fun k => decide (k ∈ R.touched)) := by
+        simp [List.mem_append, List.mem_filter, hS, ht]
+      rw [if_pos ht, if_pos hm]
+    · have hnC : k ∉ C := fun h => ht (hC k h)
+      have hm : k ∉ C ++ S.filter (fun k => decide (k ∈ R.touched)) := by
+        simp [List.mem_append, List.mem_filter, ht, hnC]
+      rw [if_neg ht, if_neg hm]
+  · rw [if_neg hS]
+    unfold commitShards
+    have hm : (k ∈ C ++ S.filter (fun k => decide (k ∈ R.touched))) ↔ k ∈ C := by
+      simp [List.mem_append, List.mem_filter, hS]
+    by_cases hk : k ∈ C
+    · rw [if_pos hk, if_pos (hm.2 hk)]
+    · rw [if_neg hk, if_neg (fun h => hk (hm.1 h))]
+
+/-- M1: a RESHARD recovery interrupted after recovering any shards `S` leaves the RESHARD crash with `C` and the
+    touched shards of `S` committed; recovery may be interrupted and resumed any number of times.
+    STMT-CHANGE-18 (old L292: no `h3`). -/
+theorem crash_partial (C S : List Nat) (h3 : Inv3 ss) (hok : reshardOk pk K' cx ss = true)
+    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
+    recoverOn S (afterReshard pk K' cx ss C) =
+      afterReshard pk K' cx ss (C ++ S.filter fun k => decide (k ∈ rT pk K' cx)) := by
+  have hA : ∀ C', afterReshard pk K' cx ss C' =
+      (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C' ss.2) := fun C' => by
+    unfold afterReshard; rw [if_pos hok]
+  rw [hA C, hA]
+  exact recoverOn_commit (rSpine pk K' cx ss) (rRec pk K' cx ss) ss.2 C S hC (recover_resh h3 hok C hC)
 
 theorem inv4_reshard (hI : Inv ss) (h4 : Inv4 pk cx ss) (h : reshard pk K' cx ss = some ss') :
     Inv4 (setK pk cx.p K') cx ss' := by
@@ -576,21 +623,27 @@ theorem packOk_setK (hp : packOk pk = true) (hK : 0 < K') (p : PartId) : packOk 
   simp only [packOk, setK, List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at hp ⊢
   exact ⟨hK, hp⟩
 
-theorem invK_reshard (h : reshard pk K' cx ss = some ss') : InvK (setK pk cx.p K') cx ss' := by
+/-- STMT-CHANGE-21 (old L579: no `hg`): `InvK` binds every stored image, not only the newest. -/
+theorem invK_reshard (hg : ss.1.recs.all (imgOk cx) = true) (h : reshard pk K' cx ss = some ss') :
+    InvK (setK pk cx.p K') cx ss' := by
   have hk := reshard_k h
   obtain ⟨_, rfl⟩ := reshard_eq h
-  exact ⟨by rw [setK_k_self]; exact hk, rRec_imgOk⟩
+  refine ⟨by rw [setK_k_self]; exact hk, ?_⟩
+  show (rRec pk K' cx ss :: ss.1.recs).all (imgOk cx) = true
+  simp only [List.all_cons, rRec_imgOk, hg, Bool.and_self]
 
 /-- After a crash inside any RESHARD (a `K` decrease included), recovery leaves a store that accepts RESHARD to any
-    `K'' > 0` and every step the judgment accepts. -/
-theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss')
-    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (K'' : Nat) (hK : 0 < K'') :
-    (reshard (setK pk cx.p K') K'' cx (recoverAll cx (afterReshard pk K' cx ss C))).isSome = true ∧
+    `K'' > 0` and every step the judgment accepts.  STMT-CHANGE-22 (old L586-590: total `recoverAll`, only `h3`):
+    recovery returns the completed RESHARD, given `Inv3`, the record numbering and bound images (`reachR_ok`). -/
+theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (hn : chainsOk ss) (hg : ss.1.recs.all (imgOk cx) = true)
+    (h : reshard pk K' cx ss = some ss') (hC : ∀ k ∈ C, k ∈ rT pk K' cx) (K'' : Nat) (hK : 0 < K'') :
+    recoverAll (setK pk cx.p K') cx (afterReshard pk K' cx ss C) = some ss' ∧
+    (reshard (setK pk cx.p K') K'' cx ss').isSome = true ∧
       ∀ inp, (judge (setK pk cx.p K') cx ss'.1.view inp).ok = true →
-        (stepS (setK pk cx.p K') cx (recoverAll cx (afterReshard pk K' cx ss C)) inp).isSome = true := by
-  rw [reshard_rollforward C h hC]
+        (stepS (setK pk cx.p K') cx ss' inp).isSome = true := by
   obtain ⟨_, hp, hK', _⟩ := ok_parts (reshard_eq h).1
-  exact live_inv3 (inv3_reshard h3 h) (invK_reshard h) (packOk_setK hp hK' cx.p) K'' hK
+  exact ⟨reshard_rollforward C h3 hg h hC, live_inv3 (inv3_reshard h3 h) (chain_reshard hn h) (invK_reshard hg h)
+    (packOk_setK hp hK' cx.p) K'' hK⟩
 
 /-- A property of directory rows kept by every step: it holds of each new row (a `routeNew` row) and the old rows
     are kept. -/
@@ -664,86 +717,102 @@ theorem homesLt_reshard (hK : 0 < K') (h : reshard pk K' cx ss = some ss') :
       rw [← Home.shard.inj hj'']; exact hl
 
 /-- M3: on every store reachable by steps and RESHARDs the invariants and the home bound hold, and the stored `K`
-    is the pack's (`InvK`: `ss.1.k = pk.k cx.p`, and the newest image is bound). -/
+    is the pack's and every stored image is bound (`InvK`).  STMT-CHANGE-23 (old L668-670): the `Inv2` component
+    is gone (trunk replaced `Inv2` by `Inv3`, whose APPLIED lists decide what is owed). -/
 theorem reachR_ok (h : ReachR cx pk ss) :
-    packOk pk = true ∧ Inv ss ∧ Inv2 ss ∧ Inv3 ss ∧ Inv4 pk cx ss ∧ chainsOk ss ∧ homesLt pk cx ss.1.dir ∧
+    packOk pk = true ∧ Inv ss ∧ Inv3 ss ∧ Inv4 pk cx ss ∧ chainsOk ss ∧ homesLt pk cx ss.1.dir ∧
       InvK pk cx ss := by
   induction h with
   | init pk L hp =>
-    exact ⟨hp, inv_init L, inv2_init L, inv3_init L, inv4_init pk cx L (Or.inl (k_pos pk cx.p hp)),
+    exact ⟨hp, inv_init L, inv3_init L, inv4_init pk cx L (Or.inl (k_pos pk cx.p hp)),
       chain_init L, homesLt_init (k_pos pk cx.p hp) L, invK_init pk cx L⟩
   | step inp _ ih =>
-    obtain ⟨hp, hI, h2, h3, h4, hc, hB, hk⟩ := ih
-    exact ⟨hp, inv_step _ _ _ inp hI, inv2_step _ _ _ inp h2, inv3_step _ _ _ inp h3,
+    obtain ⟨hp, hI, h3, h4, hc, hB, hk⟩ := ih
+    exact ⟨hp, inv_step _ _ _ inp hI, inv3_step _ _ _ inp h3,
       inv4_step _ _ _ inp hI h4, chain_step _ _ _ inp hc, homesLt_step (k_pos _ cx.p hp) inp hB,
       invK_step _ _ _ inp hk⟩
   | resh K' _ hr ih =>
-    obtain ⟨hp, hI, h2, h3, h4, hc, hB, hk⟩ := ih
+    obtain ⟨hp, hI, h3, h4, hc, hB, hk⟩ := ih
     obtain ⟨hok, _⟩ := reshard_eq hr
     obtain ⟨_, _, hK', _⟩ := ok_parts hok
-    exact ⟨packOk_setK hp hK' cx.p, inv_reshard hI hB hr, inv2_reshard hr, inv3_reshard h3 hr,
-      inv4_reshard hI h4 hr, chain_reshard hc hr, homesLt_reshard hK' hr, invK_reshard hr⟩
+    exact ⟨packOk_setK hp hK' cx.p, inv_reshard hI hB hr, inv3_reshard h3 hr,
+      inv4_reshard hI h4 hr, chain_reshard hc hr, homesLt_reshard hK' hr, invK_reshard hk.2 hr⟩
 
-/-- A crash before any spine COMMIT leaves a `ReachR` store; recovery changes nothing in it. -/
-theorem reachR_recover (h : ReachR cx pk ss) : recoverAll cx ss = ss := by
-  have h2 := (reachR_ok h).2.2.1
-  show (ss.1, fun k => recover cx ss.1 k (ss.2 k)) = (ss.1, ss.2)
-  congr 1
-  funext k
-  unfold recover
-  split
-  · rfl
-  · next R rs hR =>
-    unfold replay
-    rw [if_neg]
-    rintro ⟨hk, _, hne, _⟩
-    exact hne (h2 R rs hR k hk)
+/-- A crash before any spine COMMIT leaves a `ReachR` store; recovery accepts it and changes nothing.
+    STMT-CHANGE-24 (old L688: total `recoverAll cx`, `= ss`). -/
+theorem reachR_recover (h : ReachR cx pk ss) : recoverAll pk cx ss = some ss := by
+  obtain ⟨_, _, h3, _, _, _, hk⟩ := reachR_ok h
+  exact recoverAll_some pk cx ss ss rfl hk.2 (recover_done ss h3)
 
 /-- Recovering any shard set of a `ReachR` store changes nothing. -/
-theorem recoverOn_reach (h : ReachR cx pk ss) (S : List Nat) : recoverOn cx S ss = ss := by
-  have e := congrFun (congrArg Prod.snd (reachR_recover h))
+theorem recoverOn_reach (h : ReachR cx pk ss) (S : List Nat) : recoverOn S ss = ss := by
+  have h3 := (reachR_ok h).2.2.1
   refine Prod.ext rfl (funext fun k => ?_)
-  show (if k ∈ S then recover cx ss.1 k (ss.2 k) else ss.2 k) = ss.2 k
-  split
-  · exact e k
-  · rfl
+  show (if k ∈ S then (recover ss.1 k (ss.2 k)).getD (ss.2 k) else ss.2 k) = ss.2 k
+  rw [recover_done ss h3 k, Option.getD_some, ite_self]
 
+/-- STMT-CHANGE-25 (old L711-712: `ReachR (recoverAll cx ..)`): recovery accepts, and its result is reachable. -/
 theorem spine_recover (inp : Input) (C : List Nat) (hr : ReachR cx pk ss)
-    (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) : ReachR cx pk (recoverAll cx (afterSpine pk cx ss inp C)) := by
+    (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) :
+    ∃ s, recoverAll pk cx (afterSpine pk cx ss inp C) = some s ∧ ReachR cx pk s := by
+  obtain ⟨_, _, h3, _, hn, _, hk⟩ := reachR_ok hr
   by_cases hc : checkAll pk cx ss inp = true
   · have hs : stepS pk cx ss inp = some (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
         commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := by
       unfold stepS; rw [if_pos hc]
-    rw [rollforward_eq pk cx ss _ inp C hs hC]
+    refine ⟨_, rollforward_eq pk cx ss _ inp C h3 hn hk.2 hs hC, ?_⟩
     have := ReachR.step inp hr
     simpa only [stepT, hs, Option.getD_some] using this
   · have : afterSpine pk cx ss inp C = ss := by unfold afterSpine; rw [if_neg hc]
-    rw [this, reachR_recover hr]; exact hr
+    rw [this]; exact ⟨ss, reachR_recover hr, hr⟩
 
+/-- STMT-CHANGE-26 (old L723-725: `ReachR (recoverAll cx ..)`). -/
 theorem resh_recover (C : List Nat) (hr : ReachR cx pk ss) (hok : reshardOk pk K' cx ss = true)
     (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
-    ReachR cx (setK pk cx.p K') (recoverAll cx (afterReshard pk K' cx ss C)) := by
+    ∃ s, recoverAll (setK pk cx.p K') cx (afterReshard pk K' cx ss C) = some s ∧ ReachR cx (setK pk cx.p K') s := by
+  obtain ⟨_, _, h3, _, _, _, hk⟩ := reachR_ok hr
   have hs : reshard pk K' cx ss = some (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2) := by
     unfold reshard; rw [if_pos hok]
-  rw [reshard_rollforward C hs hC]
-  exact ReachR.resh K' hr hs
+  exact ⟨_, reshard_rollforward C h3 hk.2 hs hC, ReachR.resh K' hr hs⟩
 
-/-- M1: recovery of every store a crash can leave is a reachable store. -/
-theorem crash_recover (h : Crash cx pk ss) : ReachR cx pk (recoverAll cx ss) := by
+/-- M1: recovery of every store a crash can leave accepts it, and the result is a reachable store.
+    STMT-CHANGE-27 (old L732: `ReachR (recoverAll cx ss)`, recovery total). -/
+theorem crash_recover (h : Crash cx pk ss) : ∃ s, recoverAll pk cx ss = some s ∧ ReachR cx pk s := by
   cases h with
-  | ok hr => rw [reachR_recover hr]; exact hr
+  | ok hr => exact ⟨_, reachR_recover hr, hr⟩
   | spine inp C hr hC => exact spine_recover inp C hr hC
   | resh K'' C hr hok hC => exact resh_recover C hr hok hC
 
+/-- After a step's spine COMMIT with the shards `C` committed, every shard recovers to its committed state. -/
+theorem recover_spine (inp : Input) (C : List Nat) (h3 : Inv3 ss) (hn : chainsOk ss)
+    (hc : checkAll pk cx ss inp = true) (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) (k : Nat) :
+    recover (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2) k
+        (commitShards (mkRec pk cx ss inp).2 C ss.2 k) =
+      some (commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k) := by
+  have hs : stepS pk cx ss inp = some (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
+      commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := by
+    unfold stepS; rw [if_pos hc]
+  by_cases hk : k ∈ C
+  · have h3' : Inv3 (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
+        commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := by
+      have := inv3_step pk cx ss inp h3
+      simpa only [stepT, hs, Option.getD_some] using this
+    have e : commitShards (mkRec pk cx ss inp).2 C ss.2 k =
+        commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2 k := by
+      unfold commitShards; rw [if_pos hk, if_pos (hC k hk)]
+    rw [e]; exact recover_fits _ _ _ (h3' k)
+  · have e : commitShards (mkRec pk cx ss inp).2 C ss.2 k = ss.2 k := by unfold commitShards; rw [if_neg hk]
+    rw [e]; exact recover_group pk cx ss _ [inp] h3 hn ((stepG_single pk cx ss inp).trans hs) k
+
 theorem spine_recoverOn (inp : Input) (C S : List Nat) (hr : ReachR cx pk ss)
     (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) :
-    Crash cx pk (recoverOn cx S (afterSpine pk cx ss inp C)) := by
+    Crash cx pk (recoverOn S (afterSpine pk cx ss inp C)) := by
+  obtain ⟨_, _, h3, _, hn, _, _⟩ := reachR_ok hr
   by_cases hc : checkAll pk cx ss inp = true
   · have hA : ∀ C', afterSpine pk cx ss inp C' = (commitSpine ss.1 (mkRec pk cx ss inp).1
         (mkRec pk cx ss inp).2, commitShards (mkRec pk cx ss inp).2 C' ss.2) := fun C' => by
       unfold afterSpine; rw [if_pos hc]
-    rw [hA C, recoverOn_commit cx _ (mkRec pk cx ss inp).2 ss.1.recs rfl ss.2 C S hC (fun _ => rfl)
-      (fun _ => cx.advances _ _ _ _) rfl, ← hA]
+    rw [hA C, recoverOn_commit _ (mkRec pk cx ss inp).2 ss.2 C S hC (recover_spine inp C h3 hn hc hC), ← hA]
     refine Crash.spine inp _ hr fun k hk => ?_
     rcases List.mem_append.1 hk with h | h
     · exact hC k h
@@ -753,8 +822,8 @@ theorem spine_recoverOn (inp : Input) (C S : List Nat) (hr : ReachR cx pk ss)
 
 theorem resh_recoverOn (C S : List Nat) (hr : ReachR cx pk ss) (hok : reshardOk pk K' cx ss = true)
     (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
-    Crash cx (setK pk cx.p K') (recoverOn cx S (afterReshard pk K' cx ss C)) := by
-  rw [crash_partial C S hok hC]
+    Crash cx (setK pk cx.p K') (recoverOn S (afterReshard pk K' cx ss C)) := by
+  rw [crash_partial C S (reachR_ok hr).2.2.1 hok hC]
   refine Crash.resh K' _ hr hok fun k hk => ?_
   rcases List.mem_append.1 hk with h | h
   · exact hC k h
@@ -762,7 +831,7 @@ theorem resh_recoverOn (C S : List Nat) (hr : ReachR cx pk ss) (hok : reshardOk 
 
 /-- M1: recovery of any shard set `S` interrupted part-way, from any store a crash can leave (a step's crash
     included), leaves a store a crash can leave. -/
-theorem crash_recoverOn (h : Crash cx pk ss) (S : List Nat) : Crash cx pk (recoverOn cx S ss) := by
+theorem crash_recoverOn (h : Crash cx pk ss) (S : List Nat) : Crash cx pk (recoverOn S ss) := by
   cases h with
   | ok hr => rw [recoverOn_reach hr]; exact Crash.ok hr
   | spine inp C hr hC => exact spine_recoverOn inp C S hr hC
@@ -1016,67 +1085,62 @@ theorem norm_reshard (hI : Inv ss) (hK' : 0 < K') :
   rw [merge_reshard hI hK']
   simp only [norm, ndir_rdir] <;> rfl
 
-theorem invK_of_ok (hok : reshardOk pk K' cx ss = true) : InvK pk cx ss := by
-  obtain ⟨hq, _, _, hk⟩ := ok_parts hok
-  simp only [quiet, Bool.and_eq_true] at hq
-  have hl := hq.2
-  unfold lastOk at hl
-  simp only [Bool.and_eq_true] at hl
-  exact ⟨hk, hl.2⟩
-
-/-- What the three run lemmas need: invariants of the new store, the old store's `InvK`, and equal norms. -/
-theorem reshard_pre (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
-    (h : reshard pk K' cx ss = some ss') :
-    Inv ss' ∧ Inv3 ss' ∧ InvK (setK pk cx.p K') cx ss' ∧ InvK pk cx ss ∧
+/-- What the three run lemmas need: invariants of the new store, the old store's `InvK`, and equal norms.
+    STMT-CHANGE-28 (old L1028-1030: no `hn`/`hg`, no `chainsOk ss'`; the old store's `InvK` came from `reshardOk`
+    via `lastOk`): `InvK` now binds every stored image, which `reshardOk` does not check, so `hg` is assumed;
+    every reachable store has it (`reachR_ok`). -/
+theorem reshard_pre (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss) (hn : chainsOk ss)
+    (hg : ss.1.recs.all (imgOk cx) = true) (h : reshard pk K' cx ss = some ss') :
+    Inv ss' ∧ Inv3 ss' ∧ chainsOk ss' ∧ InvK (setK pk cx.p K') cx ss' ∧ InvK pk cx ss ∧
       norm (merge (setK pk cx.p K') cx ss') = norm (merge pk cx ss) ∧
       packOk (setK pk cx.p K') = packOk pk := by
   obtain ⟨hok, e⟩ := reshard_eq h
-  obtain ⟨_, hp, hK', _⟩ := ok_parts hok
-  refine ⟨inv_reshard hI hB h, inv3_reshard h3 h, invK_reshard h, invK_of_ok hok, ?_, ?_⟩
+  obtain ⟨_, hp, hK', hk⟩ := ok_parts hok
+  refine ⟨inv_reshard hI hB h, inv3_reshard h3 h, chain_reshard hn h, invK_reshard hg h, ⟨hk, hg⟩, ?_, ?_⟩
   · rw [e]; exact norm_reshard hI hK'
   · rw [hp, packOk_setK hp hK']
 
 /-- Lifts `merge_run`: the resharded store runs as the single store on the merged view with the rehomed directory. -/
 theorem reshard_merge_run (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
-    (h : reshard pk K' cx ss = some ss') (rs : List Input) :
+    (hn : chainsOk ss) (hg : ss.1.recs.all (imgOk cx) = true) (h : reshard pk K' cx ss = some ss') (rs : List Input) :
     merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)
       = runSingle (setK pk cx.p K') cx { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } rs := by
-  obtain ⟨hI', h3', hK'', _⟩ := reshard_pre hI hB h3 h
+  obtain ⟨hI', h3', hn', hK'', _⟩ := reshard_pre hI hB h3 hn hg h
   obtain ⟨hok, e⟩ := reshard_eq h
   obtain ⟨_, _, hK', _⟩ := ok_parts hok
-  rw [merge_run (setK pk cx.p K') cx ss' rs hI' h3' hK'', e, merge_reshard hI hK']
+  rw [merge_run (setK pk cx.p K') cx ss' rs hI' h3' hn' hK'', e, merge_reshard hI hK']
 
 /-- Lifts `whole_run` and `merge_run`: after RESHARD the store's merged view equals, up to the shard index of
     directory homes, the un-resharded single-store and whole-file runs (verdicts, dir, clock, every total). -/
 theorem reshard_whole_run (hLoc : Local cx) (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
-    (h : reshard pk K' cx ss = some ss') (rs : List Input) :
+    (hn : chainsOk ss) (hg : ss.1.recs.all (imgOk cx) = true) (h : reshard pk K' cx ss = some ss') (rs : List Input) :
     norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)) = norm (runWhole pk cx (merge pk cx ss) rs) ∧
       norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs))
         = norm (runSingle pk cx (merge pk cx ss) rs) := by
-  obtain ⟨hI', h3', hK'', hKss, hs, hp⟩ := reshard_pre hI hB h3 h
+  obtain ⟨hI', h3', hn', hK'', hKss, hs, hp⟩ := reshard_pre hI hB h3 hn hg h
   have hw : norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)) =
       norm (runWhole pk cx (merge pk cx ss) rs) := by
-    rw [whole_run (setK pk cx.p K') cx hLoc ss' rs hI' h3' hK'']
+    rw [whole_run (setK pk cx.p K') cx hLoc ss' rs hI' h3' hn' hK'']
     exact (runW_sim (setK pk cx.p K') pk cx hp rs hs).1
   refine ⟨hw, hw.trans ?_⟩
-  rw [← whole_run pk cx hLoc ss rs hI h3 hKss, merge_run pk cx ss rs hI h3 hKss]
+  rw [← whole_run pk cx hLoc ss rs hI h3 hn hKss, merge_run pk cx ss rs hI h3 hn hKss]
 
 /-- Lifts `rcpts_run`: per-row receipts after RESHARD are the un-resharded store's and the whole-file run's. -/
 theorem reshard_rcpts_run (hLoc : Local cx) (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
-    (h : reshard pk K' cx ss = some ss') (rs : List Input) :
+    (hn : chainsOk ss) (hg : ss.1.recs.all (imgOk cx) = true) (h : reshard pk K' cx ss = some ss') (rs : List Input) :
     rcptsS (setK pk cx.p K') cx ss' rs = rcptsW pk cx (merge pk cx ss) rs ∧
       rcptsS (setK pk cx.p K') cx ss' rs = rcptsS pk cx ss rs := by
-  obtain ⟨hI', h3', hK'', hKss, hs, hp⟩ := reshard_pre hI hB h3 h
+  obtain ⟨hI', h3', hn', hK'', hKss, hs, hp⟩ := reshard_pre hI hB h3 hn hg h
   have h1 : rcptsS (setK pk cx.p K') cx ss' rs = rcptsW pk cx (merge pk cx ss) rs :=
-    (rcpts_run (setK pk cx.p K') cx hLoc ss' rs hI' h3' hK'').trans
+    (rcpts_run (setK pk cx.p K') cx hLoc ss' rs hI' h3' hn' hK'').trans
       (runW_sim (setK pk cx.p K') pk cx hp rs hs).2
-  exact ⟨h1, h1.trans (rcpts_run pk cx hLoc ss rs hI h3 hKss).symm⟩
+  exact ⟨h1, h1.trans (rcpts_run pk cx hLoc ss rs hI h3 hn hKss).symm⟩
 
 /-! ## Witnesses (kernel `decide`) -/
 
 def cxW : Ctx :=
   { p := 0, hsh := fun _ _ => 1, lean := fun rs => rs.map fun _ => true, hs := fun d _ _ _ => d + 1,
-    advances := fun d _ _ _ => Nat.succ_ne_self d, hi := fun d _ _ => d + 1, advancesI := fun d _ _ => Nat.succ_ne_self d }
+    hi := fun d _ _ => d + 1 }
 
 def LW : Legacy :=
   { cells := fun _ => some (5, 10), item := fun _ => some "i", t := 0, used := 10, budget := 3, lc := 0,
@@ -1091,9 +1155,9 @@ example : (reshard ⟨[]⟩ 2 cxW (initS 1 LW)).map
 /-- H1, the review's scenario and its mirror: a crash after the RESHARD spine COMMIT with shard 1 only, shard 0
     only, or no shard committed; after recovery "a" is charged once, at shard 1, and the merged charge is 1. -/
 example : [[1], [0], []].map (fun C =>
-      let ss := recoverAll cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) C)
-      ((ss.2 0).chg "a", (ss.2 1).chg "a", (merge ⟨[(0, 2)]⟩ cxW ss).chg "a"))
-    = [(0, 1, 1), (0, 1, 1), (0, 1, 1)] := by
+      (recoverAll ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW) C)).map fun ss =>
+        ((ss.2 0).chg "a", (ss.2 1).chg "a", (merge ⟨[(0, 2)]⟩ cxW ss).chg "a"))
+    = [some (0, 1, 1), some (0, 1, 1), some (0, 1, 1)] := by
   decide
 
 /-- Before recovery, shard 0 uncommitted: a later RESHARD and a step are both refused. -/
@@ -1105,8 +1169,18 @@ example : (reshard ⟨[(0, 2)]⟩ 3 cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 LW
     accepted after it. -/
 example : let ss := afterReshard ⟨[(0, 2)]⟩ 1 cxW (initS 2 LW) [0]
     ((stepS ⟨[(0, 1), (0, 2)]⟩ cxW ss ⟨0, []⟩).isNone && (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW ss).isNone &&
-      (stepS ⟨[(0, 1), (0, 2)]⟩ cxW (recoverAll cxW ss) ⟨0, []⟩).isSome &&
-      (reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW (recoverAll cxW ss)).isSome) = true := by
+      ((recoverAll ⟨[(0, 1), (0, 2)]⟩ cxW ss).bind fun s => stepS ⟨[(0, 1), (0, 2)]⟩ cxW s ⟨0, []⟩).isSome &&
+      ((recoverAll ⟨[(0, 1), (0, 2)]⟩ cxW ss).bind fun s => reshard ⟨[(0, 1), (0, 2)]⟩ 1 cxW s).isSome) = true := by
+  decide
+
+/-- F2: with `hs` and `hi` returning their pre head (a fixed point), a RESHARD still moves every touched head
+    (`adv`), so a crash with no shard committed still blocks a step, and recovery still finishes the RESHARD:
+    "a" ends at shard 1 only. -/
+def cxF : Ctx := { cxW with hs := fun d _ _ _ => d, hi := fun d _ _ => d }
+
+example : let ss := afterReshard ⟨[]⟩ 2 cxF (initS 1 LW) []
+    ((stepS ⟨[(0, 2)]⟩ cxF ss ⟨0, []⟩).isNone &&
+      (recoverAll ⟨[(0, 2)]⟩ cxF ss).map (fun s => ((s.2 0).chg "a", (s.2 1).chg "a")) == some (0, 1)) = true := by
   decide
 
 /-- `K' = 0` is refused. -/

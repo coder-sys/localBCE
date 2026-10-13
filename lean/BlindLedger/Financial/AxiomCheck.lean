@@ -17,6 +17,8 @@ import BlindLedger.Financial.Offset.ClaimLaws
 import BlindLedger.Financial.DecisionPackage.Laws
 -- RESHARD pins (below)
 import BlindLedger.Financial.Reshard
+import BlindLedger.Financial.ShardSplit
+import BlindLedger.Financial.Payment.BatchFast
 
 namespace BlindLedger.Financial
 
@@ -523,11 +525,11 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.history_reshard
 /-- info: 'BlindLedger.Financial.Reshard.reshard_refuse' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_refuse
-/-- info: 'BlindLedger.Financial.Reshard.reshard_open' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.Reshard.reshard_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_open
 /-- info: 'BlindLedger.Financial.Reshard.reshard_rollforward' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_rollforward
-/-- info: 'BlindLedger.Financial.Reshard.reshard_crash_open' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Financial.Reshard.reshard_crash_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_crash_open
 /-- info: 'BlindLedger.Financial.Reshard.reshard_live' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_live
@@ -569,8 +571,12 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.high_zero
 /-- info: 'BlindLedger.Financial.Reshard.merge_reshard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.merge_reshard
-/-- info: 'BlindLedger.Financial.Reshard.inv2_reshard' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.inv2_reshard
+/-- info: 'BlindLedger.Financial.Reshard.reshard_k' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_k
+/-- info: 'BlindLedger.Financial.Reshard.reachR_run' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reachR_run
+/-- info: 'BlindLedger.Financial.Reshard.reachS_reachR' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reachS_reachR
 /-- info: 'BlindLedger.Financial.Reshard.inv3_reshard' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.inv3_reshard
 /-- info: 'BlindLedger.Financial.Reshard.inv4_reshard' depends on axioms: [propext, Quot.sound] -/
@@ -589,3 +595,80 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.ndir_rdir
 /-- info: 'BlindLedger.Financial.Reshard.norm_reshard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.norm_reshard
+-- ShardSplit (spine + K shard DBs): every theorem whose meaning depends on `Ctx` or `adv`.
+/-- info: 'BlindLedger.Financial.ShardSplit.adv_ne' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.adv_ne
+/-- info: 'BlindLedger.Financial.ShardSplit.post_ne_pre' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.post_ne_pre
+/-- info: 'BlindLedger.Financial.ShardSplit.replay_commit' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.replay_commit
+/-- info: 'BlindLedger.Financial.ShardSplit.shard_run_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.shard_run_eq
+/-- info: 'BlindLedger.Financial.ShardSplit.rollforward_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.rollforward_eq
+/-- info: 'BlindLedger.Financial.ShardSplit.crash_before_spine' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.crash_before_spine
+/-- info: 'BlindLedger.Financial.ShardSplit.reader_cut' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.reader_cut
+/-- info: 'BlindLedger.Financial.ShardSplit.reader_cut_prefix' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.reader_cut_prefix
+/-- info: 'BlindLedger.Financial.ShardSplit.spine_chain_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.spine_chain_binds
+/-- info: 'BlindLedger.Financial.ShardSplit.applied_missing' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.applied_missing
+/-- info: 'BlindLedger.Financial.ShardSplit.rollforward_closed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.rollforward_closed
+/-- info: 'BlindLedger.Financial.ShardSplit.accepted_applied' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.accepted_applied
+/-- info: 'BlindLedger.Financial.ShardSplit.stepG_single' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.stepG_single
+/-- info: 'BlindLedger.Financial.ShardSplit.stepG_append' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.stepG_append
+/-- info: 'BlindLedger.Financial.ShardSplit.stepG_run' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.stepG_run
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_done' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_done
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_group' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_group
+/-- info: 'BlindLedger.Financial.ShardSplit.rollforward_group' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.rollforward_group
+/-- info: 'BlindLedger.Financial.ShardSplit.rollforward_any' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.rollforward_any
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_idem' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_idem
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_one' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_one
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_diverged' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_diverged
+/-- info: 'BlindLedger.Financial.ShardSplit.checkAll_of_inv3' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.checkAll_of_inv3
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_fits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_fits
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_diverged_tail' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_diverged_tail
+/-- info: 'BlindLedger.Financial.ShardSplit.recover_gap' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recover_gap
+/-- info: 'BlindLedger.Financial.ShardSplit.accepted_applied_group' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.accepted_applied_group
+/-- info: 'BlindLedger.Financial.ShardSplit.group_crash_refused' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.group_crash_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.dup_n_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.dup_n_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.recoverAll_refused' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.recoverAll_refused
+/-- info: 'BlindLedger.Financial.ShardSplit.merge_step' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.merge_step
+/-- info: 'BlindLedger.Financial.ShardSplit.merge_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.merge_run
+/-- info: 'BlindLedger.Financial.ShardSplit.whole_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.whole_run
+/-- info: 'BlindLedger.Financial.ShardSplit.rcpts_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.rcpts_run
+/-- info: 'BlindLedger.Financial.ShardSplit.check_split' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.check_split
+/-- info: 'BlindLedger.Financial.ShardSplit.check_split_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.check_split_iff
+/-- info: 'BlindLedger.Financial.Payment.fast_eq_trace_of_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.fast_eq_trace_of_ok
+/-- info: 'BlindLedger.Financial.Payment.batchFast_eq_trace' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.batchFast_eq_trace

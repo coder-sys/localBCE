@@ -160,6 +160,31 @@ theorem verifyToken_route {c : Crypto} {s : PayerState} {p : Payment} {bytes : B
     simp only [hn, Option.any_some, beq_iff_eq] at hr
     exact ⟨n, ht ▸ hn, by rw [ht, hk]; exact hr⟩
 
+/-- Checks 6 and 9: an accepted token is approved by a grant of its own tenant, which is the payment's
+    tenant, for its rule version and engine release. -/
+theorem verifyToken_grant_tenant {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token}
+    (h : verifyToken c s p bytes = true) (hd : decodeToken bytes = some t) :
+    ∃ g ∈ s.grants, g.tenantId = t.leaf.tenantId ∧ g.tenantId = p.tenantId ∧ g.grantId = t.leaf.grantId ∧
+      t.leaf.ruleVersion ∈ g.ruleVersions ∧ t.leaf.engineRelease ∈ g.engineReleases := by
+  obtain ⟨u, -, hu, -, -, -, -, hm, -, -, hg, -⟩ := (verifyToken_iff c s p bytes).1 h
+  obtain rfl : u = t := Option.some.inj (hu.symm.trans hd)
+  simp only [paymentMatches, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
+  unfold granted at hg
+  obtain ⟨g, hgs, hgt⟩ := List.any_eq_true.1 hg
+  simp only [Bool.and_eq_true, beq_iff_eq] at hgt
+  obtain ⟨⟨⟨hid, hten⟩, hr⟩, he⟩ := hgt
+  exact ⟨g, hgs, hten, hten.trans hm.1, hid, by simpa using hr, by simpa using he⟩
+
+/-- No cross-tenant release: if every grant with the token's id is another tenant's, the token never ACCEPTs. -/
+theorem verifyToken_foreign_grant {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token}
+    (hd : decodeToken bytes = some t)
+    (hg : ∀ g ∈ s.grants, g.grantId = t.leaf.grantId → g.tenantId ≠ t.leaf.tenantId) :
+    verifyToken c s p bytes = false := by
+  cases h : verifyToken c s p bytes
+  · rfl
+  · obtain ⟨g, hgs, hten, -, hid, -⟩ := verifyToken_grant_tenant h hd
+    exact absurd hten (hg g hgs hid)
+
 /-- The payer's steps: install a certificate, store a checkpoint, send a
     command (the only step that pins), release, or move the clock and grants. -/
 inductive Step (c : Crypto) : PayerState → PayerState → Prop

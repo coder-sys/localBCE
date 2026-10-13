@@ -33,7 +33,7 @@ Residuals (not closed by Lean; each loud): total loss of the store followed by a
   ceremony + rollback (payer check 10 and its fork check); an adversary who READS unreleased store entries inside
   the CAS-to-bump window and rolls back forks one position (payer fork check only); a HOLD is never re-decided and a
   v1-era payment is never redone on v2 (refused, loudly); `fresh` rows are not signed: a forged copy breaks only the
-  witness (refusal), never a decision; evidenceRoot stays unchecked (trunk writes zero); never_twice is per shard,
+  witness (refusal), never a decision; evidenceRoot stays unchecked (trunk writes zero) until MAN-0 S2 binds it to the read manifest; never_twice is per shard,
   cross-shard identity is the registry + payer check 10; any foreign junk makes the fold none and every shard
   stops; a v1 signature past the seal is refused by the payer's follows check (v2 follows the tip).
 Dropped (r4): Entry (old), logHead, logOk + its lemmas, ZeroPre, log_binds, PermitBase, permitBase, baseDigest,
@@ -41,7 +41,8 @@ Dropped (r4): Entry (old), logHead, logOk + its lemmas, ZeroPre, log_binds, Perm
   restore_resumes, rollback_detected, SignedStep, logRunOk, stepBatch, runRows. chain_sound keeps the stateDigest
   conclusion; the token rows per step are custody_binds applied to chain_sound's base.
 Kept: invB_iff with proof, V1Collision, v1_reach_inv, §8e lines, PayRow (+revision), certsOk, readSetOf.
-Every def is concrete; `sorry` stands only in theorem bodies. No axioms. PQ only: ML-DSA-87 via acceptsAny.
+Every def is concrete; no `sorry` (none since ef76ee80), no `axiom`, and no theorem here is axiom-pinned yet.
+PQ only: ML-DSA-87 via acceptsAny.
 -/
 
 import BlindLedger.Gate.Producer
@@ -7247,7 +7248,7 @@ def push (P : Pins) (st : LogState) (e : Entry) : Option LogState := do
 /-- All custody state: the fold of the off-machine log, once, at boot (H3). -/
 def fold (P : Pins) (log : List Entry) : Option LogState := log.foldlM (push P) LogState.init
 
-private theorem guard_some (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
+theorem guard_some (c : Prop) [Decidable c] (x : Unit) : (guard c : Option Unit) = some x ↔ c := by
   by_cases hc : c <;> simp [guard, hc]
 
 private theorem push_shape (P : Pins) (st st' : LogState) (e : Entry) (h : push P st e = some st') :
@@ -7744,7 +7745,7 @@ def custodyOk (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (
 
 /-- custodyOk's binds: the batch, Lean's output on the shard base, the read set, the stored checkpoint carrying
     Lean's digest, the token check on the rows custody built, and the sign body with Lean's fresh rows. -/
-private theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
+theorem c15_peel (P : Pins) (st : LogState) (k : Nat) (cert : Bytes) (i : SignIn) (new : Bytes)
     (tokens : List Bytes) (e : Entry) (h : custodyOk P st k cert i new tokens = some e) :
     ∃ (rs : List Request) (bt : Batch) (o : OutV2) (rset : Bytes) (n : Stored), batchAt P st k i = some (rs, bt) ∧
       decideIdx sha3 bt.ctx k bt.owners bt.lines (st.shard k).base i.witness = some o ∧

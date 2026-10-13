@@ -1,29 +1,32 @@
 import BlindLedger.Gate.Producer
 import BlindLedger.Gate.Payer
+import BlindLedger.Gate.Batch
 
 open BlindLedger.Gate
 
 /-! `gate_verify`: stdin is one mode byte and its frame; stdout one answer line.  Exit 0 for ACCEPT, INDEX,
     STORED and FORK, 1 for REJECT and HOLD, 2 (stderr `GATE_VERIFY=FRAME`) for a malformed frame.  Every
-    decision is a theorem-covered function (`publishOk`, `storeCheckpointAny`, `firstFailure`); this file only
+    decision is a theorem-covered function (`publishOkTree`,`storeCheckpointAny`, `firstFailure`); this file only
     reads the frame into the state they take.  Integers are big-endian; `u32‖x` is a length then `x`.
     - 0x01 PUBLISH: root_pk · u32‖cert · u32‖last (0 = genesis) · u32‖signed new · u16 k · (u32‖token)^k
     - 0x02 INDEX: u32‖signed checkpoint
     - 0x03 STORE: root_pk · u16 m · (u32‖cert)^m · u16 j · (u32‖candidate)^j · u16 f · (u32‖fork evidence)^f ·
       u32‖new, where a fork evidence is the stored side of a recorded fork
-    - 0x04 RELEASE: root_pk · u16 m · (u32‖cert)^m · u16 f · (u32‖fork evidence)^f · u32‖checkpoint · u64 now ·
+    - 0x05 RELEASE: root_pk · u16 m · (u32‖cert)^m · u16 f · (u32‖fork evidence)^f · u32‖checkpoint · u64 now ·
       u16 g · grants · u8 released · u8 pinned [‖ 32-byte member key] · u32‖DECIDE-REQUEST · u32‖token
-      (a grant: id, u16 n and n rule versions, u16 n and n engine releases, each u16‖bytes) -/
+      (a grant: tenant ident, then id, u16 n and n rule versions, u16 n and n engine releases, each u16‖bytes).
+      0x04, the grant without a tenant, is gone: such a frame is malformed. -/
 
 def pBytes : P Bytes := do take (← nat 4)
 def pList {α : Type} (p : P α) : P (List α) := do many p (← nat 2)
 def pRoot : P Bytes := take mlDsa87Key
 
 def pGrant : P Grant := do
+  let tenantId ← ident
   let grantId ← blob 0 65535
   let ruleVersions ← many (blob 0 65535) (← nat 2)
   let engineReleases ← many (blob 0 65535) (← nat 2)
-  pure { grantId, ruleVersions, engineReleases }
+  pure { tenantId, grantId, ruleVersions, engineReleases }
 
 def hex (b : Bytes) : String :=
   String.join (b.map fun x => String.ofList [Nat.digitChar (x.toNat / 16), Nat.digitChar (x.toNat % 16)])
@@ -46,7 +49,7 @@ def publish : P (String × UInt32) := do
   let last ← pBytes
   let new ← pBytes
   let tokens ← pList pBytes
-  pure (accept (publishOkAny rootPk cert (if last.isEmpty then none else some last) new tokens))
+  pure (accept (publishOkTree rootPk cert (if last.isEmpty then none else some last) new tokens))
 
 def index : P (String × UInt32) := do
   match storedOfAny sha3 (← pBytes) with
@@ -106,7 +109,7 @@ def frame : P (String × UInt32) := do
   | [1] => publish
   | [2] => index
   | [3] => store
-  | [4] => release
+  | [5] => release
   | _ => fail
 
 def main : IO UInt32 := do

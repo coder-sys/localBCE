@@ -7,6 +7,9 @@ import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
+import BlindLedger.Gate.ReadManifest
+import BlindLedger.Gate.Engine.Log
+import BlindLedger.Gate.Engine.Snap
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -19,6 +22,8 @@ import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.verifyToken_fence_eq_epoch
 #print axioms BlindLedger.Gate.verifyToken_pinned
 #print axioms BlindLedger.Gate.verifyToken_route
+#print axioms BlindLedger.Gate.verifyToken_grant_tenant
+#print axioms BlindLedger.Gate.verifyToken_foreign_grant
 #print axioms BlindLedger.Gate.installCert_shardCount
 #print axioms BlindLedger.Gate.storeCheckpoint_keeps
 #print axioms BlindLedger.Gate.release_keeps
@@ -136,6 +141,26 @@ import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.releaseBatch_cp_isolation
 #print axioms BlindLedger.Gate.releaseBatch_accept_verified
 #print axioms BlindLedger.Gate.releaseBatch_once
+#print axioms BlindLedger.Gate.releaseBatch_grant_tenant
 #print axioms BlindLedger.Gate.pathOf_verifies
 #print axioms BlindLedger.Gate.publishOkTree_sound
 #print axioms BlindLedger.Gate.publishOkTree_complete
+#print axioms BlindLedger.Gate.publishOkTree_eq
+#print axioms BlindLedger.Gate.publishOkTree_no_downgrade
+#print axioms BlindLedger.Gate.ReadManifest.readSetOf_pre
+#print axioms BlindLedger.Gate.ReadManifest.run_reads_eq
+#print axioms BlindLedger.Gate.ReadManifest.decodeReads_encode
+#print axioms BlindLedger.Gate.ReadManifest.encodeReads_inj
+#print axioms BlindLedger.Gate.ReadManifest.kindOf_some
+#print axioms BlindLedger.Gate.ReadManifest.reads_exact
+#print axioms BlindLedger.Gate.Engine.E1_entry3_roundtrip
+#print axioms BlindLedger.Gate.Engine.E2_entryIn3_inj
+#print axioms BlindLedger.Gate.Engine.decode_encode
+#print axioms BlindLedger.Gate.Engine.pBody_app
+#print axioms BlindLedger.Gate.Engine.stepM_keep
+#print axioms BlindLedger.Gate.Engine.pushM_chain
+#print axioms BlindLedger.Gate.Engine.pushM_fold
+#print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical
+#print axioms BlindLedger.Gate.Engine.E4_snap_roundtrip
+#print axioms BlindLedger.Gate.Engine.E4b_snapDigest_binds
+#print axioms BlindLedger.Gate.Engine.E5_replay_from_snap
