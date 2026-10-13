@@ -28,6 +28,7 @@ import os
 from pathlib import Path
 import sqlite3
 import threading
+import weakref
 from typing import Callable, Final, Iterable, Mapping, Sequence
 
 from app import right_rail_gate_codec as gate
@@ -48,15 +49,26 @@ CREATE TRIGGER IF NOT EXISTS log_no_delete BEFORE DELETE ON log BEGIN SELECT RAI
 _SEEN: dict[bytes, tuple[int, bytes]] = {}  # boot nonce -> the row (n, head) this process last committed or booted at
 _STOPPED: set[str | bytes] = set()  # paths of boots in this process that did not pass, and the nonces it stopped
 _BOOTING = threading.Lock()  # one boot at a time per process: a pass never clears a boot still running
-if hasattr(os, "register_at_fork"):  # a child forked mid-boot starts with a free boot lock, not a held copy
-    os.register_at_fork(after_in_child=lambda: globals().update(_BOOTING=threading.Lock()))
+_OPEN: weakref.WeakSet[IdRegistry] = weakref.WeakSet()  # this process's open handles (a boot's connection: _BOOTING held)
+_FORKED = False  # a child forked while either was open: SQLite's inherited lock records would let its new one lose its -wal
+
+
+def _forked() -> None:  # in a forked child: a free boot lock, not a held copy; no boot or new handle if a registry was open
+    globals().update(_BOOTING=threading.Lock(), _FORKED=_FORKED or _BOOTING.locked() or bool(_OPEN))
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forked)
 
 
 def _bind(real: str, timeout: float = 5.0, *, create: bool = False):
     """Open the registry at ``real`` (a path with no links; UNC refused): (connection, pin, identity of the file
     opened).  On Windows the pin, a handle taken before the connect and held to close, bars renaming the file or any
     directory above it, so the file SQLite opens is the one identified; POSIX keeps none (closing any descriptor of a
-    file drops this process's SQLite locks on it): a real directory swapped inside the connect is not seen there."""
+    file drops this process's SQLite locks on it): a real directory swapped inside the connect is not seen there.  A
+    file with another hard-link name is ``registry_aliased`` (each name has its own -wal, -shm and leases)."""
+    if _FORKED:
+        raise IdRegistryError("registry_forked")
     if real.startswith(2 * os.sep):  # a share or the \\?\ form (SQLite's URI refuses both): refused before the pin creates
         raise IdRegistryError("registry_unavailable")
     pin = db = None
@@ -65,7 +77,9 @@ def _bind(real: str, timeout: float = 5.0, *, create: bool = False):
             pin = open(os.open(real, os.O_RDONLY | os.O_CREAT * create), "rb", buffering=0)
         db = _open(Path(real), timeout, create=create)
         st = os.fstat(pin.fileno()) if pin else os.stat(real)
-        return db, pin, (os.path.normcase(real), st.st_dev, st.st_ino)
+        if st.st_nlink != 1:
+            raise IdRegistryError("registry_aliased")
+        return db, pin, (os.path.normcase(real), st.st_dev, st.st_ino, 1)
     except BaseException as error:
         for handle in (db, pin):
             if handle is not None:
@@ -75,13 +89,13 @@ def _bind(real: str, timeout: float = 5.0, *, create: bool = False):
         raise
 
 
-def _ident(path: Path) -> tuple[str, int, int] | None:
-    """The file behind ``path`` now: its real path and (device, inode); None if it cannot be read."""
+def _ident(path: Path) -> tuple[str, int, int, int] | None:
+    """The file behind ``path`` now: its real path, (device, inode) and name count; None if it cannot be read."""
     try:
         st = os.stat(path)
     except OSError:
         return None
-    return os.path.normcase(os.path.realpath(path)), st.st_dev, st.st_ino
+    return os.path.normcase(os.path.realpath(path)), st.st_dev, st.st_ino, st.st_nlink
 
 
 def _stop_boots(db: sqlite3.Connection, keep: bytes | None = None) -> None:
@@ -138,7 +152,7 @@ def _open(path: Path, timeout: float = 5.0, *, create: bool = False) -> sqlite3.
 
 
 @contextlib.contextmanager
-def _txn(db: sqlite3.Connection, boot: bytes | None, path: Path | None = None, ident: tuple[str, int, int] | None = None):
+def _txn(db: sqlite3.Connection, boot: bytes | None, path: Path | None = None, ident: tuple[str, int, int, int] | None = None):
     """One write transaction (BEGIN IMMEDIATE, one fsync at COMMIT) whose newest BOOT row must carry ``boot``.  A
     handle's first on a nonce in its process stops every other nonce in the log.  It stops its own nonce if the newest
     BOOT row is not it (refused, nothing written), if ``path`` no longer names the file it opened (``ident``) or the
@@ -313,9 +327,10 @@ def boot(path: Path, inputs: Inputs) -> bytes:
 
 class IdRegistry:
     def __init__(self, path: Path, *, boot: bytes, timeout: float = 5.0) -> None:
+        self._boot = boot.rjust(ID_LEN, b"\0")  # before the open: a bad nonce leaves nothing open
         self._real, self._path, self._leases, self._pid = os.path.realpath(path), path, {}, os.getpid()
+        _OPEN.add(self)  # before the open, out after the close: a fork in between sees it (refused, it is dropped unused)
         self._db, self._pin, self._ident = _bind(self._real, timeout)
-        self._boot = boot.rjust(ID_LEN, b"\0")
         if _ident(path) != self._ident:  # the path names another file than the one opened
             self.close()
             raise IdRegistryError("registry_moved")
@@ -325,6 +340,7 @@ class IdRegistry:
             lock.close()
         self._db.close()
         self._pin and self._pin.close()
+        _OPEN.discard(self)
 
     def _own(self) -> sqlite3.Connection:
         """The connection, in the process that opened it only: a forked child holds none of its locks or leases."""
