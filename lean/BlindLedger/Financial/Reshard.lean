@@ -607,8 +607,8 @@ theorem heads_reshard (h : reshard pk K' cx ss = some ss') : headsOk (setK pk cx
 
 theorem history_reshard (hc : chainsOk ss) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') :
     historyOk ss' (mergeHist (setK pk cx.p K') cx ss') = true :=
-  (spine_chain_binds_iff (setK pk cx.p K') cx ss' (by rw [reshard_k h, setK_k_self])).1
-    ⟨chain_reshard hc h, heads_reshard h, fun k _ => (inv3_reshard h3 h k).2⟩
+  (spine_chain_binds_iff (setK pk cx.p K') cx ss').1
+    ⟨chain_reshard hc h, fun k _ => (inv3_reshard h3 h k).1, fun k _ => (inv3_reshard h3 h k).2⟩
 
 theorem reachR_run : ∀ (rs : List Input) {ss : SS}, ReachR cx pk ss → ReachR cx pk (runS pk cx ss rs)
   | [], _, h => h
@@ -1214,6 +1214,13 @@ example : ((recoverAll ⟨[(0, 2)]⟩ cxW (afterReshard ⟨[]⟩ 2 cxW (initS 1 
 /-- After RESHARD K = 1 to K = 2, a pack with K = 2 saves and the old pack (K = 1) is refused. -/
 example : (reshard ⟨[]⟩ 2 cxW (initS 1 LW)).map (fun ss =>
       (packSaveOk ⟨[(0, 2)]⟩ cxW ss, packSaveOk ⟨[]⟩ cxW ss)) = some (true, false) := by
+  decide
+
+/-- Review r3 item 1: after RESHARD K = 2 to K = 1 that crashed with shard 0 committed, shard 1 (retired) has not
+    applied the RESHARD record, and `historyOk` refuses the state; after `recoverAll` it holds. -/
+example : let X := afterReshard ⟨[(0, 2)]⟩ 1 cxW (initS 2 LW) [0]
+    (historyOk X (mergeHist ⟨[(0, 2)]⟩ cxW X),
+      (recoverAll ⟨[(0, 2)]⟩ cxW X).map fun s => historyOk s (mergeHist ⟨[(0, 2)]⟩ cxW s)) = (false, some true) := by
   decide
 
 end BlindLedger.Financial.Reshard

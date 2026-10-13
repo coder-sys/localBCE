@@ -554,7 +554,10 @@ def merge (_pk : Pack) (_cx : Ctx) (ss : SS) : View :=
 
 /-- The guarded reader: `merge` only when every held shard fits the spine (`fitsOk`) and the pack's `K` is the
     stored one (`kOk`); an unrecovered RESHARD (a committed shard beside an uncommitted one) reads `none`, never an
-    over-read.  Readers go through `readS` or `recoverAll`. -/
+    over-read.  `readS_recoverAll`: when the stored images are bound, `readS` accepting means `recoverAll` has
+    nothing to replay.  `readS` skips `chainsOk` and `imgOk`, so it is a view only, never a replay or a basis for
+    one: a store with a forged stored image can still be read here while `recoverAll` refuses it.  Readers go
+    through `readS` or `recoverAll`. -/
 def readS (pk : Pack) (cx : Ctx) (ss : SS) : Option View :=
   if fitsOk pk cx ss && kOk pk cx ss then some (merge pk cx ss) else none
 
@@ -583,10 +586,11 @@ def checkSpine (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (sp' : SpineDB) : 
 def checkShard (R : Rec) (k : Nat) (sh sh' : ShardDB) : Prop :=
   sh' = if k ∈ R.touched then applyPart R k sh else sh
 
-/-- Each shard's APPLIED list is exactly the records touching it, in spine order; shards `0 .. K-1` of the stored `K`
-    (STMT-CHANGE-34: not the pack's `K`, as `merge`).  The pack arguments are unused. -/
+/-- Each held shard's APPLIED list is exactly the records touching it, in spine order; the shards `held` under the
+    stored `K` (STMT-CHANGE-34: not the pack's `K`; STMT-CHANGE-40: not `0 .. K-1` alone, so a shard retired by a
+    RESHARD to a smaller `K` stays audited).  The pack arguments are unused. -/
 def appliedOk (_pk : Pack) (_cx : Ctx) (ss : SS) : Prop :=
-  ∀ k < ss.1.k, (ss.2 k).applied = (ss.1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)
+  ∀ k ∈ held ss.1.k ss, (ss.2 k).applied = (ss.1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n)
 
 /-- One event of the merged history: a shard's tip (its head and the spine's `heads(k)`), a spine record with the
     shards whose next APPLIED entry is its number, ascending, or a shard's APPLIED entries no record claims. -/
@@ -598,31 +602,32 @@ inductive Ev where
 /-- Shard `k`'s next pending APPLIED entry is `n`. -/
 def nextIs (pend : Nat → List Nat) (n k : Nat) : Bool := decide ((pend k).head? = some n)
 
-/-- Interleave the spine records (oldest first) with the shards' pending APPLIED lists. -/
-def mergeGo (K : Nat) : List Rec → (Nat → List Nat) → List Ev
-  | [], pend => ((List.range K).filter fun k => !(pend k).isEmpty).map fun k => .orphan k (pend k)
-  | R :: rs, pend => .record R ((List.range K).filter (nextIs pend R.n)) ::
-      mergeGo K rs fun k => if nextIs pend R.n k then (pend k).tail else pend k
+/-- Interleave the spine records (oldest first) with the pending APPLIED lists of the shards `ks`. -/
+def mergeGo (ks : List Nat) : List Rec → (Nat → List Nat) → List Ev
+  | [], pend => (ks.filter fun k => !(pend k).isEmpty).map fun k => .orphan k (pend k)
+  | R :: rs, pend => .record R (ks.filter (nextIs pend R.n)) ::
+      mergeGo ks rs fun k => if nextIs pend R.n k then (pend k).tail else pend k
 
-/-- `mergeHist`: every shard's tip (`k < K`), then per record, oldest first, the record and the shards `k < K` whose
-    next pending APPLIED entry is its number, ascending `k`; then one orphan per shard with APPLIED entries left. -/
+/-- `mergeHist` (STMT-CHANGE-40: shards `held ss.1.k ss`, not `0 .. K-1`; a shard may repeat): every held shard's
+    tip, then per record, oldest first, the record and the held shards whose next pending APPLIED entry is its
+    number; then one orphan per held shard with APPLIED entries left. -/
 def mergeHist (_pk : Pack) (_cx : Ctx) (ss : SS) : List Ev :=
-  ((List.range ss.1.k).map fun k => Ev.tip k (ss.2 k).head (ss.1.heads k)) ++
-    mergeGo ss.1.k ss.1.recs.reverse fun k => (ss.2 k).applied
+  ((held ss.1.k ss).map fun k => Ev.tip k (ss.2 k).head (ss.1.heads k)) ++
+    mergeGo (held ss.1.k ss) ss.1.recs.reverse fun k => (ss.2 k).applied
 
 /-- One pass over a merged history from record number `i`: each tip's heads agree, record numbers run `i, i+1, ...`,
-    each record's parts are exactly the shards below `K` it touches, and no APPLIED entry is left over. -/
-def evOk (K : Nat) : Nat → List Ev → Bool
+    each record's parts are exactly the shards of `ks` it touches, and no APPLIED entry is left over. -/
+def evOk (ks : List Nat) : Nat → List Ev → Bool
   | _, [] => true
-  | i, .tip _ a b :: t => (a == b) && evOk K i t
-  | i, .record R ks :: t =>
-      decide (R.n = i) && decide (ks = (List.range K).filter fun k => decide (k ∈ R.touched)) && evOk K (i + 1) t
+  | i, .tip _ a b :: t => (a == b) && evOk ks i t
+  | i, .record R ps :: t =>
+      decide (R.n = i) && decide (ps = ks.filter fun k => decide (k ∈ R.touched)) && evOk ks (i + 1) t
   | _, .orphan _ _ :: _ => false
 
-/-- `evOk` from record number 0 with the stored `K = ss.1.k` (STMT-CHANGE-34: not the pack's; the history is read
-    from the store `ss`): tips agree, records run `0, 1, ...`, each record's parts are exactly the shards below `K`
-    it touches, and there is no orphan. -/
-def historyOk (ss : SS) (h : List Ev) : Bool := evOk ss.1.k 0 h
+/-- `evOk` from record number 0 over the shards `held` under the stored `K = ss.1.k` (STMT-CHANGE-34: not the
+    pack's; STMT-CHANGE-40: retired shards included): tips agree, records run `0, 1, ...`, each record's parts are
+    exactly the held shards it touches, and there is no orphan. -/
+def historyOk (ss : SS) (h : List Ev) : Bool := evOk (held ss.1.k ss) 0 h
 
 /-! ## Helpers -/
 
@@ -896,6 +901,30 @@ theorem invK_init (pk : Pack) (cx : Ctx) (L : Legacy) : InvK pk cx (initS (pk.k 
 
 theorem reach_invK (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) : InvK pk cx ss := by
   obtain ⟨L, rs, rfl⟩ := h; exact invK_run pk cx _ rs (invK_init pk cx L)
+
+theorem lt_mem_held {K k : Nat} {ss : SS} (h : k < K) : k ∈ held K ss := List.mem_append_left _ (List.mem_range.2 h)
+
+/-- Every record a step run keeps touches only shards below the pack's `K`. -/
+theorem touched_run (pk : Pack) (cx : Ctx) : ∀ (ss : SS) (rs : List Input),
+    (∀ R ∈ ss.1.recs, ∀ k ∈ R.touched, k < pk.k cx.p) → ∀ R ∈ (runS pk cx ss rs).1.recs, ∀ k ∈ R.touched, k < pk.k cx.p
+  | _, [], h => h
+  | ss, r :: rs, h => touched_run pk cx _ rs (by
+      unfold stepT stepS
+      split
+      · intro R hR k hk
+        rcases List.mem_cons.1 (show R ∈ (mkRec pk cx ss r).2 :: ss.1.recs from hR) with rfl | hm
+        · simp only [mkRec, touched, List.mem_filter, List.mem_range] at hk
+          exact hk.1
+        · exact h R hm k hk
+      · exact h)
+
+theorem reach_touched (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
+    ∀ R ∈ ss.1.recs, ∀ k ∈ R.touched, k < pk.k cx.p := by
+  obtain ⟨L, rs, rfl⟩ := h
+  refine touched_run pk cx _ rs fun R hR k hk => ?_
+  simp only [initS, List.mem_singleton] at hR
+  subst hR
+  simp [genesis] at hk
 
 theorem chain_step (pk : Pack) (cx : Ctx) (ss : SS) (inp : Input) (h : chainsOk ss) :
     chainsOk (stepT pk cx ss inp) := by
@@ -1562,7 +1591,15 @@ theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) 
     · simp only [headsOk, List.all_eq_true, beq_iff_eq]
       intro k hk
       exact (congrArg ShardDB.head (he k (List.mem_range.1 hk))).trans (h31 k).1
-    · exact (congrArg ShardDB.applied (he k (lt_of_lt_of_eq hk hK.1))).trans (h31 k).2
+    · have hk' : k < pk.k cx.p := by
+        rcases List.mem_append.1 hk with h | h
+        · exact lt_of_lt_of_eq (List.mem_range.1 h) hK.1
+        · obtain ⟨R', hR', hkR⟩ := List.mem_flatMap.1 h
+          rcases List.mem_cons.1 (show R' ∈ (mkRec pk cx ss inp).2 :: ss.1.recs from hR') with rfl | hm
+          · simp only [mkRec, touched, List.mem_filter, List.mem_range] at hkR
+            exact hkR.1
+          · exact reach_touched pk cx ss hr R' hm k hkR
+      exact (congrArg ShardDB.applied (he k hk')).trans (h31 k).2
     · rw [he k hk] at hp; exact (hI1 c).2 k hp
     · rw [he k hk]
       by_cases ht : k ∈ (mkRec pk cx ss inp).2.touched
@@ -1587,7 +1624,7 @@ theorem check_split_iff (pk : Pack) (cx : Ctx) (ss : SS) (hr : reachS pk cx ss) 
     have hH' : (sh' k).head = (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).heads k := by
       simp only [headsOk, List.all_eq_true, beq_iff_eq] at hH; exact hH k (List.mem_range.2 hk)
     have hA' : (sh' k).applied = ((commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).recs.reverse.filter
-        fun R => k ∈ R.touched).map (·.n) := hA k (lt_of_lt_of_eq hk hK.1.symm)
+        fun R => k ∈ R.touched).map (·.n) := hA k (lt_mem_held (lt_of_lt_of_eq hk hK.1.symm))
     refine shard_eq (funext fun c => ?_) ?_ ?_ (hH'.trans (h31 k).1.symm) (hA'.trans (h31 k).2.symm)
     · exact pin_one (pk.k cx.p) k hk
         (fun k' => ∃ x, (judge pk cx ss.1.view inp).dir c = some x ∧ x.home = .shard k')
@@ -1982,7 +2019,7 @@ theorem run_high (pk : Pack) (cx : Ctx) (k : Nat) (hk : pk.k cx.p ≤ k) : ∀ (
 
 /-- Reader cut over prefixes (review fix 7): a reader that takes the spine after the first `i` inputs of a run
     from a migrated store and each shard `k` after any number `j k` of them, and whose APPLIED check
-    (`appliedOk`: each shard below `K` lists exactly the spine records touching it) passes, holds exactly the
+    (`appliedOk`: each held shard lists exactly the spine records touching it) passes, holds exactly the
     store after the first `i` inputs, every shard included.  The check needed is APPLIED, not heads: `Ctx.hs` is
     arbitrary and `adv` only stops one step from returning its own pre head, so a shard two touching records ahead
     can show the spine's head again (heads going `h0 → h1 → h0`) while its charges differ. -/
@@ -2000,7 +2037,7 @@ theorem reader_cut_prefix (pk : Pack) (cx : Ctx) (L : Legacy) (rs : List Input) 
   by_cases hK : k < pk.k cx.p
   · have e : (sh k).applied =
         ((runS pk cx (initS (pk.k cx.p) L) (rs.take i)).1.recs.reverse.filter fun R => k ∈ R.touched).map (·.n) :=
-      hA k (lt_of_lt_of_eq hK (invK_run pk cx _ (rs.take i) (invK_init pk cx L)).1.symm)
+      hA k (lt_mem_held (lt_of_lt_of_eq hK (invK_run pk cx _ (rs.take i) (invK_init pk cx L)).1.symm))
     have hl := congrArg List.length
       (e.trans ((inv3_run pk cx (initS (pk.k cx.p) L) (rs.take i) (inv3_init L)) k).2.symm)
     rw [hsh k] at hl
@@ -2166,6 +2203,32 @@ theorem recoverAll_retired (pk : Pack) (cx : Ctx) (ss : SS) (k : Nat) (R : Rec) 
 /-- A shard that fits the spine owes nothing, and recovery returns it as is. -/
 theorem recover_fits (sp : SpineDB) (k : Nat) (sh : ShardDB) (hf : fits sp k sh) : recover sp k sh = some sh := by
   rw [recover_some sp k sh sh (by rw [pending_nil sp k sh hf.2]; rfl), if_pos hf]
+
+/-- STMT-CHANGE-41 (new): when `readS` accepts, recovery has nothing to do: if every held shard fits the spine
+    (`fitsOk`), the pack's `K` is the stored one (`kOk`) and every stored image is bound, `recoverAll` returns the
+    store unchanged.  So `readS`'s `merge` reads a store recovery would leave as it is. -/
+theorem readS_recoverAll (pk : Pack) (cx : Ctx) (ss : SS) (hf : fitsOk pk cx ss = true) (hk : kOk pk cx ss = true)
+    (hg : ss.1.recs.all (imgOk cx) = true) : recoverAll pk cx ss = some ss := by
+  have hK : ss.1.k = pk.k cx.p := beq_iff_eq.1 hk
+  have hfit : ∀ k ∈ held ss.1.k ss, fits ss.1 k (ss.2 k) := by
+    simp only [fitsOk, List.all_eq_true, decide_eq_true_eq] at hf
+    rw [hK]; exact hf
+  unfold recoverAll
+  rw [if_pos (by
+    rw [hg, Bool.true_and]
+    exact List.all_eq_true.2 fun k hk => by rw [recover_fits _ _ _ (hfit k hk)]; rfl)]
+  refine congrArg some (Prod.ext rfl (funext fun k => ?_))
+  show (recover ss.1 k (ss.2 k)).getD (ss.2 k) = ss.2 k
+  by_cases h : k ∈ held ss.1.k ss
+  · rw [recover_fits _ _ _ (hfit k h)]; rfl
+  · have hp : pending ss.1 k (ss.2 k) = [] := by
+      unfold pending
+      rw [List.filter_eq_nil_iff]
+      intro R hR hp
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hp
+      exact h (List.mem_append_right _ (List.mem_flatMap.2 ⟨R, List.mem_reverse.1 hR, hp.1⟩))
+    rw [recover_some ss.1 k (ss.2 k) (ss.2 k) (by rw [hp]; rfl)]
+    split <;> rfl
 
 theorem recover_done (ss : SS) (h3 : Inv3 ss) (k : Nat) : recover ss.1 k (ss.2 k) = some (ss.2 k) :=
   recover_fits ss.1 k (ss.2 k) (h3 k)
@@ -2333,16 +2396,16 @@ theorem recover_gap (sp : SpineDB) (k : Nat) (sh : ShardDB) (R : Rec) (m : Nat) 
       have := hp.2 m hm
       omega
 
-theorem evOk_tips (K i : Nat) (a b : Nat → Dg) (t : List Ev) : ∀ l : List Nat,
-    evOk K i ((l.map fun k => Ev.tip k (a k) (b k)) ++ t) = ((l.all fun k => a k == b k) && evOk K i t)
+theorem evOk_tips (ks : List Nat) (i : Nat) (a b : Nat → Dg) (t : List Ev) : ∀ l : List Nat,
+    evOk ks i ((l.map fun k => Ev.tip k (a k) (b k)) ++ t) = ((l.all fun k => a k == b k) && evOk ks i t)
   | [] => by simp
   | k :: l => by
-    simp only [List.map_cons, List.cons_append, evOk, List.all_cons, evOk_tips K i a b t l, Bool.and_assoc]
+    simp only [List.map_cons, List.cons_append, evOk, List.all_cons, evOk_tips ks i a b t l, Bool.and_assoc]
 
-theorem filter_eq_at {p q : Nat → Bool} {K k : Nat} (h : (List.range K).filter p = (List.range K).filter q)
-    (hk : k < K) : p k = q k := by
-  have e : k ∈ (List.range K).filter p ↔ k ∈ (List.range K).filter q := by rw [h]
-  simp only [List.mem_filter, List.mem_range, hk, true_and] at e
+theorem filter_eq_at {p q : Nat → Bool} {ks : List Nat} {k : Nat} (h : ks.filter p = ks.filter q)
+    (hk : k ∈ ks) : p k = q k := by
+  have e : k ∈ ks.filter p ↔ k ∈ ks.filter q := by rw [h]
+  simp only [List.mem_filter, hk, true_and] at e
   cases hp : p k <;> cases hq : q k <;> simp_all
 
 /-- Under consecutive numbering after `i`, no later record's number is `i`. -/
@@ -2385,17 +2448,17 @@ theorem step_k (n : Nat) (b : Bool) (l F : List Nat) (hne : F.head? ≠ some n) 
       | cons a t => simp at h1 h2; simp [h1, h2]
 
 /-- The merge pass accepts exactly consecutive numbering from `i` and pending lists equal to each shard's records. -/
-theorem evOk_go (K : Nat) : ∀ (rs : List Rec) (i : Nat) (pend : Nat → List Nat),
-    evOk K i (mergeGo K rs pend) = true ↔
+theorem evOk_go (ks : List Nat) : ∀ (rs : List Rec) (i : Nat) (pend : Nat → List Nat),
+    evOk ks i (mergeGo ks rs pend) = true ↔
       rs.map (·.n) = List.range' i rs.length ∧
-        ∀ k < K, pend k = (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := by
+        ∀ k ∈ ks, pend k = (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := by
   intro rs
   induction rs with
   | nil =>
     intro i pend
-    have e : ∀ l : List Nat, evOk K i (l.map fun k => Ev.orphan k (pend k)) = true ↔ l = [] := by
+    have e : ∀ l : List Nat, evOk ks i (l.map fun k => Ev.orphan k (pend k)) = true ↔ l = [] := by
       intro l; cases l <;> simp [evOk]
-    show evOk K i (((List.range K).filter fun k => !(pend k).isEmpty).map fun k => Ev.orphan k (pend k)) = true ↔ _
+    show evOk ks i ((ks.filter fun k => !(pend k).isEmpty).map fun k => Ev.orphan k (pend k)) = true ↔ _
     rw [e]
     simp [List.filter_eq_nil_iff]
   | cons R rs ih =>
@@ -2410,30 +2473,30 @@ theorem evOk_go (K : Nat) : ∀ (rs : List Rec) (i : Nat) (pend : Nat → List N
       exact (step_k R.n _ (pend k) _ (filt_ge rs R.n k hr)).2 ⟨filter_eq_at hks hk, hp k hk⟩
     · rintro ⟨⟨hn, hr⟩, hp⟩
       subst hn
-      have hs : ∀ k, k < K → nextIs pend R.n k = decide (k ∈ R.touched) ∧
+      have hs : ∀ k, k ∈ ks → nextIs pend R.n k = decide (k ∈ R.touched) ∧
           (if nextIs pend R.n k = true then (pend k).tail else pend k) =
             (rs.filter fun R => decide (k ∈ R.touched)).map (·.n) := fun k hk =>
         (step_k R.n _ (pend k) _ (filt_ge rs R.n k hr)).1 (by have := hp k hk; rwa [filt_cons] at this)
-      exact ⟨⟨rfl, List.filter_congr fun k hk => (hs k (List.mem_range.1 hk)).1⟩, hr, fun k hk => (hs k hk).2⟩
+      exact ⟨⟨rfl, List.filter_congr fun k hk => (hs k hk).1⟩, hr, fun k hk => (hs k hk).2⟩
 
 /-- On any state: `historyOk (mergeHist ss)` holds iff records are numbered `0 .. n-1` oldest first (`chainsOk`),
-    every shard `k < K` has head = the spine's `heads k` (`headsOk`), and every shard `k < K` has APPLIED = the
-    numbers of the records touching it, oldest first (`appliedOk`).  Shard hash chains stay abstract (`cx.hs`).
-    STMT-CHANGE-34: `historyOk`, `mergeHist` and `appliedOk` range over the stored `K`, so the pack's `headsOk` needs
-    `hK : ss.1.k = pk.k cx.p` (gained). -/
-theorem spine_chain_binds_iff (pk : Pack) (cx : Ctx) (ss : SS) (hK : ss.1.k = pk.k cx.p) :
-    chainsOk ss ∧ headsOk pk cx ss = true ∧ appliedOk pk cx ss ↔ historyOk ss (mergeHist pk cx ss) = true := by
+    every held shard has head = the spine's `heads k`, and every held shard has APPLIED = the numbers of the records
+    touching it, oldest first (`appliedOk`).  Shard hash chains stay abstract (`cx.hs`).
+    STMT-CHANGE-40: the shards are `held ss.1.k ss`, retired ones included, so the pack's `headsOk` (`k < K`) is
+    replaced by the same head check over `held`, and `hK` is gone. -/
+theorem spine_chain_binds_iff (pk : Pack) (cx : Ctx) (ss : SS) :
+    chainsOk ss ∧ (∀ k ∈ held ss.1.k ss, (ss.2 k).head = ss.1.heads k) ∧ appliedOk pk cx ss ↔
+      historyOk ss (mergeHist pk cx ss) = true := by
   unfold historyOk mergeHist
-  rw [evOk_tips ss.1.k 0 (fun k => (ss.2 k).head) ss.1.heads, Bool.and_eq_true, evOk_go]
-  unfold chainsOk headsOk appliedOk
-  rw [List.length_reverse, hK]
+  rw [evOk_tips (held ss.1.k ss) 0 (fun k => (ss.2 k).head) ss.1.heads, Bool.and_eq_true, evOk_go]
+  unfold chainsOk appliedOk
+  simp only [List.all_eq_true, beq_iff_eq, List.length_reverse]
   exact ⟨fun ⟨a, b, c⟩ => ⟨b, a, c⟩, fun ⟨b, a, c⟩ => ⟨a, b, c⟩⟩
 
 /-- The spine binds the shard chains: on every reachable state heads match, each shard's APPLIED list is its
     records in order, records are numbered in order, and the merged history passes `historyOk`. -/
 theorem spine_chain_binds (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss) :
     headsOk pk cx ss = true ∧ appliedOk pk cx ss ∧ chainsOk ss ∧ historyOk ss (mergeHist pk cx ss) = true := by
-  have hK := (reach_invK pk cx ss h).1
   obtain ⟨L, rs, rfl⟩ := h
   have h3 := inv3_run pk cx (initS (pk.k cx.p) L) rs (inv3_init L)
   have hc := chain_run pk cx (initS (pk.k cx.p) L) rs (chain_init L)
@@ -2441,25 +2504,22 @@ theorem spine_chain_binds (pk : Pack) (cx : Ctx) (ss : SS) (h : reachS pk cx ss)
     simp only [headsOk, List.all_eq_true, beq_iff_eq]
     exact fun k _ => (h3 k).1
   have ha : appliedOk pk cx (runS pk cx (initS (pk.k cx.p) L) rs) := fun k _ => (h3 k).2
-  exact ⟨hh, ha, hc, (spine_chain_binds_iff pk cx _ hK).1 ⟨hc, hh, ha⟩⟩
+  exact ⟨hh, ha, hc, (spine_chain_binds_iff pk cx _).1 ⟨hc, fun k _ => (h3 k).1, ha⟩⟩
 
 /-! ## A shard COMMIT that fails after the spine COMMIT -/
 
 /-- A state with the spine COMMIT of the step on `ss` whose shard `k` (touched) still has its APPLIED list from
     `ss` fails `historyOk`: the spine lists the record for `k` and the shard does not. -/
-theorem applied_missing (pk : Pack) (cx : Ctx) (ss X : SS) (inp : Input) (h3 : Inv3 ss) (hKs : ss.1.k = pk.k cx.p)
+theorem applied_missing (pk : Pack) (cx : Ctx) (ss X : SS) (inp : Input) (h3 : Inv3 ss)
     (hX : X.1 = commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2) (k : Nat)
     (ht : k ∈ (mkRec pk cx ss inp).2.touched) (ha : (X.2 k).applied = (ss.2 k).applied) :
     historyOk X (mergeHist pk cx X) = false := by
-  have hKX : X.1.k = pk.k cx.p := by rw [hX]; exact hKs
   cases e : historyOk X (mergeHist pk cx X)
   · rfl
-  obtain ⟨-, -, hA⟩ := (spine_chain_binds_iff pk cx X hKX).2 e
-  have hK : k < pk.k cx.p := by
-    have h' := ht
-    simp only [mkRec, touched, List.mem_filter, List.mem_range] at h'
-    exact h'.1
-  have hl := congrArg List.length ((hA k (by rw [hKX]; exact hK)).symm.trans (ha.trans (h3 k).2))
+  obtain ⟨-, -, hA⟩ := (spine_chain_binds_iff pk cx X).2 e
+  have hH : k ∈ held X.1.k X :=
+    List.mem_append_right _ (List.mem_flatMap.2 ⟨_, by rw [hX]; exact List.mem_cons_self, ht⟩)
+  have hl := congrArg List.length ((hA k hH).symm.trans (ha.trans (h3 k).2))
   rw [hX] at hl
   simp [commitSpine, ht] at hl
 
@@ -2478,14 +2538,11 @@ theorem rollforward_closed (pk : Pack) (cx : Ctx) (ss ss' : SS) (inp : Input) (C
     split at h
     · assumption
     · cases h
-  have hKs : ss.1.k = pk.k cx.p := by
-    simp only [checkAll, kOk, Bool.and_eq_true, beq_iff_eq] at hc
-    exact hc.2
   have hA : afterSpine pk cx ss inp C = (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
       commitShards (mkRec pk cx ss inp).2 C ss.2) := by
     unfold afterSpine
     rw [if_pos hc]
-  exact ⟨applied_missing pk cx ss _ inp h3 hKs (by rw [hA]) k ht (by rw [hA]; simp [commitShards, hk]),
+  exact ⟨applied_missing pk cx ss _ inp h3 (by rw [hA]) k ht (by rw [hA]; simp [commitShards, hk]),
     rollforward_eq pk cx ss ss' inp C h3 hn hg h hC⟩
 
 /-- One record, any `hs` (the identity included): if the writer's check accepts a next input on the state a crash
