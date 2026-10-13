@@ -132,28 +132,50 @@ variable {pk : Pack} {K' : Nat} {cx : Ctx} {ss ss' : SS}
 
 /-! ## The pack -/
 
-theorem setK_k_self (pk : Pack) (p : PartId) (K' : Nat) : (setK pk p K').k p = K' := sorry
+theorem setK_k_self (pk : Pack) (p : PartId) (K' : Nat) : (setK pk p K').k p = K' := by
+  simp [setK, Pack.k, kOf]
 
-theorem setK_k_ne (pk : Pack) {p q : PartId} (K' : Nat) (h : q ≠ p) : (setK pk p K').k q = pk.k q := sorry
+theorem setK_k_ne (pk : Pack) {p q : PartId} (K' : Nat) (h : q ≠ p) : (setK pk p K').k q = pk.k q := by
+  simp [setK, Pack.k, kOf, h]
 
 /-! ## (d) Refusal and crash -/
 
 theorem reshard_eq (h : reshard pk K' cx ss = some ss') :
     reshardOk pk K' cx ss = true ∧
-      ss' = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2) := sorry
+      ss' = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2) := by
+  unfold reshard at h
+  split at h
+  · rename_i hh; cases h; exact ⟨hh, rfl⟩
+  · cases h
 
-theorem reshard_none (h : reshardOk pk K' cx ss = false) : reshard pk K' cx ss = none := sorry
-
-theorem reshard_refuse (h : quiet pk K' cx ss = false ∨ packOk pk = false ∨ K' = 0 ∨ ss.1.k ≠ pk.k cx.p) :
-    reshard pk K' cx ss = none := sorry
+theorem reshard_none (h : reshardOk pk K' cx ss = false) : reshard pk K' cx ss = none := by
+  simp [reshard, h]
 
 theorem ok_parts (h : reshardOk pk K' cx ss = true) :
-    quiet pk K' cx ss = true ∧ packOk pk = true ∧ 0 < K' ∧ ss.1.k = pk.k cx.p := sorry
+    quiet pk K' cx ss = true ∧ packOk pk = true ∧ 0 < K' ∧ ss.1.k = pk.k cx.p := by
+  simp only [reshardOk, kOk, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at h
+  obtain ⟨⟨⟨hq, hp⟩, hK⟩, hk⟩ := h
+  exact ⟨hq, hp, hK, hk⟩
+
+theorem reshard_refuse (h : quiet pk K' cx ss = false ∨ packOk pk = false ∨ K' = 0 ∨ ss.1.k ≠ pk.k cx.p) :
+    reshard pk K' cx ss = none := by
+  apply reshard_none
+  cases hh : reshardOk pk K' cx ss
+  · rfl
+  · obtain ⟨hq, hp, hK, hk⟩ := ok_parts hh
+    rcases h with h | h | h | h
+    · rw [hq] at h; cases h
+    · rw [hp] at h; cases h
+    · omega
+    · exact absurd hk h
 
 /-- HIGH-1: a pack whose `K` is not the store's (one saved before a RESHARD, or not saved after one) can neither
     RESHARD nor step the store. -/
 theorem stale_pack (h : ss.1.k ≠ pk.k cx.p) :
-    (∀ K'', reshard pk K'' cx ss = none) ∧ ∀ inp, stepS pk cx ss inp = none := sorry
+    (∀ K'', reshard pk K'' cx ss = none) ∧ ∀ inp, stepS pk cx ss inp = none := by
+  refine ⟨fun K'' => reshard_refuse (Or.inr (Or.inr (Or.inr h))), fun inp => ?_⟩
+  have hk : kOk pk cx ss = false := beq_eq_false_iff_ne.2 h
+  simp [stepS, checkAll, hk]
 
 /-- RESHARD stores its `K'`. -/
 theorem reshard_k (h : reshard pk K' cx ss = some ss') : ss'.1.k = K' := by
@@ -167,24 +189,74 @@ theorem packSave_ok (h : reshard pk K' cx ss = some ss') (pk' : Pack) :
     packSaveOk pk' cx ss' = (packOk pk' && K' == pk'.k cx.p) := by
   unfold packSaveOk kOk; rw [reshard_k h]
 
+theorem rRec_imgOk : imgOk cx (rRec pk K' cx ss) = true :=
+  List.all_eq_true.2 fun _ _ => beq_self_eq_true _
+
+/-- A newest record touching a shard whose head is not the spine's head blocks RESHARD and every step. -/
+theorem lastOk_false {s : SS} {R : Rec} {rs : List Rec} (hr : s.1.recs = R :: rs) {k : Nat} (hk : k ∈ R.touched)
+    (hne : (s.2 k).head ≠ s.1.heads k) : lastOk cx s = false := by
+  have h : (R.touched.all fun k => (s.2 k).head == s.1.heads k) = false :=
+    Bool.eq_false_iff.2 fun h => hne (beq_iff_eq.1 (List.all_eq_true.1 h k hk))
+  simp [lastOk, hr, h]
+
+theorem blocked {s : SS} (hl : lastOk cx s = false) :
+    (∀ pk'' K'', reshard pk'' K'' cx s = none) ∧ ∀ pk'' inp, stepS pk'' cx s inp = none := by
+  refine ⟨fun pk'' K'' => reshard_refuse (Or.inl ?_), fun pk'' inp => ?_⟩
+  · simp [quiet, hl]
+  · simp [stepS, checkAll, hl]
+
 /-- A crash after a step's spine COMMIT that left a touched shard `k` uncommitted is not quiescent: under any
     pack, RESHARD and every step refuse. -/
 theorem reshard_open (inp : Input) (C : List Nat) (k : Nat) (hc : checkAll pk cx ss inp = true)
     (hk : k ∈ (mkRec pk cx ss inp).2.touched) (hC : k ∉ C) :
     (∀ pk'' K'', reshard pk'' K'' cx (afterSpine pk cx ss inp C) = none) ∧
-      ∀ pk'' inp', stepS pk'' cx (afterSpine pk cx ss inp C) inp' = none := sorry
+      ∀ pk'' inp', stepS pk'' cx (afterSpine pk cx ss inp C) inp' = none := by
+  have hA : afterSpine pk cx ss inp C =
+      (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
+        commitShards (mkRec pk cx ss inp).2 C ss.2) := by
+    unfold afterSpine; rw [if_pos hc]
+  rw [hA]
+  apply blocked
+  refine lastOk_false (R := (mkRec pk cx ss inp).2) (rs := ss.1.recs) rfl hk ?_
+  have e1 : (commitShards (mkRec pk cx ss inp).2 C ss.2 k).head = (ss.2 k).head := by simp [commitShards, hC]
+  have e2 : (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).heads k =
+      cx.hs (ss.2 k).head ss.1.recs.length (part (judge pk cx ss.1.view inp) (.shard k))
+        (verdicts cx (judge pk cx ss.1.view inp) k) := by
+    show (if k ∈ (mkRec pk cx ss inp).2.touched then _ else _) = _
+    rw [if_pos hk]; rfl
+  show (commitShards (mkRec pk cx ss inp).2 C ss.2 k).head ≠
+    (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2).heads k
+  rw [e1, e2]
+  exact fun h => cx.advances _ _ _ _ h.symm
 
 /-- H1: a RESHARD interrupted after its spine COMMIT, with any set `C` of shards committed, recovers to exactly
     the completed RESHARD. -/
 theorem reshard_rollforward (C : List Nat) (h : reshard pk K' cx ss = some ss') (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
-    recoverAll cx (afterReshard pk K' cx ss C) = ss' := sorry
+    recoverAll cx (afterReshard pk K' cx ss C) = ss' := by
+  obtain ⟨hok, rfl⟩ := reshard_eq h
+  have hA : afterReshard pk K' cx ss C = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C ss.2) := by
+    unfold afterReshard; rw [if_pos hok]
+  rw [hA]
+  refine Prod.ext rfl (funext fun k => ?_)
+  exact replay_commit cx (rRec pk K' cx ss) ss.2 C hC (fun _ => rfl) (fun _ => cx.advancesI _ _ _) rRec_imgOk k
 
 /-- Before recovery, an interrupted RESHARD with any touched shard `j` uncommitted (a retired `j ≥ K'` included)
     blocks every later RESHARD and every step, under any pack. -/
 theorem reshard_crash_open (C : List Nat) (j : Nat) (hok : reshardOk pk K' cx ss = true) (hj : j ∈ rT pk K' cx)
     (hC : j ∉ C) :
     (∀ pk'' K'', reshard pk'' K'' cx (afterReshard pk K' cx ss C) = none) ∧
-      ∀ pk'' inp, stepS pk'' cx (afterReshard pk K' cx ss C) inp = none := sorry
+      ∀ pk'' inp, stepS pk'' cx (afterReshard pk K' cx ss C) inp = none := by
+  have hA : afterReshard pk K' cx ss C = (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C ss.2) := by
+    unfold afterReshard; rw [if_pos hok]
+  rw [hA]
+  apply blocked
+  refine lastOk_false (R := rRec pk K' cx ss) (rs := ss.1.recs) rfl hj ?_
+  have e1 : (commitShards (rRec pk K' cx ss) C ss.2 j).head = (ss.2 j).head := by simp [commitShards, hC]
+  show (commitShards (rRec pk K' cx ss) C ss.2 j).head ≠ (rSpine pk K' cx ss).heads j
+  rw [e1]
+  show _ ≠ (if j ∈ rT pk K' cx then _ else _)
+  rw [if_pos hj]
+  exact fun h => cx.advancesI _ _ _ h.symm
 
 /-- M1: recovery of every store a crash can leave is a reachable store. -/
 theorem crash_recover (h : Crash cx pk ss) : ReachR cx pk (recoverAll cx ss) := sorry
@@ -217,7 +289,14 @@ theorem reshard_live (C : List Nat) (h3 : Inv3 ss) (h : reshard pk K' cx ss = so
     pre head, the record number and its charges, gross and machine charge after RESHARD.  This alone does not
     bind the head to the state (`hi` need not be injective); see `img_bind`. -/
 theorem reshard_head_img (h : reshard pk K' cx ss = some ss') (j : Nat) (hj : j ∈ rT pk K' cx) :
-    (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length ((ss'.2 j).chg, (ss'.2 j).gross, (ss'.2 j).mc) := sorry
+    (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length ((ss'.2 j).chg, (ss'.2 j).gross, (ss'.2 j).mc) := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length
+    ((commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).chg, (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).gross,
+      (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).mc)
+  unfold commitShards
+  rw [if_pos hj]
+  rfl
 
 /-- M2: if `hi` at shard `j`'s pre head and record number has no collision with the true image (`hInj`, a
     collision-resistance assumption stated pointwise: no `Ctx` hash into `Dg = Nat` is injective on all images),
@@ -228,11 +307,22 @@ theorem img_bind (j : Nat) (v : (Cell → Nat) × Int × Int)
     (hInj : ∀ w, cx.hi (ss.2 j).head ss.1.recs.length w = cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j) →
       w = rImg pk K' cx ss j)
     (h : reshard pk K' cx ss = some ss') (hj : j ∈ rT pk K' cx)
-    (hv : (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length v) : v = rImg pk K' cx ss j := sorry
+    (hv : (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length v) : v = rImg pk K' cx ss j := by
+  have hh : (ss'.2 j).head = cx.hi (ss.2 j).head ss.1.recs.length (rImg pk K' cx ss j) := by
+    obtain ⟨_, rfl⟩ := reshard_eq h
+    show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).head = _
+    unfold commitShards
+    rw [if_pos hj]
+    rfl
+  exact hInj v (hv.symm.trans hh)
 
 /-! ## Charges under the new directory -/
 
-theorem tgt_lt (hK : 0 < pk.k cx.p) (x : DirRow) : tgt pk cx x < pk.k cx.p := sorry
+theorem tgt_lt (hK : 0 < pk.k cx.p) (x : DirRow) : tgt pk cx x < pk.k cx.p := by
+  unfold tgt sidx
+  cases x.item with
+  | none => exact hK
+  | some i => exact Nat.mod_lt _ hK
 
 theorem restrict_le {d : Dir} {k : Nat} {chg : Cell → Nat} {c : Cell} : restrict d k chg c ≤ chg c := by
   simp only [restrict]; split <;> omega
@@ -255,7 +345,8 @@ theorem inv_off (hI : Inv ss) (c : Cell) (k : Nat) (h : ∀ x, ss.1.dir c = some
 
 /-- With the home bound, shards `≥ K` hold no charge, so `reshard_row` covers every charged row. -/
 theorem high_zero (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (k : Nat) (hk : pk.k cx.p ≤ k) (c : Cell) :
-    (ss.2 k).chg c = 0 := sorry
+    (ss.2 k).chg c = 0 :=
+  inv_off hI c k fun x hx hh => by have := hB c x k hx hh; omega
 
 theorem merge_le1 (hI : Inv ss) (c : Cell) : (merge pk cx ss).chg c ≤ 1 := by
   show ((List.range ss.1.k).map fun k => (ss.2 k).chg c).sum ≤ 1
@@ -278,29 +369,164 @@ theorem merge_at (hI : Inv ss) (c : Cell) (x : DirRow) (hx : ss.1.dir c = some x
   subst hxy
   rw [hh]; intro he; exact hne (Home.shard.inj he).symm
 
+theorem mem_rT {k : Nat} (hk : k < K') : k ∈ rT pk K' cx :=
+  List.mem_range.2 (Nat.lt_of_lt_of_le hk (Nat.le_max_right _ _))
+
+theorem new_chg {k : Nat} (hk : k ∈ rT pk K' cx) (c : Cell) :
+    (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).chg c =
+      restrict (rdir (setK pk cx.p K') cx ss.1.dir) k (merge pk cx ss).chg c := by
+  unfold commitShards; rw [if_pos hk]; rfl
+
+theorem new_gross {k : Nat} (hk : k ∈ rT pk K' cx) :
+    (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).gross =
+      if k = 0 then (merge pk cx ss).gross else 0 := by
+  unfold commitShards; rw [if_pos hk]; rfl
+
+theorem new_mc {k : Nat} (hk : k ∈ rT pk K' cx) :
+    (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).mc = if k = 0 then (merge pk cx ss).mc else 0 := by
+  unfold commitShards; rw [if_pos hk]; rfl
+
+theorem sum_range_zeroI' (f : Nat → Int) (K : Nat) (hK : 0 < K) (hf : ∀ k, k ≠ 0 → k < K → f k = 0) :
+    ((List.range K).map f).sum = f 0 := by
+  have e : (List.range K).map f = (List.range K).map (fun k => if k < K then f k else 0) :=
+    List.map_congr_left fun k hk => (if_pos (List.mem_range.1 hk)).symm
+  rw [e, sum_range_zeroI _ K hK fun k hk => by
+    by_cases h : k < K
+    · simp only [if_pos h]; exact hf k hk h
+    · simp only [if_neg h]]
+  simp only [if_pos hK]
+
+theorem gross_sum (hK' : 0 < K') :
+    ((List.range K').map fun k => (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).gross).sum =
+      (merge pk cx ss).gross := by
+  rw [sum_range_zeroI' _ K' hK' fun k hk hl => by rw [new_gross (mem_rT hl)]; exact if_neg hk,
+    new_gross (mem_rT hK')]
+  exact if_pos rfl
+
+theorem mc_sum (hK' : 0 < K') :
+    ((List.range K').map fun k => (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).mc).sum =
+      (merge pk cx ss).mc := by
+  rw [sum_range_zeroI' _ K' hK' fun k hk hl => by rw [new_mc (mem_rT hl)]; exact if_neg hk,
+    new_mc (mem_rT hK')]
+  exact if_pos rfl
+
+/-- The new images, summed over the new shards, give back the merged charge of every cell. -/
+theorem rimg_sum (hI : Inv ss) (hK' : 0 < K') (c : Cell) :
+    ((List.range K').map fun k => restrict (rdir (setK pk cx.p K') cx ss.1.dir) k (merge pk cx ss).chg c).sum =
+      (merge pk cx ss).chg c := by
+  by_cases hz : ∀ k ∈ List.range ss.1.k, (ss.2 k).chg c = 0
+  · have h0 : (merge pk cx ss).chg c = 0 := sum_zeroN (fun k => (ss.2 k).chg c) _ hz
+    rw [h0]
+    exact sum_zeroN _ _ fun k _ => by
+      have := @restrict_le (rdir (setK pk cx.p K') cx ss.1.dir) k (merge pk cx ss).chg c
+      omega
+  · have hex : ∃ k0 ∈ List.range ss.1.k, (ss.2 k0).chg c ≠ 0 :=
+      Classical.byContradiction fun hcon =>
+        hz fun k hk => Classical.byContradiction fun hh => hcon ⟨k, hk, hh⟩
+    obtain ⟨k0, _, hne⟩ := hex
+    obtain ⟨x, hx, hh⟩ := (hI c).2 k0 (Nat.pos_of_ne_zero hne)
+    have hK2 : 0 < (setK pk cx.p K').k cx.p := by rw [setK_k_self]; exact hK'
+    have ht := tgt_lt hK2 x
+    rw [setK_k_self] at ht
+    have hnd : rdir (setK pk cx.p K') cx ss.1.dir c = some (rehome (setK pk cx.p K') cx x) := by
+      simp [rdir, hx]
+    have hhome : (rehome (setK pk cx.p K') cx x).home = .shard (tgt (setK pk cx.p K') cx x) := by
+      simp [rehome, rh, hh]
+    generalize tgt (setK pk cx.p K') cx x = t at ht hhome
+    refine (sum_one (fun k => restrict (rdir (setK pk cx.p K') cx ss.1.dir) k (merge pk cx ss).chg c) t _
+      List.nodup_range (List.mem_range.2 ht) ?_).trans ?_
+    · intro k _ hne'
+      simp [restrict, hnd, hhome, Ne.symm hne']
+    · simp [restrict, hnd, hhome]
+
 /-- The merged view after RESHARD is the merged view before, with the rehomed directory. -/
 theorem merge_reshard (hI : Inv ss) (hK' : 0 < K') :
     merge (setK pk cx.p K') cx (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2)
-      = { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } := sorry
+      = { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } := by
+  refine view_eq rfl rfl rfl rfl rfl rfl (funext fun c => ?_) ?_ ?_
+  · show ((List.range K').map fun k => (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).chg c).sum =
+      (merge pk cx ss).chg c
+    rw [List.map_congr_left fun k hk => new_chg (mem_rT (List.mem_range.1 hk)) c]
+    exact rimg_sum hI hK' c
+  · exact gross_sum hK'
+  · exact mc_sum hK'
 
 /-! ## (c) Invariants -/
 
-theorem inv_reshard (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss') : Inv ss' :=
-  sorry
+theorem inv_reshard (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss') : Inv ss' := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  intro c
+  refine ⟨fun k => ?_, fun k hk => ?_⟩
+  · show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).chg c ≤ 1
+    by_cases hkT : k ∈ rT pk K' cx
+    · rw [new_chg hkT]; exact Nat.le_trans restrict_le (merge_le1 hI c)
+    · unfold commitShards; rw [if_neg hkT]; exact (hI c).1 k
+  · change 0 < (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).chg c at hk
+    change ∃ x, rdir (setK pk cx.p K') cx ss.1.dir c = some x ∧ x.home = .shard k
+    by_cases hkT : k ∈ rT pk K' cx
+    · rw [new_chg hkT] at hk; exact restrict_pos hk
+    · unfold commitShards at hk; rw [if_neg hkT] at hk
+      have h2 : ¬ k < max (pk.k cx.p) K' := fun hh => hkT (List.mem_range.2 hh)
+      have h0 := high_zero hI hB k (by omega) c
+      omega
 
-theorem inv2_reshard (h : reshard pk K' cx ss = some ss') : Inv2 ss' := sorry
+theorem inv2_reshard (h : reshard pk K' cx ss = some ss') : Inv2 ss' := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  intro R rs hR k hk
+  have hR' : rRec pk K' cx ss = R := (List.cons.inj hR).1
+  subst hR'
+  show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).head = _
+  unfold commitShards
+  have hk' : k ∈ rT pk K' cx := hk
+  rw [if_pos hk']
+  rfl
 
-theorem inv3_reshard (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') : Inv3 ss' := sorry
+theorem inv3_reshard (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') : Inv3 ss' := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  intro k
+  obtain ⟨h1, h2⟩ := h3 k
+  by_cases hk : k ∈ rT pk K' cx
+  · simp [commitShards, rSpine, applyPart, rRec, hk, h2]
+  · simp [commitShards, rSpine, rRec, hk, h1, h2]
 
 theorem inv4_reshard (hI : Inv ss) (h4 : Inv4 pk cx ss) (h : reshard pk K' cx ss = some ss') :
-    Inv4 (setK pk cx.p K') cx ss' := sorry
+    Inv4 (setK pk cx.p K') cx ss' := by
+  obtain ⟨hok, rfl⟩ := reshard_eq h
+  obtain ⟨_, _, hK', hk⟩ := ok_parts hok
+  refine ⟨?_, ?_⟩
+  · show ss.1.used = ((List.range ((setK pk cx.p K').k cx.p)).map fun k =>
+      (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).gross).sum
+    rw [setK_k_self, gross_sum hK']
+    show _ = ((List.range ss.1.k).map fun k => (ss.2 k).gross).sum
+    rw [hk]; exact h4.1
+  · show ss.1.budget = ((List.range ((setK pk cx.p K').k cx.p)).map fun k =>
+      (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).mc).sum + ss.1.lc
+    rw [setK_k_self, mc_sum hK']
+    show _ = ((List.range ss.1.k).map fun k => (ss.2 k).mc).sum + ss.1.lc
+    rw [hk]; exact h4.2
 
-theorem chain_reshard (hc : chainsOk ss) (h : reshard pk K' cx ss = some ss') : chainsOk ss' := sorry
+theorem chain_reshard (hc : chainsOk ss) (h : reshard pk K' cx ss = some ss') : chainsOk ss' := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  show ((rRec pk K' cx ss :: ss.1.recs).reverse.map (·.n)) = List.range' 0 (ss.1.recs.length + 1)
+  rw [List.reverse_cons, List.map_append, hc, List.range'_concat]
+  simp [rRec]
 
-theorem heads_reshard (h : reshard pk K' cx ss = some ss') : headsOk (setK pk cx.p K') cx ss' = true := sorry
+theorem heads_reshard (h : reshard pk K' cx ss = some ss') : headsOk (setK pk cx.p K') cx ss' = true := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  unfold headsOk
+  rw [setK_k_self]
+  refine List.all_eq_true.2 fun k hk => beq_iff_eq.2 ?_
+  have hkT : k ∈ rT pk K' cx := List.mem_range.2 (Nat.lt_of_lt_of_le (List.mem_range.1 hk) (Nat.le_max_right _ _))
+  show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 k).head = (rSpine pk K' cx ss).heads k
+  show _ = (if k ∈ rT pk K' cx then _ else _)
+  unfold commitShards
+  rw [if_pos hkT, if_pos hkT]
+  rfl
 
 theorem history_reshard (hc : chainsOk ss) (h3 : Inv3 ss) (h : reshard pk K' cx ss = some ss') :
-    historyOk (setK pk cx.p K') cx (mergeHist (setK pk cx.p K') cx ss') = true := sorry
+    historyOk (setK pk cx.p K') cx (mergeHist (setK pk cx.p K') cx ss') = true :=
+  (spine_chain_binds_iff (setK pk cx.p K') cx ss').1
+    ⟨chain_reshard hc h, heads_reshard h, fun k _ => (inv3_reshard h3 h k).2⟩
 
 theorem reachR_run : ∀ (rs : List Input) {ss : SS}, ReachR cx pk ss → ReachR cx pk (runS pk cx ss rs)
   | [], _, h => h
@@ -323,7 +549,9 @@ theorem reachR_recover (h : ReachR cx pk ss) : recoverAll cx ss = ss := sorry
 /-! ## (a) Every row present exactly once, at its new home -/
 
 theorem reshard_dir (h : reshard pk K' cx ss = some ss') (c : Cell) :
-    ss'.1.dir c = (ss.1.dir c).map (rehome (setK pk cx.p K') cx) := sorry
+    ss'.1.dir c = (ss.1.dir c).map (rehome (setK pk cx.p K') cx) := by
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  rfl
 
 /-- M2: after RESHARD every shard row sits at its own item's shard under the new pack. -/
 theorem reshard_local (h : reshard pk K' cx ss = some ss') : locDir (setK pk cx.p K') cx ss'.1.dir := sorry
@@ -371,9 +599,15 @@ theorem cls_route (pk pk' : Pack) (cx : Ctx) (r : Row) : cls (routeNew pk cx r) 
 theorem ndir_set (d : Dir) (c : Cell) (x : DirRow) : ndir (setDir d c x) = setDir (ndir d) c (nrow x) := by
   funext c'; by_cases h : c' = c <;> simp [ndir, setDir, h]
 
-theorem nrow_rehome (x : DirRow) : nrow (rehome pk cx x) = nrow x := sorry
+theorem nrow_rehome (x : DirRow) : nrow (rehome pk cx x) = nrow x := by
+  have : ∀ (t : Nat) (h : Home), cls (rh t h) = cls h := by intro t h; cases h <;> rfl
+  simp only [nrow, rehome, this]
 
-theorem ndir_rdir (d : Dir) : ndir (rdir pk cx d) = ndir d := sorry
+theorem ndir_rdir (d : Dir) : ndir (rdir pk cx d) = ndir d := by
+  funext c
+  rcases h : d c with _ | x
+  · simp [ndir, rdir, h]
+  · simp [ndir, rdir, h, nrow_rehome]
 
 theorem jrow_sim (pk pk' : Pack) (cx : Ctx) {d1 d2 : Dir} (h : ndir d1 = ndir d2) (r : Row) :
     ndir (judgeRow pk cx d1 r).1 = ndir (judgeRow pk' cx d2 r).1 ∧
