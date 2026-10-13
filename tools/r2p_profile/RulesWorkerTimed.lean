@@ -65,8 +65,8 @@ def commitT (a : Acc) (st : St) (unanchored : Bool) : IO (St × List String) := 
   let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
   let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
-  let adds ← tm a 14 oLen fun _ =>
-    (do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten : Option (List UInt8))
+  let adds ← tm a 14 (fun (o : Option ByteArray) => o.elim 0 (·.size)) fun _ =>
+    (do pure (((← fresh.1.mapM (rowBytesFast 1)) ++ (← fresh.2.mapM (rowBytesFast 2))).foldl (· ++ ·) ByteArray.empty) : Option ByteArray)
   let pinOf (o : Option (Snapshot Line × List UInt8)) (d : String) (k : Nat) (s : Snapshot Line) :=
     o.elim ((Fast.pinBytes d k Line.fields s).map hB) (some ·.2)
   let base ← tm a 10 oLen fun _ =>
@@ -80,7 +80,7 @@ def commitT (a : Acc) (st : St) (unanchored : Bool) : IO (St × List String) := 
       let rd ← tm a 12 oLen fun _ => base.bind (reads p c)
       tm a 15 List.length fun _ => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
         dg.toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
-        adds.toList.map (fun b => s!"RULES_ADDS {hexOf b.toByteArray}") ++
+        adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
         rd.toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
   let st' ← tm a 7 (fun (s : St) => s.checked) fun _ =>
     { st with pinned := some p, anchor := none, sealed := true,

@@ -75,6 +75,9 @@ def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
   do let bs ← l.fields.mapM fun (w, n) => be w n
      pure (tag :: bs.flatten)
 
+/-- `rowBytes` as one ByteArray (`rowBytesFast_eq`). -/
+def rowBytesFast (tag : UInt8) (l : Line) : Option ByteArray := Fast.pushRow (ByteArray.empty.push tag) l.fields
+
 def rowWidths : List Nat := (Line.fields ⟨0, 0, .FFS_CYCLE, 0, 0, 0, 0, 0, 0, 0⟩).map (·.1)
 
 /-- The row at byte offset `o` of `b`: the set tag and the line. -/
@@ -259,7 +262,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
   let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
-  let adds := do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten
+  let adds := do pure (((← fresh.1.mapM (rowBytesFast 1)) ++ (← fresh.2.mapM (rowBytesFast 2))).foldl (· ++ ·) ByteArray.empty)
   -- The checkpoint extended; before the first, the declared sets (pins from declaration) or the empty priors.
   let pinOf (o : Option (Snapshot Line × List UInt8)) (d : String) (k : Nat) (s : Snapshot Line) :=
     o.elim ((Fast.pinBytes d k Line.fields s).map hB) (some ·.2)
@@ -268,7 +271,7 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
       (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior))
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
     (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
-    adds.toList.map (fun b => s!"RULES_ADDS {hexOf b.toByteArray}") ++
+    adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
     (base.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
   ({ st with pinned := some p, anchor := none, sealed := true,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
