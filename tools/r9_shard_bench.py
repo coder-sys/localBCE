@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS records (n INTEGER PRIMARY KEY, file_index INTEGER NO
 CREATE TABLE IF NOT EXISTS heads (k INTEGER PRIMARY KEY, head BLOB NOT NULL);
 """
 SHARD_DDL = "CREATE TABLE IF NOT EXISTS applied (n INTEGER PRIMARY KEY, spine_id BLOB NOT NULL, rcore BLOB NOT NULL, i_digest BLOB NOT NULL);"
+GROWING = ("payments", "evidence", "evaluations", "commands")  # owner tables that only grow; check() counts the rows a part adds by the move of MAX(rowid)
 BUILD_ID = rb.sha("RR/SHARD/BUILD/v1", *(hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in (__file__, rb.__file__)))
 SPINE_ID = rb.sha("RR/SHARD/SPINE/v1", PAYER)
 T0_MS = 1_700_000_000_000
@@ -189,6 +190,7 @@ class Shard:
             self.undo, self.pre_mark = [seq0, pre_head, began, 0, count0, last0], 0
         w.c.execute("SAVEPOINT part")  # a refused part leaves no trace, the parts before it in the group stay until the spine aborts the group
         try:
+            self.timed(self.amounts, parts)
             t = {"cell_rows": [(rk, origin, tag, amount, raw, rawdig) for rk, origin, tag, _, amount, raw, rawdig, _, _ in parts],
                  "resolutions": [(rk, cid, None, amount, "INTAKE") for rk, _, _, _, amount, _, _, _, cid in parts],
                  "charges": [(rk, rk, ob, amount) for rk, _, _, _, amount, _, _, ob, _ in parts],
@@ -197,8 +199,8 @@ class Shard:
             w.mutations(t, touched, index, t_f, [(ob, key, amount, "PAYMENT_RECEIVED") for _, _, _, key, amount, _, _, ob, _ in parts])
             if parts and w.head == pre_head:  # a part that adds events must move the head (ShardSplit.lean `adv`): a closed chain is refused before anything is written
                 raise rb.FinancialIntegrityError("shard_fixed_point")
-            self.chain(parts, seq0, pre_head, t_f, began, t["financial_events"])  # a wrong build is refused before any write
-            cash0 = self.cash(sorted({p[7] for p in parts}))
+            self.timed(self.chain, parts, seq0, pre_head, t_f, began, t["financial_events"])  # a wrong build is refused before any write
+            before = self.timed(self.state, parts)
             digest = hashlib.sha3_256()
             for name, data in t.items():
                 digest.update(pickle.dumps(data, 5))
@@ -209,9 +211,7 @@ class Shard:
             w.c.execute("INSERT INTO applied VALUES (?,?,?,?)", (n, SPINE_ID, rb.sha("RR/SHARD/RCORE/v1", n, index, pool, t_f), self.seen))
             self.applied_count, self.last_applied_n = count0 + 1, n
             w.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (w.seq, w.head))
-            c0 = time.perf_counter()
-            self.check(index, parts, seq0, t_f, t["financial_events"], cash0)
-            self.check_s += time.perf_counter() - c0
+            self.timed(self.check, index, parts, seq0, t_f, t["financial_events"], before)
         except BaseException:
             if w.c.in_transaction:
                 w.c.execute("ROLLBACK TO part")
@@ -227,6 +227,21 @@ class Shard:
         self.lines += len(parts)
         self.busy += time.perf_counter() - t0
         return w.head, digest.digest()
+
+    def timed(self, fn, *args):
+        """Everything that checks, hashes it recomputes included, is shard_check_us: amounts, chain, state and check run through here."""
+        c0 = time.perf_counter()
+        try:
+            return fn(*args)
+        finally:
+            self.check_s += time.perf_counter() - c0
+
+    @staticmethod
+    def amounts(parts: list) -> None:
+        """Cents are an int, never a bool, never negative (zero is real data: a denied or zero-pay line). Anything else is refused by name before the builder meets
+        it: text would be a raw TypeError there, a float or a negative would be written as it stands."""
+        if any(type(p[4]) is not int or p[4] < 0 for p in parts):
+            raise rb.FinancialIntegrityError("shard_amount")
 
     def chain(self, parts: list, seq0: int, pre_head: bytes, t_f: int, began: dict, built: list) -> None:
         """Before anything is written: every event mutations built is recomputed from the part and the pre-state alone and compared field by field, in order (the
@@ -254,29 +269,55 @@ class Shard:
             out += self.w.c.execute(f"{select} IN ({','.join('?' * len(chunk))})", chunk).fetchall()
         return out
 
-    def cash(self, obs: list) -> dict:
-        return dict(self.stored("SELECT obligation_id,received_cash_cents FROM obligations WHERE obligation_id", obs))
+    def state(self, parts: list) -> tuple:
+        """Before the writes: the part's obligations' (cash, revision), all obligations' cash, and where each growing owner table ends. These tables only grow (their
+        triggers refuse update and delete), so MAX(rowid), which is O(1), moves by the rows the writes added."""
+        c = self.w.c
+        rows = self.stored("SELECT obligation_id,received_cash_cents,revision FROM obligations WHERE obligation_id", sorted({p[7] for p in parts}))
+        return ({r[0]: r[1:] for r in rows}, c.execute("SELECT SUM(received_cash_cents) FROM obligations").fetchone()[0],
+                [c.execute(f"SELECT COALESCE(MAX(rowid),0) FROM {table}").fetchone()[0] for table in GROWING])
 
-    def check(self, index: int, parts: list, seq0: int, t_f: int, built: list, cash0: dict) -> None:
-        """Shard check after the writes (chain() has already refused a wrong build): the stored events equal the built ones; charges, and the money rows the part
-        wrote (payments, evidence, each obligation's received cash) equal an independent recompute from the part (cash0: the obligations' cash before the writes)."""
-        w, obl = self.w, self.w.obl
-        events = w.c.execute("SELECT * FROM financial_events WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall()
-        if events != built:
+    def check(self, index: int, parts: list, seq0: int, t_f: int, built: list, before: tuple) -> None:
+        """Shard check after the writes (amounts and chain have already refused a wrong part or build). All of it is recomputed from the part and the state before it (`before`,
+        from state()), never from the builder's rows: the stored events equal the built ones; the part's cell_rows, resolutions and charges equal it row for row; and the owner
+        tables hold exactly what the part makes and nothing else: commands (id, kind, canonical request text, its digest, sequence), payments and evidence (every column, digests
+        too), one evaluation per touched obligation (id, revision, time, digests), each touched obligation's cash, revision and current evaluation, and in total the cash moved by
+        the part's cents while payments, evidence, evaluations and commands each grew by exactly their rows (the product checker's rule: the named rows, no other obligation moved)."""
+        c, obl = self.w.c, self.w.obl
+        cash0, total0, rowid0 = before
+        if c.execute("SELECT * FROM financial_events WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall() != built:
             raise rb.FinancialIntegrityError("shard_chain")
-        count, cents = w.c.execute("SELECT COUNT(*),COALESCE(SUM(cents),0) FROM charges WHERE row_key BETWEEN ? AND ?", (index * rb.KEY, (index + 1) * rb.KEY - 1)).fetchone()
-        if count != len(parts) or cents != sum(p[4] for p in parts):
+        rng = (index * rb.KEY, (index + 1) * rb.KEY - 1)
+
+        def rows(table, cols):
+            return sorted(c.execute(f"SELECT {cols} FROM {table} WHERE row_key BETWEEN ? AND ?", rng))
+        if (rows("cell_rows", "row_key,origin_id,tag,amount_cents,raw,line_digest") != sorted((p[0], p[1], p[2], p[4], p[5], p[6]) for p in parts)
+                or rows("resolutions", "row_key,cell_id,act,cents,basis") != sorted((p[0], p[8], None, p[4], "INTAKE") for p in parts)
+                or rows("charges", "row_key,resolution_key,obligation_id,cents") != sorted((p[0], p[0], p[7], p[4]) for p in parts)):
             raise rb.FinancialIntegrityError("shard_check")
-        cash: dict[str, int] = {}
+        cents, lines = {}, collections.Counter(p[7] for p in parts)
         for p in parts:
-            cash[p[7]] = cash.get(p[7], 0) + p[4]
+            cents[p[7]] = cents.get(p[7], 0) + p[4]
         pay, ev = f"pay:{index:06d}:", f"ev:{index:06d}:"
-        payments = sorted((pay + p[3], p[7], obl[p[7]], ev + p[3], f"x12/{p[3]}", abs(p[4]) or 1, t_f, 1, None) for p in parts)
-        evidence = sorted((ev + p[3], obl[p[7]], "PAYMENT", f"x12/{p[3]}", "x12", "v1", "", t_f, t_f, t_f, p[4], None, None) for p in parts)
-        if (self.cash(list(cash)) != {ob: cash0[ob] + max(c, 0) for ob, c in cash.items()}
+        eid = {ob: f"eval:{index:06d}:{ob}:{cash0[ob][1] + n}" for ob, n in lines.items()}
+        payments = sorted((pay + p[3], p[7], obl[p[7]], ev + p[3], f"x12/{p[3]}", p[4] or 1, t_f, 1, None) for p in parts)  # a zero-cent line is a payment of one cent (the owner takes no zero payment), its evidence and the obligation's cash keep zero
+        evidence = sorted((ev + p[3], obl[p[7]], "PAYMENT", f"x12/{p[3]}", "x12", "v1", "", t_f, t_f, t_f, rb.sha(ev + p[3], 1), rb.sha(ev + p[3], 2), p[4], None, None) for p in parts)
+        evaluations = sorted((eid[ob], ob, cash0[ob][1] + n, t_f, rb.sha(eid[ob], 1), rb.sha(eid[ob], 2), rb.sha(eid[ob], 3)) for ob, n in lines.items())
+        obligations = sorted((ob, cash0[ob][0] + cents[ob], cash0[ob][1] + n, eid[ob]) for ob, n in lines.items())
+        commands = []
+        for i, p in enumerate(parts):  # the owner's canonical request (keys sorted, ascii, compact) and its domain digest, by json.dumps rather than the builder's text
+            request = json.dumps({"command": "PAYMENT", "key": pay + p[3], "amount_cents": p[4], "common_origin_id": f"x12/{p[3]}", "event_at_ms": t_f, "evidence_id": ev + p[3],
+                                  "item_id": obl[p[7]], "local_ref": "", "source_id": "x12", "source_version": "v1"}, sort_keys=True, separators=(",", ":")).encode("ascii")
+            commands.append((f"PAYMENT:{pay}{p[3]}", "PAYMENT", request.decode("ascii"), hashlib.sha3_512(b"RR/FINANCIAL/COMMAND/v1\x00" + request).digest(), seq0 + i + 1))
+        grown = [r + d for r, d in zip(rowid0, (len(parts), len(parts), len(lines), len(parts)))]
+        if (sorted(self.stored("SELECT command_id,kind,request_json,request_digest,event_sequence FROM commands WHERE command_id", [r[0] for r in commands])) != sorted(commands)
                 or sorted(self.stored("SELECT * FROM payments WHERE payment_id", [r[0] for r in payments])) != payments
-                or sorted(self.stored("SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes"
-                                      " FROM evidence WHERE evidence_id", [r[0] for r in evidence])) != evidence):
+                or sorted(self.stored("SELECT * FROM evidence WHERE evidence_id", [r[0] for r in evidence])) != evidence
+                or sorted(self.stored("SELECT evaluation_id,obligation_id,revision,evaluated_at_ms,result_digest,input_snapshot_digest,receipt_digest FROM evaluations WHERE evaluation_id",
+                                      list(eid.values()))) != evaluations
+                or sorted(self.stored("SELECT obligation_id,received_cash_cents,revision,current_evaluation_id FROM obligations WHERE obligation_id", list(lines))) != obligations
+                or c.execute("SELECT SUM(received_cash_cents) FROM obligations").fetchone()[0] != total0 + sum(cents.values())
+                or [c.execute(f"SELECT COALESCE(MAX(rowid),0) FROM {table}").fetchone()[0] for table in GROWING] != grown):
             raise rb.FinancialIntegrityError("shard_money")
 
     def commit(self) -> None:

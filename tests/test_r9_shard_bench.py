@@ -57,8 +57,10 @@ def pinned(db: Path, shard: bool) -> str:
 # spine, shard0..shard3 of 12 files x 300 lines at K=4, recorded from the per-file code at HEAD 83a79331 (script scratch-spine3/pin_tables.py), before any group existed
 GROUP_PINNED = {"FL": ["a3ad9c4cbccc3ff1", "8d7e5b0aa7a55d05", "59802cdeb36c4859", "447c83213a0e82ec", "ed63467592ab5a8c"],
                 "DE": ["ccc7eb40344c7153", "f8069f7e6d4c431f", "85a3986dab841d57", "8e06fdff80af5e0a", "46842524f7b28356"]}
-# sha256[:16] of each shard's financial_events rows after the template's (sequence above the template's last, 11) without previous_head and head, the only two columns
-# that hold wall-clock stamps (LOW-6): sequence, id, aggregate, kind, revisions, payload text and digest, time; 12 files x 300 lines at K=4, recorded at HEAD 81a71903 (run s1cf4n)
+# REGRESSION PIN, not an oracle: these values were derived by running this code (run s1cf4n), so they say the events have not changed since, not that they are right; the
+# oracle is Shard.chain, which recomputes every event from the part. sha256[:16] of each shard's financial_events rows after the template's (sequence above the template's
+# last, 11) without previous_head and head, the only two columns that hold wall-clock stamps: sequence, id, aggregate, kind, revisions, payload text and digest, time;
+# 12 files x 300 lines at K=4, recorded at HEAD 81a71903
 EVENT_PINNED = {"FL": ["d87ec6eb1f12ea3c", "c77d9354059972e9", "53355d26265ba9f1", "557ce5bcbda3261c"], "DE": ["0b0b2f54d4cb6a25", "55da35f0b7de95c7", "7947de0c1397e23f", "8a4ed8c7e20a38f5"]}
 
 
@@ -603,6 +605,74 @@ class ShardBench(unittest.TestCase):
                 w.mutations = mutations
             self.refused(f"wrong-{fault}", "shard_chain", patch)
 
+    def test_chain_refuses_a_column_alone_a_desynced_head_or_sequence_and_a_dropped_event(self) -> None:
+        """LOW-5: faults a rechained builder cannot reach. The payload, digests and links are right and one column is wrong; or the events are right and the builder's head or
+        sequence is not; or an event is missing with the head and sequence of what remains consistent. Each fault is refused by exactly one check of chain()."""
+        def column(col, edit, ids=False):
+            def patch(shard, parts):
+                w, real = shard.w, shard.w.mutations
+
+                def mutations(t, *args):
+                    real(t, *args)
+                    e = t["financial_events"][0]
+                    e = e[:col] + (edit(e, w),) + e[col + 1:]
+                    t["financial_events"][0] = e[:1] + (rb.sha("event", e[0]),) + e[2:] if ids else e
+                w.mutations = mutations
+            return patch
+
+        def desync(attr, value):
+            def patch(shard, parts):
+                w, real = shard.w, shard.w.mutations
+
+                def mutations(*args):
+                    real(*args)
+                    setattr(w, attr, value(w))
+                w.mutations = mutations
+            return patch
+
+        def dropped(shard, parts):
+            w, real = shard.w, shard.w.mutations
+
+            def mutations(t, *args):
+                real(t, *args)
+                t["financial_events"].pop()
+                w.head = t["financial_events"][-1][10]  # head and sequence agree with the events that remain; only the count is short
+            w.mutations = mutations
+        faults = {"aggregate_type_column": column(2, lambda e, w: "CASE"), "payload_column": column(7, lambda e, w: e[7] + " "),
+                  "aggregate_column": column(3, lambda e, w: next(x for x in w.obl_ids if x != e[3])), "kind_column": column(4, lambda e, w: "PAYMENT_REVERSAL"),
+                  "before_column": column(5, lambda e, w: e[5] + 1), "after_column": column(6, lambda e, w: e[6] + 1), "id_column": column(1, lambda e, w: rb.sha("event", e[0], 1)),
+                  "digest_column": column(8, lambda e, w: bytes(64)), "link_column": column(9, lambda e, w: bytes(64)), "head_column": column(10, lambda e, w: bytes(64)),
+                  "time_column": column(11, lambda e, w: e[11] + 1), "sequence_column": column(0, lambda e, w: e[0] + 1),
+                  "sequence_and_id_columns": column(0, lambda e, w: e[0] + 1, ids=True),  # a gap the id agrees with: only the sequence compare sees it
+                  "head_desync": desync("head", lambda w: rb.sha("desync")), "seq_desync": desync("seq", lambda w: w.seq + 1), "dropped_event": dropped}
+        for name, patch in faults.items():
+            self.refused(f"chain-{name}", "shard_chain", patch)
+
+    def test_shard_refuses_an_amount_that_is_not_a_non_negative_int_by_name(self) -> None:
+        """LOW-4: text would be a raw TypeError in the builder, a float or a negative would be written as it stands, a bool is not an amount. Zero is real data (below)."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        parts = pickle.loads(prep.blobs[0])
+        for bad in ("5", 1.5, -1, -3, True, None):
+            shard, db = self.fresh_shard(f"amount-{bad!r}".replace("'", ""))
+            head, w, seq0, began = shard.w.head, shard.w, shard.w.seq, dict(shard.w.revision)
+            blob = pickle.dumps([parts[0][:4] + (bad,) + parts[0][5:]] + parts[1:])
+            with self.assertRaises(rb.FinancialIntegrityError) as caught:
+                shard.build(prep.n, prep.index, "pool", 1, blob, head, prep.verdicts[0])
+            self.assertIn("shard_amount", str(caught.exception), repr(bad))
+            self.assertFalse(shard.c.in_transaction)
+            self.assertEqual((w.head, w.seq, w.revision), (head, seq0, began), repr(bad))
+            shard.stats()
+
+    def test_shard_accepts_a_zero_cent_line(self) -> None:
+        """A denied or zero-pay remittance line is real data: it builds, checks and stores zero cents (the amount check refuses -1 above, not 0)."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        parts = pickle.loads(prep.blobs[0])
+        shard, db = self.fresh_shard("amount-zero")
+        shard.build(prep.n, prep.index, "pool", 1, pickle.dumps([parts[0][:4] + (0,) + parts[0][5:]] + parts[1:]), shard.w.head, prep.verdicts[0])
+        self.assertTrue(shard.c.in_transaction)
+        self.assertEqual(shard.w.c.execute("SELECT cents FROM resolutions WHERE row_key=?", (parts[0][0],)).fetchone(), (0,))
+        shard.stats()
+
     def test_shard_check_refuses_money_that_differs_from_the_part(self) -> None:
         """MED-C: the part's cents are recomputed independently of the builder and compared with what the writes left in payments, evidence and each obligation's received cash."""
         prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
@@ -643,6 +713,103 @@ class ShardBench(unittest.TestCase):
         for name, patch in {"payment_amount": tamper("payments", 5, 1), "evidence_amount": tamper("evidence", 12, 1), "overwrite_not_add": overwrite_not_add, "extra_cash": extra_cash,
                             "dropped_payment": dropped_payment, "payment_item": wrong_item}.items():
             self.refused(f"money-{name}", "shard_money", patch)
+
+    def test_shard_check_refuses_a_write_beyond_the_part_in_any_owner_table(self) -> None:
+        """MED-1: the expected rows are all there and right, and one more row, or cash on an obligation the part does not touch, is written after them; only the whole-table
+        deltas (total cash, rows added to payments, evidence, evaluations, commands) can refuse it."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        parts = pickle.loads(prep.blobs[0])
+
+        def stray(table, row=None):
+            """After the real finish, one write the part does not make: an UPDATE of cash on another obligation (no row) or an INSERT of `row(other, base evaluation, item)`."""
+            def patch(shard, _):
+                w, real = shard.w, shard.w.finish
+
+                def finish(*args):
+                    real(*args)
+                    other = next(x for x in w.obl_ids if x not in {p[7] for p in parts})  # an obligation the part does not touch
+                    if row is None:
+                        w.c.execute("UPDATE obligations SET received_cash_cents=received_cash_cents+100 WHERE obligation_id=?", (other,))
+                        return
+                    base = list(w.base[other])
+                    base[w.cols.index("evaluation_id")], base[w.cols.index("revision")] = "eval:stray", 10 ** 6
+                    values = row(other, base, w.obl[other])
+                    w.c.execute(f"INSERT INTO {table} VALUES ({','.join('?' * len(values))})", values)
+                w.finish = finish
+            return patch
+        for name, patch in {
+            "cash_on_another_obligation": stray("obligations"),
+            "extra_evaluation": stray("evaluations", lambda other, base, item: tuple(base)),
+            "extra_evidence": stray("evidence", lambda other, base, item: ("ev:stray", item, "PAYMENT", "x12/stray", "x12", "v1", "", 1, 1, 1, bytes(64), bytes(64), 100, None, None)),
+            "extra_payment": stray("payments", lambda other, base, item: ("pay:stray", other, item, "ev:stray", "x12/stray", 100, 1, 1, None)),
+            "extra_command": stray("commands", lambda other, base, item: ("PAYMENT:stray", "PAYMENT", "{}", bytes(64), 10 ** 9)),
+        }.items():
+            self.refused(f"stray-{name}", "shard_money", patch)
+
+    def test_shard_check_refuses_a_stored_row_that_differs_from_the_recompute_of_the_part_row_by_row(self) -> None:
+        """MED-2 and LOW-7: a charge moved from one obligation to another or a cent from one charge to the next (count and sum stay), resolutions and cell_rows that differ, a
+        commands row with another amount, digest or sequence, and the obligation's revision or current evaluation, an evaluation's revision or digest, an evidence digest."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        parts = pickle.loads(prep.blobs[0])
+        self.assertGreater(len({p[7] for p in parts}), 1)
+
+        def rewrite(table, edit):
+            def patch(shard, _):
+                w, real = shard.w, shard.w.write
+                w.write = lambda name, rows: real(name, edit(w, list(rows))) if name == table else real(name, rows)
+            return patch
+
+        def at(index, column, value):
+            return lambda w, rows: [r[:column] + (value(r, w),) + r[column + 1:] if i == index else r for i, r in enumerate(rows)]
+
+        def swap_obligations(w, rows):
+            j = next(i for i, r in enumerate(rows) if r[2] != rows[0][2])
+            rows[0], rows[j] = rows[0][:2] + (rows[j][2],) + rows[0][3:], rows[j][:2] + (rows[0][2],) + rows[j][3:]
+            return rows
+
+        def cent_moved(w, rows):
+            rows[0], rows[1] = rows[0][:3] + (rows[0][3] + 1,), rows[1][:3] + (rows[1][3] - 1,)
+            return rows
+
+        def swap_sequences(w, rows):
+            rows[0], rows[1] = rows[0][:4] + (rows[1][4],), rows[1][:4] + (rows[0][4],)
+            return rows
+
+        def after_finish(sql, row):
+            def patch(shard, _):
+                w, real = shard.w, shard.w.finish
+
+                def finish(*args):
+                    real(*args)
+                    w.c.execute(sql, row(w))
+                w.finish = finish
+            return patch
+        other_eval = lambda w: next(x for x in w.base.values() if x[1] != parts[0][7])[0]
+        col = lambda w, name: w.cols.index(name)
+        faults = {
+            ("shard_check", "charge_cent_moved"): rewrite("charges", cent_moved),
+            ("shard_check", "charge_obligations_swapped"): rewrite("charges", swap_obligations),
+            ("shard_check", "charge_wrong_obligation"): rewrite("charges", at(0, 2, lambda r, w: next(x for x in w.obl_ids if x != r[2]))),
+            ("shard_check", "resolution_cents"): rewrite("resolutions", at(0, 3, lambda r, w: r[3] + 1)),
+            ("shard_check", "resolution_cell"): rewrite("resolutions", at(0, 1, lambda r, w: bytes(len(r[1])))),
+            ("shard_check", "cell_row_amount"): rewrite("cell_rows", at(0, 3, lambda r, w: r[3] + 1)),
+            ("shard_check", "cell_row_raw"): rewrite("cell_rows", at(0, 4, lambda r, w: r[4][::-1] if r[4] != r[4][::-1] else r[4] + r[4][:1])),
+            ("shard_money", "command_request"): rewrite("commands", at(0, 2, lambda r, w: r[2].replace('"local_ref":""', '"local_ref":" "'))),
+            ("shard_money", "command_digest"): rewrite("commands", at(0, 3, lambda r, w: bytes(64))),
+            ("shard_money", "command_sequences"): rewrite("commands", swap_sequences),
+            ("shard_money", "evidence_digest"): rewrite("evidence", at(0, 10, lambda r, w: bytes(64))),
+            ("shard_money", "evidence_record_digest"): rewrite("evidence", at(0, 11, lambda r, w: bytes(64))),
+            ("shard_money", "evaluation_revision"): rewrite("evaluations", lambda w, rows: [r[:col(w, "revision")] + (r[col(w, "revision")] + 1,) + r[col(w, "revision") + 1:] if i == 0 else r for i, r in enumerate(rows)]),
+            ("shard_money", "evaluation_digest"): rewrite("evaluations", lambda w, rows: [r[:col(w, "receipt_digest")] + (bytes(64),) + r[col(w, "receipt_digest") + 1:] if i == 0 else r for i, r in enumerate(rows)]),
+            ("shard_money", "evaluation_result_digest"): rewrite("evaluations", lambda w, rows: [r[:col(w, "result_digest")] + (bytes(64),) + r[col(w, "result_digest") + 1:] if i == 0 else r for i, r in enumerate(rows)]),
+            ("shard_money", "evaluation_input_digest"): rewrite("evaluations", lambda w, rows: [r[:col(w, "input_snapshot_digest")] + (bytes(64),) + r[col(w, "input_snapshot_digest") + 1:] if i == 0 else r for i, r in enumerate(rows)]),
+            ("shard_money", "cash_moved_between_two_obligations"): after_finish("UPDATE obligations SET received_cash_cents=received_cash_cents+CASE obligation_id WHEN ? THEN 1 ELSE -1 END WHERE obligation_id IN (?,?)",
+                                                                                lambda w: (parts[0][7], parts[0][7], next(p[7] for p in parts if p[7] != parts[0][7]))),  # the total is unchanged
+            ("shard_money", "obligation_revision"): after_finish("UPDATE obligations SET revision=revision+1 WHERE obligation_id=?", lambda w: (parts[0][7],)),
+            ("shard_money", "current_evaluation"): after_finish("UPDATE obligations SET current_evaluation_id=? WHERE obligation_id=?", lambda w: (other_eval(w), parts[0][7])),
+        }
+        for (message, name), patch in faults.items():
+            self.refused(f"row-{name}", message, patch)
 
     def test_abort_after_shards_built_leaves_every_database_unchanged_and_retry_matches(self) -> None:
         clean = self.drive(3, "clean")

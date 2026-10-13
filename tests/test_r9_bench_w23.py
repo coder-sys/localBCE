@@ -154,7 +154,7 @@ class OracleShard(sb.Shard):
                 t["charges"].append((rk, rk, ob, amount))
                 w.mutate(t, touched, index, t_f, ob, key, amount, "PAYMENT_RECEIVED")
             self.chain(parts, seq0, pre_head, t_f, began, t["financial_events"])
-            cash0 = self.cash(sorted({p[7] for p in parts}))
+            before = self.state(parts)
             digest = hashlib.sha3_256()
             for name, data in t.items():
                 digest.update(pickle.dumps(data, 5))
@@ -165,7 +165,7 @@ class OracleShard(sb.Shard):
             w.c.execute("INSERT INTO applied VALUES (?,?,?,?)", (n, SPINE_ID, rb.sha("RR/SHARD/RCORE/v1", n, index, pool, t_f), self.seen))
             w.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (w.seq, w.head))
             c0 = time.perf_counter()
-            self.check(index, parts, seq0, t_f, t["financial_events"], cash0)
+            self.check(index, parts, seq0, t_f, t["financial_events"], before)
             self.check_s += time.perf_counter() - c0
         except BaseException:
             if w.c.in_transaction:
