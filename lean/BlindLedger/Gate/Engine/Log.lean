@@ -10,10 +10,13 @@ import BlindLedger.Gate.ApprovalLaws
     Fixed widths (L4): kind 1, idx 8, prev 64, shard 4, length prefixes 4, a registry row
     1 + 129 + 4 = 134 bytes.  Domain tag `RR/GATE/TENANT-LOG/v3\0`.
 
-    `stepM` keeps only the S1 guards (live shard for a batch, no double resume, seal once on a
-    parked shard) and the L6 rule that a sealed shard is final (no resume reopens it).  They are
-    necessary, not sufficient: custody, permit decode, activation, resume reserve rows,
-    seal-of-v1-only and `last` are owed to `push3`. -/
+    `stepM` keeps the S1 guards (live shard for a batch, no double resume, seal once on a parked
+    shard) and StateV2 `push`'s resume tip rule (S3 review HIGH-1: a resume needs a parked shard and
+    a permit tip naming its seal, or no tip when unsealed; it sets live and `last`).  A batch appends
+    its registry rows to `reg`.  The shard also carries `own`, `base` and `pays`, the custody state
+    StateV2 `push` reads, so a snapshot holds it; `stepM` does not yet write them.  The guards are
+    necessary, not sufficient: custody, the permit's rel/unr sets, activation, resume reserve rows
+    and seal-of-v1-only are owed to `push3`. -/
 
 namespace BlindLedger.Gate.Engine
 
@@ -426,27 +429,51 @@ theorem decodeEntry3B_canonical {b : ByteArray} {e : Entry3} (h : decodeEntry3B 
 
 /-! ## Log state and push -/
 
+/-- A permit opens with StateV2 `tipBytes` (`0`, or `1 || lp sealed || lp cert`); its rel/unr sets
+    follow and have no decoder yet. -/
+def tipIn : Option (Bytes × Bytes) → Bytes
+  | none => natBE 1 0
+  | some (s, c) => natBE 1 1 ++ lp s ++ lp c
+def pTip : P (Option (Bytes × Bytes)) := do
+  match ← rd 1 with
+  | 0 => pure none
+  | 1 => do let s ← pLp; let c ← pLp; pure (some (s, c))
+  | _ => fail
+def permitTip (p : Bytes) : Option (Option (Bytes × Bytes)) := (pTip.run p).map (·.1)
+
+/-- StateV2 `Shard` with `own` as its (epoch, count) rows, epochs ascending, and each `pays` leaf as its bytes. -/
 structure ShardM where
+  own : List (Nat × Nat)
   sealed : Option Bytes
   live : Bool
+  last : Option (Bytes × Bytes)
+  base : Bytes
+  pays : List (Nat × Bytes)
 
-def ShardM.init : ShardM := ⟨none, false⟩
+def ShardM.init : ShardM := ⟨[], none, false, none, zeroDigest, []⟩
 
 structure LogStateM where
   len : Nat
   head : Bytes
+  reg : List Row
   rhead : Bytes
   shards : Std.TreeMap Nat ShardM
 
-def LogStateM.init : LogStateM := ⟨0, zeroDigest, zeroDigest, ∅⟩
+def LogStateM.init : LogStateM := ⟨0, zeroDigest, [], zeroDigest, ∅⟩
 def LogStateM.shard (m : LogStateM) (k : Nat) : ShardM := m.shards.getD k ShardM.init
 
 def stepM (m : LogStateM) : Body3 → Option LogStateM
   | .batch b =>
-    if (m.shard b.shard).live then some { m with rhead := chainHead sha3 m.rhead b.regRows } else none
-  | .resume k _ =>
-    if (m.shard k).live ∨ (m.shard k).sealed.isSome then none
-    else some { m with shards := m.shards.insert k { m.shard k with live := true } }
+    if (m.shard b.shard).live then
+      some { m with reg := b.regRows ++ m.reg, rhead := chainHead sha3 m.rhead b.regRows }
+    else none
+  | .resume k p =>
+    match permitTip p with
+    | some tip =>
+      if (m.shard k).live = false ∧ tip.map (·.1) = (m.shard k).sealed then
+        some { m with shards := m.shards.insert k { m.shard k with live := true, last := tip } }
+      else none
+    | none => none
   | .seal k t =>
     if (m.shard k).live = false ∧ (m.shard k).sealed = none then
       some { m with shards := m.shards.insert k { m.shard k with sealed := some t } }
@@ -491,12 +518,14 @@ theorem stepM_keep {m m' : LogStateM} {b : Body3} (h : stepM m b = some m') : Ke
   | resume k p =>
     simp only [stepM] at h
     split at h
+    · split at h
+      · cases h
+        rw [shard_insert]
+        by_cases hka : k = a
+        · rw [if_pos hka]; subst hka; exact ⟨fun _ => rfl, fun _ => rfl⟩
+        · rw [if_neg hka]; exact ⟨fun _ => rfl, id⟩
+      · cases h
     · cases h
-    · cases h
-      rw [shard_insert]
-      by_cases hka : k = a
-      · rw [if_pos hka]; subst hka; exact ⟨fun _ => rfl, fun _ => rfl⟩
-      · rw [if_neg hka]; exact ⟨fun _ => rfl, id⟩
   | «seal» k t =>
     simp only [stepM] at h
     split at h
@@ -534,64 +563,45 @@ theorem pushM_step {m m' : LogStateM} {b : ByteArray} (h : pushM m b = some m') 
         exact ⟨e, s, rfl, hc.1, hc.2, hs, rfl⟩
     next => cases h
 
-/-- A sealed shard is parked: the invariant every reachable state keeps. -/
-def SealedParked (m : LogStateM) : Prop := ∀ k, (m.shard k).sealed.isSome → (m.shard k).live = false
-
-theorem stepM_parked {m m' : LogStateM} {b : Body3} (hi : SealedParked m) (h : stepM m b = some m') :
-    SealedParked m' := by
-  intro a
-  cases b with
-  | batch bt =>
-    simp only [stepM] at h
-    split at h
-    · cases h; exact hi a
-    · cases h
-  | resume k p =>
-    simp only [stepM] at h
-    split at h
-    · cases h
-    next hc =>
-      cases h
-      rw [shard_insert]
-      by_cases hka : k = a
-      · rw [if_pos hka]; subst hka
-        intro hs
-        exact absurd (Or.inr hs) hc
-      · rw [if_neg hka]; exact hi a
-  | «seal» k t =>
-    simp only [stepM] at h
+/-- L6, restated by S3 review HIGH-1 to StateV2 `push`'s resume guard (sealed + live is the normal
+    post-cutover state): a seal is never taken twice, and on a sealed shard a resume is taken only
+    when the shard is parked and the permit tip names that seal; it keeps the seal, sets live and
+    records the tip as `last`. -/
+theorem stepM_sealed_final {m : LogStateM} {k : Nat} {t : Bytes} (hs : (m.shard k).sealed = some t) :
+    (∀ t', stepM m (.seal k t') = none) ∧
+      ∀ p m', stepM m (.resume k p) = some m' → (m.shard k).live = false ∧
+        ∃ c, permitTip p = some (some (t, c)) ∧ m'.shard k = { m.shard k with live := true, last := some (t, c) } := by
+  refine ⟨fun t' => if_neg (fun hc => by rw [hc.2] at hs; cases hs), fun p m' h => ?_⟩
+  simp only [stepM] at h
+  split at h
+  next tip htip =>
     split at h
     next hc =>
       cases h
-      rw [shard_insert]
-      by_cases hka : k = a
-      · rw [if_pos hka]; subst hka; exact fun _ => hc.1
-      · rw [if_neg hka]; exact hi a
+      obtain ⟨hl, ht⟩ := hc
+      rw [hs] at ht
+      cases tip with
+      | none => cases ht
+      | some sc =>
+        obtain ⟨s, c⟩ := sc
+        simp only [Option.map_some, Option.some.injEq] at ht
+        subst ht
+        exact ⟨hl, c, htip, by rw [shard_insert, if_pos rfl]⟩
     next => cases h
-  | segment s =>
-    simp only [stepM] at h
-    cases h; exact hi a
+  next => cases h
 
-/-- L6: a sealed shard is final.  On a reachable state no batch, resume or second seal is taken on
-    it, so nothing after its seal can change it. -/
-theorem stepM_sealed_final {m : LogStateM} {k : Nat} (hi : SealedParked m)
-    (hs : (m.shard k).sealed.isSome) :
-    (∀ bt : Batch3, bt.shard = k → stepM m (.batch bt) = none) ∧ (∀ p, stepM m (.resume k p) = none) ∧
-      ∀ t, stepM m (.seal k t) = none := by
-  have hl := hi k hs
-  refine ⟨fun bt hb => ?_, fun p => ?_, fun t => ?_⟩
-  · subst hb; simp [stepM, hl]
-  · simp [stepM, hs]
-  · exact if_neg fun hc => by rw [hc.2] at hs; cases hs
-
-theorem pushM_parked {m m' : LogStateM} {b : ByteArray} (hi : SealedParked m) (h : pushM m b = some m') :
-    SealedParked m' := by
-  obtain ⟨e, s, -, -, -, hs, rfl⟩ := pushM_step h
-  have hp := stepM_parked hi hs
-  exact hp
-
-theorem init_parked : SealedParked LogStateM.init := fun _ h => by
-  simp [LogStateM.init, LogStateM.shard, ShardM.init] at h
+/-- The post-cutover path (S3 review HIGH-1): on a parked unsealed shard a seal of `t` and then a
+    resume whose permit tip is `(t, c)` both step, leaving the shard sealed at `t`, live, `last = (t, c)`. -/
+theorem stepM_seal_resume {m : LogStateM} {k : Nat} {t c p : Bytes} (hl : (m.shard k).live = false)
+    (hn : (m.shard k).sealed = none) (hp : permitTip p = some (some (t, c))) :
+    ((stepM m (.seal k t)).bind fun m1 => stepM m1 (.resume k p)).map (·.shard k) =
+      some { m.shard k with sealed := some t, live := true, last := some (t, c) } := by
+  have h1 : stepM m (.seal k t) = some { m with shards := m.shards.insert k { m.shard k with sealed := some t } } :=
+    if_pos ⟨hl, hn⟩
+  rw [h1, Option.bind_some]
+  have hm : ∀ a b c d s x, (LogStateM.mk a b c d s).shard x = s.getD x ShardM.init := fun _ _ _ _ _ _ => rfl
+  simp [stepM, hp, hm, Std.TreeMap.getD_insert, Nat.compare_eq_eq]
+  exact hl
 
 /-- A push decodes `b` to one entry (well formed and canonical by `decodeEntry3B_canonical`), links
     it to the current head at the next index, grows the log by one, moves the head to the SHA3 of

@@ -11,7 +11,13 @@ Synthetic, nonpayment; moves no money.
 from __future__ import annotations
 
 import hashlib
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from typing import Final
+import unittest
 
 TAG: Final = b"RR/GATE/TENANT-LOG/v3\x00"
 DIGEST: Final = 64
@@ -126,3 +132,29 @@ def decode(data: bytes) -> tuple[int, bytes, str, tuple]:
 def encode(idx: int, prev: bytes, kind: str, fields: tuple) -> bytes:
     body = {"batch": batch, "resume": resume, "seal": seal, "segment": segment}[kind](*fields)
     return entry_in(idx, prev, body)
+
+
+def d(n: int) -> bytes:
+    return hashlib.sha3_512(bytes([n])).digest()
+
+
+def lean_leg(case: unittest.TestCase, module: str, runner: str, vectors: Path, saved: Path, want: str) -> None:
+    """The built module is current, `lean --run <runner> <vectors>` prints `want`, and so does the saved output."""
+    lake = shutil.which("lake") or os.path.join(os.path.expanduser("~"), ".elan", "bin", "lake")
+    lean = vectors.parents[2] / "lean"
+    built = subprocess.run([lake, "build", "--no-build", f"BlindLedger.Gate.Engine.{module}"], cwd=lean,
+                           capture_output=True, text=True, timeout=600)
+    case.assertEqual(built.returncode, 0, f"Engine.{module} is stale; run `lake build` in lean/\n" + built.stdout[-1500:])
+    run = subprocess.run([lake, "env", "lean", "--run", f"BlindLedger/Gate/Engine/{runner}.lean", str(vectors)],
+                         cwd=lean, capture_output=True, text=True, timeout=600)
+    case.assertEqual(run.returncode, 0, run.stderr[-1500:])
+    diff = [g for g, w in zip(run.stdout.splitlines(), want.splitlines()) if g != w]
+    case.assertEqual(run.stdout, want, "first Lean lines that differ: " + " | ".join(diff[:4])[:1200])
+    case.assertEqual(saved.read_text("utf-8"), want)
+
+
+def emit_main(render) -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--emit":
+        Path(sys.argv[2]).write_text(render(), encoding="utf-8", newline="\n")
+    else:
+        unittest.main()

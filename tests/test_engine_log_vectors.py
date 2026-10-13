@@ -8,12 +8,7 @@ Emit the vector file from the repo root with `python -m tests.test_engine_log_ve
 
 from __future__ import annotations
 
-import hashlib
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import sys
 import unittest
 
 from tests import right_rail_gate_log3 as log3
@@ -25,10 +20,7 @@ LEAN = ROOT / "lean"
 LOG_LEAN = LEAN / "BlindLedger" / "Gate" / "Engine" / "Log.lean"
 
 
-def d(n: int) -> bytes:
-    return hashlib.sha3_512(bytes([n])).digest()
-
-
+d = log3.d
 PREV = d(0)
 ROWS = [(1, 2**1031, 7), (0, 5, 0), (255, 0, 2**32 - 1)]
 GOOD = {
@@ -138,16 +130,8 @@ class Log3Codec(unittest.TestCase):
 class Log3AgainstLean(unittest.TestCase):
     def test_python_matches_lean(self) -> None:
         self.assertEqual(VECTORS.read_text("utf-8"), render(), "stale vector file; re-emit it")
-        lake = shutil.which("lake") or os.path.join(os.path.expanduser("~"), ".elan", "bin", "lake")
-        built = subprocess.run([lake, "build", "--no-build", "BlindLedger.Gate.Engine.Log"], cwd=LEAN,
-                               capture_output=True, text=True, timeout=600)
-        self.assertEqual(built.returncode, 0, "Engine.Log is stale; run `lake build` in lean/\n" + built.stdout[-1500:])
-        run = subprocess.run([lake, "env", "lean", "--run", "BlindLedger/Gate/Engine/LogVectors.lean", str(VECTORS)],
-                             cwd=LEAN, capture_output=True, text=True, timeout=600)
-        self.assertEqual(run.returncode, 0, run.stderr[-1500:])
         want = "".join(f"{name} {verdict(data)}\n" for name, data, _ in vectors())
-        self.assertEqual(run.stdout, want)
-        self.assertEqual(LEAN_OUT.read_text("utf-8"), want)
+        log3.lean_leg(self, "Log", "LogVectors", VECTORS, LEAN_OUT, want)
 
 
 def render() -> str:
@@ -155,7 +139,4 @@ def render() -> str:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--emit":
-        Path(sys.argv[2]).write_text(render(), encoding="utf-8", newline="\n")
-    else:
-        unittest.main()
+    log3.emit_main(render)

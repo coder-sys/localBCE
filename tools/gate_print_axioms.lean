@@ -157,9 +157,8 @@ import BlindLedger.Gate.Engine.Frame
 #print axioms BlindLedger.Gate.Engine.E4b_snapDigest_binds
 #print axioms BlindLedger.Gate.Engine.E5_replay_from_snap
 #print axioms BlindLedger.Gate.Engine.pushM_step
-#print axioms BlindLedger.Gate.Engine.stepM_parked
 #print axioms BlindLedger.Gate.Engine.stepM_sealed_final
-#print axioms BlindLedger.Gate.Engine.pushM_parked
+#print axioms BlindLedger.Gate.Engine.stepM_seal_resume
 #print axioms BlindLedger.Gate.Engine.E8_frame_total
 #print axioms BlindLedger.Gate.Engine.decodeFrame_app
 #print axioms BlindLedger.Gate.Engine.C5_bytes_refine
