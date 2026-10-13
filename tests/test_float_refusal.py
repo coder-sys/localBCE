@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from app import right_rail_financial_cash_file_independent as check
+from app import right_rail_financial_owner as writer
 from app import right_rail_financial_owner_independent as independent
 
 REFUSED = {"1.5": "float", "1e3": "float", "-0.0": "float", "NaN": "constant", "Infinity": "constant", "-Infinity": "constant"}
@@ -49,6 +50,29 @@ class FloatRefusalTests(unittest.TestCase):
         value = independent._parse_json(raw, "intake")
         self.assertEqual((independent._canonical(value), check._parsed(raw.encode("ascii"))), (raw.encode("ascii"), value))
         self.assertIs(type(value["amount_cents"]), int)
+
+    def test_the_writer_reads_json_through_the_same_strict_parser_and_never_exports_or_restores_a_float(self):
+        for number, kind in REFUSED.items():
+            for raw in (number, f'{{"values":[{number}]}}', f'{{"a":{{"b":[{number}]}}}}'):
+                with self.subTest(raw=raw):
+                    with self.assertRaisesRegex(writer.FinancialIntegrityError, "^stored$"):
+                        writer._loads(raw, writer.FinancialIntegrityError, "stored")
+                    with self.assertRaisesRegex(writer.FinancialIntegrityError, "^stored$"):
+                        writer._stored_object(raw, "stored")
+                    with self.assertRaisesRegex(writer.FinancialContinuityError, "^continuity_package_canonical$"):
+                        writer.FinancialOwner.validate_continuity_package(raw.encode("ascii"))
+        for limit, past in BOUNDS.values():
+            self.assertEqual(writer._loads(limit, writer.FinancialIntegrityError, "stored"), independent._parse_json(limit, "x"))
+            with self.assertRaisesRegex(writer.FinancialIntegrityError, "^stored$"):
+                writer._loads(past, writer.FinancialIntegrityError, "stored")
+        for text in ('{"b":1,"a":2}', '{"a":1,"a":2}', "", '{"a":1} '):  # unsorted, duplicate key, empty, padded
+            with self.subTest(text=text), self.assertRaisesRegex(writer.FinancialIntegrityError, "^stored$"):
+                writer._loads(text.encode("ascii"), writer.FinancialIntegrityError, "stored")
+        self.assertEqual(writer._loads(b'{"a":[1,null]}', writer.FinancialIntegrityError, "stored"), {"a": [1, None]})
+        for value in (1.5, 2.0, float("nan")):
+            for convert in (writer.FinancialOwner._export_value, writer.FinancialOwner._import_value):
+                with self.subTest(value=value), self.assertRaisesRegex(writer.FinancialContinuityError, "^continuity_value$"):
+                    convert(value)
 
     def test_the_quarantine_scan_finds_each_row_past_the_grammar_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
