@@ -1,6 +1,6 @@
 """Constitution III.3: an exact retry is DUPLICATE and writes nothing, even after the owner clock moved; support,
-reversal and offset retries ignore expected_revision, payment retries need the original one; a different payload at a
-stale revision still conflicts. Also: canonical JSON and continuity packages never accept NaN or Infinity."""
+reversal and offset retries ignore expected_revision; a payment comes only through intake (R5), whose exact resend
+returns the first answer; a different payload at a stale revision still conflicts, and a payment's is held. Also: canonical JSON and continuity packages never accept NaN or Infinity."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 from app.right_rail_financial_owner import FinancialContinuityError, FinancialInputError, FinancialIntegrityError, FinancialOwner, FinancialRevisionError, _canonical
+from tests.rightrail_intake_rows import pay
 from tests.test_right_rail_financial_followthrough import RULES, _build_r_store, _history
 
 
@@ -20,7 +21,7 @@ class RetryOrderTests(unittest.TestCase):
             payment = dict(amount_cents=5_000, event_at_ms=store.clock.value, source_id="state-collections")
             writes = {
                 "support": ("item-r3", lambda item, tag, rev: store.record_support_evidence(item_id=item, evidence_id=f"evidence:support:{tag}", common_origin_id=f"origin:support:{tag}", expected_revision=rev)),
-                "payment": ("item-r3", lambda item, tag, rev: store.record_payment_evidence(item_id=item, payment_id=f"payment:{tag}", common_origin_id=f"origin:pay:{tag}", evidence_id=f"evidence:pay:{tag}", expected_revision=rev, **payment)),
+                "payment": ("item-r3", lambda item, tag, rev: pay(store, item_id=item, payment_id=f"payment:{tag}", common_origin_id=f"origin:pay:{tag}", evidence_id=f"evidence:pay:{tag}", expected_revision=rev, **payment)),
                 "reversal": ("item-r1", lambda item, tag, rev: store.reverse_payment(item_id=item, payment_id="payment:r1", evidence_id=f"evidence:reversal:{tag}", expected_revision=rev)),
                 "offset": ("item-r2", lambda item, tag, rev: store.record_offset_claim(item_id=item, claim_id=f"claim:{tag}", evidence_id=f"evidence:offset:{tag}", expected_revision=rev, **offset)),
             }
@@ -31,11 +32,15 @@ class RetryOrderTests(unittest.TestCase):
                     self.assertGreater(store.obligation_detail(item)["revision"], original)
                     store.clock.value += 60_000  # the owner clock moves before the retry (reversal takes its time from it)
                     before, detail = _history(store), store.obligation_detail(item)
-                    self.assertEqual(write(item, "a", original)["status"], "DUPLICATE")
+                    self.assertEqual(write(item, "a", original)["status"], "RECORDED" if name == "payment" else "DUPLICATE")  # an intake resend: its first answer
                     if name != "payment":  # retry identity ignores expected_revision here, as for reporting and acknowledgment
                         for revision in (None, original + 1, detail["revision"]):
                             self.assertEqual(write(item, "a", revision)["status"], "DUPLICATE")
                     self.assertEqual((_history(store), store.obligation_detail(item)), (before, detail))
+                    if name == "payment":  # held, not raised: the intake records the file and its held row, and no cash moves
+                        self.assertEqual({key: write(item, "b", original)[key] for key in ("status", "reason")}, {"status": "HELD", "reason": "obligation_revision_conflict"})
+                        self.assertEqual((_history(store)[0], store.obligation_detail(item)), (before[0] + 1, detail))
+                        continue
                     with self.assertRaisesRegex(FinancialRevisionError, "^obligation_revision_conflict$"):
                         write(item, "b", original)
                     self.assertEqual((_history(store), store.obligation_detail(item)), (before, detail))

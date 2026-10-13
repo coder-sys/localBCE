@@ -27,6 +27,7 @@ from app.right_rail_financial_owner import (
     SyntheticTrustedAuthority,
 )
 from tests import rightrail_financial_expected_cases as expected
+from tests.rightrail_intake_rows import pay
 from tests.test_right_rail_financial_acceptance import (
     _control_pack_from_fixture,
     _image,
@@ -845,8 +846,8 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             store = self._build_base()
             with patch.object(adapter, "_record_wire", encode):
                 for number in range(6):
-                    store.record_payment_evidence(item_id=expected.H_ITEM_ID, payment_id=f"cache-payment-{number}", common_origin_id=f"cache-origin-{number}",
-                                                  amount_cents=100, evidence_id=f"cache-evidence-{number}", event_at_ms=expected.CASH_EVENT_MS)
+                    pay(store, item_id=expected.H_ITEM_ID, payment_id=f"cache-payment-{number}", common_origin_id=f"cache-origin-{number}",
+                        amount_cents=100, evidence_id=f"cache-evidence-{number}", event_at_ms=expected.CASH_EVENT_MS)
             directory = self._path(f"history-{len(histories)}")
             store.export_history(directory)
             histories.append({path.name: path.read_bytes() for path in directory.iterdir()})
