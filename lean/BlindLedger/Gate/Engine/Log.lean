@@ -301,7 +301,7 @@ theorem Keeps.trans {a b c : LogStateM} (h1 : Keeps a b) (h2 : Keeps b c) : Keep
 
 theorem shard_insert (m : LogStateM) (k a : Nat) (s : ShardM) :
     ({ m with shards := m.shards.insert k s } : LogStateM).shard a = if k = a then s else m.shard a := by
-  simp only [LogStateM.shard, Std.TreeMap.getD_insert, LawfulEqCmp.compare_eq_iff_eq]
+  simp only [LogStateM.shard, Std.TreeMap.getD_insert, Nat.compare_eq_eq]
 
 theorem stepM_keep {m m' : LogStateM} {b : Body3} (h : stepM m b = some m') : Keeps m m' := by
   intro a
@@ -320,7 +320,7 @@ theorem stepM_keep {m m' : LogStateM} {b : Body3} (h : stepM m b = some m') : Ke
       by_cases hka : k = a
       · rw [if_pos hka]; subst hka; exact ⟨fun _ => rfl, fun _ => rfl⟩
       · rw [if_neg hka]; exact ⟨fun _ => rfl, id⟩
-  | seal k t =>
+  | «seal» k t =>
     simp only [stepM] at h
     split at h
     next hc =>
@@ -350,7 +350,8 @@ theorem pushM_chain {m m' : LogStateM} {e : Entry3} (h : pushM m e = some m') :
       rw [hs] at h
       have h' : some { s with len := m.len + 1, head := entryDigest3 e } = some m' := h
       cases h'
-      exact ⟨hc.1, hc.2, rfl, rfl, stepM_keep hs⟩
+      have hk : Keeps m s := stepM_keep hs
+      exact ⟨hc.1, hc.2, rfl, rfl, hk⟩
   next => cases h
 
 /-- Folding pushes over a list: the log grows by exactly the list length, append-only. -/
