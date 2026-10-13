@@ -57,6 +57,19 @@ def pinned(db: Path, shard: bool) -> str:
 # spine, shard0..shard3 of 12 files x 300 lines at K=4, recorded from the per-file code at HEAD 83a79331 (script scratch-spine3/pin_tables.py), before any group existed
 GROUP_PINNED = {"FL": ["a3ad9c4cbccc3ff1", "8d7e5b0aa7a55d05", "59802cdeb36c4859", "447c83213a0e82ec", "ed63467592ab5a8c"],
                 "DE": ["ccc7eb40344c7153", "f8069f7e6d4c431f", "85a3986dab841d57", "8e06fdff80af5e0a", "46842524f7b28356"]}
+# sha256[:16] of each shard's financial_events rows after the template's (sequence above the template's last, 11) without previous_head and head, the only two columns
+# that hold wall-clock stamps (LOW-6): sequence, id, aggregate, kind, revisions, payload text and digest, time; 12 files x 300 lines at K=4, recorded at HEAD 81a71903 (run s1cf4n)
+EVENT_PINNED = {"FL": ["d87ec6eb1f12ea3c", "c77d9354059972e9", "53355d26265ba9f1", "557ce5bcbda3261c"], "DE": ["0b0b2f54d4cb6a25", "55da35f0b7de95c7", "7947de0c1397e23f", "8a4ed8c7e20a38f5"]}
+
+
+def event_pin(db: Path, seq0: int) -> str:
+    with sqlite3.connect(str(db)) as c:
+        rows = c.execute("SELECT event_sequence,event_id,aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,committed_at_ms FROM financial_events"
+                         " WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall()
+    return hashlib.sha256(repr(rows).encode()).hexdigest()[:16]
+
+
+TABLES5 = ("applied", "payments", "evidence", "commands", "charges")
 FAULT_FILE = 2  # the third file: its shard check fails (test only)
 
 
@@ -510,6 +523,127 @@ class ShardBench(unittest.TestCase):
             shard.stats()
             self.assertEqual(sqlite3.connect(str(work / "s.sqlite3")).execute("SELECT COUNT(*) FROM applied").fetchone()[0], 0, fault)
 
+    def fresh_shard(self, name: str):
+        work = self.tmp / name
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir()
+        shutil.copyfile(self.template, work / "s.sqlite3")
+        return sb.Shard(0, work / "s.sqlite3"), work / "s.sqlite3"
+
+    def refused(self, name: str, message: str, patch) -> None:
+        """K=1 part of file 0 built by a shard that `patch(shard, parts)` made wrong: the build is refused with `message`, nothing is left open, written or applied, memory is back."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        shard, db = self.fresh_shard(name)
+        with sqlite3.connect(str(db)) as c:
+            counts0 = [c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES5]
+        head, w, seq0, began = shard.w.head, shard.w, shard.w.seq, dict(shard.w.revision)
+        patch(shard, pickle.loads(prep.blobs[0]))
+        with self.assertRaises(rb.FinancialIntegrityError) as caught:
+            shard.build(prep.n, prep.index, "pool", 1, prep.blobs[0], head, prep.verdicts[0])
+        self.assertIn(message, str(caught.exception), name)
+        self.assertFalse(shard.c.in_transaction)
+        self.assertEqual((w.head, w.seq, w.revision), (head, seq0, began), name)
+        shard.stats()
+        with sqlite3.connect(str(db)) as c:
+            self.assertEqual([c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in TABLES5], counts0, name)
+
+    def test_shard_check_refuses_a_builder_whose_events_differ_from_the_part_though_every_id_digest_and_link_is_recomputed(self) -> None:
+        """MED-A, MED-B, LOW-7: each fault rewrites the built events from a different content, then renumbers, re-digests and re-links them from the pre-head, so the store equals
+        the build and the chain runs; only the recompute from the part can refuse them."""
+        def rechained(seq0, previous, rows, seqs=None, pd=rb.sha):
+            out = []
+            for i, (ob, kind, before, after, payload, at) in enumerate(rows):
+                seq, digest = seqs[i] if seqs else seq0 + i + 1, pd(payload)
+                out.append((seq, rb.sha("event", seq), "OBLIGATION", ob, kind, before, after, payload, digest, previous, rb.sha(previous, digest), at))
+                previous = out[-1][10]
+            return out
+
+        def swap(rows, ids):
+            rows[0], rows[1] = rows[1], rows[0]
+
+        def drop_duplicate(rows, ids):
+            rows[1] = rows[0]
+
+        def wrong_obligation(rows, ids):
+            ob, kind, before, after, payload, at = rows[0]
+            other = next(x for x in ids if x != ob)
+            rows[0] = (other, kind, before, after, payload.replace(f'"{ob}"', f'"{other}"'), at)
+
+        def wrong_kind(rows, ids):
+            ob, kind, before, after, payload, at = rows[0]
+            rows[0] = (ob, "PAYMENT_REVERSAL", before, after, payload.replace(kind, "PAYMENT_REVERSAL"), at)
+
+        def wrong_revision(rows, ids):
+            ob, kind, before, after, payload, at = rows[0]
+            rows[0] = (ob, kind, before + 1, after + 1, payload.replace(f'"before":{before},"after":{after}', f'"before":{before + 1},"after":{after + 1}'), at)
+
+        def wrong_time(rows, ids):
+            rows[0] = rows[0][:5] + (rows[0][5] + 1,)
+
+        def wrong_payload_text(rows, ids):
+            rows[0] = rows[0][:4] + (rows[0][4].replace('"ref":"', '"ref":"x'),) + rows[0][5:]
+
+        faults = {"swap_order": swap, "drop_one_duplicate_another": drop_duplicate, "wrong_obligation": wrong_obligation, "wrong_kind": wrong_kind, "wrong_revision": wrong_revision,
+                  "wrong_time": wrong_time, "wrong_payload_text": wrong_payload_text, "skipped_sequence": None, "wrong_payload_digest": None}
+        for fault, edit in faults.items():
+            def patch(shard, parts, fault=fault, edit=edit):
+                w = shard.w
+                real = w.mutations
+
+                def mutations(t, *args):
+                    seq0, head0 = w.seq, w.head
+                    real(t, *args)
+                    rows = [(e[3], e[4], e[5], e[6], e[7], e[11]) for e in t["financial_events"]]
+                    seqs = [seq0 + i + 1 + (i > 0) for i in range(len(rows))] if fault == "skipped_sequence" else None  # the second event on skips one
+                    if edit:
+                        edit(rows, w.obl_ids)
+                    out = rechained(seq0, head0, rows, seqs, (lambda payload: rb.sha(payload, "x")) if fault == "wrong_payload_digest" else rb.sha)
+                    t["financial_events"][:] = out
+                    w.seq, w.head = out[-1][0], out[-1][10]
+                w.mutations = mutations
+            self.refused(f"wrong-{fault}", "shard_chain", patch)
+
+    def test_shard_check_refuses_money_that_differs_from_the_part(self) -> None:
+        """MED-C: the part's cents are recomputed independently of the builder and compared with what the writes left in payments, evidence and each obligation's received cash."""
+        prep = sb.prepare(sb.tables(self.template, 1), 0, self.files[0][0].rows, 1)
+        parts = pickle.loads(prep.blobs[0])
+        self.assertLess(len({p[7] for p in parts}), len(parts))  # an obligation takes more than one line of the part, so overwriting its cents differs from adding them
+
+        def tamper(table, column, delta):
+            def patch(shard, _):
+                w, real = shard.w, shard.w.write
+                w.write = lambda name, rows: real(name, [r[:column] + (r[column] + delta,) + r[column + 1:] if i == 0 else r for i, r in enumerate(rows)] if name == table else rows)
+            return patch
+
+        def overwrite_not_add(shard, _):
+            w, real = shard.w, shard.w.mutations
+
+            def mutations(t, touched, *args):
+                real(t, touched, *args)
+                touched.clear()
+                touched.update({p[7]: p[4] for p in parts})  # the last line of each obligation replaces the sum
+            w.mutations = mutations
+
+        def extra_cash(shard, _):
+            w, real = shard.w, shard.w.finish
+
+            def finish(*args):
+                real(*args)
+                w.c.execute("UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE obligation_id=?", (parts[0][7],))
+            w.finish = finish
+
+        def dropped_payment(shard, _):
+            w, real = shard.w, shard.w.write
+            w.write = lambda name, rows: real(name, rows[1:] if name == "payments" else rows)
+
+        def wrong_item(shard, _):
+            w, real = shard.w, shard.w.write
+            w.write = lambda name, rows: real(name, [r[:2] + (next(x for x in w.obl.values() if x != r[2]),) + r[3:] if i == 0 else r for i, r in enumerate(rows)] if name == "payments" else rows)
+
+        for name, patch in {"payment_amount": tamper("payments", 5, 1), "evidence_amount": tamper("evidence", 12, 1), "overwrite_not_add": overwrite_not_add, "extra_cash": extra_cash,
+                            "dropped_payment": dropped_payment, "payment_item": wrong_item}.items():
+            self.refused(f"money-{name}", "shard_money", patch)
+
     def test_abort_after_shards_built_leaves_every_database_unchanged_and_retry_matches(self) -> None:
         clean = self.drive(3, "clean")
         work = self.tmp / "abort"
@@ -650,6 +784,10 @@ class ShardBench(unittest.TestCase):
             self.assertEqual(self.all_digests(one), self.all_digests(eight), name)  # every row of the spine and of each shard: records bytes, heads, cells, shard rows
             got = [pinned(eight / "spine.sqlite3", False)] + [pinned(eight / f"shard{k}.sqlite3", True) for k in range(4)]
             self.assertEqual(got, GROUP_PINNED[name], name)  # and both equal what the per-file code stored before groups existed
+            with sqlite3.connect(str(self.template)) as c:
+                seq0 = c.execute("SELECT MAX(event_sequence) FROM financial_events").fetchone()[0]
+            self.assertEqual(seq0, 11)
+            self.assertEqual([event_pin(eight / f"shard{k}.sqlite3", seq0) for k in range(4)], EVENT_PINNED[name], name)  # the events themselves, not only the tables around them
 
     def test_t2_failed_shard_check_on_file_three_gives_the_group_of_one_stores(self) -> None:
         files = sb.corpus(20261006, LINES, 12)
@@ -791,8 +929,8 @@ class ShardBench(unittest.TestCase):
         finally:
             spine.close()
 
-    def test_f5f_restored_earlier_copy_of_a_shard_is_refused_before_commit(self) -> None:
-        """Restart stand-in (the bench has no mid-run restart path): a second run starts all four shards from shard 3's earlier copy, the snapshot taken before the base run's second group. Its applied rows are the base run's first group, so the second run's group (a file the base run never held) is refused on the BUILT compare before any spine COMMIT. A shard's applied n is its primary key, so the second run numbers its records after the copy's last applied n."""
+    def test_f5f_a_fresh_spine_refuses_shards_that_already_hold_applied_parts_before_commit(self) -> None:
+        """What this proves, and not more: a fresh spine (no records) started over shard 3's earlier copy, which holds the base run's first group, refuses its first group on the BUILT compare of applied count and last n, before any spine COMMIT. It is NOT a stale-copy-against-a-spine-that-has-records test: that refusal is f5a-f5e through replay. A shard's applied n is its primary key, so the run numbers its records after the copy's last applied n."""
         snap = self.f5_base()[1]
         with sqlite3.connect(str(snap)) as c:
             last = c.execute("SELECT MAX(n) FROM applied").fetchone()[0]

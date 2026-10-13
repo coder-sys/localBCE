@@ -197,6 +197,8 @@ class Shard:
             w.mutations(t, touched, index, t_f, [(ob, key, amount, "PAYMENT_RECEIVED") for _, _, _, key, amount, _, _, ob, _ in parts])
             if parts and w.head == pre_head:  # a part that adds events must move the head (ShardSplit.lean `adv`): a closed chain is refused before anything is written
                 raise rb.FinancialIntegrityError("shard_fixed_point")
+            self.chain(parts, seq0, pre_head, t_f, began, t["financial_events"])  # a wrong build is refused before any write
+            cash0 = self.cash(sorted({p[7] for p in parts}))
             digest = hashlib.sha3_256()
             for name, data in t.items():
                 digest.update(pickle.dumps(data, 5))
@@ -208,7 +210,7 @@ class Shard:
             self.applied_count, self.last_applied_n = count0 + 1, n
             w.c.execute("UPDATE financial_meta SET sequence=?,history_head=?", (w.seq, w.head))
             c0 = time.perf_counter()
-            self.check(index, parts, seq0, pre_head, t["financial_events"])
+            self.check(index, parts, seq0, t_f, t["financial_events"], cash0)
             self.check_s += time.perf_counter() - c0
         except BaseException:
             if w.c.in_transaction:
@@ -226,21 +228,56 @@ class Shard:
         self.busy += time.perf_counter() - t0
         return w.head, digest.digest()
 
-    def check(self, index: int, parts: list, seq0: int, pre_head: bytes, built: list) -> None:
-        """Shard check: the stored events equal the events mutations built, and each event's id, payload digest and head are recomputed from its row and its
-        predecessor (the product checker's rule, so a builder that is wrong but self-consistent is refused); the links run from the pre-head, and rows, charges
-        and amounts equal the part."""
-        w, previous = self.w, pre_head
+    def chain(self, parts: list, seq0: int, pre_head: bytes, t_f: int, began: dict, built: list) -> None:
+        """Before anything is written: every event mutations built is recomputed from the part and the pre-state alone and compared field by field, in order (the
+        product checker's rule, independent.py _verify_events, so a builder that is wrong but self-consistent is refused): sequence seq0+i+1 without a gap, id,
+        aggregate, kind, revisions from the obligation's pre-revision, payload text, payload digest, link from the pre-head, head and time."""
+        previous, revision = pre_head, dict(began)
+        if len(built) != len(parts) or self.w.seq != seq0 + len(parts):
+            raise rb.FinancialIntegrityError("shard_chain")
+        for i, (e, p) in enumerate(zip(built, parts)):
+            ob, key = p[7], p[3]
+            before, revision[ob] = revision[ob], revision[ob] + 1
+            payload = f'{{"kind":"PAYMENT_RECEIVED","obligation":"{ob}","before":{before},"after":{before + 1},"ref":"{key}"}}'
+            if (e[0] != seq0 + i + 1 or e[1] != rb.sha("event", e[0]) or e[2:8] != ("OBLIGATION", ob, "PAYMENT_RECEIVED", before, before + 1, payload)
+                    or e[8] != rb.sha(payload) or e[9] != previous or e[10] != rb.sha(previous, e[8]) or e[11] != t_f):
+                raise rb.FinancialIntegrityError("shard_chain")
+            previous = e[10]
+        if previous != self.w.head:
+            raise rb.FinancialIntegrityError("shard_chain")
+
+    def stored(self, select: str, ids: list) -> list:
+        """The rows `select` (ending in `WHERE <key column>`) finds for these keys, 500 keys to a statement."""
+        out = []
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            out += self.w.c.execute(f"{select} IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+        return out
+
+    def cash(self, obs: list) -> dict:
+        return dict(self.stored("SELECT obligation_id,received_cash_cents FROM obligations WHERE obligation_id", obs))
+
+    def check(self, index: int, parts: list, seq0: int, t_f: int, built: list, cash0: dict) -> None:
+        """Shard check after the writes (chain() has already refused a wrong build): the stored events equal the built ones; charges, and the money rows the part
+        wrote (payments, evidence, each obligation's received cash) equal an independent recompute from the part (cash0: the obligations' cash before the writes)."""
+        w, obl = self.w, self.w.obl
         events = w.c.execute("SELECT * FROM financial_events WHERE event_sequence>? ORDER BY event_sequence", (seq0,)).fetchall()
         if events != built:
             raise rb.FinancialIntegrityError("shard_chain")
-        for e in events:
-            if e[9] != previous or e[1] != rb.sha("event", e[0]) or e[8] != rb.sha(e[7]) or e[10] != rb.sha(previous, e[8]):
-                raise rb.FinancialIntegrityError("shard_chain")
-            previous = e[10]
         count, cents = w.c.execute("SELECT COUNT(*),COALESCE(SUM(cents),0) FROM charges WHERE row_key BETWEEN ? AND ?", (index * rb.KEY, (index + 1) * rb.KEY - 1)).fetchone()
-        if previous != w.head or len(events) != len(parts) or count != len(parts) or cents != sum(p[4] for p in parts):
+        if count != len(parts) or cents != sum(p[4] for p in parts):
             raise rb.FinancialIntegrityError("shard_check")
+        cash: dict[str, int] = {}
+        for p in parts:
+            cash[p[7]] = cash.get(p[7], 0) + p[4]
+        pay, ev = f"pay:{index:06d}:", f"ev:{index:06d}:"
+        payments = sorted((pay + p[3], p[7], obl[p[7]], ev + p[3], f"x12/{p[3]}", abs(p[4]) or 1, t_f, 1, None) for p in parts)
+        evidence = sorted((ev + p[3], obl[p[7]], "PAYMENT", f"x12/{p[3]}", "x12", "v1", "", t_f, t_f, t_f, p[4], None, None) for p in parts)
+        if (self.cash(list(cash)) != {ob: cash0[ob] + max(c, 0) for ob, c in cash.items()}
+                or sorted(self.stored("SELECT * FROM payments WHERE payment_id", [r[0] for r in payments])) != payments
+                or sorted(self.stored("SELECT evidence_id,item_id,kind,common_origin_id,source_id,source_version,local_ref,applicable_at_ms,event_at_ms,received_at_ms,amount_cents,reversal_of,supersedes"
+                                      " FROM evidence WHERE evidence_id", [r[0] for r in evidence])) != evidence):
+            raise rb.FinancialIntegrityError("shard_money")
 
     def commit(self) -> None:
         c0, b0 = time.perf_counter(), io_write_bytes()
