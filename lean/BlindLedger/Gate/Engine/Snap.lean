@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Engine.Log
 import BlindLedger.Gate.StateV2
+import BlindLedger.Sha3FastEq
 
 /-! ENGINE-0 S2/S3b (design `engine0-design-20261013` sections 1.5 and 7): the ENGINE-SNAP/v2
     snapshot codec and digest.  Synthetic, nonpayment; moves no money.
@@ -551,6 +552,94 @@ theorem E5_replay_from_snap (log : List ByteArray) (i : Nat) {m0 m : LogStateM}
     List.take_append_drop]
   exact foldM_abs _ (abs_canon m)
 
+/-! ## Well-formedness of a push -/
+
+theorem sha3_len (x : Bytes) : (sha3 x).length = digestBytes := by
+  unfold sha3
+  rw [← Semantic.sha3_512_eq]
+  exact Semantic.sha3_512_toList_length _
+
+theorem chainHead_len (l : List Row) : (chainHead sha3 zeroDigest l).length = digestBytes := by
+  cases l with
+  | nil => simp [chainHead, zeroDigest]
+  | cons r l => obtain ⟨kd, i, s⟩ := r; simp only [chainHead, idRegStep]; exact sha3_len _
+
+theorem stateIn_len (m : LogStateM) : (stateIn m).length =
+    m.rhead.length + (4 + (rows m.reg).length) + (4 + (m.shards.toList.flatMap shardRow).length) := by
+  simp only [stateIn, ascIn, lp, List.length_append, natBE_length]
+
+theorem shardRow_len (x : Nat × ShardM) : 4 ≤ (shardRow x).length := by
+  simp only [shardRow, List.length_append, natBE_length]; omega
+
+theorem length_le_flatMap : ∀ l : List (Nat × ShardM), l.length ≤ (l.flatMap shardRow).length
+  | [] => by simp
+  | x :: l => by
+    have h1 := length_le_flatMap l
+    have h2 := shardRow_len x
+    simp only [List.flatMap_cons, List.length_cons, List.length_append]
+    omega
+
+theorem row_le_flatMap {x : Nat × ShardM} {l : List (Nat × ShardM)} (h : x ∈ l) :
+    (shardRow x).length ≤ (l.flatMap shardRow).length := by
+  obtain ⟨a, b, rfl⟩ := List.append_of_mem h
+  simp only [List.flatMap_append, List.flatMap_cons, List.length_append]
+  omega
+
+theorem sealed_lt_row {x : Nat × ShardM} {t : Bytes} (h : x.2.sealed = some t) :
+    t.length < (shardRow x).length := by
+  simp only [shardRow, sealedIn, h, lp, List.length_append, natBE_length]; omega
+
+theorem sealed_bound {m : LogStateM} (hs : (stateIn m).length < 256 ^ 4) {x : Nat × ShardM}
+    (hx : x ∈ m.shards.toList) : ∀ t, x.2.sealed = some t → t.length < 256 ^ 4 := by
+  intro t h
+  have h1 := sealed_lt_row h
+  have h2 := row_le_flatMap hx
+  have h3 := stateIn_len m
+  omega
+
+theorem ascKeys_nil {α : Type} : ascKeys ([] : List (Nat × α)) = true := rfl
+
+theorem wf_facts {m : LogStateM} (hw : m.wf ∨ m = LogStateM.init) :
+    m.rhead = chainHead sha3 zeroDigest m.reg ∧ (∀ x ∈ m.reg, rowFits x) ∧
+      (∀ x ∈ m.shards.toList, ShardM.fits x) := by
+  rcases hw with ⟨-, -, -, -, -, h2, -, h3, -, h1⟩ | rfl
+  · exact ⟨h1, h2, h3⟩
+  · refine ⟨rfl, fun x hx => by simp [LogStateM.init] at hx, fun x hx => ?_⟩
+    obtain ⟨a, b⟩ := x
+    rw [Std.TreeMap.mem_toList_iff_getElem?_eq_some] at hx
+    simp [LogStateM.init, Std.TreeMap.getElem?_emptyc] at hx
+
+theorem shard_fits {m : LogStateM} (hsh : ∀ x ∈ m.shards.toList, ShardM.fits x) {k : Nat}
+    (hk : k < 256 ^ 4) : ShardM.fits (k, m.shard k) := by
+  unfold LogStateM.shard
+  rw [Std.TreeMap.getD_eq_getD_getElem?]
+  cases hg : m.shards[k]? with
+  | none =>
+    simp only [Option.getD_none]
+    unfold ShardM.fits
+    simp [ShardM.init, ascFits, ascKeys_nil, zeroDigest, digestBytes, hk]
+  | some v =>
+    simp only [Option.getD_some]
+    exact hsh _ (Std.TreeMap.mem_toList_iff_getElem?_eq_some.2 hg)
+
+theorem mem_insert_toList {t : Std.TreeMap Nat ShardM} {k : Nat} {v : ShardM} {x : Nat × ShardM}
+    (h : x ∈ (t.insert k v).toList) : x = (k, v) ∨ x ∈ t.toList := by
+  obtain ⟨a, b⟩ := x
+  rw [Std.TreeMap.mem_toList_iff_getElem?_eq_some] at h
+  simp only [Std.TreeMap.getElem?_insert, Nat.compare_eq_eq] at h
+  split at h
+  · next hk => left; cases h; subst hk; rfl
+  · right; exact Std.TreeMap.mem_toList_iff_getElem?_eq_some.2 h
+
+theorem wf_mk (m : LogStateM) (hl : 0 < m.len) (hn : m.len - 1 < 256 ^ 8) (hh : m.head.length = digestBytes)
+    (hrh : m.rhead = chainHead sha3 zeroDigest m.reg) (hreg : ∀ x ∈ m.reg, rowFits x)
+    (hsh : ∀ x ∈ m.shards.toList, ShardM.fits x) (hs : (stateIn m).length < 256 ^ 4) : m.wf := by
+  have h1 := stateIn_len m
+  have h2 := length_le_flatMap m.shards.toList
+  have h3 : m.rhead.length = digestBytes := by rw [hrh]; exact chainHead_len _
+  unfold LogStateM.wf
+  exact ⟨hl, hn, hh, h3, by omega, hreg, by omega, hsh, hs, hrh⟩
+
 /-- S3d review HIGH-2: a push from `init` or a well-formed state gives a well-formed state while it fits
     its widths (`stateIn` under `256 ^ 4` bytes; a batch grows `reg`, a seal tip is unbounded), except a
     RESUME, which leaves a live shard on the zero base until it computes StateV2's base.  `init` itself
@@ -558,7 +647,47 @@ theorem E5_replay_from_snap (log : List ByteArray) (i : Nat) {m0 m : LogStateM}
 theorem pushM_wf {m m' : LogStateM} {b : ByteArray} (hw : m.wf ∨ m = LogStateM.init) (h : pushM m b = some m')
     (hr : ∀ e, decodeEntry3B b = some e → ∀ k p, e.body ≠ .resume k p) (hs : (stateIn m').length < 256 ^ 4) :
     m'.wf := by
-  sorry
+  obtain ⟨e, s, hd, hidx, hprev, hstep, rfl⟩ := pushM_step h
+  obtain ⟨hA, hB, hC⟩ := wf_facts hw
+  obtain ⟨he1, he2, he3⟩ := (decodeEntry3B_canonical hd).1
+  have hnr := hr e hd
+  have hrh := stepM_rhead hA hstep
+  have hs' : (stateIn s).length < 256 ^ 4 := hs
+  have key : (∀ x ∈ s.reg, rowFits x) ∧ (∀ x ∈ s.shards.toList, ShardM.fits x) := by
+    generalize e.body = bd at hstep hnr he3
+    cases bd with
+    | batch bt =>
+      simp only [stepM] at hstep
+      split at hstep
+      · cases hstep
+        refine ⟨fun x hx => ?_, hC⟩
+        rcases List.mem_append.1 hx with hx | hx
+        · exact (he3 : Batch3.wf bt).2.2.2.2.2.1 x hx
+        · exact hB x hx
+      · cases hstep
+    | resume k p => exact (hnr _ _ rfl).elim
+    | «seal» k t =>
+      simp only [stepM] at hstep
+      split at hstep
+      · cases hstep
+        refine ⟨hB, fun x hx => ?_⟩
+        have hb := sealed_bound hs' hx
+        have hx' : x ∈ (m.shards.insert k { m.shard k with sealed := some t }).toList := hx
+        rcases mem_insert_toList hx' with rfl | hx0
+        · have hk : k < 256 ^ 4 := he3
+          obtain ⟨f1, f2, -, f4, f5, f6, f7, f8, f9⟩ := shard_fits hC hk
+          exact ⟨f1, f2, hb, f4, f5, f6, f7, f8, f9⟩
+        · exact hC x hx0
+      · cases hstep
+    | segment sg =>
+      simp only [stepM] at hstep
+      split at hstep
+      · cases hstep; exact ⟨hB, hC⟩
+      · cases hstep
+  refine wf_mk _ (Nat.succ_pos _) ?_ (sha3_len _) hrh key.1 key.2 hs
+  show m.len + 1 - 1 < 256 ^ 8
+  rw [Nat.add_sub_cancel, ← hidx]
+  exact he1
 
 /-- The chain `pushM_wf` needs for E5 (S3d review r2): a resume-free fold from `init` or a well-formed
     state whose result fits its widths ends well formed, or is empty.  Only the end state's width is
