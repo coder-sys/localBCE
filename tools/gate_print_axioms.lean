@@ -166,3 +166,7 @@ import BlindLedger.Gate.Engine.Frame
 #print axioms BlindLedger.Gate.Engine.E8_frame_total
 #print axioms BlindLedger.Gate.Engine.decodeFrame_app
 #print axioms BlindLedger.Gate.Engine.C5_bytes_refine
+#print axioms BlindLedger.Gate.Engine.decodeSnap_canonical
+#print axioms BlindLedger.Gate.Engine.foldM_batches
+#print axioms BlindLedger.Gate.Engine.pushM_wf
+#print axioms BlindLedger.Gate.Engine.foldM_wf

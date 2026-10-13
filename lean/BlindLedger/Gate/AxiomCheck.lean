@@ -349,3 +349,11 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeFrame_app
 /-- info: 'BlindLedger.Gate.Engine.C5_bytes_refine' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.C5_bytes_refine
+/-- info: 'BlindLedger.Gate.Engine.decodeSnap_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeSnap_canonical
+/-- info: 'BlindLedger.Gate.Engine.foldM_batches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.foldM_batches
+/-- info: 'BlindLedger.Gate.Engine.pushM_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_wf
+/-- info: 'BlindLedger.Gate.Engine.foldM_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.foldM_wf

@@ -607,7 +607,7 @@ theorem wf_facts {m : LogStateM} (hw : m.wf ∨ m = LogStateM.init) :
   · refine ⟨rfl, fun x hx => by simp [LogStateM.init] at hx, fun x hx => ?_⟩
     obtain ⟨a, b⟩ := x
     rw [Std.TreeMap.mem_toList_iff_getElem?_eq_some] at hx
-    simp [LogStateM.init, Std.TreeMap.getElem?_emptyc] at hx
+    simp [LogStateM.init] at hx
 
 theorem shard_fits {m : LogStateM} (hsh : ∀ x ∈ m.shards.toList, ShardM.fits x) {k : Nat}
     (hk : k < 256 ^ 4) : ShardM.fits (k, m.shard k) := by
@@ -689,6 +689,121 @@ theorem pushM_wf {m m' : LogStateM} {b : ByteArray} (hw : m.wf ∨ m = LogStateM
   rw [Nat.add_sub_cancel, ← hidx]
   exact he1
 
+theorem flat_le_of_key {t : Std.TreeMap Nat ShardM} {k : Nat} {v : ShardM}
+    (h : ∀ v0, t[k]? = some v0 → (shardRow (k, v0)).length ≤ (shardRow (k, v)).length) :
+    ∀ G : List (Nat × ShardM), (∀ x ∈ G, x.1 = k ∧ t[k]? = some x.2) →
+      G.Pairwise (fun a b => ¬ compare a.1 b.1 = .eq) → (G.flatMap shardRow).length ≤ (shardRow (k, v)).length
+  | [], _, _ => by simp
+  | [x], hk, _ => by
+    obtain ⟨e1, e2⟩ := hk x (by simp)
+    obtain ⟨a1, a2⟩ := x
+    simp only at e1 e2
+    subst e1
+    simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil]
+    exact h _ e2
+  | a :: b :: r, hk, hp => by
+    exfalso
+    have hab := (List.pairwise_cons.1 hp).1 b (by simp)
+    have ha := hk a (by simp)
+    have hb := hk b (by simp)
+    exact hab (Nat.compare_eq_eq.2 (ha.1.trans hb.1.symm))
+
+theorem flat_insert_ge (t : Std.TreeMap Nat ShardM) (k : Nat) (v : ShardM)
+    (h : ∀ v0, t[k]? = some v0 → (shardRow (k, v0)).length ≤ (shardRow (k, v)).length) :
+    (t.toList.flatMap shardRow).length ≤ ((t.insert k v).toList.flatMap shardRow).length := by
+  have p1 := (Std.TreeMap.toList_insert_perm (t := t) (k := k) (v := v)).flatMap_right shardRow
+  have p2 := (List.filter_append_perm (fun x : Nat × ShardM => decide (¬k == x.1)) t.toList).flatMap_right shardRow
+  have hG := flat_le_of_key (t := t) h
+    (t.toList.filter (fun x : Nat × ShardM => !decide (¬k == x.1)))
+    (fun x hx => by
+      obtain ⟨hx1, hx2⟩ := List.mem_filter.1 hx
+      have hk : x.1 = k := (by simpa using hx2 : k = x.1).symm
+      refine ⟨hk, ?_⟩
+      have := Std.TreeMap.mem_toList_iff_getElem?_eq_some.1 (show (x.1, x.2) ∈ t.toList from hx1)
+      rw [hk] at this
+      exact this)
+    ((Std.TreeMap.distinct_keys_toList (t := t)).sublist List.filter_sublist)
+  have l1 := p1.length_eq
+  have l2 := p2.length_eq
+  simp only [List.flatMap_append, List.flatMap_cons, List.length_append] at l1 l2
+  omega
+
+theorem stepM_mono {m s : LogStateM} {bd : Body3} (hA : m.rhead = chainHead sha3 zeroDigest m.reg)
+    (hnr : ∀ k p, bd ≠ .resume k p) (h : stepM m bd = some s) :
+    (stateIn m).length ≤ (stateIn s).length := by
+  have hB := stepM_rhead hA h
+  have l1 : m.rhead.length = digestBytes := by rw [hA]; exact chainHead_len _
+  have l2 : s.rhead.length = digestBytes := by rw [hB]; exact chainHead_len _
+  cases bd with
+  | batch bt =>
+    simp only [stepM] at h
+    split at h
+    · cases h
+      have hr : (rows (bt.regRows ++ m.reg)).length = (rows bt.regRows).length + (rows m.reg).length := by
+        simp [rows, List.flatMap_append]
+      rw [stateIn_len m, stateIn_len]
+      dsimp only at l2 ⊢
+      omega
+    · cases h
+  | resume k p => exact (hnr k p rfl).elim
+  | «seal» k t =>
+    simp only [stepM] at h
+    split at h
+    · next hc =>
+      cases h
+      have hge : ∀ v0, m.shards[k]? = some v0 →
+          (shardRow (k, v0)).length ≤ (shardRow (k, { m.shard k with sealed := some t })).length := by
+        intro v0 hv0
+        have e : m.shard k = v0 := by
+          unfold LogStateM.shard
+          rw [Std.TreeMap.getD_eq_getD_getElem?, hv0]
+          rfl
+        have hsn : v0.sealed = none := by rw [← e]; exact hc.2.1
+        rw [e]
+        simp only [shardRow, sealedIn, hsn, lp, List.length_append, natBE_length]
+        omega
+      have := flat_insert_ge m.shards k { m.shard k with sealed := some t } hge
+      rw [stateIn_len m, stateIn_len]
+      dsimp only at l2 this ⊢
+      omega
+    · cases h
+  | segment sg =>
+    simp only [stepM] at h
+    split at h
+    · cases h; exact Nat.le_refl _
+    · cases h
+
+theorem pushM_mono {m m' : LogStateM} {b : ByteArray} (hA : m.rhead = chainHead sha3 zeroDigest m.reg)
+    (hr : ∀ e, decodeEntry3B b = some e → ∀ k p, e.body ≠ .resume k p) (h : pushM m b = some m') :
+    (stateIn m).length ≤ (stateIn m').length := by
+  obtain ⟨e, s, hd, -, -, hstep, rfl⟩ := pushM_step h
+  have := stepM_mono hA (hr e hd) hstep
+  exact this
+
+theorem foldM_mono (es : List ByteArray) : ∀ {m0 m : LogStateM},
+    m0.rhead = chainHead sha3 zeroDigest m0.reg → es.foldlM pushM m0 = some m →
+    (∀ b ∈ es, ∀ e, decodeEntry3B b = some e → ∀ k p, e.body ≠ .resume k p) →
+    (stateIn m0).length ≤ (stateIn m).length := by
+  induction es with
+  | nil =>
+    intro m0 m _ h _
+    have h' : some m0 = some m := h
+    cases h'
+    exact Nat.le_refl _
+  | cons x es ih =>
+    intro m0 m hA h hr
+    cases hp : pushM m0 x with
+    | none => simp [List.foldlM_cons, hp] at h
+    | some m1 =>
+      rw [List.foldlM_cons, hp] at h
+      have h1 : es.foldlM pushM m1 = some m := h
+      have hA1 : m1.rhead = chainHead sha3 zeroDigest m1.reg := by
+        obtain ⟨e, s, hd, -, -, hst, rfl⟩ := pushM_step hp
+        have := stepM_rhead hA hst
+        exact this
+      exact Nat.le_trans (pushM_mono hA (hr x (List.mem_cons_self ..)) hp)
+        (ih hA1 h1 (fun b hb => hr b (List.mem_cons_of_mem _ hb)))
+
 /-- The chain `pushM_wf` needs for E5 (S3d review r2): a resume-free fold from `init` or a well-formed
     state whose result fits its widths ends well formed, or is empty.  Only the end state's width is
     assumed: a BATCH, SEAL or SEGMENT never shrinks `stateIn`, so every state on the way fits too. -/
@@ -697,7 +812,29 @@ theorem foldM_wf (es : List ByteArray) {m0 m : LogStateM} (hw : m0.wf ∨ m0 = L
     (hr : ∀ b ∈ es, ∀ e, decodeEntry3B b = some e → ∀ k p, e.body ≠ .resume k p)
     (hs : (stateIn m).length < 256 ^ 4) :
     m.wf ∨ (es = [] ∧ m = m0) := by
-  sorry
+  induction es generalizing m0 with
+  | nil =>
+    have h' : some m0 = some m := h
+    cases h'
+    exact Or.inr ⟨rfl, rfl⟩
+  | cons x es ih =>
+    cases hp : pushM m0 x with
+    | none => simp [List.foldlM_cons, hp] at h
+    | some m1 =>
+      rw [List.foldlM_cons, hp] at h
+      have h1 : es.foldlM pushM m1 = some m := h
+      have hr1 : ∀ b ∈ es, ∀ e, decodeEntry3B b = some e → ∀ k p, e.body ≠ .resume k p :=
+        fun b hb => hr b (List.mem_cons_of_mem _ hb)
+      obtain ⟨hA, -, -⟩ := wf_facts hw
+      have hA1 : m1.rhead = chainHead sha3 zeroDigest m1.reg := by
+        obtain ⟨e, s, hd, -, -, hst, rfl⟩ := pushM_step hp
+        have := stepM_rhead hA hst
+        exact this
+      have hs1 : (stateIn m1).length < 256 ^ 4 := Nat.lt_of_le_of_lt (foldM_mono es hA1 h1 hr1) hs
+      have hw1 : m1.wf := pushM_wf hw hp (hr x (List.mem_cons_self ..)) hs1
+      rcases ih (Or.inl hw1) h1 hr1 with h2 | ⟨-, h3⟩
+      · exact Or.inl h2
+      · rw [h3]; exact Or.inl hw1
 
 /-- L4 (S3b review, restated by S3d review HIGH-1): the per-entry fold of a run of BATCH entries is one
     registry update, the batches' rows newest batch first ahead of `reg` and `rhead` moved over exactly
