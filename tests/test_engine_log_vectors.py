@@ -1,4 +1,4 @@
-"""ENGINE-0 S1: the v3 tenant-log entry codec (app/right_rail_gate_log3.py) against
+"""ENGINE-0 S1: the v3 tenant-log entry codec (tests/right_rail_gate_log3.py) against
 lean/BlindLedger/Gate/Engine/Log.lean.  Synthetic, nonpayment, non-PHI.
 
 The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/LogVectors.lean <vectors>` in lean/
@@ -16,7 +16,7 @@ import subprocess
 import sys
 import unittest
 
-from app import right_rail_gate_log3 as log3
+from tests import right_rail_gate_log3 as log3
 
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "tests" / "engine_log" / "log3_v1.vectors"
