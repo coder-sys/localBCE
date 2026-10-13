@@ -565,13 +565,68 @@ theorem reshard_row (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk 
     (k : Nat) (hk : k < pk.k cx.p) (hpos : 0 < (ss.2 k).chg c) :
     ∃ x, ss.1.dir c = some x ∧ tgt (setK pk cx.p K') cx x < K' ∧
       (ss'.2 (tgt (setK pk cx.p K') cx x)).chg c = (ss.2 k).chg c ∧
-      ∀ j, j ≠ tgt (setK pk cx.p K') cx x → (ss'.2 j).chg c = 0 := sorry
+      ∀ j, j ≠ tgt (setK pk cx.p K') cx x → (ss'.2 j).chg c = 0 := by
+  obtain ⟨hok, e⟩ := reshard_eq h
+  obtain ⟨_, _, hK', hkk⟩ := ok_parts hok
+  obtain ⟨x, hx, hh⟩ := (hI c).2 k hpos
+  have hK2 : 0 < (setK pk cx.p K').k cx.p := by rw [setK_k_self]; exact hK'
+  have ht := tgt_lt hK2 x
+  rw [setK_k_self] at ht
+  have hnd : rdir (setK pk cx.p K') cx ss.1.dir c = some (rehome (setK pk cx.p K') cx x) := by
+    simp [rdir, hx]
+  have hhome : (rehome (setK pk cx.p K') cx x).home = .shard (tgt (setK pk cx.p K') cx x) := by
+    simp [rehome, rh, hh]
+  have hmerge : (merge pk cx ss).chg c = (ss.2 k).chg c := merge_at hI c x hx k hh (by rw [hkk]; exact hk)
+  subst e
+  refine ⟨x, hx, ht, ?_, fun j hj => ?_⟩
+  · show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 _).chg c = _
+    rw [new_chg (mem_rT ht)]
+    simp [restrict, hnd, hhome, hmerge]
+  · show (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).chg c = 0
+    by_cases hj' : j ∈ rT pk K' cx
+    · rw [new_chg hj']; simp [restrict, hnd, hhome, Ne.symm hj]
+    · unfold commitShards; rw [if_neg hj']
+      have : ¬ j < max (pk.k cx.p) K' := fun hh => hj' (List.mem_range.2 hh)
+      exact high_zero hI hB j (by omega) c
 
 /-- No row appears from nowhere: a charge at new shard `j` sits at the row's `tgt` and came from an old shard. -/
 theorem reshard_row_src (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h : reshard pk K' cx ss = some ss')
     (c : Cell) (j : Nat) (hpos : 0 < (ss'.2 j).chg c) :
     ∃ x, ss.1.dir c = some x ∧ j = tgt (setK pk cx.p K') cx x ∧
-      ∃ k < pk.k cx.p, (ss.2 k).chg c = (ss'.2 j).chg c := sorry
+      ∃ k < pk.k cx.p, (ss.2 k).chg c = (ss'.2 j).chg c := by
+  obtain ⟨hok, e⟩ := reshard_eq h
+  obtain ⟨_, _, hK', hkk⟩ := ok_parts hok
+  subst e
+  change 0 < (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).chg c at hpos
+  have hj : j ∈ rT pk K' cx := Classical.byContradiction fun hj' => by
+    unfold commitShards at hpos; rw [if_neg hj'] at hpos
+    have : ¬ j < max (pk.k cx.p) K' := fun hh => hj' (List.mem_range.2 hh)
+    have := high_zero hI hB j (by omega) c
+    omega
+  rw [new_chg hj] at hpos
+  obtain ⟨x', hx', hhj⟩ := restrict_pos hpos
+  have hM : 0 < (merge pk cx ss).chg c := Nat.lt_of_lt_of_le hpos restrict_le
+  have hex : ∃ k0 ∈ List.range ss.1.k, (ss.2 k0).chg c ≠ 0 :=
+    Classical.byContradiction fun hcon => by
+      have : (merge pk cx ss).chg c = 0 :=
+        sum_zeroN (fun k => (ss.2 k).chg c) _ fun k hk => Classical.byContradiction fun hh => hcon ⟨k, hk, hh⟩
+      omega
+  obtain ⟨k0, hk0, hne⟩ := hex
+  obtain ⟨x, hx, hh⟩ := (hI c).2 k0 (Nat.pos_of_ne_zero hne)
+  have hmerge : (merge pk cx ss).chg c = (ss.2 k0).chg c := merge_at hI c x hx k0 hh (List.mem_range.1 hk0)
+  have hnd : rdir (setK pk cx.p K') cx ss.1.dir c = some (rehome (setK pk cx.p K') cx x) := by
+    simp [rdir, hx]
+  rw [hnd] at hx'
+  have hx2 : rehome (setK pk cx.p K') cx x = x' := Option.some.inj hx'
+  have hhome : (rehome (setK pk cx.p K') cx x).home = .shard (tgt (setK pk cx.p K') cx x) := by
+    simp [rehome, rh, hh]
+  have hhome2 : (rehome (setK pk cx.p K') cx x).home = .shard j := by rw [hx2]; exact hhj
+  have hjt := Home.shard.inj (hhome2.symm.trans hhome)
+  refine ⟨x, hx, hjt, k0, ?_, ?_⟩
+  · have := List.mem_range.1 hk0; omega
+  · show _ = (commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2 j).chg c
+    rw [new_chg hj]
+    simp [restrict, hnd, hhome2, hmerge]
 
 /-! ## (b) Observational equivalence -/
 
@@ -714,13 +769,48 @@ theorem runW_sim (pk pk' : Pack) (cx : Ctx) (hp : packOk pk = packOk pk') :
 
 theorem norm_reshard (hI : Inv ss) (hK' : 0 < K') :
     norm (merge (setK pk cx.p K') cx (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2))
-      = norm (merge pk cx ss) := sorry
+      = norm (merge pk cx ss) := by
+  rw [merge_reshard hI hK']
+  simp only [norm, ndir_rdir] <;> rfl
+
+theorem packOk_setK (hp : packOk pk = true) (hK : 0 < K') (p : PartId) : packOk (setK pk p K') = true := by
+  simp only [packOk, setK, List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at hp ⊢
+  exact ⟨hK, hp⟩
+
+theorem invK_reshard (h : reshard pk K' cx ss = some ss') : InvK (setK pk cx.p K') cx ss' := by
+  have hk := reshard_k h
+  obtain ⟨_, rfl⟩ := reshard_eq h
+  exact ⟨by rw [setK_k_self]; exact hk, rRec_imgOk⟩
+
+theorem invK_of_ok (hok : reshardOk pk K' cx ss = true) : InvK pk cx ss := by
+  obtain ⟨hq, _, _, hk⟩ := ok_parts hok
+  simp only [quiet, Bool.and_eq_true] at hq
+  have hl := hq.2
+  unfold lastOk at hl
+  simp only [Bool.and_eq_true] at hl
+  exact ⟨hk, hl.2⟩
+
+/-- What the three run lemmas need: invariants of the new store, the old store's `InvK`, and equal norms. -/
+theorem reshard_pre (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
+    (h : reshard pk K' cx ss = some ss') :
+    Inv ss' ∧ Inv3 ss' ∧ InvK (setK pk cx.p K') cx ss' ∧ InvK pk cx ss ∧
+      norm (merge (setK pk cx.p K') cx ss') = norm (merge pk cx ss) ∧
+      packOk (setK pk cx.p K') = packOk pk := by
+  obtain ⟨hok, e⟩ := reshard_eq h
+  obtain ⟨_, hp, hK', _⟩ := ok_parts hok
+  refine ⟨inv_reshard hI hB h, inv3_reshard h3 h, invK_reshard h, invK_of_ok hok, ?_, ?_⟩
+  · rw [e]; exact norm_reshard hI hK'
+  · rw [hp, packOk_setK hp hK']
 
 /-- Lifts `merge_run`: the resharded store runs as the single store on the merged view with the rehomed directory. -/
 theorem reshard_merge_run (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
     (h : reshard pk K' cx ss = some ss') (rs : List Input) :
     merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)
-      = runSingle (setK pk cx.p K') cx { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } rs := sorry
+      = runSingle (setK pk cx.p K') cx { merge pk cx ss with dir := rdir (setK pk cx.p K') cx ss.1.dir } rs := by
+  obtain ⟨hI', h3', hK'', _⟩ := reshard_pre hI hB h3 h
+  obtain ⟨hok, e⟩ := reshard_eq h
+  obtain ⟨_, _, hK', _⟩ := ok_parts hok
+  rw [merge_run (setK pk cx.p K') cx ss' rs hI' h3' hK'', e, merge_reshard hI hK']
 
 /-- Lifts `whole_run` and `merge_run`: after RESHARD the store's merged view equals, up to the shard index of
     directory homes, the un-resharded single-store and whole-file runs (verdicts, dir, clock, every total). -/
@@ -728,13 +818,25 @@ theorem reshard_whole_run (hLoc : Local cx) (hI : Inv ss) (hB : homesLt pk cx ss
     (h : reshard pk K' cx ss = some ss') (rs : List Input) :
     norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)) = norm (runWhole pk cx (merge pk cx ss) rs) ∧
       norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs))
-        = norm (runSingle pk cx (merge pk cx ss) rs) := sorry
+        = norm (runSingle pk cx (merge pk cx ss) rs) := by
+  obtain ⟨hI', h3', hK'', hKss, hs, hp⟩ := reshard_pre hI hB h3 h
+  have hw : norm (merge (setK pk cx.p K') cx (runS (setK pk cx.p K') cx ss' rs)) =
+      norm (runWhole pk cx (merge pk cx ss) rs) := by
+    rw [whole_run (setK pk cx.p K') cx hLoc ss' rs hI' h3' hK'']
+    exact (runW_sim (setK pk cx.p K') pk cx hp rs hs).1
+  refine ⟨hw, hw.trans ?_⟩
+  rw [← whole_run pk cx hLoc ss rs hI h3 hKss, merge_run pk cx ss rs hI h3 hKss]
 
 /-- Lifts `rcpts_run`: per-row receipts after RESHARD are the un-resharded store's and the whole-file run's. -/
 theorem reshard_rcpts_run (hLoc : Local cx) (hI : Inv ss) (hB : homesLt pk cx ss.1.dir) (h3 : Inv3 ss)
     (h : reshard pk K' cx ss = some ss') (rs : List Input) :
     rcptsS (setK pk cx.p K') cx ss' rs = rcptsW pk cx (merge pk cx ss) rs ∧
-      rcptsS (setK pk cx.p K') cx ss' rs = rcptsS pk cx ss rs := sorry
+      rcptsS (setK pk cx.p K') cx ss' rs = rcptsS pk cx ss rs := by
+  obtain ⟨hI', h3', hK'', hKss, hs, hp⟩ := reshard_pre hI hB h3 h
+  have h1 : rcptsS (setK pk cx.p K') cx ss' rs = rcptsW pk cx (merge pk cx ss) rs :=
+    (rcpts_run (setK pk cx.p K') cx hLoc ss' rs hI' h3' hK'').trans
+      (runW_sim (setK pk cx.p K') pk cx hp rs hs).2
+  exact ⟨h1, h1.trans (rcpts_run pk cx hLoc ss rs hI h3 hKss).symm⟩
 
 /-! ## Witnesses (kernel `decide`) -/
 
