@@ -2,7 +2,7 @@ import BlindLedger.Gate.Engine.Log
 
 /-! ENGINE-0 S1 conformance runner for the v3 log-entry decoder.  Not a lakefile target (no TCB pin
     moves): `lake env lean --run BlindLedger/Gate/Engine/LogVectors.lean <vectors>` in `lean/`.
-    Each `name hex` line prints `name ok <entryDigest3 hex>` or `name refuse` (`name malformed`
+    Each `name hex` line (one space; the hex may be empty) prints `name ok <entryDigest3 hex>` or `name refuse` (`name malformed`
     for bad hex, which fails the run).  Compared with Python by `tests/test_engine_log_vectors.py`.
     Test-only; never a release path. -/
 
@@ -38,9 +38,8 @@ def main (args : List String) : IO UInt32 := do
     return 2
   let mut bad := false
   for line in (← IO.FS.readFile path).splitOn "\n" do
-    let fields := ((String.ofList (line.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
-    match fields with
-    | [] => continue
+    match (String.ofList (line.toList.filter (· ≠ '\r'))).splitOn " " with
+    | [] | [""] => continue
     | "#" :: _ => continue
     | [name, hex] =>
       if let some r := answer hex then

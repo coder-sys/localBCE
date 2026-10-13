@@ -319,3 +319,5 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_chain
 /-- info: 'BlindLedger.Gate.Engine.pushM_fold' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold
+/-- info: 'BlindLedger.Gate.Engine.decodeEntry3B_canonical' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical

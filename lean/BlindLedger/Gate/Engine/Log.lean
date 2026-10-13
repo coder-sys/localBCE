@@ -2,6 +2,7 @@ import Std.Data.TreeMap
 import BlindLedger.Gate.Rules.ShardRun
 import BlindLedger.Gate.CheckpointV2Theorems
 import BlindLedger.Gate.Verify
+import BlindLedger.Gate.ApprovalLaws
 
 /-! ENGINE-0 S1 (design `engine0-design-20261013` sections 1, 2, 7, L4): the v3 tenant-log entry
     codec, the log state maps and `pushM`.  Synthetic, nonpayment; moves no money.
@@ -131,7 +132,8 @@ def pEntry3 : P Entry3 := do
   pure { idx, prev, body }
 
 def decodeEntry3 (x : Bytes) : Option (Entry3 × Bytes) := pEntry3.run x
-/-- Refuses trailing bytes. -/
+/-- Exactly one entry: bytes after a BATCH or SEGMENT body are refused; a RESUME permit and a
+    SEAL tip run to the end of the input, so bytes after them are part of the permit or tip. -/
 def decodeEntry3B (b : ByteArray) : Option Entry3 :=
   match decodeEntry3 b.data.toList with
   | some (e, []) => some e
@@ -253,6 +255,174 @@ theorem E2_entryIn3_inj {a b : Entry3} (ha : a.wf) (hb : b.wf) (h : entryIn3 a =
 theorem decode_encode (e : Entry3) (h : e.wf) : decodeEntry3B (encodeEntry3 e) = some e := by
   simp only [decodeEntry3B, encodeEntry3, List.toList_data_toByteArray, E1_entry3_roundtrip e h] <;> rfl
 
+/-! ## Decoder accept set: only canonical encodings of well-formed entries -/
+
+theorem beNat_lt (bs : Bytes) : beNat bs < 256 ^ bs.length := by
+  suffices h : ∀ (bs : Bytes) (acc : Nat),
+      bs.foldl (fun a x => a * 256 + x.toNat) acc < (acc + 1) * 256 ^ bs.length by
+    simpa [beNat] using h bs 0
+  intro bs
+  induction bs with
+  | nil => intro acc; simp
+  | cons x bs ih =>
+    intro acc
+    have hx : x.toNat < 256 := UInt8.toNat_lt x
+    have h1 : acc * 256 + x.toNat + 1 ≤ (acc + 1) * 256 := by omega
+    have h2 : (acc * 256 + x.toNat + 1) * 256 ^ bs.length ≤ (acc + 1) * 256 ^ (x :: bs).length := by
+      simp only [List.length_cons, Nat.pow_succ]
+      calc _ ≤ ((acc + 1) * 256) * 256 ^ bs.length := Nat.mul_le_mul_right _ h1
+        _ = _ := by rw [Nat.mul_assoc, Nat.mul_comm 256 (256 ^ bs.length)]
+    exact Nat.lt_of_lt_of_le (ih (acc * 256 + x.toNat)) h2
+
+theorem rd_run {w v : Nat} {b r : Bytes} (h : (rd w).run b = some (v, r)) : natBE w v ++ r = b ∧ v < 256 ^ w := by
+  obtain ⟨x, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨hx, hl⟩ := Approval.take_run h1
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  subst hl hx
+  exact ⟨by rw [Approval.natBE_beNat], beNat_lt x⟩
+
+theorem digest_run {b x r : Bytes} (h : digest.run b = some (x, r)) : x ++ r = b ∧ x.length = digestBytes :=
+  Approval.take_run h
+
+theorem rest_run {b x r : Bytes} (h : rest.run b = some (x, r)) : x = b ∧ r = [] := by
+  change some (b, []) = some (x, r) at h
+  cases h; exact ⟨rfl, rfl⟩
+
+theorem pLp_run {b x r : Bytes} (h : pLp.run b = some (x, r)) : lp x ++ r = b ∧ x.length < 256 ^ 4 := by
+  obtain ⟨n, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨hn, hb⟩ := rd_run h1
+  obtain ⟨hx, hl⟩ := Approval.take_run h
+  subst hl hx hn
+  exact ⟨by simp [lp], hb⟩
+
+theorem pList_run {b r : Bytes} {xs : List Bytes} (h : pList.run b = some (xs, r)) : lps xs ++ r = b ∧ lpsFit xs := by
+  obtain ⟨n, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨hn, hb⟩ := rd_run h1
+  obtain ⟨hx, hl, hq⟩ := Approval.many_run (e := lp) (Q := fun x : Bytes => x.length < 256 ^ 4) pLp_run n h
+  subst hl hx hn
+  exact ⟨by simp [lps], hb, hq⟩
+
+theorem pRow_run {b r : Bytes} {x : Row} (h : pRow.run b = some (x, r)) : regRow x ++ r = b ∧ rowFits x := by
+  obtain ⟨k, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨i, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨s, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  obtain ⟨e1, w1⟩ := rd_run h1
+  obtain ⟨e2, w2⟩ := rd_run h2
+  obtain ⟨e3, w3⟩ := rd_run h3
+  subst e3 e2 e1
+  exact ⟨by simp [regRow], w1, w2, w3⟩
+
+theorem pRows_run {b r : Bytes} {rs : List Row} (h : pRows.run b = some (rs, r)) :
+    lp (rows rs) ++ r = b ∧ (rows rs).length < 256 ^ 4 ∧ ∀ x ∈ rs, rowFits x := by
+  obtain ⟨n, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨hn, hb⟩ := rd_run h1
+  obtain ⟨u, r2, h2, hm⟩ := Approval.bind_run h
+  obtain ⟨ok, rfl⟩ := Approval.need_run h2
+  obtain ⟨hx, hl, hq⟩ := Approval.many_run (e := regRow) (Q := rowFits) pRow_run _ hm
+  have hlen : (rows rs).length = n := by
+    rw [rows_len, hl]
+    simp only [regRowWidth, beq_iff_eq] at ok ⊢
+    omega
+  refine ⟨?_, by rw [hlen]; exact hb, hq⟩
+  rw [lp, hlen, ← hn, ← hx]
+  simp [rows]
+
+theorem pBatch_run {b r : Bytes} {x : Batch3} (h : pBatch.run b = some (x, r)) : batchIn x ++ r = b ∧ x.wf := by
+  obtain ⟨s, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨hd, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨mf, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨rq, r4, h4, h⟩ := Approval.bind_run h
+  obtain ⟨rr, r5, h5, h⟩ := Approval.bind_run h
+  obtain ⟨lv, r6, h6, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  obtain ⟨e1, w1⟩ := rd_run h1
+  obtain ⟨e2, w2⟩ := pLp_run h2
+  obtain ⟨e3, w3⟩ := pLp_run h3
+  obtain ⟨e4, w4⟩ := pList_run h4
+  obtain ⟨e5, w5, w5'⟩ := pRows_run h5
+  obtain ⟨e6, w6⟩ := pList_run h6
+  subst e6 e5 e4 e3 e2 e1
+  exact ⟨by simp [batchIn], w1, w2, w3, w4, w5, w5', w6⟩
+
+theorem pSeg_run {b r : Bytes} {x : Segment3} (h : pSeg.run b = some (x, r)) : segIn x ++ r = b ∧ x.wf := by
+  obtain ⟨f, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨l, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨d1, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨d2, r4, h4, h⟩ := Approval.bind_run h
+  obtain ⟨d3, r5, h5, h⟩ := Approval.bind_run h
+  obtain ⟨d4, r6, h6, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  obtain ⟨e1, w1⟩ := rd_run h1
+  obtain ⟨e2, w2⟩ := rd_run h2
+  obtain ⟨e3, w3⟩ := digest_run h3
+  obtain ⟨e4, w4⟩ := digest_run h4
+  obtain ⟨e5, w5⟩ := digest_run h5
+  obtain ⟨e6, w6⟩ := digest_run h6
+  subst e6 e5 e4 e3 e2 e1
+  exact ⟨by simp [segIn], w1, w2, w3, w4, w5, w6⟩
+
+theorem pBody_run {b r : Bytes} {x : Body3} (h : pBody.run b = some (x, r)) : bodyIn3 x ++ r = b ∧ x.wf := by
+  obtain ⟨v, r1, h1, hm⟩ := Approval.bind_run h
+  obtain ⟨rfl, -⟩ := rd_run h1
+  clear h
+  split at hm
+  · obtain ⟨bt, r2, h2, h⟩ := Approval.bind_run hm
+    obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+    obtain ⟨e2, w⟩ := pBatch_run h2
+    subst e2
+    exact ⟨by simp [bodyIn3], w⟩
+  · obtain ⟨k, r2, h2, h⟩ := Approval.bind_run hm
+    obtain ⟨p, r3, h3, h⟩ := Approval.bind_run h
+    obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+    obtain ⟨rfl, rfl⟩ := rest_run h3
+    obtain ⟨e2, w⟩ := rd_run h2
+    subst e2
+    exact ⟨by simp [bodyIn3], w⟩
+  · obtain ⟨k, r2, h2, h⟩ := Approval.bind_run hm
+    obtain ⟨t, r3, h3, h⟩ := Approval.bind_run h
+    obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+    obtain ⟨rfl, rfl⟩ := rest_run h3
+    obtain ⟨e2, w⟩ := rd_run h2
+    subst e2
+    exact ⟨by simp [bodyIn3], w⟩
+  · obtain ⟨sg, r2, h2, h⟩ := Approval.bind_run hm
+    obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+    obtain ⟨e2, w⟩ := pSeg_run h2
+    subst e2
+    exact ⟨by simp [bodyIn3], w⟩
+  · simp [fail, StateT.run] at hm
+
+theorem pEntry3_run {b r : Bytes} {e : Entry3} (h : pEntry3.run b = some (e, r)) : entryIn3 e ++ r = b ∧ e.wf := by
+  obtain ⟨u, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨i, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨p, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨bd, r4, h4, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  have e1 := Approval.expect_run h1
+  obtain ⟨e2, w2⟩ := rd_run h2
+  obtain ⟨e3, w3⟩ := digest_run h3
+  obtain ⟨e4, w4⟩ := pBody_run h4
+  subst e4 e3 e2 e1
+  exact ⟨by simp [entryIn3], w2, w3, w4⟩
+
+/-- The decoder accepts only canonical bytes: what it returns is well formed and encodes back to
+    exactly the input, so one entry has one byte string (with E2, decode and encode are inverse). -/
+theorem decodeEntry3B_canonical {b : ByteArray} {e : Entry3} (h : decodeEntry3B b = some e) :
+    e.wf ∧ encodeEntry3 e = b := by
+  cases hd : decodeEntry3 b.data.toList with
+  | none => simp [decodeEntry3B, hd] at h
+  | some q =>
+    obtain ⟨e', r⟩ := q
+    cases r with
+    | cons _ _ => simp [decodeEntry3B, hd] at h
+    | nil =>
+      simp only [decodeEntry3B, hd, Option.some.injEq] at h
+      subst h
+      obtain ⟨he, w⟩ := pEntry3_run hd
+      refine ⟨w, ByteArray.ext (Array.toList_inj.1 ?_)⟩
+      rw [encodeEntry3, List.toList_data_toByteArray, ← he, List.append_nil]
+
 /-! ## Log state and push -/
 
 structure ShardM where
@@ -282,11 +452,17 @@ def stepM (m : LogStateM) : Body3 → Option LogStateM
     else none
   | .segment _ => some m
 
-/-- Appends `e` only at the next index and only on the current head (no replay, no fork). -/
-def pushM (m : LogStateM) (e : Entry3) : Option LogStateM :=
-  if e.idx = m.len ∧ e.prev = m.head then
-    (stepM m e.body).map fun s => { s with len := m.len + 1, head := entryDigest3 e }
-  else none
+/-- Appends the entry bytes `b` only at the next index and only on the current head (no replay).
+    `pushM` takes bytes, not an `Entry3`: the new head is the SHA3 of exactly `b` and the step is
+    taken on the one entry `b` decodes to, so equal heads mean equal bytes and so equal states up to
+    a SHA3 collision (no fork).  An `Entry3` whose fields overflow their widths has no bytes. -/
+def pushM (m : LogStateM) (b : ByteArray) : Option LogStateM :=
+  match decodeEntry3B b with
+  | none => none
+  | some e =>
+    if e.idx = m.len ∧ e.prev = m.head then
+      (stepM m e.body).map fun s => { s with len := m.len + 1, head := sha3 b.data.toList }
+    else none
 
 /-- Append-only on shards: a seal is never rewritten and a live shard never parks again. -/
 def Keeps (m m' : LogStateM) : Prop :=
@@ -337,25 +513,30 @@ theorem stepM_keep {m m' : LogStateM} {b : Body3} (h : stepM m b = some m') : Ke
     simp only [stepM] at h
     cases h; exact ⟨fun _ => rfl, id⟩
 
-/-- A push links to the current head at the next index, grows the log by one, moves the head
-    to the entry digest and keeps every shard seal and live mark. -/
-theorem pushM_chain {m m' : LogStateM} {e : Entry3} (h : pushM m e = some m') :
-    e.idx = m.len ∧ e.prev = m.head ∧ m'.len = m.len + 1 ∧ m'.head = entryDigest3 e ∧ Keeps m m' := by
-  unfold pushM at h
-  split at h
-  next hc =>
-    cases hs : stepM m e.body with
-    | none => rw [hs] at h; cases h
-    | some s =>
-      rw [hs] at h
-      have h' : some { s with len := m.len + 1, head := entryDigest3 e } = some m' := h
-      cases h'
-      have hk : Keeps m s := stepM_keep hs
-      exact ⟨hc.1, hc.2, rfl, rfl, hk⟩
-  next => cases h
+/-- A push decodes `b` to one entry (well formed and canonical by `decodeEntry3B_canonical`), links
+    it to the current head at the next index, grows the log by one, moves the head to the SHA3 of
+    `b` and keeps every shard seal and live mark. -/
+theorem pushM_chain {m m' : LogStateM} {b : ByteArray} (h : pushM m b = some m') :
+    ∃ e, decodeEntry3B b = some e ∧ e.idx = m.len ∧ e.prev = m.head ∧ m'.len = m.len + 1 ∧
+      m'.head = sha3 b.data.toList ∧ Keeps m m' := by
+  cases hd : decodeEntry3B b with
+  | none => simp [pushM, hd] at h
+  | some e =>
+    simp only [pushM, hd] at h
+    split at h
+    next hc =>
+      cases hs : stepM m e.body with
+      | none => rw [hs] at h; cases h
+      | some s =>
+        rw [hs] at h
+        have h' : some { s with len := m.len + 1, head := sha3 b.data.toList } = some m' := h
+        cases h'
+        have hk : Keeps m s := stepM_keep hs
+        exact ⟨e, rfl, hc.1, hc.2, rfl, rfl, hk⟩
+    next => cases h
 
 /-- Folding pushes over a list: the log grows by exactly the list length, append-only. -/
-theorem pushM_fold (es : List Entry3) : ∀ {m m' : LogStateM}, es.foldlM pushM m = some m' →
+theorem pushM_fold (es : List ByteArray) : ∀ {m m' : LogStateM}, es.foldlM pushM m = some m' →
     m'.len = m.len + es.length ∧ Keeps m m' := by
   induction es with
   | nil =>
@@ -370,7 +551,7 @@ theorem pushM_fold (es : List Entry3) : ∀ {m m' : LogStateM}, es.foldlM pushM 
     | some m1 =>
       rw [List.foldlM_cons, h1] at h
       obtain ⟨hl, hk⟩ := ih (h : es.foldlM pushM m1 = some m')
-      obtain ⟨-, -, hl1, -, hk1⟩ := pushM_chain h1
+      obtain ⟨_, -, -, -, hl1, -, hk1⟩ := pushM_chain h1
       exact ⟨by rw [hl, hl1, List.length_cons]; omega, hk1.trans hk⟩
 
 end BlindLedger.Gate.Engine

@@ -96,7 +96,8 @@ class _Reader:
 
 
 def decode(data: bytes) -> tuple[int, bytes, str, tuple]:
-    """(idx, prev, kind, fields); refuses a wrong tag, a short or trailing input and an unknown kind."""
+    """(idx, prev, kind, fields); refuses a wrong tag, a short input, an unknown kind and bytes after a BATCH or
+    SEGMENT body.  A RESUME permit and a SEAL tip run to the end of the input, so bytes after them are part of it."""
     r = _Reader(data)
     if r.take(len(TAG)) != TAG:
         raise Log3Error("tag")

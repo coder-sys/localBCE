@@ -1,15 +1,18 @@
 """ENGINE-0 S1: the v3 tenant-log entry codec (app/right_rail_gate_log3.py) against
 lean/BlindLedger/Gate/Engine/Log.lean.  Synthetic, nonpayment, non-PHI.
 
-The Lean leg compares the Python verdicts with the output of
-`lake env lean --run BlindLedger/Gate/Engine/LogVectors.lean <vectors>` (see LEAN_OUT).
+The Lean leg runs `lake env lean --run BlindLedger/Gate/Engine/LogVectors.lean <vectors>` in lean/
+live and checks its output against the Python verdicts and the saved LEAN_OUT.
 Emit the vector file from the repo root with `python -m tests.test_engine_log_vectors --emit <path>`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import unittest
 
@@ -18,7 +21,8 @@ from app import right_rail_gate_log3 as log3
 ROOT = Path(__file__).resolve().parents[1]
 VECTORS = ROOT / "tests" / "engine_log" / "log3_v1.vectors"
 LEAN_OUT = ROOT / "tests" / "engine_log" / "log3_v1.lean.out"
-LOG_LEAN = ROOT / "lean" / "BlindLedger" / "Gate" / "Engine" / "Log.lean"
+LEAN = ROOT / "lean"
+LOG_LEAN = LEAN / "BlindLedger" / "Gate" / "Engine" / "Log.lean"
 
 
 def d(n: int) -> bytes:
@@ -45,13 +49,15 @@ def good(name: str) -> bytes:
 def vectors() -> list[tuple[str, bytes, bool]]:
     """(name, bytes, must the entry decode)."""
     out = [(f"ok_{n}", good(n), True) for n in GOOD]
-    seg, bat = good("segment"), good("batch")
+    seg, bat, res, sea = good("segment"), good("batch"), good("resume"), good("seal")
     kind_at = len(log3.TAG) + 8 + 64
     rows_prefix = log3.lp(log3.reg_rows(ROWS))
     at = bat.index(rows_prefix)
+    reqs_at = bat.index(log3.lps(GOOD["batch"][3]))
+    header_at = kind_at + 1 + 4
     out += [
         ("refuse_bad_tag", b"RR/GATE/TENANT-LOG/v2\x00" + seg[len(log3.TAG):], False),
-        ("refuse_tag_no_nul", log3.TAG[:-1] + seg[len(log3.TAG):], False),
+        ("refuse_tag_no_nul", log3.TAG[:-1] + b"\x01" + seg[len(log3.TAG):], False),
         ("refuse_trailing_segment", seg + b"\x00", False),
         ("refuse_trailing_batch", bat + b"\x00", False),
         ("refuse_truncated_segment", seg[:-1], False),
@@ -59,6 +65,17 @@ def vectors() -> list[tuple[str, bytes, bool]]:
         ("refuse_only_tag", log3.TAG, False),
         ("refuse_kind_4", seg[:kind_at] + b"\x04" + seg[kind_at + 1:], False),
         ("refuse_rows_not_134", bat[:at] + (len(rows_prefix) - 4 + 1).to_bytes(4, "big") + bat[at + 4:], False),
+        ("refuse_empty", b"", False),
+        ("refuse_resume_short_shard", res[:kind_at + 4], False),
+        ("refuse_seal_short_shard", sea[:kind_at + 4], False),
+        ("refuse_kind_ff", seg[:kind_at] + b"\xff" + seg[kind_at + 1:], False),
+        ("refuse_reqs_count_over", bat[:reqs_at] + (len(GOOD["batch"][3]) + 1).to_bytes(4, "big") + bat[reqs_at + 4:],
+         False),
+        ("refuse_header_len_max", bat[:header_at] + b"\xff" * 4 + bat[header_at + 4:], False),
+        ("refuse_truncated_row", bat[:at + 4 + log3.ROW - 1], False),
+        ("refuse_shifted_tag", log3.TAG[:-1] + seg[len(log3.TAG):], False),
+        ("ok_resume_trailing_is_permit", res + b"\x00", True),
+        ("ok_seal_trailing_is_tip", sea + b"\x00", True),
     ]
     return out
 
@@ -119,13 +136,18 @@ class Log3Codec(unittest.TestCase):
 
 
 class Log3AgainstLean(unittest.TestCase):
-    @unittest.skipUnless(LEAN_OUT.is_file(), f"LEAN LOG VECTORS NOT RUN: {LEAN_OUT} is missing; run LogVectors.lean "
-                         "with `lake env lean --run` over tests/engine_log/log3_v1.vectors in lean/ and save its stdout")
     def test_python_matches_lean(self) -> None:
-        got = dict(line.split(" ", 1) for line in LEAN_OUT.read_text("utf-8").splitlines() if line.strip())
-        want = {name: verdict(data) for name, data, _ in vectors()}
-        self.assertEqual(got, want)
-        self.assertEqual(VECTORS.read_text("utf-8"), render(), "the Lean output ran over a stale vector file")
+        self.assertEqual(VECTORS.read_text("utf-8"), render(), "stale vector file; re-emit it")
+        lake = shutil.which("lake") or os.path.join(os.path.expanduser("~"), ".elan", "bin", "lake")
+        built = subprocess.run([lake, "build", "--no-build", "BlindLedger.Gate.Engine.Log"], cwd=LEAN,
+                               capture_output=True, text=True, timeout=600)
+        self.assertEqual(built.returncode, 0, "Engine.Log is stale; run `lake build` in lean/\n" + built.stdout[-1500:])
+        run = subprocess.run([lake, "env", "lean", "--run", "BlindLedger/Gate/Engine/LogVectors.lean", str(VECTORS)],
+                             cwd=LEAN, capture_output=True, text=True, timeout=600)
+        self.assertEqual(run.returncode, 0, run.stderr[-1500:])
+        want = "".join(f"{name} {verdict(data)}\n" for name, data, _ in vectors())
+        self.assertEqual(run.stdout, want)
+        self.assertEqual(LEAN_OUT.read_text("utf-8"), want)
 
 
 def render() -> str:

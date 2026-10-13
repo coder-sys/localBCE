@@ -150,3 +150,4 @@ import BlindLedger.Gate.Engine.Log
 #print axioms BlindLedger.Gate.Engine.stepM_keep
 #print axioms BlindLedger.Gate.Engine.pushM_chain
 #print axioms BlindLedger.Gate.Engine.pushM_fold
+#print axioms BlindLedger.Gate.Engine.decodeEntry3B_canonical
