@@ -473,15 +473,15 @@ class ReceiverCashFileTests(unittest.TestCase):
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
                 code = cli.main(args + ["--apply"])
-            return code, {key: json.loads(out.getvalue())[key] for key in ("recorded_count", "duplicate_count", "cash_delta_cents")}
+            return code, {key: json.loads(out.getvalue())[key] for key in ("admitted", "resolved", "cash_delta_cents")}
         def planned_then_overtaken(*arguments, **keywords):
             plan = plan_file(*arguments, **keywords)
             if not overtaken:
                 overtaken.append(self._apply())  # another writer lands the same file between plan and commit
             return plan
         with patch.object(cash, "plan_cash_file", planned_then_overtaken):
-            self.assertEqual(apply(), (0, {"recorded_count": 0, "duplicate_count": 2, "cash_delta_cents": 0}))  # an empty plan's DUPLICATE, not cash_file_stale
-        self.assertEqual(apply(), (0, {"recorded_count": 0, "duplicate_count": 2, "cash_delta_cents": 0}))  # a resend plans nothing to write
+            self.assertEqual(apply(), (0, {"admitted": 0, "resolved": 2, "cash_delta_cents": 0}))  # an empty plan's DUPLICATE, not cash_file_stale
+        self.assertEqual(apply(), (0, {"admitted": 0, "resolved": 2, "cash_delta_cents": 0}))  # a resend: its stored receipt
 
     def test_planned_commit_refuses_rows_unlike_the_plan_in_any_table(self):
         plan = self._plan()
@@ -585,15 +585,14 @@ class ReceiverCashFileTests(unittest.TestCase):
                 return cli.main(args + ["--apply"]), out.getvalue(), err.getvalue()
         refused = check.CashFileError("cash_file_conflict")  # finish is the checker's last step: a refusal found only after the whole file ran
         with patch.object(owner.FinancialOwner, "run_batch", spy):
-            code, out, _ = apply()
-            self.assertEqual((code, json.loads(out)["cash_delta_cents"]), (0, 300))
-            code, out, _ = apply()
-            self.assertEqual((code, json.loads(out)["duplicate_count"]), (0, 2))  # a resend
             before = fixtures._image(self.store.path)
             with patch.object(check.CashFileCheck, "finish", side_effect=refused):
                 self.assertEqual(apply(), (2, "", "ERROR:receiver_cash_file_refused:cash_file_conflict\n"))
             self.assertEqual(fixtures._image(self.store.path), before)
-        self.assertEqual(on_live, [False] * 3)  # each file ran once, on its plan's copy, never on the live store
+            code, out, _ = apply()
+            self.assertEqual((code, json.loads(out)["cash_delta_cents"]), (0, 300))
+            self.assertEqual(apply(), (0, out, ""))  # a resend: the first receipt, nothing run
+        self.assertEqual(on_live, [False] * 2)  # each file ran once, on its plan's copy, never on the live store
         with patch.object(check.CashFileCheck, "finish", side_effect=refused), self.assertRaisesRegex(check.CashFileError, "^cash_file_conflict$"):
             self._production_apply()
         self.assertEqual(self.spans, [])  # the plan's refusal is the answer: no live write lock is taken
@@ -1124,6 +1123,26 @@ raise SystemExit(main(sys.argv[5:]))
             self.assertEqual(cli.main(args + ["--file", str(directory / "private-marker")]), 2)
         self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", "ERROR:receiver_cash_file_refused:cash_file_input\n"))
         self.assertEqual({name: (directory / name).read_bytes() for name in files}, files)
+
+    def test_cli_upload_goes_through_intake_and_holds_an_unreadable_row_alone(self):
+        """R5: an uploaded row reaches the owner only through intake. One unreadable row is held with its reason, the
+        rest are judged, and the INTAKE record binds the raw file; preview judges the same and writes nothing."""
+        self.value["rows"][1]["event_at_ms"] = "01/02/2026"
+        directory, files, args = self._cli_fixture()
+        for apply in (False, True):
+            before, stdout, stderr = self.store.export_continuity(), io.StringIO(), io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = cli.main(args + ["--apply"] * apply)
+            self.assertEqual((code, stderr.getvalue()), (0, ""))
+            result = json.loads(stdout.getvalue())
+            self.assertEqual(result["cash_delta_cents"], 100)
+            if not apply:
+                self.assertEqual((self.store.export_continuity(), self.store.intake_records()), (before, []))
+        self.assertEqual([(row["status"], row["basis"]) for row in result["rows"]], [("ADMITTED", None), ("HELD", "date_format")])
+        self.assertEqual([json.loads(record["payload_json"])["intake"]["source_sha256"] for record in self.store.intake_records()], [sha(files["receiver.json"])])
+        with closing(sqlite3.connect(Path(self.store.path).resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            paid = {row[0] for row in connection.execute("SELECT payment_id FROM payments WHERE payment_id LIKE 'file-payment-%'")}
+        self.assertEqual(paid, {"file-payment-1"})
 
 
 if __name__ == "__main__":

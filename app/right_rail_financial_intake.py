@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 
 from app.right_rail_financial_canonical_json import decode, encode
-from app.right_rail_financial_cash_file import MAX_FILE_BYTES, _header, _identifier, _integer, _refuse, apply_cash_file, prepare_cash_file
+from app.right_rail_financial_cash_file import MAX_FILE_BYTES, _header, _identifier, _integer, _refuse, apply_cash_file, prepare_cash_file, preview_cash_file
 from app.right_rail_financial_cash_file_independent import MAX_ITEM_ROWS, CashFileError
 from app.right_rail_financial_owner import FinancialConflictError
 
@@ -194,6 +194,27 @@ def _stored(owner, sha):
     return next(iter(owner.intake_records(sha)), None)
 
 
+def _raw_sha(raw, expected_source_sha256):
+    if type(raw) is not bytes or not 0 < len(raw) <= MAX_FILE_BYTES:
+        raise CashFileError("cash_file_format")
+    sha = _sha(raw)
+    if sha != expected_source_sha256:
+        raise CashFileError("cash_file_binding")
+    return sha
+
+
+def _derive(raw, sha, baseline_bytes, **expected):
+    """The one route by which uploaded rows reach the owner (R5): the raw file absorbed, its readable rows proposed bound to its intake facts."""
+    derived, facts = absorb(raw, expected["expected_scope"], expected["expected_source"])
+    facts = {"adapter": ADAPTER, "ruleset_digest": RULESET_DIGEST, "source_sha256": sha, "derived_sha256": _sha(derived), **facts}
+    return prepare_cash_file(derived, baseline_bytes, expected_source_sha256=facts["derived_sha256"], intake=facts, **expected)  # its signature names every expectation
+
+
+def preview_intake(raw, baseline_bytes, *, path, expected_source_sha256, **expected):
+    """What ingest would judge, run on a private copy of the store at `path` and rolled back: keeps and writes nothing."""
+    return preview_cash_file(*_derive(raw, _raw_sha(raw, expected_source_sha256), baseline_bytes, **expected), path=path, trusted_authority=expected["trusted_authority"])
+
+
 def ingest_cash_file(owner, raw, baseline_bytes, *, expected_source_sha256, expected_baseline_sha256, expected_scope,
                      expected_source, expected_owner_id, expected_mode, trusted_authority):
     """Absorb one receiver cash file: keep it, let the gate judge every row it can read, hold the rest, receipt it.
@@ -201,22 +222,13 @@ def ingest_cash_file(owner, raw, baseline_bytes, *, expected_source_sha256, expe
     The same bytes again return the first receipt and write nothing. A refused container or gate refusal raises its
     fixed code with only the raw bytes kept, so the same file can be sent again.
     """
-    if type(raw) is not bytes or not 0 < len(raw) <= MAX_FILE_BYTES:
-        raise CashFileError("cash_file_format")
-    sha = _sha(raw)
-    if sha != expected_source_sha256:
-        raise CashFileError("cash_file_binding")
+    sha = _raw_sha(raw, expected_source_sha256)
     _keep(intake_folder(owner), sha, raw)
     record = _stored(owner, sha)
     if record is None:
-        derived, facts = absorb(raw, expected_scope, expected_source)
-        facts = {"adapter": ADAPTER, "ruleset_digest": RULESET_DIGEST, "source_sha256": sha, "derived_sha256": _sha(derived), **facts}
         try:
-            commands, context = prepare_cash_file(
-                derived, baseline_bytes, expected_source_sha256=facts["derived_sha256"], expected_baseline_sha256=expected_baseline_sha256,
-                expected_scope=expected_scope, expected_source=expected_source, expected_owner_id=expected_owner_id,
-                expected_mode=expected_mode, trusted_authority=trusted_authority, intake=facts)
-            apply_cash_file(owner, commands, context)
+            apply_cash_file(owner, *_derive(raw, sha, baseline_bytes, expected_baseline_sha256=expected_baseline_sha256, expected_scope=expected_scope, expected_source=expected_source,
+                                            expected_owner_id=expected_owner_id, expected_mode=expected_mode, trusted_authority=trusted_authority))
         except (CashFileError, FinancialConflictError):
             if _stored(owner, sha) is None:
                 raise
