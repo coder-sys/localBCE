@@ -7,6 +7,7 @@ import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
+import BlindLedger.Gate.Engine.Log
 #print axioms BlindLedger.Gate.verifyToken_iff
 #print axioms BlindLedger.Gate.verifyToken_epoch_ge_fence
 #print axioms BlindLedger.Gate.raiseFence_ge
@@ -142,3 +143,10 @@ import BlindLedger.Gate.BatchTheorems
 #print axioms BlindLedger.Gate.pathOf_verifies
 #print axioms BlindLedger.Gate.publishOkTree_sound
 #print axioms BlindLedger.Gate.publishOkTree_complete
+#print axioms BlindLedger.Gate.Engine.E1_entry3_roundtrip
+#print axioms BlindLedger.Gate.Engine.E2_entryIn3_inj
+#print axioms BlindLedger.Gate.Engine.decode_encode
+#print axioms BlindLedger.Gate.Engine.pBody_app
+#print axioms BlindLedger.Gate.Engine.stepM_keep
+#print axioms BlindLedger.Gate.Engine.pushM_chain
+#print axioms BlindLedger.Gate.Engine.pushM_fold

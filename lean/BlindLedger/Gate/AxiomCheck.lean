@@ -305,3 +305,17 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_sound
 /-- info: 'BlindLedger.Gate.publishOkTree_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_complete
+/-- info: 'BlindLedger.Gate.Engine.E1_entry3_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E1_entry3_roundtrip
+/-- info: 'BlindLedger.Gate.Engine.E2_entryIn3_inj' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E2_entryIn3_inj
+/-- info: 'BlindLedger.Gate.Engine.decode_encode' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decode_encode
+/-- info: 'BlindLedger.Gate.Engine.pBody_app' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pBody_app
+/-- info: 'BlindLedger.Gate.Engine.stepM_keep' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_keep
+/-- info: 'BlindLedger.Gate.Engine.pushM_chain' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_chain
+/-- info: 'BlindLedger.Gate.Engine.pushM_fold' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold
