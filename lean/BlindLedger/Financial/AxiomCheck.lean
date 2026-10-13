@@ -15,6 +15,8 @@ import BlindLedger.Financial.Payment.KAT
 import BlindLedger.Financial.Payment.OpenLaws
 import BlindLedger.Financial.Offset.ClaimLaws
 import BlindLedger.Financial.DecisionPackage.Laws
+-- RESHARD pins (below): uncomment with the pins once proved.
+-- import BlindLedger.Financial.Reshard
 
 namespace BlindLedger.Financial
 
@@ -503,3 +505,49 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.encodeClaimAnswer_some_unless_oversize
 /-- info: 'BlindLedger.Financial.Offset.claimRespond_length_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Offset.claimRespond_length_le
+
+-- RESHARD pins (M3, 2026-10-13): commented while the theorems are sorry (a pin would print sorryAx and fail).
+-- rr-eng: uncomment each pin and the import at the top once its theorem is proved; adjust the axiom set to the
+-- printed one only if it stays within [propext, Classical.choice, Quot.sound].
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_row' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_row
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_row_src' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_row_src
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_merge_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_merge_run
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_whole_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_whole_run
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_rcpts_run' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_rcpts_run
+-- /-- info: 'BlindLedger.Financial.Reshard.inv_reshard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.inv_reshard
+-- /-- info: 'BlindLedger.Financial.Reshard.history_reshard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.history_reshard
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_refuse' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_refuse
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_open
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_rollforward' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_rollforward
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_crash_open' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_crash_open
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_live' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_live
+-- /-- info: 'BlindLedger.Financial.Reshard.live_inv3' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.live_inv3
+-- /-- info: 'BlindLedger.Financial.Reshard.reachR_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reachR_ok
+-- /-- info: 'BlindLedger.Financial.Reshard.reachR_recover' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reachR_recover
+-- /-- info: 'BlindLedger.Financial.Reshard.reshard_local' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.reshard_local
+-- /-- info: 'BlindLedger.Financial.Reshard.crash_recover' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.crash_recover
+-- /-- info: 'BlindLedger.Financial.Reshard.stale_pack' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.stale_pack
+-- /-- info: 'BlindLedger.Financial.Reshard.img_bind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.img_bind
+-- /-- info: 'BlindLedger.Financial.Reshard.crash_recoverOn' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.crash_recoverOn
+-- /-- info: 'BlindLedger.Financial.Reshard.packSave_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+-- #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Reshard.packSave_ok
