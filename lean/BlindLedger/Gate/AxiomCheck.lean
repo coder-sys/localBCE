@@ -306,6 +306,10 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_sound
 /-- info: 'BlindLedger.Gate.publishOkTree_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_complete
+/-- info: 'BlindLedger.Gate.publishOkTreeAny_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkTreeAny_sound
+/-- info: 'BlindLedger.Gate.publishOkTreeAny_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.publishOkTreeAny_complete
 /-- info: 'BlindLedger.Gate.ReadManifest.readSetOf_pre' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.ReadManifest.readSetOf_pre
 /-- info: 'BlindLedger.Gate.ReadManifest.run_reads_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
