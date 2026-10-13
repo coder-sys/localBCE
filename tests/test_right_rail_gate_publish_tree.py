@@ -94,6 +94,34 @@ class PublishTreeTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.publish(last, signed, tokens), REJECT)
 
+    def test_refuses_an_undecodable_last_before_a_genesis_checkpoint(self) -> None:
+        # A genesis successor would follow "no last"; an undecodable last is not "no last"
+        signed, _, tokens = self.batch(0, 3)
+        self.assertEqual(self.publish(None, signed, tokens), ACCEPT)
+        self.assertEqual(self.publish(b"\x01\x02not a checkpoint", signed, tokens), REJECT)
+
+    def sign_checkpoint(self, cp: gate.Checkpoint) -> bytes:
+        header = gate.encode_checkpoint_header(cp)
+        return gate.attach_signature(header, signer.sign(self.handle, header))
+
+    def test_refuses_tokens_whose_tree_is_not_the_signed_token_root(self) -> None:
+        # Both batches are valid alone; B's self-consistent tokens carry A's checkpoint digest but build another tree
+        a, a_tokens = fx.build(fx.batch_leaves(0, 3, 0))
+        b, b_tokens = fx.build(fx.batch_leaves(0, 3, 100))
+        self.assertEqual(self.publish(None, self.sign_checkpoint(a), a_tokens), ACCEPT)
+        self.assertEqual(self.publish(None, self.sign_checkpoint(b), b_tokens), ACCEPT)
+        digest = gate.checkpoint_digest(a)
+        mixed = [replace(t, checkpoint_digest=digest) for t in b_tokens]
+        self.assertEqual(self.publish(None, self.sign_checkpoint(a), mixed), REJECT)
+
+    def test_refuses_a_signed_count_the_tokens_do_not_reach(self) -> None:
+        # The signed token root is the three tokens' tree, but the checkpoint (and its seq range) says four
+        cp, tokens = fx.build(fx.batch_leaves(0, 3, 0))
+        self.assertEqual(self.publish(None, self.sign_checkpoint(cp), tokens), ACCEPT)
+        four = replace(cp, count=4, seq_to=cp.seq_to + 1)
+        redigested = [replace(t, checkpoint_digest=gate.checkpoint_digest(four)) for t in tokens]
+        self.assertEqual(self.publish(None, self.sign_checkpoint(four), redigested), REJECT)
+
 
 if __name__ == "__main__":
     unittest.main()
