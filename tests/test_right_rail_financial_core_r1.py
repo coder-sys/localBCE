@@ -17,6 +17,7 @@ from unittest.mock import patch
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 from tests import rightrail_financial_expected_cases as expected
+from tests.rightrail_intake_rows import pay
 from tests import test_right_rail_financial_acceptance as acceptance
 
 FLAT = 1.25  # R1 gate: at most 25% more lock work after the unrelated history (docs/CORE_REDESIGN.md)
@@ -92,7 +93,7 @@ class CoreR1aMarkTests(unittest.TestCase):
         store = self._fixture()._build_base()
         _foreign(store.path, TAMPER)
         with self.assertRaisesRegex(owner.FinancialIntegrityError, "^open_verification:"):
-            store.record_payment_evidence(**_pay("item-05"))
+            pay(store, **_pay("item-05"))
 
     def test_a_tampered_store_is_refused_with_the_code_a_fresh_open_gives(self):
         for name, sql in {"meta": "UPDATE financial_meta SET owner_id='another-owner'", "obligation": TAMPER}.items():
@@ -103,7 +104,7 @@ class CoreR1aMarkTests(unittest.TestCase):
                 with self.assertRaises(owner.FinancialError) as fresh:
                     fixture._make_owner(path=store.path, clock=store.clock)
                 with self.assertRaises(owner.FinancialError) as write:
-                    store.record_payment_evidence(**_pay("item-05"))
+                    pay(store, **_pay("item-05"))
                 self.assertEqual((type(write.exception), str(write.exception)), (type(fresh.exception), str(fresh.exception)))
 
     def test_an_export_after_a_foreign_tamper_is_refused(self):
@@ -117,9 +118,9 @@ class CoreR1aMarkTests(unittest.TestCase):
         fixture = self._fixture()
         store = fixture._build_base()
         second = fixture._make_owner(path=store.path, clock=store.clock)  # H2: until R2 a second process costs a full verify
-        second.record_payment_evidence(**_pay("item-05"))
+        pay(second, **_pay("item-05"))
         with self._counting_verifies() as calls:
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-06")))
+            self.assertIn("status", pay(store, **_pay("item-06")))
         self.assertGreaterEqual(len(calls), 1)
 
     def test_a_correction_after_a_foreign_tamper_is_refused_by_the_full_verification(self):
@@ -140,12 +141,12 @@ class CoreR1aMarkTests(unittest.TestCase):
         earlier = Path(tempfile.mkdtemp(dir=fixture.temp_dir.name)) / "earlier.sqlite"
         with closing(sqlite3.connect(str(store.path))) as live, closing(sqlite3.connect(str(earlier))) as copy:
             live.backup(copy)
-        store.record_payment_evidence(**_pay("item-06"))
+        pay(store, **_pay("item-06"))
         with closing(sqlite3.connect(str(earlier))) as copy, closing(sqlite3.connect(str(store.path))) as live:
             copy.backup(live)  # same file, so only the history mark shows the rewind
         rewound = acceptance._image(store.path)
-        for command in (lambda: store.record_payment_evidence(**_pay("item-05")),
-                        lambda: store.record_payment_evidence(**_pay("item-04")), store.export_continuity):
+        for command in (lambda: pay(store, **_pay("item-05")),
+                        lambda: pay(store, **_pay("item-04")), store.export_continuity):
             with self.assertRaisesRegex(owner.FinancialIntegrityError, "^store_replaced$"):
                 command()
         self.assertEqual(acceptance._image(store.path), rewound)
@@ -159,7 +160,7 @@ class CoreR1aMarkTests(unittest.TestCase):
             with LockMeter().watching() as meter:
                 reopened = fixture._make_owner(path=store.path, clock=store.clock)
                 meter.steps = 0  # the open itself is R1b
-                reopened.record_payment_evidence(**_pay(item))
+                pay(reopened, **_pay(item))
             measured.append(meter.steps)
             _grow(store, item)
         self.assertGreater(measured[0], 0, "no lock work was counted: connections must come from sqlite3.connect")
@@ -186,21 +187,22 @@ class CoreR1aMarkTests(unittest.TestCase):
             reopened = fixture._make_owner(path=store.path, clock=store.clock)
         if wrote == [True]:
             with self.assertRaisesRegex(owner.FinancialIntegrityError, "^open_verification:"):
-                reopened.record_payment_evidence(**_pay("item-05"))
+                pay(reopened, **_pay("item-05"))
         else:
             self.assertEqual(wrote, [False])
-            self.assertIn("status", reopened.record_payment_evidence(**_pay("item-05")))
+            self.assertIn("status", pay(reopened, **_pay("item-05")))
 
     def test_a_failed_write_leaves_no_transaction_open_and_the_next_verifies_in_full(self):
         # M1: a persistent connection is discarded on any error, never left mid-transaction
         store = self._fixture()._build_base()
-        store.record_payment_evidence(**_pay("item-06"))
+        pay(store, **_pay("item-06"))
         with self.assertRaises(owner.FinancialError):
-            store.record_payment_evidence(**_pay("item-06", amount=2))  # same payment id, changed meaning
+            store.record_payment_evidence(**_pay("item-06", amount=2))  # a write the owner refuses inside its transaction (intake would hold it)
         _foreign(store.path, "BEGIN IMMEDIATE; ROLLBACK;", timeout=0.5)
         with self._counting_verifies() as calls:
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-05")))
+            store.export_history(Path(store.path).parent / "seal")  # the next write: a payment's baseline seal
         self.assertEqual(len(calls), 1)
+        self.assertIn("status", pay(store, **_pay("item-05")))
 
     def test_a_raw_page_edit_while_the_owner_is_open_is_not_committed_on_top_of(self):
         # safety red team S1: a byte edit of a payments page moves no data_version and the writer's cached pages may
@@ -231,38 +233,39 @@ class CoreR1aMarkTests(unittest.TestCase):
         wall, mono = [store.clock.value + 1_000], [0]  # ms; a wall step moves only `wall`
         store.clock = owner._SystemClock()
         with patch.object(owner.time, "time_ns", lambda: wall[0] * 1_000_000), patch.object(owner.time, "monotonic_ns", lambda: mono[0] * 1_000_000):
-            store.record_payment_evidence(**_pay("item-05"))
+            pay(store, **_pay("item-05"))
             wall[0] += 60_000
             mono[0] += 60_000
-            store.record_payment_evidence(**_pay("item-06"))  # normal running
+            pay(store, **_pay("item-06"))  # normal running
             wall[0] += owner._CLOCK_SKEW_MS - 1  # a small skew inside the bound
-            store.record_payment_evidence(**_pay("item-04"))
+            pay(store, **_pay("item-04"))
             wall[0] += 3_600_000  # an hour's step ahead
+            store.export_history(Path(store.path).parent / "seal")  # the baseline seal reads no clock; what is refused is the payment
             before = acceptance._image(store.path)
             with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
-                store.record_payment_evidence(**_pay("item-03"))
+                pay(store, **_pay("item-03"))
             self.assertEqual(acceptance._image(store.path), before)
             wall[0] -= 3_600_000  # the clock is corrected
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-03")))
+            self.assertIn("status", pay(store, **_pay("item-03")))
 
     def test_a_forward_clock_step_that_stays_put_is_accepted_after_the_lockstep_window(self):
         store = self._fixture()._build_base()
         wall, mono = [store.clock.value + 1_000], [0]
         store.clock = owner._SystemClock()
         with patch.object(owner.time, "time_ns", lambda: wall[0] * 1_000_000), patch.object(owner.time, "monotonic_ns", lambda: mono[0] * 1_000_000):
-            store.record_payment_evidence(**_pay("item-05"))
+            pay(store, **_pay("item-05"))
             wall[0] += 3_600_000  # a step ahead that is never corrected
             for _ in range(2):
                 with self.assertRaisesRegex(owner.FinancialIntegrityError, "^clock_jump_ahead$"):
-                    store.record_payment_evidence(**_pay("item-06"))
+                    pay(store, **_pay("item-06"))
                 wall[0] += owner._CLOCK_SKEW_MS // 2
                 mono[0] += owner._CLOCK_SKEW_MS // 2  # time passes in step, still inside the window
             wall[0] += 1
             mono[0] += 1
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-06")))  # held for the whole window: the new baseline
+            self.assertIn("status", pay(store, **_pay("item-06")))  # held for the whole window: the new baseline
             wall[0] += 60_000
             mono[0] += 60_000
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-04")))
+            self.assertIn("status", pay(store, **_pay("item-04")))
 
     def test_close_is_idempotent_and_releases_the_store(self):
         fixture = self._fixture()
@@ -270,7 +273,7 @@ class CoreR1aMarkTests(unittest.TestCase):
         base.close()
         path = base.path
         with fixture._make_owner(path=path, clock=base.clock) as store:
-            store.record_payment_evidence(**_pay("item-06"))
+            pay(store, **_pay("item-06"))
         store.close()
         os.replace(path, Path(f"{path}.moved"))  # Windows refuses this while any handle is open
 
