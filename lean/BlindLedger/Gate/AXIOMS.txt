@@ -141,3 +141,6 @@
 'BlindLedger.Gate.Engine.pushM_chain' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Engine.pushM_fold' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Engine.decodeEntry3B_canonical' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Engine.E4_snap_roundtrip' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.Engine.E4b_snapDigest_binds' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.Engine.E5_replay_from_snap' depends on axioms: [propext, Classical.choice, Quot.sound]
