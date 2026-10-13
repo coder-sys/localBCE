@@ -1,10 +1,11 @@
 import BlindLedger.Gate.Engine.Snap
 
-/-! ENGINE-0 S2 conformance runner for the ENGINE-SNAP/v1 decoder.  Not a lakefile target (no TCB pin
+/-! ENGINE-0 S2/S3b conformance runner for the ENGINE-SNAP/v2 decoder and the `pushM` fold.  Not a lakefile target (no TCB pin
     moves): `lake env lean --run BlindLedger/Gate/Engine/SnapVectors.lean <vectors>` in `lean/`.
     Each `name hex` line prints `name ok <snapDigest hex>` (the digest of the decoded state's own
     encoding, so a non-canonical accept shows as a digest mismatch) or `name refuse` (`name malformed`
-    for bad hex, which fails the run).  Compared with Python by `tests/test_engine_snap_vectors.py`.
+    for bad hex, which fails the run).  A `name fold hex1 hex2 ...` line folds `pushM` over the entries
+    from `LogStateM.init` (or from the decoded snapshot if the first entry is one) and prints `name ok <snapDigest hex>` of the result or `name refuse`.  Compared with Python by `tests/test_engine_snap_vectors.py`.
     Test-only; never a release path. -/
 
 namespace BlindLedger.Gate.Engine.SnapVectors
@@ -30,6 +31,15 @@ def answer (hex : String) : Option String := do
     | some m => "ok " ++ toHex (snapDigest m)
     | none => "refuse")
 
+def answerFold (hexes : List String) : Option String := do
+  let es ← hexes.mapM fun h => (unhex h.toList).map fun bs => ByteArray.mk bs.toArray
+  let (m0, es) := match es.head?.bind decodeSnap with
+    | some m => (m, es.tail)
+    | none => (LogStateM.init, es)
+  pure (match es.foldlM pushM m0 with
+    | some m => "ok " ++ toHex (snapDigest m)
+    | none => "refuse")
+
 end BlindLedger.Gate.Engine.SnapVectors
 
 open BlindLedger.Gate.Engine.SnapVectors in
@@ -44,6 +54,12 @@ def main (args : List String) : IO UInt32 := do
     | "#" :: _ => continue
     | [name, hex] =>
       if let some r := answer hex then
+        IO.println s!"{name} {r}"
+      else
+        IO.println s!"{name} malformed"
+        bad := true
+    | name :: "fold" :: hexes =>
+      if let some r := answerFold hexes then
         IO.println s!"{name} {r}"
       else
         IO.println s!"{name} malformed"

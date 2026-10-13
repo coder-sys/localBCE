@@ -11,7 +11,13 @@ Synthetic, nonpayment; moves no money.
 from __future__ import annotations
 
 import hashlib
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from typing import Final
+import unittest
 
 TAG: Final = b"RR/GATE/TENANT-LOG/v3\x00"
 DIGEST: Final = 64
@@ -46,6 +52,13 @@ def digest(x: bytes) -> bytes:
     return x
 
 
+def chain_head(rows: list[tuple[int, int, int]], h: bytes = bytes(DIGEST)) -> bytes:
+    """Lean `chainHead sha3 h rows` (rows newest first): `idRegStep` folded from the oldest."""
+    for k, i, s in reversed(rows):
+        h = hashlib.sha3_512(b"RR/GATE/ID-REG/v2\x00" + h + be(1, k) + be(129, i) + be(4, s)).digest()
+    return h
+
+
 def batch(shard: int, header: bytes, manifest: bytes, reqs: list[bytes], rows: list[tuple[int, int, int]],
           leaves: list[bytes]) -> bytes:
     return (be(1, 0) + be(4, shard) + lp(header) + lp(manifest) + lps(reqs) + lp(reg_rows(rows)) + lps(leaves))
@@ -68,10 +81,6 @@ def entry_in(idx: int, prev: bytes, body: bytes) -> bytes:
     return TAG + be(8, idx) + digest(prev) + body
 
 
-def entry_digest(entry: bytes) -> bytes:
-    return hashlib.sha3_512(entry).digest()
-
-
 class _Reader:
     def __init__(self, data: bytes) -> None:
         self.data, self.pos = data, 0
@@ -88,9 +97,6 @@ class _Reader:
     def lp(self) -> bytes:
         return self.take(self.num(4))
 
-    def many(self, one, count: int) -> list:
-        return [one() for _ in range(count)]
-
     def rest(self) -> bytes:
         return self.take(len(self.data) - self.pos)
 
@@ -104,12 +110,12 @@ def decode(data: bytes) -> tuple[int, bytes, str, tuple]:
     idx, prev, kind = r.num(8), r.take(DIGEST), r.num(1)
     if kind == 0:
         shard, header, manifest = r.num(4), r.lp(), r.lp()
-        reqs = r.many(r.lp, r.num(4))
+        reqs = [r.lp() for _ in range(r.num(4))]
         n = r.num(4)
         if n % ROW:
             raise Log3Error("rows")
-        rows = r.many(lambda: (r.num(1), r.num(129), r.num(4)), n // ROW)
-        leaves = r.many(r.lp, r.num(4))
+        rows = [(r.num(1), r.num(129), r.num(4)) for _ in range(n // ROW)]
+        leaves = [r.lp() for _ in range(r.num(4))]
         out = ("batch", (shard, header, manifest, reqs, rows, leaves))
     elif kind in (1, 2):
         shard = r.num(4)
@@ -126,3 +132,38 @@ def decode(data: bytes) -> tuple[int, bytes, str, tuple]:
 def encode(idx: int, prev: bytes, kind: str, fields: tuple) -> bytes:
     body = {"batch": batch, "resume": resume, "seal": seal, "segment": segment}[kind](*fields)
     return entry_in(idx, prev, body)
+
+
+def d(n: int) -> bytes:
+    return hashlib.sha3_512(bytes([n])).digest()
+
+
+def render(vs: list) -> str:
+    """The vector file: `name hex`, or `name fold hex...` when the data is a list of entries."""
+    return "".join(f"{n} " + (" ".join(["fold"] + [e.hex() for e in x]) if isinstance(x, list) else x.hex()) + "\n"
+                   for n, x, _ in vs)
+
+
+def lean_leg(case: unittest.TestCase, module: str, runner: str, vectors: Path, saved: Path, vs: list, verdict) -> None:
+    """The vector file is current, the built module is current, `lean --run <runner> <vectors>` prints the Python
+    verdicts, and so does the saved output."""
+    case.assertEqual(vectors.read_text("utf-8"), render(vs), "stale vector file; re-emit it")
+    want = "".join(f"{n} {verdict(x)}\n" for n, x, _ in vs)
+    lake = shutil.which("lake") or os.path.join(os.path.expanduser("~"), ".elan", "bin", "lake")
+    lean = vectors.parents[2] / "lean"
+    built = subprocess.run([lake, "build", "--no-build", f"BlindLedger.Gate.Engine.{module}"], cwd=lean,
+                           capture_output=True, text=True, timeout=600)
+    case.assertEqual(built.returncode, 0, f"Engine.{module} is stale; run `lake build` in lean/\n" + built.stdout[-1500:])
+    run = subprocess.run([lake, "env", "lean", "--run", f"BlindLedger/Gate/Engine/{runner}.lean", str(vectors)],
+                         cwd=lean, capture_output=True, text=True, timeout=600)
+    case.assertEqual(run.returncode, 0, run.stderr[-1500:])
+    diff = [g for g, w in zip(run.stdout.splitlines(), want.splitlines()) if g != w]
+    case.assertEqual(run.stdout, want, "first Lean lines that differ: " + " | ".join(diff[:4])[:1200])
+    case.assertEqual(saved.read_text("utf-8"), want)
+
+
+def emit_main(vs) -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--emit":
+        Path(sys.argv[2]).write_text(render(vs()), encoding="utf-8", newline="\n")
+    else:
+        unittest.main()

@@ -11,6 +11,7 @@ import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.ReadManifest
 import BlindLedger.Gate.Engine.Log
 import BlindLedger.Gate.Engine.Snap
+import BlindLedger.Gate.Engine.Frame
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
@@ -369,3 +370,31 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.E4b_snapDigest_binds
 /-- info: 'BlindLedger.Gate.Engine.E5_replay_from_snap' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.E5_replay_from_snap
+/-- info: 'BlindLedger.Gate.Engine.pushM_step' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_step
+/-- info: 'BlindLedger.Gate.Engine.stepM_sealed_final' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_sealed_final
+/-- info: 'BlindLedger.Gate.Engine.stepM_seal_guard' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_seal_guard
+/-- info: 'BlindLedger.Gate.Engine.stepM_seal_resume' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_seal_resume
+/-- info: 'BlindLedger.Gate.Engine.chainHead_app' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.chainHead_app
+/-- info: 'BlindLedger.Gate.Engine.stepM_rhead' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.stepM_rhead
+/-- info: 'BlindLedger.Gate.Engine.pushM_fold_rhead' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_fold_rhead
+/-- info: 'BlindLedger.Gate.Engine.E8_frame_total' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.E8_frame_total
+/-- info: 'BlindLedger.Gate.Engine.decodeFrame_app' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeFrame_app
+/-- info: 'BlindLedger.Gate.Engine.C5_bytes_refine' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.C5_bytes_refine
+/-- info: 'BlindLedger.Gate.Engine.decodeSnap_canonical' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.decodeSnap_canonical
+/-- info: 'BlindLedger.Gate.Engine.foldM_batches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.foldM_batches
+/-- info: 'BlindLedger.Gate.Engine.pushM_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_wf
+/-- info: 'BlindLedger.Gate.Engine.foldM_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Engine.foldM_wf
