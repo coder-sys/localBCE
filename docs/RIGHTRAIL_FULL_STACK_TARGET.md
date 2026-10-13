@@ -138,6 +138,8 @@ shown) and a NUL byte:
 | SEGMENT | financial history segments |
 | KEY-CERT | epoch key certificate |
 | CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
+| TENANT-LOG/v3 | engine tenant-log entry digest (literal tag, as written: no `/v2` suffix; entry codec in `Gate/Engine/Log.lean`) |
+| ENGINE-SNAP/v1, LOG-SEGMENT/v1 | engine state snapshot at a segment start; archived log segment (designed, not yet built) |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 
 Checkpoints stream to an independent witness (a separate state agency or
