@@ -3,8 +3,8 @@ import BlindLedger.Gate.Payer
 import BlindLedger.Gate.Producer
 
 /-! payer-batch-release-v1 (design 2026-10-01, `rrb/designs/payer-batch-release-goals.lean`; definitions are its
-    final text); §B generalised to every checkpoint version after review MEDIUM-1 (2026-10-07).  Not imported
-    by `VerifyCli` until step B4, so the pinned exe's sources stay untouched.
+    final text); §B generalised to every checkpoint version after review MEDIUM-1 (2026-10-07).  `VerifyCli`
+    runs `publishOkTree` for PUBLISH.
       §A  RELEASE-BATCH: install certificates and verify each checkpoint once, then decide every item
       §B  one-tree PUBLISH (`publishOkTree`), checked against `publishOkAny`
     Theorems: `BatchTheorems`. -/

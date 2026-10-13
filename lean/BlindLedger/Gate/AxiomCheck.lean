@@ -308,3 +308,27 @@ example : ∀ {c : Crypto} {r : ReleaseRun} {items : List Item} {i : Nat} {it : 
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_eq
 /-- info: 'BlindLedger.Gate.publishOkTree_no_downgrade' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.publishOkTree_no_downgrade
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes},
+    publishOkTree rootPk cert last new tokens = true → publishOkAny rootPk cert last new tokens = true :=
+  @BlindLedger.Gate.publishOkTree_sound
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes},
+    publishOkAny rootPk cert last new tokens = true →
+    publishOkTree rootPk cert last new tokens = true ∨
+      ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y :=
+  @BlindLedger.Gate.publishOkTree_complete
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes},
+    publishCollision tokens = none →
+    publishOkTree rootPk cert last new tokens = publishOkAny rootPk cert last new tokens :=
+  @BlindLedger.Gate.publishOkTree_eq
+open BlindLedger.Gate in
+/-- The statement is pinned: changing the theorem must change this pin in the same commit. -/
+example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {b : Bytes},
+    publishOkTree rootPk cert last new tokens = true → last = some b → isV2 b = true → isV2 new = true :=
+  @BlindLedger.Gate.publishOkTree_no_downgrade
+

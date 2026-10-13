@@ -1,11 +1,12 @@
 import BlindLedger.Gate.Producer
 import BlindLedger.Gate.Payer
+import BlindLedger.Gate.Batch
 
 open BlindLedger.Gate
 
 /-! `gate_verify`: stdin is one mode byte and its frame; stdout one answer line.  Exit 0 for ACCEPT, INDEX,
     STORED and FORK, 1 for REJECT and HOLD, 2 (stderr `GATE_VERIFY=FRAME`) for a malformed frame.  Every
-    decision is a theorem-covered function (`publishOk`, `storeCheckpointAny`, `firstFailure`); this file only
+    decision is a theorem-covered function (`publishOkTree`,`storeCheckpointAny`, `firstFailure`); this file only
     reads the frame into the state they take.  Integers are big-endian; `u32‖x` is a length then `x`.
     - 0x01 PUBLISH: root_pk · u32‖cert · u32‖last (0 = genesis) · u32‖signed new · u16 k · (u32‖token)^k
     - 0x02 INDEX: u32‖signed checkpoint
@@ -48,7 +49,7 @@ def publish : P (String × UInt32) := do
   let last ← pBytes
   let new ← pBytes
   let tokens ← pList pBytes
-  pure (accept (publishOkAny rootPk cert (if last.isEmpty then none else some last) new tokens))
+  pure (accept (publishOkTree rootPk cert (if last.isEmpty then none else some last) new tokens))
 
 def index : P (String × UInt32) := do
   match storedOfAny sha3 (← pBytes) with
