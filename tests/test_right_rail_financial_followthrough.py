@@ -27,6 +27,7 @@ from app.right_rail_financial_owner import (
     FinancialOwnerConfig, FinancialRevisionError, PopulationItem, PopulationManifest, SyntheticTrustedAuthority,
 )
 from tests import test_right_rail_financial_acceptance as acceptance
+from tests.rightrail_intake_rows import pay
 from tests.test_right_rail_financial_custody import fixture_custody
 from tests.test_right_rail_financial_line_pack import _Clock, _unsigned
 from tools import right_rail_financial_cli as financial_cli
@@ -86,7 +87,7 @@ def _build_r_store(directory: Path, rules_bytes: bytes, *, extra_refs: tuple[str
     for name in ("r1", "r2"):
         _support(owner, name, f"evidence:notice:{name}", "state-demand-letters", NOTICE, NOTICE)
     owner.clock.value = paid[1]  # paid[0] is the collection date, paid[1] the day it was recorded
-    owner.record_payment_evidence(item_id="item-r1", payment_id="payment:r1", common_origin_id="origin:r1", amount_cents=1_000_000, evidence_id="evidence:payment:r1", event_at_ms=paid[0], source_id="state-collections")
+    pay(owner, item_id="item-r1", payment_id="payment:r1", common_origin_id="origin:r1", amount_cents=1_000_000, evidence_id="evidence:payment:r1", event_at_ms=paid[0], source_id="state-collections")
     if credit is not None:
         _support(owner, "r1", "evidence:credit:r1", "state-cms64", credit, credit, local_ref="cms64:FFY2027Q2:64.9C1:9C")
     fixture_custody(owner)
@@ -501,7 +502,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
         untyped = {**SUGGESTION, "source_id": "unknown-model", "source_ref": "triage:r3:1", "reason_code": "NOT_IN_RULES"}
         _decide(store, item_id="item-r3", decision_id="decision:r3:close", reason_code="NOT_IN_RULES", suggestion=untyped)
         store.clock.value = ASSIGN_AT
-        store.record_payment_evidence(item_id="item-r3", payment_id="payment:r3", common_origin_id="origin:r3", amount_cents=1_000, evidence_id="evidence:payment:r3", event_at_ms=ASSIGN_AT, source_id="state-collections")
+        pay(store, item_id="item-r3", payment_id="payment:r3", common_origin_id="origin:r3", amount_cents=1_000, evidence_id="evidence:payment:r3", event_at_ms=ASSIGN_AT, source_id="state-collections")
         pack = _pack(store)
         for gap in ("gap:decision-not-in-rules:decision:r3:close", "gap:suggestion-source-not-typed:decision:r3:close", "gap:activity-after-close:item-r3"):
             self.assertIn(gap, pack["unavailable"])
@@ -540,8 +541,8 @@ class FollowthroughDecisionTests(unittest.TestCase):
         # 433.318(a)(1) excuses the state only to the extent it cannot recover: the collected part's federal share stays due.
         store = self._closing(_build_r_store(self.directory, RULES))
         store.clock.value = EVIDENCE_AT
-        store.record_payment_evidence(item_id="item-r2", payment_id="payment:r2:partial", common_origin_id="origin:r2:partial", amount_cents=200_000,
-                                      evidence_id="evidence:payment:r2:partial", event_at_ms=EVIDENCE_AT, source_id="state-collections")
+        pay(store, item_id="item-r2", payment_id="payment:r2:partial", common_origin_id="origin:r2:partial", amount_cents=200_000,
+            evidence_id="evidence:payment:r2:partial", event_at_ms=EVIDENCE_AT, source_id="state-collections")
         _legal(store, "petition", "creditor", "effort")
         _decide(store)
         item = self._r2(store)
