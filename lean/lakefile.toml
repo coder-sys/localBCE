@@ -46,6 +46,12 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 name = "gate_axioms"
 roots = ["BlindLedger.Gate.AxiomCheck"]
 
+# Test-only: Lean-encoded request bytes for tests/test_wire_vectors.py (the Python encoders must match); not pinned.
+[[lean_exe]]
+name = "wire_vectors"
+root = "BlindLedger.Financial.WireVectors"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
 # Test-only: runs tests/gate_rules/*.vectors through the gate rules; never a payment path.
 [[lean_exe]]
 name = "gate_rules"
