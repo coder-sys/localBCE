@@ -16,6 +16,7 @@ import BlindLedger.Financial.Payment.OpenLaws
 import BlindLedger.Financial.Offset.ClaimLaws
 import BlindLedger.Financial.DecisionPackage.Laws
 import BlindLedger.Financial.ShardSplit
+import BlindLedger.Financial.Payment.BatchFast
 
 namespace BlindLedger.Financial
 
@@ -577,3 +578,7 @@ end BlindLedger.Financial
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.check_split
 /-- info: 'BlindLedger.Financial.ShardSplit.check_split_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.ShardSplit.check_split_iff
+/-- info: 'BlindLedger.Financial.Payment.fast_eq_trace_of_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.fast_eq_trace_of_ok
+/-- info: 'BlindLedger.Financial.Payment.batchFast_eq_trace' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms BlindLedger.Financial.Payment.batchFast_eq_trace
