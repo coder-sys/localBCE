@@ -1096,7 +1096,8 @@ class AxiomRecordTests(unittest.TestCase):
                 self.assertNotIn("sorryAx", record[name])
         # The grant-tenant theorems keep their statement pins, so weakening a theorem must change the pin in the same commit
         check = (gate_dir / "AxiomCheck.lean").read_text("utf-8")
-        for name in ("verifyToken_grant_tenant", "verifyToken_foreign_grant", "releaseBatch_grant_tenant"):
+        for name in ("verifyToken_grant_tenant", "verifyToken_foreign_grant", "releaseBatch_grant_tenant",
+                     "publishOkTree_sound", "publishOkTree_complete", "publishOkTree_eq", "publishOkTree_no_downgrade"):
             with self.subTest(name):
                 self.assertRegex(check, re.compile(rf"^example : [^\n]*\n(?: [^\n]*\n)*? [^\n]*:=\n  @BlindLedger\.Gate\.{name}$", re.M))
         # The pinned verifier decides no rule: only the anchor, which runs in the decide runtime, imports them

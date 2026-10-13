@@ -14,8 +14,8 @@ and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FR
 ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
 (Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
 
-- Size: 4,366,848 bytes
-- SHA-256: c66117f3a5c61ad420cd4d11b01a3f0b154844744222645b67ef3805459c8b76
+- Size: 4,375,040 bytes
+- SHA-256: cc83a3235f02f22857ccba961c484ea52684a50453e01514396fd968fe400dce
   (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
 - Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
   -Wl,--no-insert-timestamp (lakefile.toml).
@@ -54,7 +54,10 @@ tenant's alone: Grant.tenantId and the check-9 tenant match; RELEASE moves from 
 `git archive 206d08a1 lean` stage builds (C:\Users\neers\rrb\le\stage-gt-a and -b; guard suffixes gt9a-a5-L2, gt9b-a16-L1; `lake build
 gate_verify gate_axioms`, 38 jobs, exit 0) and the in-tree build (gt5-a1-L2) are byte-identical.
 
+Re-pin (2026-10-13, branch b4-s1, commit 1349913a): `gate_verify` moved from c66117f3... to the SHA-256 above (PUBLISH now runs `publishOkTree`, the one-tree check of Gate/Batch.lean, proved equal to `publishOkAny` by `publishOkTree_eq`, with `_sound`, `_complete`, `_no_downgrade`; VerifyCli imports Batch). Two fresh `git archive 1349913a lean` stage builds (C:\Users\neers\rrb\le\stage-b4-a and -b; guard suffixes b4s5e, b4s5f; `lake build gate_verify gate_axioms`, exit 0) and the in-tree build (b4s5c) are byte-identical. The pinned worker (`7C1EAB94...`) did not move.
+
 Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 c66117f3a5c61ad420cd4d11b01a3f0b154844744222645b67ef3805459c8b76 (4,366,848 bytes; before PUBLISH ran the one-tree `publishOkTree`; replaced by the SHA-256 above).
 - gate_verify SHA-256 a9f4731240bfad9c2ef1171be8d17c853b5d5c4d3ce73615983ba568c502cccd (4,366,336 bytes; before the grant tenant (RELEASE 0x04);
   recoverable at 96620d8a; replaced by the SHA-256 above).
 - gate_verify SHA-256 e3fc5fee34fb6356a1cddd1e3aed27b59b90f1b9bc8b2c9ab3c78a3fca6295c6 (4,365,824 bytes; before the multi-shard review fixes (storedOf restored, storedOfAny, publishOkAny no-downgrade, RULES_FREE once per id); replaced by the SHA-256 above; recoverable at 62e6859).
