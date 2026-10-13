@@ -7,7 +7,6 @@ The owner calls begin under its write lock and finish after sealing, before COMM
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import sqlite3
 from collections import Counter
@@ -99,16 +98,18 @@ def _integer(value: object, low: int, high: int) -> None:
     _require(type(value) is int and low <= value <= high, "cash_file_format")
 
 
-def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result = dict(pairs)
-    _require(len(result) == len(pairs), "cash_file_format")
-    return result
+def _parsed(raw: bytes) -> object:
+    """A caller's JSON through the owner's one parser: a float, NaN, Infinity, a duplicate key or non-canonical bytes is cash_file_format."""
+    try:
+        return ledger._parse_json(raw.decode("ascii"), "cash-file")
+    except ledger.IndependentFinancialError:
+        raise CashFileError("cash_file_format") from None
 
 
 def _source(raw: bytes, empty: bool) -> dict[str, object]:
     """`empty`: a file derived from a raw one may carry no row (every raw row held); a direct file carries one at least."""
     _require(type(raw) is bytes and 0 < len(raw) <= 1024 * 1024, "cash_file_format")
-    value = json.loads(raw.decode("ascii"), object_pairs_hook=_unique)
+    value = _parsed(raw)
     _keys(value, {"contract", "source_class", "scope", "source", "row_count", "total_cents", "rows"})
     _require(value["contract"] == "RR/FINANCIAL/RECEIVER-CASH-FILE/v1" and value["source_class"] == "SYNTHETIC_RECEIVER_CASH", "cash_file_format")
     _keys(value["scope"], _SCOPE)
@@ -139,8 +140,6 @@ def _source(raw: bytes, empty: bool) -> dict[str, object]:
             seen.add(key)
     _require(max(Counter(row["item_id"] for row in rows).values(), default=0) <= MAX_ITEM_ROWS, "cash_file_row_cap")
     _require(sum(row["amount_cents"] for row in rows) == value["total_cents"], "cash_file_format")
-    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
-    _require(raw == canonical, "cash_file_format")
     return value
 
 
@@ -261,9 +260,9 @@ def verify_intakes(events: list, meta: Mapping, payments: Mapping) -> None:
                "authority": {"authority_id": meta["authority_id"], "authority_epoch": meta["authority_epoch"], "authority_digest": bytes(meta["authority_digest"]).hex().upper()}}
     claimed, shas = set(), set()
     try:
-        received = {payload["payment_id"]: event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" for payload in (json.loads(event["payload_json"]),)}
+        received = {payload["payment_id"]: event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" for payload in (ledger._parse_json(event["payload_json"], "history:intake", max_bytes=ledger.MAX_PACKAGE_BYTES),)}
         for event in intakes:
-            payload, at = json.loads(event["payload_json"]), event["event_sequence"]
+            payload, at = ledger._parse_json(event["payload_json"], "history:intake", max_bytes=ledger.MAX_PACKAGE_BYTES), event["event_sequence"]
             stored, bound, rows = payload["intake"], payload["binding"], payload["outcomes"]
             base = bound["baseline_sequence"]
             ok = (set(payload) == {"contract", "intake", "binding", "outcomes", "totals"} and payload["contract"] == INTAKE_CONTRACT and set(stored) == set(_INTAKE_KEYS)
@@ -309,11 +308,10 @@ class CashFileCheck:
         _require(type(context["expected_mode"]) is str and context["expected_mode"] in ("LIVE", "TEST") and type(context["preview"]) is bool, "cash_file_binding")
         intake = context["intake"]  # None, or the intake facts of the raw file this file was derived from, stored with every row's outcome
         _require(intake is None or type(intake) is dict and intake.get("derived_sha256") == self._source_sha and type(intake.get("source_sha256")) is str and _SHA.fullmatch(intake["source_sha256"]) is not None, "cash_file_binding")
-        self.intake = None if intake is None else json.loads(ledger._canonical(intake))
+        self.intake = None if intake is None else _parsed(ledger._canonical(intake))
         self._context = _freeze(context)
         self._source = _freeze(source)
-        manifest = json.loads(context["baseline_bytes"].decode("ascii"), object_pairs_hook=_unique)  # B: the owner's history-export manifest (docs/CORE_REDESIGN.md "History segments")
-        _require(context["baseline_bytes"] == ledger._canonical(manifest), "cash_file_format")
+        manifest = _parsed(context["baseline_bytes"])  # B: the owner's history-export manifest (docs/CORE_REDESIGN.md "History segments")
         try:  # the export verifier's own manifest checks: shape, digest, meta, authority, scope, identity
             meta = ledger._verify_manifest(manifest, context["expected_authority"], context["expected_scope"])[0]
         except ledger.IndependentFinancialError as error:
@@ -343,7 +341,7 @@ class CashFileCheck:
         rows, meta = outcomes(self.intake, results), self._meta[1]
         binding = {"scope": dict(self._context["expected_scope"]), "baseline_sha256": self._baseline_sha,
                    "baseline_sequence": self._anchor[1], "baseline_head": self._anchor[2].hex().upper(), "authority": {"authority_id": meta["trusted_authority_id"], "authority_epoch": meta["trusted_authority_epoch"], "authority_digest": bytes(meta["trusted_authority_digest"]).hex().upper()}}
-        return json.loads(ledger._canonical({"contract": INTAKE_CONTRACT, "intake": {key: self.intake[key] for key in _INTAKE_KEYS}, "binding": binding, "outcomes": rows, "totals": _totals(rows, self.intake["control_total_cents"])}))
+        return ledger._parse_json(ledger._canonical({"contract": INTAKE_CONTRACT, "intake": {key: self.intake[key] for key in _INTAKE_KEYS}, "binding": binding, "outcomes": rows, "totals": _totals(rows, self.intake["control_total_cents"])}).decode("ascii"), "cash-file:intake", max_bytes=ledger.MAX_PACKAGE_BYTES)
 
     def _expectations(self) -> dict:
         return {**{key: self._context[key] for key in ("expected_scope", "expected_authority", "expected_mode", "expected_owner_id")}, "expected_continuity_epoch": self._epoch}
@@ -408,12 +406,12 @@ class CashFileCheck:
         item_of = {row["obligation_id"]: row["item_id"] for row in self._obligations.values()}
         received, aliases = {}, {}  # index set 4 holds one PAYMENT_RECEIVED per payment id and one alias per evidence id, store-wide: each read by its key, then bound
         for event in _keyed(connection, "rr_financial_v4_events_received_payment", self._payments):
-            payload = json.loads(event["payload_json"])
-            _require(payload["payment_id"] in self._payments and payload["payment_id"] not in received, "cash_file_failed")  # json_extract keys on a payload's first payment_id, json.loads keeps its last: the id must be a requested one, received once
+            payload = ledger._parse_json(event["payload_json"], "cash-file:received", max_bytes=ledger.MAX_PACKAGE_BYTES)
+            _require(payload["payment_id"] in self._payments and payload["payment_id"] not in received, "cash_file_failed")  # the id must be a requested one, received once
             _require(event["aggregate_id"] == self._payments[payload["payment_id"]]["obligation_id"], "cash_file_failed")  # a receipt filed under another obligation
             received[payload["payment_id"]] = (event, payload)
         for event in _keyed(connection, "rr_financial_v4_events_alias_evidence", [argument["evidence_id"] for argument in arguments]):
-            payload = json.loads(event["payload_json"])
+            payload = ledger._parse_json(event["payload_json"], "cash-file:alias", max_bytes=ledger.MAX_PACKAGE_BYTES)
             item = evidence[payload["candidate_evidence_id"]]["item_id"]
             _require(item_of.get(event["aggregate_id"]) == item, "cash_file_failed")  # an alias filed under an obligation of another item
             if event["aggregate_id"] == obligations.get(item):  # another period's alias is not this file's
@@ -479,7 +477,7 @@ class CashFileCheck:
             sequence += 1  # each NEW or OVERLAP row appends exactly the next event, verified onto the chain
             event, obligation = events[sequence], payments[answer]["obligation_id"]
             head = ledger._verify_event(event, sequence, head)
-            payload = json.loads(event["payload_json"])
+            payload = ledger._parse_json(event["payload_json"], "cash-file:event", max_bytes=ledger.MAX_PACKAGE_BYTES)
             _require(event["before_revision"] == argument["expected_revision"] == revisions[obligation] and _matches(evidence.get(argument["evidence_id"]), _fact(argument)), "cash_file_failed")
             new_evidence.add(argument["evidence_id"])
             touched.add(obligation)

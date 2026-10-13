@@ -580,7 +580,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             )
             cases = {
                 "bool-for-int": ({"table": table, "key": key, "set": {column: bool(number)}}, f"replay:{table}"),
-                "float-for-int": ({"table": table, "key": key, "set": {column: float(number)}}, f"replay:{table}"),
+                "float-for-int": ({"table": table, "key": key, "set": {column: float(number)}}, "replay:payload:float"),  # F14: refused at parse
                 "extra-key": ({"table": table, "key": key, "set": {"unknown_column": number}}, f"replay:image:{table}"),
                 "missing-key": ({"table": table, "row": {independent.TABLE_COLUMNS[table][0]: "replay:new"}}, f"replay:image:{table}"),
             }

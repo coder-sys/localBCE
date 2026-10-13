@@ -570,15 +570,52 @@ def _parse_json(raw: object, code: str, *, max_bytes: int = MAX_JSON_BYTES) -> o
         value = json.loads(
             encoded.decode("ascii"),
             object_pairs_hook=_duplicate_pairs,
+            parse_float=lambda _value: _fail(f"{code}:float"),  # money and identity values are integers only; the Lean types have no floats
             parse_constant=lambda _value: _fail(f"{code}:constant"),
+            parse_int=lambda text: _lean_int(text, code),
         )
     except IndependentFinancialError:
         raise
     except (RecursionError, TypeError, UnicodeDecodeError, ValueError):
         _fail(f"{code}:parse")
+    _check_json_shape(value, code)
     if _canonical(value, code) != encoded:
         _fail(f"{code}:noncanonical")
     return value
+
+
+def _lean_int(text: str, code: str) -> int:
+    """Lean `J.ok`: -(2^63) <= i < 2^63. JSON has no leading zeros, so 20+ digits is past the bound before int() runs."""
+    value = int(text) if len(text.lstrip("-")) <= 19 else 1 << 63
+    if not -(1 << 63) <= value < 1 << 63:
+        _fail(f"{code}:bounds")
+    return value
+
+
+def _past_lean_grammar(raw: object) -> str | None:
+    try:
+        _parse_json(raw, "quarantine", max_bytes=MAX_SEGMENT_BYTES)
+    except IndependentFinancialError as error:
+        reason = str(error).removeprefix("quarantine:")
+        return reason if reason in ("float", "constant", "bounds") else None
+    return None
+
+
+def json_quarantine_rows(connection: sqlite3.Connection) -> list[dict[str, object]]:
+    """Read-only: every stored row holding a REAL value, or JSON past the Lean grammar (a float, NaN or Infinity, depth over 32,
+    over 250,000 nodes, an integer outside -(2^63)..2^63-1), one entry per row naming each such column and why, for quarantine.
+    Other malformed JSON is left to the checks that own it. One such row never refuses the store, and nothing is rewritten."""
+    present = {name for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    found: list[dict[str, object]] = []
+    for table, definition in {**_TABLE_DEFS, **_HISTORY_TABLE_DEFS, **_ROW_COUNTS_DEF}.items():
+        names = [name for name, _, _ in definition]
+        keys = [name for name, _, pk in sorted(definition, key=lambda column: column[2]) if pk]
+        for values in connection.execute(f"SELECT {','.join(names)} FROM {table} ORDER BY {','.join(keys)}") if table in present else ():
+            reasons = (("real" if type(value) is float else name.endswith("_json") and _past_lean_grammar(value)) for name, value in zip(names, values))
+            columns = {name: reason for name, reason in zip(names, reasons) if reason}
+            if columns:
+                found.append({"table": table, "key": tuple(values[names.index(key)] for key in keys), "columns": columns})
+    return found
 
 
 def _check_json_shape(value: object, code: str) -> None:
@@ -589,11 +626,8 @@ def _check_json_shape(value: object, code: str) -> None:
         nodes += 1
         if nodes > MAX_PACKAGE_NODES or depth > 32:
             _fail(f"{code}:bounds")
-        if isinstance(current, dict):
-            for key, child in current.items():
-                if type(key) is not str:
-                    _fail(f"{code}:key")
-                stack.append((child, depth + 1))
+        if isinstance(current, dict):  # only _parse_json output reaches here, so every key is a str
+            stack.extend((child, depth + 1) for child in current.values())
         elif isinstance(current, list):
             stack.extend((child, depth + 1) for child in current)
 
@@ -1439,10 +1473,7 @@ def _verify_correction_followup_records(
             or case.get("obligation_id") != aggregate_id
         ):
             _fail("history:correction-followup-input-binding")
-        try:
-            evidence_value = json.loads(str(result_row["evidence_bindings_json"]))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            _fail("history:correction-followup-evidence")
+        evidence_value = _parse_json(result_row["evidence_bindings_json"], "history:correction-followup-evidence")
         if not isinstance(evidence_value, dict) or set(evidence_value) != {"bindings"} or followup["supporting_evidence"] != evidence_value["bindings"]:
             _fail("history:correction-followup-evidence-binding")
 
@@ -3898,7 +3929,7 @@ def _package_import_value(value: object, code: str) -> object:
             return bytes.fromhex(encoded)
         except ValueError:
             _fail(f"{code}:hex")
-    if value is None or type(value) in {str, int, float, bool}:
+    if value is None or type(value) in {str, int, bool}:
         return value
     _fail(f"{code}:value")
 
@@ -4105,7 +4136,6 @@ def verify_continuity_package(
     value = _parse_json(raw_text, "continuity:package", max_bytes=MAX_PACKAGE_BYTES)
     if not isinstance(value, dict):
         _fail("continuity:object")
-    _check_json_shape(value, "continuity:shape")
     required = {
         "schema", "version", "scope", "authority", "continuity_epoch", "sequence",
         "history_head", "dispatch_enabled", "egress_enabled", "mode", "tables", "package_digest",
