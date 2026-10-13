@@ -258,18 +258,46 @@ theorem reshard_crash_open (C : List Nat) (j : Nat) (hok : reshardOk pk K' cx ss
   rw [if_pos hj]
   exact fun h => cx.advancesI _ _ _ h.symm
 
-/-- M1: recovery of every store a crash can leave is a reachable store. -/
-theorem crash_recover (h : Crash cx pk ss) : ReachR cx pk (recoverAll cx ss) := sorry
+/-- Recovering the shards `S` of a store whose newest record is `R`, with the shards `C` of `R` committed, commits
+    the touched shards of `S` too. -/
+theorem recoverOn_commit (cx : Ctx) (sp : SpineDB) (R : Rec) (rs : List Rec) (hs : sp.recs = R :: rs)
+    (sh : Nat → ShardDB) (C S : List Nat) (hC : ∀ k ∈ C, k ∈ R.touched) (hpre : ∀ k, R.pre k = (sh k).head)
+    (hadv : ∀ k, R.post k ≠ R.pre k) (hI : imgOk cx R = true) :
+    recoverOn cx S (sp, commitShards R C sh) =
+      (sp, commitShards R (C ++ S.filter fun k => decide (k ∈ R.touched)) sh) := by
+  refine Prod.ext rfl (funext fun k => ?_)
+  show (if k ∈ S then recover cx sp k (commitShards R C sh k) else commitShards R C sh k) =
+    commitShards R (C ++ S.filter fun k => decide (k ∈ R.touched)) sh k
+  by_cases hS : k ∈ S
+  · rw [if_pos hS, recover_pure cx sp R rs hs, replay_commit cx R sh C hC hpre hadv hI k]
+    unfold commitShards
+    by_cases ht : k ∈ R.touched
+    · have hm : k ∈ C ++ S.filter (fun k => decide (k ∈ R.touched)) := by
+        simp [List.mem_append, List.mem_filter, hS, ht]
+      rw [if_pos ht, if_pos hm]
+    · have hnC : k ∉ C := fun h => ht (hC k h)
+      have hm : k ∉ C ++ S.filter (fun k => decide (k ∈ R.touched)) := by
+        simp [List.mem_append, List.mem_filter, ht, hnC]
+      rw [if_neg ht, if_neg hm]
+  · rw [if_neg hS]
+    unfold commitShards
+    have hm : (k ∈ C ++ S.filter (fun k => decide (k ∈ R.touched))) ↔ k ∈ C := by
+      simp [List.mem_append, List.mem_filter, hS]
+    by_cases hk : k ∈ C
+    · rw [if_pos hk, if_pos (hm.2 hk)]
+    · rw [if_neg hk, if_neg (fun h => hk (hm.1 h))]
 
 /-- M1: a RESHARD recovery interrupted after recovering any shards `S` leaves the RESHARD crash with `C` and the
     touched shards of `S` committed; recovery may be interrupted and resumed any number of times. -/
 theorem crash_partial (C S : List Nat) (hok : reshardOk pk K' cx ss = true) (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
     recoverOn cx S (afterReshard pk K' cx ss C) =
-      afterReshard pk K' cx ss (C ++ S.filter fun k => decide (k ∈ rT pk K' cx)) := sorry
-
-/-- M1: recovery of any shard set `S` interrupted part-way, from any store a crash can leave (a step's crash
-    included), leaves a store a crash can leave. -/
-theorem crash_recoverOn (h : Crash cx pk ss) (S : List Nat) : Crash cx pk (recoverOn cx S ss) := sorry
+      afterReshard pk K' cx ss (C ++ S.filter fun k => decide (k ∈ rT pk K' cx)) := by
+  have hA : ∀ C', afterReshard pk K' cx ss C' =
+      (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) C' ss.2) := fun C' => by
+    unfold afterReshard; rw [if_pos hok]
+  rw [hA C, hA]
+  exact recoverOn_commit cx (rSpine pk K' cx ss) (rRec pk K' cx ss) ss.1.recs rfl ss.2 C S hC (fun _ => rfl)
+    (fun _ => cx.advancesI _ _ _) rRec_imgOk
 
 theorem lastOk_of (h3 : Inv3 ss) (hk : InvK pk cx ss) : lastOk cx ss = true := by
   unfold lastOk
@@ -670,6 +698,75 @@ theorem reachR_recover (h : ReachR cx pk ss) : recoverAll cx ss = ss := by
     rw [if_neg]
     rintro ⟨hk, _, hne, _⟩
     exact hne (h2 R rs hR k hk)
+
+/-- Recovering any shard set of a `ReachR` store changes nothing. -/
+theorem recoverOn_reach (h : ReachR cx pk ss) (S : List Nat) : recoverOn cx S ss = ss := by
+  have e := congrFun (congrArg Prod.snd (reachR_recover h))
+  refine Prod.ext rfl (funext fun k => ?_)
+  show (if k ∈ S then recover cx ss.1 k (ss.2 k) else ss.2 k) = ss.2 k
+  split
+  · exact e k
+  · rfl
+
+theorem spine_recover (inp : Input) (C : List Nat) (hr : ReachR cx pk ss)
+    (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) : ReachR cx pk (recoverAll cx (afterSpine pk cx ss inp C)) := by
+  by_cases hc : checkAll pk cx ss inp = true
+  · have hs : stepS pk cx ss inp = some (commitSpine ss.1 (mkRec pk cx ss inp).1 (mkRec pk cx ss inp).2,
+        commitShards (mkRec pk cx ss inp).2 (mkRec pk cx ss inp).2.touched ss.2) := by
+      unfold stepS; rw [if_pos hc]
+    rw [rollforward_eq pk cx ss _ inp C hs hC]
+    have := ReachR.step inp hr
+    simpa only [stepT, hs, Option.getD_some] using this
+  · have : afterSpine pk cx ss inp C = ss := by unfold afterSpine; rw [if_neg hc]
+    rw [this, reachR_recover hr]; exact hr
+
+theorem resh_recover (C : List Nat) (hr : ReachR cx pk ss) (hok : reshardOk pk K' cx ss = true)
+    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
+    ReachR cx (setK pk cx.p K') (recoverAll cx (afterReshard pk K' cx ss C)) := by
+  have hs : reshard pk K' cx ss = some (rSpine pk K' cx ss, commitShards (rRec pk K' cx ss) (rT pk K' cx) ss.2) := by
+    unfold reshard; rw [if_pos hok]
+  rw [reshard_rollforward C hs hC]
+  exact ReachR.resh K' hr hs
+
+/-- M1: recovery of every store a crash can leave is a reachable store. -/
+theorem crash_recover (h : Crash cx pk ss) : ReachR cx pk (recoverAll cx ss) := by
+  cases h with
+  | ok hr => rw [reachR_recover hr]; exact hr
+  | spine inp C hr hC => exact spine_recover inp C hr hC
+  | resh K'' C hr hok hC => exact resh_recover C hr hok hC
+
+theorem spine_recoverOn (inp : Input) (C S : List Nat) (hr : ReachR cx pk ss)
+    (hC : ∀ k ∈ C, k ∈ (mkRec pk cx ss inp).2.touched) :
+    Crash cx pk (recoverOn cx S (afterSpine pk cx ss inp C)) := by
+  by_cases hc : checkAll pk cx ss inp = true
+  · have hA : ∀ C', afterSpine pk cx ss inp C' = (commitSpine ss.1 (mkRec pk cx ss inp).1
+        (mkRec pk cx ss inp).2, commitShards (mkRec pk cx ss inp).2 C' ss.2) := fun C' => by
+      unfold afterSpine; rw [if_pos hc]
+    rw [hA C, recoverOn_commit cx _ (mkRec pk cx ss inp).2 ss.1.recs rfl ss.2 C S hC (fun _ => rfl)
+      (fun _ => cx.advances _ _ _ _) rfl, ← hA]
+    refine Crash.spine inp _ hr fun k hk => ?_
+    rcases List.mem_append.1 hk with h | h
+    · exact hC k h
+    · exact of_decide_eq_true (List.mem_filter.1 h).2
+  · have : afterSpine pk cx ss inp C = ss := by unfold afterSpine; rw [if_neg hc]
+    rw [this, recoverOn_reach hr]; exact Crash.ok hr
+
+theorem resh_recoverOn (C S : List Nat) (hr : ReachR cx pk ss) (hok : reshardOk pk K' cx ss = true)
+    (hC : ∀ k ∈ C, k ∈ rT pk K' cx) :
+    Crash cx (setK pk cx.p K') (recoverOn cx S (afterReshard pk K' cx ss C)) := by
+  rw [crash_partial C S hok hC]
+  refine Crash.resh K' _ hr hok fun k hk => ?_
+  rcases List.mem_append.1 hk with h | h
+  · exact hC k h
+  · exact of_decide_eq_true (List.mem_filter.1 h).2
+
+/-- M1: recovery of any shard set `S` interrupted part-way, from any store a crash can leave (a step's crash
+    included), leaves a store a crash can leave. -/
+theorem crash_recoverOn (h : Crash cx pk ss) (S : List Nat) : Crash cx pk (recoverOn cx S ss) := by
+  cases h with
+  | ok hr => rw [recoverOn_reach hr]; exact Crash.ok hr
+  | spine inp C hr hC => exact spine_recoverOn inp C S hr hC
+  | resh K'' C hr hok hC => exact resh_recoverOn C S hr hok hC
 
 /-! ## (a) Every row present exactly once, at its new home -/
 
