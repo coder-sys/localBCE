@@ -801,4 +801,46 @@ theorem setsDigestF_eq (H : ByteArray → List UInt8) (r u : Snapshot Line) :
 /-- info: 'BlindLedger.Gate.Rules.Fast.pinBytes_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms pinBytes_eq
 
+theorem unhexGo_eq (u : ByteArray) : ∀ (k i : Nat) (a : ByteArray),
+    Run.unhexGo u k i a = (List.range' i k).foldlM
+      (fun a i => do pure (a.push ((← Run.nib u[2 * i]!) * 16 + (← Run.nib u[2 * i + 1]!)))) a
+  | 0, i, a => by simp [Run.unhexGo]
+  | k + 1, i, a => by
+    simp only [Run.unhexGo, List.range'_succ, List.foldlM_cons]
+    cases h1 : Run.nib u[2 * i]! <;> cases h2 : Run.nib u[2 * i + 1]! <;> simp [h1, h2, unhexGo_eq u k (i + 1)]
+
+theorem unhexFast_eq (s : String) : Run.unhexFast s = Run.unhex s := by
+  simp only [Run.unhexFast, Run.unhex, unhexGo_eq, List.range_eq_range']
+
+theorem fieldsFast_eq (raw : String) : Run.fieldsFast raw = Run.fields raw := by
+  unfold Run.fieldsFast
+  split
+  · rfl
+  · rename_i h
+    have h' : '\r' ∉ raw.toList := by simpa [String.contains_char_eq] using h
+    unfold Run.fields
+    have e : raw.toList.filter (· ≠ '\r') = raw.toList :=
+      List.filter_eq_self.mpr fun c hc => by simp; rintro rfl; exact h' hc
+    rw [e, String.ofList_toList]
+
+theorem setsDigestF_carry_eq (m : Option Run.Memo) (r u : Snapshot Line) :
+    Run.Memo.get m r u = setsDigestF Run.hB r u := by
+  unfold Run.Memo.get
+  split
+  · rename_i m
+    split
+    · rename_i h
+      obtain ⟨h1, h2⟩ := h
+      subst h1 h2
+      exact m.ok
+    · rfl
+  · rfl
+
+/-- info: 'BlindLedger.Gate.Rules.Fast.unhexFast_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms unhexFast_eq
+/-- info: 'BlindLedger.Gate.Rules.Fast.fieldsFast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms fieldsFast_eq
+/-- info: 'BlindLedger.Gate.Rules.Fast.setsDigestF_carry_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms setsDigestF_carry_eq
+
 end BlindLedger.Gate.Rules.Fast

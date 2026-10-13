@@ -32,10 +32,9 @@ def oLen {α : Type} (o : Option (List α)) : Nat := o.elim 0 List.length
 def commitT (a : Acc) (st : St) (unanchored : Bool) : IO (St × List String) := do
   let p ← tm a 6 (fun (p : Pinned) => p.kinds.elim 0 List.length) fun _ => st.pinned.getD st.pin
   let c ← tm a 7 (fun (c : Ctx) => c.today) fun _ => st.ctx p
-  let okA ← match st.anchor with
-    | none => pure true
-    | some n => tm a 10 (fun (b : Bool) => b.toNat) fun _ =>
-        Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior == some (Gate.natBE Gate.digestBytes n)
+  let prior ← tm a 10 oLen fun _ =>
+    if st.sealed || st.anchor.isSome then Memo.get st.memo c.releasedPrior c.unresolvedPrior else none
+  let okA := st.anchor.all fun n => prior == some (Gate.natBE Gate.digestBytes n)
   if !okA then
     let st0 : St := { st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], owners := none,
                               free := none, pays := [], checked := st.checked + unanchored.toNat,
@@ -70,7 +69,7 @@ def commitT (a : Acc) (st : St) (unanchored : Bool) : IO (St × List String) := 
   let pinOf (o : Option (Snapshot Line × List UInt8)) (d : String) (k : Nat) (s : Snapshot Line) :=
     o.elim ((Fast.pinBytes d k Line.fields s).map hB) (some ·.2)
   let base ← tm a 10 oLen fun _ =>
-    (if st.sealed then Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior else do
+    (if st.sealed then prior else do
       pure (Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (← pinOf p.released "RR/GATE/RELEASED/v1" 5 c.releasedPrior)
         (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior)) : Option (List UInt8))
   let shown : List String ← match fr with
@@ -97,14 +96,15 @@ def loadT (a : Acc) (st : St) (asof adds h : String) : IO (Option (St × List St
   let some ao := asof.toNat? | return none
   let g : Snapshot Line := ⟨ao, 0, []⟩
   let sz (o : Option ByteArray) : Nat := o.elim 0 (·.size)
-  let anc ← tm a 3 sz fun _ => unhex h
-  let bso ← tm a 3 sz fun _ => if adds == "-" then some ByteArray.empty else unhex adds
+  let anc ← tm a 3 sz fun _ => unhexFast h
+  let bso ← tm a 3 sz fun _ => if adds == "-" then some ByteArray.empty else unhexFast adds
   let some ab := anc | return none
   let some bs := bso | return none
   let anchor := Gate.beNat ab.toList
   let rb ← tm a 4 (fun (o : Option (Snapshot Line × Snapshot Line)) => o.elim 0 fun s => s.1.entries.length) fun _ =>
     (parseAdds bs).map fun ad => Rules.replay (g, g) [ad]
-  let dg ← tm a 5 oLen fun _ => rb.bind fun s => Fast.setsDigestF hB s.1 s.2
+  let mo : Option Memo := rb.map fun s => ⟨s.1, s.2, _, rfl⟩
+  let dg ← tm a 5 oLen fun _ => mo.bind (·.d)
   match rb with
   | some s =>
     if dg == some (Gate.natBE Gate.digestBytes anchor) then
@@ -113,7 +113,7 @@ def loadT (a : Acc) (st : St) (asof adds h : String) : IO (Option (St × List St
       pure (some ({ st with
         snaps := ("released", g.asOf, 0, er) :: ("unresolved", g.asOf, 0, eu) :: st.snaps,
         rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true }, []))
+        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true, memo := mo }, []))
     else pure (some ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"]))
   | none => pure (some ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"]))
 
@@ -131,7 +131,7 @@ def runTextT (a : Acc) (text : String) : IO (Array String × Bool) := do
   let raws ← tm a 1 List.length fun _ => text.splitOn "\n"
   for raw in raws do
     number := number + 1
-    let fields ← tm a 1 List.length fun _ => ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
+    let fields ← tm a 1 List.length fun _ => fieldsFast raw
     if fields.isEmpty || fields.head!.startsWith "#" then continue
     match ← stepT a st fields with
     | none =>
