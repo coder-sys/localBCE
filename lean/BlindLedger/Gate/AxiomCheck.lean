@@ -8,6 +8,7 @@ import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.ApprovalLaws
 import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Sha3FastEq
+import BlindLedger.Gate.Engine.Log
 
 /-! Pins what the gate theorems rest on.  `#guard_msgs` fails this build if
     any theorem's dependency set changes, so `lake build gate_axioms` is the
