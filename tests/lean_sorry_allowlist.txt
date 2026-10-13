@@ -1,1 +1,1 @@
-lean/BlindLedger/Gate/Engine/Snap.lean 4
+lean/BlindLedger/Gate/Engine/Snap.lean 2

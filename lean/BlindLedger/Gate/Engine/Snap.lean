@@ -206,6 +206,186 @@ theorem pState_app (m : LogStateM) (hr : m.rhead.length = digestBytes) (hg : (ro
   simp only [pState, stateIn, List.append_assoc, seq_app (digest_app hr), seq_app (pRows_app _ hg hf),
     seq_app (pAsc_app pShard_app _ ⟨hn, hs, ha⟩)] <;> rfl
 
+/-! ## Inverse of the decoder (L2) -/
+
+theorem pBit_run {b r : Bytes} {v : Bool} (h : pBit.run b = some (v, r)) : bitIn v ++ r = b := by
+  obtain ⟨x, r1, h1, hm⟩ := Approval.bind_run h
+  obtain ⟨hx, -⟩ := rd_run h1
+  rcases x with _ | _ | x
+  · obtain ⟨rfl, rfl⟩ := Approval.pure_run hm; exact hx
+  · obtain ⟨rfl, rfl⟩ := Approval.pure_run hm; exact hx
+  · simp [fail, StateT.run] at hm
+
+theorem pSealed_run {b r : Bytes} {o : Option Bytes} (h : pSealed.run b = some (o, r)) :
+    sealedIn o ++ r = b ∧ ∀ t, o = some t → t.length < 256 ^ 4 := by
+  obtain ⟨x, r1, h1, hm⟩ := Approval.bind_run h
+  obtain ⟨hx, -⟩ := rd_run h1
+  rcases x with _ | _ | x
+  · obtain ⟨rfl, rfl⟩ := Approval.pure_run hm
+    exact ⟨hx, fun t ht => by cases ht⟩
+  · obtain ⟨t, r2, h2, hm2⟩ := Approval.bind_run hm
+    obtain ⟨rfl, rfl⟩ := Approval.pure_run hm2
+    obtain ⟨ht, hl⟩ := pLp_run h2
+    subst hx ht
+    refine ⟨by simp [sealedIn], fun t' ht' => ?_⟩
+    cases ht'
+    exact hl
+  · simp [fail, StateT.run] at hm
+
+theorem pTip_run {b r : Bytes} {o : Option (Bytes × Bytes)} (h : pTip.run b = some (o, r)) :
+    tipIn o ++ r = b ∧ ∀ s c, o = some (s, c) → s.length < 256 ^ 4 ∧ c.length < 256 ^ 4 := by
+  obtain ⟨x, r1, h1, hm⟩ := Approval.bind_run h
+  obtain ⟨hx, -⟩ := rd_run h1
+  rcases x with _ | _ | x
+  · obtain ⟨rfl, rfl⟩ := Approval.pure_run hm
+    exact ⟨hx, fun s c hc => by cases hc⟩
+  · obtain ⟨s, r2, h2, hm2⟩ := Approval.bind_run hm
+    obtain ⟨c, r3, h3, hm3⟩ := Approval.bind_run hm2
+    obtain ⟨rfl, rfl⟩ := Approval.pure_run hm3
+    obtain ⟨hs, hl⟩ := pLp_run h2
+    obtain ⟨hc, hl'⟩ := pLp_run h3
+    subst hx hs hc
+    refine ⟨by simp [tipIn], fun s' c' hh => ?_⟩
+    cases hh
+    exact ⟨hl, hl'⟩
+  · simp [fail, StateT.run] at hm
+
+theorem pOwn_run {b r : Bytes} {x : Nat × Nat} (h : pOwn.run b = some (x, r)) :
+    ownRow x ++ r = b ∧ x.1 < 256 ^ 8 ∧ 0 < x.2 ∧ x.2 < 256 ^ 8 := by
+  obtain ⟨e, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨c, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨u, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  obtain ⟨he, we⟩ := rd_run h1
+  obtain ⟨hc, wc⟩ := rd_run h2
+  obtain ⟨ok, rfl⟩ := Approval.need_run h3
+  subst he hc
+  exact ⟨by simp [ownRow], we, of_decide_eq_true ok, wc⟩
+
+theorem pPay_run {k : Nat} {b r : Bytes} {x : Nat × Bytes} (h : (pPay k).run b = some (x, r)) :
+    payRow x ++ r = b ∧ x.1 < 256 ^ payWidth ∧ x.2.length < 256 ^ 4 ∧ payKeyOk k x.1 x.2 = true := by
+  obtain ⟨n, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨y, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨u, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  obtain ⟨hn, wn⟩ := rd_run h1
+  obtain ⟨hy, wy⟩ := pLp_run h2
+  obtain ⟨ok, rfl⟩ := Approval.need_run h3
+  subst hn hy
+  exact ⟨by simp [payRow], wn, wy, ok⟩
+
+theorem pAsc_run {α : Type} {p : P (Nat × α)} {enc : Nat × α → Bytes} {Q : Nat × α → Prop}
+    (hp : ∀ {b x r}, p.run b = some (x, r) → enc x ++ r = b ∧ Q x) {b r : Bytes} {xs : List (Nat × α)}
+    (h : (pAsc p).run b = some (xs, r)) : ascIn enc xs ++ r = b ∧ ascFits Q xs := by
+  obtain ⟨n, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨hn, wn⟩ := rd_run h1
+  obtain ⟨ys, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨hx, hl, hq⟩ := Approval.many_run hp n h2
+  obtain ⟨u, r3, h3, h4⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h4
+  obtain ⟨ok, rfl⟩ := Approval.need_run h3
+  subst hn hx
+  refine ⟨by simp [ascIn, hl], ?_⟩
+  unfold ascFits
+  exact ⟨by rw [hl]; exact wn, hq, ok⟩
+
+theorem pShard_run {b r : Bytes} {x : Nat × ShardM} (h : pShard.run b = some (x, r)) :
+    shardRow x ++ r = b ∧ ShardM.fits x := by
+  obtain ⟨k, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨own, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨sealed, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨live, r4, h4, h⟩ := Approval.bind_run h
+  obtain ⟨last, r5, h5, h⟩ := Approval.bind_run h
+  obtain ⟨base, r6, h6, h⟩ := Approval.bind_run h
+  obtain ⟨u1, r7, h7, h⟩ := Approval.bind_run h
+  obtain ⟨u2, r8, h8, h⟩ := Approval.bind_run h
+  obtain ⟨pays, r9, h9, h⟩ := Approval.bind_run h
+  obtain ⟨u3, r10, h10, h⟩ := Approval.bind_run h
+  obtain ⟨rfl, rfl⟩ := Approval.pure_run h
+  obtain ⟨hk, wk⟩ := rd_run h1
+  obtain ⟨ho, fo⟩ := pAsc_run (enc := ownRow) (Q := fun e => e.1 < 256 ^ 8 ∧ 0 < e.2 ∧ e.2 < 256 ^ 8) pOwn_run h2
+  obtain ⟨hs, fs⟩ := pSealed_run h3
+  have hl := pBit_run h4
+  obtain ⟨ht, ft⟩ := pTip_run h5
+  obtain ⟨hb, wb⟩ := digest_run h6
+  obtain ⟨ok1, rfl⟩ := Approval.need_run h7
+  obtain ⟨ok2, rfl⟩ := Approval.need_run h8
+  obtain ⟨hp, fp⟩ := pAsc_run (enc := payRow)
+    (Q := fun e => e.1 < 256 ^ payWidth ∧ e.2.length < 256 ^ 4 ∧ payKeyOk k e.1 e.2 = true) (pPay_run (k := k)) h9
+  obtain ⟨ok3, rfl⟩ := Approval.need_run h10
+  have f1 : live = true → base ≠ zeroDigest := by
+    intro hlv hbz; subst hlv; simp [hbz] at ok1
+  have f2 : last = none → pays = [] := by
+    intro hn; subst hn; simpa using ok3
+  have f3 : live = false → own = [] ∧ last = none ∧ base = zeroDigest := by
+    intro hf; subst hf; simpa [and_assoc] using ok2
+  subst hk ho hs hl ht hb hp
+  refine ⟨by simp [shardRow], ?_⟩
+  unfold ShardM.fits
+  exact ⟨wk, fo, fs, ft, wb, f1, fp, f2, f3⟩
+
+theorem pState_run {b r rh : Bytes} {reg : List Row} {rs : List (Nat × ShardM)}
+    (h : pState.run b = some ((rh, reg, rs), r)) :
+    rh ++ lp (rows reg) ++ ascIn shardRow rs ++ r = b ∧ rh.length = digestBytes ∧
+      (rows reg).length < 256 ^ 4 ∧ (∀ x ∈ reg, rowFits x) ∧ ascFits ShardM.fits rs := by
+  obtain ⟨d, r1, h1, h⟩ := Approval.bind_run h
+  obtain ⟨g, r2, h2, h⟩ := Approval.bind_run h
+  obtain ⟨s, r3, h3, h⟩ := Approval.bind_run h
+  obtain ⟨hp, rfl⟩ := Approval.pure_run h
+  obtain ⟨rfl, hp2⟩ := Prod.mk.inj hp
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hp2
+  obtain ⟨hd, wd⟩ := digest_run h1
+  obtain ⟨hg, wg, fg⟩ := pRows_run h2
+  obtain ⟨hs, fs⟩ := pAsc_run (enc := shardRow) (Q := ShardM.fits) pShard_run h3
+  subst hd hg hs
+  exact ⟨by simp, wd, wg, fg, fs⟩
+
+theorem ascKeys_pairwise {α : Type} : ∀ l : List (Nat × α), ascKeys l = true → l.Pairwise (fun a b => a.1 < b.1)
+  | [], _ => List.Pairwise.nil
+  | [_], _ => List.pairwise_singleton _ _
+  | a :: b :: t, h => by
+    simp only [ascKeys, Bool.and_eq_true, decide_eq_true_eq] at h
+    have ih := ascKeys_pairwise (b :: t) h.2
+    refine List.Pairwise.cons ?_ ih
+    intro x hx
+    rcases List.mem_cons.1 hx with rfl | hx
+    · exact h.1
+    · exact Nat.lt_trans h.1 ((List.pairwise_cons.1 ih).1 x hx)
+
+/-- A strictly ascending row list is its own map's `toList` (the tree shape is not canonical, its
+    in-order list is). -/
+theorem toList_ofList_asc (rs : List (Nat × ShardM)) (h : rs.Pairwise (fun a b => a.1 < b.1)) :
+    (Std.TreeMap.ofList rs compare).toList = rs := by
+  have hord : (Std.TreeMap.ofList rs compare).toList.Pairwise (fun a b => a.1 < b.1) :=
+    Std.TreeMap.ordered_keys_toList.imp (fun hh => Nat.compare_eq_lt.1 hh)
+  have hne : ∀ {l : List (Nat × ShardM)}, l.Pairwise (fun a b => a.1 < b.1) → l.Nodup := fun hl =>
+    hl.imp (fun hlt heq => by subst heq; exact Nat.lt_irrefl _ hlt)
+  have hdist : rs.Pairwise (fun a b => ¬ compare a.1 b.1 = .eq) :=
+    h.imp (fun hlt heq => by have := Nat.compare_eq_eq.1 heq; omega)
+  refine List.Perm.eq_of_pairwise (le := fun a b => a.1 < b.1)
+    (fun a b _ _ h1 h2 => absurd (Nat.lt_trans h1 h2) (Nat.lt_irrefl _)) hord h ?_
+  refine (List.perm_ext_iff_of_nodup (hne hord) (hne h)).2 ?_
+  rintro ⟨k, v⟩
+  constructor
+  · intro hmem
+    have hg := Std.TreeMap.mem_toList_iff_getElem?_eq_some.1 hmem
+    have hc : (rs.map Prod.fst).contains k = true := by
+      refine Classical.byContradiction fun hnc => ?_
+      have hn := Std.TreeMap.getElem?_ofList_of_contains_eq_false (cmp := compare) (l := rs) (k := k)
+        (by simpa using hnc)
+      rw [hn] at hg
+      cases hg
+    obtain ⟨⟨k', v'⟩, hm', hk'⟩ := List.mem_map.1 (List.contains_iff_mem.1 hc)
+    have hg' := Std.TreeMap.getElem?_ofList_of_mem (cmp := compare) (k := k') (k' := k)
+      (Nat.compare_eq_eq.2 hk') hdist hm'
+    rw [hg] at hg'
+    cases hg'
+    cases hk'
+    exact hm'
+  · intro hmem
+    exact Std.TreeMap.mem_toList_iff_getElem?_eq_some.2
+      (Std.TreeMap.getElem?_ofList_of_mem (Nat.compare_eq_eq.2 rfl) hdist hmem)
+
 theorem ofList_toList_equiv (t : Std.TreeMap Nat ShardM) :
     (Std.TreeMap.ofList t.toList compare).Equiv t := by
   apply Std.TreeMap.Equiv.of_forall_constGet?_eq
@@ -244,7 +424,54 @@ theorem E4_snap_roundtrip (m : LogStateM) (h : m.wf) : (decodeSnap (encodeSnap m
     E4b and E5 apply to every accepted snapshot. -/
 theorem decodeSnap_canonical {b : ByteArray} {m : LogStateM} (h : decodeSnap b = some m) :
     m.wf ∧ encodeSnap m = b := by
-  sorry
+  unfold decodeSnap at h
+  cases hr : pSnap.run b.data.toList with
+  | none => rw [hr] at h; exact absurd h (by simp)
+  | some pr =>
+    obtain ⟨m0, rest⟩ := pr
+    cases rest with
+    | cons x xs => rw [hr] at h; exact absurd h (by simp)
+    | nil =>
+      rw [hr] at h
+      have h' : some m0 = some m := h
+      cases h'
+      obtain ⟨u1, r1, h1, hr⟩ := Approval.bind_run hr
+      obtain ⟨idx, r2, h2, hr⟩ := Approval.bind_run hr
+      obtain ⟨head, r3, h3, hr⟩ := Approval.bind_run hr
+      obtain ⟨body, r4, h4, hr⟩ := Approval.bind_run hr
+      rcases hst : pState.run body with _ | ⟨⟨rh, reg, rs⟩, rest⟩
+      · rw [hst] at hr; simp [fail, StateT.run] at hr
+      · cases rest with
+        | cons x xs => rw [hst] at hr; simp [fail, StateT.run] at hr
+        | nil =>
+          rw [hst] at hr
+          dsimp only at hr
+          obtain ⟨u2, r5, h5, hr'⟩ := Approval.bind_run hr
+          obtain ⟨rfl, rfl⟩ := Approval.pure_run hr'
+          obtain ⟨ok, rfl⟩ := Approval.need_run h5
+          have hx1 := Approval.expect_run h1
+          obtain ⟨hx2, wi⟩ := rd_run h2
+          obtain ⟨hx3, wh⟩ := digest_run h3
+          obtain ⟨hx4, wb⟩ := pLp_run h4
+          obtain ⟨hs, wrh, wg, fg, fa⟩ := pState_run hst
+          have hshards : (Std.TreeMap.ofList rs compare).toList = rs :=
+            toList_ofList_asc rs (ascKeys_pairwise rs fa.2.2)
+          have hst' : stateIn ⟨idx + 1, head, reg, rh, Std.TreeMap.ofList rs compare⟩ = body := by
+            simp only [stateIn, hshards]
+            rw [List.append_nil] at hs
+            exact hs
+          refine ⟨?_, ?_⟩
+          · unfold LogStateM.wf
+            dsimp only
+            refine ⟨Nat.succ_pos _, by simpa using wi, wh, wrh, wg, fg, ?_, ?_, ?_, beq_iff_eq.1 ok⟩
+            · rw [hshards]; exact fa.1
+            · rw [hshards]; exact fa.2.1
+            · rw [hst']; exact wb
+          · subst hx2 hx3 hx4
+            refine ByteArray.ext (Array.toList_inj.1 ?_)
+            rw [encodeSnap, List.toList_data_toByteArray, ← hx1]
+            simp only [snapIn, hst', Nat.add_sub_cancel]
+            simp
 
 /-- E4b: equal snapshot digests mean equal states, or the two distinct encodings are an explicit
     SHA3 collision. -/
@@ -357,6 +584,50 @@ theorem foldM_batches (es : List ByteArray) (bs : List Batch3) {m m' : LogStateM
     m'.reg = bs.reverse.flatMap Batch3.regRows ++ m.reg ∧
       m'.rhead = chainHead sha3 m.rhead (bs.reverse.flatMap Batch3.regRows) ∧
       (∀ b ∈ bs, (m.shard b.shard).live = true) ∧ ∀ k, k ∉ bs.map Batch3.shard → m'.shard k = m.shard k := by
-  sorry
+  induction es generalizing bs m with
+  | nil =>
+    have h' : some m = some m' := h
+    cases h'
+    cases bs with
+    | nil => exact ⟨rfl, rfl, (fun _ hb => nomatch hb), (fun _ _ => rfl)⟩
+    | cons b bs => simp at hb
+  | cons x es ih =>
+    cases hp : pushM m x with
+    | none => simp [List.foldlM_cons, hp] at h
+    | some m1 =>
+      rw [List.foldlM_cons, hp] at h
+      have h1 : es.foldlM pushM m1 = some m' := h
+      obtain ⟨e, s, hd, -, -, hs, rfl⟩ := pushM_step hp
+      cases hm : es.mapM decodeEntry3B with
+      | none => simp [List.mapM_cons, hd, hm] at hb
+      | some ys =>
+        cases bs with
+        | nil => simp [List.mapM_cons, hd, hm] at hb
+        | cons b0 bs =>
+          simp [List.mapM_cons, hd, hm] at hb
+          obtain ⟨hb0, hb1⟩ := hb
+          have hb1' : (es.mapM decodeEntry3B).map (·.map Entry3.body) = some (bs.map Body3.batch) := by
+            rw [hm]; simp [hb1]
+          rw [hb0] at hs
+          simp only [stepM] at hs
+          split at hs
+          next hlive =>
+            have hs' : some { m with reg := b0.regRows ++ m.reg, rhead := chainHead sha3 m.rhead b0.regRows } =
+                some s := hs
+            cases hs'
+            obtain ⟨hreg, hrh, hl, hsh⟩ := ih bs hb1' h1
+            refine ⟨?_, ?_, ?_, ?_⟩
+            · rw [hreg]; simp
+            · have e : (b0 :: bs).reverse.flatMap Batch3.regRows = bs.reverse.flatMap Batch3.regRows ++ b0.regRows := by
+                simp
+              rw [hrh, e, chainHead_app]
+              try rfl
+            · intro b hbm
+              rcases List.mem_cons.1 hbm with rfl | hbm
+              · exact hlive
+              · exact hl b hbm
+            · intro k hk
+              exact hsh k (fun hh => hk (List.mem_cons_of_mem _ hh))
+          next => cases hs
 
 end BlindLedger.Gate.Engine
