@@ -618,8 +618,8 @@ class ShardTests(fx.Scratch):
                     self.assertEqual(g.decide_batch(c, prod, p, 0, {1: [10]})[2], {10: "HOLD registry_not_booted"})
                     self.assertIn(p._boot, idreg._STOPPED)
                 real = idreg._open  # review M-2 (s3fix2): the link moves back between Q's connect and its identity read
-                with mock.patch.object(idreg, "_open", lambda *a: (real(*a), link(c.dir, home))[0]), \
-                        self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                with mock.patch.object(idreg, "_open", lambda *a, **k: (real(*a, **k), link(c.dir, home))[0]), \
+                        self.assertRaisesRegex(idreg.IdRegistryError, "registry_moved"):
                     idreg.IdRegistry(c.reg, boot=c.nonce)  # before: Q took the copy's identity while writing the other file
             finally:
                 link(c.dir, None)
@@ -658,7 +658,7 @@ class ShardTests(fx.Scratch):
                 nonces = {d: idreg.boot(d / "ids.sqlite3", none) for d in (a, b)}
                 j = link(Path(keep) / "j", a if during == "lock wait" else b)
                 try:
-                    with mock.patch.multiple(idreg, _SEEN={}, _STOPPED={idreg._where(j / "ids.sqlite3")}, _BOOTING=lock):
+                    with mock.patch.multiple(idreg, _SEEN={}, _STOPPED={os.path.normcase(os.path.realpath(j / "ids.sqlite3"))}, _BOOTING=lock):
                         if during == "lock wait":
                             lock.lock.acquire()
                             t = threading.Thread(target=lambda: got.append(attempt(lambda: idreg.boot(j / "ids.sqlite3", none))))
@@ -671,7 +671,7 @@ class ShardTests(fx.Scratch):
                             self.assertEqual((reserve(a, nonces[a]), reserve(b, got[0])), ("registry_not_booted", [(1, 0, False)]))
                         else:
                             with mock.patch.object(idreg, "_open", lambda *x, **k: (link(j, a), real(*x, **k))[1]), \
-                                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_moved"):
                                 idreg.boot(j / "ids.sqlite3", none)
                             self.assertEqual((reserve(a, nonces[a]), reserve(b, nonces[b])), ("registry_not_booted",) * 2)
                 finally:
