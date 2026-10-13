@@ -12,6 +12,7 @@ import io
 import itertools
 import os
 import pstats
+from pathlib import Path
 import random
 import sqlite3
 import subprocess
@@ -77,16 +78,40 @@ class GateThroughput(fx.Scratch):
                     spent[name] += time.perf_counter() - t
             return run
 
-        statuses, worker = {}, decider.RulesWorker(w.WORKER)
+        # RR_GATE_BENCH_WORKER / _ONESHOT: the stage-timed exe tools/r2p_profile r2p_rules (its R2P_STAGE lines are taken out of the answers);
+        # RR_GATE_BENCH_DUMP=<dir>: every gate_verify frame (mode byte then frame) is written there.
+        stages, dump = collections.Counter(), os.environ.get("RR_GATE_BENCH_DUMP")
+
+        def take(lines):
+            for line in lines:
+                if line.startswith("R2P_STAGE "):
+                    _, name, ns = line.split()
+                    stages[name] += int(ns)
+            return [line for line in lines if not line.startswith("R2P_STAGE ")]
+
+        def oneshot(argv, **kw):
+            done = subprocess.run([os.environ.get("RR_GATE_BENCH_ONESHOT", argv[0]), *argv[1:]], **kw)
+            done.stdout = "\n".join(take(done.stdout.splitlines()))
+            return done
+
+        def verify(real):
+            def run(mode, frame):
+                if dump:
+                    open(os.path.join(dump, f"v{len(os.listdir(dump)):05d}.bin"), "wb").write(bytes([mode]) + frame)
+                return real(mode, frame)
+            return run
+
+        statuses, worker = {}, decider.RulesWorker(Path(os.environ.get("RR_GATE_BENCH_WORKER", w.WORKER)))
         self.addCleanup(worker.close)
         with self.scratch() as tmp, contextlib.ExitStack() as stack:
             c = g.Cluster(tmp, fx.custody(tmp), shards=1)
             with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):  # the BOOT nonce is the only random byte in the stored outputs
                 c.boot()
             stack.enter_context(mock.patch.object(decider, "subprocess", types.SimpleNamespace(
-                run=timed("  one-shot exe", subprocess.run), TimeoutExpired=subprocess.TimeoutExpired)))
+                run=timed("  one-shot exe", oneshot), TimeoutExpired=subprocess.TimeoutExpired)))
+            wrapped = {"  rules worker": lambda f: lambda self, data: take(f(self, data)), "  gate_verify": verify}
             for name, (owner, attr) in ((n, t) for n, t in STAGES.items() if t):
-                stack.enter_context(mock.patch.object(owner, attr, timed(name, getattr(owner, attr))))
+                stack.enter_context(mock.patch.object(owner, attr, timed(name, wrapped.get(name, lambda f: f)(getattr(owner, attr)))))
             for owner, attr, name in ((decider, "decide", "decide"), (decider, "commit", "commit"), (g, "decide_batch", "leaves")):
                 stack.enter_context(mock.patch.object(owner, attr, timed(name, getattr(owner, attr))))
             prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
@@ -111,6 +136,8 @@ class GateThroughput(fx.Scratch):
         print(f"\nGATE_BENCH lines={N} batch={BATCH} seconds={elapsed:.2f} lines_per_s={N / elapsed:.0f} us_per_line={elapsed / N * 1e6:.0f} digest={digest}")
         for name, sec in spent.items():
             print(f"GATE_BENCH_STAGE {name:<20}{sec / N * 1e6:8.0f} us/line {sec / elapsed:6.1%}")
+        for name, ns in stages.items():
+            print(f"GATE_BENCH_RULES_STAGE {name:<14}{ns / N / 1e3:8.1f} us/line")
         if profile:
             out = io.StringIO()
             pstats.Stats(profile, stream=out).sort_stats("cumulative").print_stats(30)

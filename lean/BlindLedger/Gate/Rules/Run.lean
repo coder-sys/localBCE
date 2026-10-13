@@ -61,19 +61,40 @@ def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [includ
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
 
+/-- A hex digit's value. -/
+def nib (c : UInt8) : Option UInt8 :=
+  if 48 ≤ c && c ≤ 57 then some (c - 48) else if 97 ≤ c && c ≤ 102 then some (c - 87) else none
+
 /-- Hex to bytes, high digit first; linear in the input. -/
 def unhex (s : String) : Option ByteArray :=
   let u := s.toUTF8
-  let nib (c : UInt8) : Option UInt8 :=
-    if 48 ≤ c && c ≤ 57 then some (c - 48) else if 97 ≤ c && c ≤ 102 then some (c - 87) else none
   if u.size % 2 != 0 then none else
   (List.range (u.size / 2)).foldlM (fun a i => do pure (a.push ((← nib u[2 * i]!) * 16 + (← nib u[2 * i + 1]!))))
     (ByteArray.emptyWithCapacity (u.size / 2))
+
+/-- `unhex`'s loop over `k` digit pairs from pair `i`, with no list and no closure per pair (`unhexFast_eq`). -/
+def unhexGo (u : ByteArray) : Nat → Nat → ByteArray → Option ByteArray
+  | 0, _, a => some a
+  | k + 1, i, a => do unhexGo u k (i + 1) (a.push ((← nib u[2 * i]!) * 16 + (← nib u[2 * i + 1]!)))
+
+def unhexFast (s : String) : Option ByteArray :=
+  let u := s.toUTF8
+  if u.size % 2 != 0 then none else unhexGo u (u.size / 2) 0 (ByteArray.emptyWithCapacity (u.size / 2))
+
+/-- A vector line's fields: `\r` dropped, split on spaces, empties skipped. -/
+def fields (raw : String) : List String := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
+
+/-- `fields` without the per-character list round trip when the line has no `\r` (`fieldsFast_eq`). -/
+def fieldsFast (raw : String) : List String :=
+  if raw.contains '\r' then fields raw else (raw.splitOn " ").filter (· ≠ "")
 
 /-- One `RULES_ADDS` row: the set tag, then the `Line.fields` row. -/
 def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
   do let bs ← l.fields.mapM fun (w, n) => be w n
      pure (tag :: bs.flatten)
+
+/-- `rowBytes` as one ByteArray (`rowBytesFast_eq`). -/
+def rowBytesFast (tag : UInt8) (l : Line) : Option ByteArray := Fast.pushRow (ByteArray.empty.push tag) l.fields
 
 def rowWidths : List Nat := (Line.fields ⟨0, 0, .FFS_CYCLE, 0, 0, 0, 0, 0, 0, 0⟩).map (·.1)
 
@@ -108,12 +129,26 @@ structure Pinned where
   unresolved : Option (Snapshot Line × List UInt8)
   kinds : Option (List (List UInt8 × List UInt8))
 
+/-- The checkpoint sets' digest kept with the sets it was computed over, so it can never be applied to others (`Memo.get_eq`). -/
+structure Memo where
+  r : Snapshot Line
+  u : Snapshot Line
+  d : Option (List UInt8)
+  ok : d = Fast.setsDigestF hB r u
+
+/-- `Fast.setsDigestF hB r u`, reusing the memo when it is for exactly these sets. -/
+def Memo.get (m : Option Memo) (r u : Snapshot Line) : Option (List UInt8) :=
+  match m with
+  | some m => if m.r = r ∧ m.u = u then m.d else Fast.setsDigestF hB r u
+  | none => Fast.setsDigestF hB r u
+
 structure St where
   today : Nat := 0
   snaps : List (String × Nat × Nat × String) := []
   rows : Array (String × List String) := #[]           -- FAST: was a List grown by `++ [x]`
   /-- `pin` of the current `snaps` and `rows`; cleared whenever either changes.  -- FAST -/
   pinned : Option Pinned := none
+  memo : Option Memo := none
   extra : List Line := []
   held : List Line := []
   rprior : Snapshot Line := ⟨0, 0, []⟩
@@ -230,7 +265,8 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let p := st.pinned.getD st.pin                        -- FAST: pin once per declaration
   let c := st.ctx p
   -- `Gate.decideAnchored`, with the twin deciding (`FastEq`): an unanchored batch decides nothing.
-  if !st.anchor.all fun a => Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior == some (Gate.natBE Gate.digestBytes a) then
+  let prior := if st.sealed || st.anchor.isSome then Memo.get st.memo c.releasedPrior c.unresolvedPrior else none
+  if !st.anchor.all fun a => prior == some (Gate.natBE Gate.digestBytes a) then
     ({ st with pinned := some p, anchor := none, batch := #[], redo := [], foreign := [], owners := none,
                free := none, pays := [],
                checked := st.checked + unanchored.toNat, failed := st.failed + (!unanchored).toNat },
@@ -259,16 +295,16 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
     (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
   let fresh := (r.released.entries.drop x.relN, r.unresolved.entries.drop x.unrN)
-  let adds := do pure ((← fresh.1.mapM (rowBytes 1)) ++ (← fresh.2.mapM (rowBytes 2))).flatten
+  let adds := do pure (((← fresh.1.mapM (rowBytesFast 1)) ++ (← fresh.2.mapM (rowBytesFast 2))).foldl (· ++ ·) ByteArray.empty)
   -- The checkpoint extended; before the first, the declared sets (pins from declaration) or the empty priors.
   let pinOf (o : Option (Snapshot Line × List UInt8)) (d : String) (k : Nat) (s : Snapshot Line) :=
     o.elim ((Fast.pinBytes d k Line.fields s).map hB) (some ·.2)
-  let base := if st.sealed then Fast.setsDigestF hB c.releasedPrior c.unresolvedPrior else do
+  let base := if st.sealed then prior else do
     pure (Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (← pinOf p.released "RR/GATE/RELEASED/v1" 5 c.releasedPrior)
       (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior))
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
     (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
-    adds.toList.map (fun b => s!"RULES_ADDS {hexOf b.toByteArray}") ++
+    adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
     (base.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
   ({ st with pinned := some p, anchor := none, sealed := true,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
@@ -296,16 +332,17 @@ def step (st : St) : List String → Option (St × List String)
   | ["load", a, adds, h] => do
     guard (h.length == 128)
     let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
-    let anchor := Gate.beNat (← unhex h).toList
-    let bs ← if adds == "-" then pure ByteArray.empty else unhex adds   -- `-` is zero rows (the field cannot be empty)
+    let anchor := Gate.beNat (← unhexFast h).toList
+    let bs ← if adds == "-" then pure ByteArray.empty else unhexFast adds   -- `-` is zero rows (the field cannot be empty)
     -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
-    match (parseAdds bs).bind fun ad => let s := Rules.replay (g, g) [ad]
-        (Fast.setsDigestF hB s.1 s.2).bind fun d => if d == Gate.natBE Gate.digestBytes anchor then some s else none with
+    match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
+        (Memo.mk s.1 s.2 _ rfl).d.bind fun d =>
+          if d == Gate.natBE Gate.digestBytes anchor then some (s, Memo.mk s.1 s.2 _ rfl) else none) (Rules.replay (g, g) [ad]) with
     | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
-    | some s => pure ({ st with
+    | some (s, m) => pure ({ st with
         snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
         rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true }, [])
+        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true, memo := some m }, [])
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
@@ -344,9 +381,9 @@ def runText (text : String) : Array String × Bool := Id.run do
   let mut number := 0
   for raw in text.splitOn "\n" do
     number := number + 1
-    let fields := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
-    if fields.isEmpty || fields.head!.startsWith "#" then continue
-    match step st fields with
+    let fs := fieldsFast raw
+    if fs.isEmpty || fs.head!.startsWith "#" then continue
+    match step st fs with
     | none =>
       st := { st with failed := st.failed + 1 }
       out := out.push s!"RULES_VECTOR_MALFORMED line={number}"

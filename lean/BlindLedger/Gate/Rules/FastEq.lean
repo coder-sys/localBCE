@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.Fast
+import BlindLedger.Gate.Rules.Run
 import BlindLedger.Gate.Anchor
 
 /-! Proves `Fast.decideBatchF` equal to `Spec.decideBatch` (and `pinBytes` to `pinInput`), plus its order laws; not imported by the runner, so a mutant of `Fast.lean` still builds `gate_rules`. -/
@@ -566,13 +567,56 @@ theorem push_fold (f : Nat → UInt8) :
   | [], acc => by simp
   | i :: L, acc => by simp [List.foldl_cons, push_fold f L]
 
-/-- `Nat.shiftRight_eq_div_pow`, `Nat.pow_mul` (2 ^ (8 * i) = 256 ^ i), `ByteArray.push` data lemmas. -/
+/-- A byte of the low 64 bits: `n.toUInt64 >>> 8i` is `(n >>> 8i) % 256`, for `i < 8`. -/
+theorem byte_eq (n i : Nat) (hi : i < 8) :
+    (n.toUInt64 >>> (8 * i).toUInt64).toUInt8 = ((n >>> (8 * i)) % 256).toUInt8 := by
+  apply UInt8.toNat_inj.mp
+  rw [UInt64.toNat_toUInt8, UInt64.toNat_shiftRight]
+  rcases (by omega : i = 0 ∨ i = 1 ∨ i = 2 ∨ i = 3 ∨ i = 4 ∨ i = 5 ∨ i = 6 ∨ i = 7) with
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp [Nat.shiftRight_eq_div_pow] <;> omega
+
+/-- Strong induction on `w`: the top `w - 8` bytes are those of `n >>> 64` (`List.range_add`, `Nat.shiftRight_add`), the last 8 `byte_eq`. -/
+theorem pushHi_eq (acc : ByteArray) : ∀ (w n : Nat),
+    (pushHi acc w n).data.toList = acc.data.toList ++ (List.range w).reverse.map fun i => ((n >>> (8 * i)) % 256).toUInt8 := by
+  intro w
+  induction w using Nat.strongRecOn with
+  | _ w ih =>
+    intro n
+    unfold pushHi
+    by_cases h : w ≤ 8
+    · simp only [h, dite_true, pushLow]
+      rw [push_fold]
+      congr 1
+      apply List.map_congr_left
+      intro i hi
+      simp at hi
+      exact byte_eq n i (by omega)
+    · simp only [h, dite_false, pushLow]
+      rw [push_fold, ih (w - 8) (by omega)]
+      have hr : (List.range w).reverse = (List.range (w - 8)).reverse.map (· + 8) ++ (List.range 8).reverse := by
+        have e := @List.range_add 8 (w - 8)
+        rw [show 8 + (w - 8) = w by omega] at e
+        rw [e, List.reverse_append, ← List.map_reverse]
+        simp [Nat.add_comm]
+      rw [hr, List.map_append, ← List.append_assoc, List.map_map]
+      congr 1
+      · congr 1
+        apply List.map_congr_left
+        intro i _
+        simp only [Function.comp]
+        rw [show 8 * (i + 8) = 64 + 8 * i by omega, Nat.shiftRight_add]
+      · apply List.map_congr_left
+        intro i hi
+        simp at hi
+        exact byte_eq n i (by omega)
+
+/-- `pushHi_eq`, then `Nat.shiftRight_eq_div_pow`, `Nat.pow_mul` (2 ^ (8 * i) = 256 ^ i). -/
 theorem pushBe_eq {acc : ByteArray} {w n : Nat} :
     (pushBe acc w n).map (·.data.toList) = (be w n).map (acc.data.toList ++ ·) := by
   unfold pushBe be
   by_cases h : n < 256 ^ w
   · simp only [h, if_true, Option.map_some]
-    rw [push_fold]
+    rw [pushHi_eq]
     congr 2
     apply List.map_congr_left
     intro i _
@@ -603,6 +647,13 @@ theorem pushRow_eq {acc : ByteArray} {fs : List (Nat × Nat)} :
       cases hm : fs.mapM (fun (w, n) => be w n) with
       | none => simp [List.mapM_cons, hbe, hm]
       | some rest => simp [List.mapM_cons, hbe, hm, hat]
+
+theorem rowBytesFast_eq {tag : UInt8} {l : Line} :
+    (Run.rowBytesFast tag l).map (·.data.toList) = Run.rowBytes tag l := by
+  have h := pushRow_eq (acc := ByteArray.empty.push tag) (fs := l.fields)
+  unfold Run.rowBytesFast Run.rowBytes
+  rw [h]
+  cases (l.fields.mapM fun (w, n) => be w n) <;> simp
 
 instance : Std.Asymm (· < · : UInt8 → UInt8 → Prop) where
   asymm a b h h' := by
@@ -749,5 +800,47 @@ theorem setsDigestF_eq (H : ByteArray → List UInt8) (r u : Snapshot Line) :
 #guard_msgs in #print axioms pin_run_eq
 /-- info: 'BlindLedger.Gate.Rules.Fast.pinBytes_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms pinBytes_eq
+
+theorem unhexGo_eq (u : ByteArray) : ∀ (k i : Nat) (a : ByteArray),
+    Run.unhexGo u k i a = (List.range' i k).foldlM
+      (fun a i => do pure (a.push ((← Run.nib u[2 * i]!) * 16 + (← Run.nib u[2 * i + 1]!)))) a
+  | 0, i, a => by simp [Run.unhexGo]
+  | k + 1, i, a => by
+    simp only [Run.unhexGo, List.range'_succ, List.foldlM_cons]
+    cases h1 : Run.nib u[2 * i]! <;> cases h2 : Run.nib u[2 * i + 1]! <;> simp [h1, h2, unhexGo_eq u k (i + 1)]
+
+theorem unhexFast_eq (s : String) : Run.unhexFast s = Run.unhex s := by
+  simp only [Run.unhexFast, Run.unhex, unhexGo_eq, List.range_eq_range']
+
+theorem fieldsFast_eq (raw : String) : Run.fieldsFast raw = Run.fields raw := by
+  unfold Run.fieldsFast
+  split
+  · rfl
+  · rename_i h
+    have h' : '\r' ∉ raw.toList := by simpa [String.contains_char_eq] using h
+    unfold Run.fields
+    have e : raw.toList.filter (· ≠ '\r') = raw.toList :=
+      List.filter_eq_self.mpr fun c hc => by simp; rintro rfl; exact h' hc
+    rw [e, String.ofList_toList]
+
+theorem setsDigestF_carry_eq (m : Option Run.Memo) (r u : Snapshot Line) :
+    Run.Memo.get m r u = setsDigestF Run.hB r u := by
+  unfold Run.Memo.get
+  split
+  · rename_i m
+    split
+    · rename_i h
+      obtain ⟨h1, h2⟩ := h
+      subst h1 h2
+      exact m.ok
+    · rfl
+  · rfl
+
+/-- info: 'BlindLedger.Gate.Rules.Fast.unhexFast_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms unhexFast_eq
+/-- info: 'BlindLedger.Gate.Rules.Fast.fieldsFast_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms fieldsFast_eq
+/-- info: 'BlindLedger.Gate.Rules.Fast.setsDigestF_carry_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms setsDigestF_carry_eq
 
 end BlindLedger.Gate.Rules.Fast
