@@ -41,7 +41,8 @@ Dropped (r4): Entry (old), logHead, logOk + its lemmas, ZeroPre, log_binds, Perm
   restore_resumes, rollback_detected, SignedStep, logRunOk, stepBatch, runRows. chain_sound keeps the stateDigest
   conclusion; the token rows per step are custody_binds applied to chain_sound's base.
 Kept: invB_iff with proof, V1Collision, v1_reach_inv, §8e lines, PayRow (+revision), certsOk, readSetOf.
-Every def is concrete; `sorry` stands only in theorem bodies. No axioms. PQ only: ML-DSA-87 via acceptsAny.
+Every def is concrete; no `sorry` (none since ef76ee80), no `axiom`, and no theorem here is axiom-pinned yet.
+PQ only: ML-DSA-87 via acceptsAny.
 -/
 
 import BlindLedger.Gate.Producer

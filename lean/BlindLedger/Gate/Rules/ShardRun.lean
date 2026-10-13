@@ -4,8 +4,9 @@ import BlindLedger.Gate.AnchorTheorems
 
 /-! Multi-shard runtime (rrb/designs/multi-shard-runtime-v1.md §5): the id registry protocol as reserve,
     seal and settle events of any shards in any order, and its safety; the `Fast` twins proved equal.
-    A crash is an absent event; a restored registry is refused at boot (design §4), so a run never steps
-    back.  Synthetic, nonpayment, activation=false. -/
+    A crash is an absent event.  A restart is safe only from the rows and sets the run ended with
+    (`NoWholeDirRestore`, `restart_one_payment_per_line`); idreg's boot does not fully establish that (see
+    `NoWholeDirRestore`).  Synthetic, nonpayment, activation=false. -/
 
 namespace BlindLedger.Gate.Rules
 
@@ -495,6 +496,50 @@ theorem run_taken_recorded {H : List UInt8 → List UInt8} (hH : ∀ a b, H a = 
   rw [← hreg i, hq']
   rfl
 
+/-! ### Restart: the premise a boot must give -/
+
+theorem World.run_append (w : World) (es es' : List Ev) :
+    w.run (es ++ es') = (w.run es).bind (·.run es') := by
+  induction es generalizing w with
+  | nil => rfl
+  | cons e es ih =>
+    simp only [List.cons_append, World.run]
+    cases hs : w.step e with
+    | none => rfl
+    | some w1 => exact ih w1
+
+/-- A restart boots the world from what it finds: `reg` from registry rows `lb` (by `holder`), shard
+    sets `rel` and `unr` from the stores, and the payer's sealed lines, which no restore takes back.  The
+    premise: those rows and sets are the ones the run before the restart ended with `(w1, l1)`, not an
+    earlier consistent copy.  `idreg.boot` gives it only in part: a whole directory restored together
+    passes its chain and commitment checks and is refused (`store_rewound`) only when the payer holds a
+    newer checkpoint of that shard (app/right_rail_gate_idreg.py:12-13). -/
+def NoWholeDirRestore (l1 lb : List Row) (w1 : World) (rel unr : Nat → List Line) : Prop :=
+  lb = l1 ∧ rel = w1.rel ∧ unr = w1.unr
+
+/-- Restart headline: under `NoWholeDirRestore`, two ALLOW lines with one id sealed before or after a
+    restart are one line of one shard.  Without it, the run after the restart starts from an earlier
+    registry and sets beside the later payer lines, and `run_one_payment_per_line` no longer applies. -/
+theorem restart_one_payment_per_line {w w1 w2 : World} {l l1 lb : List Row} {es es' : List Ev}
+    {rel unr : Nat → List Line} (hok : w.Ok) (h : w.Inv l) (hf : w.Fair l es)
+    (hr : w.runL l es = some (w1, l1)) (hb : NoWholeDirRestore l1 lb w1 rel unr)
+    (hr' : (World.mk (fun i => (holder i lb).map (·.1)) rel unr w1.paid).run es' = some w2)
+    {k k' : Nat} {x y : Line} (hx : (k, x) ∈ w2.paid) (hy : (k', y) ∈ w2.paid) (hid : x.id = y.id) :
+    k = k' ∧ x = y := by
+  unfold NoWholeDirRestore at hb
+  obtain ⟨hl, hrel, hunr⟩ := hb
+  rw [hl, hrel, hunr] at hr'
+  have hw : World.mk (fun i => (holder i l1).map (·.1)) w1.rel w1.unr w1.paid = w1 := by
+    have hreg := (World.runL_inv h hf hr).1
+    first
+      | exact congrArg (fun r => ({ w1 with reg := r } : World)) (funext hreg)
+      | (cases w1; simp only [World.mk.injEq, and_true]; exact funext hreg)
+  rw [hw] at hr'
+  have hrun : w.run (es ++ es') = some w2 := by
+    rw [World.run_append, World.runL_run hr]
+    exact hr'
+  exact run_one_payment_per_line hok hrun hx hy hid
+
 /-! ### The twins -/
 
 namespace Fast
@@ -537,5 +582,7 @@ end Fast
 #guard_msgs in #print axioms World.runL_run
 /-- info: 'BlindLedger.Gate.Rules.pendingOf_fair' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms pendingOf_fair
+/-- info: 'BlindLedger.Gate.Rules.restart_one_payment_per_line' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms restart_one_payment_per_line
 
 end BlindLedger.Gate.Rules
