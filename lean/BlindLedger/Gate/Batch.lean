@@ -134,6 +134,21 @@ def publishOkTree (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tok
       ascending (ts.map (·.leaf.paymentId))
   | _, _, _ => false
 
+/-- `publishOkTree` for any checkpoint version, the `publishOkAny` conjuncts with the one-tree token check: what the
+    resident engine (`Engine.OneProc`) runs.  `publishOkTreeAny_sound` (BatchTheorems) carries it to `publishOkAny`. -/
+def publishOkTreeAny (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes) : Bool :=
+  match decodeKeyCert cert, storedOfAny sha3 new, tokens.mapM decodeToken with
+  | some e, some n, some ts =>
+    let d := domain "MERKLE-NODE"
+    let lv := levels sha3 d treeFuel (ts.map fun t => leafHash sha3 d t.leafBytes)
+    acceptsAny rootPk cert new && last.all (fun b => (storedOfAny sha3 b).isSome) &&
+      follows (last.bind (storedOfAny sha3)) n && ts.length == n.checkpoint.count &&
+      lv.getLast? == some [n.checkpoint.tokenRoot] &&
+      (ts.zipIdx.all fun (t, i) =>
+        tokenFitsTree (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n lv i t) &&
+      ascending (ts.map (·.leaf.paymentId)) && (!last.any isV2 || isV2 new)
+  | _, _, _ => false
+
 /-- The hash inputs of `pathRoot`'s fold, in order: one `stepInput` per sibling consumed. -/
 def pathInputs (H : Bytes → Bytes) (d : Bytes) : Nat → Nat → Nat → Bytes → List Bytes → List Bytes
   | 0, _, _, _, _ => []

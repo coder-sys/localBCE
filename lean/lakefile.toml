@@ -64,6 +64,12 @@ name = "gate_rules_worker"
 root = "BlindLedger.Gate.Rules.RulesWorker"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
+# The resident one-process gate (Engine.OneProc): rules frames and PUBLISH checks in one long-lived process per shard.
+[[lean_exe]]
+name = "gate_engine"
+root = "BlindLedger.Gate.Engine.OneProc"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
 # Test-only: panics or writes stderr on request; tests/test_lean_worker_panic.py.
 [[lean_exe]]
 name = "panic_probe"

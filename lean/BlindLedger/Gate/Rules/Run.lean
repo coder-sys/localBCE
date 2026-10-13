@@ -142,6 +142,13 @@ def Memo.get (m : Option Memo) (r u : Snapshot Line) : Option (List UInt8) :=
   | some m => if m.r = r ∧ m.u = u then m.d else Fast.setsDigestF hB r u
   | none => Fast.setsDigestF hB r u
 
+/-- The memo for exactly `r` and `u`: the held one when it is for these sets (the resident engine keeps it across
+    frames), else a fresh one; either way its `ok` field is the digest's proof. -/
+def Memo.reuse (m : Option Memo) (r u : Snapshot Line) : Memo :=
+  match m with
+  | some m => if m.r = r ∧ m.u = u then m else ⟨r, u, _, rfl⟩
+  | none => ⟨r, u, _, rfl⟩
+
 structure St where
   today : Nat := 0
   snaps : List (String × Nat × Nat × String) := []
@@ -336,8 +343,8 @@ def step (st : St) : List String → Option (St × List String)
     let bs ← if adds == "-" then pure ByteArray.empty else unhexFast adds   -- `-` is zero rows (the field cannot be empty)
     -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
     match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
-        (Memo.mk s.1 s.2 _ rfl).d.bind fun d =>
-          if d == Gate.natBE Gate.digestBytes anchor then some (s, Memo.mk s.1 s.2 _ rfl) else none) (Rules.replay (g, g) [ad]) with
+        let m := Memo.reuse st.memo s.1 s.2
+        m.d.bind fun d => if d == Gate.natBE Gate.digestBytes anchor then some (s, m) else none) (Rules.replay (g, g) [ad]) with
     | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
     | some (s, m) => pure ({ st with
         snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
@@ -374,9 +381,10 @@ def step (st : St) : List String → Option (St × List String)
   | [] => none
 
 /-- The vector text through the rules: the output lines (the one-shot `main` prints them after `RULES_SOURCE`; the
-    worker answers a frame with them) and whether it passed.  Each text starts from the empty state. -/
-def runText (text : String) : Array String × Bool := Id.run do
-  let mut st : St := {}
+    worker answers a frame with them), whether it passed, and the end state.  Each text starts from the empty state
+    but for `memo`, a self-proving digest cache the resident engine carries from the last text. -/
+def runFrom (memo : Option Memo) (text : String) : Array String × Bool × St := Id.run do
+  let mut st : St := { memo }
   let mut out : Array String := #[]
   let mut number := 0
   for raw in text.splitOn "\n" do
@@ -392,7 +400,9 @@ def runText (text : String) : Array String × Bool := Id.run do
       st := next
       out := out ++ lines
   let pass := st.failed == 0 && st.expected == some st.checked
-  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass)
+  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass, st)
+
+def runText (text : String) : Array String × Bool := let (out, pass, _) := runFrom none text; (out, pass)
 
 def main (args : List String) : IO UInt32 := do
   IO.println s!"RULES_SOURCE {source}"

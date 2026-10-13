@@ -852,4 +852,10 @@ theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {
     rintro ⟨t, i⟩ hti
     exact (htok t i hti).2.2.2 _ (hpath i t.siblings ⟨t, hti, rfl⟩)
 
+/-- OPEN (sorry, for rr-review of the statement): the engine's v1/v2 one-tree check never publishes what
+    `publishOkAny` refuses; the proof is `publishOkTree_sound` with `storedOfAny`/`acceptsAny` and the no-downgrade conjunct. -/
+theorem publishOkTreeAny_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
+    (h : publishOkTreeAny rootPk cert last new tokens = true) : publishOkAny rootPk cert last new tokens = true := by
+  sorry
+
 end BlindLedger.Gate
