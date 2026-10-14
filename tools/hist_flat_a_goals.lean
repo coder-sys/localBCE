@@ -109,9 +109,61 @@ def Res.fit (st : St) : Option Res := do
   pure { m, rbuf := ((← rowsOf m.r.entries).mergeSort Fast.baLe).toArray,
             ubuf := ((← rowsOf m.u.entries).mergeSort Fast.baLe).toArray, ix := none }
 
-/-- `commit` with the kept index (`refresh`, or a build if `today` moved) and the kept buffers (`Res.digest`), and
-    the next `Res`. -/
-def commitRes (x : Res) (st : St) (unanchored : Bool) : Res × St × List String := sorry
+/-- The `Res` for the committed sets `r`, `u` from `x`'s buffers and `i` extended by the fresh rows, or `none` when
+    the fresh rows do not serialize (a field over its width: the worker then falls back, `refit`). `Memo.ok` is a
+    `Prop` (erased); it is discharged classically here because its proof is `digest_eq`, which needs `x.Ok`.
+    NONCOMPUTABLE only for that reason; no O(n) work is added. -/
+noncomputable def Res.next (x : Res) (i : Fast.Ix) (r u : Snapshot Line) : Option Res :=
+  match x.digest r u with
+  | none => none
+  | some (d, rb, ub) =>
+    @dite _ (some d = Fast.setsDigestF hB r u) (Classical.propDecidable _)
+      (fun h => some { m := ⟨r, u, some d, h⟩, rbuf := rb, ubuf := ub, ix := some (extend i r u) }) (fun _ => none)
+
+/-- `commit` with the kept index (`refresh`, or a build if `today` moved), the kept buffers (`Res.digest`) and the
+    kept digest as `prior`; plus the next `Res` (`none`: fall back to `refit`). -/
+noncomputable def commitRes (x : Res) (st : St) (unanchored : Bool) : Option Res × St × List String :=
+  let p := st.pinned.getD st.pin
+  let c := st.ctx p
+  let prior := x.m.d
+  if !st.anchor.all fun a => prior == some (Gate.natBE Gate.digestBytes a) then (some x, commit st unanchored) else
+  let lines := st.batch.toList.map (·.1)
+  let (b, f, wait) : List Line × List Nat × List Line := match st.owners with
+    | some (k, os) =>
+      let b := Fast.readyF k os lines
+      let ps := Std.HashSet.ofList (b.map (·.pay))
+      (b, Fast.foreignOfF k os b, lines.filter fun l => !ps.contains l.pay)
+    | none => (lines, st.foreign, [])
+  let ix := match x.ix with
+    | some i => if i.today = c.today then refresh i c b else Fast.Ix.build c b
+    | none => Fast.Ix.build c b
+  let r := ix.runIn f b
+  let exp := st.batch.toList.filterMap (·.2)
+  let got := r.decisions.map render ++ wait.map (lineText · ++ " WAIT -")
+  let fr := st.owners.map fun (k, os) => uniq (Fast.settleFreeF r.released.entries r.unresolved.entries (pendingOf k os))
+  let frOk := st.free.all (some · == fr)
+  let bad := st.pays.filter fun (q, o) => name (ix.payOutcome r.decisions q) != o
+  let (ok, n, msg) :=
+    if exp.isEmpty then (true, 0, [])
+    else if exp.length == lines.length && sorted exp == sorted got then (true, lines.length, [])
+    else (false, 0, ((sorted got).filter (!exp.contains ·)).map ("RULES_GOT " ++ ·))
+  let ok := ok && bad.isEmpty && !unanchored && frOk
+  let msg := msg ++ bad.map (fun (q, o) => s!"RULES_PAY {q} expected={o}") ++
+    (if unanchored then ["RULES_ANCHORED commit"] else []) ++ (if frOk then [] else [s!"RULES_FREE_EXPECTED {st.free}"])
+  let fresh := (r.released.entries.drop ix.relN, r.unresolved.entries.drop ix.unrN)
+  let adds := do pure (((← fresh.1.mapM (rowBytesFast 1)) ++ (← fresh.2.mapM (rowBytesFast 2))).foldl (· ++ ·) ByteArray.empty)
+  let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
+    ((x.digest r.released r.unresolved).map (·.1)).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
+    adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
+    (prior.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
+  (x.next ix r.released r.unresolved,
+   { st with pinned := some p, anchor := none, sealed := true,
+             extra := st.extra ++ fresh.1, held := st.held ++ fresh.2,
+             rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], owners := none,
+             free := none, pays := [],
+             done := st.done ++ r.decisions, checked := st.checked + (if ok then n + st.pays.length else 0),
+             failed := st.failed + (if ok then 0 else 1) },
+   shown ++ if ok then [] else "RULES_VECTOR_MISMATCH commit" :: msg)
 
 /-- `resume h`: `load`'s accepted branch with the kept sets, no parse, replay or digest; fail closed on any other
     anchor or no kept sets. -/
@@ -174,7 +226,7 @@ def refit (w : Worker) (st : St) : Worker :=
   | some y => { x := some y, live := true, st }
   | none => { w with live := false, st }
 
-def stepRes (w : Worker) : List String → Option (Worker × List String)
+noncomputable def stepRes (w : Worker) : List String → Option (Worker × List String)
   | ["resume", h] => do
     let (st, out) ← resume w.x w.st h
     pure ({ w with st, live := out.isEmpty || w.live }, out)
@@ -182,14 +234,16 @@ def stepRes (w : Worker) : List String → Option (Worker × List String)
     let u := fs == ["commit", "UNANCHORED"]
     if fs == ["commit"] || u then
       match w.x, w.live with
-      | some x, true => let (y, st, out) := commitRes x w.st u; pure ({ x := some y, live := true, st }, out)
+      | some x, true =>
+        let (y, st, out) := commitRes x w.st u
+        pure (match y with | some y => { x := some y, live := true, st } | none => refit w st, out)
       | _, _ => let (st, out) := commit w.st u; pure (refit w st, out)
     else do
       let (st, out) ← step w.st fs
       pure (if fs.head? == some "load" then refit w st else { w with st, live := w.live && !breaks fs }, out)
 
 /-- A worker frame from the kept `Res`. -/
-def runRes (x : Option Res) (text : String) : Array String × Bool × Worker :=
+noncomputable def runRes (x : Option Res) (text : String) : Array String × Bool × Worker :=
   runOn stepRes (·.st) (fun w => { w with st := { w.st with failed := w.st.failed + 1 } }) { x, live := false, st := {} } text
 
 /-- `runWith` is the shipped loop: rules out a frame loop that drifts from `runText`. -/
@@ -288,11 +342,11 @@ theorem commit_genesis_adds (st : St) (u : Bool) (hs : st.sealed = false) (ha : 
       parseAdds b = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := sorry
 
 /-- T2: on a fitting state the resident commit prints every byte `commit` prints (RULES_LINE, _FREE, _DIGEST, _ADDS,
-    _READS, mismatches), leaves the same state, and its next `Res` fits that state. Rules out a stale cache after a
+    _READS, mismatches), leaves the same state, and its next `Res` (none when fresh rows do not serialize) fits that state. Rules out a stale cache after a
     commit and any output that differs from the full replay. -/
 theorem commitRes_eq (x : Res) (st : St) (unanchored : Bool) (hf : x.Fits st) :
     (commitRes x st unanchored).2 = commit st unanchored ∧
-      (commitRes x st unanchored).1.Fits (commit st unanchored).1 := sorry
+      ∀ y, (commitRes x st unanchored).1 = some y → y.Fits (commit st unanchored).1 := sorry
 
 /-- F1: every worker step keeps `Inv`. Rules out `commitRes` running on a state its `Res` does not fit (after a
     `today`, `snap`, `drop`, set row, `case` or `load` in the frame). -/
