@@ -249,11 +249,6 @@ noncomputable def runRes (x : Option Res) (text : String) : Array String × Bool
 /-- `runWith` is the shipped loop: rules out a frame loop that drifts from `runText`. -/
 theorem runWith_eq_runText (text : String) : ((runWith text).1, (runWith text).2.1) = runText text := sorry
 
-/-- T0: `load` reads back exactly the rows one `commit` printed as `RULES_ADDS`, in order and per set. Rules out a
-    restart that loses, reorders or moves a row between sets. -/
-theorem parseAdds_addsBytes (r u : List Line) (bs : ByteArray) (hb : addsBytes r u = some bs) :
-    parseAdds bs = some (r, u) := sorry
-
 theorem foldl_agree (g g' : Nat → UInt8) (l : List Nat) :
     ∀ a, (∀ i ∈ l, g i = g' i) →
       l.foldl (fun n i => n * 256 + (g i).toNat) a = l.foldl (fun n i => n * 256 + (g' i).toNat) a := by
@@ -367,6 +362,245 @@ theorem parseAdds_append (a b : ByteArray) (r u r' u' : List Line) (ha : parseAd
   unfold parseAdds
   simp only [guard, failure, hsz, Nat.mul_div_cancel_left _ hpos, hrows]
   simp [hta, htb, List.all_append, List.filter_append]
+
+def bytesBE (w n : Nat) : List UInt8 := (List.range w).reverse.map fun i => (n / 256 ^ i % 256).toUInt8
+def rdL (l : List UInt8) : Nat := l.foldl (fun a b => a * 256 + b.toNat) 0
+
+theorem bytesBE_succ (w n : Nat) : bytesBE (w+1) n = bytesBE w (n/256) ++ [(n % 256).toUInt8] := by
+  unfold bytesBE
+  rw [List.range_succ_eq_map, List.reverse_cons, ← List.map_reverse, List.map_append, List.map_map]
+  congr 1
+  · apply List.map_congr_left
+    intro i _
+    simp only [Function.comp]
+    rw [Nat.pow_succ, Nat.mul_comm, ← Nat.div_div_eq_div_mul]
+  · simp
+
+theorem rdL_bytesBE : ∀ (w n : Nat), n < 256 ^ w → rdL (bytesBE w n) = n := by
+  intro w
+  induction w with
+  | zero => intro n h; simp at h; subst h; simp [bytesBE, rdL]
+  | succ w ih =>
+    intro n h
+    rw [bytesBE_succ]
+    have h1 : n / 256 < 256 ^ w := by
+      rw [Nat.div_lt_iff_lt_mul (by omega)]; rwa [← Nat.pow_succ]
+    have := ih _ h1
+    unfold rdL at this ⊢
+    rw [List.foldl_append, this]
+    simp only [List.foldl_cons, List.foldl_nil]
+    have : ((n % 256).toUInt8).toNat = n % 256 := by simp [Nat.toUInt8]
+    omega
+
+theorem get!_eq (b : ByteArray) (i : Nat) : b.get! i = (b.data.toList[i]?).getD 0 := by
+  simp [ByteArray.get!, getElem!_def]
+  cases b.data[i]? <;> rfl
+
+theorem range_fold_list (L : List UInt8) (o : Nat) : ∀ (l : List UInt8) (a : Nat),
+    (∀ i < l.length, L[o + i]? = l[i]?) →
+    (List.range l.length).foldl (fun n i => n * 256 + ((L[o + i]?).getD 0).toNat) a = l.foldl (fun a b => a * 256 + b.toNat) a := by
+  intro l
+  induction l generalizing o with
+  | nil => intros; rfl
+  | cons x t ih =>
+    intro a h
+    rw [List.length_cons, List.range_succ_eq_map, List.foldl_cons, List.foldl_map]
+    have h0 := h 0 (by simp)
+    simp only [Nat.add_zero, List.getElem?_cons_zero] at h0 ⊢
+    have hf : (fun (x y : Nat) => x * 256 + (L[o + y.succ]?.getD 0).toNat) =
+        fun x y => x * 256 + (L[(o + 1) + y]?.getD 0).toNat := by
+      funext x y; rw [show o + y.succ = (o + 1) + y by omega]
+    rw [hf, h0]
+    simp only [Option.getD_some, List.foldl_cons]
+    exact ih (o+1) _ (fun i hi => by
+      have := h (i+1) (by simp; omega)
+      rw [show o+1+i = o+(i+1) by omega]; simpa using this)
+
+
+theorem length_bytesBE (w n : Nat) : (bytesBE w n).length = w := by simp [bytesBE]
+
+def flatBE (ws ns : List Nat) : List UInt8 := ((ws.zip ns).map fun p => bytesBE p.1 p.2).flatten
+
+theorem fold_read (b : ByteArray) : ∀ (ws ns : List Nat) (r : Array Nat) (o : Nat) (pre rest : List UInt8),
+    ws.length = ns.length → (∀ p ∈ ws.zip ns, p.2 < 256 ^ p.1) →
+    b.data.toList = pre ++ flatBE ws ns ++ rest → pre.length = o →
+    (ws.foldl (fun (r, o) w => (r.push ((List.range w).foldl (fun n i => n * 256 + (b.get! (o + i)).toNat) 0), o + w)) (r, o)).1
+      = r ++ ns.toArray := by
+  intro ws
+  induction ws with
+  | nil =>
+    intro ns r o pre rest hl _ _ _
+    cases ns with
+    | nil => simp
+    | cons => simp at hl
+  | cons w ws ih =>
+    intro ns r o pre rest hl hfit hL ho
+    cases ns with
+    | nil => simp at hl
+    | cons n ns =>
+      simp only [List.length_cons, Nat.add_right_cancel_iff] at hl
+      have hn : n < 256 ^ w := hfit (w, n) (by simp)
+      have hL' : b.data.toList = (pre ++ bytesBE w n) ++ flatBE ws ns ++ rest := by
+        rw [hL]; simp [flatBE, List.append_assoc]
+      have hread : (List.range w).foldl (fun n i => n * 256 + (b.get! (o + i)).toNat) 0 = n := by
+        have := range_fold_list b.data.toList o (bytesBE w n) 0 (fun i hi => by
+          rw [hL, List.append_assoc, List.getElem?_append_right (by omega)]
+          simp only [flatBE, List.zip_cons_cons, List.map_cons, List.flatten_cons, List.append_assoc]
+          rw [show o + i - pre.length = i by omega, List.getElem?_append_left (by simpa [length_bytesBE] using hi)])
+        rw [length_bytesBE] at this
+        simp only [get!_eq]
+        rw [this]
+        exact rdL_bytesBE w n hn
+      simp only [List.foldl_cons]
+      rw [hread]
+      have := ih ns (r.push n) (o + w) (pre ++ bytesBE w n) rest hl (fun p hp => hfit p (by simp [hp])) hL' (by simp [ho, length_bytesBE])
+      rw [this]; simp
+
+theorem zip_map_fs (fs : List (Nat × Nat)) : (fs.map Prod.fst).zip (fs.map Prod.snd) = fs := by
+  induction fs with
+  | nil => rfl
+  | cons p fs ih => simp [ih]
+
+theorem mapM_be (fs : List (Nat × Nat)) : ∀ (bs : List (List UInt8)),
+    (fs.mapM fun (w, n) => BlindLedger.Gate.Rules.be w n) = some bs →
+    (∀ p ∈ fs, p.2 < 256 ^ p.1) ∧ bs = fs.map (fun p => bytesBE p.1 p.2) := by
+  induction fs with
+  | nil => intro bs h; simp at h; subst h; simp
+  | cons p fs ih =>
+    intro bs h
+    obtain ⟨w, n⟩ := p
+    by_cases hp : n < 256 ^ w
+    · have hbe : BlindLedger.Gate.Rules.be w n = some (bytesBE w n) := by simp [BlindLedger.Gate.Rules.be, hp, bytesBE]
+      simp only [List.mapM_cons, hbe] at h
+      cases hm : fs.mapM (fun (w, n) => BlindLedger.Gate.Rules.be w n) with
+      | none => simp [hm] at h
+      | some rest =>
+        simp only [hm] at h
+        have h' : bs = bytesBE w n :: rest := by simpa using h.symm
+        obtain ⟨h1, h2⟩ := ih rest hm
+        refine ⟨?_, ?_⟩
+        · intro q hq
+          rcases List.mem_cons.1 hq with rfl | hq
+          · exact hp
+          · exact h1 q hq
+        · rw [h', h2]; rfl
+    · have hbe : BlindLedger.Gate.Rules.be w n = none := by simp [BlindLedger.Gate.Rules.be, hp]
+      simp [List.mapM_cons, hbe] at h
+
+theorem flatBE_length (ws ns : List Nat) (h : ws.length = ns.length) : (flatBE ws ns).length = ws.sum := by
+  induction ws generalizing ns with
+  | nil => simp [flatBE]
+  | cons w ws ih =>
+    cases ns with
+    | nil => simp at h
+    | cons n ns =>
+      simp only [List.length_cons, Nat.add_right_cancel_iff] at h
+      have := ih ns h
+      simp only [flatBE, List.zip_cons_cons, List.map_cons, List.flatten_cons, List.length_append, length_bytesBE, List.sum_cons] at this ⊢
+      omega
+
+theorem rowWidths_eq (l : Line) : rowWidths = (Line.fields l).map (·.1) := rfl
+
+theorem parseRow_rowBytesFast (t : UInt8) (l : Line) (b : ByteArray) (h : rowBytesFast t l = some b) :
+    b.size = 1 + rowWidths.sum ∧ parseRow b 0 = some (t, l) := by
+  have h1 := Fast.rowBytesFast_eq (tag := t) (l := l)
+  rw [h] at h1
+  simp only [Option.map_some] at h1
+  unfold rowBytes at h1
+  cases hm : (Line.fields l).mapM (fun (w, n) => BlindLedger.Gate.Rules.be w n) with
+  | none => simp [hm] at h1
+  | some bs =>
+    simp only [hm] at h1
+    obtain ⟨hfit, hbs⟩ := mapM_be _ bs hm
+    have hL : b.data.toList = t :: (bs.flatten) := by simpa using h1
+    have hflat : bs.flatten = flatBE ((Line.fields l).map Prod.fst) ((Line.fields l).map Prod.snd) := by
+      rw [hbs, flatBE, zip_map_fs]
+    have hlen : ((Line.fields l).map Prod.fst).length = ((Line.fields l).map Prod.snd).length := by simp
+    have hws : rowWidths = (Line.fields l).map Prod.fst := rowWidths_eq l
+    refine ⟨?_, ?_⟩
+    · have : b.data.toList.length = 1 + rowWidths.sum := by
+        rw [hL, List.length_cons, hflat, flatBE_length _ _ hlen, hws]; omega
+      show b.data.size = _
+      rw [← Array.length_toList]; exact this
+    · have hb0 : b.get! 0 = t := by
+        rw [get!_eq, hL]; rfl
+      unfold parseRow
+      have hfr := fold_read b ((Line.fields l).map Prod.fst) ((Line.fields l).map Prod.snd) #[] 1 [t] [] hlen
+        (by rw [zip_map_fs]; exact hfit) (by rw [hL, hflat]; simp) rfl
+      rw [hws]
+      simp only [Nat.zero_add]
+      rw [hfr]
+      have e : (#[] ++ ((Line.fields l).map Prod.snd).toArray).toList = (Line.fields l).map Prod.snd := by simp
+      rw [e]
+      clear hfr hm hfit hbs hflat h1 hL h hlen e hws
+      obtain ⟨i, y, f, m, p, r, d, c, u, a⟩ := l
+      cases f <;> simp [Line.fields, hb0, Flow.tag]
+
+theorem parseAdds_empty : parseAdds ByteArray.empty = some ([], []) := by
+  unfold parseAdds
+  simp [guard, failure]
+
+theorem parseAdds_one (t : UInt8) (l : Line) (b : ByteArray) (h : rowBytesFast t l = some b) (ht : t = 1 ∨ t = 2) :
+    parseAdds b = some (if t = 1 then ([l], []) else ([], [l])) := by
+  obtain ⟨hsz, hp⟩ := parseRow_rowBytesFast t l b h
+  have hpos : 0 < (1 + rowWidths.sum) := by omega
+  have hmod : (b.size % (1 + rowWidths.sum) == 0) = true := by rw [hsz]; simp
+  have hdiv : b.size / (1 + rowWidths.sum) = 1 := by rw [hsz]; exact Nat.div_self hpos
+  have hm : (List.range 1).mapM (fun i => parseRow b ((1 + rowWidths.sum) * i)) = some [(t, l)] := by
+    simp [List.range_one, hp]
+  unfold parseAdds
+  simp only [guard, failure, hmod, if_true, hdiv, hm]
+  rcases ht with rfl | rfl <;> simp
+
+theorem foldl_cat (t : UInt8) (ht : t = 1 ∨ t = 2) : ∀ (ls : List Line) (bl : List ByteArray) (acc : ByteArray) (R U : List Line),
+    ls.mapM (rowBytesFast t) = some bl → parseAdds acc = some (R, U) →
+    parseAdds (bl.foldl (· ++ ·) acc) = some (if t = 1 then (R ++ ls, U) else (R, U ++ ls)) := by
+  intro ls
+  induction ls with
+  | nil =>
+    intro bl acc R U h ha
+    simp only [List.mapM_nil, Option.pure_def, Option.some.injEq] at h
+    subst h
+    simp [ha]
+  | cons l ls ih =>
+    intro bl acc R U h ha
+    simp only [List.mapM_cons] at h
+    cases hb : rowBytesFast t l with
+    | none => simp [hb] at h
+    | some b =>
+      cases hr : ls.mapM (rowBytesFast t) with
+      | none => simp [hb, hr] at h
+      | some rest =>
+        simp only [hb, hr] at h
+        have h' : bl = b :: rest := by simpa using h.symm
+        subst h'
+        have h1 := parseAdds_one t l b hb ht
+        rcases ht with rfl | rfl
+        · have hab := parseAdds_append acc b R U _ _ ha h1
+          have := ih rest (acc ++ b) _ _ hr hab
+          simpa using this
+        · have hab := parseAdds_append acc b R U _ _ ha h1
+          have := ih rest (acc ++ b) _ _ hr hab
+          simpa using this
+
+/-- T0: `load` reads back exactly the rows one `commit` printed as `RULES_ADDS`, in order and per set. Rules out a
+    restart that loses, reorders or moves a row between sets. -/
+theorem parseAdds_addsBytes (r u : List Line) (bs : ByteArray) (hb : addsBytes r u = some bs) :
+    parseAdds bs = some (r, u) := by
+  unfold addsBytes at hb
+  cases hr : r.mapM (rowBytesFast 1) with
+  | none => simp [hr] at hb
+  | some rs =>
+    cases hu : u.mapM (rowBytesFast 2) with
+    | none => simp [hr, hu] at hb
+    | some us =>
+      simp only [hr, hu] at hb
+      have hbs : bs = (rs ++ us).foldl (· ++ ·) ByteArray.empty := by simpa using hb.symm
+      subst hbs
+      rw [List.foldl_append]
+      have h1 := foldl_cat 1 (Or.inl rfl) r rs ByteArray.empty [] [] hr parseAdds_empty
+      have h2 := foldl_cat 2 (Or.inr rfl) u us _ _ _ hu (by simpa using h1)
+      simpa using h2
 
 /-- T1, per step: from ANY state (a head's `today`, snapshots and rows, a `case`, a batch), `resume D` on kept sets is
     `load a adds D` for any `adds` that parse to those sets. Rules out a resume that drops or resets anything `load`
