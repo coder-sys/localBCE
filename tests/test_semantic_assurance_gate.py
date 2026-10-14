@@ -33,6 +33,9 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
 
     # The test_real_* tests clone the real external candidate. With the variable
     # set they run (and fail closed on any problem); without it they skip.
+    # One cold build of the candidate's committed tree per process seeds every
+    # gate build root; the gate's native exe must be that build's bytes.
+    _committed_build: tuple[Path, str] | None = None
     _REQUIRES_REAL_CANDIDATE = unittest.skipUnless(
         os.environ.get(CANDIDATE_ENVIRONMENT_VARIABLE),
         f"requires {CANDIDATE_ENVIRONMENT_VARIABLE}; these tests run only "
@@ -109,10 +112,47 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             cls._git_command(root, "rev-parse", "HEAD^{tree}"),
         )
 
+    @classmethod
+    def _build_committed_tree(cls, actual: Path, manifest: gate.Manifest) -> tuple[Path, str]:
+        """Cold-build the committed Lake workspace once: its .lake and the sha256 of its native exe."""
+        if cls._committed_build is None:
+            temporary = tempfile.TemporaryDirectory(prefix="semantic-gate-committed-build-")
+            cls.addClassCleanup(temporary.cleanup)
+            build_root = Path(temporary.name) / "build"
+            head = cls._git_command(actual, "rev-parse", "HEAD")
+            gate._extract_git_tree(actual, f"{head}:{manifest.candidate['lean_root']}", build_root)
+            tool_paths, _ = gate._toolchain_paths(manifest)
+            build = gate._run(
+                [str(tool_paths["lake"]), "build", *(str(item) for item in manifest.build["targets"])],
+                cwd=build_root,
+                timeout=gate.BUILD_TIMEOUT_SECONDS,
+                env=gate._clean_environment(tool_paths),
+            )
+            gate._require_success("committed tree build", build)
+            artifact = build_root / Path(*manifest.build["artifact"]["relative_path"].split("/"))
+            pin = gate._file_identity(artifact, "committed tree native artifact").sha256
+            cls._committed_build = (build_root / ".lake", pin)
+        return cls._committed_build
+
     @contextmanager
     def _fresh_candidate(self, mutation):
         actual = self._actual_candidate()
-        with tempfile.TemporaryDirectory(prefix="semantic-gate-candidate-") as temporary:
+        committed_lake, pin = self._build_committed_tree(actual, self.manifest)
+        extract, run = gate._extract_git_tree, gate._run
+
+        def extract_seeded(root, revision, destination):
+            extract(root, revision, destination)
+            shutil.copytree(committed_lake, destination / ".lake")
+
+        def run_pinned(command, **kwargs):
+            if self._native_invocation(command):
+                exe = gate._file_identity(Path(str(command[0])), "native artifact before run")
+                self.assertEqual(pin, exe.sha256, "native exe is not the committed tree's one cold build")
+            return run(command, **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix="semantic-gate-candidate-") as temporary, patch.object(
+            gate, "_extract_git_tree", extract_seeded
+        ), patch.object(gate, "_run", run_pinned):
             root = Path(temporary) / "candidate"
             self._git_mutation(
                 Path(temporary),

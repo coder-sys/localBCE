@@ -453,26 +453,6 @@ private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
   obtain ⟨rfl, -⟩ := h
   exact nat_ok hc
 
-private theorem storedOf_count {b : Bytes} {x : Stored} (h : storedOf sha3 b = some x) :
-    1 ≤ x.checkpoint.count ∧ x.checkpoint.count ≤ maxBatch := by
-  unfold storedOf at h
-  cases hd : decodeCheckpoint b with
-  | none => simp [hd] at h
-  | some y =>
-    simp only [hd, Option.map_some, Option.some.injEq] at h
-    subst h
-    have hr := parse_run (p := pSignedCheckpoint) hd
-    simp only [pSignedCheckpoint, StateT.run_bind] at hr
-    obtain ⟨c, hc, hr⟩ := bind_some hr
-    obtain ⟨s, -, hr⟩ := bind_some hr
-    simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
-    obtain ⟨rfl, -⟩ := hr
-    have hp := consumed_run hc
-    simp only [pCheckpoint, StateT.run_bind] at hp
-    obtain ⟨a1, -, hp⟩ := bind_some hp
-    obtain ⟨a2, -, hp⟩ := bind_some hp
-    exact pCheckpointFields_count hp
-
 private theorem storedOfAny_count {b : Bytes} {x : Stored} (h : storedOfAny sha3 b = some x) :
     1 ≤ x.checkpoint.count ∧ x.checkpoint.count ≤ maxBatch := by
   unfold storedOfAny at h
@@ -482,7 +462,17 @@ private theorem storedOfAny_count {b : Bytes} {x : Stored} (h : storedOfAny sha3
     simp only [hd, Option.map_some, Option.some.injEq] at h
     subst h
     rcases decodeAnyCheckpoint_cases hd with h1 | ⟨head, h2⟩
-    · exact storedOf_count (x := ⟨sha3 y.header, y.checkpoint, b⟩) (by unfold storedOf; rw [h1]; rfl)
+    · have hr := parse_run (p := pSignedCheckpoint) h1
+      simp only [pSignedCheckpoint, StateT.run_bind] at hr
+      obtain ⟨c, hc, hr⟩ := bind_some hr
+      obtain ⟨s, -, hr⟩ := bind_some hr
+      simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
+      obtain ⟨rfl, -⟩ := hr
+      have hp := consumed_run hc
+      simp only [pCheckpoint, StateT.run_bind] at hp
+      obtain ⟨a1, -, hp⟩ := bind_some hp
+      obtain ⟨a2, -, hp⟩ := bind_some hp
+      exact pCheckpointFields_count hp
     · have hr := parse_run h2
       simp only [StateT.run_bind] at hr
       obtain ⟨c, hc, hr⟩ := bind_some hr
@@ -530,60 +520,51 @@ private theorem mapM_decode : ∀ {tokens : List Bytes} {ts : List Token}, token
           simp at hb
           simpa using h3 i b hb
 
-/-- The token half of `publishOkTree_sound`/`publishOkTreeAny_sound`: tokens that fit the one tree fit `tokenFits`. -/
-private theorem treeFits_sound {roots : List (Bytes × Bytes)} {k : Nat} {n : Stored} {tokens : List Bytes} {ts : List Token}
-    (hm : tokens.mapM decodeToken = some ts) (hc : n.checkpoint.count ≤ maxBatch) (hl : ts.length = n.checkpoint.count)
-    (hroot : (levels sha3 (domain "MERKLE-NODE") treeFuel (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes)).getLast? = some [n.checkpoint.tokenRoot])
-    (hall : (ts.zipIdx.all fun (t, i) => tokenFitsTree (realCrypto roots) k n (levels sha3 (domain "MERKLE-NODE") treeFuel (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes)) i t) = true) :
-    (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto roots) k n i b) = true := by
-  obtain ⟨hl1, -, hget⟩ := mapM_decode hm
-  rw [List.all_eq_true]
-  rintro ⟨b, i⟩ hbi
-  have hi : tokens[i]? = some b := List.mem_zipIdx_iff_getElem?.1 hbi
-  obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hi
-  have hit : i < ts.length := by omega
-  have hd : decodeToken b = some ts[i] := by rw [hget i b hi]; exact List.getElem?_eq_getElem hit
-  have hmem : (ts[i], i) ∈ ts.zipIdx := List.mem_zipIdx_iff_getElem?.2 (List.getElem?_eq_getElem hit)
-  have hft := List.all_eq_true.1 hall _ hmem
-  simp only [tokenFitsTree, Bool.and_eq_true, beq_iff_eq] at hft
-  obtain ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, h7⟩, h8⟩ := hft
-  have hpv := pathOf_verifies (by simpa using hit) (by rw [List.length_map]; omega) hroot
-  have e1 : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).length =
-      n.checkpoint.count := by rw [List.length_map]; omega
-  have e2 : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).getD i [] =
-      leafHash sha3 (domain "MERKLE-NODE") ts[i].leafBytes := by
-    simp [List.getD_eq_getElem?_getD, hit]
-  rw [e1, e2] at hpv
-  show tokenFits (realCrypto roots) k n i b = true
-  unfold tokenFits
-  rw [hd]
-  simp only [inBatch, verifyPath, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq]
-  refine ⟨⟨⟨h1, h2⟩, ⟨⟨⟨⟨⟨h3, h4⟩, h5⟩, h6⟩, by omega⟩, ?_⟩⟩, h8⟩
-  rw [h2, Nat.add_sub_cancel_left, h7]
-  exact ⟨by omega, hpv⟩
-
-/-- Soundness, the only direction safety needs: the one-tree check never publishes what `publishOk`
-    refuses, so `publishOk_sound` and `publish_payer_local` carry over unchanged. -/
+/-- Soundness, the only direction safety needs: the one-tree check never publishes what `publishOkAny`
+    refuses, so `publishOkAny_sound` and `publishOkAny_no_downgrade` carry over unchanged. -/
 theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOkTree rootPk cert last new tokens = true) : publishOk rootPk cert last new tokens = true := by
+    (h : publishOkTree rootPk cert last new tokens = true) : publishOkAny rootPk cert last new tokens = true := by
   unfold publishOkTree at h
   cases he : decodeKeyCert cert with
   | none => simp [he] at h
   | some e =>
-    cases hn : storedOf sha3 new with
+    cases hn : storedOfAny sha3 new with
     | none => simp [he, hn] at h
     | some n =>
       cases hm : tokens.mapM decodeToken with
       | none => simp [he, hn, hm] at h
       | some ts =>
         simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq] at h
-        obtain ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hroot⟩, hall⟩, hasc⟩ := h
+        obtain ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hroot⟩, hall⟩, hasc⟩, hdg⟩ := h
         obtain ⟨hl1, hfm, hget⟩ := mapM_decode hm
-        have hcnt := storedOf_count hn
-        unfold publishOk
+        have hcnt := storedOfAny_count hn
+        unfold publishOkAny
         simp only [he, hn, Bool.and_eq_true, beq_iff_eq]
-        refine ⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, by rw [hl1]; exact hlen⟩, ?_⟩, by rw [hfm]; exact hasc⟩
-        exact treeFits_sound hm hcnt.2 hlen hroot hall
+        refine ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, by rw [hl1]; exact hlen⟩, ?_⟩, by rw [hfm]; exact hasc⟩, hdg⟩
+        rw [List.all_eq_true]
+        rintro ⟨b, i⟩ hbi
+        have hi : tokens[i]? = some b := List.mem_zipIdx_iff_getElem?.1 hbi
+        obtain ⟨hlt, -⟩ := List.getElem?_eq_some_iff.1 hi
+        have hit : i < ts.length := by omega
+        have hd : decodeToken b = some ts[i] := by rw [hget i b hi]; exact List.getElem?_eq_getElem hit
+        have hmem : (ts[i], i) ∈ ts.zipIdx := List.mem_zipIdx_iff_getElem?.2 (List.getElem?_eq_getElem hit)
+        have hft := List.all_eq_true.1 hall _ hmem
+        simp only [tokenFitsTree, Bool.and_eq_true, beq_iff_eq] at hft
+        obtain ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, h7⟩, h8⟩ := hft
+        have hpv := pathOf_verifies (by simpa using hit) (by rw [List.length_map]; omega) hroot
+        have e1 : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).length =
+            n.checkpoint.count := by rw [List.length_map]; omega
+        have e2 : (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes).getD i [] =
+            leafHash sha3 (domain "MERKLE-NODE") ts[i].leafBytes := by
+          simp [List.getD_eq_getElem?_getD, hit]
+        rw [e1, e2] at hpv
+        show tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true
+        unfold tokenFits
+        rw [hd]
+        simp only [inBatch, verifyPath, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq]
+        refine ⟨⟨⟨h1, h2⟩, ⟨⟨⟨⟨⟨h3, h4⟩, h5⟩, h6⟩, by omega⟩, ?_⟩⟩, h8⟩
+        rw [h2, Nat.add_sub_cancel_left, h7]
+        exact ⟨by omega, hpv⟩
 
 /-! ### Completeness up to a SHA3 collision -/
 
@@ -798,19 +779,26 @@ private theorem tree_agrees {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H 
       obtain ⟨rest, rfl, -, -⟩ := hpart i p hp hc
       exact congrArg (List.cons _) (hpaths (i / 2) _ ⟨i, _, hp, rfl, by rw [if_neg hc, List.tail_cons]⟩)
 
-/-- The token half of the completeness theorems: the batch's tokens fit the one tree, up to a SHA3 collision. -/
-private theorem treeFits_complete {roots : List (Bytes × Bytes)} {k : Nat} {n : Stored} {tokens : List Bytes}
-    (hc : 1 ≤ n.checkpoint.count ∧ n.checkpoint.count ≤ maxBatch) (hlen : tokens.length = n.checkpoint.count)
-    (hall : (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto roots) k n i b) = true) :
-    (∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y) ∨
-      ∃ ts, tokens.mapM decodeToken = some ts ∧ tokens.filterMap decodeToken = ts ∧
-        (levels sha3 (domain "MERKLE-NODE") treeFuel (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes)).getLast? = some [n.checkpoint.tokenRoot] ∧
-        (ts.zipIdx.all fun (t, i) => tokenFitsTree (realCrypto roots) k n (levels sha3 (domain "MERKLE-NODE") treeFuel (ts.map fun t => leafHash sha3 (domain "MERKLE-NODE") t.leafBytes)) i t) = true := by
+/-- Completeness: whatever `publishOkAny` accepts, the one-tree check accepts too, unless the batch's tokens
+    carry a SHA3-512 collision, which `publishCollision` returns. -/
+theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
+    (h : publishOkAny rootPk cert last new tokens = true) :
+    publishOkTree rootPk cert last new tokens = true ∨
+      ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y := by
+  unfold publishOkAny at h
+  cases he : decodeKeyCert cert with
+  | none => simp [he] at h
+  | some e =>
+  cases hn : storedOfAny sha3 new with
+  | none => simp [he, hn] at h
+  | some n =>
+  simp only [he, hn, Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hall⟩, hasc⟩, hdg⟩ := h
   rw [List.all_eq_true] at hall
   have hdec : ∀ b ∈ tokens, (decodeToken b).isSome := by
     intro b hb
     obtain ⟨i, hi⟩ := List.mem_iff_getElem?.1 hb
-    have hf : tokenFits (realCrypto roots) k n i b = true :=
+    have hf : tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true :=
       hall (b, i) (List.mem_zipIdx_iff_getElem?.2 hi)
     unfold tokenFits at hf
     cases hd : decodeToken b with
@@ -819,19 +807,19 @@ private theorem treeFits_complete {roots : List (Bytes × Bytes)} {k : Nat} {n :
   obtain ⟨ts, hm⟩ : ∃ ts, tokens.mapM decodeToken = some ts := ⟨_, mapM_some hdec⟩
   obtain ⟨hl1, hfm, hget⟩ := mapM_decode hm
   have hcnt : ts.length = n.checkpoint.count := by omega
-  have hc1 := hc.1
+  have hc1 := (storedOfAny_count hn).1
   -- Each decoded token: digest-length siblings, a path folding to the root, and every other check.
   have htok : ∀ t i, (t, i) ∈ ts.zipIdx → (∀ s ∈ t.siblings, s.length = digestBytes) ∧ i < n.checkpoint.count ∧
       pathRoot sha3 (domain "MERKLE-NODE") treeFuel i n.checkpoint.count
         (leafHash sha3 (domain "MERKLE-NODE") t.leafBytes) t.siblings = some n.checkpoint.tokenRoot ∧
       ∀ lv, t.siblings = pathOf lv i →
-        tokenFitsTree (realCrypto roots) k n lv i t = true := by
+        tokenFitsTree (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n lv i t = true := by
     intro t i hti
     have hit : ts[i]? = some t := List.mem_zipIdx_iff_getElem?.1 hti
     have hlt : i < ts.length := (List.getElem?_eq_some_iff.1 hit).1
     obtain ⟨b, hb⟩ : ∃ b, tokens[i]? = some b := ⟨tokens[i]'(by omega), List.getElem?_eq_getElem (by omega)⟩
     have hd : decodeToken b = some t := by rw [hget i b hb, hit]
-    have hf : tokenFits (realCrypto roots) k n i b = true :=
+    have hf : tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b = true :=
       hall (b, i) (List.mem_zipIdx_iff_getElem?.2 hb)
     unfold tokenFits at hf
     rw [hd] at hf
@@ -843,13 +831,13 @@ private theorem treeFits_complete {roots : List (Bytes × Bytes)} {k : Nat} {n :
     exact ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, hp⟩, h8⟩
   cases hpc : publishCollision tokens with
   | some xy =>
-    left
+    right
     obtain ⟨x, y⟩ := xy
     refine ⟨x, y, rfl, ?_⟩
     simp only [publishCollision] at hpc
     simpa using List.find?_some hpc
   | none =>
-    right
+    left
     simp only [publishCollision, hfm, List.find?_eq_none] at hpc
     have hS : ∀ x y, x ∈ batchInputs ts → y ∈ batchInputs ts → sha3 x = sha3 y → x = y := by
       intro x y hx hy hxy
@@ -876,77 +864,30 @@ private theorem treeFits_complete {roots : List (Bytes × Bytes)} {k : Nat} {n :
         rw [List.length_map, hg, hcnt]
         refine ⟨hlt, hsib, hpr, fun x hx => ?_⟩
         exact List.mem_flatMap.2 ⟨(t, i), hti, by rw [hcnt]; exact hx⟩)
-    refine ⟨ts, hm, hfm, hroot, ?_⟩
+    unfold publishOkTree
+    simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq]
+    refine ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hcnt⟩, hroot⟩, ?_⟩, by rw [← hfm]; exact hasc⟩, hdg⟩
     rw [List.all_eq_true]
     rintro ⟨t, i⟩ hti
     exact (htok t i hti).2.2.2 _ (hpath i t.siblings ⟨t, hti, rfl⟩)
 
-/-- Completeness: whatever `publishOk` accepts, the one-tree check accepts too, unless the batch's tokens
-    carry a SHA3-512 collision, which `publishCollision` returns. -/
-theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOk rootPk cert last new tokens = true) :
-    publishOkTree rootPk cert last new tokens = true ∨
-      ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y := by
-  unfold publishOk at h
-  cases he : decodeKeyCert cert with
-  | none => simp [he] at h
-  | some e =>
-  cases hn : storedOf sha3 new with
-  | none => simp [he, hn] at h
-  | some n =>
-  simp only [he, hn, Bool.and_eq_true, beq_iff_eq] at h
-  obtain ⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hall⟩, hasc⟩ := h
-  rcases treeFits_complete (storedOf_count hn) hlen hall with hcol | ⟨ts, hm, hfm, hroot, hfit⟩
-  · exact Or.inr hcol
-  · left
-    have hcnt : ts.length = n.checkpoint.count := by have := (mapM_decode hm).1; omega
-    unfold publishOkTree
-    simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq]
-    exact ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hcnt⟩, hroot⟩, hfit⟩, by rw [← hfm]; exact hasc⟩
+/-- The exe's PUBLISH is `publishOkAny`, exactly, unless the batch's own hash inputs collide (then it refuses). -/
+theorem publishOkTree_eq {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
+    (hc : publishCollision tokens = none) :
+    publishOkTree rootPk cert last new tokens = publishOkAny rootPk cert last new tokens := by
+  cases ha : publishOkAny rootPk cert last new tokens with
+  | true =>
+    rcases publishOkTree_complete ha with h | ⟨_, _, h, -⟩
+    · exact h
+    · simp [hc] at h
+  | false =>
+    cases ht : publishOkTree rootPk cert last new tokens with
+    | false => rfl
+    | true => exact absurd (publishOkTree_sound ht) (by simp [ha])
 
-/-- `publishOkTree_complete` for any checkpoint version: the engine never rejects what `publishOkAny` accepts, up to a
-    SHA3 collision. -/
-theorem publishOkTreeAny_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOkAny rootPk cert last new tokens = true) :
-    publishOkTreeAny rootPk cert last new tokens = true ∨
-      ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y := by
-  unfold publishOkAny at h
-  cases he : decodeKeyCert cert with
-  | none => simp [he] at h
-  | some e =>
-  cases hn : storedOfAny sha3 new with
-  | none => simp [he, hn] at h
-  | some n =>
-  simp only [he, hn, Bool.and_eq_true, beq_iff_eq] at h
-  obtain ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hall⟩, hasc⟩, hdg⟩ := h
-  rcases treeFits_complete (storedOfAny_count hn) hlen hall with hcol | ⟨ts, hm, hfm, hroot, hfit⟩
-  · exact Or.inr hcol
-  · left
-    have hcnt : ts.length = n.checkpoint.count := by have := (mapM_decode hm).1; omega
-    unfold publishOkTreeAny
-    simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq]
-    exact ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hcnt⟩, hroot⟩, hfit⟩, by rw [← hfm]; exact hasc⟩, hdg⟩
-
-/-- The engine's v1/v2 one-tree check never publishes what `publishOkAny` refuses (`publishOkTree_sound` with
-    `storedOfAny`/`acceptsAny` and the no-downgrade conjunct). -/
-theorem publishOkTreeAny_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOkTreeAny rootPk cert last new tokens = true) : publishOkAny rootPk cert last new tokens = true := by
-  unfold publishOkTreeAny at h
-  cases he : decodeKeyCert cert with
-  | none => simp [he] at h
-  | some e =>
-    cases hn : storedOfAny sha3 new with
-    | none => simp [he, hn] at h
-    | some n =>
-      cases hm : tokens.mapM decodeToken with
-      | none => simp [he, hn, hm] at h
-      | some ts =>
-        simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq] at h
-        obtain ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hroot⟩, hall⟩, hasc⟩, hdg⟩ := h
-        obtain ⟨hl1, hfm, -⟩ := mapM_decode hm
-        unfold publishOkAny
-        simp only [he, hn, Bool.and_eq_true, beq_iff_eq]
-        exact ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, by rw [hl1]; exact hlen⟩,
-          treeFits_sound hm (storedOfAny_count hn).2 hlen hroot hall⟩, by rw [hfm]; exact hasc⟩, hdg⟩
+/-- No downgrade at the exe: after a v2 only a v2 publishes. -/
+theorem publishOkTree_no_downgrade {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {b : Bytes}
+    (h : publishOkTree rootPk cert last new tokens = true) (hb : last = some b) (hv : isV2 b = true) :
+    isV2 new = true := publishOkAny_no_downgrade (publishOkTree_sound h) hb hv
 
 end BlindLedger.Gate

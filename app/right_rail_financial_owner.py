@@ -23,6 +23,8 @@ import threading
 import time
 from typing import Any, Final, Iterable, Iterator, Mapping, Protocol
 
+from app.right_rail_financial_owner_independent import IndependentFinancialError, _parse_json
+
 
 class FinancialError(RuntimeError):
     """Base error with a stable, redacted code in ``str(error)``."""
@@ -595,13 +597,19 @@ def _values_json(values: Iterable[Any]) -> str:
     return _canonical({"values": list(values)}).decode("ascii")
 
 
+def _loads(raw: object, error_type: type[FinancialError], code: str, max_bytes: int = _MAX_PACKAGE_BYTES) -> Any:
+    """The writer's one JSON reader: the independent checker's strict parser (ASCII, canonical, no float, NaN, Infinity, duplicate key or past-Lean bound), refused as ``code``."""
+
+    try:
+        return _parse_json(raw.decode("ascii", "replace") if type(raw) is bytes else raw, code, max_bytes=max_bytes)
+    except IndependentFinancialError:
+        _fail(error_type, code)
+
+
 def _stored_values(raw: object, code: str) -> tuple[Any, ...]:
     """Decode one persisted ``{"values": [...]}`` column or fail closed with ``code``."""
 
-    try:
-        value = json.loads(str(raw))
-    except (TypeError, ValueError):
-        _fail(FinancialIntegrityError, code)
+    value = _loads(raw, FinancialIntegrityError, code)
     if type(value) is not dict or set(value) != {"values"} or type(value["values"]) is not list:
         _fail(FinancialIntegrityError, code)
     return tuple(value["values"])
@@ -610,10 +618,7 @@ def _stored_values(raw: object, code: str) -> tuple[Any, ...]:
 def _stored_object(raw: object, code: str) -> dict[str, Any]:
     """Decode one persisted JSON object column or fail closed with ``code``."""
 
-    try:
-        value = json.loads(str(raw))
-    except (TypeError, ValueError):
-        _fail(FinancialIntegrityError, code)
+    value = _loads(raw, FinancialIntegrityError, code)
     if type(value) is not dict:
         _fail(FinancialIntegrityError, code)
     return value
@@ -2805,7 +2810,7 @@ class FinancialOwner:
             )
         captured = connection.execute("SELECT image FROM temp.rr_captured_rows ORDER BY rowid").fetchall()
         if captured:
-            event_payload["rows"] = [json.loads(row[0]) for row in captured]
+            event_payload["rows"] = [_loads(row[0], FinancialIntegrityError, "captured_row") for row in captured]
             connection.execute("DELETE FROM temp.rr_captured_rows")
         payload_bytes = _canonical(event_payload)
         payload_digest = _digest(_EVENT_DOMAIN, payload_bytes)
@@ -5184,13 +5189,7 @@ class FinancialOwner:
     def _evaluation_receipt_for_row(self, connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict[str, Any]:
         if row is None:
             _fail(FinancialIntegrityError, "evaluation_missing")
-        try:
-            evidence_ids_value = json.loads(str(row["evidence_ids_json"]))
-            bindings_value = json.loads(str(row["evidence_bindings_json"]))
-            scope = json.loads(str(row["scope_json"]))
-            input_snapshot = json.loads(str(row["input_snapshot_json"]))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            _fail(FinancialIntegrityError, "evaluation_reference_malformed")
+        evidence_ids_value, bindings_value, scope, input_snapshot = (_loads(row[column], FinancialIntegrityError, "evaluation_reference_malformed") for column in ("evidence_ids_json", "evidence_bindings_json", "scope_json", "input_snapshot_json"))
         if not isinstance(evidence_ids_value, dict) or set(evidence_ids_value) != {"evidence_ids"} or not isinstance(evidence_ids_value["evidence_ids"], list):
             _fail(FinancialIntegrityError, "evaluation_evidence_binding")
         evidence_ids = evidence_ids_value["evidence_ids"]
@@ -6317,7 +6316,7 @@ class FinancialOwner:
     def _export_value(value: Any) -> Any:
         if type(value) is bytes:
             return {"hex": _hex(value)}
-        if value is None or type(value) in {str, int, float, bool}:
+        if value is None or type(value) in {str, int, bool}:  # no float: money is integer cents, a REAL is never exported or restored
             return value
         _fail(FinancialContinuityError, "continuity_value")
 
@@ -6329,7 +6328,7 @@ class FinancialOwner:
             except ValueError:
                 _fail(FinancialContinuityError, "continuity_hex")
             return raw
-        if value is None or type(value) in {str, int, float, bool}:
+        if value is None or type(value) in {str, int, bool}:  # no float: money is integer cents, a REAL is never exported or restored
             return value
         _fail(FinancialContinuityError, "continuity_value")
 
@@ -6337,11 +6336,8 @@ class FinancialOwner:
     def validate_continuity_package(cls, package_bytes: bytes) -> dict[str, Any]:
         if type(package_bytes) is not bytes or not package_bytes or len(package_bytes) > _MAX_PACKAGE_BYTES:
             _fail(FinancialContinuityError, "continuity_package_size")
-        try:
-            package = json.loads(package_bytes.decode("ascii"), parse_constant=lambda _: None, parse_float=lambda t: None if abs(float(t)) == float("inf") else float(t))  # NaN, Infinity and 1e999 become null, so the canonical comparison below refuses them
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            _fail(FinancialContinuityError, "continuity_package_json")
-        if type(package) is not dict or _canonical(package) != package_bytes:
+        package = _loads(package_bytes, FinancialContinuityError, "continuity_package_canonical")
+        if type(package) is not dict:
             _fail(FinancialContinuityError, "continuity_package_canonical")
         required = {
             "schema", "version", "scope", "authority", "continuity_epoch", "sequence",
@@ -6529,15 +6525,15 @@ class FinancialOwner:
             segments = connection.execute("SELECT * FROM history_segments WHERE segment_index<? ORDER BY segment_index", (count,)).fetchall()
             if target.exists():
                 try:  # an older manifest of this identity whose last segment is this store's segment at that index
-                    old = json.loads(target.read_bytes())
+                    old = _loads(target.read_bytes(), FinancialContinuityError, "history_export_mismatch")
                     replaceable = old["identity"] == body["identity"] and old["segment_count"] >= 0 and old["last_segment_digest"] == (_hex(bytes(segments[old["segment_count"] - 1]["segment_digest"])) if old["segment_count"] else _hex(_ZERO_DIGEST))
-                except (ValueError, KeyError, TypeError, IndexError):
+                except (FinancialContinuityError, KeyError, TypeError, IndexError):
                     replaceable = False
                 if not replaceable and target.read_bytes() != manifest:
                     _fail(FinancialContinuityError, "history_export_mismatch")
             for segment in segments:
                 events = connection.execute("SELECT * FROM financial_events WHERE event_sequence BETWEEN ? AND ? ORDER BY event_sequence", (segment["first_sequence"], segment["last_sequence"]))
-                data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": json.loads(segment["rows_json"]), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
+                data = _canonical({"events": [self._segment_record("financial_events", tuple(row)) for row in events], "rows": _loads(segment["rows_json"], FinancialIntegrityError, "history_segment_rows", _MAX_SEGMENT_BYTES), "seal": _segment_seal(*tuple(segment)[:6]), "segment_digest": _hex(bytes(segment["segment_digest"])), "signature": None})
                 path = directory / f"segment-{segment['segment_index']:08d}.json"
                 if not path.exists():
                     _replace_file(path, data)
@@ -6552,7 +6548,7 @@ class FinancialOwner:
     def _replay_segment(self, connection: sqlite3.Connection, path: Path) -> None:
         """Apply one checked segment's events and final row images, then reseal it; the seal must match."""
         with path.open("rb") as handle:
-            segment = json.loads(handle.read(_MAX_SEGMENT_BYTES + 1))
+            segment = _loads(handle.read(_MAX_SEGMENT_BYTES + 1), FinancialContinuityError, "history_segment", _MAX_SEGMENT_BYTES)
         columns = _TABLE_COLUMNS["financial_events"]
         connection.executemany(f"INSERT INTO financial_events ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", ([self._import_value(event[column]) for column in columns] for event in segment["events"]))
         keys = {table: [str(info[1]) for info in sorted(connection.execute(f"PRAGMA table_info({table})"), key=lambda info: info[5]) if info[5]] for table in _PROJECTION_TABLES}

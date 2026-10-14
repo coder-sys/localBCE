@@ -4,6 +4,7 @@ SETTLE and BOOT rows; settle-then-reserve in one transaction; the boot check.  S
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -17,6 +18,7 @@ from unittest import mock
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_idreg as idreg
+from tests.test_right_rail_gate_shards import link
 
 ROOT = Path(__file__).resolve().parents[1]
 STORES = {0: Path("no-store-0"), 1: Path("no-store-1")}  # with a payer that stored no checkpoint ({}), B3 passes
@@ -206,7 +208,13 @@ class IdRegistryTests(unittest.TestCase):
                                       ({**STORES, 1: junk}, {1: bytes(64)}, "store_unavailable")):
             with self.subTest(error), self.assertRaisesRegex(idreg.IdRegistryError, error):
                 idreg.boot(self.path, lambda: ({0: (n, head), 1: (n, head)}, stores, stored))
-        with mock.patch.object(idreg.producer.os, "stat", side_effect=PermissionError), self.assertRaisesRegex(
+        stat = os.stat  # only the stores' stat fails: boot also stats the registry it opened (S4)
+
+        def denied(p, *a, **k):
+            if Path(p) in STORES.values():
+                raise PermissionError(p)
+            return stat(p, *a, **k)
+        with mock.patch.object(idreg.producer.os, "stat", denied), self.assertRaisesRegex(
                 idreg.IdRegistryError, "store_unavailable"):  # the store path's cause, never a raw OSError
             idreg.boot(self.path, lambda: ({0: (n, head), 1: (n, head)}, STORES, {0: bytes(64)}))
         added = self.reg._db.execute("SELECT kind, id FROM log WHERE n > ?", (before[0],)).fetchall()
@@ -366,15 +374,208 @@ class IdRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
                 idreg.IdRegistry(new, boot=self.nonce)
             self.assertEqual([(p.name, p.stat().st_size) for p in new.parent.glob("new.*")], [("new.sqlite3", 0)] * exists)
-        real_open, real_ident = idreg._open, idreg._ident
-        for idents in ([None], [real_ident(self.path), None]):  # no file before the connect, or none after it
-            opened = []
-            with mock.patch.object(idreg, "_open", lambda *a: opened.append(real_open(*a)) or opened[-1]), \
-                    mock.patch.object(idreg, "_ident", side_effect=idents), \
-                    self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
-                idreg.IdRegistry(self.path, boot=self.nonce)
-            with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed"):
-                opened[0].execute("SELECT 1")
+        real_open, opened = idreg._open, []  # no file at the path after the connect (S4: the identity is the opened file's)
+        with mock.patch.object(idreg, "_open", lambda *a, **k: opened.append(real_open(*a, **k)) or opened[-1]), \
+                mock.patch.object(idreg, "_ident", return_value=None), \
+                self.assertRaisesRegex(idreg.IdRegistryError, "registry_moved"):
+            idreg.IdRegistry(self.path, boot=self.nonce)
+        with self.assertRaisesRegex(sqlite3.ProgrammingError, "closed"):
+            opened[0].execute("SELECT 1")
+
+    def copied(self, sub: str = "") -> tuple[Path, Path, bytes]:
+        """A registry booted in ``a/`` (``a<sub>/<sub>/`` if given) and its copy in ``b/``: the same rows and nonce, so a
+        handle on the copy writes there as if it were on ``a``."""
+        a, b = self.path.with_name("a" + sub), self.path.with_name("b" + sub)
+        (a / sub).mkdir(parents=True)
+        nonce = idreg.boot(a / sub / "ids.sqlite3", lambda: ({}, {}, {}))
+        shutil.copytree(a, b)
+        return a, b, nonce
+
+    def test_the_file_opened_is_the_file_checked(self) -> None:
+        """S4 R1: a link re-pointed to a copy for the connect only (A->B->A) left the path's identity the same before
+        and after it, so the handle wrote the copy as the registry; the connect now takes the link-free path whose
+        identity it binds."""
+        a, b, nonce = self.copied()
+        via = link(self.path.with_name("via"), a)
+        self.addCleanup(link, via, None)
+        real_open, before = idreg._open, rows(b)
+
+        def swapped(*args, **kwargs):
+            link(via, b)
+            try:
+                return real_open(*args, **kwargs)
+            finally:
+                link(via, a)
+        with mock.patch.object(idreg, "_open", swapped):
+            reg = idreg.IdRegistry(via / "ids.sqlite3", boot=nonce)
+        self.addCleanup(reg.close)
+        reg.reserve(0, [1], sealed=None)
+        self.assertEqual([rows(a), rows(b)], [before + 1, before])
+
+    @unittest.skipUnless(os.name == "nt", "POSIX keeps no pin (closing any descriptor of a file drops this process's "
+                         "SQLite locks on it): a real directory swapped inside the connect is the named residual there")
+    def test_the_file_and_its_directories_stay_put_while_open(self) -> None:
+        """S4 R1 (Windows): the registry's directory, or (review S4) its grandparent, renamed away and a link to the
+        copy put in its place for the connect only (A->B->A) was not seen; the handle taken before the connect bars
+        the rename."""
+        for sub in ("p", ""):  # a is the file's grandparent, then its parent
+            a, b, nonce = self.copied(sub)
+            real_open, before, barred = idreg._open, rows(b / sub), []
+
+            def swapped(*args, **kwargs):
+                try:
+                    os.rename(a, a.with_name("x"))
+                except PermissionError as error:
+                    barred.append(error)
+                    return real_open(*args, **kwargs)
+                link(a, b)
+                try:
+                    return real_open(*args, **kwargs)
+                finally:
+                    link(a, None)
+                    os.rename(a.with_name("x"), a)
+            with mock.patch.object(idreg, "_open", swapped):
+                reg = idreg.IdRegistry(a / sub / "ids.sqlite3", boot=nonce)
+            self.addCleanup(reg.close)
+            reg.reserve(0, [1], sealed=None)
+            self.assertEqual([sub, len(barred), rows(a / sub), rows(b / sub)], [sub, 1, before + 1, before])
+
+    def test_a_lease_is_the_opened_files_and_a_moved_path_refuses(self) -> None:
+        """S4 R1: a link re-pointed after the open moved the handle's lease to the copy's lease file, so a second
+        decider on the opened file got the shard too; the lease is now beside the file opened, and taking it on a
+        path that names another file refuses ``registry_moved``."""
+        a, b, nonce = self.copied()
+        via = link(self.path.with_name("via"), a)
+        self.addCleanup(link, via, None)
+        moved = idreg.IdRegistry(via / "ids.sqlite3", boot=nonce)
+        self.addCleanup(moved.close)
+        link(via, b)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_moved"):
+            moved.in_flight(0)
+        direct = idreg.IdRegistry(a / "ids.sqlite3", boot=nonce)
+        self.addCleanup(direct.close)
+        self.assertEqual(direct.in_flight(0), [])
+        link(via, a)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "shard_busy"):
+            moved.in_flight(0)
+        self.assertEqual(sorted(p.name for p in b.iterdir() if "lease" in p.name), [])
+
+    @unittest.skipUnless(hasattr(os, "fork"), "no os.fork here (Windows spawns, never forks): no child can inherit a "
+                         "handle or the boot lock")
+    def test_a_forked_child_reuses_no_handle_or_lock(self) -> None:
+        """S4 R3: a child forked while the parent holds the boot lock and a shard lease gets a free boot lock, and
+        each use of the parent's handle is refused ``registry_forked``, and (review M2: SQLite's inherited lock records
+        let a new handle there lose its -wal to the parent's close) so are a new handle and a boot; the parent's
+        handle still works."""
+        self.reg.in_flight(0)
+        read, write = os.pipe()
+        with idreg._BOOTING:
+            pid = os.fork()
+            if pid == 0:  # the child reports through the pipe and never returns into the runner
+                code = 1
+                try:
+                    out = [idreg._BOOTING.acquire(timeout=0)]
+                    idreg._BOOTING.release()
+                    for use in (lambda: self.reg.reserve(0, [1], sealed=None), lambda: self.reg.in_flight(1),
+                                lambda: self.reg.settled(0), lambda: self.reg.settle(0, [], []), lambda: self.reg.genesis({}),
+                                lambda: idreg.IdRegistry(self.path, boot=self.nonce), lambda: idreg.boot(self.path, lambda: ({}, {}, {}))):
+                        try:
+                            out.append(repr(use()))
+                        except idreg.IdRegistryError as error:
+                            out.append(str(error))
+                    os.write(write, repr(out).encode())
+                    code = 0
+                finally:
+                    os._exit(code)
+        os.close(write)
+        self.assertEqual(os.waitpid(pid, 0)[1], 0)
+        with os.fdopen(read, "rb") as pipe:
+            self.assertEqual(pipe.read().decode(), repr([True] + ["registry_forked"] * 7))
+        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    def test_a_child_forked_with_a_registry_open_opens_none(self) -> None:
+        """Review M2, the after-fork hook run here as a child runs it: a handle open (or a boot running) at the fork
+        refuses the child's boots and new handles ``registry_forked``; neither refuses nothing."""
+        with mock.patch.object(idreg, "_FORKED", False), mock.patch.object(idreg, "_BOOTING", idreg._BOOTING):
+            with mock.patch.object(idreg, "_OPEN", set()):
+                idreg._forked()
+            self.assertFalse(idreg._FORKED)
+            idreg._forked()
+            for use in (lambda: idreg.IdRegistry(self.path, boot=self.nonce), lambda: idreg.boot(self.path, lambda: ({}, {}, {}))):
+                with self.assertRaisesRegex(idreg.IdRegistryError, "registry_forked"):
+                    use()
+
+    def test_a_registry_with_two_names_is_refused(self) -> None:
+        """Review H1: a second hard-link name has its own -wal, -shm and leases, so a handle on each name reserved one
+        id for two shards; a file with two names is refused ``registry_aliased`` by boot and a handle on either name,
+        and a name added under an open handle refuses its lease ``registry_moved`` and fences its next transaction."""
+        alias = self.path.with_name("alias.sqlite3")
+        os.link(self.path, alias)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_moved"):
+            self.reg.in_flight(0)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.reserve(0, [1], sealed=None)
+        for name in (self.path, alias):
+            for use in (lambda: idreg.boot(name, lambda: ({}, {}, {})), lambda: idreg.IdRegistry(name, boot=self.nonce)):
+                with self.subTest(name=name.name), self.assertRaisesRegex(idreg.IdRegistryError, "registry_aliased"):
+                    use()
+
+    def test_a_nonce_that_is_not_bytes_opens_nothing(self) -> None:
+        """Review L3: a nonce that is not bytes raised after the registry was opened, leaving its connection and pin
+        open; it is now refused before the open."""
+        with mock.patch.object(idreg, "_bind", side_effect=AssertionError("opened")), self.assertRaises(TypeError):
+            idreg.IdRegistry(self.path, boot="nonce")
+
+    def test_the_opening_process_uses_its_handle(self) -> None:
+        """S4 R3: the fork check passes in the process that opened the handle (on Windows the only one there is)."""
+        self.assertEqual(self.reg._pid, os.getpid())
+        owners, n, _ = self.reg.reserve(0, [1], sealed=None)
+        self.assertEqual((owners, self.reg.in_flight(0), self.reg.settled(0)), ([(1, 0, False)], [n], False))
+
+    @unittest.skipIf(os.name == "nt", "Windows bars the replace (an open SQLite handle shares no delete access): "
+                     "test_a_file_replaced_under_an_open_handle_is_barred")
+    def test_a_file_replaced_under_an_open_handle_is_refused(self) -> None:
+        """S4 R4 (POSIX): os.replace of the registry by a copy under an open handle names another inode: a lease
+        refuses ``registry_moved`` and the next transaction fences and is refused ``registry_not_booted``."""
+        copy = self.path.with_name("copy.sqlite3")
+        shutil.copy(self.path, copy)
+        os.replace(copy, self.path)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_moved"):
+            self.reg.in_flight(0)
+        with self.assertRaisesRegex(idreg.IdRegistryError, "registry_not_booted"):
+            self.reg.reserve(0, [1], sealed=None)
+
+    @unittest.skipUnless(os.name == "nt", "POSIX allows the replace: test_a_file_replaced_under_an_open_handle_is_refused")
+    def test_a_file_replaced_under_an_open_handle_is_barred(self) -> None:
+        """S4 R4 (Windows): os.replace onto the open registry is refused by the OS, and the handle still works."""
+        copy = self.path.with_name("copy.sqlite3")
+        shutil.copy(self.path, copy)
+        with self.assertRaises(PermissionError):
+            os.replace(copy, self.path)
+        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+    @unittest.skipUnless(os.name == "nt", "UNC is Windows path syntax")
+    def test_unc_paths_are_refused(self) -> None:
+        """S4: a UNC path (a share, or the \\\\?\\ form) is refused ``registry_unavailable`` by boot and by a handle, and
+        a refused boot creates no file."""
+        local = str(self.path.resolve())
+        forms = ("\\\\localhost\\" + local.replace(":", "$", 1), "\\\\?\\" + local)
+        try:
+            os.stat(forms[0])
+        except OSError as error:
+            raise unittest.SkipTest(f"LOUD SKIP: no administrative share here: {error}") from error
+        for unc in forms:
+            for path in (Path(unc), Path(unc).with_name("unc.sqlite3")):
+                for use in (lambda: idreg.boot(path, lambda: ({}, {}, {})), lambda: idreg.IdRegistry(path, boot=self.nonce)):
+                    with self.subTest(path=path), self.assertRaisesRegex(idreg.IdRegistryError, "registry_unavailable"):
+                        use()
+        self.assertFalse(self.path.with_name("unc.sqlite3").exists())
+        self.assertEqual(self.reg.reserve(0, [1], sealed=None)[0], [(1, 0, False)])
+
+
+def rows(d: Path) -> int:
+    with contextlib.closing(sqlite3.connect(d / "ids.sqlite3")) as db:
+        return db.execute("SELECT count(*) FROM log").fetchone()[0]
 
 
 if __name__ == "__main__":

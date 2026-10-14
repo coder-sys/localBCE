@@ -266,6 +266,8 @@ class ProducerTests(fx.Scratch):
                 digests.append(gate.checkpoint_digest(cb))
             a, b = Path(tmp) / "a#1" / "shard.sqlite3", Path(tmp) / "b%41" / "shard.sqlite3"
             self.assertNotEqual(digests[0], digests[1])
+            files = sorted(Path(tmp).rglob("*"))  # closed stores: no -wal, no -shm
+            self.assertEqual([f.name for f in files if f.name.endswith(("-wal", "-shm"))], [])
             self.assertEqual([producer.holds(a, digests[0]), producer.holds(b, digests[1])], [True, True])
             self.assertEqual([producer.newest(a), producer.newest(b)], [IDREG, IDREG])
             with mock.patch.object(producer.os, "stat", side_effect=PermissionError), \
@@ -274,6 +276,7 @@ class ProducerTests(fx.Scratch):
             self.assertEqual([producer.holds(a, digests[1]), producer.holds(b, digests[0])], [None, None])  # the other dir's
             none = Path(tmp) / "none.sqlite3"
             self.assertEqual([producer.holds(none, digests[0]), producer.newest(none)], [None, None])  # no store, no batch
+            self.assertEqual(sorted(Path(tmp).rglob("*")), files)  # S4 R2: a read creates no file (before: -wal, -shm)
             (Path(tmp) / "junk.sqlite3").write_bytes(b"not a database" * 64)
             for bad in (Path(tmp) / "junk.sqlite3", Path(tmp) / "nul\0name", Path(tmp)):  # junk, no file name, a directory
                 for read in (lambda path: producer.holds(path, digests[0]), producer.newest):  # L-A, L-B: never absent

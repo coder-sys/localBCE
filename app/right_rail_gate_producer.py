@@ -188,10 +188,17 @@ class ShardProducer:
 
 def _read(path: Path, sql: str, args: tuple = ()):
     """Read-only, for the registry boot check: the query's first row, None for no row or no file (only
-    ``FileNotFoundError`` is absent); any other path, file or database error is ``store_unavailable``."""
+    ``FileNotFoundError`` is absent); any other path, file or database error is ``store_unavailable``.  A closed store
+    (no -wal: every commit in the file) is read immutable, which creates no file; a store a producer opens meanwhile
+    writes its own WAL, and a checkpoint during the read copies in committed rows only, so a torn read misses a row
+    or errs, never shows one that was not committed (``holds`` rechecks the row it found).  A live or crashed one's
+    WAL needs a wal-index: SQLite makes -shm.  A rollback journal is no producer's store."""
     try:
         os.stat(path)
-        db = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        real = path.resolve()
+        if os.path.lexists(f"{real}-journal"):
+            raise OSError("a rollback journal")
+        db = sqlite3.connect(real.as_uri() + "?mode=ro" + "&immutable=1" * (not os.path.lexists(f"{real}-wal")), uri=True)
         try:
             return db.execute(sql, args).fetchone()
         finally:
@@ -211,5 +218,5 @@ def newest(path: Path) -> tuple[int, bytes] | None:
 def holds(path: Path, digest: bytes) -> bool | None:
     """B3: True when the store holds the batch ``digest`` sealed, False when only as an open row (not yet a batch: boot
     is ``store_unsealed`` until a reopen reseals or voids it), None when not at all (no store holds nothing)."""
-    row = _read(path, "SELECT signature IS NOT NULL FROM batches WHERE digest=?", (digest,))
+    row = _read(path, "SELECT signature IS NOT NULL FROM batches WHERE digest = ?1 AND +digest = ?1", (digest,))
     return row and bool(row[0])
