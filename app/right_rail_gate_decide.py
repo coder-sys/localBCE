@@ -1,12 +1,11 @@
-"""The gate's decide layer at stage 1 (decide-layer-v1 section 4): one cold ``gate_rules`` run per shard batch, synthetic,
-activation=false.
+"""The gate's decide layer at stage 1 (decide-layer-v1 section 4): one Lean decide per shard batch, synthetic, activation=false.
 
 The frame is the vector directive text (F2(a)): the tenant's snapshot header, then ``load`` of the shard's sealed
 ``adds`` against the newest sealed header's state digest (the anchor, read from the signed store, never from memory),
 then the registry's ``owners`` answer and the lines.  Lean folds the adds onto the genesis sets dated ``asof`` and
-decides only if they hash to the anchor; else the shard decides nothing (``state_mismatch``).  Every outcome, the
-state digest after the batch, its ``adds`` and the ids to free come from Lean; Python holds no policy and never
-decodes the rows.  At genesis (no sealed batch) the header's empty sets are the shard's sets.
+decides only if they hash to the anchor (``resume``: the same check on the resident engine's held sets); else the
+shard decides nothing (``state_mismatch``).  Every outcome, the state digest after the batch, its ``adds`` and the ids
+to free come from Lean; Python holds no policy and never decodes rows.  At genesis the header's empty sets are the shard's.
 """
 
 from __future__ import annotations
@@ -40,25 +39,24 @@ FRAME_CAP = 1 << 20  # the largest frame the worker takes; Lean's own limit (``p
 
 
 class RulesWorker:
-    """A long-lived ``gate_rules_worker`` (the one-shot's process start and arena are paid once, not per batch): u32 BE frames
-    of the same vector text, answered with the same output lines minus ``RULES_SOURCE``; both exes run ``Run.runText``.  Any
-    failure (a killed or hung worker, a stray byte, an oversize answer) closes it and raises ``rules_refused``; the next call
-    starts a fresh one.  A frame over ``FRAME_CAP`` goes to the one-shot exe (``decide``), by size, never after a
-    failure: a decide takes some 700 times its frame in memory (measured), so the 1 GB job cap stops a batch near 1.5 MiB."""
+    """A long-lived ``gate_engine``: u32 BE frames of a 0x00 tag and the vector text, answered with the one-shot's lines
+    minus ``RULES_SOURCE`` (both run ``Run.runFrom``); ``held`` is the digest of its last answer, the sets it can ``resume``.
+    Any failure closes it and raises ``rules_refused``; the next call starts a fresh one.  A frame over ``FRAME_CAP`` goes to
+    the one-shot exe (``decide``), never after a failure: a decide takes ~700x its frame in memory, so 1 GB caps it near 1.5 MiB."""
 
     TIMEOUT_SECONDS = 600.0
     RECYCLE_COMMIT_BYTES = 400_000_000  # replaced between batches, never mid-batch, so slow growth never reaches the job cap
     JOB_MEMORY_CAP_BYTES = 1_000_000_000
 
     def __init__(self, exe: Path) -> None:
-        self.exe, self._worker, self._workspace, self._lock = exe, None, None, threading.Lock()
+        self.exe, self._worker, self._workspace, self._lock, self.held = exe, None, None, threading.Lock(), None
 
     def close(self) -> None:
         with self._lock:
             self._close()
 
     def _close(self) -> None:
-        worker, workspace, self._worker, self._workspace = self._worker, self._workspace, None, None
+        worker, workspace, self._worker, self._workspace, self.held = self._worker, self._workspace, None, None, None
         if worker is not None:
             worker.close()
         if workspace is not None:
@@ -75,11 +73,12 @@ class RulesWorker:
                     self._worker = process.launch_contained_worker(
                         self.exe, workspace=self._workspace, job_memory_cap_bytes=self.JOB_MEMORY_CAP_BYTES,
                         expected_executable_size_bytes=len(exe), expected_executable_sha256=hashlib.sha256(exe).digest())
-                answer = self._worker.exchange(data, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
-                                               timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8")
+                answer = self._worker.exchange(b"\0" + data, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
+                                               timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8").splitlines()
+                self.held = next((bytes.fromhex(x[13:]) for x in reversed(answer) if x.startswith("RULES_DIGEST ")), None)
                 if self._worker.commit_bytes() > self.RECYCLE_COMMIT_BYTES:
                     self._close()
-                return answer.splitlines()
+                return answer
             except Exception as error:  # a timeout, an OS error or bad UTF-8 is a refusal too, never an untyped escape
                 self._close()
                 raise GateDecideError("rules_refused") from error
@@ -131,7 +130,8 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
             raise
         return _hold(lines, str(e))
     f = len({i for i, s, w in owners if s == k and not w})  # fresh RESERVE rows: the reserve's last f, nothing before in flight
-    text = "\n".join([*head, "case batch", *([f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
+    text = "\n".join([*head, "case batch", *([f"resume {asof} {anchor.hex()}" if worker is not None and worker.held == anchor else
+                                              f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
                        "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
                        *(f"line {line}" for line in lines), "commit", "end 0"])
     data = text.encode("utf-8")

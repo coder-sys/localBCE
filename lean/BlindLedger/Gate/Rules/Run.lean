@@ -36,7 +36,9 @@ open BlindLedger.Gate.Rules
     `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex) and what it read (`RULES_READS`, `reads`
     on the checkpoint it extends, or before the first on the sets it declares; redo order is part of the record).  `load G_ASOF ADDSHEX ANCHORHEX`
     drops the released and unresolved sets and replays those rows onto empty sets dated G_ASOF
-    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  Arrival
+    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  `resume G_ASOF
+    ANCHORHEX` is `load` from the sets the runner holds (the resident engine's last commit, kept in its `Memo`), with no
+    rows sent: unless they are dated G_ASOF and hash to ANCHORHEX it prints `RULES_HEAD_MISMATCH` and fails.  Arrival
     order cannot change a decision (`decideBatchIn_perm`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
@@ -141,6 +143,13 @@ def Memo.get (m : Option Memo) (r u : Snapshot Line) : Option (List UInt8) :=
   match m with
   | some m => if m.r = r ∧ m.u = u then m.d else Fast.setsDigestF hB r u
   | none => Fast.setsDigestF hB r u
+
+/-- The memo for exactly `r` and `u`: the held one when it is for these sets (the resident engine keeps it across
+    frames), else a fresh one; either way its `ok` field is the digest's proof. -/
+def Memo.reuse (m : Option Memo) (r u : Snapshot Line) : Memo :=
+  match m with
+  | some m => if m.r = r ∧ m.u = u then m else ⟨r, u, _, rfl⟩
+  | none => ⟨r, u, _, rfl⟩
 
 structure St where
   today : Nat := 0
@@ -302,11 +311,13 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let base := if st.sealed then prior else do
     pure (Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (← pinOf p.released "RR/GATE/RELEASED/v1" 5 c.releasedPrior)
       (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior))
+  -- the digest after an `owners` commit, kept with its sets for the next `Memo.get` or `resume`
+  let post : Option Memo := fr.map fun _ => ⟨r.released, r.unresolved, _, rfl⟩
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
-    (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
+    (post.bind (·.d)).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
     adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
     (base.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
-  ({ st with pinned := some p, anchor := none, sealed := true,
+  ({ st with pinned := some p, anchor := none, sealed := true, memo := post <|> st.memo,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
              held := st.held ++ fresh.2,
              rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], owners := none,
@@ -322,6 +333,13 @@ def parseOwner (o : String) : Option Owner := match o.splitOn ":" with
     pure ⟨← i.toNat?, ← s.toNat?, b == "1"⟩
   | _ => none
 
+/-- After `load` or `resume`: the released and unresolved sets declared empty at `a`, grown by `m`'s sets. -/
+def loaded (st : St) (a : Nat) (m : Memo) : Option (St × List String) := do
+  pure ({ st with
+    snaps := ("released", a, 0, ← emptyPin "released" a) :: ("unresolved", a, 0, ← emptyPin "unresolved" a) :: st.snaps,
+    rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
+    extra := m.r.entries, held := m.u.entries, rprior := m.r, uprior := m.u, sealed := true, memo := some m }, [])
+
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
                                    anchor := none, batch := #[], redo := [], foreign := [], owners := none, free := none,
@@ -336,13 +354,17 @@ def step (st : St) : List String → Option (St × List String)
     let bs ← if adds == "-" then pure ByteArray.empty else unhexFast adds   -- `-` is zero rows (the field cannot be empty)
     -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
     match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
-        (Memo.mk s.1 s.2 _ rfl).d.bind fun d =>
-          if d == Gate.natBE Gate.digestBytes anchor then some (s, Memo.mk s.1 s.2 _ rfl) else none) (Rules.replay (g, g) [ad]) with
+        let m := Memo.reuse st.memo s.1 s.2
+        m.d.bind fun d => if d == Gate.natBE Gate.digestBytes anchor then some m else none) (Rules.replay (g, g) [ad]) with
     | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
-    | some (s, m) => pure ({ st with
-        snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
-        rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true, memo := some m }, [])
+    | some m => loaded st g.asOf m
+  | ["resume", a, h] => do
+    guard (h.length == 128)
+    let a ← a.toNat?
+    let anchor := Gate.beNat (← unhexFast h).toList
+    match st.memo.filter fun m => m.r.asOf == a && m.u.asOf == a && m.d == some (Gate.natBE Gate.digestBytes anchor) with
+    | none => pure ({ st with failed := st.failed + 1 }, ["RULES_HEAD_MISMATCH resume"])
+    | some m => loaded st a m
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
@@ -374,9 +396,10 @@ def step (st : St) : List String → Option (St × List String)
   | [] => none
 
 /-- The vector text through the rules: the output lines (the one-shot `main` prints them after `RULES_SOURCE`; the
-    worker answers a frame with them) and whether it passed.  Each text starts from the empty state. -/
-def runText (text : String) : Array String × Bool := Id.run do
-  let mut st : St := {}
+    worker answers a frame with them), whether it passed, and the end state.  Each text starts from the empty state
+    but for `memo`, a self-proving digest cache the resident engine carries from the last text. -/
+def runFrom (memo : Option Memo) (text : String) : Array String × Bool × St := Id.run do
+  let mut st : St := { memo }
   let mut out : Array String := #[]
   let mut number := 0
   for raw in text.splitOn "\n" do
@@ -392,7 +415,9 @@ def runText (text : String) : Array String × Bool := Id.run do
       st := next
       out := out ++ lines
   let pass := st.failed == 0 && st.expected == some st.checked
-  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass)
+  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass, st)
+
+def runText (text : String) : Array String × Bool := let (out, pass, _) := runFrom none text; (out, pass)
 
 def main (args : List String) : IO UInt32 := do
   IO.println s!"RULES_SOURCE {source}"
