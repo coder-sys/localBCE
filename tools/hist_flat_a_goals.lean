@@ -470,7 +470,26 @@ theorem digest_eq (x : Res) (hx : x.Ok) (fr fu : List Line) :
     (x.digest r u).map (·.1) = Fast.setsDigestF hB r u ∧
     ∀ d rb ub, x.digest r u = some (d, rb, ub) →
       (∃ rs, rowsOf r.entries = some rs ∧ rb.toList = rs.mergeSort Fast.baLe) ∧
-      (∃ us, rowsOf u.entries = some us ∧ ub.toList = us.mergeSort Fast.baLe) := sorry
+      (∃ us, rowsOf u.entries = some us ∧ ub.toList = us.mergeSort Fast.baLe) := by
+  intro r u
+  obtain ⟨⟨rs, hrs, hrb⟩, ⟨us, hus, hub⟩, -⟩ := hx
+  have h1 := pinIncr_eq "RR/GATE/RELEASED/v1" 5 x.m.r fr x.rbuf rs hrs hrb
+  have h2 := pinIncr_eq "RR/GATE/UNRESOLVED/v1" 6 x.m.u fu x.ubuf us hus hub
+  have d1 : r.entries.drop x.m.r.entries.length = fr := List.drop_left
+  have d2 : u.entries.drop x.m.u.entries.length = fu := List.drop_left
+  constructor
+  · simp only [Res.digest, Fast.setsDigestF, r, u, d1, d2] at *
+    rw [← h1.1, ← h2.1]
+    cases ha : pinIncr "RR/GATE/RELEASED/v1" 5 x.m.r.asOf (x.m.r.count + fr.length) x.rbuf fr <;>
+      cases hb : pinIncr "RR/GATE/UNRESOLVED/v1" 6 x.m.u.asOf (x.m.u.count + fu.length) x.ubuf fu <;> simp
+  · intro d rb ub h
+    simp only [Res.digest, r, u, d1, d2] at h
+    obtain ⟨⟨a, rb'⟩, ha, h⟩ := Option.bind_eq_some_iff.1 h
+    obtain ⟨⟨b, ub'⟩, hb, h⟩ := Option.bind_eq_some_iff.1 h
+    have h := Option.some.inj h
+    simp only [Prod.mk.injEq] at h
+    obtain ⟨-, rfl, rfl⟩ := h
+    exact ⟨h1.2 a rb' ha, h2.2 b ub' hb⟩
 
 /-- T4: a kept index refreshed for a new frame (same `today`, same sets) is the index a full build makes. With
     `decideBatchFIn_eq` it decides as `decideBatchIn`. Rules out stale snapshot, redo or batch parts. -/
