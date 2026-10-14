@@ -159,8 +159,10 @@ def breaks : List String → Bool
   | k :: _ => ["case", "today", "snap", "drop", "dmf", "pdeath", "excl", "span", "released", "unresolved"].contains k
   | [] => false
 
-/-- After a full `load` or commit: live on `Res.fit st`, else the old `Res` kept (only `resume` reads it) and not live. -/
-def refit (w : Worker) (st : St) : Worker := match Res.fit st with
+/-- After a full `load` or commit: live on `Res.fit st` if the frame has not failed, else the old `Res` kept (only
+    `resume` reads it) and not live. A failed frame's state is never adopted. -/
+def refit (w : Worker) (st : St) : Worker :=
+  match (if st.failed = 0 then Res.fit st else none) with
   | some y => { x := some y, live := true, st }
   | none => { w with live := false, st }
 
@@ -234,6 +236,17 @@ theorem commit_genesis_fits (st : St) (u : Bool) (hs : st.sealed = false) (ha : 
       (st.ctx (st.pinned.getD st.pin)).unresolved.map (·.asOf))
     (hg : (Fast.setsDigestF hB (commit st u).1.rprior (commit st u).1.uprior).isSome) :
     ∃ y, Res.fit (commit st u).1 = some y := sorry
+
+/-- N1: a genesis commit over empty declared sets (the head's `<asOf, 0, []>`; genesis sends no `load`) prints
+    RULES_ADDS that parse to exactly the committed sets, so `resident_inv` starts from the first batch. Rules out a
+    live genesis `Res` whose rows are not the sealed adds. -/
+theorem commit_genesis_adds (st : St) (u : Bool) (hs : st.sealed = false) (ha : st.anchor = none)
+    (hr : Fast.chainedF st.today st.rprior (st.ctx (st.pinned.getD st.pin)).released = true)
+    (hu : Fast.chainedF st.today st.uprior (st.ctx (st.pinned.getD st.pin)).unresolved = true)
+    (he : (st.ctx (st.pinned.getD st.pin)).released.map (·.entries) = some [] ∧
+      (st.ctx (st.pinned.getD st.pin)).unresolved.map (·.entries) = some []) :
+    ∀ b, ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2 →
+      parseAdds b = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := sorry
 
 /-- T2: on a fitting state the resident commit prints every byte `commit` prints (RULES_LINE, _FREE, _DIGEST, _ADDS,
     _READS, mismatches), leaves the same state, and its next `Res` fits that state. Rules out a stale cache after a
