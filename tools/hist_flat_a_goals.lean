@@ -1,4 +1,7 @@
 import BlindLedger.Gate.Rules.FastEq
+import BlindLedger.Gate.AnchorTheorems
+import BlindLedger.Sha3FastEq
+import Std.Data.String.ToNat
 
 /-! HIST-FLAT design A: the resident rules worker's goals (rr-core, 2026-10-14; r2 after rr-review
     `rrb/state/hist-flat-a-review-20261014.md` F1-F4). Design: `rrb/state/hist-flat-design-A-20261013.md`. Statements
@@ -719,13 +722,252 @@ theorem parseAdds_addsBytes (r u : List Line) (bs : ByteArray) (hb : addsBytes r
       have h2 := foldl_cat 2 (Or.inr rfl) u us _ _ _ hu (by simpa using h1)
       simpa using h2
 
+theorem ba_foldl {β : Type} (f : β → UInt8 → β) (init : β) (as : ByteArray) :
+    as.foldl f init = as.data.toList.foldl f init := by
+  unfold ByteArray.foldl ByteArray.foldlM
+  simp only [Nat.le_refl, dite_true, Nat.sub_zero, Id.run]
+  have key : ∀ (i j : Nat) (b : β), j + i = as.size →
+      ByteArray.foldlM.loop (m := Id) (fun x y => pure (f x y)) as as.size (Nat.le_refl _) i j b = (as.data.toList.drop j).foldl f b := by
+    intro i
+    induction i with
+    | zero =>
+      intro j b h; unfold ByteArray.foldlM.loop; simp
+      rw [List.drop_eq_nil_of_le (by simp; omega)]; rfl
+    | succ i ih =>
+      intro j b h; unfold ByteArray.foldlM.loop
+      rw [dif_pos (by omega)]
+      show ByteArray.foldlM.loop (m := Id) _ as as.size _ i (j + 1) (f b as[j]) = _
+      rw [ih (j + 1) (f b as[j]) (by omega), List.drop_eq_getElem_cons (i := j) (by simp; omega)]
+      simp [List.foldl_cons, ByteArray.getElem_eq_getElem_data]
+  have := key as.size 0 init (by omega)
+  simpa using this
+
+theorem bget_eq (u : ByteArray) (i : Nat) : u[i]! = (u.data.toList[i]?).getD 0 := by
+  by_cases h : i < u.size
+  · rw [getElem!_pos u i h, List.getElem?_eq_getElem (by rw [Array.length_toList]; exact h)]
+    simp [ByteArray.getElem_eq_getElem_data]
+  · rw [getElem!_neg u i h]
+    have : u.data.toList[i]? = none := by
+      rw [List.getElem?_eq_none_iff, Array.length_toList]
+      exact Nat.le_of_not_lt h
+    rw [this]; rfl
+
+def dd (n : UInt8) : UInt8 := if n < 10 then 48 + n else 87 + n
+
+def hexStep (a : ByteArray) (x : UInt8) : ByteArray :=
+  (a.push (dd (x >>> 4))).push (dd (x &&& 15))
+
+theorem hexOf_eq (b : ByteArray) : hexOf b = String.fromUTF8! (b.data.toList.foldl hexStep (ByteArray.emptyWithCapacity (2 * b.size))) := by
+  rw [← ba_foldl]
+  rfl
+
+theorem hexStep_data (l : List UInt8) (a : ByteArray) :
+    (l.foldl hexStep a).data.toList = a.data.toList ++ l.flatMap (fun x : UInt8 => [dd (x >>> 4), dd (x &&& 15)]) := by
+  induction l generalizing a with
+  | nil => simp
+  | cons x l ih => simp [List.foldl_cons, ih, hexStep]
+
+theorem u8_forall (P : UInt8 → Prop) (h : ∀ k, k < 256 → P (UInt8.ofNat k)) : ∀ n, P n := by
+  intro n
+  have := h n.toNat (by have := n.toNat_lt; omega)
+  simpa using this
+
+theorem dd_ascii : ∀ n : UInt8, n < 16 → dd n < 128 := by
+  apply u8_forall (fun n => n < 16 → dd n < 128)
+  decide +kernel
+theorem nib_dd : ∀ n : UInt8, n < 16 → nib (dd n) = some n := by
+  apply u8_forall (fun n => n < 16 → nib (dd n) = some n)
+  decide +kernel
+theorem shift_lt : ∀ x : UInt8, x >>> 4 < 16 ∧ x &&& 15 < 16 := by
+  apply u8_forall
+  decide +kernel
+theorem pair_eq : ∀ x : UInt8, (x >>> 4) * 16 + (x &&& 15) = x := by
+  apply u8_forall
+  decide +kernel
+theorem ascii_char : ∀ v : UInt8, v < 128 → ∃ c : Char, c.utf8Size = 1 ∧ c.toUInt8 = v := by
+  intro v hv
+  refine ⟨Char.ofNat v.toNat, ?_⟩
+  revert hv
+  revert v
+  apply u8_forall (fun v => v < 128 → (Char.ofNat v.toNat).utf8Size = 1 ∧ (Char.ofNat v.toNat).toUInt8 = v)
+  decide +kernel
+
+theorem hexStep_valid (l : List UInt8) (a : ByteArray) (h : a.IsValidUTF8) : (l.foldl hexStep a).IsValidUTF8 := by
+  induction l generalizing a with
+  | nil => simpa using h
+  | cons x l ih =>
+    simp only [List.foldl_cons]
+    apply ih
+    obtain ⟨c1, s1, e1⟩ := ascii_char (dd (x >>> 4)) (dd_ascii _ (shift_lt x).1)
+    obtain ⟨c2, s2, e2⟩ := ascii_char (dd (x &&& 15)) (dd_ascii _ (shift_lt x).2)
+    have := ((h.push s1).push s2)
+    rw [e1, e2] at this
+    exact this
+
+def hexList (bl : List UInt8) : List UInt8 := bl.flatMap (fun x : UInt8 => [dd (x >>> 4), dd (x &&& 15)])
+
+theorem hexList_get (bl : List UInt8) : ∀ (i : Nat) (h : i < bl.length),
+    (hexList bl)[2 * i]? = some (dd (bl[i] >>> 4)) ∧ (hexList bl)[2 * i + 1]? = some (dd (bl[i] &&& 15)) := by
+  induction bl with
+  | nil => intro i h; simp at h
+  | cons x t ih =>
+    intro i h
+    cases i with
+    | zero => simp [hexList]
+    | succ i =>
+      have := ih i (by simpa using h)
+      have e1 : 2 * (i + 1) = 2 * i + 2 := by omega
+      simp only [hexList] at this ⊢
+      rw [e1, List.flatMap_cons]
+      simp only [List.cons_append, List.nil_append, List.getElem?_cons_succ, Nat.add_assoc]
+      simpa using this
+
+theorem unhexGo_hex (u : ByteArray) (bl : List UInt8) (hu : u.data.toList = hexList bl) :
+    ∀ (k i : Nat) (a : ByteArray), i + k ≤ bl.length →
+      ∃ r, unhexGo u k i a = some r ∧ r.data.toList = a.data.toList ++ (bl.drop i).take k := by
+  intro k
+  induction k with
+  | zero => intro i a h; exact ⟨a, by simp [unhexGo], by simp⟩
+  | succ k ih =>
+    intro i a h
+    have hi : i < bl.length := by omega
+    obtain ⟨g1, g2⟩ := hexList_get bl i hi
+    have e1 : u[2 * i]! = dd (bl[i] >>> 4) := by rw [bget_eq, hu, g1]; rfl
+    have e2 : u[2 * i + 1]! = dd (bl[i] &&& 15) := by rw [bget_eq, hu, g2]; rfl
+    have n1 := nib_dd _ (shift_lt bl[i]).1
+    have n2 := nib_dd _ (shift_lt bl[i]).2
+    obtain ⟨r, hr, hr2⟩ := ih (i + 1) (a.push bl[i]) (by omega)
+    refine ⟨r, ?_, ?_⟩
+    · simp [unhexGo, e1, e2, n1, n2, pair_eq, hr]
+    · have hd : bl.drop i = bl[i] :: bl.drop (i + 1) := List.drop_eq_getElem_cons hi
+      rw [hr2]
+      simp
+      rw [hd]; rfl
+
+theorem hexList_length (bl : List UInt8) : (hexList bl).length = 2 * bl.length := by
+  induction bl with
+  | nil => rfl
+  | cons x t ih => simp [hexList] at ih ⊢; omega
+
+theorem unhexFast_hexOf (b : ByteArray) : unhexFast (hexOf b) = some b := by
+  have hv : (b.data.toList.foldl hexStep (ByteArray.emptyWithCapacity (2 * b.size))).IsValidUTF8 :=
+    hexStep_valid _ _ ByteArray.isValidUTF8_empty
+  have hd := hexStep_data b.data.toList (ByteArray.emptyWithCapacity (2 * b.size))
+  have hu : (hexOf b).toUTF8 = b.data.toList.foldl hexStep (ByteArray.emptyWithCapacity (2 * b.size)) := by
+    rw [hexOf_eq]; unfold String.fromUTF8!; rw [dif_pos hv]; rfl
+  have hl : (hexOf b).toUTF8.data.toList = hexList b.data.toList := by
+    rw [hu, hd]; rfl
+  have hsz : (hexOf b).toUTF8.size = 2 * b.size := by
+    have := congrArg List.length hl
+    rw [hexList_length] at this
+    simpa using this
+  obtain ⟨r, hr, hr2⟩ := unhexGo_hex _ _ hl b.size 0 (ByteArray.emptyWithCapacity b.size) (by simp)
+  have hrb : r = b := by
+    apply ByteArray.ext
+    apply Array.toList_inj.mp
+    rw [hr2]; simp [ByteArray.emptyWithCapacity]
+    exact List.take_of_length_le (by rw [Array.length_toList]; exact Nat.le_refl _)
+  unfold unhexFast
+  simp only [hsz]
+  have h2 : (2 * b.size % 2 != 0) = false := by simp
+  have h3 : 2 * b.size / 2 = b.size := by omega
+  rw [h2, h3]
+  simp only [Bool.false_eq_true, if_false]
+  rw [hr, hrb]
+theorem memo_len (m : Memo) (D : List UInt8) (hd : m.d = some D) : D.length = 64 := by
+  have h := m.ok
+  rw [hd] at h
+  unfold Fast.setsDigestF at h
+  cases ha : Fast.pinBytes "RR/GATE/RELEASED/v1" 5 Line.fields m.r with
+  | none => simp [ha] at h
+  | some a =>
+    cases hb : Fast.pinBytes "RR/GATE/UNRESOLVED/v1" 6 Line.fields m.u with
+    | none => simp [ha, hb] at h
+    | some b =>
+      rw [ha, hb] at h
+      have h2 : D = Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (hB a) (hB b) := Option.some.inj h
+      rw [h2]
+      unfold Gate.stateDigest hB
+      rw [← Semantic.sha3_512_eq]
+      exact Semantic.sha3_512_toList_length _
+
+theorem memo_eta' (m : Memo) (D : List UInt8) (hd : m.d = some D) (h : some D = Fast.setsDigestF hB m.r m.u) :
+    (⟨m.r, m.u, some D, h⟩ : Memo) = m := by
+  cases m with
+  | mk r u d ok => simp only at hd; subst hd; rfl
+
+theorem unhexFast_dash : unhexFast "-" = none := by
+  unfold unhexFast
+  have : "-".toUTF8.size = 1 := by decide +kernel
+  dsimp only
+  rw [this]
+  rfl
+
+theorem toList_loop (b : ByteArray) : ∀ (n i : Nat) (r : List UInt8), b.size - i = n →
+    ByteArray.toList.loop b i r = r.reverse ++ b.data.toList.drop i := by
+  intro n
+  induction n with
+  | zero =>
+    intro i r h
+    unfold ByteArray.toList.loop
+    have : ¬ i < b.size := by omega
+    rw [if_neg this]
+    have hl : b.data.toList.length ≤ i := by rw [Array.length_toList]; show b.size ≤ i; omega
+    rw [List.drop_of_length_le hl]; simp
+  | succ n ih =>
+    intro i r h
+    unfold ByteArray.toList.loop
+    have hi : i < b.size := by omega
+    rw [if_pos hi, ih (i+1) _ (by omega)]
+    have hl : i < b.data.toList.length := by rw [Array.length_toList]; exact hi
+    have hd : b.data.toList.drop i = b.data.toList[i] :: b.data.toList.drop (i+1) := List.drop_eq_getElem_cons hl
+    rw [hd, get!_eq, List.getElem?_eq_getElem hl]
+    simp
+
+theorem tba_toList (D : List UInt8) : D.toByteArray.toList = D := by
+  unfold ByteArray.toList
+  rw [toList_loop _ _ 0 [] rfl]
+  simp
+
+theorem replay_one (r u : Snapshot Line) (ha : u.asOf = r.asOf) (hr : r.count = r.entries.length)
+    (hu : u.count = u.entries.length) :
+    Rules.replay (⟨r.asOf, 0, []⟩, ⟨r.asOf, 0, []⟩) [(r.entries, u.entries)] = (r, u) := by
+  obtain ⟨ra, rc, re⟩ := r
+  obtain ⟨ua, uc, ue⟩ := u
+  simp only at ha hr hu
+  subst ha hr hu
+  simp [Rules.replay]
+
 /-- T1, per step: from ANY state (a head's `today`, snapshots and rows, a `case`, a batch), `resume D` on kept sets is
     `load a adds D` for any `adds` that parse to those sets. Rules out a resume that drops or resets anything `load`
     keeps (snapshots, rows, `today`, the batch) or installs anything `load` would not. -/
 theorem resume_eq_load (x : Res) (st : St) (D : List UInt8) (bs : ByteArray) (hx : x.Ok) (hd : x.m.d = some D)
     (hb : parseAdds bs = some (x.m.r.entries, x.m.u.entries)) :
     resume (some x) st (hexOf D.toByteArray) =
-      step st ["load", toString x.m.r.asOf, addsField bs, hexOf D.toByteArray] := sorry
+      step st ["load", toString x.m.r.asOf, addsField bs, hexOf D.toByteArray] := by
+  have hDl := memo_len x.m D hd
+  have hbn : Gate.natBE Gate.digestBytes (Gate.beNat D) = D := by
+    have := Gate.natBE_beNat D
+    rw [hDl] at this
+    exact this
+  have hcase : (addsField bs = "-" ∧ bs = ByteArray.empty) ∨ (addsField bs = hexOf bs ∧ ¬ hexOf bs = "-") := by
+    unfold addsField
+    by_cases hz : bs.size = 0
+    · exact Or.inl ⟨if_pos hz, ByteArray.ext (Array.eq_empty_of_size_eq_zero hz)⟩
+    · refine Or.inr ⟨if_neg hz, fun h' => ?_⟩
+      have := unhexFast_hexOf bs
+      rw [h', unhexFast_dash] at this
+      cases this
+  have hdig : Fast.setsDigestF hB x.m.r x.m.u = some D := x.m.ok.symm.trans hd
+  obtain ⟨-, -, hasof, hrc, huc, -⟩ := hx
+  have hrep := replay_one x.m.r x.m.u hasof hrc huc
+  cases hl : (hexOf D.toByteArray).length == 128
+  · simp [resume, step, guard, failure, hl]
+  · have hu : unhexFast (hexOf D.toByteArray) = some D.toByteArray := unhexFast_hexOf _
+    rcases hcase with ⟨hf, rfl⟩ | ⟨hf, hne⟩
+    · simp [resume, step, guard, hl, hu, tba_toList, hf, hb, hrep, hdig, hbn, hd, memo_eta', Option.filter_some]
+    · simp [resume, step, guard, hl, hu, tba_toList, hf, hne, unhexFast_hexOf, hb, hrep, hdig, hbn, hd, memo_eta',
+        Option.filter_some]
 
 /-- T1b: `resume` installs the kept sets only on their exact digest; otherwise it prints the mismatch and changes
     nothing but `failed`. Rules out a resume onto a stale, forked or foreign checkpoint. -/
@@ -867,8 +1109,29 @@ theorem resume_fits (x : Res) (st st' : St) (h : String) (hx : x.Ok) (hs : resum
     rw [hp, s2, hhd]
     exact congrArg some hr2
 
+theorem memoOf_priors (st : St) : (Res.memoOf st).r = st.rprior ∧ (Res.memoOf st).u = st.uprior := by
+  unfold Res.memoOf
+  split
+  · split
+    · rename_i h; exact h
+    · exact ⟨rfl, rfl⟩
+  · exact ⟨rfl, rfl⟩
+
 /-- F2: `Res.fit` only returns a `Res` that fits (so `Ok` is established, never assumed). Rules out unsorted buffers. -/
-theorem fit_fits (st : St) (x : Res) (h : Res.fit st = some x) : x.Fits st := sorry
+theorem fit_fits (st : St) (x : Res) (h : Res.fit st = some x) : x.Fits st := by
+  unfold Res.fit at h
+  dsimp only at h
+  split at h
+  · rename_i hc
+    obtain ⟨hs, hasof, hrc, huc, hcr, hcu⟩ := hc
+    split at h
+    · rename_i rs us hr hu
+      cases h
+      obtain ⟨h1, h2⟩ := memoOf_priors st
+      exact ⟨⟨⟨rs, hr, by simp⟩, ⟨us, hu, by simp⟩, hasof, hrc, huc, fun i hi => by simp at hi⟩,
+        h1.symm, h2.symm, hs, hcr, hcu⟩
+    · cases h
+  · cases h
 
 /-- F2: after an accepted `load` (worker start or recycle) `Res.fit` succeeds, reusing the load's digest, and the
     loaded adds parse to the priors. Rules out a load that leaves the worker without a resident checkpoint. -/
