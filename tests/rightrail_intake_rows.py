@@ -14,6 +14,7 @@ def ingest(store, rows, source_id="synthetic-payment-source", source_version="fi
     owner, turn, full = getattr(store, "owner", store), {}, []
     with owner._read_snapshot() as connection:
         for row in rows:
+            assert row.keys() <= intake.ROW_FIELDS, row  # a misspelt field is the test's error, never a held row
             revision = turn.setdefault(row["item_id"], owner._get_obligation_row(connection, row["item_id"])["revision"])
             full.append({"pays_action_id": None, **row, "expected_revision": revision if row.get("expected_revision") is None else row["expected_revision"]})
             turn[row["item_id"]] += 1

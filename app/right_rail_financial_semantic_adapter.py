@@ -1907,7 +1907,6 @@ def _load_determinations(
     connection: sqlite3.Connection,
     *,
     obligation_id: str,
-    evidence: Mapping[str, Mapping[str, Any]],
     actions: list[dict[str, Any]],
     authority_context: TrustedAuthorityContext,
     evaluation_time_ms: int,
@@ -2063,7 +2062,7 @@ def live_evaluation_input(
             evaluation_time_ms=evaluation_time_ms, limit=owner._MAX_ROWS,
         )
         facts["determinations"] = _load_determinations(
-            connection, obligation_id=obligation_id, evidence=evidence_by_id, actions=facts["actions"],
+            connection, obligation_id=obligation_id, actions=facts["actions"],
             authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=owner._MAX_ROWS,
         )
         data = {
@@ -2213,7 +2212,7 @@ def build_locked_semantic_snapshot(
             limit=max_fact_rows,
         )
         facts["determinations"] = _load_determinations(
-            connection, obligation_id=obligation_id, evidence=evidence_by_id, actions=facts["actions"],
+            connection, obligation_id=obligation_id, actions=facts["actions"],
             authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=max_fact_rows,
         )
         body = {

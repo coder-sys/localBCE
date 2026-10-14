@@ -43,7 +43,7 @@ class HostileIntakeTests(unittest.TestCase):
         copy = [dict(entry) for entry in events]
         payload = json.loads(copy[position]["payload_json"])
         change and change(payload)
-        copy[position].update(event, payload_json=json.dumps(payload))
+        copy[position].update(event, payload_json=json.dumps(payload, sort_keys=True, separators=(",", ":")))  # canonical, so only the forged field can fail it
         return copy
 
     def _file(self, rows, total):
@@ -251,6 +251,22 @@ class HostileIntakeTests(unittest.TestCase):
                 real(forgery, meta, payments)
         with self.assertRaisesRegex(Exception, "history:intake"):  # a payment event no payload can read fails as the intake does, not as a raw error
             real([*events[:position], {**events[0], "kind": "PAYMENT_RECEIVED", "payload_json": "{}"}, *events[position:]], meta, payments)
+
+    def test_a_row_held_by_a_conflict_id_needs_that_conflict_made_visible_before_its_file(self):
+        revision = self._revisions()[expected.H_ITEM_ID]
+        self._ingest(encode(self._file([self._row(1, 100, revision)], 100)))
+        self._ingest(encode(self._file([{**self._row(2, 101, revision + 1), "common_origin_id": "file-origin-1"}], 101)))
+        (events, meta, payments), real = self._intake_history(), check.verify_intakes
+        shown = next(i for i, event in enumerate(events) if event["kind"] == "PAYMENT_CONFLICT_VISIBLE")
+        position = [i for i, event in enumerate(events) if event["aggregate_type"] == "INTAKE"][1]
+        self.assertEqual(json.loads(events[position]["payload_json"])["outcomes"][0]["basis"], f"conflict:conflict:{expected.H_ITEM_ID}:file-origin-1:file-evidence-2")
+        cases = {"unseen": self._forged(events, shown, lambda payload: payload.update(conflict_id="conflict:other")),
+                 "after": self._forged(events, shown, event_sequence=events[position]["event_sequence"]),
+                 "origin": self._forged(events, shown, lambda payload: payload.update(common_origin_id="other-origin"))}
+        for label, forgery in cases.items():
+            with self.subTest(forgery=label), self.assertRaisesRegex(Exception, "history:intake"):
+                real(forgery, meta, payments)
+        real(events, meta, payments)
 
     def test_a_store_holding_an_intake_event_restores_in_test_and_shadow_and_reopens(self):
         """Restore rewrites owner and mode but keeps events, so an INTAKE event binds only scope, authority and baseline."""

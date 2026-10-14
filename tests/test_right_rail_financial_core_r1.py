@@ -1,10 +1,7 @@
 """Core R1a (rrb/archive/xi2-records-20261001.md "R1a"; red team rrb/reviews/core-r1-redteam.md H1, M1): one writer connection
 holds a verified mark checked at every BEGIN. A commit it did not make means the store is verified again exactly as a
 fresh open verifies it; a swapped file is store_replaced; any error discards the connection. R1c: the correction's
-own checks cover every input it reads. R1d and R1b tests are in commit 958947a (branch core-r1a) until they land.
-
-Lock work is counted as SQLite VM steps (x100) run inside a transaction on connections made through
-sqlite3.connect: deterministic, but blind to Python-side work, so the wall-time gates stay in the bench."""
+own checks cover every input it reads. R1d and R1b tests are in commit 958947a (branch core-r1a) until they land."""
 
 from contextlib import closing, contextmanager
 import os
@@ -17,11 +14,9 @@ from unittest.mock import patch
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 from tests import rightrail_financial_expected_cases as expected
-from tests.rightrail_intake_rows import ingest, pay
+from tests.rightrail_intake_rows import pay
 from tests import test_right_rail_financial_acceptance as acceptance
 
-FLAT = 1.25  # R1 gate: at most 25% more lock work after the unrelated history (docs/CORE_REDESIGN.md)
-UNRELATED = ("item-01", "item-02", "item-03", "item-04")
 CLAIM = "claim:obligation-item-h:offset-v1"
 H_OBLIGATION = "(SELECT obligation_id FROM obligations WHERE item_id='item-h')"
 TAMPER = "UPDATE obligations SET received_cash_cents=received_cash_cents+1 WHERE item_id='item-06'"
@@ -35,36 +30,6 @@ def _pay(item, tag="x", amount=1):
 def _foreign(path, sql, timeout=5.0):
     with closing(sqlite3.connect(str(path), timeout=timeout, isolation_level=None)) as other:
         other.executescript(sql)
-
-
-def _grow(store, tag="", count=600):
-    """Unrelated history on item-01..04 (M2): payments through intake (R5), reversals, and conflicting repeats of a common origin, which intake holds."""
-    def payment(n, origin, amount):
-        return {"item_id": UNRELATED[origin % len(UNRELATED)], "payment_id": f"grow{tag}-payment-{n}", "common_origin_id": f"grow{tag}-origin-{origin}",
-                "evidence_id": f"grow{tag}-evidence-{n}", "amount_cents": amount, "event_at_ms": expected.CASH_EVENT_MS}
-    def outcomes(rows):  # 12 rows a file: at most MAX_ITEM_ROWS (6) of any item
-        return {(row["status"], row["basis"]) for start in range(0, len(rows), 12) for row in ingest(store, rows[start:start + 12])["rows"]}
-    for block in (range(start, min(start + 300, count)) for start in range(0, count, 300)):
-        assert (seen := outcomes([payment(n, n, 1) for n in block if n % 10 < 8])) == {("ADMITTED", None)}, seen
-        store.run_batch([("reverse_payment", {"item_id": UNRELATED[(n - 8) % len(UNRELATED)], "payment_id": f"grow{tag}-payment-{n - 8}", "evidence_id": f"grow{tag}-reversal-{n}"}) for n in block if n % 10 == 8])
-        assert (seen := outcomes([payment(n, n - 7, 2) for n in block if n % 10 == 9])) == {("HELD", "conflict")}, seen
-
-
-class LockMeter:
-    def __init__(self):
-        self.steps = 0
-
-    @contextmanager
-    def watching(self):
-        connect = sqlite3.connect  # the owner and adapter require plain sqlite3.Connection objects: no subclass
-
-        def counted(*args, **kwargs):
-            connection = connect(*args, **kwargs)
-            connection.set_progress_handler(lambda: setattr(self, "steps", self.steps + connection.in_transaction), 100)
-            return connection
-
-        with patch.object(sqlite3, "connect", counted):
-            yield self
 
 
 class CoreR1aMarkTests(unittest.TestCase):
@@ -146,21 +111,6 @@ class CoreR1aMarkTests(unittest.TestCase):
             with self.assertRaisesRegex(owner.FinancialIntegrityError, "^store_replaced$"):
                 command()
         self.assertEqual(acceptance._image(store.path), rewound)
-
-    @unittest.skip("R1c: the pre-commit evidence read stays NOT INDEXED (an index-only read is weaker); lead kept the full read 2026-10-03, gap 48-101 vs 60 recorded in 3409453")
-    def test_first_write_after_open_lock_work_is_flat_in_history(self):
-        fixture = self._fixture()
-        store = fixture._build_base()
-        measured = []
-        for item in ("item-06", "item-05"):
-            with LockMeter().watching() as meter:
-                reopened = fixture._make_owner(path=store.path, clock=store.clock)
-                meter.steps = 0  # the open itself is R1b
-                pay(reopened, **_pay(item))
-            measured.append(meter.steps)
-            _grow(store, item)
-        self.assertGreater(measured[0], 0, "no lock work was counted: connections must come from sqlite3.connect")
-        self.assertLessEqual(measured[1], measured[0] * FLAT, f"lock work grew with unrelated history: {measured} (x100 VM steps)")
 
     def test_a_commit_after_the_verified_snapshot_is_never_inside_the_mark(self):
         # H1: the mark is read on the writer connection inside the verified transaction, so a commit that lands

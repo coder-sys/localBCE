@@ -832,7 +832,7 @@ raise SystemExit(main(sys.argv[2:]))
         self._apply()
         self.baseline = self._manifest()
         origin_1 = {"common_origin_id": "file-origin-1"}
-        cases = {"conflict": ({**self._row(4, 101, 2), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),
+        cases = {"conflict": ({**self._row(4, 101, 1), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),  # another amount at a revision past: not a CONFLICT to record
                  "already_recorded": ({**self._row(1, 100, 0), "common_origin_id": "file-origin-9"}, {**self._row(4, 100, 2), "evidence_id": "file-evidence-1"}),
                  "unknown_item": ({**self._row(4, 100, 2), "item_id": "item-not-in-period"},)}
         for reason, rows in cases.items():
@@ -841,6 +841,33 @@ raise SystemExit(main(sys.argv[2:]))
                 with self.subTest(reason=reason, row=row):  # the item's next row counted on the held one; an unknown item's rows are each unknown
                     self._held(lambda: self._apply(self._prepare(value)), ("HELD", reason), ("HELD", "unknown_item" if reason == "unknown_item" else "depends_on_held"))
         self._held(lambda: self._apply(stale), ("RECORDED", None))  # prepared before file A, at the revision file A left: new work, not stale
+
+    def test_a_new_amount_of_a_recorded_origin_is_recorded_as_a_conflict_held_by_its_id_and_a_refused_one_holds_alone(self):
+        self._apply()
+        conflict, row = f"conflict:conflict:{expected.H_ITEM_ID}:file-origin-1:file-evidence-4", {**self._row(4, 101, 2), "common_origin_id": "file-origin-1"}
+        self._file_b([row, self._row(5, 5, 3)])
+        receipt = self._apply()  # Lean records the conflict: a new revision and a visible event, no cash; the item's next row counted on it
+        self.assertEqual(([(out["status"], out["reason"]) for out in receipt["rows"]], receipt["cash_delta_cents"]), ([("HELD", conflict), ("HELD", "depends_on_held")], 0))
+        self.assertEqual(self._query("SELECT conflict_id,existing_amount_cents,candidate_amount_cents FROM financial_conflicts"), [(conflict[9:], 100, 101)])
+        self.assertEqual(self._query("SELECT kind FROM financial_events ORDER BY event_sequence DESC LIMIT 1"), [("PAYMENT_CONFLICT_VISIBLE",)])
+        self.assertEqual(self.store.obligation_detail(expected.H_ITEM_ID)["revision"], 3)
+        self._file_b([{**row, "expected_revision": 3}])
+        self._held(self._apply, ("HELD", conflict))  # sent again in a new file: held by the same id, unrun
+        late = self.store.clock.value + 1_000  # after the owner's clock: Lean refuses the row's chronology, the file goes on
+        self._file_b([self._row(6, 6, 3), {**self._row(7, 201, 4), "common_origin_id": "file-origin-2", "event_at_ms": late}], late)
+        receipt = self._held(self._apply, ("RECORDED", None), ("HELD", "evidence_chronology"))
+        self.assertEqual((receipt["cash_delta_cents"], len(self._query("SELECT 1 FROM financial_conflicts"))), (6, 1))
+
+    def test_a_conflict_row_stored_unlike_the_one_the_checker_derives_is_refused(self):
+        self._apply()
+        self._file_b([{**self._row(4, 101, 2), "common_origin_id": "file-origin-1"}])
+        begin = owner.FinancialOwner._begin
+        def altering(instance, statement):  # the stored conflict names another existing amount than the payment it cites
+            connection = begin(instance, statement)
+            connection.execute("CREATE TEMP TRIGGER IF NOT EXISTS rr_test_conflict BEFORE INSERT ON main.financial_conflicts WHEN NEW.existing_amount_cents=(SELECT amount_cents FROM payments WHERE payment_id=NEW.existing_payment_id) BEGIN INSERT INTO main.financial_conflicts SELECT NEW.conflict_id,NEW.obligation_id,NEW.common_origin_id,NEW.existing_payment_id,NEW.candidate_evidence_id,NEW.existing_amount_cents+1,NEW.candidate_amount_cents,NEW.reason,NEW.visible_at_ms; SELECT RAISE(IGNORE); END")
+            return connection
+        with patch.object(owner.FinancialOwner, "_begin", altering):
+            self._unchanged(self._apply, "^cash_file_failed$")
 
     def _file_b(self, rows, captured_at_ms=None):
         self.baseline = self._manifest()

@@ -3649,7 +3649,6 @@ def verify_followthrough_connection(connection: sqlite3.Connection, obligation_i
 
 def _verify_evaluation_history_events(
     events: list[sqlite3.Row],
-    populations: dict[str, sqlite3.Row],
     obligations: dict[str, sqlite3.Row],
     evaluations: dict[str, list[sqlite3.Row]],
 ) -> None:
@@ -3741,7 +3740,6 @@ def _completion_time(
 
 
 def _verify_projections(
-    meta: dict[str, object],
     obligations: dict[str, sqlite3.Row],
     populations: dict[str, sqlite3.Row],
     packs: dict[str, sqlite3.Row],
@@ -4332,7 +4330,7 @@ def _verify_connection(
     evaluations = _verify_evaluations(connection, meta, obligations, populations, packs, evidence)
     current = {key: max(history, key=lambda row: row["revision"]) for key, history in evaluations.items()}
     _verify_cases(connection, obligations, current)
-    _verify_evaluation_history_events(events, populations, obligations, evaluations)
+    _verify_evaluation_history_events(events, obligations, evaluations)
     determinations = _verify_determinations(
         connection,
         meta,
@@ -4352,7 +4350,7 @@ def _verify_connection(
     _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_state["manifests"]))
     from app.right_rail_financial_cash_file_independent import verify_intakes  # it imports this module
     verify_intakes(events, meta, payments)
-    projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
+    projections, totals = _verify_projections(obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
     for key, obligation in obligations.items():
         _verify_exact_input(connection, obligation, _evaluation_input_snapshot(current[key]["input_snapshot_json"], "evaluation:input"))
     _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
