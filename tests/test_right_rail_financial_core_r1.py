@@ -17,7 +17,7 @@ from unittest.mock import patch
 from app import right_rail_financial_owner as owner
 from app import right_rail_financial_owner_independent as independent
 from tests import rightrail_financial_expected_cases as expected
-from tests.rightrail_intake_rows import pay
+from tests.rightrail_intake_rows import ingest, pay
 from tests import test_right_rail_financial_acceptance as acceptance
 
 FLAT = 1.25  # R1 gate: at most 25% more lock work after the unrelated history (docs/CORE_REDESIGN.md)
@@ -38,20 +38,16 @@ def _foreign(path, sql, timeout=5.0):
 
 
 def _grow(store, tag="", count=600):
-    """Unrelated history on item-01..04 (M2): payments, conflicting repeats of a common origin, and reversals."""
+    """Unrelated history on item-01..04 (M2): payments through intake (R5), reversals, and conflicting repeats of a common origin, which intake holds."""
     def payment(n, origin, amount):
-        return ("record_payment_evidence", {"item_id": UNRELATED[origin % len(UNRELATED)], "payment_id": f"grow{tag}-payment-{n}",
-                                            "common_origin_id": f"grow{tag}-origin-{origin}", "evidence_id": f"grow{tag}-evidence-{n}",
-                                            "amount_cents": amount, "event_at_ms": expected.CASH_EVENT_MS})
-    commands = []
-    for n in range(count):
-        if n % 10 == 8:
-            commands.append(("reverse_payment", {"item_id": UNRELATED[(n - 8) % len(UNRELATED)], "payment_id": f"grow{tag}-payment-{n - 8}",
-                                                 "evidence_id": f"grow{tag}-reversal-{n}"}))
-        else:
-            commands.append(payment(n, n - 7 if n % 10 == 9 else n, 2 if n % 10 == 9 else 1))
-    for start in range(0, count, 300):
-        store.run_batch(commands[start:start + 300])
+        return {"item_id": UNRELATED[origin % len(UNRELATED)], "payment_id": f"grow{tag}-payment-{n}", "common_origin_id": f"grow{tag}-origin-{origin}",
+                "evidence_id": f"grow{tag}-evidence-{n}", "amount_cents": amount, "event_at_ms": expected.CASH_EVENT_MS}
+    def outcomes(rows):  # 12 rows a file: at most MAX_ITEM_ROWS (6) of any item
+        return {(row["status"], row["basis"]) for start in range(0, len(rows), 12) for row in ingest(store, rows[start:start + 12])["rows"]}
+    for block in (range(start, min(start + 300, count)) for start in range(0, count, 300)):
+        assert (seen := outcomes([payment(n, n, 1) for n in block if n % 10 < 8])) == {("ADMITTED", None)}, seen
+        store.run_batch([("reverse_payment", {"item_id": UNRELATED[(n - 8) % len(UNRELATED)], "payment_id": f"grow{tag}-payment-{n - 8}", "evidence_id": f"grow{tag}-reversal-{n}"}) for n in block if n % 10 == 8])
+        assert (seen := outcomes([payment(n, n - 7, 2) for n in block if n % 10 == 9])) == {("HELD", "conflict")}, seen
 
 
 class LockMeter:
