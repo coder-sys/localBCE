@@ -1250,6 +1250,239 @@ theorem load_fits (st st' : St) (a h : String) (bs : ByteArray)
         · rw [hrp, hup]; exact hpa
       · simp at h3
 
+/-- T4: a kept index refreshed for a new frame (same `today`, same sets) is the index a full build makes. With
+    `decideBatchFIn_eq` it decides as `decideBatchIn`. Rules out stale snapshot, redo or batch parts. -/
+theorem refresh_eq (c c' : Ctx) (b₀ b : List Line) (ht : c'.today = c.today)
+    (hr : c'.released = c.released) (hrp : c'.releasedPrior = c.releasedPrior)
+    (hu : c'.unresolved = c.unresolved) (hup : c'.unresolvedPrior = c.unresolvedPrior) :
+    refresh (Fast.Ix.build c b₀) c' b = Fast.Ix.build c' b := by
+  simp only [refresh, Fast.Ix.build, ht, hr, hrp, hu, hup]
+
+theorem view_self (t : Nat) (p : Snapshot Line) : view t p (some p) = p := by
+  simp only [view]; split <;> rfl
+
+theorem advance_self_ex (t : Nat) (p : Snapshot Line) (adds : List Line) {o : Option (Snapshot Line)} (h : o = some p) :
+    ∃ A, advance t p o adds = ⟨p.asOf, p.entries.length + A.length, p.entries ++ A⟩ :=
+  ⟨adds, by subst h; simp [advance, view_self]⟩
+
+theorem viewF_self (b : Bool) (p : Snapshot Line) : Fast.viewF b p (some p) = p := by cases b <;> rfl
+
+theorem looseF_self (b : Bool) (p : Snapshot Line) : Fast.looseF b p (some p) = [] := by
+  cases b
+  · simp [Fast.looseF, entries]
+  · rfl
+
+theorem chainedF_self (t : Nat) (p : Snapshot Line) :
+    Fast.chainedF t p (some p) = (p.entries.length == p.count && validDate p.asOf && decide (p.asOf ≤ t)) := by
+  simp [Fast.chainedF]
+
+theorem posts_ext (P A : List Line) : (A.foldl Fast.postStep ((Fast.posts P).1, P.length)).1 = (Fast.posts (P ++ A)).1 := by
+  rw [Fast.posts_append, ← Fast.posts_count P]
+
+/-- T4: the index extended by a commit's fresh rows, refreshed for the next frame's context over the committed sets,
+    is the index a full build over that context makes. Rules out a missing, duplicated or misplaced posting. -/
+theorem ix_extend_eq (c c' : Ctx) (f : List Nat) (b₀ b : List Line)
+    (hr : c.released = some c.releasedPrior) (hu : c.unresolved = some c.unresolvedPrior) (ht : c'.today = c.today)
+    (hr' : c'.released = some (decideBatchIn c f b₀).released) (hrp : c'.releasedPrior = (decideBatchIn c f b₀).released)
+    (hu' : c'.unresolved = some (decideBatchIn c f b₀).unresolved)
+    (hup : c'.unresolvedPrior = (decideBatchIn c f b₀).unresolved) :
+    refresh (extend (Fast.Ix.build c b₀) (decideBatchIn c f b₀).released (decideBatchIn c f b₀).unresolved) c' b =
+      Fast.Ix.build c' b := by
+  obtain ⟨A, hA⟩ := advance_self_ex c.today c.releasedPrior (releasedLines c (decideAll c (idSeen f ++ seen0 c b₀) (order c b₀))) hr
+  obtain ⟨B, hB⟩ := advance_self_ex c.today c.unresolvedPrior (unresolvedLines c (decideAll c (idSeen f ++ seen0 c b₀) (order c b₀))) hu
+  have eA : (decideBatchIn c f b₀).released = ⟨c.releasedPrior.asOf, c.releasedPrior.entries.length + A.length, c.releasedPrior.entries ++ A⟩ := by
+    simp only [decideBatchIn]; rw [hr] at hA ⊢; exact hA
+  have eB : (decideBatchIn c f b₀).unresolved = ⟨c.unresolvedPrior.asOf, c.unresolvedPrior.entries.length + B.length, c.unresolvedPrior.entries ++ B⟩ := by
+    simp only [decideBatchIn]; rw [hu] at hB ⊢; exact hB
+  rw [eA] at hr' hrp
+  rw [eB] at hu' hup
+  rw [eA, eB]
+  simp only [refresh, extend, Fast.Ix.build, hr, hu, hr', hrp, hu', hup, ht, viewF_self, looseF_self, chainedF_self]
+  simp only [List.append_nil, List.drop_left, posts_ext]
+  simp [List.length_append, List.drop_length]
+
+/-- `s` does not begin like `RULES_ADDS ` (its first eight characters, `RULES_AD`, differ). -/
+def NA (s : String) : Prop := s.toList.take 8 ≠ "RULES_ADDS ".toList.take 8
+
+theorem na_app (a t : String) (h1 : NA a) (h2 : 8 ≤ a.toList.length) : NA (a ++ t) := by
+  unfold NA at *
+  simpa [String.toList_append, List.take_append_of_le_length h2] using h1
+
+theorem not_na_adds (y : String) : ¬ NA ("RULES_ADDS " ++ y) := by
+  unfold NA
+  intro h
+  apply h
+  simp only [String.toList_append]
+  exact List.take_append_of_le_length (by decide)
+
+instance (s : String) : Decidable (NA s) := by unfold NA; infer_instance
+
+/-- `NA` with room for the eight characters it inspects, so appending keeps it. -/
+def Pre (s : String) : Prop := NA s ∧ 8 ≤ s.toList.length
+
+instance (s : String) : Decidable (Pre s) := by unfold Pre; infer_instance
+
+theorem pre_app (a t : String) (h : Pre a) : Pre (a ++ t) :=
+  ⟨na_app a t h.1 h.2, by rw [String.toList_append, List.length_append]; exact Nat.le_trans h.2 (Nat.le_add_right _ _)⟩
+
+theorem pre_na {s : String} (h : Pre s) : NA s := h.1
+
+macro "na_tac" : tactic =>
+  `(tactic| (apply pre_na; repeat' (first | decide | apply pre_app)))
+
+theorem na_free (ids : List String) : NA (" ".intercalate ("RULES_FREE" :: ids)) := by
+  cases ids with
+  | nil => rw [String.intercalate_singleton]; na_tac
+  | cons x l =>
+    rw [String.intercalate_cons_of_ne_nil (by simp)]
+    exact pre_na (pre_app _ _ (pre_app _ _ (by decide)))
+
+/-- A printed line is not a `RULES_ADDS` line, or it is the one for `ad`. -/
+def Good (ad : Option ByteArray) (e : String) : Prop :=
+  NA e ∨ ∃ bb, e = "RULES_ADDS " ++ hexOf bb ∧ ad = some bb
+
+theorem good_app {ad : Option ByteArray} {l1 l2 : List String} (h1 : ∀ e ∈ l1, Good ad e)
+    (h2 : ∀ e ∈ l2, Good ad e) : ∀ e ∈ l1 ++ l2, Good ad e := by
+  intro e he
+  rcases List.mem_append.1 he with h | h
+  · exact h1 e h
+  · exact h2 e h
+
+theorem na_append {l1 l2 : List String} (h1 : ∀ e ∈ l1, NA e) (h2 : ∀ e ∈ l2, NA e) : ∀ e ∈ l1 ++ l2, NA e := by
+  intro e he
+  rcases List.mem_append.1 he with h | h
+  · exact h1 e h
+  · exact h2 e h
+
+theorem good_pre {ad : Option ByteArray} {α : Type} (a : String) (g : α → String) (L : List α) (h : Pre a) :
+    ∀ e ∈ L.map (fun x => a ++ g x), Good ad e := by
+  intro e he
+  obtain ⟨x, -, rfl⟩ := List.mem_map.1 he
+  exact Or.inl (pre_app a _ h).1
+
+/-- The tail of `commit`'s output: a mismatch line and the notes, all non-`RULES_ADDS`. -/
+theorem good_tail (ad : Option ByteArray) (S M : List String) (c : Prop) [Decidable c]
+    (hS : ∀ e ∈ S, Good ad e) (hM : ∀ e ∈ M, NA e) :
+    ∀ e ∈ S ++ (if c then [] else "RULES_VECTOR_MISMATCH commit" :: M), Good ad e := by
+  refine good_app hS ?_
+  by_cases hc : c
+  · simp [hc]
+  · simp only [if_neg hc]
+    intro e he
+    rcases List.mem_cons.1 he with rfl | h
+    · exact Or.inl (show Pre "RULES_VECTOR_MISMATCH commit" by decide).1
+    · exact Or.inl (hM e h)
+
+theorem grow_app (o : Option (Snapshot Line)) (xs ys : List Line) : grow (grow o xs) ys = grow o (xs ++ ys) := by
+  cases o <;> simp [grow, List.length_append, Nat.add_assoc, List.append_assoc]
+
+/-- The batch, ids and waiting lines `commit` decides (its `owners` match). -/
+def cbf (st : St) : List Line × List Nat × List Line :=
+  match st.owners with
+  | some (k, os) =>
+    let b := Fast.readyF k os (st.batch.toList.map (·.1))
+    let ps := Std.HashSet.ofList (b.map (·.pay))
+    (b, Fast.foreignOfF k os b, (st.batch.toList.map (·.1)).filter fun l => !ps.contains l.pay)
+  | none => (st.batch.toList.map (·.1), st.foreign, [])
+
+/-- `commit`, split into its two exits. Exit 1 (the anchor does not match): the sets are untouched and nothing but a
+    non-`RULES_ADDS` line is printed. Exit 2: it decided `b` with ids `f` over the context; its sets are the run's, its
+    new rows are the run's fresh ones, and every printed line is a non-`RULES_ADDS` line or the one `RULES_ADDS` of
+    those fresh rows. -/
+theorem commit_struct (st : St) (u : Bool) :
+    let p := st.pinned.getD st.pin
+    let st' := (commit st u).1
+    st'.pinned = some p ∧ st'.today = st.today ∧ st'.memo = st.memo ∧
+    ((st.anchor.isSome = true ∧ st'.extra = st.extra ∧ st'.held = st.held ∧ st'.rprior = st.rprior ∧
+        st'.uprior = st.uprior ∧ ∀ e ∈ (commit st u).2, NA e) ∨
+     st'.sealed = true ∧
+        st'.extra = st.extra ++ ((Fast.Ix.build (st.ctx p) (cbf st).1).runIn (cbf st).2.1 (cbf st).1).released.entries.drop (Fast.Ix.build (st.ctx p) (cbf st).1).relN ∧
+        st'.held = st.held ++ ((Fast.Ix.build (st.ctx p) (cbf st).1).runIn (cbf st).2.1 (cbf st).1).unresolved.entries.drop (Fast.Ix.build (st.ctx p) (cbf st).1).unrN ∧
+        st'.rprior = ((Fast.Ix.build (st.ctx p) (cbf st).1).runIn (cbf st).2.1 (cbf st).1).released ∧
+        st'.uprior = ((Fast.Ix.build (st.ctx p) (cbf st).1).runIn (cbf st).2.1 (cbf st).1).unresolved ∧
+        ∀ e ∈ (commit st u).2, NA e ∨ ∃ bb, e = "RULES_ADDS " ++ hexOf bb ∧
+          addsBytes (((Fast.Ix.build (st.ctx p) (cbf st).1).runIn (cbf st).2.1 (cbf st).1).released.entries.drop (Fast.Ix.build (st.ctx p) (cbf st).1).relN)
+            (((Fast.Ix.build (st.ctx p) (cbf st).1).runIn (cbf st).2.1 (cbf st).1).unresolved.entries.drop (Fast.Ix.build (st.ctx p) (cbf st).1).unrN) = some bb) := by
+  intro p st'
+  dsimp only [p, st']
+  unfold commit
+  dsimp only
+  by_cases hA : (!st.anchor.all fun a => (if st.sealed || st.anchor.isSome then Memo.get st.memo (st.ctx (st.pinned.getD st.pin)).releasedPrior (st.ctx (st.pinned.getD st.pin)).unresolvedPrior else none) == some (Gate.natBE Gate.digestBytes a)) = true
+  · simp only [if_pos hA]
+    refine ⟨trivial, trivial, trivial, Or.inl ⟨?_, trivial, trivial, trivial, trivial, ?_⟩⟩
+    · cases ha : st.anchor with
+      | none => simp [ha] at hA
+      | some a => rfl
+    · intro e he
+      cases u <;> simp at he <;> (subst he; unfold NA; decide)
+  · simp only [if_neg hA]
+    refine ⟨trivial, trivial, trivial, Or.inr ?_⟩
+    rcases ho : st.owners with _ | ⟨k, os⟩
+    all_goals simp only [ho, cbf, Option.map, Option.elim]
+    all_goals refine ⟨trivial, trivial, trivial, trivial, trivial, ?_⟩
+    all_goals refine good_tail _ _ _ _ ?_ ?_
+    · intro e he; simp at he
+    · 
+      refine na_append (na_append (na_append ?_ ?_) ?_) ?_
+      · intro e he
+        split at he
+        · simp at he
+        · split at he
+          · simp at he
+          · obtain ⟨x, -, rfl⟩ := List.mem_map.1 he
+            na_tac
+      · intro e he
+        obtain ⟨x, -, rfl⟩ := List.mem_map.1 he
+        na_tac
+      · intro e he
+        split at he
+        · simp only [List.mem_singleton] at he
+          subst he
+          na_tac
+        · simp at he
+      · intro e he
+        split at he
+        · simp at he
+        · simp only [List.mem_singleton] at he
+          subst he
+          na_tac
+    · refine good_app (good_app (good_app (good_app ?_ ?_) ?_) ?_) ?_
+      · exact good_pre _ _ _ (by decide)
+      · intro e he
+        simp only [List.mem_singleton] at he
+        subst he
+        exact Or.inl (na_free _)
+      · exact good_pre _ _ _ (by decide)
+      · intro e he
+        obtain ⟨x, hx, rfl⟩ := List.mem_map.1 he
+        right
+        exact ⟨x, rfl, Option.mem_toList.1 hx⟩
+      · exact good_pre _ _ _ (by decide)
+    · 
+      refine na_append (na_append (na_append ?_ ?_) ?_) ?_
+      · intro e he
+        split at he
+        · simp at he
+        · split at he
+          · simp at he
+          · obtain ⟨x, -, rfl⟩ := List.mem_map.1 he
+            na_tac
+      · intro e he
+        obtain ⟨x, -, rfl⟩ := List.mem_map.1 he
+        na_tac
+      · intro e he
+        split at he
+        · simp only [List.mem_singleton] at he
+          subst he
+          na_tac
+        · simp at he
+      · intro e he
+        split at he
+        · simp at he
+        · simp only [List.mem_singleton] at he
+          subst he
+          na_tac
+
 /-- F2: a genesis commit (not sealed, no anchor) over declared sets that are chained, of one date, with a digest,
     gives a fitting `Res`. Rules out a first frame that can never reach the resident path. -/
 theorem commit_genesis_fits (st : St) (u : Bool) (hs : st.sealed = false) (ha : st.anchor = none)
@@ -1326,55 +1559,5 @@ theorem resident_inv (st : St) (u : Bool) (bs b : ByteArray)
     (hb : ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2) :
     parseAdds (bs ++ b) = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := sorry
 
-/-- T4: a kept index refreshed for a new frame (same `today`, same sets) is the index a full build makes. With
-    `decideBatchFIn_eq` it decides as `decideBatchIn`. Rules out stale snapshot, redo or batch parts. -/
-theorem refresh_eq (c c' : Ctx) (b₀ b : List Line) (ht : c'.today = c.today)
-    (hr : c'.released = c.released) (hrp : c'.releasedPrior = c.releasedPrior)
-    (hu : c'.unresolved = c.unresolved) (hup : c'.unresolvedPrior = c.unresolvedPrior) :
-    refresh (Fast.Ix.build c b₀) c' b = Fast.Ix.build c' b := by
-  simp only [refresh, Fast.Ix.build, ht, hr, hrp, hu, hup]
-
-theorem view_self (t : Nat) (p : Snapshot Line) : view t p (some p) = p := by
-  simp only [view]; split <;> rfl
-
-theorem advance_self_ex (t : Nat) (p : Snapshot Line) (adds : List Line) {o : Option (Snapshot Line)} (h : o = some p) :
-    ∃ A, advance t p o adds = ⟨p.asOf, p.entries.length + A.length, p.entries ++ A⟩ :=
-  ⟨adds, by subst h; simp [advance, view_self]⟩
-
-theorem viewF_self (b : Bool) (p : Snapshot Line) : Fast.viewF b p (some p) = p := by cases b <;> rfl
-
-theorem looseF_self (b : Bool) (p : Snapshot Line) : Fast.looseF b p (some p) = [] := by
-  cases b
-  · simp [Fast.looseF, entries]
-  · rfl
-
-theorem chainedF_self (t : Nat) (p : Snapshot Line) :
-    Fast.chainedF t p (some p) = (p.entries.length == p.count && validDate p.asOf && decide (p.asOf ≤ t)) := by
-  simp [Fast.chainedF]
-
-theorem posts_ext (P A : List Line) : (A.foldl Fast.postStep ((Fast.posts P).1, P.length)).1 = (Fast.posts (P ++ A)).1 := by
-  rw [Fast.posts_append, ← Fast.posts_count P]
-
-/-- T4: the index extended by a commit's fresh rows, refreshed for the next frame's context over the committed sets,
-    is the index a full build over that context makes. Rules out a missing, duplicated or misplaced posting. -/
-theorem ix_extend_eq (c c' : Ctx) (f : List Nat) (b₀ b : List Line)
-    (hr : c.released = some c.releasedPrior) (hu : c.unresolved = some c.unresolvedPrior) (ht : c'.today = c.today)
-    (hr' : c'.released = some (decideBatchIn c f b₀).released) (hrp : c'.releasedPrior = (decideBatchIn c f b₀).released)
-    (hu' : c'.unresolved = some (decideBatchIn c f b₀).unresolved)
-    (hup : c'.unresolvedPrior = (decideBatchIn c f b₀).unresolved) :
-    refresh (extend (Fast.Ix.build c b₀) (decideBatchIn c f b₀).released (decideBatchIn c f b₀).unresolved) c' b =
-      Fast.Ix.build c' b := by
-  obtain ⟨A, hA⟩ := advance_self_ex c.today c.releasedPrior (releasedLines c (decideAll c (idSeen f ++ seen0 c b₀) (order c b₀))) hr
-  obtain ⟨B, hB⟩ := advance_self_ex c.today c.unresolvedPrior (unresolvedLines c (decideAll c (idSeen f ++ seen0 c b₀) (order c b₀))) hu
-  have eA : (decideBatchIn c f b₀).released = ⟨c.releasedPrior.asOf, c.releasedPrior.entries.length + A.length, c.releasedPrior.entries ++ A⟩ := by
-    simp only [decideBatchIn]; rw [hr] at hA ⊢; exact hA
-  have eB : (decideBatchIn c f b₀).unresolved = ⟨c.unresolvedPrior.asOf, c.unresolvedPrior.entries.length + B.length, c.unresolvedPrior.entries ++ B⟩ := by
-    simp only [decideBatchIn]; rw [hu] at hB ⊢; exact hB
-  rw [eA] at hr' hrp
-  rw [eB] at hu' hup
-  rw [eA, eB]
-  simp only [refresh, extend, Fast.Ix.build, hr, hu, hr', hrp, hu', hup, ht, viewF_self, looseF_self, chainedF_self]
-  simp only [List.append_nil, List.drop_left, posts_ext]
-  simp [List.length_append, List.drop_length]
 
 end BlindLedger.Gate.Rules.Resident
