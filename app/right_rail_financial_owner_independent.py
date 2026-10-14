@@ -2953,7 +2953,7 @@ def _verify_conflicts(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "financial_conflicts")
     conflicts: dict[str, sqlite3.Row] = {}
-    visible = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE' ORDER BY event_sequence")}
+    visible = {(str(row[0]), *row[2:]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms,json_extract(payload_json,'$.existing_payment_id'),json_extract(payload_json,'$.common_origin_id'),json_extract(payload_json,'$.candidate_evidence_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE' ORDER BY event_sequence")}
     keys: set[tuple[str, str, str]] = set()
     for row in rows:
         conflict_id = _id(row["conflict_id"], "conflict:id")
@@ -2980,7 +2980,7 @@ def _verify_conflicts(
             _fail("conflict:amount")
         if row["reason"] != "CONFLICTING_COMMON_ORIGIN_AMOUNT":
             _fail("conflict:reason")
-        if not candidate["received_at_ms"] <= _time(row["visible_at_ms"], "conflict:visible") <= visible.get(conflict_id, -1):
+        if not candidate["received_at_ms"] <= _time(row["visible_at_ms"], "conflict:visible") <= visible.get((conflict_id, existing_id, common_origin_id, candidate_id), -1):  # the visible event names what the row stores
             _fail("conflict:visible")
         key = (obligation_id, common_origin_id, candidate_id)
         if key in keys:

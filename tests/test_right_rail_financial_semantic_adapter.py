@@ -232,7 +232,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         context: adapter.TrustedAuthorityContext | None = None,
         evaluation_time_ms: int | None = None,
     ) -> adapter.LockedSemanticSnapshot:
-        clock = getattr(store, "clock", None)
         if evaluation_time_ms is None:
             evaluation_time_ms = 2**63 - 2
         authority_context = context or adapter.TrustedAuthorityContext.from_authority(store.trusted_authority)
@@ -509,7 +508,6 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
         self._assert_no_source_mutation(store, before_hash)
 
     def _record_duplicate_conflict_reversal_replacement(self, store: FinancialOwner) -> None:
-        payment = expected.P2_PAYMENT_EVIDENCE
         duplicate = expected.P2_CONFIRMATION_EVIDENCE
         conflict = expected.P2_CONFLICT_EVIDENCE
         self._advance_clock(store, duplicate.event_at_ms)

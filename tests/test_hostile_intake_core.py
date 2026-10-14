@@ -262,7 +262,8 @@ class HostileIntakeTests(unittest.TestCase):
         self.assertEqual(json.loads(events[position]["payload_json"])["outcomes"][0]["basis"], f"conflict:conflict:{expected.H_ITEM_ID}:file-origin-1:file-evidence-2")
         cases = {"unseen": self._forged(events, shown, lambda payload: payload.update(conflict_id="conflict:other")),
                  "after": self._forged(events, shown, event_sequence=events[position]["event_sequence"]),
-                 "origin": self._forged(events, shown, lambda payload: payload.update(common_origin_id="other-origin"))}
+                 "origin": self._forged(events, shown, lambda payload: payload.update(common_origin_id="other-origin")),
+                 "candidate": self._forged(events, shown, lambda payload: payload.update(candidate_evidence_id="file-evidence-9"))}
         for label, forgery in cases.items():
             with self.subTest(forgery=label), self.assertRaisesRegex(Exception, "history:intake"):
                 real(forgery, meta, payments)

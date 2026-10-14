@@ -868,6 +868,11 @@ raise SystemExit(main(sys.argv[2:]))
             return connection
         with patch.object(owner.FinancialOwner, "_begin", altering):
             self._unchanged(self._apply, "^cash_file_failed$")
+        append = owner.FinancialOwner._append_event
+        for name, change in (("payload", lambda event: {**event, "payload": {**event["payload"], "existing_payment_id": "file-payment-9"}}),  # the visible event cites another payment than its row
+                             ("hold", lambda event: owner._fail(owner.FinancialInputError, "payment_amount_zero"))):  # Lean holds a conflict row only for its chronology
+            with self.subTest(name), patch.object(owner.FinancialOwner, "_append_event", lambda instance, connection, **event: append(instance, connection, **(change(event) if event["kind"] == "PAYMENT_CONFLICT_VISIBLE" else event))):
+                self._unchanged(self._apply, "^cash_file_failed$")
 
     def _file_b(self, rows, captured_at_ms=None):
         self.baseline = self._manifest()

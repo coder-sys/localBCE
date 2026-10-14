@@ -552,7 +552,6 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         workflow.reject_offset_and_authorize_correction(self._review_body(workflow))
         owner = workflow.mirror.owner
         body = self._cash_body(workflow)
-        original_revision = body["revision"]
         sequence_before = int(owner.verify_integrity()["sequence"])
 
         recorded = workflow.record_cash_correction(body)

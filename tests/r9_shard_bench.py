@@ -19,7 +19,6 @@ import pickle
 import queue
 import shutil
 import sqlite3
-import statistics
 import struct
 import sys
 import threading

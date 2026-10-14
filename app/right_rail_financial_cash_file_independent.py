@@ -483,7 +483,7 @@ class CashFileCheck:
                 skip = _held(argument, "depends_on_held")  # its expected_revision assumed the held row before it
             if skip is None and result.get("status") == "HELD" and (kind, result.get("reason")) != ("CONFLICT", "conflict:" + conflict):  # the owner refused the row; its savepoint rolled the row back (an intake file, or any file's conflict row)
                 reason = result.get("reason")
-                _require((self.intake is not None or kind == "CONFLICT") and reason in _OWNER_HOLDS and (reason != "obligation_revision_conflict" or argument["expected_revision"] != revisions[self._items[argument["item_id"]]]), "cash_file_failed")
+                _require((reason == "evidence_chronology" if kind == "CONFLICT" else self.intake is not None and reason in _OWNER_HOLDS) and (reason != "obligation_revision_conflict" or argument["expected_revision"] != revisions[self._items[argument["item_id"]]]), "cash_file_failed")
                 skip = _held(argument, reason)
             if skip is not None:
                 _require(result == skip, "cash_file_failed")  # wrote nothing: the write log of every table and the event chain below prove it

@@ -17,7 +17,6 @@ import unittest
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_payer as payer
-from app import right_rail_gate_signer as signer
 from tests import test_right_rail_gate_formats as fx
 
 ROOT = Path(__file__).resolve().parents[1]
