@@ -767,9 +767,105 @@ theorem resume_fail_closed (o : Option Res) (st st' : St) (h : String) (out : Li
         exact ⟨rfl, rfl⟩
   · simp [guard, hl, failure] at hs
 
+theorem toUpper_released : "released".toUpper = "RELEASED" := by decide +kernel
+theorem toUpper_unresolved : "unresolved".toUpper = "UNRESOLVED" := by decide +kernel
+
+theorem emptyPin_r (a : Nat) : emptyPin "released" a =
+    (Fast.pinBytes "RR/GATE/RELEASED/v1" 5 Line.fields (⟨a, 0, []⟩ : Snapshot Line)).map
+      fun b => hexOf (BlindLedger.Semantic.sha3_512Fast b) := by
+  simp only [emptyPin, toUpper_released]; rfl
+
+theorem emptyPin_u (a : Nat) : emptyPin "unresolved" a =
+    (Fast.pinBytes "RR/GATE/UNRESOLVED/v1" 6 Line.fields (⟨a, 0, []⟩ : Snapshot Line)).map
+      fun b => hexOf (BlindLedger.Semantic.sha3_512Fast b) := by
+  simp only [emptyPin, toUpper_unresolved]; rfl
+
+/-- A declared empty set with its (recomputed) pin is what `snapshot` returns. -/
+theorem snapshot_decl {α : Type} (st : St) (kind : String) (row : List String → Option α) (domain : String) (k : Nat)
+    (fields : α → List (Nat × Nat)) (a : Nat) (pb : ByteArray)
+    (hs : st.snaps.lookup kind = some (a, 0, hexOf (BlindLedger.Semantic.sha3_512Fast pb)))
+    (hr : st.rows.filter (·.1 == kind) = #[])
+    (hp : Fast.pinBytes domain k fields (⟨a, 0, []⟩ : Snapshot α) = some pb) :
+    snapshot st kind row domain k fields = some (⟨a, 0, []⟩, (BlindLedger.Semantic.sha3_512Fast pb).toList) := by
+  simp [snapshot, hs, hr, hp, guard]
+
+theorem rows_released (rows : Array (String × List String)) :
+    (rows.filter fun r => r.1 != "released" && r.1 != "unresolved").filter (·.1 == "released") = #[] := by
+  apply Array.ext'
+  simp [List.filter_eq_nil_iff]
+  intro a b _ h1 h2
+  exact absurd h1 h2
+
+theorem rows_unresolved (rows : Array (String × List String)) :
+    (rows.filter fun r => r.1 != "released" && r.1 != "unresolved").filter (·.1 == "unresolved") = #[] := by
+  apply Array.ext'
+  simp [List.filter_eq_nil_iff]
+  intro a b _ h
+  simp_all
+
+/-- What an accepted `resume` does to the state. -/
+theorem resume_acc (x : Res) (st st' : St) (h : String) (hs : resume (some x) st h = some (st', [])) :
+    ∃ p1 p2, emptyPin "released" x.m.r.asOf = some p1 ∧ emptyPin "unresolved" x.m.r.asOf = some p2 ∧
+      st' = { st with
+        snaps := ("released", x.m.r.asOf, 0, p1) :: ("unresolved", x.m.r.asOf, 0, p2) :: st.snaps,
+        rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
+        extra := x.m.r.entries, held := x.m.u.entries, rprior := x.m.r, uprior := x.m.u, sealed := true,
+        memo := some x.m } := by
+  unfold resume at hs
+  by_cases hl : (h.length == 128) = true
+  · cases hu : unhexFast h with
+    | none => simp [guard, hl, hu] at hs
+    | some bs =>
+      simp [guard, hl, hu] at hs
+      split at hs
+      · rename_i y hy
+        simp only [Option.filter] at hy
+        split at hy
+        · cases hy
+          cases e1 : emptyPin "released" x.m.r.asOf with
+          | none => simp [e1] at hs
+          | some p1 =>
+            cases e2 : emptyPin "unresolved" x.m.r.asOf with
+            | none => simp [e1, e2] at hs
+            | some p2 =>
+              simp [e1, e2] at hs
+              exact ⟨p1, p2, rfl, rfl, hs.symm⟩
+        · cases hy
+      · simp at hs
+  · simp [guard, hl, failure] at hs
+
 /-- F1: an accepted `resume` of an `Ok` `Res` leaves a state it fits. -/
 theorem resume_fits (x : Res) (st st' : St) (h : String) (hx : x.Ok) (hs : resume (some x) st h = some (st', [])) :
-    x.Fits st' := sorry
+    x.Fits st' := by
+  obtain ⟨p1, p2, e1, e2, hst⟩ := resume_acc x st st' h hs
+  obtain ⟨⟨-, -, hasOf, hrc, huc, -⟩⟩ := And.intro hx trivial
+  rw [emptyPin_r] at e1
+  rw [emptyPin_u] at e2
+  obtain ⟨pb1, hp1, rfl⟩ := Option.map_eq_some_iff.1 e1
+  obtain ⟨pb2, hp2, rfl⟩ := Option.map_eq_some_iff.1 e2
+  have hne : ("unresolved" == "released") = false := by decide
+  have hpin : st'.pinned = none := by rw [hst]
+  have hex : st'.extra = x.m.r.entries := by rw [hst]
+  have hhd : st'.held = x.m.u.entries := by rw [hst]
+  have s1 := snapshot_decl (α := Line) st' "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields x.m.r.asOf pb1
+    (by rw [hst]; simp) (by rw [hst]; exact rows_released st.rows) hp1
+  have s2 := snapshot_decl (α := Line) st' "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields x.m.r.asOf pb2
+    (by rw [hst]; simp [List.lookup, hne]) (by rw [hst]; exact rows_unresolved st.rows) hp2
+  have hr1 : (⟨x.m.r.asOf, 0 + x.m.r.entries.length, [] ++ x.m.r.entries⟩ : Snapshot Line) = x.m.r := by
+    rw [List.nil_append, Nat.zero_add, ← hrc]
+  have hr2 : (⟨x.m.r.asOf, 0 + x.m.u.entries.length, [] ++ x.m.u.entries⟩ : Snapshot Line) = x.m.u := by
+    rw [List.nil_append, Nat.zero_add, ← huc, ← hasOf]
+  refine ⟨hx, by rw [hst], by rw [hst], by rw [hst], ?_, ?_⟩
+  · have hp : (st'.ctx (st'.pinned.getD st'.pin)).released =
+        grow ((snapshot st' "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields).map (·.1)) st'.extra := by
+      rw [hpin]; rfl
+    rw [hp, s1, hex]
+    exact congrArg some hr1
+  · have hp : (st'.ctx (st'.pinned.getD st'.pin)).unresolved =
+        grow ((snapshot st' "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields).map (·.1)) st'.held := by
+      rw [hpin]; rfl
+    rw [hp, s2, hhd]
+    exact congrArg some hr2
 
 /-- F2: `Res.fit` only returns a `Res` that fits (so `Ok` is established, never assumed). Rules out unsorted buffers. -/
 theorem fit_fits (st : St) (x : Res) (h : Res.fit st = some x) : x.Fits st := sorry
