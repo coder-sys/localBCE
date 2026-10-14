@@ -14,16 +14,12 @@ import unittest
 from unittest.mock import patch
 
 from app import right_rail_financial_owner as owner
-from tests import rightrail_financial_expected_cases as expected
+from tests.test_right_rail_financial_core_r1 import _pay
 from tests import test_right_rail_financial_acceptance as acceptance
+from tests.rightrail_intake_rows import pay
 
 BEGIN_WRITE = re.compile(r"\s*BEGIN\s+(IMMEDIATE|EXCLUSIVE)", re.I)
 FULL_SYNC = re.compile(r"\s*PRAGMA\s+synchronous\s*=\s*(FULL|EXTRA|2|3)\s*;?\s*", re.I)
-
-
-def _pay(item, tag="x", amount=1):
-    return {"item_id": item, "payment_id": f"{tag}-{item}-payment", "common_origin_id": f"{tag}-{item}-origin",
-            "evidence_id": f"{tag}-{item}-evidence", "amount_cents": amount, "event_at_ms": expected.CASH_EVENT_MS}
 
 
 def _journal(path, assignment=""):
@@ -56,7 +52,7 @@ class DurabilityR05Tests(unittest.TestCase):
 
         with patch.object(sqlite3, "connect", traced):
             store = self.fixture._build_base()
-            self.fixture._make_owner(path=store.path, clock=store.clock).record_payment_evidence(**_pay("item-06"))
+            pay(self.fixture._make_owner(path=store.path, clock=store.clock), **_pay("item-06"))
             store.summary()
             self._restore(store, Path(self.fixture.temp_dir.name) / "restored.sqlite")
         with open(store.path, "rb") as handle:
@@ -74,7 +70,7 @@ class DurabilityR05Tests(unittest.TestCase):
         # The commit reached the main file or -wal by the time the response is released (also true of the rollback
         # journal: this shows no commit is held back, not that it was synced; synchronous=FULL is the test above).
         store = self.fixture._build_base()
-        self.assertIn("status", store.record_payment_evidence(**_pay("item-06")))
+        self.assertIn("status", pay(store, **_pay("item-06")))
         crashed = Path(tempfile.mkdtemp(dir=self.fixture.temp_dir.name)) / "crashed.sqlite"
         for suffix in ("", "-wal"):  # what is on disk the moment the response is released; the owner is never closed
             source = Path(str(store.path) + suffix)
@@ -88,7 +84,7 @@ class DurabilityR05Tests(unittest.TestCase):
         with closing(sqlite3.connect(str(store.path), isolation_level=None)) as reader:
             reader.execute("BEGIN")
             reader.execute("SELECT COUNT(*) FROM financial_events").fetchone()  # a staff read or audit in progress (H4)
-            self.assertIn("status", store.record_payment_evidence(**_pay("item-06")))
+            self.assertIn("status", pay(store, **_pay("item-06")))
             reader.execute("COMMIT")
 
     def test_a_pre_wal_store_changes_only_in_an_open_that_may_migrate_it(self):

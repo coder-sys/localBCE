@@ -1091,13 +1091,7 @@ def _digest_input(value: object, label: str) -> bytes:
         return value
     if type(value) is not str or re.fullmatch(r"[0-9A-Fa-f]{128}", value) is None:
         _fail(FinancialInputError, label)
-    try:
-        result = bytes.fromhex(value)
-    except ValueError:
-        _fail(FinancialInputError, label)
-    if len(result) != 64:
-        _fail(FinancialInputError, label)
-    return result
+    return bytes.fromhex(value)  # 128 hex digits: always 64 bytes
 
 
 def _evaluation_result_body(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -2214,26 +2208,10 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "identity_contract_destination")
         if not existed:
             if identity_contract is None:
-                identity_digest = _identity_digest(
-                    provenance="ROOT",
-                    bound_mode=mode,
-                    bound_owner_id=self.owner_id,
-                    anchor_sequence=0,
-                    source_package_digest=_ZERO_DIGEST,
-                )
+                bound = {"provenance": "ROOT", "bound_mode": mode, "bound_owner_id": self.owner_id, "anchor_sequence": 0, "source_package_digest": _ZERO_DIGEST}  # digested and stored alike
+                identity_digest = _identity_digest(**bound)
                 genesis = _digest(_GENESIS_DOMAIN, config.canonical_bytes, trusted_authority.digest, identity_digest)
-                identity = {
-                    "id": 1,
-                    "schema_version": self.schema_version,
-                    "provenance": "ROOT",
-                    "bound_mode": mode,
-                    "bound_owner_id": self.owner_id,
-                    "anchor_sequence": 0,
-                    "anchor_head": genesis,
-                    "genesis_head": genesis,
-                    "source_package_digest": _ZERO_DIGEST,
-                    "identity_digest": identity_digest,
-                }
+                identity = {"id": 1, "schema_version": self.schema_version, **bound, "anchor_head": genesis, "genesis_head": genesis, "identity_digest": identity_digest}
                 initial_sequence = 0
                 initial_history_head = genesis
             else:
@@ -2692,7 +2670,7 @@ class FinancialOwner:
         history, retries). All or nothing: the first failure rolls the whole batch back and is raised
         with a ``batch_index=<i>`` note (Art. III.2, III.5). In an absorbed cash file (intake facts given) an input,
         conflict or revision refusal holds only its row (and its item's later rows), the file may carry no row, and the
-        file's one INTAKE event lands last; any other cash file is atomic."""
+        file's one INTAKE event lands last; any other cash file is atomic but for a refused conflict row, held alone."""
         if type(commands) is not list or not (cash_file_context is None) <= len(commands) <= 1_000 or any(type(entry) is not tuple or len(entry) != 2 or entry[0] not in _BATCH_COMMANDS or not isinstance(entry[1], Mapping) for entry in commands):
             _fail(FinancialInputError, "batch_commands")
         check = None
@@ -2713,17 +2691,18 @@ class FinancialOwner:
                     if check and outcome is None and arguments["item_id"] in held:
                         outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": "depends_on_held"}
                     elif outcome is None:
-                        absorbing and connection.execute("SAVEPOINT rr_row")  # D2: a refused cash row rolls back alone
+                        (soft := absorbing or check and check._plan[index][0] == "CONFLICT") and connection.execute("SAVEPOINT rr_row")  # D2: a refused cash row rolls back alone; Lean may refuse a conflict (chronology, form) in any file
                         try:
                             answer = getattr(self, name)(**arguments)
-                            outcome = {"status": answer["status"], "payment_id": answer["payment_id"], "reason": None} if check else answer
+                            outcome = answer if not check else {"status": "HELD", "payment_id": arguments["payment_id"], "reason": "conflict:" + answer["conflict_id"]} if answer["status"] == "CONFLICT" else {
+                                "status": answer["status"], "payment_id": answer["payment_id"], "reason": None}  # a conflict Lean recorded keeps its writes; the row (and its item) is held by its id
                         except BaseException as error:
-                            if not (absorbing and isinstance(error, (FinancialInputError, FinancialConflictError, FinancialRevisionError))):
+                            if not (soft and isinstance(error, (FinancialInputError, FinancialConflictError, FinancialRevisionError))):
                                 error.add_note(f"batch_index={index}")
                                 raise
                             connection.execute("ROLLBACK TO rr_row")  # this row's writes, temp logs included
                             outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": str(error)}
-                        absorbing and connection.execute("RELEASE rr_row")
+                        soft and connection.execute("RELEASE rr_row")
                     if check and outcome["status"] == "HELD":
                         held.add(arguments["item_id"])
                     results.append(outcome)
@@ -2767,8 +2746,7 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "period_scope")
 
     def _meta(self, connection: sqlite3.Connection) -> sqlite3.Row:
-        row = _one(connection, "meta_missing", "SELECT * FROM financial_meta WHERE id=1")
-        return row
+        return _one(connection, "meta_missing", "SELECT * FROM financial_meta WHERE id=1")
 
     def _append_event(
         self,
@@ -2909,8 +2887,7 @@ class FinancialOwner:
 
     def _get_obligation_row(self, connection: sqlite3.Connection, item_id: str) -> sqlite3.Row:
         _id(item_id, "item_id")
-        row = _one(connection, "obligation_missing", "SELECT * FROM obligations WHERE item_id=? AND period_id=?", (item_id, self.config.period_id))
-        return row
+        return _one(connection, "obligation_missing", "SELECT * FROM obligations WHERE item_id=? AND period_id=?", (item_id, self.config.period_id))
 
     def _population_binding_for_obligation(
         self,
@@ -3895,11 +3872,7 @@ class FinancialOwner:
 
     @staticmethod
     def _obligation_id(item_id: str, period_id: str) -> str:
-        suffix = period_id
-        marker = "period-"
-        if marker in period_id:
-            suffix = marker + period_id.rsplit(marker, 1)[1]
-        return f"obligation:{item_id}:{suffix}"
+        return f"obligation:{item_id}:{period_id[max(period_id.rfind('period-'), 0):]}"  # from the last "period-" on, if any
 
     def _ensure_case(self, connection: sqlite3.Connection, *, obligation_id: str, reason: str, owner: str, due_at_ms: int, status: str, now_ms: int) -> None:
         case_id = f"case:{obligation_id}"
@@ -4058,8 +4031,7 @@ class FinancialOwner:
         }
 
     def _obligation_by_id(self, connection: sqlite3.Connection, obligation_id: str) -> sqlite3.Row:
-        row = _one(connection, "obligation_missing", "SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,))
-        return row
+        return _one(connection, "obligation_missing", "SELECT * FROM obligations WHERE obligation_id=?", (obligation_id,))
 
     def _current_projection(self, connection: sqlite3.Connection, obligation_id: str) -> dict[str, Any]:
         return self._projection_for_row(self._obligation_by_id(connection, obligation_id))
@@ -4220,9 +4192,7 @@ class FinancialOwner:
         row = _one(connection, "evaluation_reference_missing", "SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (evaluation_id, obligation["obligation_id"]))
         if int(row["revision"]) != expected_revision or bytes(row["result_digest"]) != provided_digest:
             _fail(FinancialRevisionError, "evaluation_reference_conflict")
-        receipt = self._evaluation_receipt_for_row(connection, row)
-        if receipt["result_digest"] != _hex(provided_digest) or int(receipt["revision"]) != expected_revision:
-            _fail(FinancialRevisionError, "evaluation_reference_conflict")
+        receipt = self._evaluation_receipt_for_row(connection, row)  # its revision and result digest are the row's, bound above
         if claim_evidence_id not in receipt["evidence_ids"]:
             _fail(FinancialIntegrityError, "evaluation_evidence_coverage")
         if int(receipt["evaluated_at_ms"]) > decision_time:
@@ -4278,14 +4248,9 @@ class FinancialOwner:
             expected_revision is None
             or evaluation_id is None
             or evaluation_result_digest is None
-            or item_binding["item_id"] != item_id
-            or item_binding["obligation_id"] != str(obligation["obligation_id"])
             or item_binding["revision"] != expected_revision
-            or item_binding["evaluation_id"] != evaluation_id
             or item_binding["evaluation_result_digest"] != _hex(_digest_input(evaluation_result_digest, "evaluation_result_digest"))
-            or input_binding["evaluation_id"] != evaluation_id
-            or input_binding["evaluation_result_digest"] != item_binding["evaluation_result_digest"]
-        ):
+        ):  # the request's own revision and digest; every other field is bound to the stored evaluation below
             conflict()
 
         evaluation = connection.execute(
@@ -5202,13 +5167,10 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "evaluation_evidence_binding")
         if [value["evidence_id"] for value in bindings] != evidence_ids:
             _fail(FinancialIntegrityError, "evaluation_evidence_binding")
-        for binding in bindings:
-            if type(binding["evidence_id"]) is not str or type(binding["record_digest"]) is not str:
-                _fail(FinancialIntegrityError, "evaluation_evidence_binding")
+        for binding in bindings:  # each id is one of evidence_ids (all str); only the hex of a stored 64-byte digest matches
             record = connection.execute("SELECT record_digest FROM evidence WHERE evidence_id=?", (binding["evidence_id"],)).fetchone()
             if record is None or _hex(bytes(record[0])) != binding["record_digest"]:
                 _fail(FinancialIntegrityError, "evaluation_evidence_binding")
-            _digest_input(binding["record_digest"], "evaluation_evidence_binding")
         if not isinstance(scope, dict) or set(scope) != set(self._scope_value()) or scope != self._scope_value():
             _fail(FinancialIntegrityError, "evaluation_scope_binding")
         if not isinstance(input_snapshot, dict) or type(input_snapshot.get("pre_revision")) is not int:
@@ -5257,14 +5219,12 @@ class FinancialOwner:
             _fail(FinancialIntegrityError, "evaluation_receipt_digest")
         return {**receipt_body, "receipt_digest": _hex(receipt_digest), "evaluation_result_digest": _hex(result_digest)}
 
-    def current_evaluation_receipt(self, item_id: str) -> dict[str, Any]:
+    def current_evaluation_receipt(self, item_id: str, *, _connection: sqlite3.Connection | None = None) -> dict[str, Any]:
         """Read the current persisted evaluation reference without advancing state."""
 
-        with self._read_snapshot() as connection:
+        with self._read_snapshot(_connection=_connection) as connection:
             obligation = self._get_obligation_row(connection, item_id)
-            evaluation_id = obligation["current_evaluation_id"]
-            if evaluation_id is None:
-                _fail(FinancialIntegrityError, "evaluation_missing")
+            evaluation_id = obligation["current_evaluation_id"]  # none matches no row: evaluation_missing
             row = connection.execute("SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?", (evaluation_id, obligation["obligation_id"])).fetchone()
             receipt = self._evaluation_receipt_for_row(connection, row)
             if int(receipt["revision"]) != int(obligation["revision"]):
@@ -5295,16 +5255,7 @@ class FinancialOwner:
         with self._read_snapshot(_connection=_connection) as connection:
             obligation = self._get_obligation_row(connection, item_id)
             obligation_id = str(obligation["obligation_id"])
-            evaluation_id = obligation["current_evaluation_id"]
-            if evaluation_id is None:
-                _fail(FinancialIntegrityError, "evaluation_missing")
-            evaluation_row = connection.execute(
-                "SELECT * FROM evaluations WHERE evaluation_id=? AND obligation_id=?",
-                (evaluation_id, obligation_id),
-            ).fetchone()
-            receipt = self._evaluation_receipt_for_row(connection, evaluation_row)
-            if int(receipt["revision"]) != int(obligation["revision"]):
-                _fail(FinancialRevisionError, "evaluation_revision_binding")
+            receipt = self.current_evaluation_receipt(item_id, _connection=connection)
             if expected_evaluation_id is not None and receipt["evaluation_id"] != expected_evaluation_id:
                 _fail(FinancialRevisionError, "evaluation_revision_conflict")
             if expected_digest is not None and bytes.fromhex(str(receipt["result_digest"])) != expected_digest:
@@ -6491,19 +6442,33 @@ class FinancialOwner:
             _fail(FinancialContinuityError, "continuity_package_size")
         return encoded
 
-    def export_continuity(self) -> bytes:
-        """Export only bounded, allowlisted responsibility state, from history a full verification covers (R1a, M5)."""
+    def _verified_read(self, read):
+        """``read`` on the writer at its mark, rolled back: a foreign change is verified (and refused) first, as a write's would be (R1a, M5)."""
         with self._lock:
             try:
-                package = self._continuity_package_bytes(self._begin("BEGIN"))
+                result = read(self._begin("BEGIN"))
                 if self._refusal is not None:
                     raise self._refusal
                 self._writer.execute("ROLLBACK")
-                return package
+                return result
             except BaseException as error:
                 self._discard_writer()
                 _raise_if_busy(error)
                 raise
+
+    def export_continuity(self) -> bytes:
+        """Export only bounded, allowlisted responsibility state, from history a full verification covers (R1a, M5)."""
+        return self._verified_read(self._continuity_package_bytes)
+
+    def _manifest(self, connection: sqlite3.Connection) -> tuple[bytes, dict]:
+        rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
+        count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
+        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
+        return _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))}), body
+
+    def history_baseline(self) -> bytes:
+        """A cash file's baseline at the committed head, written by nothing: the history manifest with the open segment left open."""
+        return self._verified_read(lambda connection: self._manifest(connection)[0])
 
     def export_history(self, directory: Path) -> bytes:
         """Export all history as sealed segments and a manifest (docs/CORE_REDESIGN.md "History segments").
@@ -6515,10 +6480,8 @@ class FinancialOwner:
         """
         with self._write() as connection:
             self._seal_segment(connection, force=True)
-            rows = {table: self._segment_record(table, tuple(connection.execute(f"SELECT * FROM {table}").fetchone()))["row"] for table in ("financial_identity", "financial_meta")}
-            count, last = connection.execute("SELECT COUNT(*),(SELECT segment_digest FROM history_segments ORDER BY segment_index DESC LIMIT 1) FROM history_segments").fetchone()
-        body = {"format": _SEGMENT_FORMAT, "identity": rows["financial_identity"], "meta": rows["financial_meta"], "segment_count": count, "last_segment_digest": _hex(_ZERO_DIGEST if last is None else bytes(last))}
-        manifest = _canonical({**body, "manifest_digest": _hex(_digest(_SEGMENT_DOMAIN, b"manifest", _canonical(body)))})
+            manifest, body = self._manifest(connection)
+        count = body["segment_count"]
         directory.mkdir(exist_ok=True)
         target = directory / "manifest.json"
         with self._read_snapshot() as connection:

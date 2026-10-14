@@ -1715,9 +1715,7 @@ def _control_pack_policy(
     policy = _CONTROL_PACK_POLICIES.get((calculation_rule_id, adjustment_rule_id))
     if policy is None or tuple(expected_tests) != policy[0]:
         _fail("pack:policy")
-    if not authorized_roles or len(set(authorized_roles)) != len(authorized_roles):
-        _fail("pack:roles")
-    if not set(authorized_roles) <= _CONTROL_PACK_ALLOWED_ROLES or not _CONTROL_PACK_REQUIRED_ROLES <= set(authorized_roles):
+    if not authorized_roles or len(set(authorized_roles)) != len(authorized_roles) or not set(authorized_roles) <= _CONTROL_PACK_ALLOWED_ROLES or not _CONTROL_PACK_REQUIRED_ROLES <= set(authorized_roles):
         _fail("pack:roles")
     return policy[1], policy[2]
 
@@ -2953,7 +2951,8 @@ def _verify_conflicts(
 ) -> dict[str, sqlite3.Row]:
     rows = _bounded_rows(connection, "financial_conflicts")
     conflicts: dict[str, sqlite3.Row] = {}
-    visible = {str(row[0]): int(row[1]) for row in connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE' ORDER BY event_sequence")}
+    events = connection.execute("SELECT json_extract(payload_json,'$.conflict_id'),committed_at_ms,aggregate_id,json_extract(payload_json,'$.existing_payment_id'),json_extract(payload_json,'$.common_origin_id'),json_extract(payload_json,'$.candidate_evidence_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND kind='PAYMENT_CONFLICT_VISIBLE' ORDER BY event_sequence").fetchall()
+    visible = {(str(row[0]), *row[2:]): int(row[1]) for row in events}
     keys: set[tuple[str, str, str]] = set()
     for row in rows:
         conflict_id = _id(row["conflict_id"], "conflict:id")
@@ -2980,12 +2979,11 @@ def _verify_conflicts(
             _fail("conflict:amount")
         if row["reason"] != "CONFLICTING_COMMON_ORIGIN_AMOUNT":
             _fail("conflict:reason")
-        if not candidate["received_at_ms"] <= _time(row["visible_at_ms"], "conflict:visible") <= visible.get(conflict_id, -1):
+        if not candidate["received_at_ms"] <= _time(row["visible_at_ms"], "conflict:visible") <= visible.get((conflict_id, obligation_id, existing_id, common_origin_id, candidate_id), -1):  # the visible event names what the row stores; the evaluation binding ties its aggregate first, so dropping aggregate_id from this key stays green
             _fail("conflict:visible")
-        key = (obligation_id, common_origin_id, candidate_id)
-        if key in keys:
-            _fail("conflict:key")
-        keys.add(key)
+        keys.add((obligation_id, common_origin_id, candidate_id))  # one row per candidate: the id form and conflict:duplicate already refuse a second
+    if len(events) != len(rows):
+        _fail("conflict:visible")  # a visible event no row stands behind
     # Every payment confirmation that is not the persisted payment itself must
     # be either an equal duplicate or an explicitly visible amount conflict.
     obligations_by_item, payments_by_origin = _group(obligations.values(), "item_id"), _group(payments.values(), "obligation_id", "common_origin_id")
@@ -3649,7 +3647,6 @@ def verify_followthrough_connection(connection: sqlite3.Connection, obligation_i
 
 def _verify_evaluation_history_events(
     events: list[sqlite3.Row],
-    populations: dict[str, sqlite3.Row],
     obligations: dict[str, sqlite3.Row],
     evaluations: dict[str, list[sqlite3.Row]],
 ) -> None:
@@ -3741,7 +3738,6 @@ def _completion_time(
 
 
 def _verify_projections(
-    meta: dict[str, object],
     obligations: dict[str, sqlite3.Row],
     populations: dict[str, sqlite3.Row],
     packs: dict[str, sqlite3.Row],
@@ -4332,7 +4328,7 @@ def _verify_connection(
     evaluations = _verify_evaluations(connection, meta, obligations, populations, packs, evidence)
     current = {key: max(history, key=lambda row: row["revision"]) for key, history in evaluations.items()}
     _verify_cases(connection, obligations, current)
-    _verify_evaluation_history_events(events, populations, obligations, evaluations)
+    _verify_evaluation_history_events(events, obligations, evaluations)
     determinations = _verify_determinations(
         connection,
         meta,
@@ -4352,15 +4348,13 @@ def _verify_connection(
     _verify_event_references(events, packs, populations, obligations, funding_receipt_ids, set(manifest_state["manifests"]))
     from app.right_rail_financial_cash_file_independent import verify_intakes  # it imports this module
     verify_intakes(events, meta, payments)
-    projections, totals = _verify_projections(meta, obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
+    projections, totals = _verify_projections(obligations, populations, packs, evidence, payments, claims, determinations, actions, conflicts, evaluations)
     for key, obligation in obligations.items():
         _verify_exact_input(connection, obligation, _evaluation_input_snapshot(current[key]["input_snapshot_json"], "evaluation:input"))
     _verify_replayed_rows(connection, events)  # after the specific checks, so their diagnoses come first
     _verify_history_tables(connection, events)  # bookkeeping last: a replay finding is the sharper diagnosis
     _verify_row_counts(connection)
     package_result: dict[str, object] | None = None
-    if current_snapshot_package is not None and restore_source_package is not None:
-        _fail("continuity:duplicate-input")
     if current_snapshot_package is not None or restore_source_package is not None:
         current = current_snapshot_package is not None  # a current snapshot also binds the live sequence and head
         package_result = verify_continuity_package(

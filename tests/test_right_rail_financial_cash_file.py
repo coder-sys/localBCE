@@ -473,15 +473,15 @@ class ReceiverCashFileTests(unittest.TestCase):
             out = io.StringIO()
             with redirect_stdout(out), redirect_stderr(io.StringIO()):
                 code = cli.main(args + ["--apply"])
-            return code, {key: json.loads(out.getvalue())[key] for key in ("recorded_count", "duplicate_count", "cash_delta_cents")}
+            return code, {key: json.loads(out.getvalue())[key] for key in ("admitted", "resolved", "cash_delta_cents")}
         def planned_then_overtaken(*arguments, **keywords):
             plan = plan_file(*arguments, **keywords)
             if not overtaken:
                 overtaken.append(self._apply())  # another writer lands the same file between plan and commit
             return plan
         with patch.object(cash, "plan_cash_file", planned_then_overtaken):
-            self.assertEqual(apply(), (0, {"recorded_count": 0, "duplicate_count": 2, "cash_delta_cents": 0}))  # an empty plan's DUPLICATE, not cash_file_stale
-        self.assertEqual(apply(), (0, {"recorded_count": 0, "duplicate_count": 2, "cash_delta_cents": 0}))  # a resend plans nothing to write
+            self.assertEqual(apply(), (0, {"admitted": 0, "resolved": 2, "cash_delta_cents": 0}))  # an empty plan's DUPLICATE, not cash_file_stale
+        self.assertEqual(apply(), (0, {"admitted": 0, "resolved": 2, "cash_delta_cents": 0}))  # a resend: its stored receipt
 
     def test_planned_commit_refuses_rows_unlike_the_plan_in_any_table(self):
         plan = self._plan()
@@ -585,15 +585,14 @@ class ReceiverCashFileTests(unittest.TestCase):
                 return cli.main(args + ["--apply"]), out.getvalue(), err.getvalue()
         refused = check.CashFileError("cash_file_conflict")  # finish is the checker's last step: a refusal found only after the whole file ran
         with patch.object(owner.FinancialOwner, "run_batch", spy):
-            code, out, _ = apply()
-            self.assertEqual((code, json.loads(out)["cash_delta_cents"]), (0, 300))
-            code, out, _ = apply()
-            self.assertEqual((code, json.loads(out)["duplicate_count"]), (0, 2))  # a resend
             before = fixtures._image(self.store.path)
             with patch.object(check.CashFileCheck, "finish", side_effect=refused):
                 self.assertEqual(apply(), (2, "", "ERROR:receiver_cash_file_refused:cash_file_conflict\n"))
             self.assertEqual(fixtures._image(self.store.path), before)
-        self.assertEqual(on_live, [False] * 3)  # each file ran once, on its plan's copy, never on the live store
+            code, out, _ = apply()
+            self.assertEqual((code, json.loads(out)["cash_delta_cents"]), (0, 300))
+            self.assertEqual(apply(), (0, out, ""))  # a resend: the first receipt, nothing run
+        self.assertEqual(on_live, [False] * 2)  # each file ran once, on its plan's copy, never on the live store
         with patch.object(check.CashFileCheck, "finish", side_effect=refused), self.assertRaisesRegex(check.CashFileError, "^cash_file_conflict$"):
             self._production_apply()
         self.assertEqual(self.spans, [])  # the plan's refusal is the answer: no live write lock is taken
@@ -712,8 +711,8 @@ raise SystemExit(main(sys.argv[2:]))
     def test_manifest_baseline_binds_digest_owner_and_the_live_chain(self):
         manifest = json.loads(self.baseline)
 
-        def sealed(**changes):  # the manifest with its digest recomputed, as a forger would
-            body = {key: value for key, value in {**manifest, **changes}.items() if key != "manifest_digest"}
+        def sealed(base=manifest, **changes):  # the manifest with its digest recomputed, as a forger would
+            body = {key: value for key, value in {**base, **changes}.items() if key != "manifest_digest"}
             return canonical({**body, "manifest_digest": independent._digest(independent.SEGMENT_DOMAIN, b"manifest", canonical(body)).hex().upper()})
         foreign = sealed(meta={**manifest["meta"], "owner_id": "other-owner"})
         for change in ({"meta": {**manifest["meta"], "sequence": None}}, {"meta": {**manifest["meta"], "history_head": None}}, {"identity": {**manifest["identity"], "schema_version": 0}}):
@@ -728,6 +727,8 @@ raise SystemExit(main(sys.argv[2:]))
                 with self.subTest(code=code, size=len(raw)), self.assertRaisesRegex(check.CashFileError, f"^{code}$"):
                     self._prepare(baseline=raw)
         self._unchanged(lambda: self._apply(self._prepare(baseline=forged)), "^cash_file_binding$")
+        self._apply(self._prepare())  # the open segment now holds this file: a read-only baseline at its head may not name a segment older than the last sealed before it
+        self._unchanged(lambda: self._apply(self._prepare(baseline=sealed(json.loads(self.store.history_baseline()), segment_count=0, last_segment_digest=independent.ZERO_DIGEST.hex().upper()))), "^cash_file_binding$")
 
     def test_preview_refuses_a_copy_with_a_dangling_key_and_lives_beside_the_store(self):
         folders, finishing, connect, finish = [], [], sqlite3.connect, check.CashFileCheck.finish
@@ -831,7 +832,7 @@ raise SystemExit(main(sys.argv[2:]))
         self._apply()
         self.baseline = self._manifest()
         origin_1 = {"common_origin_id": "file-origin-1"}
-        cases = {"conflict": ({**self._row(4, 101, 2), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),
+        cases = {"conflict": ({**self._row(4, 101, 1), **origin_1}, {**self._row(4, 100, 2), **origin_1, "pays_action_id": "action-x"}),  # another amount at a revision past: not a CONFLICT to record
                  "already_recorded": ({**self._row(1, 100, 0), "common_origin_id": "file-origin-9"}, {**self._row(4, 100, 2), "evidence_id": "file-evidence-1"}),
                  "unknown_item": ({**self._row(4, 100, 2), "item_id": "item-not-in-period"},)}
         for reason, rows in cases.items():
@@ -840,6 +841,43 @@ raise SystemExit(main(sys.argv[2:]))
                 with self.subTest(reason=reason, row=row):  # the item's next row counted on the held one; an unknown item's rows are each unknown
                     self._held(lambda: self._apply(self._prepare(value)), ("HELD", reason), ("HELD", "unknown_item" if reason == "unknown_item" else "depends_on_held"))
         self._held(lambda: self._apply(stale), ("RECORDED", None))  # prepared before file A, at the revision file A left: new work, not stale
+
+    def test_a_new_amount_of_a_recorded_origin_is_recorded_as_a_conflict_held_by_its_id_and_a_refused_one_holds_alone(self):
+        self._apply()
+        conflict, row = f"conflict:conflict:{expected.H_ITEM_ID}:file-origin-1:file-evidence-4", {**self._row(4, 101, 2), "common_origin_id": "file-origin-1"}
+        self._file_b([row, self._row(5, 5, 3)])
+        receipt = self._apply()  # Lean records the conflict: a new revision and a visible event, no cash; the item's next row counted on it
+        self.assertEqual(([(out["status"], out["reason"]) for out in receipt["rows"]], receipt["cash_delta_cents"]), ([("HELD", conflict), ("HELD", "depends_on_held")], 0))
+        self.assertEqual(self._query("SELECT conflict_id,existing_amount_cents,candidate_amount_cents FROM financial_conflicts"), [(conflict[9:], 100, 101)])
+        self.assertEqual(self._query("SELECT kind FROM financial_events ORDER BY event_sequence DESC LIMIT 1"), [("PAYMENT_CONFLICT_VISIBLE",)])
+        self.assertEqual(self.store.obligation_detail(expected.H_ITEM_ID)["revision"], 3)
+        self._file_b([{**row, "expected_revision": 3}])
+        self._held(self._apply, ("HELD", conflict))  # sent again in a new file: held by the same id, unrun
+        late = self.store.clock.value + 1_000  # after the owner's clock: Lean refuses the row's chronology, the file goes on
+        self._file_b([self._row(6, 6, 3), {**self._row(7, 201, 4), "common_origin_id": "file-origin-2", "event_at_ms": late}], late)
+        receipt = self._held(self._apply, ("RECORDED", None), ("HELD", "evidence_chronology"))
+        self.assertEqual((receipt["cash_delta_cents"], len(self._query("SELECT 1 FROM financial_conflicts"))), (6, 1))
+
+    def test_a_conflict_row_stored_unlike_the_one_the_checker_derives_is_refused(self):
+        self._apply()
+        self._file_b([{**self._row(4, 101, 2), "common_origin_id": "file-origin-1"}])
+        begin = owner.FinancialOwner._begin
+        def altering(instance, statement):  # the stored conflict names another existing amount than the payment it cites
+            connection = begin(instance, statement)
+            connection.execute("CREATE TEMP TRIGGER IF NOT EXISTS rr_test_conflict BEFORE INSERT ON main.financial_conflicts WHEN NEW.existing_amount_cents=(SELECT amount_cents FROM payments WHERE payment_id=NEW.existing_payment_id) BEGIN INSERT INTO main.financial_conflicts SELECT NEW.conflict_id,NEW.obligation_id,NEW.common_origin_id,NEW.existing_payment_id,NEW.candidate_evidence_id,NEW.existing_amount_cents+1,NEW.candidate_amount_cents,NEW.reason,NEW.visible_at_ms; SELECT RAISE(IGNORE); END")
+            return connection
+        with patch.object(owner.FinancialOwner, "_begin", altering):
+            self._unchanged(self._apply, "^cash_file_failed$")
+        append = owner.FinancialOwner._append_event
+        def unlike_row(connection, event, run):  # the event carries digests the evaluation row does not
+            with patch.object(owner, "_hex", lambda value: value[::-1].hex().upper()):
+                return run(**event)
+        for name, change in (("payload", lambda c, event, run: run(**{**event, "payload": {**event["payload"], "existing_payment_id": "file-payment-9"}})),  # the visible event cites another payment than its row
+                             ("hold", lambda c, event, run: owner._fail(owner.FinancialInputError, "payment_amount_zero")),  # Lean holds a conflict row only for its chronology
+                             ("rows", lambda c, event, run: (c.execute("UPDATE temp.rr_captured_rows SET image=replace(image,'\"local_ref\":\"','\"local_ref\":\"x')"), run(**event))[1]),  # an evidence image unlike its row
+                             ("evaluation", unlike_row)):
+            with self.subTest(name), patch.object(owner.FinancialOwner, "_append_event", lambda instance, connection, **event: change(connection, event, lambda **given: append(instance, connection, **given)) if event["kind"] == "PAYMENT_CONFLICT_VISIBLE" else append(instance, connection, **event)):
+                self._unchanged(self._apply, "^cash_file_failed$")
 
     def _file_b(self, rows, captured_at_ms=None):
         self.baseline = self._manifest()
@@ -1124,6 +1162,26 @@ raise SystemExit(main(sys.argv[5:]))
             self.assertEqual(cli.main(args + ["--file", str(directory / "private-marker")]), 2)
         self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", "ERROR:receiver_cash_file_refused:cash_file_input\n"))
         self.assertEqual({name: (directory / name).read_bytes() for name in files}, files)
+
+    def test_cli_upload_goes_through_intake_and_holds_an_unreadable_row_alone(self):
+        """R5: an uploaded row reaches the owner only through intake. One unreadable row is held with its reason, the
+        rest are judged, and the INTAKE record binds the raw file; preview judges the same and writes nothing."""
+        self.value["rows"][1]["event_at_ms"] = "01/02/2026"
+        directory, files, args = self._cli_fixture()
+        for apply in (False, True):
+            before, stdout, stderr = self.store.export_continuity(), io.StringIO(), io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = cli.main(args + ["--apply"] * apply)
+            self.assertEqual((code, stderr.getvalue()), (0, ""))
+            result = json.loads(stdout.getvalue())
+            self.assertEqual(result["cash_delta_cents"], 100)
+            if not apply:
+                self.assertEqual((self.store.export_continuity(), self.store.intake_records()), (before, []))
+        self.assertEqual([(row["status"], row["basis"]) for row in result["rows"]], [("ADMITTED", None), ("HELD", "date_format")])
+        self.assertEqual([json.loads(record["payload_json"])["intake"]["source_sha256"] for record in self.store.intake_records()], [sha(files["receiver.json"])])
+        with closing(sqlite3.connect(Path(self.store.path).resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+            paid = {row[0] for row in connection.execute("SELECT payment_id FROM payments WHERE payment_id LIKE 'file-payment-%'")}
+        self.assertEqual(paid, {"file-payment-1"})
 
 
 if __name__ == "__main__":

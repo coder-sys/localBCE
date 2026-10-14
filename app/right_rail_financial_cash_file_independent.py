@@ -143,7 +143,7 @@ def _source(raw: bytes, empty: bool) -> dict[str, object]:
     return value
 
 
-_INSERTS = ("payments", "evidence", "evaluations", "financial_events", "commands")
+_INSERTS = ("payments", "evidence", "evaluations", "financial_events", "commands", "financial_conflicts")
 _UPDATES = ("financial_meta", "obligations", "cases")
 _LOGGED = frozenset({(table, "INSERT") for table in _INSERTS} | {(table, "UPDATE") for table in _UPDATES} | {("history_pending", "INSERT"), ("history_pending", "UPDATE"), ("history_pending", "DELETE"), ("history_open", "UPDATE"), ("history_segments", "INSERT")})  # and the owner's segment bookkeeping (a seal empties pending); every other write to any table is refused
 _SCHEMA = "PRAGMA temp.schema_version"  # moved by every CREATE or DROP in temp, an identical re-create included
@@ -194,6 +194,10 @@ def _fact(argument: Mapping) -> dict:
 
 def _held(argument: Mapping, reason: str) -> dict:
     return {"status": "HELD", "payment_id": argument["payment_id"], "reason": reason}
+
+
+def _conflict_id(argument: Mapping) -> str:  # the id Lean gives a row's conflict (semantic adapter conflictImage)
+    return f"conflict:{argument['item_id']}:{argument['common_origin_id']}:{argument['evidence_id']}"
 
 
 def _matches(row: Mapping | None, expected: Mapping) -> bool:
@@ -261,6 +265,7 @@ def verify_intakes(events: list, meta: Mapping, payments: Mapping) -> None:
     claimed, shas = set(), set()
     try:
         received = {payload["payment_id"]: event["event_sequence"] for event in events if event["kind"] == "PAYMENT_RECEIVED" for payload in (ledger._parse_json(event["payload_json"], "history:intake", max_bytes=ledger.MAX_PACKAGE_BYTES),)}
+        visible = {payload["conflict_id"]: (event["event_sequence"], payload) for event in events if event["kind"] == "PAYMENT_CONFLICT_VISIBLE" for payload in (ledger._parse_json(event["payload_json"], "history:intake", max_bytes=ledger.MAX_PACKAGE_BYTES),)}
         for event in intakes:
             payload, at = ledger._parse_json(event["payload_json"], "history:intake", max_bytes=ledger.MAX_PACKAGE_BYTES), event["event_sequence"]
             stored, bound, rows = payload["intake"], payload["binding"], payload["outcomes"]
@@ -272,14 +277,18 @@ def verify_intakes(events: list, meta: Mapping, payments: Mapping) -> None:
             facts = {"repairs": stored["repairs"], "rows": [{**{key: row[key] for key in ("item_id", "payment_id", "common_origin_id", "amount_cents")}, "reason": row["basis"] if row["status"] == "HELD" else None} for row in rows]}
             judged = [{"status": "DUPLICATE" if row["status"] == "RESOLVED" else "RECORDED", "payment_id": str(row["basis"]).partition(":")[2], "reason": None} for row in rows if row["status"] != "HELD"]
             ok = ok and bound == {**binding, "baseline_sha256": bound["baseline_sha256"], "baseline_sequence": base, "baseline_head": head} and rows == outcomes(facts, judged) and payload["totals"] == _totals(rows, stored["control_total_cents"]) and all(type(value) is int for value in payload["totals"].values())
-            for row in (row for row in rows if row["status"] != "HELD") if ok else ():
-                resolved = row["status"] == "RESOLVED"
-                target = row["basis"].partition(":")[2] if resolved else row["payment_id"]
-                paid = payments.get(target)  # every row that went through is a payment of its item, origin and amount received before its file; a new one, since the baseline and claimed once
-                ok = paid is not None and (paid["item_id"], paid["common_origin_id"], paid["amount_cents"]) == (row["item_id"], row["common_origin_id"], row["amount_cents"]) and 0 < received.get(target, 0) < at and (resolved or (target not in claimed and base < received[target]))
+            for row in rows if ok else ():
+                resolved, conflict = row["status"] == "RESOLVED", row["basis"].removeprefix("conflict:") if row["status"] == "HELD" else None
+                if conflict is not None:  # a row held by a conflict id names a conflict of its item and origin made visible before its file
+                    when, shown = visible.get(conflict, (at, None))
+                    ok = conflict == row["basis"] or when < at and shown["common_origin_id"] == row["common_origin_id"] and conflict == f"conflict:{row['item_id']}:{row['common_origin_id']}:{shown['candidate_evidence_id']}"
+                else:
+                    target = row["basis"].partition(":")[2] if resolved else row["payment_id"]
+                    paid = payments.get(target)  # every row that went through is a payment of its item, origin and amount received before its file; a new one, since the baseline and claimed once
+                    ok = paid is not None and (paid["item_id"], paid["common_origin_id"], paid["amount_cents"]) == (row["item_id"], row["common_origin_id"], row["amount_cents"]) and 0 < received.get(target, 0) < at and (resolved or (target not in claimed and base < received[target]))
                 if not ok:
                     break
-                if not resolved:
+                if conflict is None and not resolved:
                     claimed.add(target)
             if not ok:
                 ledger._fail("history:intake")
@@ -379,8 +388,8 @@ class CashFileCheck:
         identity, sequence, head, count, last = self._anchor
         self._meta, stored = next(iter(_table(connection, "financial_meta").items())), list(_table(connection, "financial_identity").values())
         ancestor = stored[0]["genesis_head"] if sequence == 0 else (connection.execute("SELECT head FROM main.financial_events WHERE event_sequence=?", (sequence,)).fetchone() or (None,))[0]
-        sealed = connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (count - 1,)).fetchone()  # the manifest's last segment is the store's, sealed at the baseline's sequence
-        _require(stored == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
+        sealed, after = (connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (index,)).fetchone() for index in (count - 1, count))  # the manifest's last segment is the store's last sealed at or before the baseline's sequence (a read-only baseline leaves the open segment open)
+        _require(stored == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else sealed[0] <= sequence and bytes(sealed[1]).hex().upper() == last) and (after is None or after[0] >= sequence), "cash_file_binding")  # the store descends from the reviewed baseline: the same identity, event head and last sealed segment
         if self.intake is not None:  # one raw file is received once; its stored outcome is the answer to any resend of the same bytes
             _require(connection.execute("SELECT 1 FROM financial_events WHERE aggregate_type='INTAKE' AND aggregate_id=?", (self.intake["source_sha256"],)).fetchone() is None, "cash_file_conflict")
         self._obligations, self._cases = _table(connection, "obligations"), _table(connection, "cases")  # finish compares these whole until it reads old images from the write log
@@ -393,8 +402,9 @@ class CashFileCheck:
         """Per row, before any write, (kind, the payment_id the owner must answer, the outcome it gets without running):
         RETRY of this row's own payment or ALIAS (its stored repeat of another) answer DUPLICATE unrun; OVERLAP (a new
         repeat: DUPLICATE, no cash) and NEW run, but an OVERLAP naming a revision its obligation is not at is an ALIAS: its
-        money is fixed by the stored payment. Any other reuse of a recorded id, an origin recorded with another amount
-        or link, or an item not in the period is HELD (L3). A NEW row's own revision is the owner's to refuse."""
+        money is fixed by the stored payment. A new other amount of a recorded origin at its obligation's revision is a
+        CONFLICT: it runs, Lean records the conflict and the row is HELD by its id (as one sent again is, unrun). Any other
+        reuse of a recorded id or origin, or an item not in the period is HELD (L3). A NEW row's revision is the owner's."""
         arguments = [argument for _, argument in self.commands]
         self._items = obligations = {row["item_id"]: row["obligation_id"] for row in self._obligations.values() if row["period_id"] == self._context["expected_scope"]["period_id"]}
         turn = {row["obligation_id"]: row["revision"] for row in self._obligations.values()}  # the revision each obligation is at as the file reaches a row
@@ -403,6 +413,7 @@ class CashFileCheck:
         self._payments, origins = {row["payment_id"]: row for row in found}, {(row["obligation_id"], row["common_origin_id"]): row for row in found}
         evidence = {row["evidence_id"]: row for row in _find(connection, "evidence", ("evidence_id",), [(argument["evidence_id"],) for argument in arguments] + [(row["reversed_by_evidence_id"],) for row in found])}
         self._actions = {row["action_id"]: row for row in _find(connection, "actions", ("action_id",), [(argument["pays_action_id"],) for argument in arguments])}
+        conflicts = {row["conflict_id"]: row for row in _find(connection, "financial_conflicts", ("conflict_id",), [(_conflict_id(argument),) for argument in known])}
         item_of = {row["obligation_id"]: row["item_id"] for row in self._obligations.values()}
         received, aliases = {}, {}  # index set 4 holds one PAYMENT_RECEIVED per payment id and one alias per evidence id, store-wide: each read by its key, then bound
         for event in _keyed(connection, "rr_financial_v4_events_received_payment", self._payments):
@@ -433,7 +444,13 @@ class CashFileCheck:
                 kind, answer = ("NEW", argument["payment_id"]) if stored is None else ("already_recorded", None)
             elif not (existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, received[existing["payment_id"]][1].get("pays_action_id"))
                       and (stored is not None or existing["active"] == 1 or argument["event_at_ms"] <= evidence[existing["reversed_by_evidence_id"]]["event_at_ms"])):  # a new repeat of a reversed payment is DUPLICATE only if it predates the reversal: later may be a re-presentment
-                kind, answer = "conflict", None
+                conflict = _conflict_id(argument)
+                other = existing["amount_cents"] != argument["amount_cents"] and _ID.fullmatch(conflict) is not None  # an id past the form stays plain held: Lean would refuse it (CONFLICT_ID_FORM)
+                if other and stored is None and argument["expected_revision"] == turn[obligation]:
+                    kind, answer = "CONFLICT", existing["payment_id"]
+                else:  # a stored conflict of this obligation and payment, sent again with its own fact; else a link, reversal or revision mismatch
+                    again = other and _matches(conflicts.get(conflict), {"obligation_id": obligation, "existing_payment_id": existing["payment_id"]}) and _matches(stored, _fact(restated))
+                    kind, answer = "conflict:" + conflict if again else "conflict", None
             elif stored is None:
                 kind, answer = "OVERLAP", existing["payment_id"]
             else:
@@ -453,44 +470,54 @@ class CashFileCheck:
         log = self._log(connection)
         added = {table: _table(connection, table, [new for _, new in log.get((table, "INSERT"), ())]) for table in _INSERTS}  # the rows this file inserted
         payments = {**self._payments, **{row["payment_id"]: row for row in added["payments"].values()}}
-        evidence, events = ({row[key]: row for row in added[table].values()} for table, key in (("evidence", "evidence_id"), ("financial_events", "event_sequence")))
+        evidence, events, evaluations = ({row[key]: row for row in added[table].values()} for table, key in (("evidence", "evidence_id"), ("financial_events", "event_sequence"), ("evaluations", "evaluation_id")))
         actions, old_meta = self._actions, self._meta[1]
         first = sequence = old_meta["sequence"]
-        head, held_cents = old_meta["history_head"], 0
+        head = old_meta["history_head"]
         revisions = {row["obligation_id"]: row["revision"] for row in self._obligations.values()}
-        recorded, new_evidence, new_evaluations, deltas, touched, held = set(), set(), set(), {}, set(), set()
+        recorded, new_evidence, new_evaluations, deltas, touched, held, conflicts, images = set(), set(), set(), {}, set(), set(), {}, []
         for (_, argument), (kind, answer, skip), result in zip(self.commands, self._plan, results):
             _require(type(result) is dict, "cash_file_failed")
+            conflict = _conflict_id(argument)
             if skip is None and argument["item_id"] in held:
                 skip = _held(argument, "depends_on_held")  # its expected_revision assumed the held row before it
-            if skip is None and result.get("status") == "HELD":  # the owner refused the row; its savepoint rolled the row back (an intake file only: any other file is atomic)
+            if skip is None and result.get("status") == "HELD" and (kind, result.get("reason")) != ("CONFLICT", "conflict:" + conflict):  # the owner refused the row; its savepoint rolled the row back (an intake file, or any file's conflict row)
                 reason = result.get("reason")
-                _require(self.intake is not None and reason in _OWNER_HOLDS and (reason != "obligation_revision_conflict" or argument["expected_revision"] != revisions[self._items[argument["item_id"]]]), "cash_file_failed")
+                _require((reason == "evidence_chronology" if kind == "CONFLICT" else self.intake is not None and reason in _OWNER_HOLDS) and (reason != "obligation_revision_conflict" or argument["expected_revision"] != revisions[self._items[argument["item_id"]]]), "cash_file_failed")
                 skip = _held(argument, reason)
             if skip is not None:
                 _require(result == skip, "cash_file_failed")  # wrote nothing: the write log of every table and the event chain below prove it
                 if skip["status"] == "HELD":
                     held.add(argument["item_id"])
-                    held_cents += argument["amount_cents"]
                 continue
-            _require(result == {"status": "RECORDED" if kind == "NEW" else "DUPLICATE", "payment_id": answer, "reason": None}, "cash_file_failed")
-            sequence += 1  # each NEW or OVERLAP row appends exactly the next event, verified onto the chain
+            _require(result == (_held(argument, "conflict:" + conflict) if kind == "CONFLICT" else {"status": "RECORDED" if kind == "NEW" else "DUPLICATE", "payment_id": answer, "reason": None}), "cash_file_failed")
+            sequence += 1  # each NEW, OVERLAP or CONFLICT row appends exactly the next event, verified onto the chain
             event, obligation = events[sequence], payments[answer]["obligation_id"]
             head = ledger._verify_event(event, sequence, head)
             payload = ledger._parse_json(event["payload_json"], "cash-file:event", max_bytes=ledger.MAX_PACKAGE_BYTES)
             _require(event["before_revision"] == argument["expected_revision"] == revisions[obligation] and _matches(evidence.get(argument["evidence_id"]), _fact(argument)), "cash_file_failed")
             new_evidence.add(argument["evidence_id"])
+            images += payload.get("rows", ())
             touched.add(obligation)
             if kind == "OVERLAP":  # exactly the alias label _verify_duplicate_evidence accepts; the repeated payment is unchanged
                 alias = {"candidate_evidence_id": argument["evidence_id"], "existing_payment_id": answer, "common_origin_id": argument["common_origin_id"]}
                 _require((event["kind"], event["aggregate_type"], event["aggregate_id"], event["after_revision"]) == ("PAYMENT_DUPLICATE_EVIDENCE", "OBLIGATION", obligation, revisions[obligation])
                          and {key: value for key, value in payload.items() if key != "rows"} == alias, "cash_file_failed")
                 continue
-            payment = payments[answer]
-            _require(event["kind"] == "PAYMENT_RECEIVED" and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None and _recorded(argument, payment, evidence[argument["evidence_id"]], event, payload, actions), "cash_file_failed")
+            if kind == "CONFLICT":  # Lean's conflict row, its evaluation and visible event: a new revision, no cash; the row (and its item) is held by its id
+                held.add(argument["item_id"])
+                conflicts[conflict] = row = {"conflict_id": conflict, "obligation_id": obligation, "common_origin_id": argument["common_origin_id"], "existing_payment_id": answer, "candidate_evidence_id": argument["evidence_id"],
+                                                 "existing_amount_cents": payments[answer]["amount_cents"], "candidate_amount_cents": argument["amount_cents"], "reason": "CONFLICTING_COMMON_ORIGIN_AMOUNT", "visible_at_ms": event["committed_at_ms"]}
+                _require((event["kind"], event["aggregate_type"], event["aggregate_id"], event["after_revision"]) == ("PAYMENT_CONFLICT_VISIBLE", "OBLIGATION", obligation, revisions[obligation] + 1)
+                         and set(payload) - {"rows"} == set(visible := ("conflict_id", "candidate_evidence_id", "existing_payment_id", "common_origin_id")) | _EVALUATION and all(payload[key] == row[key] for key in visible), "cash_file_failed")
+            else:
+                payment = payments[answer]
+                _require(event["kind"] == "PAYMENT_RECEIVED" and payment["active"] == 1 and payment["reversed_by_evidence_id"] is None and _recorded(argument, payment, evidence[argument["evidence_id"]], event, payload, actions), "cash_file_failed")
+                recorded.add(answer)
             revisions[obligation] += 1
-            deltas[obligation] = deltas.get(obligation, 0) + argument["amount_cents"]
-            recorded.add(answer)
+            deltas[obligation] = deltas.get(obligation, 0) + (0 if kind == "CONFLICT" else argument["amount_cents"])  # a conflict moves no cash; the obligation's other fields follow its new evaluation
+            stored = evaluations[payload["evaluation_id"]]  # the row the event names, with the digests it carries
+            _require((stored["obligation_id"], stored["revision"]) == (obligation, event["after_revision"]) and all(payload["evaluation_" + name] == bytes(stored[column]).hex().upper() for name, column in (("input_digest", "input_snapshot_digest"), ("result_digest", "result_digest"), ("receipt_digest", "receipt_digest"))), "cash_file_failed")
             new_evaluations.add(payload["evaluation_id"])
         if self.intake is not None:  # last, the raw file's intake facts with every row's outcome, as one event
             sequence += 1
@@ -501,9 +528,11 @@ class CashFileCheck:
         new_meta =_table(connection, "financial_meta", [self._meta[0]])[self._meta[0]]
         _require((new_meta["sequence"], new_meta["history_head"]) == (sequence, head), "cash_file_failed")
         _unchanged(old_meta, new_meta, {"sequence", "history_head"})
-        for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1)))):
+        for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1))), ("financial_conflicts", "conflict_id", set(conflicts))):
             keys = [row[key] for row in added[table].values()]
             _require(len(keys) == len(additions) and set(keys) == additions, "cash_file_failed")  # exactly the rows the file names: the log shows no other write to these tables
+        for table, key, derived in (("evidence", "evidence_id", evidence), ("financial_conflicts", "conflict_id", conflicts)):  # the row images the events carry are the rows written (replay holds them to it at reopen)
+            _require({image["row"][key]: {column: ledger._package_import_value(value, "cash_file") for column, value in image["row"].items()} for image in images if image["table"] == table and "row" in image} == {row[key]: row for row in added[table].values()} == derived, "cash_file_failed")
         ledger._verify_commands({"financial_events": list(events.values()), **{table: list(added[table].values()) for table in ("payments", "evidence", "commands")}}, "cash_file")  # one command row per new PAYMENT_RECEIVED, as history derives it
         changed = {"revision", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "verification_status", "case_status", "current_evaluation_id", "updated_at_ms"}
         rowids = {old for old, _ in log.get(("obligations", "UPDATE"), ())} | {rowid for rowid, row in self._obligations.items() if row["obligation_id"] in deltas}  # a row of an untouched obligation that was not written passes every check below
@@ -524,6 +553,7 @@ class CashFileCheck:
         recorded_cents = sum(deltas.values())
         cash_before = sum(row["received_cash_cents"] for row in self._obligations.values())
         held_count = sum(result["status"] == "HELD" for result in results)
+        held_cents = sum(argument["amount_cents"] for (_, argument), result in zip(self.commands, results) if result["status"] == "HELD")
         self.receipt = {
             "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3",
             "mode": "PREVIEW" if self._preview else "APPLIED",

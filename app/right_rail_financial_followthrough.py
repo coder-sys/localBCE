@@ -219,7 +219,6 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
     manifests = {row["manifest_id"]: row for row in rows["population_manifests"]}
     finders = {row["population_id"]: manifests[row["manifest_id"]] for row in rows["population_manifest_bindings"]}
     reasons = {reason["reason_code"]: reason for reason in rules["closure_reasons"]}
-    evidence = _by(rows["evidence"], "item_id")
     support = _by(rows["evidence"], "item_id", lambda row: row["kind"] == "SUPPORT")
     events = _by(rows["financial_events"], "aggregate_id", lambda row: row["aggregate_type"] == "OBLIGATION")
     evaluations = _by(sorted(rows["evaluations"], key=lambda row: row["revision"]), "obligation_id")

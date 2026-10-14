@@ -2,7 +2,6 @@
 the store verifying, with no payment half-written or doubled, and a retry gives the answer a never-crashed run gives."""
 
 import json
-import os
 import sqlite3
 import subprocess
 import sys
