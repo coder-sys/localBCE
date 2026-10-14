@@ -254,9 +254,119 @@ theorem runWith_eq_runText (text : String) : ((runWith text).1, (runWith text).2
 theorem parseAdds_addsBytes (r u : List Line) (bs : ByteArray) (hb : addsBytes r u = some bs) :
     parseAdds bs = some (r, u) := sorry
 
+theorem foldl_agree (g g' : Nat → UInt8) (l : List Nat) :
+    ∀ a, (∀ i ∈ l, g i = g' i) →
+      l.foldl (fun n i => n * 256 + (g i).toNat) a = l.foldl (fun n i => n * 256 + (g' i).toNat) a := by
+  induction l with
+  | nil => intros; rfl
+  | cons x l ih =>
+    intro a h
+    simp only [List.foldl_cons]
+    rw [h x (by simp)]
+    exact ih _ (fun i hi => h i (by simp [hi]))
+
+theorem fold_congr (b b' : ByteArray) (ws : List Nat) :
+    ∀ (r : Array Nat) (p p' : Nat), (∀ j < ws.sum, b.get! (p + j) = b'.get! (p' + j)) →
+    (ws.foldl (fun (r, o) w => (r.push ((List.range w).foldl (fun n i => n * 256 + (b.get! (o + i)).toNat) 0), o + w)) (r, p)).1 =
+    (ws.foldl (fun (r, o) w => (r.push ((List.range w).foldl (fun n i => n * 256 + (b'.get! (o + i)).toNat) 0), o + w)) (r, p')).1 := by
+  induction ws with
+  | nil => intros; rfl
+  | cons w ws ih =>
+    intro r p p' h
+    simp only [List.foldl_cons]
+    have hb : (List.range w).foldl (fun n i => n * 256 + (b.get! (p + i)).toNat) 0 =
+        (List.range w).foldl (fun n i => n * 256 + (b'.get! (p' + i)).toNat) 0 :=
+      foldl_agree (fun i => b.get! (p + i)) (fun i => b'.get! (p' + i)) _ 0
+        (fun i hi => h i (by simp at hi ⊢; omega))
+    rw [hb]
+    apply ih
+    intro j hj
+    have := h (w + j) (by simp; omega)
+    rwa [← Nat.add_assoc, ← Nat.add_assoc] at this
+theorem parseRow_congr (b b' : ByteArray) (o o' : Nat) (h : ∀ j < 1 + rowWidths.sum, b.get! (o + j) = b'.get! (o' + j)) :
+    parseRow b o = parseRow b' o' := by
+  unfold parseRow
+  have h0 := h 0 (by omega)
+  have := fold_congr b b' rowWidths #[] (o + 1) (o' + 1) (fun j hj => by
+    have := h (j + 1) (by omega)
+    rwa [show o + 1 + j = o + (j + 1) by omega, show o' + 1 + j = o' + (j + 1) by omega])
+  simp only [Nat.add_zero] at h0
+  dsimp only
+  rw [this, h0]
+theorem get!_append_left (a b : ByteArray) (i : Nat) (h : i < a.size) : (a ++ b).get! i = a.get! i := by
+  simp only [ByteArray.get!, getElem!_def, ByteArray.data_append]
+  rw [Array.getElem?_append_left (by simpa using h)]
+
+theorem get!_append_right (a b : ByteArray) (i : Nat) : (a ++ b).get! (a.size + i) = b.get! i := by
+  simp only [ByteArray.get!, getElem!_def, ByteArray.data_append]
+  rw [Array.getElem?_append_right (by simp)]
+  simp
+
+theorem mapM_ext_opt {α β : Type} (l : List α) (f g : α → Option β) (h : ∀ x ∈ l, f x = g x) : l.mapM f = l.mapM g := by
+  induction l with
+  | nil => rfl
+  | cons x l ih =>
+    simp only [List.mapM_cons]
+    rw [h x (by simp), ih (fun y hy => h y (by simp [hy]))]
+
+theorem parseAdds_some (bs : ByteArray) (r u : List Line) (h : parseAdds bs = some (r, u)) :
+    ∃ k rows, bs.size = (1 + rowWidths.sum) * k ∧
+      (List.range k).mapM (fun i => parseRow bs ((1 + rowWidths.sum) * i)) = some rows ∧
+      rows.all (fun (t, _) => t == 1 || t == 2) = true ∧
+      r = (rows.filter (·.1 == 1)).map (·.2) ∧ u = (rows.filter (·.1 == 2)).map (·.2) := by
+  unfold parseAdds at h
+  by_cases hm : (bs.size % (1 + rowWidths.sum) == 0) = true
+  · have hd : (1 + rowWidths.sum) ∣ bs.size := Nat.dvd_of_mod_eq_zero (by simpa using hm)
+    obtain ⟨k, hk⟩ := hd
+    simp only [guard, failure, hm, if_true] at h
+    cases hr : (List.range (bs.size / (1 + rowWidths.sum))).mapM (fun i => parseRow bs ((1 + rowWidths.sum) * i)) with
+    | none => simp [hr] at h
+    | some rows =>
+      simp only [hr] at h
+      by_cases ht : (rows.all fun (t, _) => t == 1 || t == 2) = true
+      · simp [ht] at h
+        refine ⟨k, rows, hk, ?_, ht, h.1.symm, h.2.symm⟩
+        rw [hk, Nat.mul_div_cancel_left _ (by omega)] at hr
+        exact hr
+      · simp [ht] at h
+  · simp [guard, failure, hm] at h
+
+
 /-- F4: the join of sealed adds parses to the joined rows, per set and in order. -/
 theorem parseAdds_append (a b : ByteArray) (r u r' u' : List Line) (ha : parseAdds a = some (r, u))
-    (hb : parseAdds b = some (r', u')) : parseAdds (a ++ b) = some (r ++ r', u ++ u') := sorry
+    (hb : parseAdds b = some (r', u')) : parseAdds (a ++ b) = some (r ++ r', u ++ u') := by
+  obtain ⟨ka, rowsA, hsa, hma, hta, rfl, rfl⟩ := parseAdds_some a r u ha
+  obtain ⟨kb, rowsB, hsb, hmb, htb, rfl, rfl⟩ := parseAdds_some b r' u' hb
+  have hpos : 0 < (1 + rowWidths.sum) := by omega
+  have hsz : (a ++ b).size = (1 + rowWidths.sum) * (ka + kb) := by rw [ByteArray.size_append, hsa, hsb, Nat.mul_add]
+  have hmod : ((a ++ b).size % (1 + rowWidths.sum) == 0) = true := by rw [hsz]; simp
+  have hrows : (List.range (ka + kb)).mapM (fun i => parseRow (a ++ b) ((1 + rowWidths.sum) * i)) = some (rowsA ++ rowsB) := by
+    rw [List.range_add, List.mapM_append, List.mapM_map]
+    have h1 : (List.range ka).mapM (fun i => parseRow (a ++ b) ((1 + rowWidths.sum) * i)) = some rowsA := by
+      rw [← hma]
+      apply mapM_ext_opt
+      intro i hi
+      have hi := List.mem_range.1 hi
+      apply parseRow_congr
+      intro j hj
+      have : (1 + rowWidths.sum) * i + j < a.size := by
+        have h3 : (1 + rowWidths.sum) * (i + 1) ≤ (1 + rowWidths.sum) * ka := Nat.mul_le_mul_left (1 + rowWidths.sum) hi
+        rw [Nat.mul_add, Nat.mul_one] at h3
+        omega
+      exact get!_append_left a b _ this
+    have h2 : (List.range kb).mapM ((fun i => parseRow (a ++ b) ((1 + rowWidths.sum) * i)) ∘ (fun x => ka + x)) = some rowsB := by
+      rw [← hmb]
+      apply mapM_ext_opt
+      intro i hi
+      simp only [Function.comp]
+      apply parseRow_congr
+      intro j hj
+      rw [show (1 + rowWidths.sum) * (ka + i) + j = a.size + ((1 + rowWidths.sum) * i + j) by rw [hsa, Nat.mul_add]; omega]
+      exact get!_append_right a b _
+    rw [h1, h2]; rfl
+  unfold parseAdds
+  simp only [guard, failure, hsz, Nat.mul_div_cancel_left _ hpos, hrows]
+  simp [hta, htb, List.all_append, List.filter_append]
 
 /-- T1, per step: from ANY state (a head's `today`, snapshots and rows, a `case`, a batch), `resume D` on kept sets is
     `load a adds D` for any `adds` that parse to those sets. Rules out a resume that drops or resets anything `load`
@@ -499,6 +609,27 @@ theorem refresh_eq (c c' : Ctx) (b₀ b : List Line) (ht : c'.today = c.today)
     refresh (Fast.Ix.build c b₀) c' b = Fast.Ix.build c' b := by
   simp only [refresh, Fast.Ix.build, ht, hr, hrp, hu, hup]
 
+theorem view_self (t : Nat) (p : Snapshot Line) : view t p (some p) = p := by
+  simp only [view]; split <;> rfl
+
+theorem advance_self_ex (t : Nat) (p : Snapshot Line) (adds : List Line) {o : Option (Snapshot Line)} (h : o = some p) :
+    ∃ A, advance t p o adds = ⟨p.asOf, p.entries.length + A.length, p.entries ++ A⟩ :=
+  ⟨adds, by subst h; simp [advance, view_self]⟩
+
+theorem viewF_self (b : Bool) (p : Snapshot Line) : Fast.viewF b p (some p) = p := by cases b <;> rfl
+
+theorem looseF_self (b : Bool) (p : Snapshot Line) : Fast.looseF b p (some p) = [] := by
+  cases b
+  · simp [Fast.looseF, entries]
+  · rfl
+
+theorem chainedF_self (t : Nat) (p : Snapshot Line) :
+    Fast.chainedF t p (some p) = (p.entries.length == p.count && validDate p.asOf && decide (p.asOf ≤ t)) := by
+  simp [Fast.chainedF]
+
+theorem posts_ext (P A : List Line) : (A.foldl Fast.postStep ((Fast.posts P).1, P.length)).1 = (Fast.posts (P ++ A)).1 := by
+  rw [Fast.posts_append, ← Fast.posts_count P]
+
 /-- T4: the index extended by a commit's fresh rows, refreshed for the next frame's context over the committed sets,
     is the index a full build over that context makes. Rules out a missing, duplicated or misplaced posting. -/
 theorem ix_extend_eq (c c' : Ctx) (f : List Nat) (b₀ b : List Line)
@@ -507,6 +638,18 @@ theorem ix_extend_eq (c c' : Ctx) (f : List Nat) (b₀ b : List Line)
     (hu' : c'.unresolved = some (decideBatchIn c f b₀).unresolved)
     (hup : c'.unresolvedPrior = (decideBatchIn c f b₀).unresolved) :
     refresh (extend (Fast.Ix.build c b₀) (decideBatchIn c f b₀).released (decideBatchIn c f b₀).unresolved) c' b =
-      Fast.Ix.build c' b := sorry
+      Fast.Ix.build c' b := by
+  obtain ⟨A, hA⟩ := advance_self_ex c.today c.releasedPrior (releasedLines c (decideAll c (idSeen f ++ seen0 c b₀) (order c b₀))) hr
+  obtain ⟨B, hB⟩ := advance_self_ex c.today c.unresolvedPrior (unresolvedLines c (decideAll c (idSeen f ++ seen0 c b₀) (order c b₀))) hu
+  have eA : (decideBatchIn c f b₀).released = ⟨c.releasedPrior.asOf, c.releasedPrior.entries.length + A.length, c.releasedPrior.entries ++ A⟩ := by
+    simp only [decideBatchIn]; rw [hr] at hA ⊢; exact hA
+  have eB : (decideBatchIn c f b₀).unresolved = ⟨c.unresolvedPrior.asOf, c.unresolvedPrior.entries.length + B.length, c.unresolvedPrior.entries ++ B⟩ := by
+    simp only [decideBatchIn]; rw [hu] at hB ⊢; exact hB
+  rw [eA] at hr' hrp
+  rw [eB] at hu' hup
+  rw [eA, eB]
+  simp only [refresh, extend, Fast.Ix.build, hr, hu, hr', hrp, hu', hup, ht, viewF_self, looseF_self, chainedF_self]
+  simp only [List.append_nil, List.drop_left, posts_ext]
+  simp [List.length_append, List.drop_length]
 
 end BlindLedger.Gate.Rules.Resident
