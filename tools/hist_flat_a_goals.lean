@@ -938,6 +938,16 @@ theorem replay_one (r u : Snapshot Line) (ha : u.asOf = r.asOf) (hr : r.count = 
   subst ha hr hu
   simp [Rules.replay]
 
+theorem addsField_cases (bs : ByteArray) :
+    (addsField bs = "-" ∧ bs = ByteArray.empty) ∨ (addsField bs = hexOf bs ∧ ¬ hexOf bs = "-") := by
+  unfold addsField
+  by_cases hz : bs.size = 0
+  · exact Or.inl ⟨if_pos hz, ByteArray.ext (Array.eq_empty_of_size_eq_zero hz)⟩
+  · refine Or.inr ⟨if_neg hz, fun h' => ?_⟩
+    have := unhexFast_hexOf bs
+    rw [h', unhexFast_dash] at this
+    cases this
+
 /-- T1, per step: from ANY state (a head's `today`, snapshots and rows, a `case`, a batch), `resume D` on kept sets is
     `load a adds D` for any `adds` that parse to those sets. Rules out a resume that drops or resets anything `load`
     keeps (snapshots, rows, `today`, the batch) or installs anything `load` would not. -/
@@ -950,14 +960,7 @@ theorem resume_eq_load (x : Res) (st : St) (D : List UInt8) (bs : ByteArray) (hx
     have := Gate.natBE_beNat D
     rw [hDl] at this
     exact this
-  have hcase : (addsField bs = "-" ∧ bs = ByteArray.empty) ∨ (addsField bs = hexOf bs ∧ ¬ hexOf bs = "-") := by
-    unfold addsField
-    by_cases hz : bs.size = 0
-    · exact Or.inl ⟨if_pos hz, ByteArray.ext (Array.eq_empty_of_size_eq_zero hz)⟩
-    · refine Or.inr ⟨if_neg hz, fun h' => ?_⟩
-      have := unhexFast_hexOf bs
-      rw [h', unhexFast_dash] at this
-      cases this
+  have hcase := addsField_cases bs
   have hdig : Fast.setsDigestF hB x.m.r x.m.u = some D := x.m.ok.symm.trans hd
   obtain ⟨-, -, hasof, hrc, huc, -⟩ := hx
   have hrep := replay_one x.m.r x.m.u hasof hrc huc
@@ -1133,12 +1136,119 @@ theorem fit_fits (st : St) (x : Res) (h : Res.fit st = some x) : x.Fits st := by
     · cases h
   · cases h
 
+theorem rowsOf_of_pin (dom : String) (k : Nat) (s : Snapshot Line) (pb : ByteArray)
+    (h : Fast.pinBytes dom k Line.fields s = some pb) : ∃ rs, rowsOf s.entries = some rs := by
+  unfold Fast.pinBytes at h
+  obtain ⟨_, -, h⟩ := Option.bind_eq_some_iff.1 h
+  obtain ⟨rs, hr, -⟩ := Option.bind_eq_some_iff.1 h
+  exact ⟨rs, hr⟩
+
+theorem rows_of_digest (r u : Snapshot Line) (d : List UInt8) (h : Fast.setsDigestF hB r u = some d) :
+    (∃ rs, rowsOf r.entries = some rs) ∧ (∃ us, rowsOf u.entries = some us) := by
+  unfold Fast.setsDigestF at h
+  obtain ⟨a, ha, h⟩ := Option.bind_eq_some_iff.1 h
+  obtain ⟨b, hb, -⟩ := Option.bind_eq_some_iff.1 h
+  exact ⟨rowsOf_of_pin _ _ _ _ ha, rowsOf_of_pin _ _ _ _ hb⟩
+
+theorem memoOf_of (st : St) (m : Memo) (h : st.memo = some m) (hr : m.r = st.rprior) (hu : m.u = st.uprior) :
+    Res.memoOf st = m := by
+  unfold Res.memoOf
+  simp [h, hr, hu]
+
+theorem fit_some (st : St) (rs us : List ByteArray)
+    (hc : st.sealed = true ∧ (Res.memoOf st).u.asOf = (Res.memoOf st).r.asOf ∧
+      (Res.memoOf st).r.count = (Res.memoOf st).r.entries.length ∧
+      (Res.memoOf st).u.count = (Res.memoOf st).u.entries.length ∧
+      (st.ctx (st.pinned.getD st.pin)).released = some (Res.memoOf st).r ∧
+      (st.ctx (st.pinned.getD st.pin)).unresolved = some (Res.memoOf st).u)
+    (hr : rowsOf (Res.memoOf st).r.entries = some rs) (hu : rowsOf (Res.memoOf st).u.entries = some us) :
+    ∃ y, Res.fit st = some y ∧ y.m = Res.memoOf st := by
+  unfold Res.fit
+  dsimp only
+  rw [if_pos hc]
+  split
+  · exact ⟨_, rfl, rfl⟩
+  · simp_all
+
 /-- F2: after an accepted `load` (worker start or recycle) `Res.fit` succeeds, reusing the load's digest, and the
     loaded adds parse to the priors. Rules out a load that leaves the worker without a resident checkpoint. -/
 theorem load_fits (st st' : St) (a h : String) (bs : ByteArray)
     (hs : step st ["load", a, addsField bs, h] = some (st', [])) :
     (∃ y, Res.fit st' = some y ∧ st'.memo = some y.m) ∧
-      parseAdds bs = some (st'.rprior.entries, st'.uprior.entries) := sorry
+      parseAdds bs = some (st'.rprior.entries, st'.uprior.entries) := by
+  have hc := addsField_cases bs
+  by_cases hl' : ¬ (h.length == 128) = true
+  · simp [step, guard, hl', failure] at hs
+  have hl : (h.length == 128) = true := Decidable.of_not_not hl'
+  cases hn : a.toNat? with
+  | none => simp [step, guard, hl, hn] at hs
+  | some n =>
+  cases hu : unhexFast h with
+  | none => simp [step, guard, hl, hn, hu] at hs
+  | some hb =>
+  rcases hc with ⟨hf, rfl⟩ | ⟨hf, hne⟩ <;>
+    first
+    | simp [step, guard, hl, hn, hu, hf, hne, unhexFast_hexOf] at hs
+    | simp [step, guard, hl, hn, hu, hf] at hs
+  all_goals
+    split at hs
+    · simp at hs
+    · rename_i s m hsm
+      obtain ⟨ad, hpa, h2⟩ := Option.bind_eq_some_iff.1 hsm
+      obtain ⟨d, hd, h3⟩ := Option.bind_eq_some_iff.1 h2
+      split at h3
+      · obtain ⟨hs0, hm0⟩ := Prod.mk.inj (Option.some.inj h3)
+        have hrep : Rules.replay (⟨n, 0, []⟩, ⟨n, 0, []⟩) [ad] =
+            (⟨n, ad.1.length, ad.1⟩, ⟨n, ad.2.length, ad.2⟩) := by simp [Rules.replay]
+        rw [hrep] at hd hs0 hm0
+        subst hs0 hm0
+        obtain ⟨p1, e1, hs⟩ := Option.bind_eq_some_iff.1 hs
+        obtain ⟨p2, e2, hs⟩ := Option.bind_eq_some_iff.1 hs
+        obtain ⟨hst, -⟩ := Prod.mk.inj (Option.some.inj hs)
+        rw [emptyPin_r] at e1
+        rw [emptyPin_u] at e2
+        obtain ⟨pb1, hp1, rfl⟩ := Option.map_eq_some_iff.1 e1
+        obtain ⟨pb2, hp2, rfl⟩ := Option.map_eq_some_iff.1 e2
+        obtain ⟨⟨rs, hrs⟩, ⟨us, hus⟩⟩ := rows_of_digest _ _ _ hd
+        have hne2 : ("unresolved" == "released") = false := by decide
+        have hpin : st'.pinned = none := by rw [← hst]
+        have hex : st'.extra = ad.1 := by rw [← hst]
+        have hhd : st'.held = ad.2 := by rw [← hst]
+        have hrp : st'.rprior = ⟨n, ad.1.length, ad.1⟩ := by rw [← hst]
+        have hup : st'.uprior = ⟨n, ad.2.length, ad.2⟩ := by rw [← hst]
+        have hsl : st'.sealed = true := by rw [← hst]
+        have hmem := (by rw [← hst] : st'.memo = some _)
+        have hmo := memoOf_of st' _ hmem (by rw [hrp]) (by rw [hup])
+        have s1 := snapshot_decl (α := Line) st' "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields n pb1
+          (by rw [← hst]; simp) (by rw [← hst]; exact rows_released st.rows) hp1
+        have s2 := snapshot_decl (α := Line) st' "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields n pb2
+          (by rw [← hst]; simp [List.lookup, hne2]) (by rw [← hst]; exact rows_unresolved st.rows) hp2
+        have hr1 : (⟨n, 0 + ad.1.length, [] ++ ad.1⟩ : Snapshot Line) = ⟨n, ad.1.length, ad.1⟩ := by simp
+        have hr2 : (⟨n, 0 + ad.2.length, [] ++ ad.2⟩ : Snapshot Line) = ⟨n, ad.2.length, ad.2⟩ := by simp
+        refine ⟨?_, ?_⟩
+        · have hcc : st'.sealed = true ∧ (Res.memoOf st').u.asOf = (Res.memoOf st').r.asOf ∧
+              (Res.memoOf st').r.count = (Res.memoOf st').r.entries.length ∧
+              (Res.memoOf st').u.count = (Res.memoOf st').u.entries.length ∧
+              (st'.ctx (st'.pinned.getD st'.pin)).released = some (Res.memoOf st').r ∧
+              (st'.ctx (st'.pinned.getD st'.pin)).unresolved = some (Res.memoOf st').u := by
+            rw [hmo]
+            refine ⟨hsl, rfl, rfl, rfl, ?_, ?_⟩
+            · have hp : (st'.ctx (st'.pinned.getD st'.pin)).released =
+                  grow ((snapshot st' "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields).map (·.1)) st'.extra := by
+                rw [hpin]; rfl
+              rw [hp, s1, hex]
+              exact congrArg some hr1
+            · have hp : (st'.ctx (st'.pinned.getD st'.pin)).unresolved =
+                  grow ((snapshot st' "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields).map (·.1)) st'.held := by
+                rw [hpin]; rfl
+              rw [hp, s2, hhd]
+              exact congrArg some hr2
+          have hrs' : rowsOf (Res.memoOf st').r.entries = some rs := by rw [hmo]; exact hrs
+          have hus' : rowsOf (Res.memoOf st').u.entries = some us := by rw [hmo]; exact hus
+          obtain ⟨y, hy, hym⟩ := fit_some st' rs us hcc hrs' hus'
+          exact ⟨y, hy, by rw [hym, hmo]; exact hmem⟩
+        · rw [hrp, hup]; exact hpa
+      · simp at h3
 
 /-- F2: a genesis commit (not sealed, no anchor) over declared sets that are chained, of one date, with a digest,
     gives a fitting `Res`. Rules out a first frame that can never reach the resident path. -/
