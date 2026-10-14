@@ -1533,6 +1533,22 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (pre rest : L
       (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) ∧
     Inv r.2.2 := sorry
 
+/-- A context that reads its own priors: the batch run's sets are the priors plus the fresh rows. -/
+theorem runIn_self (c : Ctx) (f : List Nat) (b : List Line) (P Q : Snapshot Line)
+    (hr : c.released = some P) (hu : c.unresolved = some Q) (hP : c.releasedPrior = P) (hQ : c.unresolvedPrior = Q) :
+    ∃ ra ua, ((Fast.Ix.build c b).runIn f b).released = ⟨P.asOf, P.entries.length + ra.length, P.entries ++ ra⟩ ∧
+      ((Fast.Ix.build c b).runIn f b).unresolved = ⟨Q.asOf, Q.entries.length + ua.length, Q.entries ++ ua⟩ ∧
+      (Fast.Ix.build c b).relN = P.entries.length ∧ (Fast.Ix.build c b).unrN = Q.entries.length := by
+  have h1 : (Fast.Ix.build c b).relV = P := by simp [Fast.Ix.build, hr, hP, viewF_self]
+  have h2 : (Fast.Ix.build c b).unrV = Q := by simp [Fast.Ix.build, hu, hQ, viewF_self]
+  have h3 : (Fast.Ix.build c b).relN = P.entries.length := by simp [Fast.Ix.build, hr, hP, viewF_self]
+  have h4 : (Fast.Ix.build c b).unrN = Q.entries.length := by simp [Fast.Ix.build, hu, hQ, viewF_self]
+  refine ⟨(Fast.Ix.build c b).releasedLines ((Fast.Ix.build c b).decideAll (Std.HashSet.ofList (idSeen f)) ((Fast.Ix.build c b).order b)),
+    (Fast.Ix.build c b).unresolvedLines ((Fast.Ix.build c b).decideAll (Std.HashSet.ofList (idSeen f)) ((Fast.Ix.build c b).order b)),
+    ?_, ?_, h3, h4⟩
+  · simp only [Fast.Ix.runIn, h1, h3]
+  · simp only [Fast.Ix.runIn, h2, h4]
+
 /-- F4: a commit from a state reading its own priors (as after `load`, `resume` or a commit) appends to each prior,
     keeps that shape, and its RULES_ADDS parse to exactly the appended rows. -/
 theorem commit_adds (st : St) (u : Bool)
@@ -1544,7 +1560,37 @@ theorem commit_adds (st : St) (u : Bool)
       (st'.ctx (st'.pinned.getD st'.pin)).released = some st'.rprior ∧
       (st'.ctx (st'.pinned.getD st'.pin)).unresolved = some st'.uprior ∧
       st'.rprior.count = st'.rprior.entries.length ∧ st'.uprior.count = st'.uprior.entries.length ∧
-      ∀ b, ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2 → parseAdds b = some (fr, fu) := sorry
+      ∀ b, ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2 → parseAdds b = some (fr, fu) := by
+  obtain ⟨hp, ht, hm, H⟩ := commit_struct st u
+  intro st'
+  dsimp only [st']
+  generalize (commit st u).1 = S at hp ht hm H ⊢
+  have hc1 := hc.1
+  have hc2 := hc.2
+  simp only [St.ctx] at hc1 hc2
+  have hP : S.pinned.getD S.pin = st.pinned.getD st.pin := by rw [hp]; rfl
+  rcases H with ⟨hanc, he, hh, hr', hu', hNA⟩ | ⟨hs, he, hh, hr', hu', hAD⟩
+  · refine ⟨[], [], by simp [hr'], by simp [hu'], ?_, ?_, by rw [hr']; exact hn.1, by rw [hu']; exact hn.2, ?_⟩
+    · rw [hP]; simp only [St.ctx, he, hr']; exact hc1
+    · rw [hP]; simp only [St.ctx, hh, hu']; exact hc2
+    · intro b hb
+      exact absurd (hNA _ hb) (not_na_adds _)
+  · obtain ⟨ra, ua, hR, hU, hrn, hun⟩ := runIn_self (st.ctx (st.pinned.getD st.pin)) (cbf st).2.1 (cbf st).1
+      st.rprior st.uprior hc.1 hc.2 rfl rfl
+    simp only [hrn, hun, hR, hU, List.drop_left] at hr' hu' he hh hAD
+    refine ⟨ra, ua, by rw [hr'], by rw [hu'], ?_, ?_, by rw [hr']; simp, by rw [hu']; simp, ?_⟩
+    · rw [hP]; simp only [St.ctx, he]; rw [← grow_app, hc1, hr']; simp [grow, hn.1]
+    · rw [hP]; simp only [St.ctx, hh]; rw [← grow_app, hc2, hu']; simp [grow, hn.2]
+    · intro b hb
+      rcases hAD _ hb with h | ⟨bb, hbb, hab⟩
+      · exact absurd h (not_na_adds _)
+      · have hh2 : hexOf b = hexOf bb := (String.append_right_inj _).1 hbb
+        have : b = bb := by
+          have := congrArg unhexFast hh2
+          rw [unhexFast_hexOf, unhexFast_hexOf] at this
+          exact Option.some.inj this
+        subst this
+        exact parseAdds_addsBytes _ _ _ hab
 
 /-- F4: if the sealed adds so far parse to the priors in order, so do they joined with the commit's RULES_ADDS. By
     induction from `load_fits`, the resident sets are `parseAdds` of the sealed join, row for row. Rules out a resumed
@@ -1557,7 +1603,10 @@ theorem resident_inv (st : St) (u : Bool) (bs b : ByteArray)
       (st.ctx (st.pinned.getD st.pin)).unresolved = some st.uprior)
     (hn : st.rprior.count = st.rprior.entries.length ∧ st.uprior.count = st.uprior.entries.length)
     (hb : ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2) :
-    parseAdds (bs ++ b) = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := sorry
+    parseAdds (bs ++ b) = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := by
+  obtain ⟨fr, fu, e1, e2, -, -, -, -, hadd⟩ := commit_adds st u hc hn
+  rw [e1, e2]
+  exact parseAdds_append _ _ _ _ _ _ h0 (hadd b hb)
 
 
 end BlindLedger.Gate.Rules.Resident
