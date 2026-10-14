@@ -1,5 +1,5 @@
 """CFI begin reads by key (cfi-history-design-20261007 s2, C1). The oracle is today's begin, kept here whole: it loads every table and walks every event.
-CORPUS replays 17 of the 56 ReceiverCashFileTests under it; each of the other 39 is in EXCLUDED with its reason, and a test that is in neither fails the module."""
+CORPUS replays 19 of the 59 ReceiverCashFileTests under it; each of the other 40 is in EXCLUDED with its reason, and a test that is in neither fails the module."""
 
 from contextlib import closing, contextmanager
 import hashlib
@@ -22,7 +22,8 @@ CORPUS = ("test_preview_apply_retry_restart_and_reversal", "test_mid_file_revisi
           "test_linked_action_limit_and_ack_report_separation", "test_lost_response_recovers_without_new_cash", "test_a_plan_turns_only_refusals_into_a_refusal", "test_planned_commit_refuses_a_replayed_row_no_event_carries",
           "test_manifest_baseline_binds_digest_owner_and_the_live_chain",
           "test_owner_bugs_the_checker_would_only_find_on_open_refuse_before_commit", "test_planned_commit_refuses_rows_unlike_the_plan_in_any_table", "test_final_verifier_failure_and_duplicate_sql_write_roll_back",
-          "test_concurrent_identical_files_commit_cash_once")  # the fault tests of the last four lines are compared too (review LOW-4)
+          "test_concurrent_identical_files_commit_cash_once", "test_a_new_amount_of_a_recorded_origin_is_recorded_as_a_conflict_held_by_its_id_and_a_refused_one_holds_alone",
+          "test_a_conflict_row_stored_unlike_the_one_the_checker_derives_is_refused")  # the fault tests of the last four lines are compared too (review LOW-4)
 _NO_BEGIN = "refused before any begin runs (census cfx1: 0 begins), so there is nothing to compare"
 _CHILD = "runs the CLI or a child process; its begin runs outside this module's patch"
 _TIMING = "asserts wall time, not behaviour; the old begin alone differs run to run"
@@ -31,7 +32,7 @@ _MIXED = "context binding and stale-plan mechanics; its begins classify only NEW
 _BIG = "2,000 rows or the row caps, all NEW; the 499-key chunk is compared by the 500-row resend below"
 EXCLUDED = {
     **dict.fromkeys(("test_a_crash_between_plan_and_commit_leaves_the_store_unchanged", "test_cli_apply_commits_an_empty_plan_for_a_resent_file_and_one_overtaken_by_the_same_file", "test_cli_binds_custom_live_and_test_identities_and_never_shadow",
-                     "test_cli_exports_the_manifest_a_file_is_prepared_against", "test_cli_preview_apply_privacy_and_source_preservation", "test_cli_refusal_never_migrates_or_creates_store", "test_process_crash_before_and_after_commit"), _CHILD),
+                     "test_cli_exports_the_manifest_a_file_is_prepared_against", "test_cli_preview_apply_privacy_and_source_preservation", "test_cli_refusal_never_migrates_or_creates_store", "test_cli_upload_goes_through_intake_and_holds_an_unreadable_row_alone", "test_process_crash_before_and_after_commit"), _CHILD),
     **dict.fromkeys(("test_an_owner_write_without_a_checker_verifies_every_evaluated_obligation", "test_bounds_types_counts_origins_and_unsupported_formats", "test_checked_context_and_commands_are_immutable_copies", "test_evaluation_bindings_cite_only_the_items_own_evidence",
                      "test_evaluation_takes_exactly_one_evidence_source", "test_every_field_is_required_and_unknowns_refuse", "test_every_whole_store_rule_runs_before_commit_or_is_excused", "test_history_export_replaces_only_an_earlier_manifest_of_this_history_and_not_through_a_leftover",
                      "test_independent_commands_bind_every_field_order_and_type", "test_noncanonical_duplicate_keys_and_file_cap_refuse", "test_preview_cleanup_failure_cannot_publish_success", "test_refusals_are_fixed_classes"), _NO_BEGIN),
@@ -49,13 +50,13 @@ def _old_begin_and_classify(self, connection):
     """begin and _classify as they were before C1: whole tables, one walk of every event."""
     _require(self._connection is None and not self._finished and isinstance(connection, sqlite3.Connection) and connection.in_transaction, "cash_file_failed")
     self._counts = check._counts(connection)
-    stored = {table: _table(connection, table) for table in ("financial_identity", "financial_meta", "financial_events", "payments", "evidence", "actions", "obligations", "cases")}
+    stored = {table: _table(connection, table) for table in ("financial_identity", "financial_meta", "financial_events", "payments", "evidence", "actions", "obligations", "cases", "financial_conflicts")}
     rows = {table: list(values.values()) for table, values in stored.items()}
     index = lambda table, key: {row[key]: row for row in rows[table]}
     identity, sequence, head, count, last = self._anchor
     ancestor = rows["financial_identity"][0]["genesis_head"] if sequence == 0 else index("financial_events", "event_sequence").get(sequence, {}).get("head")
-    sealed = connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (count - 1,)).fetchone()
-    _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else (sealed[0], bytes(sealed[1]).hex().upper()) == (sequence, last)), "cash_file_binding")
+    sealed, after = (connection.execute("SELECT last_sequence,segment_digest FROM main.history_segments WHERE segment_index=?", (index,)).fetchone() for index in (count - 1, count))
+    _require(rows["financial_identity"] == identity and ancestor == head and ((count, last) == (0, ledger.ZERO_DIGEST.hex().upper()) if sealed is None else sealed[0] <= sequence and bytes(sealed[1]).hex().upper() == last) and (after is None or after[0] >= sequence), "cash_file_binding")
     if self.intake is not None:
         _require(connection.execute("SELECT 1 FROM financial_events WHERE aggregate_type='INTAKE' AND aggregate_id=?", (self.intake["source_sha256"],)).fetchone() is None, "cash_file_conflict")
     received, aliases = {}, {}
@@ -88,7 +89,13 @@ def _old_begin_and_classify(self, connection):
             kind, answer = ("NEW", argument["payment_id"]) if stored_evidence is None else ("already_recorded", None)
         elif not (existing["amount_cents"] == argument["amount_cents"] and argument["pays_action_id"] in (None, received[existing["payment_id"]][1].get("pays_action_id"))
                   and (stored_evidence is not None or existing["active"] == 1 or argument["event_at_ms"] <= evidence[existing["reversed_by_evidence_id"]]["event_at_ms"])):
-            kind, answer = "conflict", None
+            conflict = check._conflict_id(argument)
+            other = existing["amount_cents"] != argument["amount_cents"] and check._ID.fullmatch(conflict) is not None
+            if other and stored_evidence is None and argument["expected_revision"] == turn[obligation]:
+                kind, answer = "CONFLICT", existing["payment_id"]
+            else:
+                again = other and _matches(index("financial_conflicts", "conflict_id").get(conflict), {"obligation_id": obligation, "existing_payment_id": existing["payment_id"]}) and _matches(stored_evidence, _fact(restated))
+                kind, answer = "conflict:" + conflict if again else "conflict", None
         elif stored_evidence is None:
             kind, answer = "OVERLAP", existing["payment_id"]
         else:

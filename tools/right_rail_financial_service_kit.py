@@ -105,6 +105,7 @@ STATE_FILES = (
     "app/right_rail_financial_custody.py",
     "app/right_rail_financial_derived.py",
     "app/right_rail_financial_followthrough.py",
+    "app/right_rail_financial_intake.py",
     "app/right_rail_financial_line_pack.py",
     "app/right_rail_financial_mirror.py",
     "app/right_rail_financial_owner.py",

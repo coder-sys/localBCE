@@ -1222,7 +1222,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             with self.subTest(conflict_id), closing(sqlite3.connect(":memory:")) as connection:
                 connection.row_factory = sqlite3.Row
                 connection.execute("CREATE TABLE financial_conflicts (conflict_id, obligation_id, common_origin_id, candidate_evidence_id, existing_payment_id)")
-                connection.execute("CREATE TABLE financial_events (aggregate_type, kind, payload_json, committed_at_ms, event_sequence)")
+                connection.execute("CREATE TABLE financial_events (aggregate_type, aggregate_id, kind, payload_json, committed_at_ms, event_sequence)")
                 connection.execute("INSERT INTO financial_conflicts VALUES (?,'ob','o','e',NULL)", (conflict_id,))
                 with self.assertRaisesRegex(independent.IndependentFinancialError, f"^{code}$"):
                     independent._verify_conflicts(connection, {}, evidence, {})

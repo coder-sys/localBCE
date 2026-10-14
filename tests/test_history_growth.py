@@ -64,12 +64,13 @@ PINNED = {  # operation: (small-history work, large-history work) on trunk 70f96
     "audit": ((18364, 46790, 0, 182, 0), (38147, 46790, 0, 181, 0)),
     "summary": ((2796, 0, 0, 11, 0), (2796, 0, 0, 11, 0)),
     "history": ((2306, 0, 0, 328, 0), (2306, 0, 0, 328, 0)),
+    "baseline": ((123, 1752, 0, 19, 0), (149, 1754, 0, 19, 0)),  # measured tr10f2: a verified read of two head rows, flat
     "open": ((257358, 3923052, 0, 6039, 0), (2442549, 83603181, 0, 96729, 0)),
     "item_decision": ((34008, 61608, 9886, 192, 0), (69720, 360175, 84016, 1076, 0)),
     "gate_state_pin": ((0, 236354, 0, 706, 0), (0, 2362946, 0, 7046, 0)),
 }
 # Every public FinancialOwner method is measured or named here with the reason it is not (history-guard-v1.md, inventory).
-MEASURED = {"record_payment_evidence", "reverse_payment", "evaluate_obligation", "run_batch", "export_history", "export_continuity", "decision_package", "summary", "history"}
+MEASURED = {"record_payment_evidence", "reverse_payment", "evaluate_obligation", "run_batch", "export_history", "export_continuity", "decision_package", "summary", "history", "history_baseline"}
 UNMEASURED = {
     "setup, scales with its own input": "publish_control_pack register_population_manifest stage_population validate_population publish_population population_status",
     "decision-path writes, not yet measured (gap)": "record_support_evidence record_offset_claim retry_action authorize_offset reject_offset_and_authorize_correction acknowledge_action record_followthrough_decision record_reporting_evidence record_reporting_correction drain_correction_followups record_program_funding_receipt",
@@ -207,6 +208,7 @@ class HistoryGrowthTests(unittest.TestCase):
         prepared = fx._prepare(fx._file_of([cash_item], cash_check.MAX_ITEM_ROWS, prefix=f"{tag}-cash"))
         yield "cash_file", lambda: fx._apply(prepared)
         yield "export", lambda: store.export_history(folder)
+        yield "baseline", store.history_baseline  # before continuity: its large-history refusal drops the writer, and the next call would pay the reopen
         yield "continuity", store.export_continuity
         yield "package", lambda: store.decision_package(item)
 
