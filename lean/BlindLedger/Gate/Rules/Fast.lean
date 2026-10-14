@@ -28,7 +28,7 @@ def group {α : Type} (key : α → Nat) (xs : List α) : HashMap Nat (List α) 
 
 /-- One row of `posts`: each of row `n`'s keys lists `n`. -/
 def postStep (acc : HashMap Key (List Nat) × Nat) (x : Line) : HashMap Key (List Nat) × Nat :=
-  ((keys x).foldl (fun m k => m.insert k (acc.2 :: m.getD k [])) acc.1, acc.2 + 1)
+  let n := acc.2; ((keys x).foldl (fun m k => m.insert k (n :: m.getD k [])) acc.1, n + 1)
 
 /-- Each key's row positions in `xs` (`mem_posts`), and the row count.  A fold, so a writer that
     keeps it extends it by the appended rows alone (`posts_append`). -/
