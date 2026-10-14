@@ -240,6 +240,12 @@ def Res.next (x : Res) (i : Fast.Ix) (fr fu : List Line) : Option Res :=
            rbuf := rb, ubuf := ub, ix := some (extend i ⟨x.m.r.asOf, x.m.r.count + fr.length, x.m.r.entries ++ fr⟩
              ⟨x.m.u.asOf, x.m.u.count + fu.length, x.m.u.entries ++ fu⟩), bok := hk }
 
+/-- The index for a commit over `c`, `b`: the kept one refreshed (same `today`), else a build. -/
+def Res.ixFor (x : Res) (c : Ctx) (b : List Line) : Fast.Ix :=
+  match x.ix with
+  | some i => if i.today = c.today then refresh i c b else Fast.Ix.build c b
+  | none => Fast.Ix.build c b
+
 /-- `commit` with the kept index (`refresh`, or a build if `today` moved), the kept buffers (`Res.digest`) and the
     kept digest as `prior`; plus the next `Res` (`none`: fall back to `refit`). -/
 def commitRes (x : Res) (st : St) (unanchored : Bool) : Option Res × St × List String :=
@@ -254,9 +260,7 @@ def commitRes (x : Res) (st : St) (unanchored : Bool) : Option Res × St × List
       let ps := Std.HashSet.ofList (b.map (·.pay))
       (b, Fast.foreignOfF k os b, lines.filter fun l => !ps.contains l.pay)
     | none => (lines, st.foreign, [])
-  let ix := match x.ix with
-    | some i => if i.today = c.today then refresh i c b else Fast.Ix.build c b
-    | none => Fast.Ix.build c b
+  let ix := x.ixFor c b
   let r := ix.runIn f b
   let exp := st.batch.toList.filterMap (·.2)
   let got := r.decisions.map render ++ wait.map (lineText · ++ " WAIT -")
@@ -1602,12 +1606,195 @@ theorem commit_genesis_adds (st : St) (u : Bool) (hs : st.sealed = false) (ha : 
   rw [e1, e2]
   exact hadd b hb
 
+theorem memo_get_fits (st : St) (x : Res) (r u : Snapshot Line) (hr : x.m.r = r) (hu : x.m.u = u) :
+    Memo.get st.memo r u = x.m.d := by
+  have hx : x.m.d = Fast.setsDigestF hB r u := x.m.ok.trans (by rw [hr, hu])
+  unfold Memo.get
+  split
+  · rename_i m _
+    split
+    · rename_i h
+      have e : m.d = Fast.setsDigestF hB r u := m.ok.trans (by rw [h.1, h.2])
+      exact e.trans hx.symm
+    · exact hx.symm
+  · exact hx.symm
+
+theorem ixFor_eq (x : Res) (c : Ctx) (b : List Line) (hx : x.Ok) (hr : c.released = some x.m.r)
+    (hrp : c.releasedPrior = x.m.r) (hu : c.unresolved = some x.m.u) (hup : c.unresolvedPrior = x.m.u) :
+    x.ixFor c b = Fast.Ix.build c b := by
+  unfold Res.ixFor
+  cases hi : x.ix with
+  | none => rfl
+  | some i =>
+    obtain ⟨c0, b0, hi0, h1, h2, h3, h4⟩ := hx.2.2.2.2.2 i hi
+    simp only
+    split
+    · rename_i ht
+      subst hi0
+      exact refresh_eq c0 c b0 b ht.symm (by rw [hr, h1]) (by rw [hrp, h2]) (by rw [hu, h3]) (by rw [hup, h4])
+    · rfl
+
+/-- `c` reading `R`, `U` as its sets and priors. -/
+def advCtx (c : Ctx) (R U : Snapshot Line) : Ctx :=
+  { c with
+    released := some R
+    releasedPrior := R
+    unresolved := some U
+    unresolvedPrior := U }
+
+/-- The index extended by a commit's rows is a build over the context that reads the new sets as its priors. -/
+theorem ix_extend_build (c : Ctx) (f : List Nat) (b : List Line)
+    (hr : c.released = some c.releasedPrior) (hu : c.unresolved = some c.unresolvedPrior) :
+    ∃ c', extend (Fast.Ix.build c b) (decideBatchIn c f b).released (decideBatchIn c f b).unresolved = Fast.Ix.build c' b ∧
+      c'.released = some (decideBatchIn c f b).released ∧ c'.releasedPrior = (decideBatchIn c f b).released ∧
+      c'.unresolved = some (decideBatchIn c f b).unresolved ∧ c'.unresolvedPrior = (decideBatchIn c f b).unresolved := by
+  refine ⟨advCtx c (decideBatchIn c f b).released (decideBatchIn c f b).unresolved, ?_, rfl, rfl, rfl, rfl⟩
+  have h := ix_extend_eq c (advCtx c (decideBatchIn c f b).released (decideBatchIn c f b).unresolved) f b b hr hu
+    rfl rfl rfl rfl rfl
+  rw [← h]
+  rfl
+
+theorem run_shape (x : Res) (c : Ctx) (b : List Line) (f : List Nat) (hx : x.Ok)
+    (hr : c.released = some x.m.r) (hrp : c.releasedPrior = x.m.r)
+    (hu : c.unresolved = some x.m.u) (hup : c.unresolvedPrior = x.m.u) :
+    ∃ ra ua, ((Fast.Ix.build c b).runIn f b).released = ⟨x.m.r.asOf, x.m.r.count + ra.length, x.m.r.entries ++ ra⟩ ∧
+      ((Fast.Ix.build c b).runIn f b).unresolved = ⟨x.m.u.asOf, x.m.u.count + ua.length, x.m.u.entries ++ ua⟩ ∧
+      (Fast.Ix.build c b).relN = x.m.r.entries.length ∧ (Fast.Ix.build c b).unrN = x.m.u.entries.length := by
+  obtain ⟨ra, ua, hR, hU, hrn, hun⟩ := runIn_view c f b x.m.r x.m.u
+    (by rw [hr, hrp]; exact viewF_self _ _) (by rw [hu, hup]; exact viewF_self _ _)
+  refine ⟨ra, ua, ?_, ?_, hrn, hun⟩
+  · rw [hR, hx.2.2.2.1]
+  · rw [hU, hx.2.2.2.2.1]
+
+theorem next_some (x : Res) (i : Fast.Ix) (fr fu : List Line) (y : Res) (hy : x.next i fr fu = some y) :
+    y.m.r = ⟨x.m.r.asOf, x.m.r.count + fr.length, x.m.r.entries ++ fr⟩ ∧
+    y.m.u = ⟨x.m.u.asOf, x.m.u.count + fu.length, x.m.u.entries ++ fu⟩ ∧ y.ix = some (extend i y.m.r y.m.u) := by
+  unfold Res.next at hy
+  split at hy
+  · simp at hy
+  · obtain rfl := Option.some.inj hy
+    exact ⟨rfl, rfl, rfl⟩
+
+theorem next_ok (x : Res) (c : Ctx) (b : List Line) (f : List Nat) (hx : x.Ok)
+    (hr : c.released = some x.m.r) (hrp : c.releasedPrior = x.m.r)
+    (hu : c.unresolved = some x.m.u) (hup : c.unresolvedPrior = x.m.u) (y : Res)
+    (hy : x.next (Fast.Ix.build c b) (((Fast.Ix.build c b).runIn f b).released.entries.drop (Fast.Ix.build c b).relN)
+      (((Fast.Ix.build c b).runIn f b).unresolved.entries.drop (Fast.Ix.build c b).unrN) = some y) :
+    ∃ ra ua, y.Ok ∧ y.m.r = ((Fast.Ix.build c b).runIn f b).released ∧
+      y.m.u = ((Fast.Ix.build c b).runIn f b).unresolved ∧
+      ((Fast.Ix.build c b).runIn f b).released = ⟨x.m.r.asOf, x.m.r.count + ra.length, x.m.r.entries ++ ra⟩ ∧
+      ((Fast.Ix.build c b).runIn f b).unresolved = ⟨x.m.u.asOf, x.m.u.count + ua.length, x.m.u.entries ++ ua⟩ ∧
+      ((Fast.Ix.build c b).runIn f b).released.entries.drop (Fast.Ix.build c b).relN = ra ∧
+      ((Fast.Ix.build c b).runIn f b).unresolved.entries.drop (Fast.Ix.build c b).unrN = ua := by
+  generalize hR0 : (Fast.Ix.build c b).runIn f b = R at hy ⊢
+  obtain ⟨ra, ua, hR, hU, hrn, hun⟩ := run_shape x c b f hx hr hrp hu hup
+  rw [hR0] at hR hU
+  have e1 : R.released.entries.drop (Fast.Ix.build c b).relN = ra := by rw [hR, hrn]; exact List.drop_left
+  have e2 : R.unresolved.entries.drop (Fast.Ix.build c b).unrN = ua := by rw [hU, hun]; exact List.drop_left
+  rw [e1, e2] at hy
+  obtain ⟨hyr, hyu, hyi⟩ := next_some x _ _ _ y hy
+  have hyr' : y.m.r = R.released := by rw [hyr, hR]
+  have hyu' : y.m.u = R.unresolved := by rw [hyu, hU]
+  refine ⟨ra, ua, ?_, hyr', hyu', hR, hU, e1, e2⟩
+  refine ⟨y.bok.1, y.bok.2, ?_, ?_, ?_, ?_⟩
+  · rw [hyr', hyu', hR, hU]; exact hx.2.2.1
+  · rw [hyr]; simp [hx.2.2.2.1]
+  · rw [hyu]; simp [hx.2.2.2.2.1]
+  · intro i' hi'
+    rw [hyi] at hi'
+    obtain ⟨c', hc', h1, h2, h3, h4⟩ := ix_extend_build c f b (by rw [hr, hrp]) (by rw [hu, hup])
+    have hd : R = decideBatchIn c f b := by rw [← hR0]; exact Fast.decideBatchFIn_eq c f b
+    rw [← hd] at hc' h1 h2 h3 h4
+    rw [← hyr', ← hyu'] at hc'
+    rw [← hyr'] at h1 h2
+    rw [← hyu'] at h3 h4
+    exact ⟨c', b, (Option.some.inj hi').symm.trans hc', h1, h2, h3, h4⟩
+
+theorem fits_main (x : Res) (st S : St) (b : List Line) (f : List Nat) (hf : x.Fits st)
+    (y : Res) (hy : x.next (Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b)
+      (((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).released.entries.drop
+        (Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).relN)
+      (((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).unresolved.entries.drop
+        (Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).unrN) = some y)
+    (hp : S.pinned = some (st.pinned.getD st.pin)) (hsl : S.sealed = true)
+    (hrS : S.rprior = ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).released)
+    (huS : S.uprior = ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).unresolved)
+    (heS : S.extra = st.extra ++ ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).released.entries.drop
+        (Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).relN)
+    (hhS : S.held = st.held ++ ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).unresolved.entries.drop
+        (Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).unrN) :
+    y.Fits S := by
+  obtain ⟨hx, hrp, hup, -, hcr, hcu⟩ := hf
+  obtain ⟨ra, ua, hok, hyr, hyu, hRs, hUs, e1, e2⟩ := next_ok x _ b f hx hcr hrp hcu hup y hy
+  have hP : S.pinned.getD S.pin = st.pinned.getD st.pin := by rw [hp]; rfl
+  rw [e1] at heS
+  rw [e2] at hhS
+  have hcr' := hcr
+  have hcu' := hcu
+  simp only [St.ctx] at hcr' hcu'
+  refine ⟨hok, by rw [hrS, hyr], by rw [huS, hyu], hsl, ?_, ?_⟩
+  · rw [hP]; simp only [St.ctx, heS]
+    rw [← grow_app, hcr', hyr, hRs]; rfl
+  · rw [hP]; simp only [St.ctx, hhS]
+    rw [← grow_app, hcu', hyu, hUs]; rfl
+
+theorem digest_run (x : Res) (hx : x.Ok) (c : Ctx) (b : List Line) (f : List Nat)
+    (hr : c.released = some x.m.r) (hrp : c.releasedPrior = x.m.r)
+    (hu : c.unresolved = some x.m.u) (hup : c.unresolvedPrior = x.m.u) :
+    (x.digest ((Fast.Ix.build c b).runIn f b).released ((Fast.Ix.build c b).runIn f b).unresolved).map (·.1) =
+      Fast.setsDigestF hB ((Fast.Ix.build c b).runIn f b).released ((Fast.Ix.build c b).runIn f b).unresolved := by
+  obtain ⟨ra, ua, hR, hU, -, -⟩ := run_shape x c b f hx hr hrp hu hup
+  rw [hR, hU]
+  exact (digest_eq x hx ra ua).1
+
 /-- T2: on a fitting state the resident commit prints every byte `commit` prints (RULES_LINE, _FREE, _DIGEST, _ADDS,
     _READS, mismatches), leaves the same state, and its next `Res` (none when fresh rows do not serialize) fits that state. Rules out a stale cache after a
     commit and any output that differs from the full replay. -/
 theorem commitRes_eq (x : Res) (st : St) (unanchored : Bool) (hf : x.Fits st) :
     (commitRes x st unanchored).2 = commit st unanchored ∧
-      ∀ y, (commitRes x st unanchored).1 = some y → y.Fits (commit st unanchored).1 := sorry
+      ∀ y, (commitRes x st unanchored).1 = some y → y.Fits (commit st unanchored).1 := by
+  have hf' := hf
+  obtain ⟨hx, hrp, hup, hsl, hcr, hcu⟩ := hf
+  have hprior : (if st.sealed || st.anchor.isSome then Memo.get st.memo (st.ctx (st.pinned.getD st.pin)).releasedPrior
+      (st.ctx (st.pinned.getD st.pin)).unresolvedPrior else none) = x.m.d := by
+    simp only [hsl, Bool.true_or, ↓reduceIte]
+    exact memo_get_fits st x _ _ hrp.symm hup.symm
+  have hIx : ∀ b, x.ixFor (st.ctx (st.pinned.getD st.pin)) b = Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b :=
+    fun b => ixFor_eq x _ b hx hcr hrp hcu hup
+  have hdigR : ∀ (f : List Nat) (b : List Line),
+      (x.digest ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).released
+        ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).unresolved).map (·.1) =
+      Fast.setsDigestF hB ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).released
+        ((Fast.Ix.build (st.ctx (st.pinned.getD st.pin)) b).runIn f b).unresolved :=
+    fun f b => digest_run x hx _ b f hcr hrp hcu hup
+  by_cases hA : (!st.anchor.all fun a => x.m.d == some (Gate.natBE Gate.digestBytes a)) = true
+  · have h1 : commitRes x st unanchored = (some x, commit st unanchored) := by
+      unfold commitRes; dsimp only; simp only [if_pos hA]
+    rw [h1]
+    refine ⟨rfl, ?_⟩
+    intro y hy
+    obtain rfl := Option.some.inj hy
+    unfold commit; dsimp only; simp only [hprior, if_pos hA]
+    exact hf'
+  · constructor
+    · unfold commitRes commit
+      dsimp only
+      simp only [hprior, if_neg hA]
+      rcases ho : st.owners with _ | ⟨k, os⟩
+      all_goals simp only [hIx, Option.elim, hsl, eq_self, ↓reduceIte]
+      all_goals simp only [hdigR]
+      all_goals simp only [Option.map]
+      all_goals first | rfl | (congr 1 <;> first | rfl | skip)
+    · intro y hy
+      unfold commitRes at hy
+      dsimp only at hy
+      simp only [if_neg hA] at hy
+      unfold commit
+      dsimp only
+      simp only [hprior, if_neg hA]
+      rcases ho : st.owners with _ | ⟨k, os⟩
+      all_goals simp only [ho, Option.map, hIx] at hy ⊢
+      all_goals exact fits_main x st _ _ _ hf' y hy rfl rfl rfl rfl rfl rfl
 
 /-- F1: every worker step keeps `Inv`. Rules out `commitRes` running on a state its `Res` does not fit (after a
     `today`, `snap`, `drop`, set row, `case` or `load` in the frame). -/
