@@ -396,6 +396,37 @@ theorem resident_inv (st : St) (u : Bool) (bs b : ByteArray)
     (hb : ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2) :
     parseAdds (bs ++ b) = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := sorry
 
+theorem baLe_trans (a b c : ByteArray) (h1 : Fast.baLe a b = true) (h2 : Fast.baLe b c = true) : Fast.baLe a c = true := by
+  simp only [Fast.baLe_eq, decide_eq_true_eq] at *
+  exact List.le_trans h1 h2
+
+theorem baLe_total (a b : ByteArray) : (Fast.baLe a b || Fast.baLe b a) = true := by
+  simp only [Fast.baLe_eq, Bool.or_eq_true, decide_eq_true_eq]
+  exact List.le_total _ _
+
+theorem baLe_anti (a b : ByteArray) (h1 : Fast.baLe a b = true) (h2 : Fast.baLe b a = true) : a = b := by
+  simp only [Fast.baLe_eq, decide_eq_true_eq] at *
+  have := List.le_antisymm h1 h2
+  cases a; cases b; simp_all [Array.toList_inj]
+
+theorem merge_sort_eq (xs ys : List ByteArray) :
+    List.merge (xs.mergeSort Fast.baLe) (ys.mergeSort Fast.baLe) Fast.baLe = (xs ++ ys).mergeSort Fast.baLe := by
+  apply List.Perm.eq_of_pairwise (le := fun a b => Fast.baLe a b = true)
+  · intro a b _ _ h1 h2; exact baLe_anti a b h1 h2
+  · exact List.pairwise_merge baLe_trans baLe_total _ _ (List.pairwise_mergeSort baLe_trans baLe_total _) (List.pairwise_mergeSort baLe_trans baLe_total _)
+  · exact List.pairwise_mergeSort baLe_trans baLe_total _
+  · exact (List.merge_perm_append _).trans ((List.mergeSort_perm xs _).append (List.mergeSort_perm ys _)) |>.trans (List.mergeSort_perm _ _).symm
+
+theorem emptyCap_append (n : Nat) (h : ByteArray) : ByteArray.emptyWithCapacity n ++ h = h := by
+  show ByteArray.empty ++ h = h
+  exact ByteArray.empty_append
+
+theorem rowsOf_append (s fresh : List Line) (rs : List ByteArray) (hs : rowsOf s = some rs) :
+    rowsOf (s ++ fresh) = (rowsOf fresh).map (rs ++ ·) := by
+  unfold rowsOf at hs ⊢
+  rw [List.mapM_append, hs]
+  cases List.mapM (fun x => Fast.pushRow ByteArray.empty x.fields) fresh <;> rfl
+
 /-- T3: the incremental pin is `Fast.pinBytes` of the extended set, and the merged buffer is its sorted rows. Rules out
     a merge that misorders, drops or duplicates a row. -/
 theorem pinIncr_eq (domain : String) (kind : Nat) (s : Snapshot Line) (fresh : List Line) (buf : Array ByteArray)
@@ -403,7 +434,33 @@ theorem pinIncr_eq (domain : String) (kind : Nat) (s : Snapshot Line) (fresh : L
     (pinIncr domain kind s.asOf (s.count + fresh.length) buf fresh).map (·.1) =
       Fast.pinBytes domain kind Line.fields ⟨s.asOf, s.count + fresh.length, s.entries ++ fresh⟩ ∧
     ∀ p b', pinIncr domain kind s.asOf (s.count + fresh.length) buf fresh = some (p, b') →
-      ∃ rs', rowsOf (s.entries ++ fresh) = some rs' ∧ b'.toList = rs'.mergeSort Fast.baLe := sorry
+      ∃ rs', rowsOf (s.entries ++ fresh) = some rs' ∧ b'.toList = rs'.mergeSort Fast.baLe := by
+  have key := rowsOf_append _ fresh _ hs
+  have hbuf : buf = (rs.mergeSort Fast.baLe).toArray := by
+    apply Array.ext'; simpa using hb
+  subst hbuf
+  have key' := key
+  unfold rowsOf at key'
+  constructor
+  · simp only [pinIncr, Fast.pinBytes, rowsOf]
+    generalize domain.toUTF8.push 0 = hd
+    generalize hho : Fast.pushRow hd [(4, kind), (4, s.asOf), (4, s.count + fresh.length)] = ho
+    cases ho with
+    | none => simp
+    | some head =>
+      cases hf : List.mapM (fun x => Fast.pushRow ByteArray.empty (Line.fields x)) fresh with
+      | none => simp [key', hf]
+      | some rf =>
+        simp [key', hf, emptyCap_append, merge_sort_eq]
+  · intro p b' h
+    cases hf : rowsOf fresh with
+    | none => simp [pinIncr, hf] at h
+    | some rf =>
+      refine ⟨rs ++ rf, by rw [key, hf]; rfl, ?_⟩
+      simp [pinIncr, hf] at h
+      obtain ⟨head, -, h⟩ := Option.bind_eq_some_iff.1 h
+      have h2 := (Prod.mk.inj (Option.some.inj h)).2
+      rw [← h2, ← merge_sort_eq]
 
 /-- T3: the kept digest of the extended sets is the full `Fast.setsDigestF` (the printed RULES_DIGEST), and the new
     buffers keep `Res.Ok`. Rules out a resident digest that differs from the full re-serialization. -/
