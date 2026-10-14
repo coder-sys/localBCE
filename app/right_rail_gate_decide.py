@@ -41,7 +41,7 @@ FRAME_CAP = 1 << 20  # the largest frame the worker takes; Lean's own limit (``p
 
 class RulesWorker:
     """A long-lived ``gate_rules_worker`` (the one-shot's process start and arena are paid once, not per batch): u32 BE frames
-    of the same vector text, answered with the same output lines minus ``RULES_SOURCE``; both exes run ``Run.runText``.  Any
+    of the same vector text, answered with the same output lines minus ``RULES_SOURCE``; the one-shot runs ``Run.runText``, the worker ``Resident.frame`` (a ``resume`` line answers as the full ``load``).  Any
     failure (a killed or hung worker, a stray byte, an oversize answer) closes it and raises ``rules_refused``; the next call
     starts a fresh one.  A frame over ``FRAME_CAP`` goes to the one-shot exe (``decide``), by size, never after a
     failure: a decide takes some 700 times its frame in memory (measured), so the 1 GB job cap stops a batch near 1.5 MiB."""

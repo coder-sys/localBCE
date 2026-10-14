@@ -81,12 +81,15 @@ def unhexFast (s : String) : Option ByteArray :=
   let u := s.toUTF8
   if u.size % 2 != 0 then none else unhexGo u (u.size / 2) 0 (ByteArray.emptyWithCapacity (u.size / 2))
 
+/-- `s` cut at every `c`, empty pieces kept (`String.split` has lemmas, the old `splitOn` none). -/
+def splitC (s : String) (c : Char) : List String := (s.split c).toList.map (·.copy)
+
 /-- A vector line's fields: `\r` dropped, split on spaces, empties skipped. -/
-def fields (raw : String) : List String := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
+def fields (raw : String) : List String := (splitC (String.ofList (raw.toList.filter (· ≠ '\r'))) ' ').filter (· ≠ "")
 
 /-- `fields` without the per-character list round trip when the line has no `\r` (`fieldsFast_eq`). -/
 def fieldsFast (raw : String) : List String :=
-  if raw.contains '\r' then fields raw else (raw.splitOn " ").filter (· ≠ "")
+  if raw.contains '\r' then fields raw else (splitC raw ' ').filter (· ≠ "")
 
 /-- One `RULES_ADDS` row: the set tag, then the `Line.fields` row. -/
 def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
@@ -373,26 +376,34 @@ def step (st : St) : List String → Option (St × List String)
     pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 
+/-- The vector lines through `stp`, numbered from 1; blank and `#` lines skipped. -/
+def runLoop {σ : Type} (stp : σ → List String → Option (σ × List String)) (get : σ → St) (bump : σ → σ) :
+    List String → Nat → σ → Array String → σ × Array String
+  | [], _, s, out => (s, out)
+  | raw :: rest, n, s, out =>
+    let n := n + 1
+    let fs := fieldsFast raw
+    if fs.isEmpty || fs.head!.startsWith "#" then runLoop stp get bump rest n s out
+    else match stp s fs with
+      | none => runLoop stp get bump rest n (bump s) (out.push s!"RULES_VECTOR_MALFORMED line={n}")
+      | some (next, ls) => runLoop stp get bump rest n next
+          ((if (get next).failed > (get s).failed then out.push s!"RULES_VECTOR_FAIL line={n}" else out) ++ ls)
+
+/-- The loop over any step state `σ` (its `St` by `get`, a malformed line by `bump`): the output, whether it passed, and
+    the final state.  `runWith` is `step` on `St`; the resident worker runs it on its `Worker`. -/
+def runOn {σ : Type} (stp : σ → List String → Option (σ × List String)) (get : σ → St) (bump : σ → σ) (s0 : σ)
+    (text : String) : Array String × Bool × σ :=
+  let (s, out) := runLoop stp get bump (splitC text '\n') 0 s0 #[]
+  let st := get s
+  let pass := st.failed == 0 && st.expected == some st.checked
+  (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass, s)
+
+def runWith (text : String) : Array String × Bool × St :=
+  runOn step id (fun st => { st with failed := st.failed + 1 }) {} text
+
 /-- The vector text through the rules: the output lines (the one-shot `main` prints them after `RULES_SOURCE`; the
     worker answers a frame with them) and whether it passed.  Each text starts from the empty state. -/
-def runText (text : String) : Array String × Bool := Id.run do
-  let mut st : St := {}
-  let mut out : Array String := #[]
-  let mut number := 0
-  for raw in text.splitOn "\n" do
-    number := number + 1
-    let fs := fieldsFast raw
-    if fs.isEmpty || fs.head!.startsWith "#" then continue
-    match step st fs with
-    | none =>
-      st := { st with failed := st.failed + 1 }
-      out := out.push s!"RULES_VECTOR_MALFORMED line={number}"
-    | some (next, lines) =>
-      if next.failed > st.failed then out := out.push s!"RULES_VECTOR_FAIL line={number}"
-      st := next
-      out := out ++ lines
-  let pass := st.failed == 0 && st.expected == some st.checked
-  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass)
+def runText (text : String) : Array String × Bool := let r := runWith text; (r.1, r.2.1)
 
 def main (args : List String) : IO UInt32 := do
   IO.println s!"RULES_SOURCE {source}"
@@ -404,7 +415,8 @@ def main (args : List String) : IO UInt32 := do
   return (if pass then 0 else 1)
 
 /-! Long-lived worker (`gate_rules_worker`), the shape of `Financial.WorkerCli`: each stdin frame is a u32 BE length and
-    a vector text, each stdout frame a u32 BE length and `runText`'s lines.  Clean end of input exits 0; a short, oversize
+    a vector text, each stdout frame a u32 BE length and the lines `frame` returns for it (`serve` threads its state `s`
+    across frames: the worker passes `Resident.frame`, the profile tool a stateless `runText`).  Clean end of input exits 0; a short, oversize
     or non-UTF-8 frame, or an answer past the cap, exits 65 without output. -/
 
 def maxFrame : Nat := 64 * 1024 * 1024
@@ -414,7 +426,8 @@ partial def readN (read : USize → IO ByteArray) (n : Nat) (acc : ByteArray := 
   let b ← read (min (n - acc.size) 1048576).toUSize
   if b.size = 0 then return acc else readN read n (acc ++ b)
 
-partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit) : IO UInt32 := do
+partial def serve {σ : Type} (frame : σ → String → Array String × σ) (s : σ) (read : USize → IO ByteArray)
+    (write : ByteArray → IO Unit) : IO UInt32 := do
   let h ← readN read 4
   if h.size = 0 then return 0
   let n := h.foldl (fun a b => a * 256 + b.toNat) 0
@@ -422,9 +435,10 @@ partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit
   let f ← readN read n
   if f.size < n then return 65
   let some text := String.fromUTF8? f | return 65
-  let resp := (String.join ((runText text).1.toList.map (· ++ "\n"))).toUTF8
+  let (out, s) := frame s text
+  let resp := (String.join (out.toList.map (· ++ "\n"))).toUTF8
   if resp.size > maxFrame then return 65
   write (ByteArray.mk #[(resp.size >>> 24).toUInt8, (resp.size >>> 16).toUInt8, (resp.size >>> 8).toUInt8, resp.size.toUInt8] ++ resp)
-  serve read write
+  serve frame s read write
 
 end BlindLedger.Gate.Rules.Run

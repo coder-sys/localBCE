@@ -48,6 +48,36 @@ class RulesWorkerTests(fx.Scratch):
                 self.assertEqual(got, one_shot(data, Path(tmp)))
                 self.assertTrue(got[-1].startswith("RULES_VECTORS="))
 
+    def test_resume_answers_as_the_full_load_across_frames(self):
+        """A `resume D` after a commit on the same worker prints what `load ASOF ADDS D` prints on the one-shot, batch after batch."""
+        def batch(base: int, n: int, first: str) -> bytes:
+            rows = [f"line {i}:{i} FFS_CLAIM 1001 7001 7001 {20270301 + i % 20} 99213 1 {1000 + i}" for i in range(base, base + n)]
+            return "\n".join([*g._HEAD, "case batch", first, "owners 0 " + " ".join(f"{i}:0:0" for i in range(base, base + n)),
+                              *rows, "commit", "end 0"]).encode()
+
+        def committed(out: list[str]) -> tuple[str, str]:
+            digest = [r.split(" ")[1] for r in out if r.startswith("RULES_DIGEST ")]
+            adds = "".join(r.split(" ")[1] for r in out if r.startswith("RULES_ADDS "))
+            self.assertEqual(len(digest), 1, out[-6:])
+            return digest[0], adds
+
+        w = self.worker()
+        with self.scratch() as tmp:
+            first = w.run(batch(1, 30, "# genesis"))
+            self.assertTrue(first[-1].startswith("RULES_VECTORS=PASS"), first[-3:])
+            digest, adds = committed(first)
+            for base in (100, 200):
+                resumed = w.run(batch(base, 30, f"resume {digest}"))
+                loaded = one_shot(batch(base, 30, f"load {g.ASOF} {adds or '-'} {digest}"), Path(tmp))
+                self.assertEqual(resumed, loaded)
+                self.assertTrue(resumed[-1].startswith("RULES_VECTORS=PASS"), resumed[-3:])
+                self.assertFalse(any("MISMATCH" in r for r in resumed))
+                new_digest, new_adds = committed(resumed)
+                self.assertNotEqual(new_digest, digest)
+                digest, adds = new_digest, adds + new_adds
+            stale = w.run(batch(300, 5, f"resume {'0' * 128}"))
+            self.assertIn("RULES_STATE_MISMATCH resume", stale)
+
     def test_killed_worker_is_a_typed_refusal_and_nothing_settles(self):
         real = process.ContainedWorker.exchange
 
