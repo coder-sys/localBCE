@@ -1483,6 +1483,82 @@ theorem commit_struct (st : St) (u : Bool) :
           subst he
           na_tac
 
+/-- The batch run's sets are the views plus the fresh rows. -/
+theorem runIn_view (c : Ctx) (f : List Nat) (b : List Line) (P Q : Snapshot Line)
+    (hr : Fast.viewF (Fast.chainedF c.today c.releasedPrior c.released) c.releasedPrior c.released = P)
+    (hu : Fast.viewF (Fast.chainedF c.today c.unresolvedPrior c.unresolved) c.unresolvedPrior c.unresolved = Q) :
+    ∃ ra ua, ((Fast.Ix.build c b).runIn f b).released = ⟨P.asOf, P.entries.length + ra.length, P.entries ++ ra⟩ ∧
+      ((Fast.Ix.build c b).runIn f b).unresolved = ⟨Q.asOf, Q.entries.length + ua.length, Q.entries ++ ua⟩ ∧
+      (Fast.Ix.build c b).relN = P.entries.length ∧ (Fast.Ix.build c b).unrN = Q.entries.length := by
+  have h1 : (Fast.Ix.build c b).relV = P := hr
+  have h2 : (Fast.Ix.build c b).unrV = Q := hu
+  have h3 : (Fast.Ix.build c b).relN = P.entries.length := congrArg (fun s : Snapshot Line => s.entries.length) hr
+  have h4 : (Fast.Ix.build c b).unrN = Q.entries.length := congrArg (fun s : Snapshot Line => s.entries.length) hu
+  refine ⟨(Fast.Ix.build c b).releasedLines ((Fast.Ix.build c b).decideAll (Std.HashSet.ofList (idSeen f)) ((Fast.Ix.build c b).order b)),
+    (Fast.Ix.build c b).unresolvedLines ((Fast.Ix.build c b).decideAll (Std.HashSet.ofList (idSeen f)) ((Fast.Ix.build c b).order b)),
+    ?_, ?_, h3, h4⟩
+  · simp only [Fast.Ix.runIn, h1, h3]
+  · simp only [Fast.Ix.runIn, h2, h4]
+
+theorem chainedF_some (t : Nat) (p : Snapshot Line) (o : Option (Snapshot Line)) (h : Fast.chainedF t p o = true) :
+    ∃ s, o = some s ∧ s.count = s.entries.length := by
+  cases o with
+  | none => simp [Fast.chainedF] at h
+  | some s =>
+    refine ⟨s, rfl, ?_⟩
+    simp only [Fast.chainedF, Bool.and_eq_true, beq_iff_eq] at h
+    exact h.1.1.1.1.symm
+
+theorem viewF_chained (t : Nat) (p s : Snapshot Line) (o : Option (Snapshot Line)) (h : Fast.chainedF t p o = true)
+    (ho : o = some s) : Fast.viewF (Fast.chainedF t p o) p o = s := by
+  rw [h, ho]; rfl
+
+/-- `Res.fit` succeeds on a sealed state that reads its own priors (one date, counts = lengths) when their digest exists. -/
+theorem fit_of_priors (S : St) (hs : S.sealed = true) (ha : S.uprior.asOf = S.rprior.asOf)
+    (hrc : S.rprior.count = S.rprior.entries.length) (huc : S.uprior.count = S.uprior.entries.length)
+    (hcr : (S.ctx (S.pinned.getD S.pin)).released = some S.rprior)
+    (hcu : (S.ctx (S.pinned.getD S.pin)).unresolved = some S.uprior)
+    (hg : (Fast.setsDigestF hB S.rprior S.uprior).isSome) : ∃ y, Res.fit S = some y := by
+  obtain ⟨d, hd⟩ := Option.isSome_iff_exists.1 hg
+  obtain ⟨⟨rs, hrs⟩, ⟨us, hus⟩⟩ := rows_of_digest _ _ _ hd
+  obtain ⟨h1, h2⟩ := memoOf_priors S
+  obtain ⟨y, hy, -⟩ := fit_some S rs us
+    ⟨hs, by rw [h1, h2]; exact ha, by rw [h1]; exact hrc, by rw [h2]; exact huc, by rw [h1]; exact hcr,
+      by rw [h2]; exact hcu⟩ (by rw [h1]; exact hrs) (by rw [h2]; exact hus)
+  exact ⟨y, hy⟩
+
+/-- A genesis commit over chained declared sets `s`, `t`: its sets are theirs plus the run's fresh rows, and its
+    RULES_ADDS parse to those rows. -/
+theorem commit_view (st : St) (u : Bool) (ha : st.anchor = none)
+    (hr : Fast.chainedF st.today st.rprior (st.ctx (st.pinned.getD st.pin)).released = true)
+    (hu : Fast.chainedF st.today st.uprior (st.ctx (st.pinned.getD st.pin)).unresolved = true) :
+    ∃ s t ra ua, (st.ctx (st.pinned.getD st.pin)).released = some s ∧
+      (st.ctx (st.pinned.getD st.pin)).unresolved = some t ∧ s.count = s.entries.length ∧ t.count = t.entries.length ∧
+      (commit st u).1.rprior = ⟨s.asOf, s.entries.length + ra.length, s.entries ++ ra⟩ ∧
+      (commit st u).1.uprior = ⟨t.asOf, t.entries.length + ua.length, t.entries ++ ua⟩ ∧
+      (commit st u).1.extra = st.extra ++ ra ∧ (commit st u).1.held = st.held ++ ua ∧
+      (commit st u).1.sealed = true ∧ (commit st u).1.pinned = some (st.pinned.getD st.pin) ∧
+      ∀ b, ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2 → parseAdds b = some (ra, ua) := by
+  obtain ⟨hp, ht, hm, H⟩ := commit_struct st u
+  obtain ⟨s, hs, hsc⟩ := chainedF_some _ _ _ hr
+  obtain ⟨t, ht', htc⟩ := chainedF_some _ _ _ hu
+  rcases H with ⟨hanc, -⟩ | ⟨hsl, he, hh, hr', hu', hAD⟩
+  · rw [ha] at hanc; exact absurd hanc (by simp)
+  · obtain ⟨ra, ua, hR, hU, hrn, hun⟩ := runIn_view (st.ctx (st.pinned.getD st.pin)) (cbf st).2.1 (cbf st).1 s t
+      (viewF_chained _ _ _ _ hr hs) (viewF_chained _ _ _ _ hu ht')
+    simp only [hrn, hun, hR, hU, List.drop_left] at hr' hu' he hh hAD
+    refine ⟨s, t, ra, ua, hs, ht', hsc, htc, hr', hu', he, hh, hsl, hp, ?_⟩
+    intro b hb
+    rcases hAD _ hb with h | ⟨bb, hbb, hab⟩
+    · exact absurd h (not_na_adds _)
+    · have hh2 : hexOf b = hexOf bb := (String.append_right_inj _).1 hbb
+      have : b = bb := by
+        have := congrArg unhexFast hh2
+        rw [unhexFast_hexOf, unhexFast_hexOf] at this
+        exact Option.some.inj this
+      subst this
+      exact parseAdds_addsBytes _ _ _ hab
+
 /-- F2: a genesis commit (not sealed, no anchor) over declared sets that are chained, of one date, with a digest,
     gives a fitting `Res`. Rules out a first frame that can never reach the resident path. -/
 theorem commit_genesis_fits (st : St) (u : Bool) (hs : st.sealed = false) (ha : st.anchor = none)
@@ -1491,7 +1567,19 @@ theorem commit_genesis_fits (st : St) (u : Bool) (hs : st.sealed = false) (ha : 
     (hd : (st.ctx (st.pinned.getD st.pin)).released.map (·.asOf) =
       (st.ctx (st.pinned.getD st.pin)).unresolved.map (·.asOf))
     (hg : (Fast.setsDigestF hB (commit st u).1.rprior (commit st u).1.uprior).isSome) :
-    ∃ y, Res.fit (commit st u).1 = some y := sorry
+    ∃ y, Res.fit (commit st u).1 = some y := by
+  obtain ⟨s, t, ra, ua, hs0, ht0, hsc, htc, hrS, huS, hex, hhd, hsl, hpS, -⟩ := commit_view st u ha hr hu
+  have hp' : (commit st u).1.pinned.getD (commit st u).1.pin = st.pinned.getD st.pin := by rw [hpS]; rfl
+  have hd' : t.asOf = s.asOf := by
+    rw [hs0, ht0] at hd
+    exact (Option.some.inj hd).symm
+  refine fit_of_priors _ hsl (by rw [hrS, huS]; exact hd') (by rw [hrS]; simp) (by rw [huS]; simp) ?_ ?_ hg
+  · rw [hp']; simp only [St.ctx, hex]
+    simp only [St.ctx] at hs0
+    rw [← grow_app, hs0, hrS]; simp [grow, hsc]
+  · rw [hp']; simp only [St.ctx, hhd]
+    simp only [St.ctx] at ht0
+    rw [← grow_app, ht0, huS]; simp [grow, htc]
 
 /-- N1: a genesis commit over empty declared sets (the head's `<asOf, 0, []>`; genesis sends no `load`) prints
     RULES_ADDS that parse to exactly the committed sets, so `resident_inv` starts from the first batch. Rules out a
@@ -1502,7 +1590,17 @@ theorem commit_genesis_adds (st : St) (u : Bool) (hs : st.sealed = false) (ha : 
     (he : (st.ctx (st.pinned.getD st.pin)).released.map (·.entries) = some [] ∧
       (st.ctx (st.pinned.getD st.pin)).unresolved.map (·.entries) = some []) :
     ∀ b, ("RULES_ADDS " ++ hexOf b) ∈ (commit st u).2 →
-      parseAdds b = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := sorry
+      parseAdds b = some ((commit st u).1.rprior.entries, (commit st u).1.uprior.entries) := by
+  obtain ⟨s, t, ra, ua, hs0, ht0, -, -, hrS, huS, -, -, -, -, hadd⟩ := commit_view st u ha hr hu
+  intro b hb
+  rw [hrS, huS]
+  rw [hs0] at he
+  rw [ht0] at he
+  have e1 : s.entries = [] := Option.some.inj he.1
+  have e2 : t.entries = [] := Option.some.inj he.2
+  show parseAdds b = some (s.entries ++ ra, t.entries ++ ua)
+  rw [e1, e2]
+  exact hadd b hb
 
 /-- T2: on a fitting state the resident commit prints every byte `commit` prints (RULES_LINE, _FREE, _DIGEST, _ADDS,
     _READS, mismatches), leaves the same state, and its next `Res` (none when fresh rows do not serialize) fits that state. Rules out a stale cache after a
@@ -1533,22 +1631,6 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (pre rest : L
       (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) ∧
     Inv r.2.2 := sorry
 
-/-- A context that reads its own priors: the batch run's sets are the priors plus the fresh rows. -/
-theorem runIn_self (c : Ctx) (f : List Nat) (b : List Line) (P Q : Snapshot Line)
-    (hr : c.released = some P) (hu : c.unresolved = some Q) (hP : c.releasedPrior = P) (hQ : c.unresolvedPrior = Q) :
-    ∃ ra ua, ((Fast.Ix.build c b).runIn f b).released = ⟨P.asOf, P.entries.length + ra.length, P.entries ++ ra⟩ ∧
-      ((Fast.Ix.build c b).runIn f b).unresolved = ⟨Q.asOf, Q.entries.length + ua.length, Q.entries ++ ua⟩ ∧
-      (Fast.Ix.build c b).relN = P.entries.length ∧ (Fast.Ix.build c b).unrN = Q.entries.length := by
-  have h1 : (Fast.Ix.build c b).relV = P := by simp [Fast.Ix.build, hr, hP, viewF_self]
-  have h2 : (Fast.Ix.build c b).unrV = Q := by simp [Fast.Ix.build, hu, hQ, viewF_self]
-  have h3 : (Fast.Ix.build c b).relN = P.entries.length := by simp [Fast.Ix.build, hr, hP, viewF_self]
-  have h4 : (Fast.Ix.build c b).unrN = Q.entries.length := by simp [Fast.Ix.build, hu, hQ, viewF_self]
-  refine ⟨(Fast.Ix.build c b).releasedLines ((Fast.Ix.build c b).decideAll (Std.HashSet.ofList (idSeen f)) ((Fast.Ix.build c b).order b)),
-    (Fast.Ix.build c b).unresolvedLines ((Fast.Ix.build c b).decideAll (Std.HashSet.ofList (idSeen f)) ((Fast.Ix.build c b).order b)),
-    ?_, ?_, h3, h4⟩
-  · simp only [Fast.Ix.runIn, h1, h3]
-  · simp only [Fast.Ix.runIn, h2, h4]
-
 /-- F4: a commit from a state reading its own priors (as after `load`, `resume` or a commit) appends to each prior,
     keeps that shape, and its RULES_ADDS parse to exactly the appended rows. -/
 theorem commit_adds (st : St) (u : Bool)
@@ -1575,8 +1657,8 @@ theorem commit_adds (st : St) (u : Bool)
     · rw [hP]; simp only [St.ctx, hh, hu']; exact hc2
     · intro b hb
       exact absurd (hNA _ hb) (not_na_adds _)
-  · obtain ⟨ra, ua, hR, hU, hrn, hun⟩ := runIn_self (st.ctx (st.pinned.getD st.pin)) (cbf st).2.1 (cbf st).1
-      st.rprior st.uprior hc.1 hc.2 rfl rfl
+  · obtain ⟨ra, ua, hR, hU, hrn, hun⟩ := runIn_view (st.ctx (st.pinned.getD st.pin)) (cbf st).2.1 (cbf st).1
+      st.rprior st.uprior (by rw [hc.1]; exact viewF_self _ _) (by rw [hc.2]; exact viewF_self _ _)
     simp only [hrn, hun, hR, hU, List.drop_left] at hr' hu' he hh hAD
     refine ⟨ra, ua, by rw [hr'], by rw [hu'], ?_, ?_, by rw [hr']; simp, by rw [hu']; simp, ?_⟩
     · rw [hP]; simp only [St.ctx, he]; rw [← grow_app, hc1, hr']; simp [grow, hn.1]
