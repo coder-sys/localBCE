@@ -80,7 +80,15 @@ def refresh (i : Fast.Ix) (c : Ctx) (b : List Line) : Fast.Ix :=
            excl := Fast.group (·.id) (entries c.exclusions), span := Fast.group (·.member) (entries c.enrollment) }
 
 /-- The index over `r'`, `u'` (the sets after a commit) from `i` over their prefixes. O(fresh). -/
-def extend (i : Fast.Ix) (r' u' : Snapshot Line) : Fast.Ix := sorry
+def extend (i : Fast.Ix) (r' u' : Snapshot Line) : Fast.Ix :=
+  let fr := r'.entries.drop i.relN
+  let fu := u'.entries.drop i.unrN
+  { i with relChained := r'.count == i.relN + fr.length && validDate r'.asOf && decide (r'.asOf ≤ i.today),
+           unrChained := u'.count == i.unrN + fu.length && validDate u'.asOf && decide (u'.asOf ≤ i.today),
+           relV := r', unrV := u', relN := i.relN + fr.length, unrN := i.unrN + fu.length,
+           rel := i.rel ++ fr.toArray, unr := i.unr ++ fu.toArray,
+           relPost := (fr.foldl Fast.postStep (i.relPost, i.relN)).1,
+           unrPost := (fu.foldl Fast.postStep (i.unrPost, i.unrN)).1 }
 
 /-- `x` is `st`'s checkpoint: `st`'s priors and the sets `st` reads are `x`'s. -/
 def Res.Fits (x : Res) (st : St) : Prop :=
@@ -211,7 +219,38 @@ theorem resume_fail_closed (o : Option Res) (st st' : St) (h : String) (out : Li
     (out = [] ∧ ∃ x bs, o = some x ∧ unhexFast h = some bs ∧
       x.m.d = some (Gate.natBE Gate.digestBytes (Gate.beNat bs.toList)) ∧ st'.memo = some x.m ∧
       st'.rprior = x.m.r ∧ st'.uprior = x.m.u) ∨
-    (out = ["RULES_STATE_MISMATCH resume"] ∧ st' = { st with failed := st.failed + 1 }) := sorry
+    (out = ["RULES_STATE_MISMATCH resume"] ∧ st' = { st with failed := st.failed + 1 }) := by
+  unfold resume at hs
+  by_cases hl : (h.length == 128) = true
+  · cases hu : unhexFast h with
+    | none => simp [guard, hl, hu] at hs
+    | some bs =>
+      simp [guard, hl, hu] at hs
+      split at hs
+      · rename_i x hx
+        cases o with
+        | none => simp [Option.filter] at hx
+        | some y =>
+          simp only [Option.filter] at hx
+          split at hx
+          · rename_i hp
+            cases hx
+            cases e1 : emptyPin "released" x.m.r.asOf with
+            | none => simp [e1] at hs
+            | some p1 =>
+              cases e2 : emptyPin "unresolved" x.m.r.asOf with
+              | none => simp [e1, e2] at hs
+              | some p2 =>
+                simp [e1, e2] at hs
+                obtain ⟨rfl, rfl⟩ := hs
+                left
+                exact ⟨rfl, x, bs, rfl, rfl, by simpa using hp, rfl, rfl, rfl⟩
+          · cases hx
+      · simp at hs
+        obtain ⟨rfl, rfl⟩ := hs
+        right
+        exact ⟨rfl, rfl⟩
+  · simp [guard, hl, failure] at hs
 
 /-- F1: an accepted `resume` of an `Ok` `Res` leaves a state it fits. -/
 theorem resume_fits (x : Res) (st st' : St) (h : String) (hx : x.Ok) (hs : resume (some x) st h = some (st', [])) :
@@ -327,7 +366,8 @@ theorem digest_eq (x : Res) (hx : x.Ok) (fr fu : List Line) :
 theorem refresh_eq (c c' : Ctx) (b₀ b : List Line) (ht : c'.today = c.today)
     (hr : c'.released = c.released) (hrp : c'.releasedPrior = c.releasedPrior)
     (hu : c'.unresolved = c.unresolved) (hup : c'.unresolvedPrior = c.unresolvedPrior) :
-    refresh (Fast.Ix.build c b₀) c' b = Fast.Ix.build c' b := sorry
+    refresh (Fast.Ix.build c b₀) c' b = Fast.Ix.build c' b := by
+  simp only [refresh, Fast.Ix.build, ht, hr, hrp, hu, hup]
 
 /-- T4: the index extended by a commit's fresh rows, refreshed for the next frame's context over the committed sets,
     is the index a full build over that context makes. Rules out a missing, duplicated or misplaced posting. -/
