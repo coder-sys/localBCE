@@ -869,9 +869,14 @@ raise SystemExit(main(sys.argv[2:]))
         with patch.object(owner.FinancialOwner, "_begin", altering):
             self._unchanged(self._apply, "^cash_file_failed$")
         append = owner.FinancialOwner._append_event
-        for name, change in (("payload", lambda event: {**event, "payload": {**event["payload"], "existing_payment_id": "file-payment-9"}}),  # the visible event cites another payment than its row
-                             ("hold", lambda event: owner._fail(owner.FinancialInputError, "payment_amount_zero"))):  # Lean holds a conflict row only for its chronology
-            with self.subTest(name), patch.object(owner.FinancialOwner, "_append_event", lambda instance, connection, **event: append(instance, connection, **(change(event) if event["kind"] == "PAYMENT_CONFLICT_VISIBLE" else event))):
+        def unlike_row(connection, event, run):  # the event carries digests the evaluation row does not
+            with patch.object(owner, "_hex", lambda value: value[::-1].hex().upper()):
+                return run(**event)
+        for name, change in (("payload", lambda c, event, run: run(**{**event, "payload": {**event["payload"], "existing_payment_id": "file-payment-9"}})),  # the visible event cites another payment than its row
+                             ("hold", lambda c, event, run: owner._fail(owner.FinancialInputError, "payment_amount_zero")),  # Lean holds a conflict row only for its chronology
+                             ("rows", lambda c, event, run: (c.execute("UPDATE temp.rr_captured_rows SET image=replace(image,'\"local_ref\":\"','\"local_ref\":\"x')"), run(**event))[1]),  # an evidence image unlike its row
+                             ("evaluation", unlike_row)):
+            with self.subTest(name), patch.object(owner.FinancialOwner, "_append_event", lambda instance, connection, **event: change(connection, event, lambda **given: append(instance, connection, **given)) if event["kind"] == "PAYMENT_CONFLICT_VISIBLE" else append(instance, connection, **event)):
                 self._unchanged(self._apply, "^cash_file_failed$")
 
     def _file_b(self, rows, captured_at_ms=None):

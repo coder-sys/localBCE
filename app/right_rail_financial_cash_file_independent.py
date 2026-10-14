@@ -470,12 +470,12 @@ class CashFileCheck:
         log = self._log(connection)
         added = {table: _table(connection, table, [new for _, new in log.get((table, "INSERT"), ())]) for table in _INSERTS}  # the rows this file inserted
         payments = {**self._payments, **{row["payment_id"]: row for row in added["payments"].values()}}
-        evidence, events = ({row[key]: row for row in added[table].values()} for table, key in (("evidence", "evidence_id"), ("financial_events", "event_sequence")))
+        evidence, events, evaluations = ({row[key]: row for row in added[table].values()} for table, key in (("evidence", "evidence_id"), ("financial_events", "event_sequence"), ("evaluations", "evaluation_id")))
         actions, old_meta = self._actions, self._meta[1]
         first = sequence = old_meta["sequence"]
         head = old_meta["history_head"]
         revisions = {row["obligation_id"]: row["revision"] for row in self._obligations.values()}
-        recorded, new_evidence, new_evaluations, deltas, touched, held, conflicts = set(), set(), set(), {}, set(), set(), {}
+        recorded, new_evidence, new_evaluations, deltas, touched, held, conflicts, images = set(), set(), set(), {}, set(), set(), {}, []
         for (_, argument), (kind, answer, skip), result in zip(self.commands, self._plan, results):
             _require(type(result) is dict, "cash_file_failed")
             conflict = _conflict_id(argument)
@@ -497,6 +497,7 @@ class CashFileCheck:
             payload = ledger._parse_json(event["payload_json"], "cash-file:event", max_bytes=ledger.MAX_PACKAGE_BYTES)
             _require(event["before_revision"] == argument["expected_revision"] == revisions[obligation] and _matches(evidence.get(argument["evidence_id"]), _fact(argument)), "cash_file_failed")
             new_evidence.add(argument["evidence_id"])
+            images += payload.get("rows", ())
             touched.add(obligation)
             if kind == "OVERLAP":  # exactly the alias label _verify_duplicate_evidence accepts; the repeated payment is unchanged
                 alias = {"candidate_evidence_id": argument["evidence_id"], "existing_payment_id": answer, "common_origin_id": argument["common_origin_id"]}
@@ -515,6 +516,8 @@ class CashFileCheck:
                 recorded.add(answer)
             revisions[obligation] += 1
             deltas[obligation] = deltas.get(obligation, 0) + (0 if kind == "CONFLICT" else argument["amount_cents"])  # a conflict moves no cash; the obligation's other fields follow its new evaluation
+            stored = evaluations[payload["evaluation_id"]]  # the row the event names, with the digests it carries
+            _require((stored["obligation_id"], stored["revision"]) == (obligation, event["after_revision"]) and all(payload["evaluation_" + name] == bytes(stored[column]).hex().upper() for name, column in (("input_digest", "input_snapshot_digest"), ("result_digest", "result_digest"), ("receipt_digest", "receipt_digest"))), "cash_file_failed")
             new_evaluations.add(payload["evaluation_id"])
         if self.intake is not None:  # last, the raw file's intake facts with every row's outcome, as one event
             sequence += 1
@@ -528,7 +531,8 @@ class CashFileCheck:
         for table, key, additions in (("payments", "payment_id", recorded), ("evidence", "evidence_id", new_evidence), ("evaluations", "evaluation_id", new_evaluations), ("financial_events", "event_sequence", set(range(first + 1, sequence + 1))), ("financial_conflicts", "conflict_id", set(conflicts))):
             keys = [row[key] for row in added[table].values()]
             _require(len(keys) == len(additions) and set(keys) == additions, "cash_file_failed")  # exactly the rows the file names: the log shows no other write to these tables
-        _require(all(row == conflicts[row["conflict_id"]] for row in added["financial_conflicts"].values()), "cash_file_failed")
+        for table, key, derived in (("evidence", "evidence_id", evidence), ("financial_conflicts", "conflict_id", conflicts)):  # the row images the events carry are the rows written (replay holds them to it at reopen)
+            _require({image["row"][key]: {column: ledger._package_import_value(value, "cash_file") for column, value in image["row"].items()} for image in images if image["table"] == table and "row" in image} == {row[key]: row for row in added[table].values()} == derived, "cash_file_failed")
         ledger._verify_commands({"financial_events": list(events.values()), **{table: list(added[table].values()) for table in ("payments", "evidence", "commands")}}, "cash_file")  # one command row per new PAYMENT_RECEIVED, as history derives it
         changed = {"revision", "received_cash_cents", "shortfall_cents", "overage_cents", "cash_satisfied", "amount_satisfied", "timely", "verification_status", "case_status", "current_evaluation_id", "updated_at_ms"}
         rowids = {old for old, _ in log.get(("obligations", "UPDATE"), ())} | {rowid for rowid, row in self._obligations.items() if row["obligation_id"] in deltas}  # a row of an untouched obligation that was not written passes every check below

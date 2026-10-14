@@ -1225,6 +1225,12 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(IndependentFinancialError, pattern):
             verify_database(path, expected_config=store.config, expected_authority=self.authority)
 
+    def _assert_refused(self, store: FinancialOwner, code: str) -> None:
+        with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):  # the checker and the owner's reopen refuse the store alike
+            self._assert_verified(store)
+        with self.assertRaisesRegex(FinancialIntegrityError, f"^open_verification:{code}$"):
+            self._make_owner(path=store.path)
+
     def _assert_verified(
         self,
         store: FinancialOwner,
@@ -3858,8 +3864,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
             with patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
                 store.authorize_offset(**request, decision_at_ms=evaluated_at)
-        with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
-            self._assert_verified(store)
+        self._assert_refused(store, "action:backdated-past-due")
 
     def test_the_checker_refuses_an_offset_committed_one_millisecond_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
         clock = _Clock()
@@ -3867,8 +3872,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         clock.value = expected.H_DUE_AT_MS  # the next tick commits at due + 1 ms
         with lean_without_one_rule(store, stale_owner_now=True), patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
             store.authorize_offset(**request, decision_at_ms=evaluated_at)
-        with self.assertRaisesRegex(IndependentFinancialError, "^action:backdated-past-due$"):
-            self._assert_verified(store)
+        self._assert_refused(store, "action:backdated-past-due")
 
     def test_c05_independent_package_input_is_bounded_before_database_open(self) -> None:
         store = self._build_base()
@@ -4394,8 +4398,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     connection.execute(f"CREATE TRIGGER command_update_immutable {_COMMAND_TRIGGER_BODY.format('UPDATE')}")
                     connection.execute(f"CREATE TRIGGER command_delete_immutable {_COMMAND_TRIGGER_BODY.format('DELETE')}")
                 tampered_bytes = _image(tampered)
-                with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
-                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+                self._assert_checker_refuses(tampered, store, f"^{code}$")
                 with self.assertRaisesRegex(FinancialIntegrityError, f"^open_verification:{code}$"):
                     self._make_owner(path=tampered)
                 self.assertEqual(_image(tampered), tampered_bytes)
@@ -4581,8 +4584,27 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 tampered.write_bytes(_image(store.path))
                 with closing(sqlite3.connect(str(tampered), isolation_level=None)) as connection:
                     self.assertEqual(connection.execute(statement).rowcount, 1)
-                with self.assertRaisesRegex(IndependentFinancialError, f"^{code}$"):
-                    verify_database(tampered, expected_config=store.config, expected_authority=self.authority)
+                self._assert_checker_refuses(tampered, store, f"^{code}$")
+
+    def test_a_visible_event_must_match_its_row_and_have_one(self) -> None:
+        # The visible event names the conflict, its payment, its common origin and its candidate; a rewritten
+        # name (chain re-hashed) or an event no financial_conflicts row stands behind is refused on reopen.
+        store = self._build_base_for_correction()
+        self._prepare_final(store)
+        for field in ("conflict_id", "existing_payment_id", "common_origin_id", "candidate_evidence_id"):
+            with self.subTest(field):
+                forged = self._path(f"visible-{field}.sqlite")
+                forged.write_bytes(_image(store.path))
+                self.assertEqual(self._rehash_history(forged, lambda payload: "conflict_id" in payload and payload.update({field: payload[field] + "x"}) is None), 1)
+                self._assert_checker_refuses(forged, store, "^conflict:visible$")
+                with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:conflict:visible$"):
+                    self._make_owner(path=forged)
+        with closing(store._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            kind, aggregate, revision, at = connection.execute("SELECT kind,aggregate_id,after_revision,committed_at_ms FROM financial_events WHERE kind='PAYMENT_CONFLICT_VISIBLE'").fetchone()
+            store._append_event(connection, aggregate_type="OBLIGATION", aggregate_id=aggregate, kind=kind, before_revision=revision, after_revision=revision, payload={"conflict_id": "conflict:stray", "candidate_evidence_id": "x", "existing_payment_id": "x", "common_origin_id": "x"}, committed_at_ms=int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0]))
+            connection.execute("COMMIT")
+        self._assert_refused(store, "conflict:visible")
 
     def test_a_forged_opening_balance_event_is_refused_on_a_native_store(self) -> None:
         # Final review of 75a5517, finding 4, kept after C3: an OPENING_BALANCE event appended to a native
@@ -4597,10 +4619,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             last = int(connection.execute("SELECT max(committed_at_ms) FROM financial_events").fetchone()[0])
             store._append_event(connection, aggregate_type="OPENING_BALANCE", aggregate_id="opening-balance", kind="OPENING_BALANCE", before_revision=0, after_revision=0, payload={"rows": images}, committed_at_ms=last)
             connection.execute("COMMIT")
-        with self.assertRaisesRegex(IndependentFinancialError, "^history:event-kind$"):
-            self._assert_verified(store)
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:event-kind$"):
-            self._make_owner(path=store.path)
+        self._assert_refused(store, "history:event-kind")
 
     @staticmethod
     def _rehash_history(path: Path, edit) -> int:
@@ -4648,10 +4667,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             return any(values.get("acknowledgment_ref") == forged for values in images)
 
         self.assertGreaterEqual(self._rehash_history(store.path, forge), 1)
-        with self.assertRaisesRegex(IndependentFinancialError, "^replay:acknowledgment$"):
-            self._assert_verified(store)
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:replay:acknowledgment$"):
-            self._make_owner(path=store.path)
+        self._assert_refused(store, "replay:acknowledgment")
 
     def _correction_decided_by_engine(self, sha256: str) -> FinancialOwner:
         # A correction as an earlier pinned engine committed it: the follow-up names that engine.
@@ -4678,20 +4694,14 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
     def test_a_correction_naming_an_unknown_engine_is_refused(self) -> None:
         store = self._correction_decided_by_engine("AB" * 32)
         self.assertEqual(store.correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)["followup_status"], "REVIEW_REQUIRED")
-        with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-followup-artifact-binding$"):
-            self._assert_verified(store)
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-followup-artifact-binding$"):
-            self._make_owner(path=store.path)
+        self._assert_refused(store, "history:correction-followup-artifact-binding")
 
     def test_a_retired_pin_registry_with_an_extra_line_is_refused(self) -> None:
         store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
         registry = self._path("RETIRED_PINS")
         registry.write_bytes(independent.RETIRED_PINS_PATH.read_bytes() + b"AB" * 32 + b"\t2026-09-26\tforged\tcorrection-rule-v1\tforged\n")
         with patch.object(independent, "RETIRED_PINS_PATH", registry):
-            with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
-                self._assert_verified(store)
-            with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
-                self._make_owner(path=store.path)
+            self._assert_refused(store, "history:correction-retired-pins")
 
     def test_a_malformed_retired_pin_registry_is_refused_even_when_pinned(self) -> None:
         store = self._correction_decided_by_engine(_RETIRED_CORRECTION_ARTIFACT_SHA256)
@@ -4709,10 +4719,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 registry = self._path(f"RETIRED_PINS-{name}")
                 registry.write_bytes(content)
                 with patch.object(independent, "RETIRED_PINS_PATH", registry), patch.object(independent, "RETIRED_PINS_SHA256", hashlib.sha256(content).hexdigest()):
-                    with self.assertRaisesRegex(IndependentFinancialError, "^history:correction-retired-pins$"):
-                        self._assert_verified(store)
-                    with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:history:correction-retired-pins$"):
-                        self._make_owner(path=store.path)
+                    self._assert_refused(store, "history:correction-retired-pins")
 
     def _as_decided(self, path: Path, sha256: str, requested_cents: int, action_id: str = expected.ACTION_CORRECTION_ID) -> None:
         """Rewrite correction ``action_id`` as engine ``sha256`` decided it, requesting ``requested_cents``: rows, row images, chain."""
@@ -4766,8 +4773,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     verify_database(path, expected_config=store.config, expected_authority=self.authority)
                     self._make_owner(path=path)
                 else:
-                    with self.assertRaisesRegex(IndependentFinancialError, f"^{refusal}$"):
-                        verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                    self._assert_checker_refuses(path, store, f"^{refusal}$")
 
     def _two_claim_corrections(self, first_cents: int, second_cents: int, unpaid_cents: int = expected.UNAPPROVED_OFFSET_CENTS) -> tuple[FinancialOwner, object]:
         """``unpaid_cents`` unpaid with claims A and B; A is rejected with a correction; returns B's rejection to call."""
@@ -5353,10 +5359,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             )
         outputs = store.correction_followup_outputs(expected.H_ITEM_ID, expected.ACTION_CORRECTION_ID)
         self.assertEqual((outputs["followup_status"], outputs["state_report"]["changed_dependencies"]), ("REOPENED", [f"COLLECTION(PAYMENT_EVIDENCE, {expected.H_ITEM_ID})"]))
-        with self.assertRaisesRegex(IndependentFinancialError, "^duplicate-evidence:binding$"):
-            self._assert_verified(store)
-        with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:duplicate-evidence:binding$"):
-            self._make_owner(path=store.path)
+        self._assert_refused(store, "duplicate-evidence:binding")
 
     def test_a_relabelled_second_correction_is_refused(self) -> None:
         # rr-review round 3 #1: 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
@@ -5372,8 +5375,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             with self.subTest(name):
                 path = self._copy(f"relabel-{name}.sqlite", store)
                 self._as_decided(path, sha256, cents, _ACTION_B)
-                with self.assertRaisesRegex(IndependentFinancialError, f"^{refusal}$"):
-                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                self._assert_checker_refuses(path, store, f"^{refusal}$")
         order_only, reject_b = self._two_claim_corrections(200_000, 100_000)
         reject_b()
         self.assertEqual(self._requested_and_claimed(order_only)[0], [200_000, 100_000])
@@ -5652,8 +5654,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 if label == "whitespace-only":
                     verify_database(path, expected_config=store.config, expected_authority=self.authority)
                     continue
-                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:sql:{table}$"):
-                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                self._assert_checker_refuses(path, store, f"^schema:sql:{table}$")
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:sql:evidence$"):
             self._make_owner(path=self._path("table-sql-on-conflict-replace.sqlite"))
 
@@ -5679,8 +5680,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                     connection.execute("PRAGMA writable_schema=ON")
                     for statement in statements:
                         connection.execute(statement)
-                with self.assertRaisesRegex(IndependentFinancialError, f"^schema:{refusal}$"):
-                    verify_database(path, expected_config=store.config, expected_authority=self.authority)
+                self._assert_checker_refuses(path, store, f"^schema:{refusal}$")
         with self.assertRaisesRegex(FinancialIntegrityError, "^open_verification:schema:objects$"):
             self._make_owner(path=self._path("hidden-trigger-case.sqlite"))
 

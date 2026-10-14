@@ -14,17 +14,12 @@ import unittest
 from unittest.mock import patch
 
 from app import right_rail_financial_owner as owner
-from tests import rightrail_financial_expected_cases as expected
+from tests.test_right_rail_financial_core_r1 import _pay
 from tests import test_right_rail_financial_acceptance as acceptance
 from tests.rightrail_intake_rows import pay
 
 BEGIN_WRITE = re.compile(r"\s*BEGIN\s+(IMMEDIATE|EXCLUSIVE)", re.I)
 FULL_SYNC = re.compile(r"\s*PRAGMA\s+synchronous\s*=\s*(FULL|EXTRA|2|3)\s*;?\s*", re.I)
-
-
-def _pay(item, tag="x", amount=1):
-    return {"item_id": item, "payment_id": f"{tag}-{item}-payment", "common_origin_id": f"{tag}-{item}-origin",
-            "evidence_id": f"{tag}-{item}-evidence", "amount_cents": amount, "event_at_ms": expected.CASH_EVENT_MS}
 
 
 def _journal(path, assignment=""):
