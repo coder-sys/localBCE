@@ -56,7 +56,7 @@ def hexOf (b : ByteArray) : String :=
 /-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
     it from the files, so a stale runner fails that test whatever its file times. -/
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
-  include_str "Fast.lean", include_str "Run.lean",  -- FAST
+  include_str "Fast.lean", include_str "Run.lean", include_str "Resident.lean", include_str "RulesWorker.lean",  -- FAST
   include_str "../Anchor.lean", include_str "../Spec.lean",
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)

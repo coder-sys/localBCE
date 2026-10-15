@@ -18,7 +18,13 @@ import Std.Data.String.ToNat
     non-resume line steps as `step` (`stepRes_step`), and a frame with `resume D` after any head prints and ends as the
     same frame with `load a adds D` (`resume_eq_load`, `runRes_eq_load`). `adds` may be the sealed join of every
     batch's RULES_ADDS: it parses to the resident sets in their order (`parseAdds_append`, `commit_adds`,
-    `resident_inv`), which fixes `with=` order. RULES_DIGEST is `Fast.setsDigestF hB` of the committed sets (T3,
+    `resident_inv`), which fixes `with=` order. The checkpoint digest sorts the rows, so it does not bind that order;
+    `resume D H` also takes `H`, the SHA3-512 (`orderTag`) of the adds stream, and `Res.tagged` lets `resume` see the
+    kept `Res` only if its stream `ba` hashes to `H` (`resume_eq_load` is unchanged; `resume_sound`: the tagged stream
+    parses to the kept sets in order, and `resume` answers as `load` of it; `tagged_other`: another stream is refused,
+    given an injective tag). A commit that cannot extend `ba` leaves it unknown (`none`), so the next resume refuses and
+    Python `load`s. `stepRes` adopts a state only if the frame added no failure (`adopt`, `refit`). Frames with no
+    `resume` run as `runWith` (`runRes_eq_runWith`). RULES_DIGEST is `Fast.setsDigestF hB` of the committed sets (T3,
     `Memo.ok`; `setsDigestF_eq` ties it to `Gate.setsDigest`); the kept index decides as `decideBatchIn` (T4 with
     `decideBatchFIn_eq`). These fix outputs, not cost: O(fresh) for `extend`/`commitRes` is a review and bench claim.
 
@@ -35,6 +41,10 @@ def addsBytes (r u : List Line) : Option ByteArray := do
 
 /-- The `load` adds field for `b`: `-` for none. -/
 def addsField (b : ByteArray) : String := if b.size = 0 then "-" else hexOf b
+
+/-- The order tag of an adds stream: SHA3-512 of the raw bytes. `pinBytes` sorts, so the checkpoint digest does not bind
+    the order of the rows; this does. -/
+def orderTag (bs : ByteArray) : String := hexOf (BlindLedger.Semantic.sha3_512Fast bs)
 
 /-- A set's rows as `Fast.pinBytes` writes them (no tag), in set order. -/
 def rowsOf (s : List Line) : Option (List ByteArray) := s.mapM fun x => Fast.pushRow .empty (Line.fields x)
@@ -58,7 +68,14 @@ structure Res where
   rbuf : Array ByteArray
   ubuf : Array ByteArray
   ix : Option Fast.Ix
+  ba : Option ByteArray
   bok : Res.BufOk m rbuf ubuf
+
+/-- The kept sets in the order of the adds stream `ba` (`none`: the stream is unknown, so no resume binds to it). -/
+def Res.AOk (x : Res) : Prop := ∀ bs, x.ba = some bs → parseAdds bs = some (x.m.r.entries, x.m.u.entries)
+
+/-- `o` if its adds stream hashes to `oh`. -/
+def Res.tagged (o : Option Res) (oh : String) : Option Res := o.filter fun x => x.ba.map orderTag == some oh
 
 /-- The digest of sets `r`, `u` that extend the kept ones, and their buffers, from the kept buffers. -/
 def Res.digest (x : Res) (r u : Snapshot Line) : Option (List UInt8 × Array ByteArray × Array ByteArray) := do
@@ -219,7 +236,7 @@ def Res.fit (st : St) : Option Res :=
       m.u.count = m.u.entries.length ∧ c.released = some m.r ∧ c.unresolved = some m.u then
     match hr : rowsOf m.r.entries, hu : rowsOf m.u.entries with
     | some rs, some us => some { m, rbuf := (rs.mergeSort Fast.baLe).toArray, ubuf := (us.mergeSort Fast.baLe).toArray,
-                                 ix := none, bok := ⟨⟨rs, hr, by simp⟩, ⟨us, hu, by simp⟩⟩ }
+                                 ix := none, ba := none, bok := ⟨⟨rs, hr, by simp⟩, ⟨us, hu, by simp⟩⟩ }
     | _, _ => none
   else none
 
@@ -236,7 +253,8 @@ def Res.next (x : Res) (i : Fast.Ix) (fr fu : List Line) : Option Res :=
     some { m := ⟨⟨x.m.r.asOf, x.m.r.count + fr.length, x.m.r.entries ++ fr⟩,
                  ⟨x.m.u.asOf, x.m.u.count + fu.length, x.m.u.entries ++ fu⟩, some d, by simpa [hd] using h⟩,
            rbuf := rb, ubuf := ub, ix := some (extend i ⟨x.m.r.asOf, x.m.r.count + fr.length, x.m.r.entries ++ fr⟩
-             ⟨x.m.u.asOf, x.m.u.count + fu.length, x.m.u.entries ++ fu⟩), bok := hk }
+             ⟨x.m.u.asOf, x.m.u.count + fu.length, x.m.u.entries ++ fu⟩),
+           ba := x.ba.bind fun b => (addsBytes fr fu).map (b ++ ·), bok := hk }
 
 /-- The index for a commit over `c`, `b`: the kept one refreshed (same `today`), else a build. -/
 def Res.ixFor (x : Res) (c : Ctx) (b : List Line) : Fast.Ix :=
@@ -315,16 +333,28 @@ def breaks : List String → Bool
   | k :: _ => ["case", "today", "snap", "drop", "dmf", "pdeath", "excl", "span", "released", "unresolved"].contains k
   | [] => false
 
-/-- After a full `load` or commit: live on `Res.fit st` if the frame has not failed, else the old `Res` kept (only
-    `resume` reads it) and not live. A failed frame's state is never adopted. -/
-def refit (w : Worker) (st : St) : Worker :=
+/-- The adds stream a `load` line `fs` that printed `out` installed: the bytes its adds field decodes to, when the field
+    is the canonical `addsField` of them. -/
+def addsOf (fs out : List String) : Option ByteArray :=
+  match fs, out with
+  | ["load", _, f, _], [] => (if f == "-" then some ByteArray.empty else unhexFast f).filter (addsField · == f)
+  | _, _ => none
+
+/-- Adopt `y` as the kept `Res` only if the frame has not failed; else keep the old `Res` (only `resume` reads it)
+    and not live. -/
+def adopt (w : Worker) (y : Res) (st : St) : Worker :=
+  if st.failed = 0 then { x := some y, live := true, st } else { w with live := false, st }
+
+/-- After a full `load` or a slow commit: `adopt` of `Res.fit st` (O(n)) with adds stream `ba`, else the old `Res` kept
+    and not live. A frame that added a failure never adopts a state. -/
+def refit (w : Worker) (st : St) (ba : Option ByteArray) : Worker :=
   match (if st.failed = 0 then Res.fit st else none) with
-  | some y => { x := some y, live := true, st }
+  | some y => { x := some { y with ba }, live := true, st }
   | none => { w with live := false, st }
 
 def stepRes (w : Worker) : List String → Option (Worker × List String)
-  | ["resume", h] => do
-    let (st, out) ← resume w.x w.st h
+  | ["resume", h, oh] => do
+    let (st, out) ← resume (Res.tagged w.x oh) w.st h
     pure ({ w with st, live := out.isEmpty || w.live }, out)
   | fs =>
     let u := fs == ["commit", "UNANCHORED"]
@@ -332,11 +362,11 @@ def stepRes (w : Worker) : List String → Option (Worker × List String)
       match w.x, w.live with
       | some x, true =>
         let (y, st, out) := commitRes x w.st u
-        pure (match y with | some y => { x := some y, live := true, st } | none => refit w st, out)
-      | _, _ => let (st, out) := commit w.st u; pure (refit w st, out)
+        pure (match y with | some y => adopt w y st | none => refit w st none, out)
+      | _, _ => let (st, out) := commit w.st u; pure (refit w st none, out)
     else do
       let (st, out) ← step w.st fs
-      pure (if fs.head? == some "load" then refit w st else { w with st, live := w.live && !breaks fs }, out)
+      pure (if fs.head? == some "load" then refit w st (addsOf fs out) else { w with st, live := w.live && !breaks fs }, out)
 
 /-- A worker frame from the kept `Res`. -/
 def runRes (x : Option Res) (text : String) : Array String × Bool × Worker :=
@@ -1797,12 +1827,17 @@ theorem fits_of_keep (x : Res) (st st' : St) (hf : x.Fits st)
     rw [e]; simp only [St.ctx, h5]
   exact ⟨hx, by rw [h6]; exact hrp, by rw [h7]; exact hup, h8 hsl, by rw [e1]; exact hcr, by rw [e2]; exact hcu⟩
 
-theorem refit_st (w : Worker) (st : St) : (refit w st).st = st := by
+theorem refit_st (w : Worker) (st : St) (ba : Option ByteArray) : (refit w st ba).st = st := by
   unfold refit
   split <;> rfl
 
+theorem adopt_st (w : Worker) (y : Res) (st : St) : (adopt w y st).st = st := by
+  unfold adopt
+  split <;> rfl
+
 /-- `refit` keeps `Inv` (a fitted `Res.fit`, or the old `Res` and not live). -/
-theorem refit_inv (w : Worker) (st : St) (hw : ∀ y, w.x = some y → y.Ok) : Inv (refit w st) := by
+theorem refit_inv (w : Worker) (st : St) (ba : Option ByteArray) (hw : ∀ y, w.x = some y → y.Ok) :
+    Inv (refit w st ba) := by
   unfold refit
   split
   · next y hy =>
@@ -1811,25 +1846,115 @@ theorem refit_inv (w : Worker) (st : St) (hw : ∀ y, w.x = some y → y.Ok) : I
       · simpa [h] using hy
       · simp [h] at hy
     have hF := fit_fits st y hfit
-    refine ⟨fun z hz => ?_, fun _ => ⟨y, rfl, hF⟩⟩
-    have hzy : y = z := Option.some.inj hz
+    have hF' : ({ y with ba } : Res).Fits st := hF
+    refine ⟨fun z hz => ?_, fun _ => ⟨{ y with ba }, rfl, hF'⟩⟩
+    have hzy : ({ y with ba } : Res) = z := Option.some.inj hz
     subst hzy
     exact hF.1
   · exact ⟨hw, fun h => by simp at h⟩
 
-theorem stepRes_resume (w : Worker) (h : String) :
-    stepRes w ["resume", h] = (resume w.x w.st h).map fun p => ({ w with st := p.1, live := p.2.isEmpty || w.live }, p.2) := by
-  cases hr : resume w.x w.st h with
+/-- `adopt` of a fitting `Res` keeps `Inv`. -/
+theorem adopt_inv (w : Worker) (y : Res) (st : St) (hw : ∀ z, w.x = some z → z.Ok) (hF : y.Fits st) :
+    Inv (adopt w y st) := by
+  unfold adopt
+  split
+  · exact ⟨fun z hz => by cases hz; exact hF.1, fun _ => ⟨y, rfl, hF⟩⟩
+  · exact ⟨hw, fun h => by simp at h⟩
+
+/-- A kept `Res` whose adds stream, if known, parses to its sets in order. -/
+theorem refit_aok (w : Worker) (st : St) (ba : Option ByteArray) (hw : ∀ y, w.x = some y → y.AOk)
+    (hba : ∀ bs, ba = some bs → parseAdds bs = some (st.rprior.entries, st.uprior.entries)) :
+    ∀ y, (refit w st ba).x = some y → y.AOk := by
+  unfold refit
+  split
+  · next y' hy =>
+    have hfit : Res.fit st = some y' := by
+      by_cases h : st.failed = 0
+      · simpa [h] using hy
+      · simp [h] at hy
+    have hF := fit_fits st y' hfit
+    intro z hz bs hbs
+    have hzy : ({ y' with ba } : Res) = z := Option.some.inj hz
+    subst hzy
+    have hbs' : ba = some bs := hbs
+    show parseAdds bs = some (y'.m.r.entries, y'.m.u.entries)
+    rw [← hF.2.1, ← hF.2.2.1]
+    exact hba bs hbs'
+  · exact hw
+
+theorem adopt_aok (w : Worker) (y : Res) (st : St) (hw : ∀ z, w.x = some z → z.AOk) (hy : y.AOk) :
+    ∀ z, (adopt w y st).x = some z → z.AOk := by
+  unfold adopt
+  split
+  · intro z hz; cases hz; exact hy
+  · exact hw
+
+theorem filter_true {α : Type} (o : Option α) (p : α → Bool) (b : α) (h : o.filter p = some b) : p b = true := by
+  cases o with
+  | none => simp [Option.filter] at h
+  | some a =>
+    rw [Option.filter_some] at h
+    split at h
+    · next hp => cases h; exact hp
+    · cases h
+
+/-- A `load` line whose adds field is the canonical field of `bs` (what `addsOf` returns). -/
+theorem addsOf_load (fs out : List String) (bs : ByteArray) (h : addsOf fs out = some bs) :
+    out = [] ∧ ∃ a hh, fs = ["load", a, addsField bs, hh] := by
+  unfold addsOf at h
+  split at h
+  · rename_i a f hh
+    have h' := filter_true _ _ _ h
+    have e : addsField bs = f := beq_iff_eq.1 h'
+    exact ⟨rfl, a, hh, by rw [e]⟩
+  · simp at h
+
+theorem tagged_some (o : Option Res) (oh : String) (x : Res) (h : Res.tagged o oh = some x) : o = some x := by
+  cases o with
+  | none => simp [Res.tagged, Option.filter] at h
+  | some y =>
+    unfold Res.tagged at h
+    rw [Option.filter_some] at h
+    split at h
+    · exact h
+    · cases h
+
+/-- `x`'s adds stream hashes to `oh` iff `Res.tagged` keeps it. -/
+theorem tagged_iff (x : Res) (oh : String) (bs : ByteArray) (hba : x.ba = some bs) :
+    Res.tagged (some x) oh = some x ↔ orderTag bs = oh := by
+  unfold Res.tagged
+  rw [Option.filter_some, hba]
+  simp [Option.map]
+
+theorem tagged_self (x : Res) (bs : ByteArray) (hba : x.ba = some bs) : Res.tagged (some x) (orderTag bs) = some x :=
+  (tagged_iff x _ bs hba).2 rfl
+
+theorem tagged_isSome (x : Res) (oh : String) (h : (Res.tagged (some x) oh).isSome = true) :
+    ∃ bs, x.ba = some bs ∧ orderTag bs = oh := by
+  cases hba : x.ba with
+  | none => unfold Res.tagged at h; rw [Option.filter_some, hba] at h; simp at h
+  | some bs =>
+    refine ⟨bs, rfl, (tagged_iff x oh bs hba).1 ?_⟩
+    unfold Res.tagged at h ⊢
+    rw [Option.filter_some] at h ⊢
+    split at h
+    · next hp => simp [hp]
+    · simp at h
+
+theorem stepRes_resume (w : Worker) (h oh : String) :
+    stepRes w ["resume", h, oh] = (resume (Res.tagged w.x oh) w.st h).map fun p =>
+      ({ w with st := p.1, live := p.2.isEmpty || w.live }, p.2) := by
+  cases hr : resume (Res.tagged w.x oh) w.st h with
   | none => simp [stepRes, hr]
   | some p => obtain ⟨a, b⟩ := p; simp [stepRes, hr]
 
-theorem stepRes_gen (w : Worker) (fs : List String) (h1 : ∀ h, fs ≠ ["resume", h])
+theorem stepRes_gen (w : Worker) (fs : List String) (h1 : ∀ h oh, fs ≠ ["resume", h, oh])
     (h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false) :
     stepRes w fs = (step w.st fs).map fun p =>
-      (if fs.head? == some "load" then refit w p.1 else { w with st := p.1, live := w.live && !breaks fs }, p.2) := by
+      (if fs.head? == some "load" then refit w p.1 (addsOf fs p.2) else { w with st := p.1, live := w.live && !breaks fs }, p.2) := by
   unfold stepRes
   split
-  · next h => exact absurd rfl (h1 h)
+  · next h oh => exact absurd rfl (h1 h oh)
   · dsimp only
     simp only [h2, Bool.false_eq_true, ↓reduceIte]
     rcases step w.st fs with _ | ⟨a, b⟩ <;> rfl
@@ -1837,8 +1962,8 @@ theorem stepRes_gen (w : Worker) (fs : List String) (h1 : ∀ h, fs ≠ ["resume
 theorem stepRes_commit_fast (w : Worker) (x : Res) (hx : w.x = some x) (hl : w.live = true) (fs : List String) (u : Bool)
     (hfs : fs = ["commit"] ∧ u = false ∨ fs = ["commit", "UNANCHORED"] ∧ u = true) :
     stepRes w fs = some ((match (commitRes x w.st u).1 with
-      | some y => ({ x := some y, live := true, st := (commitRes x w.st u).2.1 } : Worker)
-      | none => refit w (commitRes x w.st u).2.1), (commitRes x w.st u).2.2) := by
+      | some y => adopt w y (commitRes x w.st u).2.1
+      | none => refit w (commitRes x w.st u).2.1 none), (commitRes x w.st u).2.2) := by
   obtain ⟨x0, l0, st0⟩ := w
   simp only at hx hl
   subst hx hl
@@ -1848,7 +1973,7 @@ theorem stepRes_commit_fast (w : Worker) (x : Res) (hx : w.x = some x) (hl : w.l
 theorem stepRes_commit_slow (w : Worker) (fs : List String) (u : Bool)
     (hfs : fs = ["commit"] ∧ u = false ∨ fs = ["commit", "UNANCHORED"] ∧ u = true)
     (hn : ¬ ∃ x, w.x = some x ∧ w.live = true) :
-    stepRes w fs = some (refit w (commit w.st u).1, (commit w.st u).2) := by
+    stepRes w fs = some (refit w (commit w.st u).1 none, (commit w.st u).2) := by
   obtain ⟨x0, l0, st0⟩ := w
   have hn' : x0 = none ∨ l0 = false := by
     rcases x0 with _ | x
@@ -1867,25 +1992,26 @@ theorem stepRes_commit_slow (w : Worker) (fs : List String) (u : Bool)
 theorem stepRes_inv (w w' : Worker) (fs out : List String) (hw : Inv w) (hs : stepRes w fs = some (w', out)) :
     Inv w' := by
   obtain ⟨hwx, hwl⟩ := hw
-  by_cases hrs : ∃ h, fs = ["resume", h]
-  · obtain ⟨h, rfl⟩ := hrs
+  by_cases hrs : ∃ h oh, fs = ["resume", h, oh]
+  · obtain ⟨h, oh, rfl⟩ := hrs
     rw [stepRes_resume] at hs
-    rcases hr : resume w.x w.st h with _ | ⟨st1, out1⟩
+    rcases hr : resume (Res.tagged w.x oh) w.st h with _ | ⟨st1, out1⟩
     · rw [hr] at hs; simp at hs
     · rw [hr] at hs
       simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
       obtain ⟨rfl, -⟩ := hs
       refine ⟨hwx, fun hl => ?_⟩
-      rcases resume_fail_closed w.x w.st st1 h out1 hr with ⟨hout, x, bs, ho, -, -, -, -, -⟩ | ⟨hout, hst⟩
+      rcases resume_fail_closed (Res.tagged w.x oh) w.st st1 h out1 hr with ⟨hout, x, bs, ho, -, -, -, -, -⟩ | ⟨hout, hst⟩
       · subst hout
+        have hwo := tagged_some _ _ _ ho
         rw [ho] at hr
-        exact ⟨x, ho, resume_fits x w.st st1 h (hwx x ho) hr⟩
+        exact ⟨x, hwo, resume_fits x w.st st1 h (hwx x hwo) hr⟩
       · subst hout
         subst hst
         have hl' : w.live = true := by simpa using hl
         obtain ⟨y, hy, hF⟩ := hwl hl'
         exact ⟨y, hy, fits_of_keep y w.st _ hF rfl rfl rfl rfl rfl rfl rfl id⟩
-  · have hr' : ∀ h, fs ≠ ["resume", h] := fun h e => hrs ⟨h, e⟩
+  · have hr' : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hrs ⟨h, oh, e⟩
     by_cases hc : fs = ["commit"] ∨ fs = ["commit", "UNANCHORED"]
     · obtain ⟨u, hu⟩ : ∃ u : Bool, (fs = ["commit"] ∧ u = false ∨ fs = ["commit", "UNANCHORED"] ∧ u = true) := by
         rcases hc with e | e
@@ -1902,21 +2028,15 @@ theorem stepRes_inv (w w' : Worker) (fs out : List String) (hw : Inv w) (hs : st
         obtain ⟨rfl, -⟩ := hs
         rcases hcm : (commitRes y w.st u).1 with _ | y'
         · try dsimp only
-          exact refit_inv w _ hwx
+          exact refit_inv w _ _ hwx
         · try dsimp only
           have hF' := h2 y' hcm
           have e : (commitRes y w.st u).2.1 = (commit w.st u).1 := by rw [h1]
-          refine ⟨fun z hz => ?_, fun _ => ⟨y', rfl, ?_⟩⟩
-          · have hzy : y' = z := Option.some.inj hz
-            subst hzy
-            exact hF'.1
-          · show y'.Fits (commitRes y w.st u).2.1
-            rw [e]
-            exact hF'
+          exact adopt_inv w y' _ hwx (by rw [e]; exact hF')
       · rw [stepRes_commit_slow w fs u hu hf] at hs
         simp only [Option.some.injEq, Prod.mk.injEq] at hs
         obtain ⟨rfl, -⟩ := hs
-        exact refit_inv w _ hwx
+        exact refit_inv w _ _ hwx
     · have h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false := by simpa [not_or] using hc
       rw [stepRes_gen w fs hr' h2] at hs
       rcases hst : step w.st fs with _ | ⟨st1, out1⟩
@@ -1925,7 +2045,7 @@ theorem stepRes_inv (w w' : Worker) (fs out : List String) (hw : Inv w) (hs : st
         simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
         obtain ⟨rfl, -⟩ := hs
         split
-        · exact refit_inv w _ hwx
+        · exact refit_inv w _ _ hwx
         · next hl =>
           refine ⟨hwx, fun hlive => ?_⟩
           have hlive' : (w.live && !breaks fs) = true := hlive
@@ -1941,7 +2061,7 @@ theorem stepRes_inv (w w' : Worker) (fs out : List String) (hw : Inv w) (hs : st
 theorem stepRes_step (w : Worker) (fs : List String) (hw : Inv w) (hr : fs.head? ≠ some "resume") :
     (stepRes w fs).map (fun p => (p.1.st, p.2)) = step w.st fs := by
   obtain ⟨hwx, hwl⟩ := hw
-  have hr' : ∀ h, fs ≠ ["resume", h] := fun h e => hr (by rw [e]; rfl)
+  have hr' : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hr (by rw [e]; rfl)
   by_cases hc : fs = ["commit"] ∨ fs = ["commit", "UNANCHORED"]
   · obtain ⟨u, hu, hstep⟩ : ∃ u : Bool, (fs = ["commit"] ∧ u = false ∨ fs = ["commit", "UNANCHORED"] ∧ u = true) ∧
         step w.st fs = some (commit w.st u) := by
@@ -1960,7 +2080,7 @@ theorem stepRes_step (w : Worker) (fs : List String) (hw : Inv w) (hr : fs.head?
       · try dsimp only
         simp only [Option.map_some, refit_st, h1]
       · try dsimp only
-        simp only [Option.map_some, h1]
+        simp only [Option.map_some, adopt_st, h1]
     · rw [stepRes_commit_slow w fs u hu hf]
       simp only [Option.map_some, refit_st]
   · have h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false := by simpa [not_or] using hc
@@ -2070,6 +2190,17 @@ theorem plain_adds (bs : ByteArray) : Plain (addsField bs) := by
   · exact plain_lit "-" (by decide) (by decide)
   · next h => exact plain_hexOf bs h
 
+theorem plain_tag (bs : ByteArray) : Plain (orderTag bs) := by
+  refine plain_hexOf _ (fun e => ?_)
+  have h : (BlindLedger.Semantic.sha3_512Fast bs).toList.length = 64 := by
+    rw [← BlindLedger.Semantic.sha3_512_eq]; exact BlindLedger.Semantic.sha3_512_toList_length _
+  have h0 : (BlindLedger.Semantic.sha3_512Fast bs).toList = [] := by
+    unfold ByteArray.toList
+    unfold ByteArray.toList.loop
+    simp [e]
+  rw [h0] at h
+  simp at h
+
 theorem plain_D (D : List UInt8) (hD : D.length = 64) : Plain (hexOf D.toByteArray) :=
   plain_hexOf _ (by simp [hD])
 
@@ -2118,18 +2249,21 @@ theorem splitC_nl (L : List String) (hne : L ≠ []) (hnl : ∀ l ∈ L, ¬ l.co
   rw [e] at this
   rw [this, if_neg hne]
 
-theorem fields_resume (h : String) (hp : Plain h) : fieldsFast ("resume " ++ h) = ["resume", h] := by
-  have e : "resume " ++ h = " ".intercalate ["resume", h] := by
-    rw [String.intercalate_cons_cons, String.intercalate_singleton]
+theorem fields_resume (h oh : String) (hp : Plain h) (hq : Plain oh) :
+    fieldsFast ("resume " ++ h ++ " " ++ oh) = ["resume", h, oh] := by
+  have e : "resume " ++ h ++ " " ++ oh = " ".intercalate ["resume", h, oh] := by
+    simp only [String.intercalate_cons_cons, String.intercalate_singleton]
     have : "resume " = "resume" ++ " " := by decide
     rw [this]
+    simp only [String.append_assoc]
   rw [e]
   refine fieldsFast_join _ (by simp) ?_
   intro p hp'
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hp'
-  rcases hp' with rfl | rfl
+  rcases hp' with rfl | rfl | rfl
   · exact plain_lit "resume" (by decide) (by decide)
   · exact hp
+  · exact hq
 
 theorem fields_load (a b c : String) (ha : Plain a) (hb : Plain b) (hc : Plain c) :
     fieldsFast ("load " ++ a ++ " " ++ b ++ " " ++ c) = ["load", a, b, c] := by
@@ -2174,7 +2308,7 @@ theorem bump_inv (w : Worker) (hw : Inv w) : Inv { w with st := { w.st with fail
 theorem stepRes_pre (w w1 : Worker) (fs ls : List String) (hr : fs.head? ≠ some "resume")
     (hl : fs.head? ≠ some "load") (hc : fs.head? ≠ some "commit") (hs : stepRes w fs = some (w1, ls))
     (hlive : w.live = false) : w1.x = w.x ∧ w1.live = false := by
-  have h1 : ∀ h, fs ≠ ["resume", h] := fun h e => hr (by rw [e]; rfl)
+  have h1 : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hr (by rw [e]; rfl)
   have h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false := by
     simp only [Bool.or_eq_false_iff, beq_eq_false_iff_ne]
     exact ⟨fun e => hc (by rw [e]; rfl), fun e => hc (by rw [e]; rfl)⟩
@@ -2251,48 +2385,51 @@ theorem runOn_snd {σ : Type} (stp : σ → List String → Option (σ × List S
   rfl
 
 theorem resume_line (x : Res) (D : List UInt8) (bs : ByteArray) (hx : x.Ok) (hd : x.m.d = some D)
-    (hb : parseAdds bs = some (x.m.r.entries, x.m.u.entries)) (w : Worker) (hi : Inv w) (hwx : w.x = some x)
+    (hb : parseAdds bs = some (x.m.r.entries, x.m.u.entries)) (hba : x.ba = some bs) (w : Worker) (hi : Inv w) (hwx : w.x = some x)
     (n : Nat) (out : Array String) :
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray] n w out).2 =
+    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] n w out).2 =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] n w.st out).2 ∧
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray] n w out).1.st =
+    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] n w out).1.st =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] n w.st out).1 ∧
-    Inv (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray] n w out).1 := by
+    Inv (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] n w out).1 := by
   have hD := memo_len x.m D hd
   have hP1 : Plain (toString x.m.r.asOf) := plain_nat _
   have hP2 : Plain (addsField bs) := plain_adds bs
   have hP3 : Plain (hexOf D.toByteArray) := plain_D D hD
   have g1 : ("resume".startsWith "#") = false := by simp
-  have hh1 : ∀ h : String, ["resume", h].head! = "resume" := fun _ => rfl
+  have hh1 : ∀ h oh : String, ["resume", h, oh].head! = "resume" := fun _ _ => rfl
   have hh2 : ∀ a b c : String, ["load", a, b, c].head! = "load" := fun _ _ _ => rfl
   have g2 : ("load".startsWith "#") = false := by simp
   have hs := resume_eq_load x w.st D bs hx hd hb
-  have hr := stepRes_resume w (hexOf D.toByteArray)
-  rw [hwx, hs] at hr
+  have hr := stepRes_resume w (hexOf D.toByteArray) (orderTag bs)
+  rw [hwx, tagged_self x bs hba, hs] at hr
   cases hst : step w.st ["load", toString x.m.r.asOf, addsField bs, hexOf D.toByteArray] with
   | none =>
     rw [hst] at hr
     simp only [Option.map_none] at hr
-    simp only [runLoop, fields_resume _ hP3, fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
+    simp only [runLoop, fields_resume _ _ hP3 (plain_tag bs), fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
       hh1, hh2, g1, g2, Bool.or_self, Bool.false_eq_true, if_false]
     exact ⟨trivial, rfl, bump_inv w hi⟩
   | some p =>
     obtain ⟨st1, ls⟩ := p
     rw [hst] at hr
     simp only [Option.map_some] at hr
-    simp only [runLoop, fields_resume _ hP3, fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
+    simp only [runLoop, fields_resume _ _ hP3 (plain_tag bs), fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
       hh1, hh2, g1, g2, Bool.or_self, Bool.false_eq_true, if_false]
     exact ⟨rfl, trivial, stepRes_inv w _ _ _ hi hr⟩
 
-theorem nl_resume (h : String) (hp : Plain h) : ¬ ("resume " ++ h).contains '\n' := by
+theorem nl_resume (h oh : String) (hp : Plain h) (hq : Plain oh) :
+    ¬ ("resume " ++ h ++ " " ++ oh).contains '\n' := by
   intro hc
   rw [String.contains_char_eq] at hc
   simp only [String.toList_append, List.mem_append, decide_eq_true_eq] at hc
-  rcases hc with hc | hc
+  rcases hc with ((hc | hc) | hc) | hc
   · revert hc; decide
   · exact (hp.2 _ hc).2.2 rfl
+  · revert hc; decide
+  · exact (hq.2 _ hc).2.2 rfl
 
 theorem nl_load (a b c : String) (ha : Plain a) (hb : Plain b) (hc : Plain c) :
     ¬ ("load " ++ a ++ " " ++ b ++ " " ++ c).contains '\n' := by
@@ -2311,11 +2448,11 @@ theorem nl_load (a b c : String) (ha : Plain a) (hb : Plain b) (hc : Plain c) :
     prints, passes and ends exactly as the same frame with `load a adds D`, and a live final `Res` fits the final
     state. With `resident_inv`, `adds` may be the sealed join. Rules out a resumed frame differing from the full replay. -/
 theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (pre rest : List String)
-    (hx : x.Ok) (hd : x.m.d = some D) (hb : parseAdds bs = some (x.m.r.entries, x.m.u.entries))
+    (hx : x.Ok) (hd : x.m.d = some D) (hb : parseAdds bs = some (x.m.r.entries, x.m.u.entries)) (hba : x.ba = some bs)
     (hnl : ∀ l ∈ pre ++ rest, ¬ l.contains '\n')
     (hpre : ∀ l ∈ pre, ∀ k ∈ ["resume", "load", "commit"], (fieldsFast l).head? ≠ some k)
     (hrest : ∀ l ∈ rest, (fieldsFast l).head? ≠ some "resume") :
-    let r := runRes (some x) ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray] ++ rest))
+    let r := runRes (some x) ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] ++ rest))
     (r.1, r.2.1, r.2.2.st) = runWith ("\n".intercalate
       (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) ∧
     Inv r.2.2 := by
@@ -2325,12 +2462,12 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (pre rest : L
   have hP1 : Plain (toString x.m.r.asOf) := plain_nat _
   have hP2 : Plain (addsField bs) := plain_adds bs
   have hP3 : Plain (hexOf D.toByteArray) := plain_D D hD
-  have hnlA : ∀ l ∈ pre ++ ["resume " ++ hexOf D.toByteArray] ++ rest, ¬ l.contains '\n' := by
+  have hnlA : ∀ l ∈ pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] ++ rest, ¬ l.contains '\n' := by
     intro l hl
     simp only [List.mem_append, List.mem_singleton] at hl
     rcases hl with (hl | rfl) | hl
     · exact hnl l (List.mem_append.2 (Or.inl hl))
-    · exact nl_resume _ hP3
+    · exact nl_resume _ _ hP3 (plain_tag bs)
     · exact hnl l (List.mem_append.2 (Or.inr hl))
   have hnlB : ∀ l ∈ pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest,
       ¬ l.contains '\n' := by
@@ -2349,23 +2486,23 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (pre rest : L
         (hpre raw hraw "commit" (by simp)) hs hp.2
       exact ⟨h.1.trans hp.1, h.2⟩)
     0 ⟨some x, false, {}⟩ #[] hw0 ⟨rfl, rfl⟩
-  obtain ⟨b1, b2, b3⟩ := resume_line x D bs hx hd hb
+  obtain ⟨b1, b2, b3⟩ := resume_line x D bs hx hd hb hba
     (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}⟩ #[]).1 a3 a4.1 (0 + pre.length)
     (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}⟩ #[]).2
   obtain ⟨c1, c2, c3, -⟩ := runLoop_sim (fun _ => True) bumpW (fun _ => rfl) (fun w hw => bump_inv w hw)
     (fun _ h => h) rest hrest (fun _ _ _ _ _ _ _ _ => trivial)
-    (0 + (pre ++ ["resume " ++ hexOf D.toByteArray]).length)
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray] (0 + pre.length)
+    (0 + (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs]).length)
+    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] (0 + pre.length)
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}⟩ #[]).1
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}⟩ #[]).2).1
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray] (0 + pre.length)
+    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] (0 + pre.length)
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}⟩ #[]).1
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}⟩ #[]).2).2 b3 trivial
   have hlen : (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray]).length =
-      (pre ++ ["resume " ++ hexOf D.toByteArray]).length := by simp
-  have hrr : runRes (some x) ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray] ++ rest)) =
-      runOn stepRes (·.st) bumpW ⟨some x, false, {}⟩ ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray] ++ rest)) := rfl
-  have h2 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray] ++ rest)) '\n') 0
+      (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs]).length := by simp
+  have hrr : runRes (some x) ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] ++ rest)) =
+      runOn stepRes (·.st) bumpW ⟨some x, false, {}⟩ ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] ++ rest)) := rfl
+  have h2 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] ++ rest)) '\n') 0
         ⟨some x, false, {}⟩ #[]).2 =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         (splitC ("\n".intercalate (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) '\n')
@@ -2373,7 +2510,7 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (pre rest : L
     rw [splitC_nl _ (by simp) hnlA, splitC_nl _ (by simp) hnlB]
     simp only [runLoop_append]
     rw [hlen, c1, b2, b1, a2, a1]
-  have h1 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray] ++ rest)) '\n') 0
+  have h1 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag bs] ++ rest)) '\n') 0
         ⟨some x, false, {}⟩ #[]).1.st =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         (splitC ("\n".intercalate (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) '\n')
@@ -2447,6 +2584,155 @@ theorem resident_inv (st : St) (u : Bool) (bs b : ByteArray)
   rw [e1, e2]
   exact parseAdds_append _ _ _ _ _ _ h0 (hadd b hb)
 
+/-- A kept stream stays the stream of the kept sets, in order, across `Res.next`. -/
+theorem next_aok (x : Res) (i : Fast.Ix) (fr fu : List Line) (y : Res) (hx : x.AOk)
+    (hy : x.next i fr fu = some y) : y.AOk := by
+  obtain ⟨h1, h2, -⟩ := next_some x i fr fu y hy
+  have hba : y.ba = x.ba.bind fun b => (addsBytes fr fu).map (b ++ ·) := by
+    unfold Res.next at hy
+    split at hy
+    · simp at hy
+    · obtain rfl := Option.some.inj hy
+      rfl
+  intro bs hbs
+  rw [hba] at hbs
+  cases hxb : x.ba with
+  | none => simp [hxb] at hbs
+  | some b =>
+    rw [hxb] at hbs
+    simp only [Option.bind_some] at hbs
+    cases hab : addsBytes fr fu with
+    | none => simp [hab] at hbs
+    | some a =>
+      simp only [hab, Option.map_some, Option.some.injEq] at hbs
+      subst hbs
+      rw [h1, h2]
+      exact parseAdds_append _ _ _ _ _ _ (hx b hxb) (parseAdds_addsBytes _ _ _ hab)
+
+theorem commitRes_aok (x : Res) (st : St) (u : Bool) (hx : x.AOk) :
+    ∀ y, (commitRes x st u).1 = some y → y.AOk := by
+  intro y hy
+  unfold commitRes at hy
+  dsimp only at hy
+  by_cases hA : (!st.anchor.all fun a => x.m.d == some (Gate.natBE Gate.digestBytes a)) = true
+  · simp only [if_pos hA] at hy
+    obtain rfl := Option.some.inj hy
+    exact hx
+  · simp only [if_neg hA] at hy
+    rcases ho : st.owners with _ | ⟨k, os⟩
+    all_goals simp only [ho, Option.map] at hy
+    all_goals exact next_aok x _ _ _ y hx hy
+
+/-- T1c: every kept `Res` with a known adds stream has that stream parse to its sets in order, through every worker step. -/
+theorem stepRes_aok (w w' : Worker) (fs out : List String) (hA : ∀ y, w.x = some y → y.AOk)
+    (hs : stepRes w fs = some (w', out)) : ∀ y, w'.x = some y → y.AOk := by
+  by_cases hrs : ∃ h oh, fs = ["resume", h, oh]
+  · obtain ⟨h, oh, rfl⟩ := hrs
+    rw [stepRes_resume] at hs
+    rcases hr : resume (Res.tagged w.x oh) w.st h with _ | ⟨st1, out1⟩
+    · rw [hr] at hs; simp at hs
+    · rw [hr] at hs
+      simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
+      obtain ⟨rfl, -⟩ := hs
+      exact hA
+  · have hr' : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hrs ⟨h, oh, e⟩
+    by_cases hc : fs = ["commit"] ∨ fs = ["commit", "UNANCHORED"]
+    · obtain ⟨u, hu⟩ : ∃ u : Bool, (fs = ["commit"] ∧ u = false ∨ fs = ["commit", "UNANCHORED"] ∧ u = true) := by
+        rcases hc with e | e
+        · exact ⟨false, Or.inl ⟨e, rfl⟩⟩
+        · exact ⟨true, Or.inr ⟨e, rfl⟩⟩
+      by_cases hf : ∃ x, w.x = some x ∧ w.live = true
+      · obtain ⟨x, hx, hl⟩ := hf
+        rw [stepRes_commit_fast w x hx hl fs u hu] at hs
+        simp only [Option.some.injEq, Prod.mk.injEq] at hs
+        obtain ⟨rfl, -⟩ := hs
+        rcases hcm : (commitRes x w.st u).1 with _ | y'
+        · try dsimp only
+          exact refit_aok w _ _ hA (fun bs h => by cases h)
+        · try dsimp only
+          exact adopt_aok w y' _ hA (commitRes_aok x w.st u (hA x hx) y' hcm)
+      · rw [stepRes_commit_slow w fs u hu hf] at hs
+        simp only [Option.some.injEq, Prod.mk.injEq] at hs
+        obtain ⟨rfl, -⟩ := hs
+        exact refit_aok w _ _ hA (fun bs h => by cases h)
+    · have h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false := by simpa [not_or] using hc
+      rw [stepRes_gen w fs hr' h2] at hs
+      rcases hst : step w.st fs with _ | ⟨st1, out1⟩
+      · rw [hst] at hs; simp at hs
+      · rw [hst] at hs
+        simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
+        obtain ⟨rfl, -⟩ := hs
+        split
+        · refine refit_aok w _ _ hA ?_
+          intro bs hbs
+          obtain ⟨hout, a, hh, hfs⟩ := addsOf_load fs out1 bs hbs
+          subst hout
+          subst hfs
+          exact (load_fits w.st st1 a hh bs hst).2
+        · exact hA
+
+theorem runLoop_aok (L : List String) : ∀ (n : Nat) (w : Worker) (out : Array String),
+    (∀ y, w.x = some y → y.AOk) → ∀ y, (runLoop stepRes (·.st) bumpW L n w out).1.x = some y → y.AOk := by
+  induction L with
+  | nil => intro n w out hw; exact hw
+  | cons raw L ih =>
+    intro n w out hw
+    simp only [runLoop]
+    split
+    · exact ih _ _ _ hw
+    · split
+      · exact ih _ _ _ hw
+      · next w1 ls hs => exact ih _ _ _ (stepRes_aok w w1 _ ls hw hs)
+
+/-- T1c: the `Res` a frame leaves keeps its stream in order, from a kept `Res` that did. -/
+theorem frame_aok (x : Option Res) (text : String) (hx : ∀ y, x = some y → y.AOk) :
+    ∀ y, (frame x text).2 = some y → y.AOk := by
+  intro y hy
+  have h : (frame x text).2 = (runLoop stepRes (·.st) bumpW (splitC text '\n') 0 ⟨x, false, {}⟩ #[]).1.x := by
+    show (runOn stepRes (·.st) bumpW ⟨x, false, {}⟩ text).2.2.x = _
+    rw [runOn_snd]
+  rw [h] at hy
+  exact runLoop_aok _ 0 ⟨x, false, {}⟩ #[] hx y hy
+
+/-- T1c: a resume answers as the full `load` of the stream whose hash it sent, and that stream is the kept sets in
+    order. `x.AOk` is what `stepRes_aok` keeps; the anchor alone binds the sets, the hash binds their order. -/
+theorem resume_sound (x : Res) (st : St) (D : List UInt8) (oh : String) (hx : x.Ok) (hxA : x.AOk)
+    (hd : x.m.d = some D) (ht : (Res.tagged (some x) oh).isSome = true) :
+    ∃ bs, x.ba = some bs ∧ orderTag bs = oh ∧ parseAdds bs = some (x.m.r.entries, x.m.u.entries) ∧
+      resume (Res.tagged (some x) oh) st (hexOf D.toByteArray) =
+        step st ["load", toString x.m.r.asOf, addsField bs, hexOf D.toByteArray] := by
+  obtain ⟨bs, hba, hoh⟩ := tagged_isSome x oh ht
+  have hb := hxA bs hba
+  refine ⟨bs, hba, hoh, hb, ?_⟩
+  subst hoh
+  rw [tagged_self x bs hba]
+  exact resume_eq_load x st D bs hx hd hb
+
+/-- T1c: a stream other than the kept one is never resumed onto, given that the tag is injective on streams (the
+    collision resistance of SHA3-512, which Lean does not prove). -/
+theorem tagged_other (x : Res) (bs bs' : ByteArray) (hba : x.ba = some bs) (hne : bs' ≠ bs)
+    (hinj : ∀ a b, orderTag a = orderTag b → a = b) : Res.tagged (some x) (orderTag bs') = none := by
+  unfold Res.tagged
+  rw [Option.filter_some, hba]
+  have h : ¬ (orderTag bs = orderTag bs') := fun e => hne (hinj _ _ e.symm)
+  simp [h]
+
+/-- F1: a frame with no `resume` line runs as `runWith` from any `Inv` start, and ends `Inv`. Rules out the worker
+    drifting from the one-shot when a frame sends `load` or `commit` only (every frame `decide` sends on a fresh worker). -/
+theorem runRes_eq_runWith (x : Option Res) (hx : ∀ y, x = some y → y.Ok) (text : String)
+    (hL : ∀ raw ∈ splitC text '\n', (fieldsFast raw).head? ≠ some "resume") :
+    (let r := runRes x text; (r.1, r.2.1, r.2.2.st) = runWith text) ∧ Inv (runRes x text).2.2 := by
+  have hw0 : Inv (⟨x, false, {}⟩ : Worker) := ⟨hx, fun h => by simp at h⟩
+  obtain ⟨c1, c2, c3, -⟩ := runLoop_sim (fun _ => True) bumpW (fun _ => rfl) (fun w hw => bump_inv w hw)
+    (fun _ h => h) (splitC text '\n') hL (fun _ _ _ _ _ _ _ _ => trivial) 0 ⟨x, false, {}⟩ #[] hw0 trivial
+  have hrr : runRes x text = runOn stepRes (·.st) bumpW ⟨x, false, {}⟩ text := rfl
+  refine ⟨?_, ?_⟩
+  · dsimp only
+    rw [hrr]
+    exact runOn_eq stepRes (·.st) bumpW ⟨x, false, {}⟩ step id _ {} _ _ c1 c2
+  · rw [hrr, runOn_snd]
+    exact c3
+
 
 /-- info: 'BlindLedger.Gate.Rules.Resident.runRes_eq_load' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms runRes_eq_load
@@ -2464,5 +2750,15 @@ theorem resident_inv (st : St) (u : Bool) (bs b : ByteArray)
 #guard_msgs in #print axioms runWith_eq_runText
 /-- info: 'BlindLedger.Gate.Rules.Resident.resume_eq_load' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms resume_eq_load
+/-- info: 'BlindLedger.Gate.Rules.Resident.runRes_eq_runWith' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms runRes_eq_runWith
+/-- info: 'BlindLedger.Gate.Rules.Resident.stepRes_aok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms stepRes_aok
+/-- info: 'BlindLedger.Gate.Rules.Resident.frame_aok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms frame_aok
+/-- info: 'BlindLedger.Gate.Rules.Resident.resume_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms resume_sound
+/-- info: 'BlindLedger.Gate.Rules.Resident.tagged_other' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms tagged_other
 
 end BlindLedger.Gate.Rules.Resident

@@ -7,7 +7,8 @@ namespace BlindLedger.Gate.Rules.RulesWorker
 opaque reserveArena (bytes : USize) (commit allowLarge : Bool) : IO UInt32
 
 /-- The long-lived `gate_rules_worker`: a 1 GiB uncommitted arena first (exit 70 without it), then `Run.serve` over
-    `Resident.frame`, which keeps the `Res` across frames (`runRes_eq_load`: `resume` answers as the full `load`). -/
+    `Resident.frame`, which keeps the `Res` across frames (`runRes_eq_load`: `resume D H` answers as the full `load`
+    when D is the held digest and H the SHA3-512 of the held adds stream, so row order is bound too). -/
 def main : IO UInt32 := do
   if (← reserveArena 1073741824 false false) != 0 then
     return 70
