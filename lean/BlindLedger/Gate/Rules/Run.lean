@@ -36,7 +36,8 @@ open BlindLedger.Gate.Rules
     `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex) and what it read (`RULES_READS`, `reads`
     on the checkpoint it extends, or before the first on the sets it declares; redo order is part of the record).  `load G_ASOF ADDSHEX ANCHORHEX`
     drops the released and unresolved sets and replays those rows onto empty sets dated G_ASOF
-    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  Arrival
+    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  (The resident worker alone also takes `resume ANCHORHEX CHAIN` and `loadparts G_ASOF CHAIN ANCHORHEX`,
+    the same as `load` of the kept or the raw-part adds; see `Resident`.)  Arrival
     order cannot change a decision (`decideBatchIn_perm`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
@@ -325,6 +326,21 @@ def parseOwner (o : String) : Option Owner := match o.splitOn ":" with
     pure ⟨← i.toNat?, ← s.toNat?, b == "1"⟩
   | _ => none
 
+/-- `load` with the adds stream `bs` already decoded (`loadparts` hands it over without a hex field). -/
+def loadBytes (st : St) (a : String) (bs : ByteArray) (h : String) : Option (St × List String) := do
+  guard (h.length == 128)
+  let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
+  let anchor := Gate.beNat (← unhexFast h).toList
+  -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
+  match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
+      (Memo.mk s.1 s.2 _ rfl).d.bind fun d =>
+        if d == Gate.natBE Gate.digestBytes anchor then some (s, Memo.mk s.1 s.2 _ rfl) else none) (Rules.replay (g, g) [ad]) with
+  | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
+  | some (s, m) => pure ({ st with
+      snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
+      rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
+      extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true, memo := some m }, [])
+
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
                                    anchor := none, batch := #[], redo := [], foreign := [], owners := none, free := none,
@@ -333,19 +349,7 @@ def step (st : St) : List String → Option (St × List String)
     guard (h.length == 128)
     pure ({ st with sealed := true, anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
   | ["load", a, adds, h] => do
-    guard (h.length == 128)
-    let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
-    let anchor := Gate.beNat (← unhexFast h).toList
-    let bs ← if adds == "-" then pure ByteArray.empty else unhexFast adds   -- `-` is zero rows (the field cannot be empty)
-    -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
-    match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
-        (Memo.mk s.1 s.2 _ rfl).d.bind fun d =>
-          if d == Gate.natBE Gate.digestBytes anchor then some (s, Memo.mk s.1 s.2 _ rfl) else none) (Rules.replay (g, g) [ad]) with
-    | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
-    | some (s, m) => pure ({ st with
-        snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
-        rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-        extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true, memo := some m }, [])
+    loadBytes st a (← if adds == "-" then pure ByteArray.empty else unhexFast adds) h   -- `-` is zero rows (the field cannot be empty)
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),

@@ -2,11 +2,11 @@
 with the exclusive time of each stage per line and its growth with history.  ``python -m tests.gate_bench --sizes 10000,100000
 --batch 1000 --out <json>``.  It changes no product code: each stage is a timing wrapper over the real function.
 
-Stages (µs per line): parse (the harness's line text and answer parse), frame (decide's text and hex of the sealed history),
+Stages (µs per line): parse (the harness's line text and answer parse), frame (decide's text and the resume line),
 registry, storage (SQLite reads and writes), lean_decide and lean_replay (the Lean call, split by a probe that sends the same
 frame without its ``line`` rows: what is left is the history replay), canon (encoding and digests), sign, verify (Lean
 ``gate_verify``), seal_other.  ``total`` leaves out the probe and the harness's own token leaves.  The guard owns memory policy: only with ``free`` (callable, free bytes; the CLI passes the live reading) does a batch whose Lean call
-would need more (about 700 times its frame) stop the run and record the wall."""
+would need more (twice the worker's commit so far, plus about 500 times the batch's frame; measured at 20,000 history lines: tree peak 288 MB private against a 204 MB commit) stop the run and record the wall."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from tests import _gate_shards as g
 from tests import test_gate_rules_worker as w
 from tests import test_right_rail_gate_formats as fx
 
-SEED, PER_PAYMENT, MEM_PER_FRAME_BYTE = 20261005, 4, 700
+SEED, PER_PAYMENT, MEM_PER_FRAME_BYTE = 20261005, 4, 500
 NONCES = itertools.count(int.from_bytes(bytes(range(32)), "big"))  # the patched os.urandom: seeded, unique per call, first bytes(range(32))
 REPORT = ("parse", "frame", "registry", "storage", "lean_decide", "lean_replay", "canon", "sign", "verify", "seal_other")
 
@@ -85,14 +85,15 @@ def corpus(total: int, batch: int):
 
 
 def _probe(fn, S):
-    """Wrap a Lean call so the same frame minus its ``line`` rows runs first, as the replay probe (answer checked, never used)."""
+    """Wrap a Lean call so the same frame minus its ``line`` rows and its ``commit`` runs first, as the replay probe (answer checked,
+    never used; a commit would step the worker's chain past the batch the producer seals)."""
     def run(first, *rest, **kw):
         if isinstance(first, bytes):
-            probe = b"\n".join(r for r in first.split(b"\n") if not r.startswith(b"line "))
+            probe = b"\n".join(r for r in first.split(b"\n") if not r.startswith(b"line ") and r != b"commit")
             ok = S.wrap("lean_probe", fn)(probe, *rest, **kw)
         else:  # the one-shot exe: (argv, ...) with the frame file last
             argv = list(first)
-            Path(argv[1] + ".probe").write_bytes(b"\n".join(r for r in Path(argv[1]).read_bytes().split(b"\n") if not r.startswith(b"line ")))
+            Path(argv[1] + ".probe").write_bytes(b"\n".join(r for r in Path(argv[1]).read_bytes().split(b"\n") if not r.startswith(b"line ") and r != b"commit"))
             ok = S.wrap("lean_probe", fn)([argv[0], argv[1] + ".probe"], *rest, **kw).stdout.splitlines()
         S.probes.append("RULES_VECTORS=PASS checked=0 expected=0 failed=0" in ok)
         return S.wrap("lean_call", fn)(first, *rest, **kw)
@@ -103,7 +104,6 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
     S, rows, wall, store = Stages(), [], None, []
     S.probes = []
     worker = decider.RulesWorker(w.WORKER)
-    adds_of = producer.ShardProducer.sealed_adds  # the unwrapped read, for the pre-flight estimate
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, contextlib.ExitStack() as stack:
         stack.callback(worker.close)
         c = g.Cluster(tmp, fx.custody(tmp), shards=1)
@@ -124,7 +124,7 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
                 (fx, "member", "harness"), (idreg.IdRegistry, "reserve", "registry"), (idreg.IdRegistry, "settle", "registry"),
                 (idreg.IdRegistry, "in_flight", "registry"), (idreg.IdRegistry, "settled", "registry"),
                 (producer.ShardProducer, "commit", "storage"), (producer.ShardProducer, "anchor", "storage"),
-                (producer.ShardProducer, "tip", "storage"), (producer.ShardProducer, "sealed_adds", "storage"),
+                (producer.ShardProducer, "tip", "storage"), (producer.ShardProducer, "sealed_batches", "storage"), (producer.ShardProducer, "sealed_chain", "storage"),
                 (producer.ShardProducer, "sealed_frees", "storage"), (gate, "build_batch", "canon"), (gate, "encode_token", "canon"),
                 (gate, "encode_checkpoint_header", "canon"), (gate, "checkpoint_digest", "canon"), (signer, "framed", "canon"),
                 (signer, "seal", "seal_other"), (signer, "sign", "sign"), (signer, "gate_verify", "verify")):
@@ -135,8 +135,9 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
         S.take()
         for payments, bad in corpus(total, batch):
             lines = sum(map(len, payments.values()))
-            frame = 2 * len(adds_of(prod)) + 400 * lines + 4096
-            need, avail = MEM_PER_FRAME_BYTE * frame, free() if free else None
+            frame = 400 * lines + 4096  # the batch's own text: the history never travels in a frame, a resume costs O(batch)
+            held = worker._worker.commit_bytes() if worker._worker else 0
+            need, avail = 2 * held + MEM_PER_FRAME_BYTE * frame, free() if free else None
             if free and avail < need:
                 wall = {"reason": "memory", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": avail}
                 break
@@ -156,7 +157,7 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
             us["lean_replay"], us["lean_decide"] = probed, call - probed  # a cold first batch can make this negative: its probe pays the start
             us.setdefault("other", 0.0)
             us["total"] = (t1 - t0 - spent.get("lean_probe", 0.0) - spent.get("harness", 0.0)) / lines * 1e6
-            rows.append({"cold": not rows, "history_before": done, "lines": lines, "frame_est_bytes": frame, "path": "exe" if frame > decider.FRAME_CAP else "worker",
+            rows.append({"cold": not rows, "history_before": done, "lines": lines, "frame_est_bytes": frame, "worker_commit_bytes": held,
                          "us_per_line": {k: round(v, 1) for k, v in us.items()}})
             done += lines
         elapsed = time.perf_counter() - started
@@ -196,7 +197,7 @@ def main() -> None:
         Path(a.out).write_text(json.dumps(result, indent=1), "utf-8")
     print("BENCH", {k: v for k, v in result.items() if k != "batches"})
     for r in result["batches"]:
-        print("BENCH_BATCH", r["history_before"], r["path"], r["frame_est_bytes"], r["us_per_line"])
+        print("BENCH_BATCH", r["history_before"], r["worker_commit_bytes"], r["frame_est_bytes"], r["us_per_line"])
 
 
 if __name__ == "__main__":
