@@ -3,20 +3,24 @@
 The frame is the vector directive text (F2(a)): the tenant's snapshot header, then ``load`` of the shard's sealed
 ``adds`` against the newest sealed header's state digest (the anchor, read from the signed store, never from memory),
 then the registry's ``owners`` answer and the lines.  Lean folds the adds onto the genesis sets dated ``asof`` and
-decides only if they hash to the anchor (``resume``: the same check on the resident engine's held sets); else the
-shard decides nothing (``state_mismatch``).  Every outcome, the state digest after the batch, its ``adds`` and the ids
-to free come from Lean; Python holds no policy and never decodes rows.  At genesis the header's empty sets are the shard's.
+decides only if they hash to the anchor; else the shard decides nothing (``state_mismatch``).  A worker holding the anchor's state is sent
+``resume ASOF ANCHOR CHAIN`` instead (CHAIN: the producer's running chain over the sealed batches, which binds their order and costs
+O(batch) to keep; a held state of another ASOF answers RULES_HEAD_MISMATCH and is reloaded); else the history goes to the worker in parts under ``PART_BYTES`` and a ``loadparts`` line adopts it only if
+the parts are a complete sequence of that chain and hash to the anchor, never by size to the one-shot exe.  Every outcome, the
+state digest after the batch, its ``adds`` and the ids to free come from Lean; Python holds no policy and never
+decodes the rows.  At genesis (no sealed batch) the header's empty sets are the shard's sets.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import threading
-from typing import NamedTuple, Sequence
+from typing import Iterable, NamedTuple, Sequence
 
 from app import minimal_clearance_verifier_process as process
 
@@ -35,34 +39,43 @@ class GateDecideError(RuntimeError):
     out; the next ``decide`` settles it, never re-commit); ``registry_restored``, a HOLD answer (nothing to seal)."""
 
 
-FRAME_CAP = 1 << 20  # the largest frame the worker takes; Lean's own limit (``process.WORKER_MAX_FRAME_BYTES``) is far above it
+PART_BYTES = 1 << 19  # a history part: under any frame cap, so a history of any size loads as a sequence of frames
+LOG = logging.getLogger(__name__)
+
+
+class WorkerDied(GateDecideError):
+    """``rules_refused`` because the worker process failed (killed, hung, over its job cap, a stray byte): the only case
+    ``decide`` re-runs a batch on the one-shot exe, and it logs the reason."""
 
 
 class RulesWorker:
-    """A long-lived ``gate_engine``: u32 BE frames of a 0x00 tag and the vector text, answered with the one-shot's lines
-    minus ``RULES_SOURCE`` (both run ``Run.runFrom``); ``held`` is the digest of its last answer, the sets it can ``resume``.
-    Any failure closes it and raises ``rules_refused``; the next call starts a fresh one.  A frame over ``FRAME_CAP`` goes to
-    the one-shot exe (``decide``), never after a failure: a decide takes ~700x its frame in memory, so 1 GB caps it near 1.5 MiB."""
+    """A long-lived ``gate_engine`` (the one-shot's process start and arena are paid once, not per batch): u32 BE frames; tag 0
+    then the vector text, answered with the same output lines minus ``RULES_SOURCE``; tag 2 then a flag byte (1 ends a sealed
+    batch's adds) and a part of the history, answered ``RULES_PART`` (the next tag 0 frame's ``loadparts`` takes them).  The
+    one-shot runs ``Run.runText``, the worker ``Resident.frame``.  The engine keeps one state, so ``holds`` maps at most one
+    shard to its state digest.  Any failure closes the worker and raises ``WorkerDied``; the next call starts a fresh one
+    (``gen`` counts the launches)."""
 
     TIMEOUT_SECONDS = 600.0
-    RECYCLE_COMMIT_BYTES = 400_000_000  # replaced between batches, never mid-batch, so slow growth never reaches the job cap
+    RECYCLE_GROWTH_BYTES, RECYCLE_CAP_BYTES = 300_000_000, 800_000_000  # over its first answer's level (the load), or near the job cap
     JOB_MEMORY_CAP_BYTES = 1_000_000_000
 
     def __init__(self, exe: Path) -> None:
-        self.exe, self._worker, self._workspace, self._lock, self.held = exe, None, None, threading.Lock(), None
+        self.exe, self._worker, self._workspace, self._lock, self.holds = exe, None, None, threading.RLock(), {}
+        self.gen, self._base = 0, None
 
     def close(self) -> None:
         with self._lock:
             self._close()
 
     def _close(self) -> None:
-        worker, workspace, self._worker, self._workspace, self.held = self._worker, self._workspace, None, None, None
+        worker, workspace, self._worker, self._workspace, self.holds, self._base = self._worker, self._workspace, None, None, {}, None
         if worker is not None:
             worker.close()
         if workspace is not None:
             shutil.rmtree(workspace, ignore_errors=True)
 
-    def run(self, data: bytes) -> list[str]:
+    def _send(self, frame: bytes, recycle: bool) -> list[str]:
         with self._lock:
             try:
                 if self._worker is not None and not self._worker.alive:
@@ -73,15 +86,48 @@ class RulesWorker:
                     self._worker = process.launch_contained_worker(
                         self.exe, workspace=self._workspace, job_memory_cap_bytes=self.JOB_MEMORY_CAP_BYTES,
                         expected_executable_size_bytes=len(exe), expected_executable_sha256=hashlib.sha256(exe).digest())
-                answer = self._worker.exchange(b"\0" + data, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
+                    self.gen += 1
+                answer = self._worker.exchange(frame, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
                                                timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8").splitlines()
-                self.held = next((bytes.fromhex(x[13:]) for x in reversed(answer) if x.startswith("RULES_DIGEST ")), None)
-                if self._worker.commit_bytes() > self.RECYCLE_COMMIT_BYTES:
-                    self._close()
+                if recycle:  # between batches only: a recycle between parts would drop the sequence
+                    used = self._worker.commit_bytes()
+                    self._base = used if self._base is None else self._base
+                    limit = min(self._base + self.RECYCLE_GROWTH_BYTES, self.RECYCLE_CAP_BYTES)
+                    if used > limit:  # past the cap every batch reloads the whole history: loud
+                        LOG.warning("gate rules worker recycled: commit %d over %d (%s; first answer %d)", used, limit,
+                                    "cap" if limit == self.RECYCLE_CAP_BYTES else "growth", self._base)
+                        self._close()
                 return answer
             except Exception as error:  # a timeout, an OS error or bad UTF-8 is a refusal too, never an untyped escape
                 self._close()
-                raise GateDecideError("rules_refused") from error
+                raise WorkerDied("rules_refused") from error
+
+    def run(self, data: bytes) -> list[str]:
+        return self._send(b"\0" + data, True)
+
+    def fresh(self, batches: Iterable[bytes], data: bytes) -> list[str]:
+        """Under one hold of the lock: close the worker (its state and stray parts freed first: no 2x peak), send each sealed
+        batch's adds in parts under ``PART_BYTES``, then ``data``; a relaunch between them is ``WorkerDied``, any failure closes."""
+        with self._lock:
+            self._close()
+            gen = self.gen + 1  # the first frame launches it
+            try:
+                for adds in batches:
+                    parts = [adds[i:i + PART_BYTES] for i in range(0, len(adds), PART_BYTES)] or [b""]
+                    for j, part in enumerate(parts):
+                        if self._send(b"\2" + bytes([j == len(parts) - 1]) + part, False) != ["RULES_PART"] or self.gen != gen:
+                            raise WorkerDied("rules_refused") from RuntimeError(f"part refused or on launch {self.gen - gen + 1}")
+                out = self.run(data)
+                if self.gen != gen:
+                    raise WorkerDied("rules_refused") from RuntimeError(f"relaunched {self.gen - gen} times mid-load")
+                return out
+            except BaseException:
+                self._close()
+                raise
+
+    def hold(self, shard: int, digest: bytes) -> None:  # the state digest the last frame left; a recycled worker holds none
+        with self._lock:
+            self.holds = {shard: digest} if self._worker is not None else {}
 
 
 class Answer(NamedTuple):
@@ -111,8 +157,8 @@ def _hold(lines: Sequence[str], reason: str) -> Answer:
 def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer.ShardProducer | None,
            reg: idreg.IdRegistry | None, ids: Sequence[int], lines: Sequence[str], worker: RulesWorker | None = None) -> Answer:
     """Settle the producer's shard's previous batch and reserve ``ids`` (the registry transaction), then decide ``lines`` (the
-    ``line`` directive bodies) against the shard's verified sets: on ``worker`` (no frame file) when the frame fits its cap,
-    else on the one-shot ``exe``.  With no registry (a refused boot: design idreg-restore 4) every line is HOLD
+    ``line`` directive bodies) against the shard's verified sets: on ``worker`` (no frame file), else on the one-shot ``exe`` (no
+    worker given, or the worker died: logged).  With no registry (a refused boot: design idreg-restore 4) every line is HOLD
     ``registry_restored`` and nothing is reserved, decided, sealed or checkpointed; a registry whose nonce a refused boot
     fenced HOLDs every line ``registry_not_booted`` the same way."""
     if any("\n" in s or "\r" in s for s in [*head, *lines]):
@@ -130,19 +176,39 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
             raise
         return _hold(lines, str(e))
     f = len({i for i, s, w in owners if s == k and not w})  # fresh RESERVE rows: the reserve's last f, nothing before in flight
-    text = "\n".join([*head, "case batch", *([f"resume {asof} {anchor.hex()}" if worker is not None and worker.held == anchor else
-                                              f"load {asof} {prod.sealed_adds().hex() or '-'} {anchor.hex()}"] if anchor else []),
-                       "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
-                       *(f"line {line}" for line in lines), "commit", "end 0"])
-    data = text.encode("utf-8")
-    if worker is not None and len(data) <= FRAME_CAP:
-        out = worker.run(data)
-    else:
-        frame.write_bytes(data)
+    chain = prod.sealed_chain()
+
+    def text(sync: str | None) -> bytes:
+        return "\n".join([*head, "case batch", *([sync] if sync else []),
+                          "owners " + " ".join([str(k)] + [f"{i}:{s}:{int(w)}" for i, s, w in owners]),
+                          *(f"line {line}" for line in lines), "commit", "end 0"]).encode("utf-8")
+
+    def on_worker(w: RulesWorker) -> list[str]:
+        if anchor and w.holds.get(k) == anchor:
+            out = w.run(text(f"resume {asof} {anchor.hex()} {chain.hex()}"))
+            if not any(r.startswith(("RULES_STATE_MISMATCH", "RULES_HEAD_MISMATCH")) for r in out):
+                return out
+        if not anchor:
+            return w.fresh((), text(None))
+        return w.fresh(prod.sealed_batches(), text(f"loadparts {asof} {chain.hex()} {anchor.hex()}"))
+
+    def one_shot() -> list[str]:
+        adds = b"".join(prod.sealed_batches())
+        frame.write_bytes(text(f"load {asof} {adds.hex() or '-'} {anchor.hex()}" if anchor else None))
         try:
-            out = subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()
+            return subprocess.run([exe, str(frame)], capture_output=True, text=True, timeout=600).stdout.splitlines()
         except subprocess.TimeoutExpired as e:
             raise GateDecideError("rules_refused") from e
+
+    served = False
+    if worker is None:
+        out = one_shot()
+    else:
+        try:
+            out, served = on_worker(worker), True
+        except WorkerDied as e:  # the one-shot's only other use: logged, and the batch is decided there in full
+            LOG.warning("gate rules worker died (%s: %r): shard %d decided on the one-shot exe", type(e).__name__, e.__cause__, k)
+            out = one_shot()
     got: dict[str, list[str]] = {}
     for row in out:
         tag, _, body = row.partition(" ")
@@ -150,7 +216,10 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
     if "RULES_VECTORS=PASS checked=0 expected=0 failed=0" not in out or {"RULES_FREE", "RULES_DIGEST", "RULES_ADDS"} - got.keys() \
             or not _reads_ok(got.get("RULES_READS", [])):
         raise GateDecideError("state_mismatch" if "RULES_STATE_MISMATCH" in got else "rules_refused")
-    return Answer(got.get("RULES_LINE", []), [int(i) for i in got["RULES_FREE"][0].split()], bytes.fromhex(got["RULES_DIGEST"][0]),
+    digest = bytes.fromhex(got["RULES_DIGEST"][0])
+    if served:
+        worker.hold(k, digest)
+    return Answer(got.get("RULES_LINE", []), [int(i) for i in got["RULES_FREE"][0].split()], digest,
                   bytes.fromhex(got["RULES_ADDS"][0]), (n, reg_head), seen, list(range(n - f + 1, n + 1)))
 
 

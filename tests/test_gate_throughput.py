@@ -4,7 +4,7 @@ results are correct and that every stored output byte (headers, tokens, state di
 signatures) matches the digest below, taken on the full-history replay pipeline, while every batch after the first resumes on the
 engine's held sets; flipping one byte of the anchor or of the sealed adds is refused.  RR_GATE_BENCH_N / _BATCH resize it
 (the digest is checked only for 2000 lines at batch 100 or 2000); RR_GATE_BENCH_REPLAY=1 resends the history every batch
-(with RR_GATE_BENCH_WORKER=gate_rules_worker.exe, the old pipeline); RR_GATE_BENCH_PROFILE=<file> writes a cProfile top 30."""
+(the old full-replay pipeline); RR_GATE_BENCH_PROFILE=<file> writes a cProfile top 30."""
 
 import collections
 import contextlib
@@ -100,13 +100,13 @@ class GateThroughput(fx.Scratch):
                 run=timed("  one-shot exe", subprocess.run), TimeoutExpired=subprocess.TimeoutExpired)))
             wrapped = {"  rules worker": lambda f: lambda self, data: frames.append(data) or f(self, data), "  gate_verify": verify}
             if replay:
-                stack.enter_context(mock.patch.object(decider.RulesWorker, "held", property(lambda s: None, lambda s, v: None), create=True))
+                stack.enter_context(mock.patch.object(decider.RulesWorker, "holds", property(lambda s: {}, lambda s, v: None), create=True))
             for name, (owner, attr) in ((n, t) for n, t in STAGES.items() if t):
                 stack.enter_context(mock.patch.object(owner, attr, timed(name, wrapped.get(name, lambda f: f)(getattr(owner, attr)))))
             for owner, attr, name in ((decider, "decide", "decide"), (decider, "commit", "commit"), (g, "decide_batch", "leaves")):
                 stack.enter_context(mock.patch.object(owner, attr, timed(name, getattr(owner, attr))))
             prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
-            for attr in ("anchor", "tip", "sealed_adds", "sealed_frees"):
+            for attr in ("anchor", "tip", "sealed_batches", "sealed_chain", "sealed_frees"):
                 stack.enter_context(mock.patch.object(producer.ShardProducer, attr, timed("  producer reads", getattr(producer.ShardProducer, attr))))
             profile = cProfile.Profile() if os.environ.get("RR_GATE_BENCH_PROFILE") else None
             started = time.perf_counter()
@@ -120,9 +120,9 @@ class GateThroughput(fx.Scratch):
                     decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
             elapsed = time.perf_counter() - started
             ran = dict(spent)  # the stage times of the run, before the kill check calls the worker again
-            self.assertEqual(sum(b"\nresume " in f for f in frames), 0 if replay else len(corpus()) - 1)
+            self.assertEqual(sum(b"\nresume " in f for f in frames), 0 if replay else len(corpus()) - 1)  # genesis sets the hold: every batch after it resumes
             if not replay:
-                self.kill_check(worker, frames[-1], prod.anchor(), prod.sealed_adds())
+                self.kill_check(worker, frames[-1], prod.anchor(), b"".join(prod.sealed_batches()), prod.sealed_chain())
             published = prod.published()
             prod.close()
             reg.close()
@@ -144,20 +144,22 @@ class GateThroughput(fx.Scratch):
         if N == 2000 and BATCH in OUTPUT_DIGEST:
             self.assertEqual(digest, OUTPUT_DIGEST[BATCH])
 
-    def kill_check(self, worker, last: bytes, anchor: bytes, adds: bytes):
+    def kill_check(self, worker, last: bytes, anchor: bytes, adds: bytes, chain: bytes):
         """The engine holds the anchor's sets, so the last frame with the new anchor would resume (as every batch did);
         flipping one byte of that anchor is refused, a load of the sealed adds with one byte flipped is refused, the same
         load unflipped decides, and the last frame itself, if it resumed (on the batch before's anchor), is refused as stale."""
-        self.assertEqual(worker.held, anchor)
+        self.assertEqual(worker.holds, {0: anchor})
         head, _, rest = last.partition(b"\ncase batch\n")
-        rest = rest.split(b"\n", 1)[1] if rest.startswith((b"load ", b"resume ")) else rest
+        rest = rest.split(b"\n", 1)[1] if rest.startswith((b"load ", b"loadparts ", b"resume ")) else rest
         frame = lambda directive: head + b"\ncase batch\n" + directive.encode() + b"\n" + rest
         flip = lambda b: b[:len(b) // 2] + bytes([b[len(b) // 2] ^ 1]) + b[len(b) // 2 + 1:]
-        self.assertIn("RULES_HEAD_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {flip(anchor).hex()}")))
+        tag = chain.hex()
+        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {flip(anchor).hex()} {tag}")))
+        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {anchor.hex()} {tag[:-1]}{'0' if tag[-1] != '0' else '1'}")))
         self.assertIn("RULES_STATE_MISMATCH load", worker.run(frame(f"load {g.ASOF} {flip(adds).hex()} {anchor.hex()}")))
         self.assertIn("RULES_VECTORS=PASS checked=0 expected=0 failed=0", worker.run(frame(f"load {g.ASOF} {adds.hex()} {anchor.hex()}")))
         if b"\nresume " in last:
-            self.assertIn("RULES_HEAD_MISMATCH resume", worker.run(last))
+            self.assertIn("RULES_STATE_MISMATCH resume", worker.run(last))
 
 
 if __name__ == "__main__":

@@ -36,9 +36,8 @@ open BlindLedger.Gate.Rules
     `u8 set` (1 released, 2 unresolved) then the `Line.fields` row, hex) and what it read (`RULES_READS`, `reads`
     on the checkpoint it extends, or before the first on the sets it declares; redo order is part of the record).  `load G_ASOF ADDSHEX ANCHORHEX`
     drops the released and unresolved sets and replays those rows onto empty sets dated G_ASOF
-    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  `resume G_ASOF
-    ANCHORHEX` is `load` from the sets the runner holds (the resident engine's last commit, kept in its `Memo`), with no
-    rows sent: unless they are dated G_ASOF and hash to ANCHORHEX it prints `RULES_HEAD_MISMATCH` and fails.  Arrival
+    (`ShardState.loadAdds`); unless they hash to ANCHORHEX it prints `RULES_STATE_MISMATCH` and fails.  (The resident worker alone also takes `resume ANCHORHEX CHAIN` and `loadparts G_ASOF CHAIN ANCHORHEX`,
+    the same as `load` of the kept or the raw-part adds; see `Resident`.)  Arrival
     order cannot change a decision (`decideBatchIn_perm`).  `report`
     prints totals; `end N` is the number of checked lines.  Test-only; never
     a payment path. -/
@@ -58,7 +57,7 @@ def hexOf (b : ByteArray) : String :=
 /-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
     it from the files, so a stale runner fails that test whatever its file times. -/
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
-  include_str "Fast.lean", include_str "Run.lean",  -- FAST
+  include_str "Fast.lean", include_str "Run.lean", include_str "Resident.lean", include_str "../Engine/OneProc.lean",  -- FAST
   include_str "../Anchor.lean", include_str "../Spec.lean",
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
@@ -83,12 +82,15 @@ def unhexFast (s : String) : Option ByteArray :=
   let u := s.toUTF8
   if u.size % 2 != 0 then none else unhexGo u (u.size / 2) 0 (ByteArray.emptyWithCapacity (u.size / 2))
 
+/-- `s` cut at every `c`, empty pieces kept (`String.split` has lemmas, the old `splitOn` none). -/
+def splitC (s : String) (c : Char) : List String := (s.split c).toList.map (·.copy)
+
 /-- A vector line's fields: `\r` dropped, split on spaces, empties skipped. -/
-def fields (raw : String) : List String := ((String.ofList (raw.toList.filter (· ≠ '\r'))).splitOn " ").filter (· ≠ "")
+def fields (raw : String) : List String := (splitC (String.ofList (raw.toList.filter (· ≠ '\r'))) ' ').filter (· ≠ "")
 
 /-- `fields` without the per-character list round trip when the line has no `\r` (`fieldsFast_eq`). -/
 def fieldsFast (raw : String) : List String :=
-  if raw.contains '\r' then fields raw else (raw.splitOn " ").filter (· ≠ "")
+  if raw.contains '\r' then fields raw else (splitC raw ' ').filter (· ≠ "")
 
 /-- One `RULES_ADDS` row: the set tag, then the `Line.fields` row. -/
 def rowBytes (tag : UInt8) (l : Line) : Option (List UInt8) :=
@@ -143,13 +145,6 @@ def Memo.get (m : Option Memo) (r u : Snapshot Line) : Option (List UInt8) :=
   match m with
   | some m => if m.r = r ∧ m.u = u then m.d else Fast.setsDigestF hB r u
   | none => Fast.setsDigestF hB r u
-
-/-- The memo for exactly `r` and `u`: the held one when it is for these sets (the resident engine keeps it across
-    frames), else a fresh one; either way its `ok` field is the digest's proof. -/
-def Memo.reuse (m : Option Memo) (r u : Snapshot Line) : Memo :=
-  match m with
-  | some m => if m.r = r ∧ m.u = u then m else ⟨r, u, _, rfl⟩
-  | none => ⟨r, u, _, rfl⟩
 
 structure St where
   today : Nat := 0
@@ -311,13 +306,11 @@ def commit (st : St) (unanchored : Bool) : St × List String :=
   let base := if st.sealed then prior else do
     pure (Gate.stateDigest (fun x => hB ⟨x.toArray⟩) (← pinOf p.released "RR/GATE/RELEASED/v1" 5 c.releasedPrior)
       (← pinOf p.unresolved "RR/GATE/UNRESOLVED/v1" 6 c.unresolvedPrior))
-  -- the digest after an `owners` commit, kept with its sets for the next `Memo.get` or `resume`
-  let post : Option Memo := fr.map fun _ => ⟨r.released, r.unresolved, _, rfl⟩
   let shown := fr.elim [] fun ids => got.map ("RULES_LINE " ++ ·) ++ [" ".intercalate ("RULES_FREE" :: ids.map toString)] ++
-    (post.bind (·.d)).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
+    (Fast.setsDigestF hB r.released r.unresolved).toList.map (fun d => s!"RULES_DIGEST {hexOf d.toByteArray}") ++
     adds.toList.map (fun b => s!"RULES_ADDS {hexOf b}") ++
     (base.bind (reads p c)).toList.map fun b => s!"RULES_READS {hexOf b.toByteArray}"
-  ({ st with pinned := some p, anchor := none, sealed := true, memo := post <|> st.memo,
+  ({ st with pinned := some p, anchor := none, sealed := true,
              extra := st.extra ++ fresh.1,                            -- FAST: `run_relN`
              held := st.held ++ fresh.2,
              rprior := r.released, uprior := r.unresolved, batch := #[], redo := [], foreign := [], owners := none,
@@ -333,12 +326,20 @@ def parseOwner (o : String) : Option Owner := match o.splitOn ":" with
     pure ⟨← i.toNat?, ← s.toNat?, b == "1"⟩
   | _ => none
 
-/-- After `load` or `resume`: the released and unresolved sets declared empty at `a`, grown by `m`'s sets. -/
-def loaded (st : St) (a : Nat) (m : Memo) : Option (St × List String) := do
-  pure ({ st with
-    snaps := ("released", a, 0, ← emptyPin "released" a) :: ("unresolved", a, 0, ← emptyPin "unresolved" a) :: st.snaps,
-    rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
-    extra := m.r.entries, held := m.u.entries, rprior := m.r, uprior := m.u, sealed := true, memo := some m }, [])
+/-- `load` with the adds stream `bs` already decoded (`loadparts` hands it over without a hex field). -/
+def loadBytes (st : St) (a : String) (bs : ByteArray) (h : String) : Option (St × List String) := do
+  guard (h.length == 128)
+  let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
+  let anchor := Gate.beNat (← unhexFast h).toList
+  -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
+  match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
+      (Memo.mk s.1 s.2 _ rfl).d.bind fun d =>
+        if d == Gate.natBE Gate.digestBytes anchor then some (s, Memo.mk s.1 s.2 _ rfl) else none) (Rules.replay (g, g) [ad]) with
+  | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
+  | some (s, m) => pure ({ st with
+      snaps := ("released", g.asOf, 0, ← emptyPin "released" g.asOf) :: ("unresolved", g.asOf, 0, ← emptyPin "unresolved" g.asOf) :: st.snaps,
+      rows := st.rows.filter fun r => r.1 != "released" && r.1 != "unresolved", pinned := none, anchor := none,
+      extra := s.1.entries, held := s.2.entries, rprior := s.1, uprior := s.2, sealed := true, memo := some m }, [])
 
 def step (st : St) : List String → Option (St × List String)
   | ["case", _] => pure ({ st with extra := [], held := [], rprior := ⟨0, 0, []⟩, uprior := ⟨0, 0, []⟩,
@@ -348,23 +349,7 @@ def step (st : St) : List String → Option (St × List String)
     guard (h.length == 128)
     pure ({ st with sealed := true, anchor := some (← h.toList.foldlM (fun n x => (n * 16 + ·) <$> "0123456789abcdef".toList.idxOf? x) 0) }, [])
   | ["load", a, adds, h] => do
-    guard (h.length == 128)
-    let g : Snapshot Line := ⟨← a.toNat?, 0, []⟩
-    let anchor := Gate.beNat (← unhexFast h).toList
-    let bs ← if adds == "-" then pure ByteArray.empty else unhexFast adds   -- `-` is zero rows (the field cannot be empty)
-    -- `Gate.ShardState.loadAdds`, with the fast digest (`Fast.setsDigestF_eq`)
-    match (parseAdds bs).bind fun ad => (fun (s : Snapshot Line × Snapshot Line) =>
-        let m := Memo.reuse st.memo s.1 s.2
-        m.d.bind fun d => if d == Gate.natBE Gate.digestBytes anchor then some m else none) (Rules.replay (g, g) [ad]) with
-    | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH load"])
-    | some m => loaded st g.asOf m
-  | ["resume", a, h] => do
-    guard (h.length == 128)
-    let a ← a.toNat?
-    let anchor := Gate.beNat (← unhexFast h).toList
-    match st.memo.filter fun m => m.r.asOf == a && m.u.asOf == a && m.d == some (Gate.natBE Gate.digestBytes anchor) with
-    | none => pure ({ st with failed := st.failed + 1 }, ["RULES_HEAD_MISMATCH resume"])
-    | some m => loaded st a m
+    loadBytes st a (← if adds == "-" then pure ByteArray.empty else unhexFast adds) h   -- `-` is zero rows (the field cannot be empty)
   | ["today", d] => do pure ({ st with today := ← d.toNat? }, [])
   | ["snap", k, a, n, pin] => do
     pure ({ st with snaps := (k, ← a.toNat?, ← n.toNat?, pin) :: st.snaps, rows := st.rows.filter (·.1 != k),
@@ -395,29 +380,34 @@ def step (st : St) : List String → Option (St × List String)
     pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 
-/-- The vector text through the rules: the output lines (the one-shot `main` prints them after `RULES_SOURCE`; the
-    worker answers a frame with them), whether it passed, and the end state.  Each text starts from the empty state
-    but for `memo`, a self-proving digest cache the resident engine carries from the last text. -/
-def runFrom (memo : Option Memo) (text : String) : Array String × Bool × St := Id.run do
-  let mut st : St := { memo }
-  let mut out : Array String := #[]
-  let mut number := 0
-  for raw in text.splitOn "\n" do
-    number := number + 1
+/-- The vector lines through `stp`, numbered from 1; blank and `#` lines skipped. -/
+def runLoop {σ : Type} (stp : σ → List String → Option (σ × List String)) (get : σ → St) (bump : σ → σ) :
+    List String → Nat → σ → Array String → σ × Array String
+  | [], _, s, out => (s, out)
+  | raw :: rest, n, s, out =>
+    let n := n + 1
     let fs := fieldsFast raw
-    if fs.isEmpty || fs.head!.startsWith "#" then continue
-    match step st fs with
-    | none =>
-      st := { st with failed := st.failed + 1 }
-      out := out.push s!"RULES_VECTOR_MALFORMED line={number}"
-    | some (next, lines) =>
-      if next.failed > st.failed then out := out.push s!"RULES_VECTOR_FAIL line={number}"
-      st := next
-      out := out ++ lines
-  let pass := st.failed == 0 && st.expected == some st.checked
-  return (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass, st)
+    if fs.isEmpty || fs.head!.startsWith "#" then runLoop stp get bump rest n s out
+    else match stp s fs with
+      | none => runLoop stp get bump rest n (bump s) (out.push s!"RULES_VECTOR_MALFORMED line={n}")
+      | some (next, ls) => runLoop stp get bump rest n next
+          ((if (get next).failed > (get s).failed then out.push s!"RULES_VECTOR_FAIL line={n}" else out) ++ ls)
 
-def runText (text : String) : Array String × Bool := let (out, pass, _) := runFrom none text; (out, pass)
+/-- The loop over any step state `σ` (its `St` by `get`, a malformed line by `bump`): the output, whether it passed, and
+    the final state.  `runWith` is `step` on `St`; the resident worker runs it on its `Worker`. -/
+def runOn {σ : Type} (stp : σ → List String → Option (σ × List String)) (get : σ → St) (bump : σ → σ) (s0 : σ)
+    (text : String) : Array String × Bool × σ :=
+  let (s, out) := runLoop stp get bump (splitC text '\n') 0 s0 #[]
+  let st := get s
+  let pass := st.failed == 0 && st.expected == some st.checked
+  (out.push s!"RULES_VECTORS={if pass then "PASS" else "FAIL"} checked={st.checked} expected={st.expected.getD 0} failed={st.failed}", pass, s)
+
+def runWith (text : String) : Array String × Bool × St :=
+  runOn step id (fun st => { st with failed := st.failed + 1 }) {} text
+
+/-- The vector text through the rules: the output lines (the one-shot `main` prints them after `RULES_SOURCE`; the
+    worker answers a frame with them) and whether it passed.  Each text starts from the empty state. -/
+def runText (text : String) : Array String × Bool := let r := runWith text; (r.1, r.2.1)
 
 def main (args : List String) : IO UInt32 := do
   IO.println s!"RULES_SOURCE {source}"
@@ -428,8 +418,9 @@ def main (args : List String) : IO UInt32 := do
   out.forM IO.println
   return (if pass then 0 else 1)
 
-/-! Long-lived worker (`gate_rules_worker`), the shape of `Financial.WorkerCli`: each stdin frame is a u32 BE length and
-    a vector text, each stdout frame a u32 BE length and `runText`'s lines.  Clean end of input exits 0; a short, oversize
+/-! Long-lived worker (`gate_engine`, `Engine.OneProc`), the shape of `Financial.WorkerCli`: each stdin frame is a u32 BE length and
+    a vector text, each stdout frame a u32 BE length and the lines `frame` returns for it (`serve` threads its state `s`
+    across frames: the worker passes `Resident.frame`, the profile tool a stateless `runText`).  Clean end of input exits 0; a short, oversize
     or non-UTF-8 frame, or an answer past the cap, exits 65 without output. -/
 
 def maxFrame : Nat := 64 * 1024 * 1024
@@ -439,7 +430,8 @@ partial def readN (read : USize → IO ByteArray) (n : Nat) (acc : ByteArray := 
   let b ← read (min (n - acc.size) 1048576).toUSize
   if b.size = 0 then return acc else readN read n (acc ++ b)
 
-partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit) : IO UInt32 := do
+partial def serve {σ : Type} (frame : σ → String → Array String × σ) (s : σ) (read : USize → IO ByteArray)
+    (write : ByteArray → IO Unit) : IO UInt32 := do
   let h ← readN read 4
   if h.size = 0 then return 0
   let n := h.foldl (fun a b => a * 256 + b.toNat) 0
@@ -447,9 +439,10 @@ partial def serve (read : USize → IO ByteArray) (write : ByteArray → IO Unit
   let f ← readN read n
   if f.size < n then return 65
   let some text := String.fromUTF8? f | return 65
-  let resp := (String.join ((runText text).1.toList.map (· ++ "\n"))).toUTF8
+  let (out, s) := frame s text
+  let resp := (String.join (out.toList.map (· ++ "\n"))).toUTF8
   if resp.size > maxFrame then return 65
   write (ByteArray.mk #[(resp.size >>> 24).toUInt8, (resp.size >>> 16).toUInt8, (resp.size >>> 8).toUInt8, resp.size.toUInt8] ++ resp)
-  serve read write
+  serve frame s read write
 
 end BlindLedger.Gate.Rules.Run

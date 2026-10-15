@@ -15,10 +15,11 @@ appended, Lean's bytes, never decoded here) come from the decide layer and are s
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import os
 from pathlib import Path
 import sqlite3
-from typing import Final, Sequence
+from typing import Final, Iterator, Sequence
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_mark as marks
@@ -50,6 +51,7 @@ class ShardProducer:
     def __init__(self, path: Path, *, mark_path: Path, tenant_id: str, shard_id: int, epoch: int, handle: str,
                  root_pk: bytes, key_cert: bytes) -> None:
         self.shard = shard_id
+        self._chain = (0, bytes(64))  # (id of the last sealed batch folded in, its chain)
         self._who, self._epoch, self._handle, self._root_pk, self._cert, self._mark = (tenant_id, shard_id), epoch, handle, root_pk, key_cert, mark_path
         self._db = sqlite3.connect(path, timeout=0, isolation_level=None)
         try:
@@ -170,9 +172,20 @@ class ShardProducer:
         last = self._sealed()
         return last and last[3]
 
-    def sealed_adds(self) -> bytes:
-        """The sealed batches' ``adds`` in id order: the rows the decide layer folds onto genesis to reach ``anchor``."""
-        return b"".join(row[0] for row in self._db.execute("SELECT adds FROM batches WHERE signature IS NOT NULL ORDER BY id"))
+    def sealed_batches(self) -> Iterator[bytes]:
+        """The sealed batches' ``adds``, one entry per batch in id order: the segments the decide layer folds onto genesis
+        to reach ``anchor``."""
+        return (row[0] for row in self._db.execute("SELECT adds FROM batches WHERE signature IS NOT NULL ORDER BY id"))
+
+    def sealed_chain(self) -> bytes:
+        """The running chain ``h_k = SHA3-512(h_{k-1} || adds_k)`` over the sealed batches in id order, from 64 zero bytes: it
+        binds the rows and their order, the digest of a worker's kept state does not.  Kept across calls (a sealed row never
+        changes), so a call reads only the batches sealed since the last: O(batch), not O(history)."""
+        last, h = self._chain
+        for last, adds in self._db.execute("SELECT id, adds FROM batches WHERE signature IS NOT NULL AND id > ? ORDER BY id", (last,)):
+            h = hashlib.sha3_512(h + adds).digest()
+        self._chain = (last, h)
+        return h
 
     def sealed_frees(self) -> tuple[int, bytes, list[int]] | None:
         """The newest batch's (idreg_n, registry head, free): the next registry reserve's ``sealed``.  An open newest row
