@@ -92,7 +92,10 @@ class RulesWorker:
                 if recycle:  # between batches only: a recycle between parts would drop the sequence
                     used = self._worker.commit_bytes()
                     self._base = used if self._base is None else self._base
-                    if used > min(self._base + self.RECYCLE_GROWTH_BYTES, self.RECYCLE_CAP_BYTES):
+                    limit = min(self._base + self.RECYCLE_GROWTH_BYTES, self.RECYCLE_CAP_BYTES)
+                    if used > limit:  # past the cap every batch reloads the whole history: loud
+                        LOG.warning("gate rules worker recycled: commit %d over %d (%s; first answer %d)", used, limit,
+                                    "cap" if limit == self.RECYCLE_CAP_BYTES else "growth", self._base)
                         self._close()
                 return answer
             except Exception as error:  # a timeout, an OS error or bad UTF-8 is a refusal too, never an untyped escape
@@ -204,7 +207,7 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
         try:
             out, served = on_worker(worker), True
         except WorkerDied as e:  # the one-shot's only other use: logged, and the batch is decided there in full
-            LOG.warning("gate rules worker died (%r): shard %d decided on the one-shot exe", e.__cause__, k)
+            LOG.warning("gate rules worker died (%s: %r): shard %d decided on the one-shot exe", type(e).__name__, e.__cause__, k)
             out = one_shot()
     got: dict[str, list[str]] = {}
     for row in out:

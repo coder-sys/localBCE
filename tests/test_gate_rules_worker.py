@@ -349,24 +349,38 @@ class RulesWorkerTests(fx.Scratch):
                 self.assertEqual(sent[len(parts) + 2:], [*parts, "loadparts"])
 
     def test_a_worker_relaunched_mid_load_is_worker_died_not_a_mismatch(self):
-        """The worker dies after the first part: the next part relaunches it, `gen` moves, and the batch is logged and decided
-        on the one-shot, never a load of the parts that reached the new worker."""
+        """The worker dies after a part (the first of 3, or the last of 3 or of 1): the relaunch (`gen` moves) is WorkerDied, logged,
+        and the batch is decided on the one-shot in full.  After the first part the next part sees it and no `loadparts` is sent;
+        after the last the `loadparts` frame relaunches it and the fresh worker answers a state mismatch: still not `state_mismatch`."""
         real = process.ContainedWorker.exchange
 
         def dies(self, frame, **kw):
             out = real(self, frame, **kw)
-            if frame[0] == 2 and not killed:
-                killed.append(self._terminate())
+            parts[0] += frame[0] == 2
+            if frame[0] == 2 and parts[0] == kill:
+                self._terminate()
             return out
-        with self.scratch() as tmp:
-            w, killed = self.worker(), []
-            batch, prod, reg = self.shard(tmp, w, 3)
-            w.close()
-            with mock.patch.object(process.ContainedWorker, "exchange", dies), self.assertLogs(decider.LOG, "WARNING") as log:
-                self.assertEqual(batch(4), {40: "ALLOW -", 41: "ALLOW -"})
-            self.assertIn("on launch 2", "".join(log.output))
-            self.assertEqual((w._worker, w.holds), (None, {}))
-            self.assertEqual(batch(5), {50: "ALLOW -", 51: "ALLOW -"})
+        for n, kill, frames, why in ((3, 1, ["part"] * 2, "on launch 2"), (3, 3, ["part"] * 3 + ["loadparts"], "relaunched 1 times"),
+                                     (1, 1, ["part", "loadparts"], "relaunched 1 times")):
+            with self.subTest(n=n, kill=kill), self.scratch() as tmp:
+                w, parts = self.worker(), [0]
+                batch, prod, reg = self.shard(tmp, w, n)
+                w.close()
+                sent, _, _, patch = self.recorder(w)
+                exe = mock.Mock(run=mock.Mock(wraps=subprocess.run), TimeoutExpired=subprocess.TimeoutExpired)
+                with patch, mock.patch.object(process.ContainedWorker, "exchange", dies), mock.patch.object(decider, "subprocess", exe),                         self.assertLogs(decider.LOG, "WARNING") as log:
+                    self.assertEqual(batch(n + 1), {10 * n + 10: "ALLOW -", 10 * n + 11: "ALLOW -"})
+                self.assertEqual((sent, exe.run.call_count, w._worker, w.holds), (frames, 1, None, {}))
+                self.assertTrue("WorkerDied" in "".join(log.output) and why in "".join(log.output), log.output)
+                self.assertEqual(batch(n + 2), {10 * n + 20: "ALLOW -", 10 * n + 21: "ALLOW -"})
+
+    def test_a_recycle_is_logged_with_its_level_and_reason(self):
+        w = self.worker()
+        for attr, reason in (("RECYCLE_CAP_BYTES", "cap"), ("RECYCLE_GROWTH_BYTES", "growth")):
+            with self.subTest(reason), mock.patch.object(decider.RulesWorker, attr, -1), self.assertLogs(decider.LOG, "WARNING") as log:
+                w.run(b"x")
+            self.assertIn(f"({reason}; first answer", "".join(log.output))
+            self.assertIsNone(w._worker)
 
     def test_a_load_that_fails_mid_sequence_closes_the_worker_and_holds_the_lock(self):
         """Reading the sealed batches fails after the first part: no other caller reaches the worker meanwhile, the error is

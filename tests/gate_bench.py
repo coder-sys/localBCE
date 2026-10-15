@@ -8,7 +8,9 @@ frame without its ``line`` rows: what is left is the history replay), canon (enc
 ``gate_verify``), seal_other.  ``total`` leaves out the probe and the harness's own token leaves.  The guard owns memory policy: only with ``free`` (callable, free bytes; the CLI passes the live reading) does a batch whose Lean call
 would need more (twice the commit of the worker holding the shard, else of the largest worker yet, since the batch reloads; plus
 about 500 times the batch's frame; measured at 20,000 history lines: tree peak 288 MB private against a 204 MB commit) stop the
-run and record the wall.  A wall of any kind exits non-zero: a run that stops short is never a pass."""
+run and record the wall.  A wall of any kind exits non-zero: a run that stops short is never a pass.  So does any batch the
+one-shot exe decided (the worker died, e.g. at the job's memory cap): a batch's ``served`` says which, ``fallbacks`` and ``reloads``
+(the history loaded again into a worker) are counted in the result."""
 
 from __future__ import annotations
 
@@ -107,14 +109,14 @@ def _probe(quiet, fn, S):
 
 def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...] = (), free=None) -> dict:
     S, rows, wall, store = Stages(), [], None, []
-    S.probes = []
+    S.probes, S.fallbacks, S.reloads = [], 0, 0
     worker = decider.RulesWorker(w.WORKER)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, contextlib.ExitStack() as stack:
         stack.callback(worker.close)
         c = g.Cluster(tmp, fx.custody(tmp), shards=1)
         with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):
             c.boot()
-        real_run, real_exe, real_close, seen = decider.RulesWorker.run, subprocess.run, decider.RulesWorker._close, [0]
+        real_run, real_exe, real_close, real_fresh, seen = decider.RulesWorker.run, subprocess.run, decider.RulesWorker._close, decider.RulesWorker.fresh, [0]
         if probe:
             wrapped_run = _probe(lambda data: worker._send(b"\0" + data, False), lambda data: real_run(worker, data), S)
             patch_worker = lambda self, data: wrapped_run(data)
@@ -124,13 +126,22 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
             patch_worker = S.wrap("lean_call", real_run)
             patch_exe = types.SimpleNamespace(run=S.wrap("lean_call", real_exe), TimeoutExpired=subprocess.TimeoutExpired)
 
+        def exe_run(*a, **kw):  # given a worker, decide reaches the one-shot exe only when the worker died
+            S.fallbacks += 1
+            return patch_exe.run(*a, **kw)
+
+        def fresh(self, batches, data):
+            S.reloads += b"loadparts " in data
+            return real_fresh(self, batches, data)
+
         def close_seen(self):  # the largest worker seen, read before a recycle or a reload drops it
             if self._worker is not None and self._worker.alive:
                 seen[0] = max(seen[0], self._worker.commit_bytes())
             real_close(self)
         stack.enter_context(mock.patch.object(decider.RulesWorker, "run", patch_worker))
         stack.enter_context(mock.patch.object(decider.RulesWorker, "_close", close_seen))
-        stack.enter_context(mock.patch.object(decider, "subprocess", patch_exe))
+        stack.enter_context(mock.patch.object(decider.RulesWorker, "fresh", fresh))
+        stack.enter_context(mock.patch.object(decider, "subprocess", types.SimpleNamespace(run=exe_run, TimeoutExpired=subprocess.TimeoutExpired)))
         for owner, attr, name in (
                 (g, "decide_batch", "parse"), (decider, "decide", "frame"), (decider, "commit", "storage"), (fx, "_leaf", "harness"),
                 (fx, "member", "harness"), (idreg.IdRegistry, "reserve", "registry"), (idreg.IdRegistry, "settle", "registry"),
@@ -156,7 +167,7 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
                 wall = {"reason": "memory", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": avail}
                 break
             S.take()
-            t0, probes = time.perf_counter(), len(S.probes)
+            t0, probes, fallbacks, reloads = time.perf_counter(), len(S.probes), S.fallbacks, S.reloads
             try:
                 ans, leaves, _ = g.decide_batch(c, prod, reg, 0, payments, bad, worker)
                 decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
@@ -172,7 +183,8 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
             us.setdefault("other", 0.0)
             us["total"] = (t1 - t0 - spent.get("lean_probe", 0.0) - spent.get("harness", 0.0)) / lines * 1e6
             rows.append({"cold": not rows, "history_before": done, "lines": lines, "frame_est_bytes": frame, "worker_commit_bytes": cur,
-                         "probed": len(S.probes) > probes, "us_per_line": {k: round(v, 1) for k, v in us.items()}})
+                         "probed": len(S.probes) > probes, "served": "one_shot" if S.fallbacks > fallbacks else "resident",
+                         "reloaded": S.reloads > reloads, "us_per_line": {k: round(v, 1) for k, v in us.items()}})
             done += lines
         elapsed = time.perf_counter() - started
         published, flat = prod.published(), []
@@ -189,7 +201,7 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
     slope = lambda a, b: (sum((x - sum(a) / len(a)) * (y - sum(b) / len(b)) for x, y in zip(a, b)) / sum((x - sum(a) / len(a)) ** 2 for x in a) * 1000
                           if len(a) > 1 and len(set(a)) > 1 else None)
     return {"seed": SEED, "batch": batch, "requested_lines": total, "sizes_requested": list(sizes), "lines_done": done,
-            "batches_done": len(rows), "wall": wall, "probe": probe, "probes_ok": sum(S.probes), "probes": len(S.probes),
+            "batches_done": len(rows), "fallbacks": S.fallbacks, "reloads": S.reloads, "wall": wall, "probe": probe, "probes_ok": sum(S.probes), "probes": len(S.probes),
             "seconds": round(elapsed, 2), "batches": rows,
             "growth": {"warm_first_total_us": ys[0] if ys else None, "warm_last_total_us": ys[-1] if ys else None,
                        "total_us_per_line_per_1000_history_lines": slope(xs, ys), "replay_us_per_line_per_1000_history_lines": slope(xs, rs)},
@@ -214,6 +226,8 @@ def main() -> None:
         print("BENCH_BATCH", r["history_before"], r["worker_commit_bytes"], r["frame_est_bytes"], r["us_per_line"])
     if result["wall"]:
         raise SystemExit(f"BENCH_WALL {result['wall']['reason']} at {result['wall']['history_lines']} lines")
+    if result["fallbacks"]:
+        raise SystemExit(f"BENCH_FALLBACK {result['fallbacks']} batches decided on the one-shot exe, not the resident worker")
 
 
 if __name__ == "__main__":
