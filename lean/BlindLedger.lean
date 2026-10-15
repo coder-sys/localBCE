@@ -1,6 +1,7 @@
 import BlindLedger.Financial.Theorems
 import BlindLedger.Financial.Partition
 import BlindLedger.Financial.ShardSplit
+import BlindLedger.Financial.Reshard
 import BlindLedger.Financial.Payment.Batch
 import BlindLedger.Financial.Payment.BatchFast
 import BlindLedger.Financial.Payment.BatchLaws

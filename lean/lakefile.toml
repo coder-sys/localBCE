@@ -1,6 +1,6 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_rules_worker", "gate_verify"]
+defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_engine", "gate_verify"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
 # correction transition, the gate and the shared `BlindLedger.Sha3`.
@@ -58,10 +58,10 @@ name = "gate_rules"
 root = "BlindLedger.Gate.Rules.RulesMain"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
-# Test-only: the same rules as a long-lived worker (u32 BE frames); tests/test_gate_rules_worker.py.
+# The resident one-process gate (Engine.OneProc): rules frames and PUBLISH checks in one long-lived process per shard.
 [[lean_exe]]
-name = "gate_rules_worker"
-root = "BlindLedger.Gate.Rules.RulesWorker"
+name = "gate_engine"
+root = "BlindLedger.Gate.Engine.OneProc"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # Test-only: panics or writes stderr on request; tests/test_lean_worker_panic.py.

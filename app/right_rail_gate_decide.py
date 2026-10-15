@@ -1,5 +1,4 @@
-"""The gate's decide layer at stage 1 (decide-layer-v1 section 4): one cold ``gate_rules`` run per shard batch, synthetic,
-activation=false.
+"""The gate's decide layer at stage 1 (decide-layer-v1 section 4): one Lean decide per shard batch, synthetic, activation=false.
 
 The frame is the vector directive text (F2(a)): the tenant's snapshot header, then ``load`` of the shard's sealed
 ``adds`` against the newest sealed header's state digest (the anchor, read from the signed store, never from memory),
@@ -41,11 +40,12 @@ FRAME_CAP = 1 << 20  # the largest frame the worker takes; Lean's own limit (``p
 
 
 class RulesWorker:
-    """A long-lived ``gate_rules_worker`` (the one-shot's process start and arena are paid once, not per batch): u32 BE frames
-    of the same vector text, answered with the same output lines minus ``RULES_SOURCE``; the one-shot runs ``Run.runText``, the worker ``Resident.frame`` (a ``resume`` line answers as the full ``load``; ``holds`` is the digest of the state it keeps).  Any
-    failure (a killed or hung worker, a stray byte, an oversize answer) closes it and raises ``rules_refused``; the next call
-    starts a fresh one.  A frame over ``FRAME_CAP`` goes to the one-shot exe (``decide``), by size, never after a
-    failure: a decide takes some 700 times its frame in memory (measured), so the 1 GB job cap stops a batch near 1.5 MiB."""
+    """A long-lived ``gate_engine`` (the one-shot's process start and arena are paid once, not per batch): u32 BE frames, tag 0
+    then the vector text, answered with the same output lines minus ``RULES_SOURCE``; the one-shot runs ``Run.runText``, the
+    worker ``Resident.frame`` (``holds`` is the digest of the state it keeps).  Any failure (a killed or hung worker, a stray
+    byte, an oversize answer) closes it and raises ``rules_refused``; the next call starts a fresh one.  A frame over
+    ``FRAME_CAP`` goes to the one-shot exe (``decide``), by size, never after a failure: a decide takes some 700 times its
+    frame in memory (measured), so the 1 GB job cap stops a batch near 1.5 MiB."""
 
     TIMEOUT_SECONDS = 600.0
     RECYCLE_COMMIT_BYTES = 400_000_000  # replaced between batches, never mid-batch, so slow growth never reaches the job cap
@@ -76,11 +76,11 @@ class RulesWorker:
                     self._worker = process.launch_contained_worker(
                         self.exe, workspace=self._workspace, job_memory_cap_bytes=self.JOB_MEMORY_CAP_BYTES,
                         expected_executable_size_bytes=len(exe), expected_executable_sha256=hashlib.sha256(exe).digest())
-                answer = self._worker.exchange(data, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
-                                               timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8")
+                answer = self._worker.exchange(b"\0" + data, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
+                                               timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8").splitlines()
                 if self._worker.commit_bytes() > self.RECYCLE_COMMIT_BYTES:
                     self._close()
-                return answer.splitlines()
+                return answer
             except Exception as error:  # a timeout, an OS error or bad UTF-8 is a refusal too, never an untyped escape
                 self._close()
                 raise GateDecideError("rules_refused") from error

@@ -56,7 +56,7 @@ def hexOf (b : ByteArray) : String :=
 /-- SHA3-512 of the sources this runner was built from, CRLF read as LF; the unit test recomputes
     it from the files, so a stale runner fails that test whatever its file times. -/
 def source : String := hexOf (BlindLedger.Semantic.sha3_512 (String.join [include_str "Spec.lean",
-  include_str "Fast.lean", include_str "Run.lean", include_str "Resident.lean", include_str "RulesWorker.lean",  -- FAST
+  include_str "Fast.lean", include_str "Run.lean", include_str "Resident.lean", include_str "../Engine/OneProc.lean",  -- FAST
   include_str "../Anchor.lean", include_str "../Spec.lean",
   include_str "../../Sha3.lean", include_str "../../Sha3Fast.lean", include_str "../../../lakefile.toml",
   include_str "../../../lean-toolchain"]).crlfToLf.toUTF8)
@@ -414,7 +414,7 @@ def main (args : List String) : IO UInt32 := do
   out.forM IO.println
   return (if pass then 0 else 1)
 
-/-! Long-lived worker (`gate_rules_worker`), the shape of `Financial.WorkerCli`: each stdin frame is a u32 BE length and
+/-! Long-lived worker (`gate_engine`, `Engine.OneProc`), the shape of `Financial.WorkerCli`: each stdin frame is a u32 BE length and
     a vector text, each stdout frame a u32 BE length and the lines `frame` returns for it (`serve` threads its state `s`
     across frames: the worker passes `Resident.frame`, the profile tool a stateless `runText`).  Clean end of input exits 0; a short, oversize
     or non-UTF-8 frame, or an answer past the cap, exits 65 without output. -/

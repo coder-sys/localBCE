@@ -5,7 +5,7 @@ import Std.Data.String.ToNat
 
 /-! HIST-FLAT design A: the resident rules worker's goals (rr-core, 2026-10-14; r2 after rr-review
     `rrb/state/hist-flat-a-review-20261014.md` F1-F4). Design: `rrb/state/hist-flat-design-A-20261013.md`. Every theorem
-    here is proved (no `sorry`); the worker (`gate_rules_worker`) serves frames through `frame`.
+    here is proved (no `sorry`); the worker (`gate_engine`) serves frames through `frame`.
     Defs: `addsBytes`, `addsField`, `rowsOf`, `pinIncr`, `Res`, `Res.digest`, `Res.Ok`, `refresh`, `Res.Fits`,
     `Res.memoOf`, `Res.fit`, `resume`, `Worker`, `Inv`, `breaks`, `refit`, `stepRes`, `runRes`, `frame`; `extend` (fresh
     rows onto `rel`/`unr` and the posting lists) and `commitRes` (`Run.commit` deciding with the kept index and
