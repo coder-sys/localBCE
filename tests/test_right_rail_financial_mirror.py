@@ -36,18 +36,11 @@ from tests.rightrail_financial_expected_cases import (
 )
 from tests.instruments.privacy_artifact_scan import scan_artifacts
 from tests.test_right_rail_financial_acceptance import (
+    _Clock,
     _control_pack_from_fixture,
     _items_from_fixture,
     _population_manifest_from_fixture,
 )
-
-class _Clock:
-    def __init__(self, value: int = 1_774_828_801_000) -> None:
-        self.value = value
-
-    def now_ms(self) -> int:
-        self.value += 1
-        return self.value
 
 class FinancialMirrorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -55,7 +48,7 @@ class FinancialMirrorTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
         self.root = Path(self.temp_dir.name)
         self.db = self.root / "owner.sqlite"
-        self.clock = _Clock()
+        self.clock = _Clock(1_774_828_801_000)
         self.config = owner.FinancialOwnerConfig(**dataclasses.asdict(PERIOD_ONE_SCOPE))
         self.authority = owner.SyntheticTrustedAuthority()
         self.store = owner.FinancialOwner(
@@ -958,7 +951,7 @@ class FinancialMirrorTests(unittest.TestCase):
             path=destination,
             config=self.config,
             trusted_authority=self.authority,
-            clock=_Clock(),
+            clock=_Clock(1_774_828_801_000),
             mode="SHADOW",
             owner_id="continuity-shadow-owner-v1",
         )

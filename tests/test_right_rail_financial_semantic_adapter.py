@@ -9,7 +9,7 @@ after every read and failed codec operation.
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import hashlib
 from pathlib import Path
 import sqlite3
@@ -29,6 +29,7 @@ from app.right_rail_financial_owner import (
 from tests import rightrail_financial_expected_cases as expected
 from tests.rightrail_intake_rows import pay
 from tests.test_right_rail_financial_acceptance import (
+    _Clock,
     _control_pack_from_fixture,
     _image,
     _items_from_fixture,
@@ -43,15 +44,6 @@ EXPECTED_H_OWED_CENTS = 10_000_000
 EXPECTED_H_CASH_CENTS = 9_700_000
 EXPECTED_OFFSET_CENTS = 300_000
 EXPECTED_HOSPITAL_COUNT = 20
-
-
-@dataclass
-class _Clock:
-    value: int = expected.CASH_EVENT_MS
-
-    def now_ms(self) -> int:
-        self.value += 1
-        return self.value
 
 
 class RightRailFinancialSemanticAdapterTests(unittest.TestCase):

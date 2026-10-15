@@ -512,7 +512,6 @@ def _payment_receipts(connection: sqlite3.Connection, obligation_id: str) -> lis
     return connection.execute("SELECT json_extract(payload_json,'$.payment_id'),before_revision,json_extract(payload_json,'$.pays_action_id') FROM financial_events WHERE aggregate_type='OBLIGATION' AND aggregate_id=? AND kind='PAYMENT_RECEIVED' ORDER BY 1", (obligation_id,)).fetchall()
 
 
-
 _PAYMENT_REFUSALS: Final = (None,  # Lean `refusals` order (Codec.lean), codes 1..16
     (FinancialInputError, "payment_amount_zero"), (FinancialConflictError, "payment_request_conflict"),
     (FinancialConflictError, "payment_origin_reversed"), (FinancialRevisionError, "obligation_revision_conflict"),

@@ -167,7 +167,6 @@ def _flag(value: object, code: str, expected: bool) -> bool:
 
 def _validate_aggregate_consistency(
     outcome: str,
-    source_count: int,
     complete_source_count: int,
     record_count: int,
     finding_count: int,
@@ -242,7 +241,6 @@ def _verify_export_inner(
     )
     _validate_aggregate_consistency(
         value["outcome"],
-        source_count,
         complete_source_count,
         record_count,
         finding_count,

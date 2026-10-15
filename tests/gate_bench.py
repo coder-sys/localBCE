@@ -15,7 +15,6 @@ import contextlib
 import ctypes
 import itertools
 import json
-import os
 import random
 import sqlite3
 import subprocess
