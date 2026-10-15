@@ -3,7 +3,9 @@
 import hashlib
 import os
 import random
+import sqlite3
 import subprocess
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -59,7 +61,7 @@ def load_line(held: tuple[str, list[bytes]]) -> str:
 
 
 def resume_line(held: tuple[str, list[bytes]]) -> str:
-    return f"resume {held[0]} {chain(held[1])}"
+    return f"resume {g.ASOF} {held[0]} {chain(held[1])}"
 
 
 @unittest.skipUnless(os.name == "nt" and os.path.isfile(rules.EXE) and WORKER.is_file(),
@@ -118,7 +120,7 @@ class RulesWorkerTests(fx.Scratch):
             held = self.start(w, tmp)
             for base in (200, 300):
                 held, _ = self.step(w, tmp, held, rows(base, 30))
-            self.refused(w, f"resume {'0' * 128} {'0' * 128}")
+            self.refused(w, f"resume {g.ASOF} {'0' * 128} {'0' * 128}")
 
     def test_resume_decides_rows_that_match_history(self):
         """Line ids decided in the genesis, the load and a resumed frame come back ALREADY_DECIDED after a resume (the kept
@@ -143,8 +145,8 @@ class RulesWorkerTests(fx.Scratch):
             old = self.start(w, tmp)
             new, _ = self.step(w, tmp, old, rows(200, 30))
             self.refused(w, resume_line(old))  # a real digest and its own adds, but not the held state
-            self.refused(w, f"resume {old[0]} {chain(new[1])}")
-            self.refused(w, f"resume {new[0]} {chain(old[1])}")
+            self.refused(w, f"resume {g.ASOF} {old[0]} {chain(new[1])}")
+            self.refused(w, f"resume {g.ASOF} {new[0]} {chain(old[1])}")
             self.refused(w, resume_line((new[0], [*new[1][1:], new[1][0]])))  # the same batches in another order
             self.step(w, tmp, new, rows(300, 30))  # the refusals left the held state alone
 
@@ -165,8 +167,10 @@ class RulesWorkerTests(fx.Scratch):
         with self.scratch() as tmp:
             digest, segs = held = self.start(w, tmp)
             tag = chain(segs)
-            for line in (f"resume {digest.upper()} {tag}", f"resume {digest[:-1]} {tag}", f"resume {digest}0 {tag}",
-                         f"resume {digest} {tag.upper()}", f"resume {digest} {tag[:-1]}", f"resume {digest}"):
+            a = g.ASOF
+            for line in (f"resume {a} {digest.upper()} {tag}", f"resume {a} {digest[:-1]} {tag}", f"resume {a} {digest}0 {tag}",
+                         f"resume {a} {digest} {tag.upper()}", f"resume {a} {digest} {tag[:-1]}", f"resume {a} {digest}",
+                         f"resume {digest} {tag}"):
                 with self.subTest(line=line[:30] + "..." + line[-3:]):
                     self.refused(w, line, ("RULES_STATE_MISMATCH", "RULES_VECTOR_MALFORMED", "RULES_VECTOR_FAIL"))
             self.step(w, tmp, held, rows(300, 30))
@@ -178,12 +182,42 @@ class RulesWorkerTests(fx.Scratch):
             fresh, data = self.worker(), frame(rows(200, 30), load_line(held))
             self.refused(fresh, resume_line(held))
             self.assertEqual(fresh.run(data), one_shot(data, Path(tmp)))
-            w.RECYCLE_COMMIT_BYTES = -1  # the next answer recycles it
+            w.RECYCLE_CAP_BYTES = -1  # the next answer recycles it
             held, _ = self.step(w, tmp, held, rows(300, 30))
             self.assertEqual((w._worker, w.holds), (None, {}))
             self.refused(w, resume_line(held))  # restarted: it holds nothing
             data = frame(rows(400, 30), load_line(held))
             self.assertEqual(w.run(data), one_shot(data, Path(tmp)))
+
+    def test_resume_at_another_asof_is_a_head_mismatch(self):
+        """The kept sets are dated `asof`: a resume naming another date is refused and leaves them held."""
+        w = self.worker()
+        with self.scratch() as tmp:
+            digest, segs = held = self.start(w, tmp)
+            for a in (g.ASOF + 1, g.ASOF - 1, 0, "x"):
+                self.refused(w, f"resume {a} {digest} {chain(segs)}", ("RULES_HEAD_MISMATCH resume",))
+            self.step(w, tmp, held, rows(300, 30))
+
+    def test_recycle_is_on_growth_over_the_load_not_on_an_absolute_level(self):
+        """Steady batches past the old absolute 400 MB line keep the worker; growth past RECYCLE_GROWTH_BYTES over its first
+        answer's level, or any level past RECYCLE_CAP_BYTES (under the job cap), recycles it after the answer."""
+        w, M = self.worker(), 1_000_000
+        self.assertLess(w.RECYCLE_CAP_BYTES, w.JOB_MEMORY_CAP_BYTES)
+        used = iter([450 * M, 455 * M, 460 * M, 470 * M, 450 * M + w.RECYCLE_GROWTH_BYTES + 1, 700 * M, 750 * M, w.RECYCLE_CAP_BYTES + 1])
+        with self.scratch() as tmp, mock.patch.object(process.ContainedWorker, "commit_bytes", lambda s: next(used)):
+            held = self.start(w, tmp)  # genesis (450: the base), then a load (455)
+            kept = w._worker
+            for base in (200, 300):
+                held, _ = self.step(w, tmp, held, rows(base, 30))
+            self.assertIs(w._worker, kept)  # 470 MB, 20 MB over the base: no reload
+            held, _ = self.step(w, tmp, held, rows(400, 30))
+            self.assertIsNone(w._worker)  # grew past RECYCLE_GROWTH_BYTES
+            out = w.run(frame(rows(500, 30), load_line(held)))  # a fresh worker: 700 is its base
+            digest, adds = self.committed(out)
+            held, _ = self.step(w, tmp, (digest, [b"".join(held[1]), adds]), rows(600, 30))  # a load keeps one segment
+            self.assertIsNotNone(w._worker)  # 750 MB: 50 over its base, under the cap
+            self.step(w, tmp, held, rows(700, 30))
+            self.assertIsNone(w._worker)  # past RECYCLE_CAP_BYTES
 
     def recorder(self, w: decider.RulesWorker):
         """Patch `w._send` to log each frame's kind ('genesis', 'resume', 'loadparts' or 'part'), the worker's reply and the sizes of the parts."""
@@ -236,6 +270,10 @@ class RulesWorkerTests(fx.Scratch):
                     self.assertEqual(sent[len(sent) - len(parts) - 1:], [*parts, "loadparts"])
                     self.assertIsNot(w._worker, old)
                     self.assertEqual(w.holds, {0: prod.anchor()})
+                    old, w.holds = w._worker, {}  # adopted, then refused before `hold`: a live worker that holds no named state
+                    batch(9)
+                    self.assertEqual(sent[-1], "loadparts")
+                    self.assertIsNot(w._worker, old)  # closed before the load: never two states at once
                     w.hold(1, bytes(64))  # the engine keeps one state: one shard held at a time
                     self.assertEqual(w.holds, {1: bytes(64)})
             finally:
@@ -277,6 +315,80 @@ class RulesWorkerTests(fx.Scratch):
             finally:
                 prod.close()
                 reg.close()
+
+    def shard(self, tmp: str, w: decider.RulesWorker, n: int):
+        """A booted cluster with `n` batches decided on `w` and committed on shard 0; returns (batch, prod, reg)."""
+        c = g.Cluster(tmp, fx.custody(tmp))
+        c.boot()
+        prod, reg = self.track(c.producer(0)), self.track(idreg.IdRegistry(c.reg, boot=c.nonce))
+
+        def batch(b):
+            ans, leaves, status = g.decide_batch(c, prod, reg, 0, {b: [b * 10, b * 10 + 1]}, worker=w)
+            decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+            return status
+        for b in range(1, n + 1):
+            batch(b)
+        return batch, prod, reg
+
+    def test_a_changed_asof_never_decides_on_the_held_sets(self):
+        """The held state is dated: a batch at another ASOF is a head mismatch on resume and is then loaded at that date (here
+        refused: the sets are not of that date), never decided on the kept sets; the next batch at the sets' date loads again."""
+        with self.scratch() as tmp:
+            w = self.worker()
+            batch, prod, reg = self.shard(tmp, w, 3)
+            sent, replies, _, patch = self.recorder(w)
+            with patch:
+                with mock.patch.object(g, "ASOF", g.ASOF + 1), self.assertRaises(decider.GateDecideError) as e:
+                    batch(4)
+                self.assertEqual(str(e.exception), "state_mismatch")
+                parts = ["part"] * len(list(prod.sealed_batches()))
+                self.assertEqual(sent, ["resume", *parts, "loadparts"])
+                self.assertTrue(any(r.startswith("RULES_HEAD_MISMATCH resume") for r in replies[0]), replies[0])
+                self.assertFalse(any("RULES_VECTORS=PASS checked=0 expected=0 failed=0" in out for out in replies))  # none decides
+                self.assertEqual(batch(5), {50: "ALLOW -", 51: "ALLOW -"})
+                self.assertEqual(sent[len(parts) + 2:], [*parts, "loadparts"])
+
+    def test_a_worker_relaunched_mid_load_is_worker_died_not_a_mismatch(self):
+        """The worker dies after the first part: the next part relaunches it, `gen` moves, and the batch is logged and decided
+        on the one-shot, never a load of the parts that reached the new worker."""
+        real = process.ContainedWorker.exchange
+
+        def dies(self, frame, **kw):
+            out = real(self, frame, **kw)
+            if frame[0] == 2 and not killed:
+                killed.append(self._terminate())
+            return out
+        with self.scratch() as tmp:
+            w, killed = self.worker(), []
+            batch, prod, reg = self.shard(tmp, w, 3)
+            w.close()
+            with mock.patch.object(process.ContainedWorker, "exchange", dies), self.assertLogs(decider.LOG, "WARNING") as log:
+                self.assertEqual(batch(4), {40: "ALLOW -", 41: "ALLOW -"})
+            self.assertIn("on launch 2", "".join(log.output))
+            self.assertEqual((w._worker, w.holds), (None, {}))
+            self.assertEqual(batch(5), {50: "ALLOW -", 51: "ALLOW -"})
+
+    def test_a_load_that_fails_mid_sequence_closes_the_worker_and_holds_the_lock(self):
+        """Reading the sealed batches fails after the first part: no other caller reaches the worker meanwhile, the error is
+        raised (not a one-shot), the worker and its parts are closed, and the next batch loads from nothing."""
+        with self.scratch() as tmp:
+            w, blocked = self.worker(), []
+            batch, prod, reg = self.shard(tmp, w, 3)
+            real = prod.sealed_batches
+
+            def broken():
+                it = real()
+                yield next(it)
+                t = threading.Thread(target=w.close)
+                t.start()
+                t.join(0.2)
+                blocked.append(t.is_alive())
+                raise sqlite3.OperationalError("disk I/O error")
+            w.close()
+            with mock.patch.object(prod, "sealed_batches", broken), self.assertRaises(sqlite3.OperationalError):
+                batch(4)
+            self.assertEqual((blocked, w._worker, w.holds), ([True], None, {}))
+            self.assertEqual(batch(5), {50: "ALLOW -", 51: "ALLOW -"})
 
     def test_killed_worker_is_logged_and_the_batch_is_decided_on_the_one_shot(self):
         real = process.ContainedWorker.exchange

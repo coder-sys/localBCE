@@ -154,8 +154,8 @@ class GateThroughput(fx.Scratch):
         frame = lambda directive: head + b"\ncase batch\n" + directive.encode() + b"\n" + rest
         flip = lambda b: b[:len(b) // 2] + bytes([b[len(b) // 2] ^ 1]) + b[len(b) // 2 + 1:]
         tag = chain.hex()
-        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {flip(anchor).hex()} {tag}")))
-        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {anchor.hex()} {tag[:-1]}{'0' if tag[-1] != '0' else '1'}")))
+        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {flip(anchor).hex()} {tag}")))
+        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {anchor.hex()} {tag[:-1]}{'0' if tag[-1] != '0' else '1'}")))
         self.assertIn("RULES_STATE_MISMATCH load", worker.run(frame(f"load {g.ASOF} {flip(adds).hex()} {anchor.hex()}")))
         self.assertIn("RULES_VECTORS=PASS checked=0 expected=0 failed=0", worker.run(frame(f"load {g.ASOF} {adds.hex()} {anchor.hex()}")))
         if b"\nresume " in last:

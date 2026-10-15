@@ -4,8 +4,8 @@ The frame is the vector directive text (F2(a)): the tenant's snapshot header, th
 ``adds`` against the newest sealed header's state digest (the anchor, read from the signed store, never from memory),
 then the registry's ``owners`` answer and the lines.  Lean folds the adds onto the genesis sets dated ``asof`` and
 decides only if they hash to the anchor; else the shard decides nothing (``state_mismatch``).  A worker holding the anchor's state is sent
-``resume ANCHOR CHAIN`` instead (CHAIN: the producer's running chain over the sealed batches, which binds their order and costs
-O(batch) to keep); else the history goes to the worker in parts under ``PART_BYTES`` and a ``loadparts`` line adopts it only if
+``resume ASOF ANCHOR CHAIN`` instead (CHAIN: the producer's running chain over the sealed batches, which binds their order and costs
+O(batch) to keep; a held state of another ASOF answers RULES_HEAD_MISMATCH and is reloaded); else the history goes to the worker in parts under ``PART_BYTES`` and a ``loadparts`` line adopts it only if
 the parts are a complete sequence of that chain and hash to the anchor, never by size to the one-shot exe.  Every outcome, the
 state digest after the batch, its ``adds`` and the ids to free come from Lean; Python holds no policy and never
 decodes the rows.  At genesis (no sealed batch) the header's empty sets are the shard's sets.
@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from typing import NamedTuple, Sequence
+from typing import Iterable, NamedTuple, Sequence
 
 from app import minimal_clearance_verifier_process as process
 
@@ -53,21 +53,23 @@ class RulesWorker:
     then the vector text, answered with the same output lines minus ``RULES_SOURCE``; tag 2 then a flag byte (1 ends a sealed
     batch's adds) and a part of the history, answered ``RULES_PART`` (the next tag 0 frame's ``loadparts`` takes them).  The
     one-shot runs ``Run.runText``, the worker ``Resident.frame``.  The engine keeps one state, so ``holds`` maps at most one
-    shard to its state digest.  Any failure closes the worker and raises ``WorkerDied``; the next call starts a fresh one."""
+    shard to its state digest.  Any failure closes the worker and raises ``WorkerDied``; the next call starts a fresh one
+    (``gen`` counts the launches)."""
 
     TIMEOUT_SECONDS = 600.0
-    RECYCLE_COMMIT_BYTES = 400_000_000  # replaced between batches, never mid-batch, so slow growth never reaches the job cap
+    RECYCLE_GROWTH_BYTES, RECYCLE_CAP_BYTES = 300_000_000, 800_000_000  # over its first answer's level (the load), or near the job cap
     JOB_MEMORY_CAP_BYTES = 1_000_000_000
 
     def __init__(self, exe: Path) -> None:
-        self.exe, self._worker, self._workspace, self._lock, self.holds = exe, None, None, threading.Lock(), {}
+        self.exe, self._worker, self._workspace, self._lock, self.holds = exe, None, None, threading.RLock(), {}
+        self.gen, self._base = 0, None
 
     def close(self) -> None:
         with self._lock:
             self._close()
 
     def _close(self) -> None:
-        worker, workspace, self._worker, self._workspace, self.holds = self._worker, self._workspace, None, None, {}
+        worker, workspace, self._worker, self._workspace, self.holds, self._base = self._worker, self._workspace, None, None, {}, None
         if worker is not None:
             worker.close()
         if workspace is not None:
@@ -84,10 +86,14 @@ class RulesWorker:
                     self._worker = process.launch_contained_worker(
                         self.exe, workspace=self._workspace, job_memory_cap_bytes=self.JOB_MEMORY_CAP_BYTES,
                         expected_executable_size_bytes=len(exe), expected_executable_sha256=hashlib.sha256(exe).digest())
+                    self.gen += 1
                 answer = self._worker.exchange(frame, response_cap_bytes=process.WORKER_MAX_FRAME_BYTES,
                                                timeout_seconds=self.TIMEOUT_SECONDS).decode("utf-8").splitlines()
-                if recycle and self._worker.commit_bytes() > self.RECYCLE_COMMIT_BYTES:
-                    self._close()  # between batches only: a recycle between parts would drop the sequence
+                if recycle:  # between batches only: a recycle between parts would drop the sequence
+                    used = self._worker.commit_bytes()
+                    self._base = used if self._base is None else self._base
+                    if used > min(self._base + self.RECYCLE_GROWTH_BYTES, self.RECYCLE_CAP_BYTES):
+                        self._close()
                 return answer
             except Exception as error:  # a timeout, an OS error or bad UTF-8 is a refusal too, never an untyped escape
                 self._close()
@@ -96,10 +102,25 @@ class RulesWorker:
     def run(self, data: bytes) -> list[str]:
         return self._send(b"\0" + data, True)
 
-    def part(self, fin: bool, data: bytes) -> None:
-        if self._send(b"\2" + bytes([fin]) + data, False) != ["RULES_PART"]:
-            self.close()
-            raise WorkerDied("rules_refused")
+    def fresh(self, batches: Iterable[bytes], data: bytes) -> list[str]:
+        """Under one hold of the lock: close the worker (its state and stray parts freed first: no 2x peak), send each sealed
+        batch's adds in parts under ``PART_BYTES``, then ``data``; a relaunch between them is ``WorkerDied``, any failure closes."""
+        with self._lock:
+            self._close()
+            gen = self.gen + 1  # the first frame launches it
+            try:
+                for adds in batches:
+                    parts = [adds[i:i + PART_BYTES] for i in range(0, len(adds), PART_BYTES)] or [b""]
+                    for j, part in enumerate(parts):
+                        if self._send(b"\2" + bytes([j == len(parts) - 1]) + part, False) != ["RULES_PART"] or self.gen != gen:
+                            raise WorkerDied("rules_refused") from RuntimeError(f"part refused or on launch {self.gen - gen + 1}")
+                out = self.run(data)
+                if self.gen != gen:
+                    raise WorkerDied("rules_refused") from RuntimeError(f"relaunched {self.gen - gen} times mid-load")
+                return out
+            except BaseException:
+                self._close()
+                raise
 
     def hold(self, shard: int, digest: bytes) -> None:  # the state digest the last frame left; a recycled worker holds none
         with self._lock:
@@ -161,18 +182,12 @@ def decide(exe: str, frame: Path, head: Sequence[str], asof: int, prod: producer
 
     def on_worker(w: RulesWorker) -> list[str]:
         if anchor and w.holds.get(k) == anchor:
-            out = w.run(text(f"resume {anchor.hex()} {chain.hex()}"))
-            if not any(r.startswith("RULES_STATE_MISMATCH") for r in out):
+            out = w.run(text(f"resume {asof} {anchor.hex()} {chain.hex()}"))
+            if not any(r.startswith(("RULES_STATE_MISMATCH", "RULES_HEAD_MISMATCH")) for r in out):
                 return out
         if not anchor:
-            return w.run(text(None))
-        if w.holds:
-            w.close()  # the old state is freed before the load builds the new one: no 2x peak
-        for adds in prod.sealed_batches():
-            parts = [adds[i:i + PART_BYTES] for i in range(0, len(adds), PART_BYTES)] or [b""]
-            for j, part in enumerate(parts):
-                w.part(j == len(parts) - 1, part)
-        return w.run(text(f"loadparts {asof} {chain.hex()} {anchor.hex()}"))
+            return w.fresh((), text(None))
+        return w.fresh(prod.sealed_batches(), text(f"loadparts {asof} {chain.hex()} {anchor.hex()}"))
 
     def one_shot() -> list[str]:
         adds = b"".join(prod.sealed_batches())

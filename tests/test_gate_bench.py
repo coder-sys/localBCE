@@ -3,15 +3,20 @@ over the bench's seeded stored outputs plus every rate boundary (the proof is ``
 run of the built executables, from ``tools/sha3_bench``, which also prints the speed of both).  RR_GATE_BENCH_N / _BATCH resize
 the bench run; RR_GATE_BENCH_OUT=<json> keeps its numbers."""
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import random
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
+from app import right_rail_gate_decide as decider
 from tests import gate_bench as bench
 from tests import test_gate_rules_vectors as rules
 from tests import test_gate_rules_worker as w
@@ -41,6 +46,28 @@ class GateBench(unittest.TestCase):
     def test_memory_wall_stops_the_run_and_says_why(self):
         r = bench.run_bench(BATCH, BATCH, free=lambda: 0)
         self.assertEqual((r["wall"]["reason"], r["lines_done"]), ("memory", 0))
+
+    def test_a_wall_exits_non_zero(self):
+        for wall in ({"reason": "refused:state_mismatch", "history_lines": 41000}, {"reason": "memory", "history_lines": 0}, None):
+            with self.subTest(wall=wall), mock.patch.object(sys, "argv", ["gate_bench", "--sizes", "10"]), \
+                    mock.patch.object(bench, "run_bench", lambda *a: {"wall": wall, "batches": [], "corpus": []}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                if wall is None:
+                    bench.main()
+                    continue
+                with self.assertRaises(SystemExit) as stop:
+                    bench.main()
+                self.assertNotIn(stop.exception.code, (0, None))
+                self.assertIn(wall["reason"], str(stop.exception.code))
+
+    def test_a_worker_reloaded_every_batch_runs_through_unprobed_loads(self):
+        """Every answer recycles the worker, so every batch after genesis loads in parts: no probe takes the parts (only
+        genesis is probed), and the run completes."""
+        with mock.patch.object(decider.RulesWorker, "RECYCLE_CAP_BYTES", -1):
+            r = bench.run_bench(3 * BATCH, BATCH, free=lambda: 1 << 62)
+        self.assertIsNone(r["wall"])
+        self.assertEqual((r["lines_done"], r["probes_ok"], r["probes"]), (3 * BATCH, 1, 1))
+        self.assertEqual([row["probed"] for row in r["batches"]], [True, False, False])
 
     @unittest.skipUnless(SHA3.is_file(), "SHA3 TWIN NOT RUN: build tools/sha3_bench (lake build -d tools/sha3_bench)")
     def test_sha3_twin_equals_the_old_path(self):

@@ -7,7 +7,7 @@ import Std.Data.String.ToNat
     `rrb/state/hist-flat-a-review-20261014.md` F1-F4). Design: `rrb/state/hist-flat-design-A-20261013.md`. Every theorem
     here is proved (no `sorry`); the worker (`gate_engine`) serves frames through `frame`.
     Defs: `addsBytes`, `addsField`, `rowsOf`, `pinIncr`, `Res`, `Res.digest`, `Res.Ok`, `refresh`, `Res.Fits`,
-    `Res.memoOf`, `Res.fit`, `resume`, `Worker`, `Inv`, `breaks`, `refit`, `stepRes`, `runRes`, `frame`; `extend` (fresh
+    `Res.memoOf`, `Res.fit`, `resume`, `resumeAt`, `Worker`, `Inv`, `breaks`, `refit`, `stepRes`, `runRes`, `frame`; `extend` (fresh
     rows onto `rel`/`unr` and the posting lists) and `commitRes` (`Run.commit` deciding with the kept index and
     digesting from the kept buffers).
 
@@ -19,7 +19,7 @@ import Std.Data.String.ToNat
     same frame with `load a adds D` (`resume_eq_load`, `runRes_eq_load`). `adds` may be the sealed join of every
     batch's RULES_ADDS: it parses to the resident sets in their order (`parseAdds_append`, `commit_adds`,
     `resident_inv`), which fixes `with=` order. The checkpoint digest sorts the rows, so it does not bind that order;
-    `resume D H` also takes `H`, the chain of the adds stream (`chainOf`: `h_k = SHA3-512 (h_{k-1} ‖ add_k)`, one segment
+    `resume A D H` takes the kept sets only at their `asOf` `A` (`resumeAt`, else RULES_HEAD_MISMATCH) and also `H`, the chain of the adds stream (`chainOf`: `h_k = SHA3-512 (h_{k-1} ‖ add_k)`, one segment
     per sealed batch), and `Res.tagged` lets `resume` see the kept `Res` only if its chain `ch` is `H`. The chain is a
     running digest, so a resume costs O(batch). `Res.AOk` (`ChainOk`) says the chain is that of segments whose stream
     parses to the kept sets in order (`next_aok`, `stepRes_aok`; `chainOf_append`, `catAll_append` are the link: the chain
@@ -360,6 +360,12 @@ def resume (o : Option Res) (st : St) (h : String) : Option (St × List String) 
       memo := some x.m }, [])
   | none => pure ({ st with failed := st.failed + 1 }, ["RULES_STATE_MISMATCH resume"])
 
+/-- `resume a h`: `resume h` only when `a` is the kept sets' `asOf` (trunk's head check); kept sets of another date
+    print the mismatch and change nothing but `failed`. -/
+def resumeAt (o : Option Res) (st : St) (a h : String) : Option (St × List String) :=
+  if o.all fun x => a.toNat? == some x.m.r.asOf then resume o st h
+  else pure ({ st with failed := st.failed + 1 }, ["RULES_HEAD_MISMATCH resume"])
+
 /-- The worker across lines: the kept `Res` (kept across frames), whether it fits `st`, the frame's state and the load parts
     received so far. -/
 structure Worker where
@@ -405,8 +411,8 @@ def genesisChain (w : Worker) (st : St) : Option ByteArray :=
   else none
 
 def stepRes (w : Worker) : List String → Option (Worker × List String)
-  | ["resume", h, oh] => do
-    let (st, out) ← resume (Res.tagged w.x oh) w.st h
+  | ["resume", a, h, oh] => do
+    let (st, out) ← resumeAt (Res.tagged w.x oh) w.st a h
     pure ({ w with st, live := out.isEmpty || w.live }, out)
   | ["loadparts", a, c, h] =>
     if w.p.opn || orderTag w.p.ch != c then
@@ -1179,6 +1185,21 @@ theorem resume_fits (x : Res) (st st' : St) (h : String) (hx : x.Ok) (hs : resum
       rw [hpin]; rfl
     rw [hp, s2, hhd]
     exact congrArg some hr2
+
+theorem resumeAt_self (x : Res) (st : St) (a h : String) (ha : a.toNat? = some x.m.r.asOf) :
+    resumeAt (some x) st a h = resume (some x) st h := by
+  simp [resumeAt, ha]
+
+/-- T1b: `resumeAt` is `resume` or the head mismatch, which changes nothing but `failed`. -/
+theorem resumeAt_cases (o : Option Res) (st st' : St) (a h : String) (out : List String)
+    (hs : resumeAt o st a h = some (st', out)) :
+    resume o st h = some (st', out) ∨
+      (out = ["RULES_HEAD_MISMATCH resume"] ∧ st' = { st with failed := st.failed + 1 }) := by
+  unfold resumeAt at hs
+  split at hs
+  · exact Or.inl hs
+  · cases hs
+    exact Or.inr ⟨rfl, rfl⟩
 
 theorem memoOf_priors (st : St) : (Res.memoOf st).r = st.rprior ∧ (Res.memoOf st).u = st.uprior := by
   unfold Res.memoOf
@@ -2048,10 +2069,10 @@ theorem tagged_isSome (x : Res) (oh : String) (h : (Res.tagged (some x) oh).isSo
     · next hp => simp [hp]
     · simp at h
 
-theorem stepRes_resume (w : Worker) (h oh : String) :
-    stepRes w ["resume", h, oh] = (resume (Res.tagged w.x oh) w.st h).map fun p =>
+theorem stepRes_resume (w : Worker) (a h oh : String) :
+    stepRes w ["resume", a, h, oh] = (resumeAt (Res.tagged w.x oh) w.st a h).map fun p =>
       ({ w with st := p.1, live := p.2.isEmpty || w.live }, p.2) := by
-  cases hr : resume (Res.tagged w.x oh) w.st h with
+  cases hr : resumeAt (Res.tagged w.x oh) w.st a h with
   | none => simp [stepRes, hr]
   | some p => obtain ⟨a, b⟩ := p; simp [stepRes, hr]
 
@@ -2071,7 +2092,7 @@ theorem stepRes_loadparts (w : Worker) (a c h : String) :
 /-- A line that is neither `resume` nor `loadparts`: it steps as `step`. -/
 def NoRL (fs : List String) : Prop := fs.head? ≠ some "resume" ∧ fs.head? ≠ some "loadparts"
 
-theorem stepRes_gen (w : Worker) (fs : List String) (h1 : ∀ h oh, fs ≠ ["resume", h, oh])
+theorem stepRes_gen (w : Worker) (fs : List String) (h1 : ∀ a h oh, fs ≠ ["resume", a, h, oh])
     (h3 : ∀ a c h, fs ≠ ["loadparts", a, c, h])
     (h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false) :
     stepRes w fs = (step w.st fs).map fun p =>
@@ -2079,7 +2100,7 @@ theorem stepRes_gen (w : Worker) (fs : List String) (h1 : ∀ h oh, fs ≠ ["res
        else { w with st := p.1, live := w.live && !breaks fs }, p.2) := by
   unfold stepRes
   split
-  · next h oh => exact absurd rfl (h1 h oh)
+  · next a h oh => exact absurd rfl (h1 a h oh)
   · next a c h => exact absurd rfl (h3 a c h)
   · dsimp only
     simp only [h2, Bool.false_eq_true, ↓reduceIte]
@@ -2124,26 +2145,32 @@ theorem bump_inv (w : Worker) (hw : Inv w) : Inv { w with st := { w.st with fail
 theorem stepRes_inv (w w' : Worker) (fs out : List String) (hw : Inv w) (hs : stepRes w fs = some (w', out)) :
     Inv w' := by
   obtain ⟨hwx, hwl⟩ := hw
-  by_cases hrs : ∃ h oh, fs = ["resume", h, oh]
-  · obtain ⟨h, oh, rfl⟩ := hrs
+  by_cases hrs : ∃ a h oh, fs = ["resume", a, h, oh]
+  · obtain ⟨a, h, oh, rfl⟩ := hrs
     rw [stepRes_resume] at hs
-    rcases hr : resume (Res.tagged w.x oh) w.st h with _ | ⟨st1, out1⟩
+    rcases hr : resumeAt (Res.tagged w.x oh) w.st a h with _ | ⟨st1, out1⟩
     · rw [hr] at hs; simp at hs
     · rw [hr] at hs
       simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
       obtain ⟨rfl, -⟩ := hs
       refine ⟨hwx, fun hl => ?_⟩
-      rcases resume_fail_closed (Res.tagged w.x oh) w.st st1 h out1 hr with ⟨hout, x, bs, ho, -, -, -, -, -⟩ | ⟨hout, hst⟩
-      · subst hout
-        have hwo := tagged_some _ _ _ ho
-        rw [ho] at hr
-        exact ⟨x, hwo, resume_fits x w.st st1 h (hwx x hwo) hr⟩
-      · subst hout
+      have hb : ∀ m : String, out1 = [m] → st1 = { w.st with failed := w.st.failed + 1 } →
+          ∃ y, w.x = some y ∧ y.Fits st1 := by
+        intro m hout hst
+        subst hout
         subst hst
         have hl' : w.live = true := by simpa using hl
         obtain ⟨y, hy, hF⟩ := hwl hl'
         exact ⟨y, hy, fits_of_keep y w.st _ hF rfl rfl rfl rfl rfl rfl rfl id⟩
-  · have hr' : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hrs ⟨h, oh, e⟩
+      rcases resumeAt_cases _ _ _ _ _ _ hr with hr | ⟨hout, hst⟩
+      · rcases resume_fail_closed (Res.tagged w.x oh) w.st st1 h out1 hr with ⟨hout, x, bs, ho, -, -, -, -, -⟩ | ⟨hout, hst⟩
+        · subst hout
+          have hwo := tagged_some _ _ _ ho
+          rw [ho] at hr
+          exact ⟨x, hwo, resume_fits x w.st st1 h (hwx x hwo) hr⟩
+        · exact hb _ hout hst
+      · exact hb _ hout hst
+  · have hr' : ∀ a h oh, fs ≠ ["resume", a, h, oh] := fun a h oh e => hrs ⟨a, h, oh, e⟩
     by_cases hlp : ∃ a c h, fs = ["loadparts", a, c, h]
     · obtain ⟨a, c, h, rfl⟩ := hlp
       rw [stepRes_loadparts] at hs
@@ -2212,7 +2239,7 @@ theorem stepRes_inv (w w' : Worker) (fs out : List String) (hw : Inv w) (hs : st
 theorem stepRes_step (w : Worker) (fs : List String) (hw : Inv w) (hr : NoRL fs) :
     (stepRes w fs).map (fun p => (p.1.st, p.2)) = step w.st fs := by
   obtain ⟨hwx, hwl⟩ := hw
-  have hr' : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hr.1 (by rw [e]; rfl)
+  have hr' : ∀ a h oh, fs ≠ ["resume", a, h, oh] := fun a h oh e => hr.1 (by rw [e]; rfl)
   have h3 : ∀ a c h, fs ≠ ["loadparts", a, c, h] := fun a c h e => hr.2 (by rw [e]; rfl)
   by_cases hc : fs = ["commit"] ∨ fs = ["commit", "UNANCHORED"]
   · obtain ⟨u, hu, hstep⟩ : ∃ u : Bool, (fs = ["commit"] ∧ u = false ∨ fs = ["commit", "UNANCHORED"] ∧ u = true) ∧
@@ -2411,9 +2438,9 @@ theorem splitC_nl (L : List String) (hne : L ≠ []) (hnl : ∀ l ∈ L, ¬ l.co
   rw [e] at this
   rw [this, if_neg hne]
 
-theorem fields_resume (h oh : String) (hp : Plain h) (hq : Plain oh) :
-    fieldsFast ("resume " ++ h ++ " " ++ oh) = ["resume", h, oh] := by
-  have e : "resume " ++ h ++ " " ++ oh = " ".intercalate ["resume", h, oh] := by
+theorem fields_resume (a h oh : String) (ha : Plain a) (hp : Plain h) (hq : Plain oh) :
+    fieldsFast ("resume " ++ a ++ " " ++ h ++ " " ++ oh) = ["resume", a, h, oh] := by
+  have e : "resume " ++ a ++ " " ++ h ++ " " ++ oh = " ".intercalate ["resume", a, h, oh] := by
     simp only [String.intercalate_cons_cons, String.intercalate_singleton]
     have : "resume " = "resume" ++ " " := by decide
     rw [this]
@@ -2422,8 +2449,9 @@ theorem fields_resume (h oh : String) (hp : Plain h) (hq : Plain oh) :
   refine fieldsFast_join _ (by simp) ?_
   intro p hp'
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hp'
-  rcases hp' with rfl | rfl | rfl
+  rcases hp' with rfl | rfl | rfl | rfl
   · exact plain_lit "resume" (by decide) (by decide)
+  · exact ha
   · exact hp
   · exact hq
 
@@ -2464,7 +2492,7 @@ theorem runLoop_append {σ : Type} (stp : σ → List String → Option (σ × L
 theorem stepRes_pre (w w1 : Worker) (fs ls : List String) (hr : NoRL fs)
     (hl : fs.head? ≠ some "load") (hc : fs.head? ≠ some "commit") (hs : stepRes w fs = some (w1, ls))
     (hlive : w.live = false) : w1.x = w.x ∧ w1.live = false := by
-  have h1 : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hr.1 (by rw [e]; rfl)
+  have h1 : ∀ a h oh, fs ≠ ["resume", a, h, oh] := fun a h oh e => hr.1 (by rw [e]; rfl)
   have h3 : ∀ a c h, fs ≠ ["loadparts", a, c, h] := fun a c h e => hr.2 (by rw [e]; rfl)
   have h2 : (fs == ["commit"] || fs == ["commit", "UNANCHORED"]) = false := by
     simp only [Bool.or_eq_false_iff, beq_eq_false_iff_ne]
@@ -2544,45 +2572,47 @@ theorem runOn_snd {σ : Type} (stp : σ → List String → Option (σ × List S
 theorem resume_line (x : Res) (D : List UInt8) (bs : ByteArray) (hx : x.Ok) (hd : x.m.d = some D)
     (hb : parseAdds bs = some (x.m.r.entries, x.m.u.entries)) (c : ByteArray) (hch : x.ch = some c) (hcs : c.size ≠ 0) (w : Worker) (hi : Inv w) (hwx : w.x = some x)
     (n : Nat) (out : Array String) :
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] n w out).2 =
+    (runLoop stepRes (·.st) bumpW ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] n w out).2 =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] n w.st out).2 ∧
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] n w out).1.st =
+    (runLoop stepRes (·.st) bumpW ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] n w out).1.st =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] n w.st out).1 ∧
-    Inv (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] n w out).1 := by
+    Inv (runLoop stepRes (·.st) bumpW ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] n w out).1 := by
   have hD := memo_len x.m D hd
   have hP1 : Plain (toString x.m.r.asOf) := plain_nat _
   have hP2 : Plain (addsField bs) := plain_adds bs
   have hP3 : Plain (hexOf D.toByteArray) := plain_D D hD
   have g1 : ("resume".startsWith "#") = false := by simp
-  have hh1 : ∀ h oh : String, ["resume", h, oh].head! = "resume" := fun _ _ => rfl
+  have hh1 : ∀ a h oh : String, ["resume", a, h, oh].head! = "resume" := fun _ _ _ => rfl
   have hh2 : ∀ a b c : String, ["load", a, b, c].head! = "load" := fun _ _ _ => rfl
   have g2 : ("load".startsWith "#") = false := by simp
   have hs := resume_eq_load x w.st D bs hx hd hb
-  have hr := stepRes_resume w (hexOf D.toByteArray) (orderTag c)
-  rw [hwx, tagged_self x c hch, hs] at hr
+  have hr := stepRes_resume w (toString x.m.r.asOf) (hexOf D.toByteArray) (orderTag c)
+  rw [hwx, tagged_self x c hch, resumeAt_self x w.st (toString x.m.r.asOf) _ (Nat.toNat?_repr _), hs] at hr
   cases hst : step w.st ["load", toString x.m.r.asOf, addsField bs, hexOf D.toByteArray] with
   | none =>
     rw [hst] at hr
     simp only [Option.map_none] at hr
-    simp only [runLoop, fields_resume _ _ hP3 (plain_tag c hcs), fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
+    simp only [runLoop, fields_resume _ _ _ hP1 hP3 (plain_tag c hcs), fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
       hh1, hh2, g1, g2, Bool.or_self, Bool.false_eq_true, if_false]
     exact ⟨trivial, rfl, bump_inv w hi⟩
   | some p =>
     obtain ⟨st1, ls⟩ := p
     rw [hst] at hr
     simp only [Option.map_some] at hr
-    simp only [runLoop, fields_resume _ _ hP3 (plain_tag c hcs), fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
+    simp only [runLoop, fields_resume _ _ _ hP1 hP3 (plain_tag c hcs), fields_load _ _ _ hP1 hP2 hP3, hr, hst, List.isEmpty_cons,
       hh1, hh2, g1, g2, Bool.or_self, Bool.false_eq_true, if_false]
     exact ⟨rfl, trivial, stepRes_inv w _ _ _ hi hr⟩
 
-theorem nl_resume (h oh : String) (hp : Plain h) (hq : Plain oh) :
-    ¬ ("resume " ++ h ++ " " ++ oh).contains '\n' := by
+theorem nl_resume (a h oh : String) (ha : Plain a) (hp : Plain h) (hq : Plain oh) :
+    ¬ ("resume " ++ a ++ " " ++ h ++ " " ++ oh).contains '\n' := by
   intro hc
   rw [String.contains_char_eq] at hc
   simp only [String.toList_append, List.mem_append, decide_eq_true_eq] at hc
-  rcases hc with ((hc | hc) | hc) | hc
+  rcases hc with ((((hc | hc) | hc) | hc) | hc) | hc
+  · revert hc; decide
+  · exact (ha.2 _ hc).2.2 rfl
   · revert hc; decide
   · exact (hp.2 _ hc).2.2 rfl
   · revert hc; decide
@@ -2609,7 +2639,7 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (c : ByteArra
     (hnl : ∀ l ∈ pre ++ rest, ¬ l.contains '\n')
     (hpre : ∀ l ∈ pre, ∀ k ∈ ["resume", "loadparts", "load", "commit"], (fieldsFast l).head? ≠ some k)
     (hrest : ∀ l ∈ rest, NoRL (fieldsFast l)) :
-    let r := runRes (some x) p ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest))
+    let r := runRes (some x) p ("\n".intercalate (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest))
     (r.1, r.2.1, r.2.2.st) = runWith ("\n".intercalate
       (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) ∧
     Inv r.2.2 := by
@@ -2619,12 +2649,12 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (c : ByteArra
   have hP1 : Plain (toString x.m.r.asOf) := plain_nat _
   have hP2 : Plain (addsField bs) := plain_adds bs
   have hP3 : Plain (hexOf D.toByteArray) := plain_D D hD
-  have hnlA : ∀ l ∈ pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest, ¬ l.contains '\n' := by
+  have hnlA : ∀ l ∈ pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest, ¬ l.contains '\n' := by
     intro l hl
     simp only [List.mem_append, List.mem_singleton] at hl
     rcases hl with (hl | rfl) | hl
     · exact hnl l (List.mem_append.2 (Or.inl hl))
-    · exact nl_resume _ _ hP3 (plain_tag c hcs)
+    · exact nl_resume _ _ _ hP1 hP3 (plain_tag c hcs)
     · exact hnl l (List.mem_append.2 (Or.inr hl))
   have hnlB : ∀ l ∈ pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest,
       ¬ l.contains '\n' := by
@@ -2648,18 +2678,18 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (c : ByteArra
     (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}, p⟩ #[]).2
   obtain ⟨c1, c2, c3, -⟩ := runLoop_sim (fun _ => True) bumpW (fun _ => rfl) (fun w hw => bump_inv w hw)
     (fun _ h => h) rest hrest (fun _ _ _ _ _ _ _ _ => trivial)
-    (0 + (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c]).length)
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] (0 + pre.length)
+    (0 + (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c]).length)
+    (runLoop stepRes (·.st) bumpW ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] (0 + pre.length)
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}, p⟩ #[]).1
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}, p⟩ #[]).2).1
-    (runLoop stepRes (·.st) bumpW ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] (0 + pre.length)
+    (runLoop stepRes (·.st) bumpW ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] (0 + pre.length)
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}, p⟩ #[]).1
       (runLoop stepRes (·.st) bumpW pre 0 ⟨some x, false, {}, p⟩ #[]).2).2 b3 trivial
   have hlen : (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray]).length =
-      (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c]).length := by simp
-  have hrr : runRes (some x) p ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) =
-      runOn stepRes (·.st) bumpW ⟨some x, false, {}, p⟩ ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) := rfl
-  have h2 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) '\n') 0
+      (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c]).length := by simp
+  have hrr : runRes (some x) p ("\n".intercalate (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) =
+      runOn stepRes (·.st) bumpW ⟨some x, false, {}, p⟩ ("\n".intercalate (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) := rfl
+  have h2 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) '\n') 0
         ⟨some x, false, {}, p⟩ #[]).2 =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         (splitC ("\n".intercalate (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) '\n')
@@ -2667,7 +2697,7 @@ theorem runRes_eq_load (x : Res) (D : List UInt8) (bs : ByteArray) (c : ByteArra
     rw [splitC_nl _ (by simp) hnlA, splitC_nl _ (by simp) hnlB]
     simp only [runLoop_append]
     rw [hlen, c1, b2, b1, a2, a1]
-  have h1 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) '\n') 0
+  have h1 : (runLoop stepRes (·.st) bumpW (splitC ("\n".intercalate (pre ++ ["resume " ++ toString x.m.r.asOf ++ " " ++ hexOf D.toByteArray ++ " " ++ orderTag c] ++ rest)) '\n') 0
         ⟨some x, false, {}, p⟩ #[]).1.st =
       (runLoop step id (fun st => { st with failed := st.failed + 1 })
         (splitC ("\n".intercalate (pre ++ ["load " ++ toString x.m.r.asOf ++ " " ++ addsField bs ++ " " ++ hexOf D.toByteArray] ++ rest)) '\n')
@@ -2778,16 +2808,16 @@ theorem commitRes_aok (x : Res) (st : St) (u : Bool) (hx : x.AOk) :
 /-- T1c: every kept `Res` with a known adds stream has that stream parse to its sets in order, through every worker step. -/
 theorem stepRes_aok (w w' : Worker) (fs out : List String) (hA : ∀ y, w.x = some y → y.AOk)
     (hs : stepRes w fs = some (w', out)) : ∀ y, w'.x = some y → y.AOk := by
-  by_cases hrs : ∃ h oh, fs = ["resume", h, oh]
-  · obtain ⟨h, oh, rfl⟩ := hrs
+  by_cases hrs : ∃ a h oh, fs = ["resume", a, h, oh]
+  · obtain ⟨a, h, oh, rfl⟩ := hrs
     rw [stepRes_resume] at hs
-    rcases hr : resume (Res.tagged w.x oh) w.st h with _ | ⟨st1, out1⟩
+    rcases hr : resumeAt (Res.tagged w.x oh) w.st a h with _ | ⟨st1, out1⟩
     · rw [hr] at hs; simp at hs
     · rw [hr] at hs
       simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at hs
       obtain ⟨rfl, -⟩ := hs
       exact hA
-  · have hr' : ∀ h oh, fs ≠ ["resume", h, oh] := fun h oh e => hrs ⟨h, oh, e⟩
+  · have hr' : ∀ a h oh, fs ≠ ["resume", a, h, oh] := fun a h oh e => hrs ⟨a, h, oh, e⟩
     by_cases hlp : ∃ a c h, fs = ["loadparts", a, c, h]
     · obtain ⟨a, c, h, rfl⟩ := hlp
       rw [stepRes_loadparts] at hs
@@ -2868,21 +2898,26 @@ theorem frame_aok (x : Option Res) (p : Pending) (text : String) (hx : ∀ y, x 
   rw [h] at hy
   exact runLoop_aok _ 0 ⟨x, false, {}, p⟩ #[] hx y hy
 
-/-- T1c: a resume answers as the full `load` of the stream whose chain it sent, and that stream is the kept sets in
-    order. `x.AOk` is what `stepRes_aok` keeps; the anchor alone binds the sets, the chain binds their order. -/
-theorem resume_sound (x : Res) (st : St) (D : List UInt8) (oh : String) (hx : x.Ok) (hxA : x.AOk)
-    (hd : x.m.d = some D) (ht : (Res.tagged (some x) oh).isSome = true) :
-    ∃ segs, x.ch = some (chainOf segs) ∧ orderTag (chainOf segs) = oh ∧
+/-- T1c: an accepted resume is at the kept sets' `asOf` and answers as the full `load` of the stream whose chain it
+    sent, and that stream is the kept sets in order. `x.AOk` is what `stepRes_aok` keeps; the anchor alone binds the sets, the chain binds their order. -/
+theorem resume_sound (x : Res) (st st' : St) (D : List UInt8) (a oh : String) (hx : x.Ok) (hxA : x.AOk)
+    (hd : x.m.d = some D) (hs : resumeAt (Res.tagged (some x) oh) st a (hexOf D.toByteArray) = some (st', [])) :
+    ∃ segs, x.ch = some (chainOf segs) ∧ orderTag (chainOf segs) = oh ∧ a.toNat? = some x.m.r.asOf ∧
       parseAdds (catAll segs) = some (x.m.r.entries, x.m.u.entries) ∧
-      resume (Res.tagged (some x) oh) st (hexOf D.toByteArray) =
-        step st ["load", toString x.m.r.asOf, addsField (catAll segs), hexOf D.toByteArray] := by
-  obtain ⟨c, hch, hoh⟩ := tagged_isSome x oh ht
-  obtain ⟨segs, hsc, hb⟩ := hxA c hch
-  subst hsc
-  refine ⟨segs, hch, hoh, hb, ?_⟩
-  subst hoh
-  rw [tagged_self x _ hch]
-  exact resume_eq_load x st D (catAll segs) hx hd hb
+      step st ["load", toString x.m.r.asOf, addsField (catAll segs), hexOf D.toByteArray] = some (st', []) := by
+  unfold resumeAt at hs
+  split at hs
+  · next ha =>
+    rcases resume_fail_closed _ _ _ _ _ hs with ⟨-, y, _, hy, -⟩ | ⟨h1, -⟩
+    · obtain rfl : x = y := Option.some.inj (tagged_some _ _ _ hy)
+      rw [hy] at ha hs
+      obtain ⟨c, hch, hoh⟩ := tagged_isSome x oh (by rw [hy]; rfl)
+      obtain ⟨segs, rfl, hb⟩ := hxA c hch
+      refine ⟨segs, hch, hoh, by simpa using ha, hb, ?_⟩
+      rw [← resume_eq_load x st D (catAll segs) hx hd hb]
+      exact hs
+    · cases h1
+  · simp at hs
 
 /-- T1c: a chain other than the kept one is never resumed onto (the tag is the chain's hex, injective, so no collision
     assumption is needed here; the chain's own collision resistance is SHA3-512's). -/
@@ -2982,6 +3017,9 @@ theorem runRes_eq_runWith (x : Option Res) (p : Pending) (hx : ∀ y, x = some y
 #guard_msgs in #print axioms frame_aok
 /-- info: 'BlindLedger.Gate.Rules.Resident.resume_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms resume_sound
+
+/-- info: 'BlindLedger.Gate.Rules.Resident.resumeAt_cases' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms resumeAt_cases
 /-- info: 'BlindLedger.Gate.Rules.Resident.tagged_other' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms tagged_other
 /-- info: 'BlindLedger.Gate.Rules.Resident.loadparts_closed' depends on axioms: [propext, Classical.choice, Quot.sound] -/

@@ -6,7 +6,9 @@ Stages (µs per line): parse (the harness's line text and answer parse), frame (
 registry, storage (SQLite reads and writes), lean_decide and lean_replay (the Lean call, split by a probe that sends the same
 frame without its ``line`` rows: what is left is the history replay), canon (encoding and digests), sign, verify (Lean
 ``gate_verify``), seal_other.  ``total`` leaves out the probe and the harness's own token leaves.  The guard owns memory policy: only with ``free`` (callable, free bytes; the CLI passes the live reading) does a batch whose Lean call
-would need more (twice the worker's commit so far, plus about 500 times the batch's frame; measured at 20,000 history lines: tree peak 288 MB private against a 204 MB commit) stop the run and record the wall."""
+would need more (twice the commit of the worker holding the shard, else of the largest worker yet, since the batch reloads; plus
+about 500 times the batch's frame; measured at 20,000 history lines: tree peak 288 MB private against a 204 MB commit) stop the
+run and record the wall.  A wall of any kind exits non-zero: a run that stops short is never a pass."""
 
 from __future__ import annotations
 
@@ -84,17 +86,20 @@ def corpus(total: int, batch: int):
                {i for i in take if rng.random() < 0.05})
 
 
-def _probe(fn, S):
-    """Wrap a Lean call so the same frame minus its ``line`` rows and its ``commit`` runs first, as the replay probe (answer checked,
-    never used; a commit would step the worker's chain past the batch the producer seals)."""
+def _probe(quiet, fn, S):
+    """Wrap a Lean call so the same frame minus its ``line`` rows and its ``commit`` runs first on ``quiet``, as the replay probe
+    (answer checked, never used; a commit would step the worker's chain past the batch the producer seals).  A worker probe
+    never recycles, and a ``loadparts`` frame is never probed: its tag-0 frame would take the parts the real frame needs."""
     def run(first, *rest, **kw):
         if isinstance(first, bytes):
-            probe = b"\n".join(r for r in first.split(b"\n") if not r.startswith(b"line ") and r != b"commit")
-            ok = S.wrap("lean_probe", fn)(probe, *rest, **kw)
+            rows = first.split(b"\n")
+            if any(r.startswith(b"loadparts ") for r in rows):
+                return S.wrap("lean_call", fn)(first, *rest, **kw)
+            ok = S.wrap("lean_probe", quiet)(b"\n".join(r for r in rows if not r.startswith(b"line ") and r != b"commit"), *rest, **kw)
         else:  # the one-shot exe: (argv, ...) with the frame file last
             argv = list(first)
             Path(argv[1] + ".probe").write_bytes(b"\n".join(r for r in Path(argv[1]).read_bytes().split(b"\n") if not r.startswith(b"line ") and r != b"commit"))
-            ok = S.wrap("lean_probe", fn)([argv[0], argv[1] + ".probe"], *rest, **kw).stdout.splitlines()
+            ok = S.wrap("lean_probe", quiet)([argv[0], argv[1] + ".probe"], *rest, **kw).stdout.splitlines()
         S.probes.append("RULES_VECTORS=PASS checked=0 expected=0 failed=0" in ok)
         return S.wrap("lean_call", fn)(first, *rest, **kw)
     return run
@@ -109,15 +114,22 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
         c = g.Cluster(tmp, fx.custody(tmp), shards=1)
         with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):
             c.boot()
-        real_run, real_exe = decider.RulesWorker.run, subprocess.run
+        real_run, real_exe, real_close, seen = decider.RulesWorker.run, subprocess.run, decider.RulesWorker._close, [0]
         if probe:
-            wrapped_run = _probe(lambda data: real_run(worker, data), S)
+            wrapped_run = _probe(lambda data: worker._send(b"\0" + data, False), lambda data: real_run(worker, data), S)
             patch_worker = lambda self, data: wrapped_run(data)
-            patch_exe = types.SimpleNamespace(run=lambda argv, **kw: _probe(lambda a, **k: real_exe(a, **k), S)(argv, **kw), TimeoutExpired=subprocess.TimeoutExpired)
+            exe = lambda a, **k: real_exe(a, **k)
+            patch_exe = types.SimpleNamespace(run=lambda argv, **kw: _probe(exe, exe, S)(argv, **kw), TimeoutExpired=subprocess.TimeoutExpired)
         else:
             patch_worker = S.wrap("lean_call", real_run)
             patch_exe = types.SimpleNamespace(run=S.wrap("lean_call", real_exe), TimeoutExpired=subprocess.TimeoutExpired)
+
+        def close_seen(self):  # the largest worker seen, read before a recycle or a reload drops it
+            if self._worker is not None and self._worker.alive:
+                seen[0] = max(seen[0], self._worker.commit_bytes())
+            real_close(self)
         stack.enter_context(mock.patch.object(decider.RulesWorker, "run", patch_worker))
+        stack.enter_context(mock.patch.object(decider.RulesWorker, "_close", close_seen))
         stack.enter_context(mock.patch.object(decider, "subprocess", patch_exe))
         for owner, attr, name in (
                 (g, "decide_batch", "parse"), (decider, "decide", "frame"), (decider, "commit", "storage"), (fx, "_leaf", "harness"),
@@ -136,13 +148,15 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
         for payments, bad in corpus(total, batch):
             lines = sum(map(len, payments.values()))
             frame = 400 * lines + 4096  # the batch's own text: the history never travels in a frame, a resume costs O(batch)
-            held = worker._worker.commit_bytes() if worker._worker else 0
+            cur = worker._worker.commit_bytes() if worker._worker else 0
+            seen[0] = max(seen[0], cur)
+            held = cur if cur and 0 in worker.holds else seen[0]  # a batch that reloads builds as big as the largest worker yet
             need, avail = 2 * held + MEM_PER_FRAME_BYTE * frame, free() if free else None
             if free and avail < need:
                 wall = {"reason": "memory", "history_lines": done, "frame_bytes": frame, "need_bytes": need, "free_bytes": avail}
                 break
             S.take()
-            t0 = time.perf_counter()
+            t0, probes = time.perf_counter(), len(S.probes)
             try:
                 ans, leaves, _ = g.decide_batch(c, prod, reg, 0, payments, bad, worker)
                 decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
@@ -157,8 +171,8 @@ def run_bench(total: int, batch: int, probe: bool = True, sizes: tuple[int, ...]
             us["lean_replay"], us["lean_decide"] = probed, call - probed  # a cold first batch can make this negative: its probe pays the start
             us.setdefault("other", 0.0)
             us["total"] = (t1 - t0 - spent.get("lean_probe", 0.0) - spent.get("harness", 0.0)) / lines * 1e6
-            rows.append({"cold": not rows, "history_before": done, "lines": lines, "frame_est_bytes": frame, "worker_commit_bytes": held,
-                         "us_per_line": {k: round(v, 1) for k, v in us.items()}})
+            rows.append({"cold": not rows, "history_before": done, "lines": lines, "frame_est_bytes": frame, "worker_commit_bytes": cur,
+                         "probed": len(S.probes) > probes, "us_per_line": {k: round(v, 1) for k, v in us.items()}})
             done += lines
         elapsed = time.perf_counter() - started
         published, flat = prod.published(), []
@@ -198,6 +212,8 @@ def main() -> None:
     print("BENCH", {k: v for k, v in result.items() if k != "batches"})
     for r in result["batches"]:
         print("BENCH_BATCH", r["history_before"], r["worker_commit_bytes"], r["frame_est_bytes"], r["us_per_line"])
+    if result["wall"]:
+        raise SystemExit(f"BENCH_WALL {result['wall']['reason']} at {result['wall']['history_lines']} lines")
 
 
 if __name__ == "__main__":
