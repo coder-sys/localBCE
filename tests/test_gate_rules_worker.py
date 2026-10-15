@@ -374,6 +374,14 @@ class RulesWorkerTests(fx.Scratch):
                 self.assertTrue("WorkerDied" in "".join(log.output) and why in "".join(log.output), log.output)
                 self.assertEqual(batch(n + 2), {10 * n + 20: "ALLOW -", 10 * n + 21: "ALLOW -"})
 
+    def test_a_worker_dead_between_batches_is_relaunched_and_logged(self):
+        w = self.worker()
+        w.run(b"x")
+        w._worker._terminate()
+        with self.assertLogs(decider.LOG, "WARNING") as log:
+            w.run(b"x")
+        self.assertIn("dead between batches", "".join(log.output))
+
     def test_a_recycle_is_logged_with_its_level_and_reason(self):
         w = self.worker()
         for attr, reason in (("RECYCLE_CAP_BYTES", "cap"), ("RECYCLE_GROWTH_BYTES", "growth")):

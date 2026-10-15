@@ -39,6 +39,7 @@ class GateBench(unittest.TestCase):
         self.assertIsNone(r["wall"])
         self.assertEqual((r["lines_done"], r["batches_done"]), (N, -(-N // BATCH)))
         self.assertEqual((r["probes_ok"], r["probes"]), (r["batches_done"],) * 2)  # every replay probe was a clean PASS
+        self.assertEqual((r["fallbacks"], {row["served"] for row in r["batches"]}), (0, {"resident"}))  # a worker death would pass the rest
         for row in r["batches"]:
             us = row["us_per_line"]
             self.assertGreater(us["lean_replay"], 0)

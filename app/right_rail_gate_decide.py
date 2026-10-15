@@ -79,6 +79,7 @@ class RulesWorker:
         with self._lock:
             try:
                 if self._worker is not None and not self._worker.alive:
+                    LOG.warning("gate rules worker dead between batches: relaunching (launch %d)", self.gen + 1)
                     self._close()
                 if self._worker is None:
                     exe = self.exe.read_bytes()
