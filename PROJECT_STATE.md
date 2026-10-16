@@ -1,25 +1,30 @@
 # Project State
 
-## Active Backends
+## Active Runtime
 
-localBCE supports two explicit proof backends:
+The checked-in runtime is adjudication-only:
 
-- `groth16` is the default compatibility/demo backend.
-- `stark_attested` is the opt-in Winterfell controlled-attestation backend.
+- `proof_execution_enabled` is `false`.
+- G1-G10 adjudication still writes `adjudication_result.json`.
+- Approved and denied results do not generate proofs or submit transactions.
+- `groth16` and `stark_attested` remain dormant compatibility implementations.
 
-The default Groth16 workflow remains unchanged:
+The active workflow is:
 
 ```text
 claim_input.json
 -> Rust G1-G10 adjudication
--> Circom witness
--> Groth16 proof
--> Solidity verifier
--> ClaimsRegistry
 -> adjudication_result.json
+-> optional RightRail-derived off-chain journal
+-> deterministic reconciliation report
 ```
 
-The opt-in STARK workflow is:
+`bridge/rightrail_offchain.py` is the sole writer for its append-only journal.
+It accepts only proof-free adjudication results and synthetic, redacted
+remittance events. The external RightRail SQLite owner, payment actions, Lean
+worker, UI, signers, and binaries remain inactive.
+
+The retained, inactive STARK workflow is:
 
 ```text
 claim_input.json
@@ -36,8 +41,9 @@ claim_input.json
 
 ## STARK Migration Status
 
-The Groth16-to-STARK technical migration is complete for the selected
-controlled-attestation profile.
+The Groth16-to-STARK technical implementation remains complete for the selected
+controlled-attestation profile, but both proof paths are disabled in the active
+runtime.
 
 Implemented and tested:
 
@@ -53,8 +59,8 @@ Implemented and tested:
 - canonical 129-byte secp256k1 attestation envelope bound to registry and amount
 - controlled-attestation Solidity verifier and STARK ClaimsRegistry
 - approved and denied runtime settlement through `rust-engine`
-- fail-closed, explicit `stark_attested` routing with Groth16 retained as the
-  checked-in default until governed production activation
+- fail-closed, explicit `stark_attested` routing retained behind the disabled
+  proof-execution gate
 - disposable-Anvil end-to-end validation
 - external-command signer validation with request/key/address/low-s checks
 - parallel non-proxy V2 contracts with a 72-hour timelock and emergency pause
@@ -102,7 +108,10 @@ ported into active folders.
 - `adjudication_result.json` remains compatible.
 - Existing Groth16 contracts and circuit artifacts remain untouched by the
   STARK backend.
-- `proof_backend` absent or `groth16` must retain current behavior.
+- `proof_execution_enabled` absent or `false` prevents proof generation and
+  chain submission.
+- Re-enabling a compatibility backend requires an explicit local setting of
+  `proof_execution_enabled: true`; no automatic fallback exists.
 - STARK attestor keys must stay outside repository config and artifacts.
 
 ## Production Readiness

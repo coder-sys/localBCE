@@ -5,18 +5,21 @@
 The Groth16-to-STARK technical migration is complete for the selected
 controlled-attestation settlement profile.
 
-The repository has two explicit proof backends:
+The repository retains two explicit proof backends:
 
-- `groth16`: the default compatibility path
+- `groth16`: a dormant compatibility path
 - `stark_attested`: an opt-in path that generates and locally verifies a real
   Winterfell proof, then authorizes settlement with a controlled secp256k1
   attestation
 
+Both are disabled by the checked-in `proof_execution_enabled: false` master
+gate. The active runtime performs adjudication only and submits no transaction.
+
 The governed Sepolia pilot candidate uses parallel V2 contracts and an
 external-command signer boundary. It has not been deployed or approved for
 production. The live local validator additionally opts into the hash-pinned
-`versioned_g1_g10` rules backend. The normal runtime defaults remain
-`groth16` plus `hardcoded_g1_g10`.
+`versioned_g1_g10` rules backend. The normal runtime uses
+`hardcoded_g1_g10` with proof execution disabled.
 
 This is not native on-chain Winterfell verification. The chain verifies the
 authorized attestor signature over the exact settlement inputs and proof
@@ -60,8 +63,10 @@ Keccak-256 commitment of the serialized Winterfell proof. It binds:
 
 ## Safety Properties
 
-- Groth16 remains the default when `proof_backend` is absent and in the
-  checked-in active selection.
+- `proof_execution_enabled` defaults to `false` and is `false` in the
+  checked-in active selection, so neither retained backend can run.
+- Compatibility testing may set `proof_execution_enabled: true`; the selected
+  `proof_backend` is then still validated normally.
 - `stark_attested` requires explicit `proof_backend = "stark_attested"`
   selection. It fails closed until the governed release profile, deployment
   pin, external signer, Sepolia RPC, submitter key, and finality requirements

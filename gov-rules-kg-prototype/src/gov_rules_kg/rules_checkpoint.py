@@ -457,7 +457,12 @@ def _validate_safety_boundaries(repo_root: Path, checkpoint: dict[str, Any]) -> 
         "hardcoded_g1_g10",
         "default rules backend",
     )
-    _require_equal(config.get("proof_backend"), "groth16", "default proof backend")
+    _require_equal(config.get("proof_backend"), "none", "default proof backend")
+    _require_equal(
+        config.get("proof_execution_enabled"),
+        False,
+        "default proof execution gate",
+    )
     rust_source = (repo_root / "rust-engine" / "src" / "rules_engine.rs").read_text(
         encoding="utf-8"
     )
@@ -515,7 +520,8 @@ def validate_rules_corpus_checkpoint(
         "runtime_activation": False,
         "proof_binding": False,
         "rules_backend": "hardcoded_g1_g10",
-        "proof_backend": "groth16",
+        "proof_backend": "none",
+        "proof_execution_enabled": False,
         "rules_active_v1_sha256": EXPECTED_RULES_SHA256,
         "validation_scope": "committed_snapshot_only",
         "live_postgres_recount_performed": False,

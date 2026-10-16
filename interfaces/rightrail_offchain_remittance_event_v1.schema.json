@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localbce.invalid/schemas/rightrail_offchain_remittance_event_v1.schema.json",
+  "title": "localBCE RightRail synthetic remittance event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "remittance_id",
+    "claim_hash",
+    "event_kind",
+    "delta_cents",
+    "payer_trace_sha256",
+    "source_artifact_sha256",
+    "occurred_at",
+    "synthetic_data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "localbce-rightrail-remittance-event-v1"
+    },
+    "remittance_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "claim_hash": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$"
+    },
+    "event_kind": {
+      "enum": [
+        "PAYMENT",
+        "REPAYMENT",
+        "REVERSAL",
+        "PARTIAL_RECOUPMENT",
+        "PLB_ADJUSTMENT"
+      ]
+    },
+    "delta_cents": {
+      "type": "integer"
+    },
+    "payer_trace_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_artifact_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "synthetic_data": {
+      "const": true
+    }
+  }
+}

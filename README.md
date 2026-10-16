@@ -9,15 +9,14 @@ Blind Ledger is a local prototype for privacy-preserving healthcare claims adjud
 - Solidity
 - Foundry
 
-The system validates claims off-chain, generates zero-knowledge proofs for approved claims, and records approved adjudications on-chain.
+The active checked-in runtime validates claims off-chain and writes the
+adjudication result without generating a proof or submitting a transaction.
 
-Groth16 remains the checked-in production backend selection. Governed
-`stark_attested` is an explicit candidate that generates and locally verifies a
-real Winterfell proof and settles through controlled-attestation Solidity
-contracts. It fails closed until an externally supplied release profile and
-deployment pin satisfy every activation gate. STARK failures never trigger an
-automatic Groth16 fallback. See `STARK_RUNTIME.md` for the exact trust boundary
-and operating commands.
+Groth16 and governed `stark_attested` remain available as dormant compatibility
+implementations, but `proof_execution_enabled` defaults to `false` and is
+disabled in the checked-in configuration. Neither proof path nor chain
+settlement runs in the active workflow. See `STARK_RUNTIME.md` for the retained
+STARK trust boundary and validation commands.
 
 A parallel governed V2 Sepolia pilot candidate adds external MPC signing,
 72-hour timelocked administration, emergency pause, policy-hash binding,
@@ -28,11 +27,35 @@ until external deployment, Safe, MPC, legal, and audit gates are satisfied.
 
 # Current Workflows
 
-Default Groth16 backend:
+Default adjudication-only runtime:
 
 claim_input.json
 -> Rust adjudication
 -> denial_reason validation
+-> adjudication_result.json
+
+The result records `tx_submitted: false` and `tx_hash: null` for approved and
+denied decisions.
+
+An operator may pass that proof-free result to the RightRail-derived off-chain
+ledger and reconciliation bridge:
+
+```text
+adjudication_result.json
+-> append-only hash-linked journal
+-> synthetic remittance events
+-> deterministic reconciliation report
+```
+
+The bridge is documented in `bridge/README.md`. It does not execute the
+external RightRail runtime, move money, generate a proof, sign an attestation,
+or submit a transaction.
+
+Dormant Groth16 compatibility backend, enabled only by an explicit local
+configuration change:
+
+claim_input.json
+-> Rust adjudication
 -> zk/input.json
 -> witness generation
 -> Groth16 proof
@@ -40,7 +63,8 @@ claim_input.json
 -> ClaimsRegistry
 -> adjudication_result.json
 
-Opt-in STARK backend:
+Dormant STARK compatibility backend, enabled only by an explicit local
+configuration change plus its existing activation gates:
 
 claim_input.json
 -> Rust adjudication
@@ -90,8 +114,9 @@ build commands exit successfully.
 The repository is aligned to the broader hardened technical architecture through
 an explicit staging model:
 
-- default Groth16 path: `rust-engine/`, `zk/`, `blind-ledger/`
-- opt-in STARK runtime: `rust-engine/`, `stark-engine/`, `blind-ledger/`
+- active adjudication and off-chain reconciliation: `rust-engine/`, `bridge/`
+- dormant Groth16 compatibility code: `zk/`, `blind-ledger/`
+- dormant STARK compatibility code: `stark-engine/`, `blind-ledger/`
 - imported app/audit reference lane: `blind-ledger-app-layer/`
 - imported hardened reference bundle: `localBCE-codex-dev-hardened-20260616/`
 - rules discovery/review lane: `gov-rules-kg-prototype/`
@@ -181,9 +206,11 @@ localBCE/
 
 ## STARK Bridge
 
-- stark-engine/ is the first-class localBCE STARK proving and settlement crate.
+- stark-engine/ retains the localBCE STARK proving and settlement implementation
+  as dormant compatibility code.
 - blind-ledger-app-layer/zk-stark/ remains the imported Winterfell reference/audit source.
-- rust-engine/ defaults to Groth16 and supports explicit `stark_attested` routing.
+- rust-engine/ defaults to `proof_backend = "none"`; compatibility tests may
+  explicitly enable the retained Groth16 or `stark_attested` paths.
 - A feature-gated Winterfell PoC proof preview exists in stark-engine/ and is
   covered by the STARK smoke chain.
 - The production G1-G10 AIR packages real Winterfell proof bytes and its exact
@@ -561,11 +588,10 @@ REDEPLOY_WORKFLOW.md
 
 Near-term next steps:
 
-- Keep Groth16 green as the default and manual rollback backend.
-- Independently audit the controlled-attestation STARK path and formalize key
-  custody, root governance, monitoring, and recovery.
-- Consider native or recursively wrapped on-chain STARK verification as a
-  separate trust-model upgrade.
+- Keep both retained proof implementations disabled unless a separate reviewed
+  compatibility test explicitly enables one.
+- Harden the off-chain ledger and reconciliation boundary without granting it
+  payment, proof, contract, or treasury authority.
 - Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.
 - Use ROADMAP_TO_TARGET_ARCHITECTURE.md to choose the next safe integration phase.
 - Port hardened/app-layer assets only through explicit reviewed integration steps.

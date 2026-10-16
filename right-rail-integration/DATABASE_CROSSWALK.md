@@ -6,24 +6,24 @@ or depend on the RightRail SQLite database.
 
 | RightRail concept | localBCE owner | Integration rule |
 | --- | --- | --- |
-| SQLite `FinancialOwner` | Operational-state reference only | The single-writer and atomic-history ideas may inform tests; SQLite is not an active localBCE store. |
+| SQLite `FinancialOwner` | `bridge/rightrail_offchain.py` adaptation | The external SQLite code stays inactive. A localBCE-owned append-only JSONL journal ports only the single-writer, hash-linked history, idempotency, and replay controls. |
 | Rules, sources, extraction, review | PostgreSQL rules corpus | PostgreSQL remains the sole bulk rules/source/review database. It does not own proof or settlement state. |
-| Adjudication and proof inputs | `rust-engine` | Rust remains the active adjudication boundary. Hardcoded G1-G10 remains its default rules backend. |
-| STARK proof and nullifier state | Rust/STARK state files and settlement journal | Existing compare-and-swap, finality, reconciliation, and recovery behavior remains authoritative. |
-| On-chain claim and root state | Existing Groth16 and governed STARK contracts | No RightRail database or adapter may write contract state. |
+| Adjudication | `rust-engine` | Rust remains the active adjudication boundary. Hardcoded G1-G10 remains its default rules backend. |
+| Off-chain operational history | `bridge/rightrail_offchain.py` | One writer records proof-free adjudications and synthetic redacted remittance events. Projections are rebuilt from the journal. |
+| Retained proof and chain code | Dormant Groth16/STARK folders | `proof_execution_enabled=false`; no RightRail database or adapter may activate or write proof/contract state. |
 | Review UI or analytics | Read-only projections | A UI, support tool, verifier, replay tool, or analytics process never becomes an authoritative writer. |
 
 ## Non-Negotiable Boundaries
 
 - No second active writer is introduced for any localBCE state domain.
 - No cross-database transaction or two-phase-commit dependency is introduced.
-- Rules PostgreSQL records never mutate proof or settlement state directly.
-- Proof and settlement code never treats a RightRail SQLite row as authority.
+- Rules PostgreSQL records never mutate adjudication or ledger state directly.
+- The bridge never treats an external RightRail SQLite row as authority.
 - Read-only replay and verification may compare state, but may not repair it
-  without an explicit, existing localBCE recovery command and authorization.
+  or append compensating events without an explicit authorized command.
 - RightRail archives, Git refs, patches, executables, and SQLite artifacts remain
   external, inactive, and hash-pinned.
 
-The selected mapping is therefore conceptual: it ports the one-writer, atomic
-history, idempotent retry, and independent replay guarantees into localBCE
-review evidence without making RightRail an active dependency.
+The selected mapping is an active localBCE adaptation, not an activation of the
+external runtime. The JSONL journal is authoritative only for off-chain
+operational reconciliation; it has no proof, chain, treasury, or payment power.

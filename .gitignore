@@ -8,5 +8,8 @@ stark-engine/target/
 rust-engine/stark_bridge_input.json
 stark-engine/runtime-artifacts/
 stark-engine/runtime-state/
+state/rightrail_offchain_ledger.jsonl
+state/rightrail_offchain_ledger.jsonl.lock
+state/rightrail_reconciliation_report.json
 __pycache__/
 *.pyc

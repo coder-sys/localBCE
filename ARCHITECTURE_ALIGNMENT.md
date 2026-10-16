@@ -54,7 +54,8 @@ or production approval. See `STARK_RUNTIME.md`.
 | Nullifier state | `stark-engine/` | `[BUILT+TESTED]` | Persistent indexed tree with lock, CAS generation, atomic writes, and replay rejection. |
 | Batch/public-input roots | `stark-engine/` | `[BUILT+TESTED]` | AIR-bound and included in the 38-element verifier handoff. |
 | STARK settlement | `blind-ledger/` | `[BUILT-CONTROLLED]` | Authorized attestation over inputs and proof commitment; not native STARK verification. |
-| Runtime selection | `rust-engine/config.json` | `[BUILT+TESTED]` | `groth16` default; `stark_attested` explicit opt-in. |
+| Runtime selection | `rust-engine/config.json` | `[BUILT+TESTED]` | Adjudication-only default; retained `groth16` and `stark_attested` paths require `proof_execution_enabled: true`. |
+| Off-chain ledger and reconciliation | `bridge/rightrail_offchain.py` | `[BUILT+TESTED]` | Proof-free adjudication handoff, append-only hash chain, idempotent retries, and deterministic synthetic remittance reconciliation. No money movement. |
 | Ops/governance | `ops/` | `[SCAFFOLDED]` | Planning scaffolds and validator; not production approval. |
 | Rules discovery | `gov-rules-kg-prototype/` | `[SCAFFOLDED]` | Promotion-ready candidates are not active policy. |
 | 837 ingestion/app orchestration | `blind-ledger-app-layer/` | `[REFERENCE]` | Imported cofounder lane, not silently wired. |

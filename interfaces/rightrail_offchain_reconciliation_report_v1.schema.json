@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localbce.invalid/schemas/rightrail_offchain_reconciliation_report_v1.schema.json",
+  "title": "localBCE RightRail off-chain reconciliation report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "as_of",
+    "runtime_activation",
+    "proof_binding",
+    "proof_execution",
+    "settlement_backend",
+    "money_movement",
+    "ledger_event_count",
+    "ledger_head_sha256",
+    "claims",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "localbce-rightrail-reconciliation-report-v1"
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runtime_activation": {
+      "const": false
+    },
+    "proof_binding": {
+      "const": false
+    },
+    "proof_execution": {
+      "const": false
+    },
+    "settlement_backend": {
+      "const": "none"
+    },
+    "money_movement": {
+      "const": false
+    },
+    "ledger_event_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ledger_head_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "claim_hash",
+          "claim_id",
+          "decision",
+          "owed_cents",
+          "net_remittance_cents",
+          "status",
+          "adjudication_event_id",
+          "remittance_event_ids"
+        ],
+        "properties": {
+          "claim_hash": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{64}$"
+          },
+          "claim_id": {
+            "type": ["string", "null"]
+          },
+          "decision": {
+            "type": ["string", "null"]
+          },
+          "owed_cents": {
+            "type": ["integer", "null"]
+          },
+          "net_remittance_cents": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "adjudication_event_id": {
+            "type": ["string", "null"]
+          },
+          "remittance_event_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "report_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

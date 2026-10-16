@@ -34,6 +34,7 @@ fn explicit_stark_fails_before_claim_or_state_side_effects_without_activation_ev
     let state_path = directory.join("state/nullifier_state.json");
     let artifact_path = directory.join("artifacts");
     let mut config = base_config();
+    config["proof_execution_enabled"] = json!(true);
     config["proof_backend"] = json!("stark_attested");
     config["stark_runtime_mode"] = json!("production");
     config["stark_release_profile_path"] = json!(directory.join("missing-release.json"));
@@ -65,16 +66,38 @@ fn explicit_stark_fails_before_claim_or_state_side_effects_without_activation_ev
 }
 
 #[test]
-fn absent_backend_preserves_groth16_default() {
-    let directory = temporary_directory("default-groth16");
+fn proof_execution_without_explicit_backend_fails_before_side_effects() {
+    let directory = temporary_directory("proof-enabled-without-backend");
+    let mut config = base_config();
+    config["proof_execution_enabled"] = json!(true);
+    write_json(&directory.join("config.json"), &config);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rust-engine"))
+        .current_dir(&directory)
+        .output()
+        .expect("execute rust-engine");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("requires an explicit compatibility proof_backend")
+    );
+    assert!(!directory.join("adjudication_result.json").exists());
+    assert!(!directory.join("stark_bridge_input.json").exists());
+
+    fs::remove_dir_all(directory).expect("remove temporary test directory");
+}
+
+#[test]
+fn absent_proof_execution_gate_defaults_to_adjudication_only() {
+    let directory = temporary_directory("default-adjudication-only");
     let config = base_config();
     write_json(&directory.join("config.json"), &config);
 
     let claim_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("claim_input.json");
     let mut claim: Value =
         serde_json::from_slice(&fs::read(claim_path).expect("read claim fixture")).unwrap();
-    claim["claim_id"] = json!(format!("GROTH16-ROLLBACK-{}", std::process::id()));
-    claim["eligibility_active"] = json!(0);
+    claim["claim_id"] = json!(format!("ADJUDICATION-ONLY-{}", std::process::id()));
     write_json(&directory.join("claim_input.json"), &claim);
 
     let output = Command::new(env!("CARGO_BIN_EXE_rust-engine"))
@@ -91,8 +114,9 @@ fn absent_backend_preserves_groth16_default() {
         &fs::read(directory.join("adjudication_result.json")).expect("read adjudication result"),
     )
     .unwrap();
-    assert_eq!(result["status"], "DENIED");
+    assert_eq!(result["status"], "APPROVED");
     assert_eq!(result["tx_submitted"], false);
+    assert_eq!(result["tx_hash"], Value::Null);
     assert!(!directory.join("stark_bridge_input.json").exists());
 
     fs::remove_dir_all(directory).expect("remove temporary test directory");

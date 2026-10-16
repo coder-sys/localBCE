@@ -23,11 +23,26 @@ logic, change an adjudication result, alter a proof, or qualify localBCE for
 production. Existing Rust, rules, STARK, and settlement tests remain the
 authoritative evidence for implemented behavior.
 
+The first best-of assimilation batch also materializes two inactive,
+machine-checkable policy candidates:
+
+- `ops/approved_data_boundary_v1.json` defines a deny-by-default boundary for
+  support, analytics, monitoring, external AI, and shared-library data.
+- `ops/settlement_authority_policy_v1.json` requires explicit provenance and
+  separated authority for true-ups, withholding, settlement, treasury, and
+  configuration actions.
+
+`scripts/validate_rightrail_adopted_controls.py` validates both policies and
+their exact RightRail requirement lineage. It does not imply human or legal
+approval and does not enforce either policy at runtime.
+
 ## Runtime Boundaries
 
-- Groth16 remains the default proof backend.
-- `stark_attested` remains explicit and gated.
+- Proof execution is disabled by default and in checked-in configuration.
+- Groth16 and `stark_attested` remain dormant compatibility implementations.
 - Hardcoded G1-G10 remains the default rules backend.
 - The 129-byte STARK controlled-attestation envelope is unchanged.
 - secp256k1 controlled attestation is unchanged.
 - Formal and post-quantum artifacts remain isolated and inactive.
+- The localBCE-owned off-chain journal has no proof, chain, payment, treasury,
+  or policy-approval authority.

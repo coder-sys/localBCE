@@ -1,0 +1,58 @@
+{
+  "schema_version": "localbce-settlement-authority-policy-v1",
+  "policy_status": "candidate_not_approved",
+  "runtime_enforced": false,
+  "human_approved": false,
+  "legal_verified": false,
+  "default_decision": "deny",
+  "no_implicit_authority": true,
+  "separation_of_duties_required": true,
+  "action_types": [
+    "true_up",
+    "withholding",
+    "settlement",
+    "treasury_transfer",
+    "configuration_change"
+  ],
+  "required_authority_record_fields": [
+    "authority_id",
+    "action_type",
+    "program",
+    "jurisdiction",
+    "scope",
+    "decision",
+    "issuer",
+    "source_reference",
+    "effective_from",
+    "effective_through",
+    "approver_roles",
+    "record_sha256"
+  ],
+  "required_roles_by_action": {
+    "configuration_change": [
+      "governance_owner",
+      "security_owner"
+    ],
+    "settlement": [
+      "settlement_owner",
+      "governance_owner"
+    ],
+    "treasury_transfer": [
+      "treasury_owner",
+      "governance_owner"
+    ],
+    "true_up": [
+      "settlement_owner",
+      "rules_owner"
+    ],
+    "withholding": [
+      "settlement_owner",
+      "rules_owner"
+    ]
+  },
+  "retry_semantics": {
+    "exact_retry": "idempotent_duplicate",
+    "changed_retry": "conflict_fail_closed"
+  },
+  "right_rail_source_requirement_id": "rrreq-a12d621a2ca01539ab58ac39"
+}

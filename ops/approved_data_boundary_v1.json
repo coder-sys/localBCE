@@ -1,0 +1,105 @@
+{
+  "schema_version": "localbce-approved-data-boundary-v1",
+  "policy_status": "candidate_not_approved",
+  "runtime_enforced": false,
+  "human_approved": false,
+  "legal_verified": false,
+  "default_decision": "deny",
+  "data_classes": [
+    {
+      "id": "public",
+      "sensitive": false,
+      "approval_required": false
+    },
+    {
+      "id": "approved_non_sensitive",
+      "sensitive": false,
+      "approval_required": true
+    },
+    {
+      "id": "confidential",
+      "sensitive": true,
+      "approval_required": true
+    },
+    {
+      "id": "phi",
+      "sensitive": true,
+      "approval_required": true
+    },
+    {
+      "id": "credential_or_secret",
+      "sensitive": true,
+      "approval_required": true
+    },
+    {
+      "id": "private_proof_material",
+      "sensitive": true,
+      "approval_required": true
+    }
+  ],
+  "destinations": [
+    {
+      "id": "support",
+      "allowed_classes": [
+        "public",
+        "approved_non_sensitive"
+      ],
+      "approval_record_required": true
+    },
+    {
+      "id": "product_analytics",
+      "allowed_classes": [
+        "public",
+        "approved_non_sensitive"
+      ],
+      "approval_record_required": true
+    },
+    {
+      "id": "ordinary_monitoring",
+      "allowed_classes": [
+        "public",
+        "approved_non_sensitive"
+      ],
+      "approval_record_required": true
+    },
+    {
+      "id": "external_ai",
+      "allowed_classes": [
+        "public",
+        "approved_non_sensitive"
+      ],
+      "approval_record_required": true
+    },
+    {
+      "id": "shared_multistate_library",
+      "allowed_classes": [
+        "public",
+        "approved_non_sensitive"
+      ],
+      "approval_record_required": true
+    }
+  ],
+  "prohibited_content": [
+    "raw_claim",
+    "phi",
+    "credential_or_secret",
+    "private_key",
+    "private_proof_material",
+    "unredacted_settlement_receipt"
+  ],
+  "required_review_roles": [
+    "privacy_owner",
+    "security_owner"
+  ],
+  "approval_record_fields": [
+    "approval_id",
+    "data_class",
+    "destination",
+    "scope",
+    "approved_by",
+    "approved_at",
+    "expires_at",
+    "content_sha256"
+  ],
+  "right_rail_source_requirement_id": "rrreq-1b3cd95e3a11c2424f08b587"
+}

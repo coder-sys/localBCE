@@ -52,6 +52,17 @@ impl AdjudicationResult {
         }
     }
 
+    fn approved_unsubmitted(claim_id: String, claim_hash: String) -> Self {
+        Self {
+            claim_id,
+            claim_hash,
+            status: AdjudicationStatus::Approved,
+            reason: None,
+            tx_submitted: false,
+            tx_hash: None,
+        }
+    }
+
     fn denied(claim_id: String, claim_hash: String, reason: &str) -> Self {
         Self {
             claim_id,
@@ -185,6 +196,7 @@ struct AppConfig {
     rpc_url: String,
     transaction_value: String,
     enable_stark_sidecar_artifacts: Option<bool>,
+    proof_execution_enabled: Option<bool>,
     proof_backend: Option<String>,
     stark_engine_binary: Option<String>,
     stark_claims_registry_address: Option<String>,
@@ -216,12 +228,16 @@ impl AppConfig {
         self.enable_stark_sidecar_artifacts.unwrap_or(false)
     }
 
+    fn proof_execution_enabled(&self) -> bool {
+        self.proof_execution_enabled.unwrap_or(false)
+    }
+
     fn proof_backend(&self) -> Result<&str, String> {
-        let value = self.proof_backend.as_deref().unwrap_or("groth16");
+        let value = self.proof_backend.as_deref().unwrap_or("none");
         match value {
-            "groth16" | "stark_attested" => Ok(value),
+            "none" | "groth16" | "stark_attested" => Ok(value),
             _ => Err(format!(
-                "unsupported proof_backend '{value}'; expected groth16 or stark_attested"
+                "unsupported proof_backend '{value}'; expected none, groth16, or stark_attested"
             )),
         }
     }
@@ -1071,7 +1087,14 @@ fn run_stark_bridge_input_dry_run() -> Result<(), String> {
 fn run_app() -> Result<(), String> {
     let config = read_config()?;
     let proof_backend = config.proof_backend()?;
-    let stark_activation = if proof_backend == "stark_attested" {
+    let proof_execution_enabled = config.proof_execution_enabled();
+    if proof_execution_enabled && proof_backend == "none" {
+        return Err(
+            "proof_execution_enabled=true requires an explicit compatibility proof_backend"
+                .to_string(),
+        );
+    }
+    let stark_activation = if proof_execution_enabled && proof_backend == "stark_attested" {
         Some(validate_stark_runtime_activation(&config)?)
     } else {
         None
@@ -1096,7 +1119,7 @@ fn run_app() -> Result<(), String> {
     let transaction_value = config.transaction_value.as_str();
 
     if let Some(reason) = configured_reason.as_deref() {
-        if config.stark_sidecar_enabled() {
+        if proof_execution_enabled && config.stark_sidecar_enabled() {
             write_stark_sidecar_artifact(&claim, &claim_hash)?;
         }
 
@@ -1105,6 +1128,26 @@ fn run_app() -> Result<(), String> {
         write_result(&result)?;
 
         println!("Claim denied before proof generation: {}", reason);
+        println!("Wrote adjudication_result.json");
+        return Ok(());
+    }
+
+    if !proof_execution_enabled {
+        let result =
+            AdjudicationResult::approved_unsubmitted(claim.claim_id.clone(), claim_hash.clone());
+        write_result(&result)?;
+        println!(
+            "{}",
+            json!({
+                "event": "adjudication_only",
+                "status": "completed",
+                "claim_id": claim.claim_id,
+                "claim_hash": claim_hash,
+                "decision": "APPROVED",
+                "proof_generation": false,
+                "chain_submission": false,
+            })
+        );
         println!("Wrote adjudication_result.json");
         return Ok(());
     }
@@ -1910,6 +1953,22 @@ mod tests {
     }
 
     #[test]
+    fn config_missing_proof_execution_flag_defaults_disabled() {
+        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
+
+        assert!(!config.proof_execution_enabled());
+    }
+
+    #[test]
+    fn config_proof_execution_flag_can_enable_legacy_backends() {
+        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        value["proof_execution_enabled"] = json!(true);
+        let config: AppConfig = serde_json::from_value(value).unwrap();
+
+        assert!(config.proof_execution_enabled());
+    }
+
+    #[test]
     fn config_stark_sidecar_flag_can_enable_artifacts() {
         let config: AppConfig = serde_json::from_str(&config_json(Some(true))).unwrap();
 
@@ -1917,10 +1976,10 @@ mod tests {
     }
 
     #[test]
-    fn config_missing_proof_backend_preserves_groth16_default() {
+    fn config_missing_proof_backend_defaults_to_none() {
         let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
 
-        assert_eq!(config.proof_backend(), Ok("groth16"));
+        assert_eq!(config.proof_backend(), Ok("none"));
     }
 
     #[test]
@@ -2127,6 +2186,22 @@ mod tests {
             value["tx_hash"],
             "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
+    }
+
+    #[test]
+    fn approved_unsubmitted_result_preserves_schema_without_settlement() {
+        let result = AdjudicationResult::approved_unsubmitted(
+            "CLAIM-TEST-001".to_string(),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        );
+
+        let value = serde_json::to_value(result).unwrap();
+
+        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
+        assert_eq!(value["status"], "APPROVED");
+        assert_eq!(value["reason"], Value::Null);
+        assert_eq!(value["tx_submitted"], false);
+        assert_eq!(value["tx_hash"], Value::Null);
     }
 
     #[test]
@@ -2780,8 +2855,13 @@ status                  1";
     }
 
     #[test]
-    #[ignore = "requires local Anvil, snarkjs, node, cast, config.json, and a fresh approved claim_id"]
-    fn approved_claim_flow_end_to_end() {
+    #[ignore = "requires proof_execution_enabled=true, local Anvil, snarkjs, node, cast, config.json, and a fresh approved claim_id"]
+    fn legacy_proof_claim_flow_end_to_end() {
+        let config = read_config().unwrap();
+        assert!(
+            config.proof_execution_enabled(),
+            "legacy proof end-to-end test requires proof_execution_enabled=true"
+        );
         run_app().unwrap();
     }
 }

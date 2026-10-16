@@ -114,13 +114,20 @@ The October handoff catalog accounts for 322 manifest entries plus the manifest
 itself, 637 trunk files, and 148 Git refs without extracting or executing the
 handoff. Its one-to-one review queue defines complete integration as complete
 inventory and disposition, not automatic copying or activation. The database
-crosswalk preserves PostgreSQL as the rules/source/review corpus and Rust/STARK
-state as the proof and settlement boundary. Its Lean/TLA+ and ML-DSA material is
-kept in isolated formal and research lanes.
+crosswalk preserves PostgreSQL as the rules/source/review corpus and Rust as the
+adjudication boundary. Its Lean/TLA+ and ML-DSA material is kept in isolated
+formal and research lanes.
+
+The first active port is deliberately narrow. `bridge/rightrail_offchain.py`
+adapts the handoff's single-writer, append-only history, idempotent retry, and
+independent replay controls into a localBCE-owned JSONL journal. It accepts only
+proof-free Rust adjudication results and synthetic redacted remittance events.
+The external SQLite owner and every executable component remain inactive.
 
 ## Safety Boundaries
 
-This integration does not change adjudication, rules activation, Groth16,
-Winterfell, Solidity settlement, claim schemas, or production configuration.
-RightRail material can advance from this ledger only through an explicit port,
-review, tests, and the existing localBCE activation gates.
+This integration does not change adjudication, rules activation, claim schemas,
+or production authority. Proof execution and chain settlement remain disabled.
+The active port cannot move money and does not imply that the external RightRail
+runtime, policies, legal conclusions, formal proofs, or cryptography are
+approved.

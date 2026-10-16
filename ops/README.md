@@ -8,8 +8,10 @@ and production-readiness expectations for future production work.
 
 They do not change the active local prototype:
 
-- Groth16 remains the active compatibility/demo path.
-- `rust-engine/`, `zk/`, and `blind-ledger/` remain the active runtime flow.
+- `rust-engine/` adjudication plus `bridge/` off-chain reconciliation is the
+  active local flow.
+- Groth16 and `stark_attested` are dormant compatibility implementations behind
+  `proof_execution_enabled: false` and `proof_backend: "none"`.
 - `stark-engine/` contains both compatibility tooling and a feature-gated real
   Winterfell prover that is opt-in and locally verified.
 - No native Solidity Winterfell verifier is active; governed V2 is an inactive
@@ -25,16 +27,27 @@ The following machine-readable JSON files are included as inactive scaffolding:
 - `stark_sepolia_pilot.example.json`
 - `stark_v2_deployment_pin.example.json`
 - `stark_v2_release_profile.example.json`
+- `approved_data_boundary_v1.json`
+- `settlement_authority_policy_v1.json`
 
 These files are examples and planning inputs only. They are not active runtime
 configuration, do not enable production mode, and do not replace
 `rust-engine/config.json`.
+
+The two RightRail-derived policies close reviewed specification gaps without
+activating behavior. The approved-data boundary denies by default and permits
+only public or separately approved non-sensitive material to support,
+analytics, monitoring, external AI, or shared libraries. The settlement
+authority policy requires explicit provenance and two distinct authority roles
+for true-ups, withholding, settlement, treasury, and configuration actions.
+Both remain unapproved candidates until named owners review them.
 
 Validate the inactive JSON scaffolding with:
 
 ```bash
 python3 scripts/validate_ops_scaffold.py
 python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
+python3 scripts/validate_rightrail_adopted_controls.py
 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 ```
 
