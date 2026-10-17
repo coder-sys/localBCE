@@ -20,7 +20,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable
 
 from validate_policy_manifest import ManifestError, validate as validate_policy_manifest
@@ -57,6 +57,14 @@ RELEASE_GATES = (
 
 class PilotError(ValueError):
     pass
+
+
+def is_absolute_path_text(value: str) -> bool:
+    return (
+        Path(value).is_absolute()
+        or PurePosixPath(value).is_absolute()
+        or PureWindowsPath(value).is_absolute()
+    )
 
 
 def now_utc() -> str:
@@ -277,8 +285,11 @@ class PilotConfig:
         if len({governance_safe, treasury, attestor}) != 3:
             raise PilotError("governance Safe, treasury, and attestor must be distinct")
         initial_root = require_bytes32(value["initial_nullifier_root"], "initial_nullifier_root")
-        signer_program = Path(require_text(value["attestor_signer_program"], "attestor_signer_program"))
-        if not signer_program.is_absolute():
+        signer_program_text = require_text(
+            value["attestor_signer_program"], "attestor_signer_program"
+        )
+        signer_program = Path(signer_program_text)
+        if not is_absolute_path_text(signer_program_text):
             raise PilotError("attestor_signer_program must be an absolute path")
         signer_args = value["attestor_signer_args"]
         if not isinstance(signer_args, list) or not all(
@@ -308,13 +319,19 @@ class PilotConfig:
                 )
         require_text(value["transaction_value"], "transaction_value")
         if not allow_example:
-            if not signer_program.is_file() or not os.access(signer_program, os.X_OK):
-                raise PilotError("attestor_signer_program must be an executable file")
             mock_signer = (ROOT / "scripts" / "mock_mpc_attestation_signer.py").resolve()
-            signer_paths = [signer_program.resolve()]
-            signer_paths.extend(Path(item).resolve() for item in signer_args if item.startswith("/"))
+            signer_paths = []
+            if signer_program.is_absolute():
+                signer_paths.append(signer_program.resolve())
+            signer_paths.extend(
+                Path(item).resolve() for item in signer_args if Path(item).is_absolute()
+            )
             if mock_signer in signer_paths:
                 raise PilotError("test-only mock signer is prohibited for the Sepolia pilot")
+            if not signer_program.is_absolute() or not signer_program.is_file() or not os.access(
+                signer_program, os.X_OK
+            ):
+                raise PilotError("attestor_signer_program must be an executable file")
             if any(
                 item == "--private-key" or re.fullmatch(r"0x[0-9a-fA-F]{64}", item)
                 for item in signer_args
