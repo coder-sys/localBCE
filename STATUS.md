@@ -6,7 +6,10 @@ Exact HEAD for this document: see `git log -1 --format=%H -- STATUS.md` on the b
 
 ## Merged
 - PR #1 (N-01, STARK validator proof gate): merged into `integration/rightrail` at `d25394d`. CI green on all six jobs of `production-gates` for head `4b21e79`.
-- PR #2 (RightRail import with history under `rightrail/`, source `af020b2`): open, see PR. Not yet merged.
+
+## Open
+- PR #2 (RightRail import with history under `rightrail/`, source `af020b2`): open at `e292ced`; all five existing CI jobs pass. Not yet merged.
+- PR #3 (Phase 0 docs, self-check, and Windows smoke): open. Its `e29c4da` run passed five jobs and failed only the Windows OpenZeppelin pin validator. Commits `0dee8544`/`fa43daf4` fix canonical pin ordering, and `eee49b10`/`2bbfe03d` fix the subsequently exposed cross-platform example signer-path validation. Updated CI evidence is pending.
 
 ## Defects
 | ID | Status | Proof |
