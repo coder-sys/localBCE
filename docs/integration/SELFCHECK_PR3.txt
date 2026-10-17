@@ -1,0 +1,17 @@
+branch             PASS      on 'codex/phase0-docs-selfcheck' (must not be codex-dev or main)
+branch             PASS      HEAD descends from 3d91138
+rightrail import   PASS      rightrail/{lean,app,rust} present; af020b2 reachable
+groth16            NOT-YET   (phase 1) N-08/D-01: groth16 still accepted as proof_backend
+adversarial        NOT-YET   (phase 1) D-02/D-03 adversarial verifier test module not yet written
+default config     PASS      proof_execution_enabled=false, proof_backend=none
+default config     NOT-YET   (phase 1) N-07/D-09: Anvil private key still in rust-engine/config.json
+single writer      NOT-YET   (phase 4) bridge/rightrail_offchain.py still writes state; owner wiring not done
+lean decides       NOT-YET   (phase 4) Lean worker not yet called from payment path
+ci matrix          PASS      windows-latest present in a workflow
+tracked files      FAIL      tracked: rightrail/artifacts/engine-evaluator/blind_financial_worker.exe rightrail/artifacts/gate-verify/gate_verify.exe zk/claim_0000.zkey zk/claim_final.zkey zk/powersOfTau28_hez_final_10.ptau zk/witness.wtns  (cleanup process)
+docs               PASS      all Phase 0 documents present
+scenarios          NOT-YET   (phase 1) 18 original scenarios tracked in docs/integration/LOG.md; none run yet
+defects            NOT-YET   (phase 1) D-01..D-10, R-01..R-08, N-01..N-08 status in docs/integration/LOG.md; see section below
+
+summary: 6 PASS, 1 FAIL, 7 NOT-YET
+note: FAIL lines need a fix or an OPEN_QUESTIONS entry before the phase report.

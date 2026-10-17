@@ -77,3 +77,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: foundry-rs/foundry-toolchain@v1
       - run: bash scripts/validate_stark_v2_anvil.sh
+
+  windows-smoke:
+    # Phase 0 partial: Windows coverage of the gate unit test and the self-check only.
+    # Full Windows coverage of existing suites is an OPEN_QUESTIONS item.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest tests.test_stark_validation_config_gate
+      - run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+        shell: bash
