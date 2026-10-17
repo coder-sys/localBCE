@@ -15,6 +15,14 @@ import validate_openzeppelin_pin as pin
 
 
 class OpenZeppelinPinTests(unittest.TestCase):
+    def test_tracked_sources_use_platform_independent_posix_order(self) -> None:
+        relative_names = [
+            path.relative_to(pin.SOURCE).as_posix()
+            for path in pin.tracked_source_files()
+        ]
+
+        self.assertEqual(relative_names, sorted(relative_names))
+
     def test_aggregate_covers_only_reviewed_git_tracked_sources(self) -> None:
         files = pin.tracked_source_files()
         self.assertGreater(len(files), 300)
