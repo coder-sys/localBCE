@@ -27,7 +27,8 @@ def tracked_source_files() -> list[Path]:
     if result.returncode:
         detail = result.stderr.decode().strip()
         raise ValueError(f"could not enumerate tracked OpenZeppelin sources: {detail}")
-    files = sorted(ROOT / value.decode() for value in result.stdout.split(b"\0") if value)
+    files = [ROOT / value.decode() for value in result.stdout.split(b"\0") if value]
+    files.sort(key=lambda path: path.relative_to(SOURCE).as_posix())
     if not files:
         raise ValueError("vendored OpenZeppelin source is empty")
     missing = [path for path in files if not path.is_file()]
