@@ -88,5 +88,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest tests.test_stark_validation_config_gate
-      - run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      # One step per file so each failure is visible in the step result (job logs are not
+      # readable from outside GitHub). Discover-based run is replaced by these.
+      - name: scripts/tests test_openzeppelin_pin
+        run: python -m unittest test_openzeppelin_pin
+        working-directory: scripts/tests
+        shell: bash
+      - name: scripts/tests test_stark_sepolia_pilot
+        run: python -m unittest test_stark_sepolia_pilot
+        working-directory: scripts/tests
         shell: bash
