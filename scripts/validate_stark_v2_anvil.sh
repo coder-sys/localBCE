@@ -132,7 +132,8 @@ import json, sys
 config = {
   "claims_registry_address": "0x0000000000000000000000000000000000000000",
   "private_key": sys.argv[8], "rpc_url": sys.argv[7], "transaction_value": "0.001ether",
-  "enable_stark_sidecar_artifacts": False, "proof_backend": "stark_attested",
+  "enable_stark_sidecar_artifacts": False, "proof_execution_enabled": True,
+  "proof_backend": "stark_attested",
   "stark_engine_binary": sys.argv[2], "stark_claims_registry_address": sys.argv[3],
   "stark_attestation_verifier_address": sys.argv[4], "stark_nullifier_state_path": sys.argv[5],
   "stark_artifacts_directory": sys.argv[6], "stark_chain_id": 31337,

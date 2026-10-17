@@ -39,6 +39,7 @@ jobs:
       - run: python3 scripts/validate_ops_scaffold.py
       - run: python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
       - run: python3 scripts/validate_openzeppelin_pin.py
+      - run: python3 -m unittest tests.test_stark_validation_config_gate
       - run: bash scripts/validate_rules_pipeline.sh
       - run: PYTHONPATH=blind-ledger-app-layer:gov-rules-kg-prototype/src gov-rules-kg-prototype/.venv/bin/python -m unittest blind-ledger-app-layer/tests/test_rules_review_auth.py
       - run: python3 scripts/scan_secrets.py
