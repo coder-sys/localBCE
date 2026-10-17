@@ -1,0 +1,175 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "creationInfo": {
+    "comment": "Complete Python logical-package inventory for the reviewed CPython 3.14.4 Windows x86-64 and Linux x86-64 production (0) and development (6) locks.",
+    "created": "2026-07-18T17:02:33Z",
+    "creators": [
+      "Tool: Codex R30 reviewed-wheel inventory"
+    ]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentDescribes": [
+    "SPDXRef-Package-Blind-Ledger-Python-Environment"
+  ],
+  "documentNamespace": "https://blind-ledger.invalid/spdx/python/2026-07-18/r30",
+  "name": "Blind Ledger reviewed Python dependency SBOM",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "comment": "Synthetic app-layer Python environment; no top-level project license is asserted.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "name": "blind-ledger-python-environment",
+      "versionInfo": "R30"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-colorama",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact colorama-0.4.6-py2.py3-none-any.whl; Linux artifact colorama-0.4.6-py2.py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/colorama/0.4.6/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/colorama@0.4.6",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "colorama",
+      "versionInfo": "0.4.6"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-iniconfig",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact iniconfig-2.3.0-py3-none-any.whl; Linux artifact iniconfig-2.3.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/iniconfig/2.3.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/iniconfig@2.3.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "iniconfig",
+      "versionInfo": "2.3.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-packaging",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact packaging-26.2-py3-none-any.whl; Linux artifact packaging-26.2-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/packaging/26.2/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/packaging@26.2",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR BSD-2-Clause",
+      "name": "packaging",
+      "versionInfo": "26.2"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pluggy",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact pluggy-1.6.0-py3-none-any.whl; Linux artifact pluggy-1.6.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pluggy/1.6.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pluggy@1.6.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "pluggy",
+      "versionInfo": "1.6.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pygments",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact pygments-2.20.0-py3-none-any.whl; Linux artifact pygments-2.20.0-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pygments/2.20.0/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pygments@2.20.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "name": "pygments",
+      "versionInfo": "2.20.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Python-pytest",
+      "comment": "Wheel metadata license reconciled. The SHA-256 install pin is governed by requirements-dev.txt (pip --require-hashes). Windows artifact pytest-9.0.3-py3-none-any.whl; Linux artifact pytest-9.0.3-py3-none-any.whl.",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "https://pypi.org/project/pytest/9.0.3/",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pytest@9.0.3",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "name": "pytest",
+      "versionInfo": "9.0.3"
+    }
+  ],
+  "relationships": [
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Python-colorama",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-Blind-Ledger-Python-Environment"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-iniconfig"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-packaging"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-pluggy"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-pygments"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-Blind-Ledger-Python-Environment",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "spdxElementId": "SPDXRef-Package-Python-pytest"
+    }
+  ],
+  "spdxVersion": "SPDX-2.3"
+}

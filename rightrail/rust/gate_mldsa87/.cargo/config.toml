@@ -1,0 +1,4 @@
+# Static CRT: the pinned binary imports no VCRUNTIME/UCRT DLL.
+# /Brepro: the linker writes a content hash, not the clock, as the PE timestamp and PDB GUID.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/Brepro"]

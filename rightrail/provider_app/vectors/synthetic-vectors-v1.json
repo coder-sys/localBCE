@@ -1,0 +1,71 @@
+{
+  "contract": "RR/PROVIDER-APP/SYNTHETIC-VECTORS/v1",
+  "description": "Fictional, manually expected outcomes for the unapproved local fixture only. The test helper adds a deterministic contentDigest to bundleTemplate after applying each mutation.",
+  "bundleTemplate": {
+    "contract": "RR/PROVIDER-APP/RULE-BUNDLE/v1",
+    "bundleId": "RR-SYNTHETIC-PREFLIGHT",
+    "version": 1,
+    "scope": "RR-SYNTHETIC-PROVIDER-A",
+    "provenance": {"status": "UNAPPROVED_SYNTHETIC_FIXTURE", "issuerReference": "LOCAL-SYNTHETIC-FIXTURE"},
+    "issuerReference": "LOCAL-SYNTHETIC-FIXTURE",
+    "publishedAt": "2026-01-01T00:00:00Z",
+    "effectiveFrom": "2026-01-01",
+    "effectiveUntil": "2027-01-01",
+    "expiresAt": "2027-01-01T00:00:00Z",
+    "withdrawnAt": null,
+    "rules": [
+      {"ruleId": "SYN-PRE-001", "version": 1, "semantic": "SERVICE_DATE_IN_EFFECTIVE_WINDOW", "effectiveFrom": "2026-01-01", "effectiveUntil": "2027-01-01", "expectedCategory": null, "minimumCents": null, "maximumCents": null, "maxSourceAgeDays": null},
+      {"ruleId": "SYN-PRE-002", "version": 1, "semantic": "SERVICE_CATEGORY_EQUALS", "effectiveFrom": "2026-01-01", "effectiveUntil": "2027-01-01", "expectedCategory": "SYNTH-CATEGORY-A", "minimumCents": null, "maximumCents": null, "maxSourceAgeDays": null},
+      {"ruleId": "SYN-PRE-003", "version": 1, "semantic": "SUPPORT_REFERENCE_PRESENT", "effectiveFrom": "2026-01-01", "effectiveUntil": "2027-01-01", "expectedCategory": null, "minimumCents": null, "maximumCents": null, "maxSourceAgeDays": null},
+      {"ruleId": "SYN-PRE-004", "version": 1, "semantic": "CHARGE_CENTS_BETWEEN", "effectiveFrom": "2026-01-01", "effectiveUntil": "2027-01-01", "expectedCategory": null, "minimumCents": 100, "maximumCents": 100000, "maxSourceAgeDays": null},
+      {"ruleId": "SYN-PRE-005", "version": 1, "semantic": "SOURCE_COMPLETE_AND_FRESH", "effectiveFrom": "2026-01-01", "effectiveUntil": "2027-01-01", "expectedCategory": null, "minimumCents": null, "maximumCents": null, "maxSourceAgeDays": 30}
+    ]
+  },
+  "requestTemplate": {
+    "contract": "RR/PROVIDER-APP/CHECK-REQUEST/v1",
+    "mode": "SYNTHETIC_TEST",
+    "scope": "RR-SYNTHETIC-PROVIDER-A",
+    "evaluatedAt": "2026-09-20T12:00:00Z",
+    "facts": {
+      "serviceDate": "2026-09-10",
+      "serviceCategory": "SYNTH-CATEGORY-A",
+      "supportReference": "PRESENT",
+      "chargeCents": 1000,
+      "sourceBinding": {"source": "SYNTHETIC-SOURCE-ALPHA", "version": "SYNTHETIC-SOURCE/v1", "status": "COMPLETE_FIXTURE", "effectiveAt": "2026-09-01", "receivedAt": "2026-09-10T12:00:00Z"}
+    }
+  },
+  "ruleIds": ["SYN-PRE-001", "SYN-PRE-002", "SYN-PRE-003", "SYN-PRE-004", "SYN-PRE-005"],
+  "cases": [
+    {"id": "all-pass", "requestChanges": {}, "bundleChanges": [], "outcome": "PASS", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "all-required-facts-missing", "requestChanges": {"facts": {"serviceDate": null, "serviceCategory": null, "supportReference": null, "chargeCents": null, "sourceBinding": null}}, "bundleChanges": [], "outcome": "MISSING", "issues": [], "ruleOutcomes": ["MISSING", "MISSING", "MISSING", "MISSING", "MISSING"], "missingFacts": ["service_date", "service_category", "support_reference", "charge_cents", "source_binding"]},
+    {"id": "service-date-lower-boundary-inclusive", "requestChanges": {"facts": {"serviceDate": "2026-01-01"}}, "bundleChanges": [], "outcome": "PASS", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "service-date-upper-boundary-exclusive", "requestChanges": {"facts": {"serviceDate": "2027-01-01"}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["HUMAN_CHECK", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "real-use-blocked", "requestChanges": {"mode": "REAL_USE"}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": ["REAL_USE_REQUIRES_APPROVED_ISSUER_BUNDLE"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "request-scope-mismatch", "requestChanges": {"scope": "RR-SYNTHETIC-PROVIDER-B"}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_SCOPE_MISMATCH"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "bundle-scope-mismatch", "requestChanges": {}, "bundleChanges": [{"path": ["scope"], "value": "RR-SYNTHETIC-PROVIDER-B"}], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_SCOPE_MISMATCH"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "bundle-not-yet-published", "requestChanges": {}, "bundleChanges": [{"path": ["publishedAt"], "value": "2026-09-20T12:00:01Z"}], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_NOT_YET_PUBLISHED"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "bundle-expired-at-evaluation", "requestChanges": {}, "bundleChanges": [{"path": ["expiresAt"], "value": "2026-09-20T12:00:00Z"}], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_EXPIRED"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "bundle-withdrawn-at-evaluation", "requestChanges": {}, "bundleChanges": [{"path": ["withdrawnAt"], "value": "2026-09-20T12:00:00Z"}], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_WITHDRAWN"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "future-withdrawal-still-effective", "requestChanges": {}, "bundleChanges": [{"path": ["withdrawnAt"], "value": "2026-10-01T00:00:00Z"}], "outcome": "PASS", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "partial-source", "requestChanges": {"facts": {"sourceBinding": {"status": "PARTIAL"}}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "conflicting-source", "requestChanges": {"facts": {"sourceBinding": {"status": "CONFLICT"}}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "replayed-source", "requestChanges": {"facts": {"sourceBinding": {"status": "REPLAYED"}}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "source-times-missing", "requestChanges": {"facts": {"sourceBinding": {"effectiveAt": null, "receivedAt": null}}}, "bundleChanges": [], "outcome": "MISSING", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "MISSING"], "missingFacts": ["source_effective_at", "source_received_at"]},
+    {"id": "source-age-boundary-30-days", "requestChanges": {"facts": {"sourceBinding": {"effectiveAt": "2026-08-01", "receivedAt": "2026-08-21T12:00:00Z"}}}, "bundleChanges": [], "outcome": "PASS", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "source-stale-31-days", "requestChanges": {"facts": {"sourceBinding": {"effectiveAt": "2026-08-01", "receivedAt": "2026-08-20T12:00:00Z"}}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "source-received-after-evaluation", "requestChanges": {"facts": {"sourceBinding": {"receivedAt": "2026-09-20T12:00:01Z"}}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "source-received-before-effective-date", "requestChanges": {"facts": {"sourceBinding": {"effectiveAt": "2026-09-11"}}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "charge-below-synthetic-range", "requestChanges": {"facts": {"chargeCents": 99}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "HUMAN_CHECK", "PASS"], "missingFacts": []},
+    {"id": "charge-lower-boundary-inclusive", "requestChanges": {"facts": {"chargeCents": 100}}, "bundleChanges": [], "outcome": "PASS", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "charge-upper-boundary-inclusive", "requestChanges": {"facts": {"chargeCents": 100000}}, "bundleChanges": [], "outcome": "PASS", "issues": [], "ruleOutcomes": ["PASS", "PASS", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "support-reference-absent", "requestChanges": {"facts": {"supportReference": "ABSENT"}}, "bundleChanges": [], "outcome": "MISSING", "issues": [], "ruleOutcomes": ["PASS", "PASS", "MISSING", "PASS", "PASS"], "missingFacts": ["support_reference"]},
+    {"id": "category-disagrees-with-fixture-rule", "requestChanges": {"facts": {"serviceCategory": "SYNTH-CATEGORY-B"}}, "bundleChanges": [], "outcome": "HUMAN_CHECK", "issues": [], "ruleOutcomes": ["PASS", "HUMAN_CHECK", "PASS", "PASS", "PASS"], "missingFacts": []},
+    {"id": "unsupported-rule-version", "requestChanges": {}, "bundleChanges": [{"path": ["rules", 0, "version"], "value": 2}], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_RULESET_UNSUPPORTED"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []},
+    {"id": "unsupported-bundle-version", "requestChanges": {}, "bundleChanges": [{"path": ["version"], "value": 2}], "outcome": "HUMAN_CHECK", "issues": ["BUNDLE_SEMANTIC_VERSION_UNSUPPORTED"], "ruleOutcomes": ["HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK", "HUMAN_CHECK"], "missingFacts": []}
+  ],
+  "notExercised": [
+    {"area": "package-install-update", "reason": "No installer, signature system, or persistent package store exists in this source-only child."},
+    {"area": "recovery", "reason": "The core has no durable state or provider-source connector to recover."},
+    {"area": "rollback", "reason": "Rollback depends on trusted issuer/revocation and local package state that this child does not own."}
+  ]
+}

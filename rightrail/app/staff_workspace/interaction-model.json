@@ -1,0 +1,237 @@
+{
+  "schema": "RR/MIRROR/INTERACTION-MODEL/v1",
+  "note": "CONSTITUTION Art. XIII.4: the declared interaction model. Screens name visible regions, not exclusive routes; unavailable retains stale content with commands disabled, and the page reads again on its own every 15 seconds. enabled_when is a Python boolean expression checked against the served DOM. Response rendering tests inject negative replies at the real HTTP handler boundary; only separate Owner tests establish the actual refusal cause. The two decision commands are reached through the decision form on H's record: choose, record, then confirm, and each POSTs its own route. Every money command has its own confirm step. Defensive integrity codes unreachable through the other fixed UI commands remain outside this response inventory; no exhaustive Owner failure claim follows from the browser crawl.",
+  "time": { "zone": "America/Chicago", "label": "CT", "note": "The synthetic program's zone: the screen shows an instant in it with its label, and the downloadable record keeps UTC." },
+  "state": {
+    "reviewed": "Owner available, the record shows the current package, and no command pending",
+    "owner_available": "The latest Owner read is usable",
+    "unresolved_decision_body": "The original decision body is retained for an exact retry",
+    "unresolved_cash_body": "The original cash body is retained for an exact retry",
+    "command_pending": "A command response is outstanding; every command is disabled",
+    "decision_form": "The approver is on H's record and it can still be decided, or a lost decision awaits its retry",
+    "role": "The selected synthetic role, or None at the picker"
+  },
+  "roles": {
+    "analyst": "State program analyst",
+    "approver": "Finance approver",
+    "director": "Program director",
+    "auditor": "Auditor",
+    "operator": "Replacement operator"
+  },
+  "screens": {
+    "picker": { "label": "Choose your role", "home": false, "back": null, "entry": true },
+    "overview": { "label": "Obligation queue and program summary", "home": true, "back": null },
+    "decision": { "label": "Obligation record", "home": false, "back": "overview" },
+    "unavailable": { "label": "Owner unavailable", "home": false, "back": "overview", "reload": true }
+  },
+  "role_screens": {
+    "analyst": ["overview", "decision", "unavailable"],
+    "approver": ["overview", "decision", "unavailable"],
+    "director": ["overview", "decision", "unavailable"],
+    "auditor": ["overview", "decision", "unavailable"],
+    "operator": ["overview", "decision", "unavailable"]
+  },
+  "controls": {
+    "read": {
+      "screen": "overview",
+      "roles": ["analyst", "approver", "director", "auditor", "operator"],
+      "route": "GET /api/workspace",
+      "leads_to": "overview",
+      "enabled_when": "True",
+      "responses": {
+        "success": { "screen": "overview", "message": "Read verified against the Owner." },
+        "owner_read_unavailable": { "screen": "unavailable", "message": "The Owner read failed. Reload this page to check again." },
+        "transport_failure": { "screen": "unavailable", "message": "The read did not reach the service. Reload this page to check again." },
+        "fork_detected": { "screen": "unavailable", "message": "The Owner history changed unexpectedly. Reload this page before continuing." }
+      }
+    },
+    "reject-offset": {
+      "screen": "decision",
+      "roles": ["approver"],
+      "route": "POST /api/decision/reject-offset",
+      "leads_to": "decision",
+      "enabled_when": "(unresolved_decision_body and owner_available and not command_pending) or (reviewed and not decided)",
+      "responses": {
+        "success": { "screen": "decision", "message": "You rejected the {amount} offset. The correction request is recorded." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_revision_conflict": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_already_consumed": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_evidence_coverage": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_chronology": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "determination_request_conflict": { "screen": "decision", "message": "This item was already decided. Review the new facts." },
+        "offset_claim_not_claimed": { "screen": "decision", "message": "This item was already decided. Review the new facts." },
+        "offset_claim_missing": { "screen": "decision", "message": "You can't decide this item: the offset claim is missing from the record." },
+        "authority_actor_not_authorized": { "screen": "decision", "message": "You can't decide this item: this role can't make a financial decision." },
+        "determination_authority_stale": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "shadow_owner_read_only": { "screen": "decision", "message": "You can't decide this item: this copy is read-only." },
+        "history_capacity": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
+        "history_segment_size": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
+        "control_pack_not_effective": { "screen": "decision", "message": "You can't decide this item: the control pack is not yet in effect at the decision time. Nothing was saved." },
+        "decision_time_backdated_past_due": { "screen": "decision", "message": "Nothing was saved: the due date has passed, so this decision can't be dated on or before it. Decide again; it will be recorded as late." },
+        "offset_exceeds_shortfall": { "screen": "decision", "message": "You can't accept this offset: it is more than the recipient's unpaid balance not already requested. Nothing was saved." },
+        "correction_scope_mismatch": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_request_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_input_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_read_set_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_input_snapshot_missing": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_transition_failed": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_query_cardinality": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_duplicate_without_action": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_snapshot_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "control_pack_not_approved": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_no_shortfall": { "screen": "decision", "message": "You can't reject this offset: the recipient has no unpaid balance to correct." },
+        "correction_no_requestable_balance": { "screen": "decision", "message": "You can't reject this offset: earlier requests already ask the payer for all of the recipient's unpaid balance." },
+        "invalid_request": { "screen": "decision", "message": "The decision could not be sent. Reload this page and try again." },
+        "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "We can't confirm your decision was saved. Reload this page to check again." },
+        "store_busy": { "screen": "decision", "message": "The ledger was busy and nothing was saved. Send it again." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
+        "command_response_unverified": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." }
+      }
+    },
+    "authorize-offset": {
+      "screen": "decision",
+      "roles": ["approver"],
+      "route": "POST /api/decision/authorize-offset",
+      "leads_to": "decision",
+      "enabled_when": "(unresolved_decision_body and owner_available and not command_pending) or (reviewed and not decided)",
+      "responses": {
+        "success": { "screen": "decision", "message": "You accepted the {amount} offset. It is recorded as counting toward the recipient's payment." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_revision_conflict": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_already_consumed": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_evidence_coverage": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "evaluation_chronology": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "determination_request_conflict": { "screen": "decision", "message": "This item was already decided. Review the new facts." },
+        "offset_claim_not_claimed": { "screen": "decision", "message": "This item was already decided. Review the new facts." },
+        "offset_claim_missing": { "screen": "decision", "message": "You can't decide this item: the offset claim is missing from the record." },
+        "authority_actor_not_authorized": { "screen": "decision", "message": "You can't decide this item: this role can't make a financial decision." },
+        "determination_authority_stale": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "shadow_owner_read_only": { "screen": "decision", "message": "You can't decide this item: this copy is read-only." },
+        "history_capacity": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
+        "history_segment_size": { "screen": "decision", "message": "You can't decide this item: the record is full in this demo." },
+        "control_pack_not_approved": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_input_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_input_snapshot_missing": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_no_requestable_balance": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_no_shortfall": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_query_cardinality": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_duplicate_without_action": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_read_set_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_request_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_scope_mismatch": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_snapshot_invalid": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "correction_transition_failed": { "screen": "decision", "message": "You can't decide this item: the rule check refused it. Review the new facts." },
+        "control_pack_not_effective": { "screen": "decision", "message": "You can't decide this item: the control pack is not yet in effect at the decision time. Nothing was saved." },
+        "determination_revision_binding": { "screen": "decision", "message": "This item changed while you were deciding. Review the new facts, then decide again." },
+        "decision_time_backdated_past_due": { "screen": "decision", "message": "Nothing was saved: the due date has passed, so this decision can't be dated on or before it. Decide again; it will be recorded as late." },
+        "offset_exceeds_shortfall": { "screen": "decision", "message": "You can't accept this offset: it is more than the recipient's unpaid balance not already requested. Nothing was saved." },
+        "invalid_request": { "screen": "decision", "message": "The decision could not be sent. Reload this page and try again." },
+        "transport_failure": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "We can't confirm your decision was saved. Reload this page to check again." },
+        "store_busy": { "screen": "decision", "message": "The ledger was busy and nothing was saved. Send it again." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." },
+        "command_response_unverified": { "screen": "decision", "message": "We can't confirm your decision was saved. Send it again: a repeat is never recorded twice." }
+      }
+    },
+    "acknowledge": {
+      "screen": "decision",
+      "roles": ["analyst"],
+      "route": "POST /api/action/acknowledge",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and action.status == 'READY' and action.open_cents != 0",
+      "responses": {
+        "success": { "screen": "decision", "message": "Delivery acknowledged. Zero cash effect." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Check the record before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "Command outcome is unknown and may have committed. Reload this page to check again." },
+        "store_busy": { "screen": "decision", "message": "The Owner store was busy and recorded nothing. Retry the same command in a moment." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Check the record before retrying." },
+        "command_response_unverified": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Check the record before retrying." }
+      }
+    },
+    "record-cash": {
+      "screen": "decision",
+      "roles": ["analyst"],
+      "route": "POST /api/correction/record-cash",
+      "leads_to": "decision",
+      "enabled_when": "(unresolved_cash_body and owner_available and not command_pending) or (reviewed and action.status == 'ACKNOWLEDGED' and (action.open_cents or 0) >= 300000)",
+      "responses": {
+        "success": { "screen": "decision", "message": "Synthetic cash evidence recorded. No money moved." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Send the cash evidence again." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "Command outcome is unknown and may have committed. Reload this page to check again." },
+        "store_busy": { "screen": "decision", "message": "The Owner store was busy and recorded nothing. Retry the same command in a moment." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Send the cash evidence again." },
+        "command_response_unverified": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Send the cash evidence again." }
+      }
+    },
+    "record-report": {
+      "screen": "decision",
+      "roles": ["analyst"],
+      "route": "POST /api/reporting/record",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and shortfall == 0 and not reporting_complete",
+      "responses": {
+        "success": { "screen": "decision", "message": "Synthetic reporting evidence recorded." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "This record changed while you were working. Review the new facts, then try again." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Check the record before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "Command outcome is unknown and may have committed. Reload this page to check again." },
+        "store_busy": { "screen": "decision", "message": "The Owner store was busy and recorded nothing. Retry the same command in a moment." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Check the record before retrying." },
+        "command_response_unverified": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Check the record before retrying." }
+      }
+    },
+    "restore-test": {
+      "screen": "decision",
+      "roles": ["operator"],
+      "route": "POST /api/continuity/restore-test",
+      "leads_to": "decision",
+      "enabled_when": "reviewed and not test_mode",
+      "responses": {
+        "success": { "screen": "decision", "message": "Continuity TEST restore verified; H's decision package matches exactly." },
+        "obligation_revision_conflict": { "screen": "decision", "message": "The record changed since it was opened. Review it before restoring." },
+        "continuity_package_size": { "screen": "decision", "message": "The Continuity package exceeded its size bound; restore did not run." },
+        "continuity_decision_package_mismatch": { "screen": "unavailable", "message": "The restored copy did not match. Reload this page to check again." },
+        "continuity_test_boundary": { "screen": "unavailable", "message": "The restored copy failed its TEST-only boundary check. Reload this page to check again." },
+        "continuity_destination_capacity": { "screen": "decision", "message": "No more TEST restore slots are available in this demo session." },
+        "invalid_request": { "screen": "decision", "message": "The command body was malformed and was refused before reaching the Owner." },
+        "transport_failure": { "screen": "decision", "message": "Command outcome is unknown and may have committed. Check the record before retrying." },
+        "owner_command_unavailable": { "screen": "unavailable", "message": "Command outcome is unknown and may have committed. Reload this page to check again." },
+        "store_busy": { "screen": "decision", "message": "The Owner store was busy and recorded nothing. Retry the same command in a moment." },
+        "store_busy_outcome_unknown": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Check the record before retrying." },
+        "command_response_unverified": { "screen": "decision", "message": "Command outcome is unavailable and may have committed. Check the record before retrying." }
+      }
+    }
+  },
+  "local_controls": {
+    "skip-workspace": { "selector": "a.sr-focus", "visible_when": "True", "enabled_when": "True", "kind": "focus", "target": "#record" },
+    "choose-analyst": { "selector": "#role-links a[href='/role/analyst']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/analyst" },
+    "choose-approver": { "selector": "#role-links a[href='/role/approver']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/approver" },
+    "choose-director": { "selector": "#role-links a[href='/role/director']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/director" },
+    "choose-auditor": { "selector": "#role-links a[href='/role/auditor']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/auditor" },
+    "choose-operator": { "selector": "#role-links a[href='/role/operator']", "visible_when": "role is None", "enabled_when": "True", "kind": "navigate", "target": "/role/operator" },
+    "switch-role": { "selector": "#role-status a[href='/']", "visible_when": "role is not None", "enabled_when": "not command_pending and not unresolved_decision_body and not unresolved_cash_body", "kind": "navigate", "target": "/" },
+    "open-record": { "selector": "#qlist a.row", "visible_when": "role is not None", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>" },
+    "summary-link": { "selector": "#summary-link", "visible_when": "role is not None", "enabled_when": "True", "kind": "navigate", "target": "#summary" },
+    "filter": { "selector": "#filter", "visible_when": "role is not None", "enabled_when": "True", "kind": "field", "target": "the queue" },
+    "back-to-queue": { "selector": "a.back", "visible_when": "role is not None and phone", "enabled_when": "True", "kind": "navigate", "target": "#queue" },
+    "plain-text": { "selector": "#plain-text", "visible_when": "role is not None", "enabled_when": "True", "kind": "navigate", "target": "#<obligation>.txt" },
+    "download-record": { "role": "link", "name": "Download record", "visible_when": "role is not None", "enabled_when": "True", "kind": "download", "target": "record-<obligation>.txt" },
+    "choose-accept": { "role": "radio", "name": "Accept the offset", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "authorize-offset" },
+    "choose-reject": { "role": "radio", "name": "Reject the offset", "visible_when": "decision_form", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "choose", "target": "reject-offset" },
+    "record-decision": { "role": "button", "names": { "idle": "Record decision", "confirm": "Record {verb} of the {amount} offset", "pending": "Recording…", "retry": "Send the {verb} of {amount} again", "cash_retry": "Send the cash evidence again" }, "hints": { "no_choice": "Choose accept or reject." }, "visible_when": "decision_form", "enabled_when": "picked", "kind": "confirm", "target": "the chosen outcome" },
+    "back-from-confirm": { "role": "button", "name": "Back", "visible_when": "decision_form and confirming", "enabled_when": "not command_pending and not unresolved_decision_body", "kind": "close", "target": "the decision form" }
+  },
+  "dependent_reads": {
+    "GET /api/correction-followup": { "after": ["read", "reject-offset", "authorize-offset", "acknowledge", "record-cash", "record-report", "restore-test"], "response_control": "read", "failures": ["owner_read_unavailable", "transport_failure"], "effect": "A second response: retain the confirmed command result, mark the view unavailable, disable commands, and recover through the next real read" }
+  },
+  "accessibility": {
+    "note": "Art. XIII.3 (WCAG 2.1 AA): the table tests/test_right_rail_mirror_interaction_model.py drives -- declared colour-token contrast pairs (checked in both the light and the prefers-color-scheme: dark palette), the status regions that must stay aria-live, and a name for every control the browser shows.",
+    "contrast_pairs": [["ink", "sheet", 4.5], ["ink", "ground", 4.5], ["ink-2", "sheet", 4.5], ["ink-3", "sheet", 4.5], ["blue", "sheet", 4.5], ["blue", "blue-wash", 4.5], ["amber", "sheet", 4.5], ["green", "sheet", 4.5], ["red", "sheet", 4.5]],
+    "live_regions": ["connection-status", "command-status"]
+  }
+}
