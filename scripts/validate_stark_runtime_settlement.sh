@@ -142,6 +142,7 @@ config = {
     "rpc_url": sys.argv[7],
     "transaction_value": "0.001ether",
     "enable_stark_sidecar_artifacts": False,
+    "proof_execution_enabled": True,
     "proof_backend": "stark_attested",
     "stark_engine_binary": sys.argv[2],
     "stark_claims_registry_address": sys.argv[3],
