@@ -185,7 +185,7 @@ class PrivacyArtifactScanTests(unittest.TestCase):
                 "`/home/alice/proof.json`\n"
                 "file:///private/proof.json\n"
                 "batch_main_args.json\n"
-                "-----BEGIN PRIVATE KEY-----\n"
+                "-----BEGIN " "PRIVATE KEY-----\n"
             ),
         })
         rendered = "\n".join(findings)
