@@ -1,0 +1,166 @@
+"""Gate throughput bench (test-only): N synthetic lines through the real decide path (registry reserve, Lean rules worker, seal,
+settle, ML-DSA sign, Lean publish check).  Prints lines/s and per-stage microseconds per line; asserts no speed.  It asserts the
+results are correct and that every stored output byte (headers, tokens, state digests, adds, registry chain; not the hedged
+signatures) matches the digest below, taken on the full-history replay pipeline, while every batch after the first resumes on the
+engine's held sets; flipping one byte of the anchor or of the sealed adds is refused.  RR_GATE_BENCH_N / _BATCH resize it
+(the digest is checked only for 2000 lines at batch 100 or 2000); RR_GATE_BENCH_REPLAY=1 resends the history every batch
+(the old full-replay pipeline); RR_GATE_BENCH_PROFILE=<file> writes a cProfile top 30."""
+
+import collections
+import contextlib
+import cProfile
+import hashlib
+import io
+import itertools
+import os
+import pstats
+from pathlib import Path
+import random
+import sqlite3
+import subprocess
+import time
+import types
+import unittest
+from unittest import mock
+
+from app import right_rail_gate_codec as gate
+from app import right_rail_gate_decide as decider
+from app import right_rail_gate_idreg as idreg
+from app import right_rail_gate_producer as producer
+from app import right_rail_gate_signer as signer
+from tests import _gate_shards as g
+from tests import test_gate_rules_worker as w
+from tests import test_right_rail_gate_formats as fx
+
+N, BATCH = int(os.environ.get("RR_GATE_BENCH_N", 2000)), int(os.environ.get("RR_GATE_BENCH_BATCH", 100))
+PER_PAYMENT, SEED = 4, 20261005
+# sha256 of the stored outputs of the 2,000-line corpus by batch size, taken before any speed change (suffixes gs-1, gs-3b2000)
+NONCES = itertools.count(int.from_bytes(bytes(range(32)), "big"))  # the patched os.urandom: seeded, unique per call, first bytes(range(32))
+OUTPUT_DIGEST = {100: "9e7563e9d853b49c6d640580615eddfcf3c4b72e333aaaeb96093f24ac4399d0",
+                 2000: "a5af4402a537bfd77fc66faa81ac6144ee0cd4d23b80572f32d44dc587a87b73"}
+STAGES = {"leaves": None, "decide": None, "  registry reserve": (idreg.IdRegistry, "reserve"), "  rules worker": (decider.RulesWorker, "run"), "  one-shot exe": None,
+          "  producer reads": None, "commit": None, "  build batch": (gate, "build_batch"), "  sign": (signer, "sign"),
+          "  gate_verify": (signer, "gate_verify"), "settle": (idreg.IdRegistry, "settle")}
+
+
+def corpus() -> list[tuple[dict[int, list[int]], set[int]]]:
+    """Batches of (payment number -> its line ids, the ids of deceased members), fixed by SEED."""
+    rng, ids = random.Random(SEED), iter(range(1, N + 1))
+    out = []
+    for b in range(0, N, BATCH):
+        take = [i for _, i in zip(range(min(BATCH, N - b)), ids)]
+        out.append(({1 + (b + k) // PER_PAYMENT: take[k : k + PER_PAYMENT] for k in range(0, len(take), PER_PAYMENT)},
+                    {i for i in take if rng.random() < 0.05}))
+    return out
+
+
+def stored_digest(c: g.Cluster) -> str:
+    h = hashlib.sha256()
+    for path, sql in ((c.store(0), "SELECT epoch, seq_from, seq_to, digest, header, state_digest, tokens, idreg_n, free, adds FROM batches ORDER BY id"),
+                      (c.reg, "SELECT n, kind, id, shard, head FROM log ORDER BY n")):
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            h.update(repr(db.execute(sql).fetchall()).encode())
+        finally:
+            db.close()
+    return h.hexdigest()
+
+
+@unittest.skipUnless(os.name == "nt" and os.path.isfile(g.rules.EXE) and w.WORKER.is_file(), "GATE THROUGHPUT NOT RUN: the Lean rules exes are missing")
+class GateThroughput(fx.Scratch):
+    def test_bench(self):
+        spent = {name: 0.0 for name in STAGES}
+
+        def timed(name, fn):
+            def run(*a, **kw):
+                t = time.perf_counter()
+                try:
+                    return fn(*a, **kw)
+                finally:
+                    spent[name] += time.perf_counter() - t
+            return run
+
+        # RR_GATE_BENCH_DUMP=<dir>: every gate_verify frame (mode byte then frame) is written there.
+        dump, frames, replay = os.environ.get("RR_GATE_BENCH_DUMP"), [], os.environ.get("RR_GATE_BENCH_REPLAY")
+
+        def verify(real):
+            def run(mode, frame):
+                if dump:
+                    open(os.path.join(dump, f"v{len(os.listdir(dump)):05d}.bin"), "wb").write(bytes([mode]) + frame)
+                return real(mode, frame)
+            return run
+
+        statuses, worker = {}, decider.RulesWorker(Path(os.environ.get("RR_GATE_BENCH_WORKER", w.WORKER)))
+        self.addCleanup(worker.close)
+        with self.scratch() as tmp, contextlib.ExitStack() as stack:
+            c = g.Cluster(tmp, fx.custody(tmp), shards=1)
+            with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):  # the BOOT nonce is the only random byte in the stored outputs
+                c.boot()
+            stack.enter_context(mock.patch.object(decider, "subprocess", types.SimpleNamespace(
+                run=timed("  one-shot exe", subprocess.run), TimeoutExpired=subprocess.TimeoutExpired)))
+            wrapped = {"  rules worker": lambda f: lambda self, data: frames.append(data) or f(self, data), "  gate_verify": verify}
+            if replay:
+                stack.enter_context(mock.patch.object(decider.RulesWorker, "holds", property(lambda s: {}, lambda s, v: None), create=True))
+            for name, (owner, attr) in ((n, t) for n, t in STAGES.items() if t):
+                stack.enter_context(mock.patch.object(owner, attr, timed(name, wrapped.get(name, lambda f: f)(getattr(owner, attr)))))
+            for owner, attr, name in ((decider, "decide", "decide"), (decider, "commit", "commit"), (g, "decide_batch", "leaves")):
+                stack.enter_context(mock.patch.object(owner, attr, timed(name, getattr(owner, attr))))
+            prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
+            for attr in ("anchor", "tip", "sealed_batches", "sealed_chain", "sealed_frees"):
+                stack.enter_context(mock.patch.object(producer.ShardProducer, attr, timed("  producer reads", getattr(producer.ShardProducer, attr))))
+            profile = cProfile.Profile() if os.environ.get("RR_GATE_BENCH_PROFILE") else None
+            started = time.perf_counter()
+            with contextlib.ExitStack() as run:
+                if profile:
+                    profile.enable()
+                    run.callback(profile.disable)
+                for payments, bad in corpus():
+                    ans, leaves, status = g.decide_batch(c, prod, reg, 0, payments, bad, worker)
+                    statuses.update({i: (s, i in bad) for i, s in status.items()})
+                    decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+            elapsed = time.perf_counter() - started
+            ran = dict(spent)  # the stage times of the run, before the kill check calls the worker again
+            self.assertEqual(sum(b"\nresume " in f for f in frames), 0 if replay else len(corpus()) - 1)  # genesis sets the hold: every batch after it resumes
+            if not replay:
+                self.kill_check(worker, frames[-1], prod.anchor(), b"".join(prod.sealed_batches()), prod.sealed_chain())
+            published = prod.published()
+            prod.close()
+            reg.close()
+            digest = stored_digest(c)
+        ran["leaves"] -= ran["decide"]  # decide_batch wraps decide
+        print(f"\nGATE_BENCH lines={N} batch={BATCH} seconds={elapsed:.2f} lines_per_s={N / elapsed:.0f} us_per_line={elapsed / N * 1e6:.0f} digest={digest}")
+        for name, sec in ran.items():
+            print(f"GATE_BENCH_STAGE {name:<20}{sec / N * 1e6:8.0f} us/line {sec / elapsed:6.1%}")
+        if profile:
+            out = io.StringIO()
+            pstats.Stats(profile, stream=out).sort_stats("cumulative").print_stats(30)
+            pstats.Stats(profile, stream=out).sort_stats("tottime").print_stats(30)
+            open(os.environ["RR_GATE_BENCH_PROFILE"], "w", encoding="utf-8").write(out.getvalue())
+        self.assertEqual(sorted(statuses), list(range(1, N + 1)))
+        print("GATE_BENCH_OUTCOMES", sorted(collections.Counter((s, bad) for s, bad in statuses.values()).items()))
+        self.assertTrue(all(not s.startswith("ALLOW") for s, bad in statuses.values() if bad))
+        self.assertEqual(len(published), len(corpus()))
+        self.assertTrue(all(len(p) > gate.ML_DSA_87_SIGNATURE for p in published))
+        if N == 2000 and BATCH in OUTPUT_DIGEST:
+            self.assertEqual(digest, OUTPUT_DIGEST[BATCH])
+
+    def kill_check(self, worker, last: bytes, anchor: bytes, adds: bytes, chain: bytes):
+        """The engine holds the anchor's sets, so the last frame with the new anchor would resume (as every batch did);
+        flipping one byte of that anchor is refused, a load of the sealed adds with one byte flipped is refused, the same
+        load unflipped decides, and the last frame itself, if it resumed (on the batch before's anchor), is refused as stale."""
+        self.assertEqual(worker.holds, {0: anchor})
+        head, _, rest = last.partition(b"\ncase batch\n")
+        rest = rest.split(b"\n", 1)[1] if rest.startswith((b"load ", b"loadparts ", b"resume ")) else rest
+        frame = lambda directive: head + b"\ncase batch\n" + directive.encode() + b"\n" + rest
+        flip = lambda b: b[:len(b) // 2] + bytes([b[len(b) // 2] ^ 1]) + b[len(b) // 2 + 1:]
+        tag = chain.hex()
+        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {flip(anchor).hex()} {tag}")))
+        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {anchor.hex()} {tag[:-1]}{'0' if tag[-1] != '0' else '1'}")))
+        self.assertIn("RULES_STATE_MISMATCH load", worker.run(frame(f"load {g.ASOF} {flip(adds).hex()} {anchor.hex()}")))
+        self.assertIn("RULES_VECTORS=PASS checked=0 expected=0 failed=0", worker.run(frame(f"load {g.ASOF} {adds.hex()} {anchor.hex()}")))
+        if b"\nresume " in last:
+            self.assertIn("RULES_STATE_MISMATCH resume", worker.run(last))
+
+
+if __name__ == "__main__":
+    unittest.main()

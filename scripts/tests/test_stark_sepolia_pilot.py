@@ -30,6 +30,11 @@ class StarkSepoliaPilotTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
 
+    def test_absolute_path_syntax_is_platform_independent(self) -> None:
+        self.assertTrue(pilot.is_absolute_path_text("/absolute/path/to/signer"))
+        self.assertTrue(pilot.is_absolute_path_text(r"C:\absolute\path\to\signer.exe"))
+        self.assertFalse(pilot.is_absolute_path_text("relative/path/to/signer"))
+
     def test_example_configuration_is_valid_only_as_example(self) -> None:
         config = pilot.PilotConfig.load(self.example_path, allow_example=True)
         self.assertEqual(config.value["chain_id"], pilot.SEPOLIA_CHAIN_ID)

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RR/PROVIDER-APP/RULE-BUNDLE/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "bundleId", "version", "scope", "provenance", "issuerReference", "publishedAt", "effectiveFrom", "effectiveUntil", "expiresAt", "withdrawnAt", "rules", "contentDigest"],
+  "properties": {
+    "contract": {"const": "RR/PROVIDER-APP/RULE-BUNDLE/v1"},
+    "bundleId": {"const": "RR-SYNTHETIC-PREFLIGHT"},
+    "version": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "scope": {"enum": ["RR-SYNTHETIC-PROVIDER-A", "RR-SYNTHETIC-PROVIDER-B"]},
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "issuerReference"],
+      "properties": {
+        "status": {"const": "UNAPPROVED_SYNTHETIC_FIXTURE"},
+        "issuerReference": {"const": "LOCAL-SYNTHETIC-FIXTURE"}
+      }
+    },
+    "issuerReference": {"const": "LOCAL-SYNTHETIC-FIXTURE"},
+    "publishedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "effectiveFrom": {"type": "string", "format": "date"},
+    "effectiveUntil": {"type": "string", "format": "date"},
+    "expiresAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "withdrawnAt": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "rules": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/rule"}},
+    "contentDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "rule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ruleId", "version", "semantic", "effectiveFrom", "effectiveUntil", "expectedCategory", "minimumCents", "maximumCents", "maxSourceAgeDays"],
+      "properties": {
+        "ruleId": {"enum": ["SYN-PRE-001", "SYN-PRE-002", "SYN-PRE-003", "SYN-PRE-004", "SYN-PRE-005"]},
+        "version": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "semantic": {"enum": ["SERVICE_DATE_IN_EFFECTIVE_WINDOW", "SERVICE_CATEGORY_EQUALS", "SUPPORT_REFERENCE_PRESENT", "CHARGE_CENTS_BETWEEN", "SOURCE_COMPLETE_AND_FRESH"]},
+        "effectiveFrom": {"type": "string", "format": "date"},
+        "effectiveUntil": {"type": "string", "format": "date"},
+        "expectedCategory": {"enum": ["SYNTH-CATEGORY-A", "SYNTH-CATEGORY-B", null]},
+        "minimumCents": {"type": ["integer", "null"], "minimum": 0, "maximum": 100000000},
+        "maximumCents": {"type": ["integer", "null"], "minimum": 0, "maximum": 100000000},
+        "maxSourceAgeDays": {"type": ["integer", "null"], "minimum": 0, "maximum": 365}
+      }
+    }
+  },
+  "x-contract-bounds": {"maximumJsonBytes": 16384, "maximumJsonNesting": 8},
+  "x-contract-note": "The only admitted fixture is unapproved and synthetic. A digest binds canonical local content bytes only; it does not establish issuer authority, publication rights, truth, or approval."
+}

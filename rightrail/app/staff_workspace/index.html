@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>RightRail synthetic staff workspace</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/staff.css">
+  <script src="/staff.js" defer></script>
+</head>
+<body>
+  <a class="sr-focus" href="#record">Skip to workspace</a>
+  <div class="app">
+    <header class="bar">
+      <span class="brand">RightRail</span>
+      <span class="ctx">Financial staff workspace</span>
+      <span class="who" id="role-status"></span>
+      <span class="tag" id="standing" title="Synthetic records. Nothing here moves money.">synthetic · not for payment · no PHI</span>
+    </header>
+    <div class="work" id="work">
+      <nav class="queue" id="queue" aria-label="Obligations" hidden>
+        <div class="qhead">
+          <div class="qtitle"><h1>Obligations</h1><span class="c" id="qcount"></span></div>
+          <a class="summary-link" id="summary-link" href="#summary">Program summary</a>
+          <input class="filter" id="filter" type="search" placeholder="Filter by name or status" aria-label="Filter obligations">
+        </div>
+        <div class="qscroll" id="qlist"></div>
+        <div class="keys" id="keys" aria-label="Keyboard shortcuts"></div>
+      </nav>
+      <main class="record" id="record" tabindex="-1">
+        <p id="connection-status" class="conn" role="status" aria-live="polite">Connecting to the local Owner…</p>
+        <p id="command-status" class="flash" role="status" aria-live="polite" tabindex="-1"></p>
+        <section id="role-picker" aria-labelledby="picker-title" hidden>
+          <h1 id="picker-title">Who is using this workspace?</h1>
+          <p class="hint">This only selects which synthetic controls are shown. It does not sign anyone in. Restarting the service resets this temporary demo database.</p>
+          <ul class="picker" id="role-links"></ul>
+        </section>
+        <div id="page"></div>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

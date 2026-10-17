@@ -1,0 +1,78 @@
+name = "RightRail"
+version = "0.1.0"
+defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_engine", "gate_verify"]
+
+# One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
+# correction transition, the gate and the shared `BlindLedger.Sha3`.
+# `blind_financial_axioms` is a library, not an executable, and a default target:
+# a plain `lake build` compiles every proof the semantic assurance gate checks
+# (`CorrectionTransition.Theorems`, the codec laws) and prints their axioms
+# without generating or linking any native code.  The gate refuses a pinned
+# executable whose import closure holds a Theorems, KAT, Vectors, CodecLaws or
+# *Check module, or a `#print axioms` / `#guard_msgs` command
+# (`lean/tools/semantic_assurance_gate.py`).  Theorem statements that live in
+# the closure itself, such as `CorrectionTransition.Transition`, stay.
+# Parked, not built: the State kernel (`parked/state_clearance/lean`), the retired
+# Semantic kernel (`parked/lean_retired_kernel`) and the unbuilt Kernel-series/System
+# modules (`parked/lean_unbuilt`).
+
+[[lean_lib]]
+name = "BlindLedger"
+
+[[lean_exe]]
+name = "blind_financial"
+root = "BlindLedger.Financial.Cli"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The long-lived evaluator worker (docs/CORE_REDESIGN.md, Lean-live M1): one BLFIN02 frame in, one outcome out.
+[[lean_exe]]
+name = "blind_financial_worker"
+root = "BlindLedger.Financial.WorkerCli"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+[[lean_lib]]
+name = "blind_financial_axioms"
+roots = ["BlindLedger.Financial.AxiomCheck", "BlindLedger.Financial.CoreTheoremsCheck"]
+
+# Payment gate formats (D1): `gate_vectors` checks tests/gate_vectors against
+# BlindLedger.Gate.Spec; `gate_axioms` (a library) builds the gate theorems and
+# pins their dependencies.  Both are default targets.
+[[lean_exe]]
+name = "gate_vectors"
+root = "BlindLedger.Gate.Vectors"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+[[lean_lib]]
+name = "gate_axioms"
+roots = ["BlindLedger.Gate.AxiomCheck"]
+
+# Test-only: Lean-encoded request bytes for tests/test_wire_vectors.py (the Python encoders must match); not pinned.
+[[lean_exe]]
+name = "wire_vectors"
+root = "BlindLedger.Financial.WireVectors"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only: runs tests/gate_rules/*.vectors through the gate rules; never a payment path.
+[[lean_exe]]
+name = "gate_rules"
+root = "BlindLedger.Gate.Rules.RulesMain"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The resident one-process gate (Engine.OneProc): rules frames and PUBLISH checks in one long-lived process per shard.
+[[lean_exe]]
+name = "gate_engine"
+root = "BlindLedger.Gate.Engine.OneProc"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only: panics or writes stderr on request; tests/test_lean_worker_panic.py.
+[[lean_exe]]
+name = "panic_probe"
+root = "BlindLedger.Financial.PanicProbe"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The pinned signer self-check (artifacts/gate-verify): one checkpoint against one root key, exit 0 only on ACCEPT.
+# The payer's verifier is not built; this is its Lean model run once per signature before it leaves the gate.
+[[lean_exe]]
+name = "gate_verify"
+root = "BlindLedger.Gate.VerifyCli"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]

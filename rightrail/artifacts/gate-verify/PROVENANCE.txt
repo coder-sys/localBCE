@@ -1,0 +1,80 @@
+gate_verify.exe: the gate's Lean decisions for the producer's publish check and the payer's index, fork and release checks
+
+Lean/Lake executable `gate_verify` (root BlindLedger.Gate.VerifyCli), built from the
+`lean/` sources whose manifest is recorded in tools/tcb_report.txt.
+One exe, four mode-byte frames (the stateless frame is deleted); exit 0 for ACCEPT, INDEX, STORED
+and FORK, 1 for REJECT and HOLD, 2 for a malformed frame (stderr `GATE_VERIFY=FRAME`):
+- 0x01 PUBLISH: `root_pk || u32|cert || u32|last (0 = genesis) || u32|signed new || u16 k || (u32|token)^k`.
+- 0x02 INDEX: `u32|signed checkpoint`; prints `GATE_VERIFY=INDEX <tenant hex> shard epoch from to <digest hex> <prev hex>`.
+- 0x03 STORE: `root_pk || u16 m || certs || u16 j || candidates || u16 f || fork evidence || u32|new`.
+- 0x05 RELEASE: `root_pk || u16 m || certs || u16 f || fork evidence || u32|checkpoint || u64 now || u16 g || grants ||
+  u8 released || u8 pinned [|| 32-byte key] || u32|DECIDE-REQUEST || u32|token`, a grant being `u16|tenant ident || u16|id ||
+  u16 n || (u16|rule version)^n || u16 n || (u16|engine release)^n`; answers ACCEPT or HOLD <first failure>. A 0x04 frame (the
+  grant without a tenant) is malformed.
+ML-DSA-87 (FIPS 204 algorithm) verified by Lean code written from the standard
+(Gate/MlDsa87.lean), not by AWS-LC; no validation is claimed.
+
+- Size: 4,375,040 bytes
+- SHA-256: cc83a3235f02f22857ccba961c484ea52684a50453e01514396fd968fe400dce
+  (artifacts/gate-verify/gate_verify.sha256; app/right_rail_gate_signer.py runs the exe only if it hashes to this)
+- Toolchain: leanprover/lean4 v4.33.1, `lake build gate_verify -d <lean dir>`, linked with
+  -Wl,--no-insert-timestamp (lakefile.toml).
+- Source manifest: the `manifest` line of tools/tcb_report.txt (the one copy), a SHA-256 over the sources this exe and the two
+  engine exes are built from: each exe's import closure (lean/tools/semantic_assurance_gate.py `pinned_source_manifest`) plus
+  lean/lakefile.toml, lean/lean-toolchain and lean/lake-manifest.json, each file hashed as LF bytes (= its git blob).
+  tests/test_tcb_gate.py recomputes it and fails when one of those files changes until tools/tcb_pin.ps1 is rerun; an edit to any
+  other lean/ file does not move it.
+
+Re-pin procedure: when this exe's SHA-256 moves, build it in each of two fresh `git archive <commit> lean` stages and byte-match
+both with the in-tree build (a reproduced pair). When only the manifest moves (no exe changes), rerun tools/tcb_pin.ps1 and
+commit tools/tcb_report.txt (it requires the in-tree build to equal the pins).
+
+Re-pin (2026-10-02, branch integ-20261002, merge of gate-producer and lean-public): `gate_verify` moved from 47ba66f6... to the SHA-256 above
+(four mode frames, the root-signed/usable-key split, lean-public's Sha3 lemmas). Two fresh `git archive ee97ca0 lean` stage builds
+(C:\Users\neers\rrb\le\stage-i2-c and -d; guard suffixes i2-stagec, i2-staged; `lake build` of `blind_financial_worker blind_financial_correction gate_verify
+gate_axioms blind_financial_axioms`, exit 0) and the in-tree build (i2-full2) are byte-identical; an earlier pair at 99b8b06 (i2-stagea, i2-stageb) gave the same bytes
+(the later commits changed one doc comment, tests and tools only). The pinned worker (`36D3FE0C...`) did not move.
+
+Re-pin (2026-10-02, branch gate-sha3, commit 96d744d): `gate_verify` moved from 316689f5... to the SHA-256 above (code only: the gate's
+SHA3 call sites now run the proved-equal fast sponge, Sha3Fast.lean; the three equalities were already proved; no decision changes, see the
+differential in the commit body). Two fresh `git archive 96d744d lean` stage builds (C:\Users\neers\rrb\le\stage-gs3-a and -b; guard suffixes
+gs3r-stagea2, gs3r-stageb; `lake build gate_verify gate_rules gate_axioms`, exit 0) and the in-tree build (gs3-b) are byte-identical.
+Trunk 70f9606 pins worker 58CDA012 (artifacts/engine-evaluator) with this gate_verify 724de1bd (cold build and tcb_pin on the merged tree).
+
+Re-pin (2026-10-03, branch multi-shard-runtime, lean tree fa60cf7e from commit 2828a24): `gate_verify` moved from 724de1bd... to the SHA-256 above
+(CHECKPOINT/v2: decodeCheckpoint2/decodeAnyCheckpoint, storeCheckpointAny, publishOkAny/acceptsAny; v1 meanings unchanged and still pinned).
+Two fresh `git archive 2828a24 lean` stage builds (C:\Users\neers\rrb\le\stage-ms1c-a and -b; guard suffixes ms1c-71a, ms1c-71b; `lake build gate_verify
+blind_financial_worker gate_rules`, 78 jobs, exit 0) and the in-tree build (ms1c-70, full `lake build`, 108 jobs, exit 0) are byte-identical for gate_verify.
+The pinned worker (`8BB1C646...`) is byte-identical in all three: it imports no BlindLedger.Gate module.
+
+Re-pin (2026-10-03, branch multi-shard-runtime, WIP 3449090): `gate_verify` moved from e3fc5fee... to the SHA-256 above (review fixes: storedOf keeps its v1 meaning, new storedOfAny, publishOkAny refuses a v1 after a v2, RULES_FREE lists each id once; statements are additions only). Byte-identity confirmed on branch decide-layer at 4f4b39b (decide layer S1-S3 moved neither this exe nor the worker): two fresh `git archive 4f4b39b lean` stage builds (C:\Users\neers\rrb\le\stage-dp-a and -b; guard suffixes dp-3a, dp-3b; `lake build gate_verify blind_financial_worker gate_rules`, 78 jobs, exit 0) and the in-tree build (dp-2) are byte-identical for gate_verify (a9f47312...), the worker (7C1EAB94...) and gate_rules.exe (737f8a9e..., not a pinned artifact). The pinned worker (`8BB1C646...`) is byte-identical to the previous pin.
+
+Re-pin (2026-10-07, branch grant-tenant, commit 206d08a1): `gate_verify` moved from a9f47312... to the SHA-256 above (a grant is its
+tenant's alone: Grant.tenantId and the check-9 tenant match; RELEASE moves from 0x04 to 0x05; statements are additions only). Two fresh
+`git archive 206d08a1 lean` stage builds (C:\Users\neers\rrb\le\stage-gt-a and -b; guard suffixes gt9a-a5-L2, gt9b-a16-L1; `lake build
+gate_verify gate_axioms`, 38 jobs, exit 0) and the in-tree build (gt5-a1-L2) are byte-identical.
+
+Re-pin (2026-10-13, branch b4-s1, commit 1349913a): `gate_verify` moved from c66117f3... to the SHA-256 above (PUBLISH now runs `publishOkTree`, the one-tree check of Gate/Batch.lean, proved equal to `publishOkAny` by `publishOkTree_eq`, with `_sound`, `_complete`, `_no_downgrade`; VerifyCli imports Batch). Two fresh `git archive 1349913a lean` stage builds (C:\Users\neers\rrb\le\stage-b4-a and -b; guard suffixes b4s5e, b4s5f; `lake build gate_verify gate_axioms`, exit 0) and the in-tree build (b4s5c) are byte-identical. The pinned worker (`7C1EAB94...`) did not move.
+
+Retired pins, not deleted (each replaced by the pin file named):
+- gate_verify SHA-256 c66117f3a5c61ad420cd4d11b01a3f0b154844744222645b67ef3805459c8b76 (4,366,848 bytes; before PUBLISH ran the one-tree `publishOkTree`; replaced by the SHA-256 above).
+- gate_verify SHA-256 a9f4731240bfad9c2ef1171be8d17c853b5d5c4d3ce73615983ba568c502cccd (4,366,336 bytes; before the grant tenant (RELEASE 0x04);
+  recoverable at 96620d8a; replaced by the SHA-256 above).
+- gate_verify SHA-256 e3fc5fee34fb6356a1cddd1e3aed27b59b90f1b9bc8b2c9ab3c78a3fca6295c6 (4,365,824 bytes; before the multi-shard review fixes (storedOf restored, storedOfAny, publishOkAny no-downgrade, RULES_FREE once per id); replaced by the SHA-256 above; recoverable at 62e6859).
+- gate_verify SHA-256 724de1bd9a1c24b8f0c34ba2ce0cfa000df7910410d49c1f003b91d02b90e66c (4,359,680 bytes; before CHECKPOINT/v2, a 64-byte registry head after createdAt (multi-shard-runtime-v1 section A): the exe now
+  decodes, stores, forks, publishes and releases both versions; recoverable at trunk 70f9606; replaced by the SHA-256 above).
+- gate_verify SHA-256 316689f5e1b05146491c8f12ecf598972007015be327fa7e84250f3ec11ba2ea (4,311,552 bytes; before the gate's SHA3 call sites moved to the proved-equal fast sponge; replaced by the SHA-256 above; recoverable at 1e061a5).
+- gate_verify SHA-256 47ba66f6b6fc30f7769d5c48a2e42a83dd9d9e91cf07532a77e7e18a1a63fc8c (4,311,040 bytes; before the root-key/usable-key split of the
+  M4 review fix and the merge with lean-public's Sha3 lemmas; recoverable at 97d8e7b; replaced by the SHA-256 above).
+- gate_verify SHA-256 9bd2602b40dccb7dd3082308fa492835d23861daddaa5717dab49c9b8cbc9916 (4,205,568 bytes; before the four mode frames and the
+  stateless frame's removal; replaced by the SHA-256 above).
+- gate_verify SHA-256 b9696f2ea715a775d93947025a0510cdec1432b5a4ab05bf3d8a75eafa4d171c (4,205,056 bytes; before the one-Keccak dedupe; replaced by the SHA-256 above).
+- gate_verify SHA-256 fc45ce6d568f90cbe1b2accd72fd360fdf3a1c8db109ed1e48d8a207d5adcb06 (4,207,616 bytes; before the bounded
+  samplers and range loops of lean-partials-v1 commit B; replaced by the SHA-256 above).
+- gate_verify SHA-256 559188c3cb024f35dd6af320eff7c799668c36337b59964e7fc13f9495933fe6
+  (before the equivocation fix: a re-signature of the same certificate body is no longer
+  equivocation; Spec.lean, Theorems.lean, Vectors.lean, Keccak.lean and lakefile.toml changed).
+- The signer worker rust/gate_mldsa87 (pin in rust/gate_mldsa87/rr_gate_mldsa87.sha256):
+  34047d3391ba6f6e898b2e5e59010db4c7715a435886a9b9e71d12b8ef15d887 (before `sign` verified its own
+  signature and `keygen` synced the key file), and the earlier seed-file worker with a `verify` mode,
+  af8743c70690f85a983762f93ad9ded731e514e106bfdb8c9d1c1cd49fed116b.

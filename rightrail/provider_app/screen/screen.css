@@ -1,0 +1,42 @@
+/* One calm sheet: the answer first, then the fixes. Same palette, type and focus idiom as the staff workspace; no external font. */
+:root {
+  --ground: #f4f5f8; --sheet: #ffffff;
+  --ink: #0f1426; --ink-2: #40495c; --ink-3: #5a6277;
+  --rule: #e2e5ee; --rule-2: #868da0;
+  --blue: #2f3a8b; --amber: #975a00; --green: #146c43; --red: #b3261e;
+  --sans: ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #101322; --sheet: #14192b;
+    --ink: #e9ecf5; --ink-2: #b6bdce; --ink-3: #98a0b5;
+    --rule: #23293d; --rule-2: #7a8299;
+    --blue: #c3d0fb; --amber: #f9b53f; --green: #5ccf95; --red: #ff9e95;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.5 var(--sans); }
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 20px; background: #161d3d; color: #f3f5fa; }
+.brand { font-weight: 600; letter-spacing: -.01em; }
+.ctx { color: #bfc6d8; }
+.tag { margin-left: auto; font-size: 12px; color: #a6afc5; border: 1px solid #697699; border-radius: 3px; padding: 1px 6px; }
+main { max-width: 44rem; margin: 0 auto; padding: 24px 20px; }
+.pick { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.pick label { font-weight: 600; }
+.pick select { flex: 1 1 16rem; min-height: 36px; padding: 0 8px; border: 1px solid var(--rule-2); border-radius: 4px; background: var(--sheet); }
+.btn { min-height: 36px; padding: 0 20px; border-radius: 4px; border: 1px solid var(--blue); background: var(--blue); color: var(--sheet); font-weight: 600; cursor: pointer; }
+.btn[aria-disabled="true"], .btn:disabled { background: var(--rule); border-color: var(--rule); color: var(--ink-3); cursor: not-allowed; }
+#answer { margin-top: 20px; padding: 24px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; }
+.hint, .cite { margin: 0; color: var(--ink-3); font-size: 13px; }
+.verdict { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
+.verdict[data-outcome="PASS"] { color: var(--green); }
+.verdict[data-outcome="MISSING"] { color: var(--amber); }
+.verdict[data-outcome="HUMAN_CHECK"], .verdict[data-outcome="REFUSED"] { color: var(--red); }
+.says { margin: 4px 0 0; color: var(--ink-2); }
+h2 { margin: 24px 0 8px; font-size: 15px; font-weight: 600; }
+.fixes { margin: 0; padding-left: 22px; }
+.fixes li { padding: 6px 0; }
+.fixes .cite { display: block; margin-top: 2px; }
+@media (prefers-reduced-motion: no-preference) { .btn { transition: background-color .12s; } }

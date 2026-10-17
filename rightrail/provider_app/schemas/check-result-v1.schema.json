@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RR/PROVIDER-APP/CHECK-RESULT/v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["contract", "outcome", "runMode", "scope", "evaluatedAt", "bundle", "sourceBinding", "bundleIssues", "rules", "missingFacts", "limitation"],
+  "properties": {
+    "contract": {"const": "RR/PROVIDER-APP/CHECK-RESULT/v1"},
+    "outcome": {"enum": ["PASS", "MISSING", "HUMAN_CHECK"]},
+    "runMode": {"enum": ["SYNTHETIC_TEST", "REAL_USE"]},
+    "scope": {"enum": ["RR-SYNTHETIC-PROVIDER-A", "RR-SYNTHETIC-PROVIDER-B"]},
+    "evaluatedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "bundle": {"$ref": "#/$defs/binding"},
+    "sourceBinding": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/source"}]},
+    "bundleIssues": {"type": "array", "items": {"enum": ["REAL_USE_REQUIRES_APPROVED_ISSUER_BUNDLE", "BUNDLE_ID_UNSUPPORTED", "BUNDLE_SEMANTIC_VERSION_UNSUPPORTED", "BUNDLE_PROVENANCE_UNSUPPORTED", "BUNDLE_ISSUER_UNSUPPORTED", "BUNDLE_SCOPE_MISMATCH", "BUNDLE_EFFECTIVE_INTERVAL_INVALID", "BUNDLE_LIFETIME_INVALID", "BUNDLE_WITHDRAWAL_INVALID", "BUNDLE_NOT_YET_PUBLISHED", "BUNDLE_EXPIRED", "BUNDLE_WITHDRAWN", "BUNDLE_CONTENT_DIGEST_MISMATCH", "BUNDLE_RULESET_UNSUPPORTED"]}},
+    "rules": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {"$ref": "#/$defs/ruleResult", "properties": {"ruleId": {"const": "SYN-PRE-001"}}},
+        {"$ref": "#/$defs/ruleResult", "properties": {"ruleId": {"const": "SYN-PRE-002"}}},
+        {"$ref": "#/$defs/ruleResult", "properties": {"ruleId": {"const": "SYN-PRE-003"}}},
+        {"$ref": "#/$defs/ruleResult", "properties": {"ruleId": {"const": "SYN-PRE-004"}}},
+        {"$ref": "#/$defs/ruleResult", "properties": {"ruleId": {"const": "SYN-PRE-005"}}}
+      ],
+      "items": false,
+      "description": "Always ordered SYN-PRE-001 through SYN-PRE-005."
+    },
+    "missingFacts": {"type": "array", "uniqueItems": true, "items": {"enum": ["service_date", "service_category", "support_reference", "charge_cents", "source_binding", "source_effective_at", "source_received_at"]}},
+    "limitation": {"const": "Synthetic pre-submission result only; it is not claim acceptance, coverage, authorization, clinical judgment, or payment."}
+  },
+  "$defs": {
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bundleId", "version", "scope", "provenance", "issuerReference", "contentDigest", "effectiveFrom", "effectiveUntil", "expiresAt", "withdrawnAt"],
+      "properties": {
+        "bundleId": {"const": "RR-SYNTHETIC-PREFLIGHT"},
+        "version": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "scope": {"enum": ["RR-SYNTHETIC-PROVIDER-A", "RR-SYNTHETIC-PROVIDER-B"]},
+        "provenance": {"const": "UNAPPROVED_SYNTHETIC_FIXTURE"},
+        "issuerReference": {"const": "LOCAL-SYNTHETIC-FIXTURE"},
+        "contentDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "effectiveFrom": {"type": "string", "format": "date"},
+        "effectiveUntil": {"type": "string", "format": "date"},
+        "expiresAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "withdrawnAt": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "version", "status", "effectiveAt", "receivedAt"],
+      "properties": {
+        "source": {"enum": ["SYNTHETIC-SOURCE-ALPHA", "SYNTHETIC-SOURCE-BETA"]},
+        "version": {"const": "SYNTHETIC-SOURCE/v1"},
+        "status": {"enum": ["COMPLETE_FIXTURE", "PARTIAL", "STALE", "CONFLICT", "REPLAYED", "UNKNOWN"]},
+        "effectiveAt": {"type": ["string", "null"], "format": "date"},
+        "receivedAt": {"type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+      }
+    },
+    "ruleResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ruleId", "citation", "outcome", "missingFacts", "reasonCodes", "factsUsed"],
+      "properties": {
+        "ruleId": {"enum": ["SYN-PRE-001", "SYN-PRE-002", "SYN-PRE-003", "SYN-PRE-004", "SYN-PRE-005"]},
+        "citation": {"type": "string", "pattern": "^RR-SYNTHETIC-PREFLIGHT/v[1-9][0-9]*#SYN-PRE-00[1-5]/v[1-9][0-9]*$"},
+        "outcome": {"enum": ["PASS", "MISSING", "HUMAN_CHECK"]},
+        "missingFacts": {"type": "array", "uniqueItems": true, "items": {"enum": ["service_date", "service_category", "support_reference", "charge_cents", "source_binding", "source_effective_at", "source_received_at"]}},
+        "reasonCodes": {"type": "array", "items": {"enum": ["BUNDLE_BLOCKED", "REQUIRED_FACT_MISSING", "SERVICE_DATE_OUTSIDE_RULE_INTERVAL", "SERVICE_CATEGORY_REQUIRES_REVIEW", "SUPPORT_REFERENCE_MISSING", "CHARGE_OUTSIDE_SYNTHETIC_RANGE", "SOURCE_EFFECTIVE_TIME_MISSING", "SOURCE_RECEIVED_TIME_MISSING", "SOURCE_STATUS_REQUIRES_REVIEW", "SOURCE_RECEIVED_BEFORE_EFFECTIVE_DATE", "SOURCE_RECEIVED_AFTER_EVALUATION_TIME", "SOURCE_STALE_FOR_SYNTHETIC_WINDOW", "RULE_SEMANTIC_UNSUPPORTED"]}},
+        "factsUsed": {"type": "array", "uniqueItems": true, "items": {"enum": ["service_date", "service_category", "support_reference", "charge_cents", "source_binding", "source_effective_at", "source_received_at"]}}
+      }
+    }
+  },
+  "x-contract-bounds": {"maximumResultBytes": 16384, "maximumJsonNesting": 8},
+  "x-contract-note": "The result is local pre-submission information only. It is not payer acceptance, coverage, authorization, clinical judgment, or payment."
+}

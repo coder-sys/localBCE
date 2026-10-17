@@ -77,3 +77,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: foundry-rs/foundry-toolchain@v1
       - run: bash scripts/validate_stark_v2_anvil.sh
+
+  windows-smoke:
+    # Phase 0 partial: Windows coverage of the gate unit test and the self-check only.
+    # Full Windows coverage of existing suites is an OPEN_QUESTIONS item.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest tests.test_stark_validation_config_gate
+      # One step per file so each failure is visible in the step result (job logs are not
+      # readable from outside GitHub). Discover-based run is replaced by these.
+      - name: diag eol of vendored OpenZeppelin on Windows checkout (pass = no CRLF)
+        run: "! git ls-files --eol blind-ledger/lib/openzeppelin-contracts | grep -q w/crlf"
+        shell: bash
+      - name: diag openzeppelin pin validator script (exit code)
+        run: python scripts/validate_openzeppelin_pin.py
+        shell: bash
+      - name: scripts/tests test_openzeppelin_pin
+        run: python -m unittest test_openzeppelin_pin
+        working-directory: scripts/tests
+        shell: bash
+      - name: scripts/tests test_stark_sepolia_pilot
+        run: python -m unittest test_stark_sepolia_pilot
+        working-directory: scripts/tests
+        shell: bash

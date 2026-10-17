@@ -1,0 +1,37 @@
+Toolchain pin for the TCB gate (tools/tcb_gate.lean). The live run (tools/tcb_pin.ps1, RR_TCB_LIVE=1) recomputes every hash
+below from the installed toolchain and fails on any difference; the default test only checks that the `toolchain oleans` line matches the report.
+
+lean-toolchain: leanprover/lean4:v4.33.1
+Lean (version 4.33.1, x86_64-w64-windows-gnu, commit 819816b2e0a3bf405af45ae5c7af2491d8f5bee6, Release)
+
+SHA-256 of every file in the toolchain's bin\ (lean.exe and lake.exe are launchers; the compiler and runtime are the DLLs,
+clang.exe, and ld.lld.exe); the same lean, lake and leanchecker hashes sit in lean/tools/semantic_assurance_manifest.json:
+b9021f861eec018c1789e08e915eff78dcbbf1b88c54805b9bff8b152a662dce  bin/cadical.exe
+1aea18dca98f91a6a7c65532adc2567efc775904d2a4bd28bf06731bc2c3778c  bin/clang.exe
+565c3976275d79e104421014b6229f4fcf4a8c8edfe164a43b344c91af6f496c  bin/lake.exe
+675e59f33f11cb90500577f116082ed4a6214fcac3a1bad88d6323aa0373179f  bin/ld.lld.exe
+af49bacfabaa1fea71332ca0feae0fa1a60912219d5902291adc79f905bffb8d  bin/lean.exe
+f8278dcae9251347a8cfe877d9ffde1694b47662b867d7880d4a6e143e7f3139  bin/leanc.exe
+31b506f83737b7d629fd11699df5aaf88c3b50be23c28219e6b283f0de98f85c  bin/leanchecker.exe
+14253c761730e6d126f3bde55e9b444b34ba305c832d2699c22577e1f438faea  bin/leanir.exe
+9f0b70acbde379a835c4fe80606501eb2586d6525ae874e802f7ef5ad50c18bb  bin/leanmake
+c7dbe74520f4c7fb132593f9f2bcd894618bf381b793961a4ab1bb37e13ba587  bin/leantar.exe
+8a9deaac6d2f4d2de468a544d1f35cd0dd4bcde03cda3cfb76fb9674749828d4  bin/libc++.dll
+1b32dd58335db4a984237e1fd1993cfd0f0fa413b5d10957290703eb03377ca4  bin/libclang-cpp.dll
+78a70f06876c01c67d44e7ae5595f1447a0df5acaeca642db115d4089cc7002c  bin/libInit_shared.dll
+6bbd4415f804254f1577c2227a46b2d23069ce6539c324c824df17b861d67e0a  bin/libLake_shared.dll
+9a3fdb05f1383ff50780d864d33d05e7385f74dec73209cdefd752ce3c8650cd  bin/libleanshared.dll
+f66e47f5c96556b6592e81ca82ea22a73f835f4f0a3b9863111b459f20048114  bin/libleanshared_1.dll
+b300c2b440f7ed036f56dca5e2de92bedabddfd33fa5f7921866c72127b68b28  bin/libleanshared_2.dll
+beaba61b3176e06fc0c4bf87e8bfae094a2405d01fa8e03d78029471555445d2  bin/libLLVM-22.dll
+675e59f33f11cb90500577f116082ed4a6214fcac3a1bad88d6323aa0373179f  bin/lld.exe
+ff7fcf456130e4fb58bc24f7cf0f2e7113ce96af534fc61f861c54a43e674a9d  bin/llvm-ar.exe
+94dd0a72d4da79e25294a91d1edf902d76eade7512d9218609a5fe43e3a7397a  bin/zlib1.dll
+
+The pinned exes link lib\*, lib\lean\*.a statically (Init, Std, the C runtime, gmp, libuv, mingw). One SHA-256 over their
+sorted `sha256  path` lines (paths relative to the toolchain):
+link inputs  588922711d8ba64df98d59de78d10aa45d8aa4d42d0aa2bdb8e7bd0ca9661fb0  48 files
+
+Every Init, Std and Lean module file the gate and its allowlist trust (`.olean`, `.olean.private`, `.olean.server`, `.ir`; not the
+`.ilean` editor data), one tree hash of the same shape (recomputed by the live gate, RR_TCB_LIVE=1):
+toolchain oleans  7884bb9b5f584355ffc6e01eb9ed31118e62001f95cf9d64cda719356add5cf0  11610 files

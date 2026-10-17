@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Provider Trust Graph local view</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="page-header">
+    <p class="eyebrow">Mirror · Provider Trust Graph</p>
+    <h1>Local observation view</h1>
+    <p class="lead">A transient, read-only projection of caller-supplied synthetic evidence.</p>
+  </header>
+
+  <main>
+    <aside class="boundary-note" aria-label="Product boundary">
+      <strong>Local and unauthenticated.</strong>
+      Synthetic only. No actions, cases, clearance, payment authority, source truth, or source-completeness claim.
+      Missing evidence is <code>UNKNOWN_NOT_ABSENT</code>.
+    </aside>
+
+    <p id="load-error" class="error" role="alert" hidden></p>
+    <noscript><p class="error">This view needs JavaScript enabled locally to render the verified projection.</p></noscript>
+
+    <section aria-labelledby="status-heading" class="panel">
+      <h2 id="status-heading">Authority and evidence status</h2>
+      <dl id="status-grid" class="status-grid"></dl>
+    </section>
+
+    <nav class="view-tabs" aria-label="View selection">
+      <button id="observation-tab" type="button" aria-pressed="true">Observation</button>
+      <button id="comparison-tab" type="button" aria-pressed="false" hidden>Comparison</button>
+    </nav>
+
+    <section id="observation-panel" class="panel" aria-labelledby="observation-heading">
+      <h2 id="observation-heading">Verified projection</h2>
+      <div class="controls">
+        <label id="selection-label" for="selection-side">Selection</label>
+        <select id="selection-side" aria-label="Selection" hidden>
+          <option value="left">Left selection</option>
+          <option value="right">Right selection</option>
+        </select>
+        <label for="collection">Collection</label>
+        <select id="collection">
+          <option value="sources">Sources</option>
+          <option value="findings">Findings</option>
+          <option value="discrepancies">Discrepancies</option>
+        </select>
+      </div>
+      <p id="collection-summary" class="muted" aria-live="polite"></p>
+      <ol id="item-list" class="item-list"></ol>
+      <div class="detail-navigation">
+        <button id="previous-item" type="button">Previous</button>
+        <span id="detail-position" aria-live="polite"></span>
+        <button id="next-item" type="button">Next</button>
+      </div>
+      <section class="detail-card" aria-labelledby="detail-heading">
+        <h3 id="detail-heading">Ephemeral detail</h3>
+        <p class="muted">Details are selected by their current projection position; no stable item identity is exposed.</p>
+        <dl id="detail-fields" class="field-list"></dl>
+      </section>
+    </section>
+
+    <section id="comparison-panel" class="panel" aria-labelledby="comparison-heading" hidden>
+      <h2 id="comparison-heading">Two-selection projection comparison</h2>
+      <p id="comparison-semantics" class="boundary-note"></p>
+      <div class="compare-grid">
+        <article class="detail-card">
+          <h3>Source projection changes</h3>
+          <div id="source-changes"></div>
+        </article>
+        <article class="detail-card">
+          <h3>Finding projection differences</h3>
+          <div id="finding-deltas"></div>
+        </article>
+        <article class="detail-card">
+          <h3>Discrepancy projection differences</h3>
+          <div id="discrepancy-deltas"></div>
+        </article>
+      </div>
+      <div class="compare-grid compare-contexts">
+        <article class="detail-card">
+          <h3>Left selection context</h3>
+          <dl id="left-context" class="field-list"></dl>
+        </article>
+        <article class="detail-card">
+          <h3>Right selection context</h3>
+          <dl id="right-context" class="field-list"></dl>
+        </article>
+      </div>
+      <p class="muted">Differences describe these verified projections only. They do not establish source absence, completeness, freshness, or truth.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>Transient local display. No data is written by this view.</p>
+  </footer>
+</body>
+</html>
