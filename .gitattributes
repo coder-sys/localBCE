@@ -1,1 +1,5 @@
 gov-rules-kg-prototype/data/source_manifests/official_source_pack.json whitespace=cr-at-eol
+
+# Vendored OpenZeppelin sources are hashed byte-for-byte (blind-ledger/openzeppelin_contracts_pin.json).
+# Keep LF on every checkout, including Windows runners with core.autocrlf=true.
+blind-ledger/lib/openzeppelin-contracts/** text eol=lf
