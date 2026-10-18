@@ -39,3 +39,26 @@
   `python -m unittest test_stark_sepolia_pilot` passes all 20 tests.
 - Defect status: see STATUS.md.
 - Scenarios: none executed yet (Phase 1+).
+- 2026-10-18: Phase 1 starting-state verification for D-01/N-08:
+
+  ```text
+  3d91138cd15ebf67958d297e0726096f2f0edf72  refs/heads/codex-dev
+  831234bc0f85d72664167f0256e724cbcf6cbcbb  refs/heads/integration/rightrail
+  cd7da9b74220d789d06b9b25834287e46abaeb4a  refs/heads/main
+  ```
+
+  These values matched the approved Phase 1 prompt. Work began on
+  `codex/phase1-d01-n08` from `origin/integration/rightrail`.
+- 2026-10-18: D-01/N-08 red evidence, commit `4ad2ba64`:
+  `d_01_n_08_config_rejects_groth16_proof_backend` failed because
+  `proof_backend()` returned `Ok("groth16")`. Both
+  `scripts.tests.test_d01_groth16_retirement` cases failed because the runtime
+  route and active Groth16 source paths still existed.
+- 2026-10-18: D-01/N-08 fix, commit `f4a18236`: `groth16` is rejected with
+  named error `proof_backend 'groth16' is retired`; Rust no longer contains the
+  Groth16 prover or `ClaimsRegistry.submitVerifiedClaim` route; reviewed
+  circuit, Solidity, deploy, and test sources moved under
+  `deprecated/groth16/`. Passing evidence: 2 Python retirement tests; 67 Rust
+  unit tests; 3 Rust activation tests; `cargo check`; `forge build`; and 59
+  Foundry tests. The `.zkey`, `.ptau`, `.wtns`, and committed executable files
+  remain untouched pending cleanup approval in `CLEANUP_PROPOSAL.md`.
