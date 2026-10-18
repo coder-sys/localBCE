@@ -2001,6 +2001,16 @@ mod tests {
     }
 
     #[test]
+    fn d_01_n_08_config_rejects_groth16_proof_backend() {
+        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        value["proof_backend"] = json!("groth16");
+        let config: AppConfig = serde_json::from_value(value).unwrap();
+
+        let error = config.proof_backend().unwrap_err();
+        assert_eq!(error, "proof_backend 'groth16' is retired");
+    }
+
+    #[test]
     fn config_missing_rules_backend_preserves_hardcoded_default() {
         let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
 
