@@ -235,9 +235,10 @@ impl AppConfig {
     fn proof_backend(&self) -> Result<&str, String> {
         let value = self.proof_backend.as_deref().unwrap_or("none");
         match value {
-            "none" | "groth16" | "stark_attested" => Ok(value),
+            "none" | "stark_attested" => Ok(value),
+            "groth16" => Err("proof_backend 'groth16' is retired".to_string()),
             _ => Err(format!(
-                "unsupported proof_backend '{value}'; expected none, groth16, or stark_attested"
+                "unsupported proof_backend '{value}'; expected none or stark_attested"
             )),
         }
     }
@@ -249,49 +250,6 @@ impl AppConfig {
             _ => Err(format!(
                 "unsupported rules_backend '{value}'; expected hardcoded_g1_g10 or versioned_g1_g10"
             )),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct ZkCircuitInput {
-    eligibility_active: u8,
-    aid_code: u64,
-    benefit_level_exists: u8,
-    date_of_service_from: u64,
-    eligibility_period_from: u64,
-    eligibility_period_thru: u64,
-    soc_amount: u64,
-    soc_met: u8,
-    provider_enrolled: u8,
-    provider_type_valid: u8,
-    billing_code_valid: u8,
-    units_valid: u8,
-    is_duplicate: u8,
-    disability_determination_valid: u8,
-    recipient_not_deceased: u8,
-    physician_certification_valid: u8,
-}
-
-impl From<&ClaimInput> for ZkCircuitInput {
-    fn from(claim: &ClaimInput) -> Self {
-        Self {
-            eligibility_active: claim.eligibility_active,
-            aid_code: claim.aid_code,
-            benefit_level_exists: claim.benefit_level_exists,
-            date_of_service_from: claim.date_of_service_from,
-            eligibility_period_from: claim.eligibility_period_from,
-            eligibility_period_thru: claim.eligibility_period_thru,
-            soc_amount: claim.soc_amount,
-            soc_met: claim.soc_met,
-            provider_enrolled: claim.provider_enrolled,
-            provider_type_valid: claim.provider_type_valid,
-            billing_code_valid: claim.billing_code_valid,
-            units_valid: claim.units_valid,
-            is_duplicate: claim.is_duplicate,
-            disability_determination_valid: claim.disability_determination_valid,
-            recipient_not_deceased: claim.recipient_not_deceased,
-            physician_certification_valid: claim.physician_certification_valid,
         }
     }
 }
@@ -607,15 +565,6 @@ fn stark_failure_code(reason: &str) -> u32 {
     }
 }
 
-fn command_output_excerpt(output: &str) -> String {
-    const MAX_LEN: usize = 500;
-
-    match output.char_indices().nth(MAX_LEN) {
-        Some((idx, _)) => format!("{}...", &output[..idx]),
-        None => output.to_string(),
-    }
-}
-
 fn command_failure_message(cmd: &str, status: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
     format!(
         "command failed: {}\nexit status: {:?}\nSTDOUT:\n{}\nSTDERR:\n{}",
@@ -626,100 +575,11 @@ fn command_failure_message(cmd: &str, status: Option<i32>, stdout: &[u8], stderr
     )
 }
 
-fn run(cmd: &str) -> Result<(), String> {
-    let output = Command::new("bash")
-        .arg("-lc")
-        .arg(cmd)
-        .output()
-        .map_err(|err| format!("failed to run command '{}': {}", cmd, err))?;
-
-    if !output.stdout.is_empty() {
-        print!("{}", String::from_utf8_lossy(&output.stdout));
-    }
-
-    if !output.stderr.is_empty() {
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    if !output.status.success() {
-        return Err(command_failure_message(
-            cmd,
-            output.status.code(),
-            &output.stdout,
-            &output.stderr,
-        ));
-    }
-
-    Ok(())
-}
-
-fn run_output(cmd: &str) -> Result<String, String> {
-    let output = Command::new("bash")
-        .arg("-lc")
-        .arg(cmd)
-        .output()
-        .map_err(|err| format!("failed to run command '{}': {}", cmd, err))?;
-
-    if !output.status.success() {
-        return Err(command_failure_message(
-            cmd,
-            output.status.code(),
-            &output.stdout,
-            &output.stderr,
-        ));
-    }
-
-    String::from_utf8(output.stdout)
-        .map(|stdout| stdout.trim().to_string())
-        .map_err(|err| format!("command output was not valid UTF-8 for '{}': {}", cmd, err))
-}
-
 fn claim_hash_32(claim_id: &str, claim_amount: u64) -> String {
     let mut hasher = Sha256::new();
     hasher.update(claim_id.as_bytes());
     hasher.update(claim_amount.to_be_bytes());
     format!("0x{}", hex::encode(hasher.finalize()))
-}
-
-fn split_calldata(calldata: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut depth = 0;
-    let mut start = 0;
-
-    for (i, ch) in calldata.char_indices() {
-        match ch {
-            '[' => depth += 1,
-            ']' => depth -= 1,
-            ',' if depth == 0 => {
-                parts.push(calldata[start..i].trim().to_string());
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-
-    parts.push(calldata[start..].trim().to_string());
-    parts
-}
-
-fn extract_transaction_hash(cast_output: &str) -> Option<String> {
-    if let Ok(value) = serde_json::from_str::<Value>(cast_output) {
-        if let Some(tx_hash) = value.get("transactionHash").and_then(Value::as_str) {
-            return Some(tx_hash.to_string());
-        }
-    }
-
-    cast_output.lines().find_map(|line| {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("transactionHash") {
-            return None;
-        }
-
-        trimmed
-            .split_whitespace()
-            .find(|part| part.starts_with("0x"))
-            .map(|part| part.trim_matches('"').to_string())
-    })
 }
 
 fn denial_reason(claim: &ClaimInput) -> Option<&'static str> {
@@ -1113,11 +973,6 @@ fn run_app() -> Result<(), String> {
         );
     }
 
-    let contract = config.claims_registry_address.as_str();
-    let private_key = config.private_key.as_str();
-    let rpc_url = config.rpc_url.as_str();
-    let transaction_value = config.transaction_value.as_str();
-
     if let Some(reason) = configured_reason.as_deref() {
         if proof_execution_enabled && config.stark_sidecar_enabled() {
             write_stark_sidecar_artifact(&claim, &claim_hash)?;
@@ -1152,101 +1007,7 @@ fn run_app() -> Result<(), String> {
         return Ok(());
     }
 
-    println!("Claim ID: {}", claim.claim_id);
-    println!("Claim Hash: {}", claim_hash);
-
-    let zk_input = serde_json::to_string_pretty(&ZkCircuitInput::from(&claim))
-        .map_err(|err| format!("could not serialize ../zk/input.json: {}", err))?;
-
-    fs::write("../zk/input.json", zk_input)
-        .map_err(|err| format!("could not write ../zk/input.json: {}", err))?;
-
-    log_proof_event(
-        "witness_generation",
-        "started",
-        &claim.claim_id,
-        &claim_hash,
-    );
-    run(
-        "node ../zk/claim_js/generate_witness.js ../zk/claim_js/claim.wasm ../zk/input.json ../zk/witness.wtns",
-    )?;
-    log_proof_event(
-        "witness_generation",
-        "completed",
-        &claim.claim_id,
-        &claim_hash,
-    );
-
-    log_proof_event("groth16_prove", "started", &claim.claim_id, &claim_hash);
-    run(
-        "snarkjs groth16 prove ../zk/claim_final.zkey ../zk/witness.wtns ../zk/proof.json ../zk/public.json",
-    )?;
-    log_proof_event("groth16_prove", "completed", &claim.claim_id, &claim_hash);
-
-    log_proof_event("calldata_export", "started", &claim.claim_id, &claim_hash);
-    let calldata =
-        run_output("cd ../zk && snarkjs zkey export soliditycalldata public.json proof.json")?
-            .replace("\"", "")
-            .replace(" ", "");
-    log_proof_event("calldata_export", "completed", &claim.claim_id, &claim_hash);
-
-    let parts = split_calldata(&calldata);
-
-    if parts.len() != 4 {
-        return Err(format!(
-            "expected 4 calldata parts from snarkjs, got {}: {}",
-            parts.len(),
-            command_output_excerpt(&calldata)
-        ));
-    }
-
-    let a = &parts[0];
-    let b = &parts[1];
-    let c = &parts[2];
-    let input = &parts[3];
-
-    println!("Proof calldata parsed dynamically.");
-
-    log_proof_event("chain_submission", "started", &claim.claim_id, &claim_hash);
-    let cast_output = run_output(&format!(
-        r#"cast send {contract} \
-"submitVerifiedClaim(bytes32,uint[2],uint[2][2],uint[2],uint[1],uint256)" \
-{claim_hash} \
-'{a}' \
-'{b}' \
-'{c}' \
-'{input}' \
-{} \
---value {transaction_value} \
---private-key {private_key} \
---rpc-url {rpc_url}"#,
-        claim.claim_amount
-    ))?;
-    let tx_hash = extract_transaction_hash(&cast_output).ok_or_else(|| {
-        format!(
-            "cast send output did not include transactionHash: {}",
-            command_output_excerpt(&cast_output)
-        )
-    })?;
-    log_proof_event(
-        "chain_submission",
-        "completed",
-        &claim.claim_id,
-        &claim_hash,
-    );
-
-    println!("Dynamic proof submitted on-chain.");
-
-    let result = AdjudicationResult::approved(claim.claim_id.clone(), claim_hash, tx_hash);
-
-    if config.stark_sidecar_enabled() {
-        write_stark_sidecar_artifact(&claim, &result.claim_hash)?;
-    }
-
-    write_result(&result)?;
-    println!("Wrote adjudication_result.json");
-
-    Ok(())
+    Err("proof execution did not select the gated stark_attested backend".to_string())
 }
 
 fn run_stark_attested_app(
@@ -2140,45 +1901,6 @@ mod tests {
     }
 
     #[test]
-    fn split_calldata_preserves_nested_arrays() {
-        let calldata = "[1,2],[[3,4],[5,6]],[7,8],[9]";
-
-        assert_eq!(
-            split_calldata(calldata),
-            vec![
-                "[1,2]".to_string(),
-                "[[3,4],[5,6]]".to_string(),
-                "[7,8]".to_string(),
-                "[9]".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn zk_circuit_input_serializes_existing_schema() {
-        let value = serde_json::to_value(ZkCircuitInput::from(&valid_claim())).unwrap();
-
-        assert_eq!(value["eligibility_active"], 1);
-        assert_eq!(value["aid_code"], 53);
-        assert_eq!(value["benefit_level_exists"], 1);
-        assert_eq!(value["date_of_service_from"], 20000);
-        assert_eq!(value["eligibility_period_from"], 19900);
-        assert_eq!(value["eligibility_period_thru"], 21000);
-        assert_eq!(value["soc_amount"], 0);
-        assert_eq!(value["soc_met"], 1);
-        assert_eq!(value["provider_enrolled"], 1);
-        assert_eq!(value["provider_type_valid"], 1);
-        assert_eq!(value["billing_code_valid"], 1);
-        assert_eq!(value["units_valid"], 1);
-        assert_eq!(value["is_duplicate"], 0);
-        assert_eq!(value["disability_determination_valid"], 1);
-        assert_eq!(value["recipient_not_deceased"], 1);
-        assert_eq!(value["physician_certification_valid"], 1);
-
-        assert_eq!(value.as_object().unwrap().len(), 16);
-    }
-
-    #[test]
     fn approved_result_serializes_existing_schema() {
         let result = AdjudicationResult::approved(
             "CLAIM-TEST-001".to_string(),
@@ -2229,44 +1951,6 @@ mod tests {
         assert_eq!(value["reason"], "G9_RECIPIENT_DECEASED");
         assert_eq!(value["tx_submitted"], false);
         assert_eq!(value["tx_hash"], Value::Null);
-    }
-
-    #[test]
-    fn extract_transaction_hash_from_plain_cast_output() {
-        let output = "\
-blockHash               0x1111111111111111111111111111111111111111111111111111111111111111
-blockNumber             123
-transactionHash         0x2222222222222222222222222222222222222222222222222222222222222222
-status                  1";
-
-        assert_eq!(
-            extract_transaction_hash(output),
-            Some("0x2222222222222222222222222222222222222222222222222222222222222222".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_transaction_hash_from_json_cast_output() {
-        let output = r#"{
-            "blockHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
-            "transactionHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
-            "status": "0x1"
-        }"#;
-
-        assert_eq!(
-            extract_transaction_hash(output),
-            Some("0x3333333333333333333333333333333333333333333333333333333333333333".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_transaction_hash_returns_none_when_missing() {
-        let output = "\
-blockHash               0x1111111111111111111111111111111111111111111111111111111111111111
-blockNumber             123
-status                  1";
-
-        assert_eq!(extract_transaction_hash(output), None);
     }
 
     #[test]
@@ -2862,16 +2546,5 @@ status                  1";
             denial_reason(&claim),
             Some("G10_PHYSICIAN_CERTIFICATION_FAILED")
         );
-    }
-
-    #[test]
-    #[ignore = "requires proof_execution_enabled=true, local Anvil, snarkjs, node, cast, config.json, and a fresh approved claim_id"]
-    fn legacy_proof_claim_flow_end_to_end() {
-        let config = read_config().unwrap();
-        assert!(
-            config.proof_execution_enabled(),
-            "legacy proof end-to-end test requires proof_execution_enabled=true"
-        );
-        run_app().unwrap();
     }
 }

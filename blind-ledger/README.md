@@ -45,11 +45,15 @@ $ forge snapshot
 $ anvil
 ```
 
-### Deploy
+### Deploy governed STARK contracts
 
 ```shell
-$ forge script script/Counter.s.sol:DeployClaimsRegistry --rpc-url <your_rpc_url> --private-key <your_private_key>
+$ forge script script/DeployStarkGovernedV2.s.sol:DeployStarkGovernedV2 --rpc-url <your_rpc_url> --broadcast
 ```
+
+The former Groth16 verifier, registry, circuit, deployment script, and tests are
+retired reference material under `../deprecated/groth16/` and are excluded from
+this Foundry project.
 
 ### Cast
 
