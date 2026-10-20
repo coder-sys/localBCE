@@ -1,19 +1,27 @@
 use serde_json::json;
 use winterfell::{
-    Trace,
+    Proof, Prover, Trace, TraceTable,
     math::{FieldElement, ToElements},
 };
 
 use super::{
+    BATCH_ROOT_TRACE_LENGTH, BATCH_ROOT_TRACE_START, CLAIM_SOURCE_ROOT_RESULT_START, COL_DECISION,
     COL_NULLIFIER_PATH_DIRECTION, FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER,
-    FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION,
+    FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_RESULT_START, FACT_COMMITMENT_RULESET_TAG,
+    FACT_COMMITMENT_SCHEMA_VERSION, FEE_SCHEDULE_ROOT_RESULT_START, HASH_STATE_START,
     NULLIFIER_AFTER_MERKLE_TRACE_START, NULLIFIER_BEFORE_MERKLE_TRACE_START,
-    NULLIFIER_MERKLE_LEVEL_LENGTH, PUBLIC_INPUT_ROOT_DOMAIN_TAG, PUBLIC_INPUT_ROOT_ENCODING,
-    PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
-    PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, ProductionAirProofInputV2,
-    ProductionFelt, TRACE_LENGTH, TRACE_WIDTH, build_production_air_trace,
+    NULLIFIER_DIGEST_RESULT_START, NULLIFIER_MERKLE_LEVEL_LENGTH, NULLIFIER_MERKLE_TRACE_LENGTH,
+    NULLIFIER_PATH_START, NULLIFIER_ROOT_AFTER_RESULT_START, NULLIFIER_ROOT_BEFORE_RESULT_START,
+    NULLIFIER_ROOT_WIDTH, ORACLE_FACTS_ROOT_RESULT_START, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
+    PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
+    PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, PUBLIC_ROOT_TRACE_LENGTH,
+    PUBLIC_ROOT_TRACE_START, ProductionAirProofInputV2, ProductionAirPublicInputsV2,
+    ProductionFelt, ProductionG1G10Prover, RESCUE_RATE_START, RESCUE_STATE_WIDTH, TRACE_LENGTH,
+    TRACE_WIDTH, build_batch_root_hash_states, build_nullifier_merkle_hash_states,
+    build_production_air_trace, build_public_input_root_hash_states,
     canonical_claim_fact_commitment_preimage, canonical_public_input_root_preimage,
-    compute_claim_fact_commitment, compute_public_input_root, compute_single_claim_batch_root,
+    canonical_public_input_root_preimage_with_commitments, compute_claim_fact_commitment,
+    compute_public_input_root, compute_single_claim_batch_root, default_options,
     pack_public_input_root_bytes32, prove_production_air, unpack_public_input_root_bytes32,
     verify_production_air, verify_production_air_result,
 };
@@ -353,6 +361,178 @@ fn tampered_public_nullifier_roots_are_rejected() {
     let (proof, mut public_inputs) = prove_production_air(&input).unwrap();
     public_inputs.nullifier_root_after[0] += ProductionFelt::ONE;
     assert!(!verify_production_air(proof, public_inputs));
+}
+
+#[derive(Clone, Copy)]
+enum NullifierPathSegment {
+    Before,
+    After,
+}
+
+fn read_row_digest(
+    columns: &[Vec<ProductionFelt>],
+    start: usize,
+    step: usize,
+) -> [ProductionFelt; NULLIFIER_ROOT_WIDTH] {
+    core::array::from_fn(|index| columns[start + index][step])
+}
+
+fn write_hash_states(
+    columns: &mut [Vec<ProductionFelt>],
+    trace_start: usize,
+    states: &[[ProductionFelt; RESCUE_STATE_WIDTH]],
+) {
+    for (offset, state) in states.iter().enumerate() {
+        for (state_index, value) in state.iter().enumerate() {
+            columns[HASH_STATE_START + state_index][trace_start + offset] = *value;
+        }
+    }
+}
+
+/// Test-only forgery: starts from the honest trace, replaces one sibling in one
+/// nullifier Merkle segment, and re-derives that segment, its root column, the
+/// public input root, and the batch root through the existing fill functions.
+/// The AIR and verifier are untouched.
+fn forge_nullifier_path_sibling_trace(
+    input: &ProductionAirProofInputV2,
+    segment: NullifierPathSegment,
+    level: usize,
+) -> TraceTable<ProductionFelt> {
+    let honest = build_production_air_trace(input).unwrap();
+    let mut columns: Vec<Vec<ProductionFelt>> = (0..honest.width())
+        .map(|column| {
+            (0..honest.length())
+                .map(|step| honest.get(column, step))
+                .collect()
+        })
+        .collect();
+
+    let mut forged_path = input.nullifier.merkle_path;
+    forged_path[level][0] += ProductionFelt::ONE;
+
+    let decision = columns[COL_DECISION][0];
+    let nullifier_digest = read_row_digest(&columns, NULLIFIER_DIGEST_RESULT_START, 0);
+    let (trace_start, sibling_rows, leaf, root_result_start) = match segment {
+        NullifierPathSegment::Before => (
+            NULLIFIER_BEFORE_MERKLE_TRACE_START,
+            NULLIFIER_BEFORE_MERKLE_TRACE_START - 1..NULLIFIER_AFTER_MERKLE_TRACE_START - 1,
+            [ProductionFelt::ZERO; NULLIFIER_ROOT_WIDTH],
+            NULLIFIER_ROOT_BEFORE_RESULT_START,
+        ),
+        NullifierPathSegment::After => (
+            NULLIFIER_AFTER_MERKLE_TRACE_START,
+            NULLIFIER_AFTER_MERKLE_TRACE_START - 1..TRACE_LENGTH,
+            nullifier_digest.map(|limb| decision * limb),
+            NULLIFIER_ROOT_AFTER_RESULT_START,
+        ),
+    };
+
+    let sibling_start = NULLIFIER_PATH_START + level * NULLIFIER_ROOT_WIDTH;
+    for step in sibling_rows {
+        for index in 0..NULLIFIER_ROOT_WIDTH {
+            columns[sibling_start + index][step] = forged_path[level][index];
+        }
+    }
+
+    let segment_states =
+        build_nullifier_merkle_hash_states(leaf, &forged_path, input.nullifier.leaf_index);
+    write_hash_states(&mut columns, trace_start, &segment_states);
+    let forged_root: [ProductionFelt; NULLIFIER_ROOT_WIDTH] = core::array::from_fn(|index| {
+        segment_states[NULLIFIER_MERKLE_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+    });
+    for (index, value) in forged_root.iter().enumerate() {
+        columns[root_result_start + index].fill(*value);
+    }
+
+    let public_root_preimage = canonical_public_input_root_preimage_with_commitments(
+        &input.adjudication,
+        &read_row_digest(&columns, FACT_COMMITMENT_RESULT_START, 0),
+        &read_row_digest(&columns, CLAIM_SOURCE_ROOT_RESULT_START, 0),
+        &read_row_digest(&columns, ORACLE_FACTS_ROOT_RESULT_START, 0),
+        &read_row_digest(&columns, FEE_SCHEDULE_ROOT_RESULT_START, 0),
+        &read_row_digest(&columns, NULLIFIER_ROOT_BEFORE_RESULT_START, 0),
+        &read_row_digest(&columns, NULLIFIER_ROOT_AFTER_RESULT_START, 0),
+    )
+    .unwrap();
+    let public_root_states = build_public_input_root_hash_states(&public_root_preimage);
+    write_hash_states(&mut columns, PUBLIC_ROOT_TRACE_START, &public_root_states);
+    let public_input_root = core::array::from_fn(|index| {
+        public_root_states[PUBLIC_ROOT_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+    });
+    let batch_root_states = build_batch_root_hash_states(&public_input_root);
+    debug_assert_eq!(batch_root_states.len(), BATCH_ROOT_TRACE_LENGTH);
+    write_hash_states(&mut columns, BATCH_ROOT_TRACE_START, &batch_root_states);
+
+    TraceTable::init(columns)
+}
+
+fn prove_trace(trace: TraceTable<ProductionFelt>) -> (Proof, ProductionAirPublicInputsV2) {
+    let prover = ProductionG1G10Prover::new(default_options());
+    let public_inputs = prover.get_pub_inputs(&trace);
+    let proof = prover.prove(trace).unwrap();
+    (proof, public_inputs)
+}
+
+const FORGED_NULLIFIER_LEVEL: usize = 3;
+
+#[test]
+fn reject_after_path_sibling_forgery() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let forged_trace = forge_nullifier_path_sibling_trace(
+        &input,
+        NullifierPathSegment::After,
+        FORGED_NULLIFIER_LEVEL,
+    );
+    let (proof, forged_public_inputs) = prove_trace(forged_trace);
+
+    assert_eq!(
+        forged_public_inputs.nullifier_root_before,
+        honest_public_inputs.nullifier_root_before
+    );
+    assert_ne!(
+        forged_public_inputs.nullifier_root_after,
+        honest_public_inputs.nullifier_root_after
+    );
+    assert!(
+        !verify_production_air(proof, forged_public_inputs),
+        "after-path sibling forgery must not verify"
+    );
+}
+
+#[test]
+fn after_path_forgery_honest_trace_control_verifies() {
+    let input = approved_proof_input();
+    let (proof, public_inputs) = prove_trace(build_production_air_trace(&input).unwrap());
+
+    assert_eq!(
+        public_inputs.nullifier_root_after,
+        input.nullifier.root_after
+    );
+    assert!(verify_production_air(proof, public_inputs));
+}
+
+#[test]
+fn after_path_forgery_before_only_mutation_control_is_rejected() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let forged_trace = forge_nullifier_path_sibling_trace(
+        &input,
+        NullifierPathSegment::Before,
+        FORGED_NULLIFIER_LEVEL,
+    );
+    let (proof, forged_public_inputs) = prove_trace(forged_trace);
+
+    assert_ne!(
+        forged_public_inputs.nullifier_root_before,
+        honest_public_inputs.nullifier_root_before
+    );
+    assert!(
+        !verify_production_air(proof, honest_public_inputs),
+        "before-path mutation must not verify against the honest nullifier_root_before"
+    );
 }
 
 #[test]
