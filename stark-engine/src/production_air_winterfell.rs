@@ -205,7 +205,8 @@ const PUBLIC_ROOT_RESET_SELECTOR: usize =
 const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
 const BATCH_ROOT_RESET_SELECTOR: usize = PUBLIC_ROOT_HOLD_SELECTOR + 1;
 const BATCH_ROOT_HOLD_SELECTOR: usize = BATCH_ROOT_RESET_SELECTOR + 1;
-const HASH_PERIODIC_COLUMN_COUNT: usize = BATCH_ROOT_HOLD_SELECTOR + 1;
+const NULLIFIER_PATH_HOLD_SELECTOR: usize = BATCH_ROOT_HOLD_SELECTOR + 1;
+const HASH_PERIODIC_COLUMN_COUNT: usize = NULLIFIER_PATH_HOLD_SELECTOR + 1;
 
 const COL_ELIGIBILITY_ACTIVE: usize = 0;
 const COL_AID_CODE: usize = 1;
@@ -297,6 +298,8 @@ const FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT: usize = FEE_SCHEDULE_ROOT_WIDTH;
 const NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
+const NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT: usize =
+    NULLIFIER_ROOT_TREE_DEPTH * NULLIFIER_ROOT_WIDTH;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -307,6 +310,7 @@ const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT
     + NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT
     + NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT
+    + NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT
     + 1;
 const CLAIM_SOURCE_FIXED_ASSERTION_COUNT: usize = 8;
 const ORACLE_FACTS_FIXED_ASSERTION_COUNT: usize = 9;
@@ -1157,6 +1161,16 @@ impl Air for ProductionG1G10Air {
                     - current[NULLIFIER_ROOT_AFTER_RESULT_START + digest_index]);
             index += 1;
         }
+        // The nullifier path columns are shared with the claim-source, oracle,
+        // and fee-schedule paths, so the hold is gated to the nullifier Merkle
+        // segment. It forces the after-path to reuse the before-path siblings.
+        for column in
+            NULLIFIER_PATH_START..NULLIFIER_PATH_START + NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT
+        {
+            result[index] =
+                periodic_values[NULLIFIER_PATH_HOLD_SELECTOR] * (next[column] - current[column]);
+            index += 1;
+        }
 
         result[index] = clock_transition;
         index += 1;
@@ -1928,6 +1942,10 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -2059,6 +2077,15 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
     columns[BATCH_ROOT_RESET_SELECTOR][BATCH_ROOT_TRACE_START - 1] = ProductionFelt::ONE;
     for step in BATCH_ROOT_TRACE_START + RESCUE_ROUND_COUNT..TRACE_LENGTH - 1 {
         columns[BATCH_ROOT_HOLD_SELECTOR][step] = ProductionFelt::ONE;
+    }
+    // From the before-path level-0 reset row through the after-path last-level
+    // reset row, so every after-path reset reads the before-path siblings.
+    for step in NULLIFIER_BEFORE_MERKLE_TRACE_START - 1
+        ..NULLIFIER_AFTER_MERKLE_TRACE_START
+            + (NULLIFIER_ROOT_TREE_DEPTH - 1) * NULLIFIER_MERKLE_LEVEL_LENGTH
+            - 1
+    {
+        columns[NULLIFIER_PATH_HOLD_SELECTOR][step] = ProductionFelt::ONE;
     }
     columns
 }

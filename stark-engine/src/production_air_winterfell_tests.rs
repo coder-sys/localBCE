@@ -473,6 +473,51 @@ fn prove_trace(trace: TraceTable<ProductionFelt>) -> (Proof, ProductionAirPublic
     (proof, public_inputs)
 }
 
+/// Proves a forged trace without trusting the prover to refuse it. Debug
+/// builds run Winterfell's trace validation, which panics on an unsatisfied
+/// constraint before a proof exists; release builds produce the proof so the
+/// unmodified verifier is the one that must reject it.
+fn prove_forged_trace(
+    trace: TraceTable<ProductionFelt>,
+) -> (Result<Proof, String>, ProductionAirPublicInputsV2) {
+    let prover = ProductionG1G10Prover::new(default_options());
+    let public_inputs = prover.get_pub_inputs(&trace);
+    let proof = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prover.prove(trace)))
+        .map_err(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|message| message.to_string())
+                })
+                .unwrap_or_default()
+        })
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    (proof, public_inputs)
+}
+
+fn assert_forged_proof_rejected(
+    proof: Result<Proof, String>,
+    public_inputs: ProductionAirPublicInputsV2,
+    context: &str,
+) {
+    match proof {
+        Ok(proof) => assert!(!verify_production_air(proof, public_inputs), "{context}"),
+        Err(message) => {
+            assert!(
+                cfg!(debug_assertions),
+                "{context}: release prover failed unexpectedly: {message}"
+            );
+            assert!(
+                message.contains("transition constraint"),
+                "{context}: debug prover refused for an unexpected reason: {message}"
+            );
+        }
+    }
+}
+
 const FORGED_NULLIFIER_LEVEL: usize = 3;
 
 #[test]
@@ -485,7 +530,7 @@ fn reject_after_path_sibling_forgery() {
         NullifierPathSegment::After,
         FORGED_NULLIFIER_LEVEL,
     );
-    let (proof, forged_public_inputs) = prove_trace(forged_trace);
+    let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
 
     assert_eq!(
         forged_public_inputs.nullifier_root_before,
@@ -495,9 +540,10 @@ fn reject_after_path_sibling_forgery() {
         forged_public_inputs.nullifier_root_after,
         honest_public_inputs.nullifier_root_after
     );
-    assert!(
-        !verify_production_air(proof, forged_public_inputs),
-        "after-path sibling forgery must not verify"
+    assert_forged_proof_rejected(
+        proof,
+        forged_public_inputs,
+        "after-path sibling forgery must not verify",
     );
 }
 
@@ -523,15 +569,16 @@ fn after_path_forgery_before_only_mutation_control_is_rejected() {
         NullifierPathSegment::Before,
         FORGED_NULLIFIER_LEVEL,
     );
-    let (proof, forged_public_inputs) = prove_trace(forged_trace);
+    let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
 
     assert_ne!(
         forged_public_inputs.nullifier_root_before,
         honest_public_inputs.nullifier_root_before
     );
-    assert!(
-        !verify_production_air(proof, honest_public_inputs),
-        "before-path mutation must not verify against the honest nullifier_root_before"
+    assert_forged_proof_rejected(
+        proof,
+        honest_public_inputs,
+        "before-path mutation must not verify against the honest nullifier_root_before",
     );
 }
 
