@@ -389,6 +389,43 @@ fn write_hash_states(
     }
 }
 
+fn honest_trace_columns(input: &ProductionAirProofInputV2) -> Vec<Vec<ProductionFelt>> {
+    let honest = build_production_air_trace(input).unwrap();
+    (0..honest.width())
+        .map(|column| {
+            (0..honest.length())
+                .map(|step| honest.get(column, step))
+                .collect()
+        })
+        .collect()
+}
+
+/// Re-derives the public input root and batch root segments from the root
+/// result columns at row 0, through the existing fill functions.
+fn rederive_public_and_batch_roots(
+    columns: &mut [Vec<ProductionFelt>],
+    input: &ProductionAirProofInputV2,
+) {
+    let public_root_preimage = canonical_public_input_root_preimage_with_commitments(
+        &input.adjudication,
+        &read_row_digest(columns, FACT_COMMITMENT_RESULT_START, 0),
+        &read_row_digest(columns, CLAIM_SOURCE_ROOT_RESULT_START, 0),
+        &read_row_digest(columns, ORACLE_FACTS_ROOT_RESULT_START, 0),
+        &read_row_digest(columns, FEE_SCHEDULE_ROOT_RESULT_START, 0),
+        &read_row_digest(columns, NULLIFIER_ROOT_BEFORE_RESULT_START, 0),
+        &read_row_digest(columns, NULLIFIER_ROOT_AFTER_RESULT_START, 0),
+    )
+    .unwrap();
+    let public_root_states = build_public_input_root_hash_states(&public_root_preimage);
+    write_hash_states(columns, PUBLIC_ROOT_TRACE_START, &public_root_states);
+    let public_input_root = core::array::from_fn(|index| {
+        public_root_states[PUBLIC_ROOT_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+    });
+    let batch_root_states = build_batch_root_hash_states(&public_input_root);
+    debug_assert_eq!(batch_root_states.len(), BATCH_ROOT_TRACE_LENGTH);
+    write_hash_states(columns, BATCH_ROOT_TRACE_START, &batch_root_states);
+}
+
 /// Test-only forgery: starts from the honest trace, replaces one sibling in one
 /// nullifier Merkle segment, and re-derives that segment, its root column, the
 /// public input root, and the batch root through the existing fill functions.
@@ -398,14 +435,7 @@ fn forge_nullifier_path_sibling_trace(
     segment: NullifierPathSegment,
     level: usize,
 ) -> TraceTable<ProductionFelt> {
-    let honest = build_production_air_trace(input).unwrap();
-    let mut columns: Vec<Vec<ProductionFelt>> = (0..honest.width())
-        .map(|column| {
-            (0..honest.length())
-                .map(|step| honest.get(column, step))
-                .collect()
-        })
-        .collect();
+    let mut columns = honest_trace_columns(input);
 
     let mut forged_path = input.nullifier.merkle_path;
     forged_path[level][0] += ProductionFelt::ONE;
@@ -444,25 +474,7 @@ fn forge_nullifier_path_sibling_trace(
         columns[root_result_start + index].fill(*value);
     }
 
-    let public_root_preimage = canonical_public_input_root_preimage_with_commitments(
-        &input.adjudication,
-        &read_row_digest(&columns, FACT_COMMITMENT_RESULT_START, 0),
-        &read_row_digest(&columns, CLAIM_SOURCE_ROOT_RESULT_START, 0),
-        &read_row_digest(&columns, ORACLE_FACTS_ROOT_RESULT_START, 0),
-        &read_row_digest(&columns, FEE_SCHEDULE_ROOT_RESULT_START, 0),
-        &read_row_digest(&columns, NULLIFIER_ROOT_BEFORE_RESULT_START, 0),
-        &read_row_digest(&columns, NULLIFIER_ROOT_AFTER_RESULT_START, 0),
-    )
-    .unwrap();
-    let public_root_states = build_public_input_root_hash_states(&public_root_preimage);
-    write_hash_states(&mut columns, PUBLIC_ROOT_TRACE_START, &public_root_states);
-    let public_input_root = core::array::from_fn(|index| {
-        public_root_states[PUBLIC_ROOT_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
-    });
-    let batch_root_states = build_batch_root_hash_states(&public_input_root);
-    debug_assert_eq!(batch_root_states.len(), BATCH_ROOT_TRACE_LENGTH);
-    write_hash_states(&mut columns, BATCH_ROOT_TRACE_START, &batch_root_states);
-
+    rederive_public_and_batch_roots(&mut columns, input);
     TraceTable::init(columns)
 }
 
