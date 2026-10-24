@@ -5,19 +5,23 @@ use winterfell::{
 };
 
 use super::{
-    BATCH_ROOT_TRACE_LENGTH, BATCH_ROOT_TRACE_START, CLAIM_SOURCE_ROOT_RESULT_START, COL_DECISION,
-    COL_NULLIFIER_PATH_DIRECTION, FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER,
-    FACT_COMMITMENT_HASH_FUNCTION, FACT_COMMITMENT_RESULT_START, FACT_COMMITMENT_RULESET_TAG,
-    FACT_COMMITMENT_SCHEMA_VERSION, FEE_SCHEDULE_ROOT_RESULT_START, HASH_STATE_START,
-    NULLIFIER_AFTER_MERKLE_TRACE_START, NULLIFIER_BEFORE_MERKLE_TRACE_START,
-    NULLIFIER_DIGEST_RESULT_START, NULLIFIER_MERKLE_LEVEL_LENGTH, NULLIFIER_MERKLE_TRACE_LENGTH,
-    NULLIFIER_PATH_START, NULLIFIER_ROOT_AFTER_RESULT_START, NULLIFIER_ROOT_BEFORE_RESULT_START,
-    NULLIFIER_ROOT_WIDTH, ORACLE_FACTS_ROOT_RESULT_START, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
+    BATCH_ROOT_TRACE_LENGTH, BATCH_ROOT_TRACE_START, CLAIM_SOURCE_LEAF_TRACE_LENGTH,
+    CLAIM_SOURCE_LEAF_TRACE_START, CLAIM_SOURCE_MERKLE_TRACE_LENGTH,
+    CLAIM_SOURCE_MERKLE_TRACE_START, CLAIM_SOURCE_PREIMAGE_START, CLAIM_SOURCE_ROOT_RESULT_START,
+    CLAIM_SOURCE_ROOT_WIDTH, COL_DECISION, COL_NULLIFIER_PATH_DIRECTION,
+    FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER, FACT_COMMITMENT_HASH_FUNCTION,
+    FACT_COMMITMENT_RESULT_START, FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION,
+    FEE_SCHEDULE_ROOT_RESULT_START, HASH_STATE_START, NULLIFIER_AFTER_MERKLE_TRACE_START,
+    NULLIFIER_BEFORE_MERKLE_TRACE_START, NULLIFIER_DIGEST_RESULT_START,
+    NULLIFIER_MERKLE_LEVEL_LENGTH, NULLIFIER_MERKLE_TRACE_LENGTH, NULLIFIER_PATH_START,
+    NULLIFIER_ROOT_AFTER_RESULT_START, NULLIFIER_ROOT_BEFORE_RESULT_START, NULLIFIER_ROOT_WIDTH,
+    ORACLE_FACTS_LEAF_TRACE_START, ORACLE_FACTS_ROOT_RESULT_START, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
     PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
     PUBLIC_INPUT_ROOT_RULESET_TAG, PUBLIC_INPUT_ROOT_SCHEMA_VERSION, PUBLIC_ROOT_TRACE_LENGTH,
     PUBLIC_ROOT_TRACE_START, ProductionAirProofInputV2, ProductionAirPublicInputsV2,
     ProductionFelt, ProductionG1G10Prover, RESCUE_RATE_START, RESCUE_STATE_WIDTH, TRACE_LENGTH,
-    TRACE_WIDTH, build_batch_root_hash_states, build_nullifier_merkle_hash_states,
+    TRACE_WIDTH, build_batch_root_hash_states, build_claim_source_leaf_hash_states,
+    build_claim_source_merkle_hash_states, build_nullifier_merkle_hash_states,
     build_production_air_trace, build_public_input_root_hash_states,
     canonical_claim_fact_commitment_preimage, canonical_public_input_root_preimage,
     canonical_public_input_root_preimage_with_commitments, compute_claim_fact_commitment,
@@ -591,6 +595,127 @@ fn after_path_forgery_before_only_mutation_control_is_rejected() {
         proof,
         honest_public_inputs,
         "before-path mutation must not verify against the honest nullifier_root_before",
+    );
+}
+
+#[derive(Clone, Copy)]
+enum ClaimSourceLimbRows {
+    /// Every claim-source preimage row except row 0, which keeps the honest
+    /// limb so the row-0 public claim hash assertion still holds.
+    AfterRowZero,
+    RowZeroOnly,
+}
+
+const FORGED_CLAIM_SOURCE_LIMB: usize = 0;
+
+/// Test-only forgery: starts from the honest trace and changes one claim hash
+/// limb inside the claim-source leaf preimage columns. For `AfterRowZero` it
+/// re-derives the claim-source leaf and Merkle segments, the claim-source root
+/// column, the public input root, and the batch root through the existing fill
+/// functions. `RowZeroOnly` changes row 0 alone and re-derives nothing. The
+/// AIR and verifier are untouched.
+fn forge_claim_source_limb_trace(
+    input: &ProductionAirProofInputV2,
+    rows: ClaimSourceLimbRows,
+) -> TraceTable<ProductionFelt> {
+    let mut columns = honest_trace_columns(input);
+    let element = 4 + FORGED_CLAIM_SOURCE_LIMB;
+    let column = CLAIM_SOURCE_PREIMAGE_START + element;
+    let mut forged_preimage = input.claim_source.leaf_preimage;
+    forged_preimage[element] += ProductionFelt::ONE;
+
+    match rows {
+        ClaimSourceLimbRows::RowZeroOnly => {
+            columns[column][0] = forged_preimage[element];
+        }
+        ClaimSourceLimbRows::AfterRowZero => {
+            for step in 1..ORACLE_FACTS_LEAF_TRACE_START - 1 {
+                columns[column][step] = forged_preimage[element];
+            }
+
+            let leaf_states = build_claim_source_leaf_hash_states(&forged_preimage);
+            write_hash_states(&mut columns, CLAIM_SOURCE_LEAF_TRACE_START, &leaf_states);
+            let forged_leaf = core::array::from_fn(|index| {
+                leaf_states[CLAIM_SOURCE_LEAF_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+            });
+            let merkle_states =
+                build_claim_source_merkle_hash_states(forged_leaf, &input.claim_source.merkle_path);
+            write_hash_states(
+                &mut columns,
+                CLAIM_SOURCE_MERKLE_TRACE_START,
+                &merkle_states,
+            );
+            for index in 0..CLAIM_SOURCE_ROOT_WIDTH {
+                columns[CLAIM_SOURCE_ROOT_RESULT_START + index].fill(
+                    merkle_states[CLAIM_SOURCE_MERKLE_TRACE_LENGTH - 1][RESCUE_RATE_START + index],
+                );
+            }
+
+            rederive_public_and_batch_roots(&mut columns, input);
+        }
+    }
+    TraceTable::init(columns)
+}
+
+// Gap 2 pass criterion is the unmodified verifier returning false. A debug
+// build's prover refuses an unsatisfied trace before the verifier runs, which
+// does not count, so the forged-trace tests run in release only.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn reject_claim_source_limb_forgery() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let forged_trace = forge_claim_source_limb_trace(&input, ClaimSourceLimbRows::AfterRowZero);
+    let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+    assert_eq!(
+        forged_public_inputs.claim_hash_limbs,
+        honest_public_inputs.claim_hash_limbs
+    );
+    assert_ne!(
+        forged_public_inputs.claim_source_root,
+        honest_public_inputs.claim_source_root
+    );
+    let proof = proof.expect("prover refused the forged trace; only a verifier rejection counts");
+    assert!(
+        !verify_production_air(proof, forged_public_inputs),
+        "claim-source limb forgery must not verify"
+    );
+}
+
+#[test]
+fn claim_source_limb_forgery_honest_trace_control_verifies() {
+    let input = approved_proof_input();
+    let (proof, public_inputs) = prove_trace(build_production_air_trace(&input).unwrap());
+
+    assert_eq!(public_inputs.claim_source_root, input.claim_source.root);
+    assert!(verify_production_air(proof, public_inputs));
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn claim_source_limb_forgery_row_zero_only_control_is_rejected() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let forged_trace = forge_claim_source_limb_trace(&input, ClaimSourceLimbRows::RowZeroOnly);
+    let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+    assert_eq!(
+        forged_public_inputs.to_elements(),
+        honest_public_inputs.to_elements()
+    );
+    let proof = proof.expect("prover refused the forged trace; only a verifier rejection counts");
+    assert!(
+        !verify_production_air(proof, honest_public_inputs),
+        "row-0 claim-source limb mutation must not verify against the public claim hash"
     );
 }
 
