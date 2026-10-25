@@ -206,7 +206,8 @@ const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
 const BATCH_ROOT_RESET_SELECTOR: usize = PUBLIC_ROOT_HOLD_SELECTOR + 1;
 const BATCH_ROOT_HOLD_SELECTOR: usize = BATCH_ROOT_RESET_SELECTOR + 1;
 const NULLIFIER_PATH_HOLD_SELECTOR: usize = BATCH_ROOT_HOLD_SELECTOR + 1;
-const HASH_PERIODIC_COLUMN_COUNT: usize = NULLIFIER_PATH_HOLD_SELECTOR + 1;
+const NULLIFIER_PADDING_HOLD_SELECTOR: usize = NULLIFIER_PATH_HOLD_SELECTOR + 1;
+const HASH_PERIODIC_COLUMN_COUNT: usize = NULLIFIER_PADDING_HOLD_SELECTOR + 1;
 
 const COL_ELIGIBILITY_ACTIVE: usize = 0;
 const COL_AID_CODE: usize = 1;
@@ -300,6 +301,14 @@ const NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT: usize =
     NULLIFIER_ROOT_TREE_DEPTH * NULLIFIER_ROOT_WIDTH;
+// Nullifier preimage zero padding, elements 12..16 (columns 152..156). These
+// columns carry other data in the claim-source, oracle and fee-schedule
+// segments, so the hold is gated to the nullifier leaf reset..absorb rows.
+const NULLIFIER_PADDING_HOLD_START: usize = NULLIFIER_PREIMAGE_START + 12;
+const NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT: usize = 4;
+// Nullifier preimage block 1 is absorbed one round block after the leaf reset row.
+const NULLIFIER_BLOCK_ONE_ABSORB_ROW: usize = NULLIFIER_LEAF_TRACE_START + 7;
+const NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -311,6 +320,7 @@ const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT
     + NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT
     + NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT
+    + NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT
     + 1;
 const CLAIM_SOURCE_FIXED_ASSERTION_COUNT: usize = 8;
 const ORACLE_FACTS_FIXED_ASSERTION_COUNT: usize = 9;
@@ -329,6 +339,7 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + FEE_SCHEDULE_FIXED_ASSERTION_COUNT
     + CLAIM_HASH_LIMB_COUNT * 5
     + 8
+    + NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT
     + NULLIFIER_ROOT_TREE_DEPTH * 2
     + BATCH_ROOT_WIDTH;
 
@@ -1171,6 +1182,13 @@ impl Air for ProductionG1G10Air {
                 periodic_values[NULLIFIER_PATH_HOLD_SELECTOR] * (next[column] - current[column]);
             index += 1;
         }
+        for column in NULLIFIER_PADDING_HOLD_START
+            ..NULLIFIER_PADDING_HOLD_START + NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT
+        {
+            result[index] =
+                periodic_values[NULLIFIER_PADDING_HOLD_SELECTOR] * (next[column] - current[column]);
+            index += 1;
+        }
 
         result[index] = clock_transition;
         index += 1;
@@ -1324,6 +1342,15 @@ impl Air for ProductionG1G10Air {
                 NULLIFIER_PREIMAGE_START + offset,
                 NULLIFIER_LEAF_TRACE_START - 1,
                 value,
+            ));
+        }
+        // The leaf hash reads block 1 at its absorb row, not the reset row,
+        // so claim hash limbs 4..7 are also pinned there to the public claim hash.
+        for limb in 4..CLAIM_HASH_LIMB_COUNT {
+            assertions.push(Assertion::single(
+                NULLIFIER_PREIMAGE_START + 4 + limb,
+                NULLIFIER_BLOCK_ONE_ABSORB_ROW,
+                self.public_inputs.claim_hash_limbs[limb],
             ));
         }
         for (offset, value) in [
@@ -1953,6 +1980,10 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -2093,6 +2124,10 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
             - 1
     {
         columns[NULLIFIER_PATH_HOLD_SELECTOR][step] = ProductionFelt::ONE;
+    }
+    // Leaf reset row through block-1 absorb row: steps reset..absorb hold next == current.
+    for step in NULLIFIER_LEAF_TRACE_START - 1..NULLIFIER_BLOCK_ONE_ABSORB_ROW {
+        columns[NULLIFIER_PADDING_HOLD_SELECTOR][step] = ProductionFelt::ONE;
     }
     columns
 }
