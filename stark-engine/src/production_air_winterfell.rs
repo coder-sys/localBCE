@@ -327,7 +327,7 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + CLAIM_SOURCE_FIXED_ASSERTION_COUNT
     + ORACLE_FACTS_FIXED_ASSERTION_COUNT
     + FEE_SCHEDULE_FIXED_ASSERTION_COUNT
-    + CLAIM_HASH_LIMB_COUNT * 4
+    + CLAIM_HASH_LIMB_COUNT * 5
     + 8
     + NULLIFIER_ROOT_TREE_DEPTH * 2
     + BATCH_ROOT_WIDTH;
@@ -1186,6 +1186,13 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 CLAIM_SOURCE_PREIMAGE_START + 4 + limb,
                 0,
+                *value,
+            ));
+            // The leaf hash reads the limbs at the rows that absorb them, not at
+            // row 0, so they are also pinned there.
+            assertions.push(Assertion::single(
+                CLAIM_SOURCE_PREIMAGE_START + 4 + limb,
+                claim_source_limb_absorb_row(limb),
                 *value,
             ));
             assertions.push(Assertion::single(
@@ -2901,6 +2908,13 @@ fn commitment_absorption_block<E: FieldElement + From<ProductionFelt>>(
         ],
         _ => unreachable!("commitment absorption block must be 1, 2, or 3"),
     }
+}
+
+/// Row at which the claim-source leaf hash absorbs claim hash `limb` (leaf
+/// element 4 + limb): block 0 at the leaf reset row, block 1 one round block later.
+fn claim_source_limb_absorb_row(limb: usize) -> usize {
+    let block = (4 + limb) / RESCUE_RATE_WIDTH;
+    CLAIM_SOURCE_LEAF_TRACE_START - 1 + block * RESCUE_RATE_WIDTH
 }
 
 fn claim_source_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
