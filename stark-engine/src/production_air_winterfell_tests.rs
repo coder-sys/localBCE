@@ -816,9 +816,9 @@ fn forge_nullifier_preimage_trace(
 }
 
 // Gap 3 uses the gap 2 pass criterion: only the unmodified verifier returning
-// false counts, so the forged-trace tests run in release only. Both block-1
-// cases are proved and verified before the final assertion, so a failure names
-// every case the verifier accepted.
+// false counts, so the forged-trace tests run in release only. All five block-1
+// cases (claim hash limb 4 and padding elements 12..=15) are proved and verified
+// before the final assertion, so a failure names every case the verifier accepted.
 #[test]
 #[cfg_attr(
     debug_assertions,
