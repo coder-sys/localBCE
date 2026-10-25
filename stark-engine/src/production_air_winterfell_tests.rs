@@ -13,7 +13,8 @@ use super::{
     FACT_COMMITMENT_RESULT_START, FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION,
     FEE_SCHEDULE_ROOT_RESULT_START, HASH_STATE_START, NULLIFIER_AFTER_MERKLE_TRACE_START,
     NULLIFIER_BEFORE_MERKLE_TRACE_START, NULLIFIER_DIGEST_RESULT_START,
-    NULLIFIER_MERKLE_LEVEL_LENGTH, NULLIFIER_MERKLE_TRACE_LENGTH, NULLIFIER_PATH_START,
+    NULLIFIER_LEAF_TRACE_LENGTH, NULLIFIER_LEAF_TRACE_START, NULLIFIER_MERKLE_LEVEL_LENGTH,
+    NULLIFIER_MERKLE_TRACE_LENGTH, NULLIFIER_PATH_START, NULLIFIER_PREIMAGE_START,
     NULLIFIER_ROOT_AFTER_RESULT_START, NULLIFIER_ROOT_BEFORE_RESULT_START, NULLIFIER_ROOT_WIDTH,
     ORACLE_FACTS_LEAF_TRACE_START, ORACLE_FACTS_ROOT_RESULT_START, PUBLIC_INPUT_ROOT_DOMAIN_TAG,
     PUBLIC_INPUT_ROOT_ENCODING, PUBLIC_INPUT_ROOT_HASH_FUNCTION, PUBLIC_INPUT_ROOT_PREIMAGE_ORDER,
@@ -21,13 +22,13 @@ use super::{
     PUBLIC_ROOT_TRACE_START, ProductionAirProofInputV2, ProductionAirPublicInputsV2,
     ProductionFelt, ProductionG1G10Prover, RESCUE_RATE_START, RESCUE_STATE_WIDTH, TRACE_LENGTH,
     TRACE_WIDTH, build_batch_root_hash_states, build_claim_source_leaf_hash_states,
-    build_claim_source_merkle_hash_states, build_nullifier_merkle_hash_states,
-    build_production_air_trace, build_public_input_root_hash_states,
-    canonical_claim_fact_commitment_preimage, canonical_public_input_root_preimage,
-    canonical_public_input_root_preimage_with_commitments, compute_claim_fact_commitment,
-    compute_public_input_root, compute_single_claim_batch_root, default_options,
-    pack_public_input_root_bytes32, prove_production_air, unpack_public_input_root_bytes32,
-    verify_production_air, verify_production_air_result,
+    build_claim_source_merkle_hash_states, build_nullifier_leaf_hash_states,
+    build_nullifier_merkle_hash_states, build_production_air_trace,
+    build_public_input_root_hash_states, canonical_claim_fact_commitment_preimage,
+    canonical_public_input_root_preimage, canonical_public_input_root_preimage_with_commitments,
+    compute_claim_fact_commitment, compute_public_input_root, compute_single_claim_batch_root,
+    default_options, pack_public_input_root_bytes32, prove_production_air,
+    unpack_public_input_root_bytes32, verify_production_air, verify_production_air_result,
 };
 use crate::{
     StarkBridgeInput,
@@ -717,6 +718,190 @@ fn claim_source_limb_forgery_row_zero_only_control_is_rejected() {
         !verify_production_air(proof, honest_public_inputs),
         "row-0 claim-source limb mutation must not verify against the public claim hash"
     );
+}
+
+/// Nullifier preimage elements absorbed in block 1 at `NULLIFIER_LEAF_TRACE_START + 7`
+/// but asserted only at the leaf reset row `NULLIFIER_LEAF_TRACE_START - 1`.
+#[derive(Clone, Copy, Debug)]
+enum NullifierBlockOneElement {
+    /// Element 8, claim hash limb 4 (column 148).
+    ClaimHashLimb4,
+    /// Zero padding at the given preimage element, 12..=15 (columns 152..=155).
+    ZeroPadding(usize),
+}
+
+impl NullifierBlockOneElement {
+    const ALL: [Self; 5] = [
+        Self::ClaimHashLimb4,
+        Self::ZeroPadding(12),
+        Self::ZeroPadding(13),
+        Self::ZeroPadding(14),
+        Self::ZeroPadding(15),
+    ];
+
+    fn element(self) -> usize {
+        match self {
+            Self::ClaimHashLimb4 => 8,
+            Self::ZeroPadding(element) => element,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum NullifierPreimageRows {
+    /// Every nullifier preimage row after the leaf reset row, which keeps the
+    /// honest value so the reset-row assertions still hold.
+    AfterResetRow,
+    ResetRowOnly,
+}
+
+/// Test-only forgery: starts from the honest trace and changes one block-1
+/// element inside the nullifier preimage columns. For `AfterResetRow` it
+/// re-derives the nullifier leaf segment, the nullifier digest column, the
+/// after-path Merkle segment, the `nullifier_root_after` column, the public input
+/// root, and the batch root through the existing fill functions; the before-path
+/// starts from a zero leaf and stays honest. `ResetRowOnly` changes the reset row
+/// alone and re-derives nothing. The AIR and verifier are untouched.
+fn forge_nullifier_preimage_trace(
+    input: &ProductionAirProofInputV2,
+    target: NullifierBlockOneElement,
+    rows: NullifierPreimageRows,
+) -> TraceTable<ProductionFelt> {
+    let mut columns = honest_trace_columns(input);
+    let element = target.element();
+    let column = NULLIFIER_PREIMAGE_START + element;
+    let mut forged_preimage = input.nullifier.preimage;
+    forged_preimage[element] += ProductionFelt::ONE;
+
+    match rows {
+        NullifierPreimageRows::ResetRowOnly => {
+            columns[column][NULLIFIER_LEAF_TRACE_START - 1] = forged_preimage[element];
+        }
+        NullifierPreimageRows::AfterResetRow => {
+            for step in NULLIFIER_LEAF_TRACE_START..TRACE_LENGTH {
+                columns[column][step] = forged_preimage[element];
+            }
+
+            let leaf_states = build_nullifier_leaf_hash_states(&forged_preimage);
+            write_hash_states(&mut columns, NULLIFIER_LEAF_TRACE_START, &leaf_states);
+            let forged_digest: [ProductionFelt; NULLIFIER_ROOT_WIDTH] =
+                core::array::from_fn(|index| {
+                    leaf_states[NULLIFIER_LEAF_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+                });
+            for (index, value) in forged_digest.iter().enumerate() {
+                columns[NULLIFIER_DIGEST_RESULT_START + index].fill(*value);
+            }
+
+            let decision = columns[COL_DECISION][0];
+            let after_states = build_nullifier_merkle_hash_states(
+                forged_digest.map(|limb| decision * limb),
+                &input.nullifier.merkle_path,
+                input.nullifier.leaf_index,
+            );
+            write_hash_states(
+                &mut columns,
+                NULLIFIER_AFTER_MERKLE_TRACE_START,
+                &after_states,
+            );
+            for index in 0..NULLIFIER_ROOT_WIDTH {
+                columns[NULLIFIER_ROOT_AFTER_RESULT_START + index].fill(
+                    after_states[NULLIFIER_MERKLE_TRACE_LENGTH - 1][RESCUE_RATE_START + index],
+                );
+            }
+
+            rederive_public_and_batch_roots(&mut columns, input);
+        }
+    }
+    TraceTable::init(columns)
+}
+
+// Gap 3 uses the gap 2 pass criterion: only the unmodified verifier returning
+// false counts, so the forged-trace tests run in release only. Both block-1
+// cases are proved and verified before the final assertion, so a failure names
+// every case the verifier accepted.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn reject_nullifier_preimage_limb_forgery() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let mut accepted = Vec::new();
+    for target in NullifierBlockOneElement::ALL {
+        let forged_trace =
+            forge_nullifier_preimage_trace(&input, target, NullifierPreimageRows::AfterResetRow);
+        let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+        assert_eq!(
+            forged_public_inputs.claim_hash_limbs, honest_public_inputs.claim_hash_limbs,
+            "{target:?}"
+        );
+        assert_eq!(
+            forged_public_inputs.nullifier_root_before, honest_public_inputs.nullifier_root_before,
+            "{target:?}"
+        );
+        assert_ne!(
+            forged_public_inputs.nullifier_root_after, honest_public_inputs.nullifier_root_after,
+            "{target:?}"
+        );
+        let proof = proof.unwrap_or_else(|message| {
+            panic!(
+                "{target:?}: prover refused the forged trace; only a verifier rejection counts: {message}"
+            )
+        });
+        if verify_production_air(proof, forged_public_inputs) {
+            accepted.push(target);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "nullifier preimage block-1 forgery must not verify; verifier accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn nullifier_preimage_forgery_honest_trace_control_verifies() {
+    let input = approved_proof_input();
+    let (proof, public_inputs) = prove_trace(build_production_air_trace(&input).unwrap());
+
+    assert_eq!(
+        public_inputs.nullifier_root_after,
+        input.nullifier.root_after
+    );
+    assert!(verify_production_air(proof, public_inputs));
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn nullifier_preimage_forgery_reset_row_only_control_is_rejected() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    for target in NullifierBlockOneElement::ALL {
+        let forged_trace =
+            forge_nullifier_preimage_trace(&input, target, NullifierPreimageRows::ResetRowOnly);
+        let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+        assert_eq!(
+            forged_public_inputs.to_elements(),
+            honest_public_inputs.to_elements(),
+            "{target:?}"
+        );
+        let proof = proof.unwrap_or_else(|message| {
+            panic!(
+                "{target:?}: prover refused the forged trace; only a verifier rejection counts: {message}"
+            )
+        });
+        assert!(
+            !verify_production_air(proof, honest_public_inputs),
+            "{target:?}: reset-row nullifier preimage mutation must not verify"
+        );
+    }
 }
 
 #[test]
