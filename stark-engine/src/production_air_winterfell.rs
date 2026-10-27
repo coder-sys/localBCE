@@ -309,6 +309,12 @@ const NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT: usize = 4;
 // Nullifier preimage block 1 is absorbed one round block after the leaf reset row.
 const NULLIFIER_BLOCK_ONE_ABSORB_ROW: usize = NULLIFIER_LEAF_TRACE_START + 7;
 const NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
+// Oracle-facts preimage block 1 is absorbed one round block after the leaf reset
+// row. Its claim hash limbs 4..7 are the oracle leaf's link to the claim, so they
+// are pinned there by assertions; ORACLE_FACTS_LINK_CONSTRAINT_COUNT counts
+// transition constraints only and stays 0.
+const ORACLE_FACTS_BLOCK_ONE_ABSORB_ROW: usize = ORACLE_FACTS_LEAF_TRACE_START + 7;
+const ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -340,6 +346,7 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + CLAIM_HASH_LIMB_COUNT * 5
     + 8
     + NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT
+    + ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT
     + NULLIFIER_ROOT_TREE_DEPTH * 2
     + BATCH_ROOT_WIDTH;
 
@@ -1350,6 +1357,15 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 NULLIFIER_PREIMAGE_START + 4 + limb,
                 NULLIFIER_BLOCK_ONE_ABSORB_ROW,
+                self.public_inputs.claim_hash_limbs[limb],
+            ));
+        }
+        // Same for the oracle-facts leaf: block 1 is read at its absorb row, so
+        // claim hash limbs 4..7 are also pinned there to the public claim hash.
+        for limb in 4..CLAIM_HASH_LIMB_COUNT {
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_PREIMAGE_START + 4 + limb,
+                ORACLE_FACTS_BLOCK_ONE_ABSORB_ROW,
                 self.public_inputs.claim_hash_limbs[limb],
             ));
         }
