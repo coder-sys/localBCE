@@ -11,7 +11,9 @@ use super::{
     CLAIM_SOURCE_ROOT_WIDTH, COL_DECISION, COL_NULLIFIER_PATH_DIRECTION,
     FACT_COMMITMENT_DOMAIN_TAG, FACT_COMMITMENT_FACT_ORDER, FACT_COMMITMENT_HASH_FUNCTION,
     FACT_COMMITMENT_RESULT_START, FACT_COMMITMENT_RULESET_TAG, FACT_COMMITMENT_SCHEMA_VERSION,
-    FEE_SCHEDULE_LEAF_TRACE_START, FEE_SCHEDULE_ROOT_RESULT_START, HASH_STATE_START,
+    FEE_SCHEDULE_LEAF_TRACE_LENGTH, FEE_SCHEDULE_LEAF_TRACE_START,
+    FEE_SCHEDULE_MERKLE_TRACE_LENGTH, FEE_SCHEDULE_MERKLE_TRACE_START, FEE_SCHEDULE_PREIMAGE_START,
+    FEE_SCHEDULE_ROOT_RESULT_START, FEE_SCHEDULE_ROOT_WIDTH, HASH_STATE_START,
     NULLIFIER_AFTER_MERKLE_TRACE_START, NULLIFIER_BEFORE_MERKLE_TRACE_START,
     NULLIFIER_DIGEST_RESULT_START, NULLIFIER_LEAF_TRACE_LENGTH, NULLIFIER_LEAF_TRACE_START,
     NULLIFIER_MERKLE_LEVEL_LENGTH, NULLIFIER_MERKLE_TRACE_LENGTH, NULLIFIER_PATH_START,
@@ -25,7 +27,8 @@ use super::{
     PUBLIC_ROOT_TRACE_START, ProductionAirProofInputV2, ProductionAirPublicInputsV2,
     ProductionFelt, ProductionG1G10Prover, RESCUE_RATE_START, RESCUE_STATE_WIDTH, TRACE_LENGTH,
     TRACE_WIDTH, build_batch_root_hash_states, build_claim_source_leaf_hash_states,
-    build_claim_source_merkle_hash_states, build_nullifier_leaf_hash_states,
+    build_claim_source_merkle_hash_states, build_fee_schedule_leaf_hash_states,
+    build_fee_schedule_merkle_hash_states, build_nullifier_leaf_hash_states,
     build_nullifier_merkle_hash_states, build_oracle_facts_leaf_hash_states,
     build_oracle_facts_merkle_hash_states, build_production_air_trace,
     build_public_input_root_hash_states, canonical_claim_fact_commitment_preimage,
@@ -1051,6 +1054,154 @@ fn oracle_facts_link_forgery_reset_row_only_control_is_rejected() {
         assert!(
             !verify_production_air(proof, honest_public_inputs),
             "limb {limb}: reset-row oracle-facts limb mutation must not verify"
+        );
+    }
+}
+
+/// Fee-schedule leaf elements 8..=11, claim hash limbs 4..=7 (columns 148..=151,
+/// fee-schedule rows 263..=374). They are the fee-schedule leaf's claim link that
+/// does not go through the shared claim-source binding columns. The leaf hash
+/// absorbs them in block 1 at `FEE_SCHEDULE_LEAF_TRACE_START + 7`, but they are
+/// asserted against the public claim hash only at the leaf reset row
+/// `FEE_SCHEDULE_LEAF_TRACE_START - 1`.
+const FEE_SCHEDULE_LINK_LIMBS: [usize; 4] = [4, 5, 6, 7];
+
+#[derive(Clone, Copy)]
+enum FeeScheduleLinkRows {
+    /// Every fee-schedule preimage row after the leaf reset row, which keeps the
+    /// honest limb so the reset-row public claim hash assertion still holds.
+    AfterResetRow,
+    ResetRowOnly,
+}
+
+/// Test-only forgery: starts from the honest trace and changes one claim hash
+/// limb inside the fee-schedule leaf preimage columns. For `AfterResetRow` it
+/// re-derives the fee-schedule leaf and Merkle segments, the fee-schedule root
+/// column, the public input root, and the batch root through the existing fill
+/// functions. `ResetRowOnly` changes the reset row alone and re-derives nothing.
+/// The AIR and verifier are untouched.
+fn forge_fee_schedule_link_trace(
+    input: &ProductionAirProofInputV2,
+    limb: usize,
+    rows: FeeScheduleLinkRows,
+) -> TraceTable<ProductionFelt> {
+    let mut columns = honest_trace_columns(input);
+    let element = 4 + limb;
+    let column = FEE_SCHEDULE_PREIMAGE_START + element;
+    let mut forged_preimage = input.fee_schedule.leaf_preimage;
+    forged_preimage[element] += ProductionFelt::ONE;
+
+    match rows {
+        FeeScheduleLinkRows::ResetRowOnly => {
+            columns[column][FEE_SCHEDULE_LEAF_TRACE_START - 1] = forged_preimage[element];
+        }
+        FeeScheduleLinkRows::AfterResetRow => {
+            for step in FEE_SCHEDULE_LEAF_TRACE_START..NULLIFIER_LEAF_TRACE_START - 1 {
+                columns[column][step] = forged_preimage[element];
+            }
+
+            let leaf_states = build_fee_schedule_leaf_hash_states(&forged_preimage);
+            write_hash_states(&mut columns, FEE_SCHEDULE_LEAF_TRACE_START, &leaf_states);
+            let forged_leaf = core::array::from_fn(|index| {
+                leaf_states[FEE_SCHEDULE_LEAF_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+            });
+            let merkle_states =
+                build_fee_schedule_merkle_hash_states(forged_leaf, &input.fee_schedule.merkle_path);
+            write_hash_states(
+                &mut columns,
+                FEE_SCHEDULE_MERKLE_TRACE_START,
+                &merkle_states,
+            );
+            for index in 0..FEE_SCHEDULE_ROOT_WIDTH {
+                columns[FEE_SCHEDULE_ROOT_RESULT_START + index].fill(
+                    merkle_states[FEE_SCHEDULE_MERKLE_TRACE_LENGTH - 1][RESCUE_RATE_START + index],
+                );
+            }
+
+            rederive_public_and_batch_roots(&mut columns, input);
+        }
+    }
+    TraceTable::init(columns)
+}
+
+// Gap 5 uses the gap 2 pass criterion: only the unmodified verifier returning
+// false counts, so the forged-trace tests run in release only. All four link
+// limbs are proved and verified before the final assertion, so a failure names
+// every limb the verifier accepted.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn reject_fee_schedule_link_forgery() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let mut accepted = Vec::new();
+    for limb in FEE_SCHEDULE_LINK_LIMBS {
+        let forged_trace =
+            forge_fee_schedule_link_trace(&input, limb, FeeScheduleLinkRows::AfterResetRow);
+        let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+        assert_eq!(
+            forged_public_inputs.claim_hash_limbs, honest_public_inputs.claim_hash_limbs,
+            "limb {limb}"
+        );
+        assert_ne!(
+            forged_public_inputs.fee_schedule_root, honest_public_inputs.fee_schedule_root,
+            "limb {limb}"
+        );
+        let proof = proof.unwrap_or_else(|message| {
+            panic!(
+                "limb {limb}: prover refused the forged trace; only a verifier rejection counts: {message}"
+            )
+        });
+        if verify_production_air(proof, forged_public_inputs) {
+            accepted.push(limb);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "fee-schedule claim-link forgery must not verify; verifier accepted limbs: {accepted:?}"
+    );
+}
+
+#[test]
+fn fee_schedule_link_forgery_honest_trace_control_verifies() {
+    let input = approved_proof_input();
+    let (proof, public_inputs) = prove_trace(build_production_air_trace(&input).unwrap());
+
+    assert_eq!(public_inputs.fee_schedule_root, input.fee_schedule.root);
+    assert!(verify_production_air(proof, public_inputs));
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn fee_schedule_link_forgery_reset_row_only_control_is_rejected() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    for limb in FEE_SCHEDULE_LINK_LIMBS {
+        let forged_trace =
+            forge_fee_schedule_link_trace(&input, limb, FeeScheduleLinkRows::ResetRowOnly);
+        let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+        assert_eq!(
+            forged_public_inputs.to_elements(),
+            honest_public_inputs.to_elements(),
+            "limb {limb}"
+        );
+        let proof = proof.unwrap_or_else(|message| {
+            panic!(
+                "limb {limb}: prover refused the forged trace; only a verifier rejection counts: {message}"
+            )
+        });
+        assert!(
+            !verify_production_air(proof, honest_public_inputs),
+            "limb {limb}: reset-row fee-schedule limb mutation must not verify"
         );
     }
 }
