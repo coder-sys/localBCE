@@ -315,6 +315,11 @@ const NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
 // transition constraints only and stays 0.
 const ORACLE_FACTS_BLOCK_ONE_ABSORB_ROW: usize = ORACLE_FACTS_LEAF_TRACE_START + 7;
 const ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
+// Fee-schedule preimage block 1 is absorbed one round block after the leaf reset
+// row. Its claim hash limbs 4..7 are pinned there by assertions;
+// FEE_SCHEDULE_LINK_CONSTRAINT_COUNT counts transition constraints only and stays 0.
+const FEE_SCHEDULE_BLOCK_ONE_ABSORB_ROW: usize = FEE_SCHEDULE_LEAF_TRACE_START + 7;
+const FEE_SCHEDULE_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -347,6 +352,7 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + 8
     + NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT
     + ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT
+    + FEE_SCHEDULE_LIMB_ABSORB_ASSERTION_COUNT
     + NULLIFIER_ROOT_TREE_DEPTH * 2
     + BATCH_ROOT_WIDTH;
 
@@ -1366,6 +1372,15 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 ORACLE_FACTS_PREIMAGE_START + 4 + limb,
                 ORACLE_FACTS_BLOCK_ONE_ABSORB_ROW,
+                self.public_inputs.claim_hash_limbs[limb],
+            ));
+        }
+        // Same for the fee-schedule leaf: block 1 is read at its absorb row, so
+        // claim hash limbs 4..7 are also pinned there to the public claim hash.
+        for limb in 4..CLAIM_HASH_LIMB_COUNT {
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_PREIMAGE_START + 4 + limb,
+                FEE_SCHEDULE_BLOCK_ONE_ABSORB_ROW,
                 self.public_inputs.claim_hash_limbs[limb],
             ));
         }
