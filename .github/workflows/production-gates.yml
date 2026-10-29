@@ -53,6 +53,10 @@ jobs:
       - run: cargo check --manifest-path rust-engine/Cargo.toml --jobs 1
       - run: cargo test --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
       - run: cargo check --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
+      # D-02/D-03 forgery tests are release-only (ignored under debug_assertions),
+      # so run the stark-engine suite in release as well for them to execute.
+      - run: cargo test --release --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
+        timeout-minutes: 90
 
   foundry:
     runs-on: ubuntu-latest
@@ -104,3 +108,13 @@ jobs:
         run: python -m unittest test_stark_sepolia_pilot
         working-directory: scripts/tests
         shell: bash
+
+  stark-engine-windows:
+    # D-02/D-03 gate on Windows: stark-engine suite in release, so the release-only
+    # forgery tests execute.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
+        timeout-minutes: 90
