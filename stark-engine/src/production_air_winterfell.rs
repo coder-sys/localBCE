@@ -205,7 +205,9 @@ const PUBLIC_ROOT_RESET_SELECTOR: usize =
 const PUBLIC_ROOT_HOLD_SELECTOR: usize = PUBLIC_ROOT_RESET_SELECTOR + 1;
 const BATCH_ROOT_RESET_SELECTOR: usize = PUBLIC_ROOT_HOLD_SELECTOR + 1;
 const BATCH_ROOT_HOLD_SELECTOR: usize = BATCH_ROOT_RESET_SELECTOR + 1;
-const HASH_PERIODIC_COLUMN_COUNT: usize = BATCH_ROOT_HOLD_SELECTOR + 1;
+const NULLIFIER_PATH_HOLD_SELECTOR: usize = BATCH_ROOT_HOLD_SELECTOR + 1;
+const NULLIFIER_PADDING_HOLD_SELECTOR: usize = NULLIFIER_PATH_HOLD_SELECTOR + 1;
+const HASH_PERIODIC_COLUMN_COUNT: usize = NULLIFIER_PADDING_HOLD_SELECTOR + 1;
 
 const COL_ELIGIBILITY_ACTIVE: usize = 0;
 const COL_AID_CODE: usize = 1;
@@ -297,6 +299,37 @@ const FEE_SCHEDULE_ROOT_BIND_CONSTRAINT_COUNT: usize = FEE_SCHEDULE_ROOT_WIDTH;
 const NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
 const NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT: usize = NULLIFIER_ROOT_WIDTH;
+const NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT: usize =
+    NULLIFIER_ROOT_TREE_DEPTH * NULLIFIER_ROOT_WIDTH;
+// Nullifier preimage zero padding, elements 12..16 (columns 152..156). These
+// columns carry other data in the claim-source, oracle and fee-schedule
+// segments, so the hold is gated to the nullifier leaf reset..absorb rows.
+const NULLIFIER_PADDING_HOLD_START: usize = NULLIFIER_PREIMAGE_START + 12;
+const NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT: usize = 4;
+// Nullifier preimage block 1 is absorbed one round block after the leaf reset row.
+const NULLIFIER_BLOCK_ONE_ABSORB_ROW: usize = NULLIFIER_LEAF_TRACE_START + 7;
+const NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
+// Oracle-facts preimage block 1 is absorbed one round block after the leaf reset
+// row. Its claim hash limbs 4..7 are the oracle leaf's link to the claim, so they
+// are pinned there by assertions; ORACLE_FACTS_LINK_CONSTRAINT_COUNT counts
+// transition constraints only and stays 0.
+const ORACLE_FACTS_BLOCK_ONE_ABSORB_ROW: usize = ORACLE_FACTS_LEAF_TRACE_START + 7;
+const ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
+// Fee-schedule preimage block 1 is absorbed one round block after the leaf reset
+// row. Its claim hash limbs 4..7 are pinned there by assertions;
+// FEE_SCHEDULE_LINK_CONSTRAINT_COUNT counts transition constraints only and stays 0.
+const FEE_SCHEDULE_BLOCK_ONE_ABSORB_ROW: usize = FEE_SCHEDULE_LEAF_TRACE_START + 7;
+const FEE_SCHEDULE_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
+// Preimage block 3 is absorbed at leaf row +23 and carries leaf elements 24..31.
+// The presence flags (24..26) and the oracle reserved zeros (30, 31) are fixed
+// values, but before this they were asserted only at the leaf reset row, so a
+// forged trace could change them on the absorb row and still verify. Pinning
+// them at the absorb row closes that gap. Both are Assertion::single on constant
+// values, so they add no transition constraints and no degree.
+const ORACLE_FACTS_BLOCK_THREE_ABSORB_ROW: usize = ORACLE_FACTS_LEAF_TRACE_START + 23;
+const ORACLE_FACTS_FLAG_ABSORB_ASSERTION_COUNT: usize = 5;
+const FEE_SCHEDULE_BLOCK_THREE_ABSORB_ROW: usize = FEE_SCHEDULE_LEAF_TRACE_START + 23;
+const FEE_SCHEDULE_FLAG_ABSORB_ASSERTION_COUNT: usize = 3;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -307,6 +340,8 @@ const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + NULLIFIER_DIGEST_BIND_CONSTRAINT_COUNT
     + NULLIFIER_ROOT_BEFORE_BIND_CONSTRAINT_COUNT
     + NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT
+    + NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT
+    + NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT
     + 1;
 const CLAIM_SOURCE_FIXED_ASSERTION_COUNT: usize = 8;
 const ORACLE_FACTS_FIXED_ASSERTION_COUNT: usize = 9;
@@ -323,8 +358,13 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + CLAIM_SOURCE_FIXED_ASSERTION_COUNT
     + ORACLE_FACTS_FIXED_ASSERTION_COUNT
     + FEE_SCHEDULE_FIXED_ASSERTION_COUNT
-    + CLAIM_HASH_LIMB_COUNT * 4
+    + CLAIM_HASH_LIMB_COUNT * 5
     + 8
+    + NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT
+    + ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT
+    + FEE_SCHEDULE_LIMB_ABSORB_ASSERTION_COUNT
+    + ORACLE_FACTS_FLAG_ABSORB_ASSERTION_COUNT
+    + FEE_SCHEDULE_FLAG_ABSORB_ASSERTION_COUNT
     + NULLIFIER_ROOT_TREE_DEPTH * 2
     + BATCH_ROOT_WIDTH;
 
@@ -1157,6 +1197,23 @@ impl Air for ProductionG1G10Air {
                     - current[NULLIFIER_ROOT_AFTER_RESULT_START + digest_index]);
             index += 1;
         }
+        // The nullifier path columns are shared with the claim-source, oracle,
+        // and fee-schedule paths, so the hold is gated to the nullifier Merkle
+        // segment. It forces the after-path to reuse the before-path siblings.
+        for column in
+            NULLIFIER_PATH_START..NULLIFIER_PATH_START + NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT
+        {
+            result[index] =
+                periodic_values[NULLIFIER_PATH_HOLD_SELECTOR] * (next[column] - current[column]);
+            index += 1;
+        }
+        for column in NULLIFIER_PADDING_HOLD_START
+            ..NULLIFIER_PADDING_HOLD_START + NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT
+        {
+            result[index] =
+                periodic_values[NULLIFIER_PADDING_HOLD_SELECTOR] * (next[column] - current[column]);
+            index += 1;
+        }
 
         result[index] = clock_transition;
         index += 1;
@@ -1172,6 +1229,13 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 CLAIM_SOURCE_PREIMAGE_START + 4 + limb,
                 0,
+                *value,
+            ));
+            // The leaf hash reads the limbs at the rows that absorb them, not at
+            // row 0, so they are also pinned there.
+            assertions.push(Assertion::single(
+                CLAIM_SOURCE_PREIMAGE_START + 4 + limb,
+                claim_source_limb_absorb_row(limb),
                 *value,
             ));
             assertions.push(Assertion::single(
@@ -1305,6 +1369,33 @@ impl Air for ProductionG1G10Air {
                 value,
             ));
         }
+        // The leaf hash reads block 1 at its absorb row, not the reset row,
+        // so claim hash limbs 4..7 are also pinned there to the public claim hash.
+        for limb in 4..CLAIM_HASH_LIMB_COUNT {
+            assertions.push(Assertion::single(
+                NULLIFIER_PREIMAGE_START + 4 + limb,
+                NULLIFIER_BLOCK_ONE_ABSORB_ROW,
+                self.public_inputs.claim_hash_limbs[limb],
+            ));
+        }
+        // Same for the oracle-facts leaf: block 1 is read at its absorb row, so
+        // claim hash limbs 4..7 are also pinned there to the public claim hash.
+        for limb in 4..CLAIM_HASH_LIMB_COUNT {
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_PREIMAGE_START + 4 + limb,
+                ORACLE_FACTS_BLOCK_ONE_ABSORB_ROW,
+                self.public_inputs.claim_hash_limbs[limb],
+            ));
+        }
+        // Same for the fee-schedule leaf: block 1 is read at its absorb row, so
+        // claim hash limbs 4..7 are also pinned there to the public claim hash.
+        for limb in 4..CLAIM_HASH_LIMB_COUNT {
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_PREIMAGE_START + 4 + limb,
+                FEE_SCHEDULE_BLOCK_ONE_ABSORB_ROW,
+                self.public_inputs.claim_hash_limbs[limb],
+            ));
+        }
         for (offset, value) in [
             (0, felt(FEE_SCHEDULE_ROOT_DOMAIN_TAG)),
             (1, felt(FEE_SCHEDULE_ROOT_SCHEMA_TAG)),
@@ -1318,6 +1409,14 @@ impl Air for ProductionG1G10Air {
                 FEE_SCHEDULE_PREIMAGE_START + offset,
                 FEE_SCHEDULE_LEAF_TRACE_START - 1,
                 value,
+            ));
+        }
+        // Same fixed flags, pinned again where block 3 absorbs them.
+        for offset in [24, 25, 26] {
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_PREIMAGE_START + offset,
+                FEE_SCHEDULE_BLOCK_THREE_ABSORB_ROW,
+                ProductionFelt::ONE,
             ));
         }
         for (offset, value) in [
@@ -1334,6 +1433,20 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 ORACLE_FACTS_PREIMAGE_START + offset,
                 ORACLE_FACTS_LEAF_TRACE_START - 1,
+                value,
+            ));
+        }
+        // Same fixed flags and reserved zeros, pinned again at the block 3 absorb row.
+        for (offset, value) in [
+            (24, ProductionFelt::ONE),
+            (25, ProductionFelt::ONE),
+            (26, ProductionFelt::ONE),
+            (30, ProductionFelt::ZERO),
+            (31, ProductionFelt::ZERO),
+        ] {
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_PREIMAGE_START + offset,
+                ORACLE_FACTS_BLOCK_THREE_ABSORB_ROW,
                 value,
             ));
         }
@@ -1928,6 +2041,14 @@ fn transition_degrees() -> Vec<TransitionConstraintDegree> {
         (0..NULLIFIER_ROOT_AFTER_BIND_CONSTRAINT_COUNT)
             .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
     );
+    degrees.extend(
+        (0..NULLIFIER_PATH_HOLD_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
+    degrees.extend(
+        (0..NULLIFIER_PADDING_HOLD_CONSTRAINT_COUNT)
+            .map(|_| TransitionConstraintDegree::with_cycles(1, vec![TRACE_LENGTH])),
+    );
     degrees.push(TransitionConstraintDegree::new(1));
     debug_assert_eq!(degrees.len(), TRANSITION_CONSTRAINT_COUNT);
     degrees
@@ -2059,6 +2180,19 @@ fn commitment_periodic_columns() -> Vec<Vec<ProductionFelt>> {
     columns[BATCH_ROOT_RESET_SELECTOR][BATCH_ROOT_TRACE_START - 1] = ProductionFelt::ONE;
     for step in BATCH_ROOT_TRACE_START + RESCUE_ROUND_COUNT..TRACE_LENGTH - 1 {
         columns[BATCH_ROOT_HOLD_SELECTOR][step] = ProductionFelt::ONE;
+    }
+    // From the before-path level-0 reset row through the after-path last-level
+    // reset row, so every after-path reset reads the before-path siblings.
+    for step in NULLIFIER_BEFORE_MERKLE_TRACE_START - 1
+        ..NULLIFIER_AFTER_MERKLE_TRACE_START
+            + (NULLIFIER_ROOT_TREE_DEPTH - 1) * NULLIFIER_MERKLE_LEVEL_LENGTH
+            - 1
+    {
+        columns[NULLIFIER_PATH_HOLD_SELECTOR][step] = ProductionFelt::ONE;
+    }
+    // Leaf reset row through block-1 absorb row: steps reset..absorb hold next == current.
+    for step in NULLIFIER_LEAF_TRACE_START - 1..NULLIFIER_BLOCK_ONE_ABSORB_ROW {
+        columns[NULLIFIER_PADDING_HOLD_SELECTOR][step] = ProductionFelt::ONE;
     }
     columns
 }
@@ -2876,6 +3010,13 @@ fn commitment_absorption_block<E: FieldElement + From<ProductionFelt>>(
     }
 }
 
+/// Row at which the claim-source leaf hash absorbs claim hash `limb` (leaf
+/// element 4 + limb): block 0 at the leaf reset row, block 1 one round block later.
+fn claim_source_limb_absorb_row(limb: usize) -> usize {
+    let block = (4 + limb) / RESCUE_RATE_WIDTH;
+    CLAIM_SOURCE_LEAF_TRACE_START - 1 + block * RESCUE_RATE_WIDTH
+}
+
 fn claim_source_leaf_absorption_block<E: FieldElement + From<ProductionFelt>>(
     row: &[E],
     block: usize,
@@ -3117,4 +3258,4 @@ fn prefix_column(gate: usize) -> usize {
 
 #[cfg(test)]
 #[path = "production_air_winterfell_tests.rs"]
-mod tests;
+mod adversarial_verifier_tests;

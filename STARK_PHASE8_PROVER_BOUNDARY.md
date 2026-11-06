@@ -1765,7 +1765,7 @@ the disabled-by-default `production-air-winterfell` feature:
 
 ```text
 cargo test --lib --features production-air-winterfell \
-  production_air_winterfell::tests --jobs 1
+  production_air_winterfell::adversarial_verifier_tests --jobs 1
 ```
 
 The trace now contains:
