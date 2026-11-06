@@ -1575,3 +1575,74 @@ fn mismatched_adjudication_cannot_enter_winterfell_trace() {
             .any(|error| error.contains("expected_outcome does not match G1-G10 semantics"))
     );
 }
+
+/// Fee-schedule presence flags (leaf elements 24..=26, columns 164..=166). The
+/// reset row asserts them to ONE, but the leaf hash absorbs them in block 3 at
+/// `FEE_SCHEDULE_LEAF_TRACE_START + 23`. This forgery sets each flag to ZERO on
+/// every fee-schedule row after the reset row, re-derives the leaf, Merkle path,
+/// fee-schedule root, public input root and batch root, and keeps the reset row
+/// honest, so only the unasserted absorb rows carry the forged flag.
+fn forge_fee_schedule_presence_flag_trace(
+    input: &ProductionAirProofInputV2,
+    element: usize,
+) -> TraceTable<ProductionFelt> {
+    let mut columns = honest_trace_columns(input);
+    let column = FEE_SCHEDULE_PREIMAGE_START + element;
+    let mut forged_preimage = input.fee_schedule.leaf_preimage;
+    forged_preimage[element] = ProductionFelt::ZERO;
+
+    for step in FEE_SCHEDULE_LEAF_TRACE_START..NULLIFIER_LEAF_TRACE_START - 1 {
+        columns[column][step] = forged_preimage[element];
+    }
+
+    let leaf_states = build_fee_schedule_leaf_hash_states(&forged_preimage);
+    write_hash_states(&mut columns, FEE_SCHEDULE_LEAF_TRACE_START, &leaf_states);
+    let forged_leaf = core::array::from_fn(|index| {
+        leaf_states[FEE_SCHEDULE_LEAF_TRACE_LENGTH - 1][RESCUE_RATE_START + index]
+    });
+    let merkle_states =
+        build_fee_schedule_merkle_hash_states(forged_leaf, &input.fee_schedule.merkle_path);
+    write_hash_states(&mut columns, FEE_SCHEDULE_MERKLE_TRACE_START, &merkle_states);
+    for index in 0..FEE_SCHEDULE_ROOT_WIDTH {
+        columns[FEE_SCHEDULE_ROOT_RESULT_START + index].fill(
+            merkle_states[FEE_SCHEDULE_MERKLE_TRACE_LENGTH - 1][RESCUE_RATE_START + index],
+        );
+    }
+    rederive_public_and_batch_roots(&mut columns, input);
+    TraceTable::init(columns)
+}
+
+// Presence flags are a D-03 item 8 forgery: release-only, pass criterion is the
+// unmodified verifier returning false.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "release-only: a debug prover refusal is not a verifier rejection"
+)]
+fn reject_fee_schedule_presence_flag_forgery() {
+    let input = approved_proof_input();
+    let (_, honest_public_inputs) = prove_production_air(&input).unwrap();
+
+    let mut accepted = Vec::new();
+    for element in [24_usize, 25, 26] {
+        let forged_trace = forge_fee_schedule_presence_flag_trace(&input, element);
+        let (proof, forged_public_inputs) = prove_forged_trace(forged_trace);
+
+        assert_ne!(
+            forged_public_inputs.fee_schedule_root, honest_public_inputs.fee_schedule_root,
+            "element {element}"
+        );
+        let proof = proof.unwrap_or_else(|message| {
+            panic!(
+                "element {element}: prover refused the forged trace; only a verifier rejection counts: {message}"
+            )
+        });
+        if verify_production_air(proof, forged_public_inputs) {
+            accepted.push(element);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "fee-schedule presence-flag forgery must not verify; verifier accepted elements: {accepted:?}"
+    );
+}

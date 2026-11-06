@@ -320,6 +320,16 @@ const ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
 // FEE_SCHEDULE_LINK_CONSTRAINT_COUNT counts transition constraints only and stays 0.
 const FEE_SCHEDULE_BLOCK_ONE_ABSORB_ROW: usize = FEE_SCHEDULE_LEAF_TRACE_START + 7;
 const FEE_SCHEDULE_LIMB_ABSORB_ASSERTION_COUNT: usize = 4;
+// Preimage block 3 is absorbed at leaf row +23 and carries leaf elements 24..31.
+// The presence flags (24..26) and the oracle reserved zeros (30, 31) are fixed
+// values, but before this they were asserted only at the leaf reset row, so a
+// forged trace could change them on the absorb row and still verify. Pinning
+// them at the absorb row closes that gap. Both are Assertion::single on constant
+// values, so they add no transition constraints and no degree.
+const ORACLE_FACTS_BLOCK_THREE_ABSORB_ROW: usize = ORACLE_FACTS_LEAF_TRACE_START + 23;
+const ORACLE_FACTS_FLAG_ABSORB_ASSERTION_COUNT: usize = 5;
+const FEE_SCHEDULE_BLOCK_THREE_ABSORB_ROW: usize = FEE_SCHEDULE_LEAF_TRACE_START + 23;
+const FEE_SCHEDULE_FLAG_ABSORB_ASSERTION_COUNT: usize = 3;
 const TRANSITION_CONSTRAINT_COUNT: usize = SEMANTIC_CONSTRAINT_COUNT
     + COMMITMENT_BOUND_COLUMN_COUNT
     + HASH_CONSTRAINT_COUNT
@@ -353,6 +363,8 @@ const PUBLIC_ASSERTION_COUNT: usize = CLAIM_HASH_LIMB_COUNT
     + NULLIFIER_LIMB_ABSORB_ASSERTION_COUNT
     + ORACLE_FACTS_LIMB_ABSORB_ASSERTION_COUNT
     + FEE_SCHEDULE_LIMB_ABSORB_ASSERTION_COUNT
+    + ORACLE_FACTS_FLAG_ABSORB_ASSERTION_COUNT
+    + FEE_SCHEDULE_FLAG_ABSORB_ASSERTION_COUNT
     + NULLIFIER_ROOT_TREE_DEPTH * 2
     + BATCH_ROOT_WIDTH;
 
@@ -1399,6 +1411,14 @@ impl Air for ProductionG1G10Air {
                 value,
             ));
         }
+        // Same fixed flags, pinned again where block 3 absorbs them.
+        for offset in [24, 25, 26] {
+            assertions.push(Assertion::single(
+                FEE_SCHEDULE_PREIMAGE_START + offset,
+                FEE_SCHEDULE_BLOCK_THREE_ABSORB_ROW,
+                ProductionFelt::ONE,
+            ));
+        }
         for (offset, value) in [
             (0, felt(ORACLE_FACTS_ROOT_DOMAIN_TAG)),
             (1, felt(ORACLE_FACTS_ROOT_SCHEMA_TAG)),
@@ -1413,6 +1433,20 @@ impl Air for ProductionG1G10Air {
             assertions.push(Assertion::single(
                 ORACLE_FACTS_PREIMAGE_START + offset,
                 ORACLE_FACTS_LEAF_TRACE_START - 1,
+                value,
+            ));
+        }
+        // Same fixed flags and reserved zeros, pinned again at the block 3 absorb row.
+        for (offset, value) in [
+            (24, ProductionFelt::ONE),
+            (25, ProductionFelt::ONE),
+            (26, ProductionFelt::ONE),
+            (30, ProductionFelt::ZERO),
+            (31, ProductionFelt::ZERO),
+        ] {
+            assertions.push(Assertion::single(
+                ORACLE_FACTS_PREIMAGE_START + offset,
+                ORACLE_FACTS_BLOCK_THREE_ABSORB_ROW,
                 value,
             ));
         }
