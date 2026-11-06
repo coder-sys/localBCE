@@ -3224,4 +3224,4 @@ fn prefix_column(gate: usize) -> usize {
 
 #[cfg(test)]
 #[path = "production_air_winterfell_tests.rs"]
-mod tests;
+mod adversarial_verifier_tests;
