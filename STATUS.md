@@ -11,7 +11,7 @@ Exact HEAD for this document: see `git log -1 --format=%H -- STATUS.md` on the b
 - PR #4 (D-01/N-08, retire Groth16 runtime routing): merged into `integration/rightrail` at `e746f582`.
 
 ## Open
-- PR #5 (D-02/D-03 STARK binding gaps 1-5), draft into `integration/rightrail`, head `e6f9dc8f`. CI run `40788336406`: all 8 jobs succeeded and the release-mode stark-engine steps succeeded on Linux (job 123167022508, step 8) and Windows (job 123167022768, step 4); per-test lines not yet confirmed (OPEN_QUESTIONS item 9). Not merged; awaiting human review.
+- PR #5 (D-02/D-03 STARK binding gaps 1-5), draft into `integration/rightrail`, head `ba4896fb`. CI run `40949974519` (#36): all 8 jobs succeeded; the release-mode stark-engine suite passed on Linux and Windows, and all five `reject_*_forgery` tests report `ok` on both (OPEN_QUESTIONS item 9, resolved). Earlier run `40788336406` on `e6f9dc8f` is kept as history. Not merged; awaiting human review.
 
 ## Defects
 | ID | Status | Proof |

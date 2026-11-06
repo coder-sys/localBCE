@@ -131,3 +131,11 @@
   123167022508, step 8) and Windows (job 123167022768, step 4). The Linux
   release step took 7m39s and the Windows release step 14m15s. Per-test log
   lines were not read (job logs need GitHub sign-in).
+- 2026-11-05: Run `40949974519` (#36) on head `ba4896fb` (docs commit): all 8
+  jobs succeeded. Read via API: the `stark-engine-windows` release step ran 78
+  tests, 0 failed, and the five `reject_*_forgery` tests reported `ok`. Closes
+  OPEN_QUESTIONS item 9. Earlier failed runs, checked on 2026-11-05: #28
+  (`8d73f40`, gap 1 failing-test commit) failed `reject_after_path_sibling_forgery`
+  as expected before its fix. #32 (`4e6d7a7`) and #29 (`418ad603`) each failed
+  only `test_concurrent_inference_workers_claim_distinct_jobs` in `rules-and-ops`,
+  a Python test outside the stark suite; not yet confirmed as flaky.
