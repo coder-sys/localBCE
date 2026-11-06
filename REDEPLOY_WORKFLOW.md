@@ -1,15 +1,19 @@
 # Redeploy Workflow
 
+> Retired by D-01 (PR #4): Groth16 runtime routing no longer exists and
+> `proof_execution_enabled` is false. Kept for reference; paths point at
+> `deprecated/groth16/`.
+
 Use this workflow only when a contract, verifier, proving key, or circuit artifact intentionally changes.
 
 ## When Redeploy Is Required
 
 Redeploy is required if any of these change:
 
-- `zk/claim.circom`
-- `zk/claim_final.zkey`
+- `deprecated/groth16/zk/claim.circom`
+- `deprecated/groth16/zk/claim_final.zkey`
 - `blind-ledger/src/Verifier.sol`
-- `blind-ledger/src/ClaimsRegistry.sol`
+- `deprecated/groth16/blind-ledger/src/ClaimsRegistry.sol`
 
 Do not redeploy for Rust-only refactors that preserve the current Groth16 calldata and contract interface.
 
