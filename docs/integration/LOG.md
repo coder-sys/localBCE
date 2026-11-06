@@ -139,3 +139,10 @@
   as expected before its fix. #32 (`4e6d7a7`) and #29 (`418ad603`) each failed
   only `test_concurrent_inference_workers_claim_distinct_jobs` in `rules-and-ops`,
   a Python test outside the stark suite; not yet confirmed as flaky.
+- 2026-11-06: Correction. Gaps 2-5 (claim-source limbs, nullifier preimage,
+  oracle-facts link, fee-schedule link) are D-02 work per the integration spec
+  (section 5, lines 108-131), not D-03. Real D-03 (each G1-G10 fact derived from
+  a root-bound EVIDENCE/v1 leaf or published as asserted) has not started and
+  depends on Phase 2 interfaces. Commit messages from these gaps keep the old
+  label; history is not rewritten. Presence flags (elements 24-26) and reserved
+  zeros are required for D-02 per the spec.
