@@ -92,3 +92,22 @@
   needs the owner as the only writer; retiring the Rust reference needs Lean
   rules for G2/G4/G6/G8/G10 and would break `AGENTS.md`'s "denial_reason()
   must remain" until then. See `OPEN_QUESTIONS.md` item 12.
+- 2026-11-07: independent read-only review of `e746f582..c9f4f71d` (six area
+  reviewers, two skeptics per finding, one completeness pass). 21 findings:
+  8 upheld by both skeptics, 8 split, 5 refuted, plus 1 from the completeness
+  pass. Fixed: `51a66cfc` (local gate's `tests/` interpreter; five app-layer
+  attack tests that read parked sources now skip; review-queue checkpoint
+  regenerated), `7bcc0e9a` (`rules_content_v1` verify accepts only what
+  export produces), `10f99b3a` (parity harness treats snapshots that fail
+  their pin as missing; human-review split 83/15 -> 81/17, totals unchanged),
+  `e1176494` (README, STATUS, plan, INVENTORY, THREAT_MODEL, ops runbooks,
+  `IMPORTED_FROM.md` check command, parked `.gitattributes`/`.gitignore`
+  entries). Not changed: the parity end-to-end tests still skip, loudly, when
+  no rust-engine binary is built (CI builds one first).
+- 2026-11-07: the owner said STARK stays parked (PR #5 stays an unmerged
+  draft) and permitted pushing this branch. The main checkout's uncommitted
+  copy of Phase 1 was compared with this branch, backed up (patches, a
+  stash-style commit under `refs/backup/main-checkout-2026-11-07`, a tar of
+  untracked files, checksums, in
+  `C:\Users\sruja\Backups\localBCE-main-checkout-2026-11-07`), and only the
+  superseded changes were reverted there.
