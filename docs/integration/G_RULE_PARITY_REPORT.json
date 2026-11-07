@@ -9,7 +9,8 @@
     "An earlier commit releases a line only when every line of its payment is ALLOW and the payment is not being decided again (`redo`); a re-decided payment's own released line is not its own duplicate.",
     "The gate's own checkpoint of the released and unresolved sets (used when a set read does not chain) is not modelled: localBCE has no checkpoint, so only the rows of the set read count.",
     "G2, G4, G6, G8 and G10 flags are set to passing values: no Lean rule exists for them yet (Phase 3).",
-    "A dropped snapshot contributes no rows."
+    "A dropped snapshot, or one whose rows do not hash to its declared pin, contributes no rows: Lean treats both as missing (Run.lean `snapshot`).",
+    "A line the vector gives no expected result is not compared, and is not counted as released for later commits (its Lean result is unknown here)."
   ],
   "authoritative": false,
   "by_category": {
@@ -18,9 +19,9 @@
     "hold_reason_differs": 3,
     "lean_holds_on_mapped_rule_local_approves": 1,
     "lean_holds_on_unmapped_rule_local_approves": 22,
-    "lean_review_local_approves": 83,
-    "lean_review_local_denies": 15,
-    "not_decided_by_lean": 1
+    "lean_review_local_approves": 81,
+    "lean_review_local_denies": 17,
+    "no_lean_expectation": 1
   },
   "compared_rules": {
     "localbce": [
@@ -1197,7 +1198,7 @@
     {
       "batch": 1,
       "case": "lost_released_row_unanchored",
-      "category": "not_decided_by_lean",
+      "category": "no_lean_expectation",
       "derived_flags": {
         "eligibility_active": 1,
         "eligibility_period_from": 20260101,
@@ -3180,11 +3181,11 @@
     {
       "batch": 0,
       "case": "span_bad_pin",
-      "category": "lean_review_local_approves",
+      "category": "lean_review_local_denies",
       "derived_flags": {
-        "eligibility_active": 1,
-        "eligibility_period_from": 20260101,
-        "eligibility_period_thru": 20271231,
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
         "is_duplicate": 0,
         "provider_enrolled": 1,
         "recipient_not_deceased": 1
@@ -3195,8 +3196,8 @@
         "STALE_ENROLLMENT"
       ],
       "line_id": 148,
-      "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
     },
     {
       "batch": 0,
@@ -3307,11 +3308,11 @@
     {
       "batch": 0,
       "case": "span_wrong_pin",
-      "category": "lean_review_local_approves",
+      "category": "lean_review_local_denies",
       "derived_flags": {
-        "eligibility_active": 1,
-        "eligibility_period_from": 20260101,
-        "eligibility_period_thru": 20271231,
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
         "is_duplicate": 0,
         "provider_enrolled": 1,
         "recipient_not_deceased": 1
@@ -3322,8 +3323,8 @@
         "STALE_ENROLLMENT"
       ],
       "line_id": 153,
-      "localbce_reason": null,
-      "localbce_status": "APPROVED"
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
     },
     {
       "batch": 0,

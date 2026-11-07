@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -72,7 +73,10 @@ ASSUMPTIONS = [
     "The gate's own checkpoint of the released and unresolved sets (used when a set read does not chain) is not "
     "modelled: localBCE has no checkpoint, so only the rows of the set read count.",
     "G2, G4, G6, G8 and G10 flags are set to passing values: no Lean rule exists for them yet (Phase 3).",
-    "A dropped snapshot contributes no rows.",
+    "A dropped snapshot, or one whose rows do not hash to its declared pin, contributes no rows: Lean treats "
+    "both as missing (Run.lean `snapshot`).",
+    "A line the vector gives no expected result is not compared, and is not counted as released for later "
+    "commits (its Lean result is unknown here).",
 ]
 
 
@@ -116,6 +120,45 @@ class VectorError(ValueError):
     pass
 
 
+# Pins (Spec.lean `pinInput`, Run.lean `St.pin`): SHA3-512 over DOMAIN, NUL, the u32 kind, date and count,
+# then each row's fixed-width big-endian fields, rows in ascending byte order.  A value too wide fails the pin.
+ID_W, PAY_W = 129, 261
+PIN_KINDS = {
+    "dmf": ("RR/GATE/SNAPSHOT/v1", 1, lambda r: [(ID_W, r[0]), (4, r[1])]),
+    "pdeath": ("RR/GATE/SNAPSHOT/v1", 2, lambda r: [(ID_W, r[0]), (4, r[1])]),
+    "excl": ("RR/GATE/SNAPSHOT/v1", 3, lambda r: [(ID_W, r[0]), (4, r[1]), (4, r[2])]),
+    "span": ("RR/GATE/SNAPSHOT/v1", 4, lambda r: [(ID_W, r[0]), (ID_W, r[1]), (4, r[2]), (4, r[3])]),
+    "released": ("RR/GATE/RELEASED/v1", 5, None),
+    "unresolved": ("RR/GATE/UNRESOLVED/v1", 6, None),
+}
+FLOW_TAG = {"FFS_CYCLE": 1, "FFS_CLAIM": 2, "CAP_820": 3}
+
+
+def _line_fields(l):
+    return [(ID_W, l.id), (PAY_W, l.pay), (1, FLOW_TAG[l.flow]), (ID_W, l.member), (ID_W, l.payee),
+            (ID_W, l.rendering), (4, l.date), (ID_W, l.proc), (4, l.units), (8, l.cents)]
+
+
+def _be(fields):
+    out = b""
+    for width, value in fields:
+        if value >= 256 ** width:
+            return None
+        out += value.to_bytes(width, "big")
+    return out
+
+
+def snapshot_pin(kind, as_of, count, rows):
+    """The hex pin Lean computes for a declared snapshot, or None when a value does not fit."""
+    domain, k, fields = PIN_KINDS[kind]
+    fields = fields or _line_fields
+    head = _be([(4, k), (4, as_of), (4, count)])
+    body = [_be(fields(r)) for r in rows]
+    if head is None or any(b is None for b in body):
+        return None
+    return hashlib.sha3_512(domain.encode("utf-8") + b"\x00" + head + b"".join(sorted(body))).hexdigest()
+
+
 def released_by(batch, redo):
     """Exact keys a committed batch adds to the released set, per the vectors' expected outcomes: the lines
     of payments whose every line is ALLOW, except a re-decided payment's (released already)."""
@@ -153,9 +196,15 @@ def parse_vectors(text):
     redo = []  # payments the next commit decides again
     case_allowed = []  # exact keys released by earlier commits of this case
 
+    decl = {}  # kind -> (asOf, count, declared pin)
+
     def snapshot_facts():
         def live(k):
-            return list(rows[k]) if present[k] else []
+            # Lean treats a snapshot whose pin does not match its rows as missing (Run.lean `snapshot`).
+            if not present[k] or k not in decl:
+                return []
+            as_of, count, declared = decl[k]
+            return list(rows[k]) if snapshot_pin(k, as_of, count, rows[k]) == declared else []
         return {
             "dmf": live("dmf"),
             "pdeath": live("pdeath"),
@@ -177,8 +226,11 @@ def parse_vectors(text):
             cases.append(case)
             batch, case_allowed, redo = [], [], []
         elif k == "snap":
+            if len(fs) != 5:
+                raise VectorError(f"line {n}: snap needs KIND ASOF COUNT PIN")
             rows[fs[1]] = []
             present[fs[1]] = True
+            decl[fs[1]] = (int(fs[2]), int(fs[3]), fs[4])
             if fs[1] == "released":
                 case_allowed = []
         elif k == "drop":
@@ -197,7 +249,9 @@ def parse_vectors(text):
             line = parse_line_fields(fs[1:10])
             e = fs[10:]
             if len(e) == 0:
-                expect = None  # the runner refuses the whole batch (e.g. `commit UNANCHORED`): Lean decides nothing
+                # The vector records no Lean result for this line (the runner checks all lines of a commit or
+                # none; rules_v1 uses this only for a `commit UNANCHORED` batch, which Lean refuses).
+                expect = None
             elif len(e) in (2, 3):
                 expect = Expect(e[0], () if e[1] == "-" else tuple(e[1].split(",")))
             else:
@@ -285,7 +339,7 @@ def run_engine(engine, claim, workdir):
 
 def classify(expect, status, reason):
     if expect is None:
-        return "not_decided_by_lean"
+        return "no_lean_expectation"
     lean = set(expect.reasons)
     if expect.outcome == "ALLOW":
         return "agree_allow" if status == "APPROVED" else "local_denies_lean_allows"
@@ -303,8 +357,9 @@ def classify(expect, status, reason):
 
 # Which categories are differences, and what each one means for review.
 CATEGORY_NOTES = {
-    "not_decided_by_lean": "The Lean runner refuses the whole batch (a checkpoint check fails), so there is no "
-                           "Lean result to compare; localBCE has no checkpoint and decides the line anyway.",
+    "no_lean_expectation": "The vector records no Lean result for the line (in rules_v1, only a `commit "
+                           "UNANCHORED` batch, which Lean refuses at its checkpoint), so there is nothing to "
+                           "compare; localBCE has no checkpoint and decides the line anyway.",
     "agree_allow": "Both pass the line.",
     "agree_hold": "Both stop the line, for a mapped reason.",
     "hold_reason_differs": "Both stop the line, but localBCE's first failing gate does not map to any Lean reason given.",
@@ -368,8 +423,8 @@ def summarize(records, vectors_path):
         "assumptions": ASSUMPTIONS,
         "lines": len(records),
         "agreements": sum(v for k, v in counts.items() if k in AGREEMENT),
-        "differences": sum(v for k, v in counts.items() if k not in AGREEMENT and k != "not_decided_by_lean"),
-        "not_compared": counts.get("not_decided_by_lean", 0),
+        "differences": sum(v for k, v in counts.items() if k not in AGREEMENT and k != "no_lean_expectation"),
+        "not_compared": counts.get("no_lean_expectation", 0),
         "by_category": dict(sorted(counts.items())),
         "records": records,
     }
@@ -382,7 +437,7 @@ def markdown(report):
         "Generated by `scripts/g_rule_parity.py`. Not authoritative: Lean decides inside RightRail, and this report",
         "only lists where localBCE's `denial_reason()` would disagree on the same synthetic facts.",
         f"Vectors: `{report['vectors']}`. Lines compared: {report['lines']}. Agreements: {report['agreements']}. "
-        f"Differences: {report['differences']}. Not compared (Lean refused the batch): {report['not_compared']}.",
+        f"Differences: {report['differences']}. Not compared (no Lean result recorded): {report['not_compared']}.",
         "",
         "## Assumptions (how localBCE flags are derived from Lean's rows)",
         "",
@@ -395,7 +450,7 @@ def markdown(report):
     for r in report["records"]:
         if r["category"] in AGREEMENT:
             continue
-        lean = (r["lean_outcome"] or "batch refused") + (" " + ",".join(r["lean_reasons"]) if r["lean_reasons"] else "")
+        lean = (r["lean_outcome"] or "no result recorded") +(" " + ",".join(r["lean_reasons"]) if r["lean_reasons"] else "")
         local = r["localbce_status"] + (" " + r["localbce_reason"] if r["localbce_reason"] else "")
         out.append(f"| {r['case']} | {r['line_id']} | {r['flow']} | {lean} | {local} | `{r['category']}` |")
     out.append("")

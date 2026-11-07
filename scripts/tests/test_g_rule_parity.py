@@ -8,6 +8,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import g_rule_parity as gp  # noqa: E402
 
 ROOT = gp.ROOT
+
+
+def pinned(text):
+    """Replace each `snap KIND ASOF COUNT PIN` placeholder pin with the pin of the rows that follow it."""
+    lines = text.splitlines()
+    for i, raw in enumerate(lines):
+        fs = raw.split()
+        if fs[:1] != ["snap"]:
+            continue
+        kind = fs[1]
+        rows = []
+        for r in lines[i + 1:]:
+            rf = r.split()
+            if rf[:1] != [kind]:
+                break
+            rows.append(gp.parse_line_fields(rf[1:]) if kind in ("released", "unresolved")
+                        else tuple(int(x) for x in rf[1:]))
+        lines[i] = " ".join(fs[:4] + [gp.snapshot_pin(kind, int(fs[2]), int(fs[3]), rows)])
+    return "\n".join(lines) + "\n"
+
+
 SYNTHETIC = """
 today 20270315
 snap released 20270315 0 x
@@ -65,16 +86,51 @@ class ParseVectors(unittest.TestCase):
             gp.parse_vectors("case x\nline 1 FFS_CLAIM 1 2 2 20270101 1 1 1 ALLOW -\n")
 
     def test_dropped_snapshot_contributes_no_rows(self):
-        cases = gp.parse_vectors(
-            "snap dmf 20270301 1 x\ndmf 5 20270101\ncase c\ndrop dmf\n"
-            "line 1 FFS_CLAIM 5 2 2 20270201 1 1 1 HUMAN_REVIEW STALE_DMF\ncommit\n")
-        _, _, facts, _ = cases[0].batches[0][0]
-        self.assertEqual(facts["dmf"], [])
+        cases = gp.parse_vectors(pinned(
+            "snap dmf 20270301 1 x\ndmf 5 20270101\ncase c\n"
+            "line 1 FFS_CLAIM 5 2 2 20270201 1 1 1 HOLD MEMBER_DECEASED\ncommit\ndrop dmf\n"
+            "line 2 FFS_CLAIM 5 2 2 20270201 1 1 1 HUMAN_REVIEW STALE_DMF\ncommit\n"))
+        self.assertEqual(cases[0].batches[0][0][2]["dmf"], [(5, 20270101)])
+        self.assertEqual(cases[0].batches[1][0][2]["dmf"], [])
+
+    def test_snapshot_failing_its_pin_contributes_no_rows(self):
+        """Lean treats a snapshot whose rows do not hash to its declared pin as missing (review 2026-11-07)."""
+        good = pinned("snap dmf 20270301 1 x\ndmf 5 20270101\n")
+        bad = good.replace("dmf 5 20270101", "dmf 6 20270101")
+        for text, rows in ((good, [(5, 20270101)]), (bad, []), ("snap dmf 20270301 1 00\ndmf 5 20270101\n", [])):
+            cases = gp.parse_vectors(text + "case c\nline 1 FFS_CLAIM 5 2 2 20270201 1 1 1 ALLOW -\ncommit\n")
+            self.assertEqual(cases[0].batches[0][0][2]["dmf"], rows)
+
+    def test_pins_reproduce_rules_v1_except_its_wrong_pin_cases(self):
+        """The harness's pin is Lean's: every declared pin in rules_v1 matches except the deliberately wrong ones."""
+        with open(gp.DEFAULT_VECTORS, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        case, matched, wrong_cases = None, 0, set()
+        for i, raw in enumerate(lines):
+            fs = raw.split()
+            if fs[:1] == ["case"]:
+                case = fs[1]
+            if fs[:1] != ["snap"]:
+                continue
+            rows = []
+            for r in lines[i + 1:]:
+                rf = r.split()
+                if rf[:1] != [fs[1]]:
+                    break
+                rows.append(gp.parse_line_fields(rf[1:]) if fs[1] in ("released", "unresolved")
+                            else tuple(int(x) for x in rf[1:]))
+            if gp.snapshot_pin(fs[1], int(fs[2]), int(fs[3]), rows) == fs[4]:
+                matched += 1
+            else:
+                wrong_cases.add(case)
+        self.assertGreater(matched, 100)
+        self.assertTrue(wrong_cases)
+        self.assertTrue(all(c.endswith(("_wrong_pin", "_bad_pin")) for c in wrong_cases), wrong_cases)
 
 
 class DeriveClaim(unittest.TestCase):
     def setUp(self):
-        self.case = gp.parse_vectors(SYNTHETIC)[0]
+        self.case = gp.parse_vectors(pinned(SYNTHETIC))[0]
 
     def flags(self, batch, index, earlier=()):
         line, _, facts, allowed = self.case.batches[batch][index]
@@ -105,8 +161,8 @@ class DeriveClaim(unittest.TestCase):
         self.assertEqual(self.flags(1, 0)["is_duplicate"], 1)
 
     def test_cap_line_for_another_plan_fails_month_of_service(self):
-        cases = gp.parse_vectors("snap span 20270314 1 x\nspan 1001 501 20260101 20271231\ncase c\n"
-                                 "line 1 CAP_820 1001 502 502 20270301 0 1 45000 HOLD MEMBER_NOT_ENROLLED\ncommit\n")
+        cases = gp.parse_vectors(pinned("snap span 20270314 1 x\nspan 1001 501 20260101 20271231\ncase c\n"
+                                 "line 1 CAP_820 1001 502 502 20270301 0 1 45000 HOLD MEMBER_NOT_ENROLLED\ncommit\n"))
         line, _, facts, _ = cases[0].batches[0][0]
         c = gp.derive_claim(line, facts, set())
         self.assertFalse(c["eligibility_period_from"] <= c["date_of_service_from"] <= c["eligibility_period_thru"])
@@ -155,8 +211,8 @@ class Classify(unittest.TestCase):
                          "lean_review_local_denies")
 
     def test_every_category_has_a_note(self):
-        self.assertEqual(gp.classify(None, "APPROVED", None), "not_decided_by_lean")
-        cats = {"not_decided_by_lean", "agree_allow", "agree_hold", "hold_reason_differs", "local_denies_lean_allows",
+        self.assertEqual(gp.classify(None, "APPROVED", None), "no_lean_expectation")
+        cats = {"no_lean_expectation", "agree_allow", "agree_hold", "hold_reason_differs", "local_denies_lean_allows",
                 "lean_holds_on_mapped_rule_local_approves", "lean_holds_on_unmapped_rule_local_approves",
                 "lean_review_local_approves", "lean_review_local_denies"}
         self.assertEqual(set(gp.CATEGORY_NOTES), cats)
@@ -176,7 +232,7 @@ ENGINE = find_engine()
                              "(cargo build in rust-engine/, or set LOCALBCE_RUST_ENGINE)")
 class EndToEnd(unittest.TestCase):
     def test_synthetic_vectors_agree(self):
-        records = gp.compare(gp.parse_vectors(SYNTHETIC), ENGINE)
+        records = gp.compare(gp.parse_vectors(pinned(SYNTHETIC)), ENGINE)
         got = {r["line_id"]: (r["category"], r["localbce_reason"]) for r in records}
         self.assertEqual(got, {
             1: ("agree_allow", None),
