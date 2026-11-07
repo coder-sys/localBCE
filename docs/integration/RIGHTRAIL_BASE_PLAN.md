@@ -6,7 +6,9 @@ the direction ("rightrail as base with stark parked and localbce wired with righ
 An earlier version of this line said the plan was approved on 2026-10-22; no record of that
 approval exists, so it was removed. Phases 1-2 implemented on `codex/rightrail-base-phases`;
 Phases 3-4 blocked (see §7 and `docs/integration/PHASE2_REPORT.md`).
-Drafted 2026-10-22 against `integration/rightrail` at `e746f58`. PR #5 (`418ad60`, STARK AIR) is parked as a draft.
+Drafted 2026-10-22 against `integration/rightrail` at `e746f58`, when PR #5 (STARK AIR) was at
+`418ad60`. PR #5 has since grown to the five forgery-gap fixes (head `ba4896fb`); STARK stays
+parked (owner, 2026-11-07), so PR #5 stays an unmerged draft.
 
 ## 1. Decision
 
@@ -49,10 +51,10 @@ RightRail already decides claim-line rules R1-R5 in Lean
 (`rightrail/lean/BlindLedger/Gate/Rules/Spec.lean:16-30`). Under CONST V.2 an
 overlapping G-rule must map onto the existing R-rule, not be added again.
 
-| localBCE gate (`rust-engine/src/main.rs:585`) | RightRail rule | Treatment |
+| localBCE gate (`denial_reason()` in `rust-engine/src/main.rs`) | RightRail rule | Treatment |
 |---|---|---|
 | G9 recipient deceased | R1 `MEMBER_DECEASED` | Map to R1; no new rule |
-| G7 duplicate claim | R4 `FFS_DUPLICATE_LINE` | Map to R4; no new rule |
+| G7 duplicate claim | R4 `FFS_DUPLICATE_LINE`; for CAP_820, R2 `CAP_MEMBER_MONTH_DUPLICATE` | Map to R4 and R2 (R2 added by §7 decision 6); no new rule |
 | G1 identity/eligibility active, G3 month of service | R5 `MEMBER_NOT_ENROLLED` | Map to R5; record any semantic difference as an open question |
 | G5 provider not enrolled / type invalid | R3 `PROVIDER_EXCLUDED` / `PROVIDER_DECEASED` | Partial; "not enrolled" and "type invalid" are new conditions |
 | G2 aid code / benefit level, G4 share of cost, G6 billing code / units, G8 disability determination, G10 physician certification | none | New Lean rules, each with its evidence source |
@@ -151,8 +153,8 @@ reversed by the owner; none is a state-policy determination.
 - Porting rules into Lean is the bulk of the work and needs the Lean toolchain and the
   Windows-pinned workers; tests that need them skip elsewhere.
 - Raising bloat caps and re-pinning workers are protected changes and slow by design.
-- The checked-in `rust-engine/adjudication_result.json` shows a submitted transaction; it
-  is stale and is regenerated in Phase 1.
+- The checked-in `rust-engine/adjudication_result.json` showed a submitted transaction; Phase 1
+  regenerated it (`tx_submitted: false`, `tx_hash: null`).
 - `rules-and-ops` CI failed on `418ad60` in a Postgres concurrency test unrelated to the
   STARK change; see §9 before treating it as a Phase 1 blocker.
 
@@ -168,4 +170,7 @@ A local base-vs-fix reproduction (`e746f58` and `418ad60`, Postgres 16, fresh
 database) has not produced a result yet: the first attempt failed on a PyPI
 download timeout, and the second hung in the Postgres-backed tests. The failure is
 therefore **not yet classified**; it is not called flaky without a passing and a
-failing run of the same commit. Phase 1 CI on its own branch is the next data point.
+failing run of the same commit. Later data from PR #5's branch: run 40949974519 on
+`ba4896fb` (2026-10-29) passed all 8 jobs, including `rules-and-ops`; runs on `418ad60` and
+`4e6d7a74` failed and were not examined. That still gives no same-commit pass/fail pair.
+Phase 1 CI on `codex/rightrail-base-phases` is the next data point.

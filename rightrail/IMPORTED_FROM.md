@@ -14,5 +14,5 @@ This tree is RightRail `rightrail-main` at `af020b268094ae3fd6ef5e68fe575b7e5ac4
     literal so localBCE's secret scanner passes; the test's input is unchanged.
   - This file and its Markdown ceiling in `tests/test_bloat_budget.py` (2026-11-07).
 
-To check: `git diff af020b2 HEAD -- . ':!IMPORTED_FROM.md'` from the localBCE root, with
-paths under `rightrail/`, should show only the changes listed above.
+To check, from the localBCE root: `git diff --stat 'af020b2^{tree}' HEAD:rightrail` compares
+the upstream tree with this one and should list only the files above.

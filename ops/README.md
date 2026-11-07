@@ -2,6 +2,9 @@
 
 Status: planning scaffold, not production approval.
 
+Parked (2026-11-07): `stark-engine/`, the STARK settlement tooling and the chain paths named below
+now live under `parked/localbce/` (`docs/integration/RIGHTRAIL_BASE_PLAN.md`) and are not run.
+
 This directory contains operational documentation ported from the hardened
 reference bundle. These files describe deployment, monitoring, custody, risk,
 and production-readiness expectations for future production work.

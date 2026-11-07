@@ -13,7 +13,7 @@ Exact HEAD for this document: see `git log -1 --format=%H -- STATUS.md` on the b
 
 ## Open
 - Phases 1-2 (branch `codex/rightrail-base-phases`, no PR yet): park proof/chain code under `parked/localbce/`, remove STARK/chain paths from `rust-engine`, trim CI, widen Windows CI, G-rule parity harness and report, `RR/RULES/CONTENT/v1` proposal, `rightrail/IMPORTED_FROM.md`. CI has not run on it.
-- PR #5 (D-02 gap 1, STARK AIR): parked as a draft; superseded by the decision to park STARK.
+- PR #5 (STARK AIR, branch `codex/phase1-d02-d03-air-bindings`, head `ba4896fb`): fixes for all five forgery gaps, each with a release-mode rejection test; CI run 40949974519 on that head passed all 8 jobs. Its commits label gaps 2-5 "D-03"; under the original defect list all five are D-02 (correction drafted, uncommitted, in that branch's worktree). STARK stays parked (owner, 2026-11-07), so PR #5 stays an unmerged draft; this branch does not include it.
 
 ## Defects
 | ID | Status | Proof |
