@@ -30,7 +30,10 @@ run_in_dir() {
 # Proof and chain validation (STARK, Foundry, Sepolia, OpenZeppelin) is parked
 # with its code under parked/localbce/; see docs/integration/RIGHTRAIL_BASE_PLAN.md.
 run_step "Parking guard and script tests" python3 -m unittest discover -s "${ROOT_DIR}/scripts/tests" -p 'test_*.py'
-run_step "Integration tests" python3 -m unittest discover -s "${ROOT_DIR}/tests" -p 'test_*.py'
+# tests/ imports pypdf, which gov-rules-kg-prototype/requirements.txt installs into its venv (as in CI).
+TESTS_PYTHON="${ROOT_DIR}/gov-rules-kg-prototype/.venv/bin/python"
+[ -x "${TESTS_PYTHON}" ] || TESTS_PYTHON=python3
+run_step "Integration tests" "${TESTS_PYTHON}" -m unittest discover -s "${ROOT_DIR}/tests" -p 'test_*.py'
 run_step "Validate ops scaffold" python3 "${ROOT_DIR}/scripts/validate_ops_scaffold.py"
 run_step "Scan tracked files for secrets" python3 "${ROOT_DIR}/scripts/scan_secrets.py"
 run_step "Validate deterministic rules pipeline" bash "${ROOT_DIR}/scripts/validate_rules_pipeline.sh"
