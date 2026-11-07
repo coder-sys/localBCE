@@ -1,21 +1,5 @@
 {
-  "claims_registry_address": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
-  "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-  "rpc_url": "http://127.0.0.1:8545",
-  "transaction_value": "0.001ether",
-  "enable_stark_sidecar_artifacts": false,
   "proof_execution_enabled": false,
   "proof_backend": "none",
-  "stark_runtime_mode": "production",
-  "stark_engine_binary": "../stark-engine/target/release/execute_production_stark_settlement",
-  "stark_nullifier_state_path": "../stark-engine/runtime-state/sepolia-pilot/nullifier_state.json",
-  "stark_artifacts_directory": "../stark-engine/runtime-artifacts/sepolia-pilot/claims",
-  "stark_release_profile_path": "../stark-engine/runtime-artifacts/sepolia-pilot/release_profile.json",
-  "stark_deployment_pin_path": "../stark-engine/runtime-artifacts/sepolia-pilot/deployment_pin.json",
-  "stark_chain_id": 11155111,
-  "stark_attestor_mode": "external_command",
-  "stark_finality_mode": "finalized",
-  "stark_finality_timeout_seconds": 900,
-  "stark_finality_poll_seconds": 12,
-  "stark_allow_test_mined_finality": false
+  "rules_backend": "hardcoded_g1_g10"
 }

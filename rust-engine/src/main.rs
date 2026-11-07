@@ -1,6 +1,5 @@
 mod advanced_rules;
 mod rules_engine;
-mod stark_activation;
 
 use advanced_rules::{
     evaluate_promotion_queue_path, validate_canonical_bundle_path, validate_promotion_queue_path,
@@ -9,18 +8,20 @@ use rules_engine::{
     CURRENT_RULESET_SHA256, ClaimRuleFacts, DeterministicRuleBundle, validate_claude_shadow_bundle,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use stark_activation::{
-    StarkRuntimeActivation, StarkRuntimeMode, validate_stark_runtime_activation,
-};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
-const STARK_SIDECAR_OUTPUT_PATH: &str = "stark_adjudication_result.json";
-const STARK_BRIDGE_INPUT_OUTPUT_PATH: &str = "stark_bridge_input.json";
+/// Subcommands that drove the STARK proof path. That path is parked under
+/// `parked/localbce/`; the commands now fail closed instead of falling through.
+const PARKED_STARK_SUBCOMMANDS: [&str; 4] = [
+    "stark-sidecar-dry-run",
+    "--stark-sidecar-dry-run",
+    "stark-bridge-input-dry-run",
+    "--stark-bridge-input-dry-run",
+];
 
 #[derive(Debug, Serialize)]
 enum AdjudicationStatus {
@@ -30,6 +31,9 @@ enum AdjudicationStatus {
     Denied,
 }
 
+/// `tx_submitted` and `tx_hash` stay in the schema for compatibility with
+/// existing consumers (for example `bridge/rightrail_offchain.py`); with proof
+/// and chain settlement parked they are always `false` and `null`.
 #[derive(Debug, Serialize)]
 struct AdjudicationResult {
     claim_id: String,
@@ -41,17 +45,6 @@ struct AdjudicationResult {
 }
 
 impl AdjudicationResult {
-    fn approved(claim_id: String, claim_hash: String, tx_hash: String) -> Self {
-        Self {
-            claim_id,
-            claim_hash,
-            status: AdjudicationStatus::Approved,
-            reason: None,
-            tx_submitted: true,
-            tx_hash: Some(tx_hash),
-        }
-    }
-
     fn approved_unsubmitted(claim_id: String, claim_hash: String) -> Self {
         Self {
             claim_id,
@@ -73,24 +66,10 @@ impl AdjudicationResult {
             tx_hash: None,
         }
     }
-
-    fn denied_submitted(
-        claim_id: String,
-        claim_hash: String,
-        reason: &str,
-        tx_hash: String,
-    ) -> Self {
-        Self {
-            claim_id,
-            claim_hash,
-            status: AdjudicationStatus::Denied,
-            reason: Some(reason.to_string()),
-            tx_submitted: true,
-            tx_hash: Some(tx_hash),
-        }
-    }
 }
 
+// Accepted for claim_input.json compatibility; not read since the STARK bridge was parked.
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ClaimServiceLine {
     procedure_code: String,
@@ -98,6 +77,7 @@ struct ClaimServiceLine {
     units: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ClaimOracleFact {
     fact_type: String,
@@ -108,6 +88,7 @@ struct ClaimOracleFact {
     verification_status: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ClaimFeeScheduleEntry {
     fee_code: String,
@@ -119,6 +100,7 @@ struct ClaimFeeScheduleEntry {
     verification_status: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ClaimInput {
     claim_id: String,
@@ -189,58 +171,43 @@ impl From<&ClaimInput> for ClaimRuleFacts {
     }
 }
 
+/// Runtime configuration. Unknown keys are ignored, so older configs that still
+/// carry chain or STARK settings parse; those settings have no effect.
 #[derive(Debug, Deserialize)]
 struct AppConfig {
-    claims_registry_address: String,
-    private_key: String,
-    rpc_url: String,
-    transaction_value: String,
-    enable_stark_sidecar_artifacts: Option<bool>,
     proof_execution_enabled: Option<bool>,
     proof_backend: Option<String>,
-    stark_engine_binary: Option<String>,
-    stark_claims_registry_address: Option<String>,
-    stark_attestation_verifier_address: Option<String>,
-    stark_nullifier_state_path: Option<String>,
-    stark_artifacts_directory: Option<String>,
-    stark_chain_id: Option<u64>,
-    stark_runtime_mode: Option<String>,
-    stark_release_profile_path: Option<String>,
-    stark_deployment_pin_path: Option<String>,
-    stark_attestor_mode: Option<String>,
-    stark_attestor_signer_program: Option<String>,
-    stark_attestor_signer_args: Option<Vec<String>>,
-    stark_attestor_allowed_key_ids: Option<Vec<String>>,
-    stark_attestor_address: Option<String>,
-    stark_attestor_signer_timeout_seconds: Option<u64>,
-    stark_policy_manifest_hash: Option<String>,
-    stark_finality_mode: Option<String>,
-    stark_finality_timeout_seconds: Option<u64>,
-    stark_finality_poll_seconds: Option<u64>,
-    stark_allow_test_mined_finality: Option<bool>,
     rules_backend: Option<String>,
     rules_file: Option<String>,
     rules_sha256: Option<String>,
 }
 
 impl AppConfig {
-    fn stark_sidecar_enabled(&self) -> bool {
-        self.enable_stark_sidecar_artifacts.unwrap_or(false)
-    }
-
-    fn proof_execution_enabled(&self) -> bool {
-        self.proof_execution_enabled.unwrap_or(false)
-    }
-
-    fn proof_backend(&self) -> Result<&str, String> {
-        let value = self.proof_backend.as_deref().unwrap_or("none");
-        match value {
-            "none" | "stark_attested" => Ok(value),
-            "groth16" => Err("proof_backend 'groth16' is retired".to_string()),
-            _ => Err(format!(
-                "unsupported proof_backend '{value}'; expected none or stark_attested"
-            )),
+    /// Proof execution is parked. Asking for it fails closed rather than
+    /// silently running adjudication only.
+    fn require_adjudication_only(&self) -> Result<(), String> {
+        match self.proof_backend.as_deref().unwrap_or("none") {
+            "none" => {}
+            "groth16" => return Err("proof_backend 'groth16' is retired".to_string()),
+            "stark_attested" => {
+                return Err(
+                    "proof_backend 'stark_attested' is parked; RightRail is the base system"
+                        .to_string(),
+                );
+            }
+            other => {
+                return Err(format!(
+                    "unsupported proof_backend '{other}'; expected none"
+                ));
+            }
         }
+        if self.proof_execution_enabled.unwrap_or(false) {
+            return Err(
+                "proof_execution_enabled=true is not supported; proof execution is parked"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     fn rules_backend(&self) -> Result<&str, String> {
@@ -252,327 +219,6 @@ impl AppConfig {
             )),
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-struct StarkSidecarArtifact {
-    artifact_version: &'static str,
-    proof_system: &'static str,
-    proof_mode: &'static str,
-    runtime_status: &'static str,
-    claim_id: String,
-    claim_hash: String,
-    decision: u8,
-    failure_code: u32,
-    failure_reason: Option<&'static str>,
-    public_inputs: StarkSidecarPublicInputs,
-    metadata: StarkSidecarMetadata,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkSidecarPublicInputs {
-    claim_hash: String,
-    decision: u8,
-    failure_code: u32,
-    ruleset_id: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkSidecarMetadata {
-    verifier_status: &'static str,
-    on_chain_submission: bool,
-    groth16_flow_unchanged: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeInput {
-    schema_version: &'static str,
-    producer: &'static str,
-    purpose: &'static str,
-    runtime_mode: &'static str,
-    claim: StarkBridgeClaim,
-    adjudication: StarkBridgeAdjudication,
-    active_rust_facts: StarkBridgeActiveRustFacts,
-    winterfell_poc_mapping: StarkBridgeWinterfellPocMapping,
-    public_inputs: StarkBridgePublicInputs,
-    proof_status: StarkBridgeProofStatus,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeClaim {
-    claim_id: String,
-    claim_amount: u64,
-    claim_hash: String,
-    member_id: Option<String>,
-    provider_npi: Option<String>,
-    diagnosis_count: Option<u64>,
-    max_charge_cents: Option<u64>,
-    diagnosis_codes: Vec<String>,
-    service_lines: Vec<ClaimServiceLine>,
-    oracle_source_manifest_id: Option<String>,
-    oracle_facts: Vec<ClaimOracleFact>,
-    oracle_attestation_refs: Vec<String>,
-    fee_schedule_id: Option<String>,
-    fee_schedule_entries: Vec<ClaimFeeScheduleEntry>,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeAdjudication {
-    decision: u8,
-    failure_code: u32,
-    failure_reason: Option<&'static str>,
-    ruleset_id: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeActiveRustFacts {
-    eligibility_active: u8,
-    aid_code: u64,
-    benefit_level_exists: u8,
-    date_of_service_from: u64,
-    eligibility_period_from: u64,
-    eligibility_period_thru: u64,
-    soc_amount: u64,
-    soc_met: u8,
-    provider_enrolled: u8,
-    provider_type_valid: u8,
-    billing_code_valid: u8,
-    units_valid: u8,
-    is_duplicate: u8,
-    disability_determination_valid: u8,
-    recipient_not_deceased: u8,
-    physician_certification_valid: u8,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeWinterfellPocMapping {
-    direct: StarkBridgeDirectMapping,
-    partial: StarkBridgePartialMapping,
-    unmapped: StarkBridgeUnmappedMapping,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeDirectMapping {
-    eligibility_active: u8,
-    provider_enrolled: u8,
-    duplicate_flag: u8,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgePartialMapping {
-    service_line_count: StarkBridgePartialEvidence,
-    prior_auth_ok: StarkBridgePartialEvidence,
-    charge_cents: StarkBridgePartialEvidence,
-    program_integrity_hold: StarkBridgePartialEvidence,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgePartialEvidence {
-    source: Vec<&'static str>,
-    status: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeUnmappedMapping {
-    member_id: Option<u64>,
-    provider_npi: Option<u64>,
-    diagnosis_count: Option<u64>,
-    max_charge_cents: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgePublicInputs {
-    claim_hash: String,
-    decision: u8,
-    failure_code: u32,
-    ruleset_id: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct StarkBridgeProofStatus {
-    stark_proof_generated: bool,
-    winterfell_poc_compatible: bool,
-    groth16_flow_unchanged: bool,
-    on_chain_submission: bool,
-}
-
-impl StarkSidecarArtifact {
-    fn from_claim(claim: &ClaimInput, claim_hash: &str) -> Self {
-        let failure_reason = denial_reason(claim);
-        let decision = bool_u8(failure_reason.is_none());
-        let failure_code = failure_reason.map(stark_failure_code).unwrap_or(0);
-
-        Self {
-            artifact_version: "stark-sidecar-v0",
-            proof_system: "stark",
-            proof_mode: "sidecar_schema_only",
-            runtime_status: "written_only_when_config_enabled",
-            claim_id: claim.claim_id.clone(),
-            claim_hash: claim_hash.to_string(),
-            decision,
-            failure_code,
-            failure_reason,
-            public_inputs: StarkSidecarPublicInputs {
-                claim_hash: claim_hash.to_string(),
-                decision,
-                failure_code,
-                ruleset_id: "current_g1_g10_denial_reason",
-            },
-            metadata: StarkSidecarMetadata {
-                verifier_status: "not_selected",
-                on_chain_submission: false,
-                groth16_flow_unchanged: true,
-            },
-        }
-    }
-}
-
-impl StarkBridgeInput {
-    fn from_claim(claim: &ClaimInput, claim_hash: &str) -> Self {
-        let failure_reason = denial_reason(claim);
-        let decision = bool_u8(failure_reason.is_none());
-        let failure_code = failure_reason.map(stark_failure_code).unwrap_or(0);
-
-        Self {
-            schema_version: "stark-bridge-input-v0",
-            producer: "rust-engine",
-            purpose: "stark_engine_compatibility_input",
-            runtime_mode: "dry_run_or_optional_sidecar",
-            claim: StarkBridgeClaim {
-                claim_id: claim.claim_id.clone(),
-                claim_amount: claim.claim_amount,
-                claim_hash: claim_hash.to_string(),
-                member_id: claim.member_id.clone(),
-                provider_npi: claim.provider_npi.clone(),
-                diagnosis_count: claim.diagnosis_count,
-                max_charge_cents: claim.max_charge_cents,
-                diagnosis_codes: claim.diagnosis_codes.clone(),
-                service_lines: claim.service_lines.clone(),
-                oracle_source_manifest_id: claim.oracle_source_manifest_id.clone(),
-                oracle_facts: claim.oracle_facts.clone(),
-                oracle_attestation_refs: claim.oracle_attestation_refs.clone(),
-                fee_schedule_id: claim.fee_schedule_id.clone(),
-                fee_schedule_entries: claim.fee_schedule_entries.clone(),
-            },
-            adjudication: StarkBridgeAdjudication {
-                decision,
-                failure_code,
-                failure_reason,
-                ruleset_id: "current_g1_g10_denial_reason",
-            },
-            active_rust_facts: StarkBridgeActiveRustFacts {
-                eligibility_active: claim.eligibility_active,
-                aid_code: claim.aid_code,
-                benefit_level_exists: claim.benefit_level_exists,
-                date_of_service_from: claim.date_of_service_from,
-                eligibility_period_from: claim.eligibility_period_from,
-                eligibility_period_thru: claim.eligibility_period_thru,
-                soc_amount: claim.soc_amount,
-                soc_met: claim.soc_met,
-                provider_enrolled: claim.provider_enrolled,
-                provider_type_valid: claim.provider_type_valid,
-                billing_code_valid: claim.billing_code_valid,
-                units_valid: claim.units_valid,
-                is_duplicate: claim.is_duplicate,
-                disability_determination_valid: claim.disability_determination_valid,
-                recipient_not_deceased: claim.recipient_not_deceased,
-                physician_certification_valid: claim.physician_certification_valid,
-            },
-            winterfell_poc_mapping: StarkBridgeWinterfellPocMapping {
-                direct: StarkBridgeDirectMapping {
-                    eligibility_active: claim.eligibility_active,
-                    provider_enrolled: claim.provider_enrolled,
-                    duplicate_flag: claim.is_duplicate,
-                },
-                partial: StarkBridgePartialMapping {
-                    service_line_count: StarkBridgePartialEvidence {
-                        source: vec!["billing_code_valid", "units_valid"],
-                        status: "not_equivalent",
-                    },
-                    prior_auth_ok: StarkBridgePartialEvidence {
-                        source: vec!["physician_certification_valid"],
-                        status: "not_equivalent",
-                    },
-                    charge_cents: StarkBridgePartialEvidence {
-                        source: vec!["claim_amount"],
-                        status: "requires_unit_normalization",
-                    },
-                    program_integrity_hold: StarkBridgePartialEvidence {
-                        source: vec!["disability_determination_valid", "recipient_not_deceased"],
-                        status: "not_equivalent",
-                    },
-                },
-                unmapped: StarkBridgeUnmappedMapping {
-                    member_id: claim
-                        .member_id
-                        .as_deref()
-                        .map(stable_identity_string_to_u64),
-                    provider_npi: claim.provider_npi.as_deref().and_then(parse_10_digit_npi),
-                    diagnosis_count: claim.diagnosis_count,
-                    max_charge_cents: claim.max_charge_cents,
-                },
-            },
-            public_inputs: StarkBridgePublicInputs {
-                claim_hash: claim_hash.to_string(),
-                decision,
-                failure_code,
-                ruleset_id: "current_g1_g10_denial_reason",
-            },
-            proof_status: StarkBridgeProofStatus {
-                stark_proof_generated: false,
-                winterfell_poc_compatible: false,
-                groth16_flow_unchanged: true,
-                on_chain_submission: false,
-            },
-        }
-    }
-}
-
-fn bool_u8(value: bool) -> u8 {
-    if value { 1 } else { 0 }
-}
-
-fn stable_identity_string_to_u64(value: &str) -> u64 {
-    value.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
-        hash ^ (byte as u64).wrapping_mul(0x100000001b3)
-    })
-}
-
-fn parse_10_digit_npi(value: &str) -> Option<u64> {
-    if value.len() == 10 && value.chars().all(|ch| ch.is_ascii_digit()) {
-        value.parse::<u64>().ok()
-    } else {
-        None
-    }
-}
-
-fn stark_failure_code(reason: &str) -> u32 {
-    match reason {
-        "G1_IDENTITY_VERIFICATION_FAILED" => 1,
-        "G2_PROGRAM_ELIGIBILITY_FAILED" => 201,
-        "G2_BENEFIT_LEVEL_MISSING" => 202,
-        "G3_MONTH_OF_SERVICE_FAILED" => 3,
-        "G4_SHARE_OF_COST_FAILED" => 4,
-        "G5_PROVIDER_NOT_ENROLLED" => 501,
-        "G5_PROVIDER_TYPE_INVALID" => 502,
-        "G6_BILLING_CODE_INVALID" => 601,
-        "G6_UNITS_INVALID" => 602,
-        "G7_DUPLICATE_CLAIM" => 7,
-        "G8_DISABILITY_DETERMINATION_FAILED" => 8,
-        "G9_RECIPIENT_DECEASED" => 9,
-        "G10_PHYSICIAN_CERTIFICATION_FAILED" => 10,
-        _ => panic!("unmapped STARK sidecar failure reason: {reason}"),
-    }
-}
-
-fn command_failure_message(cmd: &str, status: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
-    format!(
-        "command failed: {}\nexit status: {:?}\nSTDOUT:\n{}\nSTDERR:\n{}",
-        cmd,
-        status,
-        String::from_utf8_lossy(stdout),
-        String::from_utf8_lossy(stderr)
-    )
 }
 
 fn claim_hash_32(claim_id: &str, claim_amount: u64) -> String {
@@ -675,41 +321,6 @@ fn write_result(result: &AdjudicationResult) -> Result<(), String> {
         .map_err(|err| format!("could not write adjudication_result.json: {}", err))
 }
 
-fn write_stark_sidecar_artifact(claim: &ClaimInput, claim_hash: &str) -> Result<(), String> {
-    let artifact = StarkSidecarArtifact::from_claim(claim, claim_hash);
-    let artifact_json = serde_json::to_string_pretty(&artifact).map_err(|err| {
-        format!(
-            "could not serialize stark_adjudication_result.json: {}",
-            err
-        )
-    })?;
-
-    fs::write(STARK_SIDECAR_OUTPUT_PATH, artifact_json)
-        .map_err(|err| format!("could not write stark_adjudication_result.json: {}", err))
-}
-
-fn write_stark_bridge_input(claim: &ClaimInput, claim_hash: &str) -> Result<(), String> {
-    let bridge_input = StarkBridgeInput::from_claim(claim, claim_hash);
-    let bridge_json = serde_json::to_string_pretty(&bridge_input)
-        .map_err(|err| format!("could not serialize stark_bridge_input.json: {}", err))?;
-
-    fs::write(STARK_BRIDGE_INPUT_OUTPUT_PATH, bridge_json)
-        .map_err(|err| format!("could not write stark_bridge_input.json: {}", err))
-}
-
-fn log_proof_event(stage: &str, status: &str, claim_id: &str, claim_hash: &str) {
-    println!(
-        "{}",
-        json!({
-            "event": "proof_generation",
-            "stage": stage,
-            "status": status,
-            "claim_id": claim_id,
-            "claim_hash": claim_hash,
-        })
-    );
-}
-
 fn read_config() -> Result<AppConfig, String> {
     let path = env::var("LOCALBCE_CONFIG_PATH").unwrap_or_else(|_| "config.json".to_string());
     let config_json =
@@ -726,27 +337,17 @@ fn read_claim_input() -> Result<ClaimInput, String> {
     serde_json::from_str(&claim_json).map_err(|err| format!("invalid {path}: {err}"))
 }
 
-fn is_stark_sidecar_dry_run_arg(arg: Option<&str>) -> bool {
-    matches!(
-        arg,
-        Some("stark-sidecar-dry-run") | Some("--stark-sidecar-dry-run")
-    )
-}
-
-fn is_stark_bridge_input_dry_run_arg(arg: Option<&str>) -> bool {
-    matches!(
-        arg,
-        Some("stark-bridge-input-dry-run") | Some("--stark-bridge-input-dry-run")
-    )
-}
-
 fn main() {
     let mut args = env::args().skip(1);
     let arg = args.next();
-    let result = if is_stark_sidecar_dry_run_arg(arg.as_deref()) {
-        run_stark_sidecar_dry_run()
-    } else if is_stark_bridge_input_dry_run_arg(arg.as_deref()) {
-        run_stark_bridge_input_dry_run()
+    let result = if arg
+        .as_deref()
+        .is_some_and(|value| PARKED_STARK_SUBCOMMANDS.contains(&value))
+    {
+        Err(format!(
+            "{} is parked with the STARK proof path; see parked/localbce/README.md",
+            arg.as_deref().unwrap_or_default()
+        ))
     } else if arg.as_deref() == Some("rules-validate") {
         args.next()
             .ok_or_else(|| "rules-validate requires a ruleset path".to_string())
@@ -900,405 +501,43 @@ fn run_rules_evaluate(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_stark_sidecar_dry_run() -> Result<(), String> {
-    let claim = read_claim_input()?;
-    let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-
-    write_stark_sidecar_artifact(&claim, &claim_hash)?;
-
-    println!(
-        "{}",
-        json!({
-            "event": "stark_sidecar_dry_run",
-            "status": "completed",
-            "claim_id": claim.claim_id,
-            "claim_hash": claim_hash,
-            "output": STARK_SIDECAR_OUTPUT_PATH,
-            "groth16_executed": false,
-            "chain_submission": false,
-        })
-    );
-
-    Ok(())
-}
-
-fn run_stark_bridge_input_dry_run() -> Result<(), String> {
-    let claim = read_claim_input()?;
-    let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-
-    write_stark_bridge_input(&claim, &claim_hash)?;
-
-    println!(
-        "{}",
-        json!({
-            "event": "stark_bridge_input_dry_run",
-            "status": "completed",
-            "claim_id": claim.claim_id,
-            "claim_hash": claim_hash,
-            "output": STARK_BRIDGE_INPUT_OUTPUT_PATH,
-            "groth16_executed": false,
-            "chain_submission": false,
-        })
-    );
-
-    Ok(())
-}
-
 fn run_app() -> Result<(), String> {
     let config = read_config()?;
-    let proof_backend = config.proof_backend()?;
-    let proof_execution_enabled = config.proof_execution_enabled();
-    if proof_execution_enabled && proof_backend == "none" {
-        return Err(
-            "proof_execution_enabled=true requires an explicit compatibility proof_backend"
-                .to_string(),
-        );
-    }
-    let stark_activation = if proof_execution_enabled && proof_backend == "stark_attested" {
-        Some(validate_stark_runtime_activation(&config)?)
-    } else {
-        None
-    };
+    config.require_adjudication_only()?;
     let claim = read_claim_input()?;
     let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-    let configured_reason = configured_denial_reason(&config, &claim)?;
 
-    if let Some(activation) = stark_activation.as_ref() {
-        return run_stark_attested_app(
-            &config,
-            activation,
-            &claim,
-            &claim_hash,
-            configured_reason.as_deref(),
-        );
-    }
-
-    if let Some(reason) = configured_reason.as_deref() {
-        if proof_execution_enabled && config.stark_sidecar_enabled() {
-            write_stark_sidecar_artifact(&claim, &claim_hash)?;
-        }
-
+    if let Some(reason) = configured_denial_reason(&config, &claim)?.as_deref() {
         let result = AdjudicationResult::denied(claim.claim_id.clone(), claim_hash, reason);
-
         write_result(&result)?;
-
-        println!("Claim denied before proof generation: {}", reason);
+        println!("Claim denied: {}", reason);
         println!("Wrote adjudication_result.json");
         return Ok(());
     }
 
-    if !proof_execution_enabled {
-        let result =
-            AdjudicationResult::approved_unsubmitted(claim.claim_id.clone(), claim_hash.clone());
-        write_result(&result)?;
-        println!(
-            "{}",
-            json!({
-                "event": "adjudication_only",
-                "status": "completed",
-                "claim_id": claim.claim_id,
-                "claim_hash": claim_hash,
-                "decision": "APPROVED",
-                "proof_generation": false,
-                "chain_submission": false,
-            })
-        );
-        println!("Wrote adjudication_result.json");
-        return Ok(());
-    }
-
-    Err("proof execution did not select the gated stark_attested backend".to_string())
-}
-
-fn run_stark_attested_app(
-    config: &AppConfig,
-    activation: &StarkRuntimeActivation,
-    claim: &ClaimInput,
-    claim_hash: &str,
-    expected_reason: Option<&str>,
-) -> Result<(), String> {
-    let attestor_mode = activation.attestor_mode.as_str();
-    let binary = config
-        .stark_engine_binary
-        .as_deref()
-        .ok_or_else(|| "stark_engine_binary is required for stark_attested mode".to_string())?;
-    let registry = activation.registry.as_str();
-    let verifier = activation.verifier.as_str();
-    let state_path = config
-        .stark_nullifier_state_path
-        .as_deref()
-        .ok_or_else(|| {
-            "stark_nullifier_state_path is required for stark_attested mode".to_string()
-        })?;
-    let artifacts_base = config
-        .stark_artifacts_directory
-        .as_deref()
-        .unwrap_or("../stark-engine/runtime-artifacts");
-    let chain_id = activation.chain_id;
-
-    write_stark_bridge_input(claim, claim_hash)?;
-    let artifact_directory =
-        PathBuf::from(artifacts_base).join(claim_hash.trim_start_matches("0x"));
-    fs::create_dir_all(&artifact_directory).map_err(|error| {
-        format!(
-            "could not create STARK artifact directory {}: {error}",
-            artifact_directory.display()
-        )
-    })?;
-
-    log_proof_event("stark_settlement", "started", &claim.claim_id, claim_hash);
-    let mut command = Command::new(binary);
-    command
-        .arg(STARK_BRIDGE_INPUT_OUTPUT_PATH)
-        .arg(state_path)
-        .arg(&artifact_directory)
-        .arg(chain_id.to_string())
-        .arg(verifier)
-        .arg(registry)
-        .arg(&activation.rpc_url)
-        .arg(&config.transaction_value)
-        .env("STARK_ATTESTOR_MODE", attestor_mode)
-        .env(
-            "STARK_SUBMITTER_PRIVATE_KEY",
-            &activation.submitter_private_key,
-        );
-    if attestor_mode == "local_private_key" {
-        command.env(
-            "STARK_ATTESTOR_PRIVATE_KEY",
-            env::var("STARK_ATTESTOR_PRIVATE_KEY").map_err(|_| {
-                "STARK_ATTESTOR_PRIVATE_KEY is required for local_private_key mode".to_string()
-            })?,
-        );
-    } else {
-        let signer_program = activation
-            .signer_program
-            .as_deref()
-            .ok_or_else(|| "stark_attestor_signer_program is required".to_string())?;
-        command
-            .env("STARK_ATTESTOR_SIGNER_PROGRAM", signer_program)
-            .env(
-                "STARK_ATTESTOR_SIGNER_ARGS_JSON",
-                serde_json::to_string(&activation.signer_args)
-                    .map_err(|error| format!("could not serialize signer args: {error}"))?,
-            )
-            .env(
-                "STARK_ATTESTOR_ALLOWED_KEY_IDS_JSON",
-                serde_json::to_string(&activation.allowed_key_ids)
-                    .map_err(|error| format!("could not serialize key IDs: {error}"))?,
-            )
-            .env(
-                "STARK_ATTESTOR_ADDRESS",
-                activation
-                    .attestor_address
-                    .as_deref()
-                    .ok_or_else(|| "stark_attestor_address is required".to_string())?,
-            )
-            .env(
-                "STARK_POLICY_MANIFEST_HASH",
-                activation
-                    .policy_manifest_hash
-                    .as_deref()
-                    .ok_or_else(|| "stark_policy_manifest_hash is required".to_string())?,
-            )
-            .env(
-                "STARK_ATTESTOR_SIGNER_TIMEOUT_SECONDS",
-                config
-                    .stark_attestor_signer_timeout_seconds
-                    .unwrap_or(30)
-                    .to_string(),
-            );
-    }
-    let finality_mode = activation.finality_mode.as_str();
-    command
-        .env("STARK_FINALITY_MODE", finality_mode)
-        .env(
-            "STARK_FINALITY_TIMEOUT_SECONDS",
-            config
-                .stark_finality_timeout_seconds
-                .unwrap_or(900)
-                .to_string(),
-        )
-        .env(
-            "STARK_FINALITY_POLL_SECONDS",
-            config.stark_finality_poll_seconds.unwrap_or(5).to_string(),
-        );
-    let allow_test_mined =
-        activation.mode == StarkRuntimeMode::LocalTest && activation.finality_mode == "test_mined";
-    if allow_test_mined {
-        if chain_id != 31337 || finality_mode != "test_mined" {
-            return Err(
-                "stark_allow_test_mined_finality is restricted to chain 31337 and test_mined mode"
-                    .to_string(),
-            );
-        }
-        command.env("STARK_ALLOW_TEST_MINED_FINALITY", "1");
-    }
-    let output = command
-        .output()
-        .map_err(|error| format!("could not execute STARK settlement engine: {error}"))?;
-    if !output.status.success() {
-        return Err(command_failure_message(
-            binary,
-            output.status.code(),
-            &output.stdout,
-            &output.stderr,
-        ));
-    }
-
-    let receipt_path = artifact_directory.join("settlement_receipt.json");
-    let receipt_json = fs::read_to_string(&receipt_path).map_err(|error| {
-        format!(
-            "STARK settlement completed without readable receipt {}: {error}",
-            receipt_path.display()
-        )
-    })?;
-    let receipt: Value = serde_json::from_str(&receipt_json)
-        .map_err(|error| format!("invalid STARK settlement receipt: {error}"))?;
-    validate_stark_runtime_receipt(
-        &receipt,
-        claim,
-        claim_hash,
-        expected_reason,
-        allow_test_mined,
-        Some(chain_id),
-    )?;
-    let tx_hash = receipt["transaction_hash"]
-        .as_str()
-        .expect("validated transaction_hash")
-        .to_string();
-    log_proof_event("stark_settlement", "completed", &claim.claim_id, claim_hash);
-
-    let result = if let Some(reason) = expected_reason {
-        AdjudicationResult::denied_submitted(
-            claim.claim_id.clone(),
-            claim_hash.to_string(),
-            reason,
-            tx_hash,
-        )
-    } else {
-        AdjudicationResult::approved(claim.claim_id.clone(), claim_hash.to_string(), tx_hash)
-    };
-    if config.stark_sidecar_enabled() {
-        write_stark_sidecar_artifact(claim, claim_hash)?;
-    }
+    let result =
+        AdjudicationResult::approved_unsubmitted(claim.claim_id.clone(), claim_hash.clone());
     write_result(&result)?;
-    println!("STARK claim settled on-chain with controlled attestation.");
+    println!(
+        "{}",
+        json!({
+            "event": "adjudication_only",
+            "status": "completed",
+            "claim_id": claim.claim_id,
+            "claim_hash": claim_hash,
+            "decision": "APPROVED",
+            "proof_generation": false,
+            "chain_submission": false,
+        })
+    );
     println!("Wrote adjudication_result.json");
-    Ok(())
-}
-
-fn validate_stark_runtime_receipt(
-    receipt: &Value,
-    _claim: &ClaimInput,
-    claim_hash: &str,
-    expected_reason: Option<&str>,
-    allow_test_mined: bool,
-    configured_chain_id: Option<u64>,
-) -> Result<(), String> {
-    let expected_decision = bool_u8(expected_reason.is_none());
-    let expected_failure = expected_reason.map(stark_failure_code).unwrap_or(0);
-    let checks = [
-        (
-            matches!(
-                receipt["schema_version"].as_str(),
-                Some("stark-production-settlement-receipt-v1")
-                    | Some("stark-production-settlement-receipt-v2")
-                    | Some("stark-production-settlement-receipt-v2-test-only")
-            ),
-            "unexpected settlement receipt schema",
-        ),
-        (
-            receipt["settlement_status"].as_str()
-                == Some("settled_on_chain_and_local_state_committed"),
-            "STARK settlement is not final",
-        ),
-        (
-            receipt["claim_hash"].as_str() == Some(claim_hash),
-            "receipt claim_hash does not match adjudicated claim",
-        ),
-        (
-            receipt["decision"].as_u64() == Some(u64::from(expected_decision)),
-            "receipt decision does not match denial_reason()",
-        ),
-        (
-            receipt["failure_code"].as_u64() == Some(u64::from(expected_failure)),
-            "receipt failure_code does not match denial_reason()",
-        ),
-        (
-            receipt["proof_locally_verified"].as_bool() == Some(true),
-            "Winterfell proof was not locally verified",
-        ),
-        (
-            receipt["batch_consumed_on_chain"].as_bool() == Some(true),
-            "batch root was not consumed on-chain",
-        ),
-        (
-            receipt["local_state_committed"].as_bool() == Some(true),
-            "local nullifier state was not committed",
-        ),
-        (
-            receipt["groth16_executed"].as_bool() == Some(false),
-            "Groth16 unexpectedly executed in STARK mode",
-        ),
-    ];
-    for (valid, message) in checks {
-        if !valid {
-            return Err(message.to_string());
-        }
-    }
-    if receipt["schema_version"].as_str() == Some("stark-production-settlement-receipt-v2") {
-        let governed_checks = [
-            (
-                receipt["finalized_on_chain"].as_bool() == Some(true),
-                "governed STARK settlement is not finalized",
-            ),
-            (
-                receipt["finality_mode"].as_str() == Some("finalized"),
-                "governed STARK settlement has the wrong finality mode",
-            ),
-            (
-                receipt["policy_manifest_hash"]
-                    .as_str()
-                    .is_some_and(|value| value.len() == 66),
-                "governed STARK receipt is missing policy manifest hash",
-            ),
-            (
-                receipt["signer_key_id"]
-                    .as_str()
-                    .is_some_and(|value| !value.is_empty()),
-                "governed STARK receipt is missing signer key ID",
-            ),
-        ];
-        for (valid, message) in governed_checks {
-            if !valid {
-                return Err(message.to_string());
-            }
-        }
-    }
-    if receipt["schema_version"].as_str()
-        == Some("stark-production-settlement-receipt-v2-test-only")
-    {
-        let test_only_valid = allow_test_mined
-            && configured_chain_id == Some(31337)
-            && receipt["finality_mode"].as_str() == Some("test_mined")
-            && receipt["finalized_on_chain"].as_bool() == Some(false)
-            && receipt["signer_backend"].as_str() == Some("mock_mpc_test_only");
-        if !test_only_valid {
-            return Err("invalid test-only STARK settlement receipt boundary".to_string());
-        }
-    }
-    let tx_hash = receipt["transaction_hash"]
-        .as_str()
-        .ok_or_else(|| "settlement receipt is missing transaction_hash".to_string())?;
-    if tx_hash.len() != 66 || !tx_hash.starts_with("0x") {
-        return Err("settlement receipt transaction_hash is invalid".to_string());
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn valid_claim() -> ClaimInput {
         ClaimInput {
@@ -1334,19 +573,107 @@ mod tests {
         }
     }
 
-    fn config_json(enable_stark_sidecar_artifacts: Option<bool>) -> String {
-        let mut value = json!({
-            "claims_registry_address": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
-            "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-            "rpc_url": "http://127.0.0.1:8545",
-            "transaction_value": "0.001ether",
-        });
 
-        if let Some(enabled) = enable_stark_sidecar_artifacts {
-            value["enable_stark_sidecar_artifacts"] = json!(enabled);
+    fn config_json() -> String {
+        json!({}).to_string()
+    }
+
+    fn config_with(key: &str, value: Value) -> AppConfig {
+        let mut config: Value = serde_json::from_str(&config_json()).unwrap();
+        config[key] = value;
+        serde_json::from_value(config).unwrap()
+    }
+
+    #[test]
+    fn empty_config_runs_adjudication_only() {
+        let config: AppConfig = serde_json::from_str(&config_json()).unwrap();
+
+        assert_eq!(config.require_adjudication_only(), Ok(()));
+    }
+
+    #[test]
+    fn config_without_chain_fields_parses() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{"proof_execution_enabled": false, "proof_backend": "none"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.require_adjudication_only(), Ok(()));
+    }
+
+    #[test]
+    fn legacy_chain_and_stark_keys_are_ignored() {
+        let config: AppConfig = serde_json::from_str(
+            r#"{
+                "claims_registry_address": "0x0000000000000000000000000000000000000001",
+                "rpc_url": "http://127.0.0.1:8545",
+                "transaction_value": "0",
+                "enable_stark_sidecar_artifacts": true,
+                "stark_chain_id": 31337
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.require_adjudication_only(), Ok(()));
+    }
+
+    #[test]
+    fn config_rejects_proof_execution() {
+        let config = config_with("proof_execution_enabled", json!(true));
+
+        assert!(
+            config
+                .require_adjudication_only()
+                .unwrap_err()
+                .contains("proof execution is parked")
+        );
+    }
+
+    #[test]
+    fn config_rejects_parked_stark_attested_backend() {
+        let config = config_with("proof_backend", json!("stark_attested"));
+
+        assert!(
+            config
+                .require_adjudication_only()
+                .unwrap_err()
+                .contains("parked")
+        );
+    }
+
+    #[test]
+    fn config_rejects_unknown_proof_backend() {
+        let config = config_with("proof_backend", json!("mystery"));
+
+        assert!(
+            config
+                .require_adjudication_only()
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
+
+    #[test]
+    fn d_01_n_08_config_rejects_groth16_proof_backend() {
+        let config = config_with("proof_backend", json!("groth16"));
+
+        assert_eq!(
+            config.require_adjudication_only(),
+            Err("proof_backend 'groth16' is retired".to_string())
+        );
+    }
+
+    #[test]
+    fn parked_stark_subcommands_are_listed() {
+        for name in [
+            "stark-sidecar-dry-run",
+            "--stark-sidecar-dry-run",
+            "stark-bridge-input-dry-run",
+            "--stark-bridge-input-dry-run",
+        ] {
+            assert!(PARKED_STARK_SUBCOMMANDS.contains(&name), "{name}");
         }
-
-        value.to_string()
+        assert!(!PARKED_STARK_SUBCOMMANDS.contains(&"rules-evaluate"));
     }
 
     struct ShadowRule {
@@ -1421,222 +748,6 @@ mod tests {
             .map(|rule| rule.reason)
     }
 
-    #[derive(Debug, PartialEq)]
-    struct StarkCompatibleWitness {
-        eligibility_active: u8,
-        program_eligible: u8,
-        benefit_level_exists: u8,
-        month_of_service_valid: u8,
-        share_of_cost_valid: u8,
-        provider_enrolled: u8,
-        provider_type_valid: u8,
-        billing_code_valid: u8,
-        units_valid: u8,
-        duplicate_clear: u8,
-        disability_determination_valid: u8,
-        recipient_not_deceased: u8,
-        physician_certification_valid: u8,
-        decision: u8,
-        failure_code: u32,
-        failure_reason: Option<&'static str>,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct StarkSidecarArtifact {
-        artifact_version: &'static str,
-        proof_system: &'static str,
-        proof_mode: &'static str,
-        runtime_status: &'static str,
-        claim_id: String,
-        claim_hash: String,
-        decision: u8,
-        failure_code: u32,
-        failure_reason: Option<&'static str>,
-        public_inputs: StarkSidecarPublicInputs,
-        metadata: StarkSidecarMetadata,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct StarkSidecarPublicInputs {
-        claim_hash: String,
-        decision: u8,
-        failure_code: u32,
-        ruleset_id: &'static str,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct StarkSidecarMetadata {
-        verifier_status: &'static str,
-        on_chain_submission: bool,
-        groth16_flow_unchanged: bool,
-    }
-
-    #[derive(Debug, PartialEq)]
-    enum ImportedStarkMappingClass {
-        Direct,
-        Partial,
-        Unmapped,
-    }
-
-    struct ImportedStarkFieldMapping {
-        imported_stark_field: &'static str,
-        active_rust_source: Option<&'static str>,
-        class: ImportedStarkMappingClass,
-        note: &'static str,
-    }
-
-    impl StarkCompatibleWitness {
-        fn from_claim(claim: &ClaimInput) -> Self {
-            let failure_reason = denial_reason(claim);
-
-            Self {
-                eligibility_active: bool_u8(claim.eligibility_active == 1),
-                program_eligible: bool_u8(matches!(claim.aid_code, 13 | 23 | 53 | 103 | 104)),
-                benefit_level_exists: bool_u8(claim.benefit_level_exists == 1),
-                month_of_service_valid: bool_u8(
-                    claim.date_of_service_from >= claim.eligibility_period_from
-                        && claim.date_of_service_from <= claim.eligibility_period_thru,
-                ),
-                share_of_cost_valid: bool_u8(claim.soc_amount == 0 || claim.soc_met == 1),
-                provider_enrolled: bool_u8(claim.provider_enrolled == 1),
-                provider_type_valid: bool_u8(claim.provider_type_valid == 1),
-                billing_code_valid: bool_u8(claim.billing_code_valid == 1),
-                units_valid: bool_u8(claim.units_valid == 1),
-                duplicate_clear: bool_u8(claim.is_duplicate == 0),
-                disability_determination_valid: bool_u8(claim.disability_determination_valid == 1),
-                recipient_not_deceased: bool_u8(claim.recipient_not_deceased == 1),
-                physician_certification_valid: bool_u8(claim.physician_certification_valid == 1),
-                decision: bool_u8(failure_reason.is_none()),
-                failure_code: failure_reason.map(stark_failure_code).unwrap_or(0),
-                failure_reason,
-            }
-        }
-    }
-
-    impl StarkSidecarArtifact {
-        fn from_claim(claim: &ClaimInput) -> Self {
-            let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-            let witness = StarkCompatibleWitness::from_claim(claim);
-
-            Self {
-                artifact_version: "stark-sidecar-v0-test-only",
-                proof_system: "stark",
-                proof_mode: "sidecar_schema_only",
-                runtime_status: "not_written_by_runtime",
-                claim_id: claim.claim_id.clone(),
-                claim_hash: claim_hash.clone(),
-                decision: witness.decision,
-                failure_code: witness.failure_code,
-                failure_reason: witness.failure_reason,
-                public_inputs: StarkSidecarPublicInputs {
-                    claim_hash,
-                    decision: witness.decision,
-                    failure_code: witness.failure_code,
-                    ruleset_id: "current_g1_g10_shadow_rules",
-                },
-                metadata: StarkSidecarMetadata {
-                    verifier_status: "not_selected",
-                    on_chain_submission: false,
-                    groth16_flow_unchanged: true,
-                },
-            }
-        }
-    }
-
-    fn imported_winterfell_stark_field_mappings() -> Vec<ImportedStarkFieldMapping> {
-        vec![
-            ImportedStarkFieldMapping {
-                imported_stark_field: "member_id",
-                active_rust_source: Some("member_id"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "optional string source requires deterministic numeric normalization",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "provider_npi",
-                active_rust_source: Some("provider_npi"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "optional 10-digit source requires validation and numeric parsing",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "eligibility_active",
-                active_rust_source: Some("eligibility_active"),
-                class: ImportedStarkMappingClass::Direct,
-                note: "both models treat 1 as active/pass",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "provider_enrolled",
-                active_rust_source: Some("provider_enrolled"),
-                class: ImportedStarkMappingClass::Direct,
-                note: "both models treat 1 as enrolled/pass",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "service_line_count",
-                active_rust_source: Some("billing_code_valid, units_valid"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "active booleans imply service-line validity, not a count",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "diagnosis_count",
-                active_rust_source: Some("diagnosis_count"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "optional source maps numerically but is not an active adjudication rule",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "prior_auth_ok",
-                active_rust_source: Some("physician_certification_valid"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "certification may support authorization but is not equivalent",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "charge_cents",
-                active_rust_source: Some("claim_amount"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "amount can map only after units/currency normalization",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "max_charge_cents",
-                active_rust_source: Some("max_charge_cents"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "optional source maps numerically but is not an active fee-schedule rule",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "duplicate_flag",
-                active_rust_source: Some("is_duplicate"),
-                class: ImportedStarkMappingClass::Direct,
-                note: "same duplicate fact, with pass condition inverted in the gate",
-            },
-            ImportedStarkFieldMapping {
-                imported_stark_field: "program_integrity_hold",
-                active_rust_source: Some("disability_determination_valid, recipient_not_deceased"),
-                class: ImportedStarkMappingClass::Partial,
-                note: "active checks can contribute to integrity status but do not equal a hold flag",
-            },
-        ]
-    }
-
-    fn bool_u8(value: bool) -> u8 {
-        if value { 1 } else { 0 }
-    }
-
-    fn stark_failure_code(reason: &str) -> u32 {
-        match reason {
-            "G1_IDENTITY_VERIFICATION_FAILED" => 1,
-            "G2_PROGRAM_ELIGIBILITY_FAILED" => 201,
-            "G2_BENEFIT_LEVEL_MISSING" => 202,
-            "G3_MONTH_OF_SERVICE_FAILED" => 3,
-            "G4_SHARE_OF_COST_FAILED" => 4,
-            "G5_PROVIDER_NOT_ENROLLED" => 501,
-            "G5_PROVIDER_TYPE_INVALID" => 502,
-            "G6_BILLING_CODE_INVALID" => 601,
-            "G6_UNITS_INVALID" => 602,
-            "G7_DUPLICATE_CLAIM" => 7,
-            "G8_DISABILITY_DETERMINATION_FAILED" => 8,
-            "G9_RECIPIENT_DECEASED" => 9,
-            "G10_PHYSICIAN_CERTIFICATION_FAILED" => 10,
-            _ => panic!("unmapped STARK compatibility failure reason: {reason}"),
-        }
-    }
-
     fn current_gate_cases() -> Vec<(&'static str, ClaimInput)> {
         let mut cases: Vec<(&str, ClaimInput)> = vec![("valid", valid_claim())];
 
@@ -1707,80 +818,15 @@ mod tests {
     }
 
     #[test]
-    fn config_missing_stark_sidecar_flag_defaults_disabled() {
-        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
-
-        assert!(!config.stark_sidecar_enabled());
-    }
-
-    #[test]
-    fn config_missing_proof_execution_flag_defaults_disabled() {
-        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
-
-        assert!(!config.proof_execution_enabled());
-    }
-
-    #[test]
-    fn config_proof_execution_flag_can_enable_legacy_backends() {
-        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
-        value["proof_execution_enabled"] = json!(true);
-        let config: AppConfig = serde_json::from_value(value).unwrap();
-
-        assert!(config.proof_execution_enabled());
-    }
-
-    #[test]
-    fn config_stark_sidecar_flag_can_enable_artifacts() {
-        let config: AppConfig = serde_json::from_str(&config_json(Some(true))).unwrap();
-
-        assert!(config.stark_sidecar_enabled());
-    }
-
-    #[test]
-    fn config_missing_proof_backend_defaults_to_none() {
-        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
-
-        assert_eq!(config.proof_backend(), Ok("none"));
-    }
-
-    #[test]
-    fn config_accepts_explicit_stark_attested_backend() {
-        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
-        value["proof_backend"] = json!("stark_attested");
-        let config: AppConfig = serde_json::from_value(value).unwrap();
-
-        assert_eq!(config.proof_backend(), Ok("stark_attested"));
-    }
-
-    #[test]
-    fn config_rejects_unknown_proof_backend() {
-        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
-        value["proof_backend"] = json!("mystery");
-        let config: AppConfig = serde_json::from_value(value).unwrap();
-
-        assert!(config.proof_backend().unwrap_err().contains("unsupported"));
-    }
-
-    #[test]
-    fn d_01_n_08_config_rejects_groth16_proof_backend() {
-        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
-        value["proof_backend"] = json!("groth16");
-        let config: AppConfig = serde_json::from_value(value).unwrap();
-
-        let error = config.proof_backend().unwrap_err();
-        assert_eq!(error, "proof_backend 'groth16' is retired");
-    }
-
-    #[test]
     fn config_missing_rules_backend_preserves_hardcoded_default() {
-        let config: AppConfig = serde_json::from_str(&config_json(None)).unwrap();
+        let config: AppConfig = serde_json::from_str(&config_json()).unwrap();
 
         assert_eq!(config.rules_backend(), Ok("hardcoded_g1_g10"));
     }
 
     #[test]
     fn versioned_rules_match_hardcoded_g1_g10_for_every_branch() {
-        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        let mut value: Value = serde_json::from_str(&config_json()).unwrap();
         value["rules_backend"] = json!("versioned_g1_g10");
         value["rules_file"] = json!("rules_active_v1.json");
         value["rules_sha256"] = json!(CURRENT_RULESET_SHA256);
@@ -1800,7 +846,7 @@ mod tests {
 
     #[test]
     fn versioned_rules_require_binary_pinned_hash() {
-        let mut value: Value = serde_json::from_str(&config_json(None)).unwrap();
+        let mut value: Value = serde_json::from_str(&config_json()).unwrap();
         value["rules_backend"] = json!("versioned_g1_g10");
         value["rules_file"] = json!("rules_active_v1.json");
         value["rules_sha256"] = json!("00");
@@ -1810,113 +856,6 @@ mod tests {
             configured_denial_reason(&config, &valid_claim())
                 .unwrap_err()
                 .contains("binary pin")
-        );
-    }
-
-    #[test]
-    fn stark_runtime_receipt_must_match_active_adjudication() {
-        let claim = valid_claim();
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-        let receipt = json!({
-            "schema_version": "stark-production-settlement-receipt-v1",
-            "settlement_status": "settled_on_chain_and_local_state_committed",
-            "claim_hash": claim_hash,
-            "decision": 1,
-            "failure_code": 0,
-            "proof_locally_verified": true,
-            "batch_consumed_on_chain": true,
-            "local_state_committed": true,
-            "groth16_executed": false,
-            "transaction_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        });
-
-        assert_eq!(
-            validate_stark_runtime_receipt(
-                &receipt,
-                &claim,
-                receipt["claim_hash"].as_str().unwrap(),
-                None,
-                false,
-                None,
-            ),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn stark_runtime_receipt_rejects_decision_mismatch() {
-        let claim = valid_claim();
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-        let receipt = json!({
-            "schema_version": "stark-production-settlement-receipt-v1",
-            "settlement_status": "settled_on_chain_and_local_state_committed",
-            "claim_hash": claim_hash,
-            "decision": 0,
-            "failure_code": 7,
-            "proof_locally_verified": true,
-            "batch_consumed_on_chain": true,
-            "local_state_committed": true,
-            "groth16_executed": false,
-            "transaction_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        });
-
-        assert!(
-            validate_stark_runtime_receipt(
-                &receipt,
-                &claim,
-                receipt["claim_hash"].as_str().unwrap(),
-                None,
-                false,
-                None,
-            )
-            .unwrap_err()
-            .contains("decision")
-        );
-    }
-
-    #[test]
-    fn stark_sidecar_dry_run_arg_is_explicit() {
-        assert!(is_stark_sidecar_dry_run_arg(Some("stark-sidecar-dry-run")));
-        assert!(is_stark_sidecar_dry_run_arg(Some(
-            "--stark-sidecar-dry-run"
-        )));
-        assert!(!is_stark_sidecar_dry_run_arg(None));
-        assert!(!is_stark_sidecar_dry_run_arg(Some("run")));
-        assert!(!is_stark_sidecar_dry_run_arg(Some("--help")));
-    }
-
-    #[test]
-    fn stark_bridge_input_dry_run_arg_is_explicit() {
-        assert!(is_stark_bridge_input_dry_run_arg(Some(
-            "stark-bridge-input-dry-run"
-        )));
-        assert!(is_stark_bridge_input_dry_run_arg(Some(
-            "--stark-bridge-input-dry-run"
-        )));
-        assert!(!is_stark_bridge_input_dry_run_arg(None));
-        assert!(!is_stark_bridge_input_dry_run_arg(Some(
-            "stark-sidecar-dry-run"
-        )));
-        assert!(!is_stark_bridge_input_dry_run_arg(Some("--help")));
-    }
-
-    #[test]
-    fn approved_result_serializes_existing_schema() {
-        let result = AdjudicationResult::approved(
-            "CLAIM-TEST-001".to_string(),
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-        );
-
-        let value = serde_json::to_value(result).unwrap();
-
-        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
-        assert_eq!(value["status"], "APPROVED");
-        assert_eq!(value["reason"], Value::Null);
-        assert_eq!(value["tx_submitted"], true);
-        assert_eq!(
-            value["tx_hash"],
-            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
     }
 
@@ -1969,469 +908,6 @@ mod tests {
                 "shadow rule mismatch for {case_name}"
             );
         }
-    }
-
-    #[test]
-    fn stark_compatible_witness_approves_valid_claim() {
-        let witness = StarkCompatibleWitness::from_claim(&valid_claim());
-
-        assert_eq!(witness.decision, 1);
-        assert_eq!(witness.failure_code, 0);
-        assert_eq!(witness.failure_reason, None);
-        assert_eq!(witness.eligibility_active, 1);
-        assert_eq!(witness.program_eligible, 1);
-        assert_eq!(witness.benefit_level_exists, 1);
-        assert_eq!(witness.month_of_service_valid, 1);
-        assert_eq!(witness.share_of_cost_valid, 1);
-        assert_eq!(witness.provider_enrolled, 1);
-        assert_eq!(witness.provider_type_valid, 1);
-        assert_eq!(witness.billing_code_valid, 1);
-        assert_eq!(witness.units_valid, 1);
-        assert_eq!(witness.duplicate_clear, 1);
-        assert_eq!(witness.disability_determination_valid, 1);
-        assert_eq!(witness.recipient_not_deceased, 1);
-        assert_eq!(witness.physician_certification_valid, 1);
-    }
-
-    #[test]
-    fn stark_compatible_witness_matches_denial_reason_for_current_gates() {
-        for (case_name, claim) in current_gate_cases() {
-            let witness = StarkCompatibleWitness::from_claim(&claim);
-            let denial = denial_reason(&claim);
-
-            assert_eq!(
-                witness.failure_reason, denial,
-                "STARK witness reason mismatch for {case_name}"
-            );
-
-            if let Some(reason) = denial {
-                assert_eq!(
-                    witness.decision, 0,
-                    "STARK witness decision mismatch for {case_name}"
-                );
-                assert_eq!(
-                    witness.failure_code,
-                    stark_failure_code(reason),
-                    "STARK witness code mismatch for {case_name}"
-                );
-            } else {
-                assert_eq!(
-                    witness.decision, 1,
-                    "STARK witness decision mismatch for {case_name}"
-                );
-                assert_eq!(
-                    witness.failure_code, 0,
-                    "STARK witness code mismatch for {case_name}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn stark_sidecar_artifact_serializes_approved_claim_schema() {
-        let claim = valid_claim();
-        let value = serde_json::to_value(StarkSidecarArtifact::from_claim(&claim)).unwrap();
-        let expected_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-
-        assert_eq!(value["artifact_version"], "stark-sidecar-v0-test-only");
-        assert_eq!(value["proof_system"], "stark");
-        assert_eq!(value["proof_mode"], "sidecar_schema_only");
-        assert_eq!(value["runtime_status"], "not_written_by_runtime");
-        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
-        assert_eq!(value["claim_hash"], expected_hash);
-        assert_eq!(value["decision"], 1);
-        assert_eq!(value["failure_code"], 0);
-        assert_eq!(value["failure_reason"], Value::Null);
-        assert_eq!(value["public_inputs"]["claim_hash"], expected_hash);
-        assert_eq!(value["public_inputs"]["decision"], 1);
-        assert_eq!(value["public_inputs"]["failure_code"], 0);
-        assert_eq!(
-            value["public_inputs"]["ruleset_id"],
-            "current_g1_g10_shadow_rules"
-        );
-        assert_eq!(value["metadata"]["verifier_status"], "not_selected");
-        assert_eq!(value["metadata"]["on_chain_submission"], false);
-        assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
-    }
-
-    #[test]
-    fn stark_sidecar_artifact_serializes_denied_claim_schema() {
-        let mut claim = valid_claim();
-        claim.recipient_not_deceased = 0;
-
-        let value = serde_json::to_value(StarkSidecarArtifact::from_claim(&claim)).unwrap();
-        let expected_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-
-        assert_eq!(value["artifact_version"], "stark-sidecar-v0-test-only");
-        assert_eq!(value["proof_system"], "stark");
-        assert_eq!(value["runtime_status"], "not_written_by_runtime");
-        assert_eq!(value["claim_hash"], expected_hash);
-        assert_eq!(value["decision"], 0);
-        assert_eq!(value["failure_code"], 9);
-        assert_eq!(value["failure_reason"], "G9_RECIPIENT_DECEASED");
-        assert_eq!(value["public_inputs"]["claim_hash"], expected_hash);
-        assert_eq!(value["public_inputs"]["decision"], 0);
-        assert_eq!(value["public_inputs"]["failure_code"], 9);
-        assert_eq!(
-            value["public_inputs"]["ruleset_id"],
-            "current_g1_g10_shadow_rules"
-        );
-        assert_eq!(value["metadata"]["verifier_status"], "not_selected");
-        assert_eq!(value["metadata"]["on_chain_submission"], false);
-        assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
-    }
-
-    #[test]
-    fn runtime_stark_sidecar_artifact_serializes_enabled_schema() {
-        let mut claim = valid_claim();
-        claim.is_duplicate = 1;
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-
-        let value =
-            serde_json::to_value(super::StarkSidecarArtifact::from_claim(&claim, &claim_hash))
-                .unwrap();
-
-        assert_eq!(value["artifact_version"], "stark-sidecar-v0");
-        assert_eq!(value["proof_system"], "stark");
-        assert_eq!(value["proof_mode"], "sidecar_schema_only");
-        assert_eq!(value["runtime_status"], "written_only_when_config_enabled");
-        assert_eq!(value["claim_id"], "CLAIM-TEST-001");
-        assert_eq!(value["claim_hash"], claim_hash);
-        assert_eq!(value["decision"], 0);
-        assert_eq!(value["failure_code"], 7);
-        assert_eq!(value["failure_reason"], "G7_DUPLICATE_CLAIM");
-        assert_eq!(value["public_inputs"]["claim_hash"], claim_hash);
-        assert_eq!(value["public_inputs"]["decision"], 0);
-        assert_eq!(value["public_inputs"]["failure_code"], 7);
-        assert_eq!(
-            value["public_inputs"]["ruleset_id"],
-            "current_g1_g10_denial_reason"
-        );
-        assert_eq!(value["metadata"]["verifier_status"], "not_selected");
-        assert_eq!(value["metadata"]["on_chain_submission"], false);
-        assert_eq!(value["metadata"]["groth16_flow_unchanged"], true);
-    }
-
-    #[test]
-    fn stark_bridge_input_serializes_approved_claim_schema() {
-        let claim = valid_claim();
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-        let value =
-            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
-
-        assert_eq!(value["schema_version"], "stark-bridge-input-v0");
-        assert_eq!(value["producer"], "rust-engine");
-        assert_eq!(value["purpose"], "stark_engine_compatibility_input");
-        assert_eq!(value["runtime_mode"], "dry_run_or_optional_sidecar");
-        assert_eq!(value["claim"]["claim_id"], "CLAIM-TEST-001");
-        assert_eq!(value["claim"]["claim_amount"], 1000);
-        assert_eq!(value["claim"]["claim_hash"], claim_hash);
-        assert_eq!(value["claim"]["member_id"], Value::Null);
-        assert_eq!(value["claim"]["provider_npi"], Value::Null);
-        assert_eq!(value["claim"]["diagnosis_count"], Value::Null);
-        assert_eq!(value["claim"]["max_charge_cents"], Value::Null);
-        assert_eq!(value["claim"]["diagnosis_codes"], json!([]));
-        assert_eq!(value["claim"]["service_lines"], json!([]));
-        assert_eq!(value["adjudication"]["decision"], 1);
-        assert_eq!(value["adjudication"]["failure_code"], 0);
-        assert_eq!(value["adjudication"]["failure_reason"], Value::Null);
-        assert_eq!(
-            value["adjudication"]["ruleset_id"],
-            "current_g1_g10_denial_reason"
-        );
-        assert_eq!(value["active_rust_facts"]["eligibility_active"], 1);
-        assert_eq!(value["active_rust_facts"]["aid_code"], 53);
-        assert_eq!(value["active_rust_facts"]["provider_enrolled"], 1);
-        assert_eq!(value["active_rust_facts"]["is_duplicate"], 0);
-        assert_eq!(
-            value["winterfell_poc_mapping"]["direct"]["eligibility_active"],
-            value["active_rust_facts"]["eligibility_active"]
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["direct"]["provider_enrolled"],
-            value["active_rust_facts"]["provider_enrolled"]
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["direct"]["duplicate_flag"],
-            value["active_rust_facts"]["is_duplicate"]
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["partial"]["charge_cents"]["source"],
-            json!(["claim_amount"])
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["partial"]["charge_cents"]["status"],
-            "requires_unit_normalization"
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["member_id"],
-            Value::Null
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
-            Value::Null
-        );
-        assert_eq!(value["public_inputs"]["claim_hash"], claim_hash);
-        assert_eq!(value["public_inputs"]["decision"], 1);
-        assert_eq!(value["public_inputs"]["failure_code"], 0);
-        assert_eq!(value["proof_status"]["stark_proof_generated"], false);
-        assert_eq!(value["proof_status"]["winterfell_poc_compatible"], false);
-        assert_eq!(value["proof_status"]["groth16_flow_unchanged"], true);
-        assert_eq!(value["proof_status"]["on_chain_submission"], false);
-    }
-
-    #[test]
-    fn stark_bridge_input_serializes_optional_identity_source_fields() {
-        let mut claim = valid_claim();
-        claim.member_id = Some("MEMBER-FIXTURE-001".to_string());
-        claim.provider_npi = Some("1234567893".to_string());
-        claim.diagnosis_count = Some(1);
-        claim.max_charge_cents = Some(150_000);
-        claim.diagnosis_codes = vec!["Z00.00".to_string()];
-        claim.service_lines = vec![ClaimServiceLine {
-            procedure_code: "99213".to_string(),
-            charge_cents: 100_000,
-            units: 1,
-        }];
-        claim.oracle_source_manifest_id = Some("DEMO-OFFICIAL-SOURCES-V1".to_string());
-        claim.oracle_facts = vec![ClaimOracleFact {
-            fact_type: "eligibility".to_string(),
-            fact_key: "eligibility_active".to_string(),
-            fact_value: "1".to_string(),
-            source_url: Some("https://example.gov/demo/oracle-facts".to_string()),
-            source_label: Some("Demo source - not production".to_string()),
-            verification_status: "verified".to_string(),
-        }];
-        claim.oracle_attestation_refs = vec!["demo-attestation:eligibility_active".to_string()];
-        claim.fee_schedule_id = Some("DEMO-FEE-SCHEDULE-V1".to_string());
-        claim.fee_schedule_entries = vec![ClaimFeeScheduleEntry {
-            fee_code: "99213".to_string(),
-            unit_amount_cents: 100_000,
-            currency: "USD".to_string(),
-            effective_from: 20240101,
-            effective_thru: Some(20251231),
-            source_url: Some("https://example.gov/demo/fee-schedule".to_string()),
-            verification_status: "verified".to_string(),
-        }];
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-        let value =
-            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
-
-        assert_eq!(value["claim"]["member_id"], "MEMBER-FIXTURE-001");
-        assert_eq!(value["claim"]["provider_npi"], "1234567893");
-        assert_eq!(value["claim"]["diagnosis_count"], 1);
-        assert_eq!(value["claim"]["max_charge_cents"], 150_000);
-        assert_eq!(value["claim"]["diagnosis_codes"], json!(["Z00.00"]));
-        assert_eq!(
-            value["claim"]["service_lines"],
-            json!([{
-                "procedure_code": "99213",
-                "charge_cents": 100_000,
-                "units": 1
-            }])
-        );
-        assert_eq!(
-            value["claim"]["oracle_source_manifest_id"],
-            "DEMO-OFFICIAL-SOURCES-V1"
-        );
-        assert_eq!(
-            value["claim"]["oracle_facts"],
-            json!([{
-                "fact_type": "eligibility",
-                "fact_key": "eligibility_active",
-                "fact_value": "1",
-                "source_url": "https://example.gov/demo/oracle-facts",
-                "source_label": "Demo source - not production",
-                "verification_status": "verified"
-            }])
-        );
-        assert_eq!(
-            value["claim"]["oracle_attestation_refs"],
-            json!(["demo-attestation:eligibility_active"])
-        );
-        assert_eq!(value["claim"]["fee_schedule_id"], "DEMO-FEE-SCHEDULE-V1");
-        assert_eq!(
-            value["claim"]["fee_schedule_entries"],
-            json!([{
-                "fee_code": "99213",
-                "unit_amount_cents": 100000,
-                "currency": "USD",
-                "effective_from": 20240101,
-                "effective_thru": 20251231,
-                "source_url": "https://example.gov/demo/fee-schedule",
-                "verification_status": "verified"
-            }])
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["member_id"],
-            stable_identity_string_to_u64("MEMBER-FIXTURE-001")
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
-            1_234_567_893
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["diagnosis_count"],
-            1
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["max_charge_cents"],
-            150_000
-        );
-        assert_eq!(value["proof_status"]["stark_proof_generated"], false);
-        assert_eq!(value["proof_status"]["on_chain_submission"], false);
-    }
-
-    #[test]
-    fn stark_bridge_input_keeps_invalid_optional_npi_out_of_numeric_poc_mapping() {
-        let mut claim = valid_claim();
-        claim.provider_npi = Some("not-a-npi".to_string());
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-        let value =
-            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
-
-        assert_eq!(value["claim"]["provider_npi"], "not-a-npi");
-        assert_eq!(
-            value["winterfell_poc_mapping"]["unmapped"]["provider_npi"],
-            Value::Null
-        );
-    }
-
-    #[test]
-    fn stark_bridge_input_serializes_denied_claim_schema() {
-        let mut claim = valid_claim();
-        claim.recipient_not_deceased = 0;
-        let claim_hash = claim_hash_32(&claim.claim_id, claim.claim_amount);
-        let value =
-            serde_json::to_value(super::StarkBridgeInput::from_claim(&claim, &claim_hash)).unwrap();
-
-        assert_eq!(value["schema_version"], "stark-bridge-input-v0");
-        assert_eq!(value["claim"]["claim_hash"], claim_hash);
-        assert_eq!(value["adjudication"]["decision"], 0);
-        assert_eq!(value["adjudication"]["failure_code"], 9);
-        assert_eq!(
-            value["adjudication"]["failure_reason"],
-            "G9_RECIPIENT_DECEASED"
-        );
-        assert_eq!(value["active_rust_facts"]["recipient_not_deceased"], 0);
-        assert_eq!(value["public_inputs"]["decision"], 0);
-        assert_eq!(value["public_inputs"]["failure_code"], 9);
-        assert_eq!(
-            value["winterfell_poc_mapping"]["partial"]["program_integrity_hold"]["source"],
-            json!(["disability_determination_valid", "recipient_not_deceased"])
-        );
-        assert_eq!(
-            value["winterfell_poc_mapping"]["partial"]["program_integrity_hold"]["status"],
-            "not_equivalent"
-        );
-        assert_eq!(value["proof_status"]["stark_proof_generated"], false);
-        assert_eq!(value["proof_status"]["on_chain_submission"], false);
-    }
-
-    #[test]
-    fn imported_winterfell_stark_mapping_classifies_all_input_fields() {
-        let mappings = imported_winterfell_stark_field_mappings();
-
-        assert_eq!(mappings.len(), 11);
-        assert_eq!(
-            mappings
-                .iter()
-                .filter(|mapping| mapping.class == ImportedStarkMappingClass::Direct)
-                .count(),
-            3
-        );
-        assert_eq!(
-            mappings
-                .iter()
-                .filter(|mapping| mapping.class == ImportedStarkMappingClass::Partial)
-                .count(),
-            8
-        );
-        assert_eq!(
-            mappings
-                .iter()
-                .filter(|mapping| mapping.class == ImportedStarkMappingClass::Unmapped)
-                .count(),
-            0
-        );
-
-        for expected_field in [
-            "member_id",
-            "provider_npi",
-            "eligibility_active",
-            "provider_enrolled",
-            "service_line_count",
-            "diagnosis_count",
-            "prior_auth_ok",
-            "charge_cents",
-            "max_charge_cents",
-            "duplicate_flag",
-            "program_integrity_hold",
-        ] {
-            assert!(
-                mappings
-                    .iter()
-                    .any(|mapping| mapping.imported_stark_field == expected_field),
-                "missing imported STARK field mapping for {expected_field}"
-            );
-        }
-
-        let eligibility_mapping = mappings
-            .iter()
-            .find(|mapping| mapping.imported_stark_field == "eligibility_active")
-            .unwrap();
-        assert_eq!(
-            eligibility_mapping.active_rust_source,
-            Some("eligibility_active")
-        );
-        assert_eq!(
-            eligibility_mapping.note,
-            "both models treat 1 as active/pass"
-        );
-    }
-
-    #[test]
-    fn imported_winterfell_direct_mappings_match_sidecar_failures() {
-        let direct_fields: Vec<&str> = imported_winterfell_stark_field_mappings()
-            .into_iter()
-            .filter(|mapping| mapping.class == ImportedStarkMappingClass::Direct)
-            .map(|mapping| mapping.imported_stark_field)
-            .collect();
-
-        assert_eq!(
-            direct_fields,
-            vec!["eligibility_active", "provider_enrolled", "duplicate_flag"]
-        );
-
-        let mut claim = valid_claim();
-        claim.eligibility_active = 0;
-        let value = serde_json::to_value(super::StarkSidecarArtifact::from_claim(
-            &claim,
-            &claim_hash_32(&claim.claim_id, claim.claim_amount),
-        ))
-        .unwrap();
-        assert_eq!(value["failure_reason"], "G1_IDENTITY_VERIFICATION_FAILED");
-        assert_eq!(value["failure_code"], 1);
-
-        let mut claim = valid_claim();
-        claim.provider_enrolled = 0;
-        let value = serde_json::to_value(super::StarkSidecarArtifact::from_claim(
-            &claim,
-            &claim_hash_32(&claim.claim_id, claim.claim_amount),
-        ))
-        .unwrap();
-        assert_eq!(value["failure_reason"], "G5_PROVIDER_NOT_ENROLLED");
-        assert_eq!(value["failure_code"], 501);
-
-        let mut claim = valid_claim();
-        claim.is_duplicate = 1;
-        let value = serde_json::to_value(super::StarkSidecarArtifact::from_claim(
-            &claim,
-            &claim_hash_32(&claim.claim_id, claim.claim_amount),
-        ))
-        .unwrap();
-        assert_eq!(value["failure_reason"], "G7_DUPLICATE_CLAIM");
-        assert_eq!(value["failure_code"], 7);
     }
 
     #[test]
