@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 
 FORMAT = "RR/RULES/CONTENT/v1"
@@ -51,7 +52,10 @@ def canonical(obj) -> bytes:
             for v in x:
                 check(v)
     check(obj)
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    try:
+        return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as err:  # e.g. a lone surrogate from a JSON \ud800 escape
+        raise ContentError(f"text is not valid Unicode: {err}") from None
 
 
 def digest(doc: dict) -> str:
@@ -59,13 +63,54 @@ def digest(doc: dict) -> str:
     return hashlib.sha3_512(DOMAIN + canonical(body)).hexdigest()
 
 
+CORPUS_STATUS = "candidate_only_not_verified"
+CITATION_FIELDS = ("url", "title", "text", "source_type")
+OPTIONAL_TEXT_RULE_FIELDS = ("program", "jurisdiction_level", "rule_unit_type", "verification_status")
+
+
+def _text(value, name, required=True):
+    if value is None and not required:
+        return
+    if not isinstance(value, str) or (required and not value):
+        raise ContentError(f"{name} must be {'a non-empty' if required else 'a'} string{'' if required else ' or null'}")
+
+
+def check_rule(r) -> None:
+    """Every rule a corpus export can produce, and nothing else."""
+    if not isinstance(r, dict) or set(r) != set(RULE_FIELDS):
+        raise ContentError(f"rule fields must be exactly {sorted(RULE_FIELDS)}")
+    rid = r["rule_id"]
+    _text(rid, "rule_id")
+    _text(r["statement"], f"rule {rid}: statement")
+    for k in OPTIONAL_TEXT_RULE_FIELDS:
+        _text(r[k], f"rule {rid}: {k}", required=False)
+    c = r["citation"]
+    if not isinstance(c, dict) or set(c) != set(CITATION_FIELDS):
+        raise ContentError(f"rule {rid}: citation fields must be exactly {sorted(CITATION_FIELDS)}")
+    _text(c["url"], f"rule {rid}: citation url")
+    for k in ("title", "text", "source_type"):
+        _text(c[k], f"rule {rid}: citation {k}", required=False)
+    bp = r["model_confidence_bp"]
+    if bp is not None and (not isinstance(bp, int) or isinstance(bp, bool) or not 0 <= bp <= 10000):
+        raise ContentError(f"rule {rid}: model_confidence_bp must be null or an integer 0-10000")
+    if r["corpus_promotion_status"] != CORPUS_STATUS:
+        raise ContentError(f"rule {rid}: corpus_promotion_status must be {CORPUS_STATUS!r}")
+    if r["lean_rule"] is not None or r["test_vectors"] != []:
+        raise ContentError(f"rule {rid}: a corpus proposal carries no Lean rule or vectors")
+
+
 def rule_from_candidate(c: dict) -> dict:
+    if not isinstance(c, dict):
+        raise ContentError("each promotion queue item must be a JSON object")
     for k in ("candidate_id", "statement", "source_url", "promotion_status"):
         if not c.get(k):
             raise ContentError(f"candidate is missing {k}")
-    if c["promotion_status"] != "candidate_only_not_verified":
+    if c["promotion_status"] != CORPUS_STATUS:
         raise ContentError(f"{c['candidate_id']}: unexpected promotion_status {c['promotion_status']!r}")
     conf = c.get("confidence_score")
+    if conf is not None and (not isinstance(conf, (int, float)) or isinstance(conf, bool)
+                             or not math.isfinite(conf) or not 0 <= conf <= 1):
+        raise ContentError(f"{c['candidate_id']}: confidence_score must be a number from 0 to 1")
     return {
         "rule_id": c["candidate_id"],
         "program": c.get("program"),
@@ -91,9 +136,13 @@ def rule_from_candidate(c: dict) -> dict:
 def export(queue: list, source_bytes: bytes, content_id: str, version: int) -> dict:
     if not isinstance(queue, list):
         raise ContentError("promotion queue must be a JSON list")
-    if not content_id or version < 1:
-        raise ContentError("content_id is required and version starts at 1")
-    rules = sorted((rule_from_candidate(c) for c in queue), key=lambda r: r["rule_id"])
+    _text(content_id, "content_id")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ContentError("version must be a positive integer")
+    rules = [rule_from_candidate(c) for c in queue]
+    for r in rules:
+        check_rule(r)
+    rules.sort(key=lambda r: r["rule_id"])
     ids = [r["rule_id"] for r in rules]
     if len(ids) != len(set(ids)):
         raise ContentError("duplicate rule_id in promotion queue")
@@ -112,22 +161,29 @@ def export(queue: list, source_bytes: bytes, content_id: str, version: int) -> d
 
 
 def verify(doc: dict) -> dict:
-    if set(doc) != set(DOC_FIELDS):
-        raise ContentError(f"document fields {sorted(doc)} != {sorted(DOC_FIELDS)}")
+    """Accept exactly the documents `export` can produce (then check the digest)."""
+    if not isinstance(doc, dict) or set(doc) != set(DOC_FIELDS):
+        raise ContentError(f"document fields must be exactly {sorted(DOC_FIELDS)}")
     if doc["format"] != FORMAT:
         raise ContentError(f"format {doc['format']!r} is not {FORMAT}")
     if doc["status"] != STATUS or doc["authoritative"] is not False:
         raise ContentError("rule content from the corpus must be a non-authoritative PROPOSAL")
     if not isinstance(doc["version"], int) or isinstance(doc["version"], bool) or doc["version"] < 1:
         raise ContentError("version must be a positive integer")
-    ids = [r.get("rule_id") for r in doc["rules"]]
+    _text(doc["content_id"], "content_id")
+    if doc["producer"] != PRODUCER:
+        raise ContentError(f"producer must be {PRODUCER!r}")
+    for key in ("source_sha3_512", "content_digest"):
+        v = doc[key]
+        if not isinstance(v, str) or len(v) != 128 or any(ch not in "0123456789abcdef" for ch in v):
+            raise ContentError(f"{key} must be 128 lowercase hex characters")
+    if not isinstance(doc["rules"], list):
+        raise ContentError("rules must be a list")
+    for r in doc["rules"]:
+        check_rule(r)
+    ids = [r["rule_id"] for r in doc["rules"]]
     if ids != sorted(ids) or len(ids) != len(set(ids)):
         raise ContentError("rules must be sorted by unique rule_id")
-    for r in doc["rules"]:
-        if set(r) != set(RULE_FIELDS):
-            raise ContentError(f"rule {r.get('rule_id')} fields differ from {sorted(RULE_FIELDS)}")
-        if r["lean_rule"] is not None or r["test_vectors"]:
-            raise ContentError(f"rule {r['rule_id']}: a corpus proposal carries no Lean rule or vectors")
     if digest(doc) != doc["content_digest"]:
         raise ContentError("content_digest does not match the document")
     return {"format": FORMAT, "content_id": doc["content_id"], "version": doc["version"],

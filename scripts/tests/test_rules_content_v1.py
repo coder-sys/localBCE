@@ -54,7 +54,7 @@ class Export(unittest.TestCase):
 
     def test_every_field_change_breaks_the_digest(self):
         mutations = [
-            ("version", 2), ("content_id", "x"), ("source_sha3_512", "0" * 128), ("producer", "other"),
+            ("version", 2), ("content_id", "x"), ("source_sha3_512", "0" * 128),
         ]
         for key, value in mutations:
             with self.subTest(key):
@@ -90,6 +90,61 @@ class Export(unittest.TestCase):
             rc.export([candidate("a", promotion_status="verified")], b"", "c", 1)
         with self.assertRaisesRegex(rc.ContentError, "floats"):
             rc.canonical({"x": 0.5})
+
+    def redigested(self, edit):
+        d = copy.deepcopy(self.doc)
+        edit(d)
+        if isinstance(d, dict) and isinstance(d.get("rules"), list):
+            try:
+                d["content_digest"] = rc.digest(d)
+            except rc.ContentError:
+                pass
+        return d
+
+    def test_verify_accepts_only_what_export_can_produce(self):
+        """A re-digested document with values export never writes is refused (review 2026-11-07)."""
+        cases = {
+            "null content_id": lambda d: d.update(content_id=None),
+            "empty content_id": lambda d: d.update(content_id=""),
+            "other producer": lambda d: d.update(producer="evil"),
+            "non-hex source hash": lambda d: d.update(source_sha3_512=5),
+            "short source hash": lambda d: d.update(source_sha3_512="ab"),
+            "rule claims promotion": lambda d: d["rules"][0].update(corpus_promotion_status="verified_promoted"),
+            "confidence above 100%": lambda d: d["rules"][0].update(model_confidence_bp=970000),
+            "bool confidence": lambda d: d["rules"][0].update(model_confidence_bp=True),
+            "list statement": lambda d: d["rules"][0].update(statement=["x"]),
+            "citation without url": lambda d: d["rules"][0]["citation"].update(url=""),
+            "citation extra field": lambda d: d["rules"][0]["citation"].update(extra="x"),
+            "rules not a list": lambda d: d.update(rules={"a": 1}),
+            "rule not an object": lambda d: d.update(rules=[1]),
+            "version bool": lambda d: d.update(version=True),
+        }
+        for name, edit in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(rc.ContentError):
+                    rc.verify(self.redigested(edit))
+        with self.assertRaises(rc.ContentError):
+            rc.verify([])
+
+    def test_export_refuses_malformed_corpus_values(self):
+        bad = {
+            "percent confidence": candidate("a", confidence_score=97),
+            "string confidence": candidate("a", confidence_score="0.9"),
+            "bool confidence": candidate("a", confidence_score=True),
+            "nan confidence": candidate("a", confidence_score=float("nan")),
+            "list statement": candidate("a", statement=["x"]),
+        }
+        for name, c in bad.items():
+            with self.subTest(name):
+                with self.assertRaises(rc.ContentError):
+                    rc.export([c], b"", "c", 1)
+        for args in ((["not an object"], b"", "c", 1), ([candidate("a")], b"", "c", True), ([candidate("a")], b"", "", 1)):
+            with self.assertRaises(rc.ContentError):
+                rc.export(*args)
+
+    def test_lone_surrogate_is_a_refusal_not_a_crash(self):
+        with self.assertRaises(rc.ContentError):
+            rc.export([candidate("a", statement="\ud800")], b"", "c", 1)
 
     def test_unknown_fields_are_refused(self):
         d = copy.deepcopy(self.doc)
