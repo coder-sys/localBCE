@@ -62,3 +62,33 @@
   unit tests; 3 Rust activation tests; `cargo check`; `forge build`; and 59
   Foundry tests. The `.zkey`, `.ptau`, `.wtns`, and committed executable files
   remain untouched pending cleanup approval in `CLEANUP_PROPOSAL.md`.
+- 2026-11-06: the owner chose the direction in chat: RightRail as base, STARK
+  parked, localBCE wired into RightRail (`RIGHTRAIL_BASE_PLAN.md`).
+- 2026-11-07: the owner approved completing the plan, delegated plan §7
+  decisions 1-6, and approved removing tracked binaries where appropriate. No
+  push, merge or deploy was authorized. Work on branch
+  `codex/rightrail-base-phases` from `e746f582`, built from the main
+  checkout's uncommitted Phase 1 work (that working copy was not changed; its
+  10 CRLF conversions were not carried over). Commits:
+  `3ec9b20f` park proof and chain code, adjudicator without them, CI;
+  `109cd687` plan, approval wording, §7 decisions;
+  `8f0b2ae4` `rightrail/IMPORTED_FROM.md` and its Markdown ceiling;
+  `9cd7b79b` remove the four parked Groth16 binaries (recover with
+  `git show 8f0b2ae4:parked/localbce/zk/<file>`), pin-check RightRail's two
+  worker `.exe` files; `8e6bafe0` G-rule parity harness, report and
+  `RR/RULES/CONTENT/v1` proposal.
+  Each commit's staged tree was checked in a throwaway worktree before
+  committing: `cargo check --all-targets`, `cargo test` (45 passed),
+  `scripts/tests` and `tests` with a CI-like Python 3.12 venv, the workflow
+  YAML, `rightrail` `tests.test_bloat_budget` where `rightrail/` changed, and
+  the self-check (10 PASS after `9cd7b79b`; the remaining FAIL is the
+  detached check tree's branch name). Windows: Python 3.10 ran `scripts/tests`
+  (37 OK, 2 skipped without a Windows rust-engine build) and `tests` (49 OK).
+  Not run: CI (nothing pushed), the RightRail suite and Lean build (no
+  `rr_guarded.ps1`, no Lean toolchain).
+- 2026-11-07: Phases 3-4 blocked, not started: new Lean rules and their
+  evidence need Lean, the guard script and an `rr-core` author; the 837
+  adapter inside `rightrail/` needs the RightRail lead; retiring the bridge
+  needs the owner as the only writer; retiring the Rust reference needs Lean
+  rules for G2/G4/G6/G8/G10 and would break `AGENTS.md`'s "denial_reason()
+  must remain" until then. See `OPEN_QUESTIONS.md` item 12.
