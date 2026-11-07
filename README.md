@@ -1,27 +1,15 @@
-# Blind Ledger - ZK Claims Adjudication Prototype
+# Blind Ledger - Claims Adjudication for RightRail
 
-Blind Ledger is a local prototype for privacy-preserving healthcare claims adjudication using:
+> **Direction (chosen by the project owner 2026-11-06):** RightRail (`rightrail/`) is the base system.
+> localBCE is wired into it without Groth16, STARK, or Solidity/on-chain
+> settlement. That code is parked, not deleted, under `parked/localbce/`.
+> Plan: `docs/integration/RIGHTRAIL_BASE_PLAN.md`. Sections below that describe
+> proofs, contracts, Sepolia or Foundry refer to the parked code.
 
-- Rust
-- Circom
-- Groth16
-- Winterfell STARK
-- Solidity
-- Foundry
-
-The active checked-in runtime validates claims off-chain and writes the
-adjudication result without generating a proof or submitting a transaction.
-
-Groth16 and governed `stark_attested` remain available as dormant compatibility
-implementations, but `proof_execution_enabled` defaults to `false` and is
-disabled in the checked-in configuration. Neither proof path nor chain
-settlement runs in the active workflow. See `STARK_RUNTIME.md` for the retained
-STARK trust boundary and validation commands.
-
-A parallel governed V2 Sepolia pilot candidate adds external MPC signing,
-72-hour timelocked administration, emergency pause, policy-hash binding,
-finalized settlement journaling, and recovery tooling. It remains inactive
-until external deployment, Safe, MPC, legal, and audit gates are satisfied.
+The active runtime is the Rust G1-G10 adjudicator. It validates claims
+off-chain and writes the adjudication result without generating a proof or
+submitting a transaction. Any proof backend other than `none`, or
+`proof_execution_enabled=true`, fails closed.
 
 ---
 
