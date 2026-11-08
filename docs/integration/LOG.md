@@ -62,6 +62,90 @@
   unit tests; 3 Rust activation tests; `cargo check`; `forge build`; and 59
   Foundry tests. The `.zkey`, `.ptau`, `.wtns`, and committed executable files
   remain untouched pending cleanup approval in `CLEANUP_PROPOSAL.md`.
+- 2026-10-18: PR #4 (D-01/N-08) merged into `integration/rightrail` at
+  `e746f582` ("Merge PR #4: D-01/N-08 retire Groth16 runtime routing").
+- 2026-10-29: D-02/D-03 ref check (`git ls-remote origin`), run after the
+  D-02/D-03 work, not before it:
+
+  ```text
+  3d91138cd15ebf67958d297e0726096f2f0edf72  refs/heads/codex-dev
+  e746f5826be1e064cb2c9b3ca09379bdcd20ba59  refs/heads/integration/rightrail
+  cd7da9b74220d789d06b9b25834287e46abaeb4a  refs/heads/main
+  ```
+
+  These match the D-02/D-03 prompt's expected starting values. Work is on
+  `codex/phase1-d02-d03-air-bindings` (draft PR #5 into `integration/rightrail`).
+- D-02/D-03 forgery method, all five gaps: each forgery changes trace generation
+  only, in a test helper; the unmodified verifier is used. Pass criterion is the
+  release-mode verifier returning false; a debug-build prover refusal does not
+  count, so the forged-trace tests are ignored under `debug_assertions`.
+- 2026-10-20: D-02 gap 1 (after-path siblings). Red: `8d73f40b`. Fix: `418ad603`
+  (`NULLIFIER_PATH_HOLD_SELECTOR` and 40 gated hold constraints on the nullifier
+  path columns). Proof parameters per the `418ad603` commit message: transition
+  constraints 229 -> 269, total with assertions 364 -> 404, conjectured 127 ->
+  127 bits, proven 63/29 -> 63/29, proof 107,915 -> 108,589 bytes. The after
+  values were re-measured at `2963a280`, whose AIR file is identical (blob
+  `8ed84514`): 269/404, 127, 63/29, 108,589 bytes.
+- 2026-10-24: `dc308e2a`: test-only refactor of shared forgery helpers
+  (touches the gap 1 test; no behaviour change).
+- 2026-10-24: D-03 gap 2 (claim-source limbs). Red: `2963a280`; the verifier
+  accepted the forged proof in release. Fix: `a93fd296`, 8 assertions pinning
+  claim hash limbs 0-3 at row 31 and 4-7 at row 39 to the public claim hash.
+  Measured: total constraints 404 -> 412 (transition 269 unchanged),
+  conjectured 127, proven 63/29, proof 108,589 -> 108,489 bytes. A gated hold
+  on the limb columns was tried first and rejected: the columns are constant
+  across an honest trace, so the hold is identically zero and fails
+  Winterfell's debug constraint-degree check.
+- 2026-10-24/25: D-03 gap 3 (nullifier preimage block 1, columns 148-155).
+  Red: `61b5e425`; the verifier accepted all five cases (claim hash limb 4 and
+  padding elements 12-15) in release. `5773a716` corrects the test comment.
+  Fix: `ed8d43db`, 4 assertions pinning limbs 4-7 (columns 148-151) at row 383
+  to the public claim hash, plus a periodic selector and 4 gated hold
+  constraints tying padding columns 152-155 across rows 375-383. Measured:
+  transition 269 -> 273, total 412 -> 420, conjectured 127, proven 63/29,
+  proof 108,489 -> 108,656 bytes. A hold on columns 148-151 was trialled and
+  rejected (debug degree check: actual degree 0 on those four constraints).
+- 2026-10-26/27: D-03 gap 4 (oracle-facts link, claim hash limbs 4-7 in
+  columns 148-151, oracle rows 151-262). Red: `4e6d7a74`; the verifier
+  accepted limbs 4, 5, 6 and 7 in release. Fix: `a7ab1329`, 4 assertions at
+  row 159 (`ORACLE_FACTS_LEAF_TRACE_START + 7`) to the public claim hash.
+  Measured: transition 273, total 420 -> 424, conjectured 127, proven 63/29,
+  proof 108,656 -> 108,077 bytes (after value measured at `6956f06f`, whose
+  AIR file is identical to `a7ab1329`, blob `86dcc63a`).
+- 2026-10-27: D-03 gap 5 (fee-schedule link, claim hash limbs 4-7 in columns
+  148-151, fee rows 263-374). Red: `6956f06f`; the verifier accepted limbs 4,
+  5, 6 and 7 in release. Fix: `3cda5533`, 4 assertions at row 271
+  (`FEE_SCHEDULE_LEAF_TRACE_START + 7`) to the public claim hash. Measured:
+  transition 273, total 424 -> 428, conjectured 127, proven 63/29, proof
+  108,077 -> 108,047 bytes.
+- 2026-10-27/28: local suites on the `3cda5533` tree: `cargo test --release
+  --manifest-path stark-engine/Cargo.toml --all-features --jobs 1` gave 397
+  passed, 0 failed, 0 ignored, with all five `reject_*_forgery` tests passing;
+  the debug `--features production-air-winterfell --lib` suite gave 62 passed,
+  0 failed, 8 ignored (the release-only forged-trace tests).
+- 2026-10-28: `e6f9dc8f` adds a release-mode `stark-engine` test step to the
+  `rust` job and a new `stark-engine-windows` job (both `timeout-minutes: 90`).
+  Before this, CI ran `stark-engine` only in debug, so the release-only
+  forgery tests did not run in CI. Run `40788336406` on `e6f9dc8f`: all 8 jobs
+  succeeded and the release-mode stark-engine steps succeeded on Linux (job
+  123167022508, step 8) and Windows (job 123167022768, step 4). The Linux
+  release step took 7m39s and the Windows release step 14m15s. Per-test log
+  lines were not read (job logs need GitHub sign-in).
+- 2026-11-05: Run `40949974519` (#36) on head `ba4896fb` (docs commit): all 8
+  jobs succeeded. Read via API: the `stark-engine-windows` release step ran 78
+  tests, 0 failed, and the five `reject_*_forgery` tests reported `ok`. Closes
+  OPEN_QUESTIONS item 9. Earlier failed runs, checked on 2026-11-05: #28
+  (`8d73f40`, gap 1 failing-test commit) failed `reject_after_path_sibling_forgery`
+  as expected before its fix. #32 (`4e6d7a7`) and #29 (`418ad603`) each failed
+  only `test_concurrent_inference_workers_claim_distinct_jobs` in `rules-and-ops`,
+  a Python test outside the stark suite; not yet confirmed as flaky.
+- 2026-11-06: Correction. Gaps 2-5 (claim-source limbs, nullifier preimage,
+  oracle-facts link, fee-schedule link) are D-02 work per the integration spec
+  (section 5, lines 108-131), not D-03. Real D-03 (each G1-G10 fact derived from
+  a root-bound EVIDENCE/v1 leaf or published as asserted) has not started and
+  depends on Phase 2 interfaces. Commit messages from these gaps keep the old
+  label; history is not rewritten. Presence flags (elements 24-26) and reserved
+  zeros are required for D-02 per the spec.
 - 2026-11-06: the owner chose the direction in chat: RightRail as base, STARK
   parked, localBCE wired into RightRail (`RIGHTRAIL_BASE_PLAN.md`).
 - 2026-11-07: the owner approved completing the plan, delegated plan §7
@@ -111,3 +195,13 @@
   untracked files, checksums, in
   `C:\Users\sruja\Backups\localBCE-main-checkout-2026-11-07`), and only the
   superseded changes were reverted there.
+- 2026-11-07: correction. PR #5 was not an open draft: it was merged into
+  `integration/rightrail` at `bc50dd62` on 2026-11-06, with three more commits
+  (`ae30b971` label correction, `d59df238` module rename to
+  `adversarial_verifier_tests`, `cf7d6953` fee/oracle presence flags and
+  reserved zeros). The entry above and earlier branch docs that called it
+  unmerged were wrong. This branch merges `bc50dd62`: git carries PR #5's
+  `stark-engine/` changes to `parked/localbce/stark-engine/` (the parking
+  renames), its `stark-engine` CI steps and `stark-engine-windows` job are
+  dropped because STARK is parked, LOG keeps both histories, and PR #5's open
+  questions 7-9 are kept as items 13-15.

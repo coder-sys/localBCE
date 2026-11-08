@@ -12,7 +12,7 @@ Updated 2026-11-07 for `RIGHTRAIL_BASE_PLAN.md` Phase 1: proof and chain code is
 - `.github/workflows/production-gates.yml`: root CI (`rules-and-ops`, `rust`, `windows-smoke`), triggers on `pull_request` and `push` to `codex-dev`.
 
 ## Parked (`parked/localbce/`, not built, tested or run; see its README)
-- `stark-engine/`: Winterfell AIR, nullifier state, attestation (forgery-gap fixes are on PR #5, also parked).
+- `stark-engine/`: Winterfell AIR, nullifier state, attestation (includes PR #5's forgery-gap and presence-flag fixes, merged at `bc50dd62` before parking).
 - `blind-ledger/`: Solidity `ClaimsRegistry` (Groth16 path) and V2 STARK contracts, Foundry tests.
 - `zk/`: Circom `claim.circom` (binds nothing; D-04). Its `.zkey`, `.ptau` and `.wtns` files were removed on 2026-11-07 and are recoverable from Git history (CLEANUP_PROPOSAL item 2).
 - `zk-prover/`, `deprecated/groth16/`, app-layer `contracts/`, `l2/`, `zk*/`, STARK and chain scripts.

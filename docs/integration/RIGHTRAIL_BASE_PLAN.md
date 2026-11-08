@@ -7,8 +7,10 @@ An earlier version of this line said the plan was approved on 2026-10-22; no rec
 approval exists, so it was removed. Phases 1-2 implemented on `codex/rightrail-base-phases`;
 Phases 3-4 blocked (see §7 and `docs/integration/PHASE2_REPORT.md`).
 Drafted 2026-10-22 against `integration/rightrail` at `e746f58`, when PR #5 (STARK AIR) was at
-`418ad60`. PR #5 has since grown to the five forgery-gap fixes (head `ba4896fb`); STARK stays
-parked (owner, 2026-11-07), so PR #5 stays an unmerged draft.
+`418ad60`. PR #5 grew to the five forgery-gap fixes plus the presence-flag pins and was merged
+into `integration/rightrail` at `bc50dd62` on 2026-11-06. STARK stays parked (owner,
+2026-11-07): this branch merges `bc50dd62` and parks that code, with PR #5's fixes, under
+`parked/localbce/stark-engine/`.
 
 ## 1. Decision
 
@@ -90,7 +92,7 @@ Each phase ends with a report and waits for "continue" (GOVERNANCE.md). Every PR
 | Phase | PR | Change | Done when |
 |---|---|---|---|
 | 0 | this document | Approve the plan and the decisions in §7 | Reviewer sign-off |
-| 1 | Park proofs and chain | Move the folders listed in §4 under `parked/localbce/` with a README; add CLEANUP_PROPOSAL entries; drop the `foundry`, `stark-bridge`, `governed-v2-anvil` CI jobs and the STARK/Sepolia steps of `rust`, `rules-and-ops`, `windows-smoke`; PR #5 stays a parked draft and is closed unmerged only on an explicit decision | CI green on remaining jobs; `git log --follow` shows moves, not deletions |
+| 1 | Park proofs and chain | Move the folders listed in §4 under `parked/localbce/` with a README; add CLEANUP_PROPOSAL entries; drop the `foundry`, `stark-bridge`, `governed-v2-anvil` CI jobs and the STARK/Sepolia steps of `rust`, `rules-and-ops`, `windows-smoke`; PR #5 was merged at `bc50dd62` before the parking landed; its code is parked with the rest | CI green on remaining jobs; `git log --follow` shows moves, not deletions |
 | 1 | Adjudicator without chain | Make `AppConfig` chain fields optional (`rust-engine/src/main.rs:193-224`); feature-gate or park `stark_activation.rs` and the STARK paths (main.rs 257-530, 678-698, 903-974, 1013-1297); remove the Anvil key (N-07) | `cargo test`, `cargo check` pass with `proof_backend=none` and no chain fields; `denial_reason()` and `adjudication_result.json` unchanged |
 | 2 | Rule content format | Define `RR/RULES/CONTENT/v1`: versioned, hash-pinned, test-vectored rule data (target doc §9); export from the corpus promotion queue as proposals | Round-trip and digest tests; proposals marked non-authoritative |
 | 2 | G-rule parity harness | Test-only harness: run `denial_reason()` and the Lean gate rules on the same synthetic vectors (`rightrail/tests/gate_rules/`) and report differences for G1/G3/G5/G7/G9 | Difference report reviewed; every difference either accepted as R-rule semantics or raised as an open question |
