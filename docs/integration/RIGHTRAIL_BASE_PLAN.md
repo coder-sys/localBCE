@@ -127,12 +127,22 @@ reversed by the owner; none is a state-policy determination.
    RightRail test files (for example `tests/test_bloat_budget.py`) run directly; the full
    RightRail suite and every Lean build stay unrun until the real guard and toolchain exist.
    Consequence: Phase 3 is blocked.
+   **Overridden by the owner on 2026-11-08:** the owner approved installing Lean and writing a
+   stand-in guard. `scripts/rr_guarded_interim.ps1` takes the real guard's call interface
+   (`-Worktree`, `-Suffix`, `-MinFree`, `-Modules` or `-Exe`) and enforces this repository's
+   own limits: a start floor on free memory, a Windows job object with a memory cap holding the
+   whole process tree, a free-memory watchdog, a timeout and low priority. It is not the real
+   `rr_guarded.ps1` (v7) and does not know the driver-root limits; RightRail runs through it
+   are interim evidence and say so in every log. Elan with `leanprover/lean4:v4.33.1` (the
+   `lean-toolchain` pin, x86_64, emulated on this ARM64 PC) is installed for this user.
 2. **Who leads RightRail changes.** No `rr-core` or `rr-review` agent definitions exist on
    this machine (`~/.claude/agents/` is empty). **Decision: the project owner is the
    RightRail lead for Phases 3-4.** Agent sessions may add provenance documents inside
    `rightrail/`, but do not change Lean, formats, digest domains, theorem statements, money
    logic or `artifacts/**` there without an `rr-core` author and an `rr-review` review.
    Consequence: the Phase 4 837 adapter inside `rightrail/` waits for that lead.
+   Confirmed by the owner on 2026-11-08 ("You stay lead"): the agent proposes, and the owner
+   authors or approves each change inside `rightrail/`.
 3. **Where parked code lives.** **Decision: `parked/localbce/` on the branch** (the
    recommended default). It keeps history with `git log --follow` and needs no extra branch.
 4. **Rules corpus home.** **Decision: keep `gov-rules-kg-prototype/` in this repository,

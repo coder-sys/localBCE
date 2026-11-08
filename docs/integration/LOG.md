@@ -205,3 +205,18 @@
   renames), its `stark-engine` CI steps and `stark-engine-windows` job are
   dropped because STARK is parked, LOG keeps both histories, and PR #5's open
   questions 7-9 are kept as items 13-15.
+- 2026-11-08: draft PR #7 (`codex/rightrail-base-phases` into
+  `integration/rightrail`) opened through the GitHub REST API with the
+  credential the git pushes use (no `gh` CLI was installed and both browsers
+  were signed out). CI run 42505077669 on `7ac72b4c`: `rust`, `windows-smoke`
+  and `rules-and-ops` all succeeded.
+- 2026-11-08: the owner chose to install the GitHub CLI and Lean, approved a
+  stand-in guard, and stays RightRail lead. Installed for this user: GitHub CLI
+  2.103.3 (winget, ARM64; `gh auth login` is the owner's step), elan with
+  `leanprover/lean4:v4.33.1` (x86_64 under emulation; this PC is ARM64).
+  Added `scripts/rr_guarded_interim.ps1` (plan §7 item 1). Its checks on this
+  PC: refused a run below `-MinFree` (exit 90); passed a normal run (exit 0);
+  under `-JobMemoryMB 512` a process allocating 128 MB blocks got MemoryError
+  after 384 MB; argument quoting round-trips spaces and quotes. The first
+  guarded `lake build` of `rightrail/lean` was refused (exit 90): 1.7 GB free,
+  floor 4,029,372,048 bytes. `rightrail/lean/.lake/` is now gitignored.

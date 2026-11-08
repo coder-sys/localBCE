@@ -8,6 +8,8 @@ stark-engine/target/
 rust-engine/stark_bridge_input.json
 stark-engine/runtime-artifacts/
 stark-engine/runtime-state/
+# Lean build output for RightRail's Lean workspace.
+rightrail/lean/.lake/
 # The same generated files where the code is parked (RIGHTRAIL_BASE_PLAN.md).
 parked/localbce/blind-ledger/deployment.json
 parked/localbce/blind-ledger/stark_deployment.json
