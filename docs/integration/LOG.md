@@ -220,3 +220,17 @@
   after 384 MB; argument quoting round-trips spaces and quotes. The first
   guarded `lake build` of `rightrail/lean` was refused (exit 90): 1.7 GB free,
   floor 4,029,372,048 bytes. `rightrail/lean/.lake/` is now gitignored.
+- 2026-11-08: Lean build of `rightrail/lean`, all through the interim guard,
+  with an owner-approved start floor of 1.5 GiB (`-MinFree 1610612736`) in
+  place of RightRail's 4,029,372,048 bytes. Run 1 (all cores) hit the 6 GB
+  job cap and 4 targets failed. Run 2 (`LEAN_NUM_THREADS=2`) reached 131/138
+  before the free-memory watchdog stopped it (exit 91). Run 3 resumed from the
+  kept modules and finished: `Build completed successfully (138 jobs)`, peak
+  job memory 2,137 MB. Slowest modules under x86_64 emulation:
+  `Payment.CodecLaws` 7,410 s, `CorrectionTransition.Theorems.Core` 7,087 s.
+  Then `python -m unittest tests.test_gate_rules_vectors` in `rightrail/`
+  through the guard: 7 tests, OK, none skipped. The Lean runner `gate_rules`
+  passes `rules_v1.vectors`, `demo_zz.vectors` and `shards_v1.vectors`, its
+  embedded source hash matches the sources, and the proofs check, so the
+  Lean results the G-rule parity harness compares against are confirmed by
+  Lean on this machine. Guard logs: `%LOCALAPPDATA%\rr_guarded_interim\logs`.
