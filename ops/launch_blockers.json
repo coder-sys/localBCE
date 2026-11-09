@@ -4,12 +4,13 @@
     {
       "id": "LB-001",
       "title": "Governed controlled-attestation STARK production approval",
-      "status": "open",
+      "status": "parked",
       "owner": "cryptography_engineering",
       "external_required": true,
       "release_track": "governed_stark_attested",
       "blocks_governed_attested_pilot": true,
-      "exit_criteria": "Pinned local Winterfell proof generation and verification, governed attestation settlement, finalized reconciliation, and independent audit acceptance all pass."
+      "exit_criteria": "Pinned local Winterfell proof generation and verification, governed attestation settlement, finalized reconciliation, and independent audit acceptance all pass.",
+      "parked_reason": "STARK and on-chain settlement are parked; RightRail is the base system (docs/integration/RIGHTRAIL_BASE_PLAN.md)."
     },
     {
       "id": "LB-002",
@@ -46,28 +47,31 @@
     {
       "id": "LB-006",
       "title": "Sepolia Safe, timelock, and MPC signer activation",
-      "status": "open",
+      "status": "parked",
       "owner": "security_owner",
       "external_required": true,
-      "exit_criteria": "The 2-of-3 Safe, 72-hour timelock, approved MPC key ID, recovery process, and signer monitoring are live and independently reviewed."
+      "exit_criteria": "The 2-of-3 Safe, 72-hour timelock, approved MPC key ID, recovery process, and signer monitoring are live and independently reviewed.",
+      "parked_reason": "STARK and on-chain settlement are parked; RightRail is the base system (docs/integration/RIGHTRAIL_BASE_PLAN.md)."
     },
     {
       "id": "LB-007",
       "title": "Finalized Sepolia canary settlements",
-      "status": "open",
+      "status": "parked",
       "owner": "release_owner",
       "external_required": true,
-      "exit_criteria": "Approved and denied canaries finalize on Sepolia, reconciliation reports match chain and local roots, and rollback rehearsal succeeds."
+      "exit_criteria": "Approved and denied canaries finalize on Sepolia, reconciliation reports match chain and local roots, and rollback rehearsal succeeds.",
+      "parked_reason": "STARK and on-chain settlement are parked; RightRail is the base system (docs/integration/RIGHTRAIL_BASE_PLAN.md)."
     },
     {
       "id": "LB-008",
       "title": "Optional native Winterfell EVM verifier activation gates",
-      "status": "future_optional",
+      "status": "parked",
       "owner": "cryptography_engineering",
       "external_required": true,
       "release_track": "native_evm_winterfell",
       "blocks_governed_attested_pilot": false,
-      "exit_criteria": "Transcript and FRI parity, EIP-170 bytecode, gas below half the target block limit, adversarial vectors, and independent cryptographic and Solidity audits all pass."
+      "exit_criteria": "Transcript and FRI parity, EIP-170 bytecode, gas below half the target block limit, adversarial vectors, and independent cryptographic and Solidity audits all pass.",
+      "parked_reason": "STARK and on-chain settlement are parked; RightRail is the base system (docs/integration/RIGHTRAIL_BASE_PLAN.md)."
     }
   ]
 }

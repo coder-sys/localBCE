@@ -1,9 +1,4 @@
 {
-  "claims_registry_address": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
-  "private_key": "REPLACE_WITH_LOCAL_OR_SECRET_MANAGED_KEY",
-  "rpc_url": "http://127.0.0.1:8545",
-  "transaction_value": "0.001ether",
-  "enable_stark_sidecar_artifacts": false,
   "proof_execution_enabled": false,
   "proof_backend": "none",
   "rules_backend": "versioned_g1_g10",

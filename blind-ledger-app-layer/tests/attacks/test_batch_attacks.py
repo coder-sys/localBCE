@@ -182,6 +182,8 @@ class PythonBatchAttackTests(unittest.TestCase):
         self.assertFalse(verify_inclusion(proof_x.leaf, proof_x.leaf_index, proof_x.siblings, batch_y.root))
 
     def test_c6_app_and_contract_inclusion_hash_mismatch_blocked(self):
+        if not (ROOT / "contracts").exists():
+            self.skipTest("Solidity sources are parked under parked/localbce/ (docs/integration/RIGHTRAIL_BASE_PLAN.md)")
         py_source = (ROOT / "app" / "batch" / "merkle.py").read_text(encoding="utf-8")
         sol_source = (ROOT / "contracts" / "src" / "batch" / "BatchClaimsRegistry.sol").read_text(encoding="utf-8")
         self.assertIn("hashlib.sha256", py_source)
@@ -196,6 +198,8 @@ class PythonBatchAttackTests(unittest.TestCase):
             book.grant("SuperAdmin", "auditor@example.gov")
 
     def test_e1_on_chain_payment_surface_has_no_clear_amount_blocked(self):
+        if not (ROOT / "contracts").exists():
+            self.skipTest("Solidity sources are parked under parked/localbce/ (docs/integration/RIGHTRAIL_BASE_PLAN.md)")
         source = (ROOT / "contracts" / "src" / "batch" / "BatchPaymentTrigger.sol").read_text(encoding="utf-8")
         self.assertNotIn("uint256 amount", source)
         self.assertNotIn("totalAmount", source)

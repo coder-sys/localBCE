@@ -23,13 +23,13 @@ TEST_KEYS = {
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     "0x00000000000000000000000000000000000000000000000000000000000a11ce",
 }
+# The well-known Anvil dev key is allowed only in parked chain tooling; active
+# adjudicator config and code must not carry it (N-07).
 TEST_KEY_FILES = {
-    "scripts/validate_stark_runtime_settlement.sh",
-    "scripts/validate_stark_v2_anvil.sh",
-    "scripts/validate_stark_bridge_chain.sh",
-    "blind-ledger-app-layer/l2/anvil.devnet.json",
-    "rust-engine/config.json",
-    "rust-engine/src/main.rs",
+    "parked/localbce/scripts/validate_stark_runtime_settlement.sh",
+    "parked/localbce/scripts/validate_stark_v2_anvil.sh",
+    "parked/localbce/scripts/validate_stark_bridge_chain.sh",
+    "parked/localbce/blind-ledger-app-layer/l2/anvil.devnet.json",
 }
 
 

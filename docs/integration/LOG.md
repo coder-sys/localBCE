@@ -146,3 +146,91 @@
   depends on Phase 2 interfaces. Commit messages from these gaps keep the old
   label; history is not rewritten. Presence flags (elements 24-26) and reserved
   zeros are required for D-02 per the spec.
+- 2026-11-06: the owner chose the direction in chat: RightRail as base, STARK
+  parked, localBCE wired into RightRail (`RIGHTRAIL_BASE_PLAN.md`).
+- 2026-11-07: the owner approved completing the plan, delegated plan §7
+  decisions 1-6, and approved removing tracked binaries where appropriate. No
+  push, merge or deploy was authorized. Work on branch
+  `codex/rightrail-base-phases` from `e746f582`, built from the main
+  checkout's uncommitted Phase 1 work (that working copy was not changed; its
+  10 CRLF conversions were not carried over). Commits:
+  `3ec9b20f` park proof and chain code, adjudicator without them, CI;
+  `109cd687` plan, approval wording, §7 decisions;
+  `8f0b2ae4` `rightrail/IMPORTED_FROM.md` and its Markdown ceiling;
+  `9cd7b79b` remove the four parked Groth16 binaries (recover with
+  `git show 8f0b2ae4:parked/localbce/zk/<file>`), pin-check RightRail's two
+  worker `.exe` files; `8e6bafe0` G-rule parity harness, report and
+  `RR/RULES/CONTENT/v1` proposal.
+  Each commit's staged tree was checked in a throwaway worktree before
+  committing: `cargo check --all-targets`, `cargo test` (45 passed),
+  `scripts/tests` and `tests` with a CI-like Python 3.12 venv, the workflow
+  YAML, `rightrail` `tests.test_bloat_budget` where `rightrail/` changed, and
+  the self-check (10 PASS after `9cd7b79b`; the remaining FAIL is the
+  detached check tree's branch name). Windows: Python 3.10 ran `scripts/tests`
+  (37 OK, 2 skipped without a Windows rust-engine build) and `tests` (49 OK).
+  Not run: CI (nothing pushed), the RightRail suite and Lean build (no
+  `rr_guarded.ps1`, no Lean toolchain).
+- 2026-11-07: Phases 3-4 blocked, not started: new Lean rules and their
+  evidence need Lean, the guard script and an `rr-core` author; the 837
+  adapter inside `rightrail/` needs the RightRail lead; retiring the bridge
+  needs the owner as the only writer; retiring the Rust reference needs Lean
+  rules for G2/G4/G6/G8/G10 and would break `AGENTS.md`'s "denial_reason()
+  must remain" until then. See `OPEN_QUESTIONS.md` item 12.
+- 2026-11-07: independent read-only review of `e746f582..c9f4f71d` (six area
+  reviewers, two skeptics per finding, one completeness pass). 21 findings:
+  8 upheld by both skeptics, 8 split, 5 refuted, plus 1 from the completeness
+  pass. Fixed: `51a66cfc` (local gate's `tests/` interpreter; five app-layer
+  attack tests that read parked sources now skip; review-queue checkpoint
+  regenerated), `7bcc0e9a` (`rules_content_v1` verify accepts only what
+  export produces), `10f99b3a` (parity harness treats snapshots that fail
+  their pin as missing; human-review split 83/15 -> 81/17, totals unchanged),
+  `e1176494` (README, STATUS, plan, INVENTORY, THREAT_MODEL, ops runbooks,
+  `IMPORTED_FROM.md` check command, parked `.gitattributes`/`.gitignore`
+  entries). Not changed: the parity end-to-end tests still skip, loudly, when
+  no rust-engine binary is built (CI builds one first).
+- 2026-11-07: the owner said STARK stays parked (PR #5 stays an unmerged
+  draft) and permitted pushing this branch. The main checkout's uncommitted
+  copy of Phase 1 was compared with this branch, backed up (patches, a
+  stash-style commit under `refs/backup/main-checkout-2026-11-07`, a tar of
+  untracked files, checksums, in
+  `C:\Users\sruja\Backups\localBCE-main-checkout-2026-11-07`), and only the
+  superseded changes were reverted there.
+- 2026-11-07: correction. PR #5 was not an open draft: it was merged into
+  `integration/rightrail` at `bc50dd62` on 2026-11-06, with three more commits
+  (`ae30b971` label correction, `d59df238` module rename to
+  `adversarial_verifier_tests`, `cf7d6953` fee/oracle presence flags and
+  reserved zeros). The entry above and earlier branch docs that called it
+  unmerged were wrong. This branch merges `bc50dd62`: git carries PR #5's
+  `stark-engine/` changes to `parked/localbce/stark-engine/` (the parking
+  renames), its `stark-engine` CI steps and `stark-engine-windows` job are
+  dropped because STARK is parked, LOG keeps both histories, and PR #5's open
+  questions 7-9 are kept as items 13-15.
+- 2026-11-08: draft PR #7 (`codex/rightrail-base-phases` into
+  `integration/rightrail`) opened through the GitHub REST API with the
+  credential the git pushes use (no `gh` CLI was installed and both browsers
+  were signed out). CI run 42505077669 on `7ac72b4c`: `rust`, `windows-smoke`
+  and `rules-and-ops` all succeeded.
+- 2026-11-08: the owner chose to install the GitHub CLI and Lean, approved a
+  stand-in guard, and stays RightRail lead. Installed for this user: GitHub CLI
+  2.103.3 (winget, ARM64; `gh auth login` is the owner's step), elan with
+  `leanprover/lean4:v4.33.1` (x86_64 under emulation; this PC is ARM64).
+  Added `scripts/rr_guarded_interim.ps1` (plan §7 item 1). Its checks on this
+  PC: refused a run below `-MinFree` (exit 90); passed a normal run (exit 0);
+  under `-JobMemoryMB 512` a process allocating 128 MB blocks got MemoryError
+  after 384 MB; argument quoting round-trips spaces and quotes. The first
+  guarded `lake build` of `rightrail/lean` was refused (exit 90): 1.7 GB free,
+  floor 4,029,372,048 bytes. `rightrail/lean/.lake/` is now gitignored.
+- 2026-11-08: Lean build of `rightrail/lean`, all through the interim guard,
+  with an owner-approved start floor of 1.5 GiB (`-MinFree 1610612736`) in
+  place of RightRail's 4,029,372,048 bytes. Run 1 (all cores) hit the 6 GB
+  job cap and 4 targets failed. Run 2 (`LEAN_NUM_THREADS=2`) reached 131/138
+  before the free-memory watchdog stopped it (exit 91). Run 3 resumed from the
+  kept modules and finished: `Build completed successfully (138 jobs)`, peak
+  job memory 2,137 MB. Slowest modules under x86_64 emulation:
+  `Payment.CodecLaws` 7,410 s, `CorrectionTransition.Theorems.Core` 7,087 s.
+  Then `python -m unittest tests.test_gate_rules_vectors` in `rightrail/`
+  through the guard: 7 tests, OK, none skipped. The Lean runner `gate_rules`
+  passes `rules_v1.vectors`, `demo_zz.vectors` and `shards_v1.vectors`, its
+  embedded source hash matches the sources, and the proofs check, so the
+  Lean results the G-rule parity harness compares against are confirmed by
+  Lean on this machine. Guard logs: `%LOCALAPPDATA%\rr_guarded_interim\logs`.

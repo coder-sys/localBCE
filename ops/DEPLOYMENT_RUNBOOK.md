@@ -2,6 +2,10 @@
 
 Status: local and pilot-prep runbook. This is not production approval.
 
+Parked (2026-11-07): the STARK, Anvil, Foundry and Sepolia steps below refer to code now under
+`parked/localbce/` (`docs/integration/RIGHTRAIL_BASE_PLAN.md`); they are not run. The active
+check is `bash scripts/validate_localbce.sh`.
+
 The active demo deployment path is still the existing Groth16 flow:
 
 ```text

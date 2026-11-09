@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+# Groth16, STARK and Solidity/on-chain jobs were removed when that code was
+# parked under parked/localbce/ (docs/integration/RIGHTRAIL_BASE_PLAN.md).
+
 jobs:
   rules-and-ops:
     runs-on: ubuntu-latest
@@ -35,11 +38,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: python3 -m venv gov-rules-kg-prototype/.venv
       - run: gov-rules-kg-prototype/.venv/bin/pip install -r gov-rules-kg-prototype/requirements.txt -r blind-ledger-app-layer/requirements.txt
+      # Built so the G-rule parity end-to-end tests run instead of skipping.
+      - run: cargo build --manifest-path rust-engine/Cargo.toml --jobs 1
       - run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      # tests/ needs pypdf (gov-rules-kg-prototype/requirements.txt), installed only in this venv.
+      - run: gov-rules-kg-prototype/.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
       - run: python3 scripts/validate_ops_scaffold.py
-      - run: python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json
-      - run: python3 scripts/validate_openzeppelin_pin.py
-      - run: python3 -m unittest tests.test_stark_validation_config_gate
       - run: bash scripts/validate_rules_pipeline.sh
       - run: PYTHONPATH=blind-ledger-app-layer:gov-rules-kg-prototype/src gov-rules-kg-prototype/.venv/bin/python -m unittest blind-ledger-app-layer/tests/test_rules_review_auth.py
       - run: python3 scripts/scan_secrets.py
@@ -51,70 +55,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --manifest-path rust-engine/Cargo.toml --jobs 1
       - run: cargo check --manifest-path rust-engine/Cargo.toml --jobs 1
-      - run: cargo test --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
-      - run: cargo check --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
-      # D-02/D-03 forgery tests are release-only (ignored under debug_assertions),
-      # so run the stark-engine suite in release as well for them to execute.
-      - run: cargo test --release --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
-        timeout-minutes: 90
-
-  foundry:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
-      - run: forge test --root blind-ledger
-      - run: forge build --root blind-ledger
-      - run: forge test --root blind-ledger --gas-report
-
-  stark-bridge:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: bash scripts/validate_stark_bridge_chain.sh
-
-  governed-v2-anvil:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: foundry-rs/foundry-toolchain@v1
-      - run: bash scripts/validate_stark_v2_anvil.sh
 
   windows-smoke:
-    # Phase 0 partial: Windows coverage of the gate unit test and the self-check only.
-    # Full Windows coverage of existing suites is an OPEN_QUESTIONS item.
+    # Windows runs the active localBCE suites: rust-engine and both Python suites. The
+    # Postgres-backed rules pipeline and app-layer auth tests stay Linux-only (rules-and-ops);
+    # RightRail's own suite needs its guard script and Lean toolchain (RIGHTRAIL_BASE_PLAN.md §7).
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m unittest tests.test_stark_validation_config_gate
-      # One step per file so each failure is visible in the step result (job logs are not
-      # readable from outside GitHub). Discover-based run is replaced by these.
-      - name: diag eol of vendored OpenZeppelin on Windows checkout (pass = no CRLF)
-        run: "! git ls-files --eol blind-ledger/lib/openzeppelin-contracts | grep -q w/crlf"
-        shell: bash
-      - name: diag openzeppelin pin validator script (exit code)
-        run: python scripts/validate_openzeppelin_pin.py
-        shell: bash
-      - name: scripts/tests test_openzeppelin_pin
-        run: python -m unittest test_openzeppelin_pin
-        working-directory: scripts/tests
-        shell: bash
-      - name: scripts/tests test_stark_sepolia_pilot
-        run: python -m unittest test_stark_sepolia_pilot
-        working-directory: scripts/tests
-        shell: bash
-
-  stark-engine-windows:
-    # D-02/D-03 gate on Windows: stark-engine suite in release, so the release-only
-    # forgery tests execute.
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --release --manifest-path stark-engine/Cargo.toml --all-features --jobs 1
-        timeout-minutes: 90
+      - run: cargo test --manifest-path rust-engine/Cargo.toml --jobs 1
+        shell: bash
+      - run: cargo build --manifest-path rust-engine/Cargo.toml --jobs 1
+        shell: bash
+      # pypdf is the only third-party module the two suites import.
+      - run: python -m pip install pypdf
+        shell: bash
+      - name: scripts/tests (all)
+        run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+        shell: bash
+      - name: tests (all)
+        run: python -m unittest discover -s tests -p 'test_*.py'
+        shell: bash

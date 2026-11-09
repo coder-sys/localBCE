@@ -124,6 +124,8 @@ class HarderAttackSurfaceHuntTests(unittest.TestCase):
 
     def test_sp1_public_values_bind_batch_context_commitment_blocked(self):
         """ASSUMPTION ATTACKED: single-claim SP1 public values bind the whole batch/on-chain context."""
+        if not (ROOT / "zk-sp1").exists():
+            self.skipTest("SP1 sources are parked under parked/localbce/ (docs/integration/RIGHTRAIL_BASE_PLAN.md)")
         source = (ROOT / "zk-sp1" / "lib" / "src" / "lib.rs").read_text(encoding="utf-8")
         public_values = source.split("pub struct PublicValues", 1)[1].split("}", 1)[0]
 

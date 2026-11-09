@@ -1,5 +1,7 @@
 gov-rules-kg-prototype/data/source_manifests/official_source_pack.json whitespace=cr-at-eol
 
-# Vendored OpenZeppelin sources are hashed byte-for-byte (blind-ledger/openzeppelin_contracts_pin.json).
-# Keep LF on every checkout, including Windows runners with core.autocrlf=true.
+# Vendored OpenZeppelin sources are hashed byte-for-byte (openzeppelin_contracts_pin.json).
+# Keep LF on every checkout, including Windows runners with core.autocrlf=true. They are parked
+# under parked/localbce/blind-ledger/; the old path stays listed in case the code is revived there.
+parked/localbce/blind-ledger/lib/openzeppelin-contracts/** text eol=lf
 blind-ledger/lib/openzeppelin-contracts/** text eol=lf

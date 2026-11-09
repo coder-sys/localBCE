@@ -45,7 +45,7 @@ class RightRailOperatingPlanReviewQueueTests(unittest.TestCase):
     def test_targets_are_stable_and_deduplicated(self) -> None:
         self.assertEqual(
             queue.target_paths(["proof_and_crypto", "settlement_and_payment"]),
-            ["STARK_RUNTIME.md"],
+            ["docs/integration/RIGHTRAIL_BASE_PLAN.md"],
         )
 
     def test_queue_never_auto_adopts(self) -> None:

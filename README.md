@@ -1,27 +1,18 @@
-# Blind Ledger - ZK Claims Adjudication Prototype
+# Blind Ledger - Claims Adjudication for RightRail
 
-Blind Ledger is a local prototype for privacy-preserving healthcare claims adjudication using:
+> **Direction (chosen by the project owner 2026-11-06):** RightRail (`rightrail/`) is the base system.
+> localBCE is wired into it without Groth16, STARK, or Solidity/on-chain
+> settlement. That code is parked, not deleted, under `parked/localbce/`.
+> Plan: `docs/integration/RIGHTRAIL_BASE_PLAN.md`. Other documents in this
+> repository that describe proofs, contracts, Sepolia, Anvil or Foundry as
+> active (`ARCHITECTURE_ALIGNMENT.md`, `ROADMAP_TO_TARGET_ARCHITECTURE.md`,
+> `PROJECT_STATE.md`, `REDEPLOY_WORKFLOW.md`, `TASKS.md`, the STARK and
+> deployment runbooks in `ops/`) are historical and refer to the parked code.
 
-- Rust
-- Circom
-- Groth16
-- Winterfell STARK
-- Solidity
-- Foundry
-
-The active checked-in runtime validates claims off-chain and writes the
-adjudication result without generating a proof or submitting a transaction.
-
-Groth16 and governed `stark_attested` remain available as dormant compatibility
-implementations, but `proof_execution_enabled` defaults to `false` and is
-disabled in the checked-in configuration. Neither proof path nor chain
-settlement runs in the active workflow. See `STARK_RUNTIME.md` for the retained
-STARK trust boundary and validation commands.
-
-A parallel governed V2 Sepolia pilot candidate adds external MPC signing,
-72-hour timelocked administration, emergency pause, policy-hash binding,
-finalized settlement journaling, and recovery tooling. It remains inactive
-until external deployment, Safe, MPC, legal, and audit gates are satisfied.
+The active runtime is the Rust G1-G10 adjudicator. It validates claims
+off-chain and writes the adjudication result without generating a proof or
+submitting a transaction. Any proof backend other than `none`, or
+`proof_execution_enabled=true`, fails closed.
 
 ---
 
@@ -49,31 +40,15 @@ adjudication_result.json
 
 The bridge is documented in `bridge/README.md`. It does not execute the
 external RightRail runtime, move money, generate a proof, sign an attestation,
-or submit a transaction.
+or submit a transaction. It is transitional: RightRail's `FinancialOwner` is to
+become the only writer (plan Phase 4).
 
-Dormant Groth16 compatibility backend, enabled only by an explicit local
-configuration change:
-
-claim_input.json
--> Rust adjudication
--> zk/input.json
--> witness generation
--> Groth16 proof
--> Solidity verifier
--> ClaimsRegistry
--> adjudication_result.json
-
-Dormant STARK compatibility backend, enabled only by an explicit local
-configuration change plus its existing activation gates:
-
-claim_input.json
--> Rust adjudication
--> StarkBridgeInput
--> persistent nullifier transition
--> Winterfell proof and local verification
--> controlled-attestation envelope
--> StarkClaimsRegistry
--> adjudication_result.json
+There is no proof or chain backend. The Groth16 and STARK paths (Circom
+witness and proof, Winterfell proof, Solidity verifiers, ClaimsRegistry and
+StarkClaimsRegistry) are parked under `parked/localbce/`. No configuration
+change re-enables them: `proof_backend` other than `none`, or
+`proof_execution_enabled=true`, makes the adjudicator refuse to start, and
+chain fields in `config.json` are ignored.
 
 ---
 
@@ -87,71 +62,38 @@ bash scripts/validate_localbce.sh
 
 This runs:
 
+- `python3 -m unittest discover -s scripts/tests` (parking guard, G-rule parity, rule content)
+- the `tests/` suite, with `gov-rules-kg-prototype/.venv/bin/python` when that venv exists (it holds `pypdf`)
 - `python3 scripts/validate_ops_scaffold.py`
-- `python3 scripts/validate_policy_manifest.py ops/policy_manifest.example.json`
-- `python3 scripts/validate_openzeppelin_pin.py`
 - `python3 scripts/scan_secrets.py`
 - `bash scripts/validate_rules_pipeline.sh`
 - `cargo test` and `cargo check` in `rust-engine/`
-- `cargo test` and `cargo check` in `stark-engine/`
-- `forge test` and `forge build` in `blind-ledger/`
 
-Set `RUN_STARK_RUNTIME_SETTLEMENT=1` to add the disposable-Anvil live STARK
-settlement gate.
+The STARK, Foundry, Sepolia, Anvil and OpenZeppelin-pin gates are parked with
+their code under `parked/localbce/` and are not run.
 
-Run `bash scripts/validate_stark_v2_anvil.sh` for the governed V2
-external-signer canary. Its `test_mined` receipt is hard-gated to chain 31337
-and the mock signer; Sepolia always requires finalized RPC coverage.
+The integration self-check prints PASS, FAIL or NOT-YET per item:
 
-Foundry may print lint notes for generated verifier constants and deployment
-JSON smoke-test file cheatcodes. Those notes are not failures when the test and
-build commands exit successfully.
+```bash
+bash scripts/integration_selfcheck.sh
+```
 
 ---
 
 # Architecture Alignment
 
-The repository is aligned to the broader hardened technical architecture through
-an explicit staging model:
-
 - active adjudication and off-chain reconciliation: `rust-engine/`, `bridge/`
-- dormant Groth16 compatibility code: `zk/`, `blind-ledger/`
-- dormant STARK compatibility code: `stark-engine/`, `blind-ledger/`
+- RightRail base system: `rightrail/` (own `CONSTITUTION.md` and `AGENTS.md`; provenance in `rightrail/IMPORTED_FROM.md`)
+- parked Groth16, STARK and chain code: `parked/localbce/` (not built or run)
 - imported app/audit reference lane: `blind-ledger-app-layer/`
 - imported hardened reference bundle: `localBCE-codex-dev-hardened-20260616/`
-- rules discovery/review lane: `gov-rules-kg-prototype/`
+- rules discovery/review lane: `gov-rules-kg-prototype/` (proposals only)
 - ops/governance planning scaffold: `ops/`
 
-See `ARCHITECTURE_ALIGNMENT.md` for the maturity-tagged map between the
-technical reference architecture and what is active, scaffolded, reference-only,
-or deferred in this repo.
-
-See `ROADMAP_TO_TARGET_ARCHITECTURE.md` for the phased implementation roadmap
-from the active Groth16 prototype toward deterministic rules, STARK bridge
-hardening, batch roots, native STARK settlement, app-layer integration, and
-production ops.
-
-See `STARK_PHASE4_CHECKPOINT.md` for the completed Phase 4 STARK bridge
-checkpoint and initial smoke-test summary.
-
-See `STARK_PHASE6_CHECKPOINT.md` for the feature-gated Winterfell proof-preview
-checkpoint that preceded the current production AIR.
-
-See `STARK_SOLIDITY_PREVIEW_CHECKPOINT.md` for the preview-only Solidity STARK
-verifier and ClaimsRegistry adapter interface history. The current opt-in
-contracts are documented in `STARK_RUNTIME.md`.
-
-See `STARK_RUNTIME.md` for the implemented controlled-attestation runtime and
-`STARK_TRANSITION_REMAINING.md` for production-hardening gates.
-
-See `STARK_VERIFIER_ABI_CANDIDATE.md` for the current preview-only production
-STARK verifier ABI candidate and public-input expectations.
-
-See `STARK_PHASE8_PROVER_BOUNDARY.md` for implementation history and the
-production G1-G10 Winterfell AIR boundary.
-
 See `RULES_ENGINE.md` for the hash-pinned G1-G10 JSON evaluator and the
-non-runtime Claude candidate shadow boundary.
+non-runtime Claude candidate shadow boundary, and
+`docs/integration/PHASE2_REPORT.md` for the G-rule parity harness against
+RightRail's Lean gate rules and the proposed `RR/RULES/CONTENT/v1` format.
 
 ---
 
@@ -159,281 +101,36 @@ non-runtime Claude candidate shadow boundary.
 
 ```text
 localBCE/
-  ARCHITECTURE_ALIGNMENT.md
-                  maturity-tagged alignment to the technical reference
-  ROADMAP_TO_TARGET_ARCHITECTURE.md
-                  phased roadmap from active prototype to target architecture
-  blind-ledger/   Solidity + Foundry
-  blind-ledger-app-layer/
-                  imported standalone app/audit layer
-  zk/             Circom + snarkjs artifacts
-  zk-prover/      future/dedicated proof service
-  rust-engine/    Rust adjudication engine
-  stark-engine/   first-class STARK bridge crate
+  rust-engine/    Rust adjudication engine (G1-G10, denial_reason())
+  bridge/         transitional off-chain journal and reconciliation
+  rightrail/      RightRail base system (Lean decision worker, owner, gate rules)
   gov-rules-kg-prototype/
-                  Claude web-grounded rules KG prototype
+                  Claude web-grounded rules corpus (outside the RightRail trunk)
+  blind-ledger-app-layer/
+                  imported app/audit layer (837 intake and audit adapters planned for RightRail)
+  scripts/        validators, self-check, parity harness, rule-content exporter
+  parked/localbce/
+                  parked Groth16, STARK, Foundry and chain code (see its README)
   localBCE-codex-dev-hardened-20260616/
                   imported hardened reference bundle
 ```
 
 ---
 
-# Current Features
-
-## Rust Adjudication Engine
-
-- Claim parsing
-- Claim hashing
-- Structured denial reasons
-- G1-G10 rule validation
-- adjudication_result.json generation
-- tx_hash extraction
-- runtime config via config.json
-- structured proof-stage logging
-- Rust unit tests
-- Typed, hash-pinned G1-G10 JSON ruleset with opt-in exact-parity evaluation
-- Rust validation of the 51-program Claude shadow bundle
-
-## ZK Layer
-
-- Circom circuits
-- Witness generation
-- Groth16 proving
-- Solidity verifier generation
-- Optional STARK sidecar artifact generation from rust-engine dry-run path
-- Feature-gated Winterfell G1-G10 proofs with a constrained Rescue-Prime
-  claim-to-fact commitment and `publicInputRoot`
-
-## STARK Bridge
-
-- stark-engine/ retains the localBCE STARK proving and settlement implementation
-  as dormant compatibility code.
-- blind-ledger-app-layer/zk-stark/ remains the imported Winterfell reference/audit source.
-- rust-engine/ defaults to `proof_backend = "none"`; compatibility tests may
-  explicitly enable the retained Groth16 or `stark_attested` paths.
-- A feature-gated Winterfell PoC proof preview exists in stark-engine/ and is
-  covered by the STARK smoke chain.
-- The production G1-G10 AIR packages real Winterfell proof bytes and its exact
-  38-element public-input vector into a versioned JSON artifact.
-- The AIR constrains canonical claim-source, verified-oracle-facts,
-  verified-fee-schedule, persistent nullifier, public-input, and batch-root
-  semantics.
-- The production artifact validator deserializes the saved proof bytes and
-  re-verifies them locally; it does not trust a stored success flag.
-- Parallel V2 contracts preserve V1 settlement behavior while separating
-  timelocked governance, emergency pause, and treasury authority.
-- Canonical native-verifier mutation vectors are generated and checked against
-  the Rust verifier. The Solidity native candidate remains deliberately
-  inactive; it does not substitute proof-commitment equality for FRI proof
-  verification.
-- The atomic executor reconciles persistent local nullifier state with the
-  on-chain registry, submits settlement, and applies state only after receipt
-  confirmation.
-- `StarkAttestationVerifier` and `StarkClaimsRegistry` provide the opt-in
-  controlled-attestation settlement path.
-- Solidity verifies a secp256k1 attestation over the exact inputs and proof
-  commitment; it does not natively verify the full Winterfell proof.
-
-Current STARK artifact and compatibility workflow:
-
-```bash
-bash scripts/validate_stark_bridge_chain.sh
-```
-
-This chain validates bridge schemas, root inputs, mock traces, production
-proof artifacts, verifier handoffs, attestation envelopes, and persistent
-state transitions. The separate runtime validator exercises live settlement.
-
-The script writes temporary artifacts under `/tmp`, removes generated runtime
-artifacts on exit, and is the source of truth for command ordering.
-
-Feature-gated production proof artifact path:
-
-```bash
-cd rust-engine
-cargo run -- stark-bridge-input-dry-run
-
-cd ../stark-engine
-cargo run --features production-air-winterfell \
-  --bin generate_production_stark_proof_artifact -- \
-  ../rust-engine/stark_bridge_input.json production_stark_proof_artifact.json
-
-cargo run --features production-air-winterfell \
-  --bin validate_production_stark_proof_artifact -- \
-  production_stark_proof_artifact.json
-
-cargo run --features production-air-winterfell \
-  --bin generate_production_stark_verifier_handoff -- \
-  production_stark_proof_artifact.json production_stark_verifier_handoff.json
-
-cargo run --features production-air-winterfell \
-  --bin validate_production_stark_verifier_handoff -- \
-  production_stark_verifier_handoff.json
-
-cargo run --features production-air-winterfell \
-  --bin generate_production_claim_source_root -- \
-  ../rust-engine/stark_bridge_input.json production_claim_source_root.json
-
-cargo run --features production-air-winterfell \
-  --bin validate_production_claim_source_root -- \
-  production_claim_source_root.json
-
-cargo run --features production-air-winterfell \
-  --bin generate_production_oracle_facts_root -- \
-  ../rust-engine/stark_bridge_input.json production_oracle_facts_root.json
-
-cargo run --features production-air-winterfell \
-  --bin validate_production_oracle_facts_root -- \
-  production_oracle_facts_root.json
-
-cargo run --features production-air-winterfell \
-  --bin generate_production_fee_schedule_root -- \
-  ../rust-engine/stark_bridge_input.json production_fee_schedule_root.json
-
-cargo run --features production-air-winterfell \
-  --bin validate_production_fee_schedule_root -- \
-  production_fee_schedule_root.json
-
-cargo run --features production-air-winterfell \
-  --bin generate_production_nullifier_root_transition -- \
-  ../rust-engine/stark_bridge_input.json production_nullifier_root_transition.json
-
-cargo run --features production-air-winterfell \
-  --bin validate_production_nullifier_root_transition -- \
-  production_nullifier_root_transition.json
-```
-
-The proof binds the 32-byte claim hash, G1-G10 facts, decision, failure code,
-all seven public roots, and the locked 38-element input vector. Root values are
-canonically packed from four big-endian 64-bit field elements into Solidity
-`bytes32`. Source labels and references are committed by the proof, while
-external truth, governance approval, and attestor custody remain operational
-trust responsibilities.
-
-The verifier handoff and 129-byte settlement envelope bind the proof
-commitment, target registry, and claim amount to the exact Solidity inputs.
-The complete Winterfell proof remains in the audit artifact and is reverified
-locally before the attestor authorizes the on-chain transition.
-
-The claim-source command independently materializes the same canonical
-depth-10 `Rp64_256` Merkle opening from bridge-supplied member, provider,
-service-line, diagnosis, charge, and service-date facts. The production AIR
-now consumes that opening, constrains its leaf and path, and exposes the root
-through the proof artifact and verifier handoff. The root is consumed by the
-opt-in STARK runtime; governance approval remains external.
-
-Schema details for the STARK bridge artifacts are documented in:
-
-```text
-stark-engine/SCHEMA.md
-```
-
-## Smart Contracts
-
-- Verifier.sol
-- ClaimsRegistry.sol
-- On-chain approved claim recording
-- Active Foundry tests for ClaimsRegistry.sol
-- Deployment JSON smoke test for deployment.json
-- Preview-only STARK verifier and adapter interfaces/tests
-- Preview-only STARK verifier V1 ABI candidate
-- Controlled-attestation STARK verifier and ClaimsRegistry
-- STARK deployment script and approved/denied/replay Foundry tests
-
----
-
 # Active Files
 
-## Rust
-
-- rust-engine/src/main.rs
-- rust-engine/config.json
-- rust-engine/claim_input.json
-- rust-engine/adjudication_result.json
-
-## Solidity and Foundry
-
-- blind-ledger/src/ClaimsRegistry.sol
-- blind-ledger/src/Verifier.sol
-- blind-ledger/script/Counter.s.sol
-- blind-ledger/test/ClaimsRegistry.t.sol
-- blind-ledger/test/DeploymentJson.t.sol
-- blind-ledger/foundry.toml
-
-## ZK
-
-- zk/claim.circom
-
-## STARK
-
-- stark-engine/Cargo.toml
-- stark-engine/SCHEMA.md
-- stark-engine/src/lib.rs
-- stark-engine/src/production_air.rs
-- stark-engine/src/production_air_winterfell.rs
-- stark-engine/src/production_proof_artifact.rs
-- stark-engine/src/production_verifier_handoff.rs
-- stark-engine/src/bin/generate_production_stark_proof_artifact.rs
-- stark-engine/src/bin/validate_production_stark_proof_artifact.rs
-- stark-engine/src/bin/generate_production_stark_verifier_handoff.rs
-- stark-engine/src/bin/validate_production_stark_verifier_handoff.rs
-- stark-engine/src/bin/validate_bridge_input.rs
-- stark-engine/src/bin/generate_claim_source_root_input.rs
-- stark-engine/src/bin/validate_claim_source_root_input.rs
-- stark-engine/src/bin/generate_oracle_facts_root_input.rs
-- stark-engine/src/bin/validate_oracle_facts_root_input.rs
-- stark-engine/src/bin/generate_fee_schedule_root_input.rs
-- stark-engine/src/bin/validate_fee_schedule_root_input.rs
-- stark-engine/src/bin/generate_nullifier_root_transition_input.rs
-- stark-engine/src/bin/validate_nullifier_root_transition_input.rs
-- stark-engine/src/bin/generate_batch_root_plan.rs
-- stark-engine/src/bin/validate_batch_root_plan.rs
-- stark-engine/src/bin/generate_batch_root_gap_report.rs
-- stark-engine/src/bin/generate_proof_intent.rs
-- stark-engine/src/bin/generate_witness_plan.rs
-- stark-engine/src/bin/validate_witness_plan.rs
-- stark-engine/src/bin/generate_mock_trace.rs
-- stark-engine/src/bin/validate_mock_trace.rs
-- stark-engine/src/bin/generate_winterfell_compat_report.rs
-- stark-engine/src/bin/generate_winterfell_gap_plan.rs
-- stark-engine/tests/compatibility.rs
-- stark-engine/tests/phase4_claim_source_root_input.rs
-- stark-engine/tests/phase4_oracle_facts_root_input.rs
-- stark-engine/tests/phase4_fee_schedule_root_input.rs
-- stark-engine/tests/phase4_nullifier_root_transition_input.rs
-
-## Imported App and Audit Layer
-
-- blind-ledger-app-layer/README.md
-- blind-ledger-app-layer/COFOUNDER_HANDOFF_README.md
-- blind-ledger-app-layer/app/
-- blind-ledger-app-layer/contracts/
-- blind-ledger-app-layer/tests/
-- blind-ledger-app-layer/zk-production-binding/
-- blind-ledger-app-layer/zk-stark/
-- blind-ledger-app-layer/zk-sp1/
+- rust-engine/src/main.rs, rules_engine.rs, advanced_rules.rs
+- rust-engine/config.json, config.rules.example.json
+- rust-engine/claim_input.json, adjudication_result.json
+- rust-engine/rules.json, rules_v9.json, rules_active_v1.json
+- bridge/rightrail_offchain.py
+- scripts/g_rule_parity.py, scripts/rules_content_v1.py
 
 Note: blind-ledger-app-layer is imported as a standalone cofounder handoff and
-audit/research lane. It is not wired into the active Rust -> Groth16 ->
-ClaimsRegistry workflow yet.
-
-## Rules Knowledge Graph
-
-- gov-rules-kg-prototype/README.md
-- gov-rules-kg-prototype/src/gov_rules_kg/
-- gov-rules-kg-prototype/tests/
-
-Note: gov-rules-kg-prototype is a rules discovery, Claude web-grounded candidate, review, and export prototype. Its outputs are not active Rust adjudication rules until reviewed and explicitly bridged into rust-engine.
-
-## Hardened Reference Bundle
-
-- localBCE-codex-dev-hardened-20260616/
-- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/ops/
-- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/blind-ledger-app-layer/
-- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/gov-rules-kg-prototype/
-- localBCE-codex-dev-hardened-20260616/localBCE-codex-dev/tooling/
-
-Note: this folder is tracked as an imported hardened reference bundle. It is not active runtime code unless a later task explicitly ports a file or behavior into the active project folders.
+audit/research lane and is not wired into the active workflow. gov-rules-kg-prototype
+outputs are proposals; they are not active adjudication rules until reviewed.
+The hardened reference bundle is not active runtime code unless a later task
+explicitly ports a file.
 
 ---
 
@@ -454,81 +151,34 @@ Note: this folder is tracked as an imported hardened reference bundle. It is not
 
 # Current Output
 
-Approved claim:
+Approved claim (`rust-engine/adjudication_result.json` for the checked-in `claim_input.json`):
 
 ```json
 {
-  "claim_id": "CLAIM-DEMO-010",
-  "claim_hash": "0x97a2edc417f16993e07f860e1f52cc3d86f8adfe66ab5c4d21369ef5c2ff58c5",
+  "claim_id": "CLAIM-DEMO-011",
+  "claim_hash": "0x1c1b60223d4f3ffd351887f834b31a4260508b1602a5a9e16a447ea40e386607",
   "status": "APPROVED",
   "reason": null,
-  "tx_submitted": true,
-  "tx_hash": "0xc2a2ee618bebfd2de66ea982a1b4f4c0566a12a27746382eafcfd43b330852dd"
-}
-```
-
-Denied claim:
-
-```json
-{
-  "claim_id": "CLAIM-DEMO-009",
-  "claim_hash": "0x470b16112aff0e4ef85c47f50c21695e8eedbac749eeda1c7dd42320300c4eff",
-  "status": "DENIED",
-  "reason": "G9_RECIPIENT_DECEASED",
   "tx_submitted": false,
   "tx_hash": null
 }
 ```
 
----
-
-# Current Status
-
-Prototype is functional end-to-end.
-
-Working components:
-
-- Rust -> ZK integration
-- Groth16 proof generation
-- Solidity verification
-- ClaimsRegistry recording
-- structured adjudication outputs
-- Rust unit tests
-- Foundry ClaimsRegistry tests
-- Foundry deployment.json smoke test
-
----
-
-# Active ClaimsRegistry
-
-0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e
-
-Configured in:
-
-```text
-rust-engine/config.json
-```
+A denied claim has the same shape with `"status": "DENIED"` and a reason such as
+`"G9_RECIPIENT_DECEASED"`.
 
 ---
 
 # Current Rules Files
 
 - rules.json - current/simple working rules
-- rules_v9.json - future target architecture
+- rules_v9.json - future target architecture (not active)
+- rules_active_v1.json - typed, hash-pinned G1-G10 ruleset, used only through the
+  explicit `versioned_g1_g10` backend with its pinned hash and parity gate
 
-Current Rust engine still reads:
-
-```text
-claim_input.json
-```
-
-Runtime submission config is read from:
-
-```text
-config.json
-```
-
-rules_v9.json is not yet active.
+The Rust engine reads `claim_input.json` and its runtime configuration from
+`config.json` (paths can be overridden with `LOCALBCE_CLAIM_INPUT_PATH` and
+`LOCALBCE_CONFIG_PATH`).
 
 ---
 
@@ -539,21 +189,11 @@ rules_v9.json is not yet active.
 - approved claims require unique claim_id
 - adjudication_result.json must continue working
 - rules.json and rules_v9.json must remain parallel
-- rust-engine/config.json must hold the active ClaimsRegistry address
-
-If claim.circom changes:
-
-1. Recompile circuit
-2. Regenerate zkey
-3. Regenerate Verifier.sol
-4. Redeploy contracts
-5. Update claims_registry_address in rust-engine/config.json
+- no proof backend, chain setting or private key returns to active config or code
 
 ---
 
 # Verification
-
-Rust:
 
 ```bash
 cd rust-engine
@@ -561,42 +201,11 @@ cargo test
 cargo check
 ```
 
-Solidity:
-
-```bash
-cd blind-ledger
-forge test
-forge build
-```
-
-Redeploy workflow:
-
-```text
-REDEPLOY_WORKFLOW.md
-```
-
 ---
 
-# Future Goals
+# Next Steps
 
-- rules_v9.json integration
-- recursive proofs
-- policy registries
-- Merkle commitments
-- nullifier trees
-- Plonky3 migration
-
-Near-term next steps:
-
-- Keep both retained proof implementations disabled unless a separate reviewed
-  compatibility test explicitly enables one.
-- Harden the off-chain ledger and reconciliation boundary without granting it
-  payment, proof, contract, or treasury authority.
-- Use ARCHITECTURE_ALIGNMENT.md as the boundary map before porting reference components.
-- Use ROADMAP_TO_TARGET_ARCHITECTURE.md to choose the next safe integration phase.
-- Port hardened/app-layer assets only through explicit reviewed integration steps.
-- Bridge reviewed deterministic rule candidates into a versioned Rust shadow
-  bundle, prove G1-G10 parity, and gate runtime activation explicitly.
-- oracle attestations
-- off-circuit rules engine
-- ZK Bouncer architecture
+See `docs/integration/RIGHTRAIL_BASE_PLAN.md` §5 and `docs/integration/OPEN_QUESTIONS.md`.
+Phases 3-4 (new Lean rules and their evidence, the 837 intake adapter, the owner as
+the only writer, retiring the bridge and the Rust reference) need a Lean toolchain,
+RightRail's guard script and a RightRail lead.

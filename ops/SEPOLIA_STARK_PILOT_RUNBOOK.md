@@ -2,6 +2,10 @@
 
 Status: credential-gated pilot procedure, not production approval.
 
+Parked (2026-11-07): STARK and Sepolia settlement are parked under `parked/localbce/`
+(`docs/integration/RIGHTRAIL_BASE_PLAN.md`). The scripts and paths below now live there and
+are not run; this runbook is kept as history for anyone who revives that code.
+
 The pilot uses real local Winterfell proof generation and verification followed
 by governed secp256k1 controlled-attestation settlement. Solidity does not
 natively verify Winterfell. Groth16 remains the default release backend until

@@ -2,151 +2,92 @@
 
 ## Project Goal
 
-Maintain a working local prototype for privacy-preserving claims adjudication using:
+RightRail (`rightrail/`) is the base system. localBCE contributes claims
+adjudication rules, a government-rules corpus, and selected app-layer adapters
+to it, **without** Groth16, STARK, or Solidity/on-chain settlement.
 
-- Rust adjudication engine
-- Circom + Groth16 proofs
-- Solidity verifier
-- ClaimsRegistry smart contract
-- Winterfell STARK prover and controlled-attestation settlement contracts
-- Imported standalone app/audit layer from the cofounder handoff
-- Imported hardened reference bundle
+The integration plan is `docs/integration/RIGHTRAIL_BASE_PLAN.md`. Work
+proceeds in its phases, each ending with a report and a pause.
 
-Current workflow:
+Current adjudication workflow (no proofs, no chain):
 
 claim_input.json
--> Rust adjudication
--> zk/input.json
--> witness generation
--> Groth16 proof
--> Solidity verification
--> ClaimsRegistry submission
--> adjudication_result.json
-
-Opt-in STARK workflow:
-
-claim_input.json
--> Rust adjudication
--> StarkBridgeInput
--> persistent nullifier transition
--> real Winterfell proof and local verification
--> controlled secp256k1 attestation
--> StarkClaimsRegistry submission
--> adjudication_result.json
+-> Rust adjudication (denial_reason(), optional hash-pinned versioned_g1_g10)
+-> adjudication_result.json (tx_submitted=false, tx_hash=null)
+-> optional bridge/rightrail_offchain.py journal (until the RightRail owner replaces it)
 
 ---
 
 # Project Structure
 
-## zk-prover Directory
+## rightrail Directory
 
-zk-prover/ exists as a future dedicated proving service directory.
+rightrail/ is the base system with its own `CONSTITUTION.md` and `AGENTS.md`.
+Changes inside it follow those documents: Lean decides, one writer
+(`FinancialOwner`), no duplicate policy, protected-change (XI.2) records, and
+guarded runs.
 
-Current active proof orchestration still happens from:
+## parked/localbce Directory
 
-rust-engine/src/main.rs
-
-Do not move proof orchestration into zk-prover until the current Groth16 flow is stable and explicitly refactored.
+parked/localbce/ holds the Groth16, STARK, Foundry/Solidity and chain code that
+was moved out of the active tree. It is parked, not deleted, keeps its original
+relative paths, and is not built, tested or run. Do not depend on it. Reviving
+anything needs an approved `docs/integration/CLEANUP_PROPOSAL.md` entry.
 
 ## blind-ledger-app-layer Directory
 
-blind-ledger-app-layer/ is an imported standalone app/audit/research lane from the cofounder handoff.
+blind-ledger-app-layer/ is an imported app/audit lane from the cofounder
+handoff. Only selected adapters (837 intake, audit reports) are planned to
+carry into RightRail. Its second G1-G10 engine (`rules-engine-rust/`,
+`rules_engine_fallback.py`) is not carried. Do not silently wire this layer
+into the active workflow.
 
-It contains:
+## gov-rules-kg-prototype Directory
 
-- Python app-layer orchestration and tests
-- standalone Solidity contracts/tests
-- standalone Rust rules-engine crate
-- production-binding Circom research lane
-- STARK/SP1/Cairo research notes and source
-
-Do not silently wire this layer into the active rust-engine/zk/blind-ledger workflow.
-Treat it as a separate review and integration candidate unless explicitly asked to merge behavior.
+gov-rules-kg-prototype/ is the rules-authoring corpus (PostgreSQL, Claude
+inference). It stays outside the RightRail trunk and produces proposals only;
+model output is a lead, never a determination.
 
 ## localBCE-codex-dev-hardened-20260616 Directory
 
 localBCE-codex-dev-hardened-20260616/ is an imported hardened reference bundle.
-
-It contains ops, governance, batch, app-layer, STARK/Cairo, and tooling material.
-
-Do not treat files inside this bundle as active runtime sources unless a task explicitly ports them into the active folders.
-When integrating from this bundle, copy or adapt only the specific reviewed file or behavior needed.
+Do not treat files inside it as active runtime sources unless a task
+explicitly ports them. Copy or adapt only the specific reviewed file needed.
 
 ---
 
 # Important Active Files
 
+- docs/integration/RIGHTRAIL_BASE_PLAN.md
 - rust-engine/src/main.rs
+- rust-engine/src/rules_engine.rs
+- rust-engine/src/advanced_rules.rs
 - rust-engine/config.json
+- rust-engine/config.rules.example.json
 - rust-engine/claim_input.json
 - rust-engine/adjudication_result.json
 - rust-engine/rules.json
 - rust-engine/rules_v9.json
-- zk/claim.circom
-- blind-ledger/src/ClaimsRegistry.sol
-- blind-ledger/src/Verifier.sol
-- blind-ledger/script/Counter.s.sol
-- blind-ledger/test/ClaimsRegistry.t.sol
-- blind-ledger/test/DeploymentJson.t.sol
-- blind-ledger/foundry.toml
-- blind-ledger-app-layer/README.md
-- blind-ledger-app-layer/COFOUNDER_HANDOFF_README.md
-- blind-ledger-app-layer/app/
-- blind-ledger-app-layer/contracts/
-- blind-ledger-app-layer/tests/
-- blind-ledger-app-layer/rules-engine-rust/
-- blind-ledger-app-layer/zk-production-binding/
+- rust-engine/rules_active_v1.json
+- bridge/rightrail_offchain.py
 - gov-rules-kg-prototype/
-- stark-engine/
-- localBCE-codex-dev-hardened-20260616/
+- blind-ledger-app-layer/app/
+- rightrail/
 
 ---
 
 # Current Working Features
 
-- G1-G10 denial rules
-- denial_reason() in Rust
-- Approved claims submit on-chain
-- Denied claims stop before proof generation
-- adjudication_result.json generation
-- tx_hash extraction
-- claim_hash generation
-- Groth16 proof generation
-- Solidity verifier integration
-- runtime config loaded from rust-engine/config.json
-- active Foundry tests for ClaimsRegistry
-- deployment.json smoke test
-- STARK pre-prover planning pipeline in stark-engine/
-- feature-gated production G1-G10 Winterfell AIR and real proof artifacts
-- persistent indexed nullifier state with atomic compare-and-swap updates
-- opt-in `stark_attested` Rust runtime backend
-- controlled-attestation `StarkAttestationVerifier` and `StarkClaimsRegistry`
+- G1-G10 denial rules and denial_reason() in Rust
 - hash-pinned `rules_active_v1.json` evaluator behind `versioned_g1_g10`
+- adjudication_result.json generation and claim_hash generation
+- runtime config loaded from rust-engine/config.json (no chain or key fields)
 - Rust-validated, non-runtime Claude shadow rules bundle
+- government rules corpus and promotion queue (proposals only)
+- RightRail off-chain bridge journal and reconciliation (transitional)
 
-Current STARK pre-prover planning commands:
-
-```text
-rust-engine:
-  cargo run -- stark-bridge-input-dry-run
-
-stark-engine:
-  validate_bridge_input
-  generate_proof_intent
-  generate_witness_plan
-  validate_witness_plan
-  generate_mock_trace
-  generate_winterfell_compat_report
-  generate_winterfell_gap_plan
-```
-
-These commands do not generate real STARK proofs and do not replace the active Groth16 flow.
-
-The separate production-shaped STARK runtime is documented in
-`STARK_RUNTIME.md`. It generates and locally verifies real Winterfell proofs,
-but Solidity verifies an authorized attestation over the public inputs and
-proof commitment rather than natively verifying Winterfell. Groth16 remains
-the default backend.
+Proof execution is parked: `proof_backend` other than `none`, or
+`proof_execution_enabled=true`, fails closed.
 
 The deterministic rules boundary is documented in `RULES_ENGINE.md`.
 `rules_active_v1.json` is the only typed runtime candidate and is pinned to
@@ -167,84 +108,24 @@ verified.
   `versioned_g1_g10` backend and must preserve the pinned hash/parity gate
 - adjudication_result.json must continue working
 - approved claims require unique claim_id
-- active ClaimsRegistry address lives in rust-engine/config.json
-
----
-
-# Circuit Constraints
-
-If claim.circom changes:
-
-1. Recompile circuit
-2. Regenerate zkey/verifier
-3. Regenerate Verifier.sol
-4. Redeploy contracts
-5. Update claims_registry_address in rust-engine/config.json
-
-Do not modify circuits casually.
-
----
-
-# Deployment Notes
-
-Current active ClaimsRegistry:
-
-0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e
-
-Contract address is configured in rust-engine/config.json.
-
-Deployment metadata is written to:
-
-```text
-blind-ledger/deployment.json
-```
-
-The deployment JSON behavior is covered by:
-
-```text
-blind-ledger/test/DeploymentJson.t.sol
-```
+- no proof backend, chain setting or private key returns to active config or code
 
 ---
 
 # Preferred Development Style
 
-- Keep changes incremental
-- Preserve working flow
-- Avoid large rewrites
-- Prefer compatibility over architecture changes
-- Never replace working files without backup
+- Keep changes incremental, one phase of the plan at a time
+- Move or park instead of deleting; deletions need an approved cleanup entry
+- Prefer compatibility over architecture changes outside the agreed plan
+- Report failures and skips as they are
 
 ---
 
-# Long-Term Architecture
-
-rules_v9.json represents future target architecture.
-
-Current implementation is still a prototype.
-
-Long-term goals include:
-
-- off-circuit rules engine
-- recursive proofs
-- Plonky3
-- Poseidon2
-- Merkle commitments
-- nullifier trees
-- policy registries
-- oracle attestations
-- ZK Bouncer architecture
-
-Do not prematurely migrate the current system to full v9 architecture.
-
 # Autonomous Work Rules
 
-- Prefer small incremental refactors.
-- Never perform large rewrites.
-- Always preserve working Groth16 flow.
-- Do not change zk circuits unless explicitly instructed.
+- Follow docs/integration/RIGHTRAIL_BASE_PLAN.md and docs/integration/GOVERNANCE.md.
+- Inside rightrail/, follow rightrail/CONSTITUTION.md and rightrail/AGENTS.md.
+- Do not build, run, or extend anything under parked/.
 - Run cargo test and cargo check after Rust changes.
-- Run forge test and forge build after Solidity changes.
-- Preserve backward compatibility.
-- Create backups before major refactors.
-- Prefer adding over replacing.
+- Run the Python suites (scripts/tests, tests) after script changes.
+- Preserve backward compatibility of claim_input.json and adjudication_result.json.

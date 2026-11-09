@@ -33,8 +33,16 @@ else
   ok groth16 "groth16 not accepted as proof_backend"
 fi
 
-# adversarial tests (D-02/D-03): module not yet written
-later adversarial 1 "D-02/D-03 adversarial verifier test module not yet written"
+# proof and chain code parked (RightRail is the base; D-02/D-03 no longer apply to active code)
+parked_ok=1
+for d in zk zk-prover stark-engine blind-ledger deprecated; do
+  if [ -e "$d" ] || [ ! -d "parked/localbce/$d" ]; then parked_ok=0; fi
+done
+if [ "$parked_ok" -eq 1 ]; then
+  ok "proof parked" "Groth16, STARK and chain roots live only under parked/localbce/"
+else
+  bad "proof parked" "a proof/chain root is still active or its parked copy is missing"
+fi
 
 # default config (N-07, proof gate)
 if python3 -c 'import json,sys; c=json.load(open("rust-engine/config.json")); sys.exit(0 if c.get("proof_execution_enabled") is False and c.get("proof_backend")=="none" else 1)'; then
@@ -42,7 +50,7 @@ if python3 -c 'import json,sys; c=json.load(open("rust-engine/config.json")); sy
 else
   bad "default config" "default is not adjudication-only"
 fi
-if grep -q '"private_key": "0x[0-9a-fA-F]\{64\}"' rust-engine/config.json; then
+if grep -q '"private_key"' rust-engine/config.json; then
   later "default config" 1 "N-07/D-09: Anvil private key still in rust-engine/config.json"
 else
   ok "default config" "no private key in rust-engine/config.json"
@@ -59,9 +67,29 @@ else
   bad "ci matrix" "no windows-latest job yet (PR 3 item, not done)"
 fi
 
-# tracked files
-banned="$(git ls-files | grep -Ei '\.(exe|zkey|ptau|wtns)$' | tr '\n' ' ')"
-if [ -z "$banned" ]; then ok "tracked files" "no banned binaries tracked"; else bad "tracked files" "tracked: $banned (cleanup process)"; fi
+# tracked files: no binaries, except RightRail's two pinned workers while each matches its pinned
+# SHA-256 (CLEANUP_PROPOSAL item 1: kept, protected under CONST XI.2).
+pinned_ok() {  # path, expected lowercase sha256
+  [ "$(git ls-files -- "$1")" = "$1" ] && [ "$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)" = "$2" ]
+}
+worker=rightrail/artifacts/engine-evaluator/blind_financial_worker.exe
+worker_pin="$(grep -o 'SHA-256 `[0-9A-Fa-f]\{64\}`' rightrail/artifacts/engine-evaluator/PROVENANCE.md | head -1 | grep -o '[0-9A-Fa-f]\{64\}' | tr 'A-F' 'a-f')"
+verify=rightrail/artifacts/gate-verify/gate_verify.exe
+verify_pin="$(cut -c1-64 rightrail/artifacts/gate-verify/gate_verify.sha256 2>/dev/null)"
+banned=""
+for f in $(git ls-files | grep -Ei '\.(exe|zkey|ptau|wtns)$'); do
+  if [ "$f" = "$worker" ] && [ -n "$worker_pin" ] && pinned_ok "$f" "$worker_pin"; then continue; fi
+  if [ "$f" = "$verify" ] && [ -n "$verify_pin" ] && pinned_ok "$f" "$verify_pin"; then continue; fi
+  banned="$banned $f"
+done
+if [ -z "$banned" ]; then ok "tracked files" "no binaries tracked except RightRail's 2 workers, each matching its pinned SHA-256"; else bad "tracked files" "tracked or unpinned:$banned"; fi
+
+# rightrail provenance
+if [ -f rightrail/IMPORTED_FROM.md ] && grep -q af020b268094ae3fd6ef5e68fe575b7e5ac40a23 rightrail/IMPORTED_FROM.md; then
+  ok "rightrail import" "rightrail/IMPORTED_FROM.md names af020b2"
+else
+  bad "rightrail import" "rightrail/IMPORTED_FROM.md missing or does not name af020b2"
+fi
 
 # docs
 missing=""

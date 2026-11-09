@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-export PATH="${HOME}/.foundry/bin:${HOME}/.cargo/bin:${PATH}"
+export PATH="${HOME}/.cargo/bin:${PATH}"
 
 run_step() {
   local label="$1"
@@ -27,32 +27,19 @@ run_in_dir() {
   )
 }
 
-run_step "Validate Sepolia pilot runner" python3 -m unittest discover -s "${ROOT_DIR}/scripts/tests" -p 'test_*.py'
+# Proof and chain validation (STARK, Foundry, Sepolia, OpenZeppelin) is parked
+# with its code under parked/localbce/; see docs/integration/RIGHTRAIL_BASE_PLAN.md.
+run_step "Parking guard and script tests" python3 -m unittest discover -s "${ROOT_DIR}/scripts/tests" -p 'test_*.py'
+# tests/ imports pypdf, which gov-rules-kg-prototype/requirements.txt installs into its venv (as in CI).
+TESTS_PYTHON="${ROOT_DIR}/gov-rules-kg-prototype/.venv/bin/python"
+[ -x "${TESTS_PYTHON}" ] || TESTS_PYTHON=python3
+run_step "Integration tests" "${TESTS_PYTHON}" -m unittest discover -s "${ROOT_DIR}/tests" -p 'test_*.py'
 run_step "Validate ops scaffold" python3 "${ROOT_DIR}/scripts/validate_ops_scaffold.py"
-run_step "Validate governed policy manifest" python3 "${ROOT_DIR}/scripts/validate_policy_manifest.py" "${ROOT_DIR}/ops/policy_manifest.example.json"
-run_step "Validate OpenZeppelin source pin" python3 "${ROOT_DIR}/scripts/validate_openzeppelin_pin.py"
 run_step "Scan tracked files for secrets" python3 "${ROOT_DIR}/scripts/scan_secrets.py"
 run_step "Validate deterministic rules pipeline" bash "${ROOT_DIR}/scripts/validate_rules_pipeline.sh"
 
 run_in_dir "Rust engine tests" "rust-engine" cargo test
 run_in_dir "Rust engine check" "rust-engine" cargo check
-
-run_in_dir "STARK engine tests" "stark-engine" cargo test
-run_in_dir "STARK engine check" "stark-engine" cargo check
-run_step "STARK bridge CLI chain smoke test" bash "${ROOT_DIR}/scripts/validate_stark_bridge_chain.sh"
-run_step "STARK Solidity preview tests" bash "${ROOT_DIR}/scripts/validate_stark_solidity_preview.sh"
-
-if [[ "${RUN_STARK_RUNTIME_SETTLEMENT:-0}" == "1" ]]; then
-  run_step "Live STARK runtime settlement" \
-    bash "${ROOT_DIR}/scripts/validate_stark_runtime_settlement.sh"
-else
-  echo
-  echo "==> Live STARK runtime settlement skipped"
-  echo "    Run with RUN_STARK_RUNTIME_SETTLEMENT=1 for disposable-chain integration."
-fi
-
-run_in_dir "Foundry tests" "blind-ledger" forge test
-run_in_dir "Foundry build" "blind-ledger" forge build
 
 echo
 echo "==> localBCE validation passed"

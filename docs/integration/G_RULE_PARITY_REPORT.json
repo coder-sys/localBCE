@@ -1,0 +1,5514 @@
+{
+  "agreements": 140,
+  "assumptions": [
+    "G9 recipient_not_deceased = 0 when a DMF row for the member is dated strictly before the service date (the snapshot's rows, whether or not Lean finds the snapshot usable).",
+    "G1 eligibility_active = 0 when the member has no enrollment span at all; otherwise 1.",
+    "G3 eligibility period = the span covering the service date (for CAP_820, with the paying plan); with no covering span, the member's first span, so G3 fires.",
+    "G5 provider_enrolled = 0 when the payee or rendering party is on the exclusion rows on the service date, or on the provider death rows dated before it.",
+    "G7 is_duplicate = 1 when the line's exact key (flow kind, member, payee, date, procedure, units, cents) is on a released-set row, on an earlier ALLOW line of the same case, or on an earlier line of the same batch in Lean's canonical order.  The unresolved set and near keys are not localBCE inputs.",
+    "An earlier commit releases a line only when every line of its payment is ALLOW and the payment is not being decided again (`redo`); a re-decided payment's own released line is not its own duplicate.",
+    "The gate's own checkpoint of the released and unresolved sets (used when a set read does not chain) is not modelled: localBCE has no checkpoint, so only the rows of the set read count.",
+    "G2, G4, G6, G8 and G10 flags are set to passing values: no Lean rule exists for them yet (Phase 3).",
+    "A dropped snapshot, or one whose rows do not hash to its declared pin, contributes no rows: Lean treats both as missing (Run.lean `snapshot`).",
+    "A line the vector gives no expected result is not compared, and is not counted as released for later commits (its Lean result is unknown here)."
+  ],
+  "authoritative": false,
+  "by_category": {
+    "agree_allow": 76,
+    "agree_hold": 64,
+    "hold_reason_differs": 3,
+    "lean_holds_on_mapped_rule_local_approves": 1,
+    "lean_holds_on_unmapped_rule_local_approves": 22,
+    "lean_review_local_approves": 81,
+    "lean_review_local_denies": 17,
+    "no_lean_expectation": 1
+  },
+  "compared_rules": {
+    "localbce": [
+      "G1_IDENTITY_VERIFICATION_FAILED",
+      "G3_MONTH_OF_SERVICE_FAILED",
+      "G5_PROVIDER_NOT_ENROLLED",
+      "G7_DUPLICATE_CLAIM",
+      "G9_RECIPIENT_DECEASED"
+    ],
+    "rightrail": [
+      "FFS_DUPLICATE_LINE",
+      "MEMBER_DECEASED",
+      "MEMBER_NOT_ENROLLED",
+      "PROVIDER_DECEASED",
+      "PROVIDER_EXCLUDED"
+    ]
+  },
+  "differences": 124,
+  "lines": 265,
+  "not_compared": 1,
+  "records": [
+    {
+      "batch": 0,
+      "case": "clean",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 1,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "clean",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 2,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "clean",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 3,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "clean",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20270301,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 4,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r1_member_deceased",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 7,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r1_member_deceased",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 5,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r1_member_deceased",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 6,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_two_plans",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 9,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_two_plans",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 8,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_two_plans",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 11,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_two_plans",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 10,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_two_plans",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 12,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_released_month",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 15,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_released_month",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 16,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r2_across_batches",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 17,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "r2_across_batches",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 18,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "r2_across_batches",
+      "category": "hold_reason_differs",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 19,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_wrong_plan_claims_no_month",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 22,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_wrong_plan_claims_no_month",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE",
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 23,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_wrong_plan_claims_no_month",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 20,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_wrong_plan_claims_no_month",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE",
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 204,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_wrong_plan_claims_no_month",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 21,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "held_lines_claim_keys",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 24,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "held_lines_claim_keys",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 25,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "held_lines_claim_keys",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 26,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "held_lines_claim_keys",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 27,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_excluded",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 29,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_excluded",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 28,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_excluded",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 32,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_excluded",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 31,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_excluded",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 30,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_excluded",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 33,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_provider_deceased",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_DECEASED"
+      ],
+      "line_id": 35,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_provider_deceased",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 36,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r3_provider_deceased",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_DECEASED"
+      ],
+      "line_id": 34,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_exact_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CYCLE",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 39,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_exact_duplicates",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 37,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_exact_duplicates",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 38,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_exact_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 42,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_exact_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 41,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_exact_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 40,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 50,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 43,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 46,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 47,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 48,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 49,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 45,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 44,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_near_duplicates",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 51,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "cap_claims_no_ffs_near_key",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 52,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "cap_claims_no_ffs_near_key",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 53,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_released",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 55,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r4_released",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 56,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "reviewed_line_resubmitted",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 57,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "reviewed_line_resubmitted",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 58,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "reviewed_line_resubmitted",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED",
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 59,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "lost_released_row_unanchored",
+      "category": "no_lean_expectation",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": null,
+      "lean_reasons": [],
+      "line_id": 262,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "anchored_sets_decide",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 262,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "released_by_a_person",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 61,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "released_by_a_person",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 62,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "later_group_billing",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 63,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "later_group_billing",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 64,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "later_one_cent",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 65,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "later_one_cent",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 66,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "later_units_split",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 67,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "later_units_split",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 68,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "later_exact",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 69,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "later_exact",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 70,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "later_distinct",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 71,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "later_distinct",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 72,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "later_distinct",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 73,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "near_duplicates_across_batches",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 74,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "near_duplicates_across_batches",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 75,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "near_duplicates_across_batches",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 76,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "near_duplicates_across_batches",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "COLLIDES_WITH_UNRESOLVED_NEAR",
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 77,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 3,
+      "case": "near_duplicates_across_batches",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_NEAR_DUPLICATE"
+      ],
+      "line_id": 78,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 4,
+      "case": "near_duplicates_across_batches",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "COLLIDES_WITH_UNRESOLVED_NEAR",
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 79,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 5,
+      "case": "near_duplicates_across_batches",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 80,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 5,
+      "case": "near_duplicates_across_batches",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 81,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "split_after_held_line",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 82,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "split_after_held_line",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "COLLIDES_WITH_UNRESOLVED_NEAR"
+      ],
+      "line_id": 83,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_collisions",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 86,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "unresolved_collisions",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "COLLIDES_WITH_UNRESOLVED_NEAR"
+      ],
+      "line_id": 87,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "unresolved_collisions",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 88,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 3,
+      "case": "unresolved_collisions",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 89,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_wrong_pin",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 90,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_short",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 91,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_missing",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 92,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20270131,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 95,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20270131,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 94,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 93,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20270301,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 97,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20270301,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 96,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 99,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "r5_not_enrolled",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 98,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "reasons_ascending",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED",
+        "MEMBER_NOT_ENROLLED",
+        "PROVIDER_DECEASED",
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 100,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "reasons_ascending",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED",
+        "MEMBER_NOT_ENROLLED",
+        "PROVIDER_DECEASED",
+        "PROVIDER_EXCLUDED",
+        "SERVICE_DATE_FUTURE"
+      ],
+      "line_id": 101,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_future",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_FUTURE"
+      ],
+      "line_id": 102,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_future",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_FUTURE"
+      ],
+      "line_id": 103,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 112,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 115,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 109,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 116,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 117,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 110,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 107,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 118,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 106,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 108,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 104,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 105,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 119,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 111,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_FUTURE",
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 114,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_FUTURE",
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 113,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "service_date_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID"
+      ],
+      "line_id": 120,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_as_of_today",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 121,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_future",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 122,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_90_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 123,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_90_days",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 238,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_91_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 124,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_91_days",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_INVALID",
+        "STALE_DMF"
+      ],
+      "line_id": 212,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_91_days",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "MEMBER_DECEASED_UNVERIFIED",
+        "STALE_DMF"
+      ],
+      "line_id": 205,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_invalid_as_of",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 125,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_invalid_row",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 126,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_count_short",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 127,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_count_long",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 128,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_empty",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 129,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_wrong_pin",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 130,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_death_after_as_of",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 213,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_death_after_as_of",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "MEMBER_DECEASED_UNVERIFIED",
+        "STALE_DMF"
+      ],
+      "line_id": 214,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_death_on_as_of",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 215,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "dmf_missing",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 131,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "pdeath_90_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 132,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "pdeath_91_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_PROVIDER_DEATH"
+      ],
+      "line_id": 133,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "pdeath_91_days",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROVIDER_DECEASED_UNVERIFIED",
+        "STALE_PROVIDER_DEATH"
+      ],
+      "line_id": 206,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "pdeath_empty",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_PROVIDER_DEATH"
+      ],
+      "line_id": 134,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "pdeath_invalid_row",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_PROVIDER_DEATH"
+      ],
+      "line_id": 135,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "pdeath_wrong_pin",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_PROVIDER_DEATH"
+      ],
+      "line_id": 136,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_31_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 137,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_32_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 138,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_32_days",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED_UNVERIFIED",
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 207,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_32_days",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED",
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 139,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_empty",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 140,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_stop_before_start",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 141,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_open_as_zero",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 142,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_invalid_stop",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 143,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_invalid_start",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 144,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "excl_wrong_pin",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_EXCLUSION"
+      ],
+      "line_id": 145,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_7_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 146,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_8_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 147,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_8_days",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED_UNVERIFIED",
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 208,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "span_bad_pin",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 148,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "span_empty",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED_UNVERIFIED",
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 149,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "span_stop_before_start",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 150,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_invalid_stop",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 151,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_invalid_start",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 152,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_stale_overlap",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 209,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "span_wrong_pin",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 153,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "today_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF",
+        "STALE_ENROLLMENT",
+        "STALE_EXCLUSION",
+        "STALE_PROVIDER_DEATH"
+      ],
+      "line_id": 154,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_short",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 155,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_long",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 157,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_missing",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 158,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_wrong_pin",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 159,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p1_late_enrollment",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 160,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p1_late_enrollment",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 161,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p1_late_enrollment",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 162,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "p1_late_enrollment",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 163,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p2_enrollment_outage",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 164,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p2_enrollment_outage",
+      "category": "hold_reason_differs",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE",
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 165,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p2_enrollment_outage",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 210,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p2_enrollment_outage",
+      "category": "hold_reason_differs",
+      "derived_flags": {
+        "eligibility_active": 0,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE",
+        "STALE_ENROLLMENT"
+      ],
+      "line_id": 211,
+      "localbce_reason": "G1_IDENTITY_VERIFICATION_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p2_enrollment_outage",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 166,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p2_enrollment_outage",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 164,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p4_repeat_rebill",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 167,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p4_repeat_rebill",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 168,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p4_repeat_rebill",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED",
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 169,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 170,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 171,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 172,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED",
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 170,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED",
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 171,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 0
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED",
+        "MEMBER_DECEASED"
+      ],
+      "line_id": 172,
+      "localbce_reason": "G9_RECIPIENT_DECEASED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 2,
+      "case": "p5_retry_merit_holds",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED",
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 173,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p6_released_rollback",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 174,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "p6_released_rollback",
+      "category": "lean_holds_on_mapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE",
+        "STALE_RELEASED"
+      ],
+      "line_id": 175,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p6_released_rollback",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 236,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p7_unresolved_reset",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 176,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p7_unresolved_reset",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "COLLIDES_WITH_UNRESOLVED_NEAR",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 177,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p7_unresolved_reset",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 237,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p8a_checkpoint_lag_retry",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 216,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p8a_checkpoint_lag_retry",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 217,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p8a_checkpoint_lag_retry",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 217,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p8b_checkpoint_lag_copy",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 218,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p8b_checkpoint_lag_copy",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 219,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p8b_checkpoint_lag_copy",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 220,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p8c_store_kept",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 221,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p8c_store_kept",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 222,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p8c_store_kept",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 223,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p8d_delayed_write",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 224,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p8d_delayed_write",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 225,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "p8d_delayed_write",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 225,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 3,
+      "case": "p8d_delayed_write",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 225,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 3,
+      "case": "p8d_delayed_write",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 226,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "p9_unresolved_swap",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 227,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "p9_unresolved_swap",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 228,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "p9_unresolved_swap",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 229,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "payment_partly_held",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 243,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "payment_partly_held",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 245,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "payment_partly_held",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "SERVICE_DATE_FUTURE"
+      ],
+      "line_id": 246,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "payment_partly_held",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 244,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "payment_partly_held",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 247,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "payment_partly_held",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 248,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "redo_allow",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 249,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "redo_allow",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 249,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "redo_allow",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 249,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 2,
+      "case": "redo_allow",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 250,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "redo_not_released",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 251,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "redo_not_released",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 252,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "redo_hold_current",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 253,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "redo_hold_current",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 254,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 2,
+      "case": "redo_hold_current",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED"
+      ],
+      "line_id": 253,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 3,
+      "case": "redo_hold_current",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "DUPLICATE_OF_UNRESOLVED",
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 255,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "redo_claims",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 0,
+        "eligibility_period_thru": 0,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "MEMBER_NOT_ENROLLED"
+      ],
+      "line_id": 256,
+      "localbce_reason": "G3_MONTH_OF_SERVICE_FAILED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "redo_claims",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20270131,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 259,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "redo_claims",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20270131,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 257,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "duplicate_line_in_payment",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 260,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "duplicate_line_in_payment",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED",
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 260,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "unchained_rows_unverified",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_DUPLICATE_UNVERIFIED",
+        "STALE_RELEASED"
+      ],
+      "line_id": 230,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "unchained_rows_unverified",
+      "category": "lean_review_local_denies",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 242,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 0,
+      "case": "unchained_rows_both_sets",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 232,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unchained_rows_both_sets",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 233,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unchained_rows_both_sets",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 235,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unchained_rows_both_sets",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "FFS_DUPLICATE_UNVERIFIED",
+        "STALE_RELEASED",
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 234,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_counterparts_by_keys",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "CAP_820",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "CAP_MEMBER_MONTH_DUPLICATE"
+      ],
+      "line_id": 240,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "already_decided",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 178,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "already_decided",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 179,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "already_decided",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED"
+      ],
+      "line_id": 178,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "already_decided",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED"
+      ],
+      "line_id": 179,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "already_decided",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 180,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "already_decided",
+      "category": "lean_holds_on_unmapped_rule_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "ALREADY_DECIDED"
+      ],
+      "line_id": 180,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "already_decided",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 181,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "already_decided",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 182,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_as_of_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 183,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_as_of_future",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 184,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_before_checkpoint",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 185,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "released_before_checkpoint",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 186,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_extends_checkpoint",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 187,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "released_extends_checkpoint",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 1,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "FFS_DUPLICATE_LINE"
+      ],
+      "line_id": 189,
+      "localbce_reason": "G7_DUPLICATE_CLAIM",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "released_extends_checkpoint",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 190,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 2,
+      "case": "released_extends_checkpoint",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 231,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "released_rewritten",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 191,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 1,
+      "case": "released_rewritten",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_RELEASED"
+      ],
+      "line_id": 192,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_as_of_invalid",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 193,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_as_of_future",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 194,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "unresolved_before_checkpoint",
+      "category": "agree_hold",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 0,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HOLD",
+      "lean_reasons": [
+        "PROVIDER_EXCLUDED"
+      ],
+      "line_id": 195,
+      "localbce_reason": "G5_PROVIDER_NOT_ENROLLED",
+      "localbce_status": "DENIED"
+    },
+    {
+      "batch": 1,
+      "case": "unresolved_before_checkpoint",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 20271231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_UNRESOLVED"
+      ],
+      "line_id": 196,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "leap_year_90_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 198,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "leap_year_90_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 197,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "leap_year_91_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 199,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "year_2100_90_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 200,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "year_2100_91_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 20260101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 201,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "year_2000_90_days",
+      "category": "agree_allow",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 19990101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "ALLOW",
+      "lean_reasons": [],
+      "line_id": 202,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    },
+    {
+      "batch": 0,
+      "case": "year_2000_91_days",
+      "category": "lean_review_local_approves",
+      "derived_flags": {
+        "eligibility_active": 1,
+        "eligibility_period_from": 19990101,
+        "eligibility_period_thru": 99991231,
+        "is_duplicate": 0,
+        "provider_enrolled": 1,
+        "recipient_not_deceased": 1
+      },
+      "flow": "FFS_CLAIM",
+      "lean_outcome": "HUMAN_REVIEW",
+      "lean_reasons": [
+        "STALE_DMF"
+      ],
+      "line_id": 203,
+      "localbce_reason": null,
+      "localbce_status": "APPROVED"
+    }
+  ],
+  "schema": "localbce.g_rule_parity_report.v1",
+  "vectors": "rightrail/tests/gate_rules/rules_v1.vectors"
+}

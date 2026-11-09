@@ -54,16 +54,13 @@ python3 scripts/extract_rightrail_requirements.py \
 
 python3 scripts/build_rightrail_operating_plan_review_queue.py
 
-python3 scripts/build_rightrail_safety_review_packet.py
-
 python3 scripts/catalog_rightrail_handoff.py \
   /path/to/RightRail-handoff-2026-10-03_0916
-
-python3 scripts/build_rightrail_handoff_crosswalk.py
-
-RIGHTRAIL_HANDOFF_ROOT=/path/to/RightRail-handoff-2026-10-03_0916 \
-  bash scripts/validate_rightrail_hardening.sh
 ```
+
+The safety review packet, handoff crosswalk, handoff validator and hardening
+script pin evidence inside the STARK runtime. They are parked with it under
+`parked/localbce/scripts/` (see `docs/integration/RIGHTRAIL_BASE_PLAN.md`).
 
 The generated reports are intentional checkpoint artifacts:
 

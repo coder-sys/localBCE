@@ -23,9 +23,9 @@ DOMAIN_TARGETS = {
     "rules_and_policy": "RULES_ENGINE.md",
     "source_and_evidence": "gov-rules-kg-prototype/README.md",
     "privacy_and_phi": "ops/RISK_REGISTER.md",
-    "proof_and_crypto": "STARK_RUNTIME.md",
+    "proof_and_crypto": "docs/integration/RIGHTRAIL_BASE_PLAN.md",
     "state_and_database": "ARCHITECTURE_ALIGNMENT.md",
-    "settlement_and_payment": "STARK_RUNTIME.md",
+    "settlement_and_payment": "docs/integration/RIGHTRAIL_BASE_PLAN.md",
     "governance_and_operations": "ops/PRODUCTION_CONFIG_CHECKLIST.md",
     "build_and_release": "PROJECT_STATE.md",
 }
