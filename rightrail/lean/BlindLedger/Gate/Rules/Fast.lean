@@ -80,14 +80,17 @@ structure Ix where
   pdSome : Bool
   exclSome : Bool
   spanSome : Bool
+  eligSome : Bool
   dmfOk : Bool
   pdOk : Bool
   exclOk : Bool
   spanOk : Bool
+  eligOk : Bool
   dmf : HashMap Nat (List Death)
   pdeath : HashMap Nat (List Death)
   excl : HashMap Nat (List Exclusion)
   span : HashMap Nat (List Span)
+  elig : HashMap Nat (List Elig)
 
 /-- One pass over each set and snapshot: O(n) expected, n the rows read. -/
 def Ix.build (c : Ctx) (b : List Line) : Ix :=
@@ -103,11 +106,13 @@ def Ix.build (c : Ctx) (b : List Line) : Ix :=
     relPost := (posts ra).1, unrPost := (posts ua).1,
     looseKeys := HashSet.ofList ((ra.drop rv.entries.length ++ ua.drop uv.entries.length).map exactKey),
     dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome,
-    spanSome := c.enrollment.isSome,
+    spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
+    eligOk := usable c.today 7 okElig c.eligibility,
     dmf := group (·.id) (entries c.dmf), pdeath := group (·.id) (entries c.providerDeaths),
-    excl := group (·.id) (entries c.exclusions), span := group (·.member) (entries c.enrollment) }
+    excl := group (·.id) (entries c.exclusions), span := group (·.member) (entries c.enrollment),
+    elig := group (·.member) (entries c.eligibility) }
 
 /-! ## Queries: each equals the Spec function of the same name (`FastEq`). -/
 
@@ -130,6 +135,12 @@ def Ix.excluded (x : Ix) (l : Line) : Bool :=
   let inForce (e : Exclusion) := e.start ≤ l.date && l.date ≤ e.stop
   (x.excl.getD l.payee []).any inForce || (x.excl.getD l.rendering []).any inForce
 
+def Ix.aidEligible (x : Ix) (l : Line) : Bool :=
+  (x.elig.getD l.member []).any fun e => eligCovers l e && allowedAid.contains e.aid
+
+def Ix.levelEligible (x : Ix) (l : Line) : Bool :=
+  (x.elig.getD l.member []).any fun e => eligCovers l e && allowedAid.contains e.aid && e.level == 1
+
 def Ix.overlap (x : Ix) (l : Line) : Bool :=
   let first := l.date / 100 * 100 + 1
   let last := l.date / 100 * 100 + monthDays (l.date / 10000) (l.date / 100 % 100)
@@ -151,6 +162,9 @@ def Ix.seen (x : Ix) (s : HashSet Key) (k : Key) : Bool := s.contains k || x.see
 /-- `fires`, row for row. -/
 def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
   | .ALREADY_DECIDED => x.seen s (idKey l) || x.pending (idKey l)
+  | .BENEFIT_LEVEL_MISSING => x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l
+  | .BENEFIT_LEVEL_MISSING_UNVERIFIED =>
+      x.eligSome && !x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l
   | .CAP_MEMBER_MONTH_DUPLICATE => isCap l &&
       (x.seen s (exactKey l) || x.seen s (nearKey l) || x.spanOk && validDate l.date && x.overlap l)
   | .COLLIDES_WITH_UNRESOLVED_NEAR => !isCap l && x.pending (nearKey l) && !x.pending (exactKey l)
@@ -162,6 +176,8 @@ def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
   | .MEMBER_DECEASED_UNVERIFIED => x.dmfSome && !x.dmfOk && validDate l.date && x.memberDead l
   | .MEMBER_NOT_ENROLLED => x.notEnrolled l
   | .MEMBER_NOT_ENROLLED_UNVERIFIED => x.spanSome && !x.spanOk && validDate l.date && !x.enrolled l
+  | .PROGRAM_NOT_ELIGIBLE => x.eligOk && validDate l.date && !x.aidEligible l
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED => x.eligSome && !x.eligOk && validDate l.date && !x.aidEligible l
   | .PROVIDER_DECEASED => x.pdOk && validDate l.date && x.providerDead l
   | .PROVIDER_DECEASED_UNVERIFIED => x.pdSome && !x.pdOk && validDate l.date && x.providerDead l
   | .PROVIDER_EXCLUDED => x.exclOk && validDate l.date && x.excluded l
@@ -169,6 +185,7 @@ def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
   | .SERVICE_DATE_FUTURE => x.today < l.date
   | .SERVICE_DATE_INVALID => !validDate l.date
   | .STALE_DMF => !x.dmfOk
+  | .STALE_ELIGIBILITY => !x.eligOk
   | .STALE_ENROLLMENT => !x.spanOk
   | .STALE_EXCLUSION => !x.exclOk
   | .STALE_PROVIDER_DEATH => !x.pdOk

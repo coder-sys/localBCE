@@ -4,7 +4,7 @@ The lean tree is copied to a temporary directory; each mutant weakens one
 check in the copy's ``BlindLedger/Gate/Rules/Fast.lean`` (the code the runner
 executes), in ``Spec.lean`` for the functions Fast shares with it (dates,
 snapshot age, keys, spans, review, order), or, for the runner's commit,
-``Run.lean``.  It rebuilds ``gate_rules`` and must make ``rules_v1.vectors``
+``Run.lean``.  It rebuilds ``gate_rules`` and must make ``rules_v2.vectors``
 FAIL.  Each demo mutant mislabels lines of the demo file and must FAIL against
 the unmutated rules.  The tracked tree is never written; the hashes of its
 Spec.lean, Fast.lean and Run.lean are checked before and after.  The optional
@@ -45,7 +45,8 @@ UNR_ROW = "unresolved := ⟨x.unrV.asOf, x.unrN + ua.length, x.unrV.entries ++ u
 LOOSE_KEYS = "HashSet.ofList ((ra.drop rv.entries.length ++ ua.drop uv.entries.length).map exactKey)"
 FFS_UNVERIFIED = "| .FFS_DUPLICATE_UNVERIFIED => !isCap l && x.looseKeys.contains (exactKey l)"
 # The four snapshot checks: tag, the fact each fires on.
-CHECKS = (("dmf", "x.memberDead l"), ("pd", "x.providerDead l"), ("excl", "x.excluded l"), ("span", "!x.enrolled l"))
+CHECKS = (("dmf", "x.memberDead l"), ("pd", "x.providerDead l"), ("excl", "x.excluded l"), ("span", "!x.enrolled l"),
+          ("elig", "!x.aidEligible l"), ("elig", "x.aidEligible l && !x.levelEligible l"))
 
 
 def unverified_rows(row):
@@ -93,9 +94,11 @@ SPEC = [
     ("death date validity unchecked", "validDate d.date && d.date ≤ asOf", "d.date ≤ asOf"),
     ("death after the snapshot accepted", " && d.date ≤ asOf", ""),
     ("death on the snapshot date rejected", "d.date ≤ asOf", "d.date < asOf"),
-    ("exclusion start unchecked", "validDate e.start && ", ""),
-    ("exclusion stop unchecked", "validDate e.stop && ", ""),
-    ("exclusion order unchecked", " && e.start ≤ e.stop", ""),
+    # Anchored on okExclusion's own text: G2's okElig shares the bare field checks.
+    ("exclusion start unchecked", "(e : Exclusion) : Bool := validDate e.start && ", "(e : Exclusion) : Bool := "),
+    ("exclusion stop unchecked", "(e : Exclusion) : Bool := validDate e.start && validDate e.stop && ",
+     "(e : Exclusion) : Bool := validDate e.start && "),
+    ("exclusion order unchecked", "validDate e.stop && e.start ≤ e.stop\n", "validDate e.stop\n"),
     ("span start unchecked", "validDate s.start && ", ""),
     ("span stop unchecked", "validDate s.stop && ", ""),
     ("span order unchecked", " && s.start ≤ s.stop", ""),
@@ -128,7 +131,9 @@ SPEC = [
 
 CERTAIN = ("=> x.dmfOk && validDate l.date && x.memberDead l", "=> x.pdOk && validDate l.date && x.providerDead l",
            "=> x.exclOk && validDate l.date && x.excluded l", "Bool := x.spanOk && validDate l.date && !x.enrolled l",
-           "|| x.spanOk && validDate l.date && x.overlap l")
+           "|| x.spanOk && validDate l.date && x.overlap l",
+           "=> x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l",
+           "=> x.eligOk && validDate l.date && !x.aidEligible l")
 FAST = [
     ("R1 off", "(x.dmf.getD l.member []).any (·.date < l.date)", "false"),
     ("R1 death on the service date", "(x.dmf.getD l.member []).any (·.date < l.date)",
@@ -314,6 +319,41 @@ SHARD_MUTANTS = [
     ("decideBatchIn reads arrival order", DIN, DIN.replace("(order c batch)\n", "batch\n")),
 ]
 
+# G2 (aid code and benefit level; synthetic, from localBCE).  Last in the run order, so the earlier slices keep their
+# positions.  The allowed aid list and `review`'s G2 entries are checked by `#guard`s in Run.lean instead: a mutant
+# there fails the build, which this tool cannot count as a kill.
+ELIG_LINE = "def eligCovers (l : Line) (e : Elig) : Bool := e.member == l.member && e.start ≤ l.date && l.date ≤ e.stop"
+G2_SPEC = [
+    ("G2 any member", ELIG_LINE, ELIG_LINE.replace("e.member == l.member && ", "")),
+    ("G2 row start exclusive", ELIG_LINE, ELIG_LINE.replace("e.start ≤ l.date", "e.start < l.date")),
+    ("G2 row stop exclusive", ELIG_LINE, ELIG_LINE.replace("l.date ≤ e.stop", "l.date < e.stop")),
+    ("eligibility level unchecked", " && e.start ≤ e.stop && e.level ≤ 1", " && e.start ≤ e.stop"),
+    ("eligibility row order unchecked", "validDate e.stop && e.start ≤ e.stop && e.level", "validDate e.stop && e.level"),
+]
+G2_FAST = [
+    ("G2 program off", "| .PROGRAM_NOT_ELIGIBLE => x.eligOk && validDate l.date && !x.aidEligible l",
+     "| .PROGRAM_NOT_ELIGIBLE => false"),
+    ("G2 benefit level off", "| .BENEFIT_LEVEL_MISSING => x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l",
+     "| .BENEFIT_LEVEL_MISSING => false"),
+    ("G2 program on an unusable snapshot", "=> x.eligOk && validDate l.date && !x.aidEligible l", "=> !x.aidEligible l"),
+    ("G2 benefit level on an unusable snapshot", "=> x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l",
+     "=> x.aidEligible l && !x.levelEligible l"),
+    ("G2 program unverified off", "x.eligSome && !x.eligOk && validDate l.date && !x.aidEligible l", "false"),
+    ("G2 benefit level unverified off", "x.eligSome && !x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l",
+     "false"),
+    ("eligibility staleness off", "| .STALE_ELIGIBILITY => !x.eligOk", "| .STALE_ELIGIBILITY => false"),
+    ("G2 pairing broken", "eligCovers l e && allowedAid.contains e.aid && e.level == 1", "eligCovers l e && e.level == 1"),
+    ("G2 any nonzero level", "allowedAid.contains e.aid && e.level == 1", "allowedAid.contains e.aid && e.level != 0"),
+    ("G2 benefit level also without an allowed aid", "=> x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l",
+     "=> x.eligOk && validDate l.date && !x.levelEligible l"),
+    ("eligibility 6 days", "usable c.today 7 okElig", "usable c.today 6 okElig"),
+    ("eligibility 8 days", "usable c.today 7 okElig", "usable c.today 8 okElig"),
+    ("eligibility usability read from enrollment", "eligOk := usable c.today 7 okElig c.eligibility",
+     "eligOk := usable c.today 7 okSpan c.enrollment"),
+    ("eligibility rows unread", "elig := group (·.member) (entries c.eligibility)", "elig := ∅"),
+]
+
+
 def swap_reasons(lines):
     """Swap the reasons of the first two held lines with different reasons."""
     held = [i for i, x in enumerate(lines) if x.split()[-2:-1] == ["HOLD"]]
@@ -378,7 +418,8 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
             print(f"MUTANT {name}: {result}", flush=True)
         chosen = ([("Spec.lean", *m) for m in SPEC] + [("Fast.lean", *m) for m in FAST] +
                   [("Run.lean", *m) for m in RUN_MUTANTS] + [("Fast.lean", *m) for m in SHARD_FAST] +
-                  [("Spec.lean", *m) for m in SHARD_MUTANTS])[
+                  [("Spec.lean", *m) for m in SHARD_MUTANTS] + [("Spec.lean", *m) for m in G2_SPEC] +
+                  [("Fast.lean", *m) for m in G2_FAST])[
             slice(*(int(x) if x else None for x in part.split(":")))]
         for file, name, old, new in chosen:
             src = lean / "BlindLedger" / "Gate" / "Rules" / file
