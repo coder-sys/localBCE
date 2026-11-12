@@ -203,7 +203,7 @@ theorem loadAdds_binds {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestB
     have := hok; unfold ShardState.Ok at this; rw [this, hdg']
   let mk : Snapshot Line → Snapshot Line → Rules.Ctx := fun r u =>
     { today := 0, dmf := none, providerDeaths := none, exclusions := none, enrollment := none, eligibility := none,
-      released := none,
+      shareOfCost := none, released := none,
       unresolved := none, releasedPrior := r, unresolvedPrior := u, anchor := a, redo := [] }
   have h1 : anchored H (mk st.released st.unresolved) = true := by unfold anchored; simp [mk, hs]
   have h2 : anchored H (mk r u) = true := by unfold anchored; simp [mk, hd]

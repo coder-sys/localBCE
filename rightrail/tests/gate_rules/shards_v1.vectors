@@ -33,12 +33,23 @@ elig 1007 78131 1 19000101 99991231
 elig 1009 78131 1 19000101 99991231
 elig 9001 78131 1 19000101 99991231
 elig 9002 78131 1 19000101 99991231
+snap soc 20270314 10 5f7c92f37e1bd72bcfb509e88df40eb93645d6d838d7f8764fd622546689138c589538b4c5abc672b04b32cf8518da847a66edbdfc8fdc8de2ad25555110f676
+soc 1001 202703 0 1
+soc 1002 202703 0 1
+soc 1003 202703 0 1
+soc 1004 202703 0 1
+soc 1005 202703 0 1
+soc 1006 202703 0 1
+soc 1007 202703 0 1
+soc 1009 202703 0 1
+soc 9001 202703 0 1
+soc 9002 202703 0 1
 
 
 # Shard uniqueness vectors (gate-shard-uniqueness-v1): a `foreign` directive names ids the tenant's
 # id registry gives another shard; the rules add ALREADY_DECIDED to those ids and change nothing else.
 # Without `foreign` the same batch is ALLOW: only the registry, not these rules, stops a second shard.
-# Synthetic IDs, no PHI.  Header (snapshots) copied from rules_v2.vectors.
+# Synthetic IDs, no PHI.  Header (snapshots) copied from rules_v3.vectors.
 
 # T1 shard 0: line 901 is new to the registry and ALLOW
 case shard0_first

@@ -12,12 +12,12 @@ Lean runner decides and compares every line.
 import hashlib
 import sys
 
-KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved", "elig")  # kind = position + 1; elig (G2) is 7
+KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved", "elig", "soc")  # kind = position + 1; elig (G2) 7, soc (G4) 8
 FLOWS = ("FFS_CYCLE", "FFS_CLAIM", "CAP_820")
 ID, PAY = 129, 261
 LINE = (ID, PAY, 1, ID, ID, ID, 4, ID, 4, 8)
 WIDTHS = {"dmf": (ID, 4), "pdeath": (ID, 4), "excl": (ID, 4, 4), "span": (ID, ID, 4, 4), "released": LINE,
-          "unresolved": LINE, "elig": (ID, ID, 1, 4, 4)}
+          "unresolved": LINE, "elig": (ID, ID, 1, 4, 4), "soc": (ID, 4, 8, 1)}
 
 
 def row(kind, fields):
@@ -85,6 +85,8 @@ def demo():
             rows.append(f"span {m} {501 + (plan[m] - 500) % 3} 20260101 20271231")
     # G2: every member has aid code "13" with a benefit level; fixed, never drawn from `r`, so the seeded lines stay.
     rows += [f"elig {m} 78131 1 19000101 99991231" for m in members]
+    # G4: every member owes no share of cost for January; fixed, never drawn from `r`, so the seeded lines stay.
+    rows += [f"soc {m} 202701 0 1" for m in members]
     batches, seen, first = [], set(), []
     for month in MONTHS:
         lines = []
@@ -127,7 +129,7 @@ def demo():
             "# tools/gate_rules_data.py demo; three monthly batches decided against one read set.",
             "today 20270405", "snap released 20270405 0 ?", "snap unresolved 20270405 0 ?"]
     for kind, as_of in (("dmf", 20270401), ("pdeath", 20270401), ("excl", 20270401), ("span", 20270404),
-                        ("elig", 20270404)):
+                        ("elig", 20270404), ("soc", 20270404)):
         kind_rows = [x for x in rows if x.startswith(kind + " ")]
         head += [f"snap {kind} {as_of} {len(kind_rows)} ?"] + kind_rows
 

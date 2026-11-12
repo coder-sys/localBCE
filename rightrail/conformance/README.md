@@ -19,13 +19,17 @@ each one (verify from the repository root with
 - **Correction reuse** `.../CORRECTION-REUSE/v1` (`BLFCRU02`→`BLFCRV02`):
  RETIRED 2026-10-02 with the one-shot exe (vectors in git 99ec957); spec
  [§7](CORRECTION_TRANSITION_WIRE.md#7-reuse-blfcru02-request-and-blfcrv02-assessment).
-- **Gate rules v2**: vectors `tests/gate_rules/{rules_v2,demo_zz_v2}.vectors`;
- v1 plus G2 (aid code and benefit level, synthetic, from localBCE) over a
- SNAPSHOT/v1 kind-7 eligibility snapshot, read as READ-SET/v3;
+- **Gate rules v3**: vectors `tests/gate_rules/{rules_v3,demo_zz_v3}.vectors`;
+ v2 plus G4 (share of cost, synthetic, from localBCE) over a
+ SNAPSHOT/v1 kind-8 share-of-cost snapshot, read as READ-SET/v4;
  **no written spec** (header comment per file; digests/pins in
  `tools/gate_rules_data.py`); impl Lake exe `gate_rules`
  (`lean/BlindLedger/Gate/Rules/Run.lean`), driven by
  `tests/test_gate_rules_vectors.py`.
+- **Gate rules v2**: vectors `tests/gate_rules/{rules_v2,demo_zz_v2}.vectors`
+ (v1 plus G2's kind-7 eligibility snapshot, READ-SET/v3):
+ RETIRED 2026-11-11 by Gate rules v3 (the current `gate_rules` reads a
+ share-of-cost snapshot v2 files do not declare, so it no longer conforms to v2).
 - **Gate rules v1**: vectors `tests/gate_rules/{rules_v1,demo_zz}.vectors`:
  RETIRED 2026-11-09 by Gate rules v2 (the current `gate_rules` reads an
  eligibility snapshot v1 files do not declare, so it no longer conforms to v1).

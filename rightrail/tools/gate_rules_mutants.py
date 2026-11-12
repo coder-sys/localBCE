@@ -4,7 +4,7 @@ The lean tree is copied to a temporary directory; each mutant weakens one
 check in the copy's ``BlindLedger/Gate/Rules/Fast.lean`` (the code the runner
 executes), in ``Spec.lean`` for the functions Fast shares with it (dates,
 snapshot age, keys, spans, review, order), or, for the runner's commit,
-``Run.lean``.  It rebuilds ``gate_rules`` and must make ``rules_v2.vectors``
+``Run.lean``.  It rebuilds ``gate_rules`` and must make ``rules_v3.vectors``
 FAIL.  Each demo mutant mislabels lines of the demo file and must FAIL against
 the unmutated rules.  The tracked tree is never written; the hashes of its
 Spec.lean, Fast.lean and Run.lean are checked before and after.  The optional
@@ -46,7 +46,7 @@ LOOSE_KEYS = "HashSet.ofList ((ra.drop rv.entries.length ++ ua.drop uv.entries.l
 FFS_UNVERIFIED = "| .FFS_DUPLICATE_UNVERIFIED => !isCap l && x.looseKeys.contains (exactKey l)"
 # The four snapshot checks: tag, the fact each fires on.
 CHECKS = (("dmf", "x.memberDead l"), ("pd", "x.providerDead l"), ("excl", "x.excluded l"), ("span", "!x.enrolled l"),
-          ("elig", "!x.aidEligible l"), ("elig", "x.aidEligible l && !x.levelEligible l"))
+          ("elig", "!x.aidEligible l"), ("elig", "x.aidEligible l && !x.levelEligible l"), ("soc", "x.socUnmet l"))
 
 
 def unverified_rows(row):
@@ -133,7 +133,8 @@ CERTAIN = ("=> x.dmfOk && validDate l.date && x.memberDead l", "=> x.pdOk && val
            "=> x.exclOk && validDate l.date && x.excluded l", "Bool := x.spanOk && validDate l.date && !x.enrolled l",
            "|| x.spanOk && validDate l.date && x.overlap l",
            "=> x.eligOk && validDate l.date && x.aidEligible l && !x.levelEligible l",
-           "=> x.eligOk && validDate l.date && !x.aidEligible l")
+           "=> x.eligOk && validDate l.date && !x.aidEligible l",
+           "=> x.socOk && validDate l.date && x.socUnmet l && !x.socDoubt l")
 FAST = [
     ("R1 off", "(x.dmf.getD l.member []).any (·.date < l.date)", "false"),
     ("R1 death on the service date", "(x.dmf.getD l.member []).any (·.date < l.date)",
@@ -353,6 +354,44 @@ G2_FAST = [
     ("eligibility rows unread", "elig := group (·.member) (entries c.eligibility)", "elig := ∅"),
 ]
 
+# G4 (share of cost; synthetic, from localBCE).  After G2, so the earlier slices keep their positions; `review`'s G4
+# entries are checked by the Run.lean `#guard`.  "G4 any member" is killed by proof only: Fast reads one member's rows.
+SOC_LINE = "def socCovers (l : Line) (q : Soc) : Bool := q.member == l.member && q.month == l.date / 100"
+SOC_DOUBT = " || x.socOk && validDate l.date && x.socDoubt l"
+G4_SPEC = [
+    ("G4 any member", SOC_LINE, SOC_LINE.replace("q.member == l.member && ", "")),
+    ("G4 month is the day", "q.month == l.date / 100", "q.month == l.date"),
+    ("G4 month key dropped", " && q.month == l.date / 100", ""),
+    ("share-of-cost month unchecked", "validDate (q.month * 100 + 1) && ", ""),
+    ("share-of-cost row after asOf accepted", " && q.month ≤ asOf / 100", ""),
+    ("share-of-cost met unchecked", " && q.met ≤ 1", ""),
+]
+G4_FAST = [
+    ("G4 off", "| .SHARE_OF_COST_UNMET => x.socOk && validDate l.date && x.socUnmet l && !x.socDoubt l",
+     "| .SHARE_OF_COST_UNMET => false"),
+    ("G4 on an unusable snapshot", "=> x.socOk && validDate l.date && x.socUnmet l && !x.socDoubt l",
+     "=> x.socUnmet l && !x.socDoubt l"),
+    ("G4 unverified off", "x.socSome && !x.socOk && validDate l.date && x.socUnmet l", "false"),
+    ("G4 doubt off", SOC_DOUBT, ""),
+    ("G4 doubt on an invalid service date", SOC_DOUBT, " || x.socOk && x.socDoubt l"),
+    ("mixed rows hold", "(x.socMet l || x.socDate < l.date", "(x.socDate < l.date"),
+    ("G4 line after the snapshot holds", " || x.socDate < l.date", ""),
+    ("G4 unmet age off", " || dayNum x.socDate + 1 < dayNum x.today", ""),
+    ("G4 unmet HOLD 2 days", "dayNum x.socDate + 1 < dayNum x.today", "dayNum x.socDate + 2 < dayNum x.today"),
+    ("G4 next month allowed", " || x.socDate / 100 < l.date / 100", ""),
+    ("share-of-cost staleness off", "| .STALE_SHARE_OF_COST => !x.socOk", "| .STALE_SHARE_OF_COST => false"),
+    ("share of cost 6 days", "usable c.today 7 okSoc", "usable c.today 6 okSoc"),
+    ("share of cost 8 days", "usable c.today 7 okSoc", "usable c.today 8 okSoc"),
+    ("share-of-cost usability read from eligibility", "socOk := usable c.today 7 okSoc c.shareOfCost",
+     "socOk := usable c.today 7 okElig c.eligibility"),
+    ("share-of-cost rows unread", "soc := group (·.member) (entries c.shareOfCost)", "soc := ∅"),
+    ("G4 amount unchecked", "0 < q.cents && ", ""),
+    ("G4 met reads 0 only", "q.met != 1", "q.met == 0"),
+    ("G4 line on asOf to review", " || x.socDate < l.date", " || x.socDate ≤ l.date"),
+    ("G4 unverified on an invalid service date", "x.socSome && !x.socOk && validDate l.date && x.socUnmet l",
+     "x.socSome && !x.socOk && x.socUnmet l"),
+]
+
 
 def swap_reasons(lines):
     """Swap the reasons of the first two held lines with different reasons."""
@@ -419,7 +458,8 @@ def main(lean_dir: str, rules: str, demo: str, lake: str, part: str = ":") -> in
         chosen = ([("Spec.lean", *m) for m in SPEC] + [("Fast.lean", *m) for m in FAST] +
                   [("Run.lean", *m) for m in RUN_MUTANTS] + [("Fast.lean", *m) for m in SHARD_FAST] +
                   [("Spec.lean", *m) for m in SHARD_MUTANTS] + [("Spec.lean", *m) for m in G2_SPEC] +
-                  [("Fast.lean", *m) for m in G2_FAST])[
+                  [("Fast.lean", *m) for m in G2_FAST] + [("Spec.lean", *m) for m in G4_SPEC] +
+                  [("Fast.lean", *m) for m in G4_FAST])[
             slice(*(int(x) if x else None for x in part.split(":")))]
         for file, name, old, new in chosen:
             src = lean / "BlindLedger" / "Gate" / "Rules" / file

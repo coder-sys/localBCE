@@ -136,7 +136,7 @@ shown) and a NUL byte:
 | MERKLE-NODE, LINES-NODE | token and claim-line Merkle trees |
 | STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
 | SEGMENT, KEY-CERT | financial history segments; epoch key certificate |
-| READ-<kind>/v2, READ-SET/v3, READ-MANIFEST/v3 | read manifest (v3: five pins, G2 eligibility; v2 retired) |
+| READ-<kind>/v2, READ-SET/v4, READ-MANIFEST/v4 | read manifest (v4: six pins, G4 share of cost; v2, v3 retired) |
 | CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
 | TENANT-LOG/v3 | engine tenant-log entry (no `/v2` suffix; codec `Gate/Engine/Log.lean`) |
 | ENGINE-SNAP | engine log snapshot (codec `Gate/Engine/Snap.lean`) |
