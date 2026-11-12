@@ -252,3 +252,21 @@
   test-only. Pushed on the owner's "push"; draft PR #8
   (`codex/rightrail-g2` into `codex/rightrail-base-phases`), CI run
   42809189032: `rust`, `windows-smoke` and `rules-and-ops` all succeeded.
+- 2026-11-12: Phase 3, second rule. The owner approved all defaults in
+  `docs/integration/G4_DESIGN.md` (2026-11-11). `90ffd3f9` adds Lean gate
+  rule G4 (share of cost, read from a pinned member-month snapshot,
+  SNAPSHOT/v1 kind 8, READ-SET/v4 and READ-MANIFEST/v4 with six pins) inside
+  `rightrail/`, with its XI.2 record in the commit message and the design's
+  section 12 recording where the build differs. Interim guard throughout:
+  full `lake build` 138/138, no `sorry`, every axiom pin matching (two
+  proofs needed a manual closing step); `rules_v3.vectors` (end 342),
+  `demo_zz_v3.vectors` and `shards_v1.vectors` pass; all 25 G4 mutants are
+  killed (24 by vectors, 1 by proof). An adversarial review found coverage
+  gaps only, fixed in the same commit. The first mutant run hit the guard's
+  10-hour limit after 8 mutants (Spec mutants rebuild StateV2 under
+  emulation); the rest finished in a second run. Gate tests: the same 77
+  environment-only failures as G2. Committed on the owner's "finish", pushed
+  on "push 90ffd3f9"; draft PR #9 (`codex/rightrail-g4` into
+  `codex/rightrail-g2`), CI run 43304286303: all three jobs succeeded. G4
+  leaves 1 of the 32 per-token reason codes free; the owner chose option 1
+  (a proved per-payment bound, lean shapes for G5-G10) over raising the cap.
