@@ -33,6 +33,12 @@ namespace BlindLedger.Gate.Rules
       verified) `PROGRAM_NOT_ELIGIBLE`: no eligibility row covering the date has
       an allowed aid code.  `BENEFIT_LEVEL_MISSING`: one does, but no single
       covering row has both an allowed aid code and a benefit level.
+    - G4 (localBCE's share of cost; synthetic, not legally verified)
+      `SHARE_OF_COST_UNMET`: a share-of-cost row for the member and the
+      service month owes cents not met, no such row shows nothing owed, the
+      line is dated on or before the snapshot, and the snapshot is at most 1
+      day old.  Conflicting rows, a later line, an older snapshot or a month
+      after the snapshot's month go to review instead.
     - `ALREADY_DECIDED`: the line's identity is already released, unresolved
       or used earlier in the batch.  Such a line joins neither set.
     - `DUPLICATE_OF_UNRESOLVED`: the exact key (or, for CAP_820, the
@@ -45,8 +51,8 @@ namespace BlindLedger.Gate.Rules
       unchained set shows outside the gate's view (`loose`).  Review only; the
       row is listed in `counterparts`, as is any loose row sharing a key.
 
-    The certain reasons (R1 to R5, G2, the duplicates, `ALREADY_DECIDED`) make the
-    line HOLD, whatever else it carries.  R1, R3, R5, G2 and R2's plan overlap
+    The certain reasons (R1 to R5, G2, G4, the duplicates, `ALREADY_DECIDED`) make the
+    line HOLD, whatever else it carries.  R1, R3, R5, G2, G4 and R2's plan overlap
     fire only on a usable snapshot and a valid service date.  The duplicates
     and `ALREADY_DECIDED` read the gate's view of each set: the set read when
     it is chained, else the gate's own checkpoint of it, never an unchained
@@ -57,13 +63,16 @@ namespace BlindLedger.Gate.Rules
     reference snapshot that is missing, failing its pin, dated on an invalid
     day or after an invalid or valid today, older than its maximum age, empty,
     not holding exactly its declared row count, or with a row whose dates are
-    invalid or reversed, a death dated after the snapshot, or an eligibility
-    level other than 0 or 1; `STALE_RELEASED` /
+    invalid or reversed, a death dated after the snapshot, an eligibility
+    level other than 0 or 1, a share-of-cost month that is not a calendar
+    month or is after the snapshot's month, or a met flag other than 0 or 1;
+    `STALE_RELEASED` /
     `STALE_UNRESOLVED`: that set is missing, not exactly its declared count,
     dated on an invalid day, after today or before the gate's checkpoint, or
     not extending the checkpoint's lines; and `*_UNVERIFIED`: a present but
-    unusable snapshot still shows R1, R3, R5 or G2's fact for a valid service
-    date, so the reviewer sees it.
+    unusable snapshot still shows R1, R3, R5, G2 or G4's fact for a valid service
+    date, or a usable share-of-cost snapshot that cannot settle the line, so the
+    reviewer sees it.
     No rule yields BLOCK: blocking stays a human or state action.
 
     A payment (`Line.pay`) is ALLOW only when it has a line and every line is
@@ -120,8 +129,10 @@ inductive Reason
   | FFS_DUPLICATE_LINE | FFS_DUPLICATE_UNVERIFIED | FFS_NEAR_DUPLICATE | MEMBER_DECEASED | MEMBER_DECEASED_UNVERIFIED
   | MEMBER_NOT_ENROLLED | MEMBER_NOT_ENROLLED_UNVERIFIED | PROGRAM_NOT_ELIGIBLE | PROGRAM_NOT_ELIGIBLE_UNVERIFIED
   | PROVIDER_DECEASED | PROVIDER_DECEASED_UNVERIFIED
-  | PROVIDER_EXCLUDED | PROVIDER_EXCLUDED_UNVERIFIED | SERVICE_DATE_FUTURE | SERVICE_DATE_INVALID | STALE_DMF
-  | STALE_ELIGIBILITY | STALE_ENROLLMENT | STALE_EXCLUSION | STALE_PROVIDER_DEATH | STALE_RELEASED | STALE_UNRESOLVED
+  | PROVIDER_EXCLUDED | PROVIDER_EXCLUDED_UNVERIFIED | SERVICE_DATE_FUTURE | SERVICE_DATE_INVALID
+  | SHARE_OF_COST_UNMET | SHARE_OF_COST_UNMET_UNVERIFIED | STALE_DMF
+  | STALE_ELIGIBILITY | STALE_ENROLLMENT | STALE_EXCLUSION | STALE_PROVIDER_DEATH | STALE_RELEASED
+  | STALE_SHARE_OF_COST | STALE_UNRESOLVED
   deriving DecidableEq, Repr
 
 /-- Every code once, in ascending byte order of its name (the runner's `#guard` checks the order). -/
@@ -131,8 +142,10 @@ def reasons : List Reason :=
    .FFS_DUPLICATE_LINE, .FFS_DUPLICATE_UNVERIFIED, .FFS_NEAR_DUPLICATE, .MEMBER_DECEASED, .MEMBER_DECEASED_UNVERIFIED,
    .MEMBER_NOT_ENROLLED, .MEMBER_NOT_ENROLLED_UNVERIFIED, .PROGRAM_NOT_ELIGIBLE, .PROGRAM_NOT_ELIGIBLE_UNVERIFIED,
    .PROVIDER_DECEASED, .PROVIDER_DECEASED_UNVERIFIED,
-   .PROVIDER_EXCLUDED, .PROVIDER_EXCLUDED_UNVERIFIED, .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID, .STALE_DMF,
-   .STALE_ELIGIBILITY, .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
+   .PROVIDER_EXCLUDED, .PROVIDER_EXCLUDED_UNVERIFIED, .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID,
+   .SHARE_OF_COST_UNMET, .SHARE_OF_COST_UNMET_UNVERIFIED, .STALE_DMF,
+   .STALE_ELIGIBILITY, .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED,
+   .STALE_SHARE_OF_COST, .STALE_UNRESOLVED]
 
 /-- For CAP_820, `payee` and `rendering` are the plan and `date` is the first
     day of the service period.  `pay` is the payment the line is part of. -/
@@ -177,6 +190,15 @@ structure Elig where
   start : Nat
   stop : Nat
 
+/-- G4 share of cost: what the member owes for the calendar month `month` (CCYYMM), in cents, and whether the
+    source certifies it met (`met` 1, else 0).  Synthetic, from localBCE G4 (rust-engine/src/main.rs:246-248);
+    not legally verified. -/
+structure Soc where
+  member : Nat
+  month : Nat
+  cents : Nat
+  met : Nat
+
 /-- A pinned input: its date, its declared row count, and the rows read. -/
 structure Snapshot (α : Type) where
   asOf : Nat
@@ -193,6 +215,7 @@ structure Ctx where
   exclusions : Option (Snapshot Exclusion)
   enrollment : Option (Snapshot Span)
   eligibility : Option (Snapshot Elig)
+  shareOfCost : Option (Snapshot Soc)
   released : Option (Snapshot Line)
   unresolved : Option (Snapshot Line)
   releasedPrior : Snapshot Line
@@ -232,6 +255,10 @@ def okSpan (_ : Nat) (s : Span) : Bool := validDate s.start && validDate s.stop 
 
 /-- An eligibility row: valid dates in order and a level flag of 0 or 1 (any other value is malformed). -/
 def okElig (_ : Nat) (e : Elig) : Bool := validDate e.start && validDate e.stop && e.start ≤ e.stop && e.level ≤ 1
+
+/-- A share-of-cost row: a calendar month not after the snapshot's month, and a met flag of 0 or 1 (any other
+    value is malformed). -/
+def okSoc (asOf : Nat) (q : Soc) : Bool := validDate (q.month * 100 + 1) && q.month ≤ asOf / 100 && q.met ≤ 1
 
 /-- Present, dated on a valid day not after a valid today, at most `maxAge`
     days old, holding exactly its declared, nonzero count of well-formed rows
@@ -335,6 +362,25 @@ def aidEligible (c : Ctx) (l : Line) : Bool :=
 def levelEligible (c : Ctx) (l : Line) : Bool :=
   (entries c.eligibility).any fun e => eligCovers l e && allowedAid.contains e.aid && e.level == 1
 
+def socCovers (l : Line) (q : Soc) : Bool := q.member == l.member && q.month == l.date / 100
+
+/-- localBCE G4 (rust-engine/src/main.rs:246): a covering row owes a share of cost not met.  Synthetic. -/
+def socUnmet (c : Ctx) (l : Line) : Bool :=
+  (entries c.shareOfCost).any fun q => socCovers l q && 0 < q.cents && q.met != 1
+
+/-- A covering row shows nothing owed: no amount, or met. -/
+def socMet (c : Ctx) (l : Line) : Bool :=
+  (entries c.shareOfCost).any fun q => socCovers l q && (q.cents == 0 || q.met == 1)
+
+def socAsOf (c : Ctx) : Nat := (c.shareOfCost.map (·.asOf)).getD 0
+
+/-- The snapshot cannot settle the line: a row shows it unmet and the rows for the month conflict, the line is
+    dated after the snapshot, or the snapshot is more than 1 day old; or the line's month is after the
+    snapshot's month. -/
+def socDoubt (c : Ctx) (l : Line) : Bool :=
+  socUnmet c l && (socMet c l || socAsOf c < l.date || dayNum (socAsOf c) + 1 < dayNum c.today) ||
+    socAsOf c / 100 < l.date / 100
+
 /-- A line of a payment this batch decides again that the released set already holds. -/
 def own (c : Ctx) (l : Line) : Bool := c.redo.contains l.pay && (releasedSet c).contains l
 
@@ -352,7 +398,8 @@ def looseKeys (c : Ctx) : List Key :=
 /-- The rule table.  Maximum ages: DMF and provider deaths 90 days (H.R.1
     §§71104-71105 quarterly minimum); exclusions 31 days (42 CFR 455.436
     monthly checks); enrollment 7 days, a placeholder for the state's own; eligibility (G2) 7 days, a
-    placeholder (localBCE's O1 TTL is 24 hours). -/
+    placeholder (localBCE's O1 TTL is 24 hours); share of cost (G4) 7 days usable and 1 day for an unmet
+    HOLD, placeholders (the source's TTL is 24 hours). -/
 def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .ALREADY_DECIDED => seen.contains (idKey l) || (pending c).contains (idKey l)
   | .BENEFIT_LEVEL_MISSING => certain c 7 okElig c.eligibility l && aidEligible c l && !levelEligible c l
@@ -377,17 +424,22 @@ def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .PROVIDER_EXCLUDED_UNVERIFIED => unverified c 31 okExclusion c.exclusions l && excluded c l
   | .SERVICE_DATE_FUTURE => c.today < l.date
   | .SERVICE_DATE_INVALID => !validDate l.date
+  | .SHARE_OF_COST_UNMET => certain c 7 okSoc c.shareOfCost l && socUnmet c l && !socDoubt c l
+  | .SHARE_OF_COST_UNMET_UNVERIFIED =>
+      unverified c 7 okSoc c.shareOfCost l && socUnmet c l || certain c 7 okSoc c.shareOfCost l && socDoubt c l
   | .STALE_DMF => !usable c.today 90 okDeath c.dmf
   | .STALE_ELIGIBILITY => !usable c.today 7 okElig c.eligibility
   | .STALE_ENROLLMENT => !usable c.today 7 okSpan c.enrollment
   | .STALE_EXCLUSION => !usable c.today 31 okExclusion c.exclusions
   | .STALE_PROVIDER_DEATH => !usable c.today 90 okDeath c.providerDeaths
   | .STALE_RELEASED => !chained c.today c.releasedPrior c.released
+  | .STALE_SHARE_OF_COST => !usable c.today 7 okSoc c.shareOfCost
   | .STALE_UNRESOLVED => !chained c.today c.unresolvedPrior c.unresolved
 
 /-- Reasons a person must look at: bad or unusable data, what it still shows, or a near duplicate or
     collision. -/
 def review : Reason → Bool
+  | .SHARE_OF_COST_UNMET_UNVERIFIED | .STALE_SHARE_OF_COST => true
   | .BENEFIT_LEVEL_MISSING_UNVERIFIED | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED | .STALE_ELIGIBILITY => true
   | .COLLIDES_WITH_UNRESOLVED_NEAR | .FFS_NEAR_DUPLICATE | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID
   | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED
@@ -482,7 +534,7 @@ def decideBatchIn (c : Ctx) (f : List Nat) (batch : List Line) : Result :=
 /-! Pins.  A snapshot or set pin is the SHA3-512 of `pinInput`: its domain
     (`RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` or `RR/GATE/UNRESOLVED/v1`)
     and a NUL, the kind (1 DMF, 2 provider deaths, 3 exclusions, 4
-    enrollment, 5 released, 6 unresolved, 7 eligibility), date and declared count, then the
+    enrollment, 5 released, 6 unresolved, 7 eligibility, 8 share of cost), date and declared count, then the
     rows in ascending byte order.  Every field is fixed-width big-endian (an
     identifier `idWidth` bytes, `pay` `payWidth`, flow tag 1, date, units,
     kind and count 4, cents 8); a value that does not fit fails the pin. -/
@@ -505,6 +557,9 @@ def Span.fields (s : Span) : List (Nat × Nat) := [(idWidth, s.member), (idWidth
 /-- Kind 7 (G2 eligibility): member and aid code as identifiers, the level flag in one byte, then the dates. -/
 def Elig.fields (e : Elig) : List (Nat × Nat) :=
   [(idWidth, e.member), (idWidth, e.aid), (1, e.level), (4, e.start), (4, e.stop)]
+
+/-- Kind 8 (G4 share of cost): member as an identifier, the month, the cents, then the met flag in one byte. -/
+def Soc.fields (q : Soc) : List (Nat × Nat) := [(idWidth, q.member), (4, q.month), (8, q.cents), (1, q.met)]
 
 def Line.fields (l : Line) : List (Nat × Nat) :=
   [(idWidth, l.id), (payWidth, l.pay), (1, l.flow.tag), (idWidth, l.member), (idWidth, l.payee),

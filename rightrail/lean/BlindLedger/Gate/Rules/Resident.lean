@@ -133,17 +133,19 @@ def Res.Ok (x : Res) : Prop :=
   ∀ i, x.ix = some i → ∃ c b, i = Fast.Ix.build c b ∧ c.released = some x.m.r ∧ c.releasedPrior = x.m.r ∧
     c.unresolved = some x.m.u ∧ c.unresolvedPrior = x.m.u
 
-/-- `i` with the per-frame parts of `Fast.Ix.build c b` (redo, batch, the five snapshots); the set parts kept. -/
+/-- `i` with the per-frame parts of `Fast.Ix.build c b` (redo, batch, the six snapshots); the set parts kept. -/
 def refresh (i : Fast.Ix) (c : Ctx) (b : List Line) : Fast.Ix :=
   { i with redo := Std.HashSet.ofList c.redo, batch := Std.HashSet.ofList b,
            dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome,
-           spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome,
+           spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome, socSome := c.shareOfCost.isSome,
            dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
            exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
            eligOk := usable c.today 7 okElig c.eligibility,
+           socOk := usable c.today 7 okSoc c.shareOfCost, socDate := socAsOf c,
            dmf := Fast.group (·.id) (entries c.dmf), pdeath := Fast.group (·.id) (entries c.providerDeaths),
            excl := Fast.group (·.id) (entries c.exclusions), span := Fast.group (·.member) (entries c.enrollment),
-           elig := Fast.group (·.member) (entries c.eligibility) }
+           elig := Fast.group (·.member) (entries c.eligibility),
+           soc := Fast.group (·.member) (entries c.shareOfCost) }
 
 /-- The index over `r'`, `u'` (the sets after a commit) from `i` over their prefixes. O(fresh). -/
 def extend (i : Fast.Ix) (r' u' : Snapshot Line) : Fast.Ix :=
@@ -381,7 +383,7 @@ def Inv (w : Worker) : Prop := (∀ y, w.x = some y → y.Ok) ∧ (w.live = true
 
 /-- Lines that may change the sets the next commit reads (or its `today`): they clear `live`. -/
 def breaks : List String → Bool
-  | k :: _ => ["case", "today", "snap", "drop", "dmf", "pdeath", "excl", "span", "elig", "released", "unresolved"].contains k
+  | k :: _ => ["case", "today", "snap", "drop", "dmf", "pdeath", "excl", "span", "elig", "soc", "released", "unresolved"].contains k
   | [] => false
 
 /-- The adds stream a `load` line `fs` that printed `out` installed: the bytes its adds field decodes to, when the field

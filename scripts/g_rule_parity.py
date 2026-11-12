@@ -4,9 +4,9 @@ Runs localBCE's `denial_reason()` (through the built `rust-engine` binary) and
 RightRail's Lean gate rules (their expected results, as recorded in
 `rightrail/tests/gate_rules/rules_v1.vectors`) on the same synthetic lines, and
 reports every difference for G1/G3/G5/G7/G9.  Gate rules v1 is retired
-(rightrail/conformance/README.md): the current runner adds G2 and checks
-rules_v2.vectors, not v1, so these v1 expectations are what the Lean runner
-checked before G2, not what it checks today.
+(rightrail/conformance/README.md): the current runner adds G2 and G4 and
+checks rules_v3.vectors, not v1, so these v1 expectations are what the Lean
+runner checked before G2, not what it checks today.
 
 This is a comparison tool, not a decider.  It writes nothing into `rightrail/`
 and nothing it prints is a determination (CONST I.3, V.1).

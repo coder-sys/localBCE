@@ -6227,15 +6227,17 @@ private theorem pm_fires (c c' : Ctx) (h1 : c.today = c'.today) (h2 : c.dmf = c'
     (h5 : c.enrollment = c'.enrollment)
     (h6 : chained c.today c.releasedPrior c.released = chained c'.today c'.releasedPrior c'.released)
     (h7 : chained c.today c.unresolvedPrior c.unresolved = chained c'.today c'.unresolvedPrior c'.unresolved)
-    (h8 : c.eligibility = c'.eligibility)
+    (h8 : c.eligibility = c'.eligibility) (h9 : c.shareOfCost = c'.shareOfCost)
     (hp : ∀ x, (pending c).contains x = (pending c').contains x) (hl : looseKeys c = looseKeys c')
     (seen seen' : List Key) (hs : ∀ x, seen.contains x = seen'.contains x) (l : Line) (r : Reason) :
     fires c seen l r = fires c' seen' l r := by
   cases c; cases c'
-  simp only at h1 h2 h3 h4 h5 h6 h7 h8
-  subst h1 h2 h3 h4 h5 h8
+  simp only at h1 h2 h3 h4 h5 h6 h7 h8 h9
+  subst h1 h2 h3 h4 h5 h8 h9
   cases r <;> simp only [fires, certain, unverified, notEnrolled, enrolled, overlap, memberDead,
-    providerDead, excluded, aidEligible, levelEligible, h6, h7, hp, hl, hs]
+    providerDead, excluded, aidEligible, levelEligible, socUnmet, socMet, socDoubt, socAsOf, socCovers, h6, h7, hp,
+    hl, hs]
+  all_goals rfl
 
 private def pmP (d : Decision) : Line × Outcome × List Reason := (d.line, d.outcome, d.reasons)
 
@@ -6345,7 +6347,7 @@ theorem decideRegT_perm (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
     pm_chained c₀.today unr unr' hu hcu hau
   have hf : ∀ seen seen', (∀ x, seen.contains x = seen'.contains x) → ∀ l r,
       fires (carried c₀ rel unr) seen l r = fires (carried c₀ rel' unr') seen' l r :=
-    fun seen seen' hs l r => pm_fires (carried c₀ rel unr) (carried c₀ rel' unr') rfl rfl rfl rfl rfl hchR hchU rfl hpend
+    fun seen seen' hs l r => pm_fires (carried c₀ rel unr) (carried c₀ rel' unr') rfl rfl rfl rfl rfl hchR hchU rfl rfl hpend
       ((hloose _ _).trans (hloose _ _).symm) seen seen' hs l r
   have hdec := pm_decideAll _ _ hf hcl
   have hord : order (carried c₀ rel unr) (ready k os b) = order (carried c₀ rel' unr') (ready k os b) := by
@@ -6678,10 +6680,12 @@ def reasonName : Reason → String
   | .PROVIDER_DECEASED => "PROVIDER_DECEASED" | .PROVIDER_DECEASED_UNVERIFIED => "PROVIDER_DECEASED_UNVERIFIED"
   | .PROVIDER_EXCLUDED => "PROVIDER_EXCLUDED" | .PROVIDER_EXCLUDED_UNVERIFIED => "PROVIDER_EXCLUDED_UNVERIFIED"
   | .SERVICE_DATE_FUTURE => "SERVICE_DATE_FUTURE" | .SERVICE_DATE_INVALID => "SERVICE_DATE_INVALID"
+  | .SHARE_OF_COST_UNMET => "SHARE_OF_COST_UNMET"
+  | .SHARE_OF_COST_UNMET_UNVERIFIED => "SHARE_OF_COST_UNMET_UNVERIFIED"
   | .STALE_DMF => "STALE_DMF" | .STALE_ELIGIBILITY => "STALE_ELIGIBILITY"
   | .STALE_ENROLLMENT => "STALE_ENROLLMENT" | .STALE_EXCLUSION => "STALE_EXCLUSION"
   | .STALE_PROVIDER_DEATH => "STALE_PROVIDER_DEATH" | .STALE_RELEASED => "STALE_RELEASED"
-  | .STALE_UNRESOLVED => "STALE_UNRESOLVED"
+  | .STALE_SHARE_OF_COST => "STALE_SHARE_OF_COST" | .STALE_UNRESOLVED => "STALE_UNRESOLVED"
 
 def reasonCode (r : Reason) : Bytes := (reasonName r).toUTF8.toList
 
@@ -6717,19 +6721,21 @@ def optPin {α : Type} (name : String) (kind : Nat) (fields : α → List (Nat �
   | none => some [0]
   | some s => (pinInput name kind fields s).map fun x => 1 :: sha3 x
 
-/-- The READ-SET domain tag: v3 since G2 added the eligibility snapshot (READ-SET/v2 is retired, never reused). -/
-def readSetTag : Bytes := "RR/GATE/READ-SET/v3".toUTF8.toList ++ [0]
+/-- The READ-SET domain tag: v4 since G4 added the share-of-cost snapshot (READ-SET/v3, G2's, and v2 are retired,
+    never reused). -/
+def readSetTag : Bytes := "RR/GATE/READ-SET/v4".toUTF8.toList ++ [0]
 
-/-- Everything a decision read besides the request: the five external snapshots, the redo list, and the base. -/
+/-- Everything a decision read besides the request: the six external snapshots, the redo list, and the base. -/
 def readSetOf (c₀ : Ctx) (base : Bytes) : Option Bytes := do
   let a ← optPin "RR/GATE/READ-DMF/v2" 1 Death.fields c₀.dmf
   let b ← optPin "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields c₀.providerDeaths
   let e ← optPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c₀.exclusions
   let n ← optPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c₀.enrollment
   let g ← optPin "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c₀.eligibility
+  let s ← optPin "RR/GATE/READ-SHARE-OF-COST/v2" 8 Soc.fields c₀.shareOfCost
   let r ← be 4 c₀.redo.length
   let rs ← c₀.redo.mapM (be payWidth)
-  pure (sha3 (readSetTag ++ a ++ b ++ e ++ n ++ g ++ r ++ rs.flatten ++ base))
+  pure (sha3 (readSetTag ++ a ++ b ++ e ++ n ++ g ++ s ++ r ++ rs.flatten ++ base))
 
 
 /-- What the custody exe is pinned with: offset table, root key, tenant, constants. -/

@@ -295,6 +295,11 @@ theorem eligCovers_member {l : Line} {e : Elig} (h : eligCovers l e = true) : e.
   simp only [Bool.and_eq_true, beq_iff_eq] at h
   exact h.1.1
 
+theorem socCovers_member {l : Line} {q : Soc} (h : socCovers l q = true) : q.member = l.member := by
+  unfold socCovers at h
+  simp only [Bool.and_eq_true, beq_iff_eq] at h
+  exact h.1
+
 /-- A probe of a posting list: a hit below `V.length` whose row passes `P` is a row of `V`. -/
 theorem probe_iff {V L : List Line} {k : Key} {P : Line → Bool} :
     ((posts (V ++ L)).1.getD k []).any (fun i => decide (i < V.length) && (V ++ L).toArray[i]?.any P) = true ↔
@@ -404,6 +409,34 @@ theorem levelEligible_eq : (Ix.build c b).levelEligible l = levelEligible c l :=
 
 theorem build_eligOk : (Ix.build c b).eligOk = usable c.today 7 okElig c.eligibility := rfl
 theorem build_eligSome : (Ix.build c b).eligSome = c.eligibility.isSome := rfl
+
+theorem build_soc : (Ix.build c b).soc = group (·.member) (entries c.shareOfCost) := rfl
+
+theorem socUnmet_eq : (Ix.build c b).socUnmet l = socUnmet c l := by
+  unfold Ix.socUnmet socUnmet
+  rw [Bool.eq_iff_iff, build_soc]
+  simp only [List.any_eq_true]
+  constructor
+  · rintro ⟨q, hq, hc⟩; exact ⟨q, (mem_group.mp hq).1, hc⟩
+  · rintro ⟨q, hq, hc⟩
+    exact ⟨q, mem_group.mpr ⟨hq, socCovers_member ((Bool.and_eq_true _ _).mp ((Bool.and_eq_true _ _).mp hc).1).1⟩, hc⟩
+
+theorem socMet_eq : (Ix.build c b).socMet l = socMet c l := by
+  unfold Ix.socMet socMet
+  rw [Bool.eq_iff_iff, build_soc]
+  simp only [List.any_eq_true]
+  constructor
+  · rintro ⟨q, hq, hc⟩; exact ⟨q, (mem_group.mp hq).1, hc⟩
+  · rintro ⟨q, hq, hc⟩
+    exact ⟨q, mem_group.mpr ⟨hq, socCovers_member ((Bool.and_eq_true _ _).mp hc).1⟩, hc⟩
+
+theorem build_socOk : (Ix.build c b).socOk = usable c.today 7 okSoc c.shareOfCost := rfl
+theorem build_socSome : (Ix.build c b).socSome = c.shareOfCost.isSome := rfl
+theorem build_socDate : (Ix.build c b).socDate = socAsOf c := rfl
+
+theorem socDoubt_eq : (Ix.build c b).socDoubt l = socDoubt c l := by
+  unfold Ix.socDoubt socDoubt
+  rw [socUnmet_eq, socMet_eq, build_socDate, show (Ix.build c b).today = c.today from rfl]
 theorem build_dmfOk : (Ix.build c b).dmfOk = usable c.today 90 okDeath c.dmf := rfl
 theorem build_pdOk : (Ix.build c b).pdOk = usable c.today 90 okDeath c.providerDeaths := rfl
 theorem build_exclOk : (Ix.build c b).exclOk = usable c.today 31 okExclusion c.exclusions := rfl
@@ -515,7 +548,8 @@ theorem fires_eq (h : ∀ k, (Ix.build c b).seen s k = seen.contains k) (r : Rea
   cases r <;> simp only [Ix.fires, fires, certain, unverified, h, pending_eq, looseKeys_eq, memberDead_eq,
     providerDead_eq, excluded_eq, overlap_eq, notEnrolled_eq, enrolled_eq, build_dmfOk, build_pdOk,
     build_exclOk, build_spanOk, build_dmfSome, build_pdSome, build_exclSome, build_spanSome, build_today,
-    build_relChained, build_unrChained, aidEligible_eq, levelEligible_eq, build_eligOk, build_eligSome] <;> try rfl
+    build_relChained, build_unrChained, aidEligible_eq, levelEligible_eq, build_eligOk, build_eligSome,
+    socUnmet_eq, socMet_eq, socDoubt_eq, build_socOk, build_socSome] <;> try rfl
 
 theorem decideLine_eq (h : ∀ k, (Ix.build c b).seen s k = seen.contains k) :
     (Ix.build c b).decideLine s l = decideLine c seen l := by

@@ -81,16 +81,21 @@ structure Ix where
   exclSome : Bool
   spanSome : Bool
   eligSome : Bool
+  socSome : Bool
   dmfOk : Bool
   pdOk : Bool
   exclOk : Bool
   spanOk : Bool
   eligOk : Bool
+  socOk : Bool
+  /-- The share-of-cost snapshot's date (`socAsOf`; not named so, or `Ix.build` would read the field). -/
+  socDate : Nat
   dmf : HashMap Nat (List Death)
   pdeath : HashMap Nat (List Death)
   excl : HashMap Nat (List Exclusion)
   span : HashMap Nat (List Span)
   elig : HashMap Nat (List Elig)
+  soc : HashMap Nat (List Soc)
 
 /-- One pass over each set and snapshot: O(n) expected, n the rows read. -/
 def Ix.build (c : Ctx) (b : List Line) : Ix :=
@@ -106,13 +111,15 @@ def Ix.build (c : Ctx) (b : List Line) : Ix :=
     relPost := (posts ra).1, unrPost := (posts ua).1,
     looseKeys := HashSet.ofList ((ra.drop rv.entries.length ++ ua.drop uv.entries.length).map exactKey),
     dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome,
-    spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome,
+    spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome, socSome := c.shareOfCost.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
     eligOk := usable c.today 7 okElig c.eligibility,
+    socOk := usable c.today 7 okSoc c.shareOfCost, socDate := socAsOf c,
     dmf := group (·.id) (entries c.dmf), pdeath := group (·.id) (entries c.providerDeaths),
     excl := group (·.id) (entries c.exclusions), span := group (·.member) (entries c.enrollment),
-    elig := group (·.member) (entries c.eligibility) }
+    elig := group (·.member) (entries c.eligibility),
+    soc := group (·.member) (entries c.shareOfCost) }
 
 /-! ## Queries: each equals the Spec function of the same name (`FastEq`). -/
 
@@ -140,6 +147,13 @@ def Ix.aidEligible (x : Ix) (l : Line) : Bool :=
 
 def Ix.levelEligible (x : Ix) (l : Line) : Bool :=
   (x.elig.getD l.member []).any fun e => eligCovers l e && allowedAid.contains e.aid && e.level == 1
+
+def Ix.socUnmet (x : Ix) (l : Line) : Bool := (x.soc.getD l.member []).any fun q => socCovers l q && 0 < q.cents && q.met != 1
+
+def Ix.socMet (x : Ix) (l : Line) : Bool := (x.soc.getD l.member []).any fun q => socCovers l q && (q.cents == 0 || q.met == 1)
+
+def Ix.socDoubt (x : Ix) (l : Line) : Bool :=
+  x.socUnmet l && (x.socMet l || x.socDate < l.date || dayNum x.socDate + 1 < dayNum x.today) || x.socDate / 100 < l.date / 100
 
 def Ix.overlap (x : Ix) (l : Line) : Bool :=
   let first := l.date / 100 * 100 + 1
@@ -184,12 +198,16 @@ def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
   | .PROVIDER_EXCLUDED_UNVERIFIED => x.exclSome && !x.exclOk && validDate l.date && x.excluded l
   | .SERVICE_DATE_FUTURE => x.today < l.date
   | .SERVICE_DATE_INVALID => !validDate l.date
+  | .SHARE_OF_COST_UNMET => x.socOk && validDate l.date && x.socUnmet l && !x.socDoubt l
+  | .SHARE_OF_COST_UNMET_UNVERIFIED =>
+      x.socSome && !x.socOk && validDate l.date && x.socUnmet l || x.socOk && validDate l.date && x.socDoubt l
   | .STALE_DMF => !x.dmfOk
   | .STALE_ELIGIBILITY => !x.eligOk
   | .STALE_ENROLLMENT => !x.spanOk
   | .STALE_EXCLUSION => !x.exclOk
   | .STALE_PROVIDER_DEATH => !x.pdOk
   | .STALE_RELEASED => !x.relChained
+  | .STALE_SHARE_OF_COST => !x.socOk
   | .STALE_UNRESOLVED => !x.unrChained
 
 def Ix.counterparts (x : Ix) (l : Line) : List Nat :=

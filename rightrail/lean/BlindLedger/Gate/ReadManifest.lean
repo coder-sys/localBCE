@@ -3,13 +3,13 @@ import BlindLedger.Gate.BatchTheorems
 import BlindLedger.Gate.Rules.Run
 import BlindLedger.Gate.Rules.FastEq
 
-/-! The per-batch read manifest `RR/GATE/READ-MANIFEST/v3` (MAN-0 S1, then G2: v1, without authority and `today`, was
-    never signed; v2 had four pins and is retired, never reused, since custody never established it; S2's pay/reg
-    roots take v4): `tag ‖ grant ‖ rule ‖ engine ‖ authority ‖ u32 today ‖ pin₁..₅ ‖ u32 |P| ‖ P`,
-    each const and pin 64 bytes, the authority one byte (`authorities` order from 1), the pins the SNAPSHOT/v1 digests
-    of what `readSetOf` read (zero for a kind it did not read; the fifth is G2's eligibility, kind 7), `P` the
-    READ-SET/v3 bytes it hashes (redo in the order read: the order is part of the record). `run_reads_eq`: the
-    runner's `RULES_READS` is `readsOf` over the base it is given; that base is STATE/v1, not custody's STATE/v2 `base`
+/-! The per-batch read manifest `RR/GATE/READ-MANIFEST/v4` (MAN-0 S1, then G2, then G4: v1, without authority and
+    `today`, was never signed; v2 had four pins and v3 five, both retired, never reused, since custody never
+    established them; S2's pay/reg roots take v5): `tag ‖ grant ‖ rule ‖ engine ‖ authority ‖ u32 today ‖ pin₁..₆ ‖
+    u32 |P| ‖ P`, each const and pin 64 bytes, the authority one byte (`authorities` order from 1), the pins the
+    SNAPSHOT/v1 digests of what `readSetOf` read (zero for a kind it did not read; the fifth is G2's eligibility, kind
+    7, the sixth G4's share of cost, kind 8), `P` the READ-SET/v4 bytes it hashes (redo in the order read: the
+    order is part of the record). `run_reads_eq`: the runner's `RULES_READS` is `readsOf` over the base it is given; that base is STATE/v1, not custody's STATE/v2 `base`
     (STATE/v2 wiring). `reads_exact` assumes `manifestOk`, which nothing establishes until S2 has custody check
     `evidenceRoot`. Not imported by the runner. -/
 
@@ -17,7 +17,7 @@ namespace BlindLedger.Gate.ReadManifest
 
 open BlindLedger.Gate BlindLedger.Gate.Rules BlindLedger.Gate.StateV2
 
-def manifestTag : Bytes := "RR/GATE/READ-MANIFEST/v3".toUTF8.toList ++ [0]
+def manifestTag : Bytes := "RR/GATE/READ-MANIFEST/v4".toUTF8.toList ++ [0]
 
 def authorityByte : Authority → UInt8
   | .OBSERVE => 1 | .HOLD => 2 | .TRANSFER => 3
@@ -38,7 +38,8 @@ def kindOf {α : Type} (d : String) (k : Nat) (f : α → List (Nat × Nat)) :
 def kindPins (c : Ctx) : Option (List (Bytes × Bytes)) := do
   pure [← kindOf "RR/GATE/READ-DMF/v2" 1 Death.fields c.dmf, ← kindOf "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields c.providerDeaths,
     ← kindOf "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c.exclusions, ← kindOf "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c.enrollment,
-    ← kindOf "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c.eligibility]
+    ← kindOf "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c.eligibility,
+    ← kindOf "RR/GATE/READ-SHARE-OF-COST/v2" 8 Soc.fields c.shareOfCost]
 
 /-- The bytes `readSetOf` hashes (`readSetOf_pre`). -/
 def readSetPre (c₀ : Ctx) (base : Bytes) : Option Bytes := do
@@ -47,9 +48,10 @@ def readSetPre (c₀ : Ctx) (base : Bytes) : Option Bytes := do
   let e ← optPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c₀.exclusions
   let n ← optPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c₀.enrollment
   let g ← optPin "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c₀.eligibility
+  let s ← optPin "RR/GATE/READ-SHARE-OF-COST/v2" 8 Soc.fields c₀.shareOfCost
   let r ← be 4 c₀.redo.length
   let rs ← c₀.redo.mapM (be payWidth)
-  pure (readSetTag ++ a ++ b ++ e ++ n ++ g ++ r ++ rs.flatten ++ base)
+  pure (readSetTag ++ a ++ b ++ e ++ n ++ g ++ s ++ r ++ rs.flatten ++ base)
 
 /-- u32 today ‖ pins ‖ u32 |P| ‖ P: what Lean emits (`RULES_READS`); the producer prefixes the tag and constants. -/
 def readsOf (c : Ctx) (base : Bytes) : Option Bytes := do
@@ -92,7 +94,8 @@ def decodeReads (x : Bytes) : Option Manifest := do
   let p3 ← cut digestBytes p2.2
   let p4 ← cut digestBytes p3.2
   let p5 ← cut digestBytes p4.2
-  let l ← cut 4 p5.2
+  let p6 ← cut digestBytes p5.2
+  let l ← cut 4 p6.2
   guard (beNat l.1 = l.2.length)
   let h ← cut readSetTag.length l.2
   guard (h.1 = readSetTag)
@@ -100,8 +103,9 @@ def decodeReads (x : Bytes) : Option Manifest := do
   let y ← slot p2.1 y
   let y ← slot p3.1 y
   let y ← slot p4.1 y
-  let _ ← slot p5.1 y
-  pure ⟨g.1, r.1, e.1, au, beNat t.1, [p1.1, p2.1, p3.1, p4.1, p5.1], l.2⟩
+  let y ← slot p5.1 y
+  let _ ← slot p6.1 y
+  pure ⟨g.1, r.1, e.1, au, beNat t.1, [p1.1, p2.1, p3.1, p4.1, p5.1, p6.1], l.2⟩
 
 /-- Pin `p` is exactly what Lean read of one kind: zero iff none, else the SNAPSHOT/v1 digest of that snapshot. -/
 def Exact {α : Type} (k : Nat) (f : α → List (Nat × Nat)) (o : Option (Snapshot α)) (p : Bytes) : Prop :=
@@ -118,7 +122,7 @@ theorem hB_mk (bs : Bytes) : Run.hB ⟨bs.toArray⟩ = sha3 bs := by
   unfold Run.hB sha3
   rw [h]
 
-theorem readSetTag_eq : readSetTag = "RR/GATE/READ-SET/v3".toUTF8.toList ++ [0] := rfl
+theorem readSetTag_eq : readSetTag = "RR/GATE/READ-SET/v4".toUTF8.toList ++ [0] := rfl
 
 theorem authorityOf_byte (a : Authority) : authorityOf [authorityByte a] = some a := by
   cases a <;> decide
@@ -181,28 +185,31 @@ theorem kindOf_some {α : Type} {d : String} {k : Nat} {f : α → List (Nat × 
       exact e3
 
 theorem kindPins_some {c : Ctx} {ks : List (Bytes × Bytes)} (h : kindPins c = some ks) :
-    ∃ p1 a1 p2 a2 p3 a3 p4 a4 p5 a5, ks = [(p1, a1), (p2, a2), (p3, a3), (p4, a4), (p5, a5)] ∧
+    ∃ p1 a1 p2 a2 p3 a3 p4 a4 p5 a5 p6 a6, ks = [(p1, a1), (p2, a2), (p3, a3), (p4, a4), (p5, a5), (p6, a6)] ∧
       kindOf "RR/GATE/READ-DMF/v2" 1 Death.fields c.dmf = some (p1, a1) ∧
       kindOf "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields c.providerDeaths = some (p2, a2) ∧
       kindOf "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c.exclusions = some (p3, a3) ∧
       kindOf "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c.enrollment = some (p4, a4) ∧
-      kindOf "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c.eligibility = some (p5, a5) := by
+      kindOf "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c.eligibility = some (p5, a5) ∧
+      kindOf "RR/GATE/READ-SHARE-OF-COST/v2" 8 Soc.fields c.shareOfCost = some (p6, a6) := by
   unfold kindPins at h
   obtain ⟨⟨p1, a1⟩, h1, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨⟨p2, a2⟩, h2, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨⟨p3, a3⟩, h3, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨⟨p4, a4⟩, h4, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨⟨p5, a5⟩, h5, h⟩ := Option.bind_eq_some_iff.mp h
-  exact ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, (Option.some.inj h).symm, h1, h2, h3, h4, h5⟩
+  obtain ⟨⟨p6, a6⟩, h6, h⟩ := Option.bind_eq_some_iff.mp h
+  exact ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, p6, a6, (Option.some.inj h).symm, h1, h2, h3, h4, h5, h6⟩
 
 theorem kindPins_pre {c : Ctx} {ks : List (Bytes × Bytes)} (h : kindPins c = some ks) (base : Bytes) :
     readSetPre c base = (do
       let r ← be 4 c.redo.length
       let rs ← c.redo.mapM (be payWidth)
       pure (readSetTag ++ (ks.map (·.2)).flatten ++ r ++ rs.flatten ++ base)) := by
-  obtain ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, rfl, h1, h2, h3, h4, h5⟩ := kindPins_some h
+  obtain ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, p6, a6, rfl, h1, h2, h3, h4, h5, h6⟩ := kindPins_some h
   unfold readSetPre
-  rw [(kindOf_some h1).2.1, (kindOf_some h2).2.1, (kindOf_some h3).2.1, (kindOf_some h4).2.1, (kindOf_some h5).2.1]
+  rw [(kindOf_some h1).2.1, (kindOf_some h2).2.1, (kindOf_some h3).2.1, (kindOf_some h4).2.1, (kindOf_some h5).2.1,
+    (kindOf_some h6).2.1]
   cases be 4 c.redo.length <;> cases c.redo.mapM (be payWidth) <;> simp [List.append_assoc]
 
 theorem readSetOf_pre (c : Ctx) (base : Bytes) : readSetOf c base = (readSetPre c base).map sha3 := by
@@ -212,6 +219,7 @@ theorem readSetOf_pre (c : Ctx) (base : Bytes) : readSetOf c base = (readSetPre 
     cases optPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields c.exclusions <;>
     cases optPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields c.enrollment <;>
     cases optPin "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields c.eligibility <;>
+    cases optPin "RR/GATE/READ-SHARE-OF-COST/v2" 8 Soc.fields c.shareOfCost <;>
     cases be 4 c.redo.length <;> cases c.redo.mapM (be payWidth) <;> rfl
 
 /-- The runner's `RULES_READS` bytes (pins cached at declaration) are `readsOf` of its context over the same
@@ -249,12 +257,13 @@ theorem decodeReads_encode {k : Consts} {c : Ctx} {base x : Bytes} (h : encodeRe
   obtain ⟨r, -, hPk⟩ := Option.bind_eq_some_iff.mp hPk
   obtain ⟨rs, -, hPk⟩ := Option.bind_eq_some_iff.mp hPk
   obtain rfl := (Option.some.inj hPk).symm
-  obtain ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, rfl, h1, h2, h3, h4, h5⟩ := kindPins_some hks
+  obtain ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, p6, a6, rfl, h1, h2, h3, h4, h5, h6⟩ := kindPins_some hks
   obtain ⟨l1, -, s1, -⟩ := kindOf_some h1
   obtain ⟨l2, -, s2, -⟩ := kindOf_some h2
   obtain ⟨l3, -, s3, -⟩ := kindOf_some h3
   obtain ⟨l4, -, s4, -⟩ := kindOf_some h4
   obtain ⟨l5, -, s5, -⟩ := kindOf_some h5
+  obtain ⟨l6, -, s6, -⟩ := kindOf_some h6
   obtain ⟨hLe, hLt⟩ := be_eq hL
   have hb := beNat_natBE 4 _ hLt
   rw [← hLe] at hb
@@ -265,8 +274,8 @@ theorem decodeReads_encode {k : Consts} {c : Ctx} {base x : Bytes} (h : encodeRe
   simp only [decodeReads, List.map_cons, List.map_nil, List.flatten_cons, List.flatten_nil, List.append_nil,
     List.append_assoc, cut_app rfl, cut_app hg1, cut_app hg2, cut_app hg3,
     cut_app (n := 1) (l := [authorityByte k.authority]) rfl, authorityOf_byte, cut_app (be_length hT), ht,
-    cut_app l1, cut_app l2, cut_app l3, cut_app l4, cut_app l5, cut_app (be_length hL), s1, s2, s3, s4, s5, guard, hb,
-    Option.bind_eq_bind, Option.bind_some, Option.pure_def, ↓reduceIte]
+    cut_app l1, cut_app l2, cut_app l3, cut_app l4, cut_app l5, cut_app l6, cut_app (be_length hL), s1, s2, s3, s4, s5,
+    s6, guard, hb, Option.bind_eq_bind, Option.bind_some, Option.pure_def, ↓reduceIte]
 
 /-- Fixed widths: one record is one (constants, authority, today, pins, `P`). -/
 theorem encodeReads_inj {k k' : Consts} {c c' : Ctx} {base base' x : Bytes} (h : encodeReads k c base = some x)
@@ -294,16 +303,16 @@ private theorem rowOf_commit {rev : Nat → Nat} {pays : List (Nat × Outcome ×
 
 /-- Given `manifestOk` (custody checks `evidenceRoot` from S2; today nothing establishes it), a stored record
     hashing to the signed `evidenceRoot` of a checkpoint custody accepted decodes to custody's constants and authority,
-    `today`, five pins each `Exact` for what Lean read, and the `P` whose hash every token's input commitment binds to
+    `today`, six pins each `Exact` for what Lean read, and the `P` whose hash every token's input commitment binds to
     its raw request; or it names a SHA3 collision with the true manifest. -/
 theorem reads_exact {P : Pins} {st : LogState} {k : Nat} {cert : Bytes} {i : SignIn} {new : Bytes}
     {tokens : List Bytes} {e : Entry} {n : Stored} {row : Bytes} (h : custodyOk P st k cert i new tokens = some e)
     (hm : manifestOk P st k i new) (hn : storedOfAny sha3 new = some n) (hroot : n.checkpoint.evidenceRoot = sha3 row) :
-    (∃ p1 p2 p3 p4 p5 Pre,
-      decodeReads row = some ⟨P.c.grant, P.c.rule, P.c.engine, P.c.authority, i.ctx.today, [p1, p2, p3, p4, p5], Pre⟩ ∧
+    (∃ p1 p2 p3 p4 p5 p6 Pre,
+      decodeReads row = some ⟨P.c.grant, P.c.rule, P.c.engine, P.c.authority, i.ctx.today, [p1, p2, p3, p4, p5, p6], Pre⟩ ∧
       Exact 1 Death.fields i.ctx.dmf p1 ∧ Exact 2 Death.fields i.ctx.providerDeaths p2 ∧
       Exact 3 Exclusion.fields i.ctx.exclusions p3 ∧ Exact 4 Span.fields i.ctx.enrollment p4 ∧
-      Exact 7 Elig.fields i.ctx.eligibility p5 ∧
+      Exact 7 Elig.fields i.ctx.eligibility p5 ∧ Exact 8 Soc.fields i.ctx.shareOfCost p6 ∧
       readSetPre i.ctx (st.shard k).base = some Pre ∧
       ∀ t ∈ tokens, ∀ w, tokRow P.c i.secs t = some w → ∃ raw ∈ i.reqs, w.commit = inputCommitment sha3 raw (sha3 Pre)) ∨
     ∃ m, encodeReads P.c i.ctx (st.shard k).base = some m ∧ Collision sha3 [row] [m] := by
@@ -314,9 +323,9 @@ theorem reads_exact {P : Pins} {st : LogState} {k : Nat} {cert : Bytes} {i : Sig
   · subst hrm
     left
     obtain ⟨ks, Pre, hks, hP, hd⟩ := decodeReads_encode hm
-    obtain ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, rfl, h1, h2, h3, h4, h5⟩ := kindPins_some hks
-    refine ⟨p1, p2, p3, p4, p5, Pre, hd, (kindOf_some h1).2.2.2, (kindOf_some h2).2.2.2, (kindOf_some h3).2.2.2,
-      (kindOf_some h4).2.2.2, (kindOf_some h5).2.2.2, hP, ?_⟩
+    obtain ⟨p1, a1, p2, a2, p3, a3, p4, a4, p5, a5, p6, a6, rfl, h1, h2, h3, h4, h5, h6⟩ := kindPins_some hks
+    refine ⟨p1, p2, p3, p4, p5, p6, Pre, hd, (kindOf_some h1).2.2.2, (kindOf_some h2).2.2.2, (kindOf_some h3).2.2.2,
+      (kindOf_some h4).2.2.2, (kindOf_some h5).2.2.2, (kindOf_some h6).2.2.2, hP, ?_⟩
     obtain ⟨rs, _, _, rset, _, -, -, hrs, -, -, htk, -⟩ := c15_peel P st k cert i new tokens e h
     rw [readSetOf_pre, hP] at hrs
     obtain rfl := (Option.some.inj hrs)

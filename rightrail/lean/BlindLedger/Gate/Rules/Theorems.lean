@@ -40,6 +40,17 @@ abbrev LevelEligible (c : Ctx) (l : Line) : Prop :=
   ∃ e ∈ entries c.eligibility, e.member = l.member ∧ e.start ≤ l.date ∧ l.date ≤ e.stop ∧ e.aid ∈ allowedAid ∧
     e.level = 1
 
+/-! The facts of G4 (synthetic, from localBCE; not legally verified). -/
+abbrev SocUnmet (c : Ctx) (l : Line) : Prop :=
+  ∃ q ∈ entries c.shareOfCost, q.member = l.member ∧ q.month = l.date / 100 ∧ 0 < q.cents ∧ q.met ≠ 1
+
+abbrev SocMet (c : Ctx) (l : Line) : Prop :=
+  ∃ q ∈ entries c.shareOfCost, q.member = l.member ∧ q.month = l.date / 100 ∧ (q.cents = 0 ∨ q.met = 1)
+
+abbrev SocDoubt (c : Ctx) (l : Line) : Prop :=
+  SocUnmet c l ∧ (SocMet c l ∨ socAsOf c < l.date ∨ dayNum (socAsOf c) + 1 < dayNum c.today) ∨
+    socAsOf c / 100 < l.date / 100
+
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .ALREADY_DECIDED => idKey l ∈ seen ∨ idKey l ∈ pending c
   | .BENEFIT_LEVEL_MISSING => Usable c.today 7 okElig c.eligibility ∧ validDate l.date = true ∧ AidEligible c l ∧
@@ -71,12 +82,18 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
       validDate l.date = true ∧ Excluded c l
   | .SERVICE_DATE_FUTURE => c.today < l.date
   | .SERVICE_DATE_INVALID => validDate l.date = false
+  | .SHARE_OF_COST_UNMET => Usable c.today 7 okSoc c.shareOfCost ∧ validDate l.date = true ∧ SocUnmet c l ∧
+      ¬SocDoubt c l
+  | .SHARE_OF_COST_UNMET_UNVERIFIED => c.shareOfCost.isSome ∧ ¬Usable c.today 7 okSoc c.shareOfCost ∧
+      validDate l.date = true ∧ SocUnmet c l ∨
+      Usable c.today 7 okSoc c.shareOfCost ∧ validDate l.date = true ∧ SocDoubt c l
   | .STALE_DMF => ¬Usable c.today 90 okDeath c.dmf
   | .STALE_ELIGIBILITY => ¬Usable c.today 7 okElig c.eligibility
   | .STALE_ENROLLMENT => ¬Usable c.today 7 okSpan c.enrollment
   | .STALE_EXCLUSION => ¬Usable c.today 31 okExclusion c.exclusions
   | .STALE_PROVIDER_DEATH => ¬Usable c.today 90 okDeath c.providerDeaths
   | .STALE_RELEASED => ¬Chained c.today c.releasedPrior c.released
+  | .STALE_SHARE_OF_COST => ¬Usable c.today 7 okSoc c.shareOfCost
   | .STALE_UNRESOLVED => ¬Chained c.today c.unresolvedPrior c.unresolved
 
 def seenAt (c : Ctx) (b : List Line) (i : Nat) : List Key :=
@@ -93,7 +110,13 @@ theorem chained_iff {t p o} : chained t p o = true ↔ Chained t p o := by
 
 theorem fires_iff {c seen l} (r : Reason) : fires c seen l r = true ↔ Fact c seen l r := by
   cases r <;> simp [fires, Fact, certain, unverified, notEnrolled, enrolled, covers, party, isCap, memberDead,
-    providerDead, excluded, aidEligible, levelEligible, eligCovers, ← usable_iff, ← chained_iff, and_assoc, or_assoc]
+    providerDead, excluded, aidEligible, levelEligible, eligCovers, socUnmet, socMet, socDoubt, socCovers, ← usable_iff,
+    ← chained_iff, and_assoc, or_assoc]
+  -- SHARE_OF_COST_UNMET: the unmet row in hand makes "every positive row is met" false.
+  all_goals
+    intro _ _ x hx hm hmo hc hne _
+    exact ⟨fun h => h.elim (fun hp => absurd (hp x hx hm hmo hc) hne) (fun hq _ _ _ _ _ _ => hq),
+      fun h => Or.inr (h x hx hm hmo hc hne)⟩
 
 theorem mem_all (r : Reason) : r ∈ reasons := by cases r <;> simp [reasons]
 
@@ -263,7 +286,8 @@ theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : De
     or not extending the checkpoint), no line is ALLOW: each is HUMAN_REVIEW,
     or HOLD on a certain reason (which never rests on the unusable data).  The
     hypothesis names the six sources below; G2's eligibility snapshot (the
-    seventh) is `fail_closed_eligibility`. -/
+    seventh) is `fail_closed_eligibility`, and G4's share-of-cost snapshot (the
+    eighth) is `fail_closed_shareOfCost`. -/
 theorem fail_closed {c b d}
     (h : ¬Usable c.today 90 okDeath c.dmf ∨ ¬Usable c.today 90 okDeath c.providerDeaths ∨
       ¬Usable c.today 31 okExclusion c.exclusions ∨ ¬Usable c.today 7 okSpan c.enrollment ∨
@@ -286,6 +310,13 @@ theorem fail_closed_eligibility {c b d} (h : ¬Usable c.today 7 okElig c.eligibi
     d.outcome = .HUMAN_REVIEW ∨ (d.outcome = .HOLD ∧ ∃ r ∈ d.reasons, review r = false) := by
   obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := seen0 c b) (ls := order c b) hd
   exact outcome_cases (line_complete (r := .STALE_ELIGIBILITY) h)
+
+/-- `fail_closed` for G4's share-of-cost snapshot (the eighth source): when it is not usable, no line is ALLOW. -/
+theorem fail_closed_shareOfCost {c b d} (h : ¬Usable c.today 7 okSoc c.shareOfCost)
+    (hd : d ∈ (decideBatch c b).decisions) :
+    d.outcome = .HUMAN_REVIEW ∨ (d.outcome = .HOLD ∧ ∃ r ∈ d.reasons, review r = false) := by
+  obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := seen0 c b) (ls := order c b) hd
+  exact outcome_cases (line_complete (r := .STALE_SHARE_OF_COST) h)
 
 /-- G2's two certain reasons make a line HOLD; the other three only send it to review. -/
 theorem g2_review :
@@ -316,6 +347,39 @@ theorem g2_allow {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
     · rfl
   have ha : AidEligible c l := Classical.byContradiction fun hn => nf .PROGRAM_NOT_ELIGIBLE ⟨hu, hd, hn⟩
   exact ⟨hu, Classical.byContradiction fun hn => nf .BENEFIT_LEVEL_MISSING ⟨hu, hd, ha, hn⟩⟩
+
+/-- G4's certain reason makes a line HOLD; the other two only send it to review. -/
+theorem g4_review :
+    review .SHARE_OF_COST_UNMET = false ∧ review .SHARE_OF_COST_UNMET_UNVERIFIED = true ∧
+      review .STALE_SHARE_OF_COST = true := by decide
+
+/-- G4's certain and unverified reasons never fire together on a line: the certain one needs a usable snapshot
+    that settles the line. -/
+theorem g4_exclusive {c seen l} :
+    ¬(Fact c seen l .SHARE_OF_COST_UNMET ∧ Fact c seen l .SHARE_OF_COST_UNMET_UNVERIFIED) :=
+  fun ⟨⟨hu, _, _, hnd⟩, h2⟩ => Or.elim h2 (fun ⟨_, hnu, _⟩ => hnu hu) (fun ⟨_, _, hd⟩ => hnd hd)
+
+/-- A G4 HOLD rests only on a usable share-of-cost snapshot at most 1 day old, a line dated on or before it, and
+    no covering row that shows nothing owed. -/
+theorem g4_hold_usable {c seen l} (h : Fact c seen l .SHARE_OF_COST_UNMET) :
+    Usable c.today 7 okSoc c.shareOfCost ∧ l.date ≤ socAsOf c ∧ dayNum c.today ≤ dayNum (socAsOf c) + 1 ∧
+      ¬SocMet c l :=
+  let ⟨hu, _, hn, hnd⟩ := h
+  ⟨hu, Nat.le_of_not_lt fun hl => hnd (Or.inl ⟨hn, Or.inr (Or.inl hl)⟩),
+    Nat.le_of_not_lt fun ha => hnd (Or.inl ⟨hn, Or.inr (Or.inr ha)⟩), fun hm => hnd (Or.inl ⟨hn, Or.inl hm⟩)⟩
+
+/-- An ALLOWed line has a usable share-of-cost snapshot, no covering row owing a share of cost not met, and a
+    month the snapshot covers. -/
+theorem g4_allow {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
+    Usable c.today 7 okSoc c.shareOfCost ∧ ¬SocUnmet c l ∧ l.date / 100 ≤ socAsOf c / 100 := by
+  have nf : ∀ r, ¬Fact c seen l r := fun r f => line_complete f h
+  have hu : Usable c.today 7 okSoc c.shareOfCost := Classical.byContradiction fun hn => nf .STALE_SHARE_OF_COST hn
+  have hd : validDate l.date = true := by
+    cases hv : validDate l.date
+    · exact (nf .SERVICE_DATE_INVALID hv).elim
+    · rfl
+  have hnd : ¬SocDoubt c l := fun hs => nf .SHARE_OF_COST_UNMET_UNVERIFIED (Or.inr ⟨hu, hd, hs⟩)
+  exact ⟨hu, fun hn => nf .SHARE_OF_COST_UNMET ⟨hu, hd, hn, hnd⟩, Nat.le_of_not_lt fun hm => hnd (Or.inr hm)⟩
 
 theorem not_own_mem {c x} {b : List Line} (h : ¬(own c x = true ∧ x ∈ b)) :
     (!(own c x && b.contains x)) = true := by
@@ -601,14 +665,16 @@ theorem ids_disjoint {c b} (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet
 /-! ## Monotonicity -/
 
 /-- `c'` has every death and exclusion row of `c`, the same day, enrollment,
-    eligibility, released and unresolved sets and checkpoints and re-decisions,
-    and each death or exclusion snapshot is usable exactly when it was (so the
-    added rows are well formed and counted).  Eligibility must be equal, not
-    grown: an added eligibility row can clear `PROGRAM_NOT_ELIGIBLE`. -/
+    eligibility, share of cost, released and unresolved sets and checkpoints and
+    re-decisions, and each death or exclusion snapshot is usable exactly when it
+    was (so the added rows are well formed and counted).  Eligibility must be
+    equal, not grown: an added eligibility row can clear `PROGRAM_NOT_ELIGIBLE`.
+    Share of cost likewise: an added met row can clear `SHARE_OF_COST_UNMET`. -/
 structure Grows (c c' : Ctx) : Prop where
   today : c'.today = c.today
   enrollment : c'.enrollment = c.enrollment
   eligibility : c'.eligibility = c.eligibility
+  shareOfCost : c'.shareOfCost = c.shareOfCost
   released : c'.released = c.released
   unresolved : c'.unresolved = c.unresolved
   releasedPrior : c'.releasedPrior = c.releasedPrior
@@ -652,6 +718,8 @@ theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → 
   | .BENEFIT_LEVEL_MISSING, h | .BENEFIT_LEVEL_MISSING_UNVERIFIED, h | .PROGRAM_NOT_ELIGIBLE, h
   | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED, h | .STALE_ELIGIBILITY, h => by
     simpa only [Fact, AidEligible, LevelEligible, g.today, g.eligibility] using h
+  | .SHARE_OF_COST_UNMET, h | .SHARE_OF_COST_UNMET_UNVERIFIED, h | .STALE_SHARE_OF_COST, h => by
+    simpa only [Fact, SocUnmet, SocMet, SocDoubt, socAsOf, g.today, g.shareOfCost] using h
   | .MEMBER_DECEASED, ⟨hu, hv, d, hd, hp⟩ => ⟨usable_iff.mp (g.dmfOk.trans (usable_iff.mpr hu)), hv, d, g.dmf d hd, hp⟩
   | .PROVIDER_DECEASED, ⟨hu, hv, d, hd, hp⟩ => ⟨usable_iff.mp (g.pdOk.trans (usable_iff.mpr hu)), hv, d, g.pd d hd, hp⟩
   | .PROVIDER_EXCLUDED, ⟨hu, hv, e, he, hp⟩ =>
@@ -875,5 +943,15 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms g2_hold_usable
 /-- info: 'BlindLedger.Gate.Rules.g2_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms g2_allow
+/-- info: 'BlindLedger.Gate.Rules.fail_closed_shareOfCost' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms fail_closed_shareOfCost
+/-- info: 'BlindLedger.Gate.Rules.g4_review' depends on axioms: [propext] -/
+#guard_msgs in #print axioms g4_review
+/-- info: 'BlindLedger.Gate.Rules.g4_exclusive' does not depend on any axioms -/
+#guard_msgs in #print axioms g4_exclusive
+/-- info: 'BlindLedger.Gate.Rules.g4_hold_usable' does not depend on any axioms -/
+#guard_msgs in #print axioms g4_hold_usable
+/-- info: 'BlindLedger.Gate.Rules.g4_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms g4_allow
 
 end BlindLedger.Gate.Rules
