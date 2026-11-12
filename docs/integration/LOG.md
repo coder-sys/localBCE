@@ -234,3 +234,21 @@
   embedded source hash matches the sources, and the proofs check, so the
   Lean results the G-rule parity harness compares against are confirmed by
   Lean on this machine. Guard logs: `%LOCALAPPDATA%\rr_guarded_interim\logs`.
+- 2026-11-09: Phase 3, first rule. The owner approved the twelve defaults in
+  `docs/integration/G2_DESIGN.md`. `f16a61f4` adds Lean gate rule G2 (aid
+  code "13","23","53","103","104" and benefit level, read from a pinned
+  eligibility snapshot, SNAPSHOT/v1 kind 7) inside `rightrail/`, with its
+  XI.2 record in the commit message. `76dc54ad` repoints five stale runner
+  mutants first. Everything ran through the interim guard: full `lake
+  build` 138/138, no `sorry`; `gate_rules` passes `rules_v2.vectors`
+  (308/308), `demo_zz_v2.vectors` (3616/3616) and `shards_v1.vectors`
+  (39/39); all 19 G2 mutants are killed (18 by vectors, 1 by proof).
+  RightRail's gate tests: 96 run, 19 pass, 77 fail on this machine only (76
+  need the ML-DSA-87 signer `rr_gate_mldsa87.exe`, which is not built
+  because there is no Rust toolchain on Windows; `test_history_growth` wants
+  SQLite 3.53.1, this machine has 3.40.1). The owner typed "commit" with
+  those failures recorded. Plan line 99 ("pinned worker re-pinned") does not
+  apply: `gate_verify` does not import the rules and `gate_rules` is
+  test-only. Pushed on the owner's "push"; draft PR #8
+  (`codex/rightrail-g2` into `codex/rightrail-base-phases`), CI run
+  42809189032: `rust`, `windows-smoke` and `rules-and-ops` all succeeded.

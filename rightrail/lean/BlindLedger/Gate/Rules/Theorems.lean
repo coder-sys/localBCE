@@ -32,8 +32,20 @@ abbrev ProviderDead (c : Ctx) (l : Line) : Prop :=
 abbrev Excluded (c : Ctx) (l : Line) : Prop :=
   ∃ e ∈ entries c.exclusions, (e.id = l.payee ∨ e.id = l.rendering) ∧ e.start ≤ l.date ∧ l.date ≤ e.stop
 
+/-! The facts of G2 (synthetic, from localBCE; not legally verified). -/
+abbrev AidEligible (c : Ctx) (l : Line) : Prop :=
+  ∃ e ∈ entries c.eligibility, e.member = l.member ∧ e.start ≤ l.date ∧ l.date ≤ e.stop ∧ e.aid ∈ allowedAid
+
+abbrev LevelEligible (c : Ctx) (l : Line) : Prop :=
+  ∃ e ∈ entries c.eligibility, e.member = l.member ∧ e.start ≤ l.date ∧ l.date ≤ e.stop ∧ e.aid ∈ allowedAid ∧
+    e.level = 1
+
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .ALREADY_DECIDED => idKey l ∈ seen ∨ idKey l ∈ pending c
+  | .BENEFIT_LEVEL_MISSING => Usable c.today 7 okElig c.eligibility ∧ validDate l.date = true ∧ AidEligible c l ∧
+      ¬LevelEligible c l
+  | .BENEFIT_LEVEL_MISSING_UNVERIFIED => c.eligibility.isSome ∧ ¬Usable c.today 7 okElig c.eligibility ∧
+      validDate l.date = true ∧ AidEligible c l ∧ ¬LevelEligible c l
   | .CAP_MEMBER_MONTH_DUPLICATE => l.flow = .CAP_820 ∧ (exactKey l ∈ seen ∨ nearKey l ∈ seen ∨
       Usable c.today 7 okSpan c.enrollment ∧ validDate l.date = true ∧ overlap c l = true)
   | .COLLIDES_WITH_UNRESOLVED_NEAR => l.flow ≠ .CAP_820 ∧ nearKey l ∈ pending c ∧ exactKey l ∉ pending c
@@ -47,6 +59,9 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .MEMBER_NOT_ENROLLED => Usable c.today 7 okSpan c.enrollment ∧ validDate l.date = true ∧ NotCovered c l
   | .MEMBER_NOT_ENROLLED_UNVERIFIED => c.enrollment.isSome ∧ ¬Usable c.today 7 okSpan c.enrollment ∧
       validDate l.date = true ∧ NotCovered c l
+  | .PROGRAM_NOT_ELIGIBLE => Usable c.today 7 okElig c.eligibility ∧ validDate l.date = true ∧ ¬AidEligible c l
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED => c.eligibility.isSome ∧ ¬Usable c.today 7 okElig c.eligibility ∧
+      validDate l.date = true ∧ ¬AidEligible c l
   | .PROVIDER_DECEASED => Usable c.today 90 okDeath c.providerDeaths ∧ validDate l.date = true ∧
       ProviderDead c l
   | .PROVIDER_DECEASED_UNVERIFIED => c.providerDeaths.isSome ∧ ¬Usable c.today 90 okDeath c.providerDeaths ∧
@@ -57,6 +72,7 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .SERVICE_DATE_FUTURE => c.today < l.date
   | .SERVICE_DATE_INVALID => validDate l.date = false
   | .STALE_DMF => ¬Usable c.today 90 okDeath c.dmf
+  | .STALE_ELIGIBILITY => ¬Usable c.today 7 okElig c.eligibility
   | .STALE_ENROLLMENT => ¬Usable c.today 7 okSpan c.enrollment
   | .STALE_EXCLUSION => ¬Usable c.today 31 okExclusion c.exclusions
   | .STALE_PROVIDER_DEATH => ¬Usable c.today 90 okDeath c.providerDeaths
@@ -77,7 +93,7 @@ theorem chained_iff {t p o} : chained t p o = true ↔ Chained t p o := by
 
 theorem fires_iff {c seen l} (r : Reason) : fires c seen l r = true ↔ Fact c seen l r := by
   cases r <;> simp [fires, Fact, certain, unverified, notEnrolled, enrolled, covers, party, isCap, memberDead,
-    providerDead, excluded, ← usable_iff, ← chained_iff, and_assoc, or_assoc]
+    providerDead, excluded, aidEligible, levelEligible, eligCovers, ← usable_iff, ← chained_iff, and_assoc, or_assoc]
 
 theorem mem_all (r : Reason) : r ∈ reasons := by cases r <;> simp [reasons]
 
@@ -245,7 +261,9 @@ theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : De
     parsed row count other than the declared one, or a malformed row), or the
     released or unresolved set is not chained (missing, miscounted, misdated
     or not extending the checkpoint), no line is ALLOW: each is HUMAN_REVIEW,
-    or HOLD on a certain reason (which never rests on the unusable data). -/
+    or HOLD on a certain reason (which never rests on the unusable data).  The
+    hypothesis names the six sources below; G2's eligibility snapshot (the
+    seventh) is `fail_closed_eligibility`. -/
 theorem fail_closed {c b d}
     (h : ¬Usable c.today 90 okDeath c.dmf ∨ ¬Usable c.today 90 okDeath c.providerDeaths ∨
       ¬Usable c.today 31 okExclusion c.exclusions ∨ ¬Usable c.today 7 okSpan c.enrollment ∨
@@ -261,6 +279,43 @@ theorem fail_closed {c b d}
   · exact line_complete (r := .STALE_ENROLLMENT) h
   · exact line_complete (r := .STALE_RELEASED) h
   · exact line_complete (r := .STALE_UNRESOLVED) h
+
+/-- `fail_closed` for G2's eligibility snapshot (the seventh source): when it is not usable, no line is ALLOW. -/
+theorem fail_closed_eligibility {c b d} (h : ¬Usable c.today 7 okElig c.eligibility)
+    (hd : d ∈ (decideBatch c b).decisions) :
+    d.outcome = .HUMAN_REVIEW ∨ (d.outcome = .HOLD ∧ ∃ r ∈ d.reasons, review r = false) := by
+  obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := seen0 c b) (ls := order c b) hd
+  exact outcome_cases (line_complete (r := .STALE_ELIGIBILITY) h)
+
+/-- G2's two certain reasons make a line HOLD; the other three only send it to review. -/
+theorem g2_review :
+    review .PROGRAM_NOT_ELIGIBLE = false ∧ review .BENEFIT_LEVEL_MISSING = false ∧
+      review .PROGRAM_NOT_ELIGIBLE_UNVERIFIED = true ∧ review .BENEFIT_LEVEL_MISSING_UNVERIFIED = true ∧
+      review .STALE_ELIGIBILITY = true := by decide
+
+/-- G2 reports at most one of its certain reasons, as localBCE's first failing gate does. -/
+theorem g2_exclusive {c seen l} :
+    ¬(Fact c seen l .PROGRAM_NOT_ELIGIBLE ∧ Fact c seen l .BENEFIT_LEVEL_MISSING) :=
+  fun ⟨⟨_, _, hn⟩, ⟨_, _, ha, _⟩⟩ => hn ha
+
+/-- A G2 HOLD rests only on a usable eligibility snapshot. -/
+theorem g2_hold_usable {c seen l}
+    (h : Fact c seen l .PROGRAM_NOT_ELIGIBLE ∨ Fact c seen l .BENEFIT_LEVEL_MISSING) :
+    Usable c.today 7 okElig c.eligibility := by
+  rcases h with ⟨hu, _⟩ | ⟨hu, _⟩ <;> exact hu
+
+/-- An ALLOWed line has a usable eligibility snapshot and one covering row with an allowed aid code and a
+    benefit level. -/
+theorem g2_allow {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
+    Usable c.today 7 okElig c.eligibility ∧ LevelEligible c l := by
+  have nf : ∀ r, ¬Fact c seen l r := fun r f => line_complete f h
+  have hu : Usable c.today 7 okElig c.eligibility := Classical.byContradiction fun hn => nf .STALE_ELIGIBILITY hn
+  have hd : validDate l.date = true := by
+    cases hv : validDate l.date
+    · exact (nf .SERVICE_DATE_INVALID hv).elim
+    · rfl
+  have ha : AidEligible c l := Classical.byContradiction fun hn => nf .PROGRAM_NOT_ELIGIBLE ⟨hu, hd, hn⟩
+  exact ⟨hu, Classical.byContradiction fun hn => nf .BENEFIT_LEVEL_MISSING ⟨hu, hd, ha, hn⟩⟩
 
 theorem not_own_mem {c x} {b : List Line} (h : ¬(own c x = true ∧ x ∈ b)) :
     (!(own c x && b.contains x)) = true := by
@@ -546,12 +601,14 @@ theorem ids_disjoint {c b} (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet
 /-! ## Monotonicity -/
 
 /-- `c'` has every death and exclusion row of `c`, the same day, enrollment,
-    released and unresolved sets and checkpoints and re-decisions, and each
-    death or exclusion snapshot is usable exactly when it was (so the added
-    rows are well formed and counted). -/
+    eligibility, released and unresolved sets and checkpoints and re-decisions,
+    and each death or exclusion snapshot is usable exactly when it was (so the
+    added rows are well formed and counted).  Eligibility must be equal, not
+    grown: an added eligibility row can clear `PROGRAM_NOT_ELIGIBLE`. -/
 structure Grows (c c' : Ctx) : Prop where
   today : c'.today = c.today
   enrollment : c'.enrollment = c.enrollment
+  eligibility : c'.eligibility = c.eligibility
   released : c'.released = c.released
   unresolved : c'.unresolved = c.unresolved
   releasedPrior : c'.releasedPrior = c.releasedPrior
@@ -592,6 +649,9 @@ theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → 
   | .FFS_DUPLICATE_UNVERIFIED, h => by simpa only [Fact, looseKeys_grows g] using h
   | .CAP_MEMBER_MONTH_DUPLICATE, h => by simpa only [Fact, overlap, g.enrollment, g.today] using h
   | .FFS_DUPLICATE_LINE, h | .FFS_NEAR_DUPLICATE, h | .SERVICE_DATE_INVALID, h => h
+  | .BENEFIT_LEVEL_MISSING, h | .BENEFIT_LEVEL_MISSING_UNVERIFIED, h | .PROGRAM_NOT_ELIGIBLE, h
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED, h | .STALE_ELIGIBILITY, h => by
+    simpa only [Fact, AidEligible, LevelEligible, g.today, g.eligibility] using h
   | .MEMBER_DECEASED, ⟨hu, hv, d, hd, hp⟩ => ⟨usable_iff.mp (g.dmfOk.trans (usable_iff.mpr hu)), hv, d, g.dmf d hd, hp⟩
   | .PROVIDER_DECEASED, ⟨hu, hv, d, hd, hp⟩ => ⟨usable_iff.mp (g.pdOk.trans (usable_iff.mpr hu)), hv, d, g.pd d hd, hp⟩
   | .PROVIDER_EXCLUDED, ⟨hu, hv, e, he, hp⟩ =>
@@ -805,5 +865,15 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms released_iff
 /-- info: 'BlindLedger.Gate.Rules.one_payment_per_line' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms one_payment_per_line
+/-- info: 'BlindLedger.Gate.Rules.fail_closed_eligibility' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms fail_closed_eligibility
+/-- info: 'BlindLedger.Gate.Rules.g2_review' depends on axioms: [propext] -/
+#guard_msgs in #print axioms g2_review
+/-- info: 'BlindLedger.Gate.Rules.g2_exclusive' does not depend on any axioms -/
+#guard_msgs in #print axioms g2_exclusive
+/-- info: 'BlindLedger.Gate.Rules.g2_hold_usable' does not depend on any axioms -/
+#guard_msgs in #print axioms g2_hold_usable
+/-- info: 'BlindLedger.Gate.Rules.g2_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms g2_allow
 
 end BlindLedger.Gate.Rules

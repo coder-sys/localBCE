@@ -13,7 +13,7 @@ open BlindLedger.Gate.Rules
     one per line: `case NAME` clears the batch, the totals, the lines earlier commits
     released or left unresolved and the gate's checkpoints; `today D`;
     `snap KIND ASOF COUNT PIN` (re)declares a snapshot (`dmf`, `pdeath`,
-    `excl`, `span`) or the `released` or `unresolved` set (rows `ID[:PAY] FLOW
+    `excl`, `span`, `elig` with rows `MEMBER AID LEVEL START STOP`) or the `released` or `unresolved` set (rows `ID[:PAY] FLOW
     M PAYEE REND DATE PROC UNITS CENTS`, PAY defaulting to ID; it also drops
     the lines earlier commits added to that set), whose rows are the
     following lines starting with KIND.  PIN is the SHA3-512 hex of
@@ -47,6 +47,12 @@ def name {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").ge
 def parse {α : Type} [Repr α] (all : List α) (s : String) : Option α := all.find? (name · == s)
 
 #guard (reasons.map name).zip ((reasons.map name).drop 1) |>.all fun (a, b) => decide (a < b)
+
+-- G2's allowed aid codes are the identifiers of localBCE's (rust-engine/src/main.rs:235).
+#guard allowedAid == ["13", "23", "53", "103", "104"].map aidId
+
+-- Every unverified or stale reason is a review reason: `review`'s `| _ => false` cannot silently make one a HOLD.
+#guard reasons.all fun r => review r || !((name r).endsWith "_UNVERIFIED" || (name r).startsWith "STALE_")
 
 def hB (b : ByteArray) : List UInt8 := (BlindLedger.Semantic.sha3_512Fast b).toList
 
@@ -123,12 +129,13 @@ def emptyPin (kind : String) (a : Nat) : Option String :=
   (Fast.pinBytes s!"RR/GATE/{kind.toUpper}/v1" (if kind == "released" then 5 else 6) Line.fields
     (⟨a, 0, []⟩ : Snapshot Line)).map fun b => hexOf (BlindLedger.Semantic.sha3_512Fast b)
 
-/-- The six pinned inputs with their checked pins, and the four kinds' `readPin`s, once per declaration.  -- FAST -/
+/-- The seven pinned inputs with their checked pins, and the five kinds' `readPin`s, once per declaration.  -- FAST -/
 structure Pinned where
   dmf : Option (Snapshot Death × List UInt8)
   pdeath : Option (Snapshot Death × List UInt8)
   excl : Option (Snapshot Exclusion × List UInt8)
   span : Option (Snapshot Span × List UInt8)
+  elig : Option (Snapshot Elig × List UInt8)
   released : Option (Snapshot Line × List UInt8)
   unresolved : Option (Snapshot Line × List UInt8)
   kinds : Option (List (List UInt8 × List UInt8))
@@ -215,11 +222,15 @@ def St.pin (st : St) : Pinned :=
   let span := snapshot st "span" (fun r => match r.mapM String.toNat? with
     | some [m, p, a, b] => some ⟨m, p, a, b⟩
     | _ => none) "RR/GATE/SNAPSHOT/v1" 4 Span.fields
-  { dmf, pdeath, excl, span,
+  let elig := snapshot st "elig" (fun r => match r.mapM String.toNat? with
+    | some [m, a, v, s, t] => some ⟨m, a, v, s, t⟩
+    | _ => none) "RR/GATE/SNAPSHOT/v1" 7 Elig.fields
+  { dmf, pdeath, excl, span, elig,
     released := snapshot st "released" parseLine "RR/GATE/RELEASED/v1" 5 Line.fields
     unresolved := snapshot st "unresolved" parseLine "RR/GATE/UNRESOLVED/v1" 6 Line.fields
     kinds := do pure [← readPin "RR/GATE/READ-DMF/v2" 1 Death.fields dmf, ← readPin "RR/GATE/READ-PROVIDER-DEATH/v2" 2 Death.fields pdeath,
-      ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields excl, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields span] }
+      ← readPin "RR/GATE/READ-EXCLUSION/v2" 3 Exclusion.fields excl, ← readPin "RR/GATE/READ-ENROLLMENT/v2" 4 Span.fields span,
+      ← readPin "RR/GATE/READ-ELIGIBILITY/v2" 7 Elig.fields elig] }
 
 def St.ctx (st : St) (p : Pinned) : Ctx where
   today := st.today
@@ -227,6 +238,7 @@ def St.ctx (st : St) (p : Pinned) : Ctx where
   providerDeaths := p.pdeath.map (·.1)
   exclusions := p.excl.map (·.1)
   enrollment := p.span.map (·.1)
+  eligibility := p.elig.map (·.1)
   released := grow (p.released.map (·.1)) st.extra
   unresolved := grow (p.unresolved.map (·.1)) st.held
   releasedPrior := st.rprior
@@ -257,11 +269,11 @@ def uniq (ids : List Nat) : List Nat :=
   (ids.foldl (fun (s, r) i => if s.contains i then (s, r) else (s.insert i, i :: r))
     ((∅ : Std.HashSet Nat), ([] : List Nat))).2.reverse
 
-/-- `RULES_READS`: u32 today ‖ the four SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes over `base`, redo in
+/-- `RULES_READS`: u32 today ‖ the five SNAPSHOT/v1 pins ‖ u32 |P| ‖ P, P the READ-SET/v3 bytes over `base`, redo in
     the order read (`ReadManifest.run_reads_eq`). -/
 def reads (p : Pinned) (c : Ctx) (base : List UInt8) : Option (List UInt8) := do
   let ks ← p.kinds
-  let pre := "RR/GATE/READ-SET/v2".toUTF8.toList ++ [0] ++ (ks.map (·.2)).flatten ++ (← be 4 c.redo.length) ++
+  let pre := "RR/GATE/READ-SET/v3".toUTF8.toList ++ [0] ++ (ks.map (·.2)).flatten ++ (← be 4 c.redo.length) ++
     (← c.redo.mapM (be payWidth)).flatten ++ base
   pure ((← be 4 c.today) ++ (ks.map (·.1)).flatten ++ (← be 4 pre.length) ++ pre)
 
@@ -376,7 +388,7 @@ def step (st : St) : List String → Option (St × List String)
       reasons.map fun r => s!"REPORT {name r} {by_ (·.reasons.contains r)}")
   | ["end", n] => do pure ({ st with expected := some (← n.toNat?) }, [])
   | k :: fs => do
-    guard (["dmf", "pdeath", "excl", "span", "released", "unresolved"].contains k)
+    guard (["dmf", "pdeath", "excl", "span", "elig", "released", "unresolved"].contains k)
     pure ({ st with rows := st.rows.push (k, fs), pinned := none }, [])
   | [] => none
 

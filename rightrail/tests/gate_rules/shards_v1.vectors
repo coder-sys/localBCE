@@ -22,12 +22,23 @@ span 1007 504 20260101 20271231
 span 1009 501 20260101 20271231
 span 1009 502 20260101 20261231
 span 9001 501 20260101 20271231
+snap elig 20270314 10 fe10794afce9784d8769eefc3be2467bd326e68946d8021f4dd984874f9b3b92b60362b671052cf6164d5a87b6c15788fdfb2350a2894b283c07c8bb8b45a7fa
+elig 1001 78131 1 19000101 99991231
+elig 1002 78131 1 19000101 99991231
+elig 1003 78131 1 19000101 99991231
+elig 1004 78131 1 19000101 99991231
+elig 1005 78131 1 19000101 99991231
+elig 1006 78131 1 19000101 99991231
+elig 1007 78131 1 19000101 99991231
+elig 1009 78131 1 19000101 99991231
+elig 9001 78131 1 19000101 99991231
+elig 9002 78131 1 19000101 99991231
 
 
 # Shard uniqueness vectors (gate-shard-uniqueness-v1): a `foreign` directive names ids the tenant's
 # id registry gives another shard; the rules add ALREADY_DECIDED to those ids and change nothing else.
 # Without `foreign` the same batch is ALLOW: only the registry, not these rules, stops a second shard.
-# Synthetic IDs, no PHI.  Header (snapshots) copied from rules_v1.vectors.
+# Synthetic IDs, no PHI.  Header (snapshots) copied from rules_v2.vectors.
 
 # T1 shard 0: line 901 is new to the registry and ALLOW
 case shard0_first

@@ -75,7 +75,7 @@ class RulesWorkerTests(fx.Scratch):
     def test_worker_equals_one_shot_on_the_vectors_and_a_random_batch(self):
         w = self.worker()
         with self.scratch() as tmp:
-            frames = [(VECTORS / name).read_bytes() for name in ("rules_v1.vectors", "demo_zz.vectors", "shards_v1.vectors")]
+            frames = [(VECTORS / name).read_bytes() for name in ("rules_v2.vectors", "demo_zz_v2.vectors", "shards_v1.vectors")]
             for data in [*frames, random_batch(1, 300), random_batch(2, 40)]:
                 got = w.run(data)
                 self.assertEqual(got, one_shot(data, Path(tmp)))
@@ -458,9 +458,9 @@ class RulesWorkerTests(fx.Scratch):
         self.assertEqual(w.run(b"x")[0], "RULES_VECTOR_MALFORMED line=1")  # the next call restarts it; a malformed text is answered, not killed
 
     def test_a_missing_or_malformed_reads_line_refuses_the_batch(self):
-        h = "52522f474154452f524541442d5345542f763200"  # READ-SET/v2 and its 0 byte
+        h = "52522f474154452f524541442d5345542f763300"  # READ-SET/v3 and its 0 byte
         edits = [lambda r: [], lambda r: r * 2, lambda r: [r[0][:-2]], lambda r: [r[0][:-1] + "g"],
-                 lambda r: [r[0].upper()], lambda r: [r[0].replace(h, h[:-4] + "33" + h[-2:])]]
+                 lambda r: [r[0].upper()], lambda r: [r[0].replace(h, h[:-4] + "32" + h[-2:])]]  # retired v2
         with self.scratch() as tmp:
             c = g.Cluster(tmp, fx.custody(tmp))
             c.boot()

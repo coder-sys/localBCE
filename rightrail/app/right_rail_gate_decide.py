@@ -142,13 +142,13 @@ class Answer(NamedTuple):
 
 
 def _reads_ok(rows: list[str]) -> bool:
-    """One ``RULES_READS``, lowercase hex of u32 today ‖ four 64-byte pins ‖ u32 |P| ‖ P, P a READ-SET/v2 record."""
+    """One ``RULES_READS``, lowercase hex of u32 today ‖ five 64-byte pins ‖ u32 |P| ‖ P, P a READ-SET/v3 record."""
     try:
         b = bytes.fromhex(rows[0]) if len(rows) == 1 else b""
     except ValueError:
         return False
-    return (len(b) >= 264 and b.hex() == rows[0] and int.from_bytes(b[260:264], "big") == len(b) - 264
-            and b[264:].startswith(b"RR/GATE/READ-SET/v2\0"))
+    return (len(b) >= 328 and b.hex() == rows[0] and int.from_bytes(b[324:328], "big") == len(b) - 328
+            and b[328:].startswith(b"RR/GATE/READ-SET/v3\0"))
 
 
 def _hold(lines: Sequence[str], reason: str) -> Answer:
