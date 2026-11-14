@@ -41,7 +41,7 @@ Dropped (r4): Entry (old), logHead, logOk + its lemmas, ZeroPre, log_binds, Perm
   restore_resumes, rollback_detected, SignedStep, logRunOk, stepBatch, runRows. chain_sound keeps the stateDigest
   conclusion; the token rows per step are custody_binds applied to chain_sound's base.
 Kept: invB_iff with proof, V1Collision, v1_reach_inv, §8e lines, PayRow (+revision), certsOk, readSetOf.
-Every def is concrete; no `sorry` (none since ef76ee80), no `axiom`, and no theorem here is axiom-pinned yet.
+Every def is concrete; no `sorry` (none since ef76ee80), no `axiom`; only the four reason-bound theorems are axiom-pinned (AxiomCheck).
 PQ only: ML-DSA-87 via acceptsAny.
 -/
 
@@ -6704,6 +6704,10 @@ private theorem g1_pw_asc : ∀ (l : List Bytes), l.Pairwise (fun a b => lexLt a
 theorem reasonCode_ascending (xs : List Reason) (h : xs.Sublist reasons) : ascending (xs.map reasonCode) = true :=
   g1_pw_asc _ (g1_reasons_pw.sublist (h.map reasonCode))
 
+/-- Every reason's code passes the decoder's `code` check (Spec.lean:119-122, 129-131), so with
+    `reasonCode_ascending` and `rowOf_reasons_le` every row's `reasonCodes` field decodes. -/
+theorem reasonCode_codeOk : reasons.all (codeOk ∘ reasonCode) = true := by decide +kernel
+
 def wireOf : Outcome → WireOutcome
   | .ALLOW => .ALLOW
   | .HOLD => .HOLD
@@ -6758,6 +6762,60 @@ def rowOf (rev : Nat → Nat) (pays : List (Nat × Outcome × Nat)) (ds : List (
     let (_, o, cents) ← pays.find? (·.1 == pay)
     let rs := (ds.filter (·.1.pay == pay)).flatMap (·.2.2)
     pure { row with outcome := wireOf o, cents, reasons := (reasons.filter rs.contains).map reasonCode }
+
+/-- A row built from decisions that all fired under one `Bits` carries at most `maxReasonCodes`
+    codes, so its TOKEN/v1 leaf passes the decoder's count (Spec.lean:460). -/
+theorem rowOf_reasons_le {rev : Nat → Nat} {pays : List (Nat × Outcome × Nat)}
+    {ds : List (Line × Outcome × List Reason)} {rset : Bytes} {x : Bytes × Request} {row : PayRow} (b : Rules.Bits)
+    (hds : ∀ y ∈ ds, ∀ r ∈ y.2.2, Rules.may b r = true)
+    (h : rowOf rev pays ds rset x = some row) : row.reasons.length ≤ maxReasonCodes := by
+  obtain ⟨raw, r⟩ := x
+  unfold StateV2.rowOf at h
+  cases hf : r.flow.ruled <;>
+    simp only [hf, Bool.not_false, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Option.some.injEq] at h
+  · subst h; exact Nat.zero_le _
+  · obtain ⟨⟨_, o, cents⟩, _, h⟩ := Option.bind_eq_some_iff.mp h
+    simp only [Option.pure_def, Option.some.injEq] at h
+    subst h
+    refine Nat.le_trans (Nat.le_of_eq (List.length_map ..)) (Nat.le_trans (Rules.pay_budget b _ ?_)
+      (by decide : 32 ≤ maxReasonCodes))
+    intro q hq
+    obtain ⟨y, hy, hq⟩ := List.mem_flatMap.mp hq
+    exact hds y (List.mem_filter.mp hy).1 q hq
+
+/-- Every row built from one batch's decisions fits one token.  With `c := carried bt.ctx rel unr`
+    this is custody_binds' `rows` (StateV2.lean:7854-7857).  For the runtime, `decideIdx_refines`
+    (StateV2.lean:5130-5141) holds for the `o` bound at :7806, before the `tokensOk` guard (:7814),
+    so this bounds custodyOk's `prs` (:7809-7810) outside its `Collision` disjunct; see
+    `custodyOk_rows_le`.  custody_binds is not used for that: it assumes custodyOk already passed :7814. -/
+theorem decideRegT_rows_le (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) (rev : Nat → Nat)
+    (pays : List (Nat × Outcome × Nat)) (rset : Bytes) (xs : List (Bytes × Request)) :
+    ∀ row ∈ xs.filterMap (rowOf rev pays ((decideRegT c k os b).decisions.map
+      fun x => (x.line, x.outcome, x.reasons)) rset), row.reasons.length ≤ maxReasonCodes := by
+  intro row hrow
+  obtain ⟨x, -, hx⟩ := List.mem_filterMap.mp hrow
+  refine rowOf_reasons_le (Rules.bitsOf c) ?_ hx
+  intro y hy r hr
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hy
+  simp only [decideRegT, bumpRes, decideReg, decideBatchIn] at hd
+  exact Rules.decideAll_may c _ _ d hd r hr
+
+/-- Runtime liveness of the count: the rows custodyOk builds from `decideIdx`'s output `o`
+    (StateV2.lean:7806-7810) fit one token, on a true base, unless a named collision.  Its hypothesis
+    is `decideIdx … = some o`, which holds before the `tokensOk` guard (:7814), so it is not circular. -/
+theorem custodyOk_rows_le (hH : HashLen sha3) (c₀ : Ctx) (k : Nat) (os : List Owner) (b : List Line)
+    (rel unr : Snapshot Line) (hi : Inv rel unr) (h : Head) (ha : headOf sha3 rel unr = some h)
+    (d : Bytes) (hd : digestV2 sha3 h = some d) (w : Witness) (o : OutV2)
+    (ho : decideIdx sha3 c₀ k os b d w = some o) (rev : Nat → Nat) (rset : Bytes)
+    (xs : List (Bytes × Request)) :
+    (∀ row ∈ xs.filterMap (rowOf rev o.pays (o.decisions.map
+      fun x => (x.line, x.outcome, x.reasons)) rset), row.reasons.length ≤ maxReasonCodes) ∨
+    Collision sha3 (witnessInputs sha3 c₀ k os b w) (stateInputs sha3 rel unr) := by
+  rcases decideIdx_refines sha3 hH c₀ k os b rel unr hi h ha d hd w o ho with ⟨hm, -, -, -, -, -, -⟩ | hc
+  · left
+    rw [hm]
+    exact decideRegT_rows_le _ k os b rev _ rset xs
+  · exact Or.inr hc
 
 /-- A token's row; decision time, issue time, expiry (F2) and the exe constants must be custody's. -/
 def tokRow (c : Consts) (secs : Nat) (t : Bytes) : Option PayRow := do

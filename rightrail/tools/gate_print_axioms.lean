@@ -179,3 +179,7 @@ import BlindLedger.Gate.Engine.Frame
 #print axioms BlindLedger.Gate.Engine.foldM_batches
 #print axioms BlindLedger.Gate.Engine.pushM_wf
 #print axioms BlindLedger.Gate.Engine.foldM_wf
+#print axioms BlindLedger.Gate.StateV2.reasonCode_codeOk
+#print axioms BlindLedger.Gate.StateV2.rowOf_reasons_le
+#print axioms BlindLedger.Gate.StateV2.decideRegT_rows_le
+#print axioms BlindLedger.Gate.StateV2.custodyOk_rows_le

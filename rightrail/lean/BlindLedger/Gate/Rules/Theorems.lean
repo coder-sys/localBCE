@@ -228,6 +228,71 @@ theorem reasons_sublist {c seen l} : (decideLine c seen l).reasons.Sublist reaso
 theorem reasons_nodup {c seen l} : (decideLine c seen l).reasons.Nodup :=
   reasons_sublist.nodup (by decide)
 
+/-! ## Reason budget: one payment's codes fit one token (TOKEN/v1 carries at most 32) -/
+
+/-- Each snapshot source's usable bit.  All lines of a batch read one `Ctx`, so these are per batch. -/
+structure Bits where
+  dmf : Bool
+  pd : Bool
+  ex : Bool
+  en : Bool
+  el : Bool
+  soc : Bool
+  deriving DecidableEq, Repr
+
+def bitsOf (c : Ctx) : Bits :=
+  ⟨usable c.today 90 okDeath c.dmf, usable c.today 90 okDeath c.providerDeaths,
+   usable c.today 31 okExclusion c.exclusions, usable c.today 7 okSpan c.enrollment,
+   usable c.today 7 okElig c.eligibility, usable c.today 7 okSoc c.shareOfCost⟩
+
+/-- Whether `r` can fire under bits `b`.  No wildcard: a new reason does not compile until it is classified. -/
+def may (b : Bits) : Reason → Bool
+  | .ALREADY_DECIDED | .CAP_MEMBER_MONTH_DUPLICATE | .COLLIDES_WITH_UNRESOLVED_NEAR | .DUPLICATE_OF_UNRESOLVED
+  | .FFS_DUPLICATE_LINE | .FFS_DUPLICATE_UNVERIFIED | .FFS_NEAR_DUPLICATE
+  | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID | .STALE_RELEASED | .STALE_UNRESOLVED
+  | .SHARE_OF_COST_UNMET_UNVERIFIED => true
+  | .MEMBER_DECEASED => b.dmf
+  | .MEMBER_DECEASED_UNVERIFIED | .STALE_DMF => !b.dmf
+  | .PROVIDER_DECEASED => b.pd
+  | .PROVIDER_DECEASED_UNVERIFIED | .STALE_PROVIDER_DEATH => !b.pd
+  | .PROVIDER_EXCLUDED => b.ex
+  | .PROVIDER_EXCLUDED_UNVERIFIED | .STALE_EXCLUSION => !b.ex
+  | .MEMBER_NOT_ENROLLED => b.en
+  | .MEMBER_NOT_ENROLLED_UNVERIFIED | .STALE_ENROLLMENT => !b.en
+  | .PROGRAM_NOT_ELIGIBLE | .BENEFIT_LEVEL_MISSING => b.el
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED | .BENEFIT_LEVEL_MISSING_UNVERIFIED | .STALE_ELIGIBILITY => !b.el
+  | .SHARE_OF_COST_UNMET => b.soc
+  | .STALE_SHARE_OF_COST => !b.soc
+
+/-- The link: a reason that fires is allowed by the batch's bits. -/
+theorem may_sound {c seen l} (r : Reason) (h : fires c seen l r = true) : may (bitsOf c) r = true := by
+  revert h
+  cases r <;> simp +contextual [fires, may, bitsOf, certain, unverified, notEnrolled]
+
+/-- The finite check, closed by the kernel. -/
+private theorem budget_bool : ∀ a b d e f g : Bool, (reasons.filter (may ⟨a, b, d, e, f, g⟩)).length ≤ 32 := by
+  decide +kernel
+
+theorem budget (b : Bits) : (reasons.filter (may b)).length ≤ 32 := by
+  cases b; exact budget_bool ..
+
+/-- Per payment: reasons that all fired under one batch's bits give at most 32 distinct codes. -/
+theorem pay_budget (b : Bits) (rs : List Reason) (h : ∀ r ∈ rs, may b r = true) :
+    (reasons.filter rs.contains).length ≤ 32 := by
+  rw [← List.countP_eq_length_filter]
+  refine Nat.le_trans (List.countP_mono_left (p := rs.contains) (q := may b)
+    fun r _ hr => h r (List.contains_iff_mem.mp hr)) ?_
+  rw [List.countP_eq_length_filter]
+  exact budget b
+
+-- Headroom pin (not a protected statement; bumped deliberately with each rule).  The maximum over
+-- every tuple is 24 today, reached at the all-false tuple.  Both by `decide +kernel`.
+private theorem headroom_le : ∀ a b d e f g : Bool, (reasons.filter (may ⟨a, b, d, e, f, g⟩)).length ≤ 24 := by
+  decide +kernel
+
+private theorem headroom_eq : (reasons.filter (may ⟨false, false, false, false, false, false⟩)).length = 24 := by
+  decide +kernel
+
 theorem outcome_cases {c seen l} (h : (decideLine c seen l).outcome ≠ .ALLOW) :
     (decideLine c seen l).outcome = .HUMAN_REVIEW ∨
       ((decideLine c seen l).outcome = .HOLD ∧ ∃ r ∈ (decideLine c seen l).reasons, review r = false) := by
@@ -278,6 +343,14 @@ theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : De
     · exact ⟨[], l, rfl⟩
     · obtain ⟨pre, l', rfl⟩ := mem_decideAll h
       exact ⟨pre ++ claim c l, l', by rw [List.append_assoc]⟩
+
+/-- Every reason on a batch's decisions is allowed by the batch's bits (Reason budget above). -/
+theorem decideAll_may (c : Ctx) :
+    ∀ (seen : List Key) (ls : List Line), ∀ d ∈ decideAll c seen ls, ∀ r ∈ d.reasons, may (bitsOf c) r = true := by
+  intro seen ls d hd r hr
+  obtain ⟨pre, l, rfl⟩ := mem_decideAll hd
+  simp only [decideLine, List.mem_filter] at hr
+  exact may_sound r hr.2
 
 /-- Fail-closed: when any reference snapshot is not usable (missing or failing
     its pin, an invalid today or asOf, dated after today, too old, empty, a
@@ -953,5 +1026,13 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms g4_hold_usable
 /-- info: 'BlindLedger.Gate.Rules.g4_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms g4_allow
+/-- info: 'BlindLedger.Gate.Rules.may_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms may_sound
+/-- info: 'BlindLedger.Gate.Rules.decideAll_may' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms decideAll_may
+/-- info: 'BlindLedger.Gate.Rules.budget' does not depend on any axioms -/
+#guard_msgs in #print axioms budget
+/-- info: 'BlindLedger.Gate.Rules.pay_budget' depends on axioms: [propext] -/
+#guard_msgs in #print axioms pay_budget
 
 end BlindLedger.Gate.Rules

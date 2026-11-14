@@ -398,3 +398,11 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.pushM_wf
 /-- info: 'BlindLedger.Gate.Engine.foldM_wf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Engine.foldM_wf
+/-- info: 'BlindLedger.Gate.StateV2.reasonCode_codeOk' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StateV2.reasonCode_codeOk
+/-- info: 'BlindLedger.Gate.StateV2.rowOf_reasons_le' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StateV2.rowOf_reasons_le
+/-- info: 'BlindLedger.Gate.StateV2.decideRegT_rows_le' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StateV2.decideRegT_rows_le
+/-- info: 'BlindLedger.Gate.StateV2.custodyOk_rows_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.StateV2.custodyOk_rows_le

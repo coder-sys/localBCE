@@ -55,8 +55,7 @@ def parse {α : Type} [Repr α] (all : List α) (s : String) : Option α := all.
 -- Every unverified or stale reason is a review reason: `review`'s `| _ => false` cannot silently make one a HOLD.
 #guard reasons.all fun r => review r || !((name r).endsWith "_UNVERIFIED" || (name r).startsWith "STALE_")
 
--- Every reason fits one token while the set is no larger than the cap (Gate.Spec maxReasonCodes, TOKEN/v1).
-#guard reasons.length ≤ BlindLedger.Gate.maxReasonCodes
+-- One payment's codes fit one token by proof, not a guard: Rules.pay_budget, StateV2.decideRegT_rows_le, StateV2.custodyOk_rows_le.
 
 def hB (b : ByteArray) : List UInt8 := (BlindLedger.Semantic.sha3_512Fast b).toList
 

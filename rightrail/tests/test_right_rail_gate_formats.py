@@ -1137,6 +1137,10 @@ class EncoderLawTests(unittest.TestCase):
         for value in bad:
             with self.subTest(value), self.assertRaises(gate.GateCodecError):
                 gate.encode_token_leaf(value)
+        codes = tuple(f"R{n:02}" for n in range(gate.MAX_REASON_CODES + 1))
+        gate.encode_token_leaf(replace(leaf, reason_codes=codes[:-1]))  # 32 codes: the most TOKEN/v1 carries
+        with self.assertRaisesRegex(gate.GateCodecError, "^reason_codes$"):
+            gate.encode_token_leaf(replace(leaf, reason_codes=codes))
         for flow in gate.RULED:
             with self.subTest(flow), self.assertRaises(gate.GateCodecError):
                 gate.encode_decide_request(_request(flow, 1))
