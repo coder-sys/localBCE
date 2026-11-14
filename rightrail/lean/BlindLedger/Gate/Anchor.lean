@@ -44,23 +44,18 @@ def ShardState.step (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (b :
     (ShardState.load H r.released r.unresolved).map fun st' => (r, st')
   else none
 
-/-- `step` for shard `k` with the id registry's answers `os` (multi-shard-runtime-v1 §2 step 3). -/
-def ShardState.stepReg (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx) (k : Nat) (os : List Rules.Owner)
+/-- `step` as `decideBatchIn c []` (no ids seen from another shard). -/
+def ShardState.stepReg (H : Bytes → Bytes) (st : ShardState) (c : Rules.Ctx)
     (b : List Rules.Line) : Option (Rules.Result × ShardState) :=
   if st.digest == natBE digestBytes c.anchor then
-    let r := Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b
+    let r := Rules.decideBatchIn { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } [] b
     (ShardState.load H r.released r.unresolved).map fun st' => (r, st')
   else none
 
-/-- The id registry's chain after one row (multi-shard-runtime-v1 §2): kind 0 RESERVE, 1 FREE, 2 SETTLE
-    (id 0), 3 BOOT (id the nonce).  `Rules.chainHead_inj`: equal count and head, equal rows. -/
-def idRegStep (H : Bytes → Bytes) (prev : Bytes) (kind id shard : Nat) : Bytes :=
-  H (("RR/GATE/ID-REG/v2").toUTF8.toList ++ [0] ++ prev ++ natBE 1 kind ++ natBE 129 id ++ natBE 4 shard)
-
 /-- The decide layer's step: `stepReg` on the state's own sets as the sets read. -/
-def ShardState.decide (H : Bytes → Bytes) (st : ShardState) (c₀ : Rules.Ctx) (k : Nat) (os : List Rules.Owner)
+def ShardState.decide (H : Bytes → Bytes) (st : ShardState) (c₀ : Rules.Ctx)
     (b : List Rules.Line) : Option (Rules.Result × ShardState) :=
-  st.stepReg H (Rules.carried c₀ st.released st.unresolved) k os b
+  st.stepReg H (Rules.carried c₀ st.released st.unresolved) b
 
 /-- Load: replay stored rows, refuse unless they hash to the signed anchor. -/
 def ShardState.loadAdds (H : Bytes → Bytes) (g : Rules.Snapshot Rules.Line × Rules.Snapshot Rules.Line)

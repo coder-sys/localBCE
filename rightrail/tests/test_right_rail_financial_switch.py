@@ -52,7 +52,7 @@ def _shadow_setup(case: unittest.TestCase, shadow_name: str) -> None:
         trusted_authority=case.fixture.authority,
         restore_mode="SHADOW",
     )
-    case.addCleanup(case.shadow.close)  # R1a: its export opens the writer
+    case.addCleanup(case.shadow.close)  # its export opens the writer
     case.snapshot = case.shadow_before = case.shadow.export_continuity()
     scope = ("state_id", "deployment_id", "program_id", "period_id", "currency")
     case.trust = {"trusted_authority": case.fixture.authority, "expected_scope": {key: getattr(case.shadow.config, key) for key in scope}}
@@ -265,6 +265,12 @@ class FinancialSwitchTests(unittest.TestCase):
                 forged = {**value, name: {**value[name], key: bad}}
                 with self.assertRaisesRegex(FinancialSwitchError, "^switch:replay-binding$"):
                     decode_replay_input(json.dumps(forged, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("ascii"), **self.trust)
+
+    def test_a_malformed_output_is_a_typed_refusal_not_a_stripped_assert(self) -> None:
+        from app.right_rail_financial_switch import FinancialSwitchError, _comparable_values
+        for output in ({"aggregate": [], "member_results": []}, {"aggregate": {}, "member_results": {}}, {"aggregate": {}, "member_results": [1]}):
+            with self.subTest(output), self.assertRaisesRegex(FinancialSwitchError, "^switch:output-shape$"):
+                _comparable_values(output, None)
 
 
 if __name__ == "__main__":

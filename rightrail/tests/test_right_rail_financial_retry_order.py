@@ -1,5 +1,5 @@
 """Constitution III.3: an exact retry is DUPLICATE and writes nothing, even after the owner clock moved; support,
-reversal and offset retries ignore expected_revision; a payment comes only through intake (R5), whose exact resend
+reversal and offset retries ignore expected_revision; a payment comes only through intake, whose exact resend
 returns the first answer; a different payload at a stale revision still conflicts, and a payment's is held. Also: canonical JSON and continuity packages never accept NaN or Infinity."""
 
 from __future__ import annotations

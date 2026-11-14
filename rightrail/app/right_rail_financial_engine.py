@@ -19,13 +19,14 @@ from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from app import minimal_clearance_verifier_process as process
+from app import right_rail_refused_frames as refused_frames
 from app import right_rail_financial_semantic_adapter as semantic
 
 
 CORRECTION_TRANSITION_OPERATION: Final[str] = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
 MAX_CORRECTION_TRANSITION_BYTES: Final[int] = semantic.MAX_WIRE_BYTES
 CORRECTION_TRANSITION_REQUEST_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
-    "C9FA662BB1A4556C19D909B6E756038C32399A6E81305A4C9B2EC7651440E5B0"
+    "CB00160D2D693638864C9F4F667DBA8FDEBD837A60577AD02EDEEF5AA58838C7"
 )
 CORRECTION_TRANSITION_RESULT_VECTOR_SHA256: Final[bytes] = bytes.fromhex(
     "CA815EBEE20A855D011F4689E595C785B97027FEEEE989FADE8D0393EE5AA48F"
@@ -87,17 +88,13 @@ def _digest(writer: Any, value: object, label: str) -> bytes:
 
 
 def _write_correction_action_lookup(writer: Any, lookup: Mapping[str, Any]) -> None:
-    kind = lookup.get("kind")
-    if kind == "absent":
-        writer.byte(1, "action_lookup")
-        return
-    if kind == "conflicting":
-        writer.byte(3, "action_lookup")
-        return
-    if kind != "existing" or type(lookup.get("identity")) is not dict:
+    kinds, kind = ("absent", "existing", "conflicting"), lookup.get("kind")
+    if kind not in kinds or (kind == "existing" and type(lookup.get("identity")) is not dict):
         raise FinancialEngineInputError("engine_correction_action_lookup")
+    writer.byte(kinds.index(kind) + 1, "action_lookup")
+    if kind != "existing":
+        return
     identity = lookup["identity"]
-    writer.byte(2, "action_lookup")
     for key in (
         "action_id", "action_obligation_id", "determination_id",
         "determination_obligation_id", "action_kind", "claim_id", "actor_id",
@@ -107,13 +104,14 @@ def _write_correction_action_lookup(writer: Any, lookup: Mapping[str, Any]) -> N
     _ident(writer, identity.get("authority_id"), "action_lookup_authority_id")
     _u64(writer, identity.get("authority_epoch"), "action_lookup_authority_epoch")
     _digest(writer, identity.get("authority_digest"), "action_lookup_authority_digest")
-    if identity.get("decision") != "OFFSET_REJECTED_CORRECTION_AUTHORIZED":
-        raise FinancialEngineInputError("action_lookup_decision")
-    writer.byte(2, "action_lookup_decision")
+    decisions, decision = ("OFFSET_AUTHORIZED", "OFFSET_REJECTED_CORRECTION_AUTHORIZED"), identity.get("decision")
+    writer.byte(decisions.index(decision) + 1 if decision in decisions else -1, "action_lookup_decision")  # -1 refuses
     _ident(writer, identity.get("input_evaluation_id"), "action_lookup_evaluation_id")
     _digest(writer, identity.get("input_evaluation_result_digest"), "action_lookup_evaluation_digest")
     _u64(writer, identity.get("expected_revision"), "action_lookup_expected_revision")
     _u64(writer, identity.get("decided_at_ms"), "action_lookup_decided_at")
+    given = identity.get("decision_time_given", "missing")  # stated, never defaulted; None: a row stored before it was kept
+    writer.byte(0 if given is None else 1 + given if type(given) is bool else -1, "action_lookup_decision_time_given")
 
 
 def _write_correction_query_observation(writer: Any, observation: Mapping[str, Any], label: str) -> None:
@@ -231,7 +229,7 @@ def _correction_input_bytes(body: dict[str, Any], *, expected_revision: int, act
         receipt_time = receipt.get("evaluated_at_ms")
         if type(receipt_time) is not int or receipt_time < 0:
             raise FinancialEngineInputError("engine_correction_receipt_time")
-        body["pre_evaluation"]["revision"] = expected_revision - 1
+        body["pre_evaluation"]["revision"] = receipt["revision"] - 1  # the stored revision, so a stale expected_revision stays visible to Lean
         body["evaluation_time_ms"] = receipt_time
     body.pop("snapshot_digest", None)
     try:
@@ -286,6 +284,7 @@ def encode_correction_transition_request(
         _ident(writer, command.get("evaluation_id"), "engine_correction_evaluation_id")
         _digest(writer, command.get("evaluation_result_digest"), "engine_correction_evaluation_digest")
         _u64(writer, command.get("decision_at_ms"), "engine_correction_decision_at")
+        writer.boolean(command.get("decision_time_given"), "engine_correction_decision_time_given")
         _u64(writer, command.get("owner_now_ms"), "engine_correction_owner_now")
         _write_correction_action_lookup(writer, action_lookup)
         for key, label in (
@@ -1137,9 +1136,9 @@ def run_offset_authorization_v1(*, request: bytes) -> dict[str, Any]:
 # --- Live evaluator: one long-lived Lean worker decides every owner evaluation ---
 
 EVALUATOR_PATH: Final[Path] = Path(__file__).resolve().parents[1] / "artifacts" / "engine-evaluator" / "blind_financial_worker.exe"
-EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_462_464
+EVALUATOR_ARTIFACT_SIZE_BYTES: Final[int] = 6_510_592
 EVALUATOR_ARTIFACT_SHA256: Final[bytes] = bytes.fromhex(
-    "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"
+    "2AC5F5EB783AC99111B4A28B35DF6F23F47E773C2F10A281C01BC02E878841D8"
 )
 EVALUATOR_JOB_MEMORY_CAP_BYTES: Final[int] = 1_000_000_000
 EVALUATOR_TIMEOUT_SECONDS: Final[float] = 5.0
@@ -1147,7 +1146,7 @@ EVALUATOR_RECYCLE_REQUESTS: Final[int] = 1000  # backstop: a long-lived worker i
 EVALUATOR_RECYCLE_COMMIT_BYTES: Final[int] = 400_000_000  # never mid-request, so slow growth never reaches the job cap
 _EVALUATOR_REJECTIONS: Final[dict[int, str]] = {
     1: "evaluator_input_rejected",
-    2: "evaluator_evaluation_rejected",
+    2: "evaluator_total_overflow",  # the worker's one proved cause for 02: a well-formed input whose sum passes 2^63 - 1 cents
     3: "evaluator_result_rejected",
 }
 _CORRECTION_REJECTIONS: Final[dict[int, str]] = {tag: code for tag, code in _EVALUATOR_REJECTIONS.items() if tag != 2}  # the worker never answers a frame with 02
@@ -1162,8 +1161,8 @@ def _close_evaluator() -> None:
     if _evaluator:
         worker, workspace = _evaluator
         _evaluator.clear()
-        worker.close()
-        shutil.rmtree(workspace, ignore_errors=True)
+        try: worker.close()
+        finally: shutil.rmtree(workspace, ignore_errors=True)
 
 
 def _running_evaluator() -> process.ContainedWorker:
@@ -1237,13 +1236,87 @@ def evaluate_live(
 
     wire, data = semantic.live_evaluation_input(connection, obligation_id=obligation_id, authority_context=authority_context,
                                                 evaluation_time_ms=evaluation_time_ms, verification=verification)
-    return _decoded_or_closed(semantic.decode_live_result, _evaluate_wire(wire), data)
+    return _decoded_or_closed(semantic.decode_live_result, refused_frames.run(_evaluate_wire, wire, connection, FinancialEngineResultError, _EVALUATOR_REJECTIONS[1], _is_reparse_path), data)
 
 
 def decide_payment_live(connection: sqlite3.Connection, *, obligation_id: str, authority_context: semantic.TrustedAuthorityContext, now_ms: int,
                         verification: Mapping[str, object], expected_revision: int | None, command: Mapping[str, Any], receipts: Any) -> semantic.PaymentOutcome:
-    """Lean decides one payment command on the owner's locked transaction (M3); the answer is bound back to it."""
+    """Lean decides one payment command on the owner's locked transaction; the answer is bound back to it."""
 
     item, data = semantic.live_payment_input(connection, obligation_id=obligation_id, authority_context=authority_context, now_ms=now_ms,
                                              verification=verification, expected_revision=expected_revision, command=command, receipts=receipts)
-    return _decoded_or_closed(semantic.decode_payment_outcome, _evaluate_wire(item), data, command)
+    return _decoded_or_closed(semantic.decode_payment_outcome, refused_frames.run(_evaluate_wire, item, connection, FinancialEngineResultError, _EVALUATOR_REJECTIONS[1], _is_reparse_path), data, command)
+
+
+_PACKAGE_SUPPORT: Final[tuple[str, ...]] = ("SUPPORTED", "NO_LINKED_EVIDENCE", "CONFLICTED", "UNKNOWN", "NOT_SATISFIED")
+_PACKAGE_ASSESSMENT: Final[tuple[str, ...]] = ("NOT_RESOLVED", "CONFLICTED", "UNSUPPORTED", "UNKNOWN", "SUPPORTED")
+PACKAGE_REQUIREMENTS: Final[tuple[str, ...]] = ("amount_satisfied", "delivery_acknowledged_or_not_required", "reporting_complete")  # bit i of the mask
+
+
+def _encode_package_request(obligation: Mapping[str, Any], actions: list[tuple[str, int, bool, str, bool, int, int]], payments: list[tuple[int, int]],
+                            claims: list[tuple[int, str]], report_count: int, conflict_count: int, case_status: str | None) -> bytes:
+    """BLFDPQ01 (Decide.lean decodePackageRequest): shortfall; each action (id, revision, correction request?, status, acknowledgment
+    reference?, amount, paid) by revision then id, which Lean checks; one BLFDPK01 item whose action is the last row's."""
+
+    def status(value: str, label: str) -> int:
+        return semantic._wire_tag(semantic._ACTION_STATUS_TAGS, value, label)
+
+    w = semantic._WireWriter()
+    w.raw(b"BLFDPQ01", "package_magic")
+    w.nat(obligation["shortfall_cents"], "package_shortfall")
+    w.list(actions, "package_actions", lambda r, label: (w.identifier(r[0], label), w.nat(r[1], label), w.boolean(r[2], label),
+                                                         w.byte(status(r[3], label), label), w.boolean(r[4], label), w.nat(r[5], label), w.nat(r[6], label)))
+    w.raw(b"BLFDPK01", "package_item_magic")
+    for key in ("owed_cents", "received_cash_cents", "claimed_adjustment_cents", "lawful_adjustment_cents"):
+        w.nat(obligation[key], f"package_{key}")
+    w.boolean(bool(obligation["amount_satisfied"]), "package_amount_satisfied")
+    w.boolean(bool(obligation["reporting_complete"]), "package_reporting_complete")
+    w.byte(semantic._wire_tag(semantic._VERIFICATION_STATUS_TAGS, obligation["verification_status"], "package_verification"), "package_verification")
+    w.list(payments, "package_payments", lambda p, label: (w.nat(p[0], label), w.boolean(bool(p[1]), label)))
+    w.list(claims, "package_claims", lambda c, label: (w.nat(c[0], label), w.byte(semantic._wire_tag(semantic._CLAIM_STATUS_TAGS, c[1], label), label)))
+    w.nat(report_count, "package_report_count")
+    w.nat(conflict_count, "package_conflict_count")
+    w.byte(0 if case_status is None else semantic._wire_tag(semantic._CASE_STATUS_TAGS, case_status, "package_case"), "package_case")
+    w.byte(status(actions[-1][3], "package_action") if actions else 0, "package_action")
+    w.boolean(bool(actions) and actions[-1][4], "package_acknowledged")
+    return w.finish(label="package_request")
+
+
+def _decode_package_answer(answer: bytes, request_count: int, shortfall_cents: int) -> dict[str, Any]:
+    """BLFDPA01 and the open cents of each action (Wire.lean decodePackageResponse); anything else, or cents past Lean's bounds, is refused."""
+
+    r = semantic._WireReader(answer, max_bytes=semantic.MAX_WIRE_BYTES)
+    if r.take(8, "package_answer_magic") != b"BLFDPA01":
+        raise FinancialEngineResultError("package_answer_magic")
+
+    def tag(names: tuple[str, ...], label: str) -> str:
+        value = r.byte(label)
+        if not 1 <= value <= len(names):
+            raise FinancialEngineResultError(label)
+        return names[value - 1]
+
+    out: dict[str, Any] = {key: tag(_PACKAGE_SUPPORT, key) for key in ("cash", "amount", "reporting", "delivery", "delivery_requirement", "required_amount")}
+    mask = r.byte("package_mask")
+    if mask > 7:
+        raise FinancialEngineResultError("package_mask")
+    out["missing_requirements"] = [key for bit, key in enumerate(PACKAGE_REQUIREMENTS) if mask >> bit & 1]
+    out["assessment"] = tag(_PACKAGE_ASSESSMENT, "package_assessment")
+    out["missing_cents"] = r.nat("package_missing_cents")
+    out["active_payment_count"] = int.from_bytes(r.take(2, "package_active_payments"), "big")
+    out["authorized_claim_count"] = int.from_bytes(r.take(2, "package_authorized_claims"), "big")
+    out["open_cents"] = r.list("package_open_cents", r.nat)
+    r.finish()
+    if len(out["open_cents"]) != request_count or sum(out["open_cents"]) > shortfall_cents or out["missing_cents"] >= 1 << 63:  # 2^63 - 1 is Lean's cent bound
+        raise FinancialEngineResultError("package_open_cents")
+    return out
+
+
+def decide_package_live(obligation: Mapping[str, Any], *, actions: list[tuple[str, int, bool, str, bool, int, int]], payments: list[tuple[int, int]],
+                        claims: list[tuple[int, str]], report_count: int, conflict_count: int, case_status: str | None) -> dict[str, Any]:
+    """Lean concludes one decision package from every row of the obligation (Decide.lean packageRequestRespond); the frame is returned too."""
+
+    try:
+        wire = _encode_package_request(obligation, actions, payments, claims, report_count, conflict_count, case_status)
+    except semantic.SemanticAdapterError as error:
+        raise FinancialEngineInputError(str(error)) from None
+    return {**_decoded_or_closed(_decode_package_answer, _evaluate_wire(wire, _CORRECTION_REJECTIONS), len(actions), obligation["shortfall_cents"]), "request": wire}

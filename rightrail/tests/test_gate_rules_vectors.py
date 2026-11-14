@@ -12,21 +12,66 @@ from tools import gate_rules_data
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEAN = os.path.join(ROOT, "lean")
 EXE = os.path.join(LEAN, ".lake", "build", "bin", "gate_rules.exe" if os.name == "nt" else "gate_rules")
-# The files the runner embeds (`Run.source`); Theorems.lean is checked by the build, not linked.
-SOURCES = ["BlindLedger/Gate/Rules/Spec.lean", "BlindLedger/Gate/Rules/Fast.lean", "BlindLedger/Gate/Rules/Run.lean",
-           "BlindLedger/Gate/Rules/Resident.lean", "BlindLedger/Gate/Engine/OneProc.lean", "BlindLedger/Gate/Anchor.lean", "BlindLedger/Gate/Spec.lean", "BlindLedger/Sha3.lean", "BlindLedger/Sha3Fast.lean", "lakefile.toml", "lean-toolchain"]
+# The files the runner embeds (`RulesMain.source`): every compiled-in file; proof-only imports (Theorems, FastEq, ...) are checked by PROOFS.
+SOURCES = [f"BlindLedger/{p}.lean" for p in ("Gate/Rules/Spec", "Gate/Rules/Fast", "Gate/Rules/Run", "Gate/Rules/RulesMain", "Gate/Rules/RulesShip", "Gate/Engine/OneProc",
+           "Gate/OnepIndex", "Gate/Anchor", "Gate/Spec", "Sha3", "Sha3Fast", "Sha3Quick", "Sha3Lanes", "Gate/Engine3/Sha3Fused", "Gate/MlDsa87", "Gate/Payer", "Gate/Producer",
+           "Gate/Verify", "Gate/Batch", "Gate/Flat/Model", "Gate/Flat/Io",
+           "Gate/Flat/Bin", "Gate/Flat/Chunk", "Gate/Flat/Store", "Gate/Flat/ChunkIo", "Gate/Flat/Worker",
+           "Gate/Authority", "Gate/Flat/StoreLog", "Gate/Flat/StoreTombs", "Gate/Frame/Fast", "Gate/Frame/Spec", "Gate/Keyset",
+           "Gate/Rules/Request", "Gate/SnapshotV2")] + ["lakefile.toml", "lean-toolchain"]
 # The twin's equality proof and the Spec's theorems; the runner does not import them, so only this test notices a stale proof.
-PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Resident", "BlindLedger.Gate.Rules.Theorems", "BlindLedger.Sha3FastEq",
-          "BlindLedger.Gate.ReadManifest"]
+PROOFS = ["BlindLedger.Gate.Rules.FastEq", "BlindLedger.Gate.Rules.Theorems", "BlindLedger.Sha3FastEq", "BlindLedger.Gate.Theorems",
+          "BlindLedger.Gate.Flat.Theorems", "BlindLedger.Gate.Flat.ChunkTheorems", "BlindLedger.Gate.Flat.StoreTheorems",
+          "BlindLedger.Gate.AnchorTheorems", "BlindLedger.Gate.ProducerTheorems", "BlindLedger.Gate.Flat.StoreTombs"]
+
+
+def runner_source_line(exe=EXE):
+    """(what the exe prints as RULES_SOURCE, what the embedded files hash to now); equal when the exe is current."""
+    text = b"".join(open(os.path.join(LEAN, p), "rb").read() for p in SOURCES).replace(b"\r\n", b"\n")
+    out = subprocess.run([exe], capture_output=True, text=True, timeout=60).stdout.split("\n")[0]
+    return out, "RULES_SOURCE " + hashlib.sha3_512(text).hexdigest()
+
+
+class EmbeddedFilesAreTracked(unittest.TestCase):
+    def test_every_compiled_file_is_in_the_source_hash(self):
+        """Every file the runner and the resident gate compile from (the import closure, less the proof-only modules) is in SOURCES."""
+        import re
+        seen, todo = set(), ["BlindLedger.Gate.Rules.RulesShip", "BlindLedger.Gate.Engine.OneProc"]
+        while todo:
+            mod = todo.pop()
+            path = os.path.join(LEAN, *mod.split(".")) + ".lean"
+            if mod not in seen and os.path.isfile(path):
+                seen.add(mod)
+                todo += re.findall(r"^import\s+(\S+)", open(path, encoding="utf8").read(), re.M)
+        compiled = {m.replace(".", "/") + ".lean" for m in seen - set(PROOFS)}
+        self.assertEqual(sorted(compiled - {p for p in SOURCES}), [])
+
+    def test_every_embedded_file_rebuilds_the_runner(self):
+        """Lake does not see `include_str`: each file RulesMain embeds must be imported by it or declared an input_file of `gate_rules_main`."""
+        import re
+        import tomllib
+        rules = os.path.join(LEAN, "BlindLedger", "Gate", "Rules")
+        embedded = {os.path.normpath(os.path.join(rules, m)) for m in re.findall(
+            r'include_str "([^"]+)"', open(os.path.join(rules, "RulesMain.lean"), encoding="utf8").read())}
+        seen, todo = set(), ["BlindLedger.Gate.Rules.RulesMain"]
+        while todo:
+            mod = todo.pop()
+            path = os.path.join(LEAN, *mod.split(".")) + ".lean"
+            if mod not in seen and os.path.isfile(path):
+                seen.add(mod)
+                todo += re.findall(r"^import\s+(\S+)", open(path, encoding="utf8").read(), re.M)
+        imported = {os.path.join(LEAN, *m.split(".")) + ".lean" for m in seen}
+        cfg = tomllib.load(open(os.path.join(LEAN, "lakefile.toml"), "rb"))
+        lib = next(x for x in cfg["lean_lib"] if x["name"] == "gate_rules_main")
+        declared = {os.path.normpath(os.path.join(LEAN, x["path"])) for x in cfg["input_file"] if x["name"] in lib["needs"]}
+        self.assertEqual(sorted(embedded - imported - declared), [])
 
 
 @unittest.skipUnless(os.path.isfile(EXE),
                      f"GATE RULES VECTORS NOT RUN: {EXE} is missing; run `lake build gate_rules` in lean/")
 class GateRulesVectors(unittest.TestCase):
     def test_runner_is_current(self):
-        text = b"".join(open(os.path.join(LEAN, p), "rb").read() for p in SOURCES).replace(b"\r\n", b"\n")
-        run = subprocess.run([EXE], capture_output=True, text=True, timeout=60)
-        self.assertEqual(run.stdout.split("\n")[0], "RULES_SOURCE " + hashlib.sha3_512(text).hexdigest(),
+        self.assertEqual(*runner_source_line(),
                          "gate_rules was not built from these sources; run `lake build gate_rules` in lean/")
 
     def test_proofs_are_current(self):
@@ -65,7 +110,7 @@ class GateRulesVectors(unittest.TestCase):
         def run(*body):
             with tempfile.TemporaryDirectory() as d:
                 path = os.path.join(d, "dash.vectors")
-                open(path, "w").write("\n".join([*head, *body, "owners 0", "commit", "end 0"]))
+                open(path, "w").write("\n".join([*head, *body, "commit SHOW", "end 0"]))
                 return subprocess.run([EXE, path], capture_output=True, text=True, timeout=600)
 
         empty = next(r for r in run("case empty").stdout.split("\n") if r.startswith("RULES_DIGEST ")).split(" ")[1]
@@ -89,22 +134,22 @@ class GateRulesVectors(unittest.TestCase):
         """Two genesis batches differing only in the declared `released` rows read different bases."""
         line = "901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500"
         body = ["snap unresolved 20270315 0 ?", "case g", "line 902 FFS_CLAIM 1002 7002 7002 20270306 99214 1 300",
-                "owners 0 902:0:0", "commit", "end 0"]
+                "commit SHOW", "end 0"]
         a = self.reads(["today 20270315", "snap released 20270315 0 ?", *body])[1]
         b = self.reads(["today 20270315", "snap released 20270315 1 ?", "released " + line, *body])[1]
         self.assertEqual((len(a), len(b)), (1, 1))
         self.assertNotEqual(a, b)
 
     def test_reads_are_the_read_set_bytes(self):
-        """`RULES_READS` is recomputed here: u32 today ‖ pins ‖ u32 |P| ‖ P, P the READ-SET/v2 bytes over the declared
+        """`RULES_READS` is recomputed here: u32 today || pins || u32 |P| || P, P the READ-SET/v2 bytes over the declared
         sets' STATE/v1 digest, then the first commit's (kind absent, a redo in the order read, two commits)."""
         frame = ["today 20270315", "snap released 20270315 0 ?", "snap unresolved 20270315 0 ?",
                  "snap dmf 20270301 2 ?", "dmf 9002 20261120", "dmf 9001 20270110",
                  "snap pdeath 20270301 1 ?", "pdeath 7701 20270120",
                  "snap excl 20270310 2 ?", "excl 7802 20260101 20270131", "excl 504 20260101 99991231",
-                 "case reads", "line 901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "owners 0 901:0:0", "commit",
-                 "redo 11", "redo 12", "line 902 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "owners 0 902:0:0",
-                 "commit", "end 0"]
+                 "case reads", "line 901 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500", "commit SHOW",
+                 "redo 11", "redo 12", "line 902 FFS_CLAIM 1001 7001 7001 20270305 99213 1 12500",
+                 "commit SHOW", "end 0"]
         digests, reads = self.reads(frame)
         self.assertEqual((len(digests), len(reads)), (2, 2))
 

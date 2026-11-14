@@ -123,6 +123,7 @@ def correctionKatCommand : CorrectionCommand := {
   evaluationId := katCorrectionEvaluationId
   evaluationResultDigest := correctionKatDigest 165
   decisionAtMs := katDecisionAt
+  decisionTimeGiven := true
   ownerNowMs := katOwnerNow
   actionLookup := .absent
   queryObservations := correctionKatAbsentQueries 10 42
@@ -200,7 +201,8 @@ def correctionKatStoredIdentity : ExistingCorrectionIdentity := {
   inputEvaluationId := katCorrectionEvaluationId
   inputEvaluationResultDigest := correctionKatDigest 165
   expectedRevision := 4
-  decidedAtMs := katDecisionAt }
+  decidedAtMs := katDecisionAt
+  decisionTimeGiven := some true }
 
 def correctionKatPostInput : FinancialInput :=
   match correctionKatAccepted.mutation with
@@ -289,6 +291,52 @@ def gateCorrectionRetryChangedIdentityRejected : Bool :=
   let request := { correctionKatRetryRequest with command :=
     { correctionKatRetryRequest.command with decisionAtMs := katDecisionAt + 1 } }
   resultHasReason (applyCorrectionTransition request) .ACTION_CONFLICT
+
+/-! Finding D (Constitution III.3): the decision time as given is part of a retry's identity. -/
+private def retryWithTime (stored : Option Bool) (given : Bool) (time : Nat) : CorrectionTransitionResult :=
+  applyCorrectionTransition { correctionKatRetryRequest with command :=
+    { correctionKatRetryRequest.command with
+      actionLookup := .existing { correctionKatStoredIdentity with decisionTimeGiven := stored }
+      decisionTimeGiven := given
+      decisionAtMs := time } }
+
+private def retryOffsetWithTime (stored : Option Bool) (given : Bool) (time : Nat) : CorrectionTransitionResult :=
+  applyOffsetAuthorization { correctionKatRetryRequest with command :=
+    { correctionKatRetryRequest.command with
+      actionLookup := .existing { correctionKatStoredIdentity with
+        actionKind := "OFFSET_AUTHORIZATION", decision := .OFFSET_AUTHORIZED, decisionTimeGiven := stored }
+      decisionTimeGiven := given
+      decisionAtMs := time } }
+
+-- The original named its time: a resend naming it is a duplicate; one leaving it out is a conflict,
+-- even when the owner's clock reads the same.
+#guard (retryWithTime (some true) true katDecisionAt).status == .DUPLICATE
+#guard resultHasReason (retryOffsetWithTime (some true) false katOwnerNow) .ACTION_CONFLICT
+-- The original left it to the owner's clock: a resend leaving it out is a duplicate; one naming a
+-- time is a conflict, even naming the stored time.
+#guard (retryOffsetWithTime (some false) false katOwnerNow).status == .DUPLICATE
+#guard resultHasReason (retryWithTime (some false) true katDecisionAt) .ACTION_CONFLICT
+-- A row stored before the flag was kept: only a resend naming the stored time.
+#guard (retryWithTime none true katDecisionAt).status == .DUPLICATE
+#guard resultHasReason (retryOffsetWithTime none false katOwnerNow) .ACTION_CONFLICT
+#guard resultHasReason (retryWithTime none true (katDecisionAt + 1)) .ACTION_CONFLICT
+-- What the flag means: a time left to the owner's clock must be the owner's clock reading, and a
+-- correction request must name its time; otherwise the command is refused before any lookup.
+#guard resultHasReason (retryOffsetWithTime (some false) false katDecisionAt) .INVALID_REQUEST
+#guard resultHasReason (retryOffsetWithTime (some true) false (katOwnerNow + 1)) .INVALID_REQUEST
+#guard resultHasReason (retryWithTime (some false) false katOwnerNow) .INVALID_REQUEST
+#guard resultHasReason (applyCorrectionTransition { correctionKatRequest with command :=
+    { correctionKatCommand with decisionTimeGiven := false, decisionAtMs := katOwnerNow } }) .INVALID_REQUEST
+#guard resultHasReason (applyOffsetAuthorization { correctionKatRequest with command :=
+    { correctionKatCommand with decisionTimeGiven := false } }) .INVALID_REQUEST
+#guard !resultHasReason (applyOffsetAuthorization { correctionKatRequest with command :=
+    { correctionKatCommand with decisionTimeGiven := false, decisionAtMs := katOwnerNow } }) .INVALID_REQUEST
+-- An offset authorization resend is decided by the same rule.
+#guard (applyOffsetAuthorization { correctionKatRetryRequest with command :=
+    { correctionKatRetryRequest.command with
+      actionLookup := .existing { correctionKatStoredIdentity with
+        actionKind := "OFFSET_AUTHORIZATION", decision := .OFFSET_AUTHORIZED, decisionTimeGiven := some false }
+      decisionTimeGiven := false, decisionAtMs := katOwnerNow } }).status == .DUPLICATE
 
 def gateCorrectionRevisionRejected : Bool :=
   let request := { correctionKatRequest with command :=

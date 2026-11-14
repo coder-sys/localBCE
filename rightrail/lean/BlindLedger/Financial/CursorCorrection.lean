@@ -41,6 +41,8 @@ def readActionLookup : Reader ActionIdentityLookup := fun ba i => do
     let (inputEvaluationResultDigest, i) ← readDigest ba i
     let (expectedRevision, i) ← readNatBE 8 ba i
     let (decidedAtMs, i) ← readNatBE 8 ba i
+    let (timeGivenByte, i) ← readByte ba i
+    let decisionTimeGiven ← decodeTimeGiven timeGivenByte
     let identity : ExistingCorrectionIdentity := {
       actionId := actionId
       actionObligationId := actionObligationId
@@ -57,7 +59,8 @@ def readActionLookup : Reader ActionIdentityLookup := fun ba i => do
       inputEvaluationId := inputEvaluationId
       inputEvaluationResultDigest := inputEvaluationResultDigest
       expectedRevision := expectedRevision
-      decidedAtMs := decidedAtMs }
+      decidedAtMs := decidedAtMs
+      decisionTimeGiven := decisionTimeGiven }
     pure (.existing identity, i)
   else none
 
@@ -266,6 +269,7 @@ def parseCorrectionTransitionRequest (ba : ByteArray) :
   let (evaluationId, i) ← readString ba i
   let (evaluationResultDigest, i) ← readDigest ba i
   let (decisionAtMs, i) ← readNatBE 8 ba i
+  let (decisionTimeGiven, i) ← readBool ba i
   let (ownerNowMs, i) ← readNatBE 8 ba i
   let (actionLookup, i) ← readActionLookup ba i
   let (queryObservations, i) ← readQueryObservations ba i
@@ -291,6 +295,7 @@ def parseCorrectionTransitionRequest (ba : ByteArray) :
       evaluationId := evaluationId
       evaluationResultDigest := evaluationResultDigest
       decisionAtMs := decisionAtMs
+      decisionTimeGiven := decisionTimeGiven
       ownerNowMs := ownerNowMs
       actionLookup := actionLookup
       queryObservations := queryObservations

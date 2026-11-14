@@ -1,6 +1,6 @@
 # Provenance: artifacts/engine-correction
 
-The one-shot `blind_financial_correction.exe` is retired (M4 P1, 2026-10-02): corrections run on the evaluator
+The one-shot `blind_financial_correction.exe` is retired (2026-10-02): corrections run on the evaluator
 worker (`artifacts/engine-evaluator/PROVENANCE.md`). Its last pin, `874E2A37123E3B3EA5AD6E96DEE9DD066C596029D5268EF9FE6F3AF6A278323F`
 (6,433,792 bytes, rule `h1-v1`), is in `RETIRED_PINS` and recoverable at git `99ec957`, with its reuse vectors and the
 per-re-pin history of this file (full text there). The worker's answers over 1,558 and 1,566 inputs equal that exe's but 361 and 27

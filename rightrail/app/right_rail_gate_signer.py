@@ -1,12 +1,12 @@
-"""The one ML-DSA-87 signer: the gate's ``RR/GATE/CHECKPOINT/v1`` headers and ``KEY-CERT/v1`` bodies, and the
+"""The one ML-DSA-87 signer: the gate's ``RR/GATE/CHECKPOINT/v3`` headers and ``KEY-CERT/v1`` bodies, and the
 financial owner's custody records and packs (``app/right_rail_financial_custody.py``), each under its own key.
 
 ML-DSA-87 (FIPS 204 algorithm) from a non-validated AWS-LC build (aws-lc-rs),
 built from ``rust/gate_mldsa87``.  A key is a *handle*, today a key-file path;
 the worker unseals the seed itself, so no seed or secret key reaches Python.
 Signing is pure ML-DSA with an empty context and hedged; the epoch key signs
-only checkpoint headers and the root key only KEY-CERT bodies, each of which
-starts with its own domain.  Each pinned executable (this worker and the Lean
+checkpoint headers, the gate producer's row pledges and its stored decide frames, the root key only
+KEY-CERT bodies, each message starting with its own domain.  Each pinned executable (this worker and the Lean
 ``gate_verify``) is copied once per process into a private temporary directory,
 held open so it cannot be written or deleted, and hashed; the hash is compared
 with its SHA-256 pin before every run, so the file that runs is the file that
@@ -20,6 +20,7 @@ from __future__ import annotations
 import atexit
 import ctypes
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ import tempfile
 import threading
 from typing import Final, Sequence
 
+from app import minimal_clearance_verifier_process as process
 from app.right_rail_gate_codec import ML_DSA_87_PUBLIC_KEY, ML_DSA_87_SIGNATURE, attach_signature
 
 ROOT: Final = Path(__file__).resolve().parents[1]
@@ -45,6 +47,11 @@ class GateSignerError(RuntimeError):
 _COPIES: dict[Path, tuple[Path, bytes]] = {}
 _PRIVATE: list[Path] = []
 _LOCK = threading.Lock()
+_SERVE = threading.Lock()  # serialises both resident workers; not _LOCK: _private_copy takes that one and it is not reentrant
+_SERVER: list = [None, None]  # the resident signing worker and its workspace
+_VSERVER: list = [None, None]  # the resident Lean gate_verify worker and its workspace: it keeps no state between requests
+MAX_MESSAGE: Final = 65536
+MAX_PATH: Final = 32767
 _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _KERNEL32.CreateFileW.restype = ctypes.c_void_p
 _KERNEL32.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
@@ -67,6 +74,7 @@ def _private_copy(binary: Path) -> tuple[Path, bytes]:
             if handle in (None, ctypes.c_void_p(-1).value):
                 raise OSError("gate_signer_hold")
             atexit.register(_KERNEL32.CloseHandle, handle)
+            atexit.register(_close_server)  # registered last, so it runs first: the child stops before its copy is released and removed
             held = _COPIES[binary] = (copy, hashlib.sha256(copy.read_bytes()).hexdigest().encode())
         return held
 
@@ -102,8 +110,59 @@ def public_key(handle: str) -> bytes:
     return _run(BINARY, PIN, ("public-key", handle), b"", ML_DSA_87_PUBLIC_KEY)
 
 
+def _close_server(*slots: list) -> None:
+    for slot in slots or (_SERVER, _VSERVER):
+        worker, workspace = slot
+        slot[0] = slot[1] = None
+        try:
+            if worker is not None:
+                worker.close()
+        finally:
+            if workspace is not None:
+                shutil.rmtree(workspace, True)
+
+
+def _resident(slot: list, binary: Path, pin: Path, args: tuple[str, ...], request: bytes, cap: int, memory: int) -> bytes:
+    """One framed exchange with the resident worker in ``slot``: pin checked per call; any failure closes it, no retry."""
+    name = binary.stem
+    try:
+        copy, digest = _private_copy(binary)
+        if digest != pin.read_bytes().strip():
+            _close_server(slot)
+            raise GateSignerError(f"{name}_pin_mismatch")
+    except OSError as error:
+        raise GateSignerError(f"{name}_failed") from error
+    try:
+        if slot[0] is None or not slot[0].alive:
+            _close_server(slot)
+            slot[1] = Path(tempfile.mkdtemp(prefix="rr-sign-"))
+            slot[0] = process.launch_contained_worker(
+                copy, workspace=slot[1], job_memory_cap_bytes=memory, arguments=args,
+                expected_executable_size_bytes=copy.stat().st_size, expected_executable_sha256=bytes.fromhex(digest.decode()))
+        return slot[0].exchange(request, response_cap_bytes=cap, timeout_seconds=30.0)
+    except Exception as error:
+        _close_server(slot)
+        raise GateSignerError(f"{name}_failed") from error
+
+
 def sign(handle: str, message: bytes) -> bytes:
-    return _run(BINARY, PIN, ("sign", handle), message, ML_DSA_87_SIGNATURE)
+    """Sign with the resident worker (one launch, then one framed exchange per call; the key is unsealed per call,
+    never held). The pin is checked on every call; any failure closes the worker, with no retry."""
+    name = BINARY.stem
+    if type(handle) is not str or type(message) is not bytes or "\0" in handle:
+        raise GateSignerError(f"{name}_input")
+    try:
+        path = os.path.abspath(handle).encode("utf-8")
+        if len(message) > MAX_MESSAGE or len(path) > MAX_PATH:
+            raise GateSignerError(f"{name}_failed")
+        with _SERVE:
+            out = _resident(_SERVER, BINARY, PIN, (), len(path).to_bytes(2, "big") + path + message, ML_DSA_87_SIGNATURE, 128 << 20)
+            if len(out) != ML_DSA_87_SIGNATURE:
+                _close_server(_SERVER)
+                raise GateSignerError(f"{name}_failed")
+            return out
+    except (OSError, UnicodeError) as error:
+        raise GateSignerError(f"{name}_failed") from error
 
 
 def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
@@ -120,21 +179,39 @@ def framed(data: bytes) -> bytes:
 
 
 def gate_verify(mode: int, frame: bytes) -> str:
-    """The one answer line of the pinned Lean ``gate_verify`` for ``mode`` and its frame (REJECT and HOLD are
-    answers, exit 1); a malformed frame or any other failure raises."""
-    done = _exec(VERIFY, VERIFY_PIN, (), bytes([mode]) + frame)
-    if done.returncode not in (0, 1):
+    """The one answer line of the pinned Lean ``gate_verify serve`` (resident; each request decided from its own bytes) for
+    ``mode`` and its frame (REJECT and HOLD are answers). A malformed frame or a dead, hung or garbled verifier raises."""
+    with _SERVE:
+        out = _resident(_VSERVER, VERIFY, VERIFY_PIN, ("serve",), bytes([mode]) + frame, 65536, 512 << 20)
+        try:
+            if out[0] not in (0, 1):
+                raise ValueError
+            return out[1:].decode("ascii").strip()
+        except (ValueError, IndexError):
+            _close_server(_VSERVER)
+            raise GateSignerError("gate_verify_failed") from None
+
+
+def custody(tpm: int | None, root_pk: bytes, cert: bytes, signed: bytes) -> str:
+    """Lean ``custodyOf`` for the shard's counter (None: defined but never written) and the store's newest sealed
+    checkpoint ``signed`` with its epoch certificate ``cert`` (both empty when nothing is sealed).  Lean reads the store's
+    counter from ``signed`` itself, and its signature under ``root_pk`` alone lets an unwritten counter under the shard's first
+    checkpoint catch up: ``create``, ``ready`` or ``catch_up``, or a refusal reason (``no_store``, ``counter_reset``,
+    ``store_rewound``, ``store_ahead``)."""
+    frame = bytes([tpm is not None]) + (tpm or 0).to_bytes(8, "big") + root_pk + framed(cert) + framed(signed)
+    step = gate_verify(7, frame).removeprefix("GATE_VERIFY=CUSTODY ")
+    if step not in ("create", "ready", "catch_up", "no_store", "counter_reset", "store_rewound", "store_ahead"):
         raise GateSignerError("gate_verify_failed")
-    return done.stdout.decode("ascii").strip()
+    return step
 
 
-def seal(handle: str, root_pk: bytes, cert: bytes, last: bytes | None, header: bytes, tokens: Sequence[bytes]) -> bytes:
+def seal(handle: str, root_pk: bytes, cert: bytes, last: bytes | None, header: bytes, tokens: Sequence[bytes], tpm: int) -> bytes:
     """Sign ``header`` through custody and release the signature only if Lean ``publishOk`` accepts the signed
-    checkpoint as the successor of ``last`` (None: the shard's first) with exactly ``tokens``: a faulty or
-    unpublishable signature never leaves."""
+    checkpoint as the successor of ``last`` (None: the shard's first) with exactly ``tokens``, taking the counter value
+    ``tpm`` + 1 where ``tpm`` is the shard's counter before this checkpoint: a faulty or unpublishable signature never leaves."""
     signature = sign(handle, header)
     frame = (root_pk + framed(cert) + framed(last or b"") + framed(attach_signature(header, signature))
-             + len(tokens).to_bytes(2, "big") + b"".join(map(framed, tokens)))
+             + len(tokens).to_bytes(2, "big") + b"".join(map(framed, tokens)) + tpm.to_bytes(8, "big"))
     if gate_verify(1, frame) != ACCEPT:
         raise GateSignerError("gate_verify_refused")
     return signature

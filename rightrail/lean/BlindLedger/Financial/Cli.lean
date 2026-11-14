@@ -1,18 +1,13 @@
 import BlindLedger.Financial.Executable
-import BlindLedger.Financial.DecisionPackage
 import BlindLedger.Financial.CorrectionTransition
 import BlindLedger.Financial.CorrectionTransition.Runtime
 
 namespace BlindLedger.Financial
 
-open BlindLedger.Financial.DecisionPackage
 open BlindLedger.Financial.CorrectionTransition
 
 def financialExitUsage : UInt8 := UInt8.ofNat 64
 def financialExitKat : UInt8 := UInt8.ofNat 70
-def financialExitPackageDecode : UInt8 := UInt8.ofNat 68
-def financialExitPackageProjection : UInt8 := UInt8.ofNat 69
-def financialExitPackageKat : UInt8 := UInt8.ofNat 71
 def financialExitTransitionDecode : UInt8 :=
   BlindLedger.Financial.CorrectionTransition.Runtime.financialExitTransitionDecode
 def financialExitTransitionEncoding : UInt8 :=
@@ -50,37 +45,6 @@ def runKatInput : IO Unit := do
   stdout.write katWire.toByteArray
   stdout.flush
 
-def runDecisionPackageKat : IO Unit := do
-  IO.println "BLFDCP01/BLFDPR01"
-  IO.println "claim=PURE_SYNTHETIC_NONACTIVATING"
-  IO.println ("DECISION_PACKAGE_KAT_COUNT=" ++ toString decisionPackageKatCount)
-  for entry in decisionPackageKatLines do
-    IO.println ("DECISION_PACKAGE_GATE name=" ++ entry.1 ++ " result=" ++
-      (if entry.2 then "PASS" else "FAIL"))
-  if decisionPackageKatsPass then
-    IO.println "FINANCIAL_DECISION_PACKAGE_RESULT=PASS"
-  else
-    runFailure financialExitPackageKat "decision-package-kat-failure"
-
-def runProjectDecisionPackage : IO Unit := do
-  let stdin ← IO.getStdin
-  let bounded ← readUpTo stdin.read (maxDecisionPackageBytes + 1) .empty
-  if bounded.size > maxDecisionPackageBytes then
-    runFailure financialExitPackageDecode "decision-package-input-too-large"
-  else
-    match decodeDecisionPackageInput bounded.toList with
-    | none => runFailure financialExitPackageDecode "decision-package-input-decode"
-    | some input =>
-        match projectDecisionPackage input with
-        | none => runFailure financialExitPackageProjection "decision-package-binding-rejected"
-        | some projection =>
-            match encodeDecisionPackageProjection projection with
-            | none => runFailure financialExitPackageProjection "decision-package-output-encoding"
-            | some output =>
-                let stdout ← IO.getStdout
-                stdout.write output.toByteArray
-                stdout.flush
-
 def runCorrectionTransitionKat : IO Unit := do
   IO.println "BLFCMD03/BLFCRES3"
   IO.println "contract=RR/FINANCIAL/CORRECTION-TRANSITION/v1"
@@ -103,14 +67,12 @@ def runAssessCorrectionReuse : IO Unit :=
 def main (args : List String) : IO Unit := do
   match args with
   | ["--kat"] => runKat
-  | ["--decision-package-kat"] => runDecisionPackageKat
   | ["--emit-kat-input"] => runKatInput
-  | ["--project-decision-package"] => runProjectDecisionPackage
   | ["--correction-transition-kat"] => runCorrectionTransitionKat
   | ["--apply-correction-transition"] => runApplyCorrectionTransition
   | ["--assess-correction-reuse"] => runAssessCorrectionReuse
   | _ =>
-      IO.eprintln "FINANCIAL_ERROR=usage expected --kat, --emit-kat-input, --decision-package-kat, --project-decision-package, --correction-transition-kat, --apply-correction-transition, or --assess-correction-reuse"
+      IO.eprintln "FINANCIAL_ERROR=usage expected --kat, --emit-kat-input, --correction-transition-kat, --apply-correction-transition, or --assess-correction-reuse"
       IO.Process.exit financialExitUsage
 
 end BlindLedger.Financial

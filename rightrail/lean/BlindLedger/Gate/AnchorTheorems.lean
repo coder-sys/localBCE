@@ -98,44 +98,7 @@ theorem step_ok {H : Bytes → Bytes} {st st' : ShardState} {c : Rules.Ctx} {b :
   · rw [if_neg hd] at h
     cases h
 
-theorem anchored_binding {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestBytes) {c c' : Rules.Ctx}
-    (h : anchored H c = true) (h' : anchored H c' = true) (ha : c.anchor = c'.anchor) :
-    (Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c.releasedPrior =
-        Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c'.releasedPrior ∧
-      Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c.unresolvedPrior =
-        Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c'.unresolvedPrior) ∨
-    ∃ x y, x ≠ y ∧ H x = H y := by
-  unfold anchored setsDigest setPins at h h'
-  simp only [beq_iff_eq] at h h'
-  cases hA : Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c.releasedPrior with
-  | none => simp [hA] at h
-  | some A =>
-  cases hB : Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c.unresolvedPrior with
-  | none => simp [hA, hB] at h
-  | some B =>
-  cases hA' : Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c'.releasedPrior with
-  | none => simp [hA'] at h'
-  | some A' =>
-  cases hB' : Rules.pinInput "RR/GATE/UNRESOLVED/v1" 6 Rules.Line.fields c'.unresolvedPrior with
-  | none => simp [hA', hB'] at h'
-  | some B' =>
-  simp [hA, hB] at h
-  simp [hA', hB'] at h'
-  rw [← ha] at h'
-  have e : stateDigest H (H A) (H B) = stateDigest H (H A') (H B') := h.trans h'.symm
-  unfold stateDigest at e
-  by_cases hq : domain "STATE" ++ H A ++ H B = domain "STATE" ++ H A' ++ H B'
-  · obtain ⟨hq1, hq2⟩ := List.append_inj' hq (by rw [hl, hl])
-    have hq3 := List.append_cancel_left hq1
-    by_cases hAA : A = A'
-    · by_cases hBB : B = B'
-      · subst hAA; subst hBB; exact Or.inl ⟨rfl, rfl⟩
-      · exact Or.inr ⟨B, B', hBB, hq2⟩
-    · exact Or.inr ⟨A, A', hAA, hq3⟩
-  · exact Or.inr ⟨_, _, hq, e⟩
-
-/-- `anchored_binding` with the collision named: its right disjunct alone is always true by pigeonhole, so
-    this one ties the colliding pair to the four pin inputs `A B A' B'` and the two state-digest inputs. -/
+/-- Equal anchors: the same pin inputs, or a collision tied to the four pin inputs `A B A' B'` and the two state-digest inputs. -/
 theorem anchored_binding_witness {H : Bytes → Bytes} (hl : ∀ x, (H x).length = digestBytes) {c c' : Rules.Ctx}
     (h : anchored H c = true) (h' : anchored H c' = true) (ha : c.anchor = c'.anchor) {A B A' B' : Bytes}
     (hA : Rules.pinInput "RR/GATE/RELEASED/v1" 5 Rules.Line.fields c.releasedPrior = some A)
@@ -368,18 +331,18 @@ theorem pinInput_lines {d : String} {k : Nat} {s s' : Rules.Snapshot Rules.Line}
   · simp only [not_or] at hm
     rw [List.count_eq_zero_of_not_mem hm.1, List.count_eq_zero_of_not_mem hm.2]
 
-/-- `stepReg` decides exactly `decideReg` on the state's own sets, and the next state holds its sets. -/
-theorem stepReg_some {H : Bytes → Bytes} {st st' : ShardState} {c : Rules.Ctx} {k : Nat}
-    {os : List Rules.Owner} {b : List Rules.Line} {r : Rules.Result} (h : st.stepReg H c k os b = some (r, st')) :
-    r = Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b ∧
+/-- `stepReg` decides exactly `decideBatchIn c []` on the state's own sets, and the next state holds its sets. -/
+theorem stepReg_some {H : Bytes → Bytes} {st st' : ShardState} {c : Rules.Ctx}
+    {b : List Rules.Line} {r : Rules.Result} (h : st.stepReg H c b = some (r, st')) :
+    r = Rules.decideBatchIn { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } [] b ∧
       st'.released = r.released ∧ st'.unresolved = r.unresolved := by
   unfold ShardState.stepReg at h
   by_cases hd : (st.digest == natBE digestBytes c.anchor) = true
   · rw [if_pos hd] at h
     dsimp only at h
     cases hl : ShardState.load H
-        (Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b).released
-        (Rules.decideReg { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } k os b).unresolved with
+        (Rules.decideBatchIn { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } [] b).released
+        (Rules.decideBatchIn { c with releasedPrior := st.released, unresolvedPrior := st.unresolved } [] b).unresolved with
     | none => rw [hl] at h; cases h
     | some st0 =>
       rw [hl] at h

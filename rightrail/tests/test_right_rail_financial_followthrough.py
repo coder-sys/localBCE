@@ -1,4 +1,4 @@
-"""Proof obligations for the read-only follow-through pack (rrb/archive/xi2-records-20261001.md "Follow-through decision event").
+"""Proof obligations for the read-only follow-through pack.
 
 The "R" store is built with public Owner commands only; every build verifies it read-only.
 """
@@ -21,6 +21,7 @@ from app import right_rail_financial_owner_independent as independent
 from app import right_rail_gate_signer as signer
 from app.right_rail_financial_custody import verify_pack
 from app.right_rail_financial_derived import NOT_HELD, DerivedError
+from app import right_rail_financial_followthrough as followthrough
 from app.right_rail_financial_followthrough import MAX_RULES_BYTES, _add, _cms64_due, build_followthrough_pack
 from app.right_rail_financial_owner import (
     ControlPack, FinancialAuthorityError, FinancialConflictError, FinancialInputError, FinancialIntegrityError, FinancialOwner,
@@ -263,6 +264,16 @@ class FollowthroughTests(unittest.TestCase):
         self.assertEqual({(item["found"]["party"], item["found"]["kind"]) for item in pack["items"]}, {(None, None)})
         self.assertIn("gap:finder-not-typed:rac-contractor-1", pack["unavailable"])
 
+    def test_a_row_missing_from_the_checked_rows_is_a_typed_refusal(self) -> None:
+        real = followthrough.verified_rows
+        for table, kind, code in (("population_manifest_bindings", None, "population-manifest"), ("population_manifests", None, "manifest"), ("evidence", None, "payment-evidence"),
+                                  ("financial_events", "CONTROL_PACK_PUBLISHED", "pack-publish-event")):
+            def cut(*args: object, **kwargs: object) -> tuple:
+                store, rows, source = real(*args, **kwargs)
+                return store, {**rows, table: [row for row in rows[table] if kind is not None and row["kind"] != kind]}, source
+            with self.subTest(table), patch.object(followthrough, "verified_rows", cut), self.assertRaisesRegex(DerivedError, f"^followthrough:{code}-missing:"):
+                self._raw()
+
     def test_a_clock_date_past_year_9999_is_refused_with_the_module_code(self) -> None:
         for unit in ("YEAR", "DAY"):
             with self.subTest(unit), self.assertRaisesRegex(DerivedError, "^clock-date-range$"):
@@ -276,8 +287,8 @@ class FollowthroughTests(unittest.TestCase):
         raw = self._raw()
         self.assertEqual(_unsigned(self._raw()), _unsigned(raw))  # the signature is hedged
         pack = json.loads(raw)
-        self.assertEqual((pack["contract"], pack["documentation_only"], pack["claims"], pack["comparison"]), ("RR/FOLLOWTHROUGH/PACK/v2", True, {"proofSuiteId": None, "production_usable": False, "activation": False}, None))
-        self.assertEqual(verify_pack(raw, signer.public_key(self.owner._custody.key)), _unsigned(raw))  # H2: signed at the custody log's tail
+        self.assertEqual((pack["contract"], pack["documentation_only"], pack["claims"], pack["comparison"]), ("RR/FOLLOWTHROUGH/PACK/v3", True, {"proofSuiteId": None, "production_usable": False, "activation": False}, None))
+        self.assertEqual(verify_pack(raw, signer.public_key(self.owner._custody.key)), _unsigned(raw))  # signed at the custody log's tail
         self.assertEqual(pack["unavailable"], sorted(NOT_HELD))
         self._refused("followthrough:generated-before-package", at_ms=CREDIT_R1 - 1)
         with tempfile.TemporaryDirectory(prefix="rr-followthrough-stale-") as tmp, _build_r_store(Path(tmp), RULES) as owner:
@@ -400,7 +411,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
         return self._closing(_decided_store(self.directory / name, **changes))
 
     def _closing(self, store: FinancialOwner) -> FinancialOwner:
-        self.addCleanup(store.close)  # R1a: the owner's writer holds the file open until closed
+        self.addCleanup(store.close)  # the owner's writer holds the file open until closed
         return store
 
     def _r2(self, store: FinancialOwner, at_ms: int = GENERATED) -> dict:
@@ -479,7 +490,7 @@ class FollowthroughDecisionTests(unittest.TestCase):
 
     def test_checker_binds_decision_events(self) -> None:
         store = self._store()
-        store.close()  # R1a: its commits reach the main file when it closes
+        store.close()  # its commits reach the main file when it closes
         for name, forge, code, _pre in FORGERIES:
             with self.subTest(name):
                 forged = self.directory / f"forged-{name.replace(' ', '-')}.sqlite3"
@@ -527,6 +538,18 @@ class FollowthroughDecisionTests(unittest.TestCase):
                 self.assertIn("gap:closure-evidence-missing:decision:short", unavailable)  # never retroactive
                 self.assertNotIn("gap:closure-evidence-missing:decision:met", unavailable)
 
+    def test_a_support_row_whose_recorded_event_is_missing_is_a_typed_refusal(self) -> None:
+        store = self._closing(_build_r_store(self.directory, RULES))
+        _legal(store, "petition", "creditor", "effort")
+        _decide(store)
+        real = followthrough.verified_rows
+
+        def cut(*args: object, **kwargs: object) -> tuple:
+            owner, rows, source = real(*args, **kwargs)
+            return owner, {**rows, "financial_events": [row for row in rows["financial_events"] if row["kind"] != "SUPPORT_EVIDENCE_RECORDED"]}, source
+        with patch.object(followthrough, "verified_rows", cut), self.assertRaisesRegex(DerivedError, "^followthrough:support-evidence-event-missing:"):
+            _pack(store)
+
     def test_one_document_cannot_meet_two_required_purposes(self) -> None:
         store = self._closing(_build_r_store(self.directory, RULES))
         _legal(store, "petition-and-creditor", "effort")  # one legal-office document offered for both BANKRUPTCY_PETITION and CREDITOR_RECORD
@@ -550,13 +573,14 @@ class FollowthroughDecisionTests(unittest.TestCase):
         self.assertEqual((item["status"], item["open_cents"], federal["status"], federal["report"]), ("CLOSED", 300_000, "STOPPED", None))
         self.assertIn("gap:write-off-line-unknown:item-r2", _pack(store)["unavailable"])
         quarter, due, _ = _cms64_due(FEDERAL_ENDS, EVIDENCE_AT, 30)
-        self.assertEqual(item["collected_share"], {
-            "clock_id": "federal-share-credit", "collected_cents": 200_000, "basis_points": 5000, "cents": 100_000, "quarter": quarter, "due_ms": due,
-            "report": {"quarter": quarter, "form": "64.9C1", "line": None, "summary_line": "9C"}, "status": "MISSED"})
+        self.assertEqual(item["share_parts"], [{
+            "clock_id": "federal-share-credit", "principal_cents": 200_000, "cents": 100_000, "due_ms": due,
+            "report": {"quarter": quarter, "form": "64.9C1", "line": None, "summary_line": "9C"}, "status": "MISSED"}])
+        self.assertEqual(federal["due_ms"], FEDERAL_DUE)  # the stopped clock keeps its own due time
         early = next(i for i in _pack(store, CLOSE_AT + DAY)["items"] if i["item_id"] == "item-r2")
-        self.assertEqual(early["collected_share"]["status"], "DUE")
+        self.assertEqual(early["share_parts"][0]["status"], "DUE")
         (self.directory / "none").mkdir()
-        self.assertIsNone(self._r2(self._closing(_decided_store(self.directory / "none")))["collected_share"])  # nothing collected: nothing due
+        self.assertEqual(self._r2(self._closing(_decided_store(self.directory / "none")))["share_parts"], [])  # nothing collected: nothing due
 
     def test_evidence_recorded_after_a_close_never_covers_it(self) -> None:
         store = self._closing(_build_r_store(self.directory, RULES))

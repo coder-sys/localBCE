@@ -1,46 +1,54 @@
-"""Gate throughput bench (test-only): N synthetic lines through the real decide path (registry reserve, Lean rules worker, seal,
-settle, ML-DSA sign, Lean publish check).  Prints lines/s and per-stage microseconds per line; asserts no speed.  It asserts the
-results are correct and that every stored output byte (headers, tokens, state digests, adds, registry chain; not the hedged
-signatures) matches the digest below, taken on the full-history replay pipeline, while every batch after the first resumes on the
-engine's held sets; flipping one byte of the anchor or of the sealed adds is refused.  RR_GATE_BENCH_N / _BATCH resize it
-(the digest is checked only for 2000 lines at batch 100 or 2000); RR_GATE_BENCH_REPLAY=1 resends the history every batch
-(the old full-replay pipeline); RR_GATE_BENCH_PROFILE=<file> writes a cProfile top 30."""
+"""Gate throughput bench (test-only): N synthetic lines through the real decide path (Lean rules worker, seal,
+ML-DSA sign, Lean publish check).  Prints lines/s and per-stage microseconds per line; asserts no speed.  It asserts the
+results are correct and that every stored output byte (headers, tokens, state digests, adds; not the hedged
+signatures) matches the digest below, taken on the history-index pipeline, while every batch after the first opens the index at
+the signed chain head (the history never travels in a frame); a flipped head, a wrong batch count or a stale frame is refused.
+RR_GATE_BENCH_N / _BATCH resize it (the digest and the per-outcome and per-reason counts are checked only for 2000 lines at
+batch 100 or 2000);
+RR_GATE_BENCH_PROFILE=<file> writes a cProfile top 30."""
 
 import collections
 import contextlib
 import cProfile
 import hashlib
 import io
-import itertools
 import os
 import pstats
 from pathlib import Path
 import random
-import sqlite3
-import subprocess
+import re
 import time
-import types
 import unittest
 from unittest import mock
 
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_decide as decider
-from app import right_rail_gate_idreg as idreg
 from app import right_rail_gate_producer as producer
 from app import right_rail_gate_signer as signer
 from tests import _gate_shards as g
+from tests import test_flat_worker as fw
 from tests import test_gate_rules_worker as w
 from tests import test_right_rail_gate_formats as fx
 
 N, BATCH = int(os.environ.get("RR_GATE_BENCH_N", 2000)), int(os.environ.get("RR_GATE_BENCH_BATCH", 100))
 PER_PAYMENT, SEED = 4, 20261005
-# sha256 of the stored outputs of the 2,000-line corpus by batch size, taken before any speed change (suffixes gs-1, gs-3b2000)
-NONCES = itertools.count(int.from_bytes(bytes(range(32)), "big"))  # the patched os.urandom: seeded, unique per call, first bytes(range(32))
-OUTPUT_DIGEST = {100: "9e7563e9d853b49c6d640580615eddfcf3c4b72e333aaaeb96093f24ac4399d0",
-                 2000: "a5af4402a537bfd77fc66faa81ac6144ee0cd4d23b80572f32d44dc587a87b73"}
-STAGES = {"leaves": None, "decide": None, "  registry reserve": (idreg.IdRegistry, "reserve"), "  rules worker": (decider.RulesWorker, "run"), "  one-shot exe": None,
+# sha256 of the stored outputs of the 2,000-line corpus by batch size, taken on the history-index path (the index salt is seeded below);
+# the tokens carry the deciding worker's digest, so a gate_engine re-pin moves them, and the checkpoints carry the counter
+OUTPUT_DIGEST = {100: "09eea1c22fde6dd523fcefda77b4b642bb8b65a2118078b6df15b3b04401ce7d",
+                 2000: "0ce87da422adf6c7e30c7ae1ff3c22c76c41a2bb1701ea09ef3dfa705a6da4ef"}
+REALISTIC = os.environ.get("RR_GATE_BENCH_CORPUS") == "realistic"  # the seeded distinct-claims corpus (g.claim)
+REALISTIC_DIGEST = {100: "5918882a88c740a1d286d43b89ad4796987fd8cffb8acc46d087a16e3ee640f0",
+                    2000: "c16c02ee5d950cb9f2da2ab4878ecb5c4d7a4452738bc39847cb52f94d845012"}
+# SHA3-512 of the sorted (line id, "OUTCOME REASONS") pairs of the 2,000-line corpus by (realistic?, batch size): the decisions alone,
+# which carry no engine hash, so a re-pin that moves the digests above must keep these (two lines that swap outcomes change this hash)
+PAIRS_DIGEST = {
+    (False, 100): "ecd6ee352e1ee82333d4fa5e112636ebcc85add8cd0f75f840861f0bf761b4a2b17520f89d6ec57fa5b9c0f8775878fc5a26ad4d237f4a4013fca3999c035c17",
+    (False, 2000): "767dbdffd16aa0002e49fb3bc1972cb056f2cbcd53fed58c13f071682eca7f1961ccb7a820539052e1cc4a66f399de93374273e1c179ed8b4430d8a21db9c460",
+    (True, 100): "3987e2d226c39fe49189f409debc1b34220ea4c0f4e77c739bb1977435819cbbe8065dae34685f199111a1afca71a3c3043a8040b05ba4302ef27fe2d05e96b6",
+    (True, 2000): "4bdf0ac46f4064870b6dd9336187d35d803f071e78a712bd34746ee2e5c33e4a4a3b9983049222ecaa9781a677a0c7a96bb0fb597bea4bad7342ddccaffbf848"}
+STAGES = {"leaves": None, "decide": None, "  rules worker": (decider.RulesWorker, "run_frame"),
           "  producer reads": None, "commit": None, "  build batch": (gate, "build_batch"), "  sign": (signer, "sign"),
-          "  gate_verify": (signer, "gate_verify"), "settle": (idreg.IdRegistry, "settle")}
+          "  gate_verify": (signer, "gate_verify")}
 
 
 def corpus() -> list[tuple[dict[int, list[int]], set[int]]]:
@@ -54,15 +62,17 @@ def corpus() -> list[tuple[dict[int, list[int]], set[int]]]:
     return out
 
 
+def pairs_digest(statuses: dict) -> str:
+    return hashlib.sha3_512("".join(f"{i} {s}\n" for i, (s, _) in sorted(statuses.items())).encode()).hexdigest()
+
+
 def stored_digest(c: g.Cluster) -> str:
     h = hashlib.sha256()
-    for path, sql in ((c.store(0), "SELECT epoch, seq_from, seq_to, digest, header, state_digest, tokens, idreg_n, free, adds FROM batches ORDER BY id"),
-                      (c.reg, "SELECT n, kind, id, shard, head FROM log ORDER BY n")):
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        try:
-            h.update(repr(db.execute(sql).fetchall()).encode())
-        finally:
-            db.close()
+    db = g.read_only(c.store(0))
+    try:
+        h.update(repr(db.execute("SELECT epoch, seq_from, seq_to, digest, header, state_digest, tokens, adds FROM batches ORDER BY id").fetchall()).encode())
+    finally:
+        db.close()
     return h.hexdigest()
 
 
@@ -81,7 +91,7 @@ class GateThroughput(fx.Scratch):
             return run
 
         # RR_GATE_BENCH_DUMP=<dir>: every gate_verify frame (mode byte then frame) is written there.
-        dump, frames, replay = os.environ.get("RR_GATE_BENCH_DUMP"), [], os.environ.get("RR_GATE_BENCH_REPLAY")
+        dump, frames = os.environ.get("RR_GATE_BENCH_DUMP"), []
 
         def verify(real):
             def run(mode, frame):
@@ -94,19 +104,13 @@ class GateThroughput(fx.Scratch):
         self.addCleanup(worker.close)
         with self.scratch() as tmp, contextlib.ExitStack() as stack:
             c = g.Cluster(tmp, fx.custody(tmp), shards=1)
-            with mock.patch.object(idreg.os, "urandom", lambda n: next(NONCES).to_bytes(n, "big")):  # the BOOT nonce is the only random byte in the stored outputs
-                c.boot()
-            stack.enter_context(mock.patch.object(decider, "subprocess", types.SimpleNamespace(
-                run=timed("  one-shot exe", subprocess.run), TimeoutExpired=subprocess.TimeoutExpired)))
-            wrapped = {"  rules worker": lambda f: lambda self, data: frames.append(data) or f(self, data), "  gate_verify": verify}
-            if replay:
-                stack.enter_context(mock.patch.object(decider.RulesWorker, "holds", property(lambda s: {}, lambda s, v: None), create=True))
+            wrapped = {"  rules worker": lambda f: lambda self, directory, shard, data: frames.append(data) or f(self, directory, shard, data), "  gate_verify": verify}
             for name, (owner, attr) in ((n, t) for n, t in STAGES.items() if t):
                 stack.enter_context(mock.patch.object(owner, attr, timed(name, wrapped.get(name, lambda f: f)(getattr(owner, attr)))))
             for owner, attr, name in ((decider, "decide", "decide"), (decider, "commit", "commit"), (g, "decide_batch", "leaves")):
                 stack.enter_context(mock.patch.object(owner, attr, timed(name, getattr(owner, attr))))
-            prod, reg = c.producer(0), idreg.IdRegistry(c.reg, boot=c.nonce)
-            for attr in ("anchor", "tip", "sealed_batches", "sealed_chain", "sealed_frees"):
+            prod = c.producer(0)
+            for attr in ("anchor", "tip", "flat_head", "sealed_quar"):
                 stack.enter_context(mock.patch.object(producer.ShardProducer, attr, timed("  producer reads", getattr(producer.ShardProducer, attr))))
             profile = cProfile.Profile() if os.environ.get("RR_GATE_BENCH_PROFILE") else None
             started = time.perf_counter()
@@ -115,17 +119,16 @@ class GateThroughput(fx.Scratch):
                     profile.enable()
                     run.callback(profile.disable)
                 for payments, bad in corpus():
-                    ans, leaves, status = g.decide_batch(c, prod, reg, 0, payments, bad, worker)
+                    ans, leaves, status = g.decide_batch(c, prod, 0, payments, bad, worker)
                     statuses.update({i: (s, i in bad) for i, s in status.items()})
-                    decider.commit(prod, reg, fx.PROGRAM, leaves, ans, fx.NOW)
+                    decider.commit(prod, fx.PROGRAM, ans, fx.NOW, c.tenant)
             elapsed = time.perf_counter() - started
             ran = dict(spent)  # the stage times of the run, before the kill check calls the worker again
-            self.assertEqual(sum(b"\nresume " in f for f in frames), 0 if replay else len(corpus()) - 1)  # genesis sets the hold: every batch after it resumes
-            if not replay:
-                self.kill_check(worker, frames[-1], prod.anchor(), b"".join(prod.sealed_batches()), prod.sealed_chain())
+            self.assertEqual([int.from_bytes(f[10:18], "little") for f in frames], list(range(1, len(corpus()) + 1)))  # batch numbers run on from the genesis
+            self.kill_check(worker, frames[-1], c.dir / "idx0", *prod.flat_head())
+            worker.close()  # it holds the index files the scratch directory removes
             published = prod.published()
             prod.close()
-            reg.close()
             digest = stored_digest(c)
         ran["leaves"] -= ran["decide"]  # decide_batch wraps decide
         print(f"\nGATE_BENCH lines={N} batch={BATCH} seconds={elapsed:.2f} lines_per_s={N / elapsed:.0f} us_per_line={elapsed / N * 1e6:.0f} digest={digest}")
@@ -137,29 +140,31 @@ class GateThroughput(fx.Scratch):
             pstats.Stats(profile, stream=out).sort_stats("tottime").print_stats(30)
             open(os.environ["RR_GATE_BENCH_PROFILE"], "w", encoding="utf-8").write(out.getvalue())
         self.assertEqual(sorted(statuses), list(range(1, N + 1)))
-        print("GATE_BENCH_OUTCOMES", sorted(collections.Counter((s, bad) for s, bad in statuses.values()).items()))
+        counts = collections.Counter((s, bad) for s, bad in statuses.values())
+        print("GATE_BENCH_OUTCOMES", sorted(counts.items()))
         self.assertTrue(all(not s.startswith("ALLOW") for s, bad in statuses.values() if bad))
         self.assertEqual(len(published), len(corpus()))
         self.assertTrue(all(len(p) > gate.ML_DSA_87_SIGNATURE for p in published))
         if N == 2000 and BATCH in OUTPUT_DIGEST:
-            self.assertEqual(digest, OUTPUT_DIGEST[BATCH])
+            table = REALISTIC_DIGEST if REALISTIC else OUTPUT_DIGEST
+            self.assertIn(BATCH, table, f"no stored digest for this corpus at batch {BATCH}")
+            self.assertEqual(pairs_digest(statuses), PAIRS_DIGEST[REALISTIC, BATCH])
+            self.assertEqual(digest, table[BATCH])
 
-    def kill_check(self, worker, last: bytes, anchor: bytes, adds: bytes, chain: bytes):
-        """The engine holds the anchor's sets, so the last frame with the new anchor would resume (as every batch did);
-        flipping one byte of that anchor is refused, a load of the sealed adds with one byte flipped is refused, the same
-        load unflipped decides, and the last frame itself, if it resumed (on the batch before's anchor), is refused as stale."""
-        self.assertEqual(worker.holds, {0: anchor})
-        head, _, rest = last.partition(b"\ncase batch\n")
-        rest = rest.split(b"\n", 1)[1] if rest.startswith((b"load ", b"loadparts ", b"resume ")) else rest
-        frame = lambda directive: head + b"\ncase batch\n" + directive.encode() + b"\n" + rest
+    def kill_check(self, worker, last: bytes, directory, anchor: bytes, count: int):
+        """The index is at the signed head after the run: a request that names the head with one byte flipped, or the wrong next
+        batch number, is refused; the last batch's own frame, now stale (the index is past the head it names), is refused;
+        a request at the true head is answered OK, before and after the first two refusals."""
         flip = lambda b: b[:len(b) // 2] + bytes([b[len(b) // 2] ^ 1]) + b[len(b) // 2 + 1:]
-        tag = chain.hex()
-        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {flip(anchor).hex()} {tag}")))
-        self.assertIn("RULES_STATE_MISMATCH resume", worker.run(frame(f"resume {g.ASOF} {anchor.hex()} {tag[:-1]}{'0' if tag[-1] != '0' else '1'}")))
-        self.assertIn("RULES_STATE_MISMATCH load", worker.run(frame(f"load {g.ASOF} {flip(adds).hex()} {anchor.hex()}")))
-        self.assertIn("RULES_VECTORS=PASS checked=0 expected=0 failed=0", worker.run(frame(f"load {g.ASOF} {adds.hex()} {anchor.hex()}")))
-        if b"\nresume " in last:
-            self.assertIn("RULES_STATE_MISMATCH resume", worker.run(last))
+        where = str(directory.absolute()).replace("\\", "/")
+        probe = lambda head, n: worker.run_frame(where, 0, decider.request_frame(g.HEAD, 0, n, 0, head, g.PIN, fw.floors(head), g.KEYS, g.GRANT, worker.launched_release(), (), ()))[6]
+        self.assertEqual(probe(anchor, count + 1), 0)
+        self.assertNotEqual(probe(flip(anchor), count + 1), 0)
+        self.assertNotEqual(probe(anchor, count + 2), 0)
+        worker.close()  # as decide does after a refused request: a fresh process reads the index, which the refusals left at the head
+        self.assertEqual(probe(anchor, count + 1), 0)
+        if count > 1:  # a one-batch run only inits
+            self.assertNotEqual(worker.run_frame(where, 0, last)[6], 0)  # last: the index is past the head it names
 
 
 if __name__ == "__main__":

@@ -76,9 +76,32 @@ def _role(value: object, label: str) -> str:
 
 
 def _time(value: object, label: str) -> int:
-    if type(value) is not int or value < 0 or value >= 2**63:
+    if type(value) is not int or value < 0 or value > _MAX_INT:
         _fail(SemanticAdapterInputError, label)
     return value
+
+
+def _bounded(value: object, low: int, high: int, label: str, error: type[Exception] = SemanticAdapterIntegrityError) -> int:
+    if type(value) is not int or not low <= value <= high:
+        _fail(error, label)
+    return value
+
+
+def _current_authority(row: Mapping[str, Any], context: "TrustedAuthorityContext", kind: str, id_label: str) -> tuple[str, int, bytes]:
+    authority_id, epoch = _id(row["authority_id"], id_label), row["authority_epoch"]
+    if type(epoch) is not int or epoch < 1:
+        _fail(SemanticAdapterIntegrityError, f"{kind}_authority_epoch")
+    authority = authority_id, epoch, _blob(row["authority_digest"], f"{kind}_authority_digest")
+    if authority != (context.authority_id, context.epoch, context.digest):
+        _fail(SemanticAdapterAuthorityError, f"{kind}_authority_stale")
+    return authority
+
+
+def _binding_list(value: Mapping[str, Any], label: str) -> list[dict[str, Any]]:
+    bindings = value.get("bindings")
+    if set(value) != {"bindings"} or type(bindings) is not list or any(type(binding) is not dict or set(binding) != {"evidence_id", "record_digest"} for binding in bindings):
+        _fail(SemanticAdapterIntegrityError, label)
+    return bindings
 
 
 def _cents(value: object, label: str, *, positive: bool = False) -> int:
@@ -96,16 +119,6 @@ def _blob(value: object, label: str) -> bytes:
 def _hex(value: bytes, label: str = "digest") -> str:
     _blob(value, label)
     return value.hex().upper()
-
-
-def _digest(value: str, label: str) -> bytes:
-    if type(value) is not str or _HEX_DIGEST.fullmatch(value) is None:
-        _fail(SemanticAdapterIntegrityError, label)
-    try:
-        raw = bytes.fromhex(value)
-    except ValueError:
-        _fail(SemanticAdapterIntegrityError, label)
-    return _blob(raw, label)
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -337,7 +350,7 @@ PAYMENT_MAGIC: Final[bytes] = b"BLFPAY01"
 PAYMENT_ANSWER_MAGIC: Final[bytes] = b"BLFPRS01"
 MAX_WIRE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_WIRE_LIST: Final[int] = 10_000
-_U64_MAX: Final[int] = (1 << 64) - 1
+_MAX_INT: Final[int] = 2**63 - 1  # the one bound for money, times and wire counts
 
 _MODE_TAGS: Final[dict[str, int]] = {"LIVE": 1, "SHADOW": 2, "TEST": 3}
 _PROVENANCE_TAGS: Final[dict[str, int]] = {"ROOT": 1, "CONTINUITY_RESTORE": 2}
@@ -391,7 +404,7 @@ def _wire_text(value: object, label: str, *, max_bytes: int = 512) -> str:
 
 
 def _wire_nat(value: object, label: str) -> int:
-    if type(value) is not int or value < 0 or value > _U64_MAX:
+    if type(value) is not int or value < 0 or value > _MAX_INT:
         _fail(SemanticAdapterCodecError, label)
     return value
 
@@ -1053,12 +1066,17 @@ class PaymentOutcome:
     decided: DecodedLeanResult | None = None
     event_kind: str | None = None
     event_payload: dict[str, Any] | None = None
+    cause: str | None = None  # why a stored-evidence answer is a duplicate: exact_retry (same payment id) or alias_of_stored_payment (another payment id)
 
     def answer(self, projection: Mapping[str, Any]) -> dict[str, Any]:
         if self.status.startswith("CONFLICT"):
             return {"status": "CONFLICT", "conflict_id": self.conflict_id, **projection}
-        status = self.status if self.status in ("RECORDED", "REVERSED") else "DUPLICATE"
-        return {"status": status, **({} if self.payment_id is None else {"payment_id": self.payment_id}), **projection}
+        who = {} if self.payment_id is None else {"payment_id": self.payment_id}
+        if self.status in ("RECORDED", "REVERSED"):
+            return {"status": self.status, **who, **projection}
+        if self.cause is None:  # a refusal never answers: the owner raises its code first
+            _fail(SemanticAdapterCodecError, "payment_response")
+        return {"status": "DUPLICATE", **who, "cause": self.cause, **projection}
 
 
 _PAYMENT_ROW = (("payment_id", "identifier"), ("obligation_id", "identifier"), ("item_id", "identifier"), ("evidence_id", "identifier"),
@@ -1171,14 +1189,14 @@ def decode_payment_outcome(answer: bytes, data: Mapping[str, Any], command: Mapp
             payment_id, evidence = reader.identifier("payment_id"), evidence_row()
             bind_evidence(evidence)
             bind(command["kind"] == "record" and payment_id == by_origin.get(origin) and stored[payment_id]["amount_cents"] == command["amount_cents"])
-            outcome = PaymentOutcome("ALIAS", payment_id=payment_id, evidence=evidence, event_kind="PAYMENT_DUPLICATE_EVIDENCE", event_payload={
+            outcome = PaymentOutcome("ALIAS", payment_id=payment_id, evidence=evidence, cause="alias_of_stored_payment", event_kind="PAYMENT_DUPLICATE_EVIDENCE", event_payload={
                 "candidate_evidence_id": evidence["evidence_id"], "existing_payment_id": payment_id, "common_origin_id": evidence["common_origin_id"]})
         elif tag == 6:
             duplicate_of = reader.option_identifier("payment_id")
             record = command["kind"] == "record"  # Lean answers DUPLICATE only for a stored evidence id; a fresh record's twin must be a stored payment of that amount
             bind(command["evidence_id"] in known and duplicate_of == ((pid if pid in stored else by_origin.get(origin)) if record else None)
                  and (not record or duplicate_of is not None and (pid in stored or stored[duplicate_of]["amount_cents"] == command["amount_cents"])))
-            outcome = PaymentOutcome("DUPLICATE", payment_id=duplicate_of)
+            outcome = PaymentOutcome("DUPLICATE", payment_id=duplicate_of, cause="exact_retry" if duplicate_of in (None, command["payment_id"]) else "alias_of_stored_payment")
         elif tag == 7 and 1 <= (code := reader.byte("refusal")) <= 16:
             outcome = PaymentOutcome("REFUSED", reason=code)
         else:
@@ -1392,8 +1410,7 @@ def _load_obligation(
         _fail(SemanticAdapterIntegrityError, "obligation_scope")
     if _id(row["item_id"], "obligation_item") is None:
         _fail(SemanticAdapterIntegrityError, "obligation_item")
-    if type(row["revision"]) is not int or not 0 <= row["revision"] <= owner._MAX_ROWS:
-        _fail(SemanticAdapterIntegrityError, "obligation_revision")
+    _bounded(row["revision"], 0, owner._MAX_ROWS, "obligation_revision")
     _time(row["updated_at_ms"], "obligation_updated")
     if int(row["updated_at_ms"]) > evaluation_time_ms:
         _fail(SemanticAdapterIntegrityError, "obligation_after_evaluation")
@@ -1430,6 +1447,29 @@ def _load_obligation(
     return row, body
 
 
+def _put(by_id: dict[str, Any], key: str, body: Any, label: str) -> None:
+    if key in by_id:
+        _fail(SemanticAdapterIntegrityError, label)
+    by_id[key] = body
+
+
+@functools.lru_cache(maxsize=1 << 14, typed=True)
+def _evidence_digest_matches(fields: tuple, record_digest: str) -> bool:
+    """Whether the fields hash to the stored digest. Keyed by the row's own content, so an unchanged row is not rehashed and any changed field is."""
+    try:
+        return owner.EvidenceRecord(*fields).record_digest.hex().upper() == record_digest
+    except (owner.FinancialError, TypeError, ValueError):
+        return False
+
+
+def _check_evidence_digest(body: Mapping[str, Any]) -> None:
+    """The stored record digest must equal the digest recomputed from the row's own fields."""
+    fields = (*(body[key] for key in ("evidence_id", "item_id", "kind", "common_origin_id", "source_id", "source_version", "local_ref", "applicable_at_ms", "event_at_ms", "received_at_ms")),
+              bytes.fromhex(body["content_digest"]), body["amount_cents"], body["reversal_of"], body["supersedes"])
+    if not _evidence_digest_matches(fields, body["record_digest"]):
+        _fail(SemanticAdapterIntegrityError, "evidence_record_digest")
+
+
 def _load_evidence(
     connection: sqlite3.Connection,
     *,
@@ -1444,7 +1484,6 @@ def _load_evidence(
         label="evidence",
         limit=limit,
     )
-    result: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
         content_digest = _blob(row["content_digest"], "evidence_content_digest")
@@ -1472,9 +1511,9 @@ def _load_evidence(
             "reversal_of": None if row["reversal_of"] is None else str(row["reversal_of"]),
             "supersedes": None if row["supersedes"] is None else str(row["supersedes"]),
         }
-        by_id[evidence_id] = body
-        result.append(body)
-    return result, by_id
+        _check_evidence_digest(body)
+        _put(by_id, evidence_id, body, "evidence_duplicate")
+    return list(by_id.values()), by_id
 
 
 def _load_payments(
@@ -1493,7 +1532,6 @@ def _load_payments(
         label="payments",
         limit=limit,
     )
-    result: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
     origins: set[str] = set()
     for row in rows:
@@ -1529,8 +1567,7 @@ def _load_payments(
             "active": int(row["active"]),
             "reversed_by_evidence_id": reversed_by,
         }
-        by_id[payment_id] = body
-        result.append(body)
+        _put(by_id, payment_id, body, "payment_duplicate")
     for evidence_row in evidence.values():
         if evidence_row["kind"] != "PAYMENT_REVERSAL":
             continue
@@ -1538,7 +1575,7 @@ def _load_payments(
         target = by_id.get(target_id)
         if target is None or target["item_id"] != item_id or evidence_row["amount_cents"] != target["amount_cents"] or target["active"] != 0:
             _fail(SemanticAdapterIntegrityError, "payment_reversal_evidence")
-    return result, by_id
+    return list(by_id.values()), by_id
 
 
 def _load_claims(
@@ -1575,7 +1612,7 @@ def _load_claims(
         updated = _time(row["updated_at_ms"], "claim_updated")
         if created > evaluation_time_ms or updated > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "claim_time_binding")
-        body = {
+        result.append({
             "claim_id": claim_id,
             "obligation_id": obligation_id,
             "evidence_id": evidence_id,
@@ -1585,8 +1622,7 @@ def _load_claims(
             "status": status,
             "created_at_ms": created,
             "updated_at_ms": updated,
-        }
-        result.append(body)
+        })
     return result
 
 
@@ -1618,7 +1654,7 @@ def _load_cases(
         updated = _time(row["updated_at_ms"], "case_updated")
         if updated > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "case_time_binding")
-        body = {
+        result.append({
             "case_id": case_id,
             "obligation_id": obligation_id,
             "reason": _id(row["reason"], "case_reason"),
@@ -1628,8 +1664,7 @@ def _load_cases(
             "completion_conditions": conditions,
             "status": status,
             "updated_at_ms": updated,
-        }
-        result.append(body)
+        })
     if not result:
         _fail(SemanticAdapterIntegrityError, "case_missing")
     return result
@@ -1676,16 +1711,13 @@ def _load_actions(
             "acknowledgment_ref": acknowledgment,
             "updated_at_ms": updated,
         }
-    result: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
         action_id = _id(row["action_id"], "action_id")
         status = str(row["status"])
         if str(row["obligation_id"]) != obligation_id or status not in {"READY", "ACKNOWLEDGED"}:
             _fail(SemanticAdapterIntegrityError, "action_status")
-        revision = row["revision"]
-        if type(revision) is not int or not 0 <= revision <= owner._MAX_ROWS:
-            _fail(SemanticAdapterIntegrityError, "action_revision")
+        revision = _bounded(row["revision"], 0, owner._MAX_ROWS, "action_revision")
         payload = _parse_json_column(row["payload_json"], "action_payload", expected_type=dict)
         payload_digest = _blob(row["payload_digest"], "action_payload_digest")
         idempotency = _blob(row["idempotency_key"], "action_idempotency")
@@ -1706,9 +1738,8 @@ def _load_actions(
             "idempotency_key": _hex(idempotency),
             "created_at_ms": created,
         }
-        by_id[action_id] = body
-        result.append(body)
-    return result, list(outbox_by_id.values()), by_id
+        _put(by_id, action_id, body, "action_duplicate")
+    return list(by_id.values()), list(outbox_by_id.values()), by_id
 
 
 def _load_conflicts(
@@ -1745,19 +1776,17 @@ def _load_conflicts(
         visible = _time(row["visible_at_ms"], "conflict_visible")
         if visible > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "conflict_time_binding")
-        result.append(
-            {
-                "conflict_id": conflict_id,
-                "obligation_id": obligation_id,
-                "common_origin_id": common_origin,
-                "existing_payment_id": existing_payment_id,
-                "candidate_evidence_id": candidate_evidence_id,
-                "existing_amount_cents": existing_amount,
-                "candidate_amount_cents": candidate_amount,
-                "reason": "CONFLICTING_COMMON_ORIGIN_AMOUNT",
-                "visible_at_ms": visible,
-            }
-        )
+        result.append({
+            "conflict_id": conflict_id,
+            "obligation_id": obligation_id,
+            "common_origin_id": common_origin,
+            "existing_payment_id": existing_payment_id,
+            "candidate_evidence_id": candidate_evidence_id,
+            "existing_amount_cents": existing_amount,
+            "candidate_amount_cents": candidate_amount,
+            "reason": "CONFLICTING_COMMON_ORIGIN_AMOUNT",
+            "visible_at_ms": visible,
+        })
     return result
 
 
@@ -1780,26 +1809,16 @@ def _load_evaluations(
         label="evaluations",
         limit=limit,
     )
-    result: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
-    revisions: list[int] = []
     for row in rows:
         if str(row["obligation_id"]) != obligation_id or str(row["contract_version"]) != owner._EVALUATION_RECEIPT_CONTRACT:
             _fail(SemanticAdapterIntegrityError, "evaluation_contract")
         evaluation_id = _id(row["evaluation_id"], "evaluation_id")
-        revision = row["revision"]
-        if type(revision) is not int or not 0 <= revision <= owner._MAX_ROWS:
-            _fail(SemanticAdapterIntegrityError, "evaluation_revision")
+        revision = _bounded(row["revision"], 0, owner._MAX_ROWS, "evaluation_revision")
         evaluated_at = _time(row["evaluated_at_ms"], "evaluation_time")
         if evaluated_at > evaluation_time_ms:
             _fail(SemanticAdapterIntegrityError, "evaluation_time_binding")
-        authority_id = _id(row["authority_id"], "evaluation_authority_id")
-        authority_epoch = row["authority_epoch"]
-        if type(authority_epoch) is not int or authority_epoch < 1:
-            _fail(SemanticAdapterIntegrityError, "evaluation_authority_epoch")
-        authority_digest = _blob(row["authority_digest"], "evaluation_authority_digest")
-        if (authority_id, authority_epoch, authority_digest) != (authority_context.authority_id, authority_context.epoch, authority_context.digest):
-            _fail(SemanticAdapterAuthorityError, "evaluation_authority_stale")
+        authority_id, authority_epoch, authority_digest = _current_authority(row, authority_context, "evaluation", "evaluation_authority_id")
         evidence_ids_value = _parse_json_column(row["evidence_ids_json"], "evaluation_evidence_ids", expected_type=dict)
         bindings_value = _parse_json_column(row["evidence_bindings_json"], "evaluation_bindings", expected_type=dict)
         scope_value = _parse_json_column(row["scope_json"], "evaluation_scope", expected_type=dict)
@@ -1809,16 +1828,11 @@ def _load_evaluations(
         evidence_ids = evidence_ids_value["evidence_ids"]
         if any(type(value) is not str for value in evidence_ids) or evidence_ids != sorted(evidence_ids) or len(set(evidence_ids)) != len(evidence_ids):
             _fail(SemanticAdapterIntegrityError, "evaluation_evidence_ids")
-        if set(bindings_value) != {"bindings"} or type(bindings_value["bindings"]) is not list:
+        bindings = _binding_list(bindings_value, "evaluation_bindings")
+        if [binding["evidence_id"] for binding in bindings] != evidence_ids:
             _fail(SemanticAdapterIntegrityError, "evaluation_bindings")
-        bindings = bindings_value["bindings"]
-        if [binding.get("evidence_id") for binding in bindings if type(binding) is dict] != evidence_ids or any(type(binding) is not dict or set(binding) != {"evidence_id", "record_digest"} for binding in bindings):
+        if any(binding["evidence_id"] not in evidence or binding["record_digest"] != evidence[binding["evidence_id"]]["record_digest"] for binding in bindings):
             _fail(SemanticAdapterIntegrityError, "evaluation_bindings")
-        for binding in bindings:
-            evidence_row = evidence.get(binding["evidence_id"])
-            if evidence_row is None or binding["record_digest"] != evidence_row["record_digest"]:
-                _fail(SemanticAdapterIntegrityError, "evaluation_bindings")
-            _digest(binding["record_digest"], "evaluation_binding_digest")
         if scope_value != dict(scope):
             _fail(SemanticAdapterIntegrityError, "evaluation_scope")
         if type(input_snapshot.get("pre_revision")) is not int or input_snapshot["pre_revision"] != (revision if revision == 0 else revision - 1):
@@ -1855,8 +1869,7 @@ def _load_evaluations(
             if result_body[field] not in (0, 1):
                 _fail(SemanticAdapterIntegrityError, "evaluation_boolean")
         result_digest = _blob(row["result_digest"], "evaluation_result_digest")
-        expected_result_digest = owner._digest(owner._EVALUATION_RESULT_DOMAIN, _canonical(result_body))
-        if result_digest != expected_result_digest:
+        if result_digest != owner._digest(owner._EVALUATION_RESULT_DOMAIN, _canonical(result_body)):
             _fail(SemanticAdapterIntegrityError, "evaluation_result_digest")
         receipt_body = owner._evaluation_receipt_body(
             result={**result_body, "result_digest": _hex(result_digest)},
@@ -1872,8 +1885,7 @@ def _load_evaluations(
             result_digest=result_digest,
         )
         receipt_digest = owner._digest(owner._EVALUATION_RECEIPT_DOMAIN, _canonical(receipt_body))
-        stored_receipt_digest = _blob(row["receipt_digest"], "evaluation_receipt_digest")
-        if stored_receipt_digest != receipt_digest:
+        if _blob(row["receipt_digest"], "evaluation_receipt_digest") != receipt_digest:
             _fail(SemanticAdapterIntegrityError, "evaluation_receipt_digest")
         receipt = {
             **receipt_body,
@@ -1881,11 +1893,10 @@ def _load_evaluations(
             "evaluation_result_digest": _hex(result_digest),
         }
         full = {"receipt": receipt, "input_snapshot": input_snapshot}
-        result.append(full)
-        by_id[evaluation_id] = full
-        revisions.append(int(revision))
+        _put(by_id, evaluation_id, full, "evaluation_duplicate")
+    result = list(by_id.values())
     current_revision = int(obligation["revision"])
-    if revisions != list(range(current_revision + 1)) or not result:
+    if [full["receipt"]["revision"] for full in result] != list(range(current_revision + 1)) or not result:
         _fail(SemanticAdapterIntegrityError, "evaluation_history")
     current_id = obligation["current_evaluation_id"]
     if current_id is None or str(current_id) != result[-1]["receipt"]["evaluation_id"] or int(result[-1]["receipt"]["revision"]) != current_revision:
@@ -1908,6 +1919,7 @@ def _load_determinations(
     *,
     obligation_id: str,
     actions: list[dict[str, Any]],
+    evidence: Mapping[str, Mapping[str, Any]],
     authority_context: TrustedAuthorityContext,
     evaluation_time_ms: int,
     limit: int,
@@ -1926,25 +1938,16 @@ def _load_determinations(
             _fail(SemanticAdapterIntegrityError, "determination_scope")
         actor_id = _id(row["actor_id"], "determination_actor")
         actor_role = _role(row["actor_role"], "determination_role")
-        authority_id = _id(row["authority_id"], "determination_authority")
-        authority_epoch = row["authority_epoch"]
-        if type(authority_epoch) is not int or authority_epoch < 1:
-            _fail(SemanticAdapterIntegrityError, "determination_authority_epoch")
-        authority_digest = _blob(row["authority_digest"], "determination_authority_digest")
-        if (authority_id, authority_epoch, authority_digest) != (authority_context.authority_id, authority_context.epoch, authority_context.digest):
-            _fail(SemanticAdapterAuthorityError, "determination_authority_stale")
+        authority_id, authority_epoch, authority_digest = _current_authority(row, authority_context, "determination", "determination_authority")
         supporting = _parse_json_column(row["supporting_evidence_json"], "determination_evidence", expected_type=dict)
-        if set(supporting) != {"bindings"} or type(supporting["bindings"]) is not list:
-            _fail(SemanticAdapterIntegrityError, "determination_evidence")
-        bindings = supporting["bindings"]
-        if any(type(binding) is not dict or set(binding) != {"evidence_id", "record_digest"} for binding in bindings):
-            _fail(SemanticAdapterIntegrityError, "determination_evidence")
+        bindings = _binding_list(supporting, "determination_evidence")
         if [binding["evidence_id"] for binding in bindings] != sorted(binding["evidence_id"] for binding in bindings) or len({binding["evidence_id"] for binding in bindings}) != len(bindings):
             _fail(SemanticAdapterIntegrityError, "determination_evidence")
-        expected_revision = row["expected_revision"]
-        resulting_revision = row["resulting_revision"]
-        if type(expected_revision) is not int or type(resulting_revision) is not int or not 0 <= expected_revision <= owner._MAX_ROWS or not 0 <= resulting_revision <= owner._MAX_ROWS:
-            _fail(SemanticAdapterIntegrityError, "determination_revision")
+        for binding in bindings:  # the evidence digests were recomputed when the evidence was loaded
+            if type(binding["evidence_id"]) is not str or binding["evidence_id"] not in evidence or binding["record_digest"] != evidence[binding["evidence_id"]]["record_digest"]:
+                _fail(SemanticAdapterIntegrityError, "determination_evidence")
+        expected_revision = _bounded(row["expected_revision"], 0, owner._MAX_ROWS, "determination_revision")
+        resulting_revision = _bounded(row["resulting_revision"], 0, owner._MAX_ROWS, "determination_revision")
         body = {
             "determination_id": determination_id,
             "obligation_id": obligation_id,
@@ -2062,7 +2065,7 @@ def live_evaluation_input(
             evaluation_time_ms=evaluation_time_ms, limit=owner._MAX_ROWS,
         )
         facts["determinations"] = _load_determinations(
-            connection, obligation_id=obligation_id, actions=facts["actions"],
+            connection, obligation_id=obligation_id, actions=facts["actions"], evidence=evidence_by_id,
             authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=owner._MAX_ROWS,
         )
         data = {
@@ -2131,9 +2134,7 @@ def _make_snapshot(body: dict[str, Any]) -> LockedSemanticSnapshot:
     _validate_json_tree(json.loads(unsigned_bytes))
     pre = body["pre_evaluation"]
     obligation_id = _id(pre["obligation_id"], "snapshot_obligation")
-    revision = pre["revision"]
-    if type(revision) is not int or not 0 <= revision <= owner._MAX_ROWS:
-        _fail(SemanticAdapterCodecError, "snapshot_revision")
+    revision = _bounded(pre["revision"], 0, owner._MAX_ROWS, "snapshot_revision", SemanticAdapterCodecError)
     evaluation_time = _time(body["evaluation_time_ms"], "snapshot_time")
     digest = owner._digest(_SNAPSHOT_DOMAIN, unsigned_bytes)
     body["snapshot_digest"] = _hex(digest)
@@ -2180,8 +2181,7 @@ def build_locked_semantic_snapshot(
     _id(expected_owner_id, "expected_owner_id")
     if expected_mode not in owner._MODES:
         _fail(SemanticAdapterInputError, "expected_mode")
-    if type(max_fact_rows) is not int or not 1 <= max_fact_rows <= MAX_FACT_ROWS:
-        _fail(SemanticAdapterInputError, "fact_row_bound")
+    _bounded(max_fact_rows, 1, MAX_FACT_ROWS, "fact_row_bound", SemanticAdapterInputError)
     try:
         if verified_by is not None:
             verified = _require_validated_snapshot(verified_by).data
@@ -2212,7 +2212,7 @@ def build_locked_semantic_snapshot(
             limit=max_fact_rows,
         )
         facts["determinations"] = _load_determinations(
-            connection, obligation_id=obligation_id, actions=facts["actions"],
+            connection, obligation_id=obligation_id, actions=facts["actions"], evidence=evidence_by_id,
             authority_context=authority_context, evaluation_time_ms=evaluation_time_ms, limit=max_fact_rows,
         )
         body = {
@@ -2267,6 +2267,8 @@ def bind_resulting_state(
     """A writer's declared post-state is its own: ``mutation``'s resulting input is this transaction's
     snapshot after its writes (verified by ``before``), and its resulting result evaluated that snapshot."""
 
+    if not isinstance(mutation, Mapping) or not {"resulting_input_wire", "resulting_result"} <= mutation.keys():
+        _fail(SemanticAdapterInputError, "mutation_shape")
     identity = _require_validated_snapshot(before).data["owner"]
     post = build_locked_semantic_snapshot(
         connection, obligation_id=before.obligation_id, authority_context=authority_context, evaluation_time_ms=evaluation_time_ms,

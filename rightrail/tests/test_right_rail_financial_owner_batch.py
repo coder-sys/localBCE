@@ -103,7 +103,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
         self.directory = Path(directory.name)
 
     def _closing(self, owner):
-        self.addCleanup(owner.close)  # R1a: the owner's writer holds the file open until closed
+        self.addCleanup(owner.close)  # the owner's writer holds the file open until closed
         return owner
 
     def _store(self, name, owner_type=FinancialOwner):
@@ -178,7 +178,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             self.assertNotEqual(_where(fork)[2], _where(owner.path)[2])  # ... a different history
             self.assertNotEqual(_rows(fork), owner._row_cache[1])
             with closing(sqlite3.connect(fork)) as source, closing(sqlite3.connect(owner.path)) as live:
-                source.backup(live)  # R1a: the swap goes through SQLite while the owner holds the file open
+                source.backup(live)  # the swap goes through SQLite while the owner holds the file open
             for _ in range(2):  # the same sequence with another head is a rewind, refused for the owner's life
                 with self.assertRaisesRegex(FinancialIntegrityError, "^store_replaced$"):
                     owner.run_batch([_support("evidence:a-2")])
@@ -232,7 +232,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
                 owner.run_batch([_support("evidence:busy")])
             owner.summary()  # WAL: the other writer does not block a read
             holder.execute("ROLLBACK")
-            # WAL (R0.5): a writer never blocks a reader, and no lock can be taken once a reader's connection is open;
+            # WAL: a writer never blocks a reader, and no lock can be taken once a reader's connection is open;
             # only an exclusive-locking-mode holder that came first locks readers out.
             holder.execute("PRAGMA locking_mode=EXCLUSIVE")
             holder.execute("BEGIN EXCLUSIVE")
@@ -325,7 +325,7 @@ class FinancialOwnerBatchTests(unittest.TestCase):
             "deleted": "DELETE FROM program_funding_projection",
             "null-id-successor": "INSERT INTO program_funding_receipts SELECT NULL,state_id,deployment_id,program_id,period_id,currency,source_record_ref,amount_cents,confirmation_class,evidence_status,event_at_ms,recorded_at_ms,receipt_id,receipt_digest FROM program_funding_receipts WHERE receipt_id IN (SELECT receipt_id FROM program_funding_projection)",
             "extra": "INSERT INTO program_funding_projection SELECT source_record_ref||':extra','funding:unknown',amount_cents,event_at_ms,revision,receipt_digest FROM program_funding_projection",
-            # rr-review L2: receipt and projection edited together; only the event payload still holds the truth.
+            # receipt and projection edited together; only the event payload still holds the truth.
             "receipt-and-projection": "DROP TRIGGER program_funding_receipt_update_immutable; UPDATE program_funding_receipts SET amount_cents=amount_cents+1; UPDATE program_funding_projection SET amount_cents=amount_cents+1",
         }
         for label, statement in mutations.items():

@@ -193,22 +193,25 @@ theorem conclude_delivery_supported_iff (f : PackageFacts) :
   · simp
   · (repeat' split) <;> simp_all
 
-theorem conclude_missingMask_zero_iff (f : PackageFacts) :
-    (conclude f).missingMask = 0 ↔ ∀ s ∈ requirements f, s = .SUPPORTED := by
-  show missingMask f = 0 ↔ _
-  unfold missingMask
-  by_cases h1 : requiredAmount f = .SUPPORTED <;> by_cases h2 : deliverySupport f = .SUPPORTED <;>
-    by_cases h3 : reportingSupport f = .SUPPORTED <;> simp [requirements, h1, h2, h3]
+/-! The mask and assessment laws hold for every delivery answer `d`: `conclude f` is `concludeFor f (deliverySupport f)`,
+    and the served package (Decide.lean) is `concludeFor` with the per-action delivery rule. -/
 
-theorem conclude_missingMask_lt (f : PackageFacts) : (conclude f).missingMask < 8 := by
-  show missingMask f < 8
-  unfold missingMask
+theorem conclude_missingMask_zero_iff (f : PackageFacts) (d : Support) :
+    (concludeFor f d).missingMask = 0 ↔ ∀ s ∈ requirementsFor f d, s = .SUPPORTED := by
+  show missingMaskFor f d = 0 ↔ _
+  unfold missingMaskFor
+  by_cases h1 : requiredAmount f = .SUPPORTED <;> by_cases h2 : d = .SUPPORTED <;>
+    by_cases h3 : reportingSupport f = .SUPPORTED <;> simp [requirementsFor, h1, h2, h3]
+
+theorem conclude_missingMask_lt (f : PackageFacts) (d : Support) : (concludeFor f d).missingMask < 8 := by
+  show missingMaskFor f d < 8
+  unfold missingMaskFor
   (repeat' split) <;> omega
 
-theorem conclude_not_resolved_iff (f : PackageFacts) :
-    (conclude f).assessment = .NOT_RESOLVED ↔ f.caseStatus ≠ some .RESOLVED := by
-  show assessment f = .NOT_RESOLVED ↔ _
-  unfold assessment
+theorem conclude_not_resolved_iff (f : PackageFacts) (d : Support) :
+    (concludeFor f d).assessment = .NOT_RESOLVED ↔ f.caseStatus ≠ some .RESOLVED := by
+  show assessmentFor f d = .NOT_RESOLVED ↔ _
+  unfold assessmentFor
   (repeat' split) <;> simp_all
 
 private theorem requiredAmount_conflicted {f : PackageFacts} (h : amountSupport f = .CONFLICTED) :
@@ -220,15 +223,15 @@ private theorem requiredAmount_supported {f : PackageFacts} (h : requiredAmount 
   unfold requiredAmount at h
   (repeat' split at h) <;> simp_all
 
-theorem conclude_assessment_supported_iff (f : PackageFacts) :
-    (conclude f).assessment = .SUPPORTED ↔
-      f.caseStatus = some .RESOLVED ∧ f.conflictCount = 0 ∧ ∀ s ∈ requirements f, s = .SUPPORTED := by
-  have hmask : missingMask f = 0 ↔ ∀ s ∈ requirements f, s = .SUPPORTED := conclude_missingMask_zero_iff f
+theorem conclude_assessment_supported_iff (f : PackageFacts) (d : Support) :
+    (concludeFor f d).assessment = .SUPPORTED ↔
+      f.caseStatus = some .RESOLVED ∧ f.conflictCount = 0 ∧ ∀ s ∈ requirementsFor f d, s = .SUPPORTED := by
+  have hmask : missingMaskFor f d = 0 ↔ ∀ s ∈ requirementsFor f d, s = .SUPPORTED := conclude_missingMask_zero_iff f d
   have hconf := @requiredAmount_conflicted f
   have hsup := @requiredAmount_supported f
-  show assessment f = .SUPPORTED ↔ _
-  unfold assessment
-  simp only [requirements, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq] at hmask ⊢
+  show assessmentFor f d = .SUPPORTED ↔ _
+  unfold assessmentFor
+  simp only [requirementsFor, List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq] at hmask ⊢
   (repeat' split) <;> first | grind | simp_all
 
 private theorem reportingSupport_supported {f : PackageFacts} (h : reportingSupport f = .SUPPORTED) :
@@ -237,14 +240,14 @@ private theorem reportingSupport_supported {f : PackageFacts} (h : reportingSupp
   (repeat' split at h) <;> simp_all
 
 /-- What an auditor may rely on when the package says SUPPORTED. -/
-theorem conclude_supported_has_evidence (f : PackageFacts) (h : (conclude f).assessment = .SUPPORTED) :
+theorem conclude_supported_has_evidence (f : PackageFacts) (d : Support) (h : (concludeFor f d).assessment = .SUPPORTED) :
     f.amountSatisfied = true ∧ f.reportingComplete = true ∧ f.reportCount ≠ 0 ∧
     (activePayments f).length + (authorizedClaims f).length ≠ 0 ∧
     activeSum f = f.receivedCashCents ∧ claimedSum f = f.claimedAdjustmentCents ∧
     lawfulSum f = f.lawfulAdjustmentCents := by
-  obtain ⟨-, -, hall⟩ := (conclude_assessment_supported_iff f).1 h
-  have hr : requiredAmount f = .SUPPORTED := hall _ (by simp [requirements])
-  have hp : reportingSupport f = .SUPPORTED := hall _ (by simp [requirements])
+  obtain ⟨-, -, hall⟩ := (conclude_assessment_supported_iff f d).1 h
+  have hr : requiredAmount f = .SUPPORTED := hall _ (by simp [requirementsFor])
+  have hp : reportingSupport f = .SUPPORTED := hall _ (by simp [requirementsFor])
   obtain ⟨hsat, hamt⟩ := requiredAmount_supported hr
   obtain ⟨hpc, hac, -, hcnt⟩ := (conclude_amount_supported_iff f).1 (show amountSupport f = .SUPPORTED from hamt)
   have h1 : activeSum f = f.receivedCashCents := Classical.byContradiction fun hne => hpc ((conclude_cash_conflicted_iff f).2 hne)
@@ -602,33 +605,57 @@ private theorem decodeSupport_supportByte (s : Support) : decodeSupport (support
 private theorem decodeAssessment_assessmentByte (a : Assessment) : decodeAssessment (assessmentByte a) = some a := by
   cases a <;> decide
 
-private theorem answer_roundtrip {c : Conclusions} (hm : c.missingMask < 8) (hc : c.missingCents ≤ maxCents)
-    (h1 : c.activePaymentCount < 256 ^ 2) (h2 : c.authorizedClaimCount < 256 ^ 2) :
-    decodePackageAnswer (encodePackageAnswer c) = some c := by
-  rcases c with ⟨cash, amount, reporting, delivery, req, mask, assess, mc, apc, acc⟩
+private theorem readOpen_enc {xs : List Nat} (h1 : xs.length ≤ maxRows) (h2 : ∀ x ∈ xs, x ≤ maxCents) :
+    readList (readNatBE 8) (encodeList (natBE 8) xs) = some (xs, []) := by
+  simpa using readList_encodeList_append_of_mem (natBE 8) (readNatBE 8) xs [] h1 (Nat.lt_of_le_of_lt h1 (by decide))
+    (fun x hx t => readNatBE_natBE_append 8 x t (Nat.lt_of_le_of_lt (h2 x hx) (by decide : maxCents < 256 ^ 8)))
+
+private theorem response_roundtrip {c : Conclusions} {xs : List Nat} (hm : c.missingMask < 8) (hc : c.missingCents ≤ maxCents)
+    (h1 : c.activePaymentCount < 256 ^ 2) (h2 : c.authorizedClaimCount < 256 ^ 2) (hx1 : xs.length ≤ maxRows)
+    (hx2 : ∀ x ∈ xs, x ≤ maxCents) :
+    decodePackageResponse (encodePackageAnswer c ++ encodeList (natBE 8) xs) = some (c, xs) := by
+  rcases c with ⟨cash, amount, reporting, delivery, dreq, req, mask, assess, mc, apc, acc⟩
   simp only at hm hc h1 h2
   have hmask : (UInt8.ofNat mask).toNat = mask := by simp [Nat.mod_eq_of_lt (by omega : mask < 256)]
   have hm7 : ¬ mask > 7 := by omega
   have e2 : ∀ r, readNatBE 2 (natBE 2 apc ++ r) = some (apc, r) := fun r => readNatBE_natBE_append 2 apc r h1
   have e3 : ∀ r, readNatBE 2 (natBE 2 acc ++ r) = some (acc, r) := fun r => readNatBE_natBE_append 2 acc r h2
-  have e3' : readNatBE 2 (natBE 2 acc) = some (acc, []) := by simpa using e3 []
-  unfold decodePackageAnswer encodePackageAnswer
+  unfold decodePackageResponse encodePackageAnswer
   simp [List.append_assoc, answerMagic_prefix, readCents_enc hc, readTagged_enc (decodeSupport_supportByte _),
-    readTagged_enc (decodeAssessment_assessmentByte _), readByte, hmask, hm7, e2, e3']
+    readTagged_enc (decodeAssessment_assessmentByte _), readByte, hmask, hm7, e2, e3, readOpen_enc hx1 hx2]
 
-theorem decodePackageAnswer_respond {item : Bytes} {f : PackageFacts} (h : decodePackageFacts item = some f) :
-    packageRespond item = UInt8.ofNat 0 :: encodePackageAnswer (conclude f) ∧
-    decodePackageAnswer (encodePackageAnswer (conclude f)) = some (conclude f) := by
-  refine ⟨by simp [packageRespond, h], ?_⟩
+/-- The answer for decoded facts, whatever the delivery answer, and any open-cents list within the limits read back as
+    themselves. -/
+theorem decodePackageResponse_encode {item : Bytes} {f : PackageFacts} (h : decodePackageFacts item = some f) (d : Support)
+    {xs : List Nat} (hx1 : xs.length ≤ maxRows) (hx2 : ∀ x ∈ xs, x ≤ maxCents) :
+    decodePackageResponse (encodePackageAnswer (concludeFor f d) ++ encodeList (natBE 8) xs) = some (concludeFor f d, xs) := by
   obtain ⟨hw1, hw2, hw3, hw4, hw5, hw6, hw7, hw8, hw9, hw10⟩ := decodePackageFacts_wellFormed h
   have hp := List.length_filter_le (·.active) f.payments
   have hc := List.length_filter_le (fun c => c.status = .AUTHORIZED) f.claims
-  apply answer_roundtrip
-  · exact conclude_missingMask_lt f
+  apply response_roundtrip _ _ _ _ hx1 hx2
+  · exact conclude_missingMask_lt f d
   · show f.owedCents - f.receivedCashCents ≤ maxCents
     omega
   · exact Nat.lt_of_le_of_lt (Nat.le_trans hp hw7) (by decide)
   · exact Nat.lt_of_le_of_lt (Nat.le_trans hc hw8) (by decide)
+
+private theorem openRequests_le {s : Nat} {rs : List PkgActionRow} {x : Nat} (hx : x ∈ openRequests s rs) : x ≤ s := by
+  simp only [openRequests, List.mem_map] at hx
+  obtain ⟨r, -, rfl⟩ := hx
+  unfold Payment.openState
+  split <;> omega
+
+/-- The whole served response reads back (`decodePackageResponse`, the specification of the Python reader
+    `engine._decode_package_answer`): outcome 0, then exactly the package answer and one open-cents value per action. -/
+theorem packageRequestRespond_answer {w : Bytes} {q : PackageRequest} (h : decodePackageRequest w = some q) :
+    (packageRequestRespond w).head? = some 0 ∧
+    decodePackageResponse (packageRequestRespond w).tail = some (packageAnswer q, openRequests q.shortfallCents q.actions) ∧
+    (openRequests q.shortfallCents q.actions).length = q.actions.length := by
+  obtain ⟨hl, ⟨i, hi⟩, hs, -, -⟩ := decodePackageRequest_inv h
+  refine ⟨by simp only [packageRequestRespond, h]; rfl, ?_, openRequests_length _ _⟩
+  simp only [packageRequestRespond, h, List.tail_cons]
+  exact decodePackageResponse_encode hi _ (by rw [openRequests_length]; exact hl)
+    (fun x hx => Nat.le_trans (openRequests_le hx) hs)
 
 /-! ### 4.6 Known answers -/
 
@@ -647,9 +674,9 @@ def kShort : PackageFacts :=
 #guard (conclude kH).missingMask == 0
 #guard decodePackageFacts (encodePackageFacts kH) == some kH
 #guard (encodePackageFacts kH).length == 93
-#guard packageRespond (encodePackageFacts kH) == UInt8.ofNat 0 :: encodePackageAnswer (conclude kH)
-#guard (packageRespond (encodePackageFacts kH)).length == 28
-#guard decodePackageAnswer (encodePackageAnswer (conclude kH)) == some (conclude kH)
+#guard decodePackageResponse (encodePackageAnswer (conclude kH) ++ encodeList (natBE 8) [4000, 0]) == some (conclude kH, [4000, 0])
+#guard decodePackageResponse (encodePackageAnswer (conclude kH) ++ encodeList (natBE 8) [4000] ++ [0]) == none
+#guard decodePackageResponse (encodePackageAnswer (conclude kH)) == none
 #guard (conclude { kShort with caseStatus := some .ACTIONED }).assessment == .NOT_RESOLVED
 #guard (conclude kShort).assessment == .UNSUPPORTED
 #guard (conclude kShort).missingCents == 4000
@@ -663,9 +690,9 @@ def kShort : PackageFacts :=
 #guard (conclude { kH with verification := .CONFLICT_VISIBLE }).requiredAmount == .CONFLICTED
 #guard (conclude { kH with receivedCashCents := 0, payments := [] }).cash == .NO_LINKED_EVIDENCE
 #guard (conclude { kH with receivedCashCents := 0, payments := [] }).amount == .UNKNOWN
-#guard packageRespond (encodePackageFacts kH ++ [0]) == [1]
-#guard packageRespond ((encodePackageFacts { kH with action := none }).dropLast ++ [1]) == [1]
-#guard packageRespond (packageItemMagic ++ natBE 8 (2 ^ 63) ++ (encodePackageFacts kH).drop 16) == [1]
-#guard packageRespond packageItemMagic == [1]
+#guard decodePackageFacts (encodePackageFacts kH ++ [0]) == none
+#guard decodePackageFacts ((encodePackageFacts { kH with action := none }).dropLast ++ [1]) == none
+#guard decodePackageFacts (packageItemMagic ++ natBE 8 (2 ^ 63) ++ (encodePackageFacts kH).drop 16) == none
+#guard decodePackageFacts packageItemMagic == none
 
 end BlindLedger.Financial.DecisionPackage

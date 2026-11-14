@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Producer
 import BlindLedger.Gate.Payer
+import BlindLedger.Gate.Theorems
 
 /-! Theorems of the checkpoint producer and the payer adapter (gate-producer-v1 §3).  Statements: rr-core's
     `gate-producer-goals.lean`, fixed. -/
@@ -43,6 +44,7 @@ theorem pCheckpointFields_wf {b rest : Bytes} {cp : Checkpoint} (h : pCheckpoint
   obtain ⟨a13, -, h⟩ := bind_some h
   obtain ⟨a14, hc, h⟩ := bind_some h
   obtain ⟨a15, -, h⟩ := bind_some h
+  obtain ⟨a15c, -, h⟩ := bind_some h
   obtain ⟨a16, h16, h⟩ := bind_some h
   obtain ⟨a17, h17, h⟩ := bind_some h
   obtain ⟨a18, h18, h⟩ := bind_some h
@@ -97,46 +99,6 @@ theorem parse_run {α : Type} {p : P α} {l : Nat} {b : Bytes} {x : α} (h : par
     · simp [hr] at h
     · cases rest <;> simp_all
 
-theorem decodeAnyCheckpoint_cases {b : Bytes} {x : SignedCheckpoint} (h : decodeAnyCheckpoint b = some x) :
-    decodeCheckpoint b = some x ∨ ∃ head, decodeCheckpoint2 b = some (x, head) := by
-  unfold decodeAnyCheckpoint at h
-  cases h1 : decodeCheckpoint b with
-  | some y =>
-    rw [h1] at h
-    exact Or.inl (by rw [Option.some.inj h])
-  | none =>
-    rw [h1] at h
-    cases h2 : decodeCheckpoint2 b with
-    | none => simp [h2] at h
-    | some r =>
-      rw [h2] at h
-      have hx : r.1 = x := by simpa using h
-      exact Or.inr ⟨r.2, by rw [← hx]⟩
-
-theorem decodeCheckpoint2_wf {b : Bytes} {y : SignedCheckpoint} {head : Bytes}
-    (h : decodeCheckpoint2 b = some (y, head)) :
-    y.checkpoint.seqFrom ≤ y.checkpoint.seqTo ∧
-      (y.checkpoint.seqFrom = 0 → y.checkpoint.prevCheckpoint = zeroDigest) := by
-  have hr := parse_run h
-  simp only [StateT.run_bind] at hr
-  obtain ⟨c, hc, h⟩ := bind_some hr
-  obtain ⟨s, -, h⟩ := bind_some h
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
-  obtain ⟨⟨rfl, -⟩, -⟩ := h
-  have h2 := consumed_run hc
-  simp only [pCheckpoint2, StateT.run_bind] at h2
-  obtain ⟨a1, -, h2⟩ := bind_some h2
-  obtain ⟨a2, -, h2⟩ := bind_some h2
-  obtain ⟨⟨cp3, m3⟩, h3, h2⟩ := bind_some h2
-  obtain ⟨a4, -, h2⟩ := bind_some h2
-  obtain ⟨a5, -, h2⟩ := bind_some h2
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h2
-  have e : c.fst.1.fst = cp3 := by
-    exact (congrArg Prod.fst h2.1).symm
-  show c.fst.1.fst.seqFrom ≤ c.fst.1.fst.seqTo ∧ (c.fst.1.fst.seqFrom = 0 → c.fst.1.fst.prevCheckpoint = zeroDigest)
-  rw [e]
-  exact pCheckpointFields_wf h3
-
 theorem storedOf_wf {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h : storedOf H b = some x) : Wf x := by
   unfold storedOf at h
   cases hd : decodeCheckpoint b with
@@ -159,21 +121,10 @@ theorem storedOf_wf {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h : storedOf
           exact pSigned_wf hr
         | cons a l => simp [hr] at hd
 
-theorem storedOfAny_wf {H : Bytes → Bytes} {b : Bytes} {x : Stored} (h : storedOfAny H b = some x) : Wf x := by
-  unfold storedOfAny at h
-  cases hd : decodeAnyCheckpoint b with
-  | none => simp [hd] at h
-  | some y =>
-    simp only [hd, Option.map_some, Option.some.injEq] at h
-    subst h
-    rcases decodeAnyCheckpoint_cases hd with h1 | ⟨head, h2⟩
-    · exact pSigned_wf (parse_run h1)
-    · exact decodeCheckpoint2_wf h2
-
 /-! ### The chain -/
 
 theorem forks_comm (a b : Stored) : forks a b = forks b a := by
-  grind [forks, misLinked]
+  grind [forks, sameShard, unlinked, misLinked]
 
 theorem follows_some {p n : Stored} (h : follows (some p) n = true) :
     p.checkpoint.tenantId = n.checkpoint.tenantId ∧ p.checkpoint.shardId = n.checkpoint.shardId ∧
@@ -187,6 +138,21 @@ theorem follows_some {p n : Stored} (h : follows (some p) n = true) :
     grind
   · simp [he] at h
     grind
+
+theorem follows_counter {p n : Stored} (h : follows (some p) n = true) :
+    n.checkpoint.counter = p.checkpoint.counter + 1 := by
+  unfold follows at h
+  by_cases he : p.checkpoint.epoch = n.checkpoint.epoch
+  · simp [he] at h
+    grind
+  · simp [he] at h
+    grind
+
+/-- The shard's first checkpoint takes counter 1: a store deleted or recreated under a counter that has counted
+    publishes nothing. -/
+theorem follows_none_counter {n : Stored} (h : follows none n = true) : n.checkpoint.counter = 1 := by
+  simp [follows] at h
+  exact h.2
 
 /-- Along a linked chain (newest first) tenant and shard are constant, epochs do not fall, and within an
     epoch the older ranges end strictly before the head's begins. -/
@@ -225,7 +191,7 @@ theorem chain_prev : ∀ (cs : List Stored), chainOk cs = true → (∀ x ∈ cs
         left
         have h := hc'.1
         simp [follows] at h
-        exact (hw _ (by simp)).2 h.1
+        exact (hw _ (by simp)).2 h.1.1
       | cons y l' =>
         obtain ⟨-, -, -, hd⟩ := follows_some (by simpa using hc'.1)
         rcases hd with ⟨-, -, h3⟩ | ⟨-, h2⟩
@@ -234,6 +200,25 @@ theorem chain_prev : ∀ (cs : List Stored), chainOk cs = true → (∀ x ∈ cs
     · rcases chain_prev rest hc'.2 (fun z hz => hw z (List.mem_cons_of_mem _ hz)) x hx' with h | h
       · exact Or.inl h
       · exact Or.inr (by simp [h])
+
+/-- The counter strictly increases along an accepted chain (newest first). -/
+theorem chainOk_counter {cs : List Stored} (h : chainOk cs = true) :
+    cs.Pairwise fun newer older => older.checkpoint.counter < newer.checkpoint.counter := by
+  induction cs with
+  | nil => exact List.Pairwise.nil
+  | cons n rest ih =>
+    have hc' : follows rest.head? n = true ∧ chainOk rest = true := by simpa [chainOk] using h
+    have ih' := ih hc'.2
+    refine List.Pairwise.cons ?_ ih'
+    intro x hx
+    cases rest with
+    | nil => simp at hx
+    | cons y l' =>
+      have hcy : n.checkpoint.counter = y.checkpoint.counter + 1 := follows_counter (by simpa using hc'.1)
+      rcases List.mem_cons.mp hx with rfl | hx'
+      · omega
+      · have := (List.pairwise_cons.mp ih').1 x hx'
+        omega
 
 /-- No two checkpoints of a well-linked store fork (the producer's self-check, done by construction):
     digests distinct and never zero (the store's UNIQUE column; a zero digest is a SHA3-512 preimage). -/
@@ -261,13 +246,35 @@ theorem chain_no_fork {cs : List Stored} (hc : chainOk cs = true) (hw : ∀ x �
         (List.nodup_cons.mp (List.nodup_cons.mp (List.nodup_cons.mp hdn).2).2).1
       show forks x n = false
       have hf : follows (some y) n = true := by simpa using hc'.1
-      obtain ⟨-, -, -, hdy⟩ := follows_some hf
+      obtain ⟨-, -, hev, hdy⟩ := follows_some hf
       obtain ⟨-, -, hle, hlt⟩ := chain_facts (y :: l') n hc hw x hx
+      have hcw := chainOk_counter hc
+      have hxc : x.checkpoint.counter < n.checkpoint.counter := (List.pairwise_cons.mp hcw).1 x hx
+      have hcy : n.checkpoint.counter = y.checkpoint.counter + 1 := follows_counter hf
+      have hxy : x = y ∨ x.checkpoint.counter < y.checkpoint.counter := by
+        by_cases h : x = y
+        · exact Or.inl h
+        · have hx' : x ∈ l' := by simpa [h] using hx
+          exact Or.inr ((List.pairwise_cons.mp (List.pairwise_cons.mp hcw).2).1 x hx')
+      have hcnt : (x.checkpoint.counter == n.checkpoint.counter) = false := by
+        rw [beq_eq_false_iff_ne]; omega
+      have hu1 : unlinked x n = false := by
+        unfold unlinked
+        by_cases h : n.checkpoint.counter = x.checkpoint.counter + 1
+        · have : x = y := by rcases hxy with h' | h' <;> first | exact h' | omega
+          subst this
+          simp [hev]
+        · simp [h]
+      have hu2 : unlinked n x = false := by
+        unfold unlinked
+        have : ¬ x.checkpoint.counter = n.checkpoint.counter + 1 := by omega
+        simp [this]
       have wn := hw n (by simp)
       have wx : Wf x := hw x (List.mem_cons_of_mem _ hx)
       have wn1 := wn.1
       have wx1 := wx.1
-      unfold forks
+      unfold forks sameShard
+      simp only [hcnt, hu1, hu2, Bool.false_or]
       by_cases he : x.checkpoint.epoch = n.checkpoint.epoch
       · have hlt' := hlt he
         have h1 : (x.checkpoint.seqFrom ≤ n.checkpoint.seqTo && n.checkpoint.seqFrom ≤ x.checkpoint.seqTo) = false := by
@@ -330,7 +337,7 @@ theorem follows_twice_forks {p : Option Stored} {y n : Stored}
         first | omega | (simp_all; omega)
   have o1 : y.checkpoint.seqFrom ≤ n.checkpoint.seqTo := by omega
   have o2 : n.checkpoint.seqFrom ≤ y.checkpoint.seqTo := by omega
-  simp [forks, hd, ht, hs, he, o1, o2]
+  simp [forks, sameShard, hd, ht, hs, he, o1, o2]
 
 /-! ### The publish check -/
 
@@ -374,11 +381,11 @@ theorem nodup_of_map {α β : Type} (f : α → β) {l : List α} (h : (l.map f)
   (List.pairwise_map.1 h).imp fun hne e => hne (congrArg f e)
 
 /-- What a published batch satisfies. -/
-theorem publishOk_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOk rootPk cert last new tokens = true) :
+theorem publishOk_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOk rootPk cert last new tokens tpm = true) :
     accepts rootPk cert new = true ∧ (last.all fun b => (storedOf sha3 b).isSome) = true ∧
     ∃ e n, decodeKeyCert cert = some e ∧ storedOf sha3 new = some n ∧
-      follows (last.bind (storedOf sha3)) n = true ∧ tokens.length = n.checkpoint.count ∧
+      follows (last.bind (storedOf sha3)) n = true ∧ n.checkpoint.counter = tpm + 1 ∧ tokens.length = n.checkpoint.count ∧
       (∀ i (hi : i < tokens.length),
         tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i tokens[i] = true) ∧
       ((tokens.filterMap decodeToken).map payKey).Nodup := by
@@ -390,53 +397,25 @@ theorem publishOk_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens 
     | none => simp [hk, hn] at h
     | some n =>
       simp only [hk, hn, Bool.and_eq_true, beq_iff_eq] at h
-      obtain ⟨⟨⟨⟨⟨ha, hl⟩, hf⟩, hlen⟩, hall⟩, hasc⟩ := h
-      refine ⟨ha, hl, e, n, rfl, rfl, hf, hlen, ?_, ?_⟩
+      obtain ⟨⟨⟨⟨⟨⟨ha, hl⟩, hf⟩, hctr⟩, hlen⟩, hall⟩, hasc⟩ := h
+      refine ⟨ha, hl, e, n, rfl, rfl, hf, hctr, hlen, ?_, ?_⟩
       · intro i hi
         have hm : (tokens[i], i) ∈ tokens.zipIdx := List.mk_mem_zipIdx_iff_getElem?.mpr (by simp [hi])
         exact (List.all_eq_true.mp hall) _ hm
       · have hnd := ascending_nodup _ hasc
         exact nodup_of_map (fun k : PayKey => k.2.2) (by rw [List.map_map]; exact hnd)
 
-/-- `publishOk_sound` for any checkpoint version. -/
-theorem publishOkAny_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOkAny rootPk cert last new tokens = true) :
-    acceptsAny rootPk cert new = true ∧ (last.all fun b => (storedOfAny sha3 b).isSome) = true ∧
-    ∃ e n, decodeKeyCert cert = some e ∧ storedOfAny sha3 new = some n ∧
-      follows (last.bind (storedOfAny sha3)) n = true ∧ tokens.length = n.checkpoint.count ∧
-      (∀ i (hi : i < tokens.length),
-        tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i tokens[i] = true) ∧
-      ((tokens.filterMap decodeToken).map payKey).Nodup := by
-  unfold publishOkAny at h
-  cases hk : decodeKeyCert cert with
-  | none => simp [hk] at h
-  | some e =>
-    cases hn : storedOfAny sha3 new with
-    | none => simp [hk, hn] at h
-    | some n =>
-      simp only [hk, hn, Bool.and_eq_true, beq_iff_eq] at h
-      obtain ⟨⟨⟨⟨⟨⟨ha, hl⟩, hf⟩, hlen⟩, hall⟩, hasc⟩, -⟩ := h
-      refine ⟨ha, hl, e, n, rfl, rfl, hf, hlen, ?_, ?_⟩
-      · intro i hi
-        have hm : (tokens[i], i) ∈ tokens.zipIdx := List.mk_mem_zipIdx_iff_getElem?.mpr (by simp [hi])
-        exact (List.all_eq_true.mp hall) _ hm
-      · have hnd := ascending_nodup _ hasc
-        exact nodup_of_map (fun k : PayKey => k.2.2) (by rw [List.map_map]; exact hnd)
-
-/-- No downgrade: once a shard's last published checkpoint is v2, only a v2 publishes after it. -/
-theorem publishOkAny_no_downgrade {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {b : Bytes}
-    (h : publishOkAny rootPk cert last new tokens = true) (hb : last = some b) (hv : isV2 b = true) :
-    isV2 new = true := by
-  unfold publishOkAny at h
-  cases hk : decodeKeyCert cert with
-  | none => simp [hk] at h
-  | some e =>
-    cases hn : storedOfAny sha3 new with
-    | none => simp [hk, hn] at h
-    | some n =>
-      simp only [hk, hn, Bool.and_eq_true] at h
-      subst hb
-      simpa [hv] using h.2
+/-- PUBLISH's counter step: the last checkpoint carries the TPM's value, the new one the next. -/
+theorem publishOk_counter {rootPk cert last new : Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOk rootPk cert (some last) new tokens tpm = true) :
+    ∃ p n, storedOf sha3 last = some p ∧ storedOf sha3 new = some n ∧
+      p.checkpoint.counter = tpm ∧ n.checkpoint.counter = tpm + 1 := by
+  obtain ⟨-, hl, e, n, -, hn, hf, hctr, -⟩ := publishOk_sound h
+  cases hp : storedOf sha3 last with
+  | none => simp [hp] at hl
+  | some p =>
+    have := follows_counter (p := p) (n := n) (by simpa [hp] using hf)
+    exact ⟨p, n, rfl, hn, by omega, hctr⟩
 
 /-- A published token never fails a payer on parse, batch, Merkle path or route: at any payer that stored
     its checkpoint under the same shard count, `verifyToken` is exactly the payment-dependent checks. -/
@@ -473,26 +452,31 @@ theorem publish_payer_local {c c' : Crypto} (hh : c.hash = c'.hash) {k i : Nat} 
 
 /-! ### The payer's slices -/
 
-theorem find?_filter_of_imp {α : Type} (l : List α) (q f : α → Bool) (h : ∀ a, f a = true → q a = true) :
+theorem find?_filter_of_mem {α : Type} (l : List α) (q f : α → Bool) (h : ∀ a ∈ l, f a = true → q a = true) :
     (l.filter q).find? f = l.find? f := by
   induction l with
   | nil => rfl
   | cons a t ih =>
+    have ih := ih fun b hb => h b (List.mem_cons_of_mem a hb)
     by_cases hq : q a = true
     · simp [List.filter_cons, hq, List.find?_cons, ih]
     · have hfa : f a = false := by
         cases hf : f a
         · rfl
-        · exact absurd (h a hf) hq
+        · exact absurd (h a (List.mem_cons_self ..) hf) hq
       simp [List.filter_cons, hq, hfa, List.find?_cons, ih]
+
+theorem find?_filter_of_imp {α : Type} (l : List α) (q f : α → Bool) (h : ∀ a, f a = true → q a = true) :
+    (l.filter q).find? f = l.find? f :=
+  find?_filter_of_mem l q f fun a _ => h a
 
 theorem ite_forked {c : Prop} [Decidable c] (a b : PayerState) (h : a.forked = b.forked) :
     Option.map (·.forked) (if c then none else some a) = Option.map (·.forked) (if c then none else some b) := by
   split <;> simp [h]
 
-theorem storeCheckpoint_slice {c : Crypto} {s : PayerState} {bytes : Bytes} {x : SignedCheckpoint}
+theorem storeCheckpoint_filter {c : Crypto} {s : PayerState} {bytes : Bytes} {x : SignedCheckpoint}
     {q : Stored → Bool} (hx : decodeCheckpoint bytes = some x)
-    (hq : ∀ a, forks ⟨c.hash x.header, x.checkpoint, bytes⟩ a = true → q a = true) :
+    (hq : ∀ a ∈ s.checkpoints, forks ⟨c.hash x.header, x.checkpoint, bytes⟩ a = true → q a = true) :
     (storeCheckpoint c { s with checkpoints := s.checkpoints.filter q } bytes).map (·.forked) =
       (storeCheckpoint c s bytes).map (·.forked) := by
   unfold storeCheckpoint
@@ -501,28 +485,38 @@ theorem storeCheckpoint_slice {c : Crypto} {s : PayerState} {bytes : Bytes} {x :
   by_cases hs : (s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
       (c.keyUsable e && c.sigOk e.publicKey x.header x.signature)) = true
   · simp only [hs, if_true]
-    rw [find?_filter_of_imp s.checkpoints q _ hq]
+    rw [find?_filter_of_mem s.checkpoints q _ hq]
     cases hfd : s.checkpoints.find? (forks ⟨c.hash x.header, x.checkpoint, bytes⟩) with
     | some old => simp
     | none => exact ite_forked _ _ rfl
   · simp [hs]
 
-theorem storeCheckpointAny_slice {c : Crypto} {s : PayerState} {bytes : Bytes} {x : SignedCheckpoint}
-    {q : Stored → Bool} (hx : decodeAnyCheckpoint bytes = some x)
+theorem storeCheckpoint_slice {c : Crypto} {s : PayerState} {bytes : Bytes} {x : SignedCheckpoint}
+    {q : Stored → Bool} (hx : decodeCheckpoint bytes = some x)
     (hq : ∀ a, forks ⟨c.hash x.header, x.checkpoint, bytes⟩ a = true → q a = true) :
-    (storeCheckpointAny c { s with checkpoints := s.checkpoints.filter q } bytes).map (·.forked) =
-      (storeCheckpointAny c s bytes).map (·.forked) := by
-  unfold storeCheckpointAny
-  rw [hx]
-  dsimp only
-  by_cases hs : (s.certs.any fun e => e.tenantId == x.checkpoint.tenantId && e.epoch == x.checkpoint.epoch &&
-      (c.keyUsable e && c.sigOk e.publicKey x.header x.signature)) = true
-  · simp only [hs, if_true]
-    rw [find?_filter_of_imp s.checkpoints q _ hq]
-    cases hfd : s.checkpoints.find? (forks ⟨c.hash x.header, x.checkpoint, bytes⟩) with
-    | some old => simp
-    | none => exact ite_forked _ _ rfl
-  · simp [hs]
+    (storeCheckpoint c { s with checkpoints := s.checkpoints.filter q } bytes).map (·.forked) =
+      (storeCheckpoint c s bytes).map (·.forked) :=
+  storeCheckpoint_filter hx fun a _ => hq a
+
+/-- Every fork is a candidate. -/
+theorem forks_candidate {x n : Stored} (hx : Wf x) (hn : Wf n) (h : forks n x = true) : candidate n x = true := by
+  unfold Wf at hx hn
+  grind [forks, candidate, sameShard, unlinked, misLinked]
+
+/-- The candidate query loses no fork: STORE on the filtered rows records what STORE on all rows records. -/
+theorem storeCheckpoint_candidates {c : Crypto} {s : PayerState} {bytes : Bytes} {x : SignedCheckpoint}
+    (hx : decodeCheckpoint bytes = some x) (hw : ∀ a ∈ s.checkpoints, Wf a) :
+    (storeCheckpoint c { s with checkpoints := s.checkpoints.filter (candidate ⟨c.hash x.header, x.checkpoint, bytes⟩) }
+      bytes).map (·.forked) =
+      (storeCheckpoint c s bytes).map (·.forked) :=
+  storeCheckpoint_filter hx fun a ha hf => forks_candidate (hw a ha)
+    (storedOf_wf (H := c.hash) (b := bytes) (by simp [storedOf, hx])) hf
+
+/-- A recorded fork pins its tenant and shard in every epoch. -/
+theorem blocked_shard {s : PayerState} {a b : Stored} (h : (a, b) ∈ s.forked) (e : Nat) :
+    blocked s a.checkpoint.tenantId a.checkpoint.shardId e = true := by
+  simp only [blocked, Bool.or_eq_true]
+  exact Or.inl (List.any_eq_true.mpr ⟨(a, b), h, by simp⟩)
 
 theorem filter_lookup {α β : Type} [BEq α] [LawfulBEq α] (l : List (α × β)) (k : α) :
     (l.filter (·.1 == k)).lookup k = l.lookup k := by
@@ -638,37 +632,68 @@ theorem storeCheckpoint_signed {c : Crypto} {s s' : PayerState} {bytes : Bytes}
       exact ⟨x, e, rfl, he, hm.2.1, hm.2.2⟩
     · simp at h
 
+/-- Storing a checkpoint that has a stored checkpoint of the same shard at the same counter value, with another
+    digest, leaves the stored checkpoints as they were and pins the shard in every epoch, whatever the two
+    epochs are. -/
+theorem storeCheckpoint_counter_fork {c : Crypto} {s s' : PayerState} {bytes : Bytes} {old new : Stored}
+    (hold : old ∈ s.checkpoints) (hnew : storedOf c.hash bytes = some new) (hs : sameShard old new = true)
+    (hc : old.checkpoint.counter = new.checkpoint.counter) (hd : old.digest ≠ new.digest)
+    (h : storeCheckpoint c s bytes = some s') :
+    s'.checkpoints = s.checkpoints ∧ ∀ e, blocked s' new.checkpoint.tenantId new.checkpoint.shardId e = true := by
+  have hF : forks new old = true := by
+    simp only [sameShard, Bool.and_eq_true, beq_iff_eq] at hs
+    simp [forks, sameShard, hs.1, hs.2, hc, Ne.symm hd]
+  unfold storeCheckpoint at h
+  cases hx : decodeCheckpoint bytes with
+  | none => simp [storedOf, hx] at hnew
+  | some x =>
+    simp only [storedOf, hx, Option.map_some, Option.some.injEq] at hnew
+    subst hnew
+    rw [hx] at h
+    dsimp only at h
+    split at h
+    · cases hf : s.checkpoints.find? (forks ⟨c.hash x.header, x.checkpoint, bytes⟩) with
+      | none =>
+        have := List.find?_eq_none.1 hf old hold
+        simp [hF] at this
+      | some o =>
+        rw [hf] at h
+        simp only [Option.some.injEq] at h
+        subst h
+        have ho := List.find?_some hf
+        simp only [forks, sameShard, Bool.and_eq_true, beq_iff_eq] at ho
+        refine ⟨rfl, fun e => ?_⟩
+        simp [blocked, ho.1.2.1, ho.1.2.2]
+    · simp at h
+
+/-- A pinned shard stores nothing new. -/
+theorem storeCheckpoint_pinned {c : Crypto} {s s' : PayerState} {bytes : Bytes} {a b x : Stored}
+    (hf : (a, b) ∈ s.forked) (hx : storedOf c.hash bytes = some x) (hs : sameShard a x = true)
+    (h : storeCheckpoint c s bytes = some s') : s'.checkpoints = s.checkpoints := by
+  simp only [sameShard, Bool.and_eq_true, beq_iff_eq] at hs
+  have hb : blocked s x.checkpoint.tenantId x.checkpoint.shardId x.checkpoint.epoch = true := by
+    rw [← hs.1, ← hs.2]
+    exact blocked_shard hf _
+  unfold storeCheckpoint at h
+  cases hd : decodeCheckpoint bytes with
+  | none => simp [storedOf, hd] at hx
+  | some y =>
+    simp only [storedOf, hd, Option.map_some, Option.some.injEq] at hx
+    subst hx
+    rw [hd] at h
+    dsimp only at h
+    split at h
+    · cases hf' : s.checkpoints.find? (forks ⟨c.hash y.header, y.checkpoint, bytes⟩) with
+      | some o => rw [hf'] at h; simp only [Option.some.injEq] at h; subst h; rfl
+      | none => rw [hf'] at h; simp [hb] at h
+    · simp at h
+
 /-- So the real verifier never verifies a checkpoint under the root key, even when a root-signed certificate
     of the root key itself is installed. -/
 theorem storeCheckpoint_not_root {t pk bytes : Bytes} {s s' : PayerState}
     (h : storeCheckpoint (realCrypto [(t, pk)]) s bytes = some s') : ∃ x e, decodeCheckpoint bytes = some x ∧
       e ∈ s.certs ∧ e.publicKey ≠ pk ∧ mlDsaOk e.publicKey x.header x.signature = true := by
   obtain ⟨x, e, hx, he, hu, hs⟩ := storeCheckpoint_signed h
-  refine ⟨x, e, hx, he, fun hp => ?_, hs⟩
-  simp [realCrypto, hp] at hu
-
-/-- `storeCheckpointAny_signed`, every checkpoint version. -/
-theorem storeCheckpointAny_signed {c : Crypto} {s s' : PayerState} {bytes : Bytes}
-    (h : storeCheckpointAny c s bytes = some s') : ∃ x e, decodeAnyCheckpoint bytes = some x ∧ e ∈ s.certs ∧
-      c.keyUsable e = true ∧ c.sigOk e.publicKey x.header x.signature = true := by
-  unfold storeCheckpointAny at h
-  cases hd : decodeAnyCheckpoint bytes with
-  | none => rw [hd] at h; simp at h
-  | some x =>
-    rw [hd] at h
-    dsimp only at h
-    split at h
-    · rename_i hany
-      obtain ⟨e, he, hm⟩ := List.any_eq_true.1 hany
-      simp only [Bool.and_eq_true] at hm
-      exact ⟨x, e, rfl, he, hm.2.1, hm.2.2⟩
-    · simp at h
-
-/-- `storeCheckpointAny_not_root`, every checkpoint version. -/
-theorem storeCheckpointAny_not_root {t pk bytes : Bytes} {s s' : PayerState}
-    (h : storeCheckpointAny (realCrypto [(t, pk)]) s bytes = some s') : ∃ x e, decodeAnyCheckpoint bytes = some x ∧
-      e ∈ s.certs ∧ e.publicKey ≠ pk ∧ mlDsaOk e.publicKey x.header x.signature = true := by
-  obtain ⟨x, e, hx, he, hu, hs⟩ := storeCheckpointAny_signed h
   refine ⟨x, e, hx, he, fun hp => ?_, hs⟩
   simp [realCrypto, hp] at hu
 
@@ -692,31 +717,6 @@ theorem accepts_cert_not_root {rootPk cert cp : Bytes} {e : EpochCert}
         | none => simp [hx, he, hi, hst] at ha
         | some s' =>
           obtain ⟨-, k, -, hk, hne, -⟩ := storeCheckpoint_not_root hst
-          have hc : s.certs = (installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e).1.certs := by
-            rw [hi]
-          rw [hc, installCert_certs] at hk
-          simp only [emptyState] at hk
-          have key : ∀ b : Bool, k ∈ (if b = true then [e] else []) → k = e := by
-            intro b; cases b <;> simp
-          obtain rfl := key _ hk
-          exact hne
-
-/-- `accepts_cert_not_root` for any checkpoint version. -/
-theorem acceptsAny_cert_not_root {rootPk cert cp : Bytes} {e : EpochCert}
-    (ha : acceptsAny rootPk cert cp = true) (he : decodeKeyCert cert = some e) : e.publicKey ≠ rootPk := by
-  unfold acceptsAny at ha
-  cases hx : decodeAnyCheckpoint cp with
-  | none => simp [hx] at ha
-  | some x =>
-    cases hi : installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e with
-    | mk s ok =>
-      cases ok with
-      | false => simp [hx, he, hi] at ha
-      | true =>
-        cases hst : storeCheckpointAny (realCrypto [(x.checkpoint.tenantId, rootPk)]) s cp with
-        | none => simp [hx, he, hi, hst] at ha
-        | some s' =>
-          obtain ⟨-, k, -, hk, hne, -⟩ := storeCheckpointAny_not_root hst
           have hc : s.certs = (installCert (realCrypto [(x.checkpoint.tenantId, rootPk)]) emptyState e).1.certs := by
             rw [hi]
           rw [hc, installCert_certs] at hk
@@ -803,7 +803,7 @@ theorem consumed_starts {α : Type} {d : Bytes} {q : Unit → P α} (hq : ∀ u,
   rw [this, ← List.append_assoc, List.take_left' rfl]
 
 theorem checkpoint_header_domain {b : Bytes} {x : SignedCheckpoint} (hx : decodeCheckpoint b = some x) :
-    ∃ t, x.header = domain "CHECKPOINT" ++ t := by
+    ∃ t, x.header = ("RR/GATE/CHECKPOINT/v3".toUTF8.toList ++ [0]) ++ t := by
   have hr := parse_run hx
   simp only [pSignedCheckpoint, StateT.run_bind] at hr
   obtain ⟨c, hc, h⟩ := bind_some hr
@@ -835,25 +835,6 @@ theorem keyCert_signed_domain {c : Bytes} {e : EpochCert} (he : decodeKeyCert c 
     | exact eats_take _
     | refine eats_bind ?_ fun _ => ?_
 
-theorem checkpoint2_header_domain {b : Bytes} {x : SignedCheckpoint} {head : Bytes}
-    (hx : decodeCheckpoint2 b = some (x, head)) :
-    ∃ t, x.header = ("RR/GATE/CHECKPOINT/v2".toUTF8.toList ++ [0]) ++ t := by
-  have hr := parse_run hx
-  simp only [StateT.run_bind] at hr
-  obtain ⟨c, hc, h⟩ := bind_some hr
-  obtain ⟨s, -, h⟩ := bind_some h
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
-  obtain ⟨⟨rfl, -⟩, -⟩ := h
-  unfold pCheckpoint2 at hc
-  refine consumed_starts ?_ hc
-  intro u
-  try dsimp only
-  repeat' first
-    | exact eats_pure _
-    | exact eats_need _
-    | exact eats_take _
-    | refine eats_bind ?_ fun _ => ?_
-
 theorem idx_append {d t : Bytes} {i : Nat} {v : UInt8} (h : d[i]? = some v) : (d ++ t)[i]? = some v := by
   obtain ⟨b1, -⟩ := List.getElem?_eq_some_iff.mp h
   rw [List.getElem?_append_left b1]
@@ -866,64 +847,23 @@ theorem checkpoint_header_ne_keycert_body {b c : Bytes} {x : SignedCheckpoint} {
   obtain ⟨u, hu⟩ := keyCert_signed_domain he
   intro h
   have h8 := congrArg (fun l => l[8]?) h
-  have g1 : (domain "CHECKPOINT")[8]? = some 67 := by first | decide +kernel | rfl | simp [domain]
-  have g2 : (domain "KEY-CERT")[8]? = some 75 := by first | decide +kernel | rfl | simp [domain]
-  obtain ⟨b1, -⟩ := List.getElem?_eq_some_iff.mp g1
-  obtain ⟨b2, -⟩ := List.getElem?_eq_some_iff.mp g2
-  have d1 : (domain "CHECKPOINT" ++ t)[8]? = some 67 := by rw [List.getElem?_append_left b1]; exact g1
-  have d2 : (domain "KEY-CERT" ++ u)[8]? = some 75 := by rw [List.getElem?_append_left b2]; exact g2
-  simp only [ht, hu, List.getElem?_take, d1, d2] at h8
+  have d1 : x.header[8]? = some 67 := by
+    rw [ht]; exact idx_append (by first | decide +kernel | rfl | simp)
+  have d2 : (domain "KEY-CERT" ++ u)[8]? = some 75 :=
+    idx_append (by first | decide +kernel | rfl | simp [domain])
+  simp only [d1, hu, List.getElem?_take, d2] at h8
   split at h8 <;> simp at h8
 
-/-- The same for every checkpoint version (v2's magic differs from v1's, but not at byte 8). -/
-theorem checkpoint_header_ne_keycert_body_any {b c : Bytes} {x : SignedCheckpoint} {e : EpochCert}
-    (hx : decodeAnyCheckpoint b = some x) (he : decodeKeyCert c = some e) :
-    x.header ≠ e.signed.take (e.signed.length - 2 - mlDsa87Signature) := by
-  rcases decodeAnyCheckpoint_cases hx with h1 | ⟨head, h2⟩
-  · exact checkpoint_header_ne_keycert_body h1 he
-  · obtain ⟨t, ht⟩ := checkpoint2_header_domain h2
-    obtain ⟨u, hu⟩ := keyCert_signed_domain he
-    intro h
-    have h8 := congrArg (fun l => l[8]?) h
-    have d1 : x.header[8]? = some 67 := by
-      rw [ht]; exact idx_append (by first | decide +kernel | rfl | simp)
-    have d2 : (domain "KEY-CERT" ++ u)[8]? = some 75 :=
-      idx_append (by first | decide +kernel | rfl | simp [domain])
-    simp only [d1, hu, List.getElem?_take, d2] at h8
-    split at h8 <;> simp at h8
-
-theorem decodeCheckpoint2_magic {b : Bytes} {r : SignedCheckpoint × Bytes} (h : decodeCheckpoint2 b = some r) :
-    ∃ m, b = ("RR/GATE/CHECKPOINT/v2".toUTF8.toList ++ [0]) ++ m := by
-  have hr := parse_run h
-  simp only [StateT.run_bind] at hr
-  obtain ⟨c, hc, -⟩ := bind_some hr
-  have h2 := consumed_run hc
-  simp only [pCheckpoint2, StateT.run_bind] at h2
-  obtain ⟨⟨u, m⟩, he, -⟩ := bind_some h2
-  exact ⟨m, expect_run he⟩
-
-/-- On bytes with the v1 magic the any-version store is the v1 store, so every v1 guarantee carries over. -/
-theorem storeCheckpointAny_v1 {c : Crypto} {s : PayerState} {bytes : Bytes}
-    (hb : ∃ t, bytes = domain "CHECKPOINT" ++ t) : storeCheckpointAny c s bytes = storeCheckpoint c s bytes := by
-  have hd : decodeAnyCheckpoint bytes = decodeCheckpoint bytes := by
-    unfold decodeAnyCheckpoint
-    cases h1 : decodeCheckpoint bytes with
-    | some x => rfl
-    | none =>
-      cases h2 : decodeCheckpoint2 bytes with
-      | none => rfl
-      | some r =>
-        exfalso
-        obtain ⟨t, ht⟩ := hb
-        obtain ⟨m, hm⟩ := decodeCheckpoint2_magic h2
-        have h20 := congrArg (fun l => l[20]?) (ht.symm.trans hm)
-        have e1 : (domain "CHECKPOINT" ++ t)[20]? = some 49 :=
-          idx_append (by first | decide +kernel | rfl | simp [domain])
-        have e2 : (("RR/GATE/CHECKPOINT/v2".toUTF8.toList ++ [0]) ++ m)[20]? = some 50 :=
-          idx_append (by first | decide +kernel | rfl | simp)
-        simp only [e1, e2] at h20
-        simp at h20
-  unfold storeCheckpointAny storeCheckpoint
-  rw [hd]
+/-- After any fork, no token of its shard in any epoch, and none of either side's epoch, releases. -/
+theorem release_after_fork {c : Crypto} {s : PayerState} {p : Payment} {bytes : Bytes} {t : Token} {a b : Stored}
+    (hf : (a, b) ∈ s.forked) (hd : decodeToken bytes = some t) (ht : t.leaf.tenantId = a.checkpoint.tenantId)
+    (hw : t.leaf.shardId = a.checkpoint.shardId ∨ t.leaf.epoch = a.checkpoint.epoch ∨ t.leaf.epoch = b.checkpoint.epoch) :
+    firstFailure c s p bytes ≠ none := by
+  intro h0
+  have h1 := (verifyToken_unforked (firstFailure_none.1 h0) hd).1 (a, b) hf ht.symm
+  rcases hw with h | h | h
+  · exact h1.1 h.symm
+  · exact h1.2.1 h.symm
+  · exact h1.2.2 h.symm
 
 end BlindLedger.Gate

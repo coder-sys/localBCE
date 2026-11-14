@@ -1,6 +1,6 @@
-"""No new `sorry` in lean/BlindLedger (S3d review r1 target 5): `lake build` stays green on a sorry and the semantic gate
+"""No new `sorry` in lean/BlindLedger: `lake build` stays green on a sorry and the semantic gate
 scans only pinned files, so this counts `sorry` outside comments, strings and char literals in every .lean file and holds
-the counts equal to tests/lean_sorry_allowlist.txt (`<path> <count>` lines).  A new sorry fails; a proof that removes one
+the counts equal to tests/lean_sorry_allowlist.txt (`<path> <count> <reason>` lines).  A new sorry fails; a proof that removes one
 fails until its line is lowered or dropped.  The allowlist only shrinks."""
 
 from pathlib import Path
@@ -36,7 +36,7 @@ class NoSorrySource(unittest.TestCase):
     def test_sorry_counts_match_allowlist(self) -> None:
         found = {p.relative_to(ROOT).as_posix(): n for p in sorted((ROOT / "lean" / "BlindLedger").rglob("*.lean"))
                  if (n := sorries(p.read_text("utf-8")))}
-        allowed = {k: int(v) for k, v in (line.split() for line in ALLOW.read_text("utf-8").splitlines() if line.strip())}
+        allowed = {k: int(v) for k, v in (line.split(None, 2)[:2] for line in ALLOW.read_text("utf-8").splitlines() if line.strip())}
         self.assertEqual(found, allowed)
 
 

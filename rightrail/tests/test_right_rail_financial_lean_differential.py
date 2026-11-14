@@ -32,7 +32,7 @@ def _header(request: bytes) -> tuple[dict[str, int], str]:
     at += 72 + 8
     skip()  # evaluation id
     at += 64
-    offsets.update(decision_at=at, owner_now=at + 8)
+    offsets.update(decision_at=at, owner_now=at + 9)  # the time-given byte sits between them
     return offsets, strings[3]
 
 

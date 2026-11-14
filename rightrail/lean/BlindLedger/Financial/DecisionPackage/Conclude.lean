@@ -92,24 +92,29 @@ def requiredAmount (f : PackageFacts) : Support :=
 
 /-- Key order is the sorted Python key order: amount_satisfied,
     delivery_acknowledged_or_not_required, reporting_complete. Bit i of the mask is key i. -/
-def requirements (f : PackageFacts) : List Support := [requiredAmount f, deliverySupport f, reportingSupport f]
+def requirementsFor (f : PackageFacts) (delivery : Support) : List Support :=
+  [requiredAmount f, delivery, reportingSupport f]
+def requirements (f : PackageFacts) : List Support := requirementsFor f (deliverySupport f)
 
-def missingMask (f : PackageFacts) : Nat :=
-  (if requiredAmount f = .SUPPORTED then 0 else 1) + (if deliverySupport f = .SUPPORTED then 0 else 2) +
+def missingMaskFor (f : PackageFacts) (delivery : Support) : Nat :=
+  (if requiredAmount f = .SUPPORTED then 0 else 1) + (if delivery = .SUPPORTED then 0 else 2) +
     (if reportingSupport f = .SUPPORTED then 0 else 4)
+def missingMask (f : PackageFacts) : Nat := missingMaskFor f (deliverySupport f)
 
-def assessment (f : PackageFacts) : Assessment :=
+def assessmentFor (f : PackageFacts) (delivery : Support) : Assessment :=
   if f.caseStatus ≠ some .RESOLVED then .NOT_RESOLVED
   else if f.conflictCount ≠ 0 ∨ amountSupport f = .CONFLICTED ∨ reportingSupport f = .CONFLICTED then .CONFLICTED
-  else if Support.NOT_SATISFIED ∈ requirements f then .UNSUPPORTED
-  else if missingMask f ≠ 0 then .UNKNOWN
+  else if Support.NOT_SATISFIED ∈ requirementsFor f delivery then .UNSUPPORTED
+  else if missingMaskFor f delivery ≠ 0 then .UNKNOWN
   else .SUPPORTED
+def assessment (f : PackageFacts) : Assessment := assessmentFor f (deliverySupport f)
 
 structure Conclusions where
   cash : Support
   amount : Support
   reporting : Support
-  delivery : Support
+  delivery : Support                -- the latest action's own acknowledgment
+  deliveryRequirement : Support     -- the delivery requirement the mask and assessment read
   requiredAmount : Support
   missingMask : Nat
   assessment : Assessment
@@ -118,16 +123,20 @@ structure Conclusions where
   authorizedClaimCount : Nat
 deriving DecidableEq, Repr
 
-def conclude (f : PackageFacts) : Conclusions where
+/-- The conclusions given a delivery requirement; only it, the mask and the assessment depend on it. -/
+def concludeFor (f : PackageFacts) (delivery : Support) : Conclusions where
   cash := paymentSupport f
   amount := amountSupport f
   reporting := reportingSupport f
   delivery := deliverySupport f
+  deliveryRequirement := delivery
   requiredAmount := requiredAmount f
-  missingMask := missingMask f
-  assessment := assessment f
+  missingMask := missingMaskFor f delivery
+  assessment := assessmentFor f delivery
   missingCents := f.owedCents - f.receivedCashCents
   activePaymentCount := (activePayments f).length
   authorizedClaimCount := (authorizedClaims f).length
+
+def conclude (f : PackageFacts) : Conclusions := concludeFor f (deliverySupport f)
 
 end BlindLedger.Financial.DecisionPackage

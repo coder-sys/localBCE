@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import patch
 
 from app import right_rail_financial_owner_independent as independent
+from app import right_rail_financial_staff_server as server
 from app.right_rail_financial_mirror import (
     FinancialMirror,
     FinancialMirrorContinuityError,
@@ -58,6 +59,16 @@ from app.right_rail_financial_staff_server import (
     _handler_for,
     _request_allowed,
 )
+_MODEL = json.loads(server._shipped("staff_workspace/interaction-model.json"))  # the same file the page and do_POST read
+
+
+class ShippedFileTests(unittest.TestCase):
+    def test_a_missing_or_malformed_shipped_file_is_a_typed_refusal_naming_it(self) -> None:
+        with self.assertRaisesRegex(server.StaffServerError, "^shipped_file_unreadable:no/such.json$"):
+            server._shipped("no/such.json")
+        for raw in (b"{", b"[]", b'{"roles": 1, "controls": {}}', b'{"roles": [], "controls": {"a": {"route": "POST /x"}}}', b'{"roles": [], "controls": []}'):
+            with self.subTest(raw), self.assertRaisesRegex(server.StaffServerError, "^interaction_model_malformed$"):
+                server._interaction_model(raw)
 
 
 class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
@@ -70,11 +81,19 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.addCleanup(workflow.close)
         return workflow
 
+    _TOKEN_PATHS = ("/api/action/acknowledge", "/api/reporting/record", "/api/continuity/restore-test")
+
+    def _token(self, port: int, item: str = "item-h") -> str:
+        """The one-time token a page read of this item would hold."""
+        return self._http_json(port, f"/api/items/{item}")["action_token"]
+
     def _http_json(self, port: int, path: str, body: dict[str, object] | None = None, *, timeout: float = 5) -> dict[str, object]:
         host = f"127.0.0.1:{port}"
         headers = {"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json"}
         if body is not None:
             headers["X-Staff-Role"] = min(COMMAND_ROLES[path])
+            if path in self._TOKEN_PATHS:
+                headers["X-Action-Token"] = self._token(port)
         with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)) as connection:
             connection.request("GET" if body is None else "POST", path,
                                body=None if body is None else json.dumps(body, separators=(",", ":")), headers=headers)
@@ -302,6 +321,64 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertIsNone(restored["workspace"]["nonactivation"]["proof_suite_id"])
         self.assertEqual(restored["workspace"]["h"]["obligation"]["shortfall_cents"], 0)
 
+    def test_a_restore_whose_package_fails_validation_leaves_the_old_owner_serving(self) -> None:
+        workflow = self._workflow()
+        old, real = workflow.mirror, FinancialMirror.validate_owner_continuity_package
+
+        def validate(mirror, package_bytes):
+            if mirror is old:
+                return real(mirror, package_bytes)
+            raise FinancialMirrorContinuityError("continuity_package_digest")
+        body = self._review_body(workflow)
+        with patch.object(FinancialMirror, "validate_owner_continuity_package", validate), self.assertRaises(FinancialMirrorContinuityError):
+            workflow.restore_test(body)
+        self.assertIs(workflow.mirror, old)
+        self.assertEqual(workflow.continuity.get("restored"), False)
+        self.assertEqual(workflow.decision_view()["decision_package"]["obligation"]["revision"], body["revision"])  # the old owner still answers
+        self.assertEqual(list(workflow.workspace_dir.glob("continuity-test-*")), [])  # the failed restore leaves no file (and so uses up no destination)
+
+    def test_failed_restores_do_not_use_up_the_restore_counter(self) -> None:
+        workflow = self._workflow()
+        body = self._review_body(workflow)
+        real = FinancialMirror.validate_owner_continuity_package
+
+        def fail_new(mirror, package_bytes):
+            if mirror is not workflow.mirror:
+                raise FinancialMirrorContinuityError("continuity_package_digest")
+            return real(mirror, package_bytes)
+        with patch.object(server, "MAX_RESTORE_DESTINATIONS", 2):
+            for _ in range(3):
+                with patch.object(FinancialMirror, "validate_owner_continuity_package", fail_new), self.assertRaises(FinancialMirrorContinuityError):
+                    workflow.restore_test(body)
+            self.assertTrue(workflow.restore_test(body)["continuity"]["decision_package_equal"])  # three failures against a cap of two
+
+    def test_a_restore_that_fails_to_close_its_new_owner_still_removes_its_file_and_reports_it(self) -> None:
+        workflow = self._workflow()
+        old, real = workflow.mirror, FinancialMirror.validate_owner_continuity_package
+
+        def validate(mirror, package_bytes):
+            if mirror is old:
+                return real(mirror, package_bytes)
+            mirror.owner.close = lambda: (_ for _ in ()).throw(RuntimeError("close"))
+            raise FinancialMirrorContinuityError("continuity_package_digest")
+        with patch.object(FinancialMirror, "validate_owner_continuity_package", validate), self.assertRaisesRegex(RuntimeError, "^close$"):
+            workflow.restore_test(self._review_body(workflow))
+        self.assertEqual(list(workflow.workspace_dir.glob("continuity-test-*")), [])
+
+    def test_a_previous_owner_that_fails_to_close_still_leaves_the_restored_state_recorded(self) -> None:
+        workflow = self._workflow()
+        old = workflow.mirror
+        body = self._review_body(workflow)
+        real_close = old.owner.close
+
+        def failing_close() -> None:
+            real_close()
+            raise RuntimeError("close")
+        with patch.object(old.owner, "close", failing_close), self.assertRaises(RuntimeError):
+            workflow.restore_test(body)
+        self.assertIsNot(workflow.mirror, old)
+        self.assertEqual(workflow.continuity.get("restored"), True)  # the serving owner and the record agree
+
     def test_h_store_followthrough_chain(self) -> None:
         workflow = self._workflow()
         owner = workflow.mirror.owner
@@ -361,7 +438,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         with patch.object(FinancialOwner, "restore_continuity", side_effect=failure):
             with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
                 connection.request("POST", "/api/continuity/restore-test", body=json.dumps(self._review_body(workflow)),
-                                   headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json", "X-Staff-Role": "operator"})
+                                   headers={"Host": host, "Origin": f"http://{host}", "Content-Type": "application/json", "X-Staff-Role": "operator", "X-Action-Token": self._token(port)})
                 response = connection.getresponse()
                 body = json.loads(response.read().decode("utf-8"))
         self.assertEqual(response.status, 409)
@@ -378,7 +455,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         reviewed = self._revision_body(workflow)
         with patch.object(
             workflow,
-            "_h_received_cash_cents",
+            "_received_cash_cents",
             side_effect=[H_CASH_CENTS, H_CASH_CENTS + 1],
         ) as cash_spy:
             acknowledgment = workflow.acknowledge_correction_action(reviewed)
@@ -386,7 +463,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         self.assertEqual(acknowledgment["cash_before_cents"], H_CASH_CENTS)
         self.assertEqual(acknowledgment["cash_after_cents"], H_CASH_CENTS + 1)
         self.assertEqual(acknowledgment["cash_effect_cents"], 1)
-        self.assertEqual(workflow._h_received_cash_cents(), H_CASH_CENTS)
+        self.assertEqual(workflow._received_cash_cents("item-h"), H_CASH_CENTS)
 
     def test_same_workspace_reopens_verified_owner_and_durable_followup(self) -> None:
         workspace = Path(self.temp_dir.name)
@@ -563,6 +640,8 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
 
         duplicate = workflow.record_cash_correction(body)
         self.assertEqual(duplicate["command"]["status"], "DUPLICATE")
+        self.assertEqual(duplicate["command"]["cause"], "exact_retry")  # the Mirror shows the cause
+        self.assertNotIn("cause", recorded["command"])
         self.assertEqual(int(owner.verify_integrity()["sequence"]), committed_sequence)
         self.assertEqual(owner.export_continuity(), committed_bytes)
 
@@ -764,7 +843,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         def tracked_detail(*args, **kwargs):
             return original_detail(*args, **kwargs)
 
-        # WAL (R0.5): a second writer commits while this read snapshot is open (it no longer waits for the
+        # WAL: a second writer commits while this read snapshot is open (it no longer waits for the
         # snapshot to close); the verification and every rendered row must still be the state before that commit.
         committed_during_verification: list[int] = []
 
@@ -923,7 +1002,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
         with patch.object(workflow, "workspace", side_effect=RuntimeError("internal detail")):
             self.assertEqual(call("GET", "/api/workspace", (host,))[:3:2], (503, {"error": {"code": "owner_read_unavailable"}}))
         with patch.object(workflow, "acknowledge_correction_action", side_effect=FinancialBusyError("store_busy")):  # a transient lock is not a 409
-            status, headers, body = call("POST", "/api/action/acknowledge", post, b'{"revision":0}')
+            status, headers, body = call("POST", "/api/action/acknowledge", (*post, ("X-Action-Token", self._token(port))), b'{"revision":0}')
         self.assertEqual((status, headers.get("Retry-After"), body), (503, "1", {"error": {"code": "store_busy"}, "changed": False}))
 
     def test_http_refuses_ambiguous_short_and_slow_bodies_before_dispatch(self) -> None:
@@ -974,11 +1053,11 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             server = self._serve_workflow(workflow)
             owner, port, body = workflow.mirror.owner, int(server.server_address[1]), json.dumps(self._revision_body(workflow))
             real_record, real_snapshot, before = workflow.mirror.record_reporting_evidence, owner._read_snapshot, owner.summary()["sequence"]
-            locked = []
+            locked, token = [], self._token(port)
 
             def commit_then_lock(**arguments: object) -> object:
                 result = real_record(**arguments)  # the owner has committed
-                locked.append(True)  # R1a: the owner's open writer keeps any exclusive-locking-mode holder out, so the lock is simulated
+                locked.append(True)  # the owner's open writer keeps any exclusive-locking-mode holder out, so the lock is simulated
                 return result
 
             @contextmanager
@@ -993,7 +1072,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
             self.addCleanup(connection.close)
             with patch.object(workflow.mirror, "record_reporting_evidence", commit_then_lock), patch.object(owner, "_read_snapshot", snapshot):
-                connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json", "X-Staff-Role": "analyst"})
+                connection.request("POST", "/api/reporting/record", body, {"Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json", "X-Staff-Role": "analyst", "X-Action-Token": token})
                 response = connection.getresponse()
                 answer = (response.status, response.getheader("Retry-After"), json.loads(response.read().decode("utf-8")))
             code = "store_busy" if released else "store_busy_outcome_unknown"
@@ -1033,12 +1112,14 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
     }
     _REFUSED = {"error": {"code": "staff_role_refused"}, "changed": False}
 
-    def _role_post(self, port: int, path: str, roles: tuple[str, ...], body: bytes = b'{"revision":0}', people: tuple[str, ...] = ()) -> tuple[int, object]:
+    def _role_post(self, port: int, path: str, roles: tuple[str, ...], body: bytes = b'{"revision":0}', people: tuple[str, ...] = (), token: str | None = None, item: str | None = None) -> tuple[int, object]:
+        token = self._token(port) if token is None and path in self._TOKEN_PATHS else token
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         self.addCleanup(connection.close)
         connection.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
         for name, value in (("Host", f"127.0.0.1:{port}"), ("Origin", f"http://127.0.0.1:{port}"), ("Content-Type", "application/json"),
-                            *(("X-Staff-Role", role) for role in roles), *(("X-Staff-Person", person) for person in people), ("Content-Length", str(len(body)))):
+                            *(("X-Staff-Role", role) for role in roles), *(("X-Staff-Person", person) for person in people),
+                            *((("X-Action-Token", token),) if token else ()), *((("X-Staff-Item", item),) if item else ()), ("Content-Length", str(len(body)))):
             connection.putheader(name, value)
         connection.endheaders(body)
         response = connection.getresponse()
@@ -1059,7 +1140,7 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                         status, body = self._role_post(port, path, (role,))
                         if role in self._ROLE_TABLE[path]:
                             self.assertEqual((status, body), (200, {}))
-                            command.assert_called_once_with(name, {"revision": 0}, None)  # nobody named: the command records its role's synthetic actor, never a roster person
+                            command.assert_called_once_with(name, {"revision": 0}, None, "item-h")  # nobody named: the command records its role's synthetic actor, never a roster person
                         else:
                             self.assertEqual((status, body), (403, self._REFUSED))
                             command.assert_not_called()
@@ -1119,10 +1200,10 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
                     self.assertEqual(command.called, expected[0] == 200)
             command.reset_mock()
             self._role_post(port, decide, ("approver",))
-            command.assert_called_once_with("reject_offset_and_authorize_correction", {"revision": 0}, None)
+            command.assert_called_once_with("reject_offset_and_authorize_correction", {"revision": 0}, None, "item-h")
             command.reset_mock()
             self._role_post(port, decide, ("approver",), people=("staff:devon-brooks",))
-            command.assert_called_once_with("reject_offset_and_authorize_correction", {"revision": 0}, "staff:devon-brooks")
+            command.assert_called_once_with("reject_offset_and_authorize_correction", {"revision": 0}, "staff:devon-brooks", "item-h")
         # Through the owner: the determination carries the named person (a claim: the header names them, nobody signed).
         workflow.command("reject_offset_and_authorize_correction", self._review_body(workflow), "staff:devon-brooks")
         with closing(sqlite3.connect(owner.path)) as check:
@@ -1139,6 +1220,50 @@ class RightRailFinancialStaffWorkspaceTests(unittest.TestCase):
             self.assertEqual(check.execute("SELECT actor_id FROM determinations").fetchall(), [("synthetic-official",)])
             self.assertEqual(check.execute("SELECT count(*) FROM financial_events WHERE kind='ACTION_ACKNOWLEDGED'").fetchone(), (1,))  # the acknowledger is not stored (STATUS open item)
             self.assertEqual(check.execute("SELECT count(*) FROM financial_events WHERE payload_json LIKE '%staff:%'").fetchone(), (0,))  # and no roster person was written anywhere
+
+    def test_a_one_click_command_needs_the_one_time_token_its_item_read_returned(self) -> None:
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        ack = "/api/action/acknowledge"
+        acknowledged = lambda: sum(1 for e in workflow.workspace()["h"]["timeline"] if e["kind"] == "ACTION_ACKNOWLEDGED")
+        early = self._token(port)  # read before the decision below
+        workflow.command("reject_offset_and_authorize_correction", self._review_body(workflow))
+        body = json.dumps(self._revision_body(workflow)).encode()
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token=""), (409, {"error": {"code": "action_token_missing"}, "changed": False}))
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token="made-up"), (409, {"error": {"code": "action_token_invalid"}, "changed": False}))
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token=early), (409, {"error": {"code": "obligation_revision_conflict"}, "changed": False}))  # the item changed since that read
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token=early), (409, {"error": {"code": "action_token_invalid"}, "changed": False}))  # and a refused token is spent
+        self.assertEqual(acknowledged(), 0)
+        fresh = self._token(port)
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token=fresh)[0], 200)
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token=fresh), (409, {"error": {"code": "action_token_invalid"}, "changed": False}))  # replayed
+        self.assertEqual(acknowledged(), 1)
+
+    def test_the_stale_token_message_does_not_blame_this_item_for_another_items_write(self) -> None:
+        # The token follows the whole store, so a refusal can follow a write to another item: the words must be true of that too.
+        for route in self._TOKEN_PATHS:
+            said = _MODEL["controls"][next(n for n, c in _MODEL["controls"].items() if c["route"] == f"POST {route}")]["responses"]["obligation_revision_conflict"]["message"]
+            self.assertTrue(said.startswith("The records changed"), said)
+
+    def test_a_token_belongs_to_one_item_and_a_command_acts_on_the_item_it_names(self) -> None:
+        workflow = self._workflow()
+        port = int(self._serve_workflow(workflow).server_address[1])
+        other = self._http_json(port, "/api/items/item-01")
+        self.assertEqual(other["h"]["obligation"]["item_id"], "item-01")  # the detail slot holds the chosen item
+        self.assertEqual({row["item_id"] for row in other["items"]}, set(ITEM_IDS))  # the one read carries the whole list
+        host = f"127.0.0.1:{port}"
+        with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
+            connection.request("GET", "/api/items", headers={"Host": host, "Origin": f"http://{host}"})
+            self.assertEqual(connection.getresponse().status, 404)  # there is no second list route
+        workflow.command("reject_offset_and_authorize_correction", self._review_body(workflow))
+        body = json.dumps(self._revision_body(workflow)).encode()
+        ack = "/api/action/acknowledge"
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, token=self._token(port, "item-01")), (409, {"error": {"code": "action_token_invalid"}, "changed": False}))  # item-01's token on item H
+        status, refused = self._role_post(port, ack, ("analyst",), body, token=self._token(port, "item-01"), item="item-01")
+        self.assertNotEqual(status, 200)  # item-01 has no action to acknowledge: the Owner refuses it
+        self.assertFalse(refused["error"]["code"].startswith("action_token"))
+        self.assertEqual(self._role_post(port, ack, ("analyst",), body, item="bad item")[0], 400)
+        self.assertEqual(sum(1 for e in workflow.workspace()["h"]["timeline"] if e["kind"] == "ACTION_ACKNOWLEDGED"), 0)  # H was never touched
 
     def test_claim_level_separation_the_named_acknowledger_may_not_be_the_named_authorizer(self) -> None:
         # Claim-level only: both names are caller claims. This stops one claimed person doing both steps; it is not identity enforcement.

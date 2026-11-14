@@ -45,7 +45,7 @@ class HistorySegmentTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self._tmp.cleanup)
         self.owner = FinancialOwner(path=self.root / "owner.sqlite3", config=CONFIG, trusted_authority=AUTHORITY)
-        self.addCleanup(self.owner.close)  # R1a: the owner's writer holds the file open until closed
+        self.addCleanup(self.owner.close)  # the owner's writer holds the file open until closed
         self.items = [item.item_id for item in _setup(self.owner, random.Random(1), 4, AUTHORITY)]
         self.commands = 0
         self._drive(30)
@@ -230,7 +230,7 @@ class HistorySegmentTests(unittest.TestCase):
         # The Owner itself refuses, typed, to seal onto a tampered chain or with missing tracking.
         for statement, code in (("UPDATE history_segments SET rows_json=rows_json||' ' WHERE segment_index=(SELECT MAX(segment_index) FROM history_segments)", "^history_segment_chain$"), ("DELETE FROM history_open", "^history_segment_events$")):
             with self.subTest(statement=statement):
-                self.owner.close()  # R1a: the bytes are swapped in while no connection holds the file
+                self.owner.close()  # the bytes are swapped in while no connection holds the file
                 self.owner.path.write_bytes(source)
                 self._tamper(self.owner.path, statement)
                 with self.assertRaisesRegex(FinancialIntegrityError, code):

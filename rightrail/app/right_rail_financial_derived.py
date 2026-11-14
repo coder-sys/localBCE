@@ -31,6 +31,13 @@ class DerivedError(ValueError):
     """A derived builder's code; the builder prefixes it, and nothing partial is returned."""
 
 
+def need(table: dict, key: object, cause: str) -> object:
+    """``table[key]``, or a typed refusal naming the row the checked store should have held."""
+    if key not in table:
+        raise DerivedError(f"{cause}-missing:{key}")
+    return table[key]
+
+
 def cents(value: object, label: str, *, minimum: int = 0) -> int:
     if type(value) is not int or not minimum <= value <= MAX_CENTS:
         raise DerivedError(label)
@@ -42,7 +49,7 @@ def hex_upper(value: bytes) -> str:
 
 
 def signed_pack(record: dict, custody: object, database: object, maximum: int) -> bytes:
-    """The pack's canonical bytes, signed with the owner's custody key at the custody log's tail (H2): ``signer``
+    """The pack's canonical bytes, signed with the owner's custody key at the custody log's tail: ``signer``
     names the key and the custody record, ``signature`` covers every other byte (``custody.verify_pack``)."""
     if type(custody) is not Custody:
         raise DerivedError("custody-required")
@@ -72,7 +79,7 @@ def bound_control_pack(rows: dict, prefix: str, content_sha256: str, *, version:
     """The one approved pack of ``version``, published before ``before_ms``, that lists ``prefix + content_sha256``, once."""
     published = {e["aggregate_id"]: e["committed_at_ms"] for e in rows["financial_events"] if e["kind"] == "CONTROL_PACK_PUBLISHED"}
     refs = lambda pack: json.loads(pack["source_refs_json"])["values"]
-    bound = [pack for pack in rows["control_packs"] if pack["status"] == "APPROVED" and published[pack["pack_id"]] < before_ms
+    bound = [pack for pack in rows["control_packs"] if pack["status"] == "APPROVED" and need(published, pack["pack_id"], "pack-publish-event") < before_ms
              and pack["version"] == version and prefix + content_sha256 in refs(pack)]
     if len(bound) != 1:
         raise DerivedError(f"{label}-not-in-approved-control-pack")

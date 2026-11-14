@@ -1,4 +1,4 @@
-"""Checked mark files beside the gate's local SQLite stores (id registry, checkpoint producer), synthetic, activation=false.
+"""Checked mark files beside the gate's local SQLite stores (checkpoint producer), synthetic, activation=false.
 
 A mark records a store's last durable state so a restored older store is refused.  Each record is
 body || SHA3-256(domain || body); each store kind has its own domain, so one kind's mark never passes as

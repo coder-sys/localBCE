@@ -264,6 +264,9 @@ structure ExistingCorrectionIdentity where
   inputEvaluationResultDigest : Bytes
   expectedRevision : Nat
   decidedAtMs : Nat
+  /-- Whether the original request named its decision time (`some false`: it left it to the
+      owner's clock); `none` for a row stored before this was kept. -/
+  decisionTimeGiven : Option Bool
 deriving DecidableEq, Repr
 
 inductive ActionIdentityLookup where
@@ -273,8 +276,8 @@ inductive ActionIdentityLookup where
 deriving DecidableEq, Repr
 
 /-! The command's evaluation ID/digest/revision/time are mandatory even on a
-    retry. This closes the Owner API's optional retry fields into one exact
-    command identity. The current authority, global lookup facts and the
+    retry, and the command says whether the caller named the time. This closes
+    the Owner API's optional retry fields into one exact command identity. The current authority, global lookup facts and the
     payments linked to earlier correction requests are read by State, not
     caller-authenticated values. -/
 structure CorrectionCommand where
@@ -290,6 +293,8 @@ structure CorrectionCommand where
   evaluationId : String
   evaluationResultDigest : Bytes
   decisionAtMs : Nat
+  /-- Whether the caller named `decisionAtMs`; false when it is the owner's clock. -/
+  decisionTimeGiven : Bool
   ownerNowMs : Nat
   actionLookup : ActionIdentityLookup
   queryObservations : CorrectionQueryObservations

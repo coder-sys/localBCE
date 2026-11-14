@@ -811,15 +811,13 @@ def _validate_output(
 
 def _comparable_values(output: Mapping[str, object], facts: SnapshotFacts) -> dict[str, object]:
     values: dict[str, object] = {}
-    aggregate = output["aggregate"]
-    assert type(aggregate) is dict
+    aggregate, rows = output["aggregate"], output["member_results"]
+    if type(aggregate) is not dict or type(rows) is not list or any(type(row) is not dict for row in rows):
+        _fail("switch:output-shape")
     values["aggregate.member_count"] = aggregate["member_count"]
     values["aggregate.total_owed_cents"] = aggregate["total_owed_cents"]
     values["aggregate.currency"] = aggregate["currency"]
-    rows = output["member_results"]
-    assert type(rows) is list
     for row in rows:
-        assert type(row) is dict
         member_id = row["member_id"]
         values[f"members.{member_id}.currency"] = row["currency"]
         values[f"members.{member_id}.owed_cents"] = row["owed_cents"]
@@ -984,7 +982,6 @@ def run_shadow_replay(
         missing.append("candidate_missing")
     if missing:
         return _base_report(status="INCOMPLETE", reasons=missing, facts=facts)
-    assert cohort_approval is not None and reference is not None and candidate is not None
     if type(reference) is not ReferenceSpec or type(candidate) is not CandidateSpec:
         return _unknown(_base_report(status="INCOMPLETE", reasons=[], facts=facts), ["operator_spec_schema"], ["operator_spec_schema"])
     approval_record, approval_error = _validate_approval(cohort_approval, facts)
@@ -1003,7 +1000,6 @@ def run_shadow_replay(
         ) = _build_replay_input(snapshot_bytes, facts, approval_record, reference, candidate)
     except FinancialSwitchError as error:
         return _unknown(_base_report(status="INCOMPLETE", reasons=[], facts=facts), [str(error)], [str(error)])
-    assert approval_record is not None
     input_sha256 = hashlib.sha256(replay_input).hexdigest().upper()
     report = _base_report(status="INCOMPLETE", reasons=[], facts=facts, input_sha256=input_sha256)
     report["reference_identity"] = reference_record

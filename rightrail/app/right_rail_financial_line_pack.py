@@ -1,6 +1,6 @@
 """Read-only CMS-64.9 line pack: one line and one quarter, documented from a verified store.
 
-The pack is documentation only (rrb/archive/xi2-records-20261001.md "Line pack"). It reconciles cents to the
+The pack is documentation only. It reconciles cents to the
 Ledger, names each row's evidence digest and the Control Pack and rule version it was decided
 under, splits service period from payment date and lists what the Ledger does not hold. It makes
 no determination about any payment. It is built only from a Continuity package that the
@@ -16,13 +16,13 @@ import json
 import re
 
 from app.right_rail_financial_derived import (  # NOT_HELD and quarter_window stay importable from here
-    NOT_HELD, DerivedError, bound_control_pack, cents as _cents, hex_upper as _hex, quarter_of as _quarter_of, quarter_window, signed_pack, verified_rows,
+    NOT_HELD, DerivedError, bound_control_pack, cents as _cents, hex_upper as _hex, need, quarter_of as _quarter_of, quarter_window, signed_pack, verified_rows,
 )
 from app.right_rail_financial_owner_independent import IndependentFinancialError, MAX_PACKAGE_BYTES
 from app.right_rail_financial_switch import FinancialSwitchError, _canonical_json, _decode_canonical_json, _id
 
 
-LINE_PACK_CONTRACT = "RR/LINE-PACK/CMS-64.9/v2"  # v2 (H2): signed with the custody key; v1 had "signer": null
+LINE_PACK_CONTRACT = "RR/LINE-PACK/CMS-64.9/v2"  # v2: signed with the custody key; v1 had "signer": null
 LINE_MAP_CONTRACT = "RR/LINE-PACK/LINE-MAP/v1"
 PROVENANCE_CONTRACT = "RR/LINE-PACK/PROVENANCE/v1"
 PAYMENT_DATE_BASIS = "PAYMENT_EVENT_AT"  # CMS-64 reports by payment date; the only basis the Ledger holds
@@ -146,13 +146,13 @@ def _build(
     unavailable = set(NOT_HELD)
     if not (pack["effective_start_ms"] <= start_ms and end_ms <= pack["effective_end_ms"]):
         unavailable.add("gap:line-map-window-does-not-cover-quarter")
-    complete = [p for p in rows["population_imports"] if p["status"] == "PUBLISHED" and p["source_complete"] == 1 and published[p["population_id"]] < end_ms]
+    complete = [p for p in rows["population_imports"] if p["status"] == "PUBLISHED" and p["source_complete"] == 1 and need(published, p["population_id"], "population-publish-event") < end_ms]
     superseded = {row["supersedes_manifest_id"] for row in rows["population_manifests"] if row["registered_at_ms"] < end_ms}
     bindings = {row["population_id"]: row["manifest_id"] for row in rows["population_manifest_bindings"]}
     manifests = {row["manifest_id"]: row for row in rows["population_manifests"]}
     member_manifest_digest = None
-    if len(complete) == 1 and bindings[complete[0]["population_id"]] not in superseded:  # the head at quarter end
-        member_manifest_digest = _hex(manifests[bindings[complete[0]["population_id"]]]["member_digest"])
+    if len(complete) == 1 and need(bindings, complete[0]["population_id"], "population-manifest") not in superseded:  # the head at quarter end
+        member_manifest_digest = _hex(need(manifests, bindings[complete[0]["population_id"]], "manifest")["member_digest"])
     else:
         unavailable.add("gap:member-manifest-not-complete-at-quarter-end")
 
@@ -166,12 +166,12 @@ def _build(
         conflicts.setdefault(conflict["existing_payment_id"], []).append(conflict["visible_at_ms"])
     pack_rows, split, rule_versions, adjustments = [], {}, set(), []
     for payment in sorted(rows["payments"], key=lambda row: row["payment_id"]):
-        proof = evidence[payment["evidence_id"]]
+        proof = need(evidence, payment["evidence_id"], "payment-evidence")
         if scope["program_id"] != predicate["program_id"] or proof["source_id"] not in predicate["payment_source_ids"]:
             continue
         # Quarters go by the owner-clock received_at_ms (checker-bound, never before event_at_ms), not a caller's date.
         learned = proof["received_at_ms"]
-        undone = None if payment["active"] == 1 else max(evidence[payment["reversed_by_evidence_id"]]["received_at_ms"], learned)
+        undone = None if payment["active"] == 1 else max(need(evidence, payment["reversed_by_evidence_id"], "reversal-evidence")["received_at_ms"], learned)
         if payment["event_at_ms"] < start_ms:  # an earlier quarter's payment: facts learned now are listed, never netted
             for kind, at_ms in (("PAYMENT", learned), ("REVERSAL", undone), *(("CONFLICT", seen) for seen in sorted(conflicts.get(payment["payment_id"], ())))):
                 if at_ms is not None and start_ms <= at_ms < end_ms:
@@ -185,7 +185,7 @@ def _build(
             continue
         if any(seen < end_ms for seen in conflicts.get(payment["payment_id"], ())):
             unavailable.add(f"gap:amount-conflict-visible:{payment['payment_id']}")
-        obligation = obligations[payment["obligation_id"]]
+        obligation = need(obligations, payment["obligation_id"], "payment-obligation")
         evaluation = decided.get(payment["obligation_id"])
         if (
             evaluation is None

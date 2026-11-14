@@ -63,7 +63,8 @@ namespace BlindLedger.Gate.Rules
 
     A payment (`Line.pay`) is ALLOW only when it has a line and every line is
     (`payOutcome`).  The released set is every line of a payment released by
-    any path: an ALLOW payment's, or one a person released from HUMAN_REVIEW;
+    any path: an ALLOW payment's, a bypassed one's, one that goes at HOLD
+    authority (`limitedPay`), or one a person released from HUMAN_REVIEW;
     an ALLOW line of a held payment joins neither set.  The unresolved set
     holds the gate's HOLD and HUMAN_REVIEW lines, enrolled or not, until a
     person releases or rejects them; the gate adds each identity to at most
@@ -115,15 +116,48 @@ inductive Reason
   | MEMBER_NOT_ENROLLED | MEMBER_NOT_ENROLLED_UNVERIFIED | PROVIDER_DECEASED | PROVIDER_DECEASED_UNVERIFIED
   | PROVIDER_EXCLUDED | PROVIDER_EXCLUDED_UNVERIFIED | SERVICE_DATE_FUTURE | SERVICE_DATE_INVALID | STALE_DMF
   | STALE_ENROLLMENT | STALE_EXCLUSION | STALE_PROVIDER_DEATH | STALE_RELEASED | STALE_UNRESOLVED
+  -- STMT-CHANGE-1 (ONEP-6): appended last, so no existing constructor moves.
+  | POSTING_CAP
   deriving DecidableEq, Repr
 
 /-- Every code once, in ascending byte order of its name (the runner's `#guard` checks the order). -/
 def reasons : List Reason :=
   [.ALREADY_DECIDED, .CAP_MEMBER_MONTH_DUPLICATE, .COLLIDES_WITH_UNRESOLVED_NEAR, .DUPLICATE_OF_UNRESOLVED,
    .FFS_DUPLICATE_LINE, .FFS_DUPLICATE_UNVERIFIED, .FFS_NEAR_DUPLICATE, .MEMBER_DECEASED, .MEMBER_DECEASED_UNVERIFIED,
-   .MEMBER_NOT_ENROLLED, .MEMBER_NOT_ENROLLED_UNVERIFIED, .PROVIDER_DECEASED, .PROVIDER_DECEASED_UNVERIFIED,
+   .MEMBER_NOT_ENROLLED, .MEMBER_NOT_ENROLLED_UNVERIFIED, .POSTING_CAP, .PROVIDER_DECEASED, .PROVIDER_DECEASED_UNVERIFIED,
    .PROVIDER_EXCLUDED, .PROVIDER_EXCLUDED_UNVERIFIED, .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID, .STALE_DMF,
    .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
+
+/-- A reason's bit in a signed mask (a grant entry's holds, a bypass's overrides).  Fixed per reason, never its
+    place in `reasons`: a signed mask keeps its meaning when a reason is added.  These are the positions the codes
+    held in name order when masks were first signed; a new reason takes the next free number (`reasons.length`
+    before it is added), and the masks' width (`Authority.reasonMask`) grows with it.  `idx_inj` and the runner's
+    `#guard` check the numbers are distinct and dense. -/
+def Reason.idx : Reason → Nat
+  | .ALREADY_DECIDED => 0 | .CAP_MEMBER_MONTH_DUPLICATE => 1 | .COLLIDES_WITH_UNRESOLVED_NEAR => 2
+  | .DUPLICATE_OF_UNRESOLVED => 3 | .FFS_DUPLICATE_LINE => 4 | .FFS_DUPLICATE_UNVERIFIED => 5
+  | .FFS_NEAR_DUPLICATE => 6 | .MEMBER_DECEASED => 7 | .MEMBER_DECEASED_UNVERIFIED => 8
+  | .MEMBER_NOT_ENROLLED => 9 | .MEMBER_NOT_ENROLLED_UNVERIFIED => 10 | .POSTING_CAP => 11
+  | .PROVIDER_DECEASED => 12 | .PROVIDER_DECEASED_UNVERIFIED => 13 | .PROVIDER_EXCLUDED => 14
+  | .PROVIDER_EXCLUDED_UNVERIFIED => 15 | .SERVICE_DATE_FUTURE => 16 | .SERVICE_DATE_INVALID => 17
+  | .STALE_DMF => 18 | .STALE_ENROLLMENT => 19 | .STALE_EXCLUSION => 20 | .STALE_PROVIDER_DEATH => 21
+  | .STALE_RELEASED => 22 | .STALE_UNRESOLVED => 23
+
+/-- Two reasons never share a bit. -/
+theorem Reason.idx_inj {a b : Reason} (h : a.idx = b.idx) : a = b := by
+  cases a <;> cases b <;> first | rfl | (simp [Reason.idx] at h)
+
+-- The bits are exactly 0 .. reasons.length - 1, each once: every mask bit below the width names one reason.
+#guard (List.range reasons.length).all fun i => (reasons.filter (·.idx == i)).length == 1
+
+/-- The reasons a bypass may override: findings about reference facts or similarity.  Every other reason guards the
+    release-once rule or is malformed input, and a new reason is not bypassable until listed here. -/
+def bypassable : Reason → Bool
+  | .MEMBER_DECEASED | .MEMBER_DECEASED_UNVERIFIED | .MEMBER_NOT_ENROLLED | .MEMBER_NOT_ENROLLED_UNVERIFIED
+  | .PROVIDER_DECEASED | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED | .PROVIDER_EXCLUDED_UNVERIFIED
+  | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .FFS_NEAR_DUPLICATE
+  | .COLLIDES_WITH_UNRESOLVED_NEAR | .SERVICE_DATE_FUTURE => true
+  | _ => false
 
 /-- For CAP_820, `payee` and `rendering` are the plan and `date` is the first
     day of the service period.  `pay` is the payment the line is part of. -/
@@ -182,6 +216,11 @@ structure Ctx where
   anchor : Nat
   /-- The payments this batch decides again: each an ALLOW past its maximum age, never released. -/
   redo : List Nat
+  /-- The admitted bypasses of this batch: the payment number and override mask of each one whose request is the
+      frame's request for that payment. -/
+  byp : List (Nat × Nat) := []
+  /-- The payments of this batch under a HOLD-level grant entry: the payment number and that entry's holds mask. -/
+  lim : List (Nat × Nat) := []
 
 def entries {α : Type} (o : Option (Snapshot α)) : List α := (o.map (·.entries)).getD []
 
@@ -302,8 +341,14 @@ def own (c : Ctx) (l : Line) : Bool := c.redo.contains l.pay && (releasedSet c).
 def claim (c : Ctx) (l : Line) : List Key :=
   if isCap l && notEnrolled c l && !own c l then [exactKey l, idKey l] else keys l
 
-/-- The keys claimed by the unresolved set. -/
-def pending (c : Ctx) : List Key := (unresolvedSet c).flatMap (claim c)
+/-- A held line of a payment an admitted bypass names: the unresolved twin of `own`. -/
+def ownU (c : Ctx) (l : Line) : Bool := (c.byp.lookup l.pay).isSome && (unresolvedSet c).contains l
+
+/-- The keys the unresolved set claims against line `l`.  When an admitted bypass names `l`'s payment, the row equal
+    to `l` is left out, so a held line sent again is not a duplicate of itself.  Every other row stays: another
+    line of the same or another payment, or `l`'s identity with changed content, still meets every duplicate rule. -/
+def pending (c : Ctx) (l : Line) : List Key :=
+  ((unresolvedSet c).filter fun u => !(u == l && (c.byp.lookup l.pay).isSome)).flatMap (claim c)
 
 /-- The exact keys of both sets' `loose` rows. -/
 def looseKeys (c : Ctx) : List Key :=
@@ -313,12 +358,12 @@ def looseKeys (c : Ctx) : List Key :=
     §§71104-71105 quarterly minimum); exclusions 31 days (42 CFR 455.436
     monthly checks); enrollment 7 days, a placeholder for the state's own. -/
 def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
-  | .ALREADY_DECIDED => seen.contains (idKey l) || (pending c).contains (idKey l)
+  | .ALREADY_DECIDED => seen.contains (idKey l) || (pending c l).contains (idKey l)
   | .CAP_MEMBER_MONTH_DUPLICATE => isCap l &&
       (seen.contains (exactKey l) || seen.contains (nearKey l) || certain c 7 okSpan c.enrollment l && overlap c l)
   | .COLLIDES_WITH_UNRESOLVED_NEAR =>
-      !isCap l && (pending c).contains (nearKey l) && !(pending c).contains (exactKey l)
-  | .DUPLICATE_OF_UNRESOLVED => (pending c).contains (exactKey l) || isCap l && (pending c).contains (nearKey l)
+      !isCap l && (pending c l).contains (nearKey l) && !(pending c l).contains (exactKey l)
+  | .DUPLICATE_OF_UNRESOLVED => (pending c l).contains (exactKey l) || isCap l && (pending c l).contains (nearKey l)
   | .FFS_DUPLICATE_LINE => !isCap l && seen.contains (exactKey l)
   | .FFS_DUPLICATE_UNVERIFIED => !isCap l && (looseKeys c).contains (exactKey l)
   | .FFS_NEAR_DUPLICATE => !isCap l && seen.contains (nearKey l) && !seen.contains (exactKey l)
@@ -338,6 +383,7 @@ def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .STALE_PROVIDER_DEATH => !usable c.today 90 okDeath c.providerDeaths
   | .STALE_RELEASED => !chained c.today c.releasedPrior c.released
   | .STALE_UNRESOLVED => !chained c.today c.unresolvedPrior c.unresolved
+  | .POSTING_CAP => false  -- the Spec reads whole sets; only the capped disk engine (Gate.OnepIndex) adds it, as HOLD
 
 /-- Reasons a person must look at: bad or unusable data, what it still shows, or a near duplicate or
     collision. -/
@@ -399,14 +445,43 @@ def payOutcome (c : Ctx) (ds : List Decision) (p : Nat) : Outcome :=
 def allowedLines (ds : List Decision) : List Line :=
   (ds.filter (·.outcome == .ALLOW)).map (·.line)
 
-/-- The lines of ALLOW payments, less a re-decision's (released already). -/
-def releasedLines (c : Ctx) (ds : List Decision) : List Line :=
-  (allowedLines ds).filter fun l => !c.redo.contains l.pay && payOutcome c ds l.pay == .ALLOW
+/-- A payment an admitted bypass releases: the gate held it here (a line is unresolved), it is not a re-decision, and
+    every reason on every line is bypassable and set in the mask (vacuously so for a held payment whose facts have
+    since cleared: the bypass is then the recorded cause of its release). -/
+def bypassed (c : Ctx) (ds : List Decision) (p : Nat) : Bool :=
+  match c.byp.lookup p with
+  | none => false
+  | some m => !c.redo.contains p &&
+      ds.any (fun d => d.line.pay == p && (unresolvedSet c).contains d.line) &&
+      ds.all fun d => d.line.pay != p || d.reasons.all fun r => bypassable r && (m >>> r.idx % 2 == 1)
 
-/-- HOLD and HUMAN_REVIEW lines with a new identity, not released already: they stay open until a
-    person acts. -/
+/-- Under a HOLD-level grant entry with holds mask `m`, the gate may hold a payment only for a reason the entry names:
+    payment `p`, with rules outcome `o`, goes when it has a decided line, `o` is not ALLOW, and every reason on its lines
+    is one a bypass may override and `m` does not name.  A reason that guards the release-once rule or marks malformed
+    input (`bypassable` false) is never lifted, whatever the mask. -/
+def lifts (m : Nat) (ds : List Decision) (p : Nat) (o : Outcome) : Bool :=
+  o != .ALLOW && ds.any (·.line.pay == p) &&
+    ds.all fun d => d.line.pay != p || d.reasons.all fun r => bypassable r && !(m >>> r.idx % 2 == 1)
+
+/-- A payment that goes at HOLD authority (`lifts` under its entry's mask): the state pays it, so its lines are
+    released here like an ALLOW payment's, and a later batch can release it again under no authority.  A re-decision
+    (a payment released before) is never lifted: a line it adds goes only through the rules or a person. -/
+def limitedPay (c : Ctx) (ds : List Decision) (p : Nat) : Bool :=
+  match c.lim.lookup p with
+  | none => false
+  | some m => !c.redo.contains p && lifts m ds p (payOutcome c ds p)
+
+/-- The lines of ALLOW payments, less a re-decision's (released already), every line of a bypassed payment, and the
+    lines of a payment that goes at HOLD authority not released already. -/
+def releasedLines (c : Ctx) (ds : List Decision) : List Line :=
+  (ds.filter fun d => (d.outcome == .ALLOW && !c.redo.contains d.line.pay && payOutcome c ds d.line.pay == .ALLOW) ||
+    bypassed c ds d.line.pay || limitedPay c ds d.line.pay && !own c d.line).map (·.line)
+
+/-- HOLD and HUMAN_REVIEW lines with a new identity, not released or held already and not released by a bypass or at
+    HOLD authority: they stay open until a person acts. -/
 def unresolvedLines (c : Ctx) (ds : List Decision) : List Line :=
-  (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !own c d.line).map (·.line)
+  (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !own c d.line &&
+    !ownU c d.line && !bypassed c ds d.line.pay && !limitedPay c ds d.line.pay).map (·.line)
 
 /-- The decisions and the gate's next checkpoints of the two sets. -/
 structure Result where
@@ -422,7 +497,7 @@ def decideBatch (c : Ctx) (batch : List Line) : Result :=
   { decisions := ds, released := advance c.today c.releasedPrior c.released (releasedLines c ds),
     unresolved := advance c.today c.unresolvedPrior c.unresolved (unresolvedLines c ds) }
 
-/-- The id keys of ids the tenant's id registry gives another shard (gate-shard-uniqueness-v1).  Kind 4
+/-- The id keys of ids already seen outside the shard's own sets.  Kind 4
     equals no exact (1, 3) or near (0, 2) key, so these fire only `ALREADY_DECIDED`. -/
 def idSeen (f : List Nat) : List Key := f.map fun i => [4, i]
 
@@ -466,71 +541,34 @@ def pinInput {α : Type} (domain : String) (kind : Nat) (fields : α → List (N
   let rows ← s.entries.mapM (row ∘ fields)
   pure (domain.toUTF8.toList ++ 0 :: head ++ (rows.mergeSort fun a b => decide (a ≤ b)).flatten)
 
-/-! Multi-shard runtime (rrb/designs/multi-shard-runtime-v1.md §2, §5).  The tenant's id registry answers a
-    shard's reserve with one `Owner` per id it knows: the shard that holds it and whether that shard's
-    batch since sealed (`settled`: the id is recorded in that shard's sets).  Proofs: `ShardRun.lean`. -/
-
-structure Owner where
-  id : Nat
-  shard : Nat
-  settled : Bool
-  deriving DecidableEq, Repr
-
-/-- Shard `k` may act on id `i`: the registry gives it `k`, or another shard recorded it. -/
-def okId (k : Nat) (os : List Owner) (i : Nat) : Bool := os.any fun o => o.id == i && (o.shard == k || o.settled)
-
-/-- Another shard recorded id `i`: shard `k` answers it `ALREADY_DECIDED`. -/
-def taken (k : Nat) (os : List Owner) (i : Nat) : Bool := os.any fun o => o.id == i && (o.shard != k && o.settled)
-
-/-- The lines shard `k` decides now: a payment waits (answered UNAVAILABLE, resent) if any of its ids is
-    neither `k`'s nor recorded elsewhere, an id with no answer included. -/
-def ready (k : Nat) (os : List Owner) (b : List Line) : List Line :=
-  b.filter fun l => !b.any fun m => m.pay == l.pay && !okId k os m.id
-
-def foreignOf (k : Nat) (os : List Owner) (b : List Line) : List Nat := (b.map (·.id)).filter (taken k os)
-
-/-- Of shard `k`'s unsettled ids `p`, those its sealed sets do not hold: the registry frees them. -/
-def settleFree (rel unr : List Line) (p : List Nat) : List Nat :=
-  p.filter fun i => !((rel ++ unr).map (·.id)).contains i
-
-/-- Shard `k`'s ids in flight in a registry answer: reserved by `k`, not yet recorded (`pendingOf_fair`). -/
-def pendingOf (k : Nat) (os : List Owner) : List Nat := (os.filter fun o => o.shard == k && !o.settled).map (·.id)
-
-/-- One batch of shard `k` against the registry's answers `os`. -/
-def decideReg (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
-  decideBatchIn c (foreignOf k os (ready k os b)) (ready k os b)
-
 /-- A shard decides with its own checkpoints as both the sets read and the priors; this is gate-rules-resident's
     `next c₀ r` (= `carried c₀ r.released r.unresolved`; one def, not two). -/
 def carried (c₀ : Ctx) (rel unr : Snapshot Line) : Ctx :=
   { c₀ with released := some rel, releasedPrior := rel, unresolved := some unr, unresolvedPrior := unr }
 
 /-- One batch of a shard, as the decide layer receives it: snapshots, today, redo and the frame's anchor (in
-    `ctx`; its set fields are ignored), the registry's answers, the lines. -/
+    `ctx`; its set fields are ignored), the lines. -/
 structure Batch where
   ctx : Ctx
-  owners : List Owner
   lines : List Line
 
 /-- The rows a batch appends to each set (multi-shard §C, unchanged text). -/
 def batchFresh (c : Ctx) (r : Result) : List Line × List Line :=
   (r.released.entries.drop (releasedSet c).length, r.unresolved.entries.drop (unresolvedSet c).length)
 
-/-- Spec of the carried state: the fold of `decideReg` over all of shard k's prior batches. -/
+/-- Spec of the carried state: the fold of `decideBatchIn c []` over all of shard k's prior batches. -/
 def shardSets (k : Nat) (g : Snapshot Line × Snapshot Line) (ts : List Batch) : Snapshot Line × Snapshot Line :=
-  ts.foldl (fun s t => let r := decideReg (carried t.ctx s.1 s.2) k t.owners t.lines; (r.released, r.unresolved)) g
+  ts.foldl (fun s t => let r := decideBatchIn (carried t.ctx s.1 s.2) [] t.lines; (r.released, r.unresolved)) g
 
 /-- What the store persists: each batch's appended rows. -/
 def addsOf (k : Nat) (g : Snapshot Line × Snapshot Line) : List Batch → List (List Line × List Line)
   | [] => []
-  | t :: ts => let c := carried t.ctx g.1 g.2; let r := decideReg c k t.owners t.lines
+  | t :: ts => let c := carried t.ctx g.1 g.2; let r := decideBatchIn c [] t.lines
                batchFresh c r :: addsOf k (r.released, r.unresolved) ts
 
 /-- Replay of stored rows onto genesis (the load path's spec). -/
 def replay (g : Snapshot Line × Snapshot Line) (as : List (List Line × List Line)) : Snapshot Line × Snapshot Line :=
   as.foldl (fun s a => (⟨s.1.asOf, s.1.entries.length + a.1.length, s.1.entries ++ a.1⟩,
                         ⟨s.2.asOf, s.2.entries.length + a.2.length, s.2.entries ++ a.2⟩)) g
-
-def settleFreeInc (fresh : List Line) (p : List Nat) : List Nat := p.filter fun i => !(fresh.map (·.id)).contains i
 
 end BlindLedger.Gate.Rules

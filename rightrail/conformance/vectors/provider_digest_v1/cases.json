@@ -1,0 +1,265 @@
+{
+ "contract": "RR/PROVIDER-DIGEST-VECTORS/v1",
+ "positive": [
+  {
+   "id": "pos-01-template",
+   "kind": "bundle",
+   "canonical": "{\"bundleId\":\"RR-SYNTHETIC-PREFLIGHT\",\"contract\":\"RR/PROVIDER-APP/RULE-BUNDLE/v1\",\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"provenance\":{\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"status\":\"UNAPPROVED_SYNTHETIC_FIXTURE\"},\"publishedAt\":\"2026-01-01T00:00:00Z\",\"rules\":[{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-001\",\"semantic\":\"SERVICE_DATE_IN_EFFECTIVE_WINDOW\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":\"SYNTH-CATEGORY-A\",\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-002\",\"semantic\":\"SERVICE_CATEGORY_EQUALS\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-003\",\"semantic\":\"SUPPORT_REFERENCE_PRESENT\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":100000,\"minimumCents\":100,\"ruleId\":\"SYN-PRE-004\",\"semantic\":\"CHARGE_CENTS_BETWEEN\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":30,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-005\",\"semantic\":\"SOURCE_COMPLETE_AND_FRESH\",\"version\":1}],\"scope\":\"RR-SYNTHETIC-PROVIDER-A\",\"version\":1,\"withdrawnAt\":null}",
+   "digest": "sha256:159dba83944480a5a9500e879b2f70a1f42576049ac04ead6102b38934b6163d",
+   "note": "Minimal accepted bundle in canonical form."
+  },
+  {
+   "id": "pos-02-pretty-reversed",
+   "kind": "bundle",
+   "canonical": "{\"bundleId\":\"RR-SYNTHETIC-PREFLIGHT\",\"contract\":\"RR/PROVIDER-APP/RULE-BUNDLE/v1\",\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"provenance\":{\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"status\":\"UNAPPROVED_SYNTHETIC_FIXTURE\"},\"publishedAt\":\"2026-01-01T00:00:00Z\",\"rules\":[{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-001\",\"semantic\":\"SERVICE_DATE_IN_EFFECTIVE_WINDOW\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":\"SYNTH-CATEGORY-A\",\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-002\",\"semantic\":\"SERVICE_CATEGORY_EQUALS\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-003\",\"semantic\":\"SUPPORT_REFERENCE_PRESENT\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":100000,\"minimumCents\":100,\"ruleId\":\"SYN-PRE-004\",\"semantic\":\"CHARGE_CENTS_BETWEEN\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":30,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-005\",\"semantic\":\"SOURCE_COMPLETE_AND_FRESH\",\"version\":1}],\"scope\":\"RR-SYNTHETIC-PROVIDER-A\",\"version\":1,\"withdrawnAt\":null}",
+   "digest": "sha256:159dba83944480a5a9500e879b2f70a1f42576049ac04ead6102b38934b6163d",
+   "note": "Indented, reverse key order, trailing newline: accepted, digest unchanged."
+  },
+  {
+   "id": "pos-03-escaped-value",
+   "kind": "bundle",
+   "canonical": "{\"bundleId\":\"RR-SYNTHETIC-PREFLIGHT\",\"contract\":\"RR/PROVIDER-APP/RULE-BUNDLE/v1\",\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"provenance\":{\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"status\":\"UNAPPROVED_SYNTHETIC_FIXTURE\"},\"publishedAt\":\"2026-01-01T00:00:00Z\",\"rules\":[{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-001\",\"semantic\":\"SERVICE_DATE_IN_EFFECTIVE_WINDOW\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":\"SYNTH-CATEGORY-A\",\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-002\",\"semantic\":\"SERVICE_CATEGORY_EQUALS\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-003\",\"semantic\":\"SUPPORT_REFERENCE_PRESENT\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":100000,\"minimumCents\":100,\"ruleId\":\"SYN-PRE-004\",\"semantic\":\"CHARGE_CENTS_BETWEEN\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":30,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-005\",\"semantic\":\"SOURCE_COMPLETE_AND_FRESH\",\"version\":1}],\"scope\":\"RR-SYNTHETIC-PROVIDER-A\",\"version\":1,\"withdrawnAt\":null}",
+   "digest": "sha256:159dba83944480a5a9500e879b2f70a1f42576049ac04ead6102b38934b6163d",
+   "note": "A value written with a \\u escape: same parsed string, same digest."
+  },
+  {
+   "id": "pos-04-upper-bounds",
+   "kind": "bundle",
+   "canonical": "{\"bundleId\":\"RR-SYNTHETIC-PREFLIGHT\",\"contract\":\"RR/PROVIDER-APP/RULE-BUNDLE/v1\",\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"provenance\":{\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"status\":\"UNAPPROVED_SYNTHETIC_FIXTURE\"},\"publishedAt\":\"2026-01-01T00:00:00Z\",\"rules\":[{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":365,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-005\",\"semantic\":\"SOURCE_COMPLETE_AND_FRESH\",\"version\":65535},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":100000000,\"minimumCents\":0,\"ruleId\":\"SYN-PRE-004\",\"semantic\":\"CHARGE_CENTS_BETWEEN\",\"version\":65535},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":\"SYNTH-CATEGORY-B\",\"maxSourceAgeDays\":null,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-002\",\"semantic\":\"SERVICE_CATEGORY_EQUALS\",\"version\":1}],\"scope\":\"RR-SYNTHETIC-PROVIDER-B\",\"version\":65535,\"withdrawnAt\":\"2026-06-01T00:00:00Z\"}",
+   "digest": "sha256:38603a1751ceb7132ab6a377cd1e782ab9aaca6a50abb132c37b8cf1b36f6540",
+   "note": "Largest version, cents, age; non-default rule order; withdrawnAt set."
+  },
+  {
+   "id": "pos-05-lower-bounds",
+   "kind": "bundle",
+   "canonical": "{\"bundleId\":\"RR-SYNTHETIC-PREFLIGHT\",\"contract\":\"RR/PROVIDER-APP/RULE-BUNDLE/v1\",\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"provenance\":{\"issuerReference\":\"LOCAL-SYNTHETIC-FIXTURE\",\"status\":\"UNAPPROVED_SYNTHETIC_FIXTURE\"},\"publishedAt\":\"2026-01-01T00:00:00Z\",\"rules\":[{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":null,\"maximumCents\":100000000,\"minimumCents\":100000000,\"ruleId\":\"SYN-PRE-004\",\"semantic\":\"CHARGE_CENTS_BETWEEN\",\"version\":1},{\"effectiveFrom\":\"2026-01-01\",\"effectiveUntil\":\"2027-01-01\",\"expectedCategory\":null,\"maxSourceAgeDays\":0,\"maximumCents\":null,\"minimumCents\":null,\"ruleId\":\"SYN-PRE-005\",\"semantic\":\"SOURCE_COMPLETE_AND_FRESH\",\"version\":1}],\"scope\":\"RR-SYNTHETIC-PROVIDER-A\",\"version\":1,\"withdrawnAt\":null}",
+   "digest": "sha256:a91e4d8b71b47fa87d62cc3be8af8bb49f3d84c1dfb5ed9dcd67b51f40458bee",
+   "note": "Zero source age; minimum equals maximum at the cents ceiling."
+  },
+  {
+   "id": "pos-06-nonascii-raw-utf8",
+   "kind": "mapping",
+   "canonical": "{\"cjk\":\"\\u6f22\",\"emoji\":\"\\ud83d\\ude00\",\"nfc\":\"\\u00e9\",\"nfd\":\"e\\u0301\",\"\\u00e9\":\"\\u00e9\\u20ac\"}",
+   "digest": "sha256:a0fb621dc0a7aed6d3c995267cac608f9593ed1b4f02367981a4baef604043aa",
+   "note": "Raw UTF-8 input; output is \\u escapes (surrogate pair); no NFC folding."
+  },
+  {
+   "id": "pos-07-escapes-upper-hex-input",
+   "kind": "mapping",
+   "canonical": "{\"s\":\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f \\\"\\\\/\\u007f\\u0080\\u2028\"}",
+   "digest": "sha256:b7f74b22053be0c7a820bcbab888c4f34e0f19d7f44f6791715bfb435fc0bbfd",
+   "note": "Every control char, quote, backslash, solidus, DEL; input hex upper case, output lower case."
+  },
+  {
+   "id": "pos-08-nested-empty",
+   "kind": "mapping",
+   "canonical": "{\"a\":{},\"b\":[],\"c\":[[],[{}]],\"d\":[[1,[2,[3]]]]}",
+   "digest": "sha256:0cfaf79f581f4daa28e4ce956f10ce832849cc7f11c14af5baeb12949d4f237f",
+   "note": "Empty containers and nested arrays."
+  },
+  {
+   "id": "pos-09-integers",
+   "kind": "mapping",
+   "canonical": "{\"huge\":1000000000000000000000000000000,\"i53\":9007199254740993,\"min\":-9223372036854775808,\"neg\":-1,\"negzero\":0,\"u63\":9223372036854775808,\"zero\":0}",
+   "digest": "sha256:5b0c53e4804fc65935e947b87d63bfd1f697dabe88cd97e69c07cf23d625d1c0",
+   "note": "Integers print in full; -0 is 0."
+  },
+  {
+   "id": "pos-10-key-order",
+   "kind": "mapping",
+   "canonical": "{\"\":1,\"10\":1,\"9\":1,\"B\":1,\"_\":1,\"a\":1,\"b\":1,\"\\u00e9\":1,\"\\uffff\":1,\"\\ud800\\udc00\":1}",
+   "digest": "sha256:ed9875258311e6731ff78273dca8d7c145d5cdbc4215a91a17066c9720825431",
+   "note": "Keys sort by code point: U+FFFF before U+10000 (UTF-16 order would differ)."
+  },
+  {
+   "id": "pos-11-digest-field",
+   "kind": "mapping",
+   "canonical": "{\"a\":{\"contentDigest\":\"kept\"},\"b\":1}",
+   "digest": "sha256:9bfcdb0a47587918945de52a25183077fdfcea9cc0aff68d2301586a30cc01e0",
+   "note": "Only the top-level contentDigest is dropped."
+  },
+  {
+   "id": "pos-12-surrogates",
+   "kind": "mapping",
+   "canonical": "{\"s\":\"\\ud800\",\"t\":\"\\udc00\\ud800\",\"u\":\"\\ud83d\\ude00\"}",
+   "digest": "sha256:ecb0982b4a0ac0452ecdd20a4e1b2e244bfdaf3e0b4a9612b8892bcc56963071",
+   "note": "Lone surrogates survive as lower-case escapes; a valid pair is one scalar, re-escaped as a pair."
+  },
+  {
+   "id": "pos-13-literals-whitespace",
+   "kind": "mapping",
+   "canonical": "{\"e\":{},\"f\":false,\"n\":null,\"t\":true}",
+   "digest": "sha256:941915b06319d5ba4980e19e626021326d21a10176ca1c60e628f87de3223fa6",
+   "note": "Literals; JSON whitespace dropped."
+  },
+  {
+   "id": "pos-14-empty-object",
+   "kind": "mapping",
+   "canonical": "{}",
+   "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "note": "Empty object."
+  }
+ ],
+ "reject": [
+  {
+   "id": "rej-01-digest-wrong",
+   "error": "BUNDLE_DIGEST_MISMATCH",
+   "note": "Well-formed digest that is not the SHA-256."
+  },
+  {
+   "id": "rej-02-digest-upper-hex",
+   "error": "BUNDLE_DIGEST_INVALID",
+   "note": "Correct digest in upper-case hex."
+  },
+  {
+   "id": "rej-03-digest-no-prefix",
+   "error": "BUNDLE_DIGEST_INVALID",
+   "note": "Bare hex without the sha256: prefix."
+  },
+  {
+   "id": "rej-04-digest-upper-prefix",
+   "error": "BUNDLE_DIGEST_INVALID",
+   "note": "Prefix in upper case."
+  },
+  {
+   "id": "rej-05-digest-null",
+   "error": "BUNDLE_DIGEST_INVALID",
+   "note": "contentDigest present but null."
+  },
+  {
+   "id": "rej-06-digest-trailing-newline",
+   "error": "BUNDLE_DIGEST_INVALID",
+   "note": "72 characters: fails the pattern (the length cap is implied by it)."
+  },
+  {
+   "id": "rej-07-digest-missing",
+   "error": "BUNDLE_SCHEMA",
+   "note": "contentDigest key absent."
+  },
+  {
+   "id": "rej-08-digest-unsorted-keys",
+   "error": "BUNDLE_DIGEST_MISMATCH",
+   "note": "Digest over insertion-order keys instead of sorted keys."
+  },
+  {
+   "id": "rej-09-digest-spaced-separators",
+   "error": "BUNDLE_DIGEST_MISMATCH",
+   "note": "Digest over default json.dumps separators."
+  },
+  {
+   "id": "rej-10-digest-covers-self",
+   "error": "BUNDLE_DIGEST_MISMATCH",
+   "note": "Digest computed with the contentDigest key still in the content."
+  },
+  {
+   "id": "rej-11-digest-stale-after-edit",
+   "error": "BUNDLE_DIGEST_MISMATCH",
+   "note": "A field changed after sealing."
+  },
+  {
+   "id": "rej-12-float-1.0",
+   "error": "JSON_FLOAT_UNSUPPORTED",
+   "note": "1.0 is a float token, refused."
+  },
+  {
+   "id": "rej-13-float-exponent",
+   "error": "JSON_FLOAT_UNSUPPORTED",
+   "note": "1e2 is a float token, refused."
+  },
+  {
+   "id": "rej-14-nan",
+   "error": "JSON_CONSTANT_UNSUPPORTED",
+   "note": "NaN refused."
+  },
+  {
+   "id": "rej-15-duplicate-key",
+   "error": "JSON_DUPLICATE_KEY",
+   "note": "Same key twice, same value."
+  },
+  {
+   "id": "rej-16-duplicate-key-escaped",
+   "error": "JSON_DUPLICATE_KEY",
+   "note": "Duplicates are detected after unescaping."
+  },
+  {
+   "id": "rej-17-unknown-field",
+   "error": "BUNDLE_SCHEMA",
+   "note": "Field outside the schema, digest valid over it."
+  },
+  {
+   "id": "rej-18-unknown-rule-field",
+   "error": "BUNDLE_RULE_SCHEMA",
+   "note": "Rule field outside the schema, digest valid over it."
+  },
+  {
+   "id": "rej-19-version-bool",
+   "error": "BUNDLE_VERSION_INVALID",
+   "note": "true is not an integer."
+  },
+  {
+   "id": "rej-20-version-65536",
+   "error": "BUNDLE_VERSION_INVALID",
+   "note": "One above the maximum."
+  },
+  {
+   "id": "rej-21-version-negative-zero",
+   "error": "BUNDLE_VERSION_INVALID",
+   "note": "-0 parses to 0, below the minimum."
+  },
+  {
+   "id": "rej-22-bom",
+   "error": "JSON_INVALID",
+   "note": "UTF-8 byte order mark."
+  },
+  {
+   "id": "rej-23-invalid-utf8",
+   "error": "JSON_INVALID",
+   "note": "Byte 0xFF is not UTF-8."
+  },
+  {
+   "id": "rej-24-array-root",
+   "error": "JSON_OBJECT_REQUIRED",
+   "note": "Top level is not an object."
+  },
+  {
+   "id": "rej-25-depth-9",
+   "error": "JSON_DEPTH_EXCEEDED",
+   "note": "Nesting depth 9 > 8, before schema checks."
+  },
+  {
+   "id": "rej-26-too-large",
+   "error": "BUNDLE_TOO_LARGE",
+   "note": "16,385 bytes; limit 16,384."
+  },
+  {
+   "id": "rej-27-nonascii-scope",
+   "error": "BUNDLE_SCOPE_UNSUPPORTED",
+   "note": "Non-ASCII text never reaches a hashed accepted bundle."
+  },
+  {
+   "id": "rej-28-rule-error-beats-digest",
+   "error": "BUNDLE_VERSION_INVALID",
+   "note": "Bad version and bad digest: the rule error wins."
+  },
+  {
+   "id": "rej-29-duplicate-then-float",
+   "error": "JSON_FLOAT_UNSUPPORTED",
+   "note": "Duplicate fires only when its object closes, after the float is read."
+  },
+  {
+   "id": "rej-30-constant-then-float",
+   "error": "JSON_CONSTANT_UNSUPPORTED",
+   "note": "First offending token by position wins."
+  },
+  {
+   "id": "rej-31-inner-duplicate-then-float",
+   "error": "JSON_DUPLICATE_KEY",
+   "note": "The inner object closes before the float is read."
+  },
+  {
+   "id": "rej-32-integer-4301-digits",
+   "error": "JSON_INVALID",
+   "note": "Beyond the interpreter integer digit limit (4,300)."
+  }
+ ]
+}

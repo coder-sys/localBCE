@@ -234,3 +234,60 @@
   embedded source hash matches the sources, and the proofs check, so the
   Lean results the G-rule parity harness compares against are confirmed by
   Lean on this machine. Guard logs: `%LOCALAPPDATA%\rr_guarded_interim\logs`.
+- 2026-11-09: Phase 3, first rule. The owner approved the twelve defaults in
+  `docs/integration/G2_DESIGN.md`. `f16a61f4` adds Lean gate rule G2 (aid
+  code "13","23","53","103","104" and benefit level, read from a pinned
+  eligibility snapshot, SNAPSHOT/v1 kind 7) inside `rightrail/`, with its
+  XI.2 record in the commit message. `76dc54ad` repoints five stale runner
+  mutants first. Everything ran through the interim guard: full `lake
+  build` 138/138, no `sorry`; `gate_rules` passes `rules_v2.vectors`
+  (308/308), `demo_zz_v2.vectors` (3616/3616) and `shards_v1.vectors`
+  (39/39); all 19 G2 mutants are killed (18 by vectors, 1 by proof).
+  RightRail's gate tests: 96 run, 19 pass, 77 fail on this machine only (76
+  need the ML-DSA-87 signer `rr_gate_mldsa87.exe`, which is not built
+  because there is no Rust toolchain on Windows; `test_history_growth` wants
+  SQLite 3.53.1, this machine has 3.40.1). The owner typed "commit" with
+  those failures recorded. Plan line 99 ("pinned worker re-pinned") does not
+  apply: `gate_verify` does not import the rules and `gate_rules` is
+  test-only. Pushed on the owner's "push"; draft PR #8
+  (`codex/rightrail-g2` into `codex/rightrail-base-phases`), CI run
+  42809189032: `rust`, `windows-smoke` and `rules-and-ops` all succeeded.
+- 2026-11-12: Phase 3, second rule. The owner approved all defaults in
+  `docs/integration/G4_DESIGN.md` (2026-11-11). `90ffd3f9` adds Lean gate
+  rule G4 (share of cost, read from a pinned member-month snapshot,
+  SNAPSHOT/v1 kind 8, READ-SET/v4 and READ-MANIFEST/v4 with six pins) inside
+  `rightrail/`, with its XI.2 record in the commit message and the design's
+  section 12 recording where the build differs. Interim guard throughout:
+  full `lake build` 138/138, no `sorry`, every axiom pin matching (two
+  proofs needed a manual closing step); `rules_v3.vectors` (end 342),
+  `demo_zz_v3.vectors` and `shards_v1.vectors` pass; all 25 G4 mutants are
+  killed (24 by vectors, 1 by proof). An adversarial review found coverage
+  gaps only, fixed in the same commit. The first mutant run hit the guard's
+  10-hour limit after 8 mutants (Spec mutants rebuild StateV2 under
+  emulation); the rest finished in a second run. Gate tests: the same 77
+  environment-only failures as G2. Committed on the owner's "finish", pushed
+  on "push 90ffd3f9"; draft PR #9 (`codex/rightrail-g4` into
+  `codex/rightrail-g2`), CI run 43304286303: all three jobs succeeded. G4
+  leaves 1 of the 32 per-token reason codes free; the owner chose option 1
+  (a proved per-payment bound, lean shapes for G5-G10) over raising the cap.
+- 2026-11-14: the per-payment reason bound. The owner approved all defaults
+  in `docs/integration/REASON_BOUND_DESIGN.md`; `b5f806df` on
+  `codex/rightrail-reason-bound` proves it on the October base and deletes
+  G4's total-count guard. Full guarded build 138/138, axiom pins at their built
+  values, 19 targeted tests OK, manual mutants M1-M6 all as predicted, the same
+  77 environment-only failures. Committed on "commit", pushed on
+  "push b5f806df" (no PR).
+- 2026-11-14: a newer RightRail trunk. The owner dropped a GitHub zip of
+  trunk `fc89f9e5` (named by the archive comment; SHA-256 `1afbc74d...0ab71`).
+  `G2_G4_TRUNK_REBASE_ASSESSMENT.md` found that G2, G4 and the bound do not
+  rebase onto it (ReadManifest, StateV2, Rules/Resident and the mutant tool
+  are gone; the rules now sit inside the pinned `gate_engine`).
+  `TRUNK_MIGRATION_PLAN.md` (three review rounds) was approved with all 19
+  defaults the same day. Step 0, on new branch `codex/rightrail-trunk` from
+  `dc586d87`: `rightrail/` replaced by the zip's 627 files byte for byte
+  (variant B, no history), the PEM literal split re-applied, provenance moved
+  to `docs/integration/RIGHTRAIL_IMPORTED_FROM.md` (the trunk's doc rule
+  refuses it inside `rightrail/`) with `scripts/check_rightrail_zip_import.py`,
+  the self-check updated to trunk `fc89f9e5`, and the October designs and logs
+  carried over and marked superseded. The trunk fixed the old `rules_v1`
+  manifest digest mismatch (OPEN_QUESTIONS item 17).

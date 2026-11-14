@@ -453,15 +453,29 @@ theorem seen0_eq : (Ix.build c b).seen0 k = (seen0 c b).contains k := by
   · rintro ⟨y, hy, hk, hp⟩; exact ⟨y, ⟨hy, hp⟩, hk⟩
   · rintro ⟨y, ⟨hy, hp⟩, hk⟩; exact ⟨y, hy, hk, hp⟩
 
-theorem pending_eq : (Ix.build c b).pending k = (pending c).contains k := by
-  unfold Ix.pending pending
-  have hcl : (Ix.build c b).claim = claim c := funext fun _ => claim_eq
-  rw [Bool.eq_iff_iff, hcl]
-  rw [probe_unr (P := fun y => (claim c y).contains k)]
-  simp only [List.contains_iff_mem, List.mem_flatMap]
+theorem build_byp : (Ix.build c b).byp = c.byp := rfl
+
+theorem held_eq : (Ix.build c b).held l = (unresolvedSet c).contains l := by
+  unfold Ix.held
+  rw [Bool.eq_iff_iff, probe_unr (P := (· == l))]
+  simp only [List.contains_iff_mem, beq_iff_eq]
   constructor
-  · rintro ⟨y, hy, _, hp⟩; exact ⟨y, hy, hp⟩
-  · rintro ⟨y, hy, hp⟩; exact ⟨y, hy, claim_sub hp, hp⟩
+  · rintro ⟨y, hy, _, rfl⟩; exact hy
+  · intro h; exact ⟨l, h, idKey_mem, rfl⟩
+
+theorem ownU_eq : (Ix.build c b).ownU l = ownU c l := by
+  simp only [Ix.ownU, ownU, held_eq, build_byp]
+
+theorem pending_eq : (Ix.build c b).pending l k = (pending c l).contains k := by
+  unfold Ix.pending
+  have hcl : (Ix.build c b).claim = claim c := funext fun _ => claim_eq
+  rw [Bool.eq_iff_iff, hcl, build_byp]
+  rw [probe_unr (P := fun y => (claim c y).contains k && !(y == l && (c.byp.lookup l.pay).isSome))]
+  rw [List.contains_iff_mem, mem_pending]
+  simp only [Bool.and_eq_true, List.contains_iff_mem]
+  constructor
+  · rintro ⟨y, hy, _, hp, hn⟩; exact ⟨y, hy, fun h => by simp [h.1, h.2] at hn, hp⟩
+  · rintro ⟨y, hy, hn, hp⟩; exact ⟨y, hy, claim_sub hp, hp, keep_row hn⟩
 
 theorem looseKeys_eq : (Ix.build c b).looseKeys.contains k = (looseKeys c).contains k := by
   simp [Ix.build, looseKeys, HashSet.contains_ofList, chainedF_eq, viewF_eq, looseF_eq]
@@ -523,11 +537,25 @@ theorem order_eq : (Ix.build c b).order b = order c b := by
 theorem payOutcome_eq {ds : List Decision} {p : Nat} : (Ix.build c b).payOutcome ds p = payOutcome c ds p := by
   simp [Ix.payOutcome, payOutcome, redo_contains, own_fun]
 
+theorem bypassed_eq {ds : List Decision} {p : Nat} : (Ix.build c b).bypassed ds p = bypassed c ds p := by
+  unfold Ix.bypassed bypassed
+  rw [build_byp]
+  cases c.byp.lookup p with
+  | none => rfl
+  | some m => simp only [redo_contains, held_eq]
+
+theorem limitedPay_eq {ds : List Decision} {p : Nat} : (Ix.build c b).limitedPay ds p = limitedPay c ds p := by
+  unfold Ix.limitedPay limitedPay
+  rw [show (Ix.build c b).lim = c.lim from rfl]
+  cases c.lim.lookup p with
+  | none => rfl
+  | some m => simp only [payOutcome_eq, redo_contains]
+
 theorem releasedLines_eq {ds} : (Ix.build c b).releasedLines ds = releasedLines c ds := by
-  simp [Ix.releasedLines, releasedLines, redo_contains, payOutcome_eq]
+  simp [Ix.releasedLines, releasedLines, redo_contains, payOutcome_eq, bypassed_eq, limitedPay_eq, own_fun]
 
 theorem unresolvedLines_eq {ds} : (Ix.build c b).unresolvedLines ds = unresolvedLines c ds := by
-  simp [Ix.unresolvedLines, unresolvedLines, own_fun]
+  simp [Ix.unresolvedLines, unresolvedLines, own_fun, ownU_eq, bypassed_eq, limitedPay_eq]
 
 end
 
@@ -561,11 +589,10 @@ theorem run_unrN {c b} : (Ix.build c b).unrN = (unresolvedSet c).length := build
 
 /-! ## Pins -/
 
-theorem push_fold (f : Nat → UInt8) :
-    ∀ (L : List Nat) (acc : ByteArray),
-      (L.foldl (fun a i => a.push (f i)) acc).data.toList = acc.data.toList ++ L.map f
-  | [], acc => by simp
-  | i :: L, acc => by simp [List.foldl_cons, push_fold f L]
+theorem pushLow_eq (x : UInt64) : ∀ (k : Nat) (acc : ByteArray),
+    (pushLow acc k x).data.toList = acc.data.toList ++ (List.range k).reverse.map fun i => (x >>> (8 * i).toUInt64).toUInt8
+  | 0, acc => by simp [pushLow]
+  | k + 1, acc => by simp [pushLow, pushLow_eq x k, List.range_succ]
 
 /-- A byte of the low 64 bits: `n.toUInt64 >>> 8i` is `(n >>> 8i) % 256`, for `i < 8`. -/
 theorem byte_eq (n i : Nat) (hi : i < 8) :
@@ -584,15 +611,15 @@ theorem pushHi_eq (acc : ByteArray) : ∀ (w n : Nat),
     intro n
     unfold pushHi
     by_cases h : w ≤ 8
-    · simp only [h, dite_true, pushLow]
-      rw [push_fold]
+    · simp only [h, dite_true]
+      rw [pushLow_eq]
       congr 1
       apply List.map_congr_left
       intro i hi
       simp at hi
       exact byte_eq n i (by omega)
-    · simp only [h, dite_false, pushLow]
-      rw [push_fold, ih (w - 8) (by omega)]
+    · simp only [h, dite_false]
+      rw [pushLow_eq, ih (w - 8) (by omega)]
       have hr : (List.range w).reverse = (List.range (w - 8)).reverse.map (· + 8) ++ (List.range 8).reverse := by
         have e := @List.range_add 8 (w - 8)
         rw [show 8 + (w - 8) = w by omega] at e
@@ -613,7 +640,10 @@ theorem pushHi_eq (acc : ByteArray) : ∀ (w n : Nat),
 /-- `pushHi_eq`, then `Nat.shiftRight_eq_div_pow`, `Nat.pow_mul` (2 ^ (8 * i) = 256 ^ i). -/
 theorem pushBe_eq {acc : ByteArray} {w n : Nat} :
     (pushBe acc w n).map (·.data.toList) = (be w n).map (acc.data.toList ++ ·) := by
+  have hk : (n >>> (8 * w) = 0) ↔ n < 256 ^ w := by
+    rw [Nat.shiftRight_eq_div_pow, Nat.pow_mul, Nat.div_eq_zero_iff]; simp
   unfold pushBe be
+  simp only [hk]
   by_cases h : n < 256 ^ w
   · simp only [h, if_true, Option.map_some]
     rw [pushHi_eq]

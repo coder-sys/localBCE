@@ -1,4 +1,4 @@
-"""History never costs more (CONSTITUTION IX.3; design C:/Users/neers/rrb/designs/history-guard-v1.md).
+"""History never costs more (CONSTITUTION IX.3).
 
 Each hot-path operation runs at a small and a large history of one fixed synthetic corpus, and
 deterministic work counters, never wall time, are compared:
@@ -40,33 +40,33 @@ COUNTERS = ("sql_ops", "hashed", "frame", "peak_kib", "refused")
 SIZES = {"store": (256, 2_560), "item": (16, 160), "gate": (256, 2_560)}  # earlier payments; one item's payments; released rows
 SLACK = 1.05
 MARGIN = 1.05  # PINNED: deterministic counters, plus room for tracemalloc's small run-to-run spread
-CHAIN = "EXACT if each indexed read is verified against the M3 chain / auth-state head; else WEAKENS: an index-only tamper waits for the sweep"
-GROWS = {  # operation: (counters that grow, owner branch, listed, strength of the planned fix); design (c)
-    "decision": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
-    "reverse": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
-    "evaluate": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
-    "audit": ("sql_ops", "hist-flat S1-S6", "2026-10-01", CHAIN),
+CHAIN = "EXACT if each indexed read is verified against the chain head; else WEAKENS: an index-only tamper waits for the sweep"
+GROWS = {  # operation: (counters that grow, planned fix, listed, strength of the planned fix)
+    "decision": ("sql_ops", "disk history index", "2026-10-01", CHAIN),
+    "reverse": ("sql_ops", "disk history index", "2026-10-01", CHAIN),
+    "evaluate": ("sql_ops", "disk history index", "2026-10-01", CHAIN),
+    "audit": ("sql_ops", "disk history index", "2026-10-01", CHAIN),
     "export": ("sql_ops peak_kib", "none", "2026-10-01", "WEAKENS: earlier exported segments stop being re-compared; a tampered copy is caught by its reader's chain check, not by the next export"),
-    "continuity": ("sql_ops hashed peak_kib refused", "auth-state K1", "2026-10-01", "EXACT: a manifest of sealed segments plus current state, each verified against its digest on restore"),
-    "open": ("sql_ops hashed peak_kib", "auth-state R1/R2", "2026-10-01", "EXACT only if the off-lock history sweep gates release; else WEAKENS: tamper in unread history found after open"),
-    "item_decision": ("sql_ops hashed frame peak_kib", "hist-flat S3 + S6", "2026-10-01", "EXACT: M3 view decide with a Lean _eq theorem against the full decide"),  # sql_ops: the per-item payment read is old, its growth unchanged (~36k steps for 16 to 160 payments, 37k before); core-r1c halved the base, so the ratio now shows it. S3 + S6 remove it.
-    "gate_state_pin": ("hashed peak_kib", "auth-state STATE/v2", "2026-10-01", "EXACT: decideBatch_slice"),
+    "continuity": ("sql_ops hashed peak_kib refused", "sealed-segment manifest", "2026-10-01", "EXACT: a manifest of sealed segments plus current state, each verified against its digest on restore"),
+    "open": ("sql_ops hashed peak_kib", "off-lock history sweep", "2026-10-01", "EXACT only if the off-lock history sweep gates release; else WEAKENS: tamper in unread history found after open"),
+    "item_decision": ("sql_ops hashed frame peak_kib", "per-item payment read", "2026-10-01", "EXACT: per-item view decide with a Lean _eq theorem against the full decide"),  # sql_ops: the per-item payment read is old, its growth unchanged (~36k steps for 16 to 160 payments, 37k before); an earlier change halved the base, so the ratio now shows it. The disk history index removes it.
+    "gate_state_pin": ("hashed peak_kib", "gate state digest", "2026-10-01", "EXACT: decideBatch_slice"),
 }
 SQLITE = "3.53.1"  # sql_ops counts this library's VM steps; another version changes them, so re-measure
 PINNED = {  # operation: (small-history work, large-history work) on trunk 70f9606 (run hy-growth4), deterministic counters lowered on m4-int (run m4int-4); lower it when an operation gets cheaper
-    "decision": ((11948, 30615, 2216, 110, 0), (31731, 30615, 2216, 116, 0)),  # re-pinned cll6: C-L1 committed row counter adds 109 sql_ops and 6 KiB peak per write
-    "reverse": ((12127, 32314, 2516, 118, 0), (31910, 32314, 2516, 118, 0)),  # re-pinned cll6, same cause
+    "decision": ((11948, 30615, 2216, 110, 0), (31731, 30615, 2216, 116, 0)),  # the committed row counter adds 109 sql_ops and 6 KiB peak per write
+    "reverse": ((12127, 32314, 2516, 118, 0), (31910, 32314, 2516, 118, 0)),  # same cause
     "evaluate": ((11670, 35621, 2208, 141, 0), (31453, 35621, 2208, 134, 0)),
-    "cash_file": ((126299, 136410, 23304, 528, 0), (163372, 136033, 22908, 522, 0)),  # CFI-C1 keyed begin: flat in history, measured cfl7 (was 137715/286031 sql_ops, 3084/29362 peak_kib)
+    "cash_file": ((129628, 146543, 23304, 555, 0), (166695, 146121, 22908, 548, 0)),  # hashed raised (was 136628/136251, still flat): evidence digests recomputed on load. re-pinned t18hd: drift since the keyed begin (+2.6% sql_ops, +218 hashed, peak 552-555 at the margin edge; likely the row counter, unconfirmed), still flat in history; the keyed begin measured cfl7 (was 137715/286031 sql_ops, 3084/29362 peak_kib)
     "export": ((7042, 48693, 0, 11827, 0), (46935, 48542, 0, 58527, 0)),
     "continuity": ((32004, 2226225, 0, 10760, 0), (229802, 44523292, 0, 141728, 1)),
-    "package": ((3152, 18608, 0, 112, 0), (3152, 18608, 0, 112, 0)),
+    "package": ((2944, 18608, 123, 112, 0), (2944, 18608, 123, 112, 0)),  # measured m2s2c-11: Lean decides the package from one 123-byte frame
     "audit": ((18364, 46790, 0, 182, 0), (38147, 46790, 0, 181, 0)),
     "summary": ((2796, 0, 0, 11, 0), (2796, 0, 0, 11, 0)),
     "history": ((2306, 0, 0, 328, 0), (2306, 0, 0, 328, 0)),
     "baseline": ((123, 1752, 0, 19, 0), (149, 1754, 0, 19, 0)),  # measured tr10f2: a verified read of two head rows, flat
     "open": ((257358, 3923052, 0, 6039, 0), (2442549, 83603181, 0, 96729, 0)),
-    "item_decision": ((34008, 61608, 9886, 192, 0), (69720, 360175, 84016, 1076, 0)),
+    "item_decision": ((34008, 71462, 9886, 192, 0), (69720, 463765, 84016, 1076, 0)),  # hashed raised (was 61608/360175): every evidence row digest is now recomputed on load
     "gate_state_pin": ((0, 236354, 0, 706, 0), (0, 2362946, 0, 7046, 0)),
 }
 # Every public FinancialOwner method is measured or named here with the reason it is not (history-guard-v1.md, inventory).

@@ -4,7 +4,7 @@ Contract `RR/FINANCIAL/CORRECTION-TRANSITION/v1`: request `BLFCMD03` (v3),
 result `BLFCRES3` (v3). Contract `RR/FINANCIAL/CORRECTION-REUSE/v1`: request
 `BLFCRU02`, assessment `BLFCRV02` (v2 each).
 
-Normative source: Lean codec at base commit `d5853b1`,
+Normative source: the current Lean codec,
 `lean/BlindLedger/Financial/CorrectionTransition/{Types,Codec,ReuseCodec,Runtime}.lean`,
 primitives in `lean/BlindLedger/Financial/Codec.lean`, receipt codec in
 `lean/BlindLedger/Financial/DecisionPackage/Codec.lean`. Pinned engine:
@@ -74,14 +74,15 @@ frame cap is 8,388,608 + 8 bytes.
 | 13 | evaluationId | `str` | id |
 | 14 | evaluationResultDigest | `d64` | |
 | 15 | decisionAtMs | `u64` | time |
-| 16 | ownerNowMs | `u64` | time |
-| 17 | actionLookup | §3.1 | |
-| 18 | queries | 3×§3.2, order ACTION_ID, DETERMINATION_ID, EVALUATION_CONSUMED | order checked only on ACCEPTED result |
-| 19 | currentEventSequence | `u64` | sequence |
-| 20 | previousHistoryHead | `d64` | |
-| 21 | paymentLinks | `list<str paymentId, str actionId>` | strictly ascending paymentId (else decode fails); each a payment row of the input, actionId a correction request of the input (else INVALID_INPUT); Lean derives paid-so-far from the active rows |
-| 22 | currentInput | `blob`→`BLFIN02` (§6.1) | decodes standalone |
-| 23 | currentReceipt | `blob`→receipt (§3.3) | nothing left over inside |
+| 16 | decisionTimeGiven | `bool` | |
+| 17 | ownerNowMs | `u64` | time |
+| 18 | actionLookup | §3.1 | |
+| 19 | queries | 3×§3.2, order ACTION_ID, DETERMINATION_ID, EVALUATION_CONSUMED | order checked only on ACCEPTED result |
+| 20 | currentEventSequence | `u64` | sequence |
+| 21 | previousHistoryHead | `d64` | |
+| 22 | paymentLinks | `list<str paymentId, str actionId>` | strictly ascending paymentId (else decode fails); each a payment row of the input, actionId a correction request of the input (else INVALID_INPUT); Lean derives paid-so-far from the active rows |
+| 23 | currentInput | `blob`→`BLFIN02` (§6.1) | decodes standalone |
+| 24 | currentReceipt | `blob`→receipt (§3.3) | nothing left over inside |
 
 ### 3.1 ActionLookup
 
@@ -90,8 +91,9 @@ frame cap is 8,388,608 + 8 bytes.
 determinationObligationId, actionKind, claimId, actorId, actorRole,
 authorityId, u64 authorityEpoch, d64 authorityDigest, u8 decision, str
 inputEvaluationId, d64 inputEvaluationResultDigest, u64 expectedRevision,
-decidedAtMs`. Ids are ids, actorRole a role, authorityEpoch an epoch,
-expectedRevision a revision, decidedAtMs a time, decision tag 1 or 2 (§5).
+decidedAtMs, u8 decisionTimeGiven`. Ids are ids, actorRole a role, authorityEpoch an epoch,
+expectedRevision a revision, decidedAtMs a time, decision tag 1 or 2 (§5),
+decisionTimeGiven 0 old row, 1 clock, 2 named.
 
 ### 3.2 QueryObservation
 
@@ -103,8 +105,8 @@ versionSequence` (sequence), `d64 versionHead`.
 ### 3.3 Evaluation receipt
 
 Contract `RR/FINANCIAL/EVALUATION-RECEIPT/v1`
-(no magic; `DecisionPackage/Codec.lean` 262-271, well-formedness in
-`Projection.lean` 102-129): `str contractVersion` (= that constant); scope:
+(no magic; `DecisionPackage/Codec.lean` 127-136, well-formedness in
+`Projection.lean` 53-71): `str contractVersion` (= that constant); scope:
 `str stateId, deploymentId, programId, periodId, currency` (ids); pack: `str
 packId` (id), `u64 version` (1..10,000), `d64 digest`; `list<str evidenceId
 (id), d64 recordDigest> evidenceBindings`; `opt<d64> inputSnapshotDigest`;
@@ -315,6 +317,8 @@ verificationStatus, caseStatus, deliveryStatus`. Nothing after.
 
 ## 7. Reuse: `BLFCRU02` request and `BLFCRV02` assessment
 
+Retired: the worker does not serve this contract; the Lean codec remains.
+
 Request (`ReuseCodec.lean` 88-136): `8B BLFCRU02, u16=2, str=
 RR/FINANCIAL/CORRECTION-REUSE/v1, blob acceptedResult (BLFCRES3, must itself
 decode), blob currentInput (BLFIN02), blob currentReceipt (§3.3), opt<
@@ -346,14 +350,12 @@ VALID, VALID, ALLOWED. `externalDispatchPermitted` MUST be false.
 ## 8. Worked examples (pinned vectors)
 
 The offsets below were decoded by hand from the pinned files, using only the
-layout above. All four pinned files parse to the end, with nothing left
-over: the request (3,359 bytes), the result (5,099), the reuse request
-(9,204) and the reuse result (53); the reuse files left the tree with the exe
-(git 99ec957). Notation: `NNx64` means a digest of 64
+layout above. The request (3,360 bytes) and the result (5,099) parse to the
+end, with nothing left over. Notation: `NNx64` means a digest of 64
 bytes, all equal to 0xNN. Verified against `artifacts/engine-correction/vectors/`.
-The request binds the real authority roster digest (`BF62...DDFE99`, also inside `currentInput` at offset 1016 and in the
-receipt at 2874), so the worker answers ACCEPTED. `request_unbound.bin` is the same request with every authority digest
-00x64 (the pre-M4 L2 `request.bin`, SHA-256 `234fdf65...e666`); `result_unbound.expected.bin` (157 bytes) is the worker's
+The request binds the real authority roster digest (`BF62...DDFE99`, also inside `currentInput` at offset 1017 and in the
+receipt at 2875), so the worker answers ACCEPTED. `request_unbound.bin` is the same request with every authority digest
+00x64 (the earlier request without the authority digest, plus the time-given byte); `result_unbound.expected.bin` (157 bytes) is the worker's
 answer, REJECTED with AUTHORITY_STALE (tag 5).
 
 `request.bin`:
@@ -375,34 +377,35 @@ offset len field value
 239 43 evaluationId 'evaluation:obligation:item-h:period-01:r4'
 282 64 evaluationResultDigest a5x64
 346 8 decisionAtMs 1774922400010
-354 8 ownerNowMs 1774922400020
-362 1 actionLookup 1 absent
-363 1 query[0].predicate 1 ACTION_ID
-364 24 query[0].subject 'action:correction:h:v1'
-388 1 query[0].complete 1
-389 8 query[0].matchCount 0
-397 1 query[0].resultIdentity 0 absent
-398 8 query[0].versionSequence 10
-406 64 query[0].versionHead 2ax64
-470 247 query[1], query[2] DETERMINATION_ID 'determination:action:correction:h:v1',
+354 1 decisionTimeGiven 1
+355 8 ownerNowMs 1774922400020
+363 1 actionLookup 1 absent
+364 1 query[0].predicate 1 ACTION_ID
+365 24 query[0].subject 'action:correction:h:v1'
+389 1 query[0].complete 1
+390 8 query[0].matchCount 0
+398 1 query[0].resultIdentity 0 absent
+399 8 query[0].versionSequence 10
+407 64 query[0].versionHead 2ax64
+471 247 query[1], query[2] DETERMINATION_ID 'determination:action:correction:h:v1',
   EVALUATION_CONSUMED 'evaluation:obligation:item-h:period-01:r4'; same shape
-717 8 currentEventSequence 10
-725 64 previousHistoryHead 2ax64
-789 2 paymentLinks.count 0
-791 4 currentInput length 1610
-795 1610 currentInput BLFIN02 ...
-2405 4 currentReceipt length 950
-2409 36 receipt.contractVersion 'RR/FINANCIAL/EVALUATION-RECEIPT/v1'
-2445 89 receipt.scope fixture-state, fixture-rightrail, fixture-provider-payment,
+718 8 currentEventSequence 10
+726 64 previousHistoryHead 2ax64
+790 2 paymentLinks.count 0
+792 4 currentInput length 1610
+796 1610 currentInput BLFIN02 ...
+2406 4 currentReceipt length 950
+2410 36 receipt.contractVersion 'RR/FINANCIAL/EVALUATION-RECEIPT/v1'
+2446 89 receipt.scope fixture-state, fixture-rightrail, fixture-provider-payment,
   fixture-2026-period-01, USD
-2534 105 receipt.pack 'control-pack:fixture-2026-01:v1', 1, 00x64
-2639 162 receipt.evidenceBindings 2: evidence:cash 44x64, evidence:offset 44x64
-2801 65 receipt.inputSnapshotDigest present, 5bx64
-2866 72 receipt.authority epoch 1, BF62...DDFE99
-2938 229 receipt.result r4, rule 1, owed 10000000, claimed 300000, received 9700000,
+2535 105 receipt.pack 'control-pack:fixture-2026-01:v1', 1, 00x64
+2640 162 receipt.evidenceBindings 2: evidence:cash 44x64, evidence:offset 44x64
+2802 65 receipt.inputSnapshotDigest present, 5bx64
+2867 72 receipt.authority epoch 1, BF62...DDFE99
+2939 229 receipt.result r4, rule 1, owed 10000000, claimed 300000, received 9700000,
   shortfall 300000, SUPPORTED / OPEN / NONE
-3167 192 receipt digests result a5x64, receipt 5ax64, evaluationResult a5x64
-3359 end, nothing left over
+3168 192 receipt digests result a5x64, receipt 5ax64, evaluationResult a5x64
+3360 end, nothing left over
 ```
 
 `result.expected.bin`:
@@ -461,10 +464,9 @@ When cancel lands, the checker must count a cancellation only from the revision 
 3. Python requires resulting BLFRES02's `evaluatedAt = event.committedAtMs`
    and `deliveryStatus = READY`; Lean requires neither.
 4. Python's decoder skips several Lean rules, all covered at commit instead
-   (lead audit 2026-09-28, by reading `app/right_rail_financial_owner.py`
-   4458-4840): checks only resulting
+   (in `FinancialOwner.reject_offset_and_authorize_correction`): checks only resulting
    BLFIN02's magic, not well-formedness (Owner compares it to its own
-   re-encoding, `right_rail_financial_semantic_adapter.py` line 2130); skips
+   re-encoding); skips
    resulting result's context/authority/pack agreement with resulting
    input; skips the action-amount formula (the checker applies its own amount and requestable rule before COMMIT); skips
    `committedAtMs = max(decisionAt, ownerNow)`, the `evaluation:<obligation>:
@@ -499,15 +501,15 @@ fail closed).
    no payment row or non-request is INVALID_INPUT. Links naming real rows are
    accepted; payment timing and the per-request cap are the Owner's and the
    independent checker's.
-9. Python is stricter: receipt evidence lists must be strictly ascending
+9. A command that leaves its time to the Owner must carry the Owner's clock
+   reading as decisionAtMs (= ownerNowMs), and a correction must name its time;
+   otherwise INVALID_REQUEST.
+10. Python is stricter: receipt evidence lists must be strictly ascending
    (Lean requires only equal lists); receipt status strings must be ids
-   (Lean allows 1..512-byte text); existing-lookup decision must be tag 2
-   (Lean allows 1 or 2); inputSnapshotDigest is always present, so reason
+   (Lean allows 1..512-byte text); inputSnapshotDigest is always present, so reason
    19 cannot occur for Owner-built requests.
 
 **D. Spec gaps.**
-10. Python has no reuse (`BLFCRU02`/`BLFCRV02`) codec and no reuse vector file
-    (retired with the one-shot exe, M4 P1) — one implementation exists.
 11. `ARCHITECTURE.md` records codec round-trip and trailing-byte laws
     proved only for admissible values; nothing yet proves every value Lean
     emits is admissible.

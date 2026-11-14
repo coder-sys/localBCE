@@ -44,6 +44,7 @@ def inputBodyHead (request : CorrectionTransitionRequest) : Bytes :=
     natBE 8 request.command.currentAuthorityEpoch ++ encodeDigest request.command.currentAuthorityDigest ++
     natBE 8 request.command.expectedRevision ++ encodeString request.command.evaluationId ++
     encodeDigest request.command.evaluationResultDigest ++ natBE 8 request.command.decisionAtMs ++
+    encodeBool request.command.decisionTimeGiven ++
     natBE 8 request.command.ownerNowMs ++ encodeActionLookup request.command.actionLookup ++
     encodeQueryObservations request.command.queryObservations ++
     natBE 8 request.command.currentEventSequence ++

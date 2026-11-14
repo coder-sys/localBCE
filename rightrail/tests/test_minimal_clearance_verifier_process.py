@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import hashlib
 import itertools
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,7 @@ import threading
 import time
 import types
 import unittest
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -73,7 +76,7 @@ class _Kernel:
 
     def _install(self) -> None:
         self.CreateJobObjectW = _FakeFunction(self._job)
-        self.SetInformationJobObject = _FakeFunction(self._limits)
+        self.SetInformationJobObject, self.QueryInformationJobObject = _FakeFunction(self._limits), _FakeFunction(lambda *_: 0)
         self.CreateProcessW = _FakeFunction(self._create)
         self.AssignProcessToJobObject = _FakeFunction(self._assign)
         self.ResumeThread = _FakeFunction(self._resume)
@@ -93,6 +96,7 @@ class _Kernel:
         self.CompareStringOrdinal = _FakeFunction(self._compare_string_ordinal)
         self.K32GetProcessImageFileNameW = _FakeFunction(self._process_image)
         self.ReadFile = _FakeFunction(self._read_file)
+        self.GetExitCodeProcess = _FakeFunction(lambda *_: 0)
         self.GetProcessMemoryInfo, self.PeekNamedPipe = _FakeFunction(self._memory_info), _FakeFunction(lambda *_: 1)
         self.InitializeProcThreadAttributeList = _FakeFunction(self._attrs_init)
         self.UpdateProcThreadAttribute = _FakeFunction(self._attrs_update)
@@ -546,7 +550,12 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                     found = None
                     for _ in range(200):  # the loader resolves imports shortly after the resume
                         modules, needed = (ctypes.c_void_p * 512)(), ctypes.c_uint32()
-                        self.assertTrue(psapi.EnumProcessModulesEx(worker._process, modules, ctypes.sizeof(modules), ctypes.byref(needed), 3))
+                        for attempt in range(5):  # the OS query can return 0 under load; only this query is retried
+                            queried = psapi.EnumProcessModulesEx(worker._process, modules, ctypes.sizeof(modules), ctypes.byref(needed), 3)
+                            if queried:
+                                break
+                            time.sleep(0.05)
+                        self.assertTrue(queried)
                         for module in modules[: needed.value // ctypes.sizeof(ctypes.c_void_p)]:
                             name = ctypes.create_unicode_buffer(1024)
                             psapi.GetModuleFileNameExW(worker._process, module, name, 1024)
@@ -561,18 +570,25 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                 self.assertEqual(os.path.normcase(found), os.path.normcase(system if loaded_from == "system" else beside))
 
     @unittest.skipUnless(os.name == "nt", "Windows reparse-point pin test")
-    def test_real_symlink_is_rejected_without_following_target(self):
-        payload = b"symlink-target"
+    def test_real_reparse_point_is_rejected_without_following_target(self):
+        # A file symlink needs a privilege; any reparse tag set on an ordinary file is the same
+        # reparse-point attribute to the pin, and setting one needs no privilege.
+        payload = b"reparse-target"
         with tempfile.TemporaryDirectory() as root_name:
-            root = Path(root_name)
-            target = root / "target.exe"
-            link = root / "link.exe"
-            target.write_bytes(payload)
-            try:
-                link.symlink_to(target)
-            except OSError as error:
-                self.skipTest(f"symlink creation unavailable: {error}")
+            link = Path(root_name) / "link.exe"
+            link.write_bytes(payload)
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateFileW.restype = wintypes.HANDLE
+            kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            kernel32.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_char_p, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+            handle = kernel32.CreateFileW(str(link), 0x40000000, 0, None, 3, 0x00200000, None)  # write, open the file itself
+            self.assertNotEqual(handle, wintypes.HANDLE(-1).value)
+            try:
+                guid_data = struct.pack("<IHH", 0x80000023, 20, 0) + uuid.uuid4().bytes_le + b"data"
+                self.assertTrue(kernel32.DeviceIoControl(handle, 0x900A4, guid_data, len(guid_data), None, 0, ctypes.byref(wintypes.DWORD()), None))
+            finally:
+                kernel32.CloseHandle(handle)
+            self.assertTrue(os.lstat(link).st_file_attributes & 0x400)
             with self.assertRaisesRegex(process.VerifierProcessError, "not_regular"):
                 process._open_pinned_executable(
                     kernel32=kernel32,
@@ -690,7 +706,7 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
         go = Path(self.enterContext(tempfile.TemporaryDirectory())) / "go"
         child = subprocess.Popen([sys.executable, "-c", _ECHO, mode, str(go)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.addCleanup(lambda: [child.kill(), child.wait(), *(pipe.close() for pipe in (child.stdin, child.stdout, child.stderr))])
-        kernel = types.SimpleNamespace(TerminateJobObject=lambda job, code: child.kill(), PeekNamedPipe=process._launch_apis()[0].PeekNamedPipe)
+        kernel = types.SimpleNamespace(TerminateJobObject=lambda job, code: child.kill() or True, PeekNamedPipe=process._launch_apis()[0].PeekNamedPipe)
         worker = process.ContainedWorker(kernel32=kernel, job=None, process_handle=None, stdin_descriptor=child.stdin.fileno(), stdout_descriptor=child.stdout.fileno(), stderr_descriptor=child.stderr.fileno(), psapi=None)
         self.addCleanup(worker._terminate)
         return worker, child, go
@@ -734,6 +750,98 @@ class MinimalClearanceVerifierProcessTests(unittest.TestCase):
                 with self.assertRaises(process.VerifierProcessError) as again:
                     worker.exchange(b"REQ-3", response_cap_bytes=64, timeout_seconds=10.0)
                 self.assertEqual(str(again.exception), "worker_unavailable")
+
+    @unittest.skipUnless(os.name == "nt", "Windows worker pipe test")
+    def test_a_worker_that_died_tells_its_diagnostic_and_its_jobs_peak_memory(self):
+        """A death mid-exchange is ``worker_exchange`` either way; only one that wrote to standard error first (a Lean panic,
+        out of memory) reports a diagnostic, its bytes read after the death without blocking, and the Job's peak memory is
+        read after the death too (final review M1: out of memory counts against the batch only near the cap)."""
+        executable = Path(sys._base_executable)
+        payload = executable.read_bytes()
+        for said, wrote in (("import sys; sys.stderr.write('out of memory'); sys.stderr.flush()", b"out of memory"), ("pass", b"")):
+            with self.subTest(wrote=wrote):
+                workspace = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                worker = process.launch_contained_worker(
+                    executable, workspace=workspace, job_memory_cap_bytes=1_000_000_000,
+                    expected_executable_size_bytes=len(payload), expected_executable_sha256=hashlib.sha256(payload).digest(),
+                    arguments=("-c", f"import sys; sys.stdin.buffer.read(5); {said}; raise SystemExit(3)"))
+                self.addCleanup(worker.close)
+                with self.assertRaises(process.VerifierProcessError) as caught:
+                    worker.exchange(b"x", response_cap_bytes=64, timeout_seconds=30.0)
+                self.assertEqual((str(caught.exception), worker.diagnostic(), worker.diagnostic()), ("worker_exchange", wrote, wrote))
+                peak = worker.peak_job_memory()
+                self.assertTrue(1_000_000 < peak < 1_000_000_000, peak)  # a Python child's commit, far below the cap
+
+
+class _StuckKernel:
+    """A kernel32 whose Job cannot be killed and whose child never exits; waits time out with no Windows error code."""
+
+    def __init__(self, terminates: bool = False) -> None:
+        self.terminates = terminates
+
+    def TerminateJobObject(self, job, code):  # noqa: N802
+        return self.terminates
+
+    def TerminateProcess(self, handle, code):  # noqa: N802
+        return True
+
+    def WaitForSingleObject(self, handle, ms):  # noqa: N802
+        return 258  # WAIT_TIMEOUT
+
+    def CloseHandle(self, handle):  # noqa: N802
+        return True
+
+
+class UnkillableChildTests(unittest.TestCase):
+    def test_a_job_that_cannot_be_killed_or_reaped_is_a_typed_failure_not_a_swallowed_one_or_a_hang(self) -> None:
+        with self.assertRaisesRegex(process.VerifierProcessError, "^probe_wait_timeout$"):
+            process._terminate_and_reap_child(kernel32=_StuckKernel(True), process_handle=1, job_handle=2, label="probe")
+        read, write = os.pipe()
+        worker = process.ContainedWorker(kernel32=_StuckKernel(), job=1, process_handle=2, stdin_descriptor=write, stdout_descriptor=read, stderr_descriptor=read, psapi=None)
+        with patch.object(process, "_REAP_MS", 1):
+            with self.assertRaisesRegex(process.VerifierProcessError, "^worker_terminate$"):
+                worker._armed(1.0, lambda: 1 / 0)
+            with self.assertRaisesRegex(process.VerifierProcessError, "^worker_reap$"):
+                worker.close()
+
+
+
+    def test_a_kernel_call_that_raises_is_worker_terminate_and_the_watchdog_survives(self) -> None:
+        class Raising(_StuckKernel):
+            def TerminateJobObject(self, job, code):  # noqa: N802
+                raise OSError("kernel32")
+        read, write = os.pipe()
+        worker = process.ContainedWorker(kernel32=Raising(), job=1, process_handle=2, stdin_descriptor=write, stdout_descriptor=read, stderr_descriptor=read, psapi=None)
+        with self.assertRaisesRegex(process.VerifierProcessError, "^worker_terminate$"):
+            worker._armed(1.0, lambda: 1 / 0)
+        worker = process.ContainedWorker(kernel32=Raising(), job=1, process_handle=2, stdin_descriptor=write, stdout_descriptor=read, stderr_descriptor=read, psapi=None)
+        with worker._cond:
+            worker._deadline = time.monotonic()  # already past: the watchdog must kill, hit the error and stay a live thread
+            worker._cond.notify()
+        worker._watchdog.join(2)
+        self.assertEqual((worker._watchdog.is_alive(), worker.alive, worker.kill_failed), (False, False, True))  # it ended because the worker is dead, with the failure recorded, not by an exception
+
+
+    def test_launch_failures_before_the_child_runs_are_typed(self) -> None:
+        with patch.object(process.ctypes, "WinDLL", side_effect=OSError("no kernel32")), self.assertRaisesRegex(process.VerifierProcessError, "^verifier_api_missing:kernel32$"):
+            process._launch_apis()
+        real_pipe, made = os.pipe, []
+
+        def third_pipe_fails() -> tuple[int, int]:  # the two output pipes are made first; the worker's input pipe is the third
+            if len(made) == 2:
+                raise OSError("no pipe")
+            made.append(1)
+            return real_pipe()
+        with tempfile.TemporaryDirectory() as workspace, patch.object(process.os, "pipe", third_pipe_fails), \
+                self.assertRaisesRegex(process.VerifierProcessError, "^worker_input_pipe$"):
+            process.launch_contained_worker(Path(sys.executable), workspace=Path(workspace), job_memory_cap_bytes=100_000_000,
+                                            expected_executable_size_bytes=1, expected_executable_sha256=bytes(32))
+
+    def test_diagnostic_of_a_closed_error_pipe_is_empty(self) -> None:
+        read, write = os.pipe()
+        worker = process.ContainedWorker(kernel32=_StuckKernel(), job=1, process_handle=2, stdin_descriptor=write, stdout_descriptor=read, stderr_descriptor=read, psapi=None)
+        with patch("msvcrt.get_osfhandle", side_effect=OSError("closed")):
+            self.assertEqual(worker.diagnostic(), b"")
 
 
 if __name__ == "__main__":

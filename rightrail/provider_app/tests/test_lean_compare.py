@@ -68,7 +68,15 @@ def _tree_snapshot(root: Path) -> tuple[tuple[str, int, int, str], ...]:
 class LeanComparisonTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        _verify_identity()
+        cls.identity_error: LeanCompareError | None = None
+        try:
+            _verify_identity()
+        except LeanCompareError as error:
+            cls.identity_error = error
+
+    def setUp(self) -> None:
+        if self.identity_error is not None:
+            self.skipTest(f"Lean build not usable ({self.identity_error.code}); tests/test_provider_app_lean_build.py fails with the cause")
 
     def test_all_manual_vector_fields_match_python_and_independent_checker(self) -> None:
         self.assertEqual(26, len(VECTORS["cases"]))

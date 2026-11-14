@@ -29,30 +29,19 @@ FORBIDDEN_AXIOM_EXAMPLES = (
 
 
 class SemanticAssuranceGateNegativeTests(unittest.TestCase):
+    # The test_real_* tests clone a clean Git checkout of this repository (or the one the
+    # variable names) as the real candidate and mutate the clone. One cold build of the
+    # candidate's committed tree per process seeds every gate build root; the gate's
+    # native exe must be that build's bytes.
     CANDIDATE_ENVIRONMENT_VARIABLE = "BLIND_LEDGER_SEMANTIC_CANDIDATE"
-
-    # The test_real_* tests clone the real external candidate. With the variable
-    # set they run (and fail closed on any problem); without it they skip.
-    # One cold build of the candidate's committed tree per process seeds every
-    # gate build root; the gate's native exe must be that build's bytes.
+    DEFAULT_CANDIDATE = Path(__file__).resolve().parents[1]
     _committed_build: tuple[Path, str] | None = None
-    _REQUIRES_REAL_CANDIDATE = unittest.skipUnless(
-        os.environ.get(CANDIDATE_ENVIRONMENT_VARIABLE),
-        f"requires {CANDIDATE_ENVIRONMENT_VARIABLE}; these tests run only "
-        "inside the semantic assurance gate (lean/tools/semantic_assurance_gate.py), "
-        "which configures a verified external candidate",
-    )
 
     def setUp(self) -> None:
         self.manifest = gate._load_manifest()
 
     def _actual_candidate(self) -> Path:
-        configured = os.environ.get(self.CANDIDATE_ENVIRONMENT_VARIABLE)
-        self.assertTrue(
-            configured,
-            f"{self.CANDIDATE_ENVIRONMENT_VARIABLE} must name the verified external candidate",
-        )
-        candidate = Path(configured).resolve()
+        candidate = Path(os.environ.get(self.CANDIDATE_ENVIRONMENT_VARIABLE) or self.DEFAULT_CANDIDATE).resolve()
         self.assertTrue(candidate.is_dir(), f"actual candidate is absent: {candidate}")
         self.assertTrue((candidate / ".git").exists(), f"actual candidate is not Git: {candidate}")
         self.assertEqual(
@@ -62,13 +51,11 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         )
         return candidate
 
-    def test_missing_candidate_configuration_fails_closed(self) -> None:
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(self.CANDIDATE_ENVIRONMENT_VARIABLE, None)
-            with self.assertRaisesRegex(
-                AssertionError,
-                rf"{self.CANDIDATE_ENVIRONMENT_VARIABLE} must name the verified external candidate",
-            ):
+    def test_candidate_that_is_not_a_git_checkout_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="semantic-gate-not-git-") as directory, patch.dict(
+            os.environ, {self.CANDIDATE_ENVIRONMENT_VARIABLE: directory}
+        ):
+            with self.assertRaisesRegex(AssertionError, "actual candidate is not Git"):
                 self._actual_candidate()
 
     @staticmethod
@@ -157,8 +144,7 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             self._git_mutation(
                 Path(temporary),
                 "clone",
-                "--no-local",
-                "--quiet",
+                "--no-local", "--depth=1", "--quiet",  # the gate reads only the head commit; full history is 77 MB of copying
                 str(actual),
                 str(root),
             )
@@ -500,7 +486,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                     root, ("source.lean",), ("forbidden_marker",)
                 )
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_removed_theorem_reaches_containing_declaration_gate(self) -> None:
         expectation = self._theorem_expectations()[0]
 
@@ -533,7 +518,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 f"containing={str(raised.exception)!r}"
             )
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_changed_theorem_reaches_containing_statement_gate(self) -> None:
         (expectation,) = [
             item
@@ -562,7 +546,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 f"containing={str(raised.exception)!r}"
             )
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_transitive_custom_axiom_reaches_containing_axiom_gate(self) -> None:
         def mutate(root: Path) -> None:
             injected = self._lean_dir(root) / "BlindLedger" / "Injected.lean"
@@ -627,7 +610,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
             print(axiom_output, end="" if axiom_output.endswith("\n") else "\n")
             print("REAL_LEAN_AXIOM_OUTPUT_END")
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_sorry_reaches_containing_axiom_gate(self) -> None:
         def mutate(root: Path) -> None:
             source_path = self._lean_dir(root) / self.manifest.candidate["theorem_source"]
@@ -667,7 +649,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 f"containing={str(raised.exception)!r}"
             )
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_source_change_during_verification_reaches_containing_identity_gate(self) -> None:
         def mutate(root: Path) -> None:
             del root
@@ -710,7 +691,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
                 f"containing={str(raised.exception)!r}"
             )
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_artifact_change_during_verification_reaches_containing_identity_gate(self) -> None:
         with self._fresh_candidate(lambda root: None) as (candidate, head, tree):
             evidence: dict[str, gate.FileIdentity] = {}
@@ -784,7 +764,6 @@ class SemanticAssuranceGateNegativeTests(unittest.TestCase):
         self.assertFalse(Path(temporary).exists())
         print(f"TOOLCHAIN_FIXTURE_CLEANUP=PASS temp={temporary}")
 
-    @_REQUIRES_REAL_CANDIDATE
     def test_real_tool_change_during_verification_reaches_containing_identity_gate(self) -> None:
         if os.name != "nt" or platform.machine().lower() not in {"amd64", "x86_64"}:
             self.skipTest("copied Lean toolchain integration requires Windows x86_64")

@@ -1,11 +1,12 @@
 import BlindLedger.Gate.Batch
 import BlindLedger.Gate.ProducerTheorems
-import BlindLedger.Gate.ApprovalLaws
+import BlindLedger.Gate.ParseLaws
 import BlindLedger.Gate.Theorems
 import BlindLedger.Sha3FastEq
+import BlindLedger.Gate.Custody
 
-/-! Theorems of payer-batch-release-v1 (§A RELEASE-BATCH, §B one-tree PUBLISH).  Statements: the design's
-    `payer-batch-release-goals.lean`, fixed. -/
+/-! Theorems of payer-batch-release-v1 (§A RELEASE-BATCH, §B one-tree PUBLISH; statements: the design's
+    `payer-batch-release-goals.lean`, fixed), and of the shard's first seal under its counter (§C). -/
 namespace BlindLedger.Gate
 
 /-! ## §A  RELEASE-BATCH -/
@@ -446,6 +447,7 @@ private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
   obtain ⟨a13, -, h⟩ := bind_some h
   obtain ⟨a14, hc, h⟩ := bind_some h
   obtain ⟨a15, -, h⟩ := bind_some h
+  obtain ⟨a15c, -, h⟩ := bind_some h
   obtain ⟨a16, -, h⟩ := bind_some h
   obtain ⟨a17, -, h⟩ := bind_some h
   obtain ⟨a18, -, h⟩ := bind_some h
@@ -453,44 +455,25 @@ private theorem pCheckpointFields_count {b rest : Bytes} {cp : Checkpoint}
   obtain ⟨rfl, -⟩ := h
   exact nat_ok hc
 
-private theorem storedOfAny_count {b : Bytes} {x : Stored} (h : storedOfAny sha3 b = some x) :
+private theorem storedOfAny_count {b : Bytes} {x : Stored} (h : storedOf sha3 b = some x) :
     1 ≤ x.checkpoint.count ∧ x.checkpoint.count ≤ maxBatch := by
-  unfold storedOfAny at h
-  cases hd : decodeAnyCheckpoint b with
+  unfold storedOf at h
+  cases hd : decodeCheckpoint b with
   | none => simp [hd] at h
   | some y =>
     simp only [hd, Option.map_some, Option.some.injEq] at h
     subst h
-    rcases decodeAnyCheckpoint_cases hd with h1 | ⟨head, h2⟩
-    · have hr := parse_run (p := pSignedCheckpoint) h1
-      simp only [pSignedCheckpoint, StateT.run_bind] at hr
-      obtain ⟨c, hc, hr⟩ := bind_some hr
-      obtain ⟨s, -, hr⟩ := bind_some hr
-      simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
-      obtain ⟨rfl, -⟩ := hr
-      have hp := consumed_run hc
-      simp only [pCheckpoint, StateT.run_bind] at hp
-      obtain ⟨a1, -, hp⟩ := bind_some hp
-      obtain ⟨a2, -, hp⟩ := bind_some hp
-      exact pCheckpointFields_count hp
-    · have hr := parse_run h2
-      simp only [StateT.run_bind] at hr
-      obtain ⟨c, hc, hr⟩ := bind_some hr
-      obtain ⟨s, -, hr⟩ := bind_some hr
-      simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
-      obtain ⟨⟨rfl, -⟩, -⟩ := hr
-      have hp := consumed_run hc
-      simp only [pCheckpoint2, StateT.run_bind] at hp
-      obtain ⟨a1, -, hp⟩ := bind_some hp
-      obtain ⟨a2, -, hp⟩ := bind_some hp
-      obtain ⟨⟨cp3, m3⟩, h3, hp⟩ := bind_some hp
-      obtain ⟨a4, -, hp⟩ := bind_some hp
-      obtain ⟨a5, -, hp⟩ := bind_some hp
-      simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hp
-      have e : c.fst.1.fst = cp3 := (congrArg Prod.fst hp.1).symm
-      show 1 ≤ c.fst.1.fst.count ∧ c.fst.1.fst.count ≤ maxBatch
-      rw [e]
-      exact pCheckpointFields_count h3
+    have hr := parse_run (p := pSignedCheckpoint) hd
+    simp only [pSignedCheckpoint, StateT.run_bind] at hr
+    obtain ⟨c, hc, hr⟩ := bind_some hr
+    obtain ⟨s, -, hr⟩ := bind_some hr
+    simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at hr
+    obtain ⟨rfl, -⟩ := hr
+    have hp := consumed_run hc
+    simp only [pCheckpoint, StateT.run_bind] at hp
+    obtain ⟨a1, -, hp⟩ := bind_some hp
+    obtain ⟨a2, -, hp⟩ := bind_some hp
+    exact pCheckpointFields_count hp
 
 private theorem mapM_decode : ∀ {tokens : List Bytes} {ts : List Token}, tokens.mapM decodeToken = some ts →
     tokens.length = ts.length ∧ tokens.filterMap decodeToken = ts ∧
@@ -520,27 +503,27 @@ private theorem mapM_decode : ∀ {tokens : List Bytes} {ts : List Token}, token
           simp at hb
           simpa using h3 i b hb
 
-/-- Soundness, the only direction safety needs: the one-tree check never publishes what `publishOkAny`
-    refuses, so `publishOkAny_sound` and `publishOkAny_no_downgrade` carry over unchanged. -/
-theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOkTree rootPk cert last new tokens = true) : publishOkAny rootPk cert last new tokens = true := by
+/-- Soundness, the only direction safety needs: the one-tree check never publishes what `publishOk`
+    refuses, so `publishOk_sound` carries over unchanged. -/
+theorem publishOkTree_sound {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOkTree rootPk cert last new tokens tpm = true) : publishOk rootPk cert last new tokens tpm = true := by
   unfold publishOkTree at h
   cases he : decodeKeyCert cert with
   | none => simp [he] at h
   | some e =>
-    cases hn : storedOfAny sha3 new with
+    cases hn : storedOf sha3 new with
     | none => simp [he, hn] at h
     | some n =>
       cases hm : tokens.mapM decodeToken with
       | none => simp [he, hn, hm] at h
       | some ts =>
         simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq] at h
-        obtain ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hroot⟩, hall⟩, hasc⟩, hdg⟩ := h
+        obtain ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hctr⟩, hlen⟩, hroot⟩, hall⟩, hasc⟩ := h
         obtain ⟨hl1, hfm, hget⟩ := mapM_decode hm
         have hcnt := storedOfAny_count hn
-        unfold publishOkAny
+        unfold publishOk
         simp only [he, hn, Bool.and_eq_true, beq_iff_eq]
-        refine ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, by rw [hl1]; exact hlen⟩, ?_⟩, by rw [hfm]; exact hasc⟩, hdg⟩
+        refine ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hctr⟩, by rw [hl1]; exact hlen⟩, ?_⟩, by rw [hfm]; exact hasc⟩
         rw [List.all_eq_true]
         rintro ⟨b, i⟩ hbi
         have hi : tokens[i]? = some b := List.mem_zipIdx_iff_getElem?.1 hbi
@@ -643,13 +626,13 @@ private theorem fold_eq {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H z).l
 private theorem decodeToken_siblings {b : Bytes} {t : Token} (h : decodeToken b = some t) :
     ∀ s ∈ t.siblings, s.length = digestBytes := by
   have hr := parse_run (p := pToken) h
-  obtain ⟨⟨leaf, lb⟩, r1, -, hr⟩ := Approval.bind_run hr
-  obtain ⟨k, r2, -, hr⟩ := Approval.bind_run hr
-  obtain ⟨sibs, r3, hs, hr⟩ := Approval.bind_run hr
-  obtain ⟨cd, r4, -, hr⟩ := Approval.bind_run hr
-  obtain ⟨rfl, -⟩ := Approval.pure_run hr
-  exact (Approval.many_run (e := id) (Q := fun x : Bytes => x.length = digestBytes)
-    (fun hd => Approval.take_run hd) k hs).2.2
+  obtain ⟨⟨leaf, lb⟩, r1, -, hr⟩ := ParseLaws.bind_run hr
+  obtain ⟨k, r2, -, hr⟩ := ParseLaws.bind_run hr
+  obtain ⟨sibs, r3, hs, hr⟩ := ParseLaws.bind_run hr
+  obtain ⟨cd, r4, -, hr⟩ := ParseLaws.bind_run hr
+  obtain ⟨rfl, -⟩ := ParseLaws.pure_run hr
+  exact (ParseLaws.many_run (e := id) (Q := fun x : Bytes => x.length = digestBytes)
+    (fun hd => ParseLaws.take_run hd) k hs).2.2
 
 private theorem mapM_some : ∀ {l : List Bytes}, (∀ b ∈ l, (decodeToken b).isSome) →
     l.mapM decodeToken = some (l.filterMap decodeToken)
@@ -779,21 +762,21 @@ private theorem tree_agrees {H : Bytes → Bytes} {d : Bytes} (hlen : ∀ z, (H 
       obtain ⟨rest, rfl, -, -⟩ := hpart i p hp hc
       exact congrArg (List.cons _) (hpaths (i / 2) _ ⟨i, _, hp, rfl, by rw [if_neg hc, List.tail_cons]⟩)
 
-/-- Completeness: whatever `publishOkAny` accepts, the one-tree check accepts too, unless the batch's tokens
+/-- Completeness: whatever `publishOk` accepts, the one-tree check accepts too, unless the batch's tokens
     carry a SHA3-512 collision, which `publishCollision` returns. -/
-theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
-    (h : publishOkAny rootPk cert last new tokens = true) :
-    publishOkTree rootPk cert last new tokens = true ∨
+theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOk rootPk cert last new tokens tpm = true) :
+    publishOkTree rootPk cert last new tokens tpm = true ∨
       ∃ x y, publishCollision tokens = some (x, y) ∧ x ≠ y ∧ sha3 x = sha3 y := by
-  unfold publishOkAny at h
+  unfold publishOk at h
   cases he : decodeKeyCert cert with
   | none => simp [he] at h
   | some e =>
-  cases hn : storedOfAny sha3 new with
+  cases hn : storedOf sha3 new with
   | none => simp [he, hn] at h
   | some n =>
   simp only [he, hn, Bool.and_eq_true, beq_iff_eq] at h
-  obtain ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hlen⟩, hall⟩, hasc⟩, hdg⟩ := h
+  obtain ⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hctr⟩, hlen⟩, hall⟩, hasc⟩ := h
   rw [List.all_eq_true] at hall
   have hdec : ∀ b ∈ tokens, (decodeToken b).isSome := by
     intro b hb
@@ -866,28 +849,54 @@ theorem publishOkTree_complete {rootPk cert new : Bytes} {last : Option Bytes} {
         exact List.mem_flatMap.2 ⟨(t, i), hti, by rw [hcnt]; exact hx⟩)
     unfold publishOkTree
     simp only [he, hn, hm, Bool.and_eq_true, beq_iff_eq]
-    refine ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hcnt⟩, hroot⟩, ?_⟩, by rw [← hfm]; exact hasc⟩, hdg⟩
+    refine ⟨⟨⟨⟨⟨⟨⟨hacc, hlast⟩, hfol⟩, hctr⟩, hcnt⟩, hroot⟩, ?_⟩, by rw [← hfm]; exact hasc⟩
     rw [List.all_eq_true]
     rintro ⟨t, i⟩ hti
     exact (htok t i hti).2.2.2 _ (hpath i t.siblings ⟨t, hti, rfl⟩)
 
-/-- The exe's PUBLISH is `publishOkAny`, exactly, unless the batch's own hash inputs collide (then it refuses). -/
-theorem publishOkTree_eq {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes}
+/-- The exe's PUBLISH is `publishOk`, exactly, unless the batch's own hash inputs collide (then it refuses). -/
+theorem publishOkTree_eq {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {tpm : Nat}
     (hc : publishCollision tokens = none) :
-    publishOkTree rootPk cert last new tokens = publishOkAny rootPk cert last new tokens := by
-  cases ha : publishOkAny rootPk cert last new tokens with
+    publishOkTree rootPk cert last new tokens tpm = publishOk rootPk cert last new tokens tpm := by
+  cases ha : publishOk rootPk cert last new tokens tpm with
   | true =>
     rcases publishOkTree_complete ha with h | ⟨_, _, h, -⟩
     · exact h
     · simp [hc] at h
   | false =>
-    cases ht : publishOkTree rootPk cert last new tokens with
+    cases ht : publishOkTree rootPk cert last new tokens tpm with
     | false => rfl
     | true => exact absurd (publishOkTree_sound ht) (by simp [ha])
 
-/-- No downgrade at the exe: after a v2 only a v2 publishes. -/
-theorem publishOkTree_no_downgrade {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Bytes} {b : Bytes}
-    (h : publishOkTree rootPk cert last new tokens = true) (hb : last = some b) (hv : isV2 b = true) :
-    isV2 new = true := publishOkAny_no_downgrade (publishOkTree_sound h) hb hv
+/-! ## §C  The first seal under the shard's counter -/
+
+/-- A crash between the first seal's signature commit and the counter's first increment heals: the store's newest
+    sealed checkpoint is the one PUBLISH accepted with no predecessor, so with the counter unwritten and that
+    checkpoint's own counter the start catches up (one increment, read back) instead of refusing. -/
+theorem first_seal_crash_heals {rootPk cert new : Bytes} {tokens : List Bytes} {tpm : Nat}
+    (h : publishOkTree rootPk cert none new tokens tpm = true) :
+    custodyOf rootPk cert new none = .catchUp := by
+  obtain ⟨ha, -, e, n, -, hn, hf, -⟩ := publishOk_sound (publishOkTree_sound h)
+  have hf' : follows none n = true := by simpa using hf
+  have h1 := follows_none_counter hf'
+  simp [custodyOf, hn, firstSealed, ha, hf', h1, custodyStep]
+
+/-- Once a checkpoint `a` is published, no checkpoint with counter 1 is published after the counter moved past the
+    value `a` was sealed at (the catch-up of `first_seal_crash_heals`, or `a`'s own increment), nor on top of `a`:
+    with `custodyStep_unwritten` (no seal at an unwritten counter over a sealed store), no second counter-1
+    checkpoint is publishable over the store; only a store deleted before the first increment starts over. -/
+theorem counter_one_once {r₁ r₂ c₁ c₂ a b : Bytes} {l₁ l₂ : Option Bytes} {ts₁ ts₂ : List Bytes} {t₁ t₂ : Nat}
+    (h₁ : publishOkTree r₁ c₁ l₁ a ts₁ t₁ = true) (h₂ : publishOkTree r₂ c₂ l₂ b ts₂ t₂ = true)
+    (moved : t₁ < t₂ ∨ l₂ = some a) :
+    (storedOf sha3 b).map (·.checkpoint.counter) ≠ some 1 := by
+  obtain ⟨-, -, e₁, n₁, -, hn₁, -, hc₁, -⟩ := publishOk_sound (publishOkTree_sound h₁)
+  obtain ⟨-, -, e₂, n₂, -, hn₂, hf₂, hc₂, -⟩ := publishOk_sound (publishOkTree_sound h₂)
+  rw [hn₂]
+  intro h
+  simp at h
+  rcases moved with hm | rfl
+  · omega
+  · have := follows_counter (p := n₁) (n := n₂) (by simpa [hn₁] using hf₂)
+    omega
 
 end BlindLedger.Gate

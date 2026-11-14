@@ -20,8 +20,11 @@ _VECTORS = Path(__file__).resolve().parents[1] / "artifacts" / "engine-correctio
 
 def _correction_corpus(vector: str) -> dict[str, bytes]:
     """The M4 P1 equivalence corpus over one KAT request (request_unbound.bin: the retired exe's, zero authority digest;
-    request.bin: the bound one): its truncations, bit flips, +-1 numeric fields and header edits."""
-    request = (_VECTORS / vector).read_bytes()
+    request.bin: the bound one): its truncations, bit flips, +-1 numeric fields and header edits.  The exe read the request
+    without the time-given byte (offset 354, here 01: the time was named), so each input is built on the exe's request
+    and then gets that byte, keeping every recorded answer comparable."""
+    shipped = (_VECTORS / vector).read_bytes()
+    request = shipped[:354] + shipped[355:]
     link_list = request.index(b"BLFIN02") - 6
     corpus = {"vector": request, "empty": b"", "zeros-limit": bytes(4_000_000), "trailing-byte": request + b"\x00",
               "old-magic": b"BLFCMD02" + request[8:], "old-version": request[:8] + b"\x00\x02" + request[10:],
@@ -36,6 +39,9 @@ def _correction_corpus(vector: str) -> dict[str, bytes]:
             v = int.from_bytes(request[off:off + 8], "big") + d
             if v >= 0:
                 corpus[f"num-{off}{d:+d}"] = request[:off] + v.to_bytes(8, "big") + request[off + 8:]
+    corpus = {key: data[:354] + shipped[354:355] + data[354:] if key not in ("empty", "zeros-limit") and len(data) > 354 else data
+              for key, data in corpus.items()}
+    assert corpus["vector"] == shipped
     return corpus
 
 
@@ -83,6 +89,23 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "evaluator_input_rejected")
         self.assertIs(engine._evaluator[0], worker)
         self.assertTrue(worker.alive)
+
+    def _with_claims(self, data: dict, amounts: tuple[int, ...]) -> bytes:
+        """The input with one open claim of each amount (and its OFFSET_CLAIM evidence): well formed, whatever the sum."""
+        role = data["control_pack"]["canonical_fields"]["authorized_roles"][0]
+        claims = [{"claim_id": f"zz-claim-{i}", "obligation_id": data["pre_evaluation"]["obligation_id"], "evidence_id": f"zz-claim-ev-{i}",
+                   "amount_cents": amount, "owner_role": role, "deadline_ms": 1, "status": "CLAIMED"} for i, amount in enumerate(amounts)]
+        extra = [dict(data["evidence"][0], evidence_id=claim["evidence_id"], kind="OFFSET_CLAIM", common_origin_id=claim["claim_id"],
+                      amount_cents=claim["amount_cents"], reversal_of=None, supersedes=None) for claim in claims]
+        return adapter._encode_blfin02(dict(data, claims=data["claims"] + claims,
+                                            evidence=sorted(data["evidence"] + extra, key=lambda row: row["evidence_id"])))
+
+    def test_a_sum_past_the_cent_bound_is_refused_as_total_overflow(self) -> None:
+        data, big = self._wires()[0][1], 1 << 62
+        engine._evaluate_wire(self._with_claims(data, (big,)))  # one such claim is well formed and decided
+        with self.assertRaises(engine.FinancialEngineResultError) as raised:
+            engine._evaluate_wire(self._with_claims(data, (big, big)))  # two make 2^63 cents: the worker's answer 02
+        self.assertEqual(str(raised.exception), "evaluator_total_overflow")
 
     def test_broken_frame_ends_the_worker_and_the_next_decision_relaunches(self) -> None:
         wire = self._wires()[0][0]
@@ -132,7 +155,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
 
     def test_large_requests_keep_the_worker_flat(self) -> None:
         """One worker, 20 accepted 600 KB requests then 8 near the 8 MiB ceiling: from each phase's second request its
-        commit stays in a 16 MB band.  The M1 pin kept a further 32 MiB segment per request (M1.5 XI.2 record)."""
+        commit stays in a 16 MB band.  An earlier pin kept a further 32 MiB segment per request."""
         data, key, long = self._wires()[0][1], "0" * 110, "x" * 500
         padded = lambda rows, text: self._padded(data, rows, text)  # noqa: E731
         base = len(padded(0, ""))
@@ -152,7 +175,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
 
     def test_unpinned_executable_is_never_run(self) -> None:
         engine._close_evaluator()  # building the fixture store already started one
-        with patch.object(engine, "EVALUATOR_ARTIFACT_SHA256", bytes(32)):
+        with patch.object(engine, "EVALUATOR_ARTIFACT_SHA256", bytes(64)):
             with self.assertRaises(engine.FinancialEngineContainmentError) as raised:
                 engine._evaluate_wire(self._wires()[0][0])
         self.assertEqual(str(raised.exception), "evaluator_containment")
@@ -230,7 +253,7 @@ class EvaluatorWorkerTests(unittest.TestCase):
         self.assertEqual(self._exchange(frames["c1"][:-1]), b"\x01")  # a truncated item is not decoded
         # The answer to the first fixture input from the worker before payment frames existed: the pinned 86299A0D exe
         # (5,724,160 bytes; the engine pin at 1168909 admits no other), guarded dev run m3s2-oldhash-dev-a1-L1 on 2026-10-01,
-        # two identical HASH lines (rrb/logs/m3s2-oldhash-dev-a1-L1.guard.log; child log guarded-command-m3s2-oldhash-dev-a1-L1.stdout.log).
+        # two identical HASH lines.
         old = "4989cc7d8f1ec95ffeef2a4a3a6e1f7504ade818803213815935b711a3d40cc5"
         self.assertEqual(hashlib.sha256(engine._evaluate_wire(self._wires()[0][0])).hexdigest(), old)
 
@@ -273,14 +296,83 @@ class EvaluatorWorkerTests(unittest.TestCase):
                             engine.run_correction_transition_v1(request=data)
                         self.assertEqual(str(raised.exception), "evaluator_input_rejected")
 
+    @staticmethod
+    def _resend_frame(request: bytes, command_at: int, time_given: int) -> bytes:
+        """The shipped command as a resend of itself: its stored identity (time-given byte as asked) and the three queries
+        that found it."""
+        def text(start: int) -> str:
+            return request[start + 2:start + 2 + int.from_bytes(request[start:start + 2], "big")].decode()
+
+        action_id, obligation_id = text(73), "obligation:item-h:period-01"
+        writer = adapter._WireWriter()
+        engine._write_correction_action_lookup(writer, {"kind": "existing", "identity": {
+            "action_id": action_id, "action_obligation_id": obligation_id, "determination_id": f"determination:{action_id}",
+            "determination_obligation_id": obligation_id, "action_kind": "CORRECTION_PAYMENT_REQUEST", "claim_id": text(57),
+            "actor_id": text(97), "actor_role": text(117), "authority_id": text(135), "authority_epoch": 1,
+            "authority_digest": request[167:231], "decision": "OFFSET_REJECTED_CORRECTION_AUTHORIZED",
+            "input_evaluation_id": text(239), "input_evaluation_result_digest": request[282:346], "expected_revision": 4,
+            "decided_at_ms": int.from_bytes(request[command_at - 8:command_at], "big"), "decision_time_given": True}})
+        lookup_at = command_at + 1 + 8
+        out, at = request[:lookup_at] + writer.finish(label="lookup")[:-1] + bytes([time_given]), lookup_at + 1
+        for found in (action_id, f"determination:{action_id}", f"determination:{action_id}"):
+            subject_end = at + 3 + int.from_bytes(request[at + 1:at + 3], "big")  # predicate, subject; then complete
+            versions = subject_end + 1 + 8 + 1  # matchCount 0 and no result identity: 8 + 1 bytes after complete
+            out += request[at:subject_end + 1] + (1).to_bytes(8, "big") + b"\x01" + len(found).to_bytes(2, "big") + found.encode()
+            out += request[versions:versions + 72]
+            at = versions + 72
+        return out + request[at:]
+
+    def test_the_two_time_given_bytes_are_flipped_and_cut_against_the_worker(self) -> None:
+        """The command's byte (after decisionAtMs) and a stored identity's byte (after decidedAtMs), on the shipped layout:
+        0 / 1 / 2 are read, any other value or a cut frame is refused, and a command that left its time to the owner's
+        clock without being dated at the owner's clock is a malformed command."""
+        request = (_VECTORS / "request.bin").read_bytes()
+        command_at = request.index((0x0000019D419E810A).to_bytes(8, "big")) + 8
+        lookup_at = command_at + 1 + 8  # the owner's clock, then the lookup tag
+        self.assertEqual((request[command_at], request[lookup_at]), (1, 1))  # named time; lookup absent
+        writer = adapter._WireWriter()
+        engine._write_correction_action_lookup(writer, {"kind": "existing", "identity": {
+            **{key: f"{key}:x" for key in ("action_id", "action_obligation_id", "determination_id", "determination_obligation_id",
+                                           "action_kind", "claim_id", "actor_id", "authority_id", "input_evaluation_id")},
+            "actor_role": "FINANCE_DECISION", "authority_epoch": 1, "authority_digest": bytes(64), "decision": "OFFSET_AUTHORIZED",
+            "input_evaluation_result_digest": bytes(64), "expected_revision": 4, "decided_at_ms": 7, "decision_time_given": True}})
+        existing = writer.finish(label="lookup")
+        with_lookup = request[:lookup_at] + existing + request[lookup_at + 1:]
+        flag_at = lookup_at + len(existing) - 1
+        self.assertEqual(with_lookup[flag_at], 2)
+
+        def mutate(frame: bytes, at: int, value: int) -> bytes:
+            return frame[:at] + bytes([value]) + frame[at + 1:]
+
+        result = engine.decode_correction_transition_result(self._exchange(mutate(request, command_at, 0))[1:])
+        self.assertEqual((result["status"], result["reject_reason"]), ("REJECTED", "INVALID_REQUEST"))
+        for value in (2, 255):
+            self.assertEqual(self._exchange(mutate(request, command_at, value)), b"\x01", value)
+        for value in (0, 1, 2):
+            self.assertEqual(self._exchange(mutate(with_lookup, flag_at, value))[:1], b"\x00", value)
+        # The shipped command resent as itself: the stored time-given byte alone decides. 1 (time left to the owner's clock)
+        # cannot match a command that named its time; 0 (old row) and 2 (named) match it.
+        answers = {}
+        for value in (0, 1, 2):
+            reply = self._exchange(self._resend_frame(request, command_at, value))
+            self.assertEqual(reply[:1], b"\x00", value)
+            result = engine.decode_correction_transition_result(reply[1:])
+            answers[value] = (result["status"], result["reject_reason"])
+        self.assertEqual(answers, {0: ("DUPLICATE", None), 1: ("REJECTED", "ACTION_CONFLICT"), 2: ("DUPLICATE", None)})
+        for value in (3, 255):
+            self.assertEqual(self._exchange(mutate(with_lookup, flag_at, value)), b"\x01", value)
+        for frame, at in ((request, command_at), (with_lookup, flag_at)):
+            for cut in (at, at + 1, at + 9):
+                self.assertEqual(self._exchange(frame[:cut]), b"\x01", cut)
+
     def test_correction_frame_at_the_cap_is_answered_inside_the_worker_bound(self) -> None:
         """Both 9,900-row frames are decided REJECTED / SCOPE_MISMATCH (a 158-byte result) by one worker that stays live and
         flat.  Pin 8EB77363, guarded run cc-cap-1 (2026-10-02), fresh worker, seconds / commit after: W=63 (5,002,526 B)
         0.70 s / 104.5 MB; the largest valid frame (7,150,826 B) 0.96 s / 138.2 MB.  The bound of 250 MB is ~1.8x that
         and under the 400 MB recycle bound.  Pin 58CDA012 committed ~190 B per frame byte: 964 MB, then 1.38 GB, failing
-        closed at the 1 GB cap (M4 P1 finding 3).  OPEN RESULT-CAP LIMIT (rr-core design question): these rejections never
+        closed at the 1 GB cap.  OPEN RESULT-CAP LIMIT: these rejections never
         reach it, but an accepted correction near 7 MB is answered 03, result encoding failed (evaluator_result_rejected)
-        on both pins, because its BLFCRES3 result embeds the input (lead measure2, runs cc-m2-new-*)."""
+        on both pins, because its BLFCRES3 result embeds the input."""
         request, data = (_VECTORS / "request.bin").read_bytes(), self._wires()[0][1]
         at = request.index(b"BLFIN02")  # the KAT's sized input (4-byte length before it) is swapped for a 9,900-row one
         rest = request[at + int.from_bytes(request[at - 4:at], "big"):]

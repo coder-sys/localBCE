@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 
 from app.right_rail_financial_owner_independent import (
+    CORRECTION_TRANSITION_ARTIFACT_SHA256,
     IndependentFinancialError,
     MAX_CENTS,
     MAX_PACKAGE_BYTES,
@@ -20,6 +21,7 @@ from app.right_rail_financial_owner_independent import (
     MAX_ROWS,
     _blob64,
     _canonical,
+    _digest,
     _evaluation_bindings_json,
     _evaluation_receipt_body,
     _evidence_ids_json,
@@ -34,7 +36,13 @@ from app.right_rail_financial_owner_independent import (
 )
 
 
-DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v3"
+DECISION_PACKAGE_CONTRACT = "RR/FINANCIAL/DECISION-PACKAGE/v4"
+PACKAGE_REQUEST_DOMAIN = b"RR/FINANCIAL/DECISION-PACKAGE-REQUEST/v1\x00"
+# Wire tags of the Lean codec (Codec.lean), restated here.
+ACTION_TAGS = {"READY": 1, "ACKNOWLEDGED": 2, "CANCELLED": 3}
+CLAIM_TAGS = {"CLAIMED": 1, "AUTHORIZED": 2, "REJECTED": 3}
+CASE_TAGS = {"OPEN": 1, "AUTHORIZED": 2, "CORRECTION_REQUIRED": 3, "ACTIONED": 4, "RESOLVED": 5}
+VERIFICATION_TAGS = {"MISSING_EVIDENCE": 1, "SUPPORTED": 2, "CONFLICT_VISIBLE": 3}
 MAX_DECISION_PACKAGE_BYTES = MAX_PACKAGE_BYTES - 512
 MAX_DECISION_PACKAGE_DEPTH = 32
 
@@ -457,11 +465,13 @@ def verify_decision_package(
                 "input_evaluation_result_digest", "dispatch",
             )
 
-            open_cents: dict[str, int] = {}  # R2, recomputed from the rows: oldest request keeps its unpaid part, the balance bounds the rest
+            open_cents: dict[str, int] = {}  # recomputed from the rows: oldest request keeps its unpaid part, the balance bounds the rest
             left = int(obligation["shortfall_cents"])
+            def paid_on(action_id: str) -> int:
+                return int(connection.execute("SELECT COALESCE(SUM(p.amount_cents),0) FROM payments p JOIN financial_events e ON json_extract(e.payload_json,'$.payment_id')=p.payment_id WHERE p.active=1 AND e.kind='PAYMENT_RECEIVED' AND json_extract(e.payload_json,'$.pays_action_id')=?", (action_id,)).fetchone()[0])
+
             for action_id, status, amount in connection.execute("SELECT action_id,status,json_extract(payload_json,'$.amount_cents') FROM actions WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' ORDER BY revision,action_id", (obligation_id,)).fetchall():
-                paid = connection.execute("SELECT COALESCE(SUM(p.amount_cents),0) FROM payments p JOIN financial_events e ON json_extract(e.payload_json,'$.payment_id')=p.payment_id WHERE p.active=1 AND e.kind='PAYMENT_RECEIVED' AND json_extract(e.payload_json,'$.pays_action_id')=?", (action_id,)).fetchone()[0]
-                open_cents[action_id] = 0 if status == "CANCELLED" else min(max(amount - paid, 0), left)
+                open_cents[action_id] = 0 if status == "CANCELLED" else min(max(amount - paid_on(action_id), 0), left)
                 left -= open_cents[action_id]
 
             def project_action(row: sqlite3.Row) -> dict[str, object]:
@@ -587,6 +597,12 @@ def verify_decision_package(
                 delivery_support = "SUPPORTED"
             else:
                 delivery_support = "NOT_SATISFIED"
+            # The delivery requirement, from the spec (Article II): every action that is not cancelled and still asks (not a request,
+            # or a request with open cents left) needs status ACKNOWLEDGED and an acknowledgment reference, the oldest as much as the newest.
+            every_action = connection.execute("SELECT a.action_id,a.kind,a.status,o.acknowledgment_ref FROM actions a LEFT JOIN action_outbox o ON o.action_id=a.action_id WHERE a.obligation_id=?", (obligation_id,)).fetchall()
+            still_asking = [row for row in every_action if row["status"] != "CANCELLED" and (row["kind"] != "CORRECTION_PAYMENT_REQUEST" or open_cents[row["action_id"]] > 0)
+                            and not (row["status"] == "ACKNOWLEDGED" and row["acknowledgment_ref"] is not None)]
+            delivery_requirement = "UNKNOWN" if not every_action else "NOT_SATISFIED" if still_asking else "SUPPORTED"
             amount_evidence_ids = sorted(set(active_payment_ids + authorized_evidence_ids))
             amount_satisfied = bool(obligation["amount_satisfied"])
             if payment_support == "CONFLICTED" or adjustment_support == "CONFLICTED":
@@ -597,10 +613,6 @@ def verify_decision_package(
                 amount_support = "CONFLICTED"
             else:
                 amount_support = "SUPPORTED" if active_payment_count or authorized_claim_count else "NO_LINKED_EVIDENCE"
-            # Delivery, from the spec: every action that is not cancelled, not acknowledged, and is either not a request or has open cents left.
-            every_action = connection.execute("SELECT action_id,kind,status FROM actions WHERE obligation_id=?", (obligation_id,)).fetchall()
-            still_asking = [row for row in every_action if row["status"] not in ("CANCELLED", "ACKNOWLEDGED") and (row["kind"] != "CORRECTION_PAYMENT_REQUEST" or open_cents[row["action_id"]] > 0)]
-            delivery_requirement = "UNKNOWN" if not every_action else "NOT_SATISFIED" if still_asking else "SUPPORTED"
             requirements = {
                 "amount_satisfied": "SUPPORTED" if amount_satisfied and amount_support == "SUPPORTED" else (
                     "NOT_SATISFIED" if not amount_satisfied and amount_support != "CONFLICTED"
@@ -622,8 +634,32 @@ def verify_decision_package(
             else:
                 resolution_assessment = "SUPPORTED"
 
+            # The decision record: the pinned worker, and the BLFDPQ01 frame Lean reads (Decide.lean decodePackageRequest),
+            # rebuilt from the rows; the owner's digest must be of exactly this frame.
+            def u64(value: object) -> bytes:
+                return int(value).to_bytes(8, "big")
+
+            def rows_list(rows: list[sqlite3.Row], encode) -> bytes:
+                return len(rows).to_bytes(2, "big") + b"".join(encode(row) for row in rows)
+
+            def action_bytes(row: sqlite3.Row) -> bytes:
+                ident = str(row[0]).encode("utf-8")
+                flags = bytes([row[2] == "CORRECTION_PAYMENT_REQUEST", ACTION_TAGS[row[3]], row[4] is not None])
+                return len(ident).to_bytes(2, "big") + ident + u64(row[1]) + flags + u64(row[5]) + u64(paid_on(str(row[0])))
+
+            frame_actions = connection.execute("SELECT a.action_id,a.revision,a.kind,a.status,o.acknowledgment_ref,json_extract(a.payload_json,'$.amount_cents') FROM actions a LEFT JOIN action_outbox o ON o.action_id=a.action_id WHERE a.obligation_id=? ORDER BY a.revision,a.action_id", (obligation_id,)).fetchall()
+            frame = (b"BLFDPQ01" + u64(obligation["shortfall_cents"]) + rows_list(frame_actions, action_bytes) + b"BLFDPK01"
+                     + b"".join(u64(obligation[key]) for key in ("owed_cents", "received_cash_cents", "claimed_adjustment_cents", "lawful_adjustment_cents"))
+                     + bytes([bool(obligation["amount_satisfied"]), bool(obligation["reporting_complete"]), VERIFICATION_TAGS[obligation["verification_status"]]])
+                     + rows_list(connection.execute("SELECT amount_cents,active FROM payments WHERE obligation_id=? ORDER BY payment_id", (obligation_id,)).fetchall(), lambda row: u64(row[0]) + bytes([bool(row[1])]))
+                     + rows_list(connection.execute("SELECT amount_cents,status FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id", (obligation_id,)).fetchall(), lambda row: u64(row[0]) + bytes([CLAIM_TAGS[row[1]]]))
+                     + u64(report_count) + u64(conflict_count)
+                     + bytes([0 if case_row is None else CASE_TAGS[case_row["status"]], ACTION_TAGS[frame_actions[-1][3]] if frame_actions else 0, bool(frame_actions) and frame_actions[-1][4] is not None]))
+            decision_record = {"worker_sha256": CORRECTION_TRANSITION_ARTIFACT_SHA256, "request_digest": _digest(PACKAGE_REQUEST_DOMAIN, frame).hex().upper()}
+
             expected_package = {
                 "contract": DECISION_PACKAGE_CONTRACT,
+                "decision_record": decision_record,
                 "scope": scope,
                 "obligation": expected_obligation,
                 "population_binding": population_binding,

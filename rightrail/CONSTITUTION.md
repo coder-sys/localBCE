@@ -25,16 +25,23 @@ responsibility is complete — and it keeps the state free to leave.
    separate, explicit state authority. Expanding scope needs state approval.
    The inline payment gate may allow or hold a payment only to the extent a
    signed state authority grant permits, and it fails closed: a payment it
-   does not allow does not go. The one exception is a bypass of a single named
-   payment, fully verified before it goes by named state employees on the
-   state-signed roster, who sign an approval committing to exactly that
-   payment. A bypass obeys the same threshold, roster, separation and calendar
-   rules as any release. There is no standing, time-window, fail-open or
-   after-the-fact bypass, and RightRail cannot issue, extend or sign one. The
-   gate ships off by default.
+   does not allow does not go. There are two ways to release a held payment,
+   both by named state employees on the state-signed roster and both verified
+   before the payment goes. A bypass releases a single named payment: the
+   employees sign an approval committing to exactly that payment. A release by
+   cause releases the payments held for one cause: the employees sign one
+   decision committing to the exact listed set of held payments that share
+   that cause. A release by cause never covers a payment not on the list when
+   it is signed, and never a future payment. Either obeys the same threshold,
+   roster, separation and calendar rules as any release. There is no standing,
+   time-window, fail-open or after-the-fact bypass or release, and RightRail
+   cannot issue, extend or sign one. The gate ships off by default.
 3. Human judgment stays human. A model output is a lead, never a determination.
 4. Existing payment systems move money. RightRail never does. BLOCK remains a
-   human or state action, never an automated one.
+   human or state action, never an automated one. A payment line that exactly
+   repeats an already-paid line is not held for a person: it is answered at
+   once, naming the earlier payment, and the sender can contest the answer in
+   one step. A line that only resembles a paid line stays with a person.
 
 ## Article II — Facts stay separate
 
@@ -86,8 +93,9 @@ silent default.
 1. Claim only what raw evidence shows. "Written" is not "ran"; "ran" is not
    "verified"; "verified locally" is not "qualified".
 2. Current standing claims until their conditions are met:
-   synthetic, non-PHI, nonpayment, `proofSuiteId=null`,
-   `production_usable=false`, `activation=false`.
+   synthetic member, claim and payment data plus public non-PHI reference data;
+   non-PHI, nonpayment, `proofSuiteId=null`, `production_usable=false`,
+   `activation=false`.
 3. Failures, skips and warnings are reported, never relabeled.
 4. RightRail is in a planned pre-state build phase (no state engagement for
    at least a year). Building and proving the complete product on synthetic
@@ -134,7 +142,7 @@ operational authority.
    operations and the gate pin at two history sizes, and fails when a count
    rises 5% over its pin or an unlisted count grows faster than log n. The
    counts that still grow are named exceptions on a dated list that only
-   shrinks (the continuity export refuses at 2,560 payments). No bound may
+   shrinks (`GROWS` in that test, each with its planned fix). No bound may
    become a way to block service as history grows. Every input, queue, report,
    export and proof has explicit bounds. Measure before claiming performance.
 4. Build what the plan needs now. The private zero-knowledge evidence mode
@@ -201,7 +209,12 @@ revision). These are binding working principles, not suggestions.
    Compose small complete parts rather than a monolith, but never split an
    atomic transition or a theorem where safety depends on seeing the whole.
    No hidden fallbacks, shared mutable state, implicit conversions or layers
-   that add ceremony without replaceability.
+   that add ceremony without replaceability. Each part can be replaced, tested
+   and, where it decides, proved on its own against its contract, without
+   changing any other part. A change that must touch several parts at once
+   shows a boundary in the wrong place, and the boundary is fixed rather than
+   worked around. A part's contract (inputs, outputs, failure cases, trust
+   class) is written down where the part lives.
 8. **Formal means executed.** A Lean definition counts only if it runs in the
    deployed path or has a reviewed refinement proof to what runs. A model plus
    matching examples is not verified code. Pin toolchains, enumerate admitted
@@ -234,6 +247,16 @@ revision). These are binding working principles, not suggestions.
 15. **Privacy is measured.** Privacy is tested as a property — output shape,
     timing, memory, errors, logs, temp files, artifacts and retries must not
     depend on hidden values — not asserted by a label.
+16. **Maximum auditability.** Every consequential decision can be replayed and
+    explained afterwards by someone who does not trust RightRail. Each decision
+    keeps one record, bound by hash, of its exact canonical inputs, the rule
+    version, the program build that ran it, the authority it relied on and its
+    result; an independent verifier rebuilds the same result from that record
+    alone. Anything that can change a decision is in the record: a default, a
+    fallback, a cache, a clock reading, a retry. The reason for every result
+    reads in plain terms: which rule, which fact, which threshold. An auditor's
+    question is answered from the record, not from logs, memory or a person.
+    The record stays where the data stays (Article IV).
 
 ## Article XII — Felt value
 
@@ -308,6 +331,23 @@ what is added.
 5. **Measured.** Design changes are judged by the Article XII scorecard; a
    prettier screen that adds staff steps is a regression.
 
+## Article XIV — Staff first, in everything
+
+Everything RightRail builds (screens, rules, checks, safeguards, failure
+handling and recovery) must make staff work easier, faster and less confusing,
+and leave staff feeling in control. Safety is never paid for with staff effort.
+
+1. What the system can safely fix itself, it fixes and notes. It never hands
+   staff a chore.
+2. What needs a person reaches them once per cause, never once per line. It
+   comes with the plain reason, the money at stake, the deadline, who owns it
+   and one action that settles it.
+3. Staff can always see what is happening, why, and what they can do about it.
+4. "Visible" means visible in the record and to the auditor, never silent. It
+   never means a flood of alerts.
+5. A change that adds staff steps, confusion or waiting without giving staff
+   something they can act on is a regression, however safe it is.
+
 ## Enforcement
 
 - Reviewers reject changes that violate an article, however useful.
@@ -357,8 +397,8 @@ never an amendment. Each amendment-log entry quotes the founder's own words that
   engine and release builds. Grants: 2026-09-28 "2 is fine instead of 2.2";
   2026-09-28 "when im not actively using the laptop ... only 1 gb cap remains";
   2026-09-29 "As long as it doesn't compromise safety and accuracy do whatever u
-  want"; standing 2026-09-25 "u have all auth". XI.2 record in
-  `docs/CORE_REDESIGN.md`.
+  want"; standing 2026-09-25 "u have all auth". XI.2 records:
+  `git log --grep '^XI.2:'`.
 - 2026-10-01 — Articles X.2 and XI.2 and the Amendment section amended by the founders ("yes", 2026-10-01, to: re-recording a program fingerprint that did not change is not a gate change; the memory-guard rules live in one place; every amendment quotes the founder's words; and the release-packaging tool is shelved until a release is planned). X.2 points to the driver root AGENTS.md and drops the v4 exception; XI.2 treats an unchanged-hash re-pin as a record update; amendment entries quote the founder.
 - 2026-10-01 — Article IX.3 strengthened by the founders ("we need to make sure
   our stack doesnt get bloated or gets slower or vulenrable as history grows,
@@ -370,3 +410,32 @@ never an amendment. Each amendment-log entry quotes the founder's own words that
   the only bypass is of one named payment, fully verified before it goes by
   named state employees who sign an approval for exactly that payment. No
   standing, time-window, fail-open or after-the-fact bypass; no recoupment.
+- 2026-10-27 — Article XI.16 added and Article XI.7 extended by the founders
+  ("Yes, draft the auditability amendment (and maximum modularity too) for me
+  to approve", then "sure", 2026-10-27, approving the text): every decision is
+  replayable and explainable from its own record; every part is replaceable,
+  testable and provable on its own against a written contract.
+- 2026-10-31 — Article XIV added by the founders ("Nuclear grade design doesn't
+  mean we make the staff's loves harder we must make their ui experience much
+  better and their work easier faster and less confusing and make them feel
+  empowered", "ts should our design philosophy for everything", then "sure do
+  it", 2026-10-31, approving the text): safety, checks and failure handling are
+  judged by staff effort; repairable faults are fixed, not handed to staff;
+  held work reaches staff once per cause with one settling action.
+- 2026-11-05 — Article IX.3 and the 2026-09-29 log entry corrected by the
+  founders ("im saying yes to these changes", 2026-11-05): IX.3 names the
+  growth test's `GROWS` list instead of a stale payment count, and the XI.2
+  record pointer names the git log, where those records now live.
+- 2026-11-06 — Article VI.2 amended by the founders ("Yes, public data",
+  2026-11-06; "Yes, that text", 2026-11-06): tests may also read public non-PHI
+  reference data; member, claim and payment data stay synthetic.
+- 2026-11-14 — Article I.2 amended by the founder ("Approve both", 2026-11-14,
+  approving the proposed change): a held payment may also be released by cause,
+  with one signed decision that names the exact listed set of held payments
+  sharing one cause; the roster, threshold, separation and calendar rules of
+  any release apply, and it is never standing or future.
+- 2026-11-14 — Article I.4 amended by the founder ("Approve both", 2026-11-14,
+  approving the proposed change): a line that exactly repeats an already-paid
+  line is answered at once, naming the earlier payment, and is contestable in
+  one step; it is no longer held for a person. This reverses the 2026-11-08
+  decision to hold exact duplicates.

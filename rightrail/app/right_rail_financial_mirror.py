@@ -31,7 +31,7 @@ from app.right_rail_financial_owner import (
 
 
 MIRROR_SCHEMA: Final[str] = "RR/FINANCIAL/MIRROR/v1"
-_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v3"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v4"
 CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
 MAX_PACKAGE_BYTES: Final[int] = 8 * 1024 * 1024
 MAX_CORRECTION_FOLLOWUP_PAGE_BYTES: Final[int] = 32 * 1024 * 1024
@@ -134,7 +134,7 @@ _CONTROL_PACK: Final = _fields(
 )
 _PAGE: Final = ("offset", "limit", "count", "total", "next_offset")
 _PACKAGE: Final = _fields(
-    "contract",
+    "contract", decision_record=_fields("worker_sha256", "request_digest"),
     scope=_SCOPE,
     obligation=_OBLIGATION,
     population_binding=_fields("status", "completeness", "source_complete", "manifest_version", "member_count"),
@@ -213,7 +213,7 @@ _PROGRAM_FUNDING: Final = _fields(
     scope=_SCOPE, current_receipts=_FUNDING_ROW, receipt_history=_FUNDING_ROW,
 )
 _COMMAND: Final = {**_OBLIGATION, **_fields(
-    "status", "payment_id", "conflict_id", "claim_id", "action_id", "determination_id", "report_id",
+    "status", "payment_id", "cause", "conflict_id", "claim_id", "action_id", "determination_id", "report_id",
     receipt=_FUNDING_ROW, program_funding=_PROGRAM_FUNDING,
 )}
 _COUNTS: Final = _fields(
@@ -279,10 +279,12 @@ def _safe_json_reference(value: str, output_key: str) -> Any:
     return None
 
 
-def _safe_value(value: Any) -> Any:
+def _safe_value(value: Any, key: str = "") -> Any:
+    if key.endswith("_cents") and value is not None and type(value) is not int:  # money is whole cents: never a float, a bool or bytes
+        _fail(FinancialMirrorContinuityError, "unsafe_owner_value")
     if type(value) is bytes:
         return value.hex().upper()
-    if value is None or type(value) in {str, int, float, bool}:
+    if value is None or type(value) in {str, int, bool}:
         return value
     _fail(FinancialMirrorContinuityError, "unsafe_owner_value")
 
@@ -295,13 +297,13 @@ def _support(**fields: Any) -> dict[str, Any]:
     }
 
 
-def _project(value: Any, table: Any) -> Any:
+def _project(value: Any, table: Any, key: str = "") -> Any:
     """Copy only what ``table`` approves (Article IV.2), in owner order; an unapproved key never passes."""
 
     if type(value) in {list, tuple}:
-        return [_project(item, table) for item in value]
+        return [_project(item, table, key) for item in value]
     if type(value) is not dict or table is None:
-        return _safe_value(value)
+        return _safe_value(value, key)
     result: dict[str, Any] = {}
     for key, item in value.items():
         rule = table.get(key, False)
@@ -310,7 +312,7 @@ def _project(value: Any, table: Any) -> Any:
             if reference is not None:
                 result[rule] = reference
         elif rule is not False:
-            result[key] = _project(item, rule)
+            result[key] = _project(item, rule, key)
     return result
 
 
@@ -395,7 +397,7 @@ def _package_projection(raw: object) -> dict[str, Any]:
 def _allowlisted_action_fields(payload: object) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {}
-    return {key: _safe_value(payload[key]) for key in _ACTION_FIELDS if key in payload}
+    return {key: _safe_value(payload[key], key) for key in _ACTION_FIELDS if key in payload}
 
 
 class FinancialMirror:
@@ -805,8 +807,10 @@ class FinancialMirror:
             _fail(FinancialMirrorContinuityError, "population_status_counts")
         if type(raw["manifest_status"]) is not str or raw["manifest_status"] not in {"CURRENT", "SUPERSEDED", "MISSING"}:
             _fail(FinancialMirrorContinuityError, "population_status_manifest")
-        if type(raw["completeness"]) is not str or raw["completeness"] not in {"EXACT", "INCOMPLETE", "STALE", "UNVERIFIED"} or type(raw["source_complete"]) is not bool:
+        if type(raw["completeness"]) is not str or raw["completeness"] not in {"EXACT", "INCOMPLETE", "STALE", "UNVERIFIED"}:
             _fail(FinancialMirrorContinuityError, "population_status_completeness")
+        if type(raw["source_complete"]) is not bool:
+            _fail(FinancialMirrorContinuityError, "population_status_complete")
         if raw["manifest_status"] == "CURRENT":
             if raw["completeness"] not in {"EXACT", "INCOMPLETE"} or raw["source_complete"] != (raw["completeness"] == "EXACT"):
                 _fail(FinancialMirrorContinuityError, "population_status_consistency")
@@ -844,7 +848,7 @@ class FinancialMirror:
         if type(raw) is not dict or raw.get("contract") != _DECISION_PACKAGE_CONTRACT:
             _fail(FinancialMirrorContinuityError, "decision_package_allowlist")
         require_fields(raw, set(_PACKAGE), "decision_package_allowlist")
-        for name, fields in (("scope", _SCOPE), ("obligation", _OWNER_OBLIGATION), ("control_pack", _CONTROL_PACK), ("cash", _PACKAGE["cash"]), ("reporting", _PACKAGE["reporting"]), ("references", _PACKAGE["references"]), ("conclusions", _PACKAGE["conclusions"])):
+        for name, fields in (("decision_record", _PACKAGE["decision_record"]), ("scope", _SCOPE), ("obligation", _OWNER_OBLIGATION), ("control_pack", _CONTROL_PACK), ("cash", _PACKAGE["cash"]), ("reporting", _PACKAGE["reporting"]), ("references", _PACKAGE["references"]), ("conclusions", _PACKAGE["conclusions"])):
             require_fields(raw[name], set(fields), "decision_package_allowlist")
         require_fields(raw["evaluation_receipt"], set(_RECEIPT), "decision_package_receipt_allowlist")
         if raw["case"] is not None:
@@ -931,6 +935,8 @@ class FinancialMirror:
                 or event.get("aggregate_id") != obligation_id
                 or type(event.get("event_sequence")) is not int
                 or event["event_sequence"] <= previous_sequence
+                or not {"kind", "before_revision", "after_revision", "committed_at_ms"} <= event.keys()
+                or type(event["committed_at_ms"]) is not int
             ):
                 _fail(FinancialMirrorContinuityError, "staff_timeline_binding")
             previous_sequence = event["event_sequence"]
@@ -939,10 +945,15 @@ class FinancialMirror:
                 "kind": str(event["kind"]),
                 "before_revision": event["before_revision"],
                 "after_revision": event["after_revision"],
-                "committed_at_ms": int(event["committed_at_ms"]),
+                "committed_at_ms": event["committed_at_ms"],
             }
             if row["kind"] == "FOLLOWTHROUGH_DECIDED":  # who did what is the point of this event
-                payload = json.loads(event["payload_json"])
+                try:
+                    payload = json.loads(event["payload_json"])
+                except (KeyError, TypeError, ValueError):
+                    payload = None
+                if type(payload) is not dict:
+                    _fail(FinancialMirrorContinuityError, "staff_timeline_binding")
                 row["followthrough"] = {key: payload.get(key) for key in ("act", "owner_id", "actor_id")}
             timeline.append(row)
         return timeline, raw["total_count"], raw["truncated"]
@@ -1112,77 +1123,7 @@ class FinancialMirror:
     def population_status(self, population_id: str) -> dict[str, Any]:
         """Expose only the owner's safe population completeness projection."""
 
-        raw = self.owner.population_status(population_id)
-        owner_fields = (
-            "population_id",
-            "status",
-            "imported_count",
-            "expected_count",
-            "validated_count",
-            "manifest_status",
-            "completeness",
-            "source_complete",
-            "manifest_version",
-            "manifest_digest",
-        )
-        public_fields = (
-            "status",
-            "imported_count",
-            "expected_count",
-            "validated_count",
-            "manifest_status",
-            "completeness",
-            "source_complete",
-            "manifest_version",
-        )
-        if type(raw) is not dict or set(raw) != set(owner_fields):
-            _fail(FinancialMirrorContinuityError, "population_status_contract")
-        if type(raw["population_id"]) is not str:
-            _fail(FinancialMirrorContinuityError, "population_status_contract")
-        if type(raw["status"]) is not str or raw["status"] not in {"STAGED", "VALIDATED", "PUBLISHED"}:
-            _fail(FinancialMirrorContinuityError, "population_status_state")
-        counts = (raw["imported_count"], raw["expected_count"], raw["validated_count"])
-        if (
-            any(type(value) is not int or value < 0 for value in counts)
-            or raw["expected_count"] < 1
-            or raw["validated_count"] > raw["imported_count"]
-            or raw["imported_count"] > raw["expected_count"]
-        ):
-            _fail(FinancialMirrorContinuityError, "population_status_counts")
-        if type(raw["manifest_status"]) is not str or raw["manifest_status"] not in {"CURRENT", "SUPERSEDED", "MISSING"}:
-            _fail(FinancialMirrorContinuityError, "population_status_manifest")
-        if type(raw["completeness"]) is not str or raw["completeness"] not in {"EXACT", "INCOMPLETE", "STALE", "UNVERIFIED"}:
-            _fail(FinancialMirrorContinuityError, "population_status_completeness")
-        if type(raw["source_complete"]) is not bool:
-            _fail(FinancialMirrorContinuityError, "population_status_complete")
-        if raw["manifest_status"] == "CURRENT":
-            if (
-                raw["completeness"] not in {"EXACT", "INCOMPLETE"}
-                or raw["source_complete"] != (raw["completeness"] == "EXACT")
-            ):
-                _fail(FinancialMirrorContinuityError, "population_status_consistency")
-        elif (
-            raw["completeness"] != ("STALE" if raw["manifest_status"] == "SUPERSEDED" else "UNVERIFIED")
-            or raw["source_complete"]
-        ):
-            _fail(FinancialMirrorContinuityError, "population_status_consistency")
-        if raw["manifest_status"] in {"CURRENT", "SUPERSEDED"}:
-            digest = raw["manifest_digest"]
-            if (
-                type(raw["manifest_version"]) is not int
-                or raw["manifest_version"] < 1
-                or type(digest) is not str
-                or len(digest) != 128
-                or digest != digest.upper()
-                or any(char not in "0123456789ABCDEF" for char in digest)
-            ):
-                _fail(FinancialMirrorContinuityError, "population_status_manifest_binding")
-        elif raw["manifest_version"] is not None or raw["manifest_digest"] is not None:
-            _fail(FinancialMirrorContinuityError, "population_status_manifest_binding")
-        result = {key: raw[key] for key in public_fields}
-        result["schema"] = MIRROR_SCHEMA
-        result["resource"] = "population_status"
-        return result
+        return self._staff_population_status(self.owner.population_status(population_id), population_id)
 
     def record_program_funding_receipt(self, receipt: ProgramFundingReceipt) -> dict[str, Any]:
         return self._command_result(self.owner.record_program_funding_receipt(receipt))
@@ -1198,6 +1139,8 @@ class FinancialMirror:
 
     def action_payload(self, action_id: str) -> dict[str, Any]:
         raw = self.owner.action_payload(action_id)
+        if not isinstance(raw, Mapping):
+            _fail(FinancialMirrorContinuityError, "action_payload_shape")
         result = {
             "schema": MIRROR_SCHEMA,
             "resource": "action",

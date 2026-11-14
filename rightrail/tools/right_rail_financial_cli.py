@@ -83,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
         "state-id", "deployment-id", "program-id", "period-id",
         ("currency", {"default": "USD"}),
         ("authority-file:path", {"help": "trusted authority JSON: authority_id, epoch, digest and actors roster (required)"}),
-        ("custody-dir:path", {"help": "H2 custody log directory, outside the store's; with --custody-key, Owner commands check and extend it and packs are signed"}),
+        ("custody-dir:path", {"help": "custody log directory, outside the store's; with --custody-key, Owner commands check and extend it and packs are signed"}),
         ("custody-key", {"help": "ML-DSA-87 custody key file (a gate signer handle)"}),
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -474,10 +474,10 @@ def _run(args: argparse.Namespace) -> Any:
         authority = _trusted_authority(args)
         source = dict(zip(("source_id", "version", "receiver_system_id", "capture_id", "captured_at_ms"), args.source_context))
         source["captured_at_ms"] = int(source["captured_at_ms"])
-        raw, baseline, expected = _read_package(args.file, cash_file.MAX_FILE_BYTES), _read_package(args.baseline), {"expected_source_sha256": args.source_sha256,  # R5: an upload goes through intake only; a row it cannot take is held, never paid
+        raw, baseline, expected = _read_package(args.file, cash_file.MAX_FILE_BYTES), _read_package(args.baseline), {"expected_source_sha256": args.source_sha256,  # an upload goes through intake only; a row it cannot take is held, never paid
             "expected_baseline_sha256": args.baseline_sha256, "expected_scope": _scope(args), "expected_source": source, "expected_owner_id": args.owner_id, "expected_mode": args.mode, "trusted_authority": authority}
         if args.apply:
-            with _owner(args) as owner:  # R1a: an owner holds the store open until closed, on success and on error
+            with _owner(args) as owner:  # an owner holds the store open until closed, on success and on error
                 return intake.ingest_cash_file(owner, raw, baseline, **expected)
         return intake.preview_intake(raw, baseline, path=_existing_database(args.database), **expected)
     if args.command == "switch-prepare":

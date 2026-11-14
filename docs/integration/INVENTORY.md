@@ -1,6 +1,6 @@
 # Inventory
 
-Repo: coder-sys/localBCE. Imported RightRail: `rightrail/` (source `af020b2`, bundle SHA-256 `3b61a4ab...c1c5fa`; see `rightrail/IMPORTED_FROM.md`).
+Repo: coder-sys/localBCE. Imported RightRail: `rightrail/` (on `codex/rightrail-trunk`: trunk `fc89f9e5`, zip SHA-256 `1afbc74d...0ab71`, no history yet; before that `af020b2`; see `docs/integration/RIGHTRAIL_IMPORTED_FROM.md`). The inventory below describes the October import and is not yet updated for the trunk.
 Updated 2026-11-07 for `RIGHTRAIL_BASE_PLAN.md` Phase 1: proof and chain code is parked.
 
 ## Active localBCE components

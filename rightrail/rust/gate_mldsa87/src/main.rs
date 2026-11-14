@@ -8,6 +8,7 @@
 //!   kat-keygen : seed(32)              -> pk (2592) || sk (4896)
 //!   kat-sign   : sk || rnd || M'       -> signature
 //!   kat-verify : pk || sig(4627) || M' -> one byte, 1 valid or 0 invalid
+//!   (no arguments) : resident signer, framed `sign` requests (see `serve`)
 //! Success exits 0; any malformed or refused input exits 2. Messages are bounded at 64 KiB.
 use aws_lc_rs::signature::{KeyPair, PqdsaKeyPair, UnparsedPublicKey, ML_DSA_87, ML_DSA_87_SIGNING};
 use std::ffi::c_void;
@@ -83,7 +84,51 @@ fn pair(seed: &mut [u8]) -> PqdsaKeyPair {
     key.unwrap_or_else(|_| fail())
 }
 
+/// Unseal the key file, sign `msg` (pure, hedged) and self-verify; None on any refusal. No key outlives the call.
+fn sign_file(path: &str, msg: &[u8]) -> Option<Vec<u8>> {
+    let mut seed = std::fs::read(path).ok().and_then(|b| dpapi(false, &b))?;
+    let key = pair(&mut seed);
+    let mut signature = vec![0u8; SIGNATURE];
+    let sound = msg.len() <= MAX_MESSAGE
+        && key.sign(msg, &mut signature) == Ok(SIGNATURE)
+        && UnparsedPublicKey::new(&ML_DSA_87, key.public_key().as_ref()).verify(msg, &signature).is_ok();
+    sound.then_some(signature)
+}
+
+/// No arguments: frames `u32 BE L || u16 BE p || path (p bytes, UTF-8) || message` on stdin, each answered by
+/// `u32 BE 4627 || signature` on stdout; clean EOF between frames exits 0, anything else exits 2. Never stderr.
+fn serve() -> ! {
+    let (mut stdin, mut stdout) = (std::io::stdin().lock(), std::io::stdout().lock());
+    loop {
+        let mut head = [0u8; 4];
+        match stdin.read(&mut head[..1]) {
+            Ok(0) => std::process::exit(0),
+            Ok(_) => {}
+            Err(_) => fail(),
+        }
+        stdin.read_exact(&mut head[1..]).unwrap_or_else(|_| fail());
+        let len = u32::from_be_bytes(head) as usize;
+        if !(2..=2 + 32767 + MAX_MESSAGE).contains(&len) {
+            fail();
+        }
+        let mut frame = vec![0u8; len];
+        stdin.read_exact(&mut frame).unwrap_or_else(|_| fail());
+        let plen = u16::from_be_bytes([frame[0], frame[1]]) as usize;
+        if plen == 0 || plen > 32767 || 2 + plen > len || len - 2 - plen > MAX_MESSAGE {
+            fail();
+        }
+        let path = std::str::from_utf8(&frame[2..2 + plen]).unwrap_or_else(|_| fail());
+        let signature = sign_file(path, &frame[2 + plen..]).unwrap_or_else(|| fail());
+        let mut reply = (SIGNATURE as u32).to_be_bytes().to_vec();
+        reply.extend_from_slice(&signature);
+        stdout.write_all(&reply).and_then(|_| stdout.flush()).unwrap_or_else(|_| fail());
+    }
+}
+
 fn main() {
+    if std::env::args_os().count() == 1 {
+        serve();
+    }
     let mut args = std::env::args().skip(1);
     let mode = args.next().unwrap_or_default();
     let file = args.next();
@@ -107,19 +152,11 @@ fn main() {
             pair(&mut seed).public_key().as_ref().to_vec()
         }
         "public-key" | "sign" => {
-            let mut seed = std::fs::read(&path).ok().and_then(|b| dpapi(false, &b)).unwrap_or_else(|| fail());
-            let key = pair(&mut seed);
-            if mode == "public-key" {
-                key.public_key().as_ref().to_vec()
+            if mode == "sign" {
+                sign_file(&path, &input).unwrap_or_else(|| fail())
             } else {
-                let mut signature = vec![0u8; SIGNATURE];
-                if input.len() > MAX_MESSAGE
-                    || key.sign(&input, &mut signature) != Ok(SIGNATURE)
-                    || UnparsedPublicKey::new(&ML_DSA_87, key.public_key().as_ref()).verify(&input, &signature).is_err()
-                {
-                    fail();
-                }
-                signature
+                let mut seed = std::fs::read(&path).ok().and_then(|b| dpapi(false, &b)).unwrap_or_else(|| fail());
+                pair(&mut seed).public_key().as_ref().to_vec()
             }
         }
         _ => kat_mode(&mode, &input),

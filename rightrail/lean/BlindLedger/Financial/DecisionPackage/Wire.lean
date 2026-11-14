@@ -94,17 +94,20 @@ def packageFactsWellFormed (f : PackageFacts) : Prop :=
 def encodePackageAnswer (c : Conclusions) : Bytes :=
   packageAnswerMagic ++
     [supportByte c.cash, supportByte c.amount, supportByte c.reporting, supportByte c.delivery,
-     supportByte c.requiredAmount, UInt8.ofNat c.missingMask, assessmentByte c.assessment] ++
+     supportByte c.deliveryRequirement, supportByte c.requiredAmount, UInt8.ofNat c.missingMask,
+     assessmentByte c.assessment] ++
     natBE 8 c.missingCents ++ natBE 2 c.activePaymentCount ++ natBE 2 c.authorizedClaimCount
 
-/-- The specification of the Python reader `semantic.decode_package_answer`. -/
-def decodePackageAnswer (b : Bytes) : Option Conclusions := do
+/-- The specification of the Python reader `engine._decode_package_answer`: what follows outcome byte 0 is the 28-byte
+    answer, then the open cents of each action (u16 count, u64 each), then nothing. -/
+def decodePackageResponse (b : Bytes) : Option (Conclusions × List Nat) := do
   if !packageAnswerMagic.isPrefixOf b then none else
   let b := b.drop packageAnswerMagic.length
   let (cash, b) ← readTagged decodeSupport b
   let (amount, b) ← readTagged decodeSupport b
   let (reporting, b) ← readTagged decodeSupport b
   let (delivery, b) ← readTagged decodeSupport b
+  let (deliveryRequirement, b) ← readTagged decodeSupport b
   let (requiredAmount, b) ← readTagged decodeSupport b
   let (mask, b) ← readByte b
   if mask.toNat > 7 then none else
@@ -112,15 +115,9 @@ def decodePackageAnswer (b : Bytes) : Option Conclusions := do
   let (missingCents, b) ← readCents b
   let (activePaymentCount, b) ← readNatBE 2 b
   let (authorizedClaimCount, b) ← readNatBE 2 b
+  let (openCents, b) ← readList (readNatBE 8) b
   if b ≠ [] then none else
-  pure { cash, amount, reporting, delivery, requiredAmount, missingMask := mask.toNat, assessment, missingCents,
-         activePaymentCount, authorizedClaimCount }
-
-/-- Worker outcome bytes: 0 ‖ 27-byte answer, or the single byte 1. `conclude` is total and the
-    answer encoder cannot fail, so 2 and 3 never occur. -/
-def packageRespond (item : Bytes) : Bytes :=
-  match decodePackageFacts item with
-  | none => [UInt8.ofNat 1]
-  | some f => UInt8.ofNat 0 :: encodePackageAnswer (conclude f)
+  pure ({ cash, amount, reporting, delivery, deliveryRequirement, requiredAmount, missingMask := mask.toNat, assessment,
+          missingCents, activePaymentCount, authorizedClaimCount }, openCents)
 
 end BlindLedger.Financial.DecisionPackage

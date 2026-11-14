@@ -6,7 +6,9 @@ fence, and the two-signature bypass with post-hoc reconciliation. It is a design
 model, not the implementation; a code change that departs from it needs the model
 updated and rechecked. It models one shard. Resharding is out of scope: a tenant's
 shard count is fixed (Lean `installCert`), and changing it needs its own migration
-spec.
+spec; a resharding design exists but is not modelled here. The bypass modelled is an
+emergency grant with later reconciliation; the built bypass (`APPROVAL/v2`: one held payment
+released by two distinct signers) is not checked by this model.
 
 ## Results (2026-09-25, TLC 2.19, `-deadlock`, 1 worker, 512 MB heap)
 

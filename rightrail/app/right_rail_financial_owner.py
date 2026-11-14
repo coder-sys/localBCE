@@ -106,7 +106,7 @@ def _raise_if_busy(error: BaseException) -> None:
 _SCHEMA_VERSION: Final[int] = 8
 _SCHEMA: Final[str] = "RR/FINANCIAL/OWNER/v8"
 _CONTINUITY_SCHEMA: Final[str] = "RR/FINANCIAL/CONTINUITY/v8"
-_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v3"
+_DECISION_PACKAGE_CONTRACT: Final[str] = "RR/FINANCIAL/DECISION-PACKAGE/v4"
 _POPULATION_MANIFEST_CONTRACT: Final[str] = "RR/FINANCIAL/POPULATION-MANIFEST/v1"
 _CURRENCY: Final[str] = "USD"
 _MAX_CENTS: Final[int] = (1 << 63) - 1
@@ -268,6 +268,7 @@ _EVALUATION_INPUT_DOMAIN = b"RR/FINANCIAL/EVALUATION-INPUT/v1\x00"
 _EVALUATION_EVENT_DOMAIN = b"RR/FINANCIAL/EVALUATION-EVENT/v1\x00"
 _EVALUATION_RECEIPT_DOMAIN = b"RR/FINANCIAL/EVALUATION-RECEIPT/v1\x00"
 _CONTINUITY_DOMAIN = b"RR/FINANCIAL/CONTINUITY/v8\x00"
+_PACKAGE_REQUEST_DOMAIN = b"RR/FINANCIAL/DECISION-PACKAGE-REQUEST/v1\x00"
 _COMMAND_DOMAIN = b"RR/FINANCIAL/COMMAND/v1\x00"
 _POPULATION_MANIFEST_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST/v1\x00"
 _POPULATION_MANIFEST_MEMBERS_DOMAIN = b"RR/FINANCIAL/POPULATION-MANIFEST-MEMBERS/v1\x00"
@@ -405,10 +406,9 @@ _CAPTURED_TABLES: Final = ("action_outbox", "cases", "claimed_adjustments", "evi
 _PROJECTION_TABLES: Final = tuple(sorted(_PACKAGE_TABLES - {"financial_events", "financial_identity", "financial_meta"}))
 _COUNTED_TABLES: Final = ("financial_events", *_PROJECTION_TABLES)  # the history tables the row cap and history_row_counts cover
 
-# The command log (Art. III.3): one row per request the Owner accepted, keyed by
-# the caller's natural key and bound to the history event that request produced.
-# The request fields are read back from the rows that request wrote, so the
-# independent checker can recompute every row.
+# The command log (Art. III.3): one row per request the Owner accepted, keyed by the caller's natural key and bound to
+# the history event it produced. Its fields are read back from the rows it wrote (an offset decision's time as given,
+# from its event), so the independent checker can recompute every row.
 _COMMAND_EVENTS: Final[dict[str, tuple[str, str | None]]] = {
     # event kind: (command kind, payload field naming the key; None = aggregate id)
     "CONTROL_PACK_PUBLISHED": ("CONTROL_PACK", None),
@@ -427,7 +427,6 @@ _COMMAND_EVENTS: Final[dict[str, tuple[str, str | None]]] = {
     "REPORTING_CORRECTION_RECORDED": ("REPORT", "evidence_id"),
     "FOLLOWTHROUGH_DECIDED": ("FOLLOWTHROUGH_DECISION", "decision_id"),
 }
-_OPTIONAL_REQUEST_FIELDS: Final = frozenset({"evaluation_id", "evaluation_result_digest", "expected_revision", "decided_at_ms"})
 _COMMAND_REQUEST_SQL: Final[dict[str, str]] = {
     "CONTROL_PACK": "SELECT pack_digest FROM control_packs WHERE pack_id=?",
     "POPULATION_MANIFEST": "SELECT manifest_digest FROM population_manifests WHERE manifest_id=?",
@@ -481,30 +480,6 @@ def _known_correction_engine(sha256: object) -> bool:
         return str(sha256) in correction_engines()
     except IndependentFinancialError as error:
         _fail(FinancialIntegrityError, str(error))
-
-
-def _correction_paid(connection: sqlite3.Connection, obligation_id: str) -> list[dict[str, Any]]:
-    """What active linked payments paid on each correction request of the obligation, by action id."""
-    return [
-        {"action_id": action_id, "paid_cents": paid}
-        for action_id, paid in connection.execute(
-            "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
-            "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
-            "WHERE e.aggregate_type='OBLIGATION' AND e.aggregate_id=? AND e.kind='PAYMENT_RECEIVED' "
-            "AND json_extract(e.payload_json,'$.pays_action_id') IS NOT NULL AND p.active=1 GROUP BY 1 ORDER BY 1",
-            (obligation_id,),
-        )
-    ]
-
-
-def _open_requests(connection: sqlite3.Connection, obligation_id: str, shortfall: int) -> dict[str, int]:
-    """R2: what each correction request may still collect, oldest first, within the unpaid balance (derived, never stored)."""
-    paid = {e["action_id"]: e["paid_cents"] for e in _correction_paid(connection, obligation_id)}
-    left, open_ = shortfall, {}
-    for action_id, amount in connection.execute("SELECT action_id,json_extract(payload_json,'$.amount_cents') FROM actions WHERE obligation_id=? AND kind='CORRECTION_PAYMENT_REQUEST' AND status<>'CANCELLED' ORDER BY revision,action_id", (obligation_id,)):
-        open_[action_id] = min(max(amount - paid.get(action_id, 0), 0), left)  # clamped: a request is never open below zero
-        left -= open_[action_id]
-    return open_
 
 
 def _payment_receipts(connection: sqlite3.Connection, obligation_id: str) -> list[tuple[str, int, str | None]]:
@@ -575,13 +550,6 @@ def _add(left: int, right: int) -> int:
     if value < -_MAX_CENTS or value > _MAX_CENTS:
         _fail(FinancialIntegrityError, "cents_overflow")
     return value
-
-
-def _sum_cents(values: Iterable[int]) -> int:
-    total = 0
-    for value in values:
-        total = _add(total, value)
-    return total
 
 
 def _hex(value: bytes) -> str:
@@ -2093,7 +2061,7 @@ class FinancialOwner:
             existing_only=existing_only,
         )
         self._verify_open_identity(verify_history=True)
-        if custody is not None:  # H2: the custody log outside the store (app/right_rail_financial_custody.py), before any write
+        if custody is not None:  # the custody log outside the store (app/right_rail_financial_custody.py), before any write
             try:
                 custody.open(self.owner_id, path, self._high, self._head_at, created=created)
             except BaseException:
@@ -2181,14 +2149,14 @@ class FinancialOwner:
         self.mode = mode
         self.owner_id = _id(owner_id, "owner_id")
         self._batch = threading.local()  # .connection: the open run_batch transaction on this thread; .rows: its base counts
-        self._lock = threading.RLock()  # R1a: one writer connection, one transaction at a time
-        self._writer: sqlite3.Connection | None = None  # R1a: kept from the open; any error discards it with the mark and cache
+        self._lock = threading.RLock()  # one writer connection, one transaction at a time
+        self._writer: sqlite3.Connection | None = None  # kept from the open; any error discards it with the mark and cache
         self._mark: tuple[int, int, int] | None = None  # (data_version, device, file index) where the writer last verified or wrote
         self._row_cache: tuple[tuple[object, ...], dict[str, int]] | None = None  # (history mark, rows per table) at that point
         self._refusal: FinancialError | None = None  # a failed re-verification, raised once the command's own checks pass
         self._high: tuple[object, ...] | None = None  # (sequence, head) last verified or committed; kept for the object's life
         self._packs: dict[tuple[object, ...], tuple[ControlPack, str, str]] = {}  # the pack, its digest check and its policy are pure functions of the exact row
-        self._custody: Any = None  # H2: set once the open's custody check passes
+        self._custody: Any = None  # set once the open's custody check passes
         if self.mode == "TEST" and self.owner_id != _TEST_OWNER_ID:
             _fail(FinancialInputError, "test_owner_identity")
         existed = path.exists()
@@ -2224,7 +2192,7 @@ class FinancialOwner:
             connection = self._connect()
             try:
                 try:
-                    if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # R0.5: born WAL (persistent header)
+                    if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":  # born WAL (persistent header)
                         _fail(FinancialIntegrityError, "journal_mode")
                     connection.execute("BEGIN IMMEDIATE")
                 except sqlite3.OperationalError as error:  # another creator holds the new file
@@ -2254,7 +2222,7 @@ class FinancialOwner:
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA recursive_triggers=ON")
             connection.execute("PRAGMA busy_timeout=5000")
-            connection.execute("PRAGMA synchronous=FULL")  # R0.5: with WAL, an acknowledged commit survives power loss
+            connection.execute("PRAGMA synchronous=FULL")  # with WAL, an acknowledged commit survives power loss
             connection.execute("PRAGMA cache_size=-65536")
             connection.create_function("rr_segment_bytes", -1, lambda table, *values: len(_canonical(self._segment_record(table, values))) + 1)
             connection.create_function("rr_captured_row", -1, self._captured_row_for_sql)
@@ -2325,7 +2293,7 @@ class FinancialOwner:
         return counts
 
     def _read_mark(self, connection: sqlite3.Connection) -> tuple[tuple[int, int, int], tuple[object, ...]]:
-        """(data_version, device, file index) and the history mark, inside the caller's transaction (H1)."""
+        """(data_version, device, file index) and the history mark, inside the caller's transaction."""
         history = tuple(connection.execute(_HISTORY_MARK).fetchone())
         try:
             stat = os.stat(self.path)
@@ -2334,7 +2302,7 @@ class FinancialOwner:
         return (connection.execute("PRAGMA data_version").fetchone()[0], stat.st_dev, stat.st_ino), history
 
     def _adopt(self, connection: sqlite3.Connection) -> None:
-        """Keep this connection as the writer (R1a), marked inside the transaction that verified or created the store."""
+        """Keep this connection as the writer, marked inside the transaction that verified or created the store."""
         self._install_capture_triggers(connection)
         mark, history = self._read_mark(connection)
         if self._rewound(history):
@@ -2462,12 +2430,12 @@ class FinancialOwner:
             )
 
     def _verify_open_identity(self, *, verify_history: bool) -> None:
-        """On a new connection, which stays as the writer once the history is verified (R1a)."""
+        """On a new connection, which stays as the writer once the history is verified."""
         no_migration = self.mode == "SHADOW" or self._existing_only
         self._discard_writer()
         connection = self._connect()
         try:
-            if no_migration and connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":  # R0.5: a pre-WAL header changes only in a migrating open
+            if no_migration and connection.execute("PRAGMA journal_mode").fetchone()[0] != "wal":  # a pre-WAL header changes only in a migrating open
                 _fail(FinancialIntegrityError, "shadow_requires_migration")
             connection.execute("BEGIN IMMEDIATE")
             meta = _one(connection, "schema_meta", "SELECT * FROM financial_meta WHERE id=1")
@@ -2644,8 +2612,14 @@ class FinancialOwner:
                     if self._custody is not None:
                         self._custody.mark(self.owner_id, self._high)  # only after COMMIT, so custody never names an uncommitted head
             except BaseException as error:
-                if began:  # R1a: a failed write (a proven drift included) is never reused; the next one verifies in full. A stale refusal changed nothing: the next begin's mark check still guards it
-                    connection.execute("ROLLBACK") if type(error) is FinancialStaleError else self._discard_writer()
+                if began:  # a failed write (a proven drift included) is never reused; the next one verifies in full. A stale refusal changed nothing: the next begin's mark check still guards it
+                    try:
+                        if type(error) is FinancialStaleError:
+                            connection.execute("ROLLBACK")
+                        else:
+                            self._discard_writer()
+                    except BaseException:  # a rollback that raises (whatever it raises) leaves the connection mid-transaction: closed, never reused, the refusal stays the original
+                        self._discard_writer()
                 _raise_if_busy(error)
                 raise
             finally:
@@ -2690,11 +2664,11 @@ class FinancialOwner:
                     if check and outcome is None and arguments["item_id"] in held:
                         outcome = {"status": "HELD", "payment_id": arguments["payment_id"], "reason": "depends_on_held"}
                     elif outcome is None:
-                        (soft := absorbing or check and check._plan[index][0] == "CONFLICT") and connection.execute("SAVEPOINT rr_row")  # D2: a refused cash row rolls back alone; Lean may refuse a conflict (chronology, form) in any file
+                        (soft := absorbing or check and check._plan[index][0] == "CONFLICT") and connection.execute("SAVEPOINT rr_row")  # a refused cash row rolls back alone; Lean may refuse a conflict (chronology, form) in any file
                         try:
                             answer = getattr(self, name)(**arguments)
                             outcome = answer if not check else {"status": "HELD", "payment_id": arguments["payment_id"], "reason": "conflict:" + answer["conflict_id"]} if answer["status"] == "CONFLICT" else {
-                                "status": answer["status"], "payment_id": answer["payment_id"], "reason": None}  # a conflict Lean recorded keeps its writes; the row (and its item) is held by its id
+                                "status": answer["status"], "payment_id": answer["payment_id"], "reason": answer.get("cause")}  # a conflict Lean recorded keeps its writes; the row (and its item) is held by its id; a repeat keeps its cause
                         except BaseException as error:
                             if not (soft and isinstance(error, (FinancialInputError, FinancialConflictError, FinancialRevisionError))):
                                 error.add_note(f"batch_index={index}")
@@ -2726,6 +2700,8 @@ class FinancialOwner:
                 yield connection
             except sqlite3.OperationalError as error:
                 _raise_if_busy(error)
+                if "integer overflow" in str(error):  # SQLite refuses a SUM past 2^63-1, never a wrapped or float total; a huge valid book is not corruption
+                    raise FinancialInputError("summary_total_overflow") from None
                 raise
 
     def _now(self) -> int:
@@ -2853,6 +2829,9 @@ class FinancialOwner:
         for field in rows[0].keys():
             value = rows[0][field]
             request[field] = _hex(bytes(value)) if type(value) is bytes else value
+        if command_kind == "OFFSET_DECISION" and "decision_at_ms" in payload:  # None: the owner's clock; an older event keeps the resolved time
+            del request["decided_at_ms"]
+            request["decision_at_ms"] = payload["decision_at_ms"]
         command_id = f"{command_kind}:{key}"
         if connection.execute("SELECT 1 FROM commands WHERE command_id=?", (command_id,)).fetchone() is not None:
             _fail(FinancialIntegrityError, "command_duplicate")
@@ -2870,13 +2849,12 @@ class FinancialOwner:
         request: Mapping[str, Any],
         conflict_code: str,
     ) -> bool:
-        """The one retry rule: True if ``kind:key`` is logged with every field (only optional ones may be None); False if new. ``expected_revision`` guards a first recording only; a retry of support, reversal, offset, report or acknowledgment ignores it."""
+        """The retry rule for commands Lean does not decide (Art. III.3): False if ``kind:key`` is not logged; True if logged as exactly this canonical request, byte for byte (an omitted field is a logged None); else ``conflict_code``. Lean decides an offset decision's resend."""
 
         row = connection.execute("SELECT request_json FROM commands WHERE command_id=?", (f"{kind}:{key}",)).fetchone()
         if row is None:
             return False
-        logged = _stored_object(row[0], "command_request")
-        if any(logged.get(field) != value and not (value is None and field in _OPTIONAL_REQUEST_FIELDS) for field, value in request.items()):
+        if row[0] != _canonical({"command": kind, "key": key, **request}).decode("ascii"):
             _fail(FinancialConflictError, conflict_code)
         return True
 
@@ -2993,7 +2971,7 @@ class FinancialOwner:
 
         pack, _calculation, _adjustment = self._control_pack_for_obligation(connection, obligation_id)
         try:
-            decided = decided or financial_engine.evaluate_live(  # M3: a payment command arrives with its Lean decision
+            decided = decided or financial_engine.evaluate_live(  # a payment command arrives with its Lean decision
                 connection,
                 obligation_id=obligation_id,
                 authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority),
@@ -3810,7 +3788,7 @@ class FinancialOwner:
             obligation_id=str(result["obligation_id"]),
             pre_revision=pre_revision,
         )
-        if evidence_bindings is None:  # batch-frames-v1 D4: the rows the snapshot just read, not a second query
+        if evidence_bindings is None:  # the rows the snapshot just read, not a second query
             ordered = list(evidence_ids)
             if ordered != sorted(ordered) or len(set(ordered)) != len(ordered):
                 _fail(FinancialIntegrityError, "evaluation_evidence_order")
@@ -3983,7 +3961,7 @@ class FinancialOwner:
             _fail(FinancialRevisionError, "obligation_revision_conflict")
 
     def _decide_payment(self, connection: sqlite3.Connection, obligation: sqlite3.Row, expected_revision: int | None, command: dict[str, Any]) -> dict[str, Any]:
-        """M3: Lean decides one payment command (BLFPAY01); this writes exactly the rows it names (V.1)."""
+        """Lean decides one payment command (BLFPAY01); this writes exactly the rows it names (V.1)."""
 
         from app import right_rail_financial_engine as financial_engine
         from app import right_rail_financial_semantic_adapter as semantic
@@ -3991,7 +3969,7 @@ class FinancialOwner:
         if expected_revision is not None and (type(expected_revision) is not int or not 0 <= expected_revision < 1 << 63):
             _fail(FinancialRevisionError, "obligation_revision_conflict")
         obligation_id, now = str(obligation["obligation_id"]), self._now()
-        asked = max(now, int(obligation["updated_at_ms"]))  # D4: a clock behind the last update is asked at that update, and only an exact retry is answered
+        asked = max(now, int(obligation["updated_at_ms"]))  # a clock behind the last update is asked at that update, and only an exact retry is answered
         try:
             out = financial_engine.decide_payment_live(
                 connection, obligation_id=obligation_id, authority_context=semantic.TrustedAuthorityContext.from_authority(self.trusted_authority), now_ms=asked,
@@ -4333,42 +4311,42 @@ class FinancialOwner:
         if snapshot["sequence"] != meta_sequence or snapshot["history_head"] != meta_head:
             _fail(FinancialRevisionError, "obligation_revision_conflict")
 
-    def _duplicate_action_or_conflict(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        action: sqlite3.Row,
-        obligation: sqlite3.Row,
-        claim_id: str,
-        actor_id: str,
-        actor_role: str,
-        decision: str,
-        evaluation_id: str | None,
-        evaluation_result_digest: str | bytes | None,
-        expected_revision: int | None,
-        decision_at_ms: int | None,
+    def _stored_offset_identity(
+        self, connection: sqlite3.Connection, action: sqlite3.Row, *, actor_id: str, actor_role: str, claim_id: str,
+        evaluation_id: str | None, evaluation_result_digest: str | bytes | None, expected_revision: int | None,
     ) -> dict[str, Any]:
-        if expected_revision is not None and type(expected_revision) is not int:
-            _fail(FinancialInputError, "expected_revision")
-        if decision_at_ms is not None:
-            _time(decision_at_ms, "decision_time")
-        request = {
-            "item_id": str(obligation["item_id"]),
-            "claim_id": claim_id,
-            "decision": decision,
-            "actor_id": actor_id,
-            "actor_role": actor_role,
-            "evaluation_id": evaluation_id,
-            "evaluation_result_digest": None if evaluation_result_digest is None else _hex(_digest_input(evaluation_result_digest, "evaluation_result_digest")),
-            "expected_revision": expected_revision,
-            "decided_at_ms": decision_at_ms,
-        }
-        if not self._replayed_command(connection, "OFFSET_DECISION", str(action["action_id"]), request, "determination_request_conflict"):
+        """The stored identity a resend is judged against; Lean decides DUPLICATE or conflict (Art. III.3).
+
+        The stored request named every one of these, so a resend omitting one is not the same input and is refused
+        here, since Lean's command cannot carry an omitted one."""
+
+        if None in (claim_id, actor_id, actor_role, evaluation_id, evaluation_result_digest, expected_revision):
             _fail(FinancialConflictError, "determination_request_conflict")
-        authority = connection.execute("SELECT authority_id,authority_epoch,authority_digest FROM determinations WHERE determination_id=?", (action["determination_id"],)).fetchone()
-        if (str(authority[0]), int(authority[1]), bytes(authority[2])) != (self.trusted_authority.authority_id, self.trusted_authority.epoch, self.trusted_authority.digest):
-            _fail(FinancialAuthorityError, "determination_authority_stale")
-        return {"status": "DUPLICATE", "action_id": str(action["action_id"]), "determination_id": str(action["determination_id"]), **self._projection_for_row(obligation)}
+        if type(expected_revision) is not int or not 0 <= expected_revision <= 10_000:
+            _fail(FinancialInputError, "expected_revision")
+        _id(claim_id, "claim_id"), _id(actor_id, "actor_id"), _role(actor_role, "actor_role"), _id(evaluation_id, "evaluation_id")
+        determination = _one(connection, "determination_missing", "SELECT * FROM determinations WHERE determination_id=?", (action["determination_id"],))
+        command_id = f"OFFSET_DECISION:{action['action_id']}"
+        source = _one(connection, "command_request_source", "SELECT c.request_json,e.payload_json FROM commands c JOIN financial_events e ON e.event_sequence=c.event_sequence WHERE c.command_id=?", (command_id,))
+        logged = _stored_object(source[0], "command_request_source")
+        if "decision_at_ms" in logged:
+            if _stored_object(source[1], "command_request_source").get("decision_at_ms", "absent") != logged["decision_at_ms"]:
+                _fail(FinancialIntegrityError, "command_request_source")  # the logged time is the committed event's
+            time_given = logged["decision_at_ms"] is not None
+        elif "decided_at_ms" in logged:
+            time_given = None  # logged before the time was kept as given
+        else:
+            _fail(FinancialIntegrityError, "command_request_source")
+        identity = {key: determination[key] for key in (
+            "claim_id", "actor_id", "actor_role", "authority_id", "authority_epoch", "authority_digest", "decision",
+            "input_evaluation_id", "input_evaluation_result_digest", "expected_revision", "decided_at_ms",
+        )}
+        identity.update(
+            action_id=action["action_id"], action_obligation_id=action["obligation_id"], action_kind=action["kind"],
+            determination_id=action["determination_id"], determination_obligation_id=determination["obligation_id"],
+            decision_time_given=time_given,
+        )
+        return identity
 
     def _insert_row(self, connection: sqlite3.Connection, table: str, values: Mapping[str, Any]) -> None:
         columns = self._table_columns[table]
@@ -4617,7 +4595,7 @@ class FinancialOwner:
         )
         require_binding(projection_update.rowcount == 1, "correction_projection_update")
 
-        payload = {"action_id": action_id, "amount_cents": expected_claim["amount_cents"], "determination_id": determination_id, "evaluation_id": evaluation_id}
+        payload = {"action_id": action_id, "amount_cents": expected_claim["amount_cents"], "decision_at_ms": (command["decision_at_ms"] if command["decision_time_given"] else None), "determination_id": determination_id, "evaluation_id": evaluation_id}
         if offset:
             payload["artifact"] = {"sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256)}
         else:
@@ -4729,9 +4707,7 @@ class FinancialOwner:
         with self._write() as connection:
             obligation = self._get_obligation_row(connection, item_id)
             existing_action = connection.execute("SELECT * FROM actions WHERE action_id=?", (action_ref,)).fetchone()
-            if existing_action is not None:
-                return self._duplicate_action_or_conflict(connection, action=existing_action, obligation=obligation, decision="OFFSET_AUTHORIZED", **request)
-            return self._served_decision(connection, obligation, offset=True, item_id=item_id, action_ref=action_ref, **request)
+            return self._served_decision(connection, obligation, offset=True, item_id=item_id, action_ref=action_ref, existing=existing_action, **request)
 
     def reject_offset_and_authorize_correction(
         self,
@@ -4766,17 +4742,7 @@ class FinancialOwner:
                     evaluation_result_digest=evaluation_result_digest,
                     duplicate=existing_action is not None,
                 )
-            if existing_action is not None:
-                if (
-                    evaluation_id is None
-                    or evaluation_result_digest is None
-                    or expected_revision is None
-                    or decision_at_ms is None
-                    or str(existing_action["determination_id"]) != f"determination:{action_ref}"
-                ):
-                    _fail(FinancialConflictError, "determination_request_conflict")
-                return self._duplicate_action_or_conflict(connection, action=existing_action, obligation=obligation, decision="OFFSET_REJECTED_CORRECTION_AUTHORIZED", **request)
-            return self._served_decision(connection, obligation, offset=False, item_id=item_id, action_ref=action_ref, **request)
+            return self._served_decision(connection, obligation, offset=False, item_id=item_id, action_ref=action_ref, existing=existing_action, **request)
 
     def _served_decision(
         self,
@@ -4787,6 +4753,7 @@ class FinancialOwner:
         item_id: str,
         claim_id: str,
         action_ref: str,
+        existing: sqlite3.Row | None,
         actor_id: str,
         actor_role: str,
         expected_revision: int | None,
@@ -4794,25 +4761,29 @@ class FinancialOwner:
         evaluation_id: str | None,
         evaluation_result_digest: str | bytes | None,
     ) -> dict[str, Any]:
-        """The pinned worker decides an offset authorization, or its rejection with a correction; the owner binds and applies its answer."""
-        claim, decision_time, evaluation_receipt, input_result_digest = self._claim_decision_inputs(
-            connection,
-            obligation,
-            claim_id=claim_id,
-            actor_id=actor_id,
-            actor_role=actor_role,
-            decision_at_ms=decision_at_ms,
-            decision_time_required=not offset,
-            evaluation_id=evaluation_id,
-            evaluation_result_digest=evaluation_result_digest,
-            expected_revision=expected_revision,
-        )
+        """The pinned worker decides an offset authorization, or its rejection with a correction, and a resend of a
+        stored one (``existing``: DUPLICATE or a conflict); the owner binds and applies its answer."""
+        if existing is None:
+            claim, decision_time, evaluation_receipt, input_result_digest = self._claim_decision_inputs(
+                connection, obligation, claim_id=claim_id, actor_id=actor_id, actor_role=actor_role, decision_at_ms=decision_at_ms,
+                decision_time_required=not offset, evaluation_id=evaluation_id, evaluation_result_digest=evaluation_result_digest,
+                expected_revision=expected_revision,
+            )
+            input_evaluation_id = str(evaluation_receipt["evaluation_id"])
+            action_lookup: dict[str, Any] = {"kind": "absent"}
+        else:
+            action_lookup = {"kind": "existing", "identity": self._stored_offset_identity(
+                connection, existing, actor_id=actor_id, actor_role=actor_role, claim_id=claim_id, evaluation_id=evaluation_id,
+                evaluation_result_digest=evaluation_result_digest, expected_revision=expected_revision,
+            )}
+            decision_time = self._now() if decision_at_ms is None else _time(decision_at_ms, "decision_time")
+            input_evaluation_id, input_result_digest = str(evaluation_id), _digest_input(evaluation_result_digest, "evaluation_result_digest")
         deterministic_determination_id = f"determination:{action_ref}"
         from app import right_rail_financial_engine as financial_engine
         from app import right_rail_financial_semantic_adapter as semantic
 
         try:
-            owner_now_ms = self._now()
+            owner_now_ms = decision_time if decision_at_ms is None else self._now()  # an omitted time is this one clock reading
             snapshot = semantic.build_locked_semantic_snapshot(
                 connection,
                 obligation_id=str(obligation["obligation_id"]),
@@ -4830,7 +4801,6 @@ class FinancialOwner:
             meta = self._meta(connection)
             current_event_sequence = int(meta["sequence"])
             previous_history_head = bytes(meta["history_head"])
-            input_evaluation_id = str(evaluation_receipt["evaluation_id"])
             lookups = [
                 (name, predicate, subject, column, connection.execute(sql, (subject,)).fetchall())
                 for name, predicate, subject, column, sql in (
@@ -4849,7 +4819,7 @@ class FinancialOwner:
                 }
                 for name, predicate, subject, column, rows in lookups
             }
-            if any(rows for *_, rows in lookups):
+            if existing is None and any(rows for *_, rows in lookups):
                 _fail(FinancialConflictError, "determination_request_conflict")
             command = {
                 "item_id": item_id,
@@ -4864,12 +4834,13 @@ class FinancialOwner:
                 "evaluation_id": input_evaluation_id,
                 "evaluation_result_digest": input_result_digest,
                 "decision_at_ms": decision_time,
+                "decision_time_given": decision_at_ms is not None,  # false: the owner's clock; logged as given (III.3)
                 "owner_now_ms": owner_now_ms,
             }
             request = financial_engine.encode_correction_transition_request(
                 snapshot=snapshot,
                 command=command,
-                action_lookup={"kind": "absent"},
+                action_lookup=action_lookup,
                 query_observations=query_observations,
                 current_event_sequence=current_event_sequence,
                 previous_history_head=previous_history_head,
@@ -4878,7 +4849,10 @@ class FinancialOwner:
             transition_result = (financial_engine.run_offset_authorization_v1 if offset else financial_engine.run_correction_transition_v1)(request=request)
         except financial_engine.FinancialEngineError:
             _fail(FinancialIntegrityError, "correction_transition_failed")
-        except semantic.SemanticAdapterError:
+        except semantic.SemanticAdapterError as error:
+            # a resend after an authority rotation: only what a rotation causes; a wrong mode or owner binding stays invalid
+            if existing is not None and str(error) in ("determination_authority_stale", "owner_verifier:meta:authority-binding"):
+                _fail(FinancialAuthorityError, "determination_authority_stale")
             _fail(FinancialIntegrityError, "correction_snapshot_invalid")
 
         if transition_result["status"] == "REJECTED":
@@ -4913,6 +4887,10 @@ class FinancialOwner:
                 (FinancialIntegrityError, "correction_transition_rejected"),
             )
             _fail(error_type, error_code)
+        if existing is not None:
+            if transition_result["status"] != "DUPLICATE":
+                _fail(FinancialIntegrityError, "correction_retry_not_duplicate")
+            return {"status": "DUPLICATE", "action_id": action_ref, "determination_id": deterministic_determination_id, **self._projection_for_row(obligation)}
         if transition_result["status"] != "ACCEPTED":
             _fail(FinancialIntegrityError, "correction_duplicate_without_action")
         return self._apply_accepted_correction_transition(
@@ -5360,7 +5338,34 @@ class FinancialOwner:
                 "input_evaluation_result_digest", "dispatch",
             )
 
-            open_cents = _open_requests(connection, obligation_id, int(obligation["shortfall_cents"]))
+            def rows(sql: str) -> list[sqlite3.Row]:
+                return connection.execute(sql, (obligation_id,)).fetchall()
+
+            # Lean concludes the package from every row of the obligation, every action oldest first (Decide.lean); the pages below only show rows.
+            from app import right_rail_financial_engine as financial_engine
+
+            actions = rows("SELECT a.action_id,a.revision,a.kind,a.status,o.acknowledgment_ref,json_extract(a.payload_json,'$.amount_cents') FROM actions a LEFT JOIN action_outbox o ON o.action_id=a.action_id WHERE a.obligation_id=? ORDER BY a.revision,a.action_id")
+            paid = dict(rows(
+                "SELECT json_extract(e.payload_json,'$.pays_action_id'),SUM(p.amount_cents) FROM financial_events e "
+                "JOIN payments p ON p.payment_id=json_extract(e.payload_json,'$.payment_id') "
+                "WHERE e.aggregate_type='OBLIGATION' AND e.aggregate_id=? AND e.kind='PAYMENT_RECEIVED' "
+                "AND json_extract(e.payload_json,'$.pays_action_id') IS NOT NULL AND p.active=1 GROUP BY 1"
+            ))
+            latest_case = rows("SELECT status FROM cases WHERE obligation_id=? ORDER BY case_id DESC LIMIT 1")
+            conflict_count = int(rows("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?")[0][0])
+            report_count = int(connection.execute("SELECT COUNT(*) FROM evidence WHERE item_id=? AND kind IN ('REPORT','REPORT_CORRECTION')", (str(obligation["item_id"]),)).fetchone()[0])
+            try:
+                decided = financial_engine.decide_package_live(
+                    obligation, actions=[(action_id, revision, kind == "CORRECTION_PAYMENT_REQUEST", status, ref is not None, amount, paid.get(action_id, 0))
+                                         for action_id, revision, kind, status, ref, amount in actions],
+                    payments=[(row[0], row[1]) for row in rows("SELECT amount_cents,active FROM payments WHERE obligation_id=? ORDER BY payment_id")],
+                    claims=[(row[0], row[1]) for row in rows("SELECT amount_cents,status FROM claimed_adjustments WHERE obligation_id=? ORDER BY claim_id")],
+                    report_count=report_count, conflict_count=conflict_count,
+                    case_status=latest_case[0][0] if latest_case else None,
+                )
+            except (FinancialError, financial_engine.FinancialEngineError) as error:
+                _fail(FinancialIntegrityError, f"lean_package:{error}")
+            open_cents = {row[0]: cents for row, cents in zip(actions, decided["open_cents"]) if row[2] == "CORRECTION_PAYMENT_REQUEST"}
 
             def action_ref(row: sqlite3.Row) -> dict[str, Any]:
                 payload = _stored_object(row["payload_json"], "decision_package_action")
@@ -5379,7 +5384,7 @@ class FinancialOwner:
                     "revision": int(row["revision"]),
                     "payload_digest": _hex(bytes(row["payload_digest"])),
                     "payload_fields": payload_fields,
-                    "open_cents": open_cents.get(str(row["action_id"]), 0 if row["kind"] == "CORRECTION_PAYMENT_REQUEST" else None),
+                    "open_cents": open_cents.get(str(row["action_id"])),
                     "created_at_ms": int(row["created_at_ms"]),
                     "acknowledgment": {
                         "status": str(row["outbox_status"]),
@@ -5430,15 +5435,6 @@ class FinancialOwner:
             current_action = latest(f"{action_query.rsplit('ORDER BY', 1)[0]}ORDER BY a.revision DESC,a.action_id DESC LIMIT 1", action_ref)
             current_determination = latest("SELECT * FROM determinations WHERE obligation_id=? ORDER BY resulting_revision DESC,determination_id DESC LIMIT 1", determination_ref)
 
-            def rows(sql: str) -> list[sqlite3.Row]:
-                return connection.execute(sql, (obligation_id,)).fetchall()
-
-            active_payment_count = int(rows("SELECT COUNT(*) FROM payments WHERE obligation_id=? AND active=1")[0][0])
-            active_payment_rows = rows("SELECT amount_cents FROM payments WHERE obligation_id=? AND active=1 ORDER BY payment_id")
-            authorized_claim_count = int(rows("SELECT COUNT(*) FROM claimed_adjustments WHERE obligation_id=? AND status='AUTHORIZED'")[0][0])
-            adjustment_rows = rows("SELECT amount_cents,status FROM claimed_adjustments WHERE obligation_id=? AND status IN ('CLAIMED','AUTHORIZED') ORDER BY claim_id")
-            conflict_count = int(rows("SELECT COUNT(*) FROM financial_conflicts WHERE obligation_id=?")[0][0])
-            report_count = int(reporting_page["total"])
             active_payment_ids = [row["evidence_id"] for row in payment_page["items"] if row["active"]]
             authorized_evidence_ids = [row["evidence_id"] for row in claim_page["items"] if row["status"] == "AUTHORIZED"]
             reporting_evidence_ids = [row["evidence_id"] for row in reporting_page["items"]]
@@ -5446,75 +5442,13 @@ class FinancialOwner:
             claim_references_complete = offset == 0 and claim_page["next_offset"] is None
             reporting_references_complete = offset == 0 and reporting_page["next_offset"] is None
 
-            active_payment_cents = _sum_cents(int(row["amount_cents"]) for row in active_payment_rows)
-            claimed_adjustment_cents = _sum_cents(int(row["amount_cents"]) for row in adjustment_rows)
-            lawful_adjustment_cents = _sum_cents(
-                int(row["amount_cents"]) for row in adjustment_rows if str(row["status"]) == "AUTHORIZED"
-            )
-            payment_support = (
-                "SUPPORTED" if active_payment_count and active_payment_cents == int(obligation["received_cash_cents"])
-                else "NO_LINKED_EVIDENCE" if not active_payment_count and int(obligation["received_cash_cents"]) == 0
-                else "CONFLICTED"
-            )
-            adjustment_support = (
-                "SUPPORTED"
-                if (authorized_claim_count or adjustment_rows)
-                and claimed_adjustment_cents == int(obligation["claimed_adjustment_cents"])
-                and lawful_adjustment_cents == int(obligation["lawful_adjustment_cents"])
-                else "NO_LINKED_EVIDENCE"
-                if not adjustment_rows and int(obligation["claimed_adjustment_cents"]) == 0 and int(obligation["lawful_adjustment_cents"]) == 0
-                else "CONFLICTED"
-            )
-            reporting_support = (
-                "SUPPORTED" if bool(obligation["reporting_complete"]) and report_count
-                else "UNKNOWN" if bool(obligation["reporting_complete"])
-                else "CONFLICTED" if report_count
-                else "NOT_SATISFIED"
-            )
-            if current_action is None:
-                delivery_support = "UNKNOWN"
-            elif current_action["status"] == "ACKNOWLEDGED" and current_action["acknowledgment"]["reference"] is not None:
-                delivery_support = "SUPPORTED"
-            else:
-                delivery_support = "NOT_SATISFIED"
-
+            payment_support, amount_support, reporting_support, delivery_support = (decided[k] for k in ("cash", "amount", "reporting", "delivery"))
             amount_evidence_ids = sorted(set(active_payment_ids + authorized_evidence_ids))
-            amount_satisfied = bool(obligation["amount_satisfied"])
-            if payment_support == "CONFLICTED" or adjustment_support == "CONFLICTED":
-                amount_support = "CONFLICTED"
-            elif amount_satisfied and not active_payment_count and not authorized_claim_count:
-                amount_support = "UNKNOWN"
-            elif str(obligation["verification_status"]) == "CONFLICT_VISIBLE":
-                amount_support = "CONFLICTED"
-            else:
-                amount_support = "SUPPORTED" if active_payment_count or authorized_claim_count else "NO_LINKED_EVIDENCE"
-
-            requirements = {
-                "amount_satisfied": "SUPPORTED" if amount_satisfied and amount_support == "SUPPORTED" else (
-                    "NOT_SATISFIED" if not amount_satisfied and amount_support != "CONFLICTED"
-                    else "CONFLICTED" if amount_support == "CONFLICTED" else "UNKNOWN"
-                ),
-                "delivery_acknowledged_or_not_required": "UNKNOWN" if current_action is None else "NOT_SATISFIED" if any(open_cents.get(a, 1) > 0 for (a,) in connection.execute("SELECT action_id FROM actions WHERE obligation_id=? AND status='READY'", (obligation_id,))) else "SUPPORTED",  # every READY action that still asks (a request with open > 0; any other kind, default 1) waits on delivery
-                "reporting_complete": reporting_support,
-            }
-            missing_requirements = sorted(key for key, value in requirements.items() if value != "SUPPORTED")
+            requirements = dict(zip(financial_engine.PACKAGE_REQUIREMENTS, (decided["required_amount"], decided["delivery_requirement"], reporting_support)))
             observed_case_status = None if current_case is None else current_case["status"]
-            # The stored case condition allows acknowledgment or an explicit
-            # not-required state, but this schema has no durable not-required
-            # marker. An absent action therefore stays UNKNOWN in this view.
-            if observed_case_status != "RESOLVED":
-                resolution_assessment = "NOT_RESOLVED"
-            elif conflict_count or amount_support == "CONFLICTED" or reporting_support == "CONFLICTED":
-                resolution_assessment = "CONFLICTED"
-            elif any(value == "NOT_SATISFIED" for value in requirements.values()):
-                resolution_assessment = "UNSUPPORTED"
-            elif missing_requirements:
-                resolution_assessment = "UNKNOWN"
-            else:
-                resolution_assessment = "SUPPORTED"
 
             package = {
-                "contract": _DECISION_PACKAGE_CONTRACT,
+                "contract": _DECISION_PACKAGE_CONTRACT, "decision_record": {"worker_sha256": _hex(financial_engine.EVALUATOR_ARTIFACT_SHA256), "request_digest": _hex(_digest(_PACKAGE_REQUEST_DOMAIN, decided["request"]))},  # the deciding worker build and the frame it read (XI.16)
                 "scope": self._scope_value(),
                 "obligation": self._projection_for_row(obligation),
                 "population_binding": population_binding,
@@ -5538,8 +5472,8 @@ class FinancialOwner:
                     "amount_satisfied": bool(obligation["amount_satisfied"]),
                     "shortfall_cents": int(obligation["shortfall_cents"]),
                     "overage_cents": int(obligation["overage_cents"]),
-                    "active_payment_count": active_payment_count,
-                    "authorized_adjustment_count": authorized_claim_count,
+                    "active_payment_count": decided["active_payment_count"],
+                    "authorized_adjustment_count": decided["authorized_claim_count"],
                 },
                 "reporting": {
                     "complete": bool(obligation["reporting_complete"]),
@@ -5561,12 +5495,12 @@ class FinancialOwner:
                         "evidence_status": payment_support,
                         "recorded_received_cash_cents": int(obligation["received_cash_cents"]),
                         "required_cents": int(obligation["owed_cents"]),
-                        "missing_cents": max(int(obligation["owed_cents"]) - int(obligation["received_cash_cents"]), 0),
+                        "missing_cents": decided["missing_cents"],
                         "supporting_evidence_ids": active_payment_ids,
                         "supporting_references_complete": payment_references_complete,
                     },
                     "amount_satisfaction": {
-                        "result": "SATISFIED" if amount_satisfied else "NOT_SATISFIED",
+                        "result": "SATISFIED" if bool(obligation["amount_satisfied"]) else "NOT_SATISFIED",
                         "evidence_status": amount_support,
                         "supporting_evidence_ids": amount_evidence_ids,
                         "supporting_references_complete": payment_references_complete and claim_references_complete,
@@ -5586,9 +5520,9 @@ class FinancialOwner:
                         "case_id": None if current_case is None else current_case["case_id"],
                         "obligation_id": obligation_id,
                         "observed_status": observed_case_status,
-                        "assessment": resolution_assessment,
+                        "assessment": decided["assessment"],
                         "required_conditions": requirements,
-                        "missing_requirements": missing_requirements,
+                        "missing_requirements": decided["missing_requirements"],
                         "supporting_evidence_ids": sorted(set(amount_evidence_ids + reporting_evidence_ids)),
                         "supporting_references_complete": payment_references_complete and claim_references_complete and reporting_references_complete,
                         "conflict_count": conflict_count,
@@ -6442,7 +6376,7 @@ class FinancialOwner:
         return encoded
 
     def _verified_read(self, read):
-        """``read`` on the writer at its mark, rolled back: a foreign change is verified (and refused) first, as a write's would be (R1a, M5)."""
+        """``read`` on the writer at its mark, rolled back: a foreign change is verified (and refused) first, as a write's would be."""
         with self._lock:
             try:
                 result = read(self._begin("BEGIN"))
@@ -6456,7 +6390,7 @@ class FinancialOwner:
                 raise
 
     def export_continuity(self) -> bytes:
-        """Export only bounded, allowlisted responsibility state, from history a full verification covers (R1a, M5)."""
+        """Export only bounded, allowlisted responsibility state, from history a full verification covers."""
         return self._verified_read(self._continuity_package_bytes)
 
     def _manifest(self, connection: sqlite3.Connection) -> tuple[bytes, dict]:

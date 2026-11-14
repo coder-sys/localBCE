@@ -127,17 +127,15 @@ class HostileGatePayerTests(fx.Scratch):
             self.assertEqual(store.release(self.request, self.token, now=2**63 - 1), "expiry")  # the top reaches Lean
             self.assertIsNone(store.release(self.request, self.token, now=fx.NOW))
 
-    def test_an_oversize_or_excess_certificate_is_refused_before_lean(self) -> None:
-        """A cert over Lean's cap, or one past MAX_CERTS, is a typed refusal that stores nothing."""
+    def test_an_oversize_or_undecodable_certificate_is_a_typed_refusal(self) -> None:
+        """A cert over Lean's cap is refused before Lean, one Lean cannot decode by CERT-INDEX: neither stores anything."""
         with self.scratch() as tmp:
             self._keys(tmp)
             store = self._store(tmp, "big", ready=False)
-            result, _, _ = self._try(store, lambda: store.install_cert(b"\x00" * (payer.MAX_CERT_BYTES + 1)))
-            self.assertEqual(str(result), "cert_too_large")
-            store._db.executemany("INSERT INTO certs VALUES(?)", ((bytes([i]),) for i in range(payer.MAX_CERTS - 1)))
-            result, _, _ = self._try(store, lambda: store.install_cert(b"\xff\xff"))
-            self.assertEqual(str(result), "cert_store_full")
-            store.install_cert(self.cert)
+            for cert, reason in ((b"\x00" * (payer.MAX_CERT_BYTES + 1), "cert_too_large"), (b"\xff\xff", "cert_rejected")):
+                result, _, _ = self._try(store, lambda: store.install_cert(cert))
+                self.assertEqual(str(result), reason)
+            self.assertEqual(store.install_cert(self.cert), "SAME")
 
     def test_one_malformed_certificate_blocks_every_later_checkpoint_and_release(self) -> None:
         """A mutated KEY-CERT is refused at install, or Lean ignores it: the clean checkpoint and token still work."""

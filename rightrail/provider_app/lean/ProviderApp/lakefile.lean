@@ -12,3 +12,4 @@ lean_lib providerAppSemantics where
 lean_exe providerAppLean where
   root := `Main
   needs := #[providerAppSemantics]
+  moreLinkArgs := #["-Wl,--no-insert-timestamp"]

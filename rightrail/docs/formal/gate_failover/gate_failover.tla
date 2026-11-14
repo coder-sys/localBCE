@@ -4,7 +4,7 @@
 (* a fencer that owns the writer epoch, and a payer that releases money    *)
 (* only on a valid ALLOW token or under a logged emergency bypass.         *)
 (*                                                                         *)
-(* Abstractions (see gate-design.md section e):                            *)
+(* Abstractions:                                                           *)
 (*  - decision id = payment (one decision per payment; determination       *)
 (*    revisions get their own decision id and are not modelled);          *)
 (*  - "HOLD" stands for every non-ALLOW outcome;                           *)

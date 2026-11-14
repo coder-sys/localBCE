@@ -2,6 +2,7 @@ import BlindLedger.Financial.Worker
 import BlindLedger.Financial.CodecLaws.Correction
 import BlindLedger.Financial.CorrectionTransition.KAT
 import BlindLedger.Financial.Theorems.Correspondence
+import BlindLedger.Financial.DecisionPackage.DecideLaws
 
 namespace BlindLedger.Financial
 
@@ -118,7 +119,8 @@ theorem workerRespond_evaluator_frames (w : Bytes) (h : financialCodecMagic.isPr
   have hp := prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h
   have hc := prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel) (by decide +kernel) h
   have ho := prefix_exclusive (b := offsetAuthorizationMagic) (by decide +kernel) (by decide +kernel) h
-  simp [workerRespond, hp, hc, ho]
+  have hd := prefix_exclusive (b := DecisionPackage.packageRequestMagic) (by decide +kernel) (by decide +kernel) h
+  simp [workerRespond, hp, hc, ho, hd]
 
 /-- E1: the same conclusion; the hypothesis names every item magic. -/
 theorem workerRespond_evaluator_unchanged₂ (w : Bytes)
@@ -126,7 +128,7 @@ theorem workerRespond_evaluator_unchanged₂ (w : Bytes)
     workerRespond w = encodeWorkerOutcome (evaluateWire w) := by
   simp only [itemMagics, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true,
     Bool.not_eq_true'] at h
-  simp [workerRespond, h.1, h.2.1, h.2.2]
+  simp [workerRespond, h.1, h.2.1, h.2.2.1, h.2.2.2]
 
 theorem workerRespond_payment (w : Bytes) (h : Payment.paymentMagic.isPrefixOf w = true) :
     workerRespond w = Payment.paymentRespond w := by
@@ -144,6 +146,15 @@ theorem workerRespond_offset (w : Bytes) (h : offsetAuthorizationMagic.isPrefixO
     prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h,
     prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel)
       (by decide +kernel) h]
+
+/-- A BLFDPQ01 frame is answered by the decision-package rule. -/
+theorem workerRespond_package (w : Bytes) (h : DecisionPackage.packageRequestMagic.isPrefixOf w = true) :
+    workerRespond w = DecisionPackage.packageRequestRespondFast w := by
+  simp [workerRespond, h,
+    prefix_exclusive (b := Payment.paymentMagic) (by decide +kernel) (by decide +kernel) h,
+    prefix_exclusive (b := CorrectionTransition.correctionTransitionInputMagic) (by decide +kernel)
+      (by decide +kernel) h,
+    prefix_exclusive (b := offsetAuthorizationMagic) (by decide +kernel) (by decide +kernel) h]
 
 /-- BLFOFA01 round trip: the frame of an admissible request decodes back to it. -/
 theorem decodeOffsetAuthorizationRequest_of_encode (request : CorrectionTransition.CorrectionTransitionRequest)
@@ -273,8 +284,17 @@ theorem workerRespond_length_le (wire : Bytes) :
   · rw [workerRespond_correction wire hc]; exact correctionRespond_length_le wire
   by_cases ho : offsetAuthorizationMagic.isPrefixOf wire = true
   · rw [workerRespond_offset wire ho]; exact offsetRespond_length_le wire
+  by_cases hd : DecisionPackage.packageRequestMagic.isPrefixOf wire = true
+  · rw [workerRespond_package wire hd, DecisionPackage.packageRequestRespondFast_eq]
+    unfold maxWorkerFrameBytes
+    cases hq : DecisionPackage.decodePackageRequest wire with
+    | none => simp [DecisionPackage.packageRequestRespond, hq]
+    | some q =>
+      rw [DecisionPackage.packageRequestRespond_length wire q hq]
+      have := DecisionPackage.decodePackageRequest_actions_le hq
+      simp only [maxRows, maxTotalEncodedBytes] at this ⊢; omega
   rw [workerRespond_evaluator_unchanged₂ wire
-    (by simp [itemMagics, hm, hc, ho])]
+    (by simp [itemMagics, hm, hc, ho, hd])]
   unfold maxWorkerFrameBytes
   cases hOut : evaluateWire wire with
   | evaluated result =>

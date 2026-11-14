@@ -1,19 +1,26 @@
 """Lean-live M3 step 3: the payment item and its answer on the live worker, fail closed (lean-live-m3 sections 3 and 7.2)."""
 
+import copy
 import dataclasses
+import hashlib
+import os
 import sqlite3
 import statistics
+import subprocess
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app import right_rail_financial_engine as engine
 from app import right_rail_financial_owner as owner_module
 from app import right_rail_financial_owner_independent as independent
 from app import right_rail_financial_semantic_adapter as adapter
+from app import right_rail_refused_frames as refused_frames
 from tests import rightrail_financial_expected_cases as expected
 from tests import test_right_rail_financial_acceptance as acceptance_tests
 from tests import test_right_rail_financial_semantic_adapter as adapter_tests
+from tests.financial_decision_package_oracle import PACKAGE_REQUEST_DOMAIN, _digest, verify_decision_package
 
 
 class LeanPaymentFrameTests(unittest.TestCase):
@@ -178,7 +185,7 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         self.assertEqual(reversed_["status"], "REVERSED")
 
     def test_only_an_exact_retry_is_answered_while_the_clock_is_behind(self) -> None:
-        """D4: crash recovery must not depend on the clock, so the write-free exact retry is a DUPLICATE; every other answer fails closed."""
+        """crash recovery must not depend on the clock, so the write-free exact retry is a DUPLICATE; every other answer fails closed."""
         first = self._pay()
         self.store.reverse_payment(item_id=self.item_id, payment_id="m3-p1", evidence_id="r-m3-p1", event_at_ms=self.at)
         before = _rows(self.store)
@@ -212,9 +219,60 @@ class LeanPaymentOwnerTests(unittest.TestCase):
         before, real = _rows(self.store), owner_module._payment_receipts
         with patch.object(owner_module, "_payment_receipts", lambda c, o: real(c, o)[1:]), self.assertRaises(owner_module.FinancialIntegrityError) as raised:
             self._pay("m3-p2")
-        self.assertEqual(str(raised.exception), "lean_payment:evaluator_input_rejected")
+        kept = list((Path(self.store.path).parent / "refused").glob("*.bin"))  # the refused frame is kept, named by its SHA3-512
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(hashlib.sha3_512(kept[0].read_bytes()).hexdigest(), kept[0].stem)
+        self.assertEqual(str(raised.exception), f"lean_payment:evaluator_input_rejected:{kept[0].stem}")
         self.assertEqual(_rows(self.store), before)
         self.assertEqual(self._pay("m3-p2")["status"], "RECORDED")  # and the honest carry is accepted
+
+    def test_a_refused_frame_is_written_once_and_a_failed_write_still_refuses(self) -> None:
+        self._pay()
+        real = owner_module._payment_receipts
+        refuse = lambda: patch.object(owner_module, "_payment_receipts", lambda c, o: real(c, o)[1:])  # noqa: E731
+        folder = Path(self.store.path).parent / "refused"
+        frame = b"a refused frame"
+        connection = sqlite3.connect(self.store.path)
+        self.addCleanup(connection.close)
+        keep = lambda: refused_frames.keep(frame, connection, engine._is_reparse_path)  # noqa: E731
+        name = keep()
+        (kept,) = folder.glob("*.bin")
+        self.assertEqual((keep(), kept.read_bytes(), list(folder.glob("*.tmp"))), (name, frame, []))  # the same bytes: kept
+        kept.write_bytes(b"kept before")  # another file under the name is never trusted, never rewritten
+        self.assertEqual((keep(), kept.read_bytes()), (f"{name}:not_kept", b"kept before"))
+        self.assertEqual(kept.stem, name)
+        kept.unlink()
+        folder.rmdir()
+        folder.write_bytes(b"in the way")  # a file where the folder must go: the write fails, the refusal stands
+        with refuse(), self.assertRaises(owner_module.FinancialIntegrityError) as raised:
+            self._pay("m3-p2")
+        self.assertRegex(str(raised.exception), r"^lean_payment:evaluator_input_rejected:[0-9a-f]{128}:not_kept$")
+        self.assertEqual(self._pay("m3-p3")["status"], "RECORDED")
+
+    def test_a_refused_frame_is_not_kept_through_a_broken_connection_a_link_or_a_full_folder(self) -> None:
+        frame = b"another refused frame"
+        digest = hashlib.sha3_512(frame).hexdigest()
+        connection = sqlite3.connect(self.store.path)
+        self.addCleanup(connection.close)
+        folder = Path(self.store.path).parent / "refused"
+        broken = sqlite3.connect(self.store.path)
+        broken.close()
+        self.assertEqual(refused_frames.keep(frame, broken, engine._is_reparse_path), f"{digest}:not_kept")  # the lookup fails: still typed
+        other = Path(self.store.path).parent / "elsewhere"
+        other.mkdir()
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(folder), str(other)], check=True, capture_output=True)  # a junction where the folder goes
+        self.assertEqual(refused_frames.keep(frame, connection, engine._is_reparse_path), f"{digest}:not_kept")
+        self.assertEqual(list(other.iterdir()), [])
+        os.rmdir(folder)  # removes the junction only
+        with patch.object(refused_frames, "_FOLDER_LIMIT", 10):
+            self.assertEqual(refused_frames.keep(b"0123456789ab", connection, engine._is_reparse_path), hashlib.sha3_512(b"0123456789ab").hexdigest())
+            self.assertEqual(refused_frames.keep(frame, connection, engine._is_reparse_path), f"{digest}:not_kept_full")  # over the limit: nothing written
+        self.assertEqual([path.name for path in folder.iterdir() if digest in path.name], [])
+        link_at_target = lambda path: path.suffix == ".bin"  # noqa: E731 - a link where the kept file goes
+        self.assertEqual(refused_frames.keep(frame, connection, link_at_target), f"{digest}:not_kept")
+        with patch.object(refused_frames.os, "fsync", side_effect=OSError("disk")):  # a failed write leaves no temporary file
+            self.assertEqual(refused_frames.keep(frame, connection, engine._is_reparse_path), f"{digest}:not_kept")
+        self.assertEqual([path.name for path in folder.iterdir() if digest in path.name], [])
 
     def test_a_second_population_naming_the_item_cannot_publish_so_the_item_keeps_one_obligation(self) -> None:
         """A store holds one period and an obligation's id is its item and period, so live_payment_input's evidence by item is exactly
@@ -231,6 +289,40 @@ class LeanPaymentOwnerTests(unittest.TestCase):
             self.store.publish_population(population)
         with self.store._connect() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM obligations WHERE item_id=?", (self.item_id,)).fetchone()[0], 1)
+
+    def test_a_duplicate_answer_names_its_cause(self) -> None:
+        """Both stay status DUPLICATE (nothing moves), but a caller can tell an exact retry from a second confirmation of a stored payment."""
+        first = self._pay()
+        self.assertEqual(self._pay(expected_revision=first["revision"] - 1)["cause"], "exact_retry")
+        alias = self._pay("m3-p2", common_origin_id="o-m3-p1", evidence_id="e-new")
+        self.assertEqual((alias["status"], alias["payment_id"], alias["cause"]), ("DUPLICATE", "m3-p1", "alias_of_stored_payment"))
+        retried = self._pay("m3-p2", common_origin_id="o-m3-p1", evidence_id="e-new", expected_revision=alias["revision"] - 1)
+        self.assertEqual((retried["status"], retried["payment_id"], retried["cause"]), ("DUPLICATE", "m3-p1", "alias_of_stored_payment"))  # the cause follows the identity, so a retry says the same
+        recorded = self._pay("m3-p3")
+        self.assertNotIn("cause", recorded)
+
+    def test_an_alias_retry_cannot_change_its_cause_because_its_payment_id_is_stored_later_for_another_origin(self) -> None:
+        """Lean refuses the retry once its payment id is a stored payment of another origin, so the cause never flips to exact_retry."""
+        self._pay()
+        alias = self._pay("m3-p2", common_origin_id="o-m3-p1", evidence_id="e-new")
+        self._pay("m3-p2", evidence_id="e-other")
+        with self.assertRaisesRegex(owner_module.FinancialConflictError, "^payment_request_conflict$"):
+            self._pay("m3-p2", common_origin_id="o-m3-p1", evidence_id="e-new", expected_revision=alias["revision"] - 1)
+
+    def test_unchanged_evidence_is_not_rehashed_on_the_next_load(self) -> None:
+        self._pay()
+        calls = []
+
+        def counting(*fields):
+            calls.append(fields)
+            return real(*fields)
+        real = owner_module.EvidenceRecord
+        with self.store._connect() as connection:
+            load = lambda: adapter._load_evidence(connection, item_id=self.item_id, evaluation_time_ms=self.at + 10**9, limit=100)  # noqa: E731
+            first = load()
+            with patch.object(owner_module, "EvidenceRecord", counting):
+                self.assertEqual(load(), first)
+        self.assertEqual(calls, [])
 
     def test_a_stored_confirmation_id_comes_back_as_a_duplicate_an_unchanged_conflict_or_a_refusal(self) -> None:
         """Each stored confirmation has a payment of its origin (Types.lean paymentConfirmationAccounted), so a record naming a stored id is
@@ -392,10 +484,9 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
             item_id=expected.H_ITEM_ID, payment_id=f"payment:h:{suffix}", common_origin_id=f"origin:payment:h:{suffix}", amount_cents=cents,
             evidence_id=f"evidence:payment-h:{suffix}", event_at_ms=expected.CORRECTION_AUTH_MS + 500, pays_action_id=expected.ACTION_CORRECTION_ID if linked else None)
 
-    def test_python_open_cents_equals_lean_open_state(self) -> None:
+    def test_package_open_cents_equal_lean_open_state(self) -> None:
+        """The open cents a decision package shows (Decide.lean) equal the payment decision's openState after every step."""
         outcomes, real, opened = [], adapter.decode_payment_outcome, []
-        with self.store._connect() as connection:
-            oid = connection.execute("SELECT obligation_id FROM obligations WHERE item_id=?", (expected.H_ITEM_ID,)).fetchone()[0]
 
         def spy(*args):
             outcomes.append(real(*args))
@@ -413,8 +504,8 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
                     continue
                 out = outcomes[-1]
                 opened.append(_open_state(out.requests, out.decided.shortfall_cents))
-                with self.store._connect() as connection:
-                    self.assertEqual(owner_module._open_requests(connection, oid, out.decided.shortfall_cents), opened[-1], out.status)
+                actions = self.store.decision_package(expected.H_ITEM_ID)["references"]["actions"]["items"]
+                self.assertEqual({a["action_id"]: a["open_cents"] for a in actions if a["kind"] == "CORRECTION_PAYMENT_REQUEST"}, opened[-1], out.status)
         self.assertEqual(len(opened), 5)
         self.assertGreater(opened[0][expected.ACTION_CORRECTION_ID], 0)
 
@@ -436,6 +527,90 @@ class LeanPaymentCorrectionTests(unittest.TestCase):
              patch.object(independent, "verify_obligation_connection", spy), self.assertRaises(owner_module.FinancialError):
             self.fixture._pay_a(store, 1, "m3b")
         self.assertEqual((seen, _rows(store)), (["payment:link"], before))
+
+
+class DecisionRecordTests(unittest.TestCase):
+    """Contract v4 (Constitution XI.16): the package names the deciding worker and the digest of the frame Lean read."""
+
+    def setUp(self) -> None:
+        self.addCleanup(engine._close_evaluator)
+
+    def test_the_independent_checker_refuses_a_wrong_worker_a_wrong_frame_digest_and_a_v3_package(self) -> None:
+        fixture = acceptance_tests.RightRailFinancialAcceptanceTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        store, reject_b = fixture._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
+        reject_b()
+        frames, real = [], engine.decide_package_live
+
+        def spy(*args, **kwargs):
+            frames.append(real(*args, **kwargs)["request"])
+            return real(*args, **kwargs)
+        with patch.object(engine, "decide_package_live", spy):
+            package = store.decision_package(expected.H_ITEM_ID)
+        frame = frames[-1]
+
+        def check(candidate: dict) -> None:
+            verify_decision_package(store.path, expected.H_ITEM_ID, candidate, expected_config=store.config, expected_authority=fixture.authority,
+                                    expected_mode=store.mode, expected_owner_id=store.owner_id)
+
+        def refused(candidate: dict) -> None:
+            with self.assertRaisesRegex(independent.IndependentFinancialError, "^decision-package:mismatch$"):
+                check(candidate)
+
+        def with_record(**changes) -> dict:
+            candidate = copy.deepcopy(package)
+            candidate["decision_record"].update(changes)
+            return candidate
+        head, count = frame[:16], int.from_bytes(frame[16:18], "big")
+        rows, i = [], 18
+        for _ in range(count):
+            end = i + 2 + int.from_bytes(frame[i:i + 2], "big") + 8 + 3 + 8 + 8  # id, revision, three flags, amount, paid
+            rows.append(frame[i:end])
+            i = end
+        tail = frame[i:]
+        self.assertGreaterEqual(count, 2)
+
+        def digest_of(rows_in: list[bytes]) -> str:
+            return _digest(PACKAGE_REQUEST_DOMAIN, head + len(rows_in).to_bytes(2, "big") + b"".join(rows_in) + tail).hex().upper()
+        self.assertEqual(digest_of(rows), package["decision_record"]["request_digest"])  # the frame is read as the checker rebuilds it
+        check(package)
+        changed = [rows[0][:-1] + bytes([rows[0][-1] ^ 1])] + rows[1:]  # one row's paid cents differ by one bit
+        refused(with_record(worker_sha256="00" * 32))
+        refused(with_record(request_digest=digest_of(changed)))
+        refused(with_record(request_digest=digest_of([rows[1], rows[0]] + rows[2:])))
+        refused(with_record(request_digest=digest_of(rows[:-1])))
+        v3 = copy.deepcopy(package)
+        v3["contract"] = "RR/FINANCIAL/DECISION-PACKAGE/v3"
+        del v3["decision_record"]
+        refused(v3)
+
+    def test_the_worker_refuses_action_rows_out_of_revision_and_id_order(self) -> None:
+        obligation = {"shortfall_cents": 9000, "owed_cents": 9000, "received_cash_cents": 0, "claimed_adjustment_cents": 0, "lawful_adjustment_cents": 0,
+                      "amount_satisfied": False, "reporting_complete": False, "verification_status": "MISSING_EVIDENCE"}
+
+        def row(action_id: str, revision: int) -> tuple:
+            return (action_id, revision, True, "READY", False, 4000, 0)
+
+        def decide(*rows: tuple, shortfall: int = 9000) -> dict:
+            return engine.decide_package_live({**obligation, "shortfall_cents": shortfall}, actions=list(rows), payments=[], claims=[], report_count=0, conflict_count=0, case_status=None)
+        self.assertEqual(decide(row("a", 1), row("b", 2))["open_cents"], [4000, 4000])
+        self.assertEqual(decide(row("a", 3), row("b", 3))["open_cents"], [4000, 4000])
+        self.assertEqual(decide(row("a", 1), row("b", 2), shortfall=4000)["open_cents"], [4000, 0])  # the older request keeps the shortfall; list order alone would give [0, 4000]
+        self.assertEqual(decide(row("a", 3), row("b", 3), shortfall=4000)["open_cents"], [4000, 0])
+        for rows in ((row("b", 2), row("a", 1)), (row("b", 3), row("a", 3)), (row("a", 1), row("a", 1)), (row("a", 1), row("c", 2), row("b", 2))):
+            with self.assertRaises(engine.FinancialEngineResultError, msg=rows):
+                decide(*rows)
+
+    def test_an_answer_with_cents_past_lean_bounds_is_refused(self) -> None:
+        def answer(missing: int, open_cents: list[int]) -> bytes:
+            nat = lambda v: v.to_bytes(8, "big")
+            return (b"BLFDPA01" + bytes([1] * 6 + [0, 1]) + nat(missing) + bytes(4) + len(open_cents).to_bytes(2, "big")
+                    + b"".join(nat(v) for v in open_cents))
+        self.assertEqual(engine._decode_package_answer(answer(0, [4000, 0]), 2, 4000)["open_cents"], [4000, 0])
+        for missing, open_cents in ((1 << 63, [0]), (0, [4001, 0]), (0, [3000, 2000])):
+            with self.assertRaises(engine.FinancialEngineResultError, msg=(missing, open_cents)):
+                engine._decode_package_answer(answer(missing, open_cents), len(open_cents), 4000)
 
 
 if __name__ == "__main__":

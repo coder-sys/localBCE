@@ -1,4 +1,4 @@
-"""M3 step 5: a crash of the engine worker or the owner process at each point around a Lean payment decision and its commit leaves
+"""a crash of the engine worker or the owner process at each point around a Lean payment decision and its commit leaves
 the store verifying, with no payment half-written or doubled, and a retry gives the answer a never-crashed run gives."""
 
 import json
@@ -126,7 +126,8 @@ class PaymentCrashTests(unittest.TestCase):
                     self.assertEqual((retry.returncode, retry.stderr), (0, b""))
                     answer = json.loads(retry.stdout)
                     self.assertEqual(answer["status"], "DUPLICATE" if point == "receipt" else clean_answer["status"])
-                    self.assertEqual({k: v for k, v in answer.items() if k not in ("status", "payment_id")}, {k: v for k, v in clean_answer.items() if k not in ("status", "payment_id")})
+                    self.assertEqual(answer.get("cause"), "exact_retry" if point == "receipt" else None)  # a retry of a committed write names why it is a duplicate
+                    self.assertEqual({k: v for k, v in answer.items() if k not in ("status", "payment_id", "cause")}, {k: v for k, v in clean_answer.items() if k not in ("status", "payment_id")})
                     self.assertEqual(_state(path), clean_state)  # recorded once, never doubled
                     self._verify(path)
 
@@ -182,8 +183,8 @@ class PaymentCrashTests(unittest.TestCase):
                     self._run(store, kind, revision)
                 self.assertEqual(str(raised.exception), "lean_payment:evaluator_containment")
                 retry = self._run(store, kind, revision)
-                self.assertEqual((retry["status"], {k: v for k, v in retry.items() if k not in ("status", "payment_id")}),
-                                 ("DUPLICATE", {k: v for k, v in clean_answer.items() if k not in ("status", "payment_id")}))
+                self.assertEqual((retry["status"], retry["cause"], {k: v for k, v in retry.items() if k not in ("status", "payment_id", "cause")}),
+                                 ("DUPLICATE", "exact_retry", {k: v for k, v in clean_answer.items() if k not in ("status", "payment_id")}))
                 self.assertEqual(_state(Path(store.path)), _state(Path(clean.path)))
                 self._verify(Path(store.path))
 

@@ -956,7 +956,7 @@ theorem record_then_reverse_restores (L) (hL : ledgerWellFormed L) (rc : RecordC
     hact2
   rw [step_payments_mutated ho2]; omega
 
--- 16.2 item 6 (5.3): placeholders removed, unused hypotheses dropped
+-- Placeholders removed, unused hypotheses dropped
 theorem run_record_retry_duplicate (L : Ledger) (hL : ledgerWellFormed L) (c : RecordCommand)
     (now rev : Nat) (calls : List Call) (now' : Nat)
     (h : ∃ w post res, L.outcome ⟨now, some rev, .record c⟩ = .mutated .RECORDED w post res) :

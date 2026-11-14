@@ -6,7 +6,7 @@ import BlindLedger.Gate.Producer
     final text); §B generalised to every checkpoint version after review MEDIUM-1 (2026-10-07).  `VerifyCli`
     runs `publishOkTree` for PUBLISH.
       §A  RELEASE-BATCH: install certificates and verify each checkpoint once, then decide every item
-      §B  one-tree PUBLISH (`publishOkTree`), checked against `publishOkAny`
+      §B  one-tree PUBLISH (`publishOkTree`), checked against `publishOk`
     Theorems: `BatchTheorems`. -/
 
 namespace BlindLedger.Gate
@@ -27,11 +27,11 @@ structure Item where
   released : Bool
   pin : Option Bytes
 
-/-- What a RELEASE-BATCH frame carries once for all its items.  Bytes only, except fork evidence, which the
-    frame parser decodes (an undecodable one is a FRAME error: dropping it could only unblock). -/
+/-- What a RELEASE-BATCH frame carries once for all its items.  Bytes only, except fork evidence (both checkpoints of
+    each recorded fork), which the frame parser decodes (an undecodable one is a FRAME error: dropping it could only unblock). -/
 structure ReleaseRun where
   certs : List Bytes
-  evidence : List Stored
+  evidence : List (Stored × Stored)
   checkpoints : List Bytes
   now : Nat
   grants : List Grant
@@ -56,7 +56,7 @@ def verified (c : Crypto) (s0 : PayerState) (b : Bytes) : Option Stored :=
 /-- The state one item is decided on: certificates, fence and equivocations from the frame's certificates,
     the given verified checkpoints, the frame's fork evidence, clock and grants, and the item's own rows. -/
 def itemState (s0 : PayerState) (cps : List Stored) (r : ReleaseRun) (it : Item) : PayerState :=
-  { s0 with checkpoints := cps, forked := r.evidence.map (fun f => (f, f)), now := r.now, grants := r.grants,
+  { s0 with checkpoints := cps, forked := r.evidence, now := r.now, grants := r.grants,
             released := if it.released then [it.payment.key] else [],
             pins := it.pin.toList.map fun m => (it.payment.key, m) }
 
@@ -120,20 +120,21 @@ def tokenFitsTree (c : Crypto) (k : Nat) (x : Stored) (lv : List (List Bytes)) (
     cp.epoch == t.leaf.epoch && t.siblings == pathOf lv i &&
     t.leaf.shardId == shardOf c.hash t.leaf.tenantId t.leaf.memberKey k
 
-/-- `publishOkAny` with each token decoded once and the tree built once: about 2k hashes per 1,000 tokens
-    instead of about 11k.  Same checkpoint decoder (`storedOfAny`: CHECKPOINT/v1 and v2) and no-downgrade rule.
-    `gate_verify` PUBLISH runs this from B4; `publishOkAny` stays the specification (`publishOkTree_eq`). -/
-def publishOkTree (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes) : Bool :=
-  match decodeKeyCert cert, storedOfAny sha3 new, tokens.mapM decodeToken with
+/-- `publishOk` with each token decoded once and the tree built once: about 2k hashes per 1,000 tokens
+    instead of about 11k, with the same checkpoint decoder (`storedOf`).  `gate_verify` PUBLISH runs this from
+    B4; `publishOk` stays the specification (`publishOkTree_eq`). -/
+def publishOkTree (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes)
+    (tpm : Nat) : Bool :=
+  match decodeKeyCert cert, storedOf sha3 new, tokens.mapM decodeToken with
   | some e, some n, some ts =>
     let d := domain "MERKLE-NODE"
     let lv := levels sha3 d treeFuel (ts.map fun t => leafHash sha3 d t.leafBytes)
-    acceptsAny rootPk cert new && last.all (fun b => (storedOfAny sha3 b).isSome) &&
-      follows (last.bind (storedOfAny sha3)) n && ts.length == n.checkpoint.count &&
+    accepts rootPk cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
+      follows (last.bind (storedOf sha3)) n && n.checkpoint.counter == tpm + 1 && ts.length == n.checkpoint.count &&
       lv.getLast? == some [n.checkpoint.tokenRoot] &&
       (ts.zipIdx.all fun (t, i) =>
         tokenFitsTree (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n lv i t) &&
-      ascending (ts.map (·.leaf.paymentId)) && (!last.any isV2 || isV2 new)
+      ascending (ts.map (·.leaf.paymentId))
   | _, _, _ => false
 
 /-- The hash inputs of `pathRoot`'s fold, in order: one `stepInput` per sibling consumed. -/
@@ -153,7 +154,7 @@ def batchInputs (ts : List Token) : List Bytes :=
   let d := domain "MERKLE-NODE"
   ts.zipIdx.flatMap fun p => pathInputs sha3 d treeFuel p.2 ts.length (leafHash sha3 d p.1.leafBytes) p.1.siblings
 
-/-- The SHA3 collision behind a batch `publishOkAny` accepts and `publishOkTree` refuses
+/-- The SHA3 collision behind a batch `publishOk` accepts and `publishOkTree` refuses
     (`publishOkTree_complete`): the first pair of distinct `batchInputs` with one output.  Only `tokens`
     matter.  Quadratic: a witness for the theorem, which the exe never runs. -/
 def publishCollision (tokens : List Bytes) : Option (Bytes × Bytes) :=

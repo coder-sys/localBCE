@@ -287,6 +287,22 @@ def decisionActionKind : DeterminationDecision → String
   | .OFFSET_AUTHORIZED => "OFFSET_AUTHORIZATION"
   | .OFFSET_REJECTED_CORRECTION_AUTHORIZED => "CORRECTION_PAYMENT_REQUEST"
 
+/-- The decision time as given (Constitution III.3: a retry is the same request only on identical
+    canonical input).  An original that left the time to the owner's clock matches only a resend
+    that leaves it out too; one that named its time, or a row stored before this was kept, matches
+    only a resend naming that same time. -/
+def decisionTimeMatches (command : CorrectionCommand) (identity : ExistingCorrectionIdentity) : Bool :=
+  match identity.decisionTimeGiven with
+  | some false => !command.decisionTimeGiven
+  | some true | none => command.decisionTimeGiven && identity.decidedAtMs = command.decisionAtMs
+
+/-- What the flag means: a decision time left to the owner's clock is the owner's clock reading
+    (`decisionAtMs = ownerNowMs`), and only an offset authorization may leave it out; a correction
+    request always names its time.  Anything else is a malformed command (`INVALID_REQUEST`). -/
+def decisionTimeFlagSound (decision : DeterminationDecision) (command : CorrectionCommand) : Bool :=
+  command.decisionTimeGiven ||
+    (decide (decision = .OFFSET_AUTHORIZED) && decide (command.decisionAtMs = command.ownerNowMs))
+
 def offsetIdentityMatches (decision : DeterminationDecision) (request : CorrectionTransitionRequest)
     (identity : ExistingCorrectionIdentity) : Bool :=
   let command := request.command
@@ -300,7 +316,7 @@ def offsetIdentityMatches (decision : DeterminationDecision) (request : Correcti
     identity.inputEvaluationId = command.evaluationId &&
     identity.inputEvaluationResultDigest = command.evaluationResultDigest &&
     identity.expectedRevision = command.expectedRevision &&
-    identity.decidedAtMs = command.decisionAtMs
+    decisionTimeMatches command identity
 
 private def existingIdentityMatches (request : CorrectionTransitionRequest)
     (identity : ExistingCorrectionIdentity) : Bool :=
@@ -876,7 +892,8 @@ def preflightCorrectionTransitionV0 (request : CorrectionTransitionRequest) :
       !digestWellFormed command.evaluationResultDigest ||
       !revisionWellFormed command.expectedRevision || !timeWellFormed command.decisionAtMs ||
       !timeWellFormed command.ownerNowMs || !digestWellFormed command.previousHistoryHead ||
-      !correctionQueryObservationsWellFormed command.queryObservations then
+      !correctionQueryObservationsWellFormed command.queryObservations ||
+      !decisionTimeFlagSound .OFFSET_REJECTED_CORRECTION_AUTHORIZED command then
     throw .INVALID_REQUEST
   if !querySetCompleteAtCommand command then throw .QUERY_OBSERVATION_INVALID
   match command.actionLookup with
@@ -967,7 +984,8 @@ def preflightOffsetDecision (decision : DeterminationDecision) (request : Correc
       !digestWellFormed command.evaluationResultDigest ||
       !revisionWellFormed command.expectedRevision || !timeWellFormed command.decisionAtMs ||
       !timeWellFormed command.ownerNowMs || !digestWellFormed command.previousHistoryHead ||
-      !correctionQueryObservationsWellFormed command.queryObservations then
+      !correctionQueryObservationsWellFormed command.queryObservations ||
+      !decisionTimeFlagSound decision command then
     throw .INVALID_REQUEST
   if !querySetCompleteAtCommand command then throw .QUERY_OBSERVATION_INVALID
   match command.actionLookup with
@@ -1230,8 +1248,8 @@ def buildAuthorized (request : CorrectionTransitionRequest) (currentResult : Fin
 def duplicateOf (kind : TransitionKind) (command : CorrectionCommand) : CorrectionTransitionResult :=
   { duplicate command with explanation := { (duplicate command).explanation with transition := some kind } }
 
--- Served by the BLFOFA01 worker frame (`offsetRespond`). The pinned engine predates it and the Python
--- owner does not call it yet, so the owner still decides offsets until the re-pin.
+-- Served by the BLFOFA01 worker frame (`offsetRespond`): the owner sends every offset authorization
+-- here, and every resend of one.
 def applyOffsetAuthorization (request : CorrectionTransitionRequest) : CorrectionTransitionResult :=
   match preflightOffsetDecision .OFFSET_AUTHORIZED request with
   | .error reason => reject request.command reason
@@ -1606,6 +1624,109 @@ theorem preflightOffsetDecision_ready_within_shortfall {decision : Determination
     · cases h
   · cases h
 
+theorem decisionTimeMatches_iff (command : CorrectionCommand) (identity : ExistingCorrectionIdentity) :
+    decisionTimeMatches command identity = true ↔
+      (identity.decisionTimeGiven = some false ∧ command.decisionTimeGiven = false) ∨
+        (identity.decisionTimeGiven ≠ some false ∧ command.decisionTimeGiven = true ∧
+          identity.decidedAtMs = command.decisionAtMs) := by
+  unfold decisionTimeMatches
+  cases identity.decisionTimeGiven with
+  | none => simp
+  | some given => cases given <;> simp
+
+/-- Finding D (Constitution III.3): an offset decision is a duplicate only of the stored identity
+    the lookup found and matched, its decision time included as given: a stored original that left
+    the time to the owner's clock only for a resend that leaves it out too, any other only for a
+    resend naming the stored time. -/
+theorem preflightOffsetDecision_duplicate_same_time {decision : DeterminationDecision}
+    {request : CorrectionTransitionRequest}
+    (h : preflightOffsetDecision decision request = .ok .duplicate) :
+    ∃ identity, request.command.actionLookup = .existing identity ∧
+      offsetIdentityMatches decision request identity = true ∧
+      ((identity.decisionTimeGiven = some false ∧ request.command.decisionTimeGiven = false) ∨
+        (identity.decisionTimeGiven ≠ some false ∧ request.command.decisionTimeGiven = true ∧
+          identity.decidedAtMs = request.command.decisionAtMs)) := by
+  delta preflightOffsetDecision at h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  obtain ⟨-, h⟩ := ite_error_ok h
+  generalize request.command.actionLookup = L at h
+  cases L with
+  | absent =>
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    obtain ⟨-, h⟩ := ite_error_ok h
+    generalize optionWithProof (derivedCorrectionPaid request.currentInput.payments
+      request.currentInput.actions request.command.paymentLinks) = P at h
+    cases P with
+    | none => cases h
+    | some paid' =>
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      obtain ⟨-, h⟩ := ite_error_ok h
+      generalize findClaim request.currentInput.claims request.command.claimId = Cl at h
+      cases Cl with
+      | none => cases h
+      | some claim' =>
+        obtain ⟨-, h⟩ := ite_error_ok h
+        obtain ⟨-, h⟩ := ite_error_ok h
+        rcases dite_cases h with ⟨hI, h⟩ | ⟨-, h⟩
+        · generalize evaluateWithProof request.currentInput = E at h
+          cases E with
+          | none => cases h
+          | some certificate =>
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            obtain ⟨-, h⟩ := ite_error_ok h
+            cases Except.ok.inj h
+        · cases h
+  | existing identity =>
+    rcases ite_cases h with ⟨hMatch, -⟩ | ⟨-, h⟩
+    · have hM : offsetIdentityMatches decision request identity = true := by
+        simp only [Bool.and_eq_true] at hMatch
+        exact hMatch.2
+      refine ⟨identity, rfl, hM, (decisionTimeMatches_iff _ _).1 ?_⟩
+      unfold offsetIdentityMatches at hM
+      simp only [Bool.and_eq_true] at hM
+      exact hM.2
+    · cases h
+  | conflicting => cases h
+
+
+/-- The flag means what it says: a command that left its decision time to the owner's clock is an
+    offset authorization dated exactly at the owner's clock reading. -/
+theorem preflightOffsetDecision_time_flag {decision : DeterminationDecision}
+    {request : CorrectionTransitionRequest} {r}
+    (h : preflightOffsetDecision decision request = .ok r)
+    (hg : request.command.decisionTimeGiven = false) :
+    decision = .OFFSET_AUTHORIZED ∧ request.command.decisionAtMs = request.command.ownerNowMs := by
+  delta preflightOffsetDecision at h
+  obtain ⟨hc, -⟩ := ite_error_ok h
+  have hs : decisionTimeFlagSound decision request.command = true := by
+    cases hb : decisionTimeFlagSound decision request.command
+    · exact (hc (by simp [hb])).elim
+    · rfl
+  unfold decisionTimeFlagSound at hs
+  simpa [hg] using hs
+
+/-- A correction request always names its decision time. -/
+theorem preflightCorrectionTransition_time_given {request : CorrectionTransitionRequest} {r}
+    (h : preflightCorrectionTransition request = .ok r) :
+    request.command.decisionTimeGiven = true := by
+  unfold preflightCorrectionTransition at h
+  obtain ⟨a, ha, -⟩ := bind_ok h
+  cases hg : request.command.decisionTimeGiven
+  · exact absurd (preflightOffsetDecision_time_flag ha hg).1 (by decide)
+  · rfl
 
 theorem preflightCorrectionTransition_shared {request : CorrectionTransitionRequest}
     {currentResult : FinancialResult} {claim : Claim} {a b paid c d}

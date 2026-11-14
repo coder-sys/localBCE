@@ -42,6 +42,7 @@ FAULTS = {
     "amount_format": ("sender", "sender_profile:amount_format"), "date_format": ("sender", "sender_profile:date_format"),
     "encoding": ("sender", "sender_profile:encoding"), "item_cap": ("state", "next_file"),
 }
+UNREADABLE_AMOUNT = frozenset(("shape", "encoding", "identifier", "amount_format", "amount"))  # the only hold causes of a row whose amount is not readable
 # The owner's own Input, Conflict and Revision refusals of a payment row (the owner's _PAYMENT_REFUSALS; a test holds the two equal): the only reasons it may hold a row with.
 _OWNER_HOLDS = frozenset((
     "payment_amount_zero", "payment_request_conflict", "payment_origin_reversed", "obligation_revision_conflict", "evidence_identity_conflict", "evidence_chronology",
@@ -196,6 +197,10 @@ def _held(argument: Mapping, reason: str) -> dict:
     return {"status": "HELD", "payment_id": argument["payment_id"], "reason": reason}
 
 
+def _duplicate(argument: Mapping, answer: str) -> dict:  # its cause by payment identity, as the semantic adapter names it: the row's own stored payment, or another one
+    return {"status": "DUPLICATE", "payment_id": answer, "reason": "exact_retry" if answer == argument["payment_id"] else "alias_of_stored_payment"}
+
+
 def _conflict_id(argument: Mapping) -> str:  # the id Lean gives a row's conflict (semantic adapter conflictImage)
     return f"conflict:{argument['item_id']}:{argument['common_origin_id']}:{argument['evidence_id']}"
 
@@ -246,9 +251,13 @@ def outcomes(facts: Mapping, results: list) -> list[dict]:
 
 
 def _totals(rows: list[dict], control_total_cents: int) -> dict:
+    """held_cents is the readable held cents; an unreadable amount is on a HELD row with its cause, is never read as 0 and stays in unallocated_cents. Any other row without an amount is refused."""
     counted, cents = Counter(row["status"] for row in rows), Counter()
     for row in rows:
-        cents[row["status"]] += row["amount_cents"] or 0  # an unreadable amount counts 0
+        if row["amount_cents"] is None:
+            _require(row["status"] == "HELD" and row["basis"] in UNREADABLE_AMOUNT, "cash_file_failed")
+        else:
+            cents[row["status"]] += row["amount_cents"]
     return {"received": len(rows), **{status.lower(): counted[status] for status in OUTCOMES}, "cash_delta_cents": cents["ADMITTED"] + cents["REPAIRED"],
             "resolved_cents": cents["RESOLVED"], "held_cents": cents["HELD"], "unallocated_cents": control_total_cents - cents["ADMITTED"] - cents["REPAIRED"] - cents["RESOLVED"]}
 
@@ -459,7 +468,7 @@ class CashFileCheck:
             if kind == "OVERLAP" and argument["expected_revision"] != turn[obligation]:
                 kind = "ALIAS"
             turn[obligation] += kind == "NEW"
-            skip = {"status": "DUPLICATE", "payment_id": answer, "reason": None} if kind in ("RETRY", "ALIAS") else None if answer else _held(argument, kind)
+            skip = _duplicate(argument, answer) if kind in ("RETRY", "ALIAS") else None if answer else _held(argument, kind)
             plan.append(("HELD" if answer is None else kind, answer, skip))
         return tuple(plan)
 
@@ -490,7 +499,7 @@ class CashFileCheck:
                 if skip["status"] == "HELD":
                     held.add(argument["item_id"])
                 continue
-            _require(result == (_held(argument, "conflict:" + conflict) if kind == "CONFLICT" else {"status": "RECORDED" if kind == "NEW" else "DUPLICATE", "payment_id": answer, "reason": None}), "cash_file_failed")
+            _require(result == (_held(argument, "conflict:" + conflict) if kind == "CONFLICT" else _duplicate(argument, answer) if kind == "OVERLAP" else {"status": "RECORDED", "payment_id": answer, "reason": None}), "cash_file_failed")
             sequence += 1  # each NEW, OVERLAP or CONFLICT row appends exactly the next event, verified onto the chain
             event, obligation = events[sequence], payments[answer]["obligation_id"]
             head = ledger._verify_event(event, sequence, head)
@@ -555,7 +564,7 @@ class CashFileCheck:
         held_count = sum(result["status"] == "HELD" for result in results)
         held_cents = sum(argument["amount_cents"] for (_, argument), result in zip(self.commands, results) if result["status"] == "HELD")
         self.receipt = {
-            "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3",
+            "contract": "RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v4",
             "mode": "PREVIEW" if self._preview else "APPLIED",
             "source_sha256": self._source_sha, "baseline_sha256": self._baseline_sha,
             "row_count": len(self.commands), "recorded_count": len(recorded), "held_count": held_count,

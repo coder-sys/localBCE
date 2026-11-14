@@ -14,6 +14,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
 import socket
 import tempfile
 import threading
@@ -53,8 +54,21 @@ MANIFEST_ID = "population-manifest:fixture-2026-01:v1"
 H_ITEM_ID = "item-h"
 H_CLAIM_ID = "claim:obligation-item-h:offset-v1"
 H_ACTION_ID = "action:obligation-item-h:correction-v1"
-H_OFFSET_ACTION_ID = "action:obligation-item-h:offset-v1"
-ACK_REFS = {H_ACTION_ID: "ack:correction:h:v1", H_OFFSET_ACTION_ID: "ack:offset:h:v1"}
+_ITEM_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def _names(item_id: str) -> dict[str, str]:
+    """Every record name a command writes for one item. For item H these are exactly the fixture's names."""
+    short = item_id.removeprefix("item-")
+    action, offset = f"action:obligation-{item_id}:correction-v1", f"action:obligation-{item_id}:offset-v1"
+    return {"claim": f"claim:obligation-{item_id}:offset-v1", "action": action, "offset_action": offset,
+            "ack": {action: f"ack:correction:{short}:v1", offset: f"ack:offset:{short}:v1"}, "report": f"report:{short}:v1", "report_evidence": f"evidence:report:{short}:original"}
+
+
+def _cash_command(item_id: str) -> dict[str, Any]:
+    short = item_id.removeprefix("item-")
+    return {**CASH_CORRECTION_COMMAND, "item_id": item_id, "pays_action_id": _names(item_id)["action"], "payment_id": f"payment:{short}:p2",
+            "common_origin_id": f"origin:payment:{short}:p2", "evidence_id": f"evidence:payment-{short}:p2", "local_ref": f"ref:payment:{short}:p2"}
 H_OBLIGATION_ID = "obligation:item-h:period-01"
 MAX_RESTORE_DESTINATIONS = 1000
 MAX_STAFF_COMMAND_BYTES = 8192
@@ -107,14 +121,31 @@ ITEM_LABELS = {
 }
 
 _ROOT = Path(__file__).resolve().parent
-FOLLOWTHROUGH_RULES_BYTES = (_ROOT / "fixtures" / "h_followthrough_rules_v1.json").read_bytes()  # listed by the fixture Control Pack
-# The role -> command table is the interaction model's, loaded once: do_POST enforces it, the page reads the same file.
-# Role is selected by path, never by query string: do_GET rejects any query
-# or fragment outright, and a fixed set of real roles keeps every disallowed
-# control absent from the page rather than merely disabled (Art. XIII.4).
-_MODEL = json.loads((_ROOT / "staff_workspace" / "interaction-model.json").read_bytes())
-STAFF_ROLES = tuple(_MODEL["roles"])
-COMMAND_ROLES = {c["route"][5:]: frozenset(c["roles"]) for c in _MODEL["controls"].values() if c["route"].startswith("POST ")}
+
+
+class StaffServerError(RuntimeError):
+    """A file this server ships is missing or malformed; the message names it."""
+
+
+def _shipped(name: str) -> bytes:
+    try:
+        return (_ROOT / name).read_bytes()
+    except OSError:
+        raise StaffServerError(f"shipped_file_unreadable:{name}") from None
+
+
+def _interaction_model(raw: bytes) -> tuple[tuple, dict]:
+    """(roles, route -> roles) from the interaction model: do_POST enforces it, the page reads the same file.
+    A role is selected by path, never by query string, and a fixed set of real roles keeps every disallowed control absent from the page (Art. XIII.4)."""
+    try:
+        model = json.loads(raw)
+        return tuple(model["roles"]), {c["route"][5:]: frozenset(c["roles"]) for c in model["controls"].values() if c["route"].startswith("POST ")}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise StaffServerError("interaction_model_malformed") from None
+
+
+FOLLOWTHROUGH_RULES_BYTES = _shipped("fixtures/h_followthrough_rules_v1.json")  # listed by the fixture Control Pack
+STAFF_ROLES, COMMAND_ROLES = _interaction_model(_shipped("staff_workspace/interaction-model.json"))
 _STATIC_FILES: dict[str, tuple[str, str]] = {
     "/": ("staff_workspace/index.html", "text/html; charset=utf-8"),
     "/staff.css": ("staff_workspace/staff.css", "text/css; charset=utf-8"),
@@ -144,13 +175,15 @@ def _person_fits(staff_role: str, owner_role: str, named: list[str]) -> bool:
     """Exactly one named roster person of this staff role who holds the owner role."""
     return len(named) == 1 and any(i == named[0] and role == staff_role and owner_role in owner_roles for i, _n, role, owner_roles in SYNTHETIC_STAFF)
 # The record only that command writes: its appearance after a busy error proves the command committed.
-_OWN_RECORD = {
-    "authorize_offset": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_OFFSET_ACTION_ID),
-    "reject_offset_and_authorize_correction": ("SELECT COUNT(*) FROM actions WHERE action_id=?", H_ACTION_ID),
-    "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE acknowledgment_ref IN (?,?)", *ACK_REFS.values()),
-    "record_cash_correction": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", CASH_CORRECTION_COMMAND["evidence_id"]),
-    "record_reporting_evidence": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", "evidence:report:h:original"),
-}
+def _own_record(name: str, item_id: str) -> tuple[Any, ...]:
+    n = _names(item_id)
+    return {
+        "authorize_offset": ("SELECT COUNT(*) FROM actions WHERE action_id=?", n["offset_action"]),
+        "reject_offset_and_authorize_correction": ("SELECT COUNT(*) FROM actions WHERE action_id=?", n["action"]),
+        "acknowledge_correction_action": ("SELECT COUNT(*) FROM action_outbox WHERE acknowledgment_ref IN (?,?)", *n["ack"].values()),
+        "record_cash_correction": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", _cash_command(item_id)["evidence_id"]),
+        "record_reporting_evidence": ("SELECT COUNT(*) FROM evidence WHERE evidence_id=?", n["report_evidence"]),
+    }.get(name, ("SELECT 0",))
 _COMMAND_ROUTES = {
     "/api/decision/authorize-offset": "authorize_offset",
     "/api/decision/reject-offset": "reject_offset_and_authorize_correction",
@@ -159,6 +192,9 @@ _COMMAND_ROUTES = {
     "/api/reporting/record": "record_reporting_evidence",
     "/api/continuity/restore-test": "restore_test",
 }
+# These three act on one click and cannot be retried blind, so each carries the one-time token its item's read returned.
+_TOKEN_COMMANDS = frozenset({"acknowledge_correction_action", "record_reporting_evidence", "restore_test"})
+MAX_ACTION_TOKENS = 256
 _HEX_DIGEST = re.compile(r"^[0-9A-F]{128}$")
 _EVALUATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -216,6 +252,7 @@ class StaffWorkflow:
         self._clock = _DemoClock()
         self._authority = staff_authority()
         self._restore_number = 0
+        self._tokens: dict[str, tuple[str, tuple[object, ...]]] = {}  # token -> (item, store position at the read); oldest dropped first
         owner_path = self.workspace_dir / "financial-owner.sqlite"
         owner_exists = owner_path.exists() or owner_path.is_symlink()
         if resume_existing and (_is_reparse_path(owner_path) or not owner_path.is_file()):
@@ -256,7 +293,7 @@ class StaffWorkflow:
             else:
                 self._seed_synthetic_population()
         except BaseException:
-            self.close()  # R1a: the owner holds the store open
+            self.close()  # the owner holds the store open
             raise
 
     def __enter__(self) -> "StaffWorkflow":
@@ -527,28 +564,28 @@ class StaffWorkflow:
             raise ValueError("review_binding")
         return revision, evaluation_id, result_digest, payload["read_binding"]
 
-    def _h_received_cash_cents(self) -> int:
-        """Measure H's recorded cash from the Owner projection."""
-        value = self._mirror.obligation_detail(H_ITEM_ID, limit=1).get("received_cash_cents")
+    def _received_cash_cents(self, item_id: str) -> int:
+        """Measure one item's recorded cash from the Owner projection."""
+        value = self._mirror.obligation_detail(item_id, limit=1).get("received_cash_cents")
         if type(value) is not int:
             raise RuntimeError("owner_cash_unavailable")
         return value
 
-    def command(self, name: str, body: object, actor: str | None = None) -> dict[str, Any]:
+    def command(self, name: str, body: object, actor: str | None = None, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         """Run one staff command. On a busy store, changed is true only when this command's own record appeared,
         false only when the store did not move at all, and otherwise None: another process may have written."""
         with self._lock:
             mirror = self._mirror
             try:
-                before = self._store_position(name)
+                before = self._store_position(name, item_id)
             except FinancialBusyError as error:
                 error.changed = False  # nothing has run yet
                 raise
             try:
-                return getattr(self, name)(body, *(() if actor is None else (actor,)))
+                return getattr(self, name)(body, *(() if actor is None else (actor,)), item_id=item_id)
             except FinancialBusyError as error:  # the command's own write, or its read-back after a commit
                 try:
-                    position, own = self._store_position(name)
+                    position, own = self._store_position(name, item_id)
                 except FinancialBusyError:
                     position, own = None, False
                 if (own and not before[1]) or self._mirror is not mirror:  # its own record appeared, or restore swapped in its store
@@ -557,80 +594,83 @@ class StaffWorkflow:
                     error.changed = False if position == before[0] else None
                 raise
 
-    def _store_position(self, name: str) -> tuple[tuple[object, ...], bool]:
+    def _store_position(self, name: str, item_id: str = H_ITEM_ID) -> tuple[tuple[object, ...], bool]:
         """(owner path, sequence, head) and whether this command's own record exists."""
-        owner, (query, *arguments) = self._mirror.owner, _OWN_RECORD.get(name, ("SELECT 0",))
+        owner, (query, *arguments) = self._mirror.owner, _own_record(name, item_id)
         with owner._read_snapshot() as connection:
             position = (str(owner.path), *connection.execute("SELECT sequence,history_head FROM financial_meta WHERE id=1").fetchone())
             return position, connection.execute(query, arguments).fetchone()[0] > 0
 
-    def reject_offset_and_authorize_correction(self, body: object, actor: str = "synthetic-official") -> dict[str, Any]:
+    def reject_offset_and_authorize_correction(self, body: object, actor: str = "synthetic-official", *, item_id: str = H_ITEM_ID) -> dict[str, Any]:
+        n = _names(item_id)
         with self._lock:
             revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
             self._clock.advance_to(DECISION_AT_MS)
             result = self._mirror.reject_offset_and_authorize_correction(
-                item_id=H_ITEM_ID,
-                claim_id=H_CLAIM_ID,
+                item_id=item_id,
+                claim_id=n["claim"],
                 actor_id=actor,
                 actor_role="FINANCE_DECISION",
                 expected_revision=revision,
-                action_id=H_ACTION_ID,
+                action_id=n["action"],
                 decision_at_ms=DECISION_AT_MS,
                 evaluation_id=evaluation_id,
                 evaluation_result_digest=result_digest,
                 staff_read_binding=read_binding,
             )
-            return {"command": result, "workspace": self._workspace_locked()}
+            return {"command": result, "workspace": self.item(item_id)}
 
-    def authorize_offset(self, body: object, actor: str = "synthetic-official") -> dict[str, Any]:
+    def authorize_offset(self, body: object, actor: str = "synthetic-official", *, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         """Accept Plan A's offset. Bound to the read the approver saw, like restore-test; a resend returns the first result."""
         revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
+        n = _names(item_id)
         with self._lock:
-            view = self.decision_view()
+            view = self.decision_view(item_id)
             # Once decided, the read has moved on by design: a resend goes to the Owner, which answers DUPLICATE or refuses.
-            if view["decision_package"].get("current_determination") is None and read_binding != self._staff_command_binding(view):
+            if view["decision_package"].get("current_determination") is None and read_binding != self._staff_command_binding(view, item_id):
                 raise FinancialRevisionError("obligation_revision_conflict")
             self._clock.advance_to(DECISION_AT_MS)
             result = self._mirror.authorize_offset(
-                item_id=H_ITEM_ID,
-                claim_id=H_CLAIM_ID,
+                item_id=item_id,
+                claim_id=n["claim"],
                 actor_id=actor,
                 actor_role="FINANCE_DECISION",
                 expected_revision=revision,
-                action_id=H_OFFSET_ACTION_ID,
+                action_id=n["offset_action"],
                 decision_at_ms=DECISION_AT_MS,
                 evaluation_id=evaluation_id,
                 evaluation_result_digest=result_digest,
             )
-            return {"command": result, "workspace": self._workspace_locked()}
+            return {"command": result, "workspace": self.item(item_id)}
 
-    def acknowledge_correction_action(self, body: object, actor: str = "synthetic-receiver") -> dict[str, Any]:
+    def acknowledge_correction_action(self, body: object, actor: str = "synthetic-receiver", *, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
-            current = self._mirror.decision_package(H_ITEM_ID, limit=100, offset=0).get("current_action")
-            action_id = current.get("action_id") if type(current) is dict and current.get("action_id") in ACK_REFS else H_ACTION_ID
-            cash_before = self._h_received_cash_cents()
+            n = _names(item_id)
+            current = self._mirror.decision_package(item_id, limit=100, offset=0).get("current_action")
+            action_id = current.get("action_id") if type(current) is dict and current.get("action_id") in n["ack"] else n["action"]
+            cash_before = self._received_cash_cents(item_id)
             result = self._mirror.acknowledge_action(
                 action_id,
-                ACK_REFS[action_id],
+                n["ack"][action_id],
                 actor_id=actor,
                 actor_role="RECEIVER",
                 expected_revision=revision,
             )
-            cash_after = self._h_received_cash_cents()
+            cash_after = self._received_cash_cents(item_id)
             return {
                 "command": result,
                 "cash_before_cents": cash_before,
                 "cash_after_cents": cash_after,
                 "cash_effect_cents": cash_after - cash_before,
-                "workspace": self._workspace_locked(),
+                "workspace": self.item(item_id),
             }
 
-    def record_cash_correction(self, body: object) -> dict[str, Any]:
+    def record_cash_correction(self, body: object, *, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         payload = self._require_object(body, {"revision", "cash_command"})
         revision, _evaluation_id, _result_digest = self._review_values({"revision": payload["revision"]}, with_receipt=False)
         cash_command = self._require_object(payload["cash_command"], set(CASH_CORRECTION_COMMAND))
-        if cash_command != CASH_CORRECTION_COMMAND:
+        if cash_command != _cash_command(item_id):
             raise ValueError("cash_command_binding")
         with self._lock:
             self._clock.advance_to(CORRECTION_EVENT_MS)
@@ -638,28 +678,28 @@ class StaffWorkflow:
                 **cash_command,
                 expected_revision=revision,
             )
-            return {"command": result, "money_movement": False, "workspace": self._workspace_locked()}
+            return {"command": result, "money_movement": False, "workspace": self.item(item_id)}
 
-    def record_reporting_evidence(self, body: object, actor: str = "synthetic-reporter") -> dict[str, Any]:
+    def record_reporting_evidence(self, body: object, actor: str = "synthetic-reporter", *, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         revision, _evaluation_id, _result_digest = self._review_values(body, with_receipt=False)
         with self._lock:
             self._clock.advance_to(REPORT_EVENT_MS)
             result = self._mirror.record_reporting_evidence(
-                item_id=H_ITEM_ID,
-                report_id="report:h:v1",
-                evidence_id="evidence:report:h:original",
+                item_id=item_id,
+                report_id=_names(item_id)["report"],
+                evidence_id=_names(item_id)["report_evidence"],
                 actor_id=actor,
                 actor_role="REPORTING_EDITOR",
                 expected_revision=revision,
                 event_at_ms=REPORT_EVENT_MS,
             )
-            return {"command": result, "reporting_source": "SYNTHETIC_UNVERIFIED", "workspace": self._workspace_locked()}
+            return {"command": result, "reporting_source": "SYNTHETIC_UNVERIFIED", "workspace": self.item(item_id)}
 
-    def _workspace_locked(self) -> dict[str, Any]:
+    def _workspace_locked(self, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         return self._mirror.staff_read_snapshot(
             {
                 "resource": "workspace",
-                "item_id": H_ITEM_ID,
+                "item_id": item_id,
                 "population_id": POPULATION_ID,
                 "status": "ALL",
                 "limit": 100,
@@ -673,18 +713,51 @@ class StaffWorkflow:
         )
 
     def workspace(self) -> dict[str, Any]:
-        with self._lock:
-            return self._workspace_locked()
+        return self.item(H_ITEM_ID)
 
-    def decision_view(self) -> dict[str, Any]:
+    def item(self, item_id: str) -> dict[str, Any]:
+        """The verified, safely rendered read with this one stored item in the detail slot, plus the one-time token its three
+        one-click commands need. The token is bound to this item and the store position read just before it."""
+        with self._lock:
+            try:
+                value = self._workspace_locked(item_id)
+                if value["h"]["obligation"]["item_id"] != item_id:
+                    raise KeyError("item_not_held")
+            except Exception:
+                if item_id not in {row["item_id"] for row in self._mirror.list_obligations(status="ALL", limit=100, offset=0)["items"]}:
+                    raise KeyError("item_not_held") from None
+                raise
+            seen = value["read_envelope"]  # the token is bound to the store position of this very read
+            token = secrets.token_urlsafe(24)
+            self._tokens[token] = (item_id, (str(self._mirror.owner.path), seen["sequence"], bytes.fromhex(seen["history_head"])))
+            while len(self._tokens) > MAX_ACTION_TOKENS:
+                del self._tokens[next(iter(self._tokens))]
+            return {**value, "action_token": token}
+
+    def check_token(self, name: str, item_id: str, tokens: list[str]) -> str | None:
+        """None only for the single token a read of this item issued, never used, with the store unmoved since. It is spent here."""
+        with self._lock:
+            if not tokens:
+                return "action_token_missing"
+            held = self._tokens.pop(tokens[0], None) if len(tokens) == 1 else None
+            if held is None or held[0] != item_id:
+                return "action_token_invalid"  # never issued, already used, or for another item
+            try:
+                position = self._store_position(name, item_id)[0]
+            except FinancialBusyError as error:
+                error.changed = False  # nothing has run
+                raise
+            return None if held[1] == position else "obligation_revision_conflict"  # the item changed since the read: the same answer a stale revision gets
+
+    def decision_view(self, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         with self._lock:
             return self._mirror.staff_read_snapshot(
-                {"resource": "decision_package", "item_id": H_ITEM_ID, "limit": 100, "offset": 0},
+                {"resource": "decision_package", "item_id": item_id, "limit": 100, "offset": 0},
                 read_at=self._clock.as_of(),
             )
 
     @staticmethod
-    def _staff_command_binding(view: dict[str, Any]) -> dict[str, Any]:
+    def _staff_command_binding(view: dict[str, Any], item_id: str = H_ITEM_ID) -> dict[str, Any]:
         envelope = view.get("read_envelope")
         package = view.get("decision_package")
         if type(envelope) is not dict or type(package) is not dict:
@@ -694,7 +767,7 @@ class StaffWorkflow:
         if type(bindings) is not list or type(receipt) is not dict:
             raise ValueError("staff_command_binding")
         item_binding = next(
-            (row for row in bindings if type(row) is dict and row.get("item_id") == H_ITEM_ID),
+            (row for row in bindings if type(row) is dict and row.get("item_id") == item_id),
             None,
         )
         authority = receipt.get("authority")
@@ -755,12 +828,12 @@ class StaffWorkflow:
         chain = ("hold", "assign", "ask", "reply", "decision", "release", "payment_confirmation")
         return {"contract": "RR/FINANCIAL/STAFF-ITEM-TIMELINE/v1", "item_id": H_ITEM_ID, "steps": steps, "incomplete": h["timeline_truncated"], "absent": [n for n in chain if n not in {x["step"] for x in steps}]}
 
-    def restore_test(self, body: object) -> dict[str, Any]:
+    def restore_test(self, body: object, *, item_id: str = H_ITEM_ID) -> dict[str, Any]:
         revision, evaluation_id, result_digest, read_binding = self._review_dependencies(body)
         with self._lock:
-            if read_binding != self._staff_command_binding(self.decision_view()):
+            if read_binding != self._staff_command_binding(self.decision_view(item_id), item_id):
                 raise FinancialRevisionError("obligation_revision_conflict")
-            before_package = self._mirror.decision_package(H_ITEM_ID, limit=100, offset=0)
+            before_package = self._mirror.decision_package(item_id, limit=100, offset=0)
             receipt = before_package.get("evaluation_receipt", {})
             if (
                 before_package.get("obligation", {}).get("revision") != revision
@@ -771,39 +844,49 @@ class StaffWorkflow:
             package_bytes = self._mirror.export_continuity()
             if len(package_bytes) > MAX_PACKAGE_BYTES:
                 raise FinancialMirrorError("continuity_package_size")
-            destination = self._next_restore_destination()
+            number, destination = self._next_restore_destination()
             restored = self._mirror.restore_test_continuity(package_bytes, destination)
-            restored_package = restored.decision_package(H_ITEM_ID, limit=100, offset=0)
-            if restored_package != before_package:
-                raise FinancialMirrorError("continuity_decision_package_mismatch")
-            integrity = restored.verify_integrity()
-            restored_summary = restored.summary()
-            if (
-                integrity.get("mode") != "TEST"
-                or restored_summary.get("dispatch_enabled") is not False
-                or restored_summary.get("egress_enabled") is not False
-                or restored_summary.get("production_usable") is not False
-                or restored_summary.get("activation") is not False
-                or restored_summary.get("proof_suite_id") is not None
-            ):
-                raise FinancialMirrorError("continuity_test_boundary")
-            previous, self._mirror = self._mirror, restored
-            previous.owner.close()
-            self._continuity = {
-                "restored": True,
-                "mode": "TEST",
-                "package_digest": str(restored.validate_owner_continuity_package(package_bytes)["package_digest"]),
-                "package_bytes": len(package_bytes),
-                "decision_package_equal": True,
-            }
-            return {"continuity": self.continuity, "workspace": self._workspace_locked()}
+            try:
+                restored_package = restored.decision_package(item_id, limit=100, offset=0)
+                if restored_package != before_package:
+                    raise FinancialMirrorError("continuity_decision_package_mismatch")
+                integrity = restored.verify_integrity()
+                restored_summary = restored.summary()
+                if (
+                    integrity.get("mode") != "TEST"
+                    or restored_summary.get("dispatch_enabled") is not False
+                    or restored_summary.get("egress_enabled") is not False
+                    or restored_summary.get("production_usable") is not False
+                    or restored_summary.get("activation") is not False
+                    or restored_summary.get("proof_suite_id") is not None
+                ):
+                    raise FinancialMirrorError("continuity_test_boundary")
+                package_digest = str(restored.validate_owner_continuity_package(package_bytes)["package_digest"])  # before the swap: a failure leaves the old owner serving
+            except BaseException:  # a restore that fails leaves no open handle and no file behind, even if the close itself fails
+                try:
+                    restored.owner.close()
+                finally:
+                    for suffix in ("", "-wal", "-shm", "-journal"):
+                        Path(f"{destination}{suffix}").unlink(missing_ok=True)
+                raise
+            previous, self._mirror, self._restore_number = self._mirror, restored, number  # only a restore that took effect uses up its number
+            try:
+                self._continuity = {
+                    "restored": True,
+                    "mode": "TEST",
+                    "package_digest": package_digest,
+                    "package_bytes": len(package_bytes),
+                    "decision_package_equal": True,
+                }
+            finally:
+                previous.owner.close()
+            return {"continuity": self.continuity, "workspace": self.item(item_id)}
 
-    def _next_restore_destination(self) -> Path:
-        while self._restore_number < MAX_RESTORE_DESTINATIONS:
-            self._restore_number += 1
-            destination = self.workspace_dir / f"continuity-test-{self._restore_number:04d}.sqlite"
+    def _next_restore_destination(self) -> tuple[int, Path]:
+        for number in range(self._restore_number + 1, MAX_RESTORE_DESTINATIONS + 1):
+            destination = self.workspace_dir / f"continuity-test-{number:04d}.sqlite"
             if not _is_reparse_path(destination) and not destination.exists():
-                return destination
+                return number, destination
         raise FinancialMirrorError("continuity_destination_capacity")
 
 
@@ -950,11 +1033,15 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             read, static = _READ_ROUTES.get(self.path), _STATIC_FILES.get(self.path)
+            one = re.fullmatch(r"/api/items/([A-Za-z0-9._:-]{1,128})", self.path)
             if not self._allowed(mutation=False):
                 self._respond(403, {"error": {"code": "loopback_origin_required"}})
-            elif read is not None:
+            elif read is not None or one is not None:
                 try:
-                    value = getattr(workflow, read)()
+                    value = workflow.item(one[1]) if one else getattr(workflow, read)()
+                except KeyError:
+                    self._respond(404, {"error": {"code": "not_found"}})
+                    return
                 except Exception:  # one detail-free refusal; no internal error reaches the client
                     self._respond(503, {"error": {"code": "owner_read_unavailable"}})
                 else:
@@ -986,13 +1073,21 @@ def _handler_for(workflow: StaffWorkflow) -> type[BaseHTTPRequestHandler]:
                 self._respond(403, {"error": {"code": "staff_person_refused"}, "changed": False})
                 return
             actor = named[0] if named else None
+            wanted = self.headers.get_all("X-Staff-Item", [])  # the item this command is for; none means item H
+            item_id = wanted[0] if len(wanted) == 1 else H_ITEM_ID if not wanted else ""
+            if not _ITEM_ID.fullmatch(item_id):
+                self._respond(400, {"error": {"code": "invalid_request"}, "changed": False})
+                return
             try:
                 body = self._json_request()
             except (ValueError, RecursionError, OSError):  # malformed, truncated or timed-out body
                 self._respond(400, {"error": {"code": "invalid_request"}})
                 return
             try:
-                result = workflow.command(command, body, actor)
+                if command in _TOKEN_COMMANDS and (code := workflow.check_token(command, item_id, self.headers.get_all("X-Action-Token", []))):
+                    self._respond(409, {"error": {"code": code}, "changed": False})
+                    return
+                result = workflow.command(command, body, actor, item_id)
             except FinancialBusyError as exc:  # a transient lock: retry only a command that provably did not commit
                 changed = getattr(exc, "changed", None)
                 code = "store_busy_outcome_unknown" if changed is None else str(exc)

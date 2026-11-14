@@ -1,4 +1,4 @@
-"""The tests' one route for a payment row (R5): a receiver cash file through real intake. pay() sends one row, answered
+"""The tests' one route for a payment row: a receiver cash file through real intake. pay() sends one row, answered
 as a direct record was (RECORDED or DUPLICATE with the projection), or HELD with its reason; an exact resend returns its
 first answer. ingest() sends many: a row without expected_revision is at its item's revision as the file reaches it."""
 

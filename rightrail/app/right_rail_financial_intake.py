@@ -1,16 +1,16 @@
-"""Hostile-data intake for receiver cash files: the absorb ladder (rrb/designs/hostile-data-corpus-v1.md).
+"""Hostile-data intake for receiver cash files: the absorb ladder.
 
 L0 keeps the raw bytes under their SHA-256. L1 makes logged, reversible repairs, each naming its rule. L2 resolves a
 row the store already has to the payment it repeats. L3 holds a row it cannot take, naming the reason, whose fault it
 is and the fix. L4 refuses a container it cannot trust (unparseable, wrong contract or bindings, row count or control
 total wrong) whole, keeping only its raw bytes. The rows this module can read form a canonical derived cash file that
-the gate judges row by row in the owner's one transaction (D2); the raw file's facts and every row's outcome land in
+the gate judges row by row in the owner's one transaction; the raw file's facts and every row's outcome land in
 the same transaction as one INTAKE event, so a crash leaves all or nothing. A held row moves no money (I.3); its cents
-stay unallocated (D3) until a named release. No repair guesses: an amount or date in a sender's own format is held for a sender profile, never converted blind (D5).
+stay unallocated until a named release. No repair guesses: an amount or date in a sender's own format is held for a sender profile, never converted blind.
 """
 
 import base64
-from collections import Counter
+from collections import Counter, defaultdict, deque
 import hashlib
 import json
 import os
@@ -114,8 +114,6 @@ def absorb(raw, expected_scope, expected_source):
     known = sum(amount for amount in amounts if amount is not None)
     if known + amounts.count(None) > value["total_cents"] or None not in amounts and known != value["total_cents"]:
         raise CashFileError("cash_file_format")  # the control total is the container's own check: a held row's cents must still fit it
-    if amounts.count(None) == 1:
-        amounts[amounts.index(None)] = value["total_cents"] - known  # the one unreadable amount, by the control total
     reasons = [reason for reason, _, _ in checked]
     keyed = [i for i, reason in enumerate(reasons) if reason not in ("shape", "encoding", "identifier")]
     keys = {i: (("payment", rows[i]["payment_id"]), ("evidence", rows[i]["evidence_id"]), ("origin", rows[i]["item_id"], rows[i]["common_origin_id"])) for i in keyed}
@@ -155,21 +153,37 @@ def _receipt(record):
 
 
 def held_cash(owner):
-    """D3: the cash every intake holds unallocated, net of the holds a later file released by evidence: a row that went
-    through with the same payment id and amount releases the earliest open hold for them; the original stays in history."""
-    open_holds, released, unallocated = {}, [], 0
+    """The cash every intake holds unallocated, net of the holds a later file released by evidence: a row that went
+    through with the same payment id releases the earliest open hold for that payment and amount, or else the earliest
+    whose amount was unreadable and fits; the admitted amount comes off, at most what the held row's own file left unallocated beyond its
+    other open holds (their amounts, a cent for each unreadable one), so one hold never takes another's cash (none fits: the earliest stays open, named). The original stays in history."""
+    open_holds, released, unallocated, left = {}, [], 0, {}  # left: what each file still holds unallocated; open holds by their row's own identity (file, row index): equal holds stay separate, in the order they were held
+    waiting, reserved = defaultdict(deque), defaultdict(int)  # (payment id, amount or None) -> hold keys in held order; file -> what its open holds still need
+    need = lambda hold: 1 if hold["amount_cents"] is None else hold["amount_cents"]
     for record in owner.intake_records():
         receipt = _receipt(record)
         unallocated += receipt["unallocated_cents"]
-        for row in receipt["rows"]:
-            waiting = open_holds.get((row["payment_id"], row["amount_cents"]))
-            if row["status"] != "HELD" and waiting:
-                released.append({**waiting.pop(0), "released_by": receipt["source_sha256"], "released_row": row["row_index"]})
+        left[receipt["source_sha256"]] = receipt["unallocated_cents"]
+        for row in (row for row in receipt["rows"] if row["status"] != "HELD"):
+            candidates = [*waiting.get((row["payment_id"], row["amount_cents"]), ()), *waiting.get((row["payment_id"], None), ())]
+            key = next((key for key in candidates if row["amount_cents"] <= left[key[0]] - reserved[key[0]] + need(open_holds[key])), None)
+            if key is None and candidates:
+                open_holds[candidates[0]]["unreleased_cause"] = "amount_exceeds_file_unallocated"  # a data fault never pays: the hold stays open
+            elif key is not None:
+                hold = open_holds.pop(key)
+                hold.pop("unreleased_cause", None)  # an earlier refusal is not the cause of a release
+                waiting[(hold["payment_id"], hold["amount_cents"])].remove(key)
+                left[key[0]] -= row["amount_cents"]
+                reserved[key[0]] -= need(hold)
+                released.append({**hold, "released_by": receipt["source_sha256"], "released_row": row["row_index"]})
                 unallocated -= row["amount_cents"]
         for row in receipt["rows"]:
             if row["status"] == "HELD":
-                open_holds.setdefault((row["payment_id"], row["amount_cents"]), []).append({"source_sha256": receipt["source_sha256"], "row_index": row["row_index"], "payment_id": row["payment_id"], "amount_cents": row["amount_cents"], "reason": row["basis"]})
-    return {"unallocated_cents": unallocated, "holds": [hold for holds in open_holds.values() for hold in holds], "released": released}
+                key = (receipt["source_sha256"], row["row_index"])
+                open_holds[key] = {"source_sha256": receipt["source_sha256"], "row_index": row["row_index"], "payment_id": row["payment_id"], "amount_cents": row["amount_cents"], "reason": row["basis"]}
+                waiting[(row["payment_id"], row["amount_cents"])].append(key)
+                reserved[key[0]] += need(open_holds[key])
+    return {"unallocated_cents": unallocated, "holds": list(open_holds.values()), "released": released}
 
 
 def intake_folder(owner):
@@ -204,7 +218,7 @@ def _raw_sha(raw, expected_source_sha256):
 
 
 def _derive(raw, sha, baseline_bytes, **expected):
-    """The one route by which uploaded rows reach the owner (R5): the raw file absorbed, its readable rows proposed bound to its intake facts."""
+    """The one route by which uploaded rows reach the owner: the raw file absorbed, its readable rows proposed bound to its intake facts."""
     derived, facts = absorb(raw, expected["expected_scope"], expected["expected_source"])
     facts = {"adapter": ADAPTER, "ruleset_digest": RULESET_DIGEST, "source_sha256": sha, "derived_sha256": _sha(derived), **facts}
     return prepare_cash_file(derived, baseline_bytes, expected_source_sha256=facts["derived_sha256"], intake=facts, **expected)  # its signature names every expectation

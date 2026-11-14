@@ -26,7 +26,8 @@ instance : Hashable Line where
 def group {α : Type} (key : α → Nat) (xs : List α) : HashMap Nat (List α) :=
   xs.foldl (fun m x => m.insert (key x) (x :: m.getD (key x) [])) ∅
 
-/-- One row of `posts`: each of row `n`'s keys lists `n`. -/
+/-- One row of `posts`: each of row `n`'s keys lists `n`.  `n` is bound before the fold so its closure does not hold
+    `acc`, which would keep the map shared and make every insert copy it (quadratic `posts`, ONEP-3 profile). -/
 def postStep (acc : HashMap Key (List Nat) × Nat) (x : Line) : HashMap Key (List Nat) × Nat :=
   let n := acc.2; ((keys x).foldl (fun m k => m.insert k (n :: m.getD k [])) acc.1, n + 1)
 
@@ -63,6 +64,10 @@ def looseF (ch : Bool) (prior : Snapshot Line) (o : Option (Snapshot Line)) : Li
 structure Ix where
   today : Nat
   redo : HashSet Nat
+  /-- The admitted bypasses (`Ctx.byp`); none until the frame decodes them. -/
+  byp : List (Nat × Nat) := []
+  /-- The HOLD-level payments and their holds masks (`Ctx.lim`). -/
+  lim : List (Nat × Nat) := []
   batch : HashSet Line
   relChained : Bool
   unrChained : Bool
@@ -97,7 +102,7 @@ def Ix.build (c : Ctx) (b : List Line) : Ix :=
   let uv := viewF uc c.unresolvedPrior c.unresolved
   let ra := rv.entries ++ looseF rc c.releasedPrior c.released
   let ua := uv.entries ++ looseF uc c.unresolvedPrior c.unresolved
-  { today := c.today, redo := HashSet.ofList c.redo, batch := HashSet.ofList b,
+  { today := c.today, redo := HashSet.ofList c.redo, byp := c.byp, lim := c.lim, batch := HashSet.ofList b,
     relChained := rc, unrChained := uc, relV := rv, unrV := uv,
     relN := rv.entries.length, unrN := uv.entries.length, rel := ra.toArray, unr := ua.toArray,
     relPost := (posts ra).1, unrPost := (posts ua).1,
@@ -141,20 +146,28 @@ def Ix.overlap (x : Ix) (l : Line) : Bool :=
 def Ix.seen0 (x : Ix) (k : Key) : Bool :=
   (x.relPost.getD k []).any fun i => i < x.relN && x.rel[i]?.any fun y => !(x.own y && x.batch.contains y)
 
-/-- `(pending c).contains k`: a key an unresolved view row claims (`claim` ⊆ `keys`). -/
-def Ix.pending (x : Ix) (k : Key) : Bool :=
-  (x.unrPost.getD k []).any fun i => i < x.unrN && x.unr[i]?.any fun y => (x.claim y).contains k
+/-- `(unresolvedSet c).contains l`. -/
+def Ix.held (x : Ix) (l : Line) : Bool :=
+  (x.unrPost.getD (idKey l) []).any fun i => i < x.unrN && x.unr[i]?.any (· == l)
+
+def Ix.ownU (x : Ix) (l : Line) : Bool := (x.byp.lookup l.pay).isSome && x.held l
+
+/-- `(pending c l).contains k`: a key an unresolved view row claims (`claim` ⊆ `keys`), but not `l`'s own row
+    when a bypass names its payment. -/
+def Ix.pending (x : Ix) (l : Line) (k : Key) : Bool :=
+  (x.unrPost.getD k []).any fun i => i < x.unrN && x.unr[i]?.any fun y =>
+    (x.claim y).contains k && !(y == l && (x.byp.lookup l.pay).isSome)
 
 /-- The Spec's `seen` list: the batch's own claims so far (`s`), then `seen0`. -/
 def Ix.seen (x : Ix) (s : HashSet Key) (k : Key) : Bool := s.contains k || x.seen0 k
 
 /-- `fires`, row for row. -/
 def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
-  | .ALREADY_DECIDED => x.seen s (idKey l) || x.pending (idKey l)
+  | .ALREADY_DECIDED => x.seen s (idKey l) || x.pending l (idKey l)
   | .CAP_MEMBER_MONTH_DUPLICATE => isCap l &&
       (x.seen s (exactKey l) || x.seen s (nearKey l) || x.spanOk && validDate l.date && x.overlap l)
-  | .COLLIDES_WITH_UNRESOLVED_NEAR => !isCap l && x.pending (nearKey l) && !x.pending (exactKey l)
-  | .DUPLICATE_OF_UNRESOLVED => x.pending (exactKey l) || isCap l && x.pending (nearKey l)
+  | .COLLIDES_WITH_UNRESOLVED_NEAR => !isCap l && x.pending l (nearKey l) && !x.pending l (exactKey l)
+  | .DUPLICATE_OF_UNRESOLVED => x.pending l (exactKey l) || isCap l && x.pending l (nearKey l)
   | .FFS_DUPLICATE_LINE => !isCap l && x.seen s (exactKey l)
   | .FFS_DUPLICATE_UNVERIFIED => !isCap l && x.looseKeys.contains (exactKey l)
   | .FFS_NEAR_DUPLICATE => !isCap l && x.seen s (nearKey l) && !x.seen s (exactKey l)
@@ -174,6 +187,7 @@ def Ix.fires (x : Ix) (s : HashSet Key) (l : Line) : Reason → Bool
   | .STALE_PROVIDER_DEATH => !x.pdOk
   | .STALE_RELEASED => !x.relChained
   | .STALE_UNRESOLVED => !x.unrChained
+  | .POSTING_CAP => false
 
 def Ix.counterparts (x : Ix) (l : Line) : List Nat :=
   hits x.rel x.relPost (keys l) (fun _ => true) ++
@@ -197,13 +211,27 @@ def Ix.payOutcome (x : Ix) (ds : List Decision) (p : Nat) : Outcome :=
   else if !ls.isEmpty && ls.all fun d => d.outcome == .ALLOW && (!x.redo.contains p || x.own d.line) then .ALLOW
   else .HUMAN_REVIEW
 
+def Ix.bypassed (x : Ix) (ds : List Decision) (p : Nat) : Bool :=
+  match x.byp.lookup p with
+  | none => false
+  | some m => !x.redo.contains p &&
+      ds.any (fun d => d.line.pay == p && x.held d.line) &&
+      ds.all fun d => d.line.pay != p || d.reasons.all fun r => bypassable r && (m >>> r.idx % 2 == 1)
+
+def Ix.limitedPay (x : Ix) (ds : List Decision) (p : Nat) : Bool :=
+  match x.lim.lookup p with
+  | none => false
+  | some m => !x.redo.contains p && lifts m ds p (x.payOutcome ds p)
+
 def Ix.releasedLines (x : Ix) (ds : List Decision) : List Line :=
-  (allowedLines ds).filter fun l => !x.redo.contains l.pay && x.payOutcome ds l.pay == .ALLOW
+  (ds.filter fun d => (d.outcome == .ALLOW && !x.redo.contains d.line.pay && x.payOutcome ds d.line.pay == .ALLOW) ||
+    x.bypassed ds d.line.pay || x.limitedPay ds d.line.pay && !x.own d.line).map (·.line)
 
 def Ix.unresolvedLines (x : Ix) (ds : List Decision) : List Line :=
-  (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !x.own d.line).map (·.line)
+  (ds.filter fun d => d.outcome != .ALLOW && !d.reasons.contains .ALREADY_DECIDED && !x.own d.line &&
+    !x.ownU d.line && !x.bypassed ds d.line.pay && !x.limitedPay ds d.line.pay).map (·.line)
 
-/-- The batch run with the ids `f` that the tenant's id registry gives another shard already seen. -/
+/-- The batch run with the ids `f` already seen outside the shard's own sets. -/
 def Ix.runIn (x : Ix) (f : List Nat) (b : List Line) : Result :=
   let ds := x.decideAll (HashSet.ofList (idSeen f)) (x.order b)
   let ra := x.releasedLines ds
@@ -215,39 +243,21 @@ def decideBatchFIn (c : Ctx) (f : List Nat) (b : List Line) : Result := (Ix.buil
 
 def decideBatchF (c : Ctx) (b : List Line) : Result := decideBatchFIn c [] b
 
-/-! Twins of the multi-shard defs: one hash set per answer kind, built once per batch (`ShardRun.lean`). -/
-
-def readyF (k : Nat) (os : List Owner) (b : List Line) : List Line :=
-  let ok := HashSet.ofList ((os.filter fun o => o.shard == k || o.settled).map (·.id))
-  let wait := HashSet.ofList ((b.filter fun m => !ok.contains m.id).map (·.pay))
-  b.filter fun l => !wait.contains l.pay
-
-def foreignOfF (k : Nat) (os : List Owner) (b : List Line) : List Nat :=
-  let t := HashSet.ofList ((os.filter fun o => o.shard != k && o.settled).map (·.id))
-  (b.map (·.id)).filter fun i => t.contains i
-
-def settleFreeF (rel unr : List Line) (p : List Nat) : List Nat :=
-  let s := HashSet.ofList ((rel ++ unr).map (·.id))
-  p.filter fun i => !s.contains i
-
-def decideRegF (c : Ctx) (k : Nat) (os : List Owner) (b : List Line) : Result :=
-  let r := readyF k os b
-  decideBatchFIn c (foreignOfF k os r) r
-
 /-! ## Pins: `pinInput` as one ByteArray (about 0.93 KB a released row, not 22 KB of list cells). -/
 
 /-- The low `k ≤ 8` bytes of `x`, high byte first, appended to `acc`. -/
-def pushLow (acc : ByteArray) (k : Nat) (x : UInt64) : ByteArray :=
-  (List.range k).reverse.foldl (fun a i => a.push (x >>> (8 * i).toUInt64).toUInt8) acc
+def pushLow (acc : ByteArray) : Nat → UInt64 → ByteArray
+  | 0, _ => acc
+  | k + 1, x => pushLow (acc.push (x >>> (8 * k).toUInt64).toUInt8) k x
 
 /-- `w` big-endian bytes of `n` in 64-bit chunks: one big shift per 8 bytes, not a power and a division per byte. -/
 def pushHi (acc : ByteArray) (w n : Nat) : ByteArray :=
   if _h : w ≤ 8 then pushLow acc w n.toUInt64 else pushLow (pushHi acc (w - 8) (n >>> 64)) 8 n.toUInt64
 termination_by w
 
-/-- `be w n` appended to `acc` (`pushBe_eq`). -/
+/-- `be w n` appended to `acc` (`pushBe_eq`); `n` fits in `w` bytes when nothing is left above them, so no power is built. -/
 def pushBe (acc : ByteArray) (w n : Nat) : Option ByteArray :=
-  if n < 256 ^ w then some (pushHi acc w n) else none
+  if n >>> (8 * w) = 0 then some (pushHi acc w n) else none
 
 def pushRow (acc : ByteArray) : List (Nat × Nat) → Option ByteArray
   | [] => some acc

@@ -6,9 +6,11 @@ a mutated answer is a typed refusal or decodes exactly like the clean one."""
 import dataclasses
 import json
 import random
+import tempfile
 import timeit
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from app import right_rail_financial_engine as engine
 from app import right_rail_financial_semantic_adapter as adapter
@@ -180,6 +182,21 @@ class HostileWorkerFrameTests(unittest.TestCase):
             except Exception as error:  # noqa: BLE001
                 bad.append((case, type(error).__name__))
         self.assertEqual(bad, [])
+
+class EvaluatorCloseTests(unittest.TestCase):
+    def test_a_worker_that_cannot_be_reaped_still_loses_its_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "rr-evaluator-x"
+            work.mkdir()
+            fake = mock.Mock()
+            fake.close.side_effect = engine.process.VerifierProcessError("worker_reap")
+            engine._evaluator[:] = [fake, work]
+            try:
+                with self.assertRaises(engine.process.VerifierProcessError):
+                    engine._close_evaluator()
+                self.assertEqual((engine._evaluator, work.exists()), ([], False))
+            finally:
+                engine._evaluator.clear()
 
 
 if __name__ == "__main__":

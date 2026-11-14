@@ -1,4 +1,4 @@
-"""Proof obligations for the read-only CMS-64.9 line pack (rrb/archive/xi2-records-20261001.md "Line pack").
+"""Proof obligations for the read-only CMS-64.9 line pack.
 
 One synthetic store (public Owner commands only) and its Continuity package; every build verifies
 the store read-only. The Ledger total each test compares against is recomputed here with read-only SQL.
@@ -14,7 +14,9 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from app import right_rail_financial_line_pack as line_pack
 from app import right_rail_gate_signer as signer
 from app.right_rail_financial_custody import verify_pack
 from app.right_rail_financial_line_pack import NOT_HELD, LinePackError, build_line_pack, quarter_window
@@ -154,6 +156,26 @@ class LinePackTests(unittest.TestCase):
         del package["package_digest"]
         return _encode({**package, "package_digest": continuity_package_digest(package)})
 
+    def test_a_row_missing_from_the_checked_rows_is_a_typed_refusal(self) -> None:
+        real = line_pack.verified_rows
+        for table, kind, code in (("evidence", None, "payment-evidence"), ("population_manifest_bindings", None, "population-manifest"), ("population_manifests", None, "manifest"),
+                                  ("obligations", None, "payment-obligation"), ("financial_events", "POPULATION_PUBLISHED", "population-publish-event"),
+                                  ("financial_events", "CONTROL_PACK_PUBLISHED", "pack-publish-event")):
+            def cut(*args: object, **kwargs: object) -> tuple:
+                store, rows, source = real(*args, **kwargs)
+                return store, {**rows, table: [row for row in rows[table] if kind is not None and row["kind"] != kind]}, source
+            with self.subTest(code), patch.object(line_pack, "verified_rows", cut), self.assertRaisesRegex(LinePackError, f"^line-pack:{code}-missing:"):
+                self._raw()
+
+    def test_a_reversal_whose_evidence_row_is_missing_is_a_typed_refusal(self) -> None:
+        real = line_pack.verified_rows
+
+        def cut(*args: object, **kwargs: object) -> tuple:
+            store, rows, source = real(*args, **kwargs)
+            return store, {**rows, "evidence": [row for row in rows["evidence"] if not row["evidence_id"].startswith("evidence:reversal:")]}, source
+        with patch.object(line_pack, "verified_rows", cut), self.assertRaisesRegex(LinePackError, "^line-pack:reversal-evidence-missing:"):
+            self._raw()
+
     def test_kill_criterion_1_synthetic_pack_reconciles_to_synthetic_line_to_the_cent(self) -> None:
         pack = self._pack()
         self.assertEqual((quarter_window("FFY2025Q3"), quarter_window("FFY2025Q4")), ((Q3_START, Q4_START), (Q4_START, Q4_END)))
@@ -270,7 +292,7 @@ class LinePackTests(unittest.TestCase):
             "member_manifest_digest", "provenance_root", "unavailable", "coverage", "versions", "source", "generated_at_ms",
             "supersedes", "signer", "signature",
         })
-        public_key = signer.public_key(self.custody.key)  # H2: signed by the owner's custody key at the custody log's tail
+        public_key = signer.public_key(self.custody.key)  # signed by the owner's custody key at the custody log's tail
         self.assertEqual((pack["contract"], verify_pack(raw, public_key)), ("RR/LINE-PACK/CMS-64.9/v2", _unsigned(raw)))
         tail = json.loads(self.custody.directory.joinpath(f"{pack['source']['owner_id']}.custody").read_bytes().splitlines()[-1])
         self.assertEqual((pack["signer"]["custody_n"], pack["signer"]["custody_digest"], tail["sequence"]), (tail["n"], tail["digest"], pack["source"]["sequence"]))

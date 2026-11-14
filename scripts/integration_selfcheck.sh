@@ -19,11 +19,19 @@ else
 fi
 if git merge-base --is-ancestor 3d91138 HEAD 2>/dev/null; then ok branch "HEAD descends from 3d91138"; else bad branch "HEAD does not contain 3d91138"; fi
 
-# rightrail import
-if [ -d rightrail/lean ] && [ -d rightrail/app ] && [ -d rightrail/rust ] && git merge-base --is-ancestor af020b2 HEAD 2>/dev/null; then
-  ok "rightrail import" "rightrail/{lean,app,rust} present; af020b2 reachable"
+# rightrail import: trunk fc89f9e5 (docs/integration/RIGHTRAIL_IMPORTED_FROM.md).  With its history (variant A)
+# fc89f9e5 must be an ancestor; as a zip snapshot (variant B) the record must name the zip hash instead.
+rr_trunk=fc89f9e5ceaacfbfb0cb50173a4fd870e3872a3f
+rr_zip=1afbc74dc3cf3f5a97c494a196f0c0e0a2d3938abdd16c76b8ce09d36ba0ab71
+rr_rec=docs/integration/RIGHTRAIL_IMPORTED_FROM.md
+if ! { [ -d rightrail/lean ] && [ -d rightrail/app ] && [ -d rightrail/rust ]; }; then
+  bad "rightrail import" "missing rightrail subtree"
+elif git merge-base --is-ancestor "$rr_trunk" HEAD 2>/dev/null; then
+  ok "rightrail import" "rightrail/{lean,app,rust} present; trunk fc89f9e5 reachable"
+elif [ -f "$rr_rec" ] && grep -q "$rr_zip" "$rr_rec"; then
+  ok "rightrail import" "rightrail/{lean,app,rust} present; zip snapshot of fc89f9e5 (no history)"
 else
-  bad "rightrail import" "missing rightrail subtree or af020b2 not reachable"
+  bad "rightrail import" "fc89f9e5 not reachable and $rr_rec does not name the zip snapshot"
 fi
 
 # groth16 (N-08 / D-01): must be unreachable
@@ -85,10 +93,10 @@ done
 if [ -z "$banned" ]; then ok "tracked files" "no binaries tracked except RightRail's 2 workers, each matching its pinned SHA-256"; else bad "tracked files" "tracked or unpinned:$banned"; fi
 
 # rightrail provenance
-if [ -f rightrail/IMPORTED_FROM.md ] && grep -q af020b268094ae3fd6ef5e68fe575b7e5ac40a23 rightrail/IMPORTED_FROM.md; then
-  ok "rightrail import" "rightrail/IMPORTED_FROM.md names af020b2"
+if [ -f "$rr_rec" ] && grep -q "$rr_trunk" "$rr_rec"; then
+  ok "rightrail import" "$rr_rec names trunk fc89f9e5"
 else
-  bad "rightrail import" "rightrail/IMPORTED_FROM.md missing or does not name af020b2"
+  bad "rightrail import" "$rr_rec missing or does not name fc89f9e5"
 fi
 
 # docs

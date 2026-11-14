@@ -1,4 +1,4 @@
-"""The owner's custody log (H2): every committed (owner_id, sequence, history head), hash-chained in a file outside
+"""The owner's custody log: every committed (owner_id, sequence, history head), hash-chained in a file outside
 the store's directory, so a store copied back after a restart is refused unless the log was edited too (Limit,
 below).  Synthetic, activation=false.
 
@@ -16,7 +16,7 @@ Signed records carry ``alg`` and an ML-DSA-87 ``sig`` (the pinned gate worker) o
 ``"RR/FINANCIAL/CUSTODY-SIGNED/v1\\0" || digest``.  MARK sequences rise; an ANCHOR may repeat its predecessor's
 (sequence, head); only REWIND_ACCEPTED lowers them.  Open walks the whole chain (one SHA3 per record, the order of
 the open's own history replay) and verifies the newest signed record under the key's public key, which covers every
-record before it.  With C the last record and S the store's verified (sequence, head):
+earlier digest.  With C the last record and S the store's verified (sequence, head):
 C ahead of S is ``store_rewound``; S's head at C's sequence differing from C's is ``store_forked``; C behind S with
 equal heads (a crash between COMMIT and MARK) gets one catch-up MARK.  A final line without its newline is a torn
 append: ignored, and cut before the next append.  A pack is signed with the same key, only at the log's tail.
@@ -126,15 +126,15 @@ class Custody:
             _refuse("custody_signer")
 
     def _public_key(self) -> bytes:
-        if self._public is None:
-            self._public = self._signer(lambda: signer.public_key(self.key))
+        self._public = self._public or self._signer(lambda: signer.public_key(self.key))  # read once per object: the pin
         return self._public
 
     def _sign(self, message: bytes) -> str:
-        return self._signer(lambda: signer.sign(self.key, message)).hex()
+        public, signature = self._public_key(), self._signer(lambda: signer.sign(self.key, message))  # a key file swapped after the pin
+        return signature.hex() if self._signer(lambda: signer.verify(public, message, signature)) else _refuse("custody_signer")  # lands nothing
 
     def _verify(self, record: dict) -> None:
-        if record["digest"] != self._verified:
+        if record["digest"] != self._verified:  # the newest signed record only: its digest covers every earlier one, not their sigs
             if not self._signer(lambda: signer.verify(self._public_key(), SIGNED + bytes.fromhex(record["digest"]), bytes.fromhex(record["sig"]))):
                 _refuse("custody_signature")
             self._verified = record["digest"]

@@ -1,4 +1,4 @@
-"""Deployment slots (D7): an unauthored slot reads strictest and loud, activation needs all five, bad packs are refused."""
+"""Deployment slots: an unauthored slot reads strictest and loud, activation needs all six, bad packs are refused."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ FULL = {
     "CHANNEL_BUDGET": [["S1", 500]],
     "THRESH": [["prog", 10_000]],
     "CHECKWRITE_CALENDAR": [[100, 200], [200, 300]],
+    "GATE_KEYSET_PIN": [["tenant-a", "ab" * 64]],
 }
 
 
@@ -33,6 +34,7 @@ class DeploymentSlotsTest(unittest.TestCase):
         self.assertEqual(slots.read("CHANNEL_BUDGET", "S1"), 0)
         self.assertEqual(slots.read("THRESH", "prog"), 0)  # every act reaches it: two signers
         self.assertEqual(slots.cycle(150), (0, SENTINEL))
+        self.assertEqual(slots.read("GATE_KEYSET_PIN", "tenant-a"), "00" * 64)  # no key set hashes to it: every row HOLDs
         with self.assertRaises(SlotError) as caught:
             slots.require_active()
         self.assertEqual(caught.exception.args[0], "slots_unauthored")
@@ -50,6 +52,19 @@ class DeploymentSlotsTest(unittest.TestCase):
         self.assertEqual(slots.cycle(150), (100, 200))
         self.assertEqual(slots.cycle(200), (200, 300))
         self.assertEqual(slots.cycle(300), (0, SENTINEL))
+        self.assertEqual(slots.read("GATE_KEYSET_PIN", "tenant-a"), "ab" * 64)
+        self.assertEqual(slots.read("GATE_KEYSET_PIN", "tenant-b"), "00" * 64)
+
+    def test_an_unknown_slot_or_unusable_key_is_typed_or_strict_never_a_traceback(self):
+        slots = Slots(FULL)
+        with self.assertRaises(SlotError) as caught:
+            slots.read("BOGUS", "x")
+        self.assertEqual(caught.exception.args[0], "slot_unknown")
+        self.assertEqual(slots.read("CHANNEL_BUDGET", ["S1"]), 0)
+        for bad in (None, [["CHANNEL_BUDGET", []]], "THRESH"):
+            with self.subTest(bad), self.assertRaises(SlotError) as caught:
+                Slots(bad)
+            self.assertEqual(caught.exception.args[0], "slot_pack_shape")
 
     def test_one_unauthored_slot_keeps_activation_refused(self):
         for sid in SLOTS:
@@ -85,7 +100,9 @@ class DeploymentSlotsTest(unittest.TestCase):
                 self.assertEqual(self.refused(**change), code)
         for sid, bad in (("CHANNEL_BUDGET", [["S1", True]]), ("CHANNEL_BUDGET", [["S1", 5], ["S1", 6]]), ("CHANNEL_BUDGET", "ab"),
                          ("SENDER_CHANNELS", [["ch", ["S", "pigeon", "P", "g"]]]), ("THRESH", [[{"a": 1}, 5]]),
-                         ("CHECKWRITE_CALENDAR", [[5, 5]]), ("DEPOSIT_FEED", [["f", "S1"]])):
+                         ("CHECKWRITE_CALENDAR", [[5, 5]]), ("DEPOSIT_FEED", [["f", "S1"]]),
+                         ("GATE_KEYSET_PIN", [["t", "00" * 64]]), ("GATE_KEYSET_PIN", [["t", "AB" * 64]]),
+                         ("GATE_KEYSET_PIN", [["t", "ab" * 63]]), ("GATE_KEYSET_PIN", [["t", b"x" * 64]]), ("GATE_KEYSET_PIN", [["", "ab" * 64]])):
             with self.subTest(sid, bad=bad):
                 self.assertEqual(self.refused(**{sid: bad}), "slot_value")
         with self.subTest("two feeds cover one sender"):

@@ -83,7 +83,7 @@ bash scripts/integration_selfcheck.sh
 # Architecture Alignment
 
 - active adjudication and off-chain reconciliation: `rust-engine/`, `bridge/`
-- RightRail base system: `rightrail/` (own `CONSTITUTION.md` and `AGENTS.md`; provenance in `rightrail/IMPORTED_FROM.md`)
+- RightRail base system: `rightrail/` (own `CONSTITUTION.md` and `AGENTS.md`; provenance in `docs/integration/RIGHTRAIL_IMPORTED_FROM.md`)
 - parked Groth16, STARK and chain code: `parked/localbce/` (not built or run)
 - imported app/audit reference lane: `blind-ledger-app-layer/`
 - imported hardened reference bundle: `localBCE-codex-dev-hardened-20260616/`

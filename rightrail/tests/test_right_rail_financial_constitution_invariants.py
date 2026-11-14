@@ -1,4 +1,4 @@
-"""Constitution-critical invariants for the RightRail financial correction slice.
+"""Constitution-critical invariants for the RightRail financial correction path.
 
 Each test names the articles of ``CONSTITUTION.md`` it enforces:
 
@@ -26,7 +26,7 @@ Each test names the articles of ``CONSTITUTION.md`` it enforces:
   II and III.4 (a correction asks only for money actually short: zero
   shortfall is a Lean rejection with no write; otherwise min(claim, shortfall)).
 * ``test_open_requests_stay_within_the_unpaid_balance``
-  II and III.4 (R2: after every command the correction requests may together
+  II and III.4 (after every command the correction requests may together
   collect exactly min(what they leave unpaid, the unpaid balance), oldest
   first), V.4 (the expected amounts are derived here, not by the owner).
 
@@ -37,7 +37,7 @@ and the standing claims ``proofSuiteId=null``, ``production_usable=false``,
 
 Pinned Engine artifact.  Every test here builds its owner through
 ``_build_base_for_correction``, and corrections run on the pinned evaluator
-worker in ``artifacts/engine-evaluator`` (since M4 P1 the one-shot correction
+worker in ``artifacts/engine-evaluator`` (the one-shot correction
 exe is retired).  The ``_requires_pinned_correction_engine`` marker on each
 test states whether the worker is actually executed or its answer stubbed.  A
 missing or mismatched artifact is a hard failure, never a skip (VI.3).
@@ -256,7 +256,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
     def _durable_state(self, store: FinancialOwner) -> dict[str, object]:
         """Byte-level identity of everything durable the owner can have written.
 
-        WAL (R0.5; XI.2 record in docs/CORE_REDESIGN.md): the database is the image a crash recovery reads, the
+        WAL (XI.2 record in docs/CORE_REDESIGN.md): the database is the image a crash recovery reads, the
         main file plus every committed -wal frame, taken through a read-only connection that never checkpoints.
         The main file's bytes and the -wal/-shm names depend on which connection closed last, not on any commit."""
 
@@ -561,12 +561,12 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         self.assertEqual(reopened.drain_correction_followups(limit=10), first)
         self.assertEqual(self._durable_state(reopened), committed_state)
 
-        # III.3: the exact retry of the lost-response command is a DUPLICATE,
-        # decided from durable identity without re-running the Engine.
-        engine_guard = MagicMock(side_effect=AssertionError("engine_invoked_for_exact_retry"))
-        with patch.object(financial_engine, "_evaluate_wire", engine_guard):
+        # III.3: the exact retry of the lost-response command is a DUPLICATE that writes nothing,
+        # decided by Lean from the stored identity (V.2), never by an owner comparison.
+        engine_spy = MagicMock(wraps=financial_engine._evaluate_wire)
+        with patch.object(financial_engine, "_evaluate_wire", engine_spy):
             duplicate = self._reject(reopened, claim_id, receipt)
-        engine_guard.assert_not_called()
+        engine_spy.assert_called_once()
         self.assertEqual(duplicate["status"], "DUPLICATE")
         self.assertEqual(duplicate["action_id"], expected.ACTION_CORRECTION_ID)
         self.assertEqual(self._durable_state(reopened), committed_state)
@@ -718,7 +718,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
                 self.assertEqual(determined, claim_cents)  # the rejected offset stays whole
                 self._assert_verified(store)
 
-    # --- 7. A payment answering a request never pays past the balance (core-theorems-v1 F1) ---
+    # --- 7. A payment answering a request never pays past the balance ---
 
     @_requires_pinned_correction_engine("the binary is executed once")
     def test_linked_payment_never_pays_past_the_balance(self) -> None:
@@ -743,7 +743,7 @@ class RightRailFinancialConstitutionInvariantTests(_AcceptanceFixtures, unittest
         self.assertEqual(str(raised.exception), "payment_exceeds_unpaid_balance")
         self.assertEqual(self._durable_state(store), before)
 
-    # --- 8. Open correction requests stay within the unpaid balance (R2, core-theorems-v1 §4.4) ---
+    # --- 8. Open correction requests stay within the unpaid balance ---
 
     @_requires_pinned_correction_engine("the binary is executed twice")
     def test_open_requests_stay_within_the_unpaid_balance(self) -> None:

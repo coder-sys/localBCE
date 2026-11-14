@@ -220,6 +220,7 @@ def sponge (rate : Nat) (suffix : UInt8) (data : ByteArray) (n : Nat) : ByteArra
 end Fast
 
 def sha3_512Fast (data : ByteArray) : ByteArray := Fast.sponge 72 0x06 data 64
+def sha3_256Fast (data : ByteArray) : ByteArray := Fast.sponge 136 0x06 data 32
 def shake128Fast (data : ByteArray) (n : Nat) : ByteArray := Fast.sponge 168 0x1F data n
 def shake256Fast (data : ByteArray) (n : Nat) : ByteArray := Fast.sponge 136 0x1F data n
 

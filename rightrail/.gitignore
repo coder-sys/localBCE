@@ -15,16 +15,15 @@ node_modules/
 zk-stark/outputs/
 l2/deployments/
 
-# Local recovery/build evidence is preserved on disk, not versioned as source.
+# Local build and run output, not source.
 /cache/
 /cargo-target-*/
-
-# Workspace-only custody and run evidence. These trees remain preserved on disk and are
-# intentionally excluded from the reviewable source ledger and release manifests.
 /_handoff_support/
 **/_handoff_support/
 /work/
 
-# Lean build output and guarded-run outputs (trunk layout)
+# Lean build output
 .lake/
 **/.lake/
+
+# Gate fuzzer findings from long runs

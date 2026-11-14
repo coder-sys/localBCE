@@ -66,7 +66,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         )
         self.authority = owner.SyntheticTrustedAuthority()
         self.store = self._open(self.db, self.clock)
-        self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
+        self.addCleanup(self.store.close)  # the owner's writer holds the file open until closed
         self._populate_owner()
         self.scope = {key: getattr(self.config, key) for key in ("state_id", "deployment_id", "program_id", "period_id", "currency")}
         self.authority_binding = {
@@ -243,7 +243,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
     def _copy_database(self, name: str) -> Path:
         target = Path(self.temp_dir.name) / name
-        self.store.close()  # R1a: the writer's commits reach the main file when it closes
+        self.store.close()  # the writer's commits reach the main file when it closes
         shutil.copy2(self.db, target)
         return target
 
@@ -649,6 +649,22 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
                 self._assert_rejected_without_repair(target, tamper, "determination:actor-role")
 
+    def test_offset_decision_without_its_action_fails_closed_without_repair(self) -> None:
+        # The owner writes a decision and its action in one transaction, and every evaluation from then on names the
+        # action in its input. A decision left without its action is refused by both checks, so follow-through, which
+        # reads only a verified store, never meets one.
+        target = self._copy_database("decision-without-action.sqlite")
+        self._verify(target)
+        with closing(sqlite3.connect(target, isolation_level=None)) as connection:
+            connection.row_factory = sqlite3.Row
+            (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
+            for table in ("action_outbox", "actions"):
+                self.assertEqual(connection.execute(f"DELETE FROM {table} WHERE action_id='action:offset:claim:H'").rowcount, 1)
+            self.assertEqual([tuple(row) for row in connection.execute("SELECT decision FROM determinations")], [("OFFSET_AUTHORIZED",)])
+            with self.assertRaisesRegex(independent.IndependentFinancialError, "^evaluation:input-action$"):
+                independent.verify_obligation_connection(connection, obligation, expected_config=self.config, expected_authority=self.authority)
+        self._assert_rejected_without_repair(target, lambda _path: None, "^evaluation:input-action$")
+
     def test_determination_dated_before_its_pack_approval_or_effect_fails_closed_without_repair(self) -> None:
         # A raw row edit trips evaluation:input-determination first; a writer whose Lean misses the pack rule, and its pre-commit check, stores a digest-consistent decision at 2_000 under a pack approved, or in effect, from 2_500 (a late owner clock must not hide it) or from 2_001 (one millisecond late).
         for field, code in (("approved_at_ms", "determination:pack-not-approved"), ("effective_start_ms", "determination:pack-not-effective")):
@@ -680,7 +696,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
         self._assert_rejected_without_repair(self._copy_database("staged-due-before-pack.sqlite"), tamper, "item:due-before-pack")
 
     def test_authorization_above_its_input_shortfall_fails_closed_without_repair(self) -> None:
-        # M1: 9,800,000 paid leaves 200,000 unpaid, and 9,700,001 leaves 299,999 against the 300,000 claim; a writer whose Lean misses the shortfall rule, with no pre-commit check, stores a digest-consistent over-authorization.
+        # 9,800,000 paid leaves 200,000 unpaid, and 9,700,001 leaves 299,999 against the 300,000 claim; a writer whose Lean misses the shortfall rule, with no pre-commit check, stores a digest-consistent over-authorization.
         pay = owner.FinancialOwner.record_payment_evidence
         for paid in (9_800_000, 9_700_001):
             self.db, self.clock = Path(self.temp_dir.name) / f"over-shortfall-{paid}.sqlite", _Clock()
@@ -1070,7 +1086,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
 
         (Path(self.temp_dir.name) / "decided").mkdir()
         source = followthrough._decided_store(Path(self.temp_dir.name) / "decided")
-        source.close()  # R1a: its commits reach the main file when it closes
+        source.close()  # its commits reach the main file when it closes
         cases = (("untouched", lambda path: None, None), *((name, forge, code) for name, forge, _whole, code in followthrough.FORGERIES))
         for name, forge, code in cases:
             with self.subTest(name):
@@ -1130,7 +1146,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             (obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item:H'").fetchone()
         (Path(self.temp_dir.name) / "decided").mkdir()
         decided = followthrough._decided_store(Path(self.temp_dir.name) / "decided")
-        decided.close()  # R1a: its commits reach the main file when it closes
+        decided.close()  # its commits reach the main file when it closes
         with closing(sqlite3.connect(decided.path)) as connection:
             (decided_obligation,) = connection.execute("SELECT obligation_id FROM obligations WHERE item_id='item-r2'").fetchone()
 
@@ -1142,7 +1158,7 @@ class IndependentFinancialCheckerTests(unittest.TestCase):
             (self._copy_database, "evidence", "item_id", "item:H", "rr_financial_v1_evidence_item_id",(f"INSERT INTO evidence VALUES ('evidence:forged','item:H','SUPPORT','o','s','v','r',1,1,1,{z},{z},NULL,NULL,NULL)",), "evidence:content-digest", per_obligation),
             (self._copy_database, "determinations", "obligation_id", obligation, "rr_financial_v1_determinations_obligation_id",(f"INSERT INTO determinations VALUES ('determination:forged',:o,NULL,'a','x','au',1,{z},'OFFSET_AUTHORIZED',1,'[]',1,2,1,{z},'evaluation:forged',{z})",), "determination:role", per_obligation),
             (self._copy_database, "actions", "obligation_id", obligation, "rr_financial_v1_actions_obligation_id",(f"INSERT INTO actions VALUES ('action:forged',:o,'determination:forged','CORRECTION_PAYMENT_REQUEST','READY',1,'{{}}',{z},{z},1)", f"INSERT INTO action_outbox VALUES ('action:forged','READY',0,{z},NULL,1)"), "action:determination", per_obligation),
-            (decided_copy, "financial_events", "kind", "FOLLOWTHROUGH_DECIDED", "rr_financial_v3_events_kind",  # R1c: a second copy of the decision
+            (decided_copy, "financial_events", "kind", "FOLLOWTHROUGH_DECIDED", "rr_financial_v3_events_kind",  # a second copy of the decision
              (f"INSERT INTO financial_events SELECT event_sequence+1000,{z},aggregate_type,aggregate_id,kind,before_revision,after_revision,payload_json,payload_digest,previous_head,head,committed_at_ms FROM financial_events WHERE kind='FOLLOWTHROUGH_DECIDED'",),
              "followthrough:duplicate", lambda connection: independent.verify_followthrough_connection(connection, decided_obligation, followthrough.CLOSE, **decided._checker_expectations())),
         )

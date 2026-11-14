@@ -1,63 +1,93 @@
 # RightRail
 
-RightRail gives a state Medicaid agency one operating record for a consequential
-responsibility that crosses plans, providers and contractors. The first one is a
-recurring financial responsibility such as a state-directed hospital payment
-program. RightRail keeps the approved rule, the evidence, open disagreements,
-the official's decision and the next action connected until the work is done.
-Existing processors and payment systems keep moving the money; RightRail never
-does.
+RightRail is a full-stack system for state Medicaid agencies and their
+providers. Its product is one evidence record: the approved rule, the evidence,
+open disagreements, the official's decision and the next action stay connected
+until the work is done, and the state can replay the record and leave at any
+time. The first paid jobs, from 2028, are a replay test before a late
+claims-system replacement goes live and a read-only view for caseworkers and
+county offices; eligibility evidence is the center of 2028 to 2030. The end
+state is an inline gate that every Medicaid payment passes before money goes
+out, under rules the state approves and signs. The state's own payment system
+holds or releases the money; RightRail never moves it. The rollout order and
+first jobs are in `docs/RIGHTRAIL_FULL_STACK_TARGET.md` section 2.
 
-It is five parts on one small foundation: **Control Pack** (the state-approved
-rules), **Blind Ledger** (the one financial writer), **Mirror** (the staff
-workspace over that writer), **Continuity State** (bounded export and restore)
-and **Switch** (shadow comparison before any transfer). Lean decides each
-consequential step; the Python owner commits it.
+**Standing claims.** Member, claim and payment data in this repository are
+synthetic; tests may also read public non-PHI reference data. It is
+state-local, nonpayment and non-PHI, and moves no money. `proofSuiteId=null`,
+`production_usable=false`, `activation=false`. Passing tests here is evidence
+about this code, not a release qualification.
 
-The reference scenario is synthetic: twenty hospitals and $1,000,000, where
-Hospital H is owed $100,000 (the other nineteen total $900,000) and ends up
-$3,000 short. Expected cents are derived by hand, never by the code under test.
+## The six products
 
-## Read first
+What each one is, and what is real today, is in `ARCHITECTURE.md`; what runs is
+in `STATUS.md`.
 
-`AGENTS.md` gives the reading order: the constitution, `STATUS.md`,
-`ARCHITECTURE.md` and the target in `docs/RIGHTRAIL_FULL_STACK_TARGET.md`.
-Engineering principles are in `docs/DESIGN_IDEOLOGY.md`.
+- **State Control Pack:** the state-approved rules and population, with the bounded export and restore of the record.
+- **Blind Ledger:** the operating record and its one writer; the payment gate is its end-state function.
+- **Mirror:** the read-only workspace for finance staff, caseworkers and county offices.
+- **Switch:** read-only replay of the record against a candidate system.
+- **Provider App:** a retail pre-submission checker sold to providers; nothing state-side depends on it.
+- **Provider Trust Graph:** read-only provider evidence from public sources, its own product.
 
-## How to run
+## What is formally verified, and how to check it
 
-All builds and tests go through the guard; never run them bare
-(Constitution X.2), through `C:/Users/neers/rrb/tools/rr_guarded.ps1`. The
-default `pytest` configuration runs `tests/` and excludes `parked/`.
+Lean code, proved against stated theorems, makes each consequential money
+decision (correction transitions, payment and reversal accounting, gate
+decision rules, checkpoint and token formats); a Python owner then commits
+the answer. If a pinned executable fails, the command fails closed.
 
-**Python dependencies** install offline only, into a fresh virtual environment,
-from a pre-provisioned wheelhouse (pip refuses any wheel whose SHA-256 differs
-from `requirements-dev.txt`):
+- `lean/` is one Lake workspace (`lake build`; toolchain in
+  `lean/lean-toolchain`) with no unfinished proofs (`tests/test_no_sorry_source.py`).
+- Proofs may rely only on Lean's standard axioms propext, Quot.sound and
+  Classical.choice; `sorryAx`, `Lean.ofReduceBool` and user axioms are refused
+  (each theorem's list is pinned).
+- `tools/STMT_PIN.txt` pins one SHA3-512 root over every pinned theorem
+  statement and everything it depends on. `tests/test_statement_pin.py`
+  recomputes it.
+- `tools/tcb_report.txt` lists, per shipped executable, every constant it
+  reaches. All are proof-backed except the named exceptions that `STATUS.md`
+  lists. `tools/tcb_pin.ps1` recomputes it
+  and `tests/test_tcb_gate.py` gates it.
+- `conformance/` holds byte-level specifications and test vectors, including
+  must-reject cases, for formats an independent implementation must match
+  (pinned by `conformance/MANIFEST.sha256`).
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `CONSTITUTION.md` | The governing rules |
+| `STATUS.md` | Current state, open items, next steps |
+| `ARCHITECTURE.md` | How the code fits together today |
+| `docs/` | Target architecture, evidence model, SBOM, TLA+ model |
+| `app/` | Payer app: owner, checker, Mirror, Switch, Provider Trust Graph, gate adapters, staff workspace |
+| `lean/` | Lean sources and proofs |
+| `rust/` | Rust ML-DSA-87 signer used by the gate |
+| `conformance/` | Wire specifications and test vectors |
+| `artifacts/` | Pinned executables; `PROVENANCE` gives source commit and hash |
+| `tools/` | CLI, service kit, proof-goal files, statement and TCB pins |
+| `tests/` | Test suite, vectors and fixtures |
+| `provider_app/` | Provider App: pre-submission checker |
+| `parked/` | Release producer, parked until a release is planned |
+
+## Run the tests
+
+```powershell
+python -m pytest
+```
+
+This runs `tests/` (`pytest parked` runs the parked work). Many tests need a
+built `lean/.lake`. `provider_app` is a separate project; run its tests from
+inside it. The maintainers run all builds and tests through a resource guard
+(Constitution X.2).
+
+Development dependencies install offline from a hash-pinned wheelhouse
+(`requirements-dev.txt`); production has no Python package dependency.
 
 ```powershell
 python -m pip install --no-index --find-links <wheelhouse> --require-hashes --only-binary=:all: --no-deps -r requirements-dev.txt
 ```
 
-Production has no Python package dependency. Changing a development dependency
-means re-pinning hashes and updating `docs/SBOM.python.spdx.json`.
-
-**Staff workspace** (loopback only, synthetic TEST owner):
-
-```powershell
-python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir>
-```
-
-`--resume-existing-workspace` reopens and re-verifies an existing TEST
-database instead of reseeding it.
-
-**CLI** over an existing owner database:
-`python -m tools.right_rail_financial_cli --database <db> summary` (also
-`list-obligations`, `obligation-detail`, `history`, `reject-offset-and-authorize-correction`,
-`acknowledge-action`, `record-payment-evidence` and more; see `--help`).
-
-**Offline service kit:** `python -m tools.right_rail_financial_service_kit`
-with `assemble`, `verify`, `extract`, `run` (the one end-to-end scenario) and
-`serve`. Assembly needs an Engine build receipt from a fresh guarded build.
-
-**Provider Trust Graph view:** `python -m tools.provider_trust_graph_view
---artifact <graph> --request <request> --operation-ref <ref> --now <seconds>`.
+The staff workspace runs loopback-only on a synthetic TEST owner:
+`python -m app.right_rail_financial_staff_server --port 8765 --workspace <dir>`.

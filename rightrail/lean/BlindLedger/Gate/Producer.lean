@@ -9,23 +9,18 @@ namespace BlindLedger.Gate
 def storedOf (H : Bytes → Bytes) (b : Bytes) : Option Stored :=
   (decodeCheckpoint b).map fun x => ⟨H x.header, x.checkpoint, b⟩
 
-/-- `storedOf` for every checkpoint version (`decodeAnyCheckpoint`; `storeCheckpointAny` builds the same triple). -/
-def storedOfAny (H : Bytes → Bytes) (b : Bytes) : Option Stored :=
-  (decodeAnyCheckpoint b).map fun x => ⟨H x.header, x.checkpoint, b⟩
-
-/-- `b` is a CHECKPOINT/v2 record. -/
-def isV2 (b : Bytes) : Bool := (decodeCheckpoint2 b).isSome
-
-/-- `n` is the next checkpoint of the shard after `last` (none: the shard's first ever).  Same tenant and
+/-- `n` is the next checkpoint of the shard after `last` (none: the shard's first ever, which takes counter 1: a
+    new epoch always follows the shard's previous checkpoint, in any epoch, so it is never `none`).  Same tenant and
     shard; `eventHead` is the digest of the shard's previous checkpoint in any epoch (zero only at the shard's
     genesis); within an epoch the seq range is adjacent and `prevCheckpoint` links; a new epoch is higher
     and restarts at seq 0 (the decoder then forces a zero `prevCheckpoint`). -/
 def follows : Option Stored → Stored → Bool
-  | none, n => n.checkpoint.seqFrom == 0 && n.checkpoint.eventHead == zeroDigest
+  | none, n => n.checkpoint.seqFrom == 0 && n.checkpoint.eventHead == zeroDigest && n.checkpoint.counter == 1
   | some p, n =>
     let a := p.checkpoint
     let b := n.checkpoint
     a.tenantId == b.tenantId && a.shardId == b.shardId && b.eventHead == p.digest &&
+      b.counter == a.counter + 1 &&
       if a.epoch == b.epoch then a.seqTo + 1 == b.seqFrom && b.prevCheckpoint == p.digest
       else a.epoch < b.epoch && b.seqFrom == 0
 
@@ -52,24 +47,14 @@ def tokenFits (c : Crypto) (k : Nat) (x : Stored) (i : Nat) (bytes : Bytes) : Bo
     (`accepts`), follows the producer's last published checkpoint, and the batch's tokens are exactly its
     `count` leaves in seq order, each fitting, payment ids strictly ascending (so no payment twice, checked in
     one pass). -/
-def publishOk (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes) : Bool :=
+def publishOk (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes)
+    (tpm : Nat) : Bool :=
   match decodeKeyCert cert, storedOf sha3 new with
   | some e, some n =>
     accepts rootPk cert new && last.all (fun b => (storedOf sha3 b).isSome) &&
-      follows (last.bind (storedOf sha3)) n && tokens.length == n.checkpoint.count &&
+      follows (last.bind (storedOf sha3)) n && n.checkpoint.counter == tpm + 1 && tokens.length == n.checkpoint.count &&
       (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b) &&
       ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId))
-  | _, _ => false
-
-/-- `publishOk` for any checkpoint version: the same decision with `acceptsAny`, and a v1 never follows a v2
-    (no downgrade). -/
-def publishOkAny (rootPk cert : Bytes) (last : Option Bytes) (new : Bytes) (tokens : List Bytes) : Bool :=
-  match decodeKeyCert cert, storedOfAny sha3 new with
-  | some e, some n =>
-    acceptsAny rootPk cert new && last.all (fun b => (storedOfAny sha3 b).isSome) &&
-      follows (last.bind (storedOfAny sha3)) n && tokens.length == n.checkpoint.count &&
-      (tokens.zipIdx.all fun (b, i) => tokenFits (realCrypto [(n.checkpoint.tenantId, rootPk)]) e.shardCount n i b) &&
-      ascending ((tokens.filterMap decodeToken).map (·.leaf.paymentId)) && (!last.any isV2 || isV2 new)
   | _, _ => false
 
 end BlindLedger.Gate

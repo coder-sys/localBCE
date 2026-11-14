@@ -1,4 +1,5 @@
-import BlindLedger.Gate.Rules.ShardRun
+import BlindLedger.Gate.AnchorTheorems
+import BlindLedger.Gate.Rules.Theorems
 
 /-! The decide layer (rrb/designs/decide-layer-v1.md §3): a shard decides with its own checkpoints as the sets
     read and the priors (`carried`), so what the store persists and reloads is exactly the spec's fold.  Proofs
@@ -13,7 +14,7 @@ def ShardState.runDecide (H : Bytes → Bytes) (k : Nat) :
     ShardState → List Rules.Batch → Option (List Rules.Result × ShardState)
   | st, [] => some ([], st)
   | st, t :: ts =>
-    match st.decide H t.ctx k t.owners t.lines with
+    match st.decide H t.ctx t.lines with
     | none => none
     | some (r, st') => (ShardState.runDecide H k st' ts).map fun (rs, s) => (r :: rs, s)
 
@@ -29,13 +30,13 @@ theorem carried_sets (c₀ : Ctx) (rel unr : Snapshot Line) :
     releasedSet (carried c₀ rel unr) = rel.entries ∧ unresolvedSet (carried c₀ rel unr) = unr.entries := by
   simp [releasedSet, unresolvedSet, carried, view_self]
 
-/-- A carried batch only appends (`advance`; §C's `decideReg_sets` specialised; no `loose` rows). -/
-theorem carried_append (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os : List Owner) (b : List Line) :
-    let c := carried c₀ rel unr; let r := decideReg c k os b
+/-- A carried batch only appends (`advance`; no `loose` rows). -/
+theorem carried_append (c₀ : Ctx) (rel unr : Snapshot Line) (b : List Line) :
+    let c := carried c₀ rel unr; let r := decideBatchIn c [] b
     r.released.entries = rel.entries ++ (batchFresh c r).1 ∧ r.unresolved.entries = unr.entries ++ (batchFresh c r).2 := by
   obtain ⟨h1, h2⟩ := carried_sets c₀ rel unr
   simp only [batchFresh, h1, h2]
-  simp [decideReg, decideBatchIn, advance, carried, view_self]
+  simp [decideBatchIn, advance, carried, view_self]
 
 private theorem replay_aux (k : Nat) (ts : List Batch) : ∀ (g g' : Snapshot Line × Snapshot Line),
     g.1.entries = g'.1.entries → g.2.entries = g'.2.entries →
@@ -45,7 +46,7 @@ private theorem replay_aux (k : Nat) (ts : List Batch) : ∀ (g g' : Snapshot Li
   | nil => intro g g' h1 h2; simp [addsOf, replay, shardSets, h1, h2]
   | cons t ts ih =>
     intro g g' h1 h2
-    obtain ⟨a1, a2⟩ := carried_append t.ctx g'.1 g'.2 k t.owners t.lines
+    obtain ⟨a1, a2⟩ := carried_append t.ctx g'.1 g'.2 t.lines
     exact ih _ _ (by simp [h1, a1]) (by simp [h2, a2])
 
 /-- REFINEMENT (load): replaying the stored rows gives the spec fold (entries; asOf kept). -/
@@ -54,38 +55,25 @@ theorem replay_addsOf (k : Nat) (g : Snapshot Line × Snapshot Line) (ts : List 
       ((shardSets k g ts).1.entries, (shardSets k g ts).2.entries) :=
   replay_aux k ts g g rfl rfl
 
-/-- COMPOSITION with the World model: a carried decide is a seal World accepts (the guard's set conjuncts hold by
-    `carried_sets`), and it moves World exactly as the runtime state moves. With `run_one_payment_per_line`
-    (ShardRun.lean, unchanged) this is the headline for the mshist-1 case (lead ruling L1). -/
-theorem carried_sealB {w : World} {k : Nat} {c₀ : Ctx} {rel unr : Snapshot Line} {os : List Owner} {b : List Line}
-    (hr : w.rel k = rel.entries) (hu : w.unr k = unr.entries) (hos : ∀ o ∈ os, o.shard = k → w.reg o.id = some k) :
-    ∃ w', w.step (.sealB k (carried c₀ rel unr) os b) = some w' ∧
-      w'.rel k = (decideReg (carried c₀ rel unr) k os b).released.entries ∧
-      w'.unr k = (decideReg (carried c₀ rel unr) k os b).unresolved.entries := by
-  obtain ⟨h1, h2⟩ := carried_sets c₀ rel unr
-  have hg : releasedSet (carried c₀ rel unr) = w.rel k ∧ unresolvedSet (carried c₀ rel unr) = w.unr k ∧
-      ∀ o ∈ os, o.shard = k → w.reg o.id = some k := ⟨h1.trans hr.symm, h2.trans hu.symm, hos⟩
-  exact ⟨_, if_pos hg, by simp, by simp⟩
-
 /-- The acceptance test as a theorem: a ready line whose id is already in the carried released set (and whose
     payment is not a re-decision, `hnr`: `seen0` drops own lines) is decided, and every decision of it is HOLD
     ALREADY_DECIDED. -/
-theorem carried_resend_held (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os : List Owner) (b : List Line)
-    (l : Line) (hl : l ∈ ready k os b) (hin : ∃ x ∈ rel.entries, x.id = l.id)
+theorem carried_resend_held (c₀ : Ctx) (rel unr : Snapshot Line) (b : List Line)
+    (l : Line) (hl : l ∈ b) (hin : ∃ x ∈ rel.entries, x.id = l.id)
     (hnr : ¬ c₀.redo.contains l.pay) :
-    (∃ d ∈ (decideReg (carried c₀ rel unr) k os b).decisions, d.line = l) ∧
-      ∀ d ∈ (decideReg (carried c₀ rel unr) k os b).decisions, d.line = l →
+    (∃ d ∈ (decideBatchIn (carried c₀ rel unr) [] b).decisions, d.line = l) ∧
+      ∀ d ∈ (decideBatchIn (carried c₀ rel unr) [] b).decisions, d.line = l →
         Reason.ALREADY_DECIDED ∈ d.reasons ∧ d.outcome = .HOLD := by
-  have hm : l ∈ (decideReg (carried c₀ rel unr) k os b).decisions.map (·.line) := by
-    show l ∈ (decideAll _ _ (order _ (ready k os b))).map (·.line)
+  have hm : l ∈ (decideBatchIn (carried c₀ rel unr) [] b).decisions.map (·.line) := by
+    show l ∈ (decideAll _ _ (order _ b)).map (·.line)
     rw [lines_decideAll]; exact (order_perm _ _).mem_iff.mpr hl
   refine ⟨List.mem_map.mp hm, fun d hd hdl => ?_⟩
   have hown : own (carried c₀ rel unr) l = false := by
     have : c₀.redo.contains l.pay = false := by simpa using hnr
     show (c₀.redo.contains l.pay && (releasedSet (carried c₀ rel unr)).contains l) = false
     rw [this]; rfl
-  obtain ⟨seen, hseen, hall⟩ := seen_all_in (c := carried c₀ rel unr) (f := foreignOf k os (ready k os b))
-    (b := ready k os b) (e := d) hd (by rw [hdl]; exact hown)
+  obtain ⟨seen, hseen, hall⟩ := seen_all_in (c := carried c₀ rel unr) (f := [])
+    (b := b) (e := d) hd (by rw [hdl]; exact hown)
   obtain ⟨x, hx, hxid⟩ := hin
   have hmem : idKey x ∈ seen :=
     hall x (by rw [(carried_sets c₀ rel unr).1]; exact hx) _ idKey_mem
@@ -100,35 +88,17 @@ theorem carried_resend_held (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os
   have ho : d.outcome = outcomeOf d.reasons := by rw [hseen]; rfl
   exact ⟨hr, ho.trans (outcomeOf_certain hr rfl)⟩
 
-/-- Settle from the batch (§C, restated against carried): the frees computed at decide time are the spec's. -/
-theorem settleFreeInc_carried (c₀ : Ctx) (rel unr : Snapshot Line) (k : Nat) (os : List Owner) (b : List Line)
-    (hp : ∀ i ∈ pendingOf k os, ∀ x ∈ rel.entries ++ unr.entries, x.id ≠ i) :
-    let c := carried c₀ rel unr; let r := decideReg c k os b
-    settleFreeInc ((batchFresh c r).1 ++ (batchFresh c r).2) (pendingOf k os) =
-      settleFree r.released.entries r.unresolved.entries (pendingOf k os) := by
-  obtain ⟨ha, hb⟩ := carried_append c₀ rel unr k os b
-  dsimp only
-  rw [ha, hb]
-  unfold settleFreeInc settleFree
-  apply List.filter_congr
-  intro i hi
-  have hr : i ∉ rel.entries.map (·.id) := fun h =>
-    let ⟨x, hx, e⟩ := List.mem_map.mp h; hp i hi x (List.mem_append_left _ hx) e
-  have hu : i ∉ unr.entries.map (·.id) := fun h =>
-    let ⟨x, hx, e⟩ := List.mem_map.mp h; hp i hi x (List.mem_append_right _ hx) e
-  simp [List.map_append, hr, hu, or_comm, or_left_comm]
-
 end BlindLedger.Gate.Rules
 
 namespace BlindLedger.Gate
 
 open Rules
 
-/-- REFINEMENT (step): a decide step is decideReg on the carried sets and keeps the cache sound (from
+/-- REFINEMENT (step): a decide step is decideBatchIn c [] on the carried sets and keeps the cache sound (from
     `stepReg_some` and `load_ok`). Axioms: three; no H hypothesis. -/
-theorem decide_ok {H : Bytes → Bytes} {st st' : ShardState} {c₀ : Rules.Ctx} {k : Nat} {os : List Rules.Owner}
-    {b : List Rules.Line} {r : Rules.Result} (hs : st.Ok H) (h : st.decide H c₀ k os b = some (r, st')) :
-    r = decideReg (carried c₀ st.released st.unresolved) k os b ∧ st'.Ok H ∧
+theorem decide_ok {H : Bytes → Bytes} {st st' : ShardState} {c₀ : Rules.Ctx} 
+    {b : List Rules.Line} {r : Rules.Result} (hs : st.Ok H) (h : st.decide H c₀ b = some (r, st')) :
+    r = decideBatchIn (carried c₀ st.released st.unresolved) [] b ∧ st'.Ok H ∧
       st'.released = r.released ∧ st'.unresolved = r.unresolved := by
   unfold ShardState.decide at h
   obtain ⟨hr, h1, h2⟩ := stepReg_some h

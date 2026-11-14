@@ -180,7 +180,7 @@ def _blfcmd03(variant):
                "actor_role": "FINANCE_DECISION", "current_authority_id": "synthetic-authority-v1",
                "current_authority_epoch": 1, "current_authority_digest": BOUND, "expected_revision": 4,
                "evaluation_id": EVAL_ID, "evaluation_result_digest": _dig(165), "decision_at_ms": 1_774_922_400_010,
-               "owner_now_ms": 1_774_922_400_020}
+               "decision_time_given": True, "owner_now_ms": 1_774_922_400_020}
     lookup = {"kind": "absent"}
     queries = {"action_id": _query("ACTION_ID", ACT), "determination_id": _query("DETERMINATION_ID", "determination:" + ACT),
                "evaluation_consumed": _query("EVALUATION_CONSUMED", EVAL_ID)}
@@ -194,7 +194,8 @@ def _blfcmd03(variant):
             "claim_id": "claim:h:offset", "actor_id": "synthetic-official", "actor_role": "FINANCE_DECISION",
             "authority_id": "synthetic-authority-v1", "authority_epoch": 1, "authority_digest": BOUND,
             "decision": "OFFSET_REJECTED_CORRECTION_AUTHORIZED", "input_evaluation_id": EVAL_ID,
-            "input_evaluation_result_digest": _dig(165), "expected_revision": 4, "decided_at_ms": 1_774_922_400_010}}
+            "input_evaluation_result_digest": _dig(165), "expected_revision": 4, "decided_at_ms": 1_774_922_400_010,
+            "decision_time_given": True}}
         queries = {"action_id": _query("ACTION_ID", ACT, ACT), "determination_id": _query("DETERMINATION_ID", DET, DET),
                    "evaluation_consumed": _query("EVALUATION_CONSUMED", EVAL_ID, DET)}
         for query in queries.values():

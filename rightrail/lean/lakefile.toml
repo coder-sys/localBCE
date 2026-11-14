@@ -1,6 +1,6 @@
 name = "RightRail"
 version = "0.1.0"
-defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_engine", "gate_verify"]
+defaultTargets = ["BlindLedger", "blind_financial_axioms", "gate_vectors", "gate_axioms", "gate_rules", "gate_rules_crashtest", "gate_engine", "gate_verify"]
 
 # One Lake workspace (Constitution IX.1).  `BlindLedger` holds the financial
 # correction transition, the gate and the shared `BlindLedger.Sha3`.
@@ -46,6 +46,11 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 name = "gate_axioms"
 roots = ["BlindLedger.Gate.AxiomCheck"]
 
+# The binary request and answer frames (conformance/FRAME_V1.md): statements, not yet proved; not imported by any exe.
+[[lean_lib]]
+name = "frame_statements"
+roots = ["BlindLedger.Gate.Frame.Spec", "BlindLedger.Gate.Frame.Fast", "BlindLedger.Gate.Frame.Answer"]
+
 # Test-only: Lean-encoded request bytes for tests/test_wire_vectors.py (the Python encoders must match); not pinned.
 [[lean_exe]]
 name = "wire_vectors"
@@ -55,13 +60,36 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 # Test-only: runs tests/gate_rules/*.vectors through the gate rules; never a payment path.
 [[lean_exe]]
 name = "gate_rules"
-root = "BlindLedger.Gate.Rules.RulesMain"
+root = "BlindLedger.Gate.Rules.RulesShip"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: gate_rules with a commit killed at the point RR_FLAT_CRASH names (tests/test_flat_worker.py).
+[[lean_exe]]
+name = "gate_rules_crashtest"
+root = "BlindLedger.Gate.Rules.RulesCrashtest"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # The resident one-process gate (Engine.OneProc): rules frames and PUBLISH checks in one long-lived process per shard.
 [[lean_exe]]
 name = "gate_engine"
-root = "BlindLedger.Gate.Engine.OneProc"
+root = "BlindLedger.Gate.Engine.EngineMain"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Engine v3 decision path on rows files (gate path design step 1): the engine's pipe over `Hist`; not pinned.
+[[lean_exe]]
+name = "gate_hist3"
+root = "BlindLedger.Gate.Engine3.HMain"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# The byte request decoder against the list decoder on frames from a file (tests/test_decode_fuzz.py); not pinned.
+[[lean_exe]]
+name = "decode_fuzz"
+root = "BlindLedger.Gate.Engine3.DecodeFuzz"
+
+# The engine v3 verifier (ENGINE_V3.md section 10): checks the rows files and log of gate_hist3; not pinned.
+[[lean_exe]]
+name = "gate_verify3"
+root = "BlindLedger.Gate.Engine3.VerifyMain"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # Test-only: panics or writes stderr on request; tests/test_lean_worker_panic.py.
@@ -76,3 +104,157 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 name = "gate_verify"
 root = "BlindLedger.Gate.VerifyCli"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: times the engine's directory insert and checks it against the model.
+[[lean_exe]]
+name = "engine3_bench"
+root = "BlindLedger.Gate.Engine3.Bench"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: tests of the checker's tagged rows file and its key file (VStore).
+[[lean_exe]]
+name = "vstore_check"
+root = "BlindLedger.Gate.Engine3.VStoreCheck"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: the model run's comparison of an answer with the spec's leaves catches a wrong leaf.
+[[lean_exe]]
+name = "leaf_check"
+root = "BlindLedger.Gate.Engine3.LeafCheck"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: checks the rows file (append, fetch, torn-tail cut) in an empty directory.
+[[lean_exe]]
+name = "rows_test"
+root = "BlindLedger.Gate.Engine3.RowsFileTest"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: times the decision step alone on in-memory history and checks the fixed-row decider against it.
+[[lean_exe]]
+name = "decide_bench"
+root = "BlindLedger.Gate.Flat.DecideBench"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# `RulesMain` embeds a hash of the files it names with `include_str`, which Lake does not track.  It sits in its own library
+# (listed after `BlindLedger`: Lake gives a module to the last library that claims it) that needs each embedded file Lean does not import
+# for it, so editing one rebuilds the module and the runner and the printed hash always matches a fresh build of the tree.
+# tests/test_gate_rules_vectors.py checks that every embedded file is imported or declared here.
+[[lean_lib]]
+name = "gate_rules_main"
+roots = ["BlindLedger.Gate.Rules.RulesMain"]
+needs = ["embed_RulesShip", "embed_OneProc", "embed_MlDsa87", "embed_Payer", "embed_Producer", "embed_Verify", "embed_Batch", "embed_Flat_Bin", "embed_Sha3Lanes", "embed_Sha3Fused", "embed_Flat_Chunk", "embed_Flat_ChunkIo", "embed_Flat_Io", "embed_Flat_Model", "embed_Flat_Store", "embed_Flat_StoreLog", "embed_Flat_StoreTombs", "embed_Flat_Worker", "embed_Frame_Fast", "embed_Frame_Spec", "embed_OnepIndex", "embed_lakefile", "embed_lean-toolchain"]
+
+[[input_file]]
+name = "embed_RulesShip"
+path = "BlindLedger/Gate/Rules/RulesShip.lean"
+text = true
+
+[[input_file]]
+name = "embed_OneProc"
+path = "BlindLedger/Gate/Engine/OneProc.lean"
+text = true
+
+[[input_file]]
+name = "embed_MlDsa87"
+path = "BlindLedger/Gate/MlDsa87.lean"
+text = true
+
+[[input_file]]
+name = "embed_Payer"
+path = "BlindLedger/Gate/Payer.lean"
+text = true
+
+[[input_file]]
+name = "embed_Producer"
+path = "BlindLedger/Gate/Producer.lean"
+text = true
+
+[[input_file]]
+name = "embed_Verify"
+path = "BlindLedger/Gate/Verify.lean"
+text = true
+
+[[input_file]]
+name = "embed_Batch"
+path = "BlindLedger/Gate/Batch.lean"
+text = true
+
+[[input_file]]
+name = "embed_lakefile"
+path = "lakefile.toml"
+text = true
+
+[[input_file]]
+name = "embed_lean-toolchain"
+path = "lean-toolchain"
+text = true
+
+[[input_file]]
+name = "embed_Flat_Bin"
+path = "BlindLedger/Gate/Flat/Bin.lean"
+text = true
+
+[[input_file]]
+name = "embed_Sha3Lanes"
+path = "BlindLedger/Sha3Lanes.lean"
+text = true
+
+[[input_file]]
+name = "embed_Sha3Fused"
+path = "BlindLedger/Gate/Engine3/Sha3Fused.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_Chunk"
+path = "BlindLedger/Gate/Flat/Chunk.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_ChunkIo"
+path = "BlindLedger/Gate/Flat/ChunkIo.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_Io"
+path = "BlindLedger/Gate/Flat/Io.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_Model"
+path = "BlindLedger/Gate/Flat/Model.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_Store"
+path = "BlindLedger/Gate/Flat/Store.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_StoreLog"
+path = "BlindLedger/Gate/Flat/StoreLog.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_StoreTombs"
+path = "BlindLedger/Gate/Flat/StoreTombs.lean"
+text = true
+
+[[input_file]]
+name = "embed_Flat_Worker"
+path = "BlindLedger/Gate/Flat/Worker.lean"
+text = true
+
+[[input_file]]
+name = "embed_Frame_Fast"
+path = "BlindLedger/Gate/Frame/Fast.lean"
+text = true
+
+[[input_file]]
+name = "embed_Frame_Spec"
+path = "BlindLedger/Gate/Frame/Spec.lean"
+text = true
+
+[[input_file]]
+name = "embed_OnepIndex"
+path = "BlindLedger/Gate/OnepIndex.lean"
+text = true

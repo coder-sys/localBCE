@@ -8,6 +8,7 @@ import tempfile
 import threading
 import queue
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from datetime import datetime, timezone
@@ -226,7 +227,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self._stop_workflow(workflow, server, thread)
 
     def test_every_role_downloads_the_record_byte_for_byte_at_every_stage(self) -> None:
-        """M5, roles able to download the record: 0 of 5 before (no download existed), 5 of 5 now, at every stage of H's journey and for a settled item; the file is the plain-text record itself, the same bytes for every role (the on-page view adds only the role's own status wording, decision and next-step sections)."""
+        """0 of 5 before (no download existed), 5 of 5 now, at every stage of H's journey and for a settled item; the file is the plain-text record itself, the same bytes for every role (the on-page view adds only the role's own status wording, decision and next-step sections)."""
         workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-download")
         link, able, same = _MODEL["local_controls"]["download-record"]["name"], set(), {}
 
@@ -257,7 +258,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         self.assertEqual(able, set(_MODEL["roles"]))
 
     def test_the_screen_writes_instants_in_program_time_and_the_record_in_utc(self) -> None:
-        """M5, one time convention: every instant on the screen, the due date included, is the Owner's instant in the program's zone with its label and no calendar date is left; the record keeps the same instants in UTC, newest first; the engine's detail stays in the record."""
+        """every instant on the screen, the due date included, is the Owner's instant in the program's zone with its label and no calendar date is left; the record keeps the same instants in UTC, newest first; the engine's detail stays in the record."""
         self.assertEqual((_MODEL["time"]["zone"], _MODEL["time"]["label"]), ("America/Chicago", "CT"))
         workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-time")
         try:
@@ -287,6 +288,18 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self.assertIn(" 2026 ", page)
         finally:
             self._stop_workflow(workflow, server, thread)
+
+    def test_opening_another_queue_row_reads_that_item_afresh(self) -> None:
+        browser = self._open("analyst")
+        asked = []
+        real = self.workflow.item
+        with patch.object(self.workflow, "item", side_effect=lambda item_id: asked.append(item_id) or real(item_id)):
+            browser.click("row-item-01")
+            browser.view()
+            self.assertEqual(asked[:1], ["item-01"])  # the row's own read, not the old item's
+            browser.click("row-item-h")
+            browser.view()
+        self.assertEqual(asked[:2], ["item-01", "item-h"])
 
     def test_the_director_lands_on_the_totals_and_opens_any_record_from_the_queue(self) -> None:
         browser = self._open_path("/role/director")
@@ -422,10 +435,10 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
         real = workflow.reject_offset_and_authorize_correction
 
         def busy_after(commit):
-            def command(body, *actor):  # the server now passes the acting person
+            def command(body, *actor, **named):  # the server passes the acting person and the item
                 del workflow.reject_offset_and_authorize_correction  # busy once
                 if commit:
-                    real(body, *actor)
+                    real(body, *actor, **named)
                 raise FinancialBusyError("store_busy")
             return command
         try:
@@ -548,7 +561,7 @@ class InteractionModelBrowserCrawlTests(unittest.TestCase):
             self._stop_workflow(workflow, server, thread)
 
     def test_record_cash_follows_the_open_amount_not_the_balance(self) -> None:
-        """R2: an acknowledged request with money still owed but less open than the payment (a state the demo never reaches; H is still short $3,000.00) keeps the button off and says why."""
+        """an acknowledged request with money still owed but less open than the payment (a state the demo never reaches; H is still short $3,000.00) keeps the button off and says why."""
         workflow, server, thread = self._start_workflow(Path(self.temp.name) / "owner-open-amount")
 
         def action(open_cents: int):
@@ -829,7 +842,8 @@ def _response_handler(workflow):
     class Responses(scorecard.staff._handler_for(workflow)):
         def _inject(self) -> bool:
             fault = self.server.fault
-            if not fault or fault["route"] != f"{self.command} {self.path}":
+            route = "/api/items/{id}" if self.path == "/api/workspace" or self.path.startswith("/api/items/") else self.path  # one read, whichever item it names
+            if not fault or fault["route"] != f"{self.command} {route}":
                 return False
             if not self._allowed(mutation=self.command == "POST"):
                 return False
@@ -845,7 +859,7 @@ def _response_handler(workflow):
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
             elif code in ("fork_detected", "stale_read"):
-                result = getattr(workflow, scorecard.staff._READ_ROUTES[self.path])()
+                result = workflow.item(self.path.rsplit("/", 1)[1]) if self.path.startswith("/api/items/") else getattr(workflow, scorecard.staff._READ_ROUTES[self.path])()
                 result["read_envelope"]["snapshot_id"] = "0" * 64
                 self._respond(200, result)
             elif code == "command_response_unverified":
@@ -857,7 +871,7 @@ def _response_handler(workflow):
             return True
 
         def _respond(self, status, value, *args, **kwargs) -> None:
-            if self.path == "/api/workspace" and self.server.rewrite:  # a read the Owner did not send, to test what the page says of it
+            if (self.path == "/api/workspace" or self.path.startswith("/api/items/")) and self.server.rewrite:  # a read the Owner did not send, to test what the page says of it
                 value = self.server.rewrite(copy.deepcopy(value))
             super()._respond(status, value, *args, **kwargs)
 

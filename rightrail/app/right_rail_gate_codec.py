@@ -1,12 +1,11 @@
-"""Payment gate wire formats, first slice (founder decision D1, 2026-09-25).
+"""Payment gate wire formats.
 
 Formats: ``RR/GATE/DECIDE-REQUEST/v1``, ``RR/GATE/DECIDE-RESPONSE/v1``,
-``RR/GATE/TOKEN/v1``, ``RR/GATE/CHECKPOINT/v1`` (ML-DSA-87 per-batch variant
+``RR/GATE/TOKEN/v2``, ``RR/GATE/CHECKPOINT/v3`` (ML-DSA-87 per-batch variant
 only), ``RR/GATE/KEY-CERT/v1`` (the tenant root signs one epoch key) and the SHA3-512 digest domains ``RR/GATE/DECISION-ID/v1``,
-``RR/GATE/INPUT/v1``, ``RR/GATE/MERKLE-NODE/v1`` (the batch token tree),
+``RR/GATE/MERKLE-NODE/v1`` (the batch token tree),
 ``RR/GATE/LINES-NODE/v1`` (a payment's lines tree), ``RR/GATE/SHARD/v1``
-(a member's shard) and ``RR/GATE/STATE/v1`` (a checkpoint's released and
-unresolved sets).
+(a member's shard).
 
 Grammar (the BLFIN02 style): every record starts with its ASCII domain and a
 NUL, which is also its explicit version; naturals are fixed-width big-endian
@@ -31,12 +30,13 @@ class GateCodecError(ValueError):
 
 DECIDE_REQUEST: Final = b"RR/GATE/DECIDE-REQUEST/v1\x00"
 DECIDE_RESPONSE: Final = b"RR/GATE/DECIDE-RESPONSE/v1\x00"
-TOKEN: Final = b"RR/GATE/TOKEN/v1\x00"
-CHECKPOINT: Final = b"RR/GATE/CHECKPOINT/v1\x00"
-CHECKPOINT_V2: Final = b"RR/GATE/CHECKPOINT/v2\x00"
+TOKEN: Final = b"RR/GATE/TOKEN/v2\x00"
+CHECKPOINT: Final = b"RR/GATE/CHECKPOINT/v3\x00"
 KEY_CERT: Final = b"RR/GATE/KEY-CERT/v1\x00"
 DECISION_ID: Final = b"RR/GATE/DECISION-ID/v1\x00"
-INPUT: Final = b"RR/GATE/INPUT/v1\x00"
+CONTEXT: Final = b"RR/GATE/CONTEXT/v1\x00"
+PAYMENT: Final = b"RR/GATE/PAYMENT/v1\x00"
+INPUT_V6: Final = b"RR/GATE/INPUT/v6\x00"
 MERKLE_NODE: Final = b"RR/GATE/MERKLE-NODE/v1\x00"
 LINES_NODE: Final = b"RR/GATE/LINES-NODE/v1\x00"
 SHARD: Final = b"RR/GATE/SHARD/v1\x00"
@@ -58,7 +58,7 @@ REJECT_CODES: Final = ("MALFORMED", "COMMAND_KEY_CONFLICT")
 SIG_ML_DSA_87_BATCH: Final = 1
 
 DIGEST: Final = 64
-MEMBER_KEY: Final = 32  # the member's salted hash (D5 salt vault)
+MEMBER_KEY: Final = 32  # the member's salted hash
 ZERO_DIGEST: Final = bytes(DIGEST)
 MAX_NAT: Final = (1 << 63) - 1
 MAX_LINES: Final = 65_535  # also bounds a lines tree to depth 16
@@ -150,26 +150,6 @@ def shard_of(tenant_id: str, member_key: bytes, shard_count: int) -> int:
     return int.from_bytes(sha3_512(bytes(w.out))[:4], "big") % shard_count
 
 
-def input_commitment(request: "DecideRequest", read_set_digest: bytes) -> bytes:
-    """SHA3-512(RR/GATE/INPUT/v1 || u32 length || canonical request || read-set digest)."""
-    body = encode_decide_request(request)
-    w = _Writer(INPUT)
-    w.int(len(body), 4, "request")
-    w.out += body
-    w.digest(read_set_digest, "read_set_digest")
-    return sha3_512(bytes(w.out))
-
-
-def state_digest(released_pin: bytes, unresolved_pin: bytes) -> bytes:
-    """SHA3-512(RR/GATE/STATE/v1 || released pin || unresolved pin): the rules'
-    released and unresolved sets after a batch, each as its 64-byte snapshot
-    pin (``tools/gate_rules_data.py``)."""
-    w = _Writer(STATE)
-    w.digest(released_pin, "released_pin")
-    w.digest(unresolved_pin, "unresolved_pin")
-    return sha3_512(bytes(w.out))
-
-
 def merkle_tree(domain: bytes, leaves: Sequence[bytes]) -> tuple[bytes, list[list[bytes]]]:
     """Root and per-leaf sibling paths (bottom-up) under ``domain``: leaf =
     H(domain || 0 || x), node = H(domain || 1 || l || r).  An odd last node is
@@ -192,6 +172,14 @@ def merkle_tree(domain: bytes, leaves: Sequence[bytes]) -> tuple[bytes, list[lis
 
 def lines_root(lines: Sequence[bytes]) -> bytes:
     return merkle_tree(LINES_NODE, lines)[0] if lines else ZERO_DIGEST
+
+
+def payment_input(context: bytes, head: bytes, lines: Sequence[bytes], tail: bytes) -> bytes:
+    """INPUT/v6 of one DECIDE-REQUEST/v1 (conformance/ENGINE_V3.md section 18): over the batch's CONTEXT/v1 digest and the
+    request's PAYMENT/v1 digest, which reads its bytes before the lines (``head``, after a 4-byte length), the root of its
+    ``lines`` and its bytes after them (``tail``)."""
+    pay = sha3_512(PAYMENT + len(head).to_bytes(4, "big") + head + lines_root(lines) + tail)
+    return sha3_512(INPUT_V6 + context + pay)
 
 
 # ------------------------------------------------------ #1 DECIDE-REQUEST/v1
@@ -258,7 +246,7 @@ def encode_decide_request(request: DecideRequest) -> bytes:
     return bytes(w.out)
 
 
-# ------------------------------------------------------------ #4 CHECKPOINT/v1
+# ------------------------------------------------------------ #4 CHECKPOINT/v3
 
 
 @dataclass(frozen=True)
@@ -276,7 +264,7 @@ class Checkpoint:
     state_digest: bytes
     count: int
     created_at: int
-    registry_head: bytes | None = None  # set: CHECKPOINT/v2, which signs the tenant id-registry head too
+    counter: int  # the shard's TPM counter value this checkpoint takes (the previous value plus one)
 
 
 _CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "evidence_root", "state_digest")
@@ -284,7 +272,7 @@ _CHECKPOINT_DIGESTS = ("prev_checkpoint_digest", "event_head", "token_root", "ev
 
 def encode_checkpoint_header(cp: Checkpoint) -> bytes:
     """The exact bytes the epoch's ML-DSA-87 key signs."""
-    w = _Writer(CHECKPOINT if cp.registry_head is None else CHECKPOINT_V2)
+    w = _Writer(CHECKPOINT)
     w.int(SIG_ML_DSA_87_BATCH, 1, "sig_alg")
     w.ident(cp.tenant_id, "tenant_id")
     w.ident(cp.program_id, "program_id")
@@ -296,8 +284,7 @@ def encode_checkpoint_header(cp: Checkpoint) -> bytes:
         w.digest(getattr(cp, name), name)
     w.int(cp.count, 2, "count", low=1, high=MAX_BATCH)
     w.int(cp.created_at, 8, "created_at")
-    if cp.registry_head is not None:
-        w.digest(cp.registry_head, "registry_head")
+    w.int(cp.counter, 8, "counter")
     if cp.seq_to - cp.seq_from + 1 != cp.count:
         _fail("seq_range")
     if (cp.seq_from == 0) != (cp.prev_checkpoint_digest == ZERO_DIGEST):
@@ -340,7 +327,13 @@ def encode_key_cert(tenant_id: str, epoch: int, shard_count: int, public_key: by
     return bytes(w.out)
 
 
-# ------------------------------------------------------------------ #3 TOKEN/v1
+def key_cert_shards(cert: bytes) -> int:
+    """The shard count a KEY-CERT body names (or its certificate: the body comes first)."""
+    at = len(KEY_CERT) + 3 + int.from_bytes(cert[len(KEY_CERT) + 1:len(KEY_CERT) + 3], "big") + 8
+    return int.from_bytes(cert[at:at + 4], "big")
+
+
+# ------------------------------------------------------------------ #3 TOKEN/v2
 
 
 @dataclass(frozen=True)
@@ -363,6 +356,7 @@ class TokenLeaf:
     reason_codes: tuple[str, ...]
     authority: str
     grant_id: bytes
+    bypass: bytes  # the admitted bypass's id; zero when none
     rule_version: bytes
     engine_release: bytes
     input_commitment: bytes
@@ -404,7 +398,11 @@ def encode_token_leaf(leaf: TokenLeaf) -> bytes:
         w.ident(code, "reason_code", _CODE)
     _sorted_unique(leaf.reason_codes, "reason_codes")
     w.tag(AUTHORITIES, leaf.authority, "authority")
-    for name in ("grant_id", "rule_version", "engine_release", "input_commitment"):
+    w.digest(leaf.grant_id, "grant_id")
+    w.digest(leaf.bypass, "bypass")
+    if leaf.bypass != ZERO_DIGEST and not (leaf.outcome == "ALLOW" and leaf.flow in RULED):
+        _fail("bypass")
+    for name in ("rule_version", "engine_release", "input_commitment"):
         w.digest(getattr(leaf, name), name)
     for name in ("decided_at", "epoch", "seq", "issued_at", "expires_at"):
         w.int(getattr(leaf, name), 8, name)
@@ -434,7 +432,7 @@ def build_batch(
     evidence_root: bytes,
     state_digest: bytes,
     created_at: int,
-    registry_head: bytes | None = None,
+    counter: int,
 ) -> tuple[Checkpoint, list[Token]]:
     """One checkpoint for a whole batch; each payment's token is its leaf plus a Merkle path to token_root.
     No key and no judgement: the leaves are one shard writer's consecutive commits, and Lean ``publishOk``
@@ -443,7 +441,7 @@ def build_batch(
     root, paths = merkle_tree(MERKLE_NODE, [encode_token_leaf(leaf) for leaf in leaves])
     checkpoint = Checkpoint(
         first.tenant_id, first.program_id, first.shard_id, first.seq, first.seq + len(leaves) - 1, first.epoch,
-        prev_checkpoint_digest, event_head, root, evidence_root, state_digest, len(leaves), created_at, registry_head,
+        prev_checkpoint_digest, event_head, root, evidence_root, state_digest, len(leaves), created_at, counter,
     )
     digest = checkpoint_digest(checkpoint)
     return checkpoint, [Token(leaf, tuple(path), digest) for leaf, path in zip(leaves, paths)]
@@ -483,82 +481,4 @@ def encode_decide_response(response: DecideResponse) -> bytes:
         w.tag(REJECT_CODES, response.reject_code, "reject_code")
     else:
         w.int(response.retry_after_ms, 4, "retry_after_ms", low=1, high=MAX_RETRY_AFTER_MS)
-    return bytes(w.out)
-
-
-# ------------------------------------------------- APPROVAL/v1 (hold-release S2)
-# A person's act and the moves it binds (r4.2 section 10).  A move names the raw
-# payment line it pays and the writer digests it, so no other domain or length
-# can be written; Lean ``Gate.Approval`` decodes, and admission checks the stored
-# bytes against ``moves_digest`` without re-encoding (``admitMoves``).
-
-APPROVAL: Final = b"RR/APPROVAL/v1\x00"
-APPROVAL_MOVES: Final = b"RR/APPROVAL/MOVES/v1\x00"
-APPROVAL_LINE: Final = b"RR/APPROVAL/LINE/v1\x00"
-KINDS: Final = ("PROPOSE", "RELEASE", "DENY", "TOTAL", "RESTATE", "BYPASS", "CANCEL")
-
-
-@dataclass(frozen=True)
-class Move:
-    cell: bytes
-    payment_id: bytes
-    claim_key: bytes
-    payee_key: bytes
-    cents: int
-    line: bytes  # the raw payment line; a gate cell's is its ``encode_decide_request`` bytes
-
-
-@dataclass(frozen=True)
-class Approval:
-    kind: str
-    subject: bytes
-    arg: bytes
-    moves_digest: bytes
-    owner_id: str
-    mode: str
-    pack_digest: bytes
-    not_after_s: int
-
-
-def line_digest(raw: bytes) -> bytes:
-    """The one line digest (Lean ``lineDigest``)."""
-    return sha3_512(APPROVAL_LINE + raw)
-
-
-def moves_digest(moves: tuple[Move, ...]) -> bytes:
-    """An approval's ``moves_digest``: SHA3-512 of the stored moves bytes (Lean ``admitMoves``)."""
-    return sha3_512(encode_moves(moves))
-
-
-def encode_moves(moves: tuple[Move, ...]) -> bytes:
-    """Moves in strictly ascending cell order, so one cell has at most one move."""
-    if type(moves) is not tuple or any(type(m) is not Move for m in moves):
-        _fail("moves")
-    w = _Writer(APPROVAL_MOVES)
-    w.int(len(moves), 2, "moves", high=MAX_LINES)
-    for m in moves:
-        w.digest(m.cell, "cell")
-        w.blob(m.payment_id, "payment_id")
-        w.blob(m.claim_key, "claim_key")
-        w.blob(m.payee_key, "payee_key")
-        w.int(m.cents, 8, "cents", low=1)
-        if type(m.line) is not bytes or not m.line:
-            _fail("line")
-        w.out += line_digest(m.line)
-    _sorted_unique([m.cell for m in moves], "moves")
-    if len(w.out) > MAX_REQUEST_BYTES:
-        _fail("size")
-    return bytes(w.out)
-
-
-def encode_approval(a: Approval) -> bytes:
-    w = _Writer(APPROVAL)
-    w.tag(KINDS, a.kind, "kind")
-    w.digest(a.subject, "subject")
-    w.blob(a.arg, "arg", low=0)
-    w.digest(a.moves_digest, "moves_digest")
-    w.ident(a.owner_id, "owner_id")
-    w.ident(a.mode, "mode")
-    w.digest(a.pack_digest, "pack_digest")
-    w.int(a.not_after_s, 8, "not_after_s")
     return bytes(w.out)

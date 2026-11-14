@@ -12,7 +12,8 @@ def slice (s : PayerState) (t : Token) : PayerState :=
     grants := s.grants.filter (·.grantId == t.leaf.grantId),
     released := s.released.filter (· == payKey t),
     forked := s.forked.filter fun f =>
-      f.1.checkpoint.tenantId == t.leaf.tenantId && f.1.checkpoint.epoch == t.leaf.epoch,
+      f.1.checkpoint.tenantId == t.leaf.tenantId &&
+        (f.1.checkpoint.shardId == t.leaf.shardId || f.1.checkpoint.epoch == t.leaf.epoch || f.2.checkpoint.epoch == t.leaf.epoch),
     equivocations := s.equivocations.filter fun q => q.1.tenantId == t.leaf.tenantId && q.1.epoch == t.leaf.epoch,
     pins := s.pins.filter (·.1 == payKey t) }
 

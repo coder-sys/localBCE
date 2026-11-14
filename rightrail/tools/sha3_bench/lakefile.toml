@@ -7,7 +7,7 @@ defaultTargets = ["sha3_bench"]
 [[lean_lib]]
 name = "BlindLedger"
 srcDir = "../../lean"
-roots = ["BlindLedger.Sha3", "BlindLedger.Sha3Fast"]
+roots = ["BlindLedger.Sha3", "BlindLedger.Sha3Fast", "BlindLedger.Sha3Quick", "BlindLedger.Sha3Lanes", "BlindLedger.Sha3LanesEq"]
 
 [[lean_exe]]
 name = "sha3_bench"

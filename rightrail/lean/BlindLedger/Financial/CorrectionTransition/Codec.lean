@@ -14,6 +14,19 @@ def readSizedBytes (maximum : Nat) (bytes : Bytes) : Option (Bytes × Bytes) := 
   if length > maximum || length > rest.length then none
   else some (rest.take length, rest.drop length)
 
+/-- 0: a row stored before the flag was kept; 1: the original left the time to the owner's clock;
+    2: it named the time. -/
+def encodeTimeGiven : Option Bool → UInt8
+  | none => UInt8.ofNat 0
+  | some false => UInt8.ofNat 1
+  | some true => UInt8.ofNat 2
+
+def decodeTimeGiven (byte : UInt8) : Option (Option Bool) :=
+  if byte.toNat = 0 then some none
+  else if byte.toNat = 1 then some (some false)
+  else if byte.toNat = 2 then some (some true)
+  else none
+
 def encodeActionLookup : ActionIdentityLookup → Bytes
   | .absent => [UInt8.ofNat 1]
   | .existing identity =>
@@ -25,7 +38,7 @@ def encodeActionLookup : ActionIdentityLookup → Bytes
         natBE 8 identity.authorityEpoch ++ encodeDigest identity.authorityDigest ++
         [encodeDecision identity.decision] ++ encodeString identity.inputEvaluationId ++
         encodeDigest identity.inputEvaluationResultDigest ++ natBE 8 identity.expectedRevision ++
-        natBE 8 identity.decidedAtMs
+        natBE 8 identity.decidedAtMs ++ [encodeTimeGiven identity.decisionTimeGiven]
   | .conflicting => [UInt8.ofNat 3]
 
 def readActionLookup (bytes : Bytes) : Option (ActionIdentityLookup × Bytes) := do
@@ -50,6 +63,8 @@ def readActionLookup (bytes : Bytes) : Option (ActionIdentityLookup × Bytes) :=
     let (inputEvaluationResultDigest, rest) ← readDigest rest
     let (expectedRevision, rest) ← readNatBE 8 rest
     let (decidedAtMs, rest) ← readNatBE 8 rest
+    let (timeGivenByte, rest) ← readByte rest
+    let decisionTimeGiven ← decodeTimeGiven timeGivenByte
     let identity : ExistingCorrectionIdentity := {
       actionId := actionId
       actionObligationId := actionObligationId
@@ -66,7 +81,8 @@ def readActionLookup (bytes : Bytes) : Option (ActionIdentityLookup × Bytes) :=
       inputEvaluationId := inputEvaluationId
       inputEvaluationResultDigest := inputEvaluationResultDigest
       expectedRevision := expectedRevision
-      decidedAtMs := decidedAtMs }
+      decidedAtMs := decidedAtMs
+      decisionTimeGiven := decisionTimeGiven }
     pure (.existing identity, rest)
   else none
 
@@ -181,6 +197,7 @@ def encodeInputBody (request : CorrectionTransitionRequest) : Option Bytes := do
     natBE 8 request.command.currentAuthorityEpoch ++ encodeDigest request.command.currentAuthorityDigest ++
     natBE 8 request.command.expectedRevision ++ encodeString request.command.evaluationId ++
     encodeDigest request.command.evaluationResultDigest ++ natBE 8 request.command.decisionAtMs ++
+    encodeBool request.command.decisionTimeGiven ++
     natBE 8 request.command.ownerNowMs ++ encodeActionLookup request.command.actionLookup ++
     encodeQueryObservations request.command.queryObservations ++
     natBE 8 request.command.currentEventSequence ++
@@ -214,6 +231,7 @@ def parseCorrectionTransitionRequest (bytes : Bytes) :
   let (evaluationId, rest) ← readString rest
   let (evaluationResultDigest, rest) ← readDigest rest
   let (decisionAtMs, rest) ← readNatBE 8 rest
+  let (decisionTimeGiven, rest) ← readBool rest
   let (ownerNowMs, rest) ← readNatBE 8 rest
   let (actionLookup, rest) ← readActionLookup rest
   let (queryObservations, rest) ← readQueryObservations rest
@@ -239,6 +257,7 @@ def parseCorrectionTransitionRequest (bytes : Bytes) :
       evaluationId := evaluationId
       evaluationResultDigest := evaluationResultDigest
       decisionAtMs := decisionAtMs
+      decisionTimeGiven := decisionTimeGiven
       ownerNowMs := ownerNowMs
       actionLookup := actionLookup
       queryObservations := queryObservations

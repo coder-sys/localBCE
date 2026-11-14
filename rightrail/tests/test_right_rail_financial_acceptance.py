@@ -164,7 +164,7 @@ def _owner_config(**overrides: object) -> FinancialOwnerConfig:
 
 
 def _image(path: Path) -> bytes:
-    """A store's committed content whichever connection closed last (R0.5: under WAL the main file can lag its -wal)."""
+    """A store's committed content whichever connection closed last (under WAL the main file can lag its -wal)."""
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         return connection.serialize()
 
@@ -661,7 +661,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             clock=clock or _Clock(),
         )
         owner = _WriteBoundaryOwner(fault=fault, **kwargs) if fault else FinancialOwner(**kwargs)
-        self.addCleanup(owner.close)  # R1a: the writer holds the file open until closed
+        self.addCleanup(owner.close)  # the writer holds the file open until closed
         return owner
 
     @staticmethod
@@ -1562,7 +1562,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             expected.ACTION_CORRECTION_ID,
             "ack:process-postcommit-correction",
         )
-        # G2: an acknowledgment moves no dependency value, so the correction stays closed.
+        # an acknowledgment moves no dependency value, so the correction stays closed.
         acknowledged_outputs = reopened_process_postcommit.correction_followup_outputs(
             expected.H_ITEM_ID,
             expected.ACTION_CORRECTION_ID,
@@ -2857,7 +2857,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_restore_race_preserves_foreign_files(after_link=True)
 
     def test_continuity_restore_publishes_commits_that_a_read_only_reader_left_in_the_wal(self) -> None:
-        # WAL (R0.5): a read-only connection that closes last never checkpoints, so the import can still be only in the
+        # WAL: a read-only connection that closes last never checkpoints, so the import can still be only in the
         # attempt's -wal when the restore links the main file alone; without a checkpoint it would publish the bare genesis.
         store = self._build_base()
         destination, readers = self._path("wal-left-continuity.sqlite"), []
@@ -3183,7 +3183,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 (population_id,),
             )
             connection.commit()
-        before = _image(store.path)  # R1a: an export after this outside edit is refused
+        before = _image(store.path)  # an export after this outside edit is refused
         with self.assertRaisesRegex(FinancialIntegrityError, "population_manifest_imported_count"):
             self._stage(
                 store, pack, population_id, manifest,
@@ -3637,7 +3637,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             "member_count": len(expected.POPULATION_MANIFEST_MEMBER_IDS),
             "member_digest": _independent_hex(manifest.member_digest),
         }
-        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v3")
+        self.assertEqual(package["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v4")
         self.assertEqual(package["population_binding"], expected_binding)
         obligation_id = package["obligation"]["obligation_id"]
         self.assertEqual(package["obligation"]["population_id"], expected_binding["population_id"])
@@ -3760,7 +3760,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def _s2_offset_request(self, clock: _Clock) -> tuple[FinancialOwner, dict[str, object], int]:
-        """S2 (design rrb/designs/s2-timely-v1.md): cash and an offset claim evaluated before the due date; the offset completes the item.
+        """cash and an offset claim evaluated before the due date; the offset completes the item.
         Each write reads the clock once, at value + 1, so ``clock.value = t - 1`` makes the next write commit at t."""
         store = self._build_base_for_correction(clock=clock)
         self._record_cash(store)
@@ -3783,7 +3783,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(store.export_continuity(), before)
 
     def test_a_decision_backdated_before_the_due_date_does_not_make_a_late_offset_timely(self) -> None:
-        # safety red team S2: a decision committed after the due date may not name a time at or before it
+        # a decision committed after the due date may not name a time at or before it
         clock = _Clock()
         store, request, evaluated_at = self._s2_offset_request(clock)
         clock.value = expected.H_DUE_AT_MS + 172_800_000  # the official actually decides two days late
@@ -3796,7 +3796,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_an_offset_claim_above_the_shortfall_is_refused_never_capped(self) -> None:
-        # M1 (Lean CLAIM_EXCEEDS_SHORTFALL): a 300,000 claim against 100,000 unpaid is refused and writes nothing.
+        # Lean CLAIM_EXCEEDS_SHORTFALL: a 300,000 claim against 100,000 unpaid is refused and writes nothing.
         store, cash = self._build_base_for_correction(), expected.H_CASH_EVIDENCE
         store.record_payment_evidence(
             item_id=cash.item_id, payment_id="payment:h:cash", common_origin_id=cash.common_origin_id,
@@ -3837,7 +3837,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             store.authorize_offset(**request, decision_at_ms=evaluated_at - 1)
 
     def test_an_on_time_offset_store_reopens_retries_as_duplicate_and_restores_after_the_due_date(self) -> None:
-        # S2 migration: an offset committed by the due date under an earlier named decision time (every honest
+        # an offset committed by the due date under an earlier named decision time (every honest
         # store before the rule) keeps reading, and its resend after the due date is DUPLICATE, not refused
         clock = _Clock()
         store, request, evaluated_at = self._s2_offset_request(clock)
@@ -3853,7 +3853,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         restored.verify_integrity()
 
     def test_the_checker_refuses_an_offset_backdated_past_the_due_date_by_a_writer_that_misses_it(self) -> None:
-        # S2: Lean refuses a late write that names a time at or before the due date. A writer whose Lean request carries a stale
+        # Lean refuses a late write that names a time at or before the due date. A writer whose Lean request carries a stale
         # owner clock gets an OFFSET_AUTHORIZED answer and stops before COMMIT; one that also skips that check (or predates the
         # rule) leaves a store the whole-store check refuses
         clock = _Clock()
@@ -4748,9 +4748,9 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._rehash_history(path, as_decided), 1)
 
     def test_history_is_judged_by_the_amount_rule_of_the_engine_that_decided_it(self) -> None:
-        # rr-review M1: E911 requested the whole claim (correction-rule-v1), 88D8 the unpaid balance (b2-v1).
+        # E911 requested the whole claim (correction-rule-v1), 88D8 the unpaid balance (b2-v1).
         # A 300,000 claim rejected on 100,000 unpaid is valid history only as the engine it names decided it,
-        # and never requesting more than was requestable: E911's whole claim is refused (round 3 #1).
+        # and never requesting more than was requestable: E911's whole claim is refused .
         store = self._build_base_for_correction()
         cash = expected.H_CASH_EVIDENCE
         store.record_payment_evidence(
@@ -4826,7 +4826,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
             self._assert_verified(store)
 
     def test_an_offset_counts_earlier_offsets_against_the_shortfall(self) -> None:
-        # M1: 600,000 unpaid; offset A (400,000) leaves 200,000, so offset B (300,000) is refused. Kills "shortfall := owed - cash" in owner and checker.
+        # 600,000 unpaid; offset A (400,000) leaves 200,000, so offset B (300,000) is refused. Kills "shortfall := owed - cash" in owner and checker.
         store = self._two_claims(400_000, 300_000, unpaid_cents=600_000)
         receipt = store.current_evaluation_receipt(expected.H_ITEM_ID)
         self._advance_clock(store, expected.CORRECTION_AUTH_MS + 1_000)
@@ -4835,13 +4835,13 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._offset_b_refused_then_forced(store)
 
     def test_an_offset_counts_open_correction_requests_against_the_shortfall(self) -> None:
-        # M1 (review finding 1): 400,000 unpaid and correction request A (300,000) open leaves 100,000: a 200,000 offset would let paying A recover twice.
+        # 400,000 unpaid and correction request A (300,000) open leaves 100,000: a 200,000 offset would let paying A recover twice.
         # With nothing open, a 300,000 offset on 300,000 unpaid is accepted (test_case_* H fixture).
         store, _reject_b = self._two_claim_corrections(300_000, 200_000, unpaid_cents=400_000)
         self._offset_b_refused_then_forced(store)
 
     def test_an_offset_counts_only_the_unpaid_part_of_an_open_request(self) -> None:
-        # M1 re-review LOW: 400,000 unpaid and request A (300,000) with 100,000 paid against it: 300,000 unpaid, 200,000 still asked, so a
+        # 400,000 unpaid and request A (300,000) with 100,000 paid against it: 300,000 unpaid, 200,000 still asked, so a
         # 100,000 offset fits exactly. Kills an owner or checker sum that ignores what was paid against a request.
         store, _reject_b = self._two_claim_corrections(300_000, 100_000, unpaid_cents=400_000)
         self._pay_a(store, 100_000)
@@ -4865,7 +4865,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     @staticmethod
     def _open_cents(store: FinancialOwner) -> dict[str, object]:
-        """R2: what each action may still collect, as the decision package shows it."""
+        """what each action may still collect, as the decision package shows it."""
         return {entry["action_id"]: entry.get("open_cents") for entry in store.decision_package(expected.H_ITEM_ID)["references"]["actions"]["items"]}
 
     @staticmethod
@@ -4884,7 +4884,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return requested, claimed
 
     def test_a_second_correction_on_a_fully_requested_balance_is_refused(self) -> None:
-        # rr-review H1: two 300,000 claims on 300,000 unpaid requested 600,000; the second now requests nothing.
+        # two 300,000 claims on 300,000 unpaid requested 600,000; the second now requests nothing.
         store, reject_b = self._two_claim_corrections(300_000, 300_000)
         counts = self._durable_counts(store.path)
         with self.assertRaisesRegex(FinancialConflictError, "^correction_no_requestable_balance$"):
@@ -4895,7 +4895,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._make_owner(path=store.path)
 
     def test_a_second_correction_requests_only_what_is_left(self) -> None:
-        # rr-review H1: claims of 200,000 and 200,000 on 300,000 unpaid request 200,000, then the 100,000 left.
+        # claims of 200,000 and 200,000 on 300,000 unpaid request 200,000, then the 100,000 left.
         # The decision events keep each claim's amount (L4); only the action rows carry the request.
         store, reject_b = self._two_claim_corrections(200_000, 200_000)
         reject_b()
@@ -4904,7 +4904,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._make_owner(path=store.path)
 
     def test_a_paid_correction_request_no_longer_blocks_the_next(self) -> None:
-        # rr-review round 3 #2: 600,000 unpaid, claims A and B of 300,000. A requests 300,000 and is paid;
+        # 600,000 unpaid, claims A and B of 300,000. A requests 300,000 and is paid;
         # 300,000 is still unpaid and no unpaid request covers it, so B requests it. A payment that
         # names no request is plain cash: A still looks unpaid and B has nothing left to request. A
         # reversed payment pays nothing: 600,000 is unpaid again, A asks for 300,000, so B's 400,000
@@ -4972,7 +4972,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_a_linked_payment_never_pays_past_the_balance(self) -> None:
-        # F1 scenario B: pay the request, pay the same cents unlinked, reverse the linked one. The balance is
+        # pay the request, pay the same cents unlinked, reverse the linked one. The balance is
         # settled and the request reads open again, but it may not collect a second time. A payment still owed is taken.
         store = self._rejected_store()
         self._pay_a(store, 300_000)
@@ -4998,7 +4998,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_checker_refuses(forged, store, "^payment:link$")
 
     def test_a_falling_balance_shrinks_the_newest_request_first(self) -> None:
-        # R2: 600,000 unpaid; A and B each request 300,000. 200,000 arrives unlinked, so 400,000 is owed:
+        # 600,000 unpaid; A and B each request 300,000. 200,000 arrives unlinked, so 400,000 is owed:
         # the older request keeps its 300,000, the newer is cut to 100,000, and a payment may collect only that.
         store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
         reject_b()
@@ -5016,7 +5016,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._make_owner(path=store.path)
 
     def test_a_request_closes_with_the_balance_and_reopens_when_it_returns(self) -> None:
-        # R2: one 300,000 request. 300,000 arrives unlinked: nothing is owed and the request is closed.
+        # one 300,000 request. 300,000 arrives unlinked: nothing is owed and the request is closed.
         # That payment is reversed: 300,000 is owed again and the request reopens, never past its own amount.
         store = self._rejected_store()
         self._pay_a(store, 300_000, linked=False)
@@ -5028,7 +5028,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_verified(store)
 
     def test_an_older_request_holds_only_its_unpaid_part(self) -> None:
-        # R2: 600,000 unpaid; A requests 300,000 and 100,000 of it is paid; B requests 300,000. A holds only its
+        # 600,000 unpaid; A requests 300,000 and 100,000 of it is paid; B requests 300,000. A holds only its
         # unpaid 200,000, so B's whole 300,000 is open and payable (a checker that holds A's full amount refuses this).
         store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
         self._pay_a(store, 100_000)
@@ -5038,8 +5038,8 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(self._open_cents(store), {expected.ACTION_CORRECTION_ID: 200_000, _ACTION_B: 0})
 
     def test_the_checker_refuses_a_payment_past_its_requests_open_amount(self) -> None:
-        # R2: with A and B open at 300,000 and 100,000, a linked 300,000 pays A. Retargeted to B it stays within
-        # B's request and within the balance (R1); only the open amount refuses it.
+        # with A and B open at 300,000 and 100,000, a linked 300,000 pays A. Retargeted to B it stays within
+        # B's request and within the balance; only the open amount refuses it.
         store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
         reject_b()
         self._pay_a(store, 200_000, linked=False)
@@ -5081,7 +5081,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
 
     def test_the_lean_link_rule_agrees_with_pythons_open_amounts(self) -> None:
         # Lean decides linked payments (`Payment.linkRefusal`, BLFPAY01); the open amounts shown (`_open_requests`) must
-        # agree with it. For every request the R2 scenarios above leave, Lean records open_cents and refuses
+        # agree with it. For every request the scenarios above leave, Lean records open_cents and refuses
         # open_cents + 1 with code 8 (LINK_EXCEEDS_UNPAID). A request with 0 open is refused at 1 cent (nothing to record at 0).
         recorded, refused = b"\x00BLFPRS01\x01", b"\x00BLFPRS01\x07\x08"
         seen: list[tuple[str, int]] = []
@@ -5114,9 +5114,11 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual({cents for _, cents in seen} >= {0, 100_000, 200_000, 300_000}, True, seen)
 
     def test_a_request_the_balance_no_longer_needs_is_not_waiting_on_delivery(self) -> None:
-        # Stale corrections: one READY 300,000 request, never acknowledged. 300,000 arrives unlinked, so it asks for
-        # nothing and delivery is not required; a reversal makes it ask again. Paid again and reported, the closed
-        # case reads SUPPORTED, not UNSUPPORTED. The newest action's own ACK result stays NOT_SATISFIED throughout.
+        """Stale corrections: one READY 300,000 request, never acknowledged. 300,000 arrives unlinked, so it asks for
+        nothing and delivery is not required; a reversal makes it ask again. Paid again and reported, the closed case
+        reads SUPPORTED, not UNSUPPORTED. The newest action's own ACK result stays NOT_SATISFIED throughout: under
+        Constitution Article II dispatch is not acknowledgment, and a requirement that is not needed does not stand in
+        for an acknowledgment that never came."""
         store = self._rejected_store()
         seen = [self._delivery(store)]
         self._pay_a(store, 300_000, linked=False)
@@ -5136,9 +5138,10 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         ])
 
     def test_every_action_that_still_asks_must_be_delivered(self) -> None:
-        # Stale corrections: 600,000 unpaid; A and B each request 300,000. Delivery waits on every action that still asks
-        # for money, not only the newest. B acknowledged leaves A waiting until A is acknowledged; A acknowledged leaves
-        # B waiting until 300,000 arrives unlinked and cuts B, the newest, to nothing.
+        """Stale corrections: 600,000 unpaid; A and B each request 300,000. Delivery waits on every action that still
+        asks for money, not only the newest (Constitution Article II: one action's acknowledgment does not stand in for
+        another's). B acknowledged leaves A waiting until A is acknowledged; A acknowledged leaves B waiting until
+        300,000 arrives unlinked and cuts B, the newest, to nothing."""
         seen = {}
         for first in (_ACTION_B, expected.ACTION_CORRECTION_ID):
             store, reject_b = self._two_claim_corrections(300_000, 300_000, unpaid_cents=600_000)
@@ -5198,7 +5201,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self.assertEqual(seen, {"NOT_SATISFIED", "SUPPORTED"})
 
     def test_a_resent_payment_source_cannot_change_its_link(self) -> None:
-        # rr-review round 3 LOW #3: a source already recorded is a duplicate only if the link it carries matches.
+        # a source already recorded is a duplicate only if the link it carries matches.
         store = self._rejected_store()
         self._pay_a(store, 100_000)
         self._pay_a(store, 50_000, "p3", linked=False)
@@ -5344,7 +5347,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 self._make_owner(path=store.path)
 
     def test_a_forged_duplicate_label_cannot_hide_a_new_payment(self) -> None:
-        # rr-review H1: a PAYMENT_DUPLICATE_EVIDENCE event appended over a real new payment's confirmation
+        # a PAYMENT_DUPLICATE_EVIDENCE event appended over a real new payment's confirmation
         # neither closes the correction's follow-up nor passes the checker.
         store = self._rejected_store()
         self._pay_a(store, 1, linked=False)
@@ -5362,7 +5365,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_refused(store, "duplicate-evidence:binding")
 
     def test_a_relabelled_second_correction_is_refused(self) -> None:
-        # rr-review round 3 #1: 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
+        # 300,000 unpaid, claims A and B of 200,000; honest requests are 200,000
         # then 100,000. Relabelling B as decided by a retired engine that requests 200,000 (400,000 on
         # 300,000) is refused whichever retired engine it names, and so is a retired engine deciding
         # after a newer one even when the amount fits (only the engine-order check sees that).
@@ -5400,7 +5403,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         return path
 
     def test_a_served_offset_names_the_serving_engine_or_a_newer_one(self) -> None:
-        # rr-review offset-served MED 1: a sha-less offset is legacy only before any event names the serving engine (7C1EAB94);
+        # a sha-less offset is legacy only before any event names the serving engine (7C1EAB94);
         # an offset naming a pre-serving engine is refused. LOW 2 is the last case.
         store = self._build_base_for_correction()
         self._authorize(store, self._record_claim(store))
@@ -5447,7 +5450,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         self._assert_checker_refuses(changed, store, "^action:event-amount$")
 
     def test_a_determination_only_the_whole_store_rule_rejects_refuses_before_commit(self) -> None:
-        # The determination and follow-up rules run on the touched rows before COMMIT (cash 1a F1): a digest that
+        # The determination and follow-up rules run on the touched rows before COMMIT : a digest that
         # matches the owner's own payload but not the row's fields used to commit and leave a store that will not open.
         store = self._build_base_for_correction()
         self._record_cash(store)
@@ -5544,7 +5547,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
                 "actor_id": decision["actor_id"],
                 "actor_role": decision["actor_role"],
                 "expected_revision": decision["expected_revision"],
-                "decision_at_ms": decision["decided_at_ms"],
+                "decision_at_ms": decision["decision_at_ms"],
                 "evaluation_id": decision["evaluation_id"],
                 "evaluation_result_digest": decision["evaluation_result_digest"],
             }
@@ -5575,7 +5578,7 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
              lambda: store.acknowledge_action(expected.ACTION_CORRECTION_ID, "ack:correction:h:other"),
              "acknowledgment_conflict"),
             ("decision", reject,
-             lambda: reject(decision_at_ms=decision["decided_at_ms"] + 1),
+             lambda: reject(decision_at_ms=decision["decision_at_ms"] + 1),
              "determination_request_conflict"),
             # Review 466178b: a None claim or actor is a changed request, not an omitted optional field.
             ("decision-claim-none", reject, lambda: reject(claim_id=None), "determination_request_conflict"),
@@ -5620,6 +5623,109 @@ class RightRailFinancialAcceptanceTests(unittest.TestCase):
         ):
             with self.subTest(label=label), self.assertRaisesRegex(FinancialIntegrityError, "^obligation_missing$"):
                 call()
+
+    def test_an_outside_label_edit_between_two_commands_refuses_the_next_offset(self) -> None:
+        # The offset snapshot runs the whole-store check, so a tamper that passes the field checks is still refused by its own code
+        clock = _Clock()
+        store, request, evaluated_at = self._s2_offset_request(clock)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute("UPDATE population_items SET display_label=display_label||'x'")
+        before = _image(store.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^correction_snapshot_invalid$"):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        self.assertEqual(_image(store.path), before)
+
+    def test_an_offset_retry_is_a_duplicate_only_when_its_input_is_identical(self) -> None:
+        # III.3: every field must match, the decision time as given: a supplied time and an omitted one are different input
+        for original, resend, status in (("T", "T", "DUPLICATE"), (None, None, "DUPLICATE"), ("T", None, "CONFLICT"), (None, "T", "CONFLICT")):
+            with self.subTest(original=original, resend=resend):
+                clock = _Clock()
+                store, request, evaluated_at = self._s2_offset_request(clock)
+                store.authorize_offset(**request, **({} if original is None else {"decision_at_ms": evaluated_at}))
+                stored_at = next(int(row["decided_at_ms"]) for row in store.obligation_detail(expected.H_ITEM_ID)["determinations"] if row["determination_id"] == f"determination:{request['action_id']}")
+                resent = {} if resend is None else {"decision_at_ms": stored_at}  # omitted/T resends the very time the clock gave
+                counts = self._durable_counts(store.path)
+                if status == "DUPLICATE":
+                    self.assertEqual(store.authorize_offset(**request, **resent)["status"], "DUPLICATE")
+                    restored = self._restore(store.export_continuity(), self._path(f"retry-{original}-{resend}.sqlite"), clock=_Clock(initial=clock.value), restore_mode="TEST")
+                    self.addCleanup(restored.close)
+                    self.assertEqual(restored.authorize_offset(**request, **resent)["status"], "DUPLICATE")  # the restored log keeps the time as given
+                else:
+                    with self.assertRaisesRegex(FinancialConflictError, "^determination_request_conflict$"):
+                        store.authorize_offset(**request, **resent)
+                with self.assertRaisesRegex(FinancialConflictError, "^determination_request_conflict$"):
+                    store.authorize_offset(**request, decision_at_ms=stored_at + 1)
+                for field in ("evaluation_id", "evaluation_result_digest", "expected_revision"):
+                    with self.assertRaisesRegex(FinancialConflictError, "^determination_request_conflict$"):
+                        store.authorize_offset(**{k: v for k, v in request.items() if k != field}, **resent)
+                self.assertEqual(self._durable_counts(store.path), counts)
+                self._assert_verified(store)
+
+    def test_an_offset_resend_refuses_a_command_row_whose_time_differs_from_the_committed_event(self) -> None:
+        store, request, evaluated_at = self._s2_offset_request(_Clock())
+        store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        with closing(sqlite3.connect(str(store.path), isolation_level=None)) as connection:
+            connection.execute("DROP TRIGGER command_update_immutable")
+            connection.execute("UPDATE commands SET request_json=replace(request_json, ?, ?) WHERE kind='OFFSET_DECISION'",
+                               (f'"decision_at_ms":{evaluated_at}', f'"decision_at_ms":{evaluated_at + 1}'))
+        counts = self._durable_counts(store.path)
+        with self.assertRaisesRegex(FinancialIntegrityError, "^command_request_source$"):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        self.assertEqual(self._durable_counts(store.path), counts)
+
+    def test_the_checker_refuses_an_omitted_time_that_is_not_the_owner_clock_at_commit(self) -> None:
+        # A writer that records the time as omitted but resolved it earlier than the commit (a backdated omitted time).
+        append = FinancialOwner._append_event
+        store, request, evaluated_at = self._s2_offset_request(_Clock())
+        with patch.object(FinancialOwner, "_append_event", lambda owner, connection, *, payload, **fields: append(owner, connection, payload={**payload, "decision_at_ms": None}, **fields)),                 patch.object(FinancialOwner, "_verify_before_commit", lambda *_args: None):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        self._assert_refused(store, ".*:given")
+
+    def test_an_offset_resend_after_an_authority_rotation_is_an_authority_failure(self) -> None:
+        # The store holds the old authority: the resend names that, not a bad snapshot. A changed input meets the store's own
+        # authority check first (trusted_authority_stale); either way it is an authority failure.
+        store, request, evaluated_at = self._s2_offset_request(_Clock())
+        store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        counts = self._durable_counts(store.path)
+        store.trusted_authority = SyntheticTrustedAuthority(epoch=2)
+        for label, changed, code in (("exact", {}, "^determination_authority_stale$"),
+                                     ("changed", {"expected_revision": request["expected_revision"] + 1}, "^trusted_authority_stale$")):
+            with self.subTest(label=label), self.assertRaisesRegex(FinancialAuthorityError, code):
+                store.authorize_offset(**{**request, **changed}, decision_at_ms=evaluated_at)
+        self.assertEqual(self._durable_counts(store.path), counts)
+
+    def test_an_offset_resend_to_a_store_of_another_owner_is_still_an_invalid_snapshot(self) -> None:
+        # Only what a rotation causes is an authority failure; a wrong owner binding keeps its old answer.
+        store, request, evaluated_at = self._s2_offset_request(_Clock())
+        store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        counts = self._durable_counts(store.path)
+        store.owner_id = "another-owner"
+        with self.assertRaisesRegex(FinancialIntegrityError, "^correction_snapshot_invalid$"):
+            store.authorize_offset(**request, decision_at_ms=evaluated_at)
+        self.assertEqual(self._durable_counts(store.path), counts)
+
+    def test_an_offset_logged_before_the_time_was_recorded_as_given_matches_only_its_exact_form(self) -> None:
+        # A store written before the event recorded the decision time as given: the log holds the resolved time, so only a
+        # resend naming that time is byte-identical; an omitted time never matches, whichever way the original was made.
+        append = FinancialOwner._append_event
+
+        def legacy_append(owner, connection, *, payload, **fields):
+            return append(owner, connection, payload={k: v for k, v in payload.items() if k != "decision_at_ms"}, **fields)
+
+        for original in ("T", None):
+            with self.subTest(original=original):
+                clock = _Clock()
+                store, request, evaluated_at = self._s2_offset_request(clock)
+                with patch.object(FinancialOwner, "_append_event", legacy_append):
+                    store.authorize_offset(**request, **({} if original is None else {"decision_at_ms": evaluated_at}))
+                self._assert_verified(store)
+                stored_at = next(int(row["decided_at_ms"]) for row in store.obligation_detail(expected.H_ITEM_ID)["determinations"] if row["determination_id"] == f"determination:{request['action_id']}")
+                counts = self._durable_counts(store.path)
+                self.assertEqual(store.authorize_offset(**request, decision_at_ms=stored_at)["status"], "DUPLICATE")
+                for resent in ({}, {"decision_at_ms": stored_at + 1}):
+                    with self.assertRaisesRegex(FinancialConflictError, "^determination_request_conflict$"):
+                        store.authorize_offset(**request, **resent)
+                self.assertEqual(self._durable_counts(store.path), counts)
 
     def test_checker_requires_every_foreign_key_to_be_deferred(self) -> None:
         store = self._build_base()

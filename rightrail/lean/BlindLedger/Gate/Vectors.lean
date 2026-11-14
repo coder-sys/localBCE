@@ -1,9 +1,10 @@
 import BlindLedger.Gate.Verify
-import BlindLedger.Gate.Approval
+import BlindLedger.Gate.Frame.Spec
+import BlindLedger.Gate.Cosign.Verify
 
 namespace BlindLedger.Gate.Vectors
 
-open BlindLedger.Gate Approval
+open BlindLedger.Gate
 
 /-! Conformance check of `tests/gate_vectors/gate_v1.vectors` against the Lean
     specification.  Lines run in order against one payer state: `cert`,
@@ -20,8 +21,13 @@ open BlindLedger.Gate Approval
     checkpoint lines, and tokens that decode, list the decoded fields they must
     yield; a response line
     names the decoded request it answers, and a `reissue` (`redecide`) line
-    checks `reissues` (`redecides`) on the latest revision and two tokens.  `moves`, `admit-moves` and `approval` lines
-    decode APPROVAL/v1 records (`tests/gate_vectors/approval_v1.vectors`).  The last line, `end N`, is the number
+    checks `reissues` (`redecides`) on the latest revision and two tokens.  An accepted `answer` line (an engine answer,
+    `Frame.decodeAns`) lists its decoded fields and must encode back to the same bytes.  In
+    `tests/gate_vectors/key_cert_v2.vectors` a `link` line adds an authority link to the tenant's chain (another tenant starts a chain;
+    its last field is the closing epoch of the generation before, `-` for none), a `genesis` line with the same fields
+    starts a new chain of the same tenant from a later generation and retires the links of the chain it replaces, and a
+    `key-cert` line is a whole KEY-CERT/v2 verified against the current chain (`Cosign.verify`): it expects `accept` or the refusal code, and lists the decoded
+    fields whenever the bytes decode.  The last line, `end N`, is the number
     of checked lines; anything else is a FAIL.  Test-only: this executable is
     never a release path. -/
 
@@ -81,7 +87,7 @@ def renderCheckpoint (x : SignedCheckpoint) : List String :=
   let c := x.checkpoint
   [text c.tenantId, text c.programId, toString c.shardId, toString c.seqFrom, toString c.seqTo, toString c.epoch,
    toHex c.prevCheckpoint, toHex c.eventHead, toHex c.tokenRoot, toHex c.evidenceRoot, toHex c.stateDigest,
-   toString c.count, toString c.createdAt, toHex (sha3 x.header)]
+   toString c.count, toString c.createdAt, toString c.counter, toHex (sha3 x.header)]
 
 def tagName {α : Type} [Repr α] (x : α) : String := ((reprStr x).splitOn ".").getLast!
 
@@ -90,24 +96,49 @@ def renderToken (t : Token) : List String :=
   [text l.tenantId, text l.programId, toString l.shardId, tagName l.flow, toString l.revision,
    text l.paymentId, toHex l.memberKey, text l.payeeRef, toString l.amountCents, text l.period,
    toHex l.linesRoot, tagName l.outcome, if l.reasonCodes.isEmpty then "-" else ",".intercalate (l.reasonCodes.map text),
-   tagName l.authority, toHex l.grantId, toHex l.ruleVersion, toHex l.engineRelease, toHex l.inputCommitment,
+   tagName l.authority, toHex l.grantId, toHex l.bypass, toHex l.ruleVersion, toHex l.engineRelease, toHex l.inputCommitment,
    toString l.decidedAt, toString l.epoch, toString l.seq, toString l.issuedAt, toString l.expiresAt,
    hexList t.siblings, toHex t.checkpointDigest]
 
-def renderMoves (ms : List Move) : List String :=
-  ms.flatMap fun m => [toHex m.cell, toHex m.paymentId, toHex m.claimKey, toHex m.payeeKey, toString m.cents,
-    toHex m.lineDigest]
+/-- An engine answer (`Frame.decodeAns`): status code, shard, batch, the request digest it echoes, the record count, and
+    each leaf's bypass id. -/
+def renderAns (a : Frame.AnsFrame) : List String :=
+  [toString a.word.code, toString a.shard, toString a.batch, toHex a.digest.toList, toString a.recs.length,
+   hexList (a.ext.leaves.map (·.bypass.toList))]
 
-def renderApproval (a : Approval) : List String :=
-  [tagName a.kind, toHex a.subject, if a.arg.isEmpty then "-" else toHex a.arg, toHex a.movesDigest, text a.ownerId,
-   text a.mode, toHex a.pack, toString a.notAfter]
+/-- A decoded KEY-CERT/v2: tenant, epoch, link, shard counts, the digests of both encoded keys and of the body, and the
+    two signature lengths. -/
+def renderKeyCert (e : Cosign.KeyCert) : List String :=
+  [text e.tenantId, toString e.epoch, toHex e.link, ",".intercalate (e.chain.map toString), toHex (sha3 e.key.enc),
+   toHex (sha3 e.verifierKey.enc), toHex (sha3 e.body), toString e.rootSig.length, toString e.coSig.length]
+
+def key (s : String) : Option Cosign.Key := (hex s).bind (parse Cosign.pKey Cosign.maxCertBytes)
 
 structure Ctx where
   state : PayerState := emptyState
   roots : List (Bytes × Bytes) := []
+  /-- The authority chain of the tenant of the newest `link` line. -/
+  chain : Option Cosign.Chain := none
+  /-- The links of that tenant's chains that a `genesis` line replaced. -/
+  retired : List Cosign.Link := []
   payments : List (String × Payment) := []
   requests : List (String × Request) := []
   expected : Option Nat := none
+
+/-- A `link` line: the next link of the current tenant's chain, or the first link of another tenant's.  A `genesis` line
+    (`regen`): a new chain of the current tenant from a later generation, which retires the links of the chain it
+    replaces.  Any other link, or one with one key in both roles, is a fault in the vector file. -/
+def admit (ch : Option Cosign.Chain) (retired : List Cosign.Link) (regen : Bool) (l : Cosign.Link) :
+    Option (Cosign.Chain × List Cosign.Link) :=
+  if hr : l.root ≠ l.witness then
+    match ch with
+    | some c =>
+      if ht : l.tenantId = c.head.tenantId then
+        if regen then (if c.head.gen < l.gen then some (.genesis l hr, c.links ++ retired) else none)
+        else if hg : l.gen = c.head.gen + 1 then some (c.extend l ht hg hr, retired) else none
+      else if regen then none else some (.genesis l hr, [])
+    | none => if regen then none else some (.genesis l hr, [])
+  else none
 
 def Ctx.crypto (x : Ctx) : Crypto := realCrypto x.roots
 
@@ -138,6 +169,12 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     | some e =>
       let (s, ok) := installCert x.crypto x.state e
       pure ({ x with state := s }, some (ok == (← verdict expect)))
+  | "key-cert" :: expect :: _ :: bytes :: rest =>
+    let b ← hex bytes
+    let got := match Cosign.verify Cosign.realCrypto (← x.chain) x.retired b with
+      | .ok _ => "accept"
+      | .error r => tagName r
+    pure (x, some (got == expect && ((Cosign.decode b).map renderKeyCert).getD [] == rest))
   | ["mldsa87", expect, pk, msg, sig] =>
     pure (x, some (MlDsa87.verify (← hex pk).toByteArray (← hex msg).toByteArray (← hex sig).toByteArray == (← verdict expect)))
   | ["grants", tenants, id, rules, releases] =>  -- the same grant for each listed tenant
@@ -158,13 +195,11 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
     | .error .member_key_changed => pure (x, some (expect == "member_key_changed"))
   | "checkpoint" :: expect :: _ :: bytes :: rest =>
     let b ← hex bytes
-    let result := storeCheckpointAny x.crypto x.state b
+    let result := storeCheckpoint x.crypto x.state b
     let got := match result with
       | none => "reject"
       | some s => if s.forked.length > x.state.forked.length then "fork" else "accept"
-    let fields := if got != "accept" then [] else match decodeCheckpoint2 b with
-      | some (y, head) => renderCheckpoint y ++ [toHex head]
-      | none => ((decodeCheckpoint b).map renderCheckpoint).getD []
+    let fields := if got != "accept" then [] else ((decodeCheckpoint b).map renderCheckpoint).getD []
     pure ({ x with state := result.getD x.state }, some (got == expect && fields == rest))
   | "token" :: expect :: decodes :: _ :: payment :: bytes :: rest =>
     let b ← hex bytes
@@ -181,12 +216,6 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   | "response" :: expect :: _ :: request :: bytes :: rest =>
     let r ← List.lookup request x.requests
     pure (x, some (← decoded expect renderResponse (decodeResponse sha3 r (← hex bytes)) rest))
-  | "moves" :: expect :: _ :: bytes :: rest => pure (x, some (← decoded expect renderMoves (decodeMoves (← hex bytes)) rest))
-  | "approval" :: expect :: _ :: bytes :: rest =>
-    pure (x, some (← decoded expect renderApproval (decodeApproval (← hex bytes)) rest))
-  | "admit-moves" :: expect :: _ :: d :: bytes :: rest =>
-    pure (x, some (← decoded expect renderMoves (admitMoves sha3 (← hex d) (← hex bytes)) rest))
-  | ["line-digest", _, raw, out] => pure (x, some (lineDigest sha3 (← hex raw) == (← hex out)))
   | [kind, expect, _, latest, old, new] =>
     let f ← [("reissue", reissues), ("redecide", redecides)].lookup kind
     let a ← decodeToken (← hex old)
@@ -200,6 +229,24 @@ def step (x : Ctx) (fields : List String) : Option (Ctx × Option Bool) := do
   | ["state", _, released, unresolved, out] =>
     pure (x, some (stateDigest sha3 (← hex released) (← hex unresolved) == (← hex out)))
   | ["lines-root", _, lines, out] => pure (x, some (linesRoot sha3 (← list hex lines) == (← hex out)))
+  | ["context", _, body, out] => pure (x, some (Gate.context sha3 (← hex body) == (← hex out)))
+  | ["pay-digest", _, request, out] =>
+    pure (x, some ((decodeRequest (← hex request)).map (Gate.payDigest sha3) == some (← hex out)))
+  | ["input6", _, ctx, rd, out] => pure (x, some (Gate.inputV6 sha3 (← hex ctx) (← hex rd) == (← hex out)))
+  | ["batch-input", _, ctx, rqs, out] =>
+    pure (x, some (Gate.batchInput sha3 (← hex ctx) (← list hex rqs) == (← hex out)))
+  | "answer" :: expect :: _ :: bytes :: rest =>
+    let b ← hex bytes
+    let r := Frame.decodeAns b
+    pure (x, some ((← decoded expect renderAns r rest) && r.all (Frame.encodeAns · == some b)))
+  | [kind, tenant, gen, digest, root, rootNext, witness, witnessNext, closed] =>
+    let regen ← [("link", false), ("genesis", true)].lookup kind
+    let closedThrough ← if closed == "-" then some none else closed.toNat?.map some
+    let l : Cosign.Link := { tenantId := ascii tenant, gen := (← gen.toNat?), digest := (← hex digest),
+                             root := (← key root), rootNext := (← hex rootNext), witness := (← key witness),
+                             witnessNext := (← hex witnessNext), closedThrough }
+    let (ch, retired) ← admit x.chain x.retired regen l
+    pure ({ x with chain := some ch, retired }, none)
   | ["end", n] => pure ({ x with expected := some (← n.toNat?) }, none)
   | _ => none
 

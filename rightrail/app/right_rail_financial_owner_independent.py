@@ -78,10 +78,10 @@ PRIVATE_INDEX_DEFS[4] = {  # one receipt per payment id and one alias per eviden
 }
 CORRECTION_FOLLOWUP_CONTRACT = "RR/FINANCIAL/CORRECTION-FOLLOWUP/v1"
 CORRECTION_TRANSITION_OPERATION = "RR/FINANCIAL/CORRECTION-TRANSITION/v1"
-CORRECTION_TRANSITION_ARTIFACT_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the evaluator worker
+CORRECTION_TRANSITION_ARTIFACT_SHA256 = "2AC5F5EB783AC99111B4A28B35DF6F23F47E773C2F10A281C01BC02E878841D8"  # the evaluator worker
 OFFSET_SERVING_ENGINE_SHA256 = "7C1EAB94BE614E584AED0D5AA388490481AC3766B085C89C2E982B8925D559E2"  # the first engine whose Lean serves offset authorizations; fixed, unlike the current pin
 RETIRED_PINS_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "engine-correction" / "RETIRED_PINS"
-RETIRED_PINS_SHA256 = "3030519fbf180128c59efc64fc94d4916f4a35fcf289d704043a78d685d5b1fd"
+RETIRED_PINS_SHA256 = "336e30ddeeb63056c929674a5c5aab227734b6f0f9ef0befbf398bd7701b1033"
 
 
 # What a correction requests, by the rule of the engine that decided it: (claim, input shortfall,
@@ -417,7 +417,7 @@ _TRIGGER_DEFS = {
 # Each table's whole stored CREATE TABLE text (every NOT NULL, CHECK, DEFAULT, UNIQUE and ON CONFLICT clause), as
 # SHA-256 of the Owner's DDL with each run of SQLite whitespace [ \t\n\f\r] made one space. Collapsing a run neither
 # joins nor splits a token, and no pinned literal or identifier holds whitespace and the DDL has no comment, so any
-# other clause, literal, case or comment changes the digest (rrb/archive/xi2-records-20261001.md "Table SQL pin").
+# other clause, literal, case or comment changes the digest.
 _TABLE_SQL_SHA256 = {
     "action_outbox": "841E8256DD35D074476B732F427886D66DE735ABBF9C105D552C846832F51613",
     "actions": "A17BA2F7AA3780BE782FD27439BB16A7A28E60B4E5848775DB15ADECB3211CC3",
@@ -2887,7 +2887,7 @@ def _verify_actions(
                 _fail("action:event-amount")  # the decision event records the rejected claim
             requestable = max(shortfall - unpaid, 0)
             amount = earlier[action_id] = _CORRECTION_AMOUNT_RULES[engines.get(action_id, current)[1]](amount, shortfall, unpaid)
-        elif amount + unpaid > shortfall:  # M1: an authorization and the open requests claim no more than the input evaluation's shortfall
+        elif amount + unpaid > shortfall:  # an authorization and the open requests claim no more than the input evaluation's shortfall
             _fail("action:exceeds-shortfall")
         expected_payload = {
             "action_id": action_id,
@@ -2937,7 +2937,7 @@ def _verify_actions(
         owed = next((e["shortfall_cents"] for e in evaluations.get(obligation_id, ()) if e["revision"] == paid_revision - 1), -1)
         if request is None or actions[action_ref]["revision"] >= paid_revision:
             _fail("payment:link")
-        older = sum(max(cents - paid_at(ref, paid_revision), 0) for ref, cents in requests[obligation_id].items() if (actions[ref]["revision"], ref) < (actions[action_ref]["revision"], action_ref))  # R2: older requests keep their unpaid part first
+        older = sum(max(cents - paid_at(ref, paid_revision), 0) for ref, cents in requests[obligation_id].items() if (actions[ref]["revision"], ref) < (actions[action_ref]["revision"], action_ref))  # older requests keep their unpaid part first
         if paid_at(action_ref, paid_revision) + payments[payment_id]["amount_cents"] > request or payments[payment_id]["amount_cents"] > owed - older:
             _fail("payment:link")
     return actions
@@ -3898,6 +3898,11 @@ def _verify_commands(rows: Mapping[str, Sequence[Mapping[str, object]]], code: s
             alias, _, column = source.partition(".")
             value = found[alias][column]
             fields[name or column] = value.hex().upper() if type(value) is bytes else value
+        if kind == "OFFSET_DECISION" and "decision_at_ms" in payload:  # the time as given; an older event keeps the resolved one
+            resolved, given = fields.pop("decided_at_ms"), payload["decision_at_ms"]
+            if not ((type(given) is int and given == resolved) or (given is None and event["kind"] == "OFFSET_AUTHORIZED" and resolved == event["committed_at_ms"])):
+                _fail(f"{code}:given")  # a given time is the resolved one; an omitted one (offset authorization only) is the owner's clock at commit
+            fields["decision_at_ms"] = given
         command_id = f"{kind}:{key}"
         if command_id in expected:
             _fail(f"{code}:duplicate")

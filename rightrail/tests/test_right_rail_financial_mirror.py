@@ -57,7 +57,7 @@ class FinancialMirrorTests(unittest.TestCase):
             trusted_authority=self.authority,
             clock=self.clock,
         )
-        self.addCleanup(self.store.close)  # R1a: the owner's writer holds the file open until closed
+        self.addCleanup(self.store.close)  # the owner's writer holds the file open until closed
         self._populate_owner()
         self.mirror = FinancialMirror(self.store)
 
@@ -464,7 +464,7 @@ class FinancialMirrorTests(unittest.TestCase):
         second = self.mirror.decision_package(H_ITEM_ID, limit=1, offset=1)
         self.assertEqual(first["schema"], "RR/FINANCIAL/MIRROR/v1")
         self.assertEqual(first["resource"], "decision_package")
-        self.assertEqual(first["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v3")
+        self.assertEqual(first["contract"], "RR/FINANCIAL/DECISION-PACKAGE/v4")
         self.assertEqual(first["cash"]["recorded_received_cash_cents"], H_CASH_CENTS)
         self.assertEqual(first["cash"]["shortfall_cents"], UNAPPROVED_OFFSET_CENTS)
         self.assertEqual(first["current_action"]["status"], "ACKNOWLEDGED")
@@ -527,6 +527,14 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertTrue(all("aggregate_id" not in row for row in population_history))
         with self.assertRaisesRegex(FinancialMirrorInputError, "decision_package_page"):
             self.mirror.decision_package(H_ITEM_ID, limit=201)
+
+    def test_a_package_of_the_old_contract_is_refused(self) -> None:
+        self._prepare_action()
+        v3 = {**self.store.decision_package(H_ITEM_ID), "contract": "RR/FINANCIAL/DECISION-PACKAGE/v3"}
+        with mock.patch.object(self.store, "decision_package", return_value=v3), self.assertRaisesRegex(FinancialMirrorContinuityError, "decision_package_contract"):
+            self.mirror.decision_package(H_ITEM_ID)
+        with self.assertRaisesRegex(FinancialMirrorContinuityError, "decision_package_allowlist"):
+            FinancialMirror._staff_decision_package(v3)
 
     def test_commands_delegate_revision_and_authority_fences(self) -> None:
         self._prepare_claim()
@@ -878,6 +886,43 @@ class FinancialMirrorTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertEqual(stderr, "ERROR:obligation_revision_conflict\n")
         self.assertEqual(self.mirror.summary()["sequence"], sequence)
+
+    def test_hostile_owner_values_are_typed_refusals_never_a_traceback(self) -> None:
+        for payload, code in (({"amount_cents": 1.5}, "unsafe_owner_value"), ({"amount_cents": True}, "unsafe_owner_value"), ({"amount_cents": b""}, "unsafe_owner_value"), (None, "action_payload_shape")):
+            raw = payload if payload is None else {"action_id": "a", "payload_digest": None, "payload": payload}
+            with self.subTest(payload), mock.patch.object(self.store, "action_payload", return_value=raw), self.assertRaisesRegex(FinancialMirrorContinuityError, f"^{code}$"):
+                self.mirror.action_payload("a")
+        event = {"aggregate_type": "OBLIGATION", "aggregate_id": "o", "event_sequence": 1, "kind": "FOLLOWTHROUGH_DECIDED", "before_revision": 1, "after_revision": 2, "committed_at_ms": 5, "payload_json": "{}"}
+        for change in ({"payload_json": "not json"}, {"payload_json": "[]"}, {"payload_json": None}, {"committed_at_ms": 5.5}, {"kind": None, "committed_at_ms": "5"}):
+            with self.subTest(change), self.assertRaisesRegex(FinancialMirrorContinuityError, "^staff_timeline_binding$"):
+                FinancialMirror._staff_timeline({"limit": 5, "total_count": 1, "truncated": False, "items": [{**event, **change}]}, obligation_id="o")
+        with self.assertRaisesRegex(FinancialMirrorContinuityError, "^staff_timeline_binding$"):
+            FinancialMirror._staff_timeline({"limit": 5, "total_count": 1, "truncated": False, "items": [{k: v for k, v in event.items() if k != "kind"}]}, obligation_id="o")
+
+    def test_a_sum_past_the_money_bound_is_a_typed_refusal(self) -> None:
+        with closing(sqlite3.connect(self.store.path)) as connection:
+            connection.execute("UPDATE obligations SET owed_cents=?", (2**63 - 1,))
+            connection.commit()
+        with self.assertRaisesRegex(owner.FinancialInputError, "^summary_total_overflow$"):
+            self.store.summary()
+
+    def test_population_status_names_which_completeness_field_is_wrong(self) -> None:
+        good = self.store.population_status(PROGRAM_ITEMS[0].population_id)
+        for change, code in (({"source_complete": "yes"}, "population_status_complete"), ({"completeness": "MAYBE"}, "population_status_completeness"),
+                             ({"population_id": "other"}, "population_status_contract")):
+            with self.subTest(change), mock.patch.object(self.store, "population_status", return_value={**good, **change}),                     self.assertRaisesRegex(FinancialMirrorContinuityError, f"^{code}$"):
+                self.mirror.population_status(PROGRAM_ITEMS[0].population_id)
+
+    def test_a_package_sum_past_the_money_bound_is_the_same_typed_refusal(self) -> None:
+        real = sqlite3.connect
+
+        class Overflowing(sqlite3.Connection):  # SQLite itself refuses a SUM past 2^63-1 with this message
+            def execute(self, sql, *args):
+                if "SUM(p.amount_cents)" in sql:
+                    raise sqlite3.OperationalError("integer overflow")
+                return super().execute(sql, *args)
+        with mock.patch.object(owner.sqlite3, "connect", lambda *a, **k: real(*a, factory=Overflowing, **k)),                 self.assertRaisesRegex(owner.FinancialInputError, "^summary_total_overflow$"):
+            self.store.decision_package(H_ITEM_ID)
 
     def test_population_status_reports_manifest_completeness_without_roster(self) -> None:
         status = self.mirror.population_status(PROGRAM_ITEMS[0].population_id)

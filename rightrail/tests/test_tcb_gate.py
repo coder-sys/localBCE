@@ -5,7 +5,7 @@ theorems, and fails on a non-standard axiom (`sorryAx`, `Lean.ofReduceBool`) or 
 `unsafe`, `partial_fixpoint`, `while`/`repeat`, `IO.iterate` or stream-`for` constant its allowlist does not name.  The live gate needs 3-5 GB, so the default run only checks the committed
 `tools/tcb_report.txt`: it must be for the pinned exes' import closures (and lakefile.toml, lean-toolchain, lake-manifest.json), the gate file and the pinned exe bytes, hold no violation, and name
 exactly the known VIOLATION-TODO set.  The pin procedure (`tools/tcb_pin.ps1`, RR_TCB_LIVE=1) builds nothing: it reruns the gate on the
-built exes (whose bytes must equal the pins), pins the toolchain and rewrites the report."""
+built exes (whose bytes must equal the pins; the engine exes' the report's lines unless `-Regen` sets RR_TCB_REGEN=1), pins the toolchain and rewrites the report."""
 
 from __future__ import annotations
 
@@ -27,8 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 LEAN = ROOT / "lean"
 GATE = ROOT / "tools" / "tcb_gate.lean"
 PIN = ROOT / "tools" / "tcb_toolchain.txt"
+PROVENANCE = ROOT / "artifacts" / "gate-verify" / "PROVENANCE.txt"
 REPORT = ROOT / "tools" / "tcb_report.txt"
-TCB_EXES = gate.PINNED_EXES + ("gate_verify",)
+ENGINE_EXES = ("gate_engine",)  # the decision program, with fsync/rename C; pinned by the report line, not by a committed binary
+TCB_EXES = gate.PINNED_EXES + ("gate_verify",) + ENGINE_EXES
 VERSION = (LEAN / "lean-toolchain").read_text("utf-8").strip().split(":v")[1]
 TOOLCHAIN = Path.home() / ".elan" / "toolchains" / f"leanprover--lean4---v{VERSION}"
 BUILT = LEAN / ".lake" / "build" / "lib" / "lean"
@@ -40,7 +42,9 @@ EXE_PINS = {
 }
 # The open items: a new one changes this set (and STATUS.md).  serve/readExact/readFinancialBounded, rejNtt and sampleInBall
 # are closed by lean-partials-v1.
-EXPECTED_TODO = {"blind_financial_worker": set(), "gate_verify": set()}
+EXPECTED_TODO = {exe: set() for exe in TCB_EXES}
+# The only C the pinned closures call: (file, `@[extern` count), mirrored by `allowed` in tools/tcb_gate.lean.
+EXTERN_FILES = {"Financial/WorkerCli.lean": 1, "Gate/Engine/OneProc.lean": 1, "Gate/Flat/Io.lean": 7}  # 7: pgReadAt (the verifier's single-call read); the live gate shows no pinned exe calls it
 
 
 def _sha256(path: Path) -> str:
@@ -63,8 +67,14 @@ def _olean_line() -> str:
     return f"toolchain oleans  {_tree(files)}  {len(files)} files"
 
 
+def _provenance_pin(text: str, exe: str) -> str:
+    pins = re.findall(rf"^pin {exe} ([0-9a-f]{{64}})\s*$", text, re.M)
+    assert len(pins) == 1, f"PROVENANCE.txt needs exactly one `pin {exe} <sha256>` line"
+    return pins[0]
+
+
 def _bound(report: str) -> list[str]:
-    """The report's binding lines: the gate file and each built exe, by SHA-256."""
+    """The report's binding lines, literally: the gate file and each built exe, by SHA-256."""
     return [line for line in report.splitlines() if line.startswith(("gate  ", "exe "))]
 
 
@@ -86,8 +96,8 @@ class TcbReportTests(unittest.TestCase):
     """Cheap checks, always on."""
 
     def test_pinned_closures_hold_no_proof_module(self) -> None:
-        """No KAT or `native_decide` module sits in any pinned executable's import closure, gate_verify included."""
-        self.assertGreater(gate._check_pinned_exe_closure(LEAN, TCB_EXES), 20)
+        """No KAT or `native_decide` module sits in the worker's or gate_verify's import closure (the engine exes share theorem files with their code; their manifest covers them)."""
+        self.assertGreater(gate._check_pinned_exe_closure(LEAN, gate.PINNED_EXES + ("gate_verify",)), 20)
 
     def test_semantic_gate_pins_the_engine_worker(self) -> None:
         """The semantic gate's worker pin is the engine's: same bytes, same SHA-256, same file."""
@@ -97,34 +107,89 @@ class TcbReportTests(unittest.TestCase):
 
     def test_manifest_covers_the_pinned_closures_and_build_files_only(self) -> None:
         """An edit to a lean file no pinned exe imports leaves the manifest alone; one to a closure file or a build file moves it."""
-        closure = {module.replace(".", "/") + ".lean" for module in gate._pinned_exe_modules(LEAN, TCB_EXES)}
+        closure = {module.replace(".", "/") + ".lean" for module in gate._pinned_exe_modules(LEAN, TCB_EXES, True)}
         outside = next(p for p in sorted(LEAN.rglob("*.lean")) if ".lake" not in p.parts and p.relative_to(LEAN).as_posix() not in closure)
         with tempfile.TemporaryDirectory() as tmp:
             copy = Path(tmp) / "lean"
             shutil.copytree(LEAN, copy, ignore=shutil.ignore_patterns(".lake"))
-            before = gate.pinned_source_manifest(copy, TCB_EXES)
-            self.assertEqual(before, gate.pinned_source_manifest(LEAN, TCB_EXES))
+            before = gate.pinned_source_manifest(copy, TCB_EXES, True)
+            self.assertEqual(before, gate.pinned_source_manifest(LEAN, TCB_EXES, True))
             with (copy / outside.relative_to(LEAN)).open("a", encoding="utf-8") as handle:
                 handle.write("-- edit\n")
-            self.assertEqual(gate.pinned_source_manifest(copy, TCB_EXES), before, outside.name)
+            self.assertEqual(gate.pinned_source_manifest(copy, TCB_EXES, True), before, outside.name)
             for name in ("BlindLedger/Gate/VerifyCli.lean", "lakefile.toml", "lean-toolchain", "lake-manifest.json"):
                 with self.subTest(name):
                     path = copy / name
                     original = path.read_bytes()
                     path.write_bytes(original + b"\n")
-                    self.assertNotEqual(gate.pinned_source_manifest(copy, TCB_EXES), before)
+                    self.assertNotEqual(gate.pinned_source_manifest(copy, TCB_EXES, True), before)
                     path.write_bytes(original)
-                    self.assertEqual(gate.pinned_source_manifest(copy, TCB_EXES), before)
+                    self.assertEqual(gate.pinned_source_manifest(copy, TCB_EXES, True), before)
 
     def test_committed_report_is_current_and_clean(self) -> None:
         report = REPORT.read_text("utf-8")
-        self.assertIn(f"manifest  {gate.pinned_source_manifest(LEAN, TCB_EXES)}", report.splitlines(), "a pinned exe's sources changed since the report: rerun tools/tcb_pin.ps1")
+        self.assertIn(f"manifest  {gate.pinned_source_manifest(LEAN, TCB_EXES, True)}", report.splitlines(), "a pinned exe's sources changed since the report: rerun tools/tcb_pin.ps1")
         self.assertEqual(_blocks(report), {exe: (0, todo) for exe, todo in EXPECTED_TODO.items()})
         self.assertEqual(report.count("allowlist BlindLedger.Financial.serveWorker x1"), 1, "the worker's one partial_fixpoint")
 
     def test_committed_report_is_about_the_pinned_exes_and_this_gate(self) -> None:
-        bound = [f"gate  {_sha256(GATE)}"] + [f"exe {exe}  {pin.lower()}" for exe, pin in ((e, EXE_PINS[e]) for e in TCB_EXES)]
-        self.assertEqual(_bound(REPORT.read_text("utf-8")), bound, "the gate or a pinned exe changed since the report: rerun tools/tcb_pin.ps1")
+        lines = _bound(REPORT.read_text("utf-8"))
+        self.assertEqual(len(lines), 1 + len(TCB_EXES), lines)
+        self.assertEqual(lines[0], f"gate  {_sha256(GATE)}", "the gate changed since the report: rerun tools/tcb_pin.ps1")
+        for exe, line in zip(TCB_EXES, lines[1:]):
+            with self.subTest(exe):
+                if exe in EXE_PINS:
+                    self.assertEqual(line, f"exe {exe}  {EXE_PINS[exe].lower()}", "a pinned exe changed since the report: rerun tools/tcb_pin.ps1")
+                else:  # test-only exe, no committed binary: the line is checked against the built exe (next test) and PROVENANCE.txt
+                    self.assertRegex(line, rf"^exe {exe}  [0-9a-f]{{64}}$")
+                    self.assertEqual(_provenance_pin(PROVENANCE.read_text("utf-8"), exe), line.split()[-1], "PROVENANCE.txt's `pin` line is not the reported hash")
+
+    def test_provenance_pin_refuses_a_retired_hash(self) -> None:
+        """The `pin <exe> <hash>` line is the one current hash; a retired hash that the prose still names does not satisfy it."""
+        text = PROVENANCE.read_text("utf-8")
+        for exe, retired in (("gate_engine", "91c41e01"),):
+            with self.subTest(exe):
+                self.assertIn(retired, text)  # still named in the history prose
+                self.assertNotEqual(_provenance_pin(text, exe), next(h for h in re.findall(r"[0-9a-f]{64}", text) if h.startswith(retired)))
+
+    def test_built_engine_exes_match_the_report(self) -> None:
+        """If the in-tree build exists, the engine exe's bytes are the report's line (a stale or edited report line fails here)."""
+        lines = _bound(REPORT.read_text("utf-8"))
+        built = {exe: LEAN / ".lake" / "build" / "bin" / f"{exe}.exe" for exe in ENGINE_EXES}
+        if not any(path.is_file() for path in built.values()):
+            self.skipTest("no in-tree gate_engine build (lake build gate_engine)")
+        for exe, path in built.items():
+            with self.subTest(exe):
+                if path.is_file():
+                    self.assertIn(f"exe {exe}  {_sha256(path)}", lines, f"the built {exe} is not the reported one: rebuild, or re-pin with tools/tcb_pin.ps1 -Regen")
+
+    def test_externs_are_the_allowlisted_few(self) -> None:
+        """A new `extern` attribute (any `@[...]` or `attribute [...]` list, any position, multi-line) in a pinned closure file fails until `allowed` in
+        tools/tcb_gate.lean and EXTERN_FILES name it.  A text scan, so a cheap early alarm; the authority is the live gate (test_gate_refuses_every_escape_hatch)."""
+        def found(lean: Path) -> dict[str, int]:
+            out = {}
+            for module in gate._pinned_exe_modules(lean, TCB_EXES, True):
+                path = module.replace(".", "/") + ".lean"
+                if (lean / path).is_file():
+                    text = re.sub(r"(?s)/-.*?-/", "", (lean / path).read_text("utf-8"))  # comments name attributes too
+                    if n := sum(bool(re.search(r"(?<![\w.])extern\b", body)) for body in re.findall(r"(?:@|\battribute\s*)\[([^\]]*)\]", text)):
+                        out[path.removeprefix("BlindLedger/")] = n
+            return out
+        self.assertEqual(found(LEAN), EXTERN_FILES)
+        allowed = GATE.read_text("utf-8")
+        for name in ("Gate.Engine.OneProc.reserveArena", "Financial.WorkerCli.reserveArena", *(f"Gate.Flat.Io.{n}" for n in ("pgOpen", "pgRead", "pgWrite", "pgSync", "pgTrunc", "pgClose"))):
+            self.assertIn(f'`BlindLedger.{name}, module := false, kinds := ["extern", "opaque"]', allowed)
+        self.assertEqual(allowed.count('kinds := ["extern", "opaque"]'), 8)
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "lean"
+            shutil.copytree(LEAN, copy, ignore=shutil.ignore_patterns(".lake"))
+            path = copy / "BlindLedger/Gate/Engine/OneProc.lean"
+            original = path.read_bytes()
+            for plant in ('@[extern "evil"] opaque evil : IO UInt32', '@[inline, extern "evil"] opaque evil : IO UInt32', '@[inline] @[extern "evil"] opaque evil : IO UInt32',
+                          '@[specialize,\n  extern "evil"]\nopaque evil : IO UInt32', 'attribute [extern "evil"] Nat.add'):
+                with self.subTest(plant):
+                    path.write_bytes(original + f"\n{plant}\n".encode())
+                    self.assertNotEqual(found(copy), EXTERN_FILES)
 
     def test_toolchain_note_matches_the_report(self) -> None:
         pinned = PIN.read_text("utf-8").splitlines()
@@ -153,10 +218,13 @@ class LiveTcbGateTests(unittest.TestCase):
         self.assertIn(oleans, pinned)
         lake = tomllib.loads((LEAN / "lakefile.toml").read_text("utf-8"))
         roots = {e["name"]: e["root"] for e in lake["lean_exe"]}
-        text = f"manifest  {gate.pinned_source_manifest(LEAN, TCB_EXES)}\ngate  {_sha256(GATE)}\n"
+        text = f"manifest  {gate.pinned_source_manifest(LEAN, TCB_EXES, True)}\ngate  {_sha256(GATE)}\n"
         for exe in TCB_EXES:
             built = _sha256(LEAN / ".lake" / "build" / "bin" / f"{exe}.exe")
-            self.assertEqual(built, EXE_PINS[exe].lower(), f"the built {exe} is not the pinned one: build in-tree first")
+            if exe in EXE_PINS:
+                self.assertEqual(built, EXE_PINS[exe].lower(), f"the built {exe} is not the pinned one: build in-tree first")
+            elif os.environ.get("RR_TCB_REGEN") != "1":  # a check run: the committed hash is the pin; only -Regen records a new one
+                self.assertIn(f"exe {exe}  {built}", REPORT.read_text("utf-8").splitlines(), f"the built {exe} is not the reported one: rebuild, or re-pin with tools/tcb_pin.ps1 -Regen")
             text += f"exe {exe}  {built}\n"
         text += f"{oleans}\n"
         for exe in TCB_EXES:

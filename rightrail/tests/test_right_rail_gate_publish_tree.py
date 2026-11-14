@@ -15,7 +15,6 @@ from tests import test_right_rail_gate_formats as fx
 
 ACCEPT = "GATE_VERIFY=ACCEPT"
 REJECT = "GATE_VERIFY=REJECT"
-REGISTRY = fx.D[12]
 
 
 class PublishTreeTests(unittest.TestCase):
@@ -25,38 +24,56 @@ class PublishTreeTests(unittest.TestCase):
         cls.addClassCleanup(cls._tmp.cleanup)
         cls.handle, cls.root_pk, cls.cert = fx.custody(cls._tmp.name)
 
-    def batch(self, first_seq: int, n: int, prev: bytes = gate.ZERO_DIGEST, v2: bool = False):
-        """A signed batch of ``n`` tokens from ``first_seq``: (signed checkpoint, header, token objects)."""
-        cp, tokens = fx.build(fx.batch_leaves(first_seq, n, first_seq), prev, prev, REGISTRY if v2 else None)
+    def batch(self, first_seq: int, n: int, prev: bytes = gate.ZERO_DIGEST, counter: int = 1):
+        """A signed batch of ``n`` tokens from ``first_seq`` taking ``counter``: (signed checkpoint, header, token objects)."""
+        cp, tokens = fx.build(fx.batch_leaves(first_seq, n, first_seq), prev, prev, counter)
         header = gate.encode_checkpoint_header(cp)
+        tokens = [replace(t, checkpoint_digest=gate.sha3_512(header)) for t in tokens]
         return gate.attach_signature(header, signer.sign(self.handle, header)), header, tokens
 
-    def publish(self, last: bytes | None, signed: bytes, tokens) -> str:
-        raw = [gate.encode_token(t) if isinstance(t, gate.Token) else t for t in tokens]
-        return signer.gate_verify(1, self.root_pk + signer.framed(self.cert) + signer.framed(last or b"")
-                                  + signer.framed(signed) + len(raw).to_bytes(2, "big") + b"".join(map(signer.framed, raw)))
+    def head(self, last: bytes | None, signed: bytes) -> bytes:
+        return self.root_pk + signer.framed(self.cert) + signer.framed(last or b"") + signer.framed(signed)
 
-    def test_accepts_a_multi_token_v2_batch_with_a_carried_odd_node(self) -> None:
+    def publish(self, last: bytes | None, signed: bytes, tokens, tpm: int = 0) -> str:
+        raw = [gate.encode_token(t) if isinstance(t, gate.Token) else t for t in tokens]
+        return signer.gate_verify(1, self.head(last, signed) + len(raw).to_bytes(2, "big") + b"".join(map(signer.framed, raw))
+                                 + tpm.to_bytes(8, "big"))
+
+    def test_refuses_a_malformed_publish_frame_as_such(self) -> None:
+        signed, _, tokens = self.batch(0, 3)
+        head, raw = self.head(None, signed), [gate.encode_token(t) for t in tokens]
+        frame = head + len(raw).to_bytes(2, "big") + b"".join(map(signer.framed, raw)) + (0).to_bytes(8, "big")
+        self.assertEqual(signer.gate_verify(1, frame), ACCEPT)
+        short = head + len(raw).to_bytes(2, "big") + b"".join(map(signer.framed, raw[:-1])) + (0).to_bytes(8, "big")
+        for name, bad in (("last byte missing", frame[:-1]), ("trailing byte", frame + b"\x00"),
+                          ("cut inside a length prefix", short + signer.framed(raw[-1])[:2]),
+                          ("count 0xFFFF, too few tokens", head + b"\xff\xff" + b"".join(map(signer.framed, raw)) + (0).to_bytes(8, "big"))):
+            with self.subTest(name), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                signer.gate_verify(1, bad)
+            done = signer._exec(signer.VERIFY, signer.VERIFY_PIN, (), b"\x01" + bad)  # exit 2 + FRAME, not a crash or timeout
+            self.assertEqual((done.returncode, done.stderr.strip()), (2, b"GATE_VERIFY=FRAME"), name)
+
+    def test_accepts_a_multi_token_batch_with_a_carried_odd_node(self) -> None:
         # Five leaves: the fifth is the odd node carried through two levels before it meets a sibling
-        signed, _, tokens = self.batch(0, 5, v2=True)
+        signed, _, tokens = self.batch(0, 5)
         self.assertEqual([len(t.siblings) for t in tokens], [3, 3, 3, 3, 1])
         self.assertEqual(self.publish(None, signed, tokens), ACCEPT)
 
-    def test_accepts_a_v1_batch(self) -> None:
+    def test_accepts_batches_of_every_small_size(self) -> None:
         for n in (1, 2, 3, 5):
             with self.subTest(tokens=n):
                 signed, _, tokens = self.batch(0, n)
                 self.assertEqual(self.publish(None, signed, tokens), ACCEPT)
 
-    def test_accepts_a_v2_published_after_a_v1_and_after_a_v2(self) -> None:
-        v1, v1_header, _ = self.batch(0, 2)
-        v2, v2_header, tokens = self.batch(2, 3, gate.sha3_512(v1_header), v2=True)
-        self.assertEqual(self.publish(v1, v2, tokens), ACCEPT)
-        again, _, again_tokens = self.batch(5, 5, gate.sha3_512(v2_header), v2=True)
-        self.assertEqual(self.publish(v2, again, again_tokens), ACCEPT)
+    def test_accepts_a_successor_after_a_successor(self) -> None:
+        first, first_header, _ = self.batch(0, 2)
+        second, second_header, tokens = self.batch(2, 3, gate.sha3_512(first_header), 2)
+        self.assertEqual(self.publish(first, second, tokens, 1), ACCEPT)
+        third, _, third_tokens = self.batch(5, 5, gate.sha3_512(second_header), 3)
+        self.assertEqual(self.publish(second, third, third_tokens, 2), ACCEPT)
 
     def test_refuses_a_flipped_sibling_in_any_token(self) -> None:
-        signed, _, tokens = self.batch(0, 5, v2=True)
+        signed, _, tokens = self.batch(0, 5)
         self.assertEqual(self.publish(None, signed, tokens), ACCEPT)
         for i, t in enumerate(tokens):
             for at in range(len(t.siblings)):
@@ -65,34 +82,26 @@ class PublishTreeTests(unittest.TestCase):
                     self.assertEqual(self.publish(None, signed, tokens[:i] + [flipped] + tokens[i + 1:]), REJECT)
 
     def test_refuses_a_token_count_that_is_not_the_checkpoints(self) -> None:
-        signed, _, tokens = self.batch(0, 5, v2=True)
+        signed, _, tokens = self.batch(0, 5)
         self.assertEqual(self.publish(None, signed, tokens), ACCEPT)
         for name, sent in (("one fewer", tokens[:-1]), ("one more", tokens + tokens[-1:]), ("none", [])):
             with self.subTest(name):
                 self.assertEqual(self.publish(None, signed, sent), REJECT)
 
     def test_refuses_a_checkpoint_not_linked_to_the_last(self) -> None:
-        v1, v1_header, _ = self.batch(0, 2)
-        linked, _, linked_tokens = self.batch(2, 3, gate.sha3_512(v1_header), v2=True)
-        self.assertEqual(self.publish(v1, linked, linked_tokens), ACCEPT)
-        unlinked, _, unlinked_tokens = self.batch(2, 3, fx.D[0], v2=True)
-        self.assertEqual(self.publish(v1, unlinked, unlinked_tokens), REJECT)
-
-    def test_refuses_a_v1_after_a_v2(self) -> None:
-        v2, v2_header, _ = self.batch(0, 2, v2=True)
-        prev = gate.sha3_512(v2_header)
-        chained, _, chained_tokens = self.batch(2, 3, prev, v2=True)
-        self.assertEqual(self.publish(v2, chained, chained_tokens), ACCEPT)
-        downgrade, _, downgrade_tokens = self.batch(2, 3, prev)
-        self.assertEqual(self.publish(v2, downgrade, downgrade_tokens), REJECT)
+        first, first_header, _ = self.batch(0, 2)
+        linked, _, linked_tokens = self.batch(2, 3, gate.sha3_512(first_header), 2)
+        self.assertEqual(self.publish(first, linked, linked_tokens, 1), ACCEPT)
+        unlinked, _, unlinked_tokens = self.batch(2, 3, fx.D[0], 2)
+        self.assertEqual(self.publish(first, unlinked, unlinked_tokens, 1), REJECT)
 
     def test_refuses_an_undecodable_last(self) -> None:
-        v1, v1_header, _ = self.batch(0, 2)
-        signed, _, tokens = self.batch(2, 3, gate.sha3_512(v1_header), v2=True)
-        self.assertEqual(self.publish(v1, signed, tokens), ACCEPT)
-        for name, last in (("garbage", b"\x01\x02not a checkpoint"), ("truncated", v1[:-1]), ("header only", v1_header[:-1])):
+        first, first_header, _ = self.batch(0, 2)
+        signed, _, tokens = self.batch(2, 3, gate.sha3_512(first_header), 2)
+        self.assertEqual(self.publish(first, signed, tokens, 1), ACCEPT)
+        for name, last in (("garbage", b"\x01\x02not a checkpoint"), ("truncated", first[:-1]), ("header only", first_header[:-1])):
             with self.subTest(name):
-                self.assertEqual(self.publish(last, signed, tokens), REJECT)
+                self.assertEqual(self.publish(last, signed, tokens, 1), REJECT)
 
     def test_refuses_an_undecodable_last_before_a_genesis_checkpoint(self) -> None:
         # A genesis successor would follow "no last"; an undecodable last is not "no last"
@@ -106,8 +115,8 @@ class PublishTreeTests(unittest.TestCase):
 
     def test_refuses_tokens_whose_tree_is_not_the_signed_token_root(self) -> None:
         # Both batches are valid alone; B's self-consistent tokens carry A's checkpoint digest but build another tree
-        a, a_tokens = fx.build(fx.batch_leaves(0, 3, 0))
-        b, b_tokens = fx.build(fx.batch_leaves(0, 3, 100))
+        a, a_tokens = fx.build(fx.batch_leaves(0, 3, 0), counter=1)
+        b, b_tokens = fx.build(fx.batch_leaves(0, 3, 100), counter=1)
         self.assertEqual(self.publish(None, self.sign_checkpoint(a), a_tokens), ACCEPT)
         self.assertEqual(self.publish(None, self.sign_checkpoint(b), b_tokens), ACCEPT)
         digest = gate.checkpoint_digest(a)
@@ -116,7 +125,7 @@ class PublishTreeTests(unittest.TestCase):
 
     def test_refuses_a_signed_count_the_tokens_do_not_reach(self) -> None:
         # The signed token root is the three tokens' tree, but the checkpoint (and its seq range) says four
-        cp, tokens = fx.build(fx.batch_leaves(0, 3, 0))
+        cp, tokens = fx.build(fx.batch_leaves(0, 3, 0), counter=1)
         self.assertEqual(self.publish(None, self.sign_checkpoint(cp), tokens), ACCEPT)
         four = replace(cp, count=4, seq_to=cp.seq_to + 1)
         redigested = [replace(t, checkpoint_digest=gate.checkpoint_digest(four)) for t in tokens]

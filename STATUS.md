@@ -2,7 +2,7 @@
 
 Integration branch: `integration/rightrail`
 Direction: RightRail is the base system; localBCE is wired in without Groth16, STARK or on-chain settlement (`docs/integration/RIGHTRAIL_BASE_PLAN.md`).
-Phase: 1 (park proofs and chain; adjudicator without chain) and 2 (G-rule parity harness, proposed rule content format) on branch `codex/rightrail-base-phases`, draft PR into `integration/rightrail`. Phases 3-4 blocked: no RightRail guard script, Lean toolchain or `rr-core` lead on this machine (plan §7, OPEN_QUESTIONS item 12).
+Phase: 1 (park proofs and chain; adjudicator without chain) and 2 (G-rule parity harness, proposed rule content format) on branch `codex/rightrail-base-phases`, draft PR into `integration/rightrail`. Phase 3 restarts on RightRail trunk `fc89f9e5` (`docs/integration/TRUNK_MIGRATION_PLAN.md`, approved 2026-11-14) on branch `codex/rightrail-trunk`; step 0 (trunk import) done there. G2, G4 and the per-payment reason bound exist on the October base only (`codex/rightrail-g2`, `codex/rightrail-g4`, `codex/rightrail-reason-bound`) as the record.
 Exact HEAD for this document: see `git log -1 --format=%H -- STATUS.md` on the branch that adds it.
 
 ## Merged
@@ -14,6 +14,7 @@ Exact HEAD for this document: see `git log -1 --format=%H -- STATUS.md` on the b
 
 ## Open
 - Phases 1-2 (branch `codex/rightrail-base-phases`, draft PR): park proof/chain code under `parked/localbce/`, remove STARK/chain paths from `rust-engine`, trim CI, widen Windows CI, G-rule parity harness and report, `RR/RULES/CONTENT/v1` proposal, `rightrail/IMPORTED_FROM.md`. Merges `integration/rightrail` at `bc50dd62`.
+- RightRail trunk move (branch `codex/rightrail-trunk`, from `codex/rightrail-base-phases`): step 0 replaces `rightrail/` with trunk `fc89f9e5` as a zip snapshot (no history yet); provenance in `docs/integration/RIGHTRAIL_IMPORTED_FROM.md`.
 
 ## Defects
 | ID | Status | Proof |

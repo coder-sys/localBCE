@@ -8,14 +8,17 @@ Synthetic, non-PHI.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 import ctypes
 from ctypes import wintypes
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 from app import right_rail_gate_signer as signer
 
@@ -197,9 +200,201 @@ class CustodyTests(unittest.TestCase):
             raw = Path(tmp) / "raw-seed.key"
             raw.write_bytes(seed)
             for args, data in ((("public-key", str(raw)), b""), (("sign", str(raw)), b"msg"), (("public-key",), seed),
-                               (("sign",), seed + b"msg"), (("verify", str(raw)), b""), (("kat-keygen", str(raw)), seed)):
+                               (("sign",), seed + b"msg"), ((), seed + b"msg"), (("verify", str(raw)), b""), (("kat-keygen", str(raw)), seed)):
                 with self.subTest(args), self.assertRaises(signer.GateSignerError):
                     signer._run(signer.BINARY, signer.PIN, args, data, PK)
+            # the resident server answers only a call with no arguments at all: a valid frame under any argument is refused
+            handle = str(Path(tmp) / "served.key")
+            signer.keygen(handle)
+            path = os.path.abspath(handle).encode()
+            frame = (2 + len(path) + 3).to_bytes(4, "big") + len(path).to_bytes(2, "big") + path + b"msg"
+            for args in (("",), ("sign",), ("public-key",), ("keygen",), ("verify",), ("kat-sign",), ("sign", handle, "x")):
+                with self.subTest(args):
+                    done = signer._exec(signer.BINARY, signer.PIN, args, frame)
+                    self.assertEqual((done.returncode, done.stdout), (2, b""))
+
+
+@unittest.skipUnless(os.name == "nt", "resident signer is Windows-only")
+class ResidentSignerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        signer._close_server()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(signer._close_server)
+        # a mutant that hangs (self-deadlock, retry loop) must fail its test, not stall the run: every sign gets a hard 45 s
+        real = signer.sign
+
+        def bounded(*args):
+            future = Future()
+
+            def run() -> None:
+                try: future.set_result(real(*args))
+                except BaseException as error: future.set_exception(error)
+
+            threading.Thread(target=run, daemon=True).start()
+            try: return future.result(45.0)
+            except FutureTimeout: raise AssertionError("signer.sign hung")
+
+        for patch in (mock.patch.object(signer, "sign", bounded), mock.patch.object(signer, "_SERVE", threading.Lock())):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def key(self, name: str) -> tuple[str, bytes]:
+        handle = str(Path(self.tmp.name) / name)
+        return handle, signer.keygen(handle)
+
+    def launches(self):
+        return mock.patch.object(signer.process, "launch_contained_worker", wraps=signer.process.launch_contained_worker)
+
+    def test_a_sign_verifies(self) -> None:
+        # a hedged signature ends in 0x0A about 1 time in 256, which would hide a missing flush: sign enough to hit a miss
+        # also CRLF translation, 0x1A and NUL must cross both pipes untouched: binary messages, and signatures that carry 0x0A and 0x1A
+        handle, pk = self.key("a.key")
+        messages = [m + bytes([i]) for i in range(16) for m in (b"", b"\n\r\n\x1a\x00\xff" * 1000)]
+        with self.launches() as launch:  # one launch for every sign
+            sigs = [signer.sign(handle, m) for m in messages]
+        self.assertEqual(launch.call_count, 1)
+        self.assertTrue(all(signer.verify(pk, m, sig) for m, sig in zip(messages, sigs)))
+        self.assertTrue(any(b"\n" in sig for sig in sigs) and any(b"\x1a" in sig for sig in sigs))
+        hb, pkb = self.key("ab.key")  # the key is not cached: a second handle signs under its own key
+        sig = signer.sign(hb, b"msg")
+        self.assertEqual((signer.verify(pkb, b"msg", sig), signer.verify(pk, b"msg", sig)), (True, False))
+
+    def test_e_size_refusals(self) -> None:
+        handle, _ = self.key("e.key")
+        self.assertEqual(len(signer.sign(handle, b"x" * 65536)), SIG)
+        raw = Path(self.tmp.name) / "raw.key"
+        raw.write_bytes(bytes(range(SEED)))
+        for args in ((handle, b"x" * 65537), ("k" * 32768, b"m"), (handle + chr(0xD800), b"m"), (str(raw), b"m")):
+            with self.assertRaises(signer.GateSignerError):
+                signer.sign(*args)
+        os.remove(handle)  # a deleted key fails closed
+        with self.assertRaises(signer.GateSignerError):
+            signer.sign(handle, b"m")
+        self.assertIsNone(signer._SERVER[0])
+
+    def test_g_error_closes_without_retry(self) -> None:
+        handle, _ = self.key("g.key")
+        for fault in ({"side_effect": RuntimeError("x")}, {"return_value": b"short"}):  # an exchange error, then a short signature
+            signer.sign(handle, b"m")
+            with self.launches() as launch, mock.patch.object(type(signer._SERVER[0]), "exchange", **fault), self.assertRaises(signer.GateSignerError):
+                signer.sign(handle, b"m")
+            self.assertEqual(launch.call_count, 0)
+            self.assertIsNone(signer._SERVER[0])
+        self.assertEqual(len(signer.sign(handle, b"m")), SIG)
+        other = Path(self.tmp.name) / "other.sha256"  # the pin is checked on every call
+        other.write_bytes(b"0" * 64)
+        with mock.patch.object(signer, "PIN", other), self.assertRaisesRegex(signer.GateSignerError, "pin_mismatch"):
+            signer.sign(handle, b"m")
+        self.assertIsNone(signer._SERVER[0])
+        self.assertEqual(len(signer.sign(handle, b"m")), SIG)
+
+    def test_h_child_dies_between_calls(self) -> None:
+        handle, pk = self.key("h.key")
+        signer.sign(handle, b"m")
+        signer._SERVER[0].close()  # a closed worker is relaunched by the next sign
+        with self.launches() as launch:
+            self.assertTrue(signer.verify(pk, b"m0", signer.sign(handle, b"m0")))
+        self.assertEqual(launch.call_count, 1)
+        worker = signer._SERVER[0]
+        self.assertTrue(worker._kernel32.TerminateJobObject(worker._job, 1))
+        with self.assertRaises(signer.GateSignerError):
+            signer.sign(handle, b"m1")
+        self.assertIsNone(signer._SERVER[0])
+        with self.launches() as launch:
+            sig = signer.sign(handle, b"m2")
+        self.assertEqual(launch.call_count, 1)
+        self.assertTrue(signer.verify(pk, b"m2", sig))
+
+    def test_i_hung_child_times_out(self) -> None:
+        handle, pk = self.key("i.key")
+        signer.sign(handle, b"m")
+        worker = signer._SERVER[0]
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtSuspendProcess.argtypes = [ctypes.c_void_p]
+        self.assertEqual(ntdll.NtSuspendProcess(worker._process), 0)  # a child that never answers
+        exchange = type(worker).exchange  # the 30 s production timeout is fixed in sign(); only this test shortens it
+        with mock.patch.object(type(worker), "exchange", lambda self, frame, **kw: exchange(self, frame, **{**kw, "timeout_seconds": 1.0})):
+            with self.assertRaisesRegex(signer.GateSignerError, "failed"):
+                signer.sign(handle, b"m1")
+        self.assertIsNone(signer._SERVER[0])
+        self.assertTrue(signer.verify(pk, b"m2", signer.sign(handle, b"m2")))
+
+    def test_k_nul_handle(self) -> None:  # refused in Python before anything is sent: the worker is neither killed nor relaunched
+        handle, pk = self.key("k.key")
+        signer.sign(handle, b"m")
+        worker, pid = signer._SERVER[0], lambda: ctypes.WinDLL("kernel32").GetProcessId(ctypes.c_void_p(signer._SERVER[0]._process))
+        before = pid()
+        with self.launches() as launch, self.assertRaisesRegex(signer.GateSignerError, "input"):
+            signer.sign("a\x00b", b"m")
+        self.assertTrue(signer.verify(pk, b"m2", signer.sign(handle, b"m2")))
+        self.assertEqual((launch.call_count, signer._SERVER[0] is worker, pid()), (0, True, before))
+
+    def test_l_exit_leaves_no_private_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            temp = Path(scratch) / "t"
+            temp.mkdir()
+            code = "import sys; from app import right_rail_gate_signer as s; s.keygen(sys.argv[1]); s.sign(sys.argv[1], b'm')"
+            env = {**os.environ, "TEMP": str(temp), "TMP": str(temp)}
+            done = subprocess.run([sys.executable, "-c", code, str(Path(scratch) / "l.key")], cwd=signer.ROOT, env=env,
+                                  capture_output=True, timeout=120, check=False)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(sorted(p.name for p in temp.rglob("*-rr_gate_mldsa87.exe")), [])
+            self.assertEqual(list(temp.iterdir()), [])
+
+    def test_o_handle_forms_and_threads(self) -> None:
+        a, pka = self.key("o.key")
+        folder = Path(self.tmp.name) / "k\u00e9y-\u9375-\U0001f511"
+        folder.mkdir()
+        b = str(folder / "p.key")
+        pkb, work = signer.keygen(b), [(t, i) for t in range(2) for i in range(8)]
+        with self.launches() as launch, ThreadPoolExecutor(2) as pool:  # 2 threads x 8 signs, one launch, all verify
+            sigs = list(pool.map(lambda ti: signer.sign(a, bytes(ti)), work))
+        self.assertEqual(launch.call_count, 1)
+        self.assertTrue(all(signer.verify(pka, bytes(ti), sig) for ti, sig in zip(work, sigs)))
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.tmp.name)  # a relative handle resolves against this process, not the worker's directory
+        self.assertTrue(signer.verify(pka, b"m", signer.sign("o.key", b"m")))
+        self.assertTrue(signer.verify(pkb, b"m", signer.sign(b, b"m")))  # non-ASCII key directory
+
+    def test_r_malformed_frames_exit_2(self) -> None:
+        handle, _ = self.key("r.key")
+        path, exe = os.path.abspath(handle).encode(), str(signer._private_copy(signer.BINARY)[0])
+        run = lambda data: subprocess.run([exe], input=data, capture_output=True, timeout=30, check=False)
+        frame = lambda plen, rest, length=None: (len(rest) + 2 if length is None else length).to_bytes(4, "big") + plen.to_bytes(2, "big") + rest
+        good = frame(len(path), path + b"msg")
+        for name, data in (("three bytes", b"\x00" * 3), ("len 1", b"\x00\x00\x00\x01\x00"), ("plen 0", frame(0, b"")), ("plen len-1", frame(4, b"abc", 5)),
+                           ("len over bound, full body sent (not EOF)", frame(32767, b"a" * (32767 + 65537))), ("non-UTF-8 path", frame(2, b"\xff\xfemsg")),
+                           ("message over 64 KiB", frame(len(path), path + b"x" * 65537))):
+            with self.subTest(name):
+                done = run(data)
+                self.assertEqual((done.returncode, done.stdout, done.stderr), (2, b"", b""))
+        done = run(good + b"\x00\x00")
+        self.assertEqual((done.returncode, done.stdout[:4], len(done.stdout), done.stderr), (2, SIG.to_bytes(4, "big"), 4 + SIG, b""))
+        self.assertEqual(run(good).returncode, 0)
+
+
+@unittest.skipUnless(os.name == "nt", "resident verifier is Windows-only")
+class ResidentVerifierTests(unittest.TestCase):
+    ASK = (2, signer.framed(b""))  # INDEX of an empty checkpoint: a real answer, REJECT
+
+    def setUp(self) -> None:
+        self.addCleanup(signer._close_server)
+
+    def test_one_launch_answers_and_a_malformed_frame_refuses(self) -> None:
+        with mock.patch.object(signer.process, "launch_contained_worker", wraps=signer.process.launch_contained_worker) as launch:
+            self.assertEqual({signer.gate_verify(*self.ASK) for _ in range(5)}, {"GATE_VERIFY=REJECT"})
+            with self.assertRaises(signer.GateSignerError):
+                signer.gate_verify(9, b"")  # unknown mode: the verifier exits 2 without an answer
+            self.assertEqual((signer.gate_verify(*self.ASK), launch.call_count), ("GATE_VERIFY=REJECT", 2))
+
+    def test_death_hang_and_garbled_or_short_frames_refuse(self) -> None:
+        for fault in ({"side_effect": signer.process.VerifierProcessError("worker_exchange")}, {"side_effect": signer.process.VerifierProcessError("worker_timeout")},
+                      {"return_value": b""}, {"return_value": b"\x07ACCEPT"}, {"return_value": b"\x00ACC\xff"}):
+            signer.gate_verify(*self.ASK)
+            with mock.patch.object(type(signer._VSERVER[0]), "exchange", **fault), self.assertRaises(signer.GateSignerError):
+                signer.gate_verify(*self.ASK)
+            self.assertIsNone(signer._VSERVER[0])
 
 
 if __name__ == "__main__":

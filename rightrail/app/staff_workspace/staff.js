@@ -16,6 +16,7 @@
   let model = null;
   let role = null;
   let snapshot = null;
+  let leadId = null; // the item the first read opened on: it keeps its place in the queue while another row is open
   let correctionFollowup = null;
   let unresolvedDecision = null; // {name, body}: a decision whose answer was lost, kept for an exact resend
   let unresolvedCashBody = null;
@@ -29,18 +30,22 @@
   let filterText = "";
   let lastId = null;
   let order = [];
-  const CASH_CORRECTION_COMMAND = Object.freeze({
-    item_id: "item-h",
-    pays_action_id: "action:obligation-item-h:correction-v1",
-    payment_id: "payment:h:p2",
-    common_origin_id: "origin:payment:h:p2",
-    amount_cents: 300000,
-    evidence_id: "evidence:payment-h:p2",
-    event_at_ms: 1775001600000,
-    source_id: "fixture-payment-file",
-    source_version: "payment-v2",
-    local_ref: "ref:payment:h:p2",
-  });
+  const CORRECTION_CENTS = 300000;
+  const cashCommand = () => { // the correction payment for the item being worked; the server builds the same names
+    const id = hId(), short = id.replace(/^item-/, "");
+    return {
+      item_id: id,
+      pays_action_id: "action:obligation-" + id + ":correction-v1",
+      payment_id: "payment:" + short + ":p2",
+      common_origin_id: "origin:payment:" + short + ":p2",
+      amount_cents: CORRECTION_CENTS,
+      evidence_id: "evidence:payment-" + short + ":p2",
+      event_at_ms: 1775001600000,
+      source_id: "fixture-payment-file",
+      source_version: "payment-v2",
+      local_ref: "ref:payment:" + short + ":p2",
+    };
+  };
   // A command whose response was lost or unverifiable may have committed: keep the exact body for retry.
   const UNCERTAIN_OUTCOMES = [
     "owner_command_unavailable", "Failed to fetch", "NetworkError", "command_unavailable",
@@ -192,7 +197,7 @@
 
   const STEPS = {
     acknowledge: { label: "Record action delivery ACK", note: "Delivery only. Cash effect: $0.00.", off: "Waits for a ready action that still asks for money." },
-    "record-cash": { label: "Record synthetic " + money.format(CASH_CORRECTION_COMMAND.amount_cents / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action whose open amount covers this payment." },
+    "record-cash": { label: "Record synthetic " + money.format(CORRECTION_CENTS / 100) + " cash evidence", note: "Records evidence only. No money moves.", off: "Waits for an acknowledged action whose open amount covers this payment." },
     "record-report": { label: "Record separate synthetic reporting evidence", note: "Reporting is separate from delivery and cash. The source is synthetic and unverified.", off: "Waits for nothing to be short and reporting to be pending." },
     "restore-test": { label: "Restore current case into Continuity TEST", note: "Copies the case into a separate test database.", off: "Already restored into Continuity TEST." },
   };
@@ -201,7 +206,7 @@
     const reviewed = ownerAvailable && !commandPending && !unresolvedCashBody && !unresolvedDecision;
     const status = view.act ? view.act.status : null;
     if (name === "acknowledge") return reviewed && status === "READY" && view.act.open_cents !== 0;
-    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.act.open_cents >= CASH_CORRECTION_COMMAND.amount_cents;
+    if (name === "record-cash") return unresolvedCashBody ? ownerAvailable && !commandPending : reviewed && status === "ACKNOWLEDGED" && view.act.open_cents >= CORRECTION_CENTS;
     if (name === "record-report") return reviewed && !view.ob.reporting_complete && view.ob.shortfall_cents <= 0;
     return reviewed && !(snapshot.continuity && snapshot.continuity.mode === "TEST");
   }
@@ -322,7 +327,7 @@
     const rows = snapshot.items.map((item, index) => ({ item, index, st: statusOf(item) }))
       .filter(({ item, st }) => !q || [item.label, item.item_id, st.state].join(" ").toLowerCase().includes(q));
     rows.sort((a, b) => ["need", "wait", "ok"].indexOf(a.st.kind) - ["need", "wait", "ok"].indexOf(b.st.kind)
-      || (b.item.item_id === hId()) - (a.item.item_id === hId()) || a.index - b.index);
+      || (b.item.item_id === leadId) - (a.item.item_id === leadId) || a.index - b.index);
     return rows;
   }
 
@@ -379,7 +384,7 @@
   }
 
   function stepList(R) {
-    const cashAmount = money.format(CASH_CORRECTION_COMMAND.amount_cents / 100);
+    const cashAmount = money.format(CORRECTION_CENTS / 100);
     return section("Next steps", el("ul", { class: "steps" }, R.steps.map((step) => el("li", {},
       el("button", { class: "btn small", type: "button", "data-action": step.name, disabled: !step.enabled, text: step.label }),
       el("span", { class: "hint", text: step.enabled ? step.note : step.off }),
@@ -392,8 +397,8 @@
   function renderRecord(R, textMode) {
     const v = R.id === hId() ? hView() : null;
     const cash = R.steps.find((step) => step.name === "record-cash");
-    // A read can remove the form or step a confirm belonged to (another actor decided, cash arrived); a command in flight settles it itself.
-    if (!commandPending && ((confirming === "decision" && !R.decide) || (confirming === "record-cash" && !(cash && cash.enabled)))) confirming = null;
+    // A read can remove the form or step a confirm belonged to (another actor decided, cash arrived); a command in flight settles it itself. A row whose own read has not landed yet keeps it.
+    if (v && !commandPending && ((confirming === "decision" && !R.decide) || (confirming === "record-cash" && !(cash && cash.enabled)))) confirming = null;
     const foot = el("div", { class: "foot" }, el("a", { id: "plain-text", href: "#" + R.id + (textMode ? "" : ".txt"), text: textMode ? "Back to the full view" : "View as plain text" }),
       el("a", { id: "download-record", href: "data:text/plain;charset=utf-8," + encodeURIComponent(textOf(R)), download: "record-" + R.id + ".txt", text: "Download record" }),
       el("span", { text: "The same record an auditor or an agent reads." }));
@@ -492,6 +497,7 @@
       picked = unresolvedDecision ? unresolvedDecision.name : null; // a lost answer stays retryable wherever the person went
       confirming = unresolvedDecision ? "decision" : null;
       commandMessage("", "");
+      if (snapshot && id !== "summary" && id !== hId()) refreshOverview(id); // another row: read that item now, so the screen and its token are its own
     }
     lastId = id;
     byId("work").classList.toggle("open", !onList && (Boolean(hash) || role === "director"));
@@ -548,12 +554,14 @@
         unresolvedCashBody = null;
       }
     }
+    const otherItem = Boolean(snapshot) && hId() !== value.h.obligation.item_id;
+    if (!snapshot) leadId = value.h.obligation.item_id;
     snapshot = value;
     ownerAvailable = true;
     lastSuccessfulRead = Date.now();
     byId("standing").textContent = "synthetic · not for payment · no PHI · " + (value.summary.production_usable ? "production" : "not production");
     banner("ok", model.controls.read.responses.success.message + " Sequence " + value.summary.sequence + " · synthetic local · dispatch and egress disabled.");
-    if (changed || !byId("page").firstChild) route();
+    if (changed || otherItem || !byId("page").firstChild) route();
     return true;
   }
 
@@ -604,11 +612,11 @@
     render();
   }
 
-  async function refreshOverview() {
+  async function refreshOverview(itemId = null) { // the read of one item: it brings the list, that item's detail and the token its commands carry
     if (commandPending) return;
     const requestGeneration = ++workspaceRequestGeneration;
     try {
-      const value = await fetchJson("/api/workspace");
+      const value = await fetchJson(snapshot ? "/api/items/" + encodeURIComponent(itemId || hId()) : "/api/workspace");
       if (!applyWorkspaceSnapshot(value, requestGeneration)) return;
       await refreshCorrectionFollowup(requestGeneration);
     } catch (error) {
@@ -642,7 +650,7 @@
     if (!pkg || !pkg.obligation) return null;
     const revision = { revision: pkg.obligation.revision };
     if (["acknowledge", "record-report"].includes(name)) return revision;
-    if (name === "record-cash") return { ...revision, cash_command: { ...CASH_CORRECTION_COMMAND } };
+    if (name === "record-cash") return { ...revision, cash_command: cashCommand() };
     if (!pkg.evaluation_receipt) return null;
     return {
       ...revision,
@@ -678,8 +686,8 @@
       staff_role_refused: "Your role can't do this. Nothing changed.",
       staff_person_refused: "That person can't do this here. Nothing changed.",
       authority_actor_not_authorized: "Owner denied the command because the fixed synthetic reporter role cannot make a financial decision.",
-      obligation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",
-      evaluation_revision_conflict: "This record changed while you were working. Review the new facts, then try again.",
+      obligation_revision_conflict: "The records changed while you were working. Review the current record, then try again.",
+      evaluation_revision_conflict: "The records changed while you were working. Review the current record, then try again.",
       loopback_origin_required: "The service accepts this action only from its exact loopback browser origin.",
     }[code] || "Command result is unresolved. Reload this page and check the record before any retry.";
   }
@@ -692,7 +700,7 @@
         method: "POST",
         cache: "no-store",
         credentials: "omit",
-        headers: { "Content-Type": "application/json", "X-Staff-Role": role },
+        headers: { "Content-Type": "application/json", "X-Staff-Role": role, "X-Staff-Item": hId(), "X-Action-Token": snapshot.action_token || "" },
         body: JSON.stringify(body),
       });
       value = await response.json();

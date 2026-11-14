@@ -35,9 +35,8 @@ private def joinTokens (tokens : List String) : String :=
   | [] => ""
   | head :: tail => tail.foldl (fun accumulated token => accumulated ++ "|" ++ token) head
 
-def run : IO Unit := do
-  let arguments ← IO.getArgs
-  match parseArgument arguments with
+def run (arguments : List String) : IO Unit := do
+  match parseArgument arguments.toArray with
   | .error code => do
       let stderr ← IO.getStderr
       stderr.putStrLn (diagnosticCode code)
@@ -48,4 +47,4 @@ def run : IO Unit := do
 
 end RightRail.ProviderApp.CLI
 
-def main : IO Unit := RightRail.ProviderApp.CLI.run
+def main (arguments : List String) : IO Unit := RightRail.ProviderApp.CLI.run arguments

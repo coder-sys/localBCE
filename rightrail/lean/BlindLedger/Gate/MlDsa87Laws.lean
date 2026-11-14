@@ -182,6 +182,82 @@ private def kh (b : ByteArray) : String := String.join (b.toList.map fun x => St
 #guard kh (sha3_512 (shake256 (pat 135) 200)) == "c9f5769c8a0653450247cebd8ba4e3c444c1b34a54a559ac325739a542540275b7af1b5780016f0caa4c0c9ad6569e36b9718f0bdda029c34ff40ede567ad376"
 #guard kh (sha3_512 (shake256 (pat 136) 200)) == "736f25ed2d57dc253abd3be212a96953c07ba301494aca9342d60bf8181ac3bbf0ca232223662e8d27332937a8121b5e383ce893aaa68e55a1b12ba82096030a"
 #guard kh (sha3_512 (shake256 (pat 137) 200)) == "abe98a25f3a56a6afc6de59d1e93f2ddd93187b7db23f514465f3dca67918f7a17aaf77dd005b47fb8ff0007c3de006d2027aa1c36c6fb8551d4d68bd1bf0832"
+/-! `unpackF` (the byte gather `verify` runs) equals the bit-by-bit FIPS `unpack`, coefficient by coefficient, bit by bit. -/
+private theorem bitAt_tb (b : ByteArray) (q : Nat) :
+    bitAt b q = if Nat.testBit (b.get! (q / 8)).toNat (q % 8) then 1 else 0 := by
+  unfold bitAt
+  rw [Nat.and_one_is_mod, Nat.shiftRight_eq_div_pow, Nat.testBit_eq_decide_div_mod_eq]
+  have := Nat.mod_lt ((b.get! (q / 8)).toNat / 2 ^ (q % 8)) (show 0 < 2 by omega)
+  by_cases h : (b.get! (q / 8)).toNat / 2 ^ (q % 8) % 2 = 1 <;> simp [h] <;> omega
+
+private theorem fold_tb (b : ByteArray) (p k : Nat) : ∀ n : Nat,
+    Nat.testBit ((List.range n).foldl (fun a i => a ||| (bitAt b (p + i) <<< i)) 0) k =
+      (decide (k < n) && Nat.testBit (b.get! ((p + k) / 8)).toNat ((p + k) % 8))
+  | 0 => by simp
+  | n + 1 => by
+    rw [List.range_succ, List.foldl_append, List.foldl_cons, List.foldl_nil, Nat.testBit_or, Nat.testBit_shiftLeft,
+      fold_tb b p k n, bitAt_tb]
+    by_cases h1 : k < n
+    · simp [h1, show ¬ n ≤ k by omega, show k < n + 1 by omega]
+    · by_cases h2 : k = n
+      · subst h2
+        generalize Nat.testBit (b.get! ((p + k) / 8)).toNat ((p + k) % 8) = tv
+        cases tv <;> simp
+      · have h4 : ¬ k < n + 1 := by omega
+        have hlt : (if Nat.testBit (b.get! ((p + n) / 8)).toNat ((p + n) % 8) then 1 else 0) < 2 ^ (k - n) := by
+          split
+          · exact Nat.one_lt_two_pow (by omega)
+          · exact Nat.two_pow_pos _
+        have := Nat.testBit_lt_two_pow hlt
+        simp [h1, h4, this]
+
+private theorem byte_tb (x m : Nat) (hx : x < 256) (hm : 8 ≤ m) : Nat.testBit x m = false := by
+  have : 2 ^ 8 ≤ 2 ^ m := Nat.pow_le_pow_right (by omega) hm
+  exact Nat.testBit_lt_two_pow (by omega)
+
+private theorem gather_tb (b : ByteArray) (s t : Nat) (ht : t < 32) :
+    Nat.testBit ((b.get! s).toNat ||| ((b.get! (s + 1)).toNat <<< 8) ||| ((b.get! (s + 2)).toNat <<< 16) |||
+      ((b.get! (s + 3)).toNat <<< 24)) t = Nat.testBit (b.get! (s + t / 8)).toNat (t % 8) := by
+  have h0 : (b.get! s).toNat < 256 := (b.get! s).toNat_lt
+  have h1 : (b.get! (s + 1)).toNat < 256 := (b.get! (s + 1)).toNat_lt
+  have h2 : (b.get! (s + 2)).toNat < 256 := (b.get! (s + 2)).toNat_lt
+  have h3 : (b.get! (s + 3)).toNat < 256 := (b.get! (s + 3)).toNat_lt
+  simp only [Nat.testBit_or, Nat.testBit_shiftLeft]
+  by_cases a : t < 8
+  · have e : t / 8 = 0 := by omega
+    simp [e, Nat.mod_eq_of_lt a, show ¬ 8 ≤ t by omega, show ¬ 16 ≤ t by omega, show ¬ 24 ≤ t by omega]
+  by_cases a2 : t < 16
+  · have e : t / 8 = 1 := by omega
+    have : t % 8 = t - 8 := by omega
+    simp [e, this, byte_tb _ t h0 (by omega), show ¬ 16 ≤ t by omega, show ¬ 24 ≤ t by omega, show 8 ≤ t by omega]
+  by_cases a3 : t < 24
+  · have e : t / 8 = 2 := by omega
+    have : t % 8 = t - 16 := by omega
+    simp [e, this, byte_tb _ t h0 (by omega), byte_tb _ (t - 8) h1 (by omega), show ¬ 24 ≤ t by omega, show 16 ≤ t by omega,
+      show 8 ≤ t by omega]
+  · have e : t / 8 = 3 := by omega
+    have : t % 8 = t - 24 := by omega
+    simp [e, this, byte_tb _ t h0 (by omega), byte_tb _ (t - 8) h1 (by omega), byte_tb _ (t - 16) h2 (by omega),
+      show 24 ≤ t by omega, show 16 ≤ t by omega, show 8 ≤ t by omega]
+
+theorem unpackF_eq (b : ByteArray) (off width : Nat) (hw : width ≤ 25) : unpackF b off width = unpack b off width := by
+  have s8 : ∀ x : Nat, x * 256 = x <<< 8 := fun x => by simp [Nat.shiftLeft_eq]
+  have s16 : ∀ x : Nat, x * 65536 = x <<< 16 := fun x => by simp [Nat.shiftLeft_eq]
+  have s24 : ∀ x : Nat, x * 16777216 = x <<< 24 := fun x => by simp [Nat.shiftLeft_eq]
+  unfold unpackF unpack
+  simp only [s8, s16, s24]
+  congr 1
+  funext j
+  apply Nat.eq_of_testBit_eq
+  intro k
+  have e1 : (8 * off + j * width + k) / 8 = (8 * off + j * width) / 8 + ((8 * off + j * width) % 8 + k) / 8 := by omega
+  have e2 : (8 * off + j * width + k) % 8 = ((8 * off + j * width) % 8 + k) % 8 := by omega
+  rw [fold_tb]
+  by_cases hk : k < width
+  · simp only [Nat.testBit_mod_two_pow, Nat.testBit_shiftRight, hk, decide_true, Bool.true_and]
+    rw [gather_tb _ _ _ (by omega), e1, e2]
+  · simp [Nat.testBit_mod_two_pow, hk]
+
 -- the ntt/invNtt loop rewrite still round-trips
 #guard let p := (Array.range 256).map (· * 7919 % q); invNtt (ntt p) == p
 

@@ -25,8 +25,7 @@ to the Lean that actually runs.  It inherits none of the old gate's assurance.
 Manifest v3 (2026-09-24) replaced the fixed commit pin (which could never equal
 the commit that carries the manifest) with a recorded commit, builds the theorem
 module that v2's `blind_financial` build never produced, and allows Lean's three
-standard axioms.  Engineering decision (2026-09-24, lead engineer, founder
-deferred): allow Lean's three standard axioms; they underlie Lean's own logic;
+standard axioms.  Engineering decision (2026-09-24): allow Lean's three standard axioms; they underlie Lean's own logic;
 sorry/custom/native axioms remain forbidden.  `STANDARD_LEAN_AXIOMS` bounds the
 manifest, so `sorryAx`, `Lean.ofReduceBool`, `Lean.trustCompiler`,
 `native_decide` auxiliary axioms and project axioms can never be allowed.
@@ -63,7 +62,7 @@ BUILD_TIMEOUT_SECONDS = 900.0
 CHECK_TIMEOUT_SECONDS = 90.0
 NATIVE_TIMEOUT_SECONDS = 15.0
 
-REQUIRED_MANIFEST_SHA256 = "60a513084f050f3ea319670b3cc48a3e12e1f3dcb529764c0fa990d0b443287c"
+REQUIRED_MANIFEST_SHA256 = "b511bdb6a2ccaeddccaa43ed8e5e78cf2f8cdde3d452ab66f07a504ef836e0c3"
 
 # The only axioms a manifest may allow: the ones Lean's own logic rests on.
 STANDARD_LEAN_AXIOMS = frozenset({"propext", "Classical.choice", "Quot.sound"})
@@ -89,8 +88,8 @@ class PinnedExe:
 PINNED_EXE_IDENTITIES = {
     "blind_financial_worker": PinnedExe(
         "artifacts/engine-evaluator/blind_financial_worker.exe",
-        6_462_464,
-        "7c1eab94be614e584aed0d5aa388490481ac3766b085c89c2e982b8925d559e2",
+        6_510_592,
+        "2ac5f5eb783ac99111b4a28b35df6f23f47e773c2f10a281c01bc02e878841d8",
     ),
 }
 PINNED_EXES = tuple(PINNED_EXE_IDENTITIES)
@@ -507,8 +506,8 @@ def _git(root: Path, *args: str) -> str:
     return _decode(_git_bytes(root, *args), "git").strip()
 
 
-def _git_bytes(root: Path, *args: str) -> bytes:
-    result = _run(["git", *args], cwd=root, timeout=CHECK_TIMEOUT_SECONDS)
+def _git_bytes(root: Path, *args: str, input_bytes: bytes = b"") -> bytes:
+    result = _run(["git", *args], cwd=root, timeout=CHECK_TIMEOUT_SECONDS, input_bytes=input_bytes)
     if result.returncode != 0:
         raise AssuranceError(
             f"git {' '.join(args)} failed exit={result.returncode}; "
@@ -550,18 +549,20 @@ def _source_identity(
     """Identity of `source_files`, which are relative to `root/lean_root`."""
     digest = hashlib.sha256()
     identities: list[FileIdentity] = []
+    # One `cat-file --batch` call gives each file as `<oid> blob <size>`, content, line feed. Git's blob, not a
+    # CRLF-converted working copy, is the identity; the clean-status check rejects edits and untracked replacements.
+    names = "".join(f"HEAD:{lean_root}/{relative}\n" for relative in source_files)
+    stream = BytesIO(_git_bytes(root, "cat-file", "--batch", input_bytes=names.encode("utf-8")))
     for relative in source_files:
-        path = root / Path(*lean_root.split("/")) / Path(*relative.split("/"))
-        _regular_file(path, f"source file {relative}")
-        git_path = f"HEAD:{lean_root}/{relative}"
-        expected_blob = _git(root, "rev-parse", git_path).lower()
-        # Git's canonical blob is the input to the fresh archive/build.  The
-        # working tree may have a reviewed CRLF conversion on Windows, so the
-        # identity is taken from `git show`, while the required clean status
-        # still rejects any tracked edit or untracked source replacement.
-        content = _git_bytes(root, "show", git_path)
+        _regular_file(root / Path(*lean_root.split("/")) / Path(*relative.split("/")), f"source file {relative}")
+        header = stream.readline().split()
+        if len(header) != 3 or header[1] != b"blob" or not header[2].isdigit():
+            raise AssuranceError(f"source file is not a Git blob: {relative}")
+        expected_blob = header[0].decode("ascii").lower()
+        content = stream.read(int(header[2]) + 1)
+        content, line_end = content[:-1], content[-1:]
         blob = hashlib.sha1(b"blob " + str(len(content)).encode("ascii") + b"\0" + content).hexdigest()
-        if blob != expected_blob:
+        if blob != expected_blob or line_end != b"\n":
             raise AssuranceError(
                 f"source file differs from pinned Git blob: {relative} expected={expected_blob} got={blob}"
             )
@@ -571,6 +572,8 @@ def _source_identity(
         digest.update(b"\0")
         digest.update(len(content).to_bytes(8, "big"))
         digest.update(content)
+    if stream.read():
+        raise AssuranceError("Git returned more objects than source files")
     return digest.hexdigest(), tuple(identities)
 
 
@@ -688,7 +691,8 @@ def _lean_imports(source: str) -> list[str]:
         at += 1
 
 
-def _pinned_exe_modules(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> set[str]:
+def _pinned_exe_modules(lean_dir: Path, exes: Sequence[str] = PINNED_EXES, proofs: bool = False) -> set[str]:
+    """`proofs`: the closure may hold proof modules (gate_engine shares theorem files with its code); the manifest then covers them."""
     lake = tomllib.loads((lean_dir / "lakefile.toml").read_text(encoding="utf-8"))
     roots = {str(exe["name"]): str(exe["root"]) for exe in lake.get("lean_exe", [])}
     if any(name not in roots for name in exes):
@@ -700,14 +704,14 @@ def _pinned_exe_modules(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> se
         if module in seen:
             continue
         seen.add(module)
-        if PROOF_MODULE_RE.search(module):
+        if not proofs and PROOF_MODULE_RE.search(module):
             raise AssuranceError(f"pinned executable imports proof module {module}")
         *folders, name = module.split(".")
         path = lean_dir.joinpath(*folders) / f"{name}.lean"
         if not path.is_file():
             continue  # Init, Std or Lean: not a source file of this workspace
         source = path.read_text(encoding="utf-8")
-        if PROOF_COMMAND_RE.search(source):
+        if not proofs and PROOF_COMMAND_RE.search(source):
             raise AssuranceError(f"pinned executable imports {module}, which pins axioms")
         pending.extend(_lean_imports(source))
     return seen
@@ -717,10 +721,10 @@ def _check_pinned_exe_closure(lean_dir: Path, exes: Sequence[str] = PINNED_EXES)
     return len(_pinned_exe_modules(lean_dir, exes))
 
 
-def pinned_source_manifest(lean_dir: Path, exes: Sequence[str] = PINNED_EXES) -> str:
+def pinned_source_manifest(lean_dir: Path, exes: Sequence[str] = PINNED_EXES, proofs: bool = False) -> str:
     """SHA-256 over `sha256  lean/path` lines (LF bytes, string-sorted) for the sources the exes are built from: each exe's import closure and the build files."""
     names = {"lakefile.toml", "lean-toolchain", "lake-manifest.json"}
-    sources = {module.replace(".", "/") + ".lean" for module in _pinned_exe_modules(lean_dir, exes)}
+    sources = {module.replace(".", "/") + ".lean" for module in _pinned_exe_modules(lean_dir, exes, proofs)}
     names |= {name for name in sources if (lean_dir / name).is_file()}  # Init, Std and Lean are not files of this tree
     digest = hashlib.sha256()
     for name in sorted(names):
@@ -807,6 +811,8 @@ def _clean_environment(tool_paths: Mapping[str, Path]) -> dict[str, str]:
             environment.pop(key, None)
     bin_dir = str(next(iter(tool_paths.values())).parent)
     environment["PATH"] = bin_dir + os.pathsep + environment.get("PATH", "")
+    # Lake has no job limit; its task pool follows this, so a cold build compiles a few modules at a time, not all.
+    environment["LEAN_NUM_THREADS"] = "2"
     return environment
 
 

@@ -5,6 +5,7 @@ import BlindLedger.Financial.Payment.Cursor
 import BlindLedger.Financial.CursorCorrection
 import BlindLedger.Financial.CorrectionFast
 import BlindLedger.Financial.CorrectionTransition.Transition
+import BlindLedger.Financial.DecisionPackage.Decide
 
 namespace BlindLedger.Financial
 
@@ -87,7 +88,8 @@ def offsetRespond (w : Bytes) : Bytes :=
 /-- Every item magic the worker dispatches on, in dispatch order. A later item is added here and in
     `workerRespond`; `workerRespond_evaluator_unchanged₂` keeps its text. -/
 def itemMagics : List Bytes :=
-  [Payment.paymentMagic, CorrectionTransition.correctionTransitionInputMagic, offsetAuthorizationMagic]
+  [Payment.paymentMagic, CorrectionTransition.correctionTransitionInputMagic, offsetAuthorizationMagic,
+    DecisionPackage.packageRequestMagic]
 
 /-- The worker's whole policy, one frame in and one answer out: a frame that starts with an item magic
     is one item decision; any other is one BLFIN02 input. -/
@@ -95,6 +97,7 @@ def workerRespond (wire : Bytes) : Bytes :=
   if Payment.paymentMagic.isPrefixOf wire then Payment.paymentRespond wire
   else if CorrectionTransition.correctionTransitionInputMagic.isPrefixOf wire then correctionRespond wire
   else if offsetAuthorizationMagic.isPrefixOf wire then offsetRespond wire
+  else if DecisionPackage.packageRequestMagic.isPrefixOf wire then DecisionPackage.packageRequestRespondFast wire
   else encodeWorkerOutcome (evaluateWire wire)
 
 theorem financialInputWellFormed_of_decodeFinancialInput {bytes : Bytes} {input : FinancialInput}
@@ -159,6 +162,9 @@ def workerRespondBA (wire : ByteArray) : Bytes :=
     correctionRespondBA₂ wire
   else if offsetAuthorizationMagic.isPrefixOf (wire.extract 0 offsetAuthorizationMagic.length).toList then
     offsetRespondBA₂ wire
+  else if DecisionPackage.packageRequestMagic.isPrefixOf
+      (wire.extract 0 DecisionPackage.packageRequestMagic.length).toList then
+    DecisionPackage.packageRequestRespondFast wire.toList
   else
     encodeWorkerOutcome
       (match Fast.decodeFinancialInputBA₂ wire with
@@ -232,6 +238,9 @@ theorem workerRespondBA_eq (wire : ByteArray) : workerRespondBA wire = workerRes
   rw [isPrefixOf_extract]
   split
   next h => exact offsetRespondBA₂_eq wire h
+  rw [isPrefixOf_extract]
+  split
+  · rfl
   rw [Fast.decodeFinancialInputBA₂_eq]
   cases hd : Fast.decodeFinancialInput wire.toList with
   | none => rfl

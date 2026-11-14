@@ -1,4 +1,4 @@
-"""Deployment slots (founder D7; hold-release r4.2 section 10): the one registry and the one reader.
+"""Deployment slots (hold-release design section 10): the one registry and the one reader.
 
 A slot is a table of (key, leaf) pairs the state signs into the Control Pack.  A slot the pack does not author reads as
 its registered strictest value, with a log line, and activation is refused until every slot is authored.  The reader
@@ -8,6 +8,7 @@ is the only way to a value, and a pack that fails any check below never becomes 
 from __future__ import annotations
 
 import logging
+import re
 from types import MappingProxyType
 
 SENTINEL = 2 ** 63 - 1  # the cycle end of a time no calendar covers
@@ -43,6 +44,10 @@ SLOTS = {
                0, lambda k, v: _text(k) and _cents(v)),
     "CHECKWRITE_CALENDAR": ("Which cycles (start, end in ms) reset the cumulative window?", "state payment authority", "Control Pack",
                             SENTINEL, lambda k, v: _cents(k) and _cents(v) and k < v),
+    # the strictest pin is 64 zero bytes: no key set hashes to it, so the gate admits no key set and every row HOLDs
+    "GATE_KEYSET_PIN": ("Which genesis key set (the SHA3-512 of its KEYSET/v2 body, lowercase hex) does each tenant's gate trust?",
+                        "state payment authority", "Control Pack", "00" * 64,
+                        lambda k, v: _text(k) and type(v) is str and re.fullmatch("[0-9a-f]{128}", v) is not None and v != "00" * 64),
 }
 
 
@@ -50,6 +55,8 @@ class Slots:
     """The slot values of one validated pack: ``pack`` maps a slot id to its (key, leaf) pairs; an id absent from it is unauthored."""
 
     def __init__(self, pack: dict) -> None:
+        if type(pack) is not dict:
+            raise SlotError("slot_pack_shape")
         if set(pack) - set(SLOTS):
             raise SlotError("slot_unknown")
         tables = {}
@@ -91,7 +98,12 @@ class Slots:
 
     def read(self, sid: str, key: object) -> object:
         """The leaf the pack authored for ``key`` in slot ``sid``, else the slot's strictest leaf."""
-        return self._tables.get(sid, {}).get(key, SLOTS[sid][3])
+        if sid not in SLOTS:
+            raise SlotError("slot_unknown", sid)
+        try:
+            return self._tables.get(sid, {}).get(key, SLOTS[sid][3])
+        except TypeError:  # a key that cannot be hashed is a key the table lacks
+            return SLOTS[sid][3]
 
     def cycle(self, now: int) -> tuple[int, int]:
         """(start, end) of the calendar cycle holding ``now``; (0, SENTINEL) where none does."""

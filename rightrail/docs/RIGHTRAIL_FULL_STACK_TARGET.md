@@ -1,15 +1,10 @@
 # RightRail full-stack target
 
-The target architecture for the complete RightRail service and, within it,
-Blind Ledger as an inline payment gate.
+Target architecture for RightRail and, within it, the Blind Ledger operating record as an inline payment gate.
 
 `CONSTITUTION.md` is supreme; this document elaborates it and cannot weaken
-it. [`ARCHITECTURE.md`](../ARCHITECTURE.md) describes today's code;
-[`STATUS.md`](../STATUS.md) is the only status record. It holds no status and
-selects no state, program, profile, evidence mode, authority level or receiver. It draws on design notes held outside the repo
-(`next-phase.md`, `gate-design.md`, `fv-plan.md`). Everything here is design,
-not built, run, or approved: `proofSuiteId=null`, `production_usable=false`,
-`activation=false`.
+it. `ARCHITECTURE.md` describes today's code;
+`STATUS.md` is the only status record. This document selects no state, program, profile, evidence mode, authority level or receiver. Everything here is design, not run or approved, except what `STATUS.md` lists as built. Standing claims: CONSTITUTION VI.2.
 
 ## 1. The end state
 
@@ -17,21 +12,54 @@ The gate is one authority level within the product `ARCHITECTURE.md` describes;
 the core financial cycle and independent exit stay useful without it.
 
 Every Medicaid payment a state routes through RightRail — FFS and managed
-care alike — passes Blind Ledger before money goes out, at full state scale
+care alike — passes the Blind Ledger gate before money goes out, at full state scale
 (New York's eMedNY cycle is the sizing reference: ~9.6M claims and $1.9B
 paid per weekly cycle, per the NY Comptroller audit of 2025-06-18).
 RightRail still never
 moves money (Constitution I.4): the state's own payment system checks the
 gate's decision and remains the party that holds or releases. No legal
 precedent exists for a private vendor to hold the 42 CFR 455.23 suspension
-trigger itself, so every document/interface says "the gate produces the
+trigger itself, so every interface says "the gate produces the
 determination the state's system consults," never "the gate holds the
 payment."
+
+RightRail enters beside one responsibility and then shrinks the old work it
+makes unnecessary. Each responsibility names, before go-live, the old tasks it
+retires and their measured baseline (staff hours, contract dollars);
+rebuilding, chasing, recoding, reconciling, reporting and re-procuring are the
+target.
 
 Gating is **off by default**; a state turns on only the authority it grants,
 per flow, through a state-signed `AUTHORITY-GRANT` (§3).
 
-## 2. Gate points and rollout order
+The evidence model, roles and growth path: `docs/STATE_EVIDENCE_ARCHITECTURE.md`. The six products: `ARCHITECTURE.md`.
+
+## 2. First jobs, gate points and rollout order
+
+**First jobs.** The evidence record is the product, and the gate is its end state, not the first sale. The first paid
+jobs, from 2028, are two. Switch runs a replay test before a late claims-system replacement goes live: the old and the
+new system process the same record and the differences are listed. Mirror gives caseworkers and county offices a
+read-only side-by-side view of the evidence for a determination; the decision stays the worker's and the view records
+what was shown. Eligibility evidence is the centre of 2028 to 2030. Pricing is in Constitution Article VIII. The
+build order is unchanged: speed and proofs as planned, then the staff loop.
+
+**Rollout stages.** A state takes the state-side products together (every product except Provider App, which is sold
+to providers on its own) and switches them on in four stages. No stage holds a payment until the stage before it has
+earned that, and every stage must make staff work radically easier and faster from its first month.
+
+1. Answer. Mirror pre-fills renewals from claims data and shows exemptions and proof before any coverage ends; audit
+   and error-rate samples are answered from the record with the documents attached; Switch replays before a new
+   claims system goes live; an exact duplicate payment line is answered at once (Constitution I.4). Nothing is held.
+2. Watch. Every product runs on live flows and holds nothing. Each hold it would have made is recorded and checked,
+   which gives the measured false-hold rate per cause.
+3. Hold by cause. A hold cause is switched on only once its measured false-hold rate is at most 5%, and its holds are
+   released by cause (Constitution I.2).
+4. Gate. The payment gate at the authority the state grants (§3), in the order below.
+
+Before a stage starts it names the staff tasks it makes faster or removes, with their measured baseline (§1), and it
+is judged on that. Views show evidence and gaps, never a recommended decision.
+
+**Gate points.**
 
 The gated unit is one payment: one payee, one amount, one release, with claim
 or member-month lines underneath.
@@ -44,12 +72,13 @@ or member-month lines underneath.
 | Directed payment (`SDP`) | Disbursement | Provider lines | Preprint schedule |
 | Plan-to-provider (`PLAN_PAY`) | Plan payment to a provider | Claim lines | Needs a contract clause; no precedent today |
 
-Rollout order: **FFS weekly cycle first, then FFS per-claim; managed care
-capitation release first, then directed payments, then plan-to-provider.**
-Pharmacy stays retrospective through PBMs, never gated inline. The order
-follows feasibility and existing measurement, not fraud exposure: CMS does not
-measure plan-to-provider payments (GAO-25-107770), so gating capitation first
-risks moving fraud there.
+Rollout order for the gate when it comes: FFS first (cycle, then per-claim), then capitation release
+(`CAP_820`), then directed payments (`SDP`) released on proof of service use
+(an accepted encounter, or the hospital's claim agreeing with the plan's 835
+payment). FFS comes first because the state adjudicates and pays those claims
+itself, so the gate sits on the state's own payment run with no plan in between.
+Pharmacy lines are gated like any other flow, read against public price files.
+`PLAN_PAY` stays in the format but is not on the rollout path.
 
 ## 3. Authority ladder
 
@@ -67,6 +96,8 @@ only by a new grant:
 
 The grant also carries the flow's fail policy (§6). Passing a comparison or
 proof gate does not itself grant the next level.
+
+What is built of this is in `STATUS.md`.
 
 ## 4. Decide, token, and the payer's checks
 
@@ -102,7 +133,7 @@ token and no bypass is a payer-side violation visible in Mirror.
 
 ## 5. Batch signing, checkpoints, and inclusion tokens
 
-**Batching is a hard invariant, not a tuning option.** One SQLite commit and
+**Batching is a hard invariant.** One SQLite commit and
 one ML-DSA-87 checkpoint signature cover a whole batch (up to 1,000 items,
 closing at a 150 ms window). A per-payment token is a Merkle-inclusion path
 of a few hundred bytes against that checkpoint's `token_root`, not a
@@ -115,8 +146,7 @@ Every batch commit produces a checkpoint (tenant, program, shard, sequence
 range, epoch, previous-checkpoint digest, event-chain head, token/evidence/
 projection roots, a never-zero state digest over the rules' released and
 unresolved pins, count, time), signed with the epoch's ML-DSA-87 key. The rules extend the
-sets of the payment's shard's latest signed checkpoint. A runtime verifier
-that the priors hash to the checkpoint's `state_digest` is not built.
+sets of the payment's shard's latest signed checkpoint.
 There is one sequence counter per (tenant, shard, epoch), shared by the
 tenant's programs, from 0: each checkpoint names the one just
 before it as its previous (all-zero for an epoch's first); a link to a
@@ -137,9 +167,10 @@ shown) and a NUL byte:
 | STATE; SNAPSHOT, RELEASED, UNRESOLVED | checkpoint state digest; the rules' read-set pins |
 | SEGMENT, KEY-CERT | financial history segments; epoch key certificate |
 | READ-<kind>/v2, READ-SET/v2, READ-MANIFEST/v2 | read manifest |
-| CHECKPOINT/v2, ID-REG/v2 | v1 plus registry head; the id registry chain |
-| TENANT-LOG/v3 | engine tenant-log entry (no `/v2` suffix; codec `Gate/Engine/Log.lean`) |
-| ENGINE-SNAP | engine log snapshot (codec `Gate/Engine/Snap.lean`) |
+| CHECKPOINT/v3 | what the producer emits: the v1 fields plus the shard's counter value |
+| KEYSET/v2 (+/SIG, /REINIT/v1), KEY/v1 | key set, successor signature, ratchet re-init; key file (`RR/` tags, no `GATE/`) |
+| SNAPSHOT/v3 (+/v3/SIG), READ-MANIFEST/v4 | signed k-of-n rules-read snapshot with validity window; v4 manifest (Lean `Gate/SnapshotV2.lean`) |
+| CUTOVER/v3 | cut tag over the shard chain (`CUT_DOM`) |
 | TEST-ONLY-SEED, TEST-ONLY-MEMBER | synthetic test keys, never product |
 
 Checkpoints stream to an independent witness (a separate state agency or
@@ -147,7 +178,9 @@ auditor, outside the database administrator's control), which cosigns only
 after checking sequence and epoch monotonicity and that no two checkpoints of
 one (tenant, shard, epoch) share a sequence with different digests or break the
 link. A mismatch raises a fork alarm; payers holding one refuse the whole
-(tenant, epoch). Payers never wait for the witness. History is sealed into
+(tenant, epoch). A payer releases a batch's payments only after the witness has cosigned its
+checkpoint; per-claim payments (FFS_CLAIM) do not wait for the agency witness,
+but still pass the machine cosign check of every batch. History is sealed into
 segments, each bound to the closing checkpoint. Records are retained 7 years
 (Pub 1075 AU-11) in WORM storage, onshore, in the state tenant. A daily anchor
 checkpoint carries an extra LMS/XMSS signature so a 7-year-old record stays
@@ -168,7 +201,15 @@ timers follow the flow's clock: 42 CFR 447.45 prompt-pay for non-fraud FFS
 holds, the 42 CFR 455.23 5-day suspension clock for fraud reasons,
 before-the-next-820 for capitation, contract terms for plan-to-provider.
 Mirror is the exception queue holding every non-ALLOW item and every bypassed
-payment.
+payment. Staff see one item per cause, not one per payment (Constitution
+XIV.2). The item lists its payments, and one action settles the cause. Each
+payment is still decided and recorded on its own.
+
+**Release by cause** (Constitution I.2; designed, not built). The officials above sign one decision that names the
+exact listed set of held payments sharing one cause. It releases only those payments, never a later one, and follows
+the same roster, threshold, separation and calendar rules; the payer verifies it before any listed payment goes.
+**Exact duplicates** (Constitution I.4) are not held: a line that exactly repeats a paid line is answered at once with
+the earlier payment, and the sender can contest it in one step.
 
 **Fail policy.** Every flow fails closed (Constitution III.5): if the gate is
 down or does not allow a payment, the payer holds it. There is no `FAIL_OPEN`
@@ -193,6 +234,8 @@ payment, so it can release no other and cannot outlive its admission. There is
 no grant, time window, post-hoc re-decision or recoupment: a payment is
 verified before it goes, never chased after.
 
+What is built of this is in `STATUS.md`.
+
 Fail-closed is the invariant T1' (`fail_closed_unless_bypass`): `outcome ≠
 Accepted → delta = ∅`, unless a verified `BYPASS` approval admitted in the
 same step commits to exactly that delta and none of its payments was released
@@ -200,29 +243,29 @@ before (`bypass_attributed`, `bypass_no_window`).
 
 ## 7. Primary, fenced standby, and the operational runbook
 
-The 99.8%-monthly availability target (~87.6 minutes of downtime a month) is
+The 99.8% monthly availability target (~87.6 minutes of downtime) is
 met by one primary and one synchronous standby, no consensus cluster. A fencer
 in the state tenant is the sole writer of the epoch, using an HSM monotonic
-counter plus a short primary lease; safety never depends on clocks. A stale primary cannot forge a valid token: it cannot commit (no standby of its
+counter on the gate machine (a TPM counter), with the second agency's
+cosignature as the off-machine check, plus a short primary lease; safety never depends on clocks. A stale primary cannot forge a valid token: it cannot commit (no standby of its
 own epoch will acknowledge it), it cannot sign (its epoch key is disabled in the
 HSM), and payers refuse it (a payer that has seen the higher epoch rejects the
 old one). A TLA+ model checks these properties as bounded state-space search,
 not proof (`docs/formal/gate_failover/README.md`).
 
-**A tested failover drill and an operational runbook (source or database
-outage, key loss, corrupted package, partial release, receiver timeout,
-operator exit) are acceptance prerequisites for claiming 99.8%.**
+**A tested failover drill and runbook (source or database outage, key loss,
+corrupted package, partial release, receiver timeout, operator exit) are
+prerequisites for claiming 99.8%.**
 
 ## 8. Sharding by member key
 
-Data shards by person/member key, never by program or plan, so the gate's core
-cross-boundary check (one person double-billed across FFS and managed care, or
-two plans) stays in one shard. No Postgres migration and no multi-region work
+Data shards by member key, never by program or plan, so the core check (one
+person double-billed across FFS and managed care, or two plans) stays in one shard. No Postgres migration and no multi-region work
 happen before a measured SQLite ceiling shows the need (Constitution IX.3).
 
 ## 9. The proof boundary: prove the interpreter, version the rule data
 
-Formal verification goes where a defect can release, withhold or misstate
+Formal verification covers what can release, withhold or misstate
 money, or forge or replay authority: the decision function, the bytes into and
 out of it, the replay checker and the signed token. Those are Lean, with
 proofs; interleavings (crash, failover, fencing) get TLA+ model checking;
@@ -254,8 +297,7 @@ interpreter, so it stays on the interpreter's proof.
 **The non-ZK evidence path ships first, as the whole answer for most
 auditors:** signed batch checkpoints, the witness cosign chain, Merkle
 inclusion proofs for selective disclosure, and a reproducible Lean checker an
-auditor reruns in the state's own tenant. No CMS, OIG, GAO or state auditor
-guidance accepts ZK proofs as audit evidence.
+auditor reruns in the state's own tenant. No CMS, OIG, GAO or state auditor guidance accepts ZK proofs as audit evidence.
 
 `PRIVATE_ZK` is a **parallel add-on**, not a prerequisite. Its value is the
 cross-organizational case with an unmotivated verifier, e.g. proving to an MCO
@@ -270,39 +312,43 @@ are not scheduled.
 - **ML-DSA-87** (FIPS 204 algorithm, non-validated AWS-LC build) signs batch and
  checkpoint bytes, one signature per batch (§5). Synthetic tenants: a
  DPAPI-sealed key behind a pinned worker, each signature checked by the Lean
- `gate_verify`; the M1 root is a laptop key, not the HSM root below.
+ `gate_verify`; the root is a laptop key, not the HSM root below.
 - **Long-lived root and anchor keys use LMS/XMSS** (SP 800-208), not
- SLH-DSA: no FIPS-140-3-validated cloud HSM offers SLH-DSA today, while
- LMS/XMSS is HSM-backed now. SLH-DSA stays available as an optional
+ SLH-DSA: on-premises FIPS-140-3-validated hardware now offers SLH-DSA (CMVP certificate 5503,
+ validated 2026-08-25); cloud HSMs are unchecked.  LMS/XMSS is HSM-backed now. SLH-DSA stays available as an optional
  software-verified second signature, never the only one on a root key.
  LMS/XMSS keys are stateful and need the SP 800-208 no-backup-restore
  discipline.
+- **A new root after a re-genesis** is installed by the payer only on the
+  agency's written instruction, with the fingerprint confirmed by the
+  countersigning agency and two payer staff, recorded as a fact; RightRail
+  never delivers or confirms an anchor, and payments hold until then.
 - **SHA3-512, domain-separated, through AWS-LC**.
 - **Hybrid ML-KEM TLS (X25519MLKEM768)** protects the gate-to-payer and
- gate-to-standby channels. Where a PQ-capable managed front end is
- unavailable, TLS terminates on the gate's own backend (AWS-LC or OpenSSL
+ gate-to-standby channels. Without a PQ-capable managed front end, TLS terminates on the gate's own backend (AWS-LC or OpenSSL
  3.5+) behind an ordinary L4 load balancer.
 
-We verify none of these primitives ourselves; we consume AWS-LC's
-machine-checked proofs, run ACVP/KAT vectors in CI against the exact library
-build, and prove only the binding — that signed bytes name exactly one decision.
+We verify none of these primitives ourselves; we use AWS-LC's
+machine-checked proofs, run ACVP/KAT vectors against the exact library
+build, and prove only the binding: signed bytes name exactly one decision.
 Check FIPS certification per deployment. Constitution VI.5 forbids RSA/ECDSA
 fallback; certification delay does not authorize a downgrade.
 
 ## 12. Evidence and integration
 
 A format model, compiled rules, a pinned executable and an integrated workflow
-are separate claims. `artifacts/engine-correction/PROVENANCE.md` is the engine
+are separate claims. `artifacts/engine-evaluator/PROVENANCE.md` is the engine
 pin. Before any end-to-end gate claim (STATUS), the payer gate needs authenticated
 checkpoint ancestry and admission of signed, scoped, current authority grants,
 with fences, released/unresolved identities, rules, tokens and payer release
 exercised through restart, retry and partial failure. Batch windows, worker
-counts and private-proof latency remain targets until measured.
+counts and private-proof latency remain targets until measured. The speed bars
+and measurements are in `STATUS.md` (Speed bars).
 
 ## 13. Path and open decisions
 
-Port the remaining command types in order of money impact (`fv-plan.md`), with
-throughput benchmarks before any batch-sizing or worker-pool claim. The
+Port the remaining command types in order of money impact; benchmark
+throughput before any batch-sizing or worker-pool claim. The
 X12/NCPDP tokenizer comes with the adapter build.
 `PRIVATE_ZK` stays in its separate prototype repository (Constitution IX.4) and
 needs a third-party audit before any claim. Cross-state reuse is limited to
@@ -315,3 +361,12 @@ theorem changes need the record and review in Constitution XI.2. Open:
  and scheduled destruction differ in what they disclose.
 - Measured segment and worker bounds, before raising the current store/export
  limits; segmented Continuity does not prove million-event operation.
+- Whether revoking a roster or grant key holds all new releases within one
+ batch.
+- Provider notice and appeal duties for holds (counsel).
+- The pre-approved list of lossless repairs that readers may apply.
+- The minimum retention period and the long-horizon target.
+- YubiHSM and 2 CFR 200.334 checks.
+- Whether a bypass may pass a hold on a certain fact (counsel).
+- How the counters are held under resharding.
+- Which agency is the witness, and under what agreement.

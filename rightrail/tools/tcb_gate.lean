@@ -32,11 +32,25 @@ def core (m : Name) : Allow :=
     reason := s!"toolchain `{m}`: compiler and C runtime primitives, trusted as the pinned toolchain (tools/tcb_toolchain.txt)" }
 
 /-- THE ALLOWLIST.  Anything else is a violation.  A `VIOLATION-TODO` reason marks a real hole in a pinned closure:
-    it passes the gate only so the lead can decide, and the report names it. -/
+    it passes the gate only so a reviewer can decide, and the report names it. -/
 def allowed : List Allow := [
   core `Init, core `Std,
   { name := `BlindLedger.Financial.WorkerCli.reserveArena, module := false, kinds := ["extern", "opaque"],
     reason := "the worker's mimalloc arena reservation, one C call, no decision logic" },
+  { name := `BlindLedger.Gate.Engine.OneProc.reserveArena, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine's mimalloc arena reservation, one C call, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgOpen, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine flat history file open: CRT _wopen on a path converted by kernel32 MultiByteToWideChar, asm-labelled C, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgRead, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine flat history file positioned page read: CRT _lseeki64 + _read, asm-labelled C, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgWrite, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine flat history file positioned page write: CRT _lseeki64 + _write, asm-labelled C, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgSync, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine flat history file CRT _commit(fd), asm-labelled C, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgTrunc, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine flat history file CRT _chsize_s(fd, len), asm-labelled C, no decision logic" },
+  { name := `BlindLedger.Gate.Flat.Io.pgClose, module := false, kinds := ["extern", "opaque"],
+    reason := "gate_engine flat history file CRT _close(fd), asm-labelled C, no decision logic" },
   { name := `BlindLedger.Financial.serveWorker, module := false, kinds := ["fixpoint"],
     reason := "the worker's frame loop, unbounded by design (answers until end of input); kernel-visible body, serveWorker_run and serveWorker_stateless" }]
 

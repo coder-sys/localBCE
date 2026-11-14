@@ -1,4 +1,4 @@
-"""H2 (rrb/reviews/safety-redteam-20261001.md; design rrb/designs/accountability-anchor-v1.md section 2): the custody
+"""The custody
 log outside the store refuses a store copied back after a restart, and only a signed, attributed operator act lowers it.
 Each test reads the log and the store back and checks that every MARK and ANCHOR names a committed head."""
 
@@ -20,7 +20,7 @@ from app.right_rail_financial_custody import Custody
 from app.right_rail_financial_owner import FinancialInputError, FinancialIntegrityError, FinancialOwner
 from tests import test_right_rail_financial_acceptance as acceptance
 from tests.rightrail_intake_rows import pay
-from tests.test_right_rail_financial_core_r1 import _pay
+from tests.test_right_rail_financial_writer_connection import _pay
 
 
 def _records(log: Path) -> list[dict]:
@@ -162,6 +162,48 @@ class CustodyTests(unittest.TestCase):
         log.write_bytes(good[:at] + (b"1" if good[at:at + 1] == b"0" else b"0") + good[at + 1:])
         with self.assertRaisesRegex(FinancialIntegrityError, "^custody_signature$"):
             self._open(store.path, store.clock, self._custody())
+
+    def test_a_key_file_swapped_after_open_signs_nothing_that_lands(self) -> None:
+        """L5 (speed-cut2-final): the worker signs with whatever the key file holds now, so each signature is checked
+        under the public key this object read before its first signature, never one read again from the same file."""
+        mine = str(Path(self.fixture.temp_dir.name) / "swapped.key")
+        shutil.copyfile(self.key, mine)
+        custody = Custody(self.directory, mine)
+        store = self._with(custody, self.fixture._build_base)  # the genesis ANCHOR reads the public key, then signs
+        pay(store, **_pay("item-05", "a"))
+        log = self._log(store)
+        before = log.read_bytes()
+        shutil.copyfile(self.other_key, mine)  # mid-process
+        with patch.object(custody_module.os, "fsync", wraps=os.fsync) as fsync:
+            with self.assertRaisesRegex(FinancialIntegrityError, "^custody_signer$"):  # the close ANCHOR is refused before it is written
+                store.close()
+            custody.pack_signer({"owner_id": store.owner_id, "sequence": store._high[0], "history_head": store._high[1].hex()}, store.path)
+            with self.assertRaisesRegex(FinancialIntegrityError, "^custody_signer$"):  # and no pack signature leaves
+                custody.sign_pack(b"{}")
+        self.assertEqual((log.read_bytes(), fsync.call_count), (before, 0))
+        with self.assertRaisesRegex(FinancialIntegrityError, "^custody_signature$"):  # a restart under the swapped key is refused
+            self._open(store.path, store.clock, Custody(self.directory, mine))
+        self.assertEqual(log.read_bytes(), before)
+        shutil.copyfile(self.key, mine)
+        self._open(store.path, store.clock, Custody(self.directory, mine)).close()
+        self.assertEqual(_records(log)[-1]["kind"], "ANCHOR")
+        self._assert_names_committed_heads(log, store.path)
+
+    def test_an_older_record_is_covered_by_the_newest_signature_but_not_its_own_sig(self) -> None:
+        """Open verifies the newest signed record only (one worker launch, not one per close): an edited older record
+        breaks the chain under it; an older record's sig is outside every digest, so editing only it is not seen."""
+        store = self._base()
+        pay(store, **_pay("item-05", "a"))
+        store.close()
+        log, (first, *rest) = self._log(store), self._log(store).read_bytes().splitlines(keepends=True)
+        edited = {**json.loads(first), "head": "0" * 128}
+        edited["digest"] = custody_module._digest(edited)  # rehashed and re-canonical: only the next record's prev disagrees
+        log.write_bytes(custody_module._encode(edited) + b"\n" + b"".join(rest))
+        with self.assertRaisesRegex(FinancialIntegrityError, "^custody_corrupt$"):
+            self._open(store.path, store.clock, self._custody())
+        at = len(first) - 20  # one hex digit of the genesis ANCHOR's sig ("sig" sorts last)
+        log.write_bytes(first[:at] + (b"1" if first[at:at + 1] == b"0" else b"0") + first[at + 1:] + b"".join(rest))
+        self._open(store.path, store.clock, self._custody()).close()  # LIMIT: accepted; the close ANCHOR's sig binds every digest
 
     def test_a_reordered_cut_or_torn_log(self) -> None:
         store = self._base()

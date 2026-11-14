@@ -8,6 +8,65 @@ namespace BlindLedger.Gate.Rules
     the keys of the released view (`seen0`) and those claimed before it.  The axiom pins at
     the end show no theorem here rests on `sorryAx` or `Lean.ofReduceBool`. -/
 
+theorem keep_row {c : Ctx} {l u : Line} (h : ¬(u = l ∧ (c.byp.lookup l.pay).isSome = true)) :
+    (!(u == l && (c.byp.lookup l.pay).isSome)) = true := by
+  cases h2 : (c.byp.lookup l.pay).isSome <;> simp_all
+
+/-- What the unresolved set claims against `l`: every row's claim but `l`'s own when a bypass names its payment. -/
+theorem mem_pending {c : Ctx} {l : Line} {k : Key} :
+    k ∈ pending c l ↔ ∃ u ∈ unresolvedSet c, ¬(u = l ∧ (c.byp.lookup l.pay).isSome = true) ∧ k ∈ claim c u := by
+  unfold pending
+  rw [List.mem_flatMap]
+  constructor
+  · rintro ⟨u, hu, hk⟩
+    obtain ⟨hu, hp⟩ := List.mem_filter.mp hu
+    exact ⟨u, hu, fun ⟨e, s⟩ => by simp [e, s] at hp, hk⟩
+  · rintro ⟨u, hu, hn, hk⟩
+    exact ⟨u, List.mem_filter.mpr ⟨hu, keep_row hn⟩, hk⟩
+
+/-- A line of a bypassed payment carries only bypassable reasons, so never `ALREADY_DECIDED`. -/
+theorem bypassed_fresh {c ds p d} (h : bypassed c ds p = true) (hd : d ∈ ds) (hp : d.line.pay = p) :
+    Reason.ALREADY_DECIDED ∉ d.reasons := fun hr => by
+  unfold bypassed at h
+  split at h
+  · cases h
+  · simp only [Bool.and_eq_true, List.all_eq_true] at h
+    have h5 := h.2 d hd
+    simp only [hp, bne_self_eq_false, Bool.false_or, List.all_eq_true, Bool.and_eq_true] at h5
+    exact absurd (h5 _ hr).1 (by decide)
+
+/-- Reading `lifts` back: the rules do not allow `p`, `p` has a decided line, and every reason on its lines is bypassable
+    and not named in the mask. -/
+theorem lifts_iff {m : Nat} {ds : List Decision} {p : Nat} {o : Outcome} : lifts m ds p o = true ↔
+    o ≠ .ALLOW ∧ (∃ d ∈ ds, d.line.pay = p) ∧
+      ∀ d ∈ ds, d.line.pay = p → ∀ r ∈ d.reasons, bypassable r = true ∧ (m >>> r.idx % 2 == 1) = false := by
+  unfold lifts
+  simp only [Bool.and_eq_true]
+  constructor
+  · rintro ⟨⟨ho, hany⟩, hall⟩
+    obtain ⟨d, hd, hp⟩ := List.any_eq_true.mp hany
+    refine ⟨bne_iff_ne.mp ho, ⟨d, hd, beq_iff_eq.mp hp⟩, fun d hd hp r hr => ?_⟩
+    have h := List.all_eq_true.mp hall d hd
+    rw [hp, bne_self_eq_false, Bool.false_or] at h
+    have h2 := (Bool.and_eq_true _ _).mp (List.all_eq_true.mp h r hr)
+    exact ⟨h2.1, by simpa using h2.2⟩
+  · rintro ⟨ho, ⟨d, hd, hp⟩, hall⟩
+    refine ⟨⟨bne_iff_ne.mpr ho, List.any_eq_true.mpr ⟨d, hd, beq_iff_eq.mpr hp⟩⟩, List.all_eq_true.mpr fun d hd => ?_⟩
+    by_cases hp : d.line.pay = p
+    · rw [hp, bne_self_eq_false, Bool.false_or]
+      exact List.all_eq_true.mpr fun r hr => by
+        obtain ⟨h1, h2⟩ := hall d hd hp r hr
+        rw [h1, h2]; rfl
+    · rw [bne_iff_ne.mpr hp, Bool.true_or]
+
+/-- A line of a payment that goes at HOLD authority carries only bypassable reasons, so never `ALREADY_DECIDED`. -/
+theorem limitedPay_fresh {c ds p d} (h : limitedPay c ds p = true) (hd : d ∈ ds) (hp : d.line.pay = p) :
+    Reason.ALREADY_DECIDED ∉ d.reasons := fun hr => by
+  unfold limitedPay at h
+  split at h
+  · cases h
+  · exact absurd ((lifts_iff.mp ((Bool.and_eq_true _ _).mp h).2).2.2 d hd hp _ hr).1 (by decide)
+
 /-- A snapshot the rules may read: see `usable`. -/
 def Usable {α : Type} (today maxAge : Nat) (ok : Nat → α → Bool) (o : Option (Snapshot α)) : Prop :=
   ∃ s, o = some s ∧ validDate today = true ∧ validDate s.asOf = true ∧ s.asOf ≤ today ∧
@@ -33,11 +92,11 @@ abbrev Excluded (c : Ctx) (l : Line) : Prop :=
   ∃ e ∈ entries c.exclusions, (e.id = l.payee ∨ e.id = l.rendering) ∧ e.start ≤ l.date ∧ l.date ≤ e.stop
 
 def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
-  | .ALREADY_DECIDED => idKey l ∈ seen ∨ idKey l ∈ pending c
+  | .ALREADY_DECIDED => idKey l ∈ seen ∨ idKey l ∈ pending c l
   | .CAP_MEMBER_MONTH_DUPLICATE => l.flow = .CAP_820 ∧ (exactKey l ∈ seen ∨ nearKey l ∈ seen ∨
       Usable c.today 7 okSpan c.enrollment ∧ validDate l.date = true ∧ overlap c l = true)
-  | .COLLIDES_WITH_UNRESOLVED_NEAR => l.flow ≠ .CAP_820 ∧ nearKey l ∈ pending c ∧ exactKey l ∉ pending c
-  | .DUPLICATE_OF_UNRESOLVED => exactKey l ∈ pending c ∨ l.flow = .CAP_820 ∧ nearKey l ∈ pending c
+  | .COLLIDES_WITH_UNRESOLVED_NEAR => l.flow ≠ .CAP_820 ∧ nearKey l ∈ pending c l ∧ exactKey l ∉ pending c l
+  | .DUPLICATE_OF_UNRESOLVED => exactKey l ∈ pending c l ∨ l.flow = .CAP_820 ∧ nearKey l ∈ pending c l
   | .FFS_DUPLICATE_LINE => l.flow ≠ .CAP_820 ∧ exactKey l ∈ seen
   | .FFS_DUPLICATE_UNVERIFIED => l.flow ≠ .CAP_820 ∧ exactKey l ∈ looseKeys c
   | .FFS_NEAR_DUPLICATE => l.flow ≠ .CAP_820 ∧ nearKey l ∈ seen ∧ exactKey l ∉ seen
@@ -62,6 +121,7 @@ def Fact (c : Ctx) (seen : List Key) (l : Line) : Reason → Prop
   | .STALE_PROVIDER_DEATH => ¬Usable c.today 90 okDeath c.providerDeaths
   | .STALE_RELEASED => ¬Chained c.today c.releasedPrior c.released
   | .STALE_UNRESOLVED => ¬Chained c.today c.unresolvedPrior c.unresolved
+  | .POSTING_CAP => False
 
 def seenAt (c : Ctx) (b : List Line) (i : Nat) : List Key :=
   ((order c b).take i).reverse.flatMap (claim c) ++ seen0 c b
@@ -101,6 +161,10 @@ theorem outcomeOf_certain {rs : List Reason} {r : Reason} (h : r ∈ rs) (hr : r
   cases rs with
   | nil => cases h
   | cons a t => rw [outcomeOf, if_neg (by simp), if_pos (List.any_eq_true.mpr ⟨r, h, by simp [hr]⟩)]
+
+/-- A row whose postings the disk engine cut is HOLD (D7, fail closed; released only by D4 evidence or approver). -/
+theorem posting_cap_hold {rs : List Reason} (h : Reason.POSTING_CAP ∈ rs) : outcomeOf rs = .HOLD :=
+  outcomeOf_certain h rfl
 
 theorem outcomeOf_hold {rs : List Reason} (h : outcomeOf rs = .HOLD) : ∃ r ∈ rs, review r = false := by
   unfold outcomeOf at h
@@ -150,7 +214,7 @@ theorem claim_keys {c x k} (hk : k ∈ keys x) (hc : k ∉ claim c x) :
 
 /-- An ALLOWed line claims all its keys, and none of them was seen or is pending. -/
 theorem allow_facts {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
-    claim c l = keys l ∧ ∀ k ∈ keys l, k ∉ seen ∧ k ∉ pending c := by
+    claim c l = keys l ∧ ∀ k ∈ keys l, k ∉ seen ∧ k ∉ pending c l := by
   have no : ∀ r, fires c seen l r = false := fun r => by
     cases hf : fires c seen l r
     · rfl
@@ -174,7 +238,7 @@ theorem allow_facts {c seen l} (h : (decideLine c seen l).outcome = .ALLOW) :
       · by_cases he : exactKey l ∈ seen
         · simp [hc, he] at h5
         · simp [hc, hs, he] at h6
-      · by_cases he : exactKey l ∈ pending c
+      · by_cases he : exactKey l ∈ pending c l
         · simp [he] at h4
         · simp [hc, hp, he] at h3
     · exact ⟨fun hs => by simp [hc, hs] at h2, fun hp => by simp [hc, hp] at h4⟩
@@ -269,12 +333,14 @@ theorem not_own_mem {c x} {b : List Line} (h : ¬(own c x = true ∧ x ∈ b)) :
 /-- An ALLOWed line shares no key with any line of the released set, nor with
     what any line of the unresolved set claims: it may share only a line this
     batch re-decides, or the member-month of an unresolved capitation line
-    whose member is known not to be enrolled with that plan.  The sets are
-    the gate's views; an ALLOW line has both sets chained (`fail_closed`), so
-    they are the sets read. -/
+    whose member is known not to be enrolled with that plan, or the line's
+    own held row when a bypass names its payment.  The sets are the gate's
+    views; an ALLOW line has both sets chained (`fail_closed`), so they are
+    the sets read. -/
 theorem allow_clear {c b d} (hd : d ∈ (decideBatch c b).decisions) (ha : d.outcome = .ALLOW) :
     ∀ x ∈ releasedSet c ++ unresolvedSet c, ∀ k ∈ keys d.line, k ∈ keys x →
-      (own c x = true ∧ x ∈ b) ∨ (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c x = true) := by
+      (own c x = true ∧ x ∈ b) ∨ (ownU c x = true ∧ x = d.line) ∨
+        (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c x = true) := by
   obtain ⟨pre, l, rfl⟩ := mem_decideAll (seen := seen0 c b) (ls := order c b) hd
   intro x hx k hk hkx
   rw [decideLine_line] at hk
@@ -283,7 +349,10 @@ theorem allow_clear {c b d} (hd : d ∈ (decideBatch c b).decisions) (ha : d.out
   · by_cases ho : own c x = true ∧ x ∈ b
     · exact Or.inl ho
     · refine (hf.1 (List.mem_append.mpr (Or.inr (List.mem_flatMap.mpr ⟨x, List.mem_filter.mpr ⟨hx, not_own_mem ho⟩, hkx⟩)))).elim
-  · exact Or.inr (claim_keys hkx (fun hc => hf.2 (List.mem_flatMap.mpr ⟨x, hx, hc⟩)))
+  · by_cases hu : x = l ∧ (c.byp.lookup l.pay).isSome = true
+    · obtain ⟨rfl, hs⟩ := hu
+      exact Or.inr (Or.inl ⟨by simp only [ownU, hs, List.contains_iff_mem.mpr hx, Bool.and_self], rfl⟩)
+    · exact Or.inr (Or.inr (claim_keys hkx (fun hc => hf.2 (mem_pending.mpr ⟨x, hx, hu, hc⟩))))
 
 theorem lines_decideAll (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
     (decideAll c seen ls).map (·.line) = ls
@@ -359,14 +428,23 @@ theorem decided_kept {c b x} (hx : x ∈ b) :
           · rfl
           · have := (payOutcome_allow hp hd rfl).2 h
             rw [ho] at this; cases this
-        simp only [decideBatch] at hp
-        exact Or.inl (List.mem_append_right _ (List.mem_filter.mpr ⟨List.mem_map.mpr
-          ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha]⟩, rfl⟩, by simp only [hr, hp] <;> decide⟩))
+        have hp' : payOutcome c (decideAll c (seen0 c b) (order c b)) d.line.pay = .ALLOW := hp
+        have hr' : d.line.pay ∉ c.redo := fun h => by simp [h] at hr
+        exact Or.inl (List.mem_append_right _ (List.mem_map.mpr
+          ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha, hr', hp']⟩, rfl⟩))
       · exact Or.inr (Or.inr ⟨d, hd, rfl, Or.inr hp⟩)
     · by_cases hr : Reason.ALREADY_DECIDED ∈ d.reasons
       · exact Or.inr (Or.inr ⟨d, hd, rfl, Or.inl hr⟩)
-      · exact Or.inr (Or.inl (List.mem_append_right _
-          (List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha, hr, ho]⟩, rfl⟩)))
+      · by_cases hbp : bypassed c (decideAll c (seen0 c b) (order c b)) d.line.pay = true
+        · exact Or.inr (Or.inr ⟨d, hd, rfl, Or.inr fun hp => ha (payOutcome_allow hp hd rfl).1⟩)
+        · by_cases hlp : limitedPay c (decideAll c (seen0 c b) (order c b)) d.line.pay = true
+          · exact Or.inl (List.mem_append_right _
+              (List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [hlp, ho]⟩, rfl⟩))
+          · by_cases hou : ownU c d.line = true
+            · exact Or.inr (Or.inl (List.mem_append_left _
+                (List.contains_iff_mem.mp ((Bool.and_eq_true _ _).mp hou).2)))
+            · exact Or.inr (Or.inl (List.mem_append_right _
+                (List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [ha, hr, ho, hbp, hou, hlp]⟩, rfl⟩)))
   · exact Or.inl (List.mem_append_left _
       (show d.line ∈ releasedSet c by simp only [own, Bool.and_eq_true] at ho; simpa using ho.2))
 
@@ -389,7 +467,8 @@ theorem view_chained {t p o} (h : Chained t p o) : (view t p o).entries = entrie
     set read (`view_chained`). -/
 theorem allow_clear_store {c b d} (hd : d ∈ (decideBatch c b).decisions) (ha : d.outcome = .ALLOW) :
     ∀ x ∈ entries c.released ++ entries c.unresolved, ∀ k ∈ keys d.line, k ∈ keys x →
-      (own c x = true ∧ x ∈ b) ∨ (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c x = true) := by
+      (own c x = true ∧ x ∈ b) ∨ (ownU c x = true ∧ x = d.line) ∨
+        (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c x = true) := by
   have hr : Chained c.today c.releasedPrior c.released := chained_iff.mp (by
     cases h : chained c.today c.releasedPrior c.released
     · obtain ⟨_, l, rfl⟩ := mem_decideAll (seen := seen0 c b) (ls := order c b) hd
@@ -426,8 +505,8 @@ theorem later_allow_clear {c c₂ : Ctx} {b₁ b₂ x d}
     (hx : x ∈ b₁) (hd : d ∈ (decideBatch c₂ b₂).decisions) (ha : d.outcome = .ALLOW) :
     (∃ e ∈ (decideBatch c b₁).decisions, e.line = x ∧
       (Reason.ALREADY_DECIDED ∈ e.reasons ∨ payOutcome c (decideBatch c b₁).decisions x.pay ≠ .ALLOW)) ∨
-      ∀ k ∈ keys d.line, k ∈ keys x →
-        (own c₂ x = true ∧ x ∈ b₂) ∨ (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c₂ x = true) := by
+      ∀ k ∈ keys d.line, k ∈ keys x → (own c₂ x = true ∧ x ∈ b₂) ∨ (ownU c₂ x = true ∧ x = d.line) ∨
+        (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled c₂ x = true) := by
   rcases decided_kept (c := c) hx with h | h | h
   · exact Or.inr (allow_clear hd ha x (List.mem_append_left _ (prior_view (by rw [hr]; exact h))))
   · exact Or.inr (allow_clear hd ha x (List.mem_append_right _ (prior_view (by rw [hu]; exact h))))
@@ -443,6 +522,7 @@ theorem later_allow_clear_many {c : Nat → Ctx} {b : Nat → List Line} {m x d}
     (∃ e ∈ (decideBatch (c 0) (b 0)).decisions, e.line = x ∧
       (Reason.ALREADY_DECIDED ∈ e.reasons ∨ payOutcome (c 0) (decideBatch (c 0) (b 0)).decisions x.pay ≠ .ALLOW)) ∨
       ∀ k ∈ keys d.line, k ∈ keys x → (own (c (m + 1)) x = true ∧ x ∈ b (m + 1)) ∨
+        (ownU (c (m + 1)) x = true ∧ x = d.line) ∨
         (x.flow = .CAP_820 ∧ k = nearKey x ∧ notEnrolled (c (m + 1)) x = true) := by
   rcases decided_kept (c := c 0) hx with h | h | h
   · have h := mem_iterate (P := fun k => (decideBatch (c k) (b k)).released.entries) (m := m)
@@ -485,7 +565,7 @@ theorem allowed_decideAll (c : Ctx) : ∀ (seen : List Key) (ls : List Line),
       exact ⟨ih1, fun k hk => (hsub k hk).2⟩
 
 theorem fresh_unseen {c : Ctx} {seen ls e} (he : e ∈ decideAll c seen ls)
-    (fe : Reason.ALREADY_DECIDED ∉ e.reasons) : idKey e.line ∉ seen ∧ idKey e.line ∉ pending c := by
+    (fe : Reason.ALREADY_DECIDED ∉ e.reasons) : idKey e.line ∉ seen ∧ idKey e.line ∉ pending c e.line := by
   obtain ⟨pre, l, rfl⟩ := mem_decideAll he
   have h : ¬Fact c (pre ++ seen) l .ALREADY_DECIDED := fun h => fe (mem_decideLine.mpr h)
   exact ⟨fun hs => h (Or.inl (List.mem_append_right _ hs)), fun hp => h (Or.inr hp)⟩
@@ -511,37 +591,71 @@ theorem allow_nil {c : Ctx} {seen ls d} (hd : d ∈ decideAll c seen ls) (ha : d
   obtain ⟨pre, l, rfl⟩ := mem_decideAll hd
   exact outcomeOf_allow.mp (decideLine_outcome.symm.trans ha)
 
-/-- Identities: if no identity sits in both views, none sits in both next
-    checkpoints; the gate adds each new identity to at most one of them. -/
-theorem ids_disjoint {c b} (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet c, x.id ≠ y.id) :
-    ∀ x ∈ (decideBatch c b).released.entries, ∀ y ∈ (decideBatch c b).unresolved.entries, x.id ≠ y.id := by
+theorem mem_releasedLines {c ds x} (h : x ∈ releasedLines c ds) : ∃ d ∈ ds, d.line = x ∧
+    ((d.outcome = .ALLOW ∧ c.redo.contains x.pay = false ∧ payOutcome c ds x.pay = .ALLOW) ∨
+      bypassed c ds x.pay = true ∨ (limitedPay c ds x.pay = true ∧ own c x = false)) := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+  obtain ⟨hd, hp⟩ := List.mem_filter.mp hd
+  refine ⟨d, hd, rfl, ?_⟩
+  rcases (Bool.or_eq_true _ _).mp hp with h1 | h1
+  · rcases (Bool.or_eq_true _ _).mp h1 with h1 | h1
+    · simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h1
+      exact Or.inl ⟨h1.1.1, h1.1.2, h1.2⟩
+    · exact Or.inr (Or.inl h1)
+  · simp only [Bool.and_eq_true, Bool.not_eq_true'] at h1
+    exact Or.inr (Or.inr h1)
+
+theorem mem_unresolvedLines {c ds y} (h : y ∈ unresolvedLines c ds) : ∃ d ∈ ds, d.line = y ∧
+    d.outcome ≠ .ALLOW ∧ Reason.ALREADY_DECIDED ∉ d.reasons ∧ own c d.line = false ∧
+      bypassed c ds d.line.pay = false ∧ limitedPay c ds d.line.pay = false := by
+  obtain ⟨d, hd, rfl⟩ := List.mem_map.mp h
+  obtain ⟨hd, hp⟩ := List.mem_filter.mp hd
+  simp only [Bool.and_eq_true] at hp
+  obtain ⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, -⟩, h5⟩, h6⟩ := hp
+  exact ⟨d, hd, rfl, bne_iff_ne.mp h1, by simpa using h2, by simpa using h3, by simpa using h5, by simpa using h6⟩
+
+/-- A line the batch releases carries no `ALREADY_DECIDED`: an ALLOW line has no reason, a bypassed one or one that
+    goes at HOLD authority only bypassable reasons. -/
+theorem released_fresh {c : Ctx} {seen ls d} (hd : d ∈ decideAll c seen ls)
+    (h : d.outcome = .ALLOW ∨ bypassed c (decideAll c seen ls) d.line.pay = true ∨
+      limitedPay c (decideAll c seen ls) d.line.pay = true) :
+    Reason.ALREADY_DECIDED ∉ d.reasons := by
+  rcases h with h | h | h
+  · rw [allow_nil hd h]; simp
+  · exact bypassed_fresh h hd rfl
+  · exact limitedPay_fresh h hd rfl
+
+/-- Identities: if an identity in both views names one line, so it does in
+    both next checkpoints.  The gate adds each new identity to at most one of
+    them; the only line in both is a held line released by a bypass (the held
+    row stays: both sets only grow). -/
+theorem ids_disjoint {c b} (h : ∀ x ∈ releasedSet c, ∀ y ∈ unresolvedSet c, x.id = y.id → x = y) :
+    ∀ x ∈ (decideBatch c b).released.entries, ∀ y ∈ (decideBatch c b).unresolved.entries, x.id = y.id → x = y := by
   intro x hx y hy hxy
   rcases List.mem_append.mp hx with hx | hx <;> rcases List.mem_append.mp hy with hy | hy
   · exact h x hx y hy hxy
-  · obtain ⟨dy, hdy, rfl⟩ := List.mem_map.mp hy
-    obtain ⟨hdy, hay⟩ := List.mem_filter.mp hdy
-    have fy : dy.outcome ≠ .ALLOW ∧ Reason.ALREADY_DECIDED ∉ dy.reasons ∧ own c dy.line = false := by
-      simp at hay; exact and_assoc.mp hay
-    obtain ⟨seen, he, hs⟩ := seen_all hdy fy.2.2
-    apply fy.2.1
+  · obtain ⟨dy, hdy, rfl, -, fy, hown, -, -⟩ := mem_unresolvedLines hy
+    obtain ⟨seen, he, hs⟩ := seen_all (c := c) (b := b) hdy hown
+    refine (fy ?_).elim
     rw [he]
     exact mem_decideLine.mpr (Or.inl (hs x hx _ (by
       rw [show idKey dy.line = idKey x by simp [idKey, hxy]]; exact idKey_mem)))
-  · obtain ⟨dx, hdx, rfl⟩ := List.mem_map.mp (List.mem_filter.mp hx).1
-    obtain ⟨hdx, hax⟩ := List.mem_filter.mp hdx
-    obtain ⟨pre, l, rfl⟩ := mem_decideAll hdx
-    have hk := ((allow_facts (by simpa using hax)).2 (idKey l) idKey_mem).2
-    have hxy : l.id = y.id := hxy
-    exact hk (List.mem_flatMap.mpr ⟨y, hy, by
-      rw [show idKey l = idKey y by simp [idKey, hxy]]; exact idKey_claim⟩)
-  · obtain ⟨dx, hdx, rfl⟩ := List.mem_map.mp (List.mem_filter.mp hx).1
-    obtain ⟨hdx, hax⟩ := List.mem_filter.mp hdx
-    obtain ⟨dy, hdy, rfl⟩ := List.mem_map.mp hy
-    obtain ⟨hdy, hay⟩ := List.mem_filter.mp hdy
-    have hax : dx.outcome = .ALLOW := by simpa using hax
-    have hay : dy.outcome ≠ .ALLOW ∧ Reason.ALREADY_DECIDED ∉ dy.reasons ∧ own c dy.line = false := by
-      simp at hay; exact and_assoc.mp hay
-    exact fresh_ids c hdx hdy (fun e => hay.1 (e ▸ hax)) (by rw [allow_nil hdx hax]; simp) hay.2.1 hxy
+  · obtain ⟨dx, hdx, rfl, hr⟩ := mem_releasedLines hx
+    have fx := released_fresh hdx (hr.imp (fun h => h.1) (Or.imp id fun h => h.1))
+    by_cases hu : y = dx.line ∧ (c.byp.lookup dx.line.pay).isSome = true
+    · exact hu.1.symm
+    · have hk : idKey dx.line ∈ claim c y := by
+        rw [show idKey dx.line = idKey y by simp [idKey, hxy]]; exact idKey_claim
+      exact ((fresh_unseen hdx fx).2 (mem_pending.mpr ⟨y, hy, hu, hk⟩)).elim
+  · obtain ⟨dx, hdx, rfl, hr⟩ := mem_releasedLines hx
+    obtain ⟨dy, hdy, rfl, hoy, fy, -, hby, hly⟩ := mem_unresolvedLines hy
+    refine (fresh_ids c hdx hdy (fun e => ?_) (released_fresh hdx (hr.imp (fun h => h.1) (Or.imp id fun h => h.1)))
+      fy hxy).elim
+    subst e
+    rcases hr with hr | hr | hr
+    · exact hoy hr.1
+    · rw [hr] at hby; cases hby
+    · rw [hr.1] at hly; cases hly
 
 /-! ## Monotonicity -/
 
@@ -553,6 +667,7 @@ structure Grows (c c' : Ctx) : Prop where
   today : c'.today = c.today
   enrollment : c'.enrollment = c.enrollment
   released : c'.released = c.released
+  byp : c'.byp = c.byp
   unresolved : c'.unresolved = c.unresolved
   releasedPrior : c'.releasedPrior = c.releasedPrior
   unresolvedPrior : c'.unresolvedPrior = c.unresolvedPrior
@@ -570,8 +685,8 @@ theorem own_grows {c c'} (g : Grows c c') : own c' = own c :=
 theorem claim_grows {c c'} (g : Grows c c') : claim c' = claim c :=
   funext fun l => by unfold claim notEnrolled certain enrolled; rw [g.today, g.enrollment, own_grows g]
 
-theorem pending_grows {c c'} (g : Grows c c') : pending c' = pending c := by
-  simp only [pending, unresolvedSet, claim_grows g, g.today, g.unresolved, g.unresolvedPrior]
+theorem pending_grows {c c'} (g : Grows c c') : pending c' = pending c :=
+  funext fun l => by simp only [pending, unresolvedSet, claim_grows g, g.byp, g.today, g.unresolved, g.unresolvedPrior]
 
 theorem order_grows {c c'} (g : Grows c c') (b : List Line) : order c' b = order c b := by
   unfold order; rw [own_grows g]
@@ -614,6 +729,7 @@ theorem fact_mono {c c' seen l} (g : Grows c c') : ∀ {r}, Fact c seen l r → 
   | .STALE_ENROLLMENT, h => by simpa only [Fact, g.today, g.enrollment] using h
   | .STALE_RELEASED, h => by simpa only [Fact, g.today, g.released, g.releasedPrior] using h
   | .STALE_UNRESOLVED, h => by simpa only [Fact, g.today, g.unresolved, g.unresolvedPrior] using h
+  | .POSTING_CAP, h => h
 
 /-- Monotonicity, for one batch under the same day, enrollment, released and
     unresolved sets and checkpoints, and snapshot usability: adding death or
@@ -684,34 +800,28 @@ theorem deterministic {c b₁ b₂} (h : b₁.Perm b₂) : decideBatch c b₁ = 
   decideBatchIn_perm (f := []) h
 
 /-- The released set after a batch: the view plus each line whose payment is
-    ALLOW and not a re-decision (M-B). -/
+    ALLOW and not a re-decision (M-B), or bypassed, or goes at HOLD authority
+    (and is not released already). -/
 theorem released_iff {c : Ctx} {b : List Line} {x : Line} :
     x ∈ (decideBatch c b).released.entries ↔ x ∈ releasedSet c ∨
-      ∃ d ∈ (decideBatch c b).decisions, d.line = x ∧ c.redo.contains x.pay = false ∧
-        payOutcome c (decideBatch c b).decisions x.pay = .ALLOW := by
+      ∃ d ∈ (decideBatch c b).decisions, d.line = x ∧
+        ((c.redo.contains x.pay = false ∧ payOutcome c (decideBatch c b).decisions x.pay = .ALLOW) ∨
+          bypassed c (decideBatch c b).decisions x.pay = true ∨
+          (limitedPay c (decideBatch c b).decisions x.pay = true ∧ own c x = false)) := by
   change x ∈ releasedSet c ++ releasedLines c (decideBatch c b).decisions ↔ _
   rw [List.mem_append]
   refine or_congr_right ⟨fun h => ?_, ?_⟩
-  · obtain ⟨hx, hc⟩ := List.mem_filter.mp h
-    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hx
-    simp only [Bool.and_eq_true, Bool.not_eq_true', beq_iff_eq] at hc
-    exact ⟨d, (List.mem_filter.mp hd).1, rfl, hc.1, hc.2⟩
-  · rintro ⟨d, hd, rfl, hr, hp⟩
-    exact List.mem_filter.mpr ⟨List.mem_map.mpr ⟨d, List.mem_filter.mpr
-      ⟨hd, by simp [(payOutcome_allow hp hd rfl).1]⟩, rfl⟩, by rw [hr, hp]; rfl⟩
-
-/-- In a duplicate-free `flatMap`, one key belongs to at most one element. -/
-theorem flatMap_nodup_inj {α β : Type} {f : α → List β} {L : List α} (h : (L.flatMap f).Nodup)
-    {x y : α} {k : β} (hx : x ∈ L) (hy : y ∈ L) (kx : k ∈ f x) (ky : k ∈ f y) : x = y := by
-  induction L with
-  | nil => simp at hx
-  | cons a L ih =>
-    rw [List.flatMap_cons, List.nodup_append] at h
-    rcases List.mem_cons.mp hx with hxa | hxL <;> rcases List.mem_cons.mp hy with hya | hyL
-    · rw [hxa, hya]
-    · subst hxa; exact absurd rfl (h.2.2 k kx k (List.mem_flatMap.mpr ⟨y, hyL, ky⟩))
-    · subst hya; exact absurd rfl (h.2.2 k ky k (List.mem_flatMap.mpr ⟨x, hxL, kx⟩))
-    · exact ih h.2.1 hxL hyL
+  · obtain ⟨d, hd, rfl, h1 | h1 | h1⟩ := mem_releasedLines h
+    · exact ⟨d, hd, rfl, Or.inl h1.2⟩
+    · exact ⟨d, hd, rfl, Or.inr (Or.inl h1)⟩
+    · exact ⟨d, hd, rfl, Or.inr (Or.inr h1)⟩
+  · rintro ⟨d, hd, rfl, ⟨hr, hp⟩ | hbp | ⟨hl, ho⟩⟩
+    · refine List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, (Bool.or_eq_true _ _).mpr (Or.inl
+        ((Bool.or_eq_true _ _).mpr (Or.inl ?_)))⟩, rfl⟩
+      simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true']
+      exact ⟨⟨(payOutcome_allow hp hd rfl).1, hr⟩, hp⟩
+    · exact List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [hbp]⟩, rfl⟩
+    · exact List.mem_map.mpr ⟨d, List.mem_filter.mpr ⟨hd, by simp [hl, ho]⟩, rfl⟩
 
 theorem map_nodup_inj {α β : Type} {f : α → β} {L : List α} (h : (L.map f).Nodup) {x y : α}
     (hx : x ∈ L) (hy : y ∈ L) (hf : f x = f y) : x = y := by
@@ -726,27 +836,39 @@ theorem map_nodup_inj {α β : Type} {f : α → β} {L : List α} (h : (L.map f
     · exact ih h.2 hxL hyL
 
 /-- At most one payable token per line over any run of batches, each reading
-    the previous one's released set, whose ids are distinct: two ALLOW
-    payments that decide the same line id are the same payment. -/
+    the previous one's released set, whose ids are distinct: two released
+    payments (ALLOW, bypassed, or gone at HOLD authority) that decide the same
+    line id are the same payment, whatever authority each batch had. -/
 theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
     (hv :∀ k, releasedSet (c (k + 1)) = (decideBatch (c k) (b k)).released.entries)
     (hn : ∀ k, ((releasedSet (c k)).map (·.id)).Nodup) {i j : Nat} (hij : i ≤ j) {d e : Decision}
     (hd : d ∈ (decideBatch (c i) (b i)).decisions)
-    (hpd : payOutcome (c i) (decideBatch (c i) (b i)).decisions d.line.pay = .ALLOW)
+    (hpd : payOutcome (c i) (decideBatch (c i) (b i)).decisions d.line.pay = .ALLOW ∨
+      bypassed (c i) (decideBatch (c i) (b i)).decisions d.line.pay = true ∨
+      limitedPay (c i) (decideBatch (c i) (b i)).decisions d.line.pay = true)
     (he : e ∈ (decideBatch (c j) (b j)).decisions)
-    (hpe : payOutcome (c j) (decideBatch (c j) (b j)).decisions e.line.pay = .ALLOW)
+    (hpe : payOutcome (c j) (decideBatch (c j) (b j)).decisions e.line.pay = .ALLOW ∨
+      bypassed (c j) (decideBatch (c j) (b j)).decisions e.line.pay = true ∨
+      limitedPay (c j) (decideBatch (c j) (b j)).decisions e.line.pay = true)
     (hid : d.line.id = e.line.id) : d.line.pay = e.line.pay := by
-  have hdo := payOutcome_allow hpd hd rfl
-  have heo := payOutcome_allow hpe he rfl
-  have hk : idKey e.line = idKey d.line := by simp [idKey, hid]
+  have fd := released_fresh (seen := seen0 (c i) (b i)) (ls := order (c i) (b i)) hd
+    (hpd.imp (fun h => (payOutcome_allow h hd rfl).1) id)
+  have fe := released_fresh (seen := seen0 (c j) (b j)) (ls := order (c j) (b j)) he
+    (hpe.imp (fun h => (payOutcome_allow h he rfl).1) id)
   rcases Nat.lt_or_eq_of_le hij with hlt | rfl
   · have hx : d.line ∈ releasedSet (c (i + 1)) := by
       rw [hv i, released_iff]
-      by_cases hr : (c i).redo.contains d.line.pay = true
-      · have := (hdo.2 hr)
-        simp only [own, Bool.and_eq_true] at this
-        exact Or.inl (by simpa using this.2)
-      · exact Or.inr ⟨d, hd, rfl, Bool.eq_false_iff.mpr hr, hpd⟩
+      rcases hpd with hpd | hpd | hpd
+      · by_cases hr : (c i).redo.contains d.line.pay = true
+        · have := (payOutcome_allow hpd hd rfl).2 hr
+          simp only [own, Bool.and_eq_true] at this
+          exact Or.inl (by simpa using this.2)
+        · exact Or.inr ⟨d, hd, rfl, Or.inl ⟨Bool.eq_false_iff.mpr hr, hpd⟩⟩
+      · exact Or.inr ⟨d, hd, rfl, Or.inr (Or.inl hpd)⟩
+      · by_cases ho : own (c i) d.line = true
+        · simp only [own, Bool.and_eq_true] at ho
+          exact Or.inl (by simpa using ho.2)
+        · exact Or.inr ⟨d, hd, rfl, Or.inr (Or.inr ⟨hpd, Bool.eq_false_iff.mpr ho⟩)⟩
     have hgrow : ∀ n, d.line ∈ releasedSet (c (i + 1 + n)) := fun n => by
       induction n with
       | zero => exact hx
@@ -761,17 +883,14 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
         simpa using hown.2
       rw [map_nodup_inj (hn j) hxj hy hid]
     · obtain ⟨seen, hde, hall⟩ := seen_all he (Bool.eq_false_iff.mpr hown)
-      have hs : seen.contains (idKey e.line) = true := by
-        simpa [hk] using hall d.line hxj (idKey d.line) idKey_mem
-      exact (fires_blocks (c := c j) (seen := seen) (l := e.line) (r := .ALREADY_DECIDED) (by simp only [fires, hs, Bool.true_or])
-        (by rw [← hde]; exact heo.1)).elim
-  · have hnd : ((allowedLines (decideBatch (c i) (b i)).decisions).flatMap keys).Nodup :=
-      (allowed_decideAll (c i) (seen0 (c i) (b i)) (order (c i) (b i))).1
-    have hmem : ∀ {z : Decision}, z ∈ (decideBatch (c i) (b i)).decisions → z.outcome = .ALLOW →
-        z.line ∈ allowedLines (decideBatch (c i) (b i)).decisions := fun hz ha =>
-      List.mem_map.mpr ⟨_, List.mem_filter.mpr ⟨hz, by simp [ha]⟩, rfl⟩
-    rw [flatMap_nodup_inj hnd (hmem hd hdo.1) (hmem he heo.1) (idKey_mem (l := d.line))
-      (hk ▸ idKey_mem (l := e.line))]
+      have hs : idKey e.line ∈ seen := by
+        rw [show idKey e.line = idKey d.line by simp [idKey, hid]]; exact hall d.line hxj _ idKey_mem
+      have ha : Reason.ALREADY_DECIDED ∈ (decideLine (c j) seen e.line).reasons := mem_decideLine.mpr (Or.inl hs)
+      rw [← hde] at ha
+      exact (fe ha).elim
+  · by_cases hde : d = e
+    · rw [hde]
+    · exact (fresh_ids (c i) (seen := seen0 (c i) (b i)) (ls := order (c i) (b i)) hd he hde fd fe hid).elim
 
 /-! Axiom pins: no `sorryAx`, no `Lean.ofReduceBool`. `Classical.choice` in
 `deterministic` comes from core `List.le_antisymm`. -/

@@ -104,7 +104,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(self.store.export_continuity(), before)
 
     def _held(self, callback, *rows):
-        """A row's own fault holds that row (L3, D2), never the file: `rows` are each row's (status, reason). A file of
+        """A row's own fault holds that row, never the file: `rows` are each row's (status, reason). A file of
         held rows and repeats writes nothing."""
         before = self.store.export_continuity()
         receipt = callback()
@@ -122,7 +122,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         prepared = self._prepare()
         live = fixtures._image(self.store.path)
         preview = cash.preview_cash_file(*prepared, path=self.store.path, trusted_authority=self.fixture.authority, clock=self.store.clock)
-        self.assertEqual((preview["contract"], preview["mode"], preview["cash_delta_cents"]), ("RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v3", "PREVIEW", 300))
+        self.assertEqual((preview["contract"], preview["mode"], preview["cash_delta_cents"]), ("RR/FINANCIAL/RECEIVER-CASH-RECEIPT/v4", "PREVIEW", 300))
         self.assertEqual((self.store.export_continuity(), fixtures._image(self.store.path)), (self.package, live))  # the preview ran on a copy
         applied = self._apply(prepared)
         self.assertEqual((applied["recorded_count"], applied["duplicate_count"], applied["cash_delta_cents"]), (2, 0, 300))
@@ -211,13 +211,13 @@ class ReceiverCashFileTests(unittest.TestCase):
                     self._unchanged(lambda: self.store.run_batch(commands, cash_file_context={**context, section: changed}))
         self._apply((commands, context))
         rebased = self._prepare(baseline=self._manifest())
-        self._held(lambda: self._apply(rebased), ("DUPLICATE", None), ("DUPLICATE", None))  # the same rows on a fresh baseline: exact retries
+        self._held(lambda: self._apply(rebased), ("DUPLICATE", "exact_retry"), ("DUPLICATE", "exact_retry"))  # the same rows on a fresh baseline: exact retries
 
     def test_moved_baseline_keeps_retries_exact_and_a_row_at_its_revision_records(self):
         commands, context = self._prepare()
         self.store.record_payment_evidence(**commands[0][1])  # row 1 was recorded since the baseline: its retry is exact, row 2 is at the item's revision now (F1: the revision it names, not the baseline's age)
-        self.assertEqual(self._held(lambda: self._apply((commands, context)), ("DUPLICATE", None), ("RECORDED", None))["cash_delta_cents"], 200)
-        self._held(lambda: self._apply(self._prepare()), ("DUPLICATE", None), ("DUPLICATE", None))
+        self.assertEqual(self._held(lambda: self._apply((commands, context)), ("DUPLICATE", "exact_retry"), ("RECORDED", None))["cash_delta_cents"], 200)
+        self._held(lambda: self._apply(self._prepare()), ("DUPLICATE", "exact_retry"), ("DUPLICATE", "exact_retry"))
 
     def test_mid_file_revision_and_action_refusals_refuse_a_file_that_is_not_absorbed_whole(self):
         for changes, reason in (({"expected_revision": 0}, "obligation_revision_conflict"), ({"pays_action_id": "missing-action"}, "payment_request_unknown")):
@@ -226,7 +226,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 value = copy.deepcopy(self.value)
                 value["rows"][1].update(changes)
                 prepared = self._prepare(value)
-                self._unchanged(lambda: self._apply(prepared), reason)  # F4/F9: only an absorbed file holds a row (D2); any other file is atomic
+                self._unchanged(lambda: self._apply(prepared), reason)  # only an absorbed file holds a row; any other file is atomic
                 self.assertEqual(self._query("SELECT payment_id FROM payments WHERE payment_id LIKE 'file-%'"), [])
 
     def _file_of(self, items, count, prefix="file"):
@@ -318,7 +318,7 @@ class ReceiverCashFileTests(unittest.TestCase):
                 self.assertLess(previewed, 15.0)
                 self.assertEqual((preview["recorded_count"], fixtures._image(self.store.path)), (check.MAX_ROWS, live))
                 receipt, seconds = self._timed(lambda: cash.apply_cash_file(self.store, *prepared))  # the production route (design (d)): the lock a writer waits on
-                print(f"CASH1B_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
+                print(f"CASH_FILE_MONTH file={number} rows={check.MAX_ROWS} preview_seconds={previewed:.2f} lock_seconds={seconds:.2f}", flush=True)
                 self.assertEqual((receipt["recorded_count"], receipt["cash_delta_cents"]), (check.MAX_ROWS, check.MAX_ROWS))
                 self.assertLess(seconds, 5.0)
                 self.baseline = self._manifest()
@@ -327,7 +327,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertLess(sum(path.stat().st_size for path in history.iterdir()), 24 * 1024 * 1024)
 
     def test_evaluation_bindings_cite_only_the_items_own_evidence(self):
-        # batch-frames-v1 D4: bindings come from the item's evidence read in the same transaction.
+        # bindings come from the item's evidence read in the same transaction.
         self._wide_store(3)  # the smallest fixture with a second item, which then holds evidence of its own
         self.store.record_payment_evidence(**{**self._row(9, 5, 0, "other"), "item_id": "item-0001", "pays_action_id": None})
         self.baseline = self._manifest()
@@ -386,20 +386,17 @@ class ReceiverCashFileTests(unittest.TestCase):
     def test_quarter_end_file_within_writer_timeout(self):
         # The production route (design (d)): plan on a copy, then commit; its longest live write is under the 5 s writer busy timeout.
         # If it fails, MAX_ROWS drops again (docs/CORE_REDESIGN.md "Cash-file capacity").
-        self.assertLess(self._quarter_end("CASH1B_QUARTER_END", lambda prepared: lambda: cash.apply_cash_file(self.store, *prepared)), 5.0)
+        self.assertLess(self._quarter_end("CASH_FILE_QUARTER_END", lambda prepared: lambda: cash.apply_cash_file(self.store, *prepared)), 5.0)
 
-    def test_quarter_end_planned_commit_within_s1_bound(self):
-        # S1 (cash-batch-speed-v1 §6): planned on a private copy outside the lock, then only the commit holds it, and the checker
-        # verifies every touched obligation there, on the live rows. Red until U1 builds S1; then ratchet to 1.5x the measured median.
+    def test_quarter_end_planned_commit_within_bound(self):
+        # Planned on a private copy outside the lock, then only the commit holds it, and the checker
+        # verifies every touched obligation there, on the live rows. Ratchet to 1.5x the measured median.
         def planned(prepared):
             plan = self._plan(prepared)
             return lambda: cash.commit_cash_plan(self.store, plan)
         self.assertLess(self._quarter_end("CASH_S1_QUARTER_END", planned), 2.5)
 
-    # S1 plan-then-commit (cash-batch-speed-v1 §9, U1's seam). These fail with "S1 NOT BUILT" until U1 lands.
     def _plan(self, prepared=None, clock=None):
-        if not (hasattr(cash, "plan_cash_file") and hasattr(cash, "commit_cash_plan")):
-            self.fail("S1 NOT BUILT: cash.plan_cash_file and cash.commit_cash_plan are U1's seam (cash-batch-speed-v1 §9)")
         return cash.plan_cash_file(*(self._prepare() if prepared is None else prepared), path=self.store.path,
                                    trusted_authority=self.fixture.authority, clock=self.store.clock if clock is None else clock)
 
@@ -527,6 +524,32 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(self.verified, [{"verify_history": True}])  # the kept writer still verifies a moved store in full, before the stale check
         self.assertIsNot(self.store._writer, writer)
 
+    def test_a_raising_rollback_after_a_refused_write_pays_nothing_twice_and_loses_nothing(self):
+        plan, writer, raised = self._plan(), self.store._writer, []
+        paid = self._query("SELECT count(*) FROM payments")[0][0]
+
+        class Failing:  # the connection whose ROLLBACK raises once, without rolling back
+            def __getattr__(self, name):
+                return getattr(writer, name)
+
+            def execute(self, sql, *arguments):
+                if sql == "ROLLBACK" and not raised:
+                    raised.append(sql)
+                    raise sqlite3.OperationalError("injected")
+                return writer.execute(sql, *arguments)
+
+        self.store._writer = failing = Failing()
+        self.store.clock.value = plan.last_ms + cash.PLAN_WINDOW_MS
+        self._refused(lambda: cash.commit_cash_plan(self.store, plan), "cash_file_stale", "cash_plan_stale")  # the refusal is still the stale one
+        self.assertEqual(raised, ["ROLLBACK"])
+        self.assertIsNot(self.store._writer, failing)  # the faulted connection is never reused
+        self.store.clock.value = plan.last_ms
+        with self._counting_verify():
+            self.assertEqual(self._apply()["recorded_count"], 2)  # the write after the fault commits the file once
+        self.assertEqual(self.verified, [{"verify_history": True}])  # on a fresh connection verified in full
+        self.assertEqual(self._apply()["duplicate_count"], 2)  # and a resend pays nothing again
+        self.assertEqual(self._query("SELECT count(*) FROM payments")[0][0], paid + 2)
+
     def test_a_plan_is_stale_when_a_deadline_fell_between_its_clock_and_the_commit(self):
         plan = self._plan()
         due = self._query("SELECT min(due_at_ms) FROM obligations")[0][0]
@@ -562,7 +585,7 @@ class ReceiverCashFileTests(unittest.TestCase):
         self.assertEqual(fired, [1])
         self.assertEqual(cash.commit_cash_plan(self.store, plan)["recorded_count"], 2)
 
-    # Design (d) (rrb/designs/cash-writer-timeout-v1.md): every production apply plans on a copy, then commits the plan.
+    # every production apply plans on a copy, then commits the plan.
     def _production_apply(self, prepared=None, stale=0):
         """``cash.apply_cash_file`` on the live store under ``_timed``, its first ``stale`` plans aged past the commit window; ``self.plans`` counts plans."""
         self.plans, plan_file = [], cash.plan_cash_file
@@ -811,6 +834,7 @@ raise SystemExit(main(sys.argv[2:]))
         prepared = self._prepare()
         receipt = self._apply(prepared)
         self.assertEqual((receipt["recorded_count"], receipt["duplicate_count"], receipt["cash_delta_cents"], receipt["duplicate_cents"]), (1, 1, 50, 100))
+        self.assertEqual([(row["status"], row["reason"]) for row in receipt["rows"]], [("RECORDED", None), ("DUPLICATE", "alias_of_stored_payment")])  # the repeat Lean ran keeps its cause
         aliases = self._query("SELECT before_revision,after_revision,payload_json FROM financial_events WHERE kind='PAYMENT_DUPLICATE_EVIDENCE'")
         self.assertEqual([(before, after, {key: value for key, value in json.loads(payload).items() if key != "rows"}) for before, after, payload in aliases],
                          [(3, 3, {"candidate_evidence_id": "file-evidence-4", "existing_payment_id": "file-payment-1", "common_origin_id": "file-origin-1"})])
@@ -820,6 +844,7 @@ raise SystemExit(main(sys.argv[2:]))
         committed = self.store.export_continuity()
         retry = self._apply(prepared)  # RETRY + ALIAS: nothing written (III.3)
         self.assertEqual((retry["recorded_count"], retry["duplicate_count"], retry["cash_delta_cents"]), (0, 2, 0))
+        self.assertEqual([(row["status"], row["reason"]) for row in retry["rows"]], [("DUPLICATE", "exact_retry"), ("DUPLICATE", "alias_of_stored_payment")])
         self.assertEqual(self.store.export_continuity(), committed)
         self.store.record_payment_evidence(**self._row(5, 7, 3, "later"), source_id="fictional-receiver", source_version="v1", local_ref="later")
         later = self.store.export_continuity()
@@ -1066,7 +1091,7 @@ raise SystemExit(main(sys.argv[2:]))
             package_bytes=self.package, recovered_path=self.fixture._path(), trusted_authority=self.fixture.authority,
             restore_mode=mode, clock=self.store.clock) for mode in ("TEST", "SHADOW")]
         for store in (custom, *restores):
-            self.addCleanup(store.close)  # R1a: an owner holds the store open until closed
+            self.addCleanup(store.close)  # an owner holds the store open until closed
             self.store = store
             self.package = store.export_continuity()
             if store.mode == "SHADOW":  # never a cash-file target (Phase 1b): the CLI has no such mode and the checker refuses it
@@ -1164,7 +1189,7 @@ raise SystemExit(main(sys.argv[5:]))
         self.assertEqual({name: (directory / name).read_bytes() for name in files}, files)
 
     def test_cli_upload_goes_through_intake_and_holds_an_unreadable_row_alone(self):
-        """R5: an uploaded row reaches the owner only through intake. One unreadable row is held with its reason, the
+        """an uploaded row reaches the owner only through intake. One unreadable row is held with its reason, the
         rest are judged, and the INTAKE record binds the raw file; preview judges the same and writes nothing."""
         self.value["rows"][1]["event_at_ms"] = "01/02/2026"
         directory, files, args = self._cli_fixture()

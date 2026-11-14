@@ -169,7 +169,7 @@ class HostileIntakeTests(unittest.TestCase):
         receipt = self._ingest(raw)
         self.assertEqual([(out["row_index"], out["status"], out["basis"], out["payment_id"], out["amount_cents"], out["fault"], out["fix"], out["depends_on"]) for out in receipt["rows"]], [
             (0, "ADMITTED", None, "mix-payment-0", 5, None, None, None), (1, "REPAIRED", ["amount_digits"], "mix-payment-1", 7, None, None, None),
-            (2, "HELD", "amount_format", "mix-payment-2", 100_000, "sender", "sender_profile:amount_format", None),
+            (2, "HELD", "amount_format", "mix-payment-2", None, "sender", "sender_profile:amount_format", None),
             (3, "HELD", "depends_on_held", "mix-payment-3", 4, "sender", "release_row", 2),
             (4, "HELD", "date_format", "mix-payment-4", 6, "sender", "sender_profile:date_format", None),
             (5, "HELD", "duplicate", "mix-dup", 8, "sender", "resend_row", None), (6, "HELD", "duplicate", "mix-dup", 9, "sender", "resend_row", None),
@@ -179,7 +179,7 @@ class HostileIntakeTests(unittest.TestCase):
         self.assertEqual(self._payments("mix-"), {"mix-payment-0", "mix-payment-1", "mix-payment-7", "mix-payment-8", "mix-payment-9", "mix-payment-10"})
         self.assertEqual(self._query("SELECT amount_cents FROM payments WHERE payment_id='mix-payment-1'"), [(7,)])
         self.assertEqual(receipt["receipt_digest"], sha(encode({key: value for key, value in receipt.items() if key != "receipt_digest"})))
-        cash_held = intake.held_cash(self.store)  # D3: held cents stay unallocated, never applied
+        cash_held = intake.held_cash(self.store)  # held cents stay unallocated, never applied
         self.assertEqual((cash_held["unallocated_cents"], [(hold["row_index"], hold["reason"]) for hold in cash_held["holds"]], cash_held["released"]),
                          (unallocated, [(2, "amount_format"), (3, "depends_on_held"), (4, "date_format"), (5, "duplicate"), (6, "duplicate"), (11, "item_cap")], []))
         self.assertEqual(len(self.store.intake_records()), 1)
@@ -200,7 +200,7 @@ class HostileIntakeTests(unittest.TestCase):
         self.assertEqual((receipt["cash_delta_cents"], receipt["unallocated_cents"], self._payments("file-")), (142, 60, {"file-payment-0", "file-payment-2"}))
 
     def test_all_rows_held_moves_nothing_and_is_receipted(self):
-        """F3: one INTAKE writer. An all-held file is a zero-row derived file the checker verifies; nothing else can store an INTAKE."""
+        """One INTAKE writer. An all-held file is a zero-row derived file the checker verifies; nothing else can store an INTAKE."""
         raw = encode(self._file([{**self._row(0, 1, 0, "held"), "amount_cents": "1.000,00"}, {**self._row(1, 2, 1, "held"), "event_at_ms": "03/04/2026"}], 100_002))
         derived, _ = intake.absorb(raw, self.scope, self.source)
         self.assertEqual(json.loads(derived)["rows"], [])
@@ -406,6 +406,74 @@ class HostileIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(check.CashFileError, "^cash_file_conflict$"):  # one raw file is received once, even through the gate
             self.store.run_batch(commands, cash_file_context=context)
         self.assertEqual(self._ingest(raw), receipt)
+
+    def test_an_unreadable_amount_is_held_with_its_cause_never_inferred_from_the_control_total(self):
+        revisions = self._revisions()
+        unreadable = {**self._row(2, 50, revisions["item-01"]), "item_id": "item-01", "amount_cents": "1.000,00"}
+        receipt = self._ingest(encode(self._file([self._row(1, 100, revisions[expected.H_ITEM_ID]), unreadable], 150)))  # the control total alone would say 50
+        self.assertEqual([(out["status"], out["basis"], out["amount_cents"]) for out in receipt["rows"]], [("ADMITTED", None, 100), ("HELD", "amount_format", None)])
+        self.assertEqual((receipt["cash_delta_cents"], receipt["held_cents"], receipt["unallocated_cents"]), (100, 0, 50))
+        self.assertEqual(intake.held_cash(self.store)["holds"], [{"source_sha256": receipt["source_sha256"], "row_index": 1, "payment_id": "file-payment-2", "amount_cents": None, "reason": "amount_format"}])
+        self.assertEqual(self._payments("file-"), {"file-payment-1"})
+
+    def test_a_corrected_resend_releases_an_unreadable_amount_hold_by_payment_id_and_takes_the_admitted_amount_off(self):
+        revisions = self._revisions()
+        clean = {**self._row(2, 50, revisions["item-01"]), "item_id": "item-01"}
+        unreadable = {**clean, "amount_cents": "1.000,00"}
+        first = self._ingest(encode(self._file([self._row(1, 100, revisions[expected.H_ITEM_ID]), unreadable], 150)))
+        self.assertEqual((first["unallocated_cents"], intake.held_cash(self.store)["unallocated_cents"]), (50, 50))
+        self.baseline = self._manifest()
+        resend = self._ingest(encode(self._file([self._row(1, 100, revisions[expected.H_ITEM_ID]), clean], 150)))
+        self.assertEqual([out["status"] for out in resend["rows"]], ["RESOLVED", "ADMITTED"])
+        held = intake.held_cash(self.store)
+        self.assertEqual((held["unallocated_cents"], held["holds"]), (0, []))
+        self.assertEqual([(hold["payment_id"], hold["amount_cents"], hold["released_by"]) for hold in held["released"]], [("file-payment-2", None, resend["source_sha256"])])
+
+    def test_a_resend_with_a_larger_amount_cannot_release_more_than_the_file_left_unallocated(self):
+        revisions = self._revisions()
+        unreadable = {**self._row(2, 50, revisions["item-01"]), "item_id": "item-01", "amount_cents": "1.000,00"}
+        first = self._ingest(encode(self._file([self._row(1, 100, revisions[expected.H_ITEM_ID]), unreadable], 150)))
+        self.baseline = self._manifest()
+        big = {**self._row(2, 5000, revisions["item-01"]), "item_id": "item-01"}
+        self._ingest(encode(self._file([self._row(1, 100, revisions[expected.H_ITEM_ID]), big], 5100)))
+        held = intake.held_cash(self.store)
+        self.assertEqual(held["unallocated_cents"], 50)  # never below zero: the hold stays open, with its cause
+        self.assertEqual([(hold["source_sha256"], hold["unreleased_cause"]) for hold in held["holds"]], [(first["source_sha256"], "amount_exceeds_file_unallocated")])
+        self.assertEqual(held["released"], [])
+
+    def test_a_resend_never_takes_the_cash_another_open_hold_of_its_file_still_needs(self):
+        revisions = self._revisions()
+        other = next(item for item in sorted(revisions) if item not in ("item-01", expected.H_ITEM_ID))
+        unreadable = {**self._row(2, 100, revisions["item-01"]), "item_id": "item-01", "amount_cents": "1.000,00"}
+        dated = {**self._row(3, 200, revisions[other]), "item_id": other}
+        first = self._ingest(encode(self._file([unreadable, {**dated, "event_at_ms": "01/02/2026"}], 300)))
+        self.assertEqual([out["status"] for out in first["rows"]], ["HELD", "HELD"])
+        self.baseline = self._manifest()
+        self._ingest(encode(self._file([{**unreadable, "amount_cents": 300}], 300)))  # the whole file's cash, 200 of it the dated row's
+        self.baseline = self._manifest()
+        self._ingest(encode(self._file([dated], 200)))  # the dated row's own resend still releases it
+        held = intake.held_cash(self.store)
+        self.assertEqual([(hold["payment_id"], hold["unreleased_cause"]) for hold in held["holds"]], [("file-payment-2", "amount_exceeds_file_unallocated")])
+        self.assertEqual([(hold["payment_id"], hold["amount_cents"]) for hold in held["released"]], [("file-payment-3", 200)])
+        self.assertNotIn("unreleased_cause", held["released"][0])
+        self.assertEqual(held["unallocated_cents"], 100)
+
+    def test_the_independent_totals_never_read_an_unreadable_amount_as_zero(self):
+        held = {"status": "HELD", "basis": "amount", "amount_cents": None}
+        self.assertEqual(check._totals([held], 7)["unallocated_cents"], 7)
+        for row in ({**held, "basis": "date_format"}, {**held, "status": "ADMITTED", "basis": None}):
+            with self.assertRaisesRegex(check.CashFileError, "^cash_file_failed$"):
+                check._totals([row], 7)
+
+    def test_equal_holds_stay_separate_and_are_listed_in_the_order_they_were_held(self):
+        revisions = self._revisions()
+        first, second, third = sorted(revisions)[:3]
+        late = "01/02/2026"
+        rows = [{**self._row(1, 50, revisions[first]), "item_id": first, "event_at_ms": late}, {**self._row(2, 30, revisions[second]), "item_id": second, "event_at_ms": late},
+                {**self._row(1, 50, revisions[third]), "item_id": third, "event_at_ms": late}]  # rows 0 and 2 hold the same payment id and amount
+        receipt = self._ingest(encode(self._file(rows, 130)))
+        self.assertEqual([out["status"] for out in receipt["rows"]], ["HELD"] * 3)
+        self.assertEqual([hold["row_index"] for hold in intake.held_cash(self.store)["holds"]], [0, 1, 2])
 
     def test_corrected_resend_releases_the_hold_by_evidence_and_history_keeps_the_original(self):
         revisions = self._revisions()

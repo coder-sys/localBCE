@@ -111,6 +111,7 @@ STATE_FILES = (
     "app/right_rail_financial_owner.py",
     "app/right_rail_financial_owner_independent.py",
     "app/right_rail_financial_semantic_adapter.py",
+    "app/right_rail_refused_frames.py",
     "app/right_rail_financial_staff_server.py",
     "app/right_rail_financial_switch.py",
     "app/right_rail_gate_codec.py",

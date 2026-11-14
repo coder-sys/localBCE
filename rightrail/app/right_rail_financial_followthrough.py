@@ -1,6 +1,6 @@
 """Read-only follow-through pack: who found each obligation, who owns it and which clocks run on it.
 
-Documentation only (rrb/archive/xi2-records-20261001.md "Follow-through decision event"). Deadlines are Control Pack data: a
+Documentation only. Deadlines are Control Pack data: a
 canonical rules file whose SHA-256 exactly one approved Control Pack lists. The pack is built from a
 verified store (right_rail_financial_derived) and writes nothing. Standing claims: synthetic,
 non-PHI, nonpayment, proofSuiteId=null, production_usable=false, activation=false.
@@ -15,13 +15,13 @@ import json
 import re
 
 from app.right_rail_financial_derived import (
-    NOT_HELD, DerivedError, bound_control_pack, hex_upper, quarter_of, quarter_window, signed_pack, verified_rows,
+    NOT_HELD, DerivedError, bound_control_pack, hex_upper, need, quarter_of, quarter_window, signed_pack, verified_rows,
 )
 from app.right_rail_financial_owner_independent import IndependentFinancialError, MAX_PACKAGE_BYTES
 from app.right_rail_financial_switch import FinancialSwitchError, _decode_canonical_json, _id, _text
 
 RULES_CONTRACT = "RR/FOLLOWTHROUGH/RULES/v1"
-PACK_CONTRACT = "RR/FOLLOWTHROUGH/PACK/v2"  # v2 (H2): signed with the custody key; v1 had "signer": null
+PACK_CONTRACT = "RR/FOLLOWTHROUGH/PACK/v3"  # v3: "share_parts" by CMS-64 quarter replace "collected_share"; v2: signed with the custody key
 RULES_SOURCE_REF = "followthrough-rules:sha256:"  # the approved Control Pack lists this ref plus the rules' SHA-256
 MAX_RULES_BYTES = 64 * 1024
 MAX_FOLLOWTHROUGH_PACK_BYTES = 2 * MAX_PACKAGE_BYTES
@@ -154,6 +154,47 @@ def _cms64_due(ends_ms: int, recovered_at_ms: int | None, due_days: int) -> tupl
     return quarter, quarter_window(quarter)[1] + due_days * _DAY, collected
 
 
+def _share_parts(clock: dict, ends_ms: int, rest: tuple[str, int, bool], payments: list, owed: int, stopped: bool, basis: int, generated_at_ms: int, filed: list) -> list:
+    """The federal share of the debt by the CMS-64 quarter that carries each part (42 CFR 433.320(a)(2)).
+
+    Each collection (payment or authorized offset) owes on its own quarter. Before a stop, collections at or after the
+    year end add nothing (433.320(b)(2)) and the rest of the debt owes on ``rest``, the clock's own quarter (433.316(h): a
+    part payment does not move the year). Once a covered close stops the clock, only collected money owes, whenever it
+    is collected. In quarter order, then the order they were on record, each collection owes the rounded share of the
+    running total (at most ``owed``) less the rounded share before it, so the shares add up to the rounded share of what
+    they cover. Each credit ``filed`` (in filing order) meets the earliest collection not yet met that owes cents and was
+    on record by its filing after its quarter ended, with every other collection of that quarter and line on record by
+    then; collections recorded later are a separate part of the quarter for a later credit. Neighbouring collections of
+    one quarter, line and credit make one part; a part that owes no cents is left out, and the debt it covers is not listed.
+    """
+    listed = [row for row in payments if stopped or row["event_at_ms"] < ends_ms]
+    cells = [] if stopped else [[rest, max(owed - sum(row["amount_cents"] for row in listed), 0), quarter_window(rest[0])[1]]]  # [key, cents, ready]
+    for row in listed:
+        key = _cms64_due(row["event_at_ms"] + 1, row["event_at_ms"], clock["report"]["due_days"])  # its own quarter
+        cells.append([key, row["amount_cents"], max(quarter_window(key[0])[1], row["received_at_ms"])])
+    cells.sort(key=lambda cell: (quarter_window(cell[0][0])[1], cell[2]))
+    before = 0
+    for cell in cells:  # now [key, principal, ready, share, the filing that met it]
+        total = min(owed, before + cell[1])
+        cell[1:] = total - before, cell[2], (total * basis + 5000) // 10_000 - (before * basis + 5000) // 10_000, None
+        before = total
+    for at in filed:
+        first = next((cell for cell in cells if cell[4] is None and cell[3] and cell[2] <= at), None)
+        for cell in cells if first is not None else ():
+            if cell[4] is None and cell[0] == first[0] and cell[2] <= at:
+                cell[4] = at
+    runs: list = []  # [key, filing, principal, share]
+    for key, principal, _, cents, met in cells:
+        if runs and runs[-1][:2] == [key, met]:
+            runs[-1][2:] = runs[-1][2] + principal, runs[-1][3] + cents
+        else:
+            runs.append([key, met, principal, cents])
+    return [{"clock_id": clock["clock_id"], "principal_cents": principal, "cents": cents, "due_ms": due,
+             "report": {"quarter": quarter, **clock["report"]["collected" if collected else "uncollected"]},
+             "status": ("MISSED" if generated_at_ms >= due else "DUE") if met is None else "MET" if met < due else "MET_LATE"}
+            for (quarter, due, collected), met, principal, cents in runs if cents]
+
+
 def _by(rows: list, key: str, keep: object = lambda row: True) -> dict[str, list]:
     grouped: dict[str, list] = {}
     for row in rows:
@@ -217,17 +258,23 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
     holders = {name: {party_id for party_id, party in parties.items() if name in party["purposes"]} for party in parties.values() for name in party["purposes"]}
     fmap = None if rules["fmap_basis_points"] is None else {entry["period_id"]: entry["basis_points"] for entry in rules["fmap_basis_points"]}
     manifests = {row["manifest_id"]: row for row in rows["population_manifests"]}
-    finders = {row["population_id"]: manifests[row["manifest_id"]] for row in rows["population_manifest_bindings"]}
+    finders = {row["population_id"]: need(manifests, row["manifest_id"], "manifest") for row in rows["population_manifest_bindings"]}
     reasons = {reason["reason_code"]: reason for reason in rules["closure_reasons"]}
     support = _by(rows["evidence"], "item_id", lambda row: row["kind"] == "SUPPORT")
     events = _by(rows["financial_events"], "aggregate_id", lambda row: row["aggregate_type"] == "OBLIGATION")
     evaluations = _by(sorted(rows["evaluations"], key=lambda row: row["revision"]), "obligation_id")
-    payments = _by(rows["payments"], "obligation_id", lambda row: row["active"] == 1)
     received = {row["evidence_id"]: row["received_at_ms"] for row in rows["evidence"]}
+    acted = {row["determination_id"]: row["created_at_ms"] for row in rows["actions"]}
+    # money recovered: payments in force, and authorized offsets, each a recovery at its decision time and on record from
+    # the later of that and its action's record
+    payments = _by([*({"obligation_id": row["obligation_id"], "event_at_ms": row["event_at_ms"], "received_at_ms": need(received, row["evidence_id"], "payment-evidence"),
+                       "amount_cents": row["amount_cents"]} for row in rows["payments"] if row["active"] == 1),
+                    *({"obligation_id": row["obligation_id"], "event_at_ms": row["decided_at_ms"], "amount_cents": row["amount_cents"],
+                       "received_at_ms": max(row["decided_at_ms"], need(acted, row["determination_id"], "offset-action"))} for row in rows["determinations"] if row["decision"] == "OFFSET_AUTHORIZED")], "obligation_id")
     recorded = {json.loads(row["payload_json"])["evidence_id"]: row["event_sequence"] for row in rows["financial_events"] if row["kind"] == "SUPPORT_EVIDENCE_RECORDED"}  # event order, not time
     gaps, items = set(), []
     for obligation in sorted(rows["obligations"], key=lambda row: row["item_id"]):
-        manifest = finders[obligation["population_id"]]
+        manifest = need(finders, obligation["population_id"], "population-manifest")
         finder = parties.get(manifest["source_owner_id"])
         if finder is None:
             gaps.add(f"gap:finder-not-typed:{manifest['source_owner_id']}")
@@ -237,7 +284,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             satisfied_row = history[1 + max((n for n, row in enumerate(history) if row["amount_satisfied"] == 0), default=-1)]
         recovered_at = None  # the collection date (433.320(a)(2)(i)), never the recording time; a satisfaction with no payment has only its recording time
         if satisfied_row is not None:
-            recovered_at = max((row["event_at_ms"] for row in payments.get(obligation["obligation_id"], []) if received[row["evidence_id"]] <= satisfied_row["evaluated_at_ms"]), default=satisfied_row["evaluated_at_ms"])
+            recovered_at = max((row["event_at_ms"] for row in payments.get(obligation["obligation_id"], []) if row["received_at_ms"] <= satisfied_row["evaluated_at_ms"]), default=satisfied_row["evaluated_at_ms"])
         share = None
         if fmap is not None:
             if obligation["period_id"] in fmap:
@@ -254,7 +301,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             listed = d["reason_code"] in reasons if d["act"] == "CLOSE" else parties.get(d["owner_id"], {"kind": "MODEL"})["kind"] != "MODEL"
             if not listed:
                 gaps.add(f"gap:decision-not-in-rules:{d['decision_id']}")
-            elif d["act"] == "CLOSE" and _covered(reasons[d["reason_code"]]["requires"], [row["source_id"] for row in _documents([row for row in support.get(obligation["item_id"], []) if recorded[row["evidence_id"]] < d["event_sequence"]])], holders):
+            elif d["act"] == "CLOSE" and _covered(reasons[d["reason_code"]]["requires"], [row["source_id"] for row in _documents([row for row in support.get(obligation["item_id"], []) if need(recorded, row["evidence_id"], "support-evidence-event") < d["event_sequence"]])], holders):
                 covered.add(d["decision_id"])
             elif d["act"] == "CLOSE":
                 gaps.add(f"gap:closure-evidence-missing:{d['decision_id']}")
@@ -264,7 +311,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
         assigned = next((d for d in reversed(decisions) if d["act"] == "ASSIGN"), None)
         if close is not None and any(row["event_sequence"] > close["event_sequence"] and row["kind"] not in _NOT_ACTIVITY for row in events.get(obligation["obligation_id"], [])):
             gaps.add(f"gap:activity-after-close:{obligation['item_id']}")  # evidence, payment or offset recorded after the close
-        collected_share = None
+        share_parts = []
         clocks = []
         for clock in rules["clocks"]:
             facts = []
@@ -278,32 +325,34 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             anchor = min(facts, key=lambda fact: fact[0])[1] if facts else None
             done = [((row["received_at_ms"], name, row["evidence_id"]), _fact(name, row["received_at_ms"], row, evaluation_id=None))
                     for name in clock["satisfied_by"] if name.startswith("EVIDENCE:") for row in support.get(obligation["item_id"], []) if row["source_id"] in holders[name[9:]]]
+            # credits filed: one per document, in filing order; a recovery meets a clock but is not a filing
+            filed = [row["received_at_ms"] for row in _documents(sorted((row for row in support.get(obligation["item_id"], []) if any(
+                row["source_id"] in holders[name[9:]] for name in clock["satisfied_by"] if name.startswith("EVIDENCE:"))), key=lambda row: (row["received_at_ms"], row["evidence_id"])))]
             if satisfied_row is not None and "SATISFIED" in clock["satisfied_by"]:
                 done.append(((recovered_at, "SATISFIED", ""), _fact("SATISFIED", recovered_at, None, evaluation_id=satisfied_row["evaluation_id"])))
             satisfied = min(done, key=lambda fact: fact[0])[1] if done else None
-            ends = due = report = None
+            ends = due = report = owes = None
             if anchor is not None:
                 ends = due = _add(anchor["at_ms"], clock["add"])
                 if clock["report"]["kind"] == "CMS64_QUARTER":
-                    quarter, due, collected = _cms64_due(ends, recovered_at, clock["report"]["due_days"])
+                    owes = _cms64_due(ends, recovered_at, clock["report"]["due_days"])
+                    quarter, due, collected = owes
                     report = {"quarter": quarter, **clock["report"]["collected" if collected else "uncollected"]}
+            # 433.320(d): a covered close stops only the uncollected part, whether or not a credit was filed
+            stops = anchor is not None and close is not None and close["decision_id"] in covered and clock["clock_id"] in reasons[close["reason_code"]]["stops"] and close["decided_at_ms"] < ends
             stopped_by = None
             if anchor is None:
                 status = "NOT_ANCHORED"
             elif satisfied is not None:
                 status = "MET" if satisfied["at_ms"] < due else "MET_LATE"
-            elif close is not None and close["decision_id"] in covered and clock["clock_id"] in reasons[close["reason_code"]]["stops"] and close["decided_at_ms"] < ends:
-                status, stopped_by = "STOPPED", close["decision_id"]  # 433.320(d): only the uncollected part stops
+            elif stops:
+                status, stopped_by = "STOPPED", close["decision_id"]
                 report = None
                 gaps.add(f"gap:write-off-line-unknown:{obligation['item_id']}")  # the 64.9 write-off line is not in the rules (design risk 2)
-                collected = obligation["owed_cents"] - obligation["shortfall_cents"]
-                if clock["report"]["kind"] == "CMS64_QUARTER" and collected > 0 and share is not None:  # the federal share of money already collected stays due (433.320(a)(2)-(3))
-                    quarter, due, was_collected = _cms64_due(ends, max((row["event_at_ms"] for row in payments.get(obligation["obligation_id"], [])), default=None), clock["report"]["due_days"])
-                    collected_share = {"clock_id": clock["clock_id"], "collected_cents": collected, "basis_points": share["basis_points"], "cents": (collected * share["basis_points"] + 5000) // 10_000,
-                                       "quarter": quarter, "due_ms": due, "report": {"quarter": quarter, **clock["report"]["collected" if was_collected else "uncollected"]},
-                                       "status": "MISSED" if generated_at_ms >= due else "DUE"}
             else:
                 status = "MISSED" if generated_at_ms >= due else "RUNNING"
+            if owes is not None and share is not None:  # after a stop the share of money collected stays due (433.320(a)(2)-(3))
+                share_parts += _share_parts(clock, ends, owes, payments.get(obligation["obligation_id"], []), obligation["owed_cents"], stops, share["basis_points"], generated_at_ms, filed)
             clocks.append({"clock_id": clock["clock_id"], "citation": clock["citation"], "anchor": anchor, "ends_ms": ends, "due_ms": due, "report": report,
                            "satisfied": satisfied, "stopped_by": stopped_by, "status": status})
         items.append({
@@ -319,7 +368,7 @@ def _build(database: object, package_bytes: bytes, *, trusted_authority: object,
             "open_cents": obligation["shortfall_cents"],
             "clocks": clocks,
             "federal_share": share,
-            "collected_share": collected_share,
+            "share_parts": share_parts,
             "decisions": decisions,
         })
     return signed_pack({

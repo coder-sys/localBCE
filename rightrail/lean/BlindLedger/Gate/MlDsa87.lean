@@ -63,6 +63,16 @@ def bitAt (b : ByteArray) (i : Nat) : Nat := ((b.get! (i / 8)).toNat >>> (i % 8)
 def unpack (b : ByteArray) (off width : Nat) : Poly :=
   (Array.range 256).map fun j => (List.range width).foldl (fun a i => a ||| (bitAt b (8 * off + j * width + i) <<< i)) 0
 
+/-- `unpack` by byte gather, 4 bytes per coefficient instead of `width` single-bit reads (`MlDsa87Laws.unpackF_eq`, for
+    `width ≤ 25`).  Multiplies by constants, not `<<<`, and takes `2 ^ width` once: both are slow on `Nat`.  `verify` runs this. -/
+def unpackF (b : ByteArray) (off width : Nat) : Poly :=
+  let m := 2 ^ width
+  (Array.range 256).map fun j =>
+    let p := 8 * off + j * width
+    let s := p / 8
+    (((b.get! s).toNat ||| ((b.get! (s + 1)).toNat * 256) ||| ((b.get! (s + 2)).toNat * 65536) |||
+      ((b.get! (s + 3)).toNat * 16777216)) >>> (p % 8)) % m
+
 /-- HintBitUnpack (Algorithm 21): none unless indices strictly increase within a polynomial, at most omega hints
     are named, and the padding is zero. -/
 def hintUnpack (y : ByteArray) : Option (Array Poly) := Id.run do
@@ -136,7 +146,7 @@ def verify (pk msg sig : ByteArray) : Bool :=
   match hintUnpack (sig.extract (64 + 7 * 640) 4627) with
   | none => false
   | some h =>
-    let v := (Array.range l).map fun s => unpack sig (64 + 640 * s) 20
+    let v := (Array.range l).map fun s => unpackF sig (64 + 640 * s) 20
     if !(v.all (·.all fun x => Int.natAbs ((gamma1 : Int) - x) < gamma1 - beta)) then false else
     let zh := v.map fun p => ntt (p.map fun x => (gamma1 + q - x) % q)
     match sampleInBall (sig.extract 0 64), expandA (pk.extract 0 32) with
@@ -144,7 +154,7 @@ def verify (pk msg sig : ByteArray) : Bool :=
     let ch := ntt c
     let w1 := (Array.range k).map fun r =>
       let a := aHat[r]!
-      let t := ntt ((unpack pk (32 + 320 * r) 10).map (· * 8192))
+      let t := ntt ((unpackF pk (32 + 320 * r) 10).map (· * 8192))
       let w := (Array.range 256).map fun j =>
         ((Array.range l).foldl (fun acc s => acc + a[s]![j]! * zh[s]![j]! % q) 0 + q - ch[j]! * t[j]! % q) % q
       (invNtt w).zipIdx.map fun (x, j) => useHint h[r]![j]! x

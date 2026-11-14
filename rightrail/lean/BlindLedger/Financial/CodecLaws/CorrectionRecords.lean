@@ -321,6 +321,12 @@ theorem readQueryObservations_append (observations : CorrectionQueryObservations
     readQueryObservation_append _ _ h1, readQueryObservation_append _ _ h2,
     readQueryObservation_append _ _ h3]
 
+theorem decodeTimeGiven_encodeTimeGiven (value : Option Bool) :
+    decodeTimeGiven (encodeTimeGiven value) = some value := by
+  cases value with
+  | none => rfl
+  | some given => cases given <;> rfl
+
 theorem readActionLookup_append (lookup : ActionIdentityLookup) (rest : Bytes)
     (h : actionLookupWireAdmissible lookup) :
     readActionLookup (encodeActionLookup lookup ++ rest) = some (lookup, rest) := by
@@ -338,7 +344,7 @@ theorem readActionLookup_append (lookup : ActionIdentityLookup) (rest : Bytes)
         readString_encodeString_append _ _ h9, readNat8_natBE_append _ _ h10,
         readDigest_wire_append _ _ h11, readString_encodeString_append _ _ h12,
         readDigest_wire_append _ _ h13, readNat8_natBE_append _ _ h14,
-        readNat8_natBE_append _ _ h15, decodeDecision_encodeDecision]
+        readNat8_natBE_append _ _ h15, decodeDecision_encodeDecision, decodeTimeGiven_encodeTimeGiven]
 
 theorem readEvidenceBinding_append (binding : EvidenceBinding) (rest : Bytes)
     (h : evidenceBindingWireAdmissible binding) :

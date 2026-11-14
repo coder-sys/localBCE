@@ -35,16 +35,4 @@ def accepts (rootPk cert checkpoint : Bytes) : Bool :=
     | _ => false
   | _, _ => false
 
-/-- `accepts` for any checkpoint version (v1 or v2); `accepts` itself keeps its v1 meaning. -/
-def acceptsAny (rootPk cert checkpoint : Bytes) : Bool :=
-  match decodeAnyCheckpoint checkpoint, decodeKeyCert cert with
-  | some x, some e =>
-    let c := realCrypto [(x.checkpoint.tenantId, rootPk)]
-    match installCert c emptyState e with
-    | (s, true) => match storeCheckpointAny c s checkpoint with
-      | some s' => s'.forked.isEmpty
-      | none => false
-    | _ => false
-  | _, _ => false
-
 end BlindLedger.Gate

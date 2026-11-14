@@ -37,7 +37,8 @@ _CREATE_UNICODE_ENVIRONMENT = 0x00000400
 _EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 _STARTF_USESTDHANDLES = 0x00000100
 _WAIT_OBJECT_0 = 0x00000000
-_INFINITE = 0xFFFFFFFF
+_WAIT_FAILED = 0xFFFFFFFF
+_REAP_MS = 30_000  # the longest a killed Job is waited for; a child still alive after it is a typed failure, never a hang
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 _JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
@@ -1000,17 +1001,23 @@ def _terminate_and_reap_child(
     else:
         if not kernel32.TerminateJobObject(job_handle, 1):
             raise _win_error(f"{label}_terminate")
-    if kernel32.WaitForSingleObject(process_handle, _INFINITE) != _WAIT_OBJECT_0:
+    waited = kernel32.WaitForSingleObject(process_handle, _REAP_MS)
+    if waited == _WAIT_FAILED:
         raise _win_error(f"{label}_wait")
+    if waited != _WAIT_OBJECT_0:  # a timeout sets no Windows error code, so none is read
+        raise VerifierProcessError(f"{label}_wait_timeout")
 
 
 def _launch_apis() -> tuple[object, object]:
     """kernel32 and psapi with every signature the suspended Job Object launch uses."""
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    except OSError:
+        raise VerifierProcessError("verifier_api_missing:kernel32") from None
     required_apis = (
-        "CreateJobObjectW", "SetInformationJobObject", "CreateProcessW",
-        "AssignProcessToJobObject", "ResumeThread", "WaitForSingleObject",
+        "CreateJobObjectW", "SetInformationJobObject", "QueryInformationJobObject", "CreateProcessW",
+        "AssignProcessToJobObject", "ResumeThread", "WaitForSingleObject", "GetExitCodeProcess",
         "TerminateJobObject",
         "CloseHandle", "SetHandleInformation", "InitializeProcThreadAttributeList",
         "UpdateProcThreadAttribute", "DeleteProcThreadAttributeList",
@@ -1028,6 +1035,10 @@ def _launch_apis() -> tuple[object, object]:
         wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD
     ]
     kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     kernel32.CreateProcessW.argtypes = [
         wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.LPVOID, wintypes.LPVOID,
         wintypes.BOOL, wintypes.DWORD, wintypes.LPVOID, wintypes.LPCWSTR,
@@ -1040,6 +1051,8 @@ def _launch_apis() -> tuple[object, object]:
     kernel32.ResumeThread.restype = wintypes.DWORD
     kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
     kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel32.TerminateJobObject.restype = wintypes.BOOL
     kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
@@ -1113,6 +1126,7 @@ class ContainedWorker:
         self._deadline: float | None = None
         self._timed_out = False
         self.alive = True
+        self.kill_failed = False  # the Job could not be killed and its child is still running
         self._watchdog = threading.Thread(target=self._watch, daemon=True)
         self._watchdog.start()
 
@@ -1121,9 +1135,10 @@ class ContainedWorker:
             self.alive = False
             self._cond.notify_all()
         try:
-            self._kernel32.TerminateJobObject(self._job, 1)
-        except BaseException:
-            pass
+            if not self._kernel32.TerminateJobObject(self._job, 1) and self._kernel32.WaitForSingleObject(self._process, 0) != _WAIT_OBJECT_0:
+                self.kill_failed = True
+        except Exception:  # a call that fails is a kill that is not confirmed: the typed worker_terminate, and the watchdog keeps running
+            self.kill_failed = True
 
     def _watch(self) -> None:
         """The one thread that enforces every exchange's deadline: it sleeps to the armed deadline, or until one is armed, and kills the Job once it passes."""
@@ -1168,11 +1183,62 @@ class ContainedWorker:
             msvcrt.get_osfhandle(descriptor), None, 0, None, ctypes.byref(available), None
         ) or available.value != 0
 
+    def diagnostic(self) -> bytes:
+        """The first bytes (at most 4 KiB) the worker left on standard error, peeked without blocking or consuming, after
+        its death too (the pipe keeps what it was given): a Lean panic, out of memory among them; empty for none."""
+
+        import msvcrt
+
+        buffer, read = ctypes.create_string_buffer(4096), wintypes.DWORD()
+        try:
+            handle = msvcrt.get_osfhandle(self._stderr)
+        except OSError:  # the pipe is closed: nothing to read
+            return b""
+        if not self._kernel32.PeekNamedPipe(handle, buffer, len(buffer), ctypes.byref(read), None, None):
+            return b""
+        return buffer.raw[: read.value]
+
+    def peak_job_memory(self) -> int | None:
+        """The most memory the worker's Job ever committed (``PeakJobMemoryUsed``), after its death too while the Job is
+        open; None if Windows does not answer."""
+
+        info = _JobObjectExtendedLimitInformation()
+        if not self._kernel32.QueryInformationJobObject(
+            self._job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), ctypes.sizeof(info), None
+        ):
+            return None
+        return int(info.PeakJobMemoryUsed)
+
     def exchange(self, frame: bytes, *, response_cap_bytes: int, timeout_seconds: float) -> bytes:
         if type(frame) is not bytes or not 0 < len(frame) <= WORKER_MAX_FRAME_BYTES:
             raise VerifierProcessError("worker_frame_cap")
         if type(response_cap_bytes) is not int or not 0 < response_cap_bytes <= WORKER_MAX_FRAME_BYTES:
             raise VerifierProcessError("worker_response_cap")
+        return self._armed(timeout_seconds, lambda: self._exchange(frame, response_cap_bytes))
+
+    def _exchange(self, frame: bytes, response_cap_bytes: int) -> bytes:
+        if self._pending(self._stdout):
+            raise VerifierProcessError("worker_exchange")
+        payload = len(frame).to_bytes(4, "big") + frame
+        offset = 0
+        while offset < len(payload):
+            written = os.write(self._stdin, payload[offset : offset + (1 << 20)])
+            if written <= 0:
+                raise VerifierProcessError("worker_exchange")
+            offset += written
+        length = int.from_bytes(self._read_exact(4), "big")
+        if not 0 < length <= response_cap_bytes:
+            raise VerifierProcessError("worker_response_cap")
+        response = self._read_exact(length)
+        if self._pending(self._stdout):
+            raise VerifierProcessError("worker_exchange")
+        if self._pending(self._stderr):
+            raise VerifierProcessError("worker_stderr")
+        return response
+
+    def _armed(self, timeout_seconds: float, step):
+        """Run one step under the lock and the deadline; any failure or overrun terminates the Job."""
+
         if type(timeout_seconds) is not float or not 0 < timeout_seconds <= 30 * 60:
             raise VerifierProcessError("worker_timeout")
         with self._lock:
@@ -1182,27 +1248,10 @@ class ContainedWorker:
                 self._deadline = time.monotonic() + timeout_seconds
                 self._cond.notify()
             try:
-                if self._pending(self._stdout):
-                    raise VerifierProcessError("worker_exchange")
-                payload = len(frame).to_bytes(4, "big") + frame
-                offset = 0
-                while offset < len(payload):
-                    written = os.write(self._stdin, payload[offset : offset + (1 << 20)])
-                    if written <= 0:
-                        raise VerifierProcessError("worker_exchange")
-                    offset += written
-                length = int.from_bytes(self._read_exact(4), "big")
-                if not 0 < length <= response_cap_bytes:
-                    raise VerifierProcessError("worker_response_cap")
-                response = self._read_exact(length)
-                if self._pending(self._stdout):
-                    raise VerifierProcessError("worker_exchange")
-                if self._pending(self._stderr):
-                    raise VerifierProcessError("worker_stderr")
-                return response
+                return step()
             except BaseException as error:
                 self._terminate()
-                code = "worker_timeout" if self._timed_out else (
+                code = "worker_terminate" if self.kill_failed else "worker_timeout" if self._timed_out else (
                     str(error) if isinstance(error, VerifierProcessError) else "worker_exchange"
                 )
                 raise VerifierProcessError(code) from None
@@ -1223,14 +1272,17 @@ class ContainedWorker:
                     os.close(descriptor)
                 except OSError:
                     pass
+            reaped = True
             try:
                 if self._kernel32.WaitForSingleObject(self._process, 5000) != _WAIT_OBJECT_0:
                     self._kernel32.TerminateJobObject(self._job, 1)
-                    self._kernel32.WaitForSingleObject(self._process, _INFINITE)
+                    reaped = self._kernel32.WaitForSingleObject(self._process, _REAP_MS) == _WAIT_OBJECT_0
             finally:
                 self._kernel32.CloseHandle(self._process)
                 self._kernel32.CloseHandle(self._job)
                 self._process = None
+            if not reaped:
+                raise VerifierProcessError("worker_reap")
 
 
 def launch_contained_worker(
@@ -1240,6 +1292,7 @@ def launch_contained_worker(
     job_memory_cap_bytes: int,
     expected_executable_size_bytes: int,
     expected_executable_sha256: bytes,
+    arguments: tuple[str, ...] = (),
 ) -> ContainedWorker:
     """Launch a pinned worker through the same suspended, image-verified Job Object path."""
 
@@ -1275,7 +1328,10 @@ def launch_contained_worker(
         owned += [stdin_read, stdin_write]
         import msvcrt
 
-        stdin_handle = int(msvcrt.get_osfhandle(stdin_read))
+        try:
+            stdin_handle = int(msvcrt.get_osfhandle(stdin_read))
+        except OSError:
+            raise VerifierProcessError("worker_input_pipe") from None
         pinned = _open_pinned_executable(
             kernel32=kernel32,
             executable=executable,
@@ -1297,7 +1353,7 @@ def launch_contained_worker(
                 parent_descriptors=[stdout_write, stderr_write, stdin_read],
                 startup=startup,
                 environment=_environment_block(workspace),
-                command_line=ctypes.create_unicode_buffer(_quote_argument(pinned.canonical_path)),
+                command_line=ctypes.create_unicode_buffer(" ".join(map(_quote_argument, (pinned.canonical_path, *arguments)))),
                 creation_flags=_CREATE_SUSPENDED | _CREATE_NO_WINDOW | _CREATE_UNICODE_ENVIRONMENT,
                 process_info=process_info,
             )
@@ -1319,12 +1375,13 @@ def launch_contained_worker(
                     job_handle=None, label="worker_child_binding",
                 )
             raise
-        if kernel32.ResumeThread(process_info.hThread) == 0xFFFFFFFF:
+        if kernel32.ResumeThread(process_info.hThread) == _WAIT_FAILED:
+            refusal = _win_error("verifier_process_resume")  # read before the reap's own calls change the error code
             _terminate_and_reap_child(
                 kernel32=kernel32, process_handle=process_info.hProcess,
                 job_handle=job, label="verifier_process_resume",
             )
-            raise _win_error("verifier_process_resume")
+            raise refusal
         pinned.close()
         pinned = None
         # The worker never writes diagnostics (IV.2); the worker keeps stderr_read and treats any byte as a failure.

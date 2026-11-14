@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import replace
 import hashlib
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -81,7 +82,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             mode=mode,
             owner_id=owner_id,
         )
-        self.addCleanup(owner.close)  # R1a: the owner's writer holds the file open until closed
+        self.addCleanup(owner.close)  # the owner's writer holds the file open until closed
         return owner
 
     def _build_base(self, *, path: Path | None = None) -> FinancialOwner:
@@ -245,7 +246,7 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
 
     @staticmethod
     def _hash(path: Path) -> str:
-        return hashlib.sha256(_image(path)).hexdigest()  # R0.5/R1a: the committed content, whichever connection closed last
+        return hashlib.sha256(_image(path)).hexdigest()  # the committed content, whichever connection closed last
 
     def _assert_no_source_mutation(self, store: FinancialOwner, before_hash: str) -> None:
         self.assertEqual(self._hash(store.path), before_hash)
@@ -752,6 +753,42 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             adapter._parse_json_column(deeply_nested, "deep_json")
         self._assert_no_source_mutation(store, source_hash)
 
+    def test_determination_evidence_digests_are_recomputed_not_trusted(self) -> None:
+        store = self._build_base()
+        self._prepare_final(store)
+        connection = store._connect()
+        self.addCleanup(connection.close)
+
+        def read() -> bytes:
+            return adapter.live_evaluation_input(
+                connection, obligation_id=expected.H_OBLIGATION_ID, authority_context=adapter.TrustedAuthorityContext.from_authority(store.trusted_authority),
+                evaluation_time_ms=store.clock.value + 1, verification={"scope": store._scope_value(), "owner_id": store.owner_id, "mode": store.mode})[0]
+        connection.execute("BEGIN")
+        read()  # the untouched store reads
+        rows = connection.execute("SELECT determination_id,supporting_evidence_json FROM determinations WHERE obligation_id=?", (expected.H_OBLIGATION_ID,)).fetchall()
+        target = next((row for row in rows if json.loads(row["supporting_evidence_json"])["bindings"]), None)
+        self.assertIsNotNone(target)
+        forged = json.loads(target["supporting_evidence_json"])
+        forged["bindings"][0]["record_digest"] = "AB" * 64
+        connection.execute("UPDATE determinations SET supporting_evidence_json=? WHERE determination_id=?", (json.dumps(forged, sort_keys=True, separators=(",", ":")), target["determination_id"]))
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "^determination_evidence$"):
+            read()
+        connection.execute("ROLLBACK")
+        connection.execute("BEGIN")  # a binding's digest must match the evidence's fields, not only its stored digest (the update trigger is dropped inside this rolled-back transaction)
+        for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='evidence' AND sql LIKE '%BEFORE UPDATE%'").fetchall():
+            connection.execute(f"DROP TRIGGER {name}")
+        connection.execute("UPDATE evidence SET local_ref=local_ref||'x' WHERE evidence_id=?", (json.loads(target["supporting_evidence_json"])["bindings"][0]["evidence_id"],))
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "^evidence_record_digest$"):
+            read()
+        connection.execute("ROLLBACK")
+        connection.execute("BEGIN")  # an edited amount under its old digest never reaches the evaluation
+        for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='evidence' AND sql LIKE '%BEFORE UPDATE%'").fetchall():
+            connection.execute(f"DROP TRIGGER {name}")
+        connection.execute("UPDATE evidence SET amount_cents=amount_cents+1 WHERE amount_cents IS NOT NULL")
+        with self.assertRaisesRegex(adapter.SemanticAdapterIntegrityError, "^evidence_record_digest$"):
+            read()
+        connection.execute("ROLLBACK")
+
     def test_blfin02_input_and_blfres02_result_are_frozen_and_bound(self) -> None:
         store = self._build_base()
         self._record_cash(store)
@@ -849,6 +886,17 @@ class RightRailFinancialSemanticAdapterTests(unittest.TestCase):
             for encode in (adapter._record_wire.__wrapped__, adapter._record_wire):
                 with patch.object(adapter, "_record_wire", encode), self.assertRaisesRegex(adapter.SemanticAdapterCodecError, f"^{code}$"):
                     adapter._encode_blfin02(refused)
+
+    def test_one_integer_bound_for_times_and_wire_counts_and_a_bad_mutation_is_typed(self) -> None:
+        top = 2**63 - 1
+        self.assertEqual((adapter._time(top, "t"), adapter._wire_nat(top, "n")), (top, top))
+        with self.assertRaisesRegex(adapter.SemanticAdapterCodecError, "^n$"):
+            adapter._wire_nat(top + 1, "n")
+        with self.assertRaisesRegex(adapter.SemanticAdapterInputError, "^t$"):
+            adapter._time(top + 1, "t")
+        for mutation in (None, {}, {"resulting_input_wire": b""}):
+            with self.subTest(mutation), self.assertRaisesRegex(adapter.SemanticAdapterInputError, "^mutation_shape$"):
+                adapter.bind_resulting_state(None, None, authority_context=None, evaluation_time_ms=0, mutation=mutation)
 
 
 if __name__ == "__main__":

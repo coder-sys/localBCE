@@ -117,7 +117,7 @@ theorem parseCorrectionTransitionRequest_of_encode (request : CorrectionTransiti
     readString_encodeString_append _ _ h5, readString_encodeString_append _ _ h6,
     readNat8_natBE_append _ _ h7, readDigest_wire_append _ _ h8, readNat8_natBE_append _ _ h9,
     readString_encodeString_append _ _ h10, readDigest_wire_append _ _ h11,
-    readNat8_natBE_append _ _ h12, readNat8_natBE_append _ _ h13,
+    readNat8_natBE_append _ _ h12, readBool_encodeBool_append, readNat8_natBE_append _ _ h13,
     readActionLookup_append _ _ h14, readQueryObservations_append _ _ h15,
     readNat8_natBE_append _ _ h16, readDigest_wire_append _ _ h17,
     readPaymentLinks_append _ _ h18,

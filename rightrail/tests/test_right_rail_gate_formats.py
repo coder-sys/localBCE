@@ -10,9 +10,11 @@ release a signature only when the pinned Lean ``gate_verify`` accepts.  Syntheti
 from __future__ import annotations
 
 import contextlib
+import itertools
 from dataclasses import replace
 import hashlib
 from itertools import count, permutations
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -41,11 +43,115 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "sb1": (1, STANDBY, OTHER_SHARDS), "sb2": (2, STANDBY, OTHER_SHARDS), "eq5": (5, STANDBY, OTHER_SHARDS),
          "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS), "e0": (0, TENANT, SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
-           "decision-id", "input", "lines-root", "state", "moves", "admit-moves", "approval", "line-digest")
+           "decision-id", "input", "lines-root", "state", "context", "pay-digest", "input6", "batch-input", "answer")
 # The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
 PINS = tuple(bytes.fromhex(gate_rules_data.pin([f"snap {kind} 20270315 0 ?"])[0].split()[4])
              for kind in ("released", "unresolved"))
-STATE = gate.state_digest(*PINS)
+STATE = gate.sha3_512(b"RR/GATE/STATE/v1\x00" + b"".join(PINS))  # Lean checks the STATE/v1 digest; the app no longer builds it
+
+
+def input_v1(request, read_set: bytes) -> bytes:  # INPUT/v1, kept only as a Lean vector input
+    body = gate.encode_decide_request(request)
+    return gate.sha3_512(b"RR/GATE/INPUT/v1\x00" + len(body).to_bytes(4, "big") + body + read_set)
+
+def synthetic_input(request, head: bytes) -> bytes:
+    """A stand-in input commitment for a hand-made token (the real one is Lean's INPUT/v6; ``frame_inputs`` recomputes it)."""
+    return gate.sha3_512(b"RR/GATE/TEST-ONLY-INPUT/v4\x00" + gate.encode_decide_request(request) + head)
+
+
+def request_parts(x: bytes) -> tuple[bytes, list[bytes], bytes]:
+    """DECIDE-REQUEST/v1 bytes cut as the payment digest reads them: the bytes before the lines (the domain, the fields
+    and the line count), each line's bytes, then the bytes after the lines (the evidence count and references)."""
+    ident = lambda a: a + 2 + int.from_bytes(x[a:a + 2], "big")
+    at = ident(ident(len(gate.DECIDE_REQUEST)))  # tenant, program
+    at = ident(ident(at + 1)) + 32  # flow tag, command key, payment id, member key
+    at = ident(ident(at) + 8)  # payee, amount, period
+    n, at = int.from_bytes(x[at:at + 2], "big"), at + 2
+    head, lines = x[:at], []
+    for _ in range(n):
+        ln = int.from_bytes(x[at:at + 2], "big")
+        lines.append(x[at + 2:at + 2 + ln])
+        at += 2 + ln
+    return head, lines, x[at:]
+
+
+def pay_digest(request: bytes) -> bytes:
+    """PAYMENT/v1, written out again from the format: the request's bytes before its lines after a 4-byte length, the
+    root of its lines, then its bytes after them."""
+    head, lines, tail = request_parts(request)
+    return gate.sha3_512(b"RR/GATE/PAYMENT/v1\x00" + len(head).to_bytes(4, "big") + head + gate.lines_root(lines) + tail)
+
+
+def input_v6(ctx: bytes, rd: bytes) -> bytes:
+    return gate.sha3_512(b"RR/GATE/INPUT/v6\x00" + ctx + rd)
+
+
+def batch_input(ctx: bytes, rqs: list[bytes]) -> bytes:
+    return gate.sha3_512(b"RR/GATE/BATCH-INPUT/v1\x00" + ctx + b"".join(rqs))
+
+
+def answer_frame(status: int, shard: int, batch: int, digest: bytes, recs: list[tuple[int, int, int, int, int, int]] = (),
+                 leaves: list[tuple[int, int, int, int, bytes, bytes]] = (), notes: list[bytes] = (), adds: list[bytes] = (),
+                 grant: bytes = bytes(64), auth: bytes = bytes(208)) -> bytes:
+    """An engine answer, written out again from conformance/FRAME_V1.md section 4 and ENGINE_V3.md section 17: the 87-byte
+    header, then (status 0 only) the 16-byte records (index, outcome, rule, reasons, chunk, row), head, root and the
+    extension (hold word, grant id, the 208-byte authority record, notes), each leaf ``(outcome, reasons, authority, bypass flag, bypass id, input)``."""
+    le = lambda n, w: n.to_bytes(w, "little")
+    out = b"RRDA" + le(1, 2) + le(status, 1) + le(shard, 4) + le(batch, 8) + le(len(recs), 4) + digest
+    if status:
+        return out
+    out += b"".join(le(i, 3) + le(o, 1) + le(u, 1) + le(m, 4) + le(c, 4) + le(w, 3) for i, o, u, m, c, w in recs)
+    out += D[13] + D[14] + bytes(16) + grant + auth + le(len(notes), 4) + b"".join(le(len(n), 2) + n for n in notes)
+    out += le(len(leaves), 4) + b"".join(le(o, 1) + le(m, 4) + le(a, 1) + le(f, 1) + (b if f == 1 else b"") + x
+                                         for o, m, a, f, b, x in leaves)
+    return out + le(len(adds), 4) + b"".join(le(len(r), 2) + r for r in adds)
+
+
+def unsigned(doc: bytes) -> bytes:
+    """An APPROVAL/v2 or KEYSET/v2 document without its signature block (a count byte, then key id and signature each)."""
+    for n in range(10):
+        cut = len(doc) - 1 - n * (64 + gate.ML_DSA_87_SIGNATURE)
+        if cut > 0 and doc[cut] == n:
+            return doc[:cut]
+    raise ValueError("no signature block")
+
+
+def frame_commitments(frame: bytes) -> tuple[bytes, dict[bytes, bytes]]:
+    """The batch identity and, by request bytes, each request's INPUT/v6, read from the binary request frame the way
+    conformance/FRAME_V1.md says: the context is CONTEXT/v1 over the body before its request count."""
+    body, at = frame[82:], 0
+
+    def take(n: int) -> bytes:
+        nonlocal at
+        at += n
+        assert at <= len(body)
+        return body[at - n:at]
+
+    num = lambda n: int.from_bytes(take(n), "little")
+    blob = lambda: take(num(4))
+    _, _, _, nredo = num(4), num(4), take(64), num(4)
+    descs = [take(77) for _ in range(4)]
+    for d, width in zip(descs, (37, 25, 29, 62)):
+        take(int.from_bytes(d[9:13], "little") * width)
+    take(261 * nredo)
+    take(64 + 13)
+    blob(), blob(), blob()
+    for _ in range(num(4)):
+        take(4)
+        blob()
+    for _ in range(num(4)):
+        blob()
+    ctx = gate.sha3_512(b"RR/GATE/CONTEXT/v1\x00" + body[:at])
+    reqs = [blob() for _ in range(num(4))]
+    assert at == len(body)
+    rqs = [input_v6(ctx, pay_digest(r)) for r in reqs]
+    return batch_input(ctx, rqs), dict(zip(reqs, rqs))
+
+
+def frame_inputs(frame: bytes) -> dict[bytes, bytes]:
+    return frame_commitments(frame)[1]
+
+
 PROCS = ("99213", "99214", "99215")
 
 
@@ -101,8 +207,9 @@ def _lines(n: int, flow: str = "FFS_CLAIM", key: bytes | None = None, **change) 
 
 
 def _leaf(n: int, seq: int, outcome: str = "ALLOW", flow: str = "", shard: int = SHARD,
-          member_key: bytes | None = None) -> gate.TokenLeaf:
-    """Payment ``n`` (per claim when it has lines) decided by engine release D[6] on ``shard``."""
+          member_key: bytes | None = None, head: bytes | None = None) -> gate.TokenLeaf:
+    """Payment ``n`` (per claim when it has lines) decided by engine release D[6] on ``shard``; with ``head``, on the
+    history index from that chain head (a stand-in input)."""
     flow = flow or ("FFS_CLAIM" if n % 4 else "FFS_CYCLE")
     member_key = member_key or member(n)
     lines = _lines(n, flow, member_key)
@@ -110,19 +217,39 @@ def _leaf(n: int, seq: int, outcome: str = "ALLOW", flow: str = "", shard: int =
     return gate.TokenLeaf(
         TENANT, PROGRAM, shard, flow, n % 2, request.payment_id, request.member_key, request.payee_ref,
         request.amount_cents, PERIOD, gate.lines_root(lines), outcome,
-        ("ELIGIBLE", "RATE_OK") if outcome == "ALLOW" else ("PA_MISSING",), "TRANSFER", D[3], D[4], D[6],
-        gate.input_commitment(request, D[1]), DECIDED, EPOCH, seq, NOW - 5, EXPIRES,
+        ("ELIGIBLE", "RATE_OK") if outcome == "ALLOW" else ("PA_MISSING",), "TRANSFER", D[3], bytes(64), D[4], D[6],
+        synthetic_input(request, head) if head else input_v1(request, D[1]), DECIDED, EPOCH, seq,
+        NOW - 5, EXPIRES,
     )
 
 
-def _batch(leaves, sign, prev: bytes = D[0]) -> tuple[gate.Checkpoint, bytes, list[gate.Token]]:
+_COUNTERS = itertools.count(2, 2)
+
+
+def _auto_counter() -> int:
+    """Vector building: each checkpoint takes its own even counter, so two never share one and none follows another by accident."""
+    return next(_COUNTERS)
+
+
+def _batch(leaves, sign, prev: bytes = D[0], counter: int | None = None) -> tuple[gate.Checkpoint, bytes, list[gate.Token]]:
     cp, tokens = gate.build_batch(leaves, prev_checkpoint_digest=prev, event_head=D[1], evidence_root=D[2],
-                                  state_digest=STATE, created_at=NOW)
+                                  state_digest=STATE, created_at=NOW, counter=counter or _auto_counter())
     return cp, sign(gate.encode_checkpoint_header(cp)), tokens
 
 
 def _flip(data: bytes, at: int, bit: int = 0x80) -> bytes:
     return data[:at] + bytes([data[at] ^ bit]) + data[at + 1 :]
+
+
+def _tpm_seal(*args, tpm: int | None = None) -> bytes:
+    """``signer.seal`` with the counter value given, else read from the chain: the signed ``last`` header's own counter, or,
+    for a first checkpoint, the value just before the header's (the shard's armed value).  The new header's counter is
+    never the source of a successor's ``tpm``, so the ``counter == tpm + 1`` check can fail."""
+    header, last = args[-2], args[3]
+    if tpm is None:
+        tail = last[: -2 - gate.ML_DSA_87_SIGNATURE] if last else header
+        tpm = int.from_bytes(tail[-8:], "big") - (0 if last else 1)
+    return signer.seal(*args, tpm)
 
 
 def hexes(values) -> str:
@@ -142,11 +269,11 @@ def resigned(header: bytes) -> bytes:
 
 
 def checkpoint_record(name: str, c: gate.Checkpoint, data: bytes) -> str:
-    """A ``checkpoint`` line; an accepted one lists the decoded fields (v2: then the registry head)."""
+    """A ``checkpoint`` line; an accepted one lists the decoded fields."""
     h = bytes.hex
     fields = [c.tenant_id, c.program_id, *map(str, (c.shard_id, c.seq_from, c.seq_to, c.epoch)),
-              *(h(getattr(c, n)) for n in gate._CHECKPOINT_DIGESTS), str(c.count), str(c.created_at),
-              h(gate.checkpoint_digest(c)), *([h(c.registry_head)] if c.registry_head else [])]
+              *(h(getattr(c, n)) for n in gate._CHECKPOINT_DIGESTS), str(c.count), str(c.created_at), str(c.counter),
+              h(gate.checkpoint_digest(c))]
     return f"checkpoint accept {name} {h(data)} {' '.join(fields)}"
 
 
@@ -158,8 +285,10 @@ def payment_record(name: str, leaf: gate.TokenLeaf, verdict: str = "accept", lin
 
 def build_vectors() -> str:
     """Every vector; all keys and signatures are deterministic."""
+    global _COUNTERS
+    _COUNTERS = itertools.count(2, 2)
     sign = det_sign
-    out = ["# RR/GATE formats #1-#4, #12 golden vectors (D1). Synthetic, non-PHI, activation=false."]
+    out = ["# RR/GATE formats #1-#4, #12 golden vectors. Synthetic, non-PHI, activation=false."]
     add = out.append
     h = bytes.hex
 
@@ -167,11 +296,42 @@ def build_vectors() -> str:
     for n in (0, 1):
         add(f"decision-id d{n} {TENANT} {PROGRAM} pay-{n:04d} {n} {h(gate.decision_id(TENANT, PROGRAM, f'pay-{n:04d}', n))}")
     request = _request("FFS_CLAIM", 3, _lines(3))
-    add(f"input i0 {h(gate.encode_decide_request(request))} {h(D[1])} {h(gate.input_commitment(request, D[1]))}")
+    add(f"input i0 {h(gate.encode_decide_request(request))} {h(D[1])} {h(input_v1(request, D[1]))}")
     for n in (0, 1, 3, 5):
         lines = tuple(f"l{k}".encode() for k in range(n))
         add(f"lines-root r{n} {hexes(lines)} {h(gate.lines_root(lines))}")
     add(f"state s0 {h(PINS[0])} {h(PINS[1])} {h(STATE)}")
+    # the commitments of a batch: its context, each payment's digest and input, and the batch's identity
+    body = bytes(range(256)) + bytes(9)
+    ctx = gate.sha3_512(b"RR/GATE/CONTEXT/v1\x00" + body)
+    add(f"context c0 {h(body)} {h(ctx)}")
+    rqs = []
+    for n, r in enumerate((request, _request("SDP", 1))):
+        x = gate.encode_decide_request(r)
+        rd = pay_digest(x)
+        add(f"pay-digest p{n} {h(x)} {h(rd)}")
+        rqs.append(input_v6(ctx, rd))
+        add(f"input6 v{n} {h(ctx)} {h(rd)} {h(rqs[-1])}")
+    add(f"batch-input b0 {h(ctx)} {hexes(rqs)} {h(batch_input(ctx, rqs))}")
+    add(f"batch-input b1 {h(ctx)} - {h(batch_input(ctx, []))}")
+
+    # Engine answers: the request digest is read from bytes 23-86 of the header, and the bytes are canonical.  Records
+    # (index, outcome, rule, reasons, chunk, row): line 1 HOLD decided with a counterpart, line 0 released.  Leaves: an
+    # ALLOW under TRANSFER, and a HOLD under HOLD with bit 24 that a bypass released.
+    none_ref = (2**32 - 1, 2**24 - 1)
+    recs = [(1, 1, 0, 1 << 4, 7, 5), (0, 0, 1, 0, *none_ref)]
+    leaves = [(0, 0, 2, 0, b"", D[15]), (1, 1 << 24, 1, 1, D[16], D[10])]
+    ok = lambda recs=recs, leaves=leaves: answer_frame(0, SHARD, 9, D[11], recs, leaves, [b"bypass note"], [b"row-0"], D[3])
+    add(f"answer accept a0 {h(ok())} 0 {SHARD} 9 {h(D[11])} 2 {h(gate.ZERO_DIGEST)},{h(D[16])}")
+    add(f"answer accept a-not-next {h(answer_frame(5, SHARD, 10, D[11]))} 5 {SHARD} 10 {h(D[11])} 0 -")
+    flag = lambda f: [leaves[0], (*leaves[1][:3], f, *leaves[1][4:])]
+    leaf = lambda i, v: [(*leaves[0][:i], v, *leaves[0][i + 1:]), leaves[1]]
+    for name, data in (("truncated", ok()[:-1]), ("trailing", ok() + b"\x00"), ("version-2", ok()[:4] + b"\x02" + ok()[5:]),
+                       ("bypass-flag-2", ok(leaves=flag(2))), ("zero-bypass-flagged", ok(leaves=[leaves[0], (*leaves[1][:4], gate.ZERO_DIGEST, D[10])])),
+                       ("leaf-outcome-3", ok(leaves=leaf(0, 3))), ("leaf-reason-bit-26", ok(leaves=leaf(1, 1 << 26))),
+                       ("leaf-authority-3", ok(leaves=leaf(2, 3))), ("index-twice", ok(recs=[recs[0], (1, *recs[1][1:])])),
+                       ("refusal-with-records", answer_frame(5, SHARD, 10, D[11])[:19] + (1).to_bytes(4, "little") + D[11])):
+        add(f"answer reject {name} {h(data)}")
 
     # #1 DECIDE-REQUEST/v1; accepted requests are named for the responses below
     def request_line(name: str, r: gate.DecideRequest) -> None:
@@ -240,7 +400,7 @@ def build_vectors() -> str:
     grants()
     add(f"now {NOW}")
 
-    # #4 CHECKPOINT/v1: one signed batch plus single-field variants, each signed
+    # #4 CHECKPOINT/v3: one signed batch plus single-field variants, each signed
     # by the key of the certificate for its tenant and epoch
     cp, signature, tokens = _batch([_leaf(n, 40 + n, "HOLD" if n == 4 else "ALLOW") for n in range(5)],
                                    lambda m: sign("e7", m))
@@ -257,7 +417,7 @@ def build_vectors() -> str:
     lone = {name: _batch([_leaf(n, seq)], lambda m: b"") for name, n, seq in (("program", 2, 60), ("seq", 3, 70))}
     variants = {
         "other-tenant": (replace(cp, tenant_id=OTHER), "other", tokens[0]),
-        "epoch-6": (replace(cp, epoch=EPOCH - 1), "e6", tokens[0]),
+        "epoch-6": (replace(cp, epoch=EPOCH - 1, counter=_auto_counter()), "e6", tokens[0]),
         "second-shard-same-seq": (replace(cp, shard_id=1), "e7", tokens[0]),
         "other-program": (replace(lone["program"][0], program_id="medicaid-cap"), "e7", lone["program"][2][0]),
         "seq-from-past-leaf": (replace(lone["seq"][0], seq_from=71, seq_to=71), "e7", lone["seq"][2][0]),
@@ -271,11 +431,12 @@ def build_vectors() -> str:
         ("trailing", signed_cp + b"\x00"),
         ("wrong-domain", gate.TOKEN + signed_cp[len(gate.CHECKPOINT) :]),
         ("variant-2", resigned(_flip(header, len(gate.CHECKPOINT), 0x03))),
-        ("flipped-count-bit", resigned(_flip(header, len(header) - 9, 0x01))),
+        *((f"magic-v{v}", resigned(gate.CHECKPOINT[:-2] + str(v).encode() + b"\x00" + header[len(gate.CHECKPOINT) :])) for v in (1, 2)),
+        ("flipped-count-bit", resigned(_flip(header, len(header) - 17, 0x01))),
         ("flipped-signature-bit", _flip(signed_cp, len(signed_cp) - 100)),
         ("retired-epoch-key", signed(cp, "e6")),
         ("other-tenant-key", signed(cp, "other")),
-        ("state-digest-zero", resigned(header[:-74] + gate.ZERO_DIGEST + header[-10:])),
+        ("state-digest-zero", resigned(header[:-82] + gate.ZERO_DIGEST + header[-18:])),
         # An epoch's first checkpoint, and only it, starts at seq 0 with an all-zero prev
         ("first-with-prev", resigned(header[:seq_at] + bytes(8) + (4).to_bytes(8, "big") + header[seq_at + 16 :])),
         ("zero-prev-not-first", resigned(header[: seq_at + 24] + gate.ZERO_DIGEST + header[seq_at + 88 :])),
@@ -298,10 +459,10 @@ def build_vectors() -> str:
     # path folds to the root at position 2 too, so only index < count refuses it
     stray = [_leaf(5, 92), _leaf(6, 91)]
     stray_root, stray_paths = gate.merkle_tree(gate.MERKLE_NODE, [gate.encode_token_leaf(x) for x in stray])
-    stray_cp = gate.Checkpoint(TENANT, PROGRAM, SHARD, 90, 91, EPOCH, D[0], D[1], stray_root, D[2], STATE, 2, NOW)
+    stray_cp = gate.Checkpoint(TENANT, PROGRAM, SHARD, 90, 91, EPOCH, D[0], D[1], stray_root, D[2], STATE, 2, NOW, _auto_counter())
     checkpoint_line("seq-outside-batch", stray_cp, signed(stray_cp))
 
-    # #3 TOKEN/v1: the batch, then one reject per check, each one field away
+    # #3 TOKEN/v2: the batch, then one reject per check, each one field away
     def payment_line(name: str, leaf: gate.TokenLeaf, verdict: str = "accept", lines: tuple[bytes, ...] | None = None) -> None:
         add(payment_record(name, leaf, verdict, lines))
 
@@ -310,7 +471,7 @@ def build_vectors() -> str:
         x = t.leaf
         fields = [x.tenant_id, x.program_id, str(x.shard_id), x.flow, str(x.revision), x.payment_id, h(x.member_key),
                   x.payee_ref, str(x.amount_cents), x.period, h(x.lines_root), x.outcome, ",".join(x.reason_codes) or "-",
-                  x.authority, h(x.grant_id), h(x.rule_version), h(x.engine_release), h(x.input_commitment),
+                  x.authority, h(x.grant_id), h(x.bypass), h(x.rule_version), h(x.engine_release), h(x.input_commitment),
                   *map(str, (x.decided_at, x.epoch, x.seq, x.issued_at, x.expires_at)), hexes(t.siblings),
                   h(t.checkpoint_digest)]
         add(f"token {verdict} decode-ok {name} {payment} {h(gate.encode_token(t))} {' '.join(fields)}")
@@ -339,6 +500,11 @@ def build_vectors() -> str:
     sdp_token = replace(t0, leaf=_leaf(7, 0, "HUMAN_REVIEW", flow="SDP"))
     sdp_raw = gate.encode_token(sdp_token)
     outcome_at = sdp_raw.index(gate.ZERO_DIGEST) + gate.DIGEST
+    def with_bypass(data: bytes) -> bytes:  # the bypass field sits between grant_id and rule_version
+        at = data.index(D[3] + bytes(64) + D[4]) + 64
+        return data[:at] + D[5] + data[at + 64 :]
+
+    hold_raw = next(gate.encode_token(t) for t in tokens if t.leaf.outcome == "HOLD")
     for name, data in (
         ("truncated", raw[0][:-1]),
         ("trailing", raw[0] + b"\x00"),
@@ -348,6 +514,8 @@ def build_vectors() -> str:
           for tag, flow in enumerate(gate.RULED, 1)),
         *((f"unruled-{name}", sdp_raw[:outcome_at] + bytes([tag]) + sdp_raw[outcome_at + 1 :])
           for tag, name in ((1, "allow"), (2, "hold"))),
+        ("bypass-on-hold", with_bypass(hold_raw)),
+        ("bypass-on-unruled-flow", with_bypass(sdp_raw)),
         ("reasons-unsorted", raw[0].replace(b"\x00\x08ELIGIBLE\x00\x07RATE_OK", b"\x00\x07RATE_OK\x00\x08ELIGIBLE", 1)),
         ("decided-after-issue", leaf0[:-40] + (NOW - 4).to_bytes(8, "big") + raw[0][len(leaf0) - 32 :]),
         ("expires-before-issue", lifetime(NOW - 6)),
@@ -357,6 +525,8 @@ def build_vectors() -> str:
     payment_line("p5", stray[0])
     isolated = [
         ("checkpoint-not-stored", "p0", replace(t0, checkpoint_digest=D[11])),
+        ("bypassed-leaf-decodes", "p0", replace(t0, leaf=replace(t0.leaf, bypass=D[5]))),
+        ("bypassed-leaf-without-reasons-decodes", "p0", replace(t0, leaf=replace(t0.leaf, bypass=D[5], reason_codes=()))),
         *((f"checkpoint-{name}", f"p{int(t.leaf.payment_id[-1])}", replace(t, checkpoint_digest=gate.checkpoint_digest(c)))
           for name, (c, _, t) in variants.items()),
         ("wrong-path", "p0", replace(t0, siblings=tokens[1].siblings)),
@@ -418,6 +588,16 @@ def build_vectors() -> str:
                     ("fork-same-seq", replace(fork_cp, token_root=_flip(fork_cp.token_root, 0, 0x01))),
                     ("fork-overlapping-seq", replace(fork_cp, seq_from=2, seq_to=3))):
         add(f"checkpoint fork {name} {h(signed(c))}")
+    # Forks by counter: one counter value twice; the next counter value not naming the stored checkpoint; and the same in
+    # another epoch (signed by that epoch's key), which no seq comparison can see
+    flipped, after = _flip(fork_cp.token_root, 0, 0x01), fork_cp.counter + 1
+    for name, key, c in (
+            ("fork-same-counter", "e7", replace(fork_cp, seq_from=40, seq_to=41, token_root=flipped)),
+            ("fork-unlinked-counter", "e7", replace(fork_cp, seq_from=60, seq_to=61, token_root=flipped, counter=after)),
+            ("fork-unlinked-counter-before", "e7", replace(fork_cp, seq_from=80, seq_to=81, token_root=flipped, counter=fork_cp.counter - 1)),
+            ("fork-cross-epoch", "e6", replace(fork_cp, epoch=EPOCH - 1, seq_from=0, seq_to=1, prev_checkpoint_digest=gate.ZERO_DIGEST,
+                                               token_root=flipped, counter=after))):
+        add(f"checkpoint fork {name} {h(signed(c, key))}")
     token("reject", "forked-batch", "p20", fork[0])
     add(f"checkpoint reject linked-after-fork {h(signed(later_cp))}")
     token("reject", "shard-3-after-fork", "p2", tokens[2])
@@ -538,10 +718,18 @@ def build_vectors() -> str:
     add(f"checkpoint fork standby-e1-fork {h(signed(replace(e1_cp, token_root=_flip(e1_cp.token_root, 0, 0x01)), 'sb1'))}")
     next_cp = _batch([standby(43, 2, 1)], lambda m: b"", gate.checkpoint_digest(late_cp))[0]
     add(f"checkpoint reject standby-e1-after-fork {h(signed(next_cp, 'sb1'))}")
-    checkpoint_line("standby-e2", e2_cp, signed(e2_cp, "sb2"))
-    token("accept", "standby-reissued-e2", "p41", e2_t)
-    add(f"release accept standby-e2 p41 {h(gate.encode_token(e2_t))}")
+    add(f"checkpoint reject standby-e2-after-fork {h(signed(e2_cp, 'sb2'))}")  # the fork pins shard 0 in every epoch
+    token("reject", "standby-reissued-e2-after-fork", "p41", e2_t)
+    add(f"release reject standby-e2-after-fork p41 {h(gate.encode_token(e2_t))}")
     add(f"release reject standby-e2-again p41 {h(gate.encode_token(e2_t))}")
+    # Epoch 2 on a shard the fork did not pin is not blocked: its payment releases once, and the second release is refused
+    member_sb1 = next(k for i in count() if (k := gate.sha3_512(b"RR/GATE/TEST-ONLY-MEMBER/v1\x00sc" + bytes([i]))[:gate.MEMBER_KEY])
+                      and gate.shard_of(STANDBY, k, OTHER_SHARDS) == 1)
+    s1_cp, _, (s1_t,) = _batch([replace(_leaf(44, 0, shard=1, member_key=member_sb1), tenant_id=STANDBY, epoch=2)], lambda m: sign("sb2", m), gate.ZERO_DIGEST, counter=1)
+    checkpoint_line("standby-e2-other-shard", s1_cp, signed(s1_cp, "sb2"))
+    payment_line("p44", s1_t.leaf)
+    add(f"release accept standby-e2-other-shard p44 {h(gate.encode_token(s1_t))}")
+    add(f"release reject standby-e2-other-shard-again p44 {h(gate.encode_token(s1_t))}")
     # Equivocation by shard count alone: epoch 5's same key with 8 shards, root-signed, is recorded and blocks epoch 5
     cert("eq5")
     shards_at = len(gate.KEY_CERT) + 1 + 2 + len(STANDBY) + 8
@@ -631,147 +819,15 @@ def build_vectors() -> str:
     return "\n".join(out) + "\n"
 
 
-def build_v2_vectors() -> str:
-    """CHECKPOINT/v2 (multi-shard-runtime-v1 A5): the v1 header and a 64-byte registry head, judged by Lean ``gate_vectors``."""
-    h, head = bytes.hex, D[12]
-    out = ["# RR/GATE CHECKPOINT/v2 golden vectors (multi-shard-runtime-v1 A5). Synthetic, non-PHI, activation=false."]
-    add = out.append
-
-    def batch(leaves, prev, registry_head=head):
-        return gate.build_batch(leaves, prev_checkpoint_digest=prev, event_head=D[1], evidence_root=D[2],
-                                state_digest=STATE, created_at=NOW, registry_head=registry_head)
-
-    def leaf(n: int, seq: int) -> gate.TokenLeaf:  # a payment on shard 4, which the cross-version chain uses
-        return _leaf(n, seq, shard=4, member_key=member(n, 4))
-
-    base, _ = batch([_leaf(0, 0), _leaf(1, 1)], gate.ZERO_DIGEST)
-    header, v1_base = gate.encode_checkpoint_header(base), replace(base, registry_head=None)
-    v1_header, signed_base = gate.encode_checkpoint_header(v1_base), signed(base)
-    v1_first, _ = batch([leaf(10, 0), leaf(11, 1)], gate.ZERO_DIGEST, None)
-    v2_next, tokens = batch([leaf(12, 2)], gate.checkpoint_digest(v1_first))
-    seq_at, magic, magic_len = len(gate.CHECKPOINT) + 1 + 2 + len(TENANT) + 2 + len(PROGRAM) + 4, 20, len(gate.CHECKPOINT)
-    next_header = gate.encode_checkpoint_header(v2_next)
-
-    for tenant in (TENANT, OTHER):
-        add(f"root {tenant} {h(keypair(f'root-{tenant}')[0])}")
-    for name in ("e7", "e6", "other"):
-        add(f"cert accept {h(key_cert(name))}")
-    add(f"grants {TENANT} {h(D[3])} {h(D[4])} {h(D[6])}")
-    add(f"now {NOW}")
-    add(checkpoint_record("v2-genesis", base, signed_base))
-    for name, data in (
-        ("zero-head", resigned(header[:-64] + gate.ZERO_DIGEST)),
-        ("head-63-bytes", resigned(header[:-1])),
-        ("v2-body-under-v1-magic", resigned(gate.CHECKPOINT + header[magic_len:])),
-        ("v1-body-under-v2-magic", resigned(gate.CHECKPOINT_V2 + v1_header[magic_len:])),
-        ("v2-flipped-to-v1", _flip(signed_base, magic, 0x03)),
-        ("v1-flipped-to-v2", _flip(signed(v1_base), magic, 0x03)),
-        ("trailing-after-signature", signed_base + b"\x00"),
-        ("truncated", signed_base[:-1]),
-        ("wrong-domain", gate.TOKEN + signed_base[magic_len:]),
-        ("variant-2", resigned(_flip(header, magic_len, 0x03))),
-        ("flipped-count-bit", resigned(_flip(header, len(header) - 9 - 64, 0x01))),
-        ("flipped-signature-bit", _flip(signed_base, len(signed_base) - 100)),
-        ("retired-epoch-key", signed(base, "e6")),
-        ("other-tenant-key", signed(base, "other")),
-        ("state-digest-zero", resigned(header[:-138] + gate.ZERO_DIGEST + header[-74:])),
-        ("first-with-prev", resigned(header[: seq_at + 24] + D[0] + header[seq_at + 88 :])),
-        ("zero-prev-not-first", resigned(next_header[: seq_at + 24] + gate.ZERO_DIGEST + next_header[seq_at + 88 :])),
-    ):
-        add(f"checkpoint reject {name} {h(data)}")
-    # A v1 at seq 0-1 then a v2 at seq 2 whose prev is the v1's digest: both stored, the v2's token is released
-    add(checkpoint_record("v1-first", v1_first, signed(v1_first)))
-    add(checkpoint_record("v2-after-v1", v2_next, signed(v2_next)))
-    add(payment_record("p12", tokens[0].leaf))
-    add(f"release accept t12 p12 {h(gate.encode_token(tokens[0]))}")
-    # A v2 overlapping the stored v1's seqs forks it
-    fork, _ = batch([leaf(13, 0)], gate.ZERO_DIGEST)
-    add(f"checkpoint fork v2-over-v1 {h(signed(fork))}")
-    add(f"end {sum(line.split(' ', 1)[0] in CHECKED for line in out)}")
-    return "\n".join(out) + "\n"
-
-
-def build_approval_vectors() -> str:
-    """APPROVAL/v1 (hold-release S2): each move binds its payment line by a 64-byte line digest; Lean decodes."""
-    h, at = bytes.hex, len(gate.APPROVAL)
-    out = ["# RR/APPROVAL/v1 golden vectors (hold-release S2). Synthetic, non-PHI, activation=false."]
-    add = out.append
-    raws = [gate.encode_decide_request(_request("FFS_CLAIM", n, _lines(n))) for n in range(3)]
-    moves = tuple(gate.Move(cell, f"pay-{n:04d}".encode(), f"claim-{n}".encode(), f"payee-{n % 3}".encode(),
-                            125_000 + n, raws[n]) for n, cell in enumerate(sorted(D[7:10])))
-
-    def fields(ms: tuple[gate.Move, ...]) -> str:
-        return " ".join(f"{h(m.cell)} {h(m.payment_id)} {h(m.claim_key)} {h(m.payee_key)} {m.cents} "
-                        f"{h(gate.line_digest(m.line))}" for m in ms)
-
-    for n, raw in enumerate(raws):
-        add(f"line-digest l{n} {h(raw)} {h(gate.line_digest(raw))}")
-    for name, ms in (("none", ()), ("one", moves[:1]), ("three", moves), ("cents-max", (replace(moves[0], cents=gate.MAX_NAT),))):
-        add(f"moves accept {name} {h(gate.encode_moves(ms))} {fields(ms)}".rstrip())
-    one, three = gate.encode_moves(moves[:1]), gate.encode_moves(moves)
-    body = [gate.encode_moves((m,))[len(gate.APPROVAL_MOVES) + 2 :] for m in moves]
-    end, two = len(one), gate.APPROVAL_MOVES + b"\x00\x02"  # move 0 ends where `one` ends
-    key = len(gate.APPROVAL_MOVES) + 2 + 64  # move 0's payment_id field
-    for name, data in (
-        ("line-digest-32", one[:-32]),
-        ("line-digest-65", one + b"\x5a"),
-        ("first-line-digest-32", three[: end - 32] + three[end:]),
-        ("first-line-digest-65", three[:end] + b"\x5a" + three[end:]),
-        ("trailing-byte", three + b"\x00"),
-        ("cents-zero", one[:-72] + bytes(8) + one[-64:]),
-        ("cells-descending", two + body[1] + body[0]),
-        ("cell-repeated", two + body[0] + body[0]),
-        ("count-too-high", two + body[0]),
-        ("approval-domain", gate.APPROVAL + one[len(gate.APPROVAL_MOVES) :]),
-        ("cents-over-max", one[:-72] + (1 << 63).to_bytes(8, "big") + one[-64:]),
-        ("payment-id-empty", one[:key] + bytes(2) + one[key + 2 + len(moves[0].payment_id) :]),
-    ):
-        add(f"moves reject {name} {h(data)}")
-    digest = gate.moves_digest(moves)
-    add(f"admit-moves accept three {h(digest)} {h(three)} {fields(moves)}")
-    for name, d, data in (("other-moves", digest, one), ("undecodable", gate.sha3_512(three + b"\x00"), three + b"\x00")):
-        add(f"admit-moves reject {name} {h(d)} {h(data)}")
-    for n, kind in enumerate(gate.KINDS):
-        a = gate.Approval(kind, D[11], bytes(range(n)), digest, f"owner-{n}", "dual", D[13], NOW + 600 * n)
-        add(f"approval accept {kind.lower()} {h(gate.encode_approval(a))} {kind} {h(a.subject)} {h(a.arg) or '-'} "
-            f"{h(a.moves_digest)} {a.owner_id} {a.mode} {h(a.pack_digest)} {a.not_after_s}")
-    base = gate.encode_approval(gate.Approval("RELEASE", D[11], b"", D[12], "zz-owner", "dual", D[13], NOW))
-    for name, data in (
-        ("kind-0", base[:at] + b"\x00" + base[at + 1 :]),
-        ("kind-8", base[:at] + b"\x08" + base[at + 1 :]),
-        ("owner-not-ident", base.replace(b"zz-owner", b"-z-owner")),
-        ("trailing-byte", base + b"\x00"),
-        ("truncated", base[:-1]),
-        ("moves-domain", gate.APPROVAL_MOVES + base[at:]),
-        ("owner-empty", base.replace(b"\x00\x08zz-owner", bytes(2))),
-        ("mode-empty", base.replace(b"\x00\x04dual", bytes(2))),
-        ("mode-not-ident", base.replace(b"dual", b"-ual")),
-        ("not-after-over-max", base[:-8] + (1 << 63).to_bytes(8, "big")),
-    ):
-        add(f"approval reject {name} {h(data)}")
-    add(f"end {sum(line.split(' ', 1)[0] in CHECKED for line in out)}")
-    return "\n".join(out) + "\n"
-
-
-V2_VECTORS = VECTORS.with_name("checkpoint_v2.vectors")
-APPROVAL_VECTORS = VECTORS.with_name("approval_v1.vectors")
 LEAN_VECTORS = signer.ROOT / "lean" / ".lake" / "build" / "bin" / "gate_vectors.exe"
 
 
 class GoldenVectorTests(unittest.TestCase):
     def test_python_reproduces_every_vector_byte(self) -> None:
         self.assertEqual(build_vectors(), VECTORS.read_text("ascii"))
-        self.assertEqual(build_v2_vectors(), V2_VECTORS.read_text("ascii"))
-        self.assertEqual(build_approval_vectors(), APPROVAL_VECTORS.read_text("ascii"))
-
-    def test_python_digests_only_a_raw_line(self) -> None:
-        with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
-            gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, "raw"),))
-        with self.assertRaisesRegex(gate.GateCodecError, "^line$"):
-            gate.encode_moves((gate.Move(D[7], b"pay-0000", b"claim-0", b"payee-0", 1, b""),))
 
     def test_lean_judges_every_golden_vector(self) -> None:
-        for path in (VECTORS, V2_VECTORS, APPROVAL_VECTORS):
+        for path in (VECTORS,):
             done = subprocess.run([str(LEAN_VECTORS), str(path)], capture_output=True, text=True, timeout=1800, check=False)
             self.assertRegex(done.stdout.strip(), r"^GATE_VECTORS=PASS checked=(\d+) expected=\1 failed=0$", path.name)
 
@@ -788,7 +844,7 @@ class GoldenVectorTests(unittest.TestCase):
             for name, value, refusal in (("PIN", wrong, "rr_gate_mldsa87_pin_mismatch"), ("BINARY", absent, "absent_failed"),
                                          ("VERIFY_PIN", wrong, "gate_verify_pin_mismatch"), ("VERIFY", absent, "absent_failed")):
                 with self.subTest(name), mock.patch.object(signer, name, value), self.assertRaisesRegex(signer.GateSignerError, refusal):
-                    signer.seal(handle, bytes(2592), b"", None, b"header", [])
+                    signer.seal(handle, bytes(2592), b"", None, b"header", [], 0)
 
     def test_the_hashed_copy_cannot_be_written_or_deleted(self) -> None:
         copy = signer._private_copy(signer.BINARY)[0]
@@ -850,23 +906,32 @@ def payment_request(n: int) -> gate.DecideRequest:
     return _request(flow, n, _lines(n, flow))
 
 
-def build(leaves, prev: bytes = gate.ZERO_DIGEST, head: bytes = gate.ZERO_DIGEST, registry_head: bytes | None = None):
+def batch_pays(n: int, start: int = 0) -> list:
+    """``n`` Lean payment answers (``decide.Pay``: the leaf fields Lean printed, ALLOW with two reasons under a TRANSFER grant, a stand-in input over the request
+    and the head ``D[1]``), as a decide prepares them, for payments ``start`` on."""
+    from app import right_rail_gate_decide as decide
+    return [decide.Pay("ALLOW", ("ELIGIBLE", "RATE_OK"), r.tenant_id, r.program_id, r.flow, r.payment_id, r.member_key, r.payee_ref,
+                       r.amount_cents, r.period, gate.lines_root(r.lines), synthetic_input(r, D[1]), "TRANSFER", D[3], bytes(64))
+            for r in map(payment_request, range(start, start + n))]
+
+
+def build(leaves, prev: bytes = gate.ZERO_DIGEST, head: bytes = gate.ZERO_DIGEST, counter: int | None = None):
     """A batch of ``leaves`` (re-numbered from the first one's seq) linked to ``prev`` and ``head``."""
     leaves = [replace(leaf, seq=leaves[0].seq + i) for i, leaf in enumerate(leaves)]
     return gate.build_batch(leaves, prev_checkpoint_digest=prev, event_head=head, evidence_root=gate.ZERO_DIGEST,
-                            state_digest=STATE, created_at=NOW, registry_head=registry_head)
+                            state_digest=STATE, created_at=NOW, counter=counter or _auto_counter())
 
 
 def _genesis(leaves) -> tuple[bytes, list[bytes]]:
     """The header and encoded tokens of a shard's first batch."""
-    cp, tokens = build(leaves)
+    cp, tokens = build(leaves, counter=1)  # a shard's first checkpoint takes counter 1 (Lean ``follows none``)
     return gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
 
 
 def signed_genesis(handle: str, n: int = 0, seal: tuple[bytes, bytes] | None = None) -> tuple[bytes, list[bytes]]:
     """Payments 0-1 as a shard's first checkpoint (genesis n), signed by the epoch key or, with ``seal`` = (root key, cert), by custody; and its tokens."""
     header, tokens = _genesis(batch_leaves(0, 2, n))
-    return gate.attach_signature(header, signer.seal(handle, *seal, None, header, tokens) if seal else signer.sign(handle, header)), tokens
+    return gate.attach_signature(header, signer.seal(handle, *seal, None, header, tokens, 0) if seal else signer.sign(handle, header)), tokens
 
 
 def _u16(n: int) -> bytes:
@@ -881,20 +946,27 @@ def _list(items) -> bytes:
     return _u16(len(items)) + b"".join(items)
 
 
+def _genesis_after(leaves, prev: bytes, counter: int) -> tuple[bytes, list[bytes]]:
+    """The header and encoded tokens of a batch linked to ``prev``, taking ``counter``."""
+    cp, tokens = build(leaves, prev, prev, counter)
+    digest = gate.checkpoint_digest(cp)
+    return gate.encode_checkpoint_header(cp), [gate.encode_token(replace(t, checkpoint_digest=digest)) for t in tokens]
+
+
 def _publish(root_pk: bytes, cert: bytes, signed: bytes, tokens: list[bytes]) -> str:
     """``gate_verify`` PUBLISH of a shard's first checkpoint: the frame ``seal`` builds."""
     return signer.gate_verify(1, root_pk + signer.framed(cert) + signer.framed(b"") + signer.framed(signed)
-                              + _u16(len(tokens)) + b"".join(map(signer.framed, tokens)))
+                              + _u16(len(tokens)) + b"".join(map(signer.framed, tokens)) + (0).to_bytes(8, "big"))
 
 
 class GateVerifyModeTests(unittest.TestCase):
-    """``gate_verify``'s four modes, each with an accepting and a refusing frame; ``seal`` is mode PUBLISH."""
+    """``gate_verify``'s five modes, each with an accepting and a refusing frame; ``seal`` is mode PUBLISH."""
 
     def test_signature_leaves_only_when_gate_verify_accepts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handle, root_pk, cert = custody(tmp)
             header, tokens = _genesis([_leaf(n, n) for n in range(5)])
-            self.assertEqual(len(signer.seal(handle, root_pk, cert, None, header, tokens)), gate.ML_DSA_87_SIGNATURE)
+            self.assertEqual(len(_tpm_seal(handle, root_pk, cert, None, header, tokens)), gate.ML_DSA_87_SIGNATURE)
             epoch_at = len(gate.KEY_CERT) + 1 + 2 + len(TENANT)
             body = cert[: -gate.ML_DSA_87_SIGNATURE - 2]
             by_epoch_key = gate.attach_signature(body, signer.sign(handle, body))
@@ -912,39 +984,91 @@ class GateVerifyModeTests(unittest.TestCase):
                 ("an epoch 6 key and certificate on an epoch 7 header", old[0], old[1:], {}),
             ):
                 with self.subTest(name), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
-                    signer.seal(key, *chain, None, *_genesis([replace(_leaf(0, 0), **change)]))
+                    _tpm_seal(key, *chain, None, *_genesis([replace(_leaf(0, 0), **change)]))
             real = signer.sign  # a faulty signature never leaves
             with mock.patch.object(signer, "sign", lambda h, m: _flip(real(h, m), 100)), \
                     self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
-                signer.seal(handle, root_pk, cert, None, header, tokens)
+                _tpm_seal(handle, root_pk, cert, None, header, tokens)
 
-    def test_publish_accepts_a_v2_after_a_v1_and_refuses_an_unlinked_v2_and_a_v1_after_a_v2(self) -> None:
+    def test_publish_refuses_a_counter_that_is_not_the_one_read_plus_one(self) -> None:
+        """Review L: ``tpm`` is its own input, so a header whose counter is not ``tpm`` + 1 is refused through ``_tpm_seal``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+            counter = int.from_bytes(header[-8:], "big")
+            for tpm in (counter, counter + 1, counter + 4):
+                with self.subTest(tpm=tpm), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
+                    _tpm_seal(handle, root_pk, cert, None, header, tokens, tpm=tpm)
+            self.assertEqual(len(_tpm_seal(handle, root_pk, cert, None, header, tokens, tpm=counter - 1)), gate.ML_DSA_87_SIGNATURE)
+
+    def test_publish_refuses_a_first_checkpoint_that_is_not_counter_1(self) -> None:
+        """Review H, golden vector: a store deleted or recreated while its counter is at t > 0 would sign seq 0 at counter
+        t + 1, which is ``tpm`` + 1; with no predecessor the verifier requires counter 1, so it is refused for every t > 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            for counter in (2, 3, 8, 2**40):
+                checkpoint, tokens = build(batch_leaves(0, 2), counter=counter)
+                header, encoded = gate.encode_checkpoint_header(checkpoint), [gate.encode_token(t) for t in tokens]
+                with self.subTest(counter=counter), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
+                    signer.seal(handle, root_pk, cert, None, header, encoded, counter - 1)
+
+    def test_publish_takes_the_next_counter_on_the_linked_chain(self) -> None:
+        """A successor is the next seq on the previous digest and takes the counter after the one read (``tpm`` + 1)."""
         with tempfile.TemporaryDirectory() as tmp:
             handle, root_pk, cert = custody(tmp)
             first, first_tokens = _genesis([_leaf(n, n) for n in range(2)])
-            last = gate.attach_signature(first, signer.seal(handle, root_pk, cert, None, first, first_tokens))
-            for prev, outcome in ((gate.sha3_512(first), None), (D[0], "gate_verify_refused")):
-                cp, tokens = build([_leaf(2, 2)], prev, prev, D[12])
-                header, raw = gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
-                with self.subTest(prev=prev.hex()[:8]):
+            last = gate.attach_signature(first, signer.seal(handle, root_pk, cert, None, first, first_tokens, 0))
+            link = gate.sha3_512(first)
+            for name, prev, counter, tpm, outcome in (
+                ("next counter", link, 2, 1, None),
+                ("unlinked", D[0], 2, 1, "gate_verify_refused"),
+                ("counter skipped", link, 3, 1, "gate_verify_refused"),
+                ("counter repeated", link, 1, 0, "gate_verify_refused"),
+                ("counter not tpm + 1", link, 2, 2, "gate_verify_refused"),
+            ):
+                header, raw = _genesis_after([_leaf(2, 2)], prev, counter)
+                with self.subTest(name):
                     if outcome is None:
-                        self.assertEqual(len(signer.seal(handle, root_pk, cert, last, header, raw)), gate.ML_DSA_87_SIGNATURE)
+                        self.assertEqual(len(signer.seal(handle, root_pk, cert, last, header, raw, tpm)), gate.ML_DSA_87_SIGNATURE)
                     else:
                         with self.assertRaisesRegex(signer.GateSignerError, outcome):
-                            signer.seal(handle, root_pk, cert, last, header, raw)
-            second = build([_leaf(2, 2)], gate.sha3_512(first), gate.sha3_512(first), D[12])
-            second_header = gate.encode_checkpoint_header(second[0])
-            last2 = gate.attach_signature(second_header, signer.seal(
-                handle, root_pk, cert, last, second_header, [gate.encode_token(t) for t in second[1]]))
-            for registry_head, outcome in ((D[12], None), (None, "gate_verify_refused")):  # a v1 never follows a v2
-                cp, tokens = build([_leaf(3, 3)], gate.sha3_512(second_header), gate.sha3_512(second_header), registry_head)
-                header, raw = gate.encode_checkpoint_header(cp), [gate.encode_token(t) for t in tokens]
-                with self.subTest(registry_head=registry_head is not None):
-                    if outcome is None:
-                        self.assertEqual(len(signer.seal(handle, root_pk, cert, last2, header, raw)), gate.ML_DSA_87_SIGNATURE)
-                    else:
-                        with self.assertRaisesRegex(signer.GateSignerError, outcome):
-                            signer.seal(handle, root_pk, cert, last2, header, raw)
+                            signer.seal(handle, root_pk, cert, last, header, raw, tpm)
+
+    def test_custody_step_answers_from_the_two_counters(self) -> None:
+        """The store's counter is read by Lean from the signed checkpoint (Round 3): a checkpoint at ``newest``, or none."""
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            at = lambda n: gate.attach_signature(gate.encode_checkpoint_header(build([_leaf(0, 0)], counter=n)[0]), bytes(gate.ML_DSA_87_SIGNATURE))
+            for tpm, newest, answer in ((None, None, "create"), (5, 5, "ready"), (5, 6, "catch_up"), (None, 4, "counter_reset"),
+                                        (None, 1, "counter_reset"), (5, None, "no_store"), (6, 5, "store_rewound"), (5, 7, "store_ahead")):
+                with self.subTest(tpm=tpm, newest=newest):
+                    self.assertEqual(signer.custody(tpm, root_pk, b"", at(newest) if newest else b""), answer)
+            for tpm in (None, 5):  # a newest checkpoint that does not decode is never served or created on
+                with self.subTest(unreadable=tpm):
+                    self.assertEqual(signer.custody(tpm, root_pk, cert, b"not a checkpoint"), "store_rewound")
+
+    def test_an_unwritten_counter_catches_up_only_under_the_signed_first_checkpoint(self) -> None:
+        """Final review U5: a crash between the first seal's signature commit and the counter's first increment leaves the
+        counter unwritten under the signed first checkpoint; the start catches up (Lean ``first_seal_crash_heals``).  The
+        same counter values under a later checkpoint, a forged signature, another root key or certificate, or a counter
+        other than the header's are still ``counter_reset``, and a written counter answers as before."""
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            first, tokens = _genesis([_leaf(n, n) for n in range(2)])
+            signed = gate.attach_signature(first, signer.seal(handle, root_pk, cert, None, first, tokens, 0))
+            later, later_tokens = _genesis_after([_leaf(2, 2)], gate.sha3_512(first), 2)
+            signed_later = gate.attach_signature(later, signer.seal(handle, root_pk, cert, signed, later, later_tokens, 1))
+            forged = signed[:-1] + bytes([signed[-1] ^ 1])
+            other_root, other_cert = keypair(f"root-{OTHER}")[0], custody(tmp, "e6")[2]
+            self.assertEqual(signer.custody(None, root_pk, cert, signed), "catch_up")
+            for name, pk, c, s, answer in (
+                    ("later checkpoint", root_pk, cert, signed_later, "counter_reset"),
+                    ("forged signature", root_pk, cert, forged, "counter_reset"),
+                    ("other root key", other_root, cert, signed, "counter_reset"),
+                    ("other certificate", root_pk, other_cert, signed, "counter_reset"),
+                    ("written counter", root_pk, cert, signed, "ready")):
+                with self.subTest(name):
+                    self.assertEqual(signer.custody(1 if name == "written counter" else None, pk, c, s), answer)
 
     def test_a_self_certified_root_is_never_installed(self) -> None:
         """A certificate for the root key itself, with a checkpoint the root key signed: refused to publish and to store."""
@@ -989,7 +1113,7 @@ class GateVerifyModeTests(unittest.TestCase):
         header = _genesis([_leaf(n, n) for n in range(3)])[0]
         signed = gate.attach_signature(header, det_sign("e7", header))
         self.assertEqual(signer.gate_verify(2, signer.framed(signed)),
-                         f"GATE_VERIFY=INDEX {TENANT.encode().hex()} {SHARD} {EPOCH} 0 2 {gate.sha3_512(header).hex()} {'00' * 64}")
+                         f"GATE_VERIFY=INDEX {TENANT.encode().hex()} {SHARD} {EPOCH} 0 2 {gate.sha3_512(header).hex()} {'00' * 64} 1")
         self.assertEqual(signer.gate_verify(2, signer.framed(signed[:-1])), "GATE_VERIFY=REJECT")
 
     def test_store_stores_a_batch_and_names_the_checkpoint_a_second_one_forks(self) -> None:
@@ -1005,6 +1129,41 @@ class GateVerifyModeTests(unittest.TestCase):
         self.assertEqual(store([sign(first)], sign(second)), f"GATE_VERIFY=FORK {gate.sha3_512(first).hex()}")
         self.assertEqual(store([], _flip(sign(first), len(first) + 100)), "GATE_VERIFY=REJECT")
         self.assertEqual(store([], sign(first), ()), "GATE_VERIFY=REJECT")  # no installed certificate
+
+    def test_store_and_release_take_a_recorded_fork_as_a_pair_and_stop_its_shard(self) -> None:
+        """Evidence is ``u16 f`` then two ``u32``-framed checkpoints per fork.  A fork pins its shard in every epoch and keeps
+        blocking both sides' epochs on every shard of the tenant; another shard in other epochs is not blocked."""
+        root, certs = keypair(f"root-{TENANT}")[0], [key_cert("e7")]
+        sign = lambda leaves, epoch, key: gate.attach_signature(*(lambda h: (h, det_sign(key, h)))(
+            gate.encode_checkpoint_header(build([replace(leaf, epoch=epoch) for leaf in leaves], counter=1)[0])))
+        a, b = sign(batch_leaves(0, 2), EPOCH - 1, "e6"), sign(batch_leaves(0, 2, 5), EPOCH + 1, "e8")  # a recorded fork, epochs 6 and 8
+        other = sign([replace(leaf, shard_id=SHARD + 1) for leaf in batch_leaves(0, 2)], EPOCH - 1, "e6")
+        pairs = lambda *forks: _list([signer.framed(x) + signer.framed(y) for x, y in forks])
+        new = sign(batch_leaves(0, 2, 10), EPOCH, "e7")
+        store = lambda forks: signer.gate_verify(3, root + _list([signer.framed(c) for c in certs]) + _u16(0) + pairs(*forks) + signer.framed(new))
+        self.assertEqual(store([]), "GATE_VERIFY=STORED")
+        self.assertEqual(store([(a, b)]), "GATE_VERIFY=REJECT")  # its shard, an epoch other than the fork's two
+        self.assertEqual(store([(other, other)]), "GATE_VERIFY=STORED")  # another shard, other epochs
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        signed, request = gate.attach_signature(header, det_sign("e7", header)), gate.encode_decide_request(payment_request(0))
+        grants = _list([_blob(TENANT.encode()) + _blob(D[3]) + _list([_blob(D[4])]) + _list([_blob(D[6])])])
+
+        def release(forks) -> str:
+            frame = root + _list([signer.framed(key_cert("e7"))]) + pairs(*forks) + signer.framed(signed) + NOW.to_bytes(8, "big")
+            return signer.gate_verify(5, frame + grants + bytes([0, 1]) + member(0) + signer.framed(request) + signer.framed(tokens[0]))
+        self.assertEqual(release([]), "GATE_VERIFY=ACCEPT")
+        self.assertEqual(release([(a, b)]), "GATE_VERIFY=HOLD forked")
+        self.assertEqual(release([(other, other)]), "GATE_VERIFY=ACCEPT")
+
+    def test_store_forks_across_epochs_when_the_next_counter_does_not_name_the_other(self) -> None:
+        """``unlinked a b`` in two epochs: counter 2 in epoch 8 whose chain head is not the epoch 7 checkpoint of counter 1."""
+        root, certs = keypair(f"root-{TENANT}")[0], _list([signer.framed(key_cert("e7")), signer.framed(key_cert("e8"))])
+        first = _genesis([_leaf(n, n) for n in range(2)])[0]
+        cp, _ = build(batch_leaves(2, 2, 10), gate.sha3_512(first), D[5], 2)  # linked by prev, not by chain head
+        header = gate.encode_checkpoint_header(replace(cp, epoch=EPOCH + 1))
+        frame = root + certs + _list([signer.framed(gate.attach_signature(first, det_sign("e7", first)))]) + _u16(0)
+        self.assertEqual(signer.gate_verify(3, frame + signer.framed(gate.attach_signature(header, det_sign("e8", header)))),
+                         f"GATE_VERIFY=FORK {gate.sha3_512(first).hex()}")
 
     def test_release_accepts_a_payer_state_and_holds_with_the_first_failure(self) -> None:
         root, cert = keypair(f"root-{TENANT}")[0], key_cert("e7")
@@ -1037,15 +1196,15 @@ class GateVerifyModeTests(unittest.TestCase):
     def test_seal_releases_a_signature_only_for_a_publishable_batch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handle, root_pk, cert = custody(tmp)
-            checkpoint, tokens = build(batch_leaves(0, 5))
+            checkpoint, tokens = build(batch_leaves(0, 5), counter=1)
             header, encoded = gate.encode_checkpoint_header(checkpoint), [gate.encode_token(t) for t in tokens]
-            signature = signer.seal(handle, root_pk, cert, None, header, encoded)
+            signature = _tpm_seal(handle, root_pk, cert, None, header, encoded)
             first = gate.attach_signature(header, signature)
             self.assertEqual(len(signature), gate.ML_DSA_87_SIGNATURE)
             nxt, nxt_tokens = build(batch_leaves(5, 3, 5), prev=gate.checkpoint_digest(checkpoint),
-                                     head=gate.checkpoint_digest(checkpoint))
+                                     head=gate.checkpoint_digest(checkpoint), counter=2)
             nxt_header, nxt_encoded = gate.encode_checkpoint_header(nxt), [gate.encode_token(t) for t in nxt_tokens]
-            signer.seal(handle, root_pk, cert, first, nxt_header, nxt_encoded)  # the chain extends
+            _tpm_seal(handle, root_pk, cert, first, nxt_header, nxt_encoded)  # the chain extends
             refused = {
                 "a token missing": (first, nxt_header, nxt_encoded[:-1]),
                 "tokens out of seq order": (first, nxt_header, nxt_encoded[::-1]),
@@ -1055,21 +1214,109 @@ class GateVerifyModeTests(unittest.TestCase):
                 "a last checkpoint that does not decode": (first[:-1], nxt_header, nxt_encoded),
             }
             back, back_tokens = build(batch_leaves(3, 2, 7), prev=gate.checkpoint_digest(checkpoint),
-                                       head=gate.checkpoint_digest(checkpoint))  # overlaps seq 3-4: a fork
+                                       head=gate.checkpoint_digest(checkpoint), counter=2)  # overlaps seq 3-4: a fork
             refused["a fork of the last checkpoint"] = (first, gate.encode_checkpoint_header(back),
                                                        [gate.encode_token(t) for t in back_tokens])
             for name, (last, head, toks) in refused.items():
                 with self.subTest(name), self.assertRaisesRegex(signer.GateSignerError, "gate_verify"):
-                    signer.seal(handle, root_pk, cert, last, head, toks)
+                    _tpm_seal(handle, root_pk, cert, last, head, toks)
 
     def test_payment_ids_ascend_within_a_batch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             handle, root_pk, cert = custody(tmp)
             leaves = batch_leaves(0, 3)
-            checkpoint, tokens = build([leaves[0], leaves[2], leaves[1]])
+            checkpoint, tokens = build([leaves[0], leaves[2], leaves[1]], counter=1)
             with self.assertRaisesRegex(signer.GateSignerError, "gate_verify"):
-                signer.seal(handle, root_pk, cert, None, gate.encode_checkpoint_header(checkpoint),
+                _tpm_seal(handle, root_pk, cert, None, gate.encode_checkpoint_header(checkpoint),
                             [gate.encode_token(t) for t in tokens])
+
+    def test_a_verifier_killed_mid_seal_releases_nothing_and_the_next_call_relaunches(self) -> None:
+        """The REAL resident verifier is killed (its Job terminated) as the seal's check is sent: no signature leaves, the dead
+        worker is dropped, the next call launches one verifier and gives the right verdicts (accept, then refuse)."""
+        worker, real = signer.process.ContainedWorker, signer.process.ContainedWorker.exchange
+        with tempfile.TemporaryDirectory() as tmp:
+            handle, root_pk, cert = custody(tmp)
+            header, tokens = _genesis([_leaf(n, n) for n in range(3)])
+            self.assertEqual(len(_tpm_seal(handle, root_pk, cert, None, header, tokens)), gate.ML_DSA_87_SIGNATURE)
+            victim = signer._VSERVER[0]
+
+            def dies(self, *a, **kw):
+                if self is victim:
+                    self._terminate()
+                return real(self, *a, **kw)
+            with mock.patch.object(worker, "exchange", dies), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                _tpm_seal(handle, root_pk, cert, None, header, tokens)
+            self.assertIsNone(signer._VSERVER[0])
+            with mock.patch.object(signer.process, "launch_contained_worker", wraps=signer.process.launch_contained_worker) as launch:
+                self.assertEqual(len(_tpm_seal(handle, root_pk, cert, None, header, tokens)), gate.ML_DSA_87_SIGNATURE)
+                with self.assertRaisesRegex(signer.GateSignerError, "gate_verify_refused"):
+                    _tpm_seal(handle, root_pk, _flip(cert, len(cert) - 1, 0x01), None, header, tokens)
+                self.assertEqual(launch.call_count, 1)
+            live = signer._VSERVER[0]
+            real_read = live._read_exact
+
+            def eof_mid_read(count):  # the request is sent; the verifier dies before its answer is read
+                live._terminate()
+                return real_read(count)
+            with mock.patch.object(live, "_read_exact", eof_mid_read), self.assertRaisesRegex(signer.GateSignerError, "gate_verify_failed"):
+                _tpm_seal(handle, root_pk, cert, None, header, tokens)
+            self.assertIsNone(signer._VSERVER[0])
+            self.assertEqual(len(_tpm_seal(handle, root_pk, cert, None, header, tokens)), gate.ML_DSA_87_SIGNATURE)
+
+    def test_the_resident_verifier_answers_a_frame_of_64_certs_and_500_stored_forks_inside_its_cap_and_time(self) -> None:
+        """Measured (srl3, Job peak, uncapped): 64 certs + 500 fork rows = 3.0 MB, 156 MB, 4.8 s; 1500 rows = 8.0 MB, 361 MB, 30.3 s;
+        2500 rows = 13.1 MB, 910 MB, 77 s.  The 512 MB cap and the 30 s exchange timeout bind together near 1500 rows (a hold, not
+        an acceptance, so liveness only); 500 forks (a fork is two rows) must be answered, as a fork."""
+        root, cert = keypair(f"root-{TENANT}")[0], key_cert("e7")
+        header, tokens = _genesis([_leaf(n, n) for n in range(2)])
+        signed, request = gate.attach_signature(header, det_sign("e7", header)), gate.encode_decide_request(payment_request(0))
+        untenanted = _blob(D[3]) + _list([_blob(D[4])]) + _list([_blob(D[6])])
+        frame = (root + _list([signer.framed(cert)] * 64) + _list([signer.framed(signed) * 2] * 500) + signer.framed(signed)
+                 + NOW.to_bytes(8, "big") + _list([_blob(TENANT.encode()) + untenanted]) + bytes([0, 1]) + member(0)
+                 + signer.framed(request) + signer.framed(tokens[0]))
+        self.assertGreater(len(frame), 2_900_000)
+        self.assertEqual(signer.gate_verify(5, frame), "GATE_VERIFY=HOLD forked")
+
+    def test_the_resident_verifier_equals_the_one_shot_exe_on_valid_and_mutated_frames(self) -> None:
+        """Every frame the mode tests send, and each with a flipped first, middle and last byte, a dropped last byte, an extra
+        byte and every other mode byte: the resident worker and a fresh one-shot exe give the same line, or both refuse."""
+        seen: dict[tuple[int, bytes], None] = {}
+        real = signer.gate_verify
+
+        def record(mode: int, frame: bytes) -> str:
+            seen[(mode, frame)] = None
+            return real(mode, frame)
+        cases = self.__class__
+        with mock.patch.object(signer, "gate_verify", record):
+            for name in ("test_signature_leaves_only_when_gate_verify_accepts", "test_a_self_certified_root_is_never_installed",
+                         "test_index_prints_the_decoded_checkpoint", "test_store_and_release_take_a_recorded_fork_as_a_pair_and_stop_its_shard", "test_store_stores_a_batch_and_names_the_checkpoint_a_second_one_forks",
+                         "test_release_accepts_a_payer_state_and_holds_with_the_first_failure", "test_a_signature_for_one_purpose_is_refused_for_every_other"):
+                getattr(cases(name), name)()
+        frames = [(m, f) for m, f in seen if 0 < len(f) < 40_000]
+        self.assertGreaterEqual(len(frames), 20)
+        root, cert = keypair(f"root-{TENANT}")[0], key_cert("e7")
+        forged = _flip(cert, len(cert) - 1)  # INSTALL (8) answers REFUSED, CERT-INDEX (9) still indexes it
+        frames += [(8, root + _list([]) + signer.framed(cert)), (8, root + _list([signer.framed(cert)]) + signer.framed(cert)),
+                   (8, root + _list([]) + signer.framed(forged)), (9, signer.framed(cert)), (9, signer.framed(forged))]
+        for mode, frame in frames:
+            variants = [(mode, frame)] + [(mode, _flip(frame, at, 0x01)) for at in (0, len(frame) // 2, len(frame) - 1)]
+            variants += [(mode, frame[:-1]), (mode, frame + b"\x00")] + [(m, frame) for m in (1, 2, 3, 4, 5, 8, 9) if m != mode]
+            for m, f in variants:
+                done = signer._exec(signer.VERIFY, signer.VERIFY_PIN, (), bytes([m]) + f)
+                shot = done.stdout.decode("ascii").strip() if done.returncode in (0, 1) else None
+                with signer._SERVE:
+                    try:  # a refusal is a dead worker (no exit byte) or an exit byte outside 0/1; an answer carries the one-shot's exit
+                        out = signer._resident(signer._VSERVER, signer.VERIFY, signer.VERIFY_PIN, ("serve",), bytes([m]) + f, 65536, 512 << 20)
+                    except signer.GateSignerError:
+                        out = None
+                    else:
+                        if out[0] not in (0, 1):
+                            signer._close_server(signer._VSERVER)
+                resident = out[1:].decode("ascii").strip() if out and out[0] in (0, 1) else None
+                self.assertEqual((out[0] if resident is not None else None, resident),
+                                 (done.returncode if shot is not None else None, shot), (m, len(f)))
+                if shot is None:
+                    self.assertEqual(done.returncode, 2)
 
 
 class AxiomRecordTests(unittest.TestCase):
@@ -1089,15 +1336,16 @@ class AxiomRecordTests(unittest.TestCase):
                   if (m := re.match(r"'BlindLedger\.Gate\.(\S+)' depends", line))}
         for name in ("storedOf_wf", "forks_comm", "chain_no_fork", "follows_twice_forks", "publishOk_sound",
                      "publish_payer_local", "verifyToken_slice", "storeCheckpoint_slice", "firstFailure_none",
-                     "anchored_binding", "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat",
-                     "Approval.decodeMoves_canonical", "Approval.decodeMoves_lineDigest", "Approval.decodeMoves_ascending", "Approval.decodeApproval_canonical"):
+                     "anchored_binding_witness", "realCrypto_cert_not_root", "accepts_cert_not_root", "checkpoint_header_ne_keycert_body", "pinInput_lines", "decideAnchored_some", "load_ok", "step_ok", "natBE_beNat",
+                     "verifyToken_transfer", "blocked_shard", "forks_candidate", "storeCheckpoint_candidates",
+                     "storeCheckpoint_pinned", "release_after_fork"):
             with self.subTest(name):
                 self.assertIn(name, record)
                 self.assertNotIn("sorryAx", record[name])
         # The grant-tenant theorems keep their statement pins, so weakening a theorem must change the pin in the same commit
         check = (gate_dir / "AxiomCheck.lean").read_text("utf-8")
         for name in ("verifyToken_grant_tenant", "verifyToken_foreign_grant", "releaseBatch_grant_tenant",
-                     "publishOkTree_sound", "publishOkTree_complete", "publishOkTree_eq", "publishOkTree_no_downgrade"):
+                     "publishOkTree_sound", "publishOkTree_complete", "publishOkTree_eq"):
             with self.subTest(name):
                 self.assertRegex(check, re.compile(rf"^example : [^\n]*\n(?: [^\n]*\n)*? [^\n]*:=\n  @BlindLedger\.Gate\.{name}$", re.M))
         # The pinned verifier decides no rule: only the anchor, which runs in the decide runtime, imports them
