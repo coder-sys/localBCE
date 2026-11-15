@@ -13,8 +13,9 @@ import BlindLedger.Gate.Flat.Bin
     bypasses from the signed bypass requests.  A bad header, digest, length or record refuses the whole frame.
 
     Engine to host: one answer per request, a fixed header (magic `RRDA`, version, status, shard, batch, record count,
-    the request's digest) and, when decided, one 16-byte record per decided line (position among the decided lines,
-    outcome, rule, reasons as a bitmask, the counterpart's store position), the chain head and the state root after the
+    the request's digest; answer header version 3) and, when decided, one 20-byte record per decided line (position
+    among the decided lines, outcome, rule, reasons as a u64 bitmask with reason `r` at bit `r.idx`, the counterpart's
+    store position), the chain head and the state root after the
     batch, and the extension (grant refusal, bypass notes, token leaves, the rows appended).
     Everything today's text answer carried that the record does not is recomputed by `join` from the record, the frame
     and the store state before the batch; `Ans.text` is the human text, produced on demand.
@@ -119,6 +120,10 @@ structure Hdr where
 def magicReq : Bytes := "RRDQ".toUTF8.toList
 def magicAns : Bytes := "RRDA".toUTF8.toList
 def version : Nat := 1
+/-- The answer header's version: 3, with u64 reason fields numbered by `Reason.idx` and the leaf-only codes at bits 62
+    and 63.  Kept apart from the request's `version` only until the request side of FRAME/v3 lands; then the two unify
+    into one `version := 3` for request and answer (TRUNK_STEP2_FRAME_DESIGN.md decision 7). -/
+def ansVersion : Nat := 3
 def hdrBytes : Nat := 82
 def ansHdrBytes : Nat := 87
 
@@ -405,7 +410,7 @@ structure Rec where
   /-- 0 ALLOW, 1 HOLD, 2 HUMAN_REVIEW. -/
   outcome : Nat
   rule : Rule
-  /-- Bit `i` is `reasons[i]`. -/
+  /-- Bit `r.idx` is reason `r`. -/
   reasons : Nat
   /-- The store position (chunk, row) of the counterparts' key entry. -/
   ref : Option (Nat × Nat)
@@ -417,9 +422,15 @@ def outCode : Outcome → Nat
 def outOf : Nat → Option Outcome
   | 0 => some .ALLOW | 1 => some .HOLD | 2 => some .HUMAN_REVIEW | _ => none
 
-def maskOf (rs : List Reason) : Nat := ((reasons.zipIdx.filter fun (r, _) => rs.contains r).map fun (_, i) => 2 ^ i).sum
+/-- A reason list's mask: bit `r.idx` for each listed reason. -/
+def maskOf (rs : List Reason) : Nat := reasons.foldl (fun m r => if rs.contains r then m ||| 2 ^ r.idx else m) 0
 
-def unmask (m : Nat) : List Reason := (reasons.zipIdx.filter fun (_, i) => m.testBit i).map (·.1)
+/-- The reasons a mask names, in `reasons` (name) order. -/
+def unmask (m : Nat) : List Reason := reasons.filter fun r => m.testBit r.idx
+
+/-- A leaf's own codes, never a rule reason: UNENCODABLE_PAYMENT at bit 62 and SCOPE at bit 63 (each emitted alone). -/
+def leafUnencodable : Nat := 2 ^ 62
+def leafScope : Nat := 2 ^ 63
 
 /-- The rule of a decision: `releasedLines` and `unresolvedLines` row for row.  `bypassed` is a line released beyond the
     rules: by an admitted bypass, or at HOLD authority (`limitedPay`); the payment's leaf names which (its bypass id). -/
@@ -486,13 +497,15 @@ structure Leaf where
   input : ByteArray
   deriving DecidableEq
 
-/-- Outcome and authority are codes 0-2; the reasons are the 24 rule reasons and the leaf's own two bits. -/
-def Leaf.ok (l : Leaf) : Bool := l.outcome ≤ 2 && l.reasons < 2 ^ 26 && l.authority ≤ 2
+/-- Outcome and authority are codes 0-2; the reasons are a u64 whose low 62 bits are rule reasons (bit `r.idx`) and
+    whose bits 62 and 63 are the leaf's own codes (`leafUnencodable`, `leafScope`). -/
+def Leaf.ok (l : Leaf) : Bool :=
+  l.outcome ≤ 2 && l.reasons < 2 ^ 64 && l.reasons % 2 ^ 62 < 2 ^ Rules.reasons.length && l.authority ≤ 2
 
 /-- A zero bypass id is one byte 0; any other is a byte 1 and the id. -/
 def encLeaf (l : Leaf) : Option Bytes := do
   guard (l.ok && l.bypass.size = 64 && l.input.size = 64)
-  let h ← leAll [1, 4, 1] [l.outcome, l.reasons, l.authority]
+  let h ← leAll [1, 8, 1] [l.outcome, l.reasons, l.authority]
   let bp := if l.bypass.toList == zeroDigest then [0] else 1 :: l.bypass.toList
   pure (h ++ bp ++ l.input.toList)
 
@@ -501,7 +514,7 @@ def blob2Rec (bs : Bytes) : Option (Bytes × Bytes) := do
   takeN n r
 
 def decLeaf (bs : Bytes) : Option (Leaf × Bytes) := do
-  let ([o, m, a, f], r) ← (nums [1, 4, 1, 1] bs).toOption | none
+  let ([o, m, a, f], r) ← (nums [1, 8, 1, 1] bs).toOption | none
   let (b, r) ← if f == 0 then pure (zeroDigest, r)
     else if f == 1 then do
       let (b, r) ← takeN 64 r
@@ -578,20 +591,20 @@ def Rec.ok (r : Rec) : Bool :=
 def encRec (r : Rec) : Option Bytes := do
   guard r.ok
   let (c, w) := r.ref.getD (noChunk, noRow)
-  leAll [3, 1, 1, 4, 4, 3] [r.index, r.outcome, rules.idxOf r.rule, r.reasons, c, w]
+  leAll [3, 1, 1, 8, 4, 3] [r.index, r.outcome, rules.idxOf r.rule, r.reasons, c, w]
 
 def encodeAns (a : AnsFrame) : Option Bytes := do
   guard (a.digest.size = 64)
   guard (if a.word == .OK then a.head.size = 64 && a.root.size = 64 &&
       (a.recs.map (·.index)).mergeSort (fun i j => decide (i ≤ j)) == List.range a.recs.length
     else a.recs.isEmpty && a.head.isEmpty && a.root.isEmpty && a.ext == ⟨.empty, .empty, .empty, [], [], []⟩)
-  let h ← leAll [2, 1, 4, 8, 4] [version, a.word.code, a.shard, a.batch, a.recs.length]
+  let h ← leAll [2, 1, 4, 8, 4] [ansVersion, a.word.code, a.shard, a.batch, a.recs.length]
   let rs ← a.recs.mapM encRec
   let x ← if a.word == .OK then encExt a.ext else pure []
   pure (magicAns ++ h ++ a.digest.toList ++ rs.flatten ++ a.head.toList ++ a.root.toList ++ x)
 
 def decRec (bs : Bytes) : Option (Rec × Bytes) := do
-  let ([i, o, u, m, c, w], r) ← (nums [3, 1, 1, 4, 4, 3] bs).toOption | none
+  let ([i, o, u, m, c, w], r) ← (nums [3, 1, 1, 8, 4, 3] bs).toOption | none
   let u ← rules[u]?
   let ref : Option (Nat × Nat) ← if c == noChunk && w == noRow then some none else if c == noChunk || w == noRow then none else some (some (c, w))
   let x : Rec := ⟨i, o, u, m, ref⟩
@@ -603,7 +616,7 @@ def decodeAns (bs : Bytes) : Option AnsFrame := do
   let (h, r) ← takeN ansHdrBytes bs
   guard (h.take 4 == magicAns)
   let ([v, st, k, b, n], dg) ← (nums [2, 1, 4, 8, 4] (h.drop 4)).toOption | none
-  guard (v == version)
+  guard (v == ansVersion)
   let w ← words[st]?
   if w == .OK then
     let (recs, r) ← manyO decRec n r
@@ -1320,8 +1333,8 @@ private theorem encRec_decRec (bs : Bytes) (x : Rec) (r : Bytes) (h : decRec bs 
         unfold encRec; rw [guard_pos hok]
         simpa [hi] using hb
 
-private theorem nums_leaf {o m a : Nat} {hd : Bytes} (h : leAll [1, 4, 1] [o, m, a] = some hd) (y : UInt8) (t : Bytes) :
-    nums [1, 4, 1, 1] (hd ++ y :: t) = .ok ([o, m, a, y.toNat], t) := by
+private theorem nums_leaf {o m a : Nat} {hd : Bytes} (h : leAll [1, 8, 1] [o, m, a] = some hd) (y : UInt8) (t : Bytes) :
+    nums [1, 8, 1, 1] (hd ++ y :: t) = .ok ([o, m, a, y.toNat], t) := by
   have := nums_leAll [1] (y :: t) _ _ _ h
   rw [nums_byte] at this
   simpa [Except.map] using this
@@ -1359,7 +1372,7 @@ private theorem encLeaf_decLeaf (bs : Bytes) (l : Leaf) (r : Bytes) (h : decLeaf
     obtain ⟨x3, y3, h3, hy3, rfl⟩ := leAll_cons_some hy2
     obtain ⟨x4, y4, h4, hy4, rfl⟩ := leAll_cons_some hy3
     rw [leAll_nil] at hy4; cases hy4
-    have hhd : leAll [1, 4, 1] [o, m, a] = some (x1 ++ (x2 ++ (x3 ++ []))) := by
+    have hhd : leAll [1, 8, 1] [o, m, a] = some (x1 ++ (x2 ++ (x3 ++ []))) := by
       simp [leAll_cons, h1, h2, h3, leAll_nil]
     have hzl : zeroDigest.length = 64 := by simp [zeroDigest, digestBytes]
     split at h
@@ -2343,7 +2356,7 @@ theorem encodeAns_decodeAns (a : AnsFrame) (bs : Bytes) (h : decodeAns bs = some
     replace h := obind_some h; obtain ⟨w, hw, h⟩ := h
     have hc := code_of hw
     subst hc
-    obtain rfl : v = version := by simpa using hv
+    obtain rfl : v = ansVersion := by simpa using hv
     have hbl : hb.length = 19 := leAll_length _ _ _ hhb
     have hsplit : hh = magicAns ++ hb ++ dg := by
       rw [← List.take_append_drop 4 hh, hdrop, (by simpa using hm : hh.take 4 = magicAns)]; simp
@@ -2706,54 +2719,41 @@ theorem records_perm :
 
 /-! ### Reasons are canonical -/
 
-/-- The sum of the bits of the selected entries. -/
-def selM {α : Type} (P : α → Bool) : List α → Nat
-  | [] => 0
-  | a :: L => (if P a then 1 else 0) + 2 * selM P L
+theorem reason_mem (r : Reason) : r ∈ reasons := by cases r <;> decide
 
-theorem mask_sum {α : Type} (P : α → Bool) : ∀ (L : List α) (n : Nat),
-    (((L.zipIdx n).filter fun (a, _) => P a).map fun (_, i) => 2 ^ i).sum = 2 ^ n * selM P L
-  | [], n => by simp [selM]
-  | a :: L, n => by
-    have ih := mask_sum P L (n + 1)
-    simp only [List.zipIdx_cons, List.filter_cons, selM]
-    cases hp : P a
-    · simp only [Bool.false_eq_true, ↓reduceIte, ih, Nat.pow_succ]
-      simp [Nat.mul_assoc, Nat.mul_comm 2]
-    · simp only [↓reduceIte, List.map_cons, List.sum_cons, ih, Nat.pow_succ]
-      simp [Nat.mul_add, Nat.mul_assoc, Nat.mul_comm 2]
+/-- Bit `j` of a partial `maskOf` fold. -/
+theorem maskOf_fold_testBit (rs : List Reason) (j : Nat) : ∀ (L : List Reason) (m : Nat),
+    (L.foldl (fun m r => if rs.contains r then m ||| 2 ^ r.idx else m) m).testBit j =
+      (m.testBit j || L.any fun r => rs.contains r && decide (r.idx = j))
+  | [], m => by simp
+  | r :: L, m => by
+    rw [List.foldl_cons, maskOf_fold_testBit rs j L]
+    cases hc : rs.contains r
+    · simp only [Bool.false_eq_true, ↓reduceIte, List.any_cons, hc, Bool.false_and, Bool.false_or]
+    · simp only [↓reduceIte, Nat.testBit_or, Nat.testBit_two_pow, List.any_cons, hc, Bool.true_and, Bool.or_assoc]
 
-theorem unmask_sel {α : Type} (P : α → Bool) : ∀ (L : List α) (n : Nat),
-    ((L.zipIdx n).filter fun (_, i) => (selM P L).testBit (i - n)).map (·.1) = L.filter P
-  | [], n => by simp
-  | a :: L, n => by
-    have ih := unmask_sel P L (n + 1)
-    have hcongr : ((L.zipIdx (n + 1)).filter fun (_, i) => (selM P (a :: L)).testBit (i - n)) =
-        ((L.zipIdx (n + 1)).filter fun (_, i) => (selM P L).testBit (i - (n + 1))) := by
-      refine List.filter_congr fun x hx => ?_
-      obtain ⟨hn, -⟩ := List.mem_zipIdx hx
-      obtain ⟨i, hi⟩ : ∃ i, x.2 - n = i + 1 := ⟨x.2 - n - 1, by omega⟩
-      have : x.2 - (n + 1) = i := by omega
-      simp only [hi, this, selM, Nat.testBit_succ]
-      have : ((if P a then 1 else 0) + 2 * selM P L) / 2 = selM P L := by split <;> omega
-      rw [this]
-    simp only [List.zipIdx_cons, List.filter_cons]
-    rw [hcongr]
-    have h0 : (selM P (a :: L)).testBit (n - n) = P a := by
-      simp only [Nat.sub_self, selM, Nat.testBit_zero]
-      cases P a <;> simp <;> omega
-    rw [h0]
-    cases hp : P a <;> simp [hp, ih]
+theorem maskOf_testBit (rs : List Reason) (j : Nat) :
+    (maskOf rs).testBit j = reasons.any fun r => rs.contains r && decide (r.idx = j) := by
+  unfold maskOf
+  rw [maskOf_fold_testBit]
+  simp
+
+/-- The mask's bit `r.idx` is set exactly when `r` is listed (bits are distinct: `Reason.idx_inj`). -/
+theorem maskOf_testBit_idx (rs : List Reason) (r : Reason) : (maskOf rs).testBit r.idx = rs.contains r := by
+  rw [maskOf_testBit, Bool.eq_iff_iff, List.any_eq_true]
+  constructor
+  · rintro ⟨r', -, h⟩
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    rw [← Reason.idx_inj h.2]
+    exact h.1
+  · intro h
+    exact ⟨r, reason_mem r, by simp only [h, Bool.true_and, decide_eq_true_eq]⟩
 
 theorem unmask_maskOf {p : Reason → Bool} : unmask (maskOf (reasons.filter p)) = reasons.filter p := by
-  unfold unmask maskOf
-  rw [mask_sum (fun r => (reasons.filter p).contains r) reasons 0]
-  simp only [Nat.pow_zero, Nat.one_mul]
-  have := unmask_sel (fun r => (reasons.filter p).contains r) reasons 0
-  simp only [Nat.sub_zero] at this
-  rw [this]
+  unfold unmask
   exact List.filter_congr fun r hr => by
-    simp [List.contains_iff_mem, hr]
+    rw [maskOf_testBit_idx]
+    simp [hr]
 theorem decideAll_canon (x : Ix) : ∀ (S : Std.HashSet Key) (ls : List Line), ∀ d ∈ x.decideAll S ls,
     (∃ p : Reason → Bool, d.reasons = reasons.filter p) ∧ d.counterparts = x.counterparts d.line
   | _, [], d, hd => by simp [Ix.decideAll] at hd
@@ -2959,20 +2959,18 @@ theorem mapM_isSome {α β : Type} {f : α → Option β} : ∀ (xs : List α), 
     obtain ⟨bs, hbs⟩ := Option.isSome_iff_exists.mp (mapM_isSome xs fun y hy => h y (List.mem_cons_of_mem _ hy))
     simp [List.mapM_cons, ha, hbs]
 
-theorem selM_lt {α : Type} (P : α → Bool) : ∀ L : List α, selM P L < 2 ^ L.length
-  | [] => by simp [selM]
-  | a :: L => by
-    have ih := selM_lt P L
-    have h2 : (if P a then 1 else 0) ≤ 1 := by split <;> omega
-    show (if P a then 1 else 0) + 2 * selM P L < 2 ^ (L.length + 1)
-    rw [Nat.pow_succ]
-    omega
+theorem maskOf_fold_lt (rs : List Reason) : ∀ (L : List Reason) (m : Nat), m < 2 ^ reasons.length →
+    L.foldl (fun m r => if rs.contains r then m ||| 2 ^ r.idx else m) m < 2 ^ reasons.length
+  | [], _, h => h
+  | r :: L, m, h => by
+    rw [List.foldl_cons]
+    refine maskOf_fold_lt rs L _ ?_
+    split
+    · exact Nat.or_lt_two_pow h (Nat.pow_lt_pow_right (by decide) (BlindLedger.Gate.Rules.idx_len r))
+    · exact h
 
-theorem maskOf_lt (rs : List Reason) : maskOf rs < 2 ^ reasons.length := by
-  unfold maskOf
-  rw [mask_sum (fun r => rs.contains r) reasons 0]
-  simp only [Nat.pow_zero, Nat.one_mul]
-  exact selM_lt _ _
+theorem maskOf_lt (rs : List Reason) : maskOf rs < 2 ^ reasons.length :=
+  maskOf_fold_lt rs reasons 0 (Nat.two_pow_pos _)
 
 theorem maskOf_zero_iff {p : Reason → Bool} : maskOf (reasons.filter p) = 0 ↔ reasons.filter p = [] := by
   constructor
@@ -3108,7 +3106,7 @@ theorem encRec_some (r : Rec) (h : r.ok = true) : (encRec r).isSome := by
   have e3 : (256 : Nat) ^ 3 = 16777216 := by decide
   have e4 : (256 : Nat) ^ 4 = 4294967296 := by decide
   have e24 : (2 : Nat) ^ 24 = 16777216 := by decide
-  have hL : (leAll [3, 1, 1, 4, 4, 3] [i, o, rules.idxOf ru, m, (ref.getD (noChunk, noRow)).1,
+  have hL : (leAll [3, 1, 1, 8, 4, 3] [i, o, rules.idxOf ru, m, (ref.getD (noChunk, noRow)).1,
       (ref.getD (noChunk, noRow)).2]).isSome := by
     refine leAll_isSome _ _ rfl ?_
     intro p hp
@@ -3120,10 +3118,12 @@ theorem encRec_some (r : Rec) (h : r.ok = true) : (encRec r).isSome := by
       omega
     · show rules.idxOf ru < 256 ^ 1
       omega
-    · show m < 256 ^ 4
-      have e5 : (2 : Nat) ^ Rules.reasons.length = 16777216 := by decide
-      rw [e5] at hm
-      omega
+    · show m < 256 ^ 8
+      have h64 : 2 ^ Rules.reasons.length ≤ 2 ^ 64 :=
+        Nat.pow_le_pow_right (by decide) (Nat.le_trans BlindLedger.Gate.Rules.reasons_len_le (by decide))
+      have e8 : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
+      rw [e8]
+      exact Nat.lt_of_lt_of_le hm h64
     · exact hc
     · exact hw
   unfold encRec
@@ -3188,12 +3188,12 @@ theorem answer_encodes (hn : dv.lines.length < 2 ^ 24)
   have e24 : (2 : Nat) ^ 24 = 16777216 := by decide
   have e32 : (2 : Nat) ^ 32 = 4294967296 := by decide
   have e64 : (2 : Nat) ^ 64 = 18446744073709551616 := by decide
-  have hh : (leAll [2, 1, 4, 8, 4] [version, Word.OK.code, q.shard, q.batch, (records H loc s q dv).length]).isSome := by
+  have hh : (leAll [2, 1, 4, 8, 4] [ansVersion, Word.OK.code, q.shard, q.batch, (records H loc s q dv).length]).isSome := by
     refine leAll_isSome _ _ rfl ?_
     intro p hp
     simp only [List.zip_cons_cons, List.zip_nil_left, List.mem_cons, List.not_mem_nil, or_false] at hp
     rcases hp with rfl | rfl | rfl | rfl | rfl
-    · show version < 256 ^ 2
+    · show ansVersion < 256 ^ 2
       rw [e2]; decide
     · show Word.OK.code < 256 ^ 1
       rw [e1]; decide
@@ -3244,13 +3244,13 @@ private theorem refusal_word {w : Word} (hw : w ≠ .OK) {bs body : Bytes} {hd :
   obtain ⟨hs, hb, hg⟩ := decodeHdr_fits h
   have hc : w.code < 256 ^ 1 := by cases w <;> decide
   have hm : (decodeHdr bs).toOption.map (·.1) = some hd := by rw [h]; rfl
-  have hL : leAll [2, 1, 4, 8, 4] [version, w.code, hd.shard, hd.batch, 0] =
-      some (((List.range 2).map fun i => (version / 256 ^ i % 256).toUInt8) ++
+  have hL : leAll [2, 1, 4, 8, 4] [ansVersion, w.code, hd.shard, hd.batch, 0] =
+      some (((List.range 2).map fun i => (ansVersion / 256 ^ i % 256).toUInt8) ++
         (((List.range 1).map fun i => (w.code / 256 ^ i % 256).toUInt8) ++
         (((List.range 4).map fun i => (hd.shard / 256 ^ i % 256).toUInt8) ++
         (((List.range 8).map fun i => (hd.batch / 256 ^ i % 256).toUInt8) ++
         (((List.range 4).map fun i => (0 / 256 ^ i % 256).toUInt8) ++ []))))) := by
-    simp only [leAll_cons, le_some (w := 2) (n := version) (by decide), le_some hc, le_some hs, le_some hb,
+    simp only [leAll_cons, le_some (w := 2) (n := ansVersion) (by decide), le_some hc, le_some hs, le_some hb,
       le_some (w := 4) (n := 0) (by decide), leAll_nil, Option.bind_some, Option.map_some]
   obtain ⟨x, hx⟩ : ∃ x, encodeAns ⟨w, hd.shard, hd.batch, hd.digest.toByteArray, [], .empty, .empty,
       ⟨.empty, .empty, .empty, [], [], []⟩⟩ = some x := by

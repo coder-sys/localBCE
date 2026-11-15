@@ -73,8 +73,8 @@ def ansAdds (a : ByteArray) : Option ByteArray := Id.run do
   p := p + 4
   -- a leaf: outcome, reasons and authority, the bypass flag (1: its id follows), the input
   for _ in [0:nl] do
-    if a.size < p + 7 || a.get! (p + 6) > 1 then return none
-    p := p + 7 + (if a.get! (p + 6) == 1 then 64 else 0) + 64
+    if a.size < p + 11 || a.get! (p + 10) > 1 then return none
+    p := p + 11 + (if a.get! (p + 10) == 1 then 64 else 0) + 64
   if a.size < p + 4 then return none
   let na := getN a p 4
   p := p + 4

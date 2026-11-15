@@ -135,7 +135,7 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
   let locOf (cp : Nat) : Option (Nat × Nat) :=
     if cp == 0 then none else if cp % 2 == 1 then ((relSeq[cp / 2]?).map (0, ·)) else ((unrSeq[cp / 2 - 1]?).map (1, ·))
   let (recs, nr) := Id.run do
-    let mut r := ByteArray.emptyWithCapacity (16 * out.ds.size + 16)
+    let mut r := ByteArray.emptyWithCapacity (20 * out.ds.size + 20)
     for d in out.ds do
       let rule : Rule := if fl[lay.lines[d.line]!.pay]! &&& 8 != 0 then .bypassed else if inRel[d.line]! then .released
         else if inUnr[d.line]! then .unresolved else .decided

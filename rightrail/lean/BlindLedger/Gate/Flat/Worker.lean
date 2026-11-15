@@ -172,12 +172,12 @@ def wordOf (why : String) : Word :=
   (Frame.words.find? fun w => Run.name w == why).getD .IO
 
 /-- Each reason's name and its bit in `Frame.maskOf` (names are distinct: `Run.name` sorts them strictly), built once. -/
-def reasonBits : List (String × Nat) := Rules.reasons.zipIdx.map fun (r, i) => (Run.name r, 2 ^ i)
+def reasonBits : List (String × Nat) := Rules.reasons.map fun r => (Run.name r, 2 ^ r.idx)
 
-/-- The reason mask of a leaf's reason text (`Run.leafReasons`): bits 24 and 25 are UNENCODABLE_PAYMENT and SCOPE. -/
+/-- The reason mask of a leaf's reason text (`Run.leafReasons`): bits 62 and 63 are UNENCODABLE_PAYMENT and SCOPE. -/
 def leafMask (s : String) : Nat :=
   (s.splitOn ",").foldl (fun m n =>
-    if n == "UNENCODABLE_PAYMENT" then m ||| 2 ^ 24 else if n == "SCOPE" then m ||| 2 ^ 25
+    if n == "UNENCODABLE_PAYMENT" then m ||| Frame.leafUnencodable else if n == "SCOPE" then m ||| Frame.leafScope
     else m ||| (reasonBits.lookup n).getD 0) 0
 
 /-- A request's leaf: its pay line `m` and its input `rq` (`INPUT/v6`). -/

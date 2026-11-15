@@ -3,7 +3,7 @@
 The history is the shard's store on disk (conformance/FLAT_V1.md), held open by ``gate_engine DIR SHARD``.  The frame is
 conformance/FRAME_V1.md's binary request: the tenant's reference feeds (read from the header lines), the shard's authority and the
 signed DECIDE-REQUEST/v1 bytes of each payment, unchanged.  The engine reads the lines from those bytes; the host never
-re-encodes product data.  The answer is binary too: a 16-byte record per line, the head and state root after the batch, the
+re-encodes product data.  The answer is binary too (header version 3): a 20-byte record per line, the head and state root after the batch, the
 grant id, the shard's authority record after the batch, each payment's outcome, reasons, authority, bypass id and
 INPUT/v6, and the added rows.  The frame carries the tenant's key-set pin and its grant serial and key-set epoch floors
 (``TenantAuthority``); an engine store begun under another pin HOLDs every row (``flat_pin``), and so does an answer whose
@@ -427,7 +427,7 @@ class Pay(NamedTuple):
 
 
 class Rec(NamedTuple):
-    """One line's 16-byte record: its position among the covered requests' lines, the outcome, the rule that decided it (0 decided,
+    """One line's 20-byte record: its position among the covered requests' lines, the outcome, the rule that decided it (0 decided,
     1 released, 2 unresolved, 3 wide, 4 sibling, 5 bypassed), its reason names and the counterpart's store position."""
     index: int
     outcome: str
@@ -478,8 +478,21 @@ REASONS = ("ALREADY_DECIDED", "CAP_MEMBER_MONTH_DUPLICATE", "COLLIDES_WITH_UNRES
            "FFS_DUPLICATE_LINE", "FFS_DUPLICATE_UNVERIFIED", "FFS_NEAR_DUPLICATE", "MEMBER_DECEASED", "MEMBER_DECEASED_UNVERIFIED",
            "MEMBER_NOT_ENROLLED", "MEMBER_NOT_ENROLLED_UNVERIFIED", "POSTING_CAP", "PROVIDER_DECEASED", "PROVIDER_DECEASED_UNVERIFIED",
            "PROVIDER_EXCLUDED", "PROVIDER_EXCLUDED_UNVERIFIED", "SERVICE_DATE_FUTURE", "SERVICE_DATE_INVALID", "STALE_DMF",
-           "STALE_ENROLLMENT", "STALE_EXCLUSION", "STALE_PROVIDER_DEATH", "STALE_RELEASED", "STALE_UNRESOLVED",
-           "UNENCODABLE_PAYMENT", "SCOPE")  # bits 24 and 25 are the leaf's own
+           "STALE_ENROLLMENT", "STALE_EXCLUSION", "STALE_PROVIDER_DEATH", "STALE_RELEASED", "STALE_UNRESOLVED")
+# The rule reasons' answer bits: Rules/Spec.lean ``Reason.idx``, written out, never derived from list position, so a new
+# reason that sorts into the middle of REASONS cannot shift an existing bit (test_gate_answer_v3 checks it against Lean).
+REASON_IDX = {"ALREADY_DECIDED": 0, "CAP_MEMBER_MONTH_DUPLICATE": 1, "COLLIDES_WITH_UNRESOLVED_NEAR": 2,
+              "DUPLICATE_OF_UNRESOLVED": 3, "FFS_DUPLICATE_LINE": 4, "FFS_DUPLICATE_UNVERIFIED": 5, "FFS_NEAR_DUPLICATE": 6,
+              "MEMBER_DECEASED": 7, "MEMBER_DECEASED_UNVERIFIED": 8, "MEMBER_NOT_ENROLLED": 9,
+              "MEMBER_NOT_ENROLLED_UNVERIFIED": 10, "POSTING_CAP": 11, "PROVIDER_DECEASED": 12,
+              "PROVIDER_DECEASED_UNVERIFIED": 13, "PROVIDER_EXCLUDED": 14, "PROVIDER_EXCLUDED_UNVERIFIED": 15,
+              "SERVICE_DATE_FUTURE": 16, "SERVICE_DATE_INVALID": 17, "STALE_DMF": 18, "STALE_ENROLLMENT": 19,
+              "STALE_EXCLUSION": 20, "STALE_PROVIDER_DEATH": 21, "STALE_RELEASED": 22, "STALE_UNRESOLVED": 23}
+assert sorted(REASON_IDX) == list(REASONS) and sorted(REASON_IDX.values()) == list(range(len(REASONS)))
+LEAF_ONLY = {62: "UNENCODABLE_PAYMENT", 63: "SCOPE"}  # a leaf's own codes, never a rule reason's bit
+RULE_MASK = (1 << len(REASONS)) - 1
+ANSWER_VERSION = 3  # answer header version (docs/integration/TRUNK_STEP2_FRAME_DESIGN.md 2.6, FRAME_V3 page to come);
+# the request header stays version 1 until the request side lands
 AUTHORITIES = ("OBSERVE", "HOLD", "TRANSFER")
 FEED_WIDTHS = {"dmf": (33, 4), "pdeath": (21, 4), "excl": (21, 4, 4), "span": (33, 21, 4, 4)}  # conformance/FRAME_V1.md section 2
 
@@ -539,8 +552,13 @@ class _Reader:
         return self.take(self.num(w))
 
 
-def _names(mask: int) -> tuple[str, ...]:
-    return tuple(n for i, n in enumerate(REASONS) if mask >> i & 1)
+def _names(mask: int, leaf: bool = False) -> tuple[str, ...]:
+    """The reason names of an answer mask, bit ``Reason.idx`` per rule reason (bits 62 and 63 the leaf's own codes when
+    ``leaf``), sorted by name bytes as a token's reason list is."""
+    names = [n for n, i in REASON_IDX.items() if mask >> i & 1]
+    if leaf:
+        names += [n for i, n in LEAF_ONLY.items() if mask >> i & 1]
+    return tuple(sorted(names, key=lambda n: n.encode("ascii")))
 
 
 def _requests(frame: bytes) -> tuple[bytes, list[bytes], bytes, list[bytes]]:
@@ -619,7 +637,7 @@ def _pay(body: bytes, context: bytes, leaf: tuple[int, int, int, bytes, bytes], 
         raise GateDecideError("rules_refused")
     if bypass != gate.ZERO_DIGEST and byps.get(bypass) != (program.encode(), payment.encode()):
         raise GateDecideError("rules_refused")
-    return Pay(OUTCOMES[outcome], _names(mask), tenant, program, flow, payment, member, payee, cents, period, gate.lines_root(lines),
+    return Pay(OUTCOMES[outcome], _names(mask, leaf=True), tenant, program, flow, payment, member, payee, cents, period, gate.lines_root(lines),
                inp, AUTHORITIES[authority], grant, bypass)
 
 
@@ -629,7 +647,7 @@ def _answer(data: bytes, frame: bytes) -> tuple[str | None, list[Rec], bytes, by
     payment's token fields are its request's, with the engine's leaf: outcome, reasons, authority, bypass id and the input,
     which must be the host's own."""
     r = _Reader(data)
-    if r.take(4) != b"RRDA" or r.num(2) != 1:
+    if r.take(4) != b"RRDA" or r.num(2) != ANSWER_VERSION:
         raise GateDecideError("rules_refused")
     status, _, _, count, echo = r.num(1), r.num(4), r.num(8), r.num(4), r.take(64)
     if echo != frame[18:82] or status >= len(WORDS):
@@ -638,8 +656,8 @@ def _answer(data: bytes, frame: bytes) -> tuple[str | None, list[Rec], bytes, by
         return "flat_" + WORDS[status].lower(), [], b"", b"", b"", [], []
     recs = []
     for _ in range(count):
-        i, o, rule, mask, chunk, row = r.num(3), r.num(1), r.num(1), r.num(4), r.num(4), r.num(3)
-        if o > 2 or rule > 5 or mask >> 24:
+        i, o, rule, mask, chunk, row = r.num(3), r.num(1), r.num(1), r.num(8), r.num(4), r.num(3)
+        if o > 2 or rule > 5 or mask & ~RULE_MASK:
             raise GateDecideError("rules_refused")
         recs.append(Rec(i, OUTCOMES[o], rule, _names(mask), chunk, row))
     head, root, hold, grant, auth = r.take(64), r.take(64), r.take(16), r.take(64), r.take(flatchain.AUTH)
@@ -649,9 +667,9 @@ def _answer(data: bytes, frame: bytes) -> tuple[str | None, list[Rec], bytes, by
         r.blob(2)
     leaves = []
     for _ in range(r.num(4)):
-        outcome, mask, authority, flag = r.num(1), r.num(4), r.num(1), r.num(1)
+        outcome, mask, authority, flag = r.num(1), r.num(8), r.num(1), r.num(1)
         bypass = r.take(64) if flag == 1 else gate.ZERO_DIGEST
-        if outcome > 2 or authority > 2 or mask >> 26 or flag > 1 or (flag == 1 and bypass == gate.ZERO_DIGEST):
+        if outcome > 2 or authority > 2 or mask & ~(RULE_MASK | 3 << 62) or flag > 1 or (flag == 1 and bypass == gate.ZERO_DIGEST):
             raise GateDecideError("rules_refused")
         leaves.append((outcome, mask, authority, bypass, r.take(64)))
     adds = [r.blob(2) for _ in range(r.num(4))]

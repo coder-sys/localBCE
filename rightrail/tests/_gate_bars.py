@@ -91,7 +91,7 @@ def verdict_bytes(out: bytes) -> tuple[bytes, bytes]:
     """(the answer's per-line records, its new head): the records do not depend on the store's random key, the head does."""
     if len(out) < 87 or out[6] != 0:
         raise RuntimeError(f"the engine refused the frame (answer {out[:24].hex()})")
-    end = 87 + 16 * int.from_bytes(out[19:23], "little")
+    end = 87 + 20 * int.from_bytes(out[19:23], "little")
     return out[87:end], out[end:end + 64]
 
 

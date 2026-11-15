@@ -154,7 +154,7 @@ def run_case(frames: list[dict], tmp: Path) -> list[tuple[str | None, list[decid
             notes = []
             if why is None:  # the notes follow the records, the head and root, the grant-hold word, the grant id and the authority record
                 r = decide._Reader(answer)
-                r.take(87 + 16 * len(recs) + 128 + 16 + 64 + flatchain.AUTH)
+                r.take(87 + 20 * len(recs) + 128 + 16 + 64 + flatchain.AUTH)
                 notes = [r.blob(2).decode() for _ in range(r.num(4))]
                 head = new
             out.append((why, pays, notes))
@@ -248,7 +248,7 @@ class AnswerBindingTests(unittest.TestCase):
         self.assertEqual([p.outcome for p in pays], ["ALLOW"])
         self.assertNotEqual(pays[0].bypass, NONE)
         r = decide._Reader(answer)
-        r.take(87 + 16 * len(recs) + 128 + 16)
+        r.take(87 + 20 * len(recs) + 128 + 16)
         grant_at = r.at
         r.take(64 + flatchain.AUTH)
         for _ in range(r.num(4)):
@@ -258,7 +258,7 @@ class AnswerBindingTests(unittest.TestCase):
         leaf_at = []
         for _ in range(1):
             leaf_at.append(r.at)
-            r.take(6)
+            r.take(10)
             if r.num(1):
                 r.take(64)
             r.take(64)
@@ -266,7 +266,7 @@ class AnswerBindingTests(unittest.TestCase):
         flip = lambda at: answer[:at] + bytes([answer[at] ^ 1]) + answer[at + 1:]  # noqa: E731
         for name, bad in (
                 ("another grant id", flip(grant_at)),
-                ("an invented bypass id", flip(leaf_at[0] + 7)),
+                ("an invented bypass id", flip(leaf_at[0] + 11)),
                 ("no leaves for a batch with requests", answer[:count_at] + bytes(4) + answer[leaves_end:])):
             with self.subTest(name), self.assertRaises(decide.GateDecideError):
                 decide._answer(bad, data)

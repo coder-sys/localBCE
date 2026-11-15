@@ -61,16 +61,16 @@ def encodeAnsOut (shard batch : Nat) (digest head root hold grant auth : ByteArr
     (locOf : Nat → UInt32 × UInt32) (held : Array Held) (notes : Array ByteArray) (leaves : Array Leaf)
     (lines : Array LineSrc) (rel unr : Array Nat) : ByteArray :=
   let nr := ds.size + held.size
-  let cap := 160 + 16 * nr + notes.foldl (fun n x => n + 2 + x.size) 4 +
-    136 * leaves.size + 4 +
+  let cap := 160 + 20 * nr + notes.foldl (fun n x => n + 2 + x.size) 4 +
+    140 * leaves.size + 4 +
     930 * (rel.size + unr.size)
   let b := putL (ByteArray.emptyWithCapacity cap) magicAns
-  let b := put (put (put (put (put b 2 version) 1 Word.OK.code) 4 shard) 8 batch) 4 nr
+  let b := put (put (put (put (put b 2 ansVersion) 1 Word.OK.code) 4 shard) 8 batch) 4 nr
   let b := b ++ digest
   let b := ds.foldl (fun b d =>
     let (c, r) := if d.cp == 0 then (0xFFFFFFFF, 0xFFFFFF) else locOf d.cp
-    putLE3 (putLE4 (putLE4 ((((putLE3 b d.line).push d.out).push (ruleOf d))) d.mask) c) r.toNat) b
-  let b := held.foldl (fun b h => putLE3 (putLE4 (putLE4 (((putLE3 b h.index).push 1).push h.rule) 0) 0xFFFFFFFF) 0xFFFFFF) b
+    putLE3 (putLE4 (put ((((putLE3 b d.line).push d.out).push (ruleOf d))) 8 d.mask.toNat) c) r.toNat) b
+  let b := held.foldl (fun b h => putLE3 (putLE4 (put (((putLE3 b h.index).push 1).push h.rule) 8 0) 0xFFFFFFFF) 0xFFFFFF) b
   let b := b ++ head ++ root ++ hold ++ grant ++ auth
   let b := notes.foldl putBlob2 (put b 4 notes.size)
   let b := leaves.foldl putLeaf (put b 4 leaves.size)
@@ -160,7 +160,7 @@ private theorem idxOf_getD (k : Nat) (hk : k < rules.length) : rules.idxOf (rule
   rcases this with rfl | rfl | rfl | rfl | rfl | rfl <;> decide
 
 private theorem encRec_some (r : Rec) (bs : Bytes) (h : encRec r = some bs) :
-    r.ok = true ∧ leAll [3, 1, 1, 4, 4, 3] [r.index, r.outcome, rules.idxOf r.rule, r.reasons,
+    r.ok = true ∧ leAll [3, 1, 1, 8, 4, 3] [r.index, r.outcome, rules.idxOf r.rule, r.reasons,
       (r.ref.getD (noChunk, noRow)).1, (r.ref.getD (noChunk, noRow)).2] = some bs := by
   unfold encRec at h
   by_cases hok : r.ok = true
@@ -173,7 +173,7 @@ private theorem encRec_some (r : Rec) (bs : Bytes) (h : encRec r = some bs) :
 
 private def decStep (ruleOf : Dec → UInt8) (locOf : Nat → UInt32 × UInt32) (b : ByteArray) (d : Dec) : ByteArray :=
   let (c, r) := if d.cp == 0 then (0xFFFFFFFF, 0xFFFFFF) else locOf d.cp
-  putLE3 (putLE4 (putLE4 ((((putLE3 b d.line).push d.out).push (ruleOf d))) d.mask) c) r.toNat
+  putLE3 (putLE4 (put ((((putLE3 b d.line).push d.out).push (ruleOf d))) 8 d.mask.toNat) c) r.toNat
 
 private theorem decStep_eq (ruleOf : Dec → UInt8) (locOf : Nat → UInt32 × UInt32) (b : ByteArray) (d : Dec)
     (bs : Bytes) (hr : (ruleOf d).toNat < rules.length) (h : encRec (decRec ruleOf locOf d) = some bs) :
@@ -198,7 +198,7 @@ private theorem decStep_eq (ruleOf : Dec → UInt8) (locOf : Nat → UInt32 × U
   rw [idxOf_getD _ hr] at e3
   unfold decStep
   simp only [hcr]
-  rw [putLE3_eq, putLE4_eq, putLE4_eq, putLE3_eq, push_eq_put, push_eq_put, le_put _ _ _ _ e6, le_put _ _ _ _ e5,
+  rw [putLE3_eq, putLE4_eq, putLE3_eq, push_eq_put, push_eq_put, le_put _ _ _ _ e6, le_put _ _ _ _ e5,
     le_put _ _ _ _ e4, le_put _ _ _ _ e3, le_put _ _ _ _ e2, le_put _ _ _ _ e1]
   simp
 
@@ -212,7 +212,7 @@ private theorem heldRec_rule (h : Held) (bs : Bytes) (he : encRec (heldRec h) = 
   simp [heldRec, Rec.ok, hn'] at hok
 
 private def heldStep (b : ByteArray) (h : Held) : ByteArray :=
-  putLE3 (putLE4 (putLE4 (((putLE3 b h.index).push 1).push h.rule) 0) 0xFFFFFFFF) 0xFFFFFF
+  putLE3 (putLE4 (put (((putLE3 b h.index).push 1).push h.rule) 8 0) 0xFFFFFFFF) 0xFFFFFF
 
 private theorem heldStep_eq (b : ByteArray) (h : Held) (bs : Bytes) (he : encRec (heldRec h) = some bs) :
     (heldStep b h).toList = b.toList ++ bs := by
@@ -222,11 +222,10 @@ private theorem heldStep_eq (b : ByteArray) (h : Held) (bs : Bytes) (he : encRec
   obtain ⟨b1, b2, b3, b4, b5, b6, e1, e2, e3, e4, e5, e6, rfl⟩ := leAll6 hl
   rw [idxOf_getD _ hr] at e3
   unfold heldStep
-  have c0 : (0 : UInt32).toNat = 0 := rfl
   have cN : (0xFFFFFFFF : UInt32).toNat = noChunk := rfl
   have rN : (16777215 : Nat) = noRow := rfl
   have u1 : (1 : UInt8).toNat = 1 := rfl
-  rw [putLE3_eq, putLE4_eq, putLE4_eq, putLE3_eq, push_eq_put, push_eq_put, c0, cN, u1, rN, le_put _ _ _ _ e6, le_put _ _ _ _ e5,
+  rw [putLE3_eq, putLE4_eq, putLE3_eq, push_eq_put, push_eq_put, cN, u1, rN, le_put _ _ _ _ e6, le_put _ _ _ _ e5,
     le_put _ _ _ _ e4, le_put _ _ _ _ e3, le_put _ _ _ _ e2, le_put _ _ _ _ e1]
   simp
 
@@ -258,7 +257,7 @@ private theorem putLeaf_eq (b : ByteArray) (l : Leaf) (bs : Bytes) (h : encLeaf 
   unfold encLeaf at h
   by_cases hg : (l.ok && l.bypass.size = 64 && l.input.size = 64) = true
   · simp only [guard, hg, if_true] at h
-    cases hl : leAll [1, 4, 1] [l.outcome, l.reasons, l.authority] with
+    cases hl : leAll [1, 8, 1] [l.outcome, l.reasons, l.authority] with
     | none => simp [hl] at h
     | some hb =>
       simp [hl] at h
@@ -266,8 +265,8 @@ private theorem putLeaf_eq (b : ByteArray) (l : Leaf) (bs : Bytes) (h : encLeaf 
       subst h
       unfold putLeaf
       simp only [bypass_beq]
-      have p3 := le_put (put (put b 1 l.outcome) 4 l.reasons) 1 l.authority _ e3
-      have p2 := le_put (put b 1 l.outcome) 4 l.reasons _ e2
+      have p3 := le_put (put (put b 1 l.outcome) 8 l.reasons) 1 l.authority _ e3
+      have p2 := le_put (put b 1 l.outcome) 8 l.reasons _ e2
       have p1 := le_put b 1 l.outcome _ e1
       split
       · rename_i hc
@@ -325,7 +324,7 @@ private theorem rowStep_eq (b : ByteArray) (tag : UInt8) (s : LineSrc) (bs : Byt
 
 private theorem encodeAns_ok (a : AnsFrame) (hw : a.word = .OK) (bs : Bytes) (h : encodeAns a = some bs) :
     a.digest.size = 64 ∧ a.head.size = 64 ∧ a.root.size = 64 ∧
-    ∃ hv rv xv, leAll [2, 1, 4, 8, 4] [version, Word.OK.code, a.shard, a.batch, a.recs.length] = some hv ∧
+    ∃ hv rv xv, leAll [2, 1, 4, 8, 4] [ansVersion, Word.OK.code, a.shard, a.batch, a.recs.length] = some hv ∧
       a.recs.mapM encRec = some rv ∧ encExt a.ext = some xv ∧
       bs = magicAns ++ (hv ++ (a.digest.toList ++ (rv.flatten ++ (a.head.toList ++ (a.root.toList ++ xv))))) := by
   have hf : (failure : Option Unit) = none := rfl
@@ -343,7 +342,7 @@ private theorem encodeAns_ok (a : AnsFrame) (hw : a.word = .OK) (bs : Bytes) (h 
     · exact c
     · simp [c1, c, hf] at h
   simp only [if_pos c1, if_pos c2, Option.bind_some] at h
-  cases hh : leAll [2, 1, 4, 8, 4] [version, Word.OK.code, a.shard, a.batch, a.recs.length] with
+  cases hh : leAll [2, 1, 4, 8, 4] [ansVersion, Word.OK.code, a.shard, a.batch, a.recs.length] with
   | none => simp [hh] at h
   | some hv =>
     cases hr : List.mapM encRec a.recs with
@@ -463,7 +462,7 @@ private theorem answer_aux (shard batch : Nat) (digest head root hold grant auth
   dsimp only [ansOfOut] at c1 c2 c3 e1 e2 hh hgr har f1 f2 f3 f4 f5 f6
   have hn : ds.size + held.size =
       (ds.toList.map (decRec ruleOf locOf) ++ held.toList.map heldRec).length := by simp
-  have e1' : leAll [2, 1, 4, 8, 4] [version, Word.OK.code, shard, batch, ds.size + held.size] = some hv := by
+  have e1' : leAll [2, 1, 4, 8, 4] [ansVersion, Word.OK.code, shard, batch, ds.size + held.size] = some hv := by
     rw [hn]; exact e1
   obtain ⟨q1, q2, q3, q4, q5, i1, i2, i3, i4, i5, rfl⟩ := leAll5 e1'
   have e2' : (ds.toList.map (decRec ruleOf locOf) ++ held.toList.map heldRec).mapM encRec = some rv := e2
@@ -479,10 +478,10 @@ private theorem answer_aux (shard batch : Nat) (digest head root hold grant auth
   have f5' : le 4 leaves.size = some ll := by simpa using f5
   have f6' : le 4 (rel.size + unr.size) = some al := by simpa using f6
   have hE : encodeAnsOut shard batch digest head root hold grant auth ds ruleOf locOf held notes leaves lines rel unr =
-      (let cap := 160 + 16 * (ds.size + held.size) + notes.foldl (fun n x => n + 2 + x.size) 4 +
-          136 * leaves.size + 4 + 930 * (rel.size + unr.size)
+      (let cap := 160 + 20 * (ds.size + held.size) + notes.foldl (fun n x => n + 2 + x.size) 4 +
+          140 * leaves.size + 4 + 930 * (rel.size + unr.size)
        let b := putL (ByteArray.emptyWithCapacity cap) magicAns
-       let b := put (put (put (put (put b 2 version) 1 Word.OK.code) 4 shard) 8 batch) 4 (ds.size + held.size)
+       let b := put (put (put (put (put b 2 ansVersion) 1 Word.OK.code) 4 shard) 8 batch) 4 (ds.size + held.size)
        let b := b ++ digest
        let b := ds.foldl (decStep ruleOf locOf) b
        let b := held.foldl heldStep b
@@ -516,7 +515,7 @@ private theorem answer_aux (shard batch : Nat) (digest head root hold grant auth
   rw [TH _ _ m2, TD _ _ m1]
   simp only [Flat.Bin.toList_append']
   rw [le_put _ 4 (ds.size + held.size) q5 i5, le_put _ 8 batch q4 i4,
-    le_put _ 4 shard q3 i3, le_put _ 1 Word.OK.code q2 i2, le_put _ 2 version q1 i1]
+    le_put _ 4 shard q3 i3, le_put _ 1 Word.OK.code q2 i2, le_put _ 2 ansVersion q1 i1]
   simp [ansOfOut, toList_putL, empty_toList, List.flatten_append]
 
 private theorem or_shift (a c k : Nat) (h : c < 2 ^ k) : a <<< k ||| c = a * 2 ^ k + c := by
@@ -1346,7 +1345,7 @@ private theorem bind_inv {α β : Type} {x : Option α} {f : α → Option β} {
   | some a => exact ⟨a, rfl, h⟩
 
 private theorem encodeAns_some (a : AnsFrame) (bs : Bytes) (h : encodeAns a = some bs) :
-    ∃ hv rv xv, leAll [2, 1, 4, 8, 4] [version, a.word.code, a.shard, a.batch, a.recs.length] = some hv ∧
+    ∃ hv rv xv, leAll [2, 1, 4, 8, 4] [ansVersion, a.word.code, a.shard, a.batch, a.recs.length] = some hv ∧
       a.recs.mapM encRec = some rv ∧ (if a.word == .OK then encExt a.ext else pure []) = some xv ∧
       bs = magicAns ++ (hv ++ (a.digest.toList ++ (rv.flatten ++ (a.head.toList ++ (a.root.toList ++ xv))))) := by
   unfold encodeAns at h

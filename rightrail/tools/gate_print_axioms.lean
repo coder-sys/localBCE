@@ -398,6 +398,13 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Frame.record_binds
 #print axioms BlindLedger.Gate.Frame.rows_of_records
 #print axioms BlindLedger.Gate.Frame.answer_encodes
+#print axioms BlindLedger.Gate.Rules.idx_dense
+#print axioms BlindLedger.Gate.Rules.reasons_len_le
+#print axioms BlindLedger.Gate.Rules.idx_len
+#print axioms BlindLedger.Gate.Rules.reasons_list_nodup
+#print axioms BlindLedger.Gate.Frame.maskOf_testBit_idx
+#print axioms BlindLedger.Gate.Frame.unmask_maskOf
+#print axioms BlindLedger.Gate.Frame.maskOf_lt
 #print axioms BlindLedger.Gate.Flat.StoreLog.load_binds
 #print axioms BlindLedger.Gate.Flat.StoreLog.crash_repair
 #print axioms BlindLedger.Gate.Flat.StoreLog.crash_old_loads

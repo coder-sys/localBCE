@@ -361,6 +361,13 @@
 'BlindLedger.Gate.Frame.record_binds' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Frame.rows_of_records' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Frame.answer_encodes' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.Rules.idx_dense' does not depend on any axioms
+'BlindLedger.Gate.Rules.reasons_len_le' does not depend on any axioms
+'BlindLedger.Gate.Rules.idx_len' does not depend on any axioms
+'BlindLedger.Gate.Rules.reasons_list_nodup' does not depend on any axioms
+'BlindLedger.Gate.Frame.maskOf_testBit_idx' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Frame.unmask_maskOf' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Frame.maskOf_lt' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Flat.StoreLog.load_binds' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Flat.StoreLog.crash_repair' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Flat.StoreLog.crash_old_loads' depends on axioms: [propext, Classical.choice, Quot.sound]

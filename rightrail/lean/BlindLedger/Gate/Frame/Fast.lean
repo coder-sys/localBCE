@@ -3793,13 +3793,13 @@ def putBlob2 (b x : ByteArray) : ByteArray := put b 2 x.size ++ x
 
 def putRec (b : ByteArray) (r : Rec) : ByteArray :=
   let (c, w) := r.ref.getD (noChunk, noRow)
-  put (put (put (put (put (put b 3 r.index) 1 r.outcome) 1 (Frame.rules.idxOf r.rule)) 4 r.reasons) 4 c) 3 w
+  put (put (put (put (put (put b 3 r.index) 1 r.outcome) 1 (Frame.rules.idxOf r.rule)) 8 r.reasons) 4 c) 3 w
 
 /-- The zero id: no bypass. -/
 def zero64B : ByteArray := ⟨Array.replicate 64 0⟩
 
 def putLeaf (b : ByteArray) (l : Leaf) : ByteArray :=
-  let b := put (put (put b 1 l.outcome) 4 l.reasons) 1 l.authority
+  let b := put (put (put b 1 l.outcome) 8 l.reasons) 1 l.authority
   let b := if l.bypass == zero64B then b.push 0 else b.push 1 ++ l.bypass
   b ++ l.input
 
@@ -3813,10 +3813,10 @@ def putExt (b : ByteArray) (e : Ext) : ByteArray :=
 def encodeAnsFast (a : AnsFrame) : ByteArray :=
   -- the buffer sized once for the whole answer, so no append copies it
   let blobs (xs : List ByteArray) := xs.foldl (fun n x => n + 2 + x.size) 4
-  let cap := 160 + 16 * a.recs.length + a.ext.hold.size + a.ext.grant.size + a.ext.auth.size + blobs a.ext.notes + blobs a.ext.adds +
-    136 * a.ext.leaves.length + 4
+  let cap := 160 + 20 * a.recs.length + a.ext.hold.size + a.ext.grant.size + a.ext.auth.size + blobs a.ext.notes + blobs a.ext.adds +
+    140 * a.ext.leaves.length + 4
   let b := putL (ByteArray.emptyWithCapacity cap) magicAns
-  let b := put (put (put (put (put b 2 version) 1 a.word.code) 4 a.shard) 8 a.batch) 4 a.recs.length
+  let b := put (put (put (put (put b 2 ansVersion) 1 a.word.code) 4 a.shard) 8 a.batch) 4 a.recs.length
   let b := b ++ a.digest
   let b := a.recs.foldl putRec b
   let b := b ++ a.head ++ a.root

@@ -62,24 +62,24 @@ def initAuth (q : Frame.Req) : AuthRec := ⟨q.auth.pin, Keyset.Ratchet.init q.a
 
 def zero64 : ByteArray := ⟨Array.replicate 64 0⟩
 
-/-- Where an answer's head and root sit: after the header and 16 bytes a record. -/
-def headAt (a : ByteArray) : Nat := Frame.ansHdrBytes + 16 * getN a 19 4
+/-- Where an answer's head and root sit: after the header and 20 bytes a record. -/
+def headAt (a : ByteArray) : Nat := Frame.ansHdrBytes + 20 * getN a 19 4
 
 /-- `an`: the logged answer with its head and root cut out. -/
 def ansBind (a : ByteArray) : ByteArray :=
   sha3_512Into ByteArray.empty (domB "ANSWER" ++ a.extract 0 (headAt a)) a (headAt a + 128) (a.size - (headAt a + 128))
 
-/-- Each reason in `Rules.reasons` order: its bit in a line's reason mask (`Rows.bit`), its place (`Reason.idx`) and its leaf
-    bit.  Computed once, so no payment searches the reason list. -/
-def reasonTab : Array (UInt32 × Nat × Nat) := (Rules.reasons.zipIdx.map fun (r, i) => (Rows.bit r, r.idx, 2 ^ i)).toArray
+/-- Each reason in `Rules.reasons` order: its bit in a line's reason mask (`Rows.bit`), its number (`Reason.idx`) and its leaf
+    bit `2 ^ r.idx`.  Computed once, so no payment searches the reason list. -/
+def reasonTab : Array (UInt32 × Nat × Nat) := (Rules.reasons.map fun r => (Rows.bit r, r.idx, 2 ^ r.idx)).toArray
 
 /-- The leaf reason mask (`leafMask` of `Run.leafReasons`) of a payment that fits, whose decided lines' reason masks have
-    union `m`: each reason's bit at its place in `Rules.reasons` (`Reason.idx`, as `Rows.bit`). -/
+    union `m`: each reason's bit at its number `Reason.idx` (as `Rows.bit`). -/
 def leafBits (m : UInt32) : Nat :=
   reasonTab.foldl (fun a (b, _, p) => if m &&& b != 0 then a ||| p else a) 0
 
 theorem leafBits_eq (m : UInt32) :
-    leafBits m = Rules.reasons.zipIdx.foldl (fun a (r, i) => if m &&& Rows.bit r != 0 then a ||| 2 ^ i else a) 0 := by
+    leafBits m = Rules.reasons.foldl (fun a r => if m &&& Rows.bit r != 0 then a ||| 2 ^ r.idx else a) 0 := by
   simp only [leafBits, reasonTab]
   rw [List.foldl_toArray, List.foldl_map]
 
@@ -243,14 +243,14 @@ def leafIn (a : Run.Admitted) (gid : ByteArray) (x : Run.Req) (ent : Option Auth
   let z := Gate.zeroDigest
   let (o, rs, au, bp) : Outcome × Nat × Gate.Authority × Bytes :=
     match ent with
-    | none => (if r.flow.ruled then .HOLD else .HUMAN_REVIEW, 2 ^ 25, .OBSERVE, z)
+    | none => (if r.flow.ruled then .HOLD else .HUMAN_REVIEW, Frame.leafScope, .OBSERVE, z)
     | some en =>
       let bp : Bytes := match a.byps.filter (fun b => b.program == r.programId.toList && b.payment == r.paymentId.toList) with
         | [y] => if !unf && f &&& 16 != 0 && y.request == Run.hB x.x && y.id != z then y.id else z
         | _ => z
       let o0 : Outcome := if f &&& 1 != 0 then .HOLD else if f &&& 4 != 0 && f &&& 2 == 0 then .ALLOW else .HUMAN_REVIEW
       let o : Outcome := if unf then .HOLD else if bp != z || f &&& 32 != 0 then .ALLOW else o0
-      (o, if unf then 2 ^ 24 else leafBits m, en.authority, bp)
+      (o, if unf then Frame.leafUnencodable else leafBits m, en.authority, bp)
   let leaf : Frame.Leaf :=
     { outcome := Frame.outCode o, reasons := rs, authority := [Gate.Authority.OBSERVE, .HOLD, .TRANSFER].idxOf au
       bypass := bp.toByteArray, input := .empty }
@@ -262,7 +262,7 @@ def linesRootS (ls : List ByteArray) : ByteArray :=
   else Frame.Fast.treeRootA treeFuel (ls.map (hashDom (Frame.Fast.linesDomain.push 0)))
 
 /-- The answer of a decided batch (word OK, head and root zero) in one buffer of its final size, its `an` and the batch's
-    identity (`Frame.ident`): the records `recs` (`nr` of 16 bytes), the grant id (the leaves', zero when there are none),
+    identity (`Frame.ident`): the records `recs` (`nr` of 20 bytes), the grant id (the leaves', zero when there are none),
     the notes, each request's leaf (`ls`) with its input (`INPUT/v6` over the context `ctx` and the payment digest over
     its lines root) computed here, and the rows the sets gain, lines `rel` (tag 1) then `unr` (tag 2) of the store lines
     `lb`. -/
@@ -275,11 +275,11 @@ def ansW (tm : Bool) (shard batch : Nat) (dg recs : ByteArray) (nr : Nat) (au : 
     | none => noExt.grant
   -- the header (magic, version, word, shard, batch, record count), the digest, the records, head and root, the hold
   let cap := (4 + 19) + dg.size + recs.size + 2 * zero64.size + noExt.hold.size + grant.size + au.size + notes.foldl (· + blob ·) 4 +
-    nAdd * (2 + rowLen) + 4 + 136 * ls.size + 4
+    nAdd * (2 + rowLen) + 4 + 140 * ls.size + 4
   let st (i : Nat) {α : Type} (x : α) : α := if tm then stamp i x else x
   let b := st 36 (Frame.Fast.putL (ByteArray.emptyWithCapacity cap) Frame.magicAns)
   let put := Frame.Fast.put
-  let b := put (put (put (put (put b 2 Frame.version) 1 (Word.code .OK)) 4 shard) 8 batch) 4 nr
+  let b := put (put (put (put (put b 2 Frame.ansVersion) 1 (Word.code .OK)) 4 shard) 8 batch) 4 nr
   let b := b ++ dg ++ recs ++ zero64 ++ zero64 ++ noExt.hold ++ grant ++ au
   let b := st 35 (notes.foldl Frame.Fast.putBlob2 (put b 4 notes.length))
   let inPre := Frame.Fast.inputDomain ++ ctx

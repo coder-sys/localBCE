@@ -93,16 +93,17 @@ def batch_input(ctx: bytes, rqs: list[bytes]) -> bytes:
 def answer_frame(status: int, shard: int, batch: int, digest: bytes, recs: list[tuple[int, int, int, int, int, int]] = (),
                  leaves: list[tuple[int, int, int, int, bytes, bytes]] = (), notes: list[bytes] = (), adds: list[bytes] = (),
                  grant: bytes = bytes(64), auth: bytes = bytes(208)) -> bytes:
-    """An engine answer, written out again from conformance/FRAME_V1.md section 4 and ENGINE_V3.md section 17: the 87-byte
-    header, then (status 0 only) the 16-byte records (index, outcome, rule, reasons, chunk, row), head, root and the
-    extension (hold word, grant id, the 208-byte authority record, notes), each leaf ``(outcome, reasons, authority, bypass flag, bypass id, input)``."""
+    """An engine answer, written out again from the answer format (header version 3; TRUNK_STEP2_FRAME_DESIGN.md section
+    2.6) and ENGINE_V3.md section 17: the 87-byte header, then (status 0 only) the 20-byte records (index, outcome, rule,
+    u64 reasons with reason ``r`` at bit ``r.idx``, chunk, row), head, root and the extension (hold word, grant id, the
+    208-byte authority record, notes), each leaf ``(outcome, u64 reasons, authority, bypass flag, bypass id, input)``."""
     le = lambda n, w: n.to_bytes(w, "little")
-    out = b"RRDA" + le(1, 2) + le(status, 1) + le(shard, 4) + le(batch, 8) + le(len(recs), 4) + digest
+    out = b"RRDA" + le(3, 2) + le(status, 1) + le(shard, 4) + le(batch, 8) + le(len(recs), 4) + digest
     if status:
         return out
-    out += b"".join(le(i, 3) + le(o, 1) + le(u, 1) + le(m, 4) + le(c, 4) + le(w, 3) for i, o, u, m, c, w in recs)
+    out += b"".join(le(i, 3) + le(o, 1) + le(u, 1) + le(m, 8) + le(c, 4) + le(w, 3) for i, o, u, m, c, w in recs)
     out += D[13] + D[14] + bytes(16) + grant + auth + le(len(notes), 4) + b"".join(le(len(n), 2) + n for n in notes)
-    out += le(len(leaves), 4) + b"".join(le(o, 1) + le(m, 4) + le(a, 1) + le(f, 1) + (b if f == 1 else b"") + x
+    out += le(len(leaves), 4) + b"".join(le(o, 1) + le(m, 8) + le(a, 1) + le(f, 1) + (b if f == 1 else b"") + x
                                          for o, m, a, f, b, x in leaves)
     return out + le(len(adds), 4) + b"".join(le(len(r), 2) + r for r in adds)
 
@@ -283,6 +284,40 @@ def payment_record(name: str, leaf: gate.TokenLeaf, verdict: str = "accept", lin
             f"{leaf.payee_ref} {leaf.amount_cents} {PERIOD} {hexes(lines)}")
 
 
+def signer_free_vectors() -> list[str]:
+    """The vector lines that need no signer: the engine answers (header version 3).  ``build_vectors`` writes them at
+    their place; ``--signer-free`` rewrites only these lines of the existing file."""
+    out: list[str] = []
+    add = out.append
+    h = bytes.hex
+
+    # Engine answers (header version 3): the request digest is read from bytes 23-86 of the header, and the bytes are
+    # canonical.  Records (index, outcome, rule, reasons, chunk, row): line 1 HOLD decided with a counterpart (bit 4,
+    # FFS_DUPLICATE_LINE's idx), line 0 released.  Leaves: an ALLOW under TRANSFER, and a HOLD under HOLD with bit 62
+    # (UNENCODABLE_PAYMENT) that a bypass released.
+    none_ref = (2**32 - 1, 2**24 - 1)
+    recs = [(1, 1, 0, 1 << 4, 7, 5), (0, 0, 1, 0, *none_ref)]
+    leaves = [(0, 0, 2, 0, b"", D[15]), (1, 1 << 62, 1, 1, D[16], D[10])]
+    ok = lambda recs=recs, leaves=leaves: answer_frame(0, SHARD, 9, D[11], recs, leaves, [b"bypass note"], [b"row-0"], D[3])
+    add(f"answer accept a0 {h(ok())} 0 {SHARD} 9 {h(D[11])} 2 {h(gate.ZERO_DIGEST)},{h(D[16])}")
+    add(f"answer accept a-not-next {h(answer_frame(5, SHARD, 10, D[11]))} 5 {SHARD} 10 {h(D[11])} 0 -")
+    flag = lambda f: [leaves[0], (*leaves[1][:3], f, *leaves[1][4:])]
+    leaf = lambda i, v: [(*leaves[0][:i], v, *leaves[0][i + 1:]), leaves[1]]
+    # a leaf whose only code is SCOPE (bit 63) is well formed
+    add(f"answer accept a-scope {h(ok(leaves=[leaves[0], (1, 1 << 63, 0, 0, b'', D[10])]))} 0 {SHARD} 9 {h(D[11])} 2 "
+        f"{h(gate.ZERO_DIGEST)},{h(gate.ZERO_DIGEST)}")
+    for name, data in (("truncated", ok()[:-1]), ("trailing", ok() + b"\x00"), ("version-2", ok()[:4] + b"\x02" + ok()[5:]),
+                       ("version-1", ok()[:4] + b"\x01" + ok()[5:]),
+                       ("bypass-flag-2", ok(leaves=flag(2))), ("zero-bypass-flagged", ok(leaves=[leaves[0], (*leaves[1][:4], gate.ZERO_DIGEST, D[10])])),
+                       ("leaf-outcome-3", ok(leaves=leaf(0, 3))), ("leaf-reason-bit-61", ok(leaves=leaf(1, 1 << 61))),
+                       ("leaf-reason-bit-24", ok(leaves=leaf(1, 1 << 24))),
+                       ("record-reason-bit-62", ok(recs=[(1, 1, 0, 1 << 62, 7, 5), recs[1]])),
+                       ("leaf-authority-3", ok(leaves=leaf(2, 3))), ("index-twice", ok(recs=[recs[0], (1, *recs[1][1:])])),
+                       ("refusal-with-records", answer_frame(5, SHARD, 10, D[11])[:19] + (1).to_bytes(4, "little") + D[11])):
+        add(f"answer reject {name} {h(data)}")
+    return out
+
+
 def build_vectors() -> str:
     """Every vector; all keys and signatures are deterministic."""
     global _COUNTERS
@@ -315,23 +350,7 @@ def build_vectors() -> str:
     add(f"batch-input b0 {h(ctx)} {hexes(rqs)} {h(batch_input(ctx, rqs))}")
     add(f"batch-input b1 {h(ctx)} - {h(batch_input(ctx, []))}")
 
-    # Engine answers: the request digest is read from bytes 23-86 of the header, and the bytes are canonical.  Records
-    # (index, outcome, rule, reasons, chunk, row): line 1 HOLD decided with a counterpart, line 0 released.  Leaves: an
-    # ALLOW under TRANSFER, and a HOLD under HOLD with bit 24 that a bypass released.
-    none_ref = (2**32 - 1, 2**24 - 1)
-    recs = [(1, 1, 0, 1 << 4, 7, 5), (0, 0, 1, 0, *none_ref)]
-    leaves = [(0, 0, 2, 0, b"", D[15]), (1, 1 << 24, 1, 1, D[16], D[10])]
-    ok = lambda recs=recs, leaves=leaves: answer_frame(0, SHARD, 9, D[11], recs, leaves, [b"bypass note"], [b"row-0"], D[3])
-    add(f"answer accept a0 {h(ok())} 0 {SHARD} 9 {h(D[11])} 2 {h(gate.ZERO_DIGEST)},{h(D[16])}")
-    add(f"answer accept a-not-next {h(answer_frame(5, SHARD, 10, D[11]))} 5 {SHARD} 10 {h(D[11])} 0 -")
-    flag = lambda f: [leaves[0], (*leaves[1][:3], f, *leaves[1][4:])]
-    leaf = lambda i, v: [(*leaves[0][:i], v, *leaves[0][i + 1:]), leaves[1]]
-    for name, data in (("truncated", ok()[:-1]), ("trailing", ok() + b"\x00"), ("version-2", ok()[:4] + b"\x02" + ok()[5:]),
-                       ("bypass-flag-2", ok(leaves=flag(2))), ("zero-bypass-flagged", ok(leaves=[leaves[0], (*leaves[1][:4], gate.ZERO_DIGEST, D[10])])),
-                       ("leaf-outcome-3", ok(leaves=leaf(0, 3))), ("leaf-reason-bit-26", ok(leaves=leaf(1, 1 << 26))),
-                       ("leaf-authority-3", ok(leaves=leaf(2, 3))), ("index-twice", ok(recs=[recs[0], (1, *recs[1][1:])])),
-                       ("refusal-with-records", answer_frame(5, SHARD, 10, D[11])[:19] + (1).to_bytes(4, "little") + D[11])):
-        add(f"answer reject {name} {h(data)}")
+    out.extend(signer_free_vectors())
 
     # #1 DECIDE-REQUEST/v1; accepted requests are named for the responses below
     def request_line(name: str, r: gate.DecideRequest) -> None:
@@ -1413,7 +1432,21 @@ class EncoderLawTests(unittest.TestCase):
         self.assertNotEqual(gate.merkle_tree(gate.LINES_NODE, [b"x"])[0], gate.merkle_tree(gate.MERKLE_NODE, [b"x"])[0])
 
 
+def rewrite_signer_free(text: str) -> str:
+    """``text`` (the vectors file) with its ``answer`` lines replaced by ``signer_free_vectors``, at the place of the first
+    of them, and its ``end`` count recomputed as ``build_vectors`` computes it; every other line is kept byte for byte."""
+    lines = text.split("\n")
+    at = next(i for i, x in enumerate(lines) if x.startswith("answer "))
+    kept = [x for x in lines if not x.startswith("answer ")]
+    out = kept[:at] + signer_free_vectors() + kept[at:]
+    count = sum(x.split(" ", 1)[0] in CHECKED for x in out)
+    return "\n".join(f"end {count}" if x.startswith("end ") else x for x in out)
+
+
 if __name__ == "__main__":
     VECTORS.parent.mkdir(exist_ok=True)
-    VECTORS.write_text(build_vectors(), "ascii", newline="\n")
+    if sys.argv[1:] == ["--signer-free"]:  # no signer needed: rewrite only the signer-free lines in place
+        VECTORS.write_text(rewrite_signer_free(VECTORS.read_text("ascii")), "ascii", newline="\n")
+    else:
+        VECTORS.write_text(build_vectors(), "ascii", newline="\n")
     sys.exit(0)

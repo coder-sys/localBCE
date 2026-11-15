@@ -1600,14 +1600,15 @@ theorem mem_reasons (r : Reason) : r ∈ reasons := by cases r <;> decide
 
 theorem idx_len (r : Reason) : r.idx < reasons.length := BlindLedger.Gate.Rules.idx_len r
 
-theorem idx_lt (r : Reason) : r.idx < 24 := by
-  have := idx_len r
-  simpa [reasons] using this
+/-- The UInt32 line-mask width until step 5; not a total-count guard. -/
+theorem reasons_len_le32 : reasons.length ≤ 32 := by decide
+
+theorem idx_lt32 (r : Reason) : r.idx < 32 := Nat.lt_of_lt_of_le (idx_len r) reasons_len_le32
 
 theorem idx_inj {r r' : Reason} (h : r.idx = r'.idx) : r = r' := Reason.idx_inj h
 
 theorem bit_toNat (r : Reason) : (bit r).toNat = 2 ^ r.idx := by
-  have := idx_lt r
+  have := idx_lt32 r
   simp only [bit, UInt32.toNat_shiftLeft, Nat.toUInt32, UInt32.toNat_ofNat]
   have h1 : (UInt32.ofNat r.idx).toNat % 32 = r.idx := by simp only [UInt32.toNat_ofNat']; omega
   have h2 : (1 % 2 ^ 32 : Nat) = 1 := by decide
@@ -1651,12 +1652,12 @@ theorem has_bit (r r' : Reason) : has (bit r') r = decide (r = r') := by
 theorem has_on (c : Bool) (r r' : Reason) : has (on c (bit r')) r = (c && decide (r = r')) := by
   cases c <;> simp [on, has_zero, has_bit]
 
-def Lo (m : UInt32) : Prop := m.toNat < 2 ^ 24
+def Lo (m : UInt32) : Prop := m.toNat < 2 ^ reasons.length
 
-theorem Lo_zero : Lo 0 := by simp [Lo]
+theorem Lo_zero : Lo 0 := by unfold Lo; simpa using Nat.two_pow_pos reasons.length
 
 theorem Lo_bit (r : Reason) : Lo (bit r) := by
-  unfold Lo; rw [bit_toNat]; exact Nat.pow_lt_pow_right (by decide) (idx_lt r)
+  unfold Lo; rw [bit_toNat]; exact Nat.pow_lt_pow_right (by decide) (idx_len r)
 
 theorem Lo_or {a b : UInt32} (ha : Lo a) (hb : Lo b) : Lo (a ||| b) := by
   unfold Lo at *; rw [UInt32.toNat_or]; exact Nat.or_lt_two_pow ha hb
@@ -1666,20 +1667,20 @@ theorem Lo_on (c : Bool) (r : Reason) : Lo (on c (bit r)) := by
 
 theorem reasons_nodup : reasons.Nodup := BlindLedger.Gate.Rules.reasons_list_nodup
 
-theorem idx_get (j : Nat) (hj : j < 24) : (reasons[j]'(by simpa [reasons] using hj)).idx = j := by
-  have h : ∀ k, k < 24 → reasons[k]?.map Reason.idx = some k := by decide
-  have e := h j hj
-  rw [List.getElem?_eq_getElem (by simpa [reasons] using hj)] at e
-  simpa using e
+-- Step 2 evidence, outside `gate_engine`: today `Reason.idx` is each reason's place in name order, so numbering the
+-- answer bits by `idx` moves no bit.  Expected to fail at step 3, when a reason sorts into the middle; removed then.
+#guard reasons.zipIdx.all fun (r, i) => r.idx == i
+
 
 theorem eq_zero_of_has {m : UInt32} (hm : Lo m) (h : ∀ r, has m r = false) : m = 0 := by
   rw [← UInt32.toNat_inj, UInt32.toNat_zero]
   apply Nat.eq_of_testBit_eq
   intro j
   rw [Nat.zero_testBit]
-  by_cases hj : j < 24
-  · have := h (reasons[j]'(by simpa [reasons] using hj))
-    rwa [has_iff, idx_get j hj] at this
+  by_cases hj : j < reasons.length
+  · obtain ⟨r, -, rfl⟩ := BlindLedger.Gate.Rules.idx_dense j hj
+    have := h r
+    rwa [has_iff] at this
   · exact Nat.testBit_lt_two_pow (Nat.lt_of_lt_of_le hm (Nat.pow_le_pow_right (by decide) (by omega)))
 
 
@@ -1713,7 +1714,7 @@ theorem Lo_maskOf_aux (p : Reason → Bool) : ∀ (l : List Reason) (acc : UInt3
 theorem Lo_maskOf (p : Reason → Bool) : Lo (maskOf p) := Lo_maskOf_aux p _ _ Lo_zero
 
 theorem has_andnot (a b : UInt32) (r : Reason) : has (a &&& ~~~b) r = (has a r && !has b r) := by
-  have hl := idx_lt r
+  have hl := idx_lt32 r
   simp only [has_iff, UInt32.toNat_and, UInt32.toNat_not, Nat.testBit_and]
   have : 2 ^ 32 - 1 - b.toNat = 2 ^ 32 - (b.toNat + 1) := by omega
   rw [this, Nat.testBit_two_pow_sub_succ b.toNat_lt]
@@ -3764,7 +3765,7 @@ theorem has_and (a b : UInt32) (r : Reason) : has (a &&& b) r = (has a r && has 
   simp only [has_iff, UInt32.toNat_and, Nat.testBit_and]
 
 theorem has_mod (m : Nat) (r : Reason) : has (m % 2 ^ 32).toUInt32 r = m.testBit r.idx := by
-  have := idx_lt r
+  have := idx_lt32 r
   have h : ((m % 2 ^ 32).toUInt32).toNat = m % 2 ^ 32 := by
     simp only [Nat.toUInt32]; exact Nat.mod_mod _ _
   rw [has_iff, h, Nat.testBit_mod_two_pow]

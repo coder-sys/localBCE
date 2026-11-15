@@ -268,7 +268,7 @@ class FlatHostTests(fx.Scratch):
                 calls.append(data)
                 if len(calls) > 1:
                     return real(self, directory, shard, data)
-                return b"RRDA" + struct.pack("<HBIQI", 1, decider.WORDS.index("IO"), shard, int.from_bytes(data[10:18], "little"), 0) + data[18:82]
+                return b"RRDA" + struct.pack("<HBIQI", 3, decider.WORDS.index("IO"), shard, int.from_bytes(data[10:18], "little"), 0) + data[18:82]
             with mock.patch.object(decider.RulesWorker, "run_frame", flaky):
                 a, l, s = self.batch(c, prod, 2, worker=w, flat=flat)
             self.assertEqual((a.digest, l, set(s.values()), len(calls)), (b"", [], {"HOLD flat_io"}, 1))
@@ -632,7 +632,7 @@ class FlatHostTests(fx.Scratch):
                 with self.assertRaisesRegex(decider.GateDecideError, "rules_refused"):  # its leaves commit to the frame it decided, not the one sent
                     decider.decide(g.HEAD, g.ASOF, prod, [g.request(2, 0, [20])], flat, w, g.GRANT, keys, c.tenant)
             count = int.from_bytes(told[0][19:23], "little")
-            self.assertEqual(told[0][87 + 16 * count + 208:][:64], au.H(body))  # the cause: its authority record names the other pin
+            self.assertEqual(told[0][87 + 20 * count + 208:][:64], au.H(body))  # the cause: its authority record names the other pin
             self.assertEqual(prod.tip(), tip)
         with self.scratch() as tmp:
             c, prod = self.cluster(tmp, "q")
@@ -840,7 +840,7 @@ class FlatHostTests(fx.Scratch):
 
                 def lie(self, directory, shard, data):
                     out = bytearray(real(self, directory, shard, data))
-                    at = 87 + 16 * int.from_bytes(out[19:23], "little")  # the head, then the root, after the records
+                    at = 87 + 20 * int.from_bytes(out[19:23], "little")  # the head, then the root, after the records
                     out[len(out) - 1 if what == "adds" else at + 64 * (what == "root")] ^= 1
                     return bytes(out)
                 with mock.patch.object(decider.RulesWorker, "run_frame", lie):

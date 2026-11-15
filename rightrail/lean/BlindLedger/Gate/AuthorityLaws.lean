@@ -484,11 +484,11 @@ def dup : Nat := 2 ^ Rules.Reason.idx .ALREADY_DECIDED
 #guard !bv (bx deceased [a1, a3])
 #guard !bv (bx deceased [a1, a5])
 #guard !bv (bx deceased [r1, r2])
--- overrides: a bit outside the bypassable set, a mix, nothing, a bit beyond the 24 reasons
+-- overrides: a bit outside the bypassable set, a mix, nothing, the first bit beyond the reasons
 #guard !bv (bx dup [a1, a2])
 #guard !bv (bx (deceased + dup) [a1, a2])
 #guard !bv (bx 0 [a1, a2])
-#guard !bv (bx (2 ^ 24) [a1, a2])
+#guard !bv (bx (2 ^ Rules.reasons.length) [a1, a2])
 #guard !bv (g0)
 
 /-- Mutant: `<` for `<=` on the window. -/

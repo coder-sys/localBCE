@@ -829,6 +829,20 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Frame.rows_of_records
 /-- info: 'BlindLedger.Gate.Frame.answer_encodes' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Frame.answer_encodes
+/-- info: 'BlindLedger.Gate.Rules.idx_dense' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.idx_dense
+/-- info: 'BlindLedger.Gate.Rules.reasons_len_le' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.reasons_len_le
+/-- info: 'BlindLedger.Gate.Rules.idx_len' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.idx_len
+/-- info: 'BlindLedger.Gate.Rules.reasons_list_nodup' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.reasons_list_nodup
+/-- info: 'BlindLedger.Gate.Frame.maskOf_testBit_idx' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Frame.maskOf_testBit_idx
+/-- info: 'BlindLedger.Gate.Frame.unmask_maskOf' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Frame.unmask_maskOf
+/-- info: 'BlindLedger.Gate.Frame.maskOf_lt' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Frame.maskOf_lt
 /-- info: 'BlindLedger.Gate.Flat.StoreLog.load_binds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.StoreLog.load_binds
 /-- info: 'BlindLedger.Gate.Flat.StoreLog.crash_repair' depends on axioms: [propext, Classical.choice, Quot.sound] -/

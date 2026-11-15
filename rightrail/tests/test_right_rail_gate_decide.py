@@ -30,7 +30,7 @@ def _le(n: int, w: int) -> bytes:
 
 def answer(frame: bytes, outcomes: list[int], leaves: list[bytes] | None = None, hold: bytes = bytes(16), floor: int = 0,
            epoch: int = 0, pin: bytes | None = None) -> bytes:
-    """The binary answer (conformance/FRAME_V1.md section 4) to ``frame``: a record per outcome, the one-step head the adapter
+    """The binary answer (header version 3: 20-byte records, u64 reasons) to ``frame``: a record per outcome, the one-step head the adapter
     recomputes over a stand-in state root, the id of the frame's grant, the authority record after the batch (the tenant's
     key-set pin unless ``pin``, this grant floor and key-set epoch) and these leaves (default: one ALLOW leaf per request)."""
     root = bytes(64)
@@ -38,10 +38,10 @@ def answer(frame: bytes, outcomes: list[int], leaves: list[bytes] | None = None,
     _, bodies, signed, _ = decide._requests(frame)
     grant = decide._approval(signed)[1] if bodies else fx.D[3]
     if leaves is None:
-        leaves = [bytes([0]) + _le(0, 4) + bytes([2, 0]) + x for x in fx.frame_inputs(frame).values()] if bodies else []
+        leaves = [bytes([0]) + _le(0, 8) + bytes([2, 0]) + x for x in fx.frame_inputs(frame).values()] if bodies else []
     head = flatchain.step_adds(frame[82 + 8:82 + 72], auth + root)
-    recs = b"".join(_le(i, 3) + bytes([o, 0]) + _le(0, 4) + _le(2**32 - 1, 4) + _le(2**24 - 1, 3) for i, o in enumerate(outcomes))
-    return (b"RRDA" + _le(1, 2) + b"\0" + frame[6:18] + _le(len(outcomes), 4) + frame[18:82] + recs + head + root + hold + grant
+    recs = b"".join(_le(i, 3) + bytes([o, 0]) + _le(0, 8) + _le(2**32 - 1, 4) + _le(2**24 - 1, 3) for i, o in enumerate(outcomes))
+    return (b"RRDA" + _le(3, 2) + b"\0" + frame[6:18] + _le(len(outcomes), 4) + frame[18:82] + recs + head + root + hold + grant
             + auth + _le(0, 4) + _le(len(leaves), 4) + b"".join(leaves) + _le(0, 4))
 
 
@@ -59,7 +59,7 @@ def carried(frame: bytes) -> tuple[bytes, int | None, int]:
 
 def leaf(r: gate.DecideRequest, frame: bytes) -> bytes:
     """The leaf the engine answers for a request of ``frame``: ALLOW, no reason, TRANSFER, no bypass, its INPUT/v6."""
-    return bytes([0]) + _le(0, 4) + bytes([2, 0]) + fx.frame_inputs(frame)[gate.encode_decide_request(r)]
+    return bytes([0]) + _le(0, 8) + bytes([2, 0]) + fx.frame_inputs(frame)[gate.encode_decide_request(r)]
 
 
 ROOT = bytes(64)  # a stand-in state root after a batch
