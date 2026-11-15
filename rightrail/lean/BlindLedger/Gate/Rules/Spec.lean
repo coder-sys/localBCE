@@ -150,6 +150,19 @@ theorem Reason.idx_inj {a b : Reason} (h : a.idx = b.idx) : a = b := by
 -- The bits are exactly 0 .. reasons.length - 1, each once: every mask bit below the width names one reason.
 #guard (List.range reasons.length).all fun i => (reasons.filter (·.idx == i)).length == 1
 
+/-- Every bit below the width names a reason (the proof-term half of the `#guard` above). -/
+theorem idx_dense : ∀ j < reasons.length, ∃ r ∈ reasons, r.idx = j := by decide
+
+/-- The u64 field budget minus the two leaf-only codes (bits 62 and 63); not a total-count guard. -/
+theorem reasons_len_le : reasons.length ≤ 62 := by decide
+
+/-- Every reason's bit is below the width. -/
+theorem idx_len (r : Reason) : r.idx < reasons.length := by cases r <;> decide
+
+/-- `reasons` lists each code once.  Not `reasons_nodup`: that name is `Rules.Theorems`'s lemma about a decision's
+    reasons. -/
+theorem reasons_list_nodup : reasons.Nodup := by decide
+
 /-- The reasons a bypass may override: findings about reference facts or similarity.  Every other reason guards the
     release-once rule or is malformed input, and a new reason is not bypassable until listed here. -/
 def bypassable : Reason → Bool
@@ -191,6 +204,25 @@ structure Span where
   plan : Nat
   start : Nat
   stop : Nat
+
+/-- G2 eligibility, inclusive: the member's aid code (an identifier) and whether a benefit level exists
+    (`level` 1, else 0) from `start` to `stop`.  Synthetic, from localBCE G2 (rust-engine/src/main.rs:235-240);
+    not legally verified.  No rule reads it yet. -/
+structure Elig where
+  member : Nat
+  aid : Nat
+  level : Nat
+  start : Nat
+  stop : Nat
+
+/-- G4 share of cost: what the member owes for the calendar month `month` (CCYYMM), in cents, and whether the
+    source certifies it met (`met` 1, else 0).  Synthetic, from localBCE G4 (rust-engine/src/main.rs:246-248);
+    not legally verified.  No rule reads it yet. -/
+structure Soc where
+  member : Nat
+  month : Nat
+  cents : Nat
+  met : Nat
 
 /-- A pinned input: its date, its declared row count, and the rows read. -/
 structure Snapshot (α : Type) where
@@ -510,7 +542,7 @@ def decideBatchIn (c : Ctx) (f : List Nat) (batch : List Line) : Result :=
 /-! Pins.  A snapshot or set pin is the SHA3-512 of `pinInput`: its domain
     (`RR/GATE/SNAPSHOT/v1`, `RR/GATE/RELEASED/v1` or `RR/GATE/UNRESOLVED/v1`)
     and a NUL, the kind (1 DMF, 2 provider deaths, 3 exclusions, 4
-    enrollment, 5 released, 6 unresolved), date and declared count, then the
+    enrollment, 5 released, 6 unresolved, 7 eligibility, 8 share of cost), date and declared count, then the
     rows in ascending byte order.  Every field is fixed-width big-endian (an
     identifier `idWidth` bytes, `pay` `payWidth`, flow tag 1, date, units,
     kind and count 4, cents 8); a value that does not fit fails the pin. -/
@@ -529,6 +561,13 @@ def Death.fields (d : Death) : List (Nat × Nat) := [(idWidth, d.id), (4, d.date
 def Exclusion.fields (e : Exclusion) : List (Nat × Nat) := [(idWidth, e.id), (4, e.start), (4, e.stop)]
 
 def Span.fields (s : Span) : List (Nat × Nat) := [(idWidth, s.member), (idWidth, s.plan), (4, s.start), (4, s.stop)]
+
+/-- Kind 7 (G2 eligibility): member and aid code as identifiers, the level flag in one byte, then the dates. -/
+def Elig.fields (e : Elig) : List (Nat × Nat) :=
+  [(idWidth, e.member), (idWidth, e.aid), (1, e.level), (4, e.start), (4, e.stop)]
+
+/-- Kind 8 (G4 share of cost): member as an identifier, the month, the cents, then the met flag in one byte. -/
+def Soc.fields (q : Soc) : List (Nat × Nat) := [(idWidth, q.member), (4, q.month), (8, q.cents), (1, q.met)]
 
 def Line.fields (l : Line) : List (Nat × Nat) :=
   [(idWidth, l.id), (payWidth, l.pay), (1, l.flow.tag), (idWidth, l.member), (idWidth, l.payee),

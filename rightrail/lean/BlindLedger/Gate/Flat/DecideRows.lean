@@ -1598,7 +1598,7 @@ theorem probe_heads {H : Bytes → Bytes} {S : SetIdx} {snap : Snapshot Line} (h
 
 theorem mem_reasons (r : Reason) : r ∈ reasons := by cases r <;> decide
 
-theorem idx_len (r : Reason) : r.idx < reasons.length := by cases r <;> decide
+theorem idx_len (r : Reason) : r.idx < reasons.length := BlindLedger.Gate.Rules.idx_len r
 
 theorem idx_lt (r : Reason) : r.idx < 24 := by
   have := idx_len r
@@ -1664,7 +1664,7 @@ theorem Lo_or {a b : UInt32} (ha : Lo a) (hb : Lo b) : Lo (a ||| b) := by
 theorem Lo_on (c : Bool) (r : Reason) : Lo (on c (bit r)) := by
   cases c <;> simp [on, Lo_zero, Lo_bit]
 
-theorem reasons_nodup : reasons.Nodup := by decide
+theorem reasons_nodup : reasons.Nodup := BlindLedger.Gate.Rules.reasons_list_nodup
 
 theorem idx_get (j : Nat) (hj : j < 24) : (reasons[j]'(by simpa [reasons] using hj)).idx = j := by
   have h : ∀ k, k < 24 → reasons[k]?.map Reason.idx = some k := by decide
