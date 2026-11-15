@@ -290,4 +290,58 @@
   refuses it inside `rightrail/`) with `scripts/check_rightrail_zip_import.py`,
   the self-check updated to trunk `fc89f9e5`, and the October designs and logs
   carried over and marked superseded. The trunk fixed the old `rules_v1`
-  manifest digest mismatch (OPEN_QUESTIONS item 17).
+  manifest digest mismatch (OPEN_QUESTIONS item 17). Step 0 committed as
+  `70b4e4b6` and pushed on "push 70b4e4b6".
+- 2026-11-14: trunk test runtime (TRUNK_MIGRATION_PLAN.md decision 16; owner
+  approved each download). A private copy of the installed Python 3.14.3 at
+  `C:\Users\sruja\rr-tools\py314` (an x64 build running under emulation;
+  `platform.machine()` reports the host's ARM64); pytest 9.0.3 and its five
+  dependencies from the six hash-pinned wheels in trunk `requirements-dev.txt`
+  (PyPI, 1.7 MB, installed offline with `--require-hashes`); `DLLs\sqlite3.dll`
+  replaced by sqlite.org's x64 3.53.1 build (`sqlite-dll-win-x64-3530100.zip`,
+  SHA-256 `24bf0618...17cd`; sqlite.org lists no hash for past releases). An
+  ARM64 SQLite zip was downloaded first in error and is unused. Rust was not
+  installed: the signer is hash-pinned and its pinned build needs the original
+  builder's CARGO_HOME path, MSVC 14.44.35207 and SDK 10.0.26100.0, so a local
+  build would not match and would be refused by design; the pinned
+  `rr_gate_mldsa87.exe` is to be requested from the RightRail maintainers.
+  The step 0 check that could not run, the committed-report part of
+  `test_tcb_gate`, now passes with this Python (12 run, 9 OK, 3 live parts
+  skipped).
+- 2026-11-14: trunk move step 1, baseline of the unmodified trunk `fc89f9e5`,
+  all through the interim guard (1.5 GiB floor). Build: `lake build` of the
+  default targets completed, 253 jobs, peak job memory 4,992 MB, after three
+  runs stopped by the guard's memory watchdog until Edge, ChatGPT, Wispr Flow
+  and Cluely were closed (6.4 GB free). The successful run took about 8
+  minutes; the first stopped run built 96 jobs in 6 minutes, so a full trunk
+  build here is minutes, not the days TRUNK_MIGRATION_PLAN.md estimated from
+  the October logs. `wire_vectors` and `panic_probe` (not default targets)
+  built separately, 71 jobs. **Reproduction check: the built `gate_engine.exe`
+  is `2d720b52f40cc6a3...`, byte-identical to the trunk pin
+  (`tools/tcb_report.txt:5`), and the built `gate_verify.exe` equals its pin
+  `bf86e5cf...`.** So re-pins made on this machine under emulation can match
+  upstream builds (plan decision 8's mismatch case did not arise). Tests: the
+  whole trunk pytest suite with `--continue-on-collection-errors`, 6,699
+  tests collected in 25 minutes, 13 skipped; 25 test files cannot be collected
+  without the signer binary. Every failure traces to this machine, none to a
+  localBCE change (step 1 changes nothing in `rightrail/`):
+  - the unbuilt ML-DSA-87 signer `rr_gate_mldsa87.exe`: 194 failures and
+    errors that name it, plus 52 in the financial follow-through, line-pack
+    and independent-checker tests that fail as `custody_signer` (with their
+    teardown file-lock errors);
+  - no browser runtime: 32 in the mirror interaction model and scorecard
+    tests, which need Playwright 1.62.1 (`RR_SCORECARD_PLAYWRIGHT`) and
+    `msedge.exe` (`RR_SCORECARD_BROWSER`);
+  - no git history (zip snapshot): 6 semantic-assurance-gate tests ("actual
+    candidate is not Git");
+  - Windows ARM64, not x86_64: 1 semantic-assurance-gate test and 1 skip;
+  - Python 3.14: `test_canonical_decoders_still_demand_canonical_bytes`
+    expects a too-deep JSON document to be refused, and 3.14's decoder accepts
+    it;
+  - Windows file locks on a test SQLite file: 2 in `retry_order`;
+  - an unbuilt provider-app Lean artifact: 1 (`LEAN_ARTIFACT_UNAVAILABLE`).
+  Fixed by the environment, not by code: the 7 Lean follow-through tests need
+  `E3_SCRATCH` set (now `C:\Users\sruja\rr-test-scratch\e3`), and the 9
+  wire-vector and panic-probe skips need those two executables built; with
+  both, they pass. Remaining skips: the two live TCB parts, one
+  x86_64-only toolchain check.
