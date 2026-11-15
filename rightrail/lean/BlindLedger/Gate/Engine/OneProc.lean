@@ -74,13 +74,13 @@ def serve (dir : String) (shard : Nat) (read : USize → IO ByteArray) (write : 
   write (be32 resp.size ++ resp)
   serve dir shard read write fw fuel
 
-def run (crash : IO String) (args : List String) : IO UInt32 := do
+def run (crash : IO String) (verify : Bytes → Bytes → Bytes → Bool) (args : List String) : IO UInt32 := do
   let [dir, sh] := args | return 64
   let some shard := sh.toNat? | return 64
   if (← reserveArena 1073741824 false false) != 0 then
     return 70
   let stdin ← IO.getStdin
   let stdout ← IO.getStdout
-  serve dir shard stdin.read (fun b => do stdout.write b; stdout.flush) { crash := ← crash } serveFuel
+  serve dir shard stdin.read (fun b => do stdout.write b; stdout.flush) { crash := ← crash, verify := verify } serveFuel
 
 end BlindLedger.Gate.Engine.OneProc

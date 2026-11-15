@@ -65,6 +65,9 @@ def decAuth (v : Bytes) : Option AuthRec :=
 structure FlatW where
   /-- Test only (the crash-test exe): where a commit kills the process; the pinned exes pass "none". -/
   crash : String := "none"
+  /-- The signature check `Run.admit` uses on a frame's authority; the pinned exes pass `mlDsaOk`.  Test only, never
+      pinned: `gate_engine_unsigned` passes one that accepts every signature (the signer-free decision check). -/
+  verify : Bytes → Bytes → Bytes → Bool := mlDsaOk
   /-- The exclusive lock on the open index's directory, held for the worker's life: a second writer is refused. -/
   lock : Option (String × IO.FS.Handle) := none
   /-- The open chunk store. -/
@@ -234,7 +237,7 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
     { today := q.today, redo := q.redo, reqs := au.reqs.toArray, grant := opt au.grant, release := opt au.release
       byps := au.byps, floorIn := au.floor, kfloorIn := some au.kfloor, keyset := opt au.keyset, ksteps := au.ksteps }
   let adm : Except String Run.Admitted :=
-    if st.reqs.isEmpty then .error "" else Run.admit mlDsaOk au0.pin au0.rat au0.floor st
+    if st.reqs.isEmpty then .error "" else Run.admit w.verify au0.pin au0.rat au0.floor st
   -- a frame whose authority is not admitted decides nothing and writes nothing: it is refused visibly
   if !st.reqs.isEmpty then
     if let .error why := adm then

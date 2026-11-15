@@ -3,6 +3,7 @@ small histories, a refused open writes nothing, a corrupt page or an unreadable 
 leaves the store before or after the batch, as the signed head says; an unsigned whole frame left by a kill is kept for the same
 request and nothing else (test-only exes; synthetic, non-PHI)."""
 
+import functools
 import hashlib
 import msvcrt
 import os
@@ -28,8 +29,21 @@ CRASH = BIN / "gate_rules_crashtest.exe"  # the only exe that reads RR_FLAT_CRAS
 PAGE = 4096
 POINTS = ["frame-torn", "frame-write", "frame-sync"]  # where a commit can be killed: body written, trailer written, synced
 NB = {"RR_FLAT_NB": "8"}  # a small directory: the second batch grows it, so the batches after rebuild it from the log
-GENESIS = chain.genesis(0, g.ASOF, g.PIN)
 MEMBERS = [1001, 1002, 1003, 1005, 7701, 504, 1006, 1007]
+
+
+@functools.lru_cache(maxsize=None)
+def genesis() -> bytes:
+    """Shard 0's genesis head under the harness key-set pin, computed at first use, so importing this module reads no ``g.PIN``
+    (which runs the signer unless ``RR_GATE_UNSIGNED=1``)."""
+    return chain.genesis(0, g.ASOF, g.PIN)
+
+
+def __getattr__(name: str):
+    """``GENESIS`` (``genesis()``) for the modules that read ``fw.GENESIS``."""
+    if name == "GENESIS":
+        return genesis()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def u16(b: bytes) -> bytes:
@@ -148,7 +162,7 @@ class FlatWorkerTests(unittest.TestCase):
         return eng, d
 
     def test_engine_equals_one_shot_on_small_histories(self):
-        rng, (eng, _), prev, history, want = random.Random(11), self.engine("w"), GENESIS, [], []
+        rng, (eng, _), prev, history, want = random.Random(11), self.engine("w"), genesis(), [], []
         for k in range(5):
             reqs, rows = batch(rng, k, 12)
             data, out = eng.ask(k, prev, reqs)
@@ -161,7 +175,7 @@ class FlatWorkerTests(unittest.TestCase):
 
     def test_a_redone_payment_is_decided_as_the_one_shot_decides(self):
         # batch 1 redoes a payment of batch 0 (it owns its line again) and one that is in no batch
-        rng, (eng, _), prev, history, redos = random.Random(5), self.engine("r"), GENESIS, [], {1: (pay_number(1000), pay_number(999999))}
+        rng, (eng, _), prev, history, redos = random.Random(5), self.engine("r"), genesis(), [], {1: (pay_number(1000), pay_number(999999))}
         for k in range(3):
             reqs, rows = batch(rng, k, 12)
             data, out = eng.ask(k, prev, reqs, redos.get(k, ()))
@@ -175,7 +189,7 @@ class FlatWorkerTests(unittest.TestCase):
             with self.subTest(why=why, fresh=fresh):
                 rng = random.Random(9)
                 eng, d = self.engine(f"o{why}{fresh}")
-                data, out = eng.ask(0, GENESIS, batch(rng, 0, 10)[0])
+                data, out = eng.ask(0, genesis(), batch(rng, 0, 10)[0])
                 head, second = read(data, out)[2], batch(rng, 1, 10)[0]
                 if why == "CORRUPT":
                     p = d / "log"  # a byte of the first frame's metadata: the chain no longer holds
@@ -198,7 +212,7 @@ class FlatWorkerTests(unittest.TestCase):
         def start(name: str):
             rng = random.Random(5)
             eng, d = self.engine(name)
-            data, out = eng.ask(0, GENESIS, batch(rng, 0, 10)[0])
+            data, out = eng.ask(0, genesis(), batch(rng, 0, 10)[0])
             return eng, d, read(data, out)[2], batch(rng, 1, 10)[0]
 
         eng, _, head, second = start("c")
@@ -226,7 +240,7 @@ class FlatWorkerTests(unittest.TestCase):
         rng, d = random.Random(9), self.tmp / name
         reqs = [batch(rng, k, n1 if k == 1 else 12) for k in range(3)]
         first = Engine(d, env=env)
-        head1 = read(*first.ask(0, GENESIS, reqs[0][0]))[2]
+        head1 = read(*first.ask(0, genesis(), reqs[0][0]))[2]
         first.close()
         second = Engine(d, CRASH if crash else ENGINE, {"RR_FLAT_CRASH": crash} if crash else None)
         data, out = second.ask(1, head1, reqs[1][0])
@@ -330,12 +344,12 @@ class FlatWorkerTests(unittest.TestCase):
     def test_a_second_writer_on_a_held_index_is_refused(self):
         rng = random.Random(4)
         eng, d = self.engine("lock")
-        head = read(*eng.ask(0, GENESIS, batch(rng, 0, 6)[0]))[2]
+        head = read(*eng.ask(0, genesis(), batch(rng, 0, 6)[0]))[2]
         head2 = read(*eng.ask(1, head, batch(rng, 1, 6)[0]))[2]
         third, was = batch(rng, 2, 6)[0], snap(d)
         other = Engine(d)
         self.addCleanup(other.close)
-        for k, prev in ((2, head2), (0, GENESIS)):  # an open, then an init
+        for k, prev in ((2, head2), (0, genesis())):  # an open, then an init
             self.assertEqual(read(*other.ask(k, prev, third))[0], "flat_lock")
             self.assertEqual(snap(d), was)
         eng.close()
@@ -349,7 +363,7 @@ class FlatWorkerTests(unittest.TestCase):
         and the file is not touched."""
         rng = random.Random(8)
         eng, d = self.engine("back")
-        head = read(*eng.ask(0, GENESIS, batch(rng, 0, 6)[0]))[2]
+        head = read(*eng.ask(0, genesis(), batch(rng, 0, 6)[0]))[2]
         e = self.tmp / "back2"
         shutil.copytree(d, e, ignore=shutil.ignore_patterns("lock"))
         other = Engine(e)
@@ -366,7 +380,7 @@ class FlatWorkerTests(unittest.TestCase):
     def test_only_the_crash_test_exe_reads_the_crash_variable(self):
         def run(exe: Path, point: str, n: int) -> tuple[int, bytes]:
             eng = Engine(self.tmp / f"env{n}", exe, {"RR_FLAT_CRASH": point})
-            out = eng.ask(0, GENESIS, batch(random.Random(3), 0, 4)[0])[1]
+            out = eng.ask(0, genesis(), batch(random.Random(3), 0, 4)[0])[1]
             eng.close()
             return eng.p.returncode, out
 

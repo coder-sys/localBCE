@@ -7,4 +7,4 @@ def crashPoint : IO String := do
   if ("none" :: points).contains v then pure v
   else do IO.eprintln s!"RR_FLAT_CRASH={v} is not a crash point"; IO.Process.exit 2
 
-def main (args : List String) : IO UInt32 := BlindLedger.Gate.Engine.OneProc.run crashPoint args
+def main (args : List String) : IO UInt32 := BlindLedger.Gate.Engine.OneProc.run crashPoint BlindLedger.Gate.mlDsaOk args

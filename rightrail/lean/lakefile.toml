@@ -46,7 +46,7 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 name = "gate_axioms"
 roots = ["BlindLedger.Gate.AxiomCheck"]
 
-# The binary request and answer frames (conformance/FRAME_V1.md): statements, not yet proved; not imported by any exe.
+# The binary request and answer frames (conformance/FRAME_V1.md): proved; Frame/Spec and Frame/Fast are in `gate_engine`'s closure.
 [[lean_lib]]
 name = "frame_statements"
 roots = ["BlindLedger.Gate.Frame.Spec", "BlindLedger.Gate.Frame.Fast", "BlindLedger.Gate.Frame.Answer"]
@@ -73,6 +73,12 @@ moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 [[lean_exe]]
 name = "gate_engine"
 root = "BlindLedger.Gate.Engine.EngineMain"
+moreLinkArgs = ["-Wl,--no-insert-timestamp"]
+
+# Test-only, never pinned: gate_engine whose authority check accepts every signature (tests/gate_unsigned_pairs.py, the signer-free decision check).
+[[lean_exe]]
+name = "gate_engine_unsigned"
+root = "BlindLedger.Gate.Engine.EngineUnsigned"
 moreLinkArgs = ["-Wl,--no-insert-timestamp"]
 
 # Engine v3 decision path on rows files (gate path design step 1): the engine's pipe over `Hist`; not pinned.
