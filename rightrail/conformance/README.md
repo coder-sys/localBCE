@@ -42,7 +42,8 @@ file not pinned (verify from the repository root with
  `app/right_rail_financial_owner_independent.py`. v1 covers the segment layer only: event id/head
  content and the 4,096-event boundary are out of scope.
 - **Engine frames** `RRDQ`/`RRDA` v1: spec [FRAME_V1.md](FRAME_V1.md); normative model `lean/BlindLedger/Gate/Frame/`;
- draft, no vectors yet.
+ draft; answer vectors in `tests/gate_vectors/gate_v1.vectors`. The engine now answers at `RRDA` header version 3 (u64 reasons); the request stays version 1;
+ a page for the version-3 frames is to come.
 - **Combined history engine** (revision 2 of the history store): spec [ENGINE_V3.md](ENGINE_V3.md); normative model
  `lean/BlindLedger/Gate/Engine3/`; draft, no vectors yet.
 - **History index** `RR/GATE/CHAIN/v1` and `RR/GATE/{FLAT/FRAME,STORE/CHUNK,STORE/LEAF,STORE/NODE,STORE/PAGE,STORE/STATE3,INDEX/TAIL}/v1` (draft): spec

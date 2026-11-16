@@ -152,7 +152,8 @@ Frame, one per batch, appended to `log` and synced once:
 
     RRF4 ‖ u32 |request| ‖ u32 |answer| ‖ u32 |trailer| ‖ request ‖ answer ‖ trailer
 
-The request and answer are the version 2 bytes of §17. `rq` is the request's FRAME/v2 digest (§17). Rows are not copied
+The request and answer are the engine's frames (§17). `rq` is the batch identity (`Frame.ident`: BATCH-INPUT over the
+batch context and each request's INPUT/v6, §18), not a frame digest (§24). Rows are not copied
 into the frame: a batch's appended rows are the lines of its rule 1, 2 and 5 records, read from the request and answer
 (`rows_of_records`).
 
@@ -173,7 +174,7 @@ Load at signed head `hd` and batch count `bt`:
 
 1. Read `key`; refuse `KEY` when it is missing or not 32 bytes. Decode the frames of `log`; frame `bt` must carry `hd`
    and `bt` and be the last whole frame or the one before it (`HEAD`).
-2. Check every frame without deciding it again. Its request must hash to its `rq` (the request's own digest first), its
+2. Check every frame without deciding it again. Its request must have the identity `rq` (the request's own digest first), its
    answer to its `an`, and the rows the answer adds to its `bd`; these checks need no state. Its `prev` is the head
    before it, its root is the state root of its own fields, and its head is the chain head of `prev`, `bd` and root
    (`REPLAY`). So every frame is chained by SHA3-512 digests to the signed head `hd`. The genesis is under the key-set pin
@@ -501,7 +502,7 @@ refuses the frame (`FRAME`) with nothing written. Staff see one item per field o
 Statements that exist in the sources are in the `Engine3` files. These names are planned
 and have no theorem yet: `fitsLine_fitsLine2`, `decideRowsX_eq`, `payIdx_eq`, `putLine_getLine`, `kbytes_inj`,
 `kbOfRow_key`, `feedOrder_decode`, `pinInputW_eq`, `feedW_eq`, `feedW_at_eq`, `frameV2Pre_inj`, `inputCtxPre_inj`,
-`inputV6Pre_inj`, `inputV6_bind`, `decodeAns_leafCount`, `bd_of_records`, `treeSet_root`, `install_leaf_eq`,
+`inputV6_bind`, `decodeAns_leafCount`, `bd_of_records`, `treeSet_root`, `install_leaf_eq`,
 `install_leaf_sound`.
 
 | Statement | Says |
@@ -618,10 +619,11 @@ digest (§24). The body is `FRAME_V1.md` §2's with the feed rows of §19.
 Answer header: `FRAME_V1.md` §4's. Extension, after `head` and `root` (§25):
 
     hold 16 ‖ grant id 64 ‖ notes u32, each blob2 ‖ leaves u32, each:
-        outcome u8 ‖ reasons u32 ‖ authority u8 ‖ bypass flag u8 ‖ (bypass id 64) ‖ input 64     71 or 135 bytes
+        outcome u8 ‖ reasons u64 ‖ authority u8 ‖ bypass flag u8 ‖ (bypass id 64) ‖ input 64     75 or 139 bytes
     ‖ adds u32, each blob2
 
-Leaf `i` is request `i`'s. The grant id is carried once, all zero when there is none. The bypass flag is 0 when no
+Leaf `i` is request `i`'s. A rule reason is at bit `Reason.idx`; bits 62 (UNENCODABLE_PAYMENT) and 63 (SCOPE) are
+leaf-only codes (`Frame.leafUnencodable`, `Frame.leafScope`). The grant id is carried once, all zero when there is none. The bypass flag is 0 when no
 bypass released the payment and 1 when one did; 1 is followed by that bypass's id, which is not all zero, and any other
 flag refuses the answer. The leaf copies no request field: the host takes tenant, program, payment, member, payee,
 period, flow and cents from the request it sent, computes the lines root and `input` (§18) from those bytes, and

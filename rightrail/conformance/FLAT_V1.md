@@ -153,8 +153,9 @@ file) and nothing else.
   head(unresolved) ‖ leb nx ‖ auth ‖ rq ‖ prev ‖ digest ‖ head`: the shard, the directory's bucket count when the store
   was created, the batch count, the chunk, the set heads, the next install number, the shard's authority record after the
   batch (208 bytes: key-set genesis pin 64 ‖ ratchet epoch u32 ‖ ratchet head 64 ‖ day u32 ‖ checkpoint 64 ‖ grant serial
-  floor u64, big endian), the request digest `rq`, the head before the batch, the batch digest and the head after it. `rq`
-  is the request frame's own digest, `H(dom FRAME ‖ body)` (FRAME_V1), over the request bytes exactly as the host sent them. The batch is committed when
+  floor u64, big endian), the batch identity `rq`, the head before the batch, the batch digest and the head after it. `rq`
+  is `Frame.ident`: `BATCH-INPUT` over the batch context (`CONTEXT/v1`) and each request's INPUT/v6 (ENGINE_V3 §18, §24),
+  not a frame digest. The batch is committed when
   its trailer is on disk. A load takes the authority record from the target's frame; the state root binds it, so a record
   swapped or rewound refuses the load.
 
@@ -192,7 +193,7 @@ mismatch prints `RULES_FLAT_HOLD CORRUPT` and writes nothing.
 
 Torn batches. A frame with no whole trailer is not a batch: load cuts the log after the signed head's frame. One whole
 frame after the signed head (the batch was committed and the host never sealed it) is replayed too and kept; the batch is
-then decided again, and it must be the same request bytes (`rq`) and come out as the same frame, else it is refused
+then decided again, and it must have the same batch identity (`rq`) and come out as the same frame, else it is refused
 (`PENDING`). Two whole frames past the signed head are `HEAD`. After a kill at any write step, load at the signed head gives
 the last committed state, and the resent batch answers and commits as an uninterrupted run does, byte for byte.
 

@@ -2,9 +2,12 @@
 
 Status: draft. Synthetic, nonpayment, non-PHI: `proofSuiteId=null`, `production_usable=false`, `activation=false`.
 The Lean model is normative: `lean/BlindLedger/Gate/Frame/Spec.lean` (codecs, the decision of a request, the record,
-`join`, the human text, admission and retry), built by the `frame_statements` library. Most of its theorems are proved; the
-open proofs are the `sorry` entries for `Frame/` in `tests/lean_sorry_allowlist.txt` (Spec 16, Fast 6, Answer 1). The host
-(`app/right_rail_gate_decide.py`) builds and reads these frames today. No vectors are published yet. The history store, the chain and the state root are `FLAT_V1.md`'s.
+`join`, the human text, admission and retry), built by the `frame_statements` library. No `sorry` is left in
+`Frame/Spec.lean`, `Frame/Fast.lean` or `Frame/Answer.lean`; `tests/lean_sorry_allowlist.txt` is empty and
+`tests/test_no_sorry_source.py` holds it so. The host
+(`app/right_rail_gate_decide.py`) builds and reads these frames today. `tests/gate_vectors/gate_v1.vectors` carries
+answer vectors (`answer` lines) at answer header version 3 (see the note in section 4): `gate_vectors` requires an
+accept vector to decode and re-encode to the same bytes and a reject vector to be refused (`Gate/Vectors.lean:238-241`). The history store, the chain and the state root are `FLAT_V1.md`'s.
 
 ## 1. Notation and transport
 
@@ -94,6 +97,12 @@ The engine computes `answers H s q` over the store state `s` before the batch. I
 A redo value too wide for its field is left out by the host. The lines that carry it hold.
 
 ## 4. Answer (engine to host)
+
+Note: this section keeps the earlier answer layout (u32 reasons, 16-byte records, 71/135-byte leaves, leaf codes at bits
+24 and 25). The built engine answers at header version 3 (`Frame/Spec.lean:126` `ansVersion`): reasons are a u64, a rule
+reason at bit `r.idx` and the leaf-only UNENCODABLE_PAYMENT and SCOPE at bits 62 and 63 (`:500-503`); a record is 20
+bytes (`:591-594`), a leaf 75 or 139 (`:506-510`). The request is still version 1 (`:122`). A full page for the version-3
+frames is still to come.
 
 Header, 87 bytes:
 
