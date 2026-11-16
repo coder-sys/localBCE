@@ -1,6 +1,6 @@
 # Draft: request to the RightRail maintainers (rr-core)
 
-Draft for the owner to send, 2026-11-15. Not sent by Claude.
+Draft for the owner to send, 2026-11-15. Not sent by Claude. Sent by the owner on 2026-11-15, as below, with TRUNK_STEP2_FRAME_DESIGN.md attached.
 
 ---
 
@@ -15,10 +15,11 @@ localBCE vendors RightRail and is adding two gate rules from its own rulebook. W
 3. **Two more feeds in frame version 2 (ENGINE_V3 §17/§19).** We want to carry two member reference feeds in the request frame:
    - eligibility (SNAPSHOT/v1 kind 7): `member 32 ‖ aid 21 ‖ level u8 ‖ start u32 ‖ stop u32`, 62 bytes per row in §19 style;
    - share of cost (SNAPSHOT/v1 kind 8): `member 32 ‖ month u32 ‖ cents u64 ‖ met u8`, 45 bytes per row.
-   Would you take these two feeds into your frame v2 when you build it? If not, we plan to build `FRAME/v3` as "your specified v2 plus these two feeds", with `CONTEXT/v2`, and an answer header version 3 whose leaf and record reason fields are u64, with reason bits numbered by `Reason.idx` and the two leaf-only codes at bits 62 and 63.
+   Would you take these two feeds into your frame v2 when you build it? If not, we plan to build `FRAME/v3` as "your specified v2 plus these two feeds", with `CONTEXT/v2`. If we have not heard from you by 2026-11-22, we will start building it that way.
+   The answer side is already built on our side, and no decision changes: answer header version 3, whose leaf and record reason fields are u64, with reason bits numbered by `Reason.idx` and the two leaf-only codes at bits 62 and 63.
 
 4. **Reserving numbers.** If we build it ourselves, please treat `FRAME/v3`, `CONTEXT/v2`, answer header version 3, `READ-SET/v5`, `READ-SET/v6`, `READ-ELIGIBILITY/v2` and `READ-SHARE-OF-COST/v2` as taken by this layout, so our tags do not collide with yours.
 
-The full design is in localBCE `docs/integration/TRUNK_STEP2_FRAME_DESIGN.md` on branch `codex/rightrail-trunk`.
+The full design is attached (`TRUNK_STEP2_FRAME_DESIGN.md`).
 
 Thank you.

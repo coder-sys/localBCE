@@ -345,3 +345,15 @@
   wire-vector and panic-probe skips need those two executables built; with
   both, they pass. Remaining skips: the two live TCB parts, one
   x86_64-only toolchain check.
+- 2026-11-15: trunk move step 2 started (TRUNK_STEP2_FRAME_DESIGN.md; owner
+  chose Route A with a bounded wait and approved all defaults). The owner sent
+  the rr-core request (RR_CORE_REQUEST_DRAFT.md: the fc89f9e5 git history, the
+  pinned signer, the two feeds in frame v2, reserved numbers), with the design
+  attached. Bound: 2026-11-22. Route-independent work so far, local only on
+  `codex/rightrail-trunk-step2`, not pushed: the signer-free decision-check
+  harness, the Elig/Soc types and idx lemmas, the answer side (header v3, u64
+  reasons at `Reason.idx`, leaf-only bits 62/63) and the route-independent
+  spec page fixes. Signer-free evidence: full lake build 253/253; decision
+  pairs identical before and after, equal to `PAIRS_DIGEST`; test_decode_fuzz
+  passes on the unsigned harness. The final step 2 commit waits for the
+  pinned signer (decision 20).
