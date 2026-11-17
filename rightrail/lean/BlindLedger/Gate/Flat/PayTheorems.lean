@@ -90,6 +90,43 @@ theorem leafReasons_codes (ds : List Decision) (u : Nat → Bool) (p : Nat) :
     · rintro ⟨d, hd, hp, y, hy, rfl⟩; exact ⟨d, ⟨hd, hp⟩, y, hy, rfl⟩
   · exact ⟨["UNENCODABLE_PAYMENT"], by simp [Run.leafReasons, hu], by simp, fun _ => rfl, fun h => by simp at h⟩
 
+/-- `Rules.budget`'s literal 32 is TOKEN/v1's `maxReasonCodes` (Gate/Spec.lean:32), which Rules.Theorems does not
+    import. -/
+private theorem budget_cap : 32 = BlindLedger.Gate.maxReasonCodes := rfl
+
+/-- Codes as `leafReasons_codes` describes them, each the name of a reason allowed by one `Bits`, are at most
+    `maxReasonCodes`: they are distinct, so no more than the allowed names (`Rules.budget`).  No name injectivity is
+    needed. -/
+private theorem codes_le (b : Bits) (ds : List Decision) (u : Nat → Bool) (p : Nat) (rs : List String)
+    (hpw : rs.Pairwise (· < ·)) (h3 : u p = true → rs = ["UNENCODABLE_PAYMENT"])
+    (h4 : u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ ds, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r)
+    (h : ∀ d ∈ ds, ∀ r ∈ d.reasons, may b r = true) : rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
+  cases hu : u p
+  · have hnd : rs.Nodup := List.nodup_iff_pairwise_ne.mpr
+      (hpw.imp fun {x _} hxy e => by subst e; exact String.lt_irrefl x hxy)
+    have hsub : rs ⊆ (reasons.filter (may b)).map Run.name := by
+      intro x hx
+      obtain ⟨d, hd, -, y, hy, rfl⟩ := (h4 hu x).mp hx
+      exact List.mem_map.mpr ⟨y, List.mem_filter.mpr ⟨by cases y <;> decide, h d hd y hy⟩, rfl⟩
+    calc rs.length ≤ ((reasons.filter (may b)).map Run.name).length := hnd.length_le_of_subset hsub
+      _ = (reasons.filter (may b)).length := List.length_map ..
+      _ ≤ 32 := budget b
+      _ = BlindLedger.Gate.maxReasonCodes := budget_cap
+  · rw [h3 hu, ← budget_cap]; decide
+
+/-- The reason codes a token carries for payment `p` are at most `maxReasonCodes` (TOKEN/v1's limit) whenever every
+    reason of every decision is allowed by one `Bits` (`Rules.decideAll_may` gives that for a batch's decisions).  The
+    code list `rs` is `leafReasons_codes`' own (strictly increasing, with its members fixed), so it is the list printed,
+    not just some list whose joining gives the printed text. -/
+theorem leafReasons_le (b : Bits) (ds : List Decision) (u : Nat → Bool) (p : Nat)
+    (h : ∀ d ∈ ds, ∀ r ∈ d.reasons, may b r = true) :
+    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
+      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
+      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ ds, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
+      rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
+  obtain ⟨rs, h1, h2, h3, h4⟩ := leafReasons_codes ds u p
+  exact ⟨rs, h1, h2, h3, h4, codes_le b ds u p rs h2 h3 h4 h⟩
+
 /-- On a batch no cap touches, over an index faithful to `rel` and `unr`, the worker's decisions are the Spec's and its
     payment outcome is the Spec's `payOutcome`. -/
 private theorem pay_eq (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat) (b : List Line)
@@ -126,6 +163,27 @@ theorem pay_line (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Li
   intro fc fe ds x spec
   obtain ⟨hds, hx⟩ : ds = spec ∧ x.payOutcome ds = payOutcome (carried c rel unr) spec := pay_eq H s c rel unr f b hr hu hb
   exact ⟨by rw [hx], hds ▸ leafReasons_codes spec u p⟩
+
+/-- Each `RULES_PAY` line fits one token: in `pay_line`'s setting (a batch no cap touches, an index faithful to `rel`
+    and `unr`), the reason codes the worker prints for payment `p` (the list `pay_line` describes) are at most
+    `maxReasonCodes`. -/
+theorem pay_codes_le (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat) (b : List Line)
+    (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hb : Uncapped (fetch s c.redo b) (Worker.feedsOf c) b)
+    (u : Nat → Bool) (p : Nat) :
+    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
+    let fe := fetch s fc.redo b
+    let ds := (decideFetched s.rel.head s.unr.head fe fc f b).1
+    let spec := (decideBatchIn (carried c rel unr) f b).decisions
+    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
+      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
+      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ spec, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
+      rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
+  intro fc fe ds spec
+  obtain ⟨hds, -⟩ := pay_eq H s c rel unr f b hr hu hb
+  have hm : ∀ d ∈ spec, ∀ r ∈ d.reasons, may (bitsOf (carried c rel unr)) r = true :=
+    decideAll_may (carried c rel unr) (idSeen f ++ seen0 (carried c rel unr) b) (order (carried c rel unr) b)
+  rw [show ds = spec from hds]
+  exact leafReasons_le _ _ u p hm
 
 /-- A payment with a capped line is HOLD, in any batch (`cap_hold`). -/
 theorem pay_capped (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) (u : Nat → Bool)
@@ -775,6 +833,27 @@ theorem pay_line_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapsh
   have hlr : Run.leafReasons ds u p = Run.leafReasons spec u p := by simp only [Run.leafReasons, hf]
   obtain ⟨rs, h1, h2, h3, h4⟩ := leafReasons_codes spec u p
   exact ⟨by simp only [Run.leafOutcome, hpo], rs, by rw [hlr]; exact h1, h2, h3, h4⟩
+
+/-- `pay_codes_le` for a payment none of whose lines is capped, in a batch where other lines may be (`pay_line_part`).
+    A payment with a capped line is HOLD (`pay_capped`); its codes come from the capped index (`Ix.fires` and
+    `capD`, which adds POSTING_CAP), not the Spec, and are not bounded here: no lemma yet ties them to `may`.  Until
+    one does, the only check on `may`'s POSTING_CAP arm is the headroom pin in Rules/Theorems. -/
+theorem pay_codes_le_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat)
+    (b : List Line) (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (u : Nat → Bool) (p : Nat)
+    (hp : ∀ l ∈ b, l.pay = p → capped (hotKeys (fetch s c.redo b) (Worker.feedsOf c) b) (fetch s c.redo b) (Worker.feedsOf c) l = false) :
+    let fc : FCtx := ⟨c.today, c.redo, Worker.feedsOf c, c.byp, c.lim⟩
+    let fe := fetch s fc.redo b
+    let ds := (decideFetched s.rel.head s.unr.head fe fc f b).1
+    let spec := (decideBatchIn (carried c rel unr) f b).decisions
+    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
+      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
+      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ spec, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
+      rs.length ≤ BlindLedger.Gate.maxReasonCodes := by
+  intro fc fe ds spec
+  obtain ⟨-, rs, h1, h2, h3, h4⟩ := pay_line_part H s c rel unr f b hr hu u p hp
+  have hm : ∀ d ∈ spec, ∀ r ∈ d.reasons, may (bitsOf (carried c rel unr)) r = true :=
+    decideAll_may (carried c rel unr) (idSeen f ++ seen0 (carried c rel unr) b) (order (carried c rel unr) b)
+  exact ⟨rs, h1, h2, h3, h4, codes_le _ _ u p rs h2 h3 h4 hm⟩
 
 /-! ## Requests: a token's lines and fields are its own request's (K1 review H1)
 

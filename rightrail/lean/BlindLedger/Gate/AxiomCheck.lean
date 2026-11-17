@@ -691,6 +691,12 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_capped
 /-- info: 'BlindLedger.Gate.Flat.pay_line_part' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_line_part
+/-- info: 'BlindLedger.Gate.Flat.leafReasons_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.leafReasons_le
+/-- info: 'BlindLedger.Gate.Flat.pay_codes_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_codes_le
+/-- info: 'BlindLedger.Gate.Flat.pay_codes_le_part' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_codes_le_part
 /-- info: 'BlindLedger.Gate.Flat.feedsOf_inv' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 /-- info: 'BlindLedger.Gate.Flat.allow_fresh' depends on axioms: [propext, Quot.sound] -/

@@ -329,6 +329,9 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.leafReasons_codes
 #print axioms BlindLedger.Gate.Flat.pay_capped
 #print axioms BlindLedger.Gate.Flat.pay_line_part
+#print axioms BlindLedger.Gate.Flat.leafReasons_le
+#print axioms BlindLedger.Gate.Flat.pay_codes_le
+#print axioms BlindLedger.Gate.Flat.pay_codes_le_part
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh

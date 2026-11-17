@@ -304,6 +304,91 @@ theorem mem_decideAll {c : Ctx} : ∀ {seen : List Key} {ls : List Line} {d : De
     · obtain ⟨pre, l', rfl⟩ := mem_decideAll h
       exact ⟨pre ++ claim c l, l', by rw [List.append_assoc]⟩
 
+/-! ## Reason budget: one payment's codes fit one token
+
+    TOKEN/v1 carries at most `BlindLedger.Gate.maxReasonCodes` = 32 reason codes per payment (Gate/Spec.lean:32,
+    483; not imported here, so the bound is the literal 32 and `Flat.PayTheorems` restates it against
+    `maxReasonCodes`).  Option 1 (REASON_BOUND_DESIGN.md): the bound is proved per payment, never by capping the rule
+    set's size.  Ported from b5f806df with the trunk's sources and reasons. -/
+
+/-- Each snapshot source's usable bit: DMF, provider deaths, exclusions, enrollment (one per source `fires` reads).
+    All lines of a batch read one `Ctx`, so these are per batch.  G2 adds `el` (eligibility) and G4 adds `soc` (share
+    of cost) with their rules. -/
+structure Bits where
+  dmf : Bool
+  pd : Bool
+  ex : Bool
+  en : Bool
+  deriving DecidableEq, Repr
+
+/-- The same `usable` terms `fires` reads. -/
+def bitsOf (c : Ctx) : Bits :=
+  ⟨usable c.today 90 okDeath c.dmf, usable c.today 90 okDeath c.providerDeaths,
+   usable c.today 31 okExclusion c.exclusions, usable c.today 7 okSpan c.enrollment⟩
+
+/-- Whether `r` can appear under bits `b`.  No wildcard: a new reason does not compile until it is classified.
+    `POSTING_CAP` is `true`: `fires` never returns it, but the capped disk engine (`Gate.OnepIndex`) adds it as HOLD,
+    so it can appear on a payment whatever the bits.  `CAP_MEMBER_MONTH_DUPLICATE` is `true`: it also fires on keys
+    seen, whatever the enrollment bit. -/
+def may (b : Bits) : Reason → Bool
+  | .ALREADY_DECIDED | .CAP_MEMBER_MONTH_DUPLICATE | .COLLIDES_WITH_UNRESOLVED_NEAR | .DUPLICATE_OF_UNRESOLVED
+  | .FFS_DUPLICATE_LINE | .FFS_DUPLICATE_UNVERIFIED | .FFS_NEAR_DUPLICATE
+  | .SERVICE_DATE_FUTURE | .SERVICE_DATE_INVALID | .STALE_RELEASED | .STALE_UNRESOLVED
+  | .POSTING_CAP => true
+  | .MEMBER_DECEASED => b.dmf
+  | .MEMBER_DECEASED_UNVERIFIED | .STALE_DMF => !b.dmf
+  | .PROVIDER_DECEASED => b.pd
+  | .PROVIDER_DECEASED_UNVERIFIED | .STALE_PROVIDER_DEATH => !b.pd
+  | .PROVIDER_EXCLUDED => b.ex
+  | .PROVIDER_EXCLUDED_UNVERIFIED | .STALE_EXCLUSION => !b.ex
+  | .MEMBER_NOT_ENROLLED => b.en
+  | .MEMBER_NOT_ENROLLED_UNVERIFIED | .STALE_ENROLLMENT => !b.en
+
+/-- The link: a reason that fires is allowed by the batch's bits. -/
+theorem may_sound {c seen l} (r : Reason) (h : fires c seen l r = true) : may (bitsOf c) r = true := by
+  revert h
+  cases r <;> simp +contextual [fires, may, bitsOf, certain, unverified, notEnrolled]
+
+/-- The finite check, closed by the kernel. -/
+private theorem budget_bool : ∀ a b d e : Bool, (reasons.filter (may ⟨a, b, d, e⟩)).length ≤ 32 := by
+  decide +kernel
+
+/-- At most 32 (`maxReasonCodes`) reasons are allowed under any bits. -/
+theorem budget (b : Bits) : (reasons.filter (may b)).length ≤ 32 := by
+  cases b; exact budget_bool ..
+
+/-- Per payment: reasons that all fired under one batch's bits give at most 32 distinct codes. -/
+theorem pay_budget (b : Bits) (rs : List Reason) (h : ∀ r ∈ rs, may b r = true) :
+    (reasons.filter rs.contains).length ≤ 32 := by
+  rw [← List.countP_eq_length_filter]
+  refine Nat.le_trans (List.countP_mono_left (p := rs.contains) (q := may b)
+    fun r _ hr => h r (List.contains_iff_mem.mp hr)) ?_
+  rw [List.countP_eq_length_filter]
+  exact budget b
+
+-- Headroom pin (not a protected statement; bumped deliberately with each rule).  The maximum over every tuple is 20
+-- today (12 always-possible reasons and the 8 `_UNVERIFIED`/`STALE_` ones), reached at the all-false tuple.  Both by
+-- `decide +kernel`.  `may_sound` cannot check the POSTING_CAP arm (`fires` never returns it; the capped engine adds
+-- it), so until a lemma ties the capped index's reasons to `may`, `headroom_eq` and `headroom_all` are its only check.
+-- `headroom_all` (12 always-possible and the 4 certain ones) also catches a `!b.x` arm loosened to `true`, which the
+-- all-false count cannot see.
+private theorem headroom_le : ∀ a b d e : Bool, (reasons.filter (may ⟨a, b, d, e⟩)).length ≤ 20 := by
+  decide +kernel
+
+private theorem headroom_eq : (reasons.filter (may ⟨false, false, false, false⟩)).length = 20 := by
+  decide +kernel
+
+private theorem headroom_all : (reasons.filter (may ⟨true, true, true, true⟩)).length = 16 := by
+  decide +kernel
+
+/-- Every reason on a batch's decisions is allowed by the batch's bits (Reason budget above). -/
+theorem decideAll_may (c : Ctx) :
+    ∀ (seen : List Key) (ls : List Line), ∀ d ∈ decideAll c seen ls, ∀ r ∈ d.reasons, may (bitsOf c) r = true := by
+  intro seen ls d hd r hr
+  obtain ⟨pre, l, rfl⟩ := mem_decideAll hd
+  simp only [decideLine, List.mem_filter] at hr
+  exact may_sound r hr.2
+
 /-- Fail-closed: when any reference snapshot is not usable (missing or failing
     its pin, an invalid today or asOf, dated after today, too old, empty, a
     parsed row count other than the declared one, or a malformed row), or the
@@ -924,5 +1009,13 @@ theorem one_payment_per_line {c : Nat → Ctx} {b : Nat → List Line}
 #guard_msgs in #print axioms released_iff
 /-- info: 'BlindLedger.Gate.Rules.one_payment_per_line' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms one_payment_per_line
+/-- info: 'BlindLedger.Gate.Rules.may_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms may_sound
+/-- info: 'BlindLedger.Gate.Rules.decideAll_may' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms decideAll_may
+/-- info: 'BlindLedger.Gate.Rules.budget' does not depend on any axioms -/
+#guard_msgs in #print axioms budget
+/-- info: 'BlindLedger.Gate.Rules.pay_budget' depends on axioms: [propext] -/
+#guard_msgs in #print axioms pay_budget
 
 end BlindLedger.Gate.Rules
