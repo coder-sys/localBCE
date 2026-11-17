@@ -125,6 +125,18 @@ structure DoneC where
   au : ByteArray
   bd : Task ByteArray
 
+/-- The checker's own copy of the engine's request numbering (`Run.payIdx`).  The loop `stepC` ran inline, moved here
+    unchanged so a lemma can name it (`Flat.PayNum.payIdxC_spec`). -/
+def payIdxC (reqs : Array Run.Req) (covR unfR : Array Bool) : Array (Option Nat) × Nat := Id.run do
+  let mut ix : Array (Option Nat) := Array.mkEmpty reqs.size
+  let mut n := 0
+  for x in reqs, c in covR, u in unfR do
+    if c && !u && x.ra.flow.ruled && !x.ra.lines.isEmpty then
+      ix := ix.push (some n)
+      n := n + 1
+    else ix := ix.push none
+  pure (ix, n)
+
 /-- The checker's own copy of the engine's per-payment flags and reason-mask OR (`Run.payFlags`, which the checker does
     not import: it shares no code with `StepH`).  The loop `stepC` ran inline, moved here unchanged so a lemma can name
     it (`Flat.Rows.payFlagsC_msk`). -/
@@ -212,15 +224,7 @@ def stepC (c : Ctx) (v : VC) (q : Frame.Req) (dg bs : ByteArray) : IO (Option Do
   let t2 ← if out.ds.size == 0xFFFFFFFFFF then pure 0 else IO.monoNanosNow
   c.add 0 (t1 - t0)
   c.add 1 (t2 - t1)
-  let (payIx, np) := Id.run do
-    let mut ix : Array (Option Nat) := Array.mkEmpty reqs.size
-    let mut n := 0
-    for x in reqs, c in covR, u in unfR do
-      if c && !u && x.ra.flow.ruled && !x.ra.lines.isEmpty then
-        ix := ix.push (some n)
-        n := n + 1
-      else ix := ix.push none
-    pure (ix, n)
+  let (payIx, np) := payIdxC reqs covR unfR
   let nb := lay.lines.size
   let inRel : Array Bool := out.rel.foldl (fun a i => a.set! i true) (Array.replicate nb false)
   let inUnr : Array Bool := out.unr.foldl (fun a i => a.set! i true) (Array.replicate nb false)

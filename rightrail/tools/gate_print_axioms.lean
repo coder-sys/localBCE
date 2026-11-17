@@ -25,6 +25,7 @@ import BlindLedger.Gate.Consume
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
 import BlindLedger.Gate.Flat.RowsBudget
+import BlindLedger.Gate.Flat.PayNumbering
 import BlindLedger.Gate.Custody
 import BlindLedger.Gate.Rules.EmitLaws
 import BlindLedger.Gate.Engine3.Frame3
@@ -353,6 +354,18 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.Rows.payFlags_msk
 #print axioms BlindLedger.Gate.Flat.Rows.payFlagsC_msk
 #print axioms BlindLedger.Gate.Flat.Rows.payFlags_leaf
+#print axioms BlindLedger.Gate.Flat.PayNum.payIdx_spec
+#print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_spec
+#print axioms BlindLedger.Gate.Flat.PayNum.numFrom_lt
+#print axioms BlindLedger.Gate.Flat.PayNum.lines_agree
+#print axioms BlindLedger.Gate.Flat.PayNum.payLines_pidx
+#print axioms BlindLedger.Gate.Flat.PayNum.payLinesV_pidx
+#print axioms BlindLedger.Gate.Flat.PayNum.payIdx_lines
+#print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_lines
+#print axioms BlindLedger.Gate.Flat.PayNum.admB_sizes
+#print axioms BlindLedger.Gate.Flat.PayNum.payIdx_lines_admB
+#print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_lines_admB
+#print axioms BlindLedger.Gate.Flat.PayNum.assemble_pay
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh

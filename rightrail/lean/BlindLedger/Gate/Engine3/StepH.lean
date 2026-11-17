@@ -29,6 +29,19 @@ inductive SteppedH
   | refused (hold : ByteArray)
   | done (d : DoneH)
 
+/-- Each request's payment number, or none, and the count: a covered request (`covR`) whose lines fit (`unfR` false)
+    and are ruled and not empty gets the next number, in request order.  The loop `stepH` ran inline, moved here unchanged
+    so a lemma can name it (`Flat.PayNum.payIdx_spec`). -/
+def payIdx (reqs : Array Run.Req) (covR unfR : Array Bool) : Array (Option Nat) × Nat := Id.run do
+  let mut ix : Array (Option Nat) := Array.mkEmpty reqs.size
+  let mut n := 0
+  for x in reqs, c in covR, u in unfR do
+    if c && !u && x.ra.flow.ruled && !x.ra.lines.isEmpty then
+      ix := ix.push (some n)
+      n := n + 1
+    else ix := ix.push none
+  pure (ix, n)
+
 /-- Per payment of the decided batch `out` on `lay` (`np` payments): its flags (1 a HOLD line, 2 a line that is not an
     own ALLOW, 4 any line, 8 a released line that was not ALLOW, 16 a bypass releases it, 32 it goes at HOLD authority)
     and the OR of its decided lines' reason masks, which `leafIn` turns into the leaf's reasons field.  The loop `stepH`
@@ -122,15 +135,7 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
   let t1b ← tick 1 t1
   let out := Rows.decideRows lay
   let t2 ← if out.ds.size == 0xFFFFFFFFFF then pure 0 else tick 19 t1b
-  let (payIx, np) := Id.run do
-    let mut ix : Array (Option Nat) := Array.mkEmpty reqs.size
-    let mut n := 0
-    for x in reqs, c in covR, u in unfR do
-      if c && !u && x.ra.flow.ruled && !x.ra.lines.isEmpty then
-        ix := ix.push (some n)
-        n := n + 1
-      else ix := ix.push none
-    pure (ix, n)
+  let (payIx, np) := payIdx reqs covR unfR
   let nb := lay.lines.size
   let inRel : Array Bool := out.rel.foldl (fun a i => a.set! i true) (Array.replicate nb false)
   let inUnr : Array Bool := out.unr.foldl (fun a i => a.set! i true) (Array.replicate nb false)

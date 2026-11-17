@@ -103,12 +103,12 @@ theorem rows_leaf_le (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) (
     the leaf-only 62 and 63.
     `m` is `msk[p]` of `Run.payFlags` (engine) or `Verify.payFlagsC` (checker): proved below to be the OR from 0 of
     the masks of exactly the decisions whose line's payment (`lay.lines[d.line].pay`) is `p` (`payFlags_msk`), and
-    tied to the emitted leaf by `payFlags_leaf`.  Still read from the code, not proved: that the leaf index `p`
-    (`payIx`, inline in `stepH`/`stepC`) numbers the requests as `Hist.read`/`VMirror.read` number the layout's
-    payments (all three filter covered, fitting, ruled requests with lines, in request order), and that every such `p`
-    is below `np` (the loop pushes `n` then increments it).  A covered request with no ruled lines gets `m = 0`.  The
-    `may` and no-leaf-only-bit conclusions hold for the OR of any of the layout's decisions, so they do not depend on
-    the numbering; only "exactly this payment's reasons" does. -/
+    tied to the emitted leaf by `payFlags_leaf`.  The numbering is proved in Flat/PayNumbering.lean: `Run.payIdx`
+    numbers the requests, every request number is below `np` (`numFrom_lt`), `Hist.payLines` numbers the kept lines,
+    the two agree line for line on `admB`'s flags (`payIdx_lines_admB`; checker: `payIdxC_lines_admB`), and
+    `assemble` gives each line that number as its payment (`assemble_pay`).  Read from the code: the `IO` glue in
+    `Hist.read`/`VMirror.read` that hands `payLines`' numbers to `assemble`.  A covered request with no ruled lines
+    gets `m = 0`. -/
 
 private theorem fold_testBit (m : UInt32) (i : Nat) : ∀ (l : List Reason) (acc : Nat),
     (l.foldl (fun a r => if m &&& bit r != 0 then a ||| 2 ^ r.idx else a) acc).testBit i =

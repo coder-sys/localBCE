@@ -631,16 +631,12 @@ structure Got where
   idx : Array Nat
   keys : Array KeyQ
 
-/-- `ReadB.read` on the rows files: same arguments, same layout.  None when a kept line has no store line.  Reads that fail
-    to complete raise an IO error (the batch is not answered). -/
-def read (h : Hist) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b : Array Line) (byp lim : List (Nat × Nat))
-    (pres : Bool × Bool × Bool × Bool) (tk : Nat → Nat → IO Nat) : IO (Option Got) := do
-  let t0 ← IO.monoNanosNow
-  let seed := ld64 (← IO.getRandomBytes 8) 0
-  let fx ← evalNow (ReadB.feedsW bs q pres seed)
-  let t0 ← tk 17 t0
-  let mut lb := ByteArray.emptyWithCapacity (lineW2 * b.size)
-  let mut pidx : Array Nat := Array.emptyWithCapacity b.size
+/-- The kept requests' store lines and each line's payment number: a ruled request with lines gets the next number,
+    in request order, once per line.  None when such a request has no payment field.  The loop `read` ran inline, moved
+    here unchanged so a lemma can name it (`Flat.PayNum.payLines_pidx`); `nb` sizes the buffers. -/
+def payLines (reqs : Array Run.Req) (nb : Nat) : Option (ByteArray × Array Nat) := Id.run do
+  let mut lb := ByteArray.emptyWithCapacity (lineW2 * nb)
+  let mut pidx : Array Nat := Array.emptyWithCapacity nb
   let mut np := 0
   for x in reqs do
     if x.ra.flow.ruled && !x.ra.lines.isEmpty then
@@ -649,6 +645,17 @@ def read (h : Hist) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b :
         lb := ReadB.storeLine lb ln pf
         pidx := pidx.push np
       np := np + 1
+  return some (lb, pidx)
+
+/-- `ReadB.read` on the rows files: same arguments, same layout.  None when a kept line has no store line.  Reads that fail
+    to complete raise an IO error (the batch is not answered). -/
+def read (h : Hist) (bs : ByteArray) (q : Frame.Req) (reqs : Array Run.Req) (b : Array Line) (byp lim : List (Nat × Nat))
+    (pres : Bool × Bool × Bool × Bool) (tk : Nat → Nat → IO Nat) : IO (Option Got) := do
+  let t0 ← IO.monoNanosNow
+  let seed := ld64 (← IO.getRandomBytes 8) 0
+  let fx ← evalNow (ReadB.feedsW bs q pres seed)
+  let t0 ← tk 17 t0
+  let some (lb, pidx) := payLines reqs b.size | return none
   if pidx.size != b.size || lb.size != lineW2 * b.size then return none
   let req ← evalNow ((Array.range b.size).map fun i => RowX.ofChunk lb (lineW2 * i))
   let t0 ← tk 20 t0

@@ -25,6 +25,7 @@ import BlindLedger.Gate.Flat.ChunkIoWin
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
 import BlindLedger.Gate.Flat.RowsBudget
+import BlindLedger.Gate.Flat.PayNumbering
 import BlindLedger.Gate.Custody
 import BlindLedger.Gate.Rules.EmitLaws
 import BlindLedger.Gate.Engine3.Frame3
@@ -738,6 +739,30 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.payFlagsC_msk
 /-- info: 'BlindLedger.Gate.Flat.Rows.payFlags_leaf' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.payFlags_leaf
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payIdx_spec' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payIdx_spec
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payIdxC_spec' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_spec
+/-- info: 'BlindLedger.Gate.Flat.PayNum.numFrom_lt' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.numFrom_lt
+/-- info: 'BlindLedger.Gate.Flat.PayNum.lines_agree' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.lines_agree
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payLines_pidx' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payLines_pidx
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payLinesV_pidx' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payLinesV_pidx
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payIdx_lines' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payIdx_lines
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payIdxC_lines' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_lines
+/-- info: 'BlindLedger.Gate.Flat.PayNum.admB_sizes' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.admB_sizes
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payIdx_lines_admB' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payIdx_lines_admB
+/-- info: 'BlindLedger.Gate.Flat.PayNum.payIdxC_lines_admB' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.payIdxC_lines_admB
+/-- info: 'BlindLedger.Gate.Flat.PayNum.assemble_pay' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.PayNum.assemble_pay
 /-- info: 'BlindLedger.Gate.Flat.feedsOf_inv' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 /-- info: 'BlindLedger.Gate.Flat.allow_fresh' depends on axioms: [propext, Quot.sound] -/
