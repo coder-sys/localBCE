@@ -369,7 +369,7 @@ theorem pay_budget (b : Bits) (rs : List Reason) (h : ∀ r ∈ rs, may b r = tr
 -- Headroom pin (not a protected statement; bumped deliberately with each rule).  The maximum over every tuple is 20
 -- today (12 always-possible reasons and the 8 `_UNVERIFIED`/`STALE_` ones), reached at the all-false tuple.  Both by
 -- `decide +kernel`.  `may_sound` cannot check the POSTING_CAP arm (`fires` never returns it; the capped engine adds
--- it), so until a lemma ties the capped index's reasons to `may`, `headroom_eq` and `headroom_all` are its only check.
+-- it); `Flat.decideFetched_may` does, through `capD`, which needs `may b .POSTING_CAP = true` for every `b`.
 -- `headroom_all` (12 always-possible and the 4 certain ones) also catches a `!b.x` arm loosened to `true`, which the
 -- all-false count cannot see.
 private theorem headroom_le : ∀ a b d e : Bool, (reasons.filter (may ⟨a, b, d, e⟩)).length ≤ 20 := by

@@ -697,6 +697,18 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_codes_le
 /-- info: 'BlindLedger.Gate.Flat.pay_codes_le_part' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_codes_le_part
+/-- info: 'BlindLedger.Gate.Flat.feedBits_inv' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.feedBits_inv
+/-- info: 'BlindLedger.Gate.Flat.ix_may_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.ix_may_sound
+/-- info: 'BlindLedger.Gate.Flat.decideFetched_may' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.decideFetched_may
+/-- info: 'BlindLedger.Gate.Flat.pay_codes_le_all' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_codes_le_all
+/-- info: 'BlindLedger.Gate.Flat.leafReasons_filter' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.leafReasons_filter
+/-- info: 'BlindLedger.Gate.Flat.leafReasons_group' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.leafReasons_group
 /-- info: 'BlindLedger.Gate.Flat.feedsOf_inv' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 /-- info: 'BlindLedger.Gate.Flat.allow_fresh' depends on axioms: [propext, Quot.sound] -/

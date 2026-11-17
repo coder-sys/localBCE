@@ -836,8 +836,7 @@ theorem pay_line_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapsh
 
 /-- `pay_codes_le` for a payment none of whose lines is capped, in a batch where other lines may be (`pay_line_part`).
     A payment with a capped line is HOLD (`pay_capped`); its codes come from the capped index (`Ix.fires` and
-    `capD`, which adds POSTING_CAP), not the Spec, and are not bounded here: no lemma yet ties them to `may`.  Until
-    one does, the only check on `may`'s POSTING_CAP arm is the headroom pin in Rules/Theorems. -/
+    `capD`, which adds POSTING_CAP), not the Spec, and are bounded by `pay_codes_le_all` below. -/
 theorem pay_codes_le_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Snapshot Line) (f : List Nat)
     (b : List Line) (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (u : Nat → Bool) (p : Nat)
     (hp : ∀ l ∈ b, l.pay = p → capped (hotKeys (fetch s c.redo b) (Worker.feedsOf c) b) (fetch s c.redo b) (Worker.feedsOf c) l = false) :
@@ -854,6 +853,94 @@ theorem pay_codes_le_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Sn
   have hm : ∀ d ∈ spec, ∀ r ∈ d.reasons, may (bitsOf (carried c rel unr)) r = true :=
     decideAll_may (carried c rel unr) (idSeen f ++ seen0 (carried c rel unr) b) (order (carried c rel unr) b)
   exact ⟨rs, h1, h2, h3, h4, codes_le _ _ u p rs h2 h3 h4 hm⟩
+
+/-! ## The capped path: every payment, capped or not
+
+    The worker's decisions are `Ix.decideAll`'s, each passed through `capD` when its line is capped
+    (`decideFetched`).  `may`'s bit-dependent arms are exactly the reasons `Ix.fires` guards with the index's four
+    usable bits (`ixBits`), as `fires` guards them with `usable`, and `capD` keeps a decision's reasons and adds
+    POSTING_CAP, which `may` allows under every bits.  So every reason the worker gives is allowed by the feeds'
+    bits, and the codes of every `RULES_PAY` line of the flat worker (`Worker.commitBin`, which prints each
+    payment's line from its own group of decisions: `leafReasons_group`) are bounded, with no `Uncapped`
+    hypothesis.  The Engine3 lanes decide with `Rows.decideRows`; carrying the bound to their leaf masks through
+    `decideRows_eq` is not done here. -/
+
+/-- The usable bits of the feeds the worker decides on (`localIx` copies them into the index). -/
+def feedBits (fd : Feeds) : Bits := ⟨fd.dmfOk, fd.pdOk, fd.exclOk, fd.spanOk⟩
+
+/-- The usable bits `Ix.fires` reads. -/
+def ixBits (x : Ix) : Bits := ⟨x.dmfOk, x.pdOk, x.exclOk, x.spanOk⟩
+
+/-- On the pinned context's feeds the bits are the Spec's (`Rules.bitsOf`).  The bound below needs no such link
+    (`Rules.budget` holds for every bits); this relates the bits it uses to the ones `Rules.may_sound` speaks of. -/
+theorem feedBits_inv {fc : FCtx} {c : Ctx} (h : FCtxInv fc c) : feedBits fc.feeds = bitsOf c := by
+  obtain ⟨-, -, -, -, -, -, h7, h8, h9, h10, -⟩ := h
+  simp [feedBits, bitsOf, h7, h8, h9, h10]
+
+/-- The fast decider's twin of `Rules.may_sound`: a reason `Ix.fires` gives is allowed by the index's bits. -/
+theorem ix_may_sound (x : Ix) (s : Std.HashSet Key) (l : Line) (r : Reason) (h : x.fires s l r = true) :
+    may (ixBits x) r = true := by
+  revert h
+  cases r <;> simp +contextual [Ix.fires, may, ixBits, Ix.notEnrolled]
+
+private theorem ix_decideAll_may (x : Ix) : ∀ (s : Std.HashSet Key) (ls : List Line),
+    ∀ d ∈ x.decideAll s ls, ∀ r ∈ d.reasons, may (ixBits x) r = true
+  | _, [] => by simp [Ix.decideAll]
+  | s, l :: ls => by
+    intro d hd r hr
+    simp only [Ix.decideAll, List.mem_cons] at hd
+    rcases hd with rfl | hd
+    · simp only [Ix.decideLine, List.mem_filter] at hr
+      exact ix_may_sound x s l r hr.2
+    · exact ix_decideAll_may x _ ls d hd r hr
+
+/-- `capD` keeps a decision's reasons and adds POSTING_CAP, which `may` allows under every bits. -/
+private theorem capD_may (b : Bits) (d : Decision) (h : ∀ r ∈ d.reasons, may b r = true) :
+    ∀ r ∈ (BlindLedger.Gate.OnepIndex.capD d).reasons, may b r = true := by
+  intro r hr
+  simp only [BlindLedger.Gate.OnepIndex.capD, List.mem_filter, Bool.or_eq_true, beq_iff_eq, List.contains_iff_mem] at hr
+  rcases hr.2 with rfl | h2
+  · rfl
+  · exact h r h2
+
+/-- Every reason on every decision of `decideFetched`, capped or not, is allowed by the feeds' bits. -/
+theorem decideFetched_may (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) :
+    ∀ d ∈ (decideFetched hr hu fe fc f b).1, ∀ r ∈ d.reasons, may (feedBits fc.feeds) r = true := by
+  intro d hd r hrd
+  simp only [decideFetched, List.mem_map] at hd
+  obtain ⟨d0, hd0, rfl⟩ := hd
+  have h0 : ∀ r ∈ d0.reasons, may (feedBits fc.feeds) r = true :=
+    ix_decideAll_may (localIx hr hu fe (localRows fe.rel) (localRows fe.unr) fc b) _ _ d0 hd0
+  split at hrd
+  · exact capD_may _ d0 h0 r hrd
+  · exact h0 r hrd
+
+/-- Each `RULES_PAY` line fits one token, in any batch: whether or not a cap touches the batch or the payment, the
+    code list the worker prints for payment `p` (strictly increasing, its members the names of the reasons of the
+    worker's decided lines of `p`, as `leafReasons_codes` gives) has at most `maxReasonCodes` codes.  The members
+    are described by the worker's own decisions (`Ix.fires`, then `capD`), not the Spec's: on a capped line the two
+    may differ.  The worker prints from the payment's group (`leafReasons_group`), which gives the same text. -/
+theorem pay_codes_le_all (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) (u : Nat → Bool)
+    (p : Nat) :
+    let ds := (decideFetched hr hu fe fc f b).1
+    ∃ rs : List String, Run.leafReasons ds u p = (if rs.isEmpty then "-" else ",".intercalate rs) ∧
+      rs.Pairwise (· < ·) ∧ (u p = true → rs = ["UNENCODABLE_PAYMENT"]) ∧
+      (u p = false → ∀ r, r ∈ rs ↔ ∃ d ∈ ds, d.line.pay = p ∧ ∃ y ∈ d.reasons, Run.name y = r) ∧
+      rs.length ≤ BlindLedger.Gate.maxReasonCodes :=
+  leafReasons_le (feedBits fc.feeds) _ u p (decideFetched_may hr hu fe fc f b)
+
+/-- Printing a payment's codes from its own decisions gives the same text as from the whole batch's. -/
+theorem leafReasons_filter (ds : List Decision) (u : Nat → Bool) (p : Nat) :
+    Run.leafReasons (ds.filter (·.line.pay == p)) u p = Run.leafReasons ds u p := by
+  simp [Run.leafReasons, List.filter_filter]
+
+/-- The worker's per-payment group (`Worker.commitBin`'s `byPay`/`grp`) prints the same codes as the whole batch's
+    decisions, so `pay_codes_le_all` bounds the text the worker emits. -/
+theorem leafReasons_group (ds : List Decision) (u : Nat → Bool) (p : Nat) :
+    Run.leafReasons ((ds.foldr (fun d m => m.insert d.line.pay (d :: m.getD d.line.pay []))
+      (∅ : HashMap Nat (List Decision))).getD p []) u p = Run.leafReasons ds u p := by
+  rw [group_getD (fun d : Decision => d.line.pay) ds p]
+  exact leafReasons_filter ds u p
 
 /-! ## Requests: a token's lines and fields are its own request's (K1 review H1)
 

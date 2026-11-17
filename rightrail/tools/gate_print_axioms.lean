@@ -332,6 +332,12 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.leafReasons_le
 #print axioms BlindLedger.Gate.Flat.pay_codes_le
 #print axioms BlindLedger.Gate.Flat.pay_codes_le_part
+#print axioms BlindLedger.Gate.Flat.feedBits_inv
+#print axioms BlindLedger.Gate.Flat.ix_may_sound
+#print axioms BlindLedger.Gate.Flat.decideFetched_may
+#print axioms BlindLedger.Gate.Flat.pay_codes_le_all
+#print axioms BlindLedger.Gate.Flat.leafReasons_filter
+#print axioms BlindLedger.Gate.Flat.leafReasons_group
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh
