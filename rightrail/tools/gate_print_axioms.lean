@@ -343,6 +343,10 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.Rows.cut_mask_may
 #print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_may
 #print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_le
+#print axioms BlindLedger.Gate.Flat.Rows.leafBits_testBit
+#print axioms BlindLedger.Gate.Flat.Rows.leafBits_lt
+#print axioms BlindLedger.Gate.Flat.Rows.leafIn_reasons
+#print axioms BlindLedger.Gate.Flat.Rows.leafIn_bits_may
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh

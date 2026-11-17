@@ -1,5 +1,6 @@
 import BlindLedger.Gate.Flat.DecideCut
 import BlindLedger.Gate.Flat.PayTheorems
+import BlindLedger.Gate.Engine3.Step
 
 /-! The Engine3 lanes' reason bits are allowed by the feeds' bits.  `Engine3.StepH` (and the checker, `Engine3.Verify`)
     decides with `Rows.decideRows` on the layout it reads and builds a payment's mask as the OR of its decided lines'
@@ -91,5 +92,78 @@ theorem rows_leaf_le (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) (
     fun r _ hr' => rows_leaf_may H s fc f b rel unr hr hu hw x' C ds hds r hr') ?_
   · rw [List.countP_eq_length_filter]
     exact budget _
+
+/-! ## The leaf Engine3 emits
+
+    `Engine3.Run.leafIn` gives a covered request whose lines fit the reasons field `leafBits m` (`leafIn_reasons`).
+    `leafBits m` has bit `i` exactly when some reason with `Reason.idx = i` is in `m` (`leafBits_testBit`), so it has
+    no bit at or past the reason count (`leafBits_lt`); with `Rules.reasons_len_le` (at most 62 reasons) that excludes
+    the leaf-only 62 and 63.
+    Read from the code, not proved (the loops are inline in the `IO` batch of `StepH` and of `Verify`, with no
+    definition a lemma could name): `m` is `msk[p]`, the OR from 0 of the masks of the `out.ds` whose line's payment
+    (`lay.lines[d.line].pay`) is `p`; the leaf index `p` (`payIx`) numbers the requests as the layout numbers payments;
+    a covered request with no ruled lines gets `m = 0` (the empty fold).  The `may` and no-leaf-only-bit conclusions
+    of `leafIn_bits_may` do not depend on these: they hold for the OR of any of the layout's decisions.  Only the
+    reading "these are exactly this payment's reasons" does. -/
+
+private theorem fold_testBit (m : UInt32) (i : Nat) : ∀ (l : List Reason) (acc : Nat),
+    (l.foldl (fun a r => if m &&& bit r != 0 then a ||| 2 ^ r.idx else a) acc).testBit i =
+      (acc.testBit i || l.any fun r => has m r && r.idx == i)
+  | [], acc => by simp
+  | r :: l, acc => by
+    rw [List.foldl_cons, fold_testBit m i l, List.any_cons]
+    by_cases h : (m &&& bit r != 0) = true
+    · have hh : has m r = true := h
+      rw [if_pos h, Nat.testBit_or, Nat.testBit_two_pow, hh]
+      cases acc.testBit i <;> by_cases e : r.idx = i <;> simp [e]
+    · have hh : has m r = false := by simpa [has] using h
+      rw [if_neg h, hh]
+      simp
+
+/-- `leafBits m` has bit `i` exactly when a reason numbered `i` is in `m`. -/
+theorem leafBits_testBit (m : UInt32) (i : Nat) :
+    (Engine3.Run.leafBits m).testBit i = reasons.any fun r => has m r && r.idx == i := by
+  rw [Engine3.Run.leafBits_eq, fold_testBit]
+  simp
+
+/-- `leafBits m` sets no bit at or past the reason count: never a leaf-only code (62, 63). -/
+theorem leafBits_lt (m : UInt32) : Engine3.Run.leafBits m < 2 ^ reasons.length := by
+  refine Nat.lt_pow_two_of_testBit _ fun i hi => ?_
+  rw [leafBits_testBit]
+  simp only [List.any_eq_false, Bool.and_eq_true, beq_iff_eq, not_and]
+  intro r _ _ e
+  have := idx_len r
+  omega
+
+/-- `leafIn`'s reasons field: SCOPE when no entry covers the request, UNENCODABLE_PAYMENT when a line does not fit, else
+    `leafBits` of the payment's mask. -/
+theorem leafIn_reasons (a : Run.Admitted) (gid : ByteArray) (x : Run.Req) (ent : Option Authority.Entry) (unf : Bool)
+    (f : UInt8) (m : UInt32) :
+    (Engine3.Run.leafIn a gid x ent unf f m).1.reasons =
+      match ent with
+      | none => Frame.leafScope
+      | some _ => if unf then Frame.leafUnencodable else Engine3.Run.leafBits m := by
+  cases ent <;> rfl
+
+/-- The leaf Engine3 emits for a covered payment whose lines fit, with its mask the OR of decisions of a cut of
+    `layout s fc f b` (`rows_leaf_may`'s hypotheses): its reasons field has bit `i` exactly when a reason numbered `i` is
+    in the mask, every such reason is allowed by the feeds' bits, and no leaf-only bit is set. -/
+theorem leafIn_bits_may (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) (b : List Line)
+    (rel unr : Snapshot Line) (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr)
+    (hw : ∀ l ∈ b ++ rel.entries ++ unr.entries, fitsLine2 l = true) (x' : Lay) (C : Cut (layout s fc f b) x')
+    (ds : List Dec) (hds : ∀ d ∈ ds, d ∈ (decideRows x').ds.toList)
+    (a : Run.Admitted) (gid : ByteArray) (x : Run.Req) (en : Authority.Entry) (fl : UInt8) :
+    let m := ds.foldl (fun a d => a ||| d.mask) 0
+    let rs := (Engine3.Run.leafIn a gid x (some en) false fl m).1.reasons
+    (∀ i, rs.testBit i = true ↔ ∃ r, r.idx = i ∧ has m r = true) ∧
+    (∀ r, has m r = true → may (feedBits fc.feeds) r = true) ∧ rs < 2 ^ reasons.length := by
+  intro m rs
+  have hrs : rs = Engine3.Run.leafBits m := leafIn_reasons a gid x (some en) false fl m
+  refine ⟨fun i => ?_, rows_leaf_may H s fc f b rel unr hr hu hw x' C ds hds, hrs ▸ leafBits_lt m⟩
+  rw [hrs, leafBits_testBit]
+  simp only [List.any_eq_true, Bool.and_eq_true, beq_iff_eq]
+  constructor
+  · rintro ⟨r, -, h1, h2⟩; exact ⟨r, h2, h1⟩
+  · rintro ⟨r, h2, h1⟩; exact ⟨r, mem_all r, h1, h2⟩
 
 end BlindLedger.Gate.Flat.Rows

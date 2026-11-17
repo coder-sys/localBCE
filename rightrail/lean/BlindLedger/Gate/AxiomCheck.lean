@@ -718,6 +718,14 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_may
 /-- info: 'BlindLedger.Gate.Flat.Rows.rows_leaf_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_le
+/-- info: 'BlindLedger.Gate.Flat.Rows.leafBits_testBit' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.leafBits_testBit
+/-- info: 'BlindLedger.Gate.Flat.Rows.leafBits_lt' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.leafBits_lt
+/-- info: 'BlindLedger.Gate.Flat.Rows.leafIn_reasons' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.leafIn_reasons
+/-- info: 'BlindLedger.Gate.Flat.Rows.leafIn_bits_may' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.leafIn_bits_may
 /-- info: 'BlindLedger.Gate.Flat.feedsOf_inv' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 /-- info: 'BlindLedger.Gate.Flat.allow_fresh' depends on axioms: [propext, Quot.sound] -/
