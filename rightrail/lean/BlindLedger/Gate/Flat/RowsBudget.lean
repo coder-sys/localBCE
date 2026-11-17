@@ -1,6 +1,8 @@
 import BlindLedger.Gate.Flat.DecideCut
 import BlindLedger.Gate.Flat.PayTheorems
 import BlindLedger.Gate.Engine3.Step
+import BlindLedger.Gate.Engine3.StepH
+import BlindLedger.Gate.Engine3.Verify
 
 /-! The Engine3 lanes' reason bits are allowed by the feeds' bits.  `Engine3.StepH` (and the checker, `Engine3.Verify`)
     decides with `Rows.decideRows` on the layout it reads and builds a payment's mask as the OR of its decided lines'
@@ -99,12 +101,14 @@ theorem rows_leaf_le (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) (
     `leafBits m` has bit `i` exactly when some reason with `Reason.idx = i` is in `m` (`leafBits_testBit`), so it has
     no bit at or past the reason count (`leafBits_lt`); with `Rules.reasons_len_le` (at most 62 reasons) that excludes
     the leaf-only 62 and 63.
-    Read from the code, not proved (the loops are inline in the `IO` batch of `StepH` and of `Verify`, with no
-    definition a lemma could name): `m` is `msk[p]`, the OR from 0 of the masks of the `out.ds` whose line's payment
-    (`lay.lines[d.line].pay`) is `p`; the leaf index `p` (`payIx`) numbers the requests as the layout numbers payments;
-    a covered request with no ruled lines gets `m = 0` (the empty fold).  The `may` and no-leaf-only-bit conclusions
-    of `leafIn_bits_may` do not depend on these: they hold for the OR of any of the layout's decisions.  Only the
-    reading "these are exactly this payment's reasons" does. -/
+    `m` is `msk[p]` of `Run.payFlags` (engine) or `Verify.payFlagsC` (checker): proved below to be the OR from 0 of
+    the masks of exactly the decisions whose line's payment (`lay.lines[d.line].pay`) is `p` (`payFlags_msk`), and
+    tied to the emitted leaf by `payFlags_leaf`.  Still read from the code, not proved: that the leaf index `p`
+    (`payIx`, inline in `stepH`/`stepC`) numbers the requests as `Hist.read`/`VMirror.read` number the layout's
+    payments (all three filter covered, fitting, ruled requests with lines, in request order), and that every such `p`
+    is below `np` (the loop pushes `n` then increments it).  A covered request with no ruled lines gets `m = 0`.  The
+    `may` and no-leaf-only-bit conclusions hold for the OR of any of the layout's decisions, so they do not depend on
+    the numbering; only "exactly this payment's reasons" does. -/
 
 private theorem fold_testBit (m : UInt32) (i : Nat) : ∀ (l : List Reason) (acc : Nat),
     (l.foldl (fun a r => if m &&& bit r != 0 then a ||| 2 ^ r.idx else a) acc).testBit i =
@@ -165,5 +169,135 @@ theorem leafIn_bits_may (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat
   constructor
   · rintro ⟨r, -, h1, h2⟩; exact ⟨r, h2, h1⟩
   · rintro ⟨r, h2, h1⟩; exact ⟨r, mem_all r, h1, h2⟩
+
+/-! ## The payment mask the engine and the checker build
+
+    `Engine3.Run.payFlags` (engine, `stepH`) and `Engine3.Verify.payFlagsC` (checker, `stepC`, its own copy) build, per
+    payment, the OR of its decided lines' masks.  `payFlags_msk` and `payFlagsC_msk`: entry `p` (below `np`) is the OR
+    from 0 of the masks of exactly the decisions whose line's payment is `p`.  `payFlags_leaf` then ties the leaf the
+    engine emits for payment `p` to exactly the reasons of that payment's decisions. -/
+
+/-- A reason is in an OR of masks exactly when it is in the start or in one of them. -/
+theorem has_fold_iff (r : Reason) : ∀ (ds : List Dec) (acc : UInt32),
+    has (ds.foldl (fun a d => a ||| d.mask) acc) r = true ↔ has acc r = true ∨ ∃ d ∈ ds, has d.mask r = true
+  | [], acc => by simp
+  | d :: ds, acc => by
+    rw [List.foldl_cons, has_fold_iff r ds, has_or, Bool.or_eq_true]
+    constructor
+    · rintro ((h | h) | ⟨e, he, h⟩)
+      · exact Or.inl h
+      · exact Or.inr ⟨d, List.mem_cons_self .., h⟩
+      · exact Or.inr ⟨e, List.mem_cons_of_mem _ he, h⟩
+    · rintro (h | ⟨e, he, h⟩)
+      · exact Or.inl (Or.inl h)
+      · rcases List.mem_cons.mp he with rfl | he
+        · exact Or.inl (Or.inr h)
+        · exact Or.inr ⟨e, he, h⟩
+
+/-- The OR loop: after setting entry `pay d` to itself OR `d.mask` for each `d` in turn, entry `p` is its start ORed
+    with the masks of the `d` whose `pay` is `p`. -/
+private theorem fold_msk_get (pay : Dec → Nat) (p : Nat) : ∀ (l : List Dec) (m : Array UInt32), p < m.size →
+    (l.foldl (fun m d => m.set! (pay d) (m[pay d]! ||| d.mask)) m)[p]! =
+      (l.filter (pay · == p)).foldl (fun a d => a ||| d.mask) m[p]!
+  | [], m, _ => rfl
+  | d :: l, m, hp => by
+    have hs : (m.set! (pay d) (m[pay d]! ||| d.mask)).size = m.size := by simp
+    rw [List.foldl_cons, fold_msk_get pay p l _ (hs ▸ hp)]
+    have hget : (m.set! (pay d) (m[pay d]! ||| d.mask))[p]! = if pay d = p then m[p]! ||| d.mask else m[p]! := by
+      simp only [Array.set!_eq_setIfInBounds, Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?,
+        Array.getElem?_setIfInBounds]
+      by_cases h : pay d = p
+      · subst h; simp [hp]
+      · simp [h]
+    rw [hget]
+    by_cases h : pay d = p
+    · simp [h, List.filter_cons]
+    · simp [h, List.filter_cons]
+
+/-- A loop each of whose steps yields, with its second component updated by `g`: that component is the fold of `g`,
+    whatever the first component does. -/
+private theorem forIn_snd {α β γ : Type} (F : α → β × γ → Id (ForInStep (β × γ))) (g : α → γ → γ)
+    (h : ∀ a st, ∃ b, F a st = pure (ForInStep.yield (b, g a st.2))) :
+    ∀ (l : List α) (st : β × γ), (forIn (m := Id) l st F).2 = l.foldl (fun c a => g a c) st.2
+  | [], _ => rfl
+  | a :: l, st => by
+    obtain ⟨b, hb⟩ := h a st
+    rw [List.forIn_cons, hb, List.foldl_cons]
+    exact forIn_snd F g h l (b, g a st.2)
+
+/-- One OR step of the mask: entry `pay d` ORed with `d.mask`. -/
+private def mskStep (lay : Lay) (d : Dec) (m : Array UInt32) : Array UInt32 :=
+  m.set! (lay.lines[d.line]!.pay) (m[lay.lines[d.line]!.pay]! ||| d.mask)
+
+/-- The mask half of `payFlags` is the OR loop over the decisions in order. -/
+theorem payFlags_snd (lay : Lay) (out : Out) (inRel : Array Bool) (np : Nat) :
+    (Engine3.Run.payFlags lay out inRel np).2 = out.ds.toList.foldl
+      (fun m d => m.set! (lay.lines[d.line]!.pay) (m[lay.lines[d.line]!.pay]! ||| d.mask)) (Array.replicate np 0) := by
+  unfold Engine3.Run.payFlags
+  simp only [Id.run, ← Array.forIn_toList, bind_pure]
+  refine forIn_snd _ (mskStep lay) (fun d st => ?_) _ _
+  simp only [mskStep]
+  repeat' split
+  all_goals exact ⟨_, rfl⟩
+
+/-- The checker's copy, the same. -/
+theorem payFlagsC_snd (lay : Lay) (out : Out) (inRel : Array Bool) (np : Nat) :
+    (Engine3.Verify.payFlagsC lay out inRel np).2 = out.ds.toList.foldl
+      (fun m d => m.set! (lay.lines[d.line]!.pay) (m[lay.lines[d.line]!.pay]! ||| d.mask)) (Array.replicate np 0) := by
+  unfold Engine3.Verify.payFlagsC
+  simp only [Id.run, ← Array.forIn_toList, bind_pure]
+  refine forIn_snd _ (mskStep lay) (fun d st => ?_) _ _
+  simp only [mskStep]
+  repeat' split
+  all_goals exact ⟨_, rfl⟩
+
+/-- The engine's mask for payment `p`: the OR from 0 of the masks of exactly the decisions whose line's payment is
+    `p`. -/
+theorem payFlags_msk (lay : Lay) (out : Out) (inRel : Array Bool) (np p : Nat) (hp : p < np) :
+    (Engine3.Run.payFlags lay out inRel np).2[p]! =
+      (out.ds.toList.filter fun d => lay.lines[d.line]!.pay == p).foldl (fun a d => a ||| d.mask) 0 := by
+  rw [payFlags_snd, fold_msk_get (fun d => lay.lines[d.line]!.pay) p _ _ (by simpa using hp)]
+  simp [hp]
+
+/-- The checker's mask for payment `p`, the same. -/
+theorem payFlagsC_msk (lay : Lay) (out : Out) (inRel : Array Bool) (np p : Nat) (hp : p < np) :
+    (Engine3.Verify.payFlagsC lay out inRel np).2[p]! =
+      (out.ds.toList.filter fun d => lay.lines[d.line]!.pay == p).foldl (fun a d => a ||| d.mask) 0 := by
+  rw [payFlagsC_snd, fold_msk_get (fun d => lay.lines[d.line]!.pay) p _ _ (by simpa using hp)]
+  simp [hp]
+
+/-- The leaf the engine emits for payment `p` (below `np`) of a covered request whose lines fit, on a cut `x'` of
+    `layout s fc f b` decided by `decideRows` (as `stepH` does): its reasons field has bit `i` exactly when some
+    decision of payment `p` has the reason numbered `i`; every such reason is allowed by the feeds' bits; and no
+    leaf-only bit is set. -/
+theorem payFlags_leaf (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) (b : List Line)
+    (rel unr : Snapshot Line) (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr)
+    (hw : ∀ l ∈ b ++ rel.entries ++ unr.entries, fitsLine2 l = true) (x' : Lay) (C : Cut (layout s fc f b) x')
+    (inRel : Array Bool) (np p : Nat) (hp : p < np)
+    (a : Run.Admitted) (gid : ByteArray) (x : Run.Req) (en : Authority.Entry) (fl : UInt8) :
+    let m := (Engine3.Run.payFlags x' (decideRows x') inRel np).2[p]!
+    let rs := (Engine3.Run.leafIn a gid x (some en) false fl m).1.reasons
+    (∀ i, rs.testBit i = true ↔
+      ∃ r, r.idx = i ∧ ∃ d ∈ (decideRows x').ds.toList, x'.lines[d.line]!.pay = p ∧ has d.mask r = true) ∧
+    (∀ r, has m r = true → may (feedBits fc.feeds) r = true) ∧ rs < 2 ^ reasons.length := by
+  intro m rs
+  let ds := (decideRows x').ds.toList.filter fun d => x'.lines[d.line]!.pay == p
+  have hm : m = ds.foldl (fun a d => a ||| d.mask) 0 := payFlags_msk x' (decideRows x') inRel np p hp
+  have hds : ∀ d ∈ ds, d ∈ (decideRows x').ds.toList := fun d hd => (List.mem_filter.mp hd).1
+  obtain ⟨h1, h2, h3⟩ := leafIn_bits_may H s fc f b rel unr hr hu hw x' C ds hds a gid x en fl
+  rw [← hm] at h1 h2 h3
+  refine ⟨fun i => ?_, h2, h3⟩
+  rw [h1 i]
+  constructor
+  · rintro ⟨r, hi, hr'⟩
+    rw [hm, has_fold_iff] at hr'
+    rcases hr' with h0 | ⟨d, hd, hdr⟩
+    · rw [has_zero] at h0; exact absurd h0 (by simp)
+    · obtain ⟨hd1, hd2⟩ := List.mem_filter.mp hd
+      exact ⟨r, hi, d, hd1, by simpa using hd2, hdr⟩
+  · rintro ⟨r, hi, d, hd, hpd, hdr⟩
+    refine ⟨r, hi, ?_⟩
+    rw [hm, has_fold_iff]
+    exact Or.inr ⟨d, List.mem_filter.mpr ⟨hd, by simpa using hpd⟩, hdr⟩
 
 end BlindLedger.Gate.Flat.Rows

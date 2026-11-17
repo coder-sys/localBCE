@@ -29,6 +29,29 @@ inductive SteppedH
   | refused (hold : ByteArray)
   | done (d : DoneH)
 
+/-- Per payment of the decided batch `out` on `lay` (`np` payments): its flags (1 a HOLD line, 2 a line that is not an
+    own ALLOW, 4 any line, 8 a released line that was not ALLOW, 16 a bypass releases it, 32 it goes at HOLD authority)
+    and the OR of its decided lines' reason masks, which `leafIn` turns into the leaf's reasons field.  The loop `stepH`
+    ran inline, moved here unchanged so a lemma can name it (`Flat.Rows.payFlags_msk`).  `inRel`: per line, whether it
+    joined the released set. -/
+def payFlags (lay : Rows.Lay) (out : Rows.Out) (inRel : Array Bool) (np : Nat) : ByteArray × Array UInt32 := Id.run do
+  let mut fl : ByteArray := ⟨Array.replicate np 0⟩
+  let mut msk : Array UInt32 := Array.replicate np 0
+  for d in out.ds do
+    let li := lay.lines[d.line]!
+    let p := li.pay
+    let sl := lay.slots[li.ki]!
+    let own := lay.pRedo[p]! && Rows.anySame lay.relP sl.rs sl.rn li.row
+    let mut f := fl[p]! ||| 4
+    if d.out == 1 then f := f ||| 1
+    if !(d.out == 0 && (!lay.pRedo[p]! || own)) then f := f ||| 2
+    if inRel[d.line]! && d.out != 0 then f := f ||| 8
+    if out.byd[p]! then f := f ||| 16
+    if out.lft[d.line]! then f := f ||| 32
+    fl := fl.set! p f
+    msk := msk.set! p (msk[p]! ||| d.mask)
+  pure (fl, msk)
+
 /-- The batch of request `q` (digest `dg`, bytes `bs`) on `h`, whose last authority record is `au0b`. -/
 def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray) : IO (Except Word SteppedH) := do
   let ts ← IO.monoNanosNow
@@ -111,23 +134,7 @@ def stepH (h : Hist.Hist) (au0b : ByteArray) (q : Frame.Req) (dg bs : ByteArray)
   let nb := lay.lines.size
   let inRel : Array Bool := out.rel.foldl (fun a i => a.set! i true) (Array.replicate nb false)
   let inUnr : Array Bool := out.unr.foldl (fun a i => a.set! i true) (Array.replicate nb false)
-  let (fl, msk) := Id.run do
-    let mut fl : ByteArray := ⟨Array.replicate np 0⟩
-    let mut msk : Array UInt32 := Array.replicate np 0
-    for d in out.ds do
-      let li := lay.lines[d.line]!
-      let p := li.pay
-      let sl := lay.slots[li.ki]!
-      let own := lay.pRedo[p]! && Rows.anySame lay.relP sl.rs sl.rn li.row
-      let mut f := fl[p]! ||| 4
-      if d.out == 1 then f := f ||| 1
-      if !(d.out == 0 && (!lay.pRedo[p]! || own)) then f := f ||| 2
-      if inRel[d.line]! && d.out != 0 then f := f ||| 8
-      if out.byd[p]! then f := f ||| 16
-      if out.lft[d.line]! then f := f ||| 32
-      fl := fl.set! p f
-      msk := msk.set! p (msk[p]! ||| d.mask)
-    pure (fl, msk)
+  let (fl, msk) := payFlags lay out inRel np
   let flOf (pix : Option Nat) : UInt8 × UInt32 := match pix with
     | some p => (fl[p]!, msk[p]!)
     | none => (0, 0)

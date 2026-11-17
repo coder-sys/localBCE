@@ -347,6 +347,12 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.Rows.leafBits_lt
 #print axioms BlindLedger.Gate.Flat.Rows.leafIn_reasons
 #print axioms BlindLedger.Gate.Flat.Rows.leafIn_bits_may
+#print axioms BlindLedger.Gate.Flat.Rows.has_fold_iff
+#print axioms BlindLedger.Gate.Flat.Rows.payFlags_snd
+#print axioms BlindLedger.Gate.Flat.Rows.payFlagsC_snd
+#print axioms BlindLedger.Gate.Flat.Rows.payFlags_msk
+#print axioms BlindLedger.Gate.Flat.Rows.payFlagsC_msk
+#print axioms BlindLedger.Gate.Flat.Rows.payFlags_leaf
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh

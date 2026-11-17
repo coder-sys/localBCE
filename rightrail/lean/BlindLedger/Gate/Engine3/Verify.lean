@@ -125,6 +125,28 @@ structure DoneC where
   au : ByteArray
   bd : Task ByteArray
 
+/-- The checker's own copy of the engine's per-payment flags and reason-mask OR (`Run.payFlags`, which the checker does
+    not import: it shares no code with `StepH`).  The loop `stepC` ran inline, moved here unchanged so a lemma can name
+    it (`Flat.Rows.payFlagsC_msk`). -/
+def payFlagsC (lay : Flat.Rows.Lay) (out : Flat.Rows.Out) (inRel : Array Bool) (np : Nat) : ByteArray × Array UInt32 :=
+  Id.run do
+  let mut fl : ByteArray := ⟨Array.replicate np 0⟩
+  let mut msk : Array UInt32 := Array.replicate np 0
+  for d in out.ds do
+    let li := lay.lines[d.line]!
+    let p := li.pay
+    let sl := lay.slots[li.ki]!
+    let own := lay.pRedo[p]! && Rows.anySame lay.relP sl.rs sl.rn li.row
+    let mut f := fl[p]! ||| 4
+    if d.out == 1 then f := f ||| 1
+    if !(d.out == 0 && (!lay.pRedo[p]! || own)) then f := f ||| 2
+    if inRel[d.line]! && d.out != 0 then f := f ||| 8
+    if out.byd[p]! then f := f ||| 16
+    if out.lft[d.line]! then f := f ||| 32
+    fl := fl.set! p f
+    msk := msk.set! p (msk[p]! ||| d.mask)
+  pure (fl, msk)
+
 /-- The batch of request `q` (digest `dg`, bytes `bs`) on the checker's history: admission (`Run.admit` on every batch, `admB`; the first batch and one in 64 also by `Run.admit` on the lines), the reads,
     `decideRows`, then the answer and the batch digest on other cores (slots 6 and 7).  None when the batch is not one
     the engine answers OK (admission refused, an authority record or a line that does not fit, a row number past 2^40). -/
@@ -202,23 +224,7 @@ def stepC (c : Ctx) (v : VC) (q : Frame.Req) (dg bs : ByteArray) : IO (Option Do
   let nb := lay.lines.size
   let inRel : Array Bool := out.rel.foldl (fun a i => a.set! i true) (Array.replicate nb false)
   let inUnr : Array Bool := out.unr.foldl (fun a i => a.set! i true) (Array.replicate nb false)
-  let (fl, msk) := Id.run do
-    let mut fl : ByteArray := ⟨Array.replicate np 0⟩
-    let mut msk : Array UInt32 := Array.replicate np 0
-    for d in out.ds do
-      let li := lay.lines[d.line]!
-      let p := li.pay
-      let sl := lay.slots[li.ki]!
-      let own := lay.pRedo[p]! && Rows.anySame lay.relP sl.rs sl.rn li.row
-      let mut f := fl[p]! ||| 4
-      if d.out == 1 then f := f ||| 1
-      if !(d.out == 0 && (!lay.pRedo[p]! || own)) then f := f ||| 2
-      if inRel[d.line]! && d.out != 0 then f := f ||| 8
-      if out.byd[p]! then f := f ||| 16
-      if out.lft[d.line]! then f := f ||| 32
-      fl := fl.set! p f
-      msk := msk.set! p (msk[p]! ||| d.mask)
-    pure (fl, msk)
+  let (fl, msk) := payFlagsC lay out inRel np
   let flOf (pix : Option Nat) : UInt8 × UInt32 := match pix with
     | some p => (fl[p]!, msk[p]!)
     | none => (0, 0)
