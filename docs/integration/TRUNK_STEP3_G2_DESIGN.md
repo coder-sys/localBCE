@@ -2,6 +2,7 @@
 
 ## Status
 
+- **Owner decision, 2026-11-17: "Approve defaults"** — all 23 decisions of section 11 at their defaults. In particular: author (a) now as WIP (1), land the step 3 commit only after step 2's request side (2), hold it for the signer (11), the signed path reads no eligibility (15).
 - Draft for owner approval, 2026-11-17, revision 2: review findings applied. Revision 2 applies the accuracy and completeness reviews (22 findings: one blocker, seven majors, fourteen minors, each checked against the cited files; several overlap and are applied once; two had small citation errors that were corrected, not copied): the signed path made fail-closed in Scoped (4.6a), the signed-path guard fallout (4.6b), the `lim_loc` and constructor-tuple sites of the `FCtxInv` change, the (a)/(b) split of Engine3 and Frame/Spec, the full statement-pin list, the plan's scratch-copy build for the proof-killed mutant, Route A as decided, the step 2 sequencing risk, the in-trunk docs and `input_file` check, and several line corrections. Nothing in this design has been built, edited or committed beyond the work listed below.
 - Worktree `C:\Users\sruja\Downloads\localBCE-trunk`, branch `codex/rightrail-trunk-step3` at 845e7b9c (local). `rightrail/` is RightRail trunk fc89f9e5, a zip import.
 - This makes exact TRUNK_MIGRATION_PLAN.md step 3 (docs/integration/TRUNK_MIGRATION_PLAN.md:278-343) under its decisions 4-14 (:450-460), which the owner approved with all defaults. It ports the October G2 (commit f16a61f4, design f16a61f4:docs/integration/G2_DESIGN.md).

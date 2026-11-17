@@ -357,3 +357,13 @@
   pairs identical before and after, equal to `PAIRS_DIGEST`; test_decode_fuzz
   passes on the unsigned harness. The final step 2 commit waits for the
   pinned signer (decision 20).
+- 2026-11-17: trunk move step 3 (G2 on the trunk). Before G2, local WIP on
+  `codex/rightrail-trunk-step3` (not pushed): the per-payment reason bound
+  ported from b5f806df (379b487c), extended to capped payments (4d715f52),
+  to the Engine3 lanes (fcd29193, 0319ec32), with Engine3's payment-mask and
+  numbering loops named and proved (6655362e, 845e7b9c); no pinned binary
+  touched by the Engine3 refactors. The step 3 design
+  (TRUNK_STEP3_G2_DESIGN.md, revision 2 after a 22-finding review) was
+  approved by the owner with all 23 defaults ("Approve defaults"): author the
+  rules-layer work now, commit G2 only after step 2's request side and with
+  the signer.
