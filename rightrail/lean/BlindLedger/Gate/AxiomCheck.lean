@@ -24,6 +24,7 @@ import BlindLedger.Gate.Flat.StoreIndex
 import BlindLedger.Gate.Flat.ChunkIoWin
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
+import BlindLedger.Gate.Flat.RowsBudget
 import BlindLedger.Gate.Custody
 import BlindLedger.Gate.Rules.EmitLaws
 import BlindLedger.Gate.Engine3.Frame3
@@ -709,6 +710,14 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.leafReasons_filter
 /-- info: 'BlindLedger.Gate.Flat.leafReasons_group' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.leafReasons_group
+/-- info: 'BlindLedger.Gate.Flat.Rows.layout_mask_may' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.layout_mask_may
+/-- info: 'BlindLedger.Gate.Flat.Rows.cut_mask_may' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.cut_mask_may
+/-- info: 'BlindLedger.Gate.Flat.Rows.rows_leaf_may' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_may
+/-- info: 'BlindLedger.Gate.Flat.Rows.rows_leaf_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_le
 /-- info: 'BlindLedger.Gate.Flat.feedsOf_inv' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 /-- info: 'BlindLedger.Gate.Flat.allow_fresh' depends on axioms: [propext, Quot.sound] -/

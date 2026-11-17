@@ -15,5 +15,6 @@ import BlindLedger.Gate.Consume
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
 import BlindLedger.Gate.Flat.DecideCut
+import BlindLedger.Gate.Flat.RowsBudget
 import BlindLedger.Gate.FactCodec
 import BlindLedger.Gate.FactRegistry

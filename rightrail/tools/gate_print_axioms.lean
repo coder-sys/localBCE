@@ -24,6 +24,7 @@ import BlindLedger.Gate.Flat.ChunkIoWin
 import BlindLedger.Gate.Consume
 import BlindLedger.Gate.Flat.Signed
 import BlindLedger.Gate.Flat.PayTheorems
+import BlindLedger.Gate.Flat.RowsBudget
 import BlindLedger.Gate.Custody
 import BlindLedger.Gate.Rules.EmitLaws
 import BlindLedger.Gate.Engine3.Frame3
@@ -338,6 +339,10 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.pay_codes_le_all
 #print axioms BlindLedger.Gate.Flat.leafReasons_filter
 #print axioms BlindLedger.Gate.Flat.leafReasons_group
+#print axioms BlindLedger.Gate.Flat.Rows.layout_mask_may
+#print axioms BlindLedger.Gate.Flat.Rows.cut_mask_may
+#print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_may
+#print axioms BlindLedger.Gate.Flat.Rows.rows_leaf_le
 #print axioms BlindLedger.Gate.Flat.feedsOf_inv
 #print axioms BlindLedger.Gate.Flat.allow_fresh
 #print axioms BlindLedger.Gate.Flat.decideAll_allow_fresh
