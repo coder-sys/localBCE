@@ -338,15 +338,22 @@ def FeedIx.decode {α : Type} (today maxAge : Nat) (seed : UInt64) (src : FeedSr
   let ok := src.present && dateOk today maxAge src.asOf && n == src.count && 0 < n && good
   return some ⟨src.present, ok, facts, tab, mask, seed⟩
 
-/-- The four feeds of a frame. -/
+/-- An absent feed (not present, not usable, no facts, an empty two-slot table), as `ReadB.feedW` gives for a feed
+    whose snapshot is not present. -/
+def FeedIx.absent {α : Type} (seed : UInt64) : FeedIx α :=
+  ⟨false, false, #[], ByteArray.mk (Array.replicate 80 0), 1, seed⟩
+
+/-- The five feeds of a frame.  Eligibility (`el`) is not yet on the frame: it is always `FeedIx.absent` (G2 then
+    decides STALE_ELIGIBILITY on every line). -/
 structure FeedsX where
   dmf : FeedIx Death
   pd : FeedIx Death
   ex : FeedIx Exclusion
   sp : FeedIx SpanF
+  el : FeedIx EligF
 
 /-- The feeds of a frame from the four the codec hands over (DMF, provider deaths, exclusions, enrollment, with the
-    maximum ages of `usable`: 90, 90, 31, 7 days); none refuses the frame. -/
+    maximum ages of `usable`: 90, 90, 31, 7 days), with eligibility absent; none refuses the frame. -/
 def FeedsX.decode (today : Nat) (seed : UInt64) (d p e s : FeedSrc) : Option FeedsX := do
   let okD := fun (asOf : Nat) (b : ByteArray) (o : Nat) => let x := ld32 b (o + 32); validDate x && x ≤ asOf
   let okP := fun (asOf : Nat) (b : ByteArray) (o : Nat) => let x := ld32 b (o + 21); validDate x && x ≤ asOf
@@ -367,7 +374,7 @@ def FeedsX.decode (today : Nat) (seed : UInt64) (d p e s : FeedSrc) : Option Fee
       keyLt x y || x == y && le2 53 b o o')
     (fun b o => let p := provAt b (o + 32); (⟨p.nat, true, p.a, p.b, p.c, ld32 b (o + 53), ld32 b (o + 57), true⟩ : SpanF))
     (fun _ b o => okW (ld32 b (o + 53)) (ld32 b (o + 57)))
-  pure ⟨dmf, pd, ex, sp⟩
+  pure ⟨dmf, pd, ex, sp, FeedIx.absent seed⟩
 
 /-! ## Assembly -/
 
@@ -423,13 +430,14 @@ def assemble (hr hu : Head) (today : Nat) (byp lim : List (Nat × Nat)) (fx : Fe
       { row := r, ke := idx[3 * i]!, kn := idx[3 * i + 1]!, ki := idx[3 * i + 2]!, pay := pj,
         dmf := fx.dmf.find r.w4.key, span := fx.sp.find r.w4.key, pdP := fx.pd.find r.payee.key,
         pdR := fx.pd.find r.rend.key, exP := fx.ex.find r.payee.key, exR := fx.ex.find r.rend.key,
-        fseen := fs.contains r.w7 }
+        elig := fx.el.find r.w4.key, fseen := fs.contains r.w7 }
   return {
     today, relCh := hr.chained today, unrCh := hu.chained today,
     dmfSome := fx.dmf.present, pdSome := fx.pd.present, exclSome := fx.ex.present, spanSome := fx.sp.present,
-    dmfOk := fx.dmf.ok, pdOk := fx.pd.ok, exclOk := fx.ex.ok, spanOk := fx.sp.ok,
+    eligSome := fx.el.present,
+    dmfOk := fx.dmf.ok, pdOk := fx.pd.ok, exclOk := fx.ex.ok, spanOk := fx.sp.ok, eligOk := fx.el.ok,
     lines, slots, relP, relSeq, unrP, unrSeq, uSpan, uId, dmf := fx.dmf.facts, pdeath := fx.pd.facts,
-    excl := fx.ex.facts, spans := fx.sp.facts, redo, pRedo, pByp, lLim, src := #[], relSrc := #[], unrSrc := #[] }
+    excl := fx.ex.facts, spans := fx.sp.facts, eligs := fx.el.facts, redo, pRedo, pByp, lLim, src := #[], relSrc := #[], unrSrc := #[] }
 
 /-- `Flat.Rows.layout` from the request rows, the heads of the two sets, the key directory, the chunk images and the
     frame's feeds (`fx`, from `FeedsX.decode`); the feed facts are `fx`'s arrays and each line's runs index into them. -/

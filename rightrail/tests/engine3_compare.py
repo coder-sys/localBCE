@@ -256,10 +256,10 @@ def summary(kind: str, p: Pair, root: Path) -> dict:
 
 
 def golden() -> dict:
-    """Each case of tests/gate_rules/rules_v1.vectors that starts from empty sets and only has lines and commits: a fresh pair of
+    """Each case of tests/gate_rules/rules_v2.vectors that starts from empty sets and only has lines and commits: a fresh pair of
     stores, a batch per commit.  Other cases (preloaded sets, redo, drop, own feeds) are counted as skipped."""
     cases, cur = [], None
-    for row in Path(WT, "tests/gate_rules/rules_v1.vectors").read_text("utf-8").splitlines():
+    for row in Path(WT, "tests/gate_rules/rules_v2.vectors").read_text("utf-8").splitlines():
         f = row.split()
         if f[:1] == ["case"]:
             cur = [f[1], []]

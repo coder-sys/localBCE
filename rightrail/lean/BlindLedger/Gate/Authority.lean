@@ -16,8 +16,8 @@ def dom (name : String) : Bytes := name.toUTF8.toList ++ [0]
 def tag : Bytes := dom "RR/GATE/APPROVAL/v2"
 def sigTag : Bytes := dom "RR/GATE/APPROVAL/v2/SIG"
 
-/-- Reason bits fit a u32 holds/overrides field; the 24 reasons use bits 0..23. -/
-def reasonMask : Nat := 2 ^ 24
+/-- Reason bits fit a u32 holds/overrides field; the 29 reasons use bits 0..28. -/
+def reasonMask : Nat := 2 ^ 29
 
 structure Entry where
   program : Bytes

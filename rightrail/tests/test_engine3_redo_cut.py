@@ -22,7 +22,7 @@ from tests import test_flat_worker as fw
 from tests import test_right_rail_gate_formats as fx
 
 HIST, VERIFY = fw.BIN / "gate_hist3.exe", fw.BIN / "gate_verify3.exe"
-NEAR = 1 << decider.REASONS.index("FFS_NEAR_DUPLICATE")
+NEAR = 1 << decider.REASON_IDX["FFS_NEAR_DUPLICATE"]
 
 
 def payment(n: int, payee: str, rendering: str = "R7001", units: int = 1) -> bytes:

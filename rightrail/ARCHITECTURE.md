@@ -293,6 +293,14 @@ The target (`docs/RIGHTRAIL_FULL_STACK_TARGET.md`) is an inline gate on every pa
 - On synthetic data the gate has a rules-worker host (`app/right_rail_gate_decide.py`), a checkpoint producer, one
   ML-DSA-87 signer and a reference payer (`app/right_rail_gate_*.py`; Lean decides every release). It has no network
   service, independent witness or fenced standby. A bypass is admitted by the rules worker alone (`STATUS.md`).
+- The gate rules (`lean/BlindLedger/Gate/Rules/Spec.lean`, contract `conformance/GATE_RULES_V2.md`) read pinned
+  reference snapshots of five kinds: deaths 1, provider deaths 2, exclusions 3, enrollment 4 and eligibility 7 (G2,
+  localBCE's aid code and benefit level; synthetic, not legally verified), beside the released and unresolved sets
+  (5, 6). An answer's reason bit is the reason's `Reason.idx` (29 reasons, bits 0-28), never its place in name order. A
+  missing or unusable snapshot gives a review reason, never a HOLD. The history engine in `Gate/Engine3` reads the
+  eligibility snapshot as its fifth feed; until the request frame carries that feed it reads it as absent, so every
+  engine line carries `STALE_ELIGIBILITY` (review). The signed payment-window path (`Gate/Scoped`, `Gate/Consume`)
+  reads no eligibility.
 
 ## Rejected directions
 

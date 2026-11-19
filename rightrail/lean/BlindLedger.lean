@@ -2,6 +2,7 @@ import BlindLedger.Financial.Theorems
 import BlindLedger.Gate.Rules.Theorems
 import BlindLedger.Gate.Rules.DecideLayer
 import BlindLedger.Gate.Rules.FastEq
+import BlindLedger.Gate.Rules.G2Mutants
 import BlindLedger.Sha3FastEq
 import BlindLedger.Gate.ParseLaws
 import BlindLedger.Gate.Keyset

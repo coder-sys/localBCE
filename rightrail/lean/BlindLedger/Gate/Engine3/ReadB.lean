@@ -100,7 +100,8 @@ def feedW {α : Type} (present : Bool) (today maxAge asOf count : Nat) (seed : U
   let ok := dateOk today maxAge asOf && n == count && 0 < n && good
   return ⟨true, ok, ss.map (fact ·.2), tab, mask, seed⟩
 
-/-- The four feeds of request frame `bs` (decoded as `q`), each present as `snapF` found it (`pres`). -/
+/-- The four feeds of request frame `bs` (decoded as `q`), each present as `snapF` found it (`pres`), and eligibility
+    absent (not yet on the frame). -/
 def feedsW (bs : ByteArray) (q : Frame.Req) (pres : Bool × Bool × Bool × Bool) (seed : UInt64) : FeedsX :=
   let nrows (k : Nat) : Nat := getN bs (Frame.hdrBytes + 76 + 77 * k + 9) 4
   let o0 := Frame.hdrBytes + 384
@@ -120,7 +121,8 @@ def feedsW (bs : ByteArray) (q : Frame.Req) (pres : Bool × Bool × Bool × Bool
    feedW pres.2.2.2 q.today 7 q.span.asOf q.span.count seed (nrows 3) 62 o3 mem
      (fun o => let p := provAt bs (o + 33)
        (⟨getN bs (o + 33) 21, true, p.a, p.b, p.c, ld32 bs (o + 54), ld32 bs (o + 58), true⟩ : SpanF))
-     (fun o => okW (o + 54))⟩
+     (fun o => okW (o + 54)),
+   FeedIx.absent seed⟩
 
 /-! ## The batch -/
 

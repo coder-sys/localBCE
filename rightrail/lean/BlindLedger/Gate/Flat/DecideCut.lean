@@ -61,15 +61,18 @@ structure Cut (x x' : Lay) : Prop where
   pdSome : x'.pdSome = x.pdSome
   exclSome : x'.exclSome = x.exclSome
   spanSome : x'.spanSome = x.spanSome
+  eligSome : x'.eligSome = x.eligSome
   dmfOk : x'.dmfOk = x.dmfOk
   pdOk : x'.pdOk = x.pdOk
   exclOk : x'.exclOk = x.exclOk
   spanOk : x'.spanOk = x.spanOk
+  eligOk : x'.eligOk = x.eligOk
   lines : x'.lines = x.lines
   dmf : x'.dmf = x.dmf
   pdeath : x'.pdeath = x.pdeath
   excl : x'.excl = x.excl
   spans : x'.spans = x.spans
+  eligs : x'.eligs = x.eligs
   redo : x'.redo = x.redo
   pRedo : x'.pRedo = x.pRedo
   pByp : x'.pByp = x.pByp
@@ -564,8 +567,8 @@ theorem decideRows_cut (x x' : Lay) (C : Cut x x') :
       rw [C.lines]
       congr 1
       exact Array.map_congr_left fun li hli => held_eq C li hli
-    all_goals simp only [C.lines, C.today, C.relCh, C.unrCh, C.dmfSome, C.pdSome, C.exclSome, C.spanSome, C.dmfOk,
-      C.pdOk, C.exclOk, C.spanOk, C.dmf, C.pdeath, C.excl, C.spans]
+    all_goals simp only [C.lines, C.today, C.relCh, C.unrCh, C.dmfSome, C.pdSome, C.exclSome, C.spanSome, C.eligSome,
+      C.dmfOk, C.pdOk, C.exclOk, C.spanOk, C.eligOk, C.dmf, C.pdeath, C.excl, C.spans, C.eligs]
   have hown : ∀ i, i < x.lines.size → r1.1[i]! = (x.pRedo[x.lines[i]!.pay]! &&
       anySame x.relP x.slots[x.lines[i]!.ki]!.rs x.slots[x.lines[i]!.ki]!.rn x.lines[i]!.row) := by
     intro i hi

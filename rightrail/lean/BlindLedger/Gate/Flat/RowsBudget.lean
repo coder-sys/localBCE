@@ -11,7 +11,7 @@ import BlindLedger.Gate.Engine3.Verify
     real sets whose rows and lines fit the store widths (the hypotheses of `decideRows_eq` and `decideRows_cut`):
     every reason bit of every decision is allowed by the feeds' bits (`cut_mask_may`), so every reason a payment's OR
     has is (`rows_leaf_may`), and the reasons it has number at most `maxReasonCodes` (`rows_leaf_le`).
-    The count is not yet a constraint: `reasons` has 24 members, so it holds for any OR, and the masks are `UInt32`
+    The count is not yet a constraint: `reasons` has 29 members, so it holds for any OR, and the masks are `UInt32`
     (`reasons_len_le32`).  It is proved through `may` so that it keeps holding when the rule set outgrows 32 (step 5,
     with wider masks).  That `Hist.read` (engine) and `VMirror.read` (checker) read such a cut is argued in
     Engine3/Hist.lean and Engine3/VMirror.lean, not proved.  Synthetic, nonpayment, non-PHI, activation=false. -/
@@ -83,7 +83,7 @@ theorem rows_leaf_may (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) 
   · exact cut_mask_may H s fc f b rel unr hr hu hw x' C d (hds d hd) r hm
 
 /-- The reasons such an OR has number at most `maxReasonCodes`, through `rows_leaf_may` and `Rules.budget` (see the
-    module note: with 24 reasons this does not yet constrain anything). -/
+    module note: with 29 reasons this does not yet constrain anything). -/
 theorem rows_leaf_le (H : Bytes → Bytes) (s : St) (fc : FCtx) (f : List Nat) (b : List Line)
     (rel unr : Snapshot Line) (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr)
     (hw : ∀ l ∈ b ++ rel.entries ++ unr.entries, fitsLine2 l = true) (x' : Lay) (C : Cut (layout s fc f b) x')

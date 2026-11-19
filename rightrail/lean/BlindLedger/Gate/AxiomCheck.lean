@@ -685,6 +685,24 @@ example : ∀ {rootPk cert new : Bytes} {last : Option Bytes} {tokens : List Byt
 #guard_msgs in #print axioms BlindLedger.Gate.Rules.Run.leafOutcome_allow
 /-- info: 'BlindLedger.Gate.Rules.Run.natStr_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Rules.Run.natStr_eq
+/-- info: 'BlindLedger.Gate.Rules.may_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.may_sound
+/-- info: 'BlindLedger.Gate.Rules.decideAll_may' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.decideAll_may
+/-- info: 'BlindLedger.Gate.Rules.budget' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.budget
+/-- info: 'BlindLedger.Gate.Rules.pay_budget' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.pay_budget
+/-- info: 'BlindLedger.Gate.Rules.fail_closed_eligibility' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.fail_closed_eligibility
+/-- info: 'BlindLedger.Gate.Rules.g2_review' depends on axioms: [propext] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.g2_review
+/-- info: 'BlindLedger.Gate.Rules.g2_exclusive' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.g2_exclusive
+/-- info: 'BlindLedger.Gate.Rules.g2_hold_usable' does not depend on any axioms -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.g2_hold_usable
+/-- info: 'BlindLedger.Gate.Rules.g2_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms BlindLedger.Gate.Rules.g2_allow
 /-- info: 'BlindLedger.Gate.Flat.pay_line' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.Flat.pay_line
 /-- info: 'BlindLedger.Gate.Flat.leafReasons_codes' depends on axioms: [propext, Classical.choice, Quot.sound] -/

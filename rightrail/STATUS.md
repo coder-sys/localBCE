@@ -112,12 +112,21 @@ tests: nothing in `app/` or `tools/` builds a producer or calls `decide`, and a 
   never fall, but only tests call it, and publishing (`publishOk`) does not replay the chain. Tested, not proved: the pin checks at open and
   per batch, the replay, and the floor file.
 - **Signed payment-window facts (Lean decides, not yet called):** a check consumes k-of-n signed facts (`allow_signed`); on
-  the history index no line is ALLOW without them, whatever the index holds (`allow_signed_idx`).
+  the history index no line is ALLOW without them, whatever the index holds (`allow_signed_idx`). The signed path reads
+  no eligibility, so today every line on it is HUMAN_REVIEW on `STALE_ELIGIBILITY`; its ALLOW theorems hold vacuously and
+  no signed-path vector exercises an ALLOW until the path is extended.
+- **G2 eligibility is a gate rule (synthetic, not legally verified):** localBCE's aid code and benefit level gate reads a
+  pinned eligibility snapshot (kind 7) and adds five reasons, `BENEFIT_LEVEL_MISSING`, `PROGRAM_NOT_ELIGIBLE` (HOLD) and
+  their `_UNVERIFIED` twins and `STALE_ELIGIBILITY` (review, bypassable), at answer bits 24-28: 29 reasons, and no
+  existing bit moved. A HOLD rests only on a usable snapshot (at most 7 days old, a placeholder) and a valid service
+  date. No eligibility producer exists and the request frame does not carry the feed yet, so the engine reads none and
+  every engine line, every former ALLOW included, is HUMAN_REVIEW on `STALE_ELIGIBILITY`.
 - **Resident rules worker:** equals the `gate_rules` test program step for step until a lost or wrong store poisons it (HOLD); pinned.
 - **Multi-key approval (Lean decides; the gate engine admits signed key-set steps, only re-initialisation is not yet called):** key-set changes (`KEYSET/v2`) and snapshot reads (`SNAPSHOT/v3`)
   need a quorum of distinct employees; revocation is permanent; a clock wound back cannot revive expired keys
   (`inband_reinit_keys_live`).
-- **Conformance:** byte-level specs and must-reject vectors for gate rules v1, `SEGMENT/v1`, provider `contentDigest` v1.
+- **Conformance:** byte-level specs and must-reject vectors for gate rules v2 (v1 plus G2; v1 retired), `SEGMENT/v1`,
+  provider `contentDigest` v1.
 - **Bypass only per verified payment** (I.2): built in the rules worker only (see the grant and bypass entry above;
   `fail_closed_unless_bypass`, `bypass_attributed`, `bypass_no_window`). No product code outside the worker releases a
   payment the gate did not allow.
@@ -178,7 +187,7 @@ on 2,000 lines, 2026-11-02: batch 2,000 at 688 lines/s synthetic and 618 realist
   the store that runs today: one store for the gate and the ledger, without the row cap, is decided and in progress,
   not built.
 - **Lean decides:** the pinned worker derives paid-so-far from linked payments; the checker re-checks it. Stray bytes fail closed.
-- **Gate (Blind Ledger's end-state function):** its five decision rules (R1-R5), `CHECKPOINT/v3`, `TOKEN/v2` and the payer's `verifyToken` in
+- **Gate (Blind Ledger's end-state function):** its decision rules (R1-R5 and G2, 29 reason codes), `CHECKPOINT/v3`, `TOKEN/v2` and the payer's `verifyToken` in
   Lean; `gate_verify` checks every checkpoint's ML-DSA-87 (post-quantum) signature, tested against NIST vectors and AWS-LC.
 - **Trusted-code check** (`tools/tcb_report.txt`, rerun `tools/tcb_pin.ps1`): every constant a pinned executable reaches
   is proof-backed except Lean's `Init` runtime, the arena reservations (`reserveArena`), the worker's frame loop (`serveWorker`),

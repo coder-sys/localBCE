@@ -288,6 +288,15 @@
 'BlindLedger.Gate.Flat.ChunkIo.readHits_pure' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Rules.Run.leafOutcome_allow' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Rules.Run.natStr_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+'BlindLedger.Gate.Rules.may_sound' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Rules.decideAll_may' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Rules.budget' does not depend on any axioms
+'BlindLedger.Gate.Rules.pay_budget' depends on axioms: [propext]
+'BlindLedger.Gate.Rules.fail_closed_eligibility' depends on axioms: [propext, Quot.sound]
+'BlindLedger.Gate.Rules.g2_review' depends on axioms: [propext]
+'BlindLedger.Gate.Rules.g2_exclusive' does not depend on any axioms
+'BlindLedger.Gate.Rules.g2_hold_usable' does not depend on any axioms
+'BlindLedger.Gate.Rules.g2_allow' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Flat.pay_line' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Flat.leafReasons_codes' depends on axioms: [propext, Classical.choice, Quot.sound]
 'BlindLedger.Gate.Flat.pay_capped' depends on axioms: [propext, Classical.choice, Quot.sound]

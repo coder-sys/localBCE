@@ -5,3 +5,6 @@ gov-rules-kg-prototype/data/source_manifests/official_source_pack.json whitespac
 # under parked/localbce/blind-ledger/; the old path stays listed in case the code is revived there.
 parked/localbce/blind-ledger/lib/openzeppelin-contracts/** text eol=lf
 blind-ledger/lib/openzeppelin-contracts/** text eol=lf
+
+# The frozen RightRail Gate rules v1 vectors are pinned by SHA-256 (tests/fixtures/rightrail_rules_v1.vectors.source.json).
+tests/fixtures/rightrail_rules_v1.vectors text eol=lf

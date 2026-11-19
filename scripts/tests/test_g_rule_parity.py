@@ -67,6 +67,19 @@ def find_engine():
     return next((c for c in candidates if c and os.path.isfile(c)), None)
 
 
+class FrozenVectors(unittest.TestCase):
+    def test_default_vectors_are_the_frozen_v1_copy(self):
+        """DEFAULT_VECTORS is the byte-identical copy of the retired rules_v1.vectors its sidecar names."""
+        import hashlib
+        import json
+        with open(gp.DEFAULT_VECTORS + ".source.json", encoding="utf-8") as f:
+            source = json.load(f)
+        with open(gp.DEFAULT_VECTORS, "rb") as f:
+            self.assertEqual(hashlib.sha256(f.read()).hexdigest(), source["sha256"])
+        self.assertEqual(source["source_path"], "rightrail/tests/gate_rules/rules_v1.vectors")
+        self.assertFalse(os.path.abspath(gp.DEFAULT_VECTORS).startswith(os.path.join(ROOT, "rightrail") + os.sep))
+
+
 class ParseVectors(unittest.TestCase):
     def test_rules_v1_every_line_parsed_with_expectation(self):
         with open(gp.DEFAULT_VECTORS, encoding="utf-8") as f:

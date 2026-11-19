@@ -420,9 +420,10 @@ def vStale (o : Offer) (r : Rows) (x : Reason) : Bool :=
 
 #guard [Cause.ABSENT, .COUNTED, .SCOPE, .AGE, .DATE, .CHAIN, .BINDING, .EXPIRED, .FUTURE, .QUORUM, .REVOKED].map
   Cause.byte == [0, 1, 2, 3, 4, 16, 17, 18, 19, 32, 33]
--- ALLOW: all four attached under one head, each carrying that head's digest, all COUNTED; the ratchet advanced
+-- all four attached under one head, each carrying that head's digest, all COUNTED; the ratchet advanced.  The signed
+-- path reads no eligibility (decision 15): HUMAN_REVIEW on STALE_ELIGIBILITY alone where it was ALLOW
 #guard vCauses vO vR == [.COUNTED, .COUNTED, .COUNTED, .COUNTED]
-#guard (vDec vO vR).map (·.outcome) == [.ALLOW]
+#guard (vDec vO vR).map (·.outcome) == [.HUMAN_REVIEW] && (vDec vO vR).map (·.reasons) == [[.STALE_ELIGIBILITY]]
 #guard (vRead vO vR).head.isSome && (vRead vO vR).ksd == Keyset.digestOf SnapshotV2.vecG.ks &&
   ((vRead vO vR).dmf.bind (·.toOption)).map (·.keyset) == some (vRead vO vR).ksd &&
   ((vRead vO vR).pd.bind (·.toOption)).map (·.keyset) == some (vRead vO vR).ksd &&

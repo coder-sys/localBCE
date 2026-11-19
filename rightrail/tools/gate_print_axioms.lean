@@ -327,6 +327,15 @@ import BlindLedger.Gate.Cosign.Theorems
 #print axioms BlindLedger.Gate.Flat.ChunkIo.readHits_pure
 #print axioms BlindLedger.Gate.Rules.Run.leafOutcome_allow
 #print axioms BlindLedger.Gate.Rules.Run.natStr_eq
+#print axioms BlindLedger.Gate.Rules.may_sound
+#print axioms BlindLedger.Gate.Rules.decideAll_may
+#print axioms BlindLedger.Gate.Rules.budget
+#print axioms BlindLedger.Gate.Rules.pay_budget
+#print axioms BlindLedger.Gate.Rules.fail_closed_eligibility
+#print axioms BlindLedger.Gate.Rules.g2_review
+#print axioms BlindLedger.Gate.Rules.g2_exclusive
+#print axioms BlindLedger.Gate.Rules.g2_hold_usable
+#print axioms BlindLedger.Gate.Rules.g2_allow
 #print axioms BlindLedger.Gate.Flat.pay_line
 #print axioms BlindLedger.Gate.Flat.leafReasons_codes
 #print axioms BlindLedger.Gate.Flat.pay_capped

@@ -1,4 +1,5 @@
-# Gate rules v1 negative and edge vectors (see conformance/GATE_RULES_V1.md).  Synthetic IDs, no PHI.
+# Gate rules v2 negative and edge vectors (see conformance/GATE_RULES_V2.md): the v1 file with the eligibility head
+# snapshot and G2's edge cases added.  Synthetic IDs, no PHI.
 # This file must FAIL: malformed lines print RULES_VECTOR_MALFORMED, and a case whose expected answer is wrong prints
 # RULES_GOT with the decision the gate really made.  The independent checker must print exactly what gate_rules prints.
 # Pins (?) are filled by tools/gate_rules_data.py pin.
@@ -15,6 +16,10 @@ snap span 20270314 3 a5c769cbae3eab07bbea7449c89997830cf00046f3feb287c213f08e170
 span 1001 501 20260101 20271231
 span 1002 501 20260101 20271231
 span 1002 502 20260101 20271231
+snap elig 20270314 3 179e6b4ed424cef1eb94e5108309b8c6cad1eeded344cb0fe8fd5e4d24e670c708c59160cfb21da8e855d947961703758cec2495fc85353a712949b71c4b44fd
+elig 1001 78131 1 19000101 99991231
+elig 1002 78131 1 19000101 99991231
+elig 9001 78131 1 19000101 99991231
 
 # Malformed lines: each is reported and changes nothing
 case bad_numeral
@@ -63,6 +68,8 @@ case bad_directive_13
 anchor 0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF
 case bad_directive_14
 	today 20270315
+case bad_directive_15
+today 18446744073709551616
 
 # Boundary dates with a deliberately wrong expectation (ALLOW -): RULES_GOT shows the real answer; one date per case
 # boundary_20270315 is correct and prints nothing
@@ -215,5 +222,80 @@ case anchor_unanchored_commit
 anchor 11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111
 line 98 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100
 commit UNANCHORED
+
+# G2 eligibility edges, each with a deliberately wrong expectation (ALLOW -) unless marked correct; aid code 78131 is
+# "13" (allowed), 20000821 is "105" (not allowed), 20527417 is "999" (not allowed)
+# elig_age_7 is correct and prints nothing: 7 days is the eligibility limit
+case elig_age_7
+snap elig 20270308 1 400ab74c38e71087a3b5361af4c93534cd1a99176389f824e23a273461389d051e5656e150ef18f8dcdf40a6ff6d903ef341efc6beef6dec63f30ea67e3a9f11
+elig 1001 78131 1 20260101 20271231
+line 100 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case elig_age_8
+snap elig 20270307 1 8b897ffd5a6ada82ca7590977b4c08dbefc2459eaa93251f42dbf6fdfd9ba993e89410011a1bb68659acae4e9d748bfbd957fbedeaf000dffc1b235eae863723
+elig 1001 78131 1 20260101 20271231
+line 101 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+# A benefit level of 2 fits its byte but is malformed: the snapshot is present and unusable
+case elig_level_2
+snap elig 20270314 1 0228fea049c0416a225c0c2d59aa5618c55f772ba62ed391a901457552c3dd0798bde7e83d706cdf2a4b41aa12026439b279b9fc12f3e1e01a9299d970efad58
+elig 1001 78131 2 20260101 20271231
+line 102 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+# A level of 256 does not fit its byte, a numeral with `_` and a four-field row do not parse: the snapshot is missing
+case elig_level_256
+snap elig 20270314 1 00
+elig 1001 78131 256 20260101 20271231
+line 103 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case elig_underscore
+snap elig 20270314 1 a5d96969ba6267e6e25dd8d3250af0a601cebaed0f47a07afd44da74ef125d41c6f18441ebf9d2d5c53709750e0f56992b13608ff0a04de5d5afe642dbdc261c
+elig 1001 78_131 1 20260101 20271231
+line 104 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case elig_four_fields
+snap elig 20270314 1 00
+elig 1001 78131 1 20260101
+line 105 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+# An aid code outside the allowed set; an allowed one with level 0 beside a leveled row of another aid code
+case elig_aid_105
+snap elig 20270314 1 a90e8aad9f0c44f19e41904f60c4cef56c16fa7a2cc2bf686d17022c721031ea09c2c13132a05044aa627752cef8948392ed969edf5c2d43e9b869b271afc2a6
+elig 1001 20000821 1 20260101 20271231
+line 106 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case elig_pairing
+snap elig 20270314 2 3660a0ebf8636f9d8bb967dfb21596618ec4973b24fabfd42720ed8340f7aee7ec1b80e3afd8036887b1fe7978a5739f4c6c43f2923d27296286ee0c7dc2b838
+elig 1001 78131 0 20260101 20271231
+elig 1001 20527417 1 20260101 20271231
+line 107 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+# Row dates are inclusive (elig_row_bounds is correct and prints nothing); a row of another member covers nothing
+case elig_row_bounds
+snap elig 20270314 2 9c2f8bc68e258682de2d49df8a8b39e08bf787f227adf5eb78bc7847c897073c2c773734a223a9a5503f1802cdf87ff9ec47f6b88cc5fbef82d708e02d41aba2
+elig 1001 78131 1 20270305 20270305
+elig 1002 78131 1 20270306 20270306
+line 108 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+line 109 FFS_CLAIM 1002 7001 7001 20270306 99213 1 100 ALLOW -
+commit
+case elig_row_ends_before
+snap elig 20270314 1 1fb7071f90d5d7f986565f8773ca45dfea3998bad3b0e1c598780a5fe402a77a655ec97aab9b17fca1c4b6fde03cc331fef8e0f3ec7ecdeae2787d62569da44a
+elig 1001 78131 1 20260101 20270304
+line 110 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+case elig_other_member
+snap elig 20270314 1 7acc6806dde15033027ab7ef3228372623a6890a96f61648f6bb7725088f02fda9fffb9a7992a425050936848ca0a37a1adda80453adcbbc382748bb8f39b58a
+elig 1002 78131 1 20260101 20271231
+line 111 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+# Dropped: STALE_ELIGIBILITY alone, never an _UNVERIFIED G2 code
+case elig_dropped
+drop elig
+line 112 FFS_CLAIM 1001 7001 7001 20270305 99213 1 100 ALLOW -
+commit
+snap elig 20270314 3 179e6b4ed424cef1eb94e5108309b8c6cad1eeded344cb0fe8fd5e4d24e670c708c59160cfb21da8e855d947961703758cec2495fc85353a712949b71c4b44fd
+elig 1001 78131 1 19000101 99991231
+elig 1002 78131 1 19000101 99991231
+elig 9001 78131 1 19000101 99991231
 
 end 99

@@ -18,7 +18,7 @@ from app import right_rail_gate_ffs as ffs
 from app import right_rail_reader_leie as leie
 from app import right_rail_x12_834 as r834
 from app import right_rail_x12_837 as r837
-from conformance import gate_rules_v1_ref as ref
+from conformance import gate_rules_v2_ref as ref
 from tests import _gate_authority as au
 from tests import _gate_shards as g
 from tests import test_right_rail_gate_formats as fx
@@ -671,7 +671,7 @@ class FileToDecisionTests(fx.Scratch):
         pack = {**ts.FULL, "GATE_KEYSET_PIN": [[fx.TENANT, au.genesis()[0].hex()]]}
         a, b = claim(1, 1001, CLEAN, 20270305, "C99213", 12500), claim(2, 1001, "1999999984", 20270305, "C99213", 12500)
         b = dataclasses.replace(b, lines=(gate.encode_line("FFS_CLAIM", "L2", b.member_key, "1999999984", CLEAN, 20270305, "C99213", 1, 12500),))  # a near duplicate of a: another payee
-        bypass = au.bypass(fx.PROGRAM, "pay-2", au.digest(gate.encode_decide_request(b)), 1 << decider.REASONS.index("FFS_NEAR_DUPLICATE"))
+        bypass = au.bypass(fx.PROGRAM, "pay-2", au.digest(gate.encode_decide_request(b)), 1 << decider.REASON_IDX["FFS_NEAR_DUPLICATE"])
         with self.scratch() as tmp:
             c = g.Cluster(tmp, fx.custody(tmp), shards=fx.SHARDS)
             shards = {k: self.track(c.producer(k)) for k in range(fx.SHARDS)}

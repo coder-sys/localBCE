@@ -1,0 +1,9 @@
+{
+  "file": "tests/fixtures/rightrail_rules_v1.vectors",
+  "source_path": "rightrail/tests/gate_rules/rules_v1.vectors",
+  "source_trunk_commit": "fc89f9e5",
+  "sha256": "15aef4c9e742d12052c1574d4eabdce6435810f0de63e5167a41db32e1ab8d2a",
+  "manifest_line": "rightrail/conformance/MANIFEST.sha256 line 1 (Gate rules v1, retired at trunk step 3, G2)",
+  "reason": "Frozen copy for scripts/g_rule_parity.py DEFAULT_VECTORS (TRUNK_MIGRATION_PLAN decision 13; TRUNK_STEP3_G2_DESIGN section 6, decision 20). Byte-identical to the source; do not edit.",
+  "synthetic": true
+}

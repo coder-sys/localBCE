@@ -367,3 +367,19 @@
   approved by the owner with all 23 defaults ("Approve defaults"): author the
   rules-layer work now, commit G2 only after step 2's request side and with
   the signer.
+- 2026-11-19: step 3 G2 part (a) committed locally as WIP (owner: "Yes,
+  commit"; not pushed; the gate_engine, TCB and statement pins NOT updated,
+  so (a) reaches no committed gate_engine pin before (b)). Design sections
+  4.1-4.10, 5, 6, 7.1 and decision 20: five reasons at idx 24-28, eligibility
+  snapshot kind 7, READ-SET/v5, the Lean model/engine/authority changes,
+  host tables, GATE_RULES_V2 (v1 retired; a frozen v1 copy at
+  tests/fixtures/ for the parity harness), in-Lean mutants. Full build 265/265
+  green; signer-free G2 tests pass; parity harness equals the documented
+  baseline (265/140/124/1). Knowingly red, owner-accepted for this commit:
+  test_statement_pin x2, test_tcb_gate x2, test_gate_rules_worker x3 (pins
+  held for the (b) re-pin) and gate_v1.vectors line 28 (decision 11, waits
+  for the signer). Owner-accepted deviations: the "any member" mutant is
+  killed by Rules/Theorems fires_iff, not FastEq eligCovers_member; its
+  scratch build used a copy of the guarded wrapper with only the Lean path
+  changed; .gitattributes, a FrozenVectors test and a parity-script comment
+  go beyond decision 20's repoint-only.

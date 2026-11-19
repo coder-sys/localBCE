@@ -60,7 +60,7 @@ class AnswerV3Tests(unittest.TestCase):
         self.assertEqual(len(lean_idx), len(decide.REASONS))
         self.assertEqual(decide.REASON_IDX, lean_idx)
         self.assertEqual(list(decide.REASONS), sorted(decide.REASONS, key=str.encode))
-        self.assertEqual(decide.RULE_MASK, 2**24 - 1)
+        self.assertEqual(decide.RULE_MASK, 2**29 - 1)
         self.assertEqual(decide.LEAF_ONLY, {62: "UNENCODABLE_PAYMENT", 63: "SCOPE"})
         self.assertEqual(decide._names(1 << 4), ("FFS_DUPLICATE_LINE",))  # idx 4
         self.assertEqual(decide._names(1 << 23 | 1), ("ALREADY_DECIDED", "STALE_UNRESOLVED"))
@@ -79,15 +79,22 @@ class AnswerV3Tests(unittest.TestCase):
                 pays = decide._answer(self.answer([(0, 1, 0, 1)], mask), self.frame)[5]
                 self.assertEqual(pays[0].reasons, names)
 
+    def test_bit_28_is_the_last_reason_and_is_read(self) -> None:
+        # G2's idx 24-28 are reasons: bit 28 (STALE_ELIGIBILITY) is accepted in a record and in a leaf.
+        why, recs, _, _, _, pays, _ = decide._answer(self.answer([(0, 2, 0, 1 << 28)], 1 << 28 | 1 << 24), self.frame)
+        self.assertIsNone(why)
+        self.assertEqual([r.reasons for r in recs], [("STALE_ELIGIBILITY",)])
+        self.assertEqual([p.reasons for p in pays], [("BENEFIT_LEVEL_MISSING", "STALE_ELIGIBILITY")])
+
     def test_other_versions_and_bits_beyond_the_reasons_are_refused(self) -> None:
         good = self.answer([(0, 1, 0, 1)], 1 << 62)
         decide._answer(good, self.frame)
         for name, bad in (("version 1", self.answer([(0, 1, 0, 1)], 1 << 62, version=1)),
                           ("version 2", self.answer([(0, 1, 0, 1)], 1 << 62, version=2)),
-                          ("record bit 24", self.answer([(0, 1, 0, 1 << 24)])),
+                          ("record bit 29", self.answer([(0, 1, 0, 1 << 29)])),
                           ("record bit 62", self.answer([(0, 1, 0, 1 << 62)])),
                           ("record bit 63", self.answer([(0, 1, 0, 1 << 63)])),
-                          ("leaf bit 24", self.answer([(0, 1, 0, 1)], 1 << 24)),
+                          ("leaf bit 29", self.answer([(0, 1, 0, 1)], 1 << 29)),
                           ("leaf bit 61", self.answer([(0, 1, 0, 1)], 1 << 61)),
                           ("trailing byte", good + b"\0")):
             with self.subTest(name), self.assertRaises(decide.GateDecideError):

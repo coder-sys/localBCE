@@ -20,13 +20,17 @@ file not pinned (verify from the repository root with
 - **Correction reuse** `.../CORRECTION-REUSE/v1` (`BLFCRU02`→`BLFCRV02`):
  retired 2026-10-02 with the one-shot exe (vectors in git 99ec957); spec
  [§7](CORRECTION_TRANSITION_WIRE.md#7-reuse-blfcru02-request-and-blfcrv02-assessment).
-- **Gate rules v1**: spec [GATE_RULES_V1.md](GATE_RULES_V1.md); vectors
- `tests/gate_rules/{rules_v1,demo_zz}.vectors` and must-reject
- `rules_v1_negative.vectors` (pins in `tools/gate_rules_data.py`); impl Lake exe
- `gate_rules` (`lean/BlindLedger/Gate/Rules/Run.lean`), driven by
+- **Gate rules v2** (v1 plus G2, the eligibility snapshot kind 7 and READ-SET/v5): spec [GATE_RULES_V2.md](GATE_RULES_V2.md);
+ vectors `tests/gate_rules/{rules_v2,demo_zz_v2}.vectors` and must-reject
+ `rules_v2_negative.vectors` with its frozen output `rules_v2_negative.expected` (pins in `tools/gate_rules_data.py`);
+ impl Lake exe `gate_rules` (`lean/BlindLedger/Gate/Rules/Run.lean`), driven by
  `tests/test_gate_rules_vectors.py`; independent checker
- `gate_rules_v1_ref.py` (from the spec alone), `tests/test_gate_rules_v1_spec.py`.
- G6 (5fa47fa6, anchored batches) rewrote `rules_v1.vectors` in place; the pre-G6 bytes were deleted (RETIRED 2026-10-02; git keeps them).
+ `gate_rules_v2_ref.py` (from the spec alone), `tests/test_gate_rules_v2_spec.py`.
+- **Gate rules v1**: RETIRED 2026-11-18 at trunk step 3 (G2): GATE_RULES_V1.md, `gate_rules_v1_ref.py`,
+ `tests/test_gate_rules_v1_spec.py`, `rules_v1.vectors`, `demo_zz.vectors`, `rules_v1_negative.{vectors,expected}` and
+ their manifest lines deleted (git keeps them). The localBCE parity harness keeps a byte-identical copy of
+ `rules_v1.vectors` outside `rightrail/`. Earlier, G6 (5fa47fa6, anchored batches) rewrote `rules_v1.vectors` in place; the
+ pre-G6 bytes were deleted (RETIRED 2026-10-02; git keeps them).
 - **Provider pre-check v1**: vectors
  `provider_app/vectors/synthetic-vectors-v1.json`; JSON Schemas
  `provider_app/schemas/{check-request-v1,check-result-v1,rule-bundle-v1}.schema.json`

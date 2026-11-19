@@ -22,7 +22,7 @@ from tests._test_only_counter import TestOnlyCounter
 from app import right_rail_gate_codec as gate
 from app import right_rail_gate_decide as decider
 from app import right_rail_gate_producer as producer
-from conformance import gate_rules_v1_ref as ref
+from conformance import gate_rules_v2_ref as ref
 from tests import _gate_authority as au
 from tests import test_gate_rules_vectors as rules
 from tests import test_right_rail_gate_formats as fx

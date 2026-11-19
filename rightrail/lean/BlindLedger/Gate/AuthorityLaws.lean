@@ -22,7 +22,7 @@ def DocWf (a : Doc) : Prop :=
 
 def Frame.Wf (f : Frame) : Prop := DocWf f.a ∧ Keyset.SigsWf f.sigs
 
-theorem reasonMask_eq : reasonMask = 16777216 := rfl
+theorem reasonMask_eq : reasonMask = 536870912 := rfl
 
 theorem lt32_maxNat {n : Nat} (h : n < 256 ^ 4) : n ≤ maxNat := by unfold maxNat; omega
 
@@ -475,7 +475,7 @@ def dup : Nat := 2 ^ Rules.Reason.idx .ALREADY_DECIDED
 #guard Rules.Reason.idx .MEMBER_DECEASED == 7 && Rules.Reason.idx .STALE_UNRESOLVED == 23
 -- a mask has one bit per reason: a new reason's number widens the masks with it
 #guard reasonMask == 2 ^ Rules.reasons.length
-#guard (Rules.reasons.filter Rules.bypassable).length == 15
+#guard (Rules.reasons.filter Rules.bypassable).length == 18
 -- two approvers of distinct employees and distinct subjects
 #guard bv (bx deceased [a1, a2])
 #guard bv (bx deceased [a2, a3])

@@ -87,10 +87,14 @@ def feedsOf (c : Ctx) : Feeds :=
   let pd := by_ (entries c.providerDeaths) (·.id)
   let ex := by_ (entries c.exclusions) (·.id)
   let sp := by_ (entries c.enrollment) (·.member)
+  let el := by_ (entries c.eligibility) (·.member)
   { dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome, spanSome := c.enrollment.isSome,
+    eligSome := c.eligibility.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
-    dmf := fun i => dmf.getD i [], pdeath := fun i => pd.getD i [], excl := fun i => ex.getD i [], span := fun i => sp.getD i [] }
+    eligOk := usable c.today 7 okElig c.eligibility,
+    dmf := fun i => dmf.getD i [], pdeath := fun i => pd.getD i [], excl := fun i => ex.getD i [], span := fun i => sp.getD i [],
+    elig := fun i => el.getD i [] }
 
 /-- The worker holding the exclusive lock on `dir` (file `lock`); `none`: another worker has it. -/
 def lockDir (w : FlatW) (dir : String) : IO (Option FlatW) := do
@@ -256,7 +260,7 @@ def commitBin (pf : Prof) (w : FlatW) (cs0 : ChunkIo.CS) (q : Frame.Req) (dg : B
   let sp := snapF 4 Span.fields q.span
   let c : Ctx :=
     { today := q.today, dmf := dmf.map (·.1), providerDeaths := pd.map (·.1), exclusions := ex.map (·.1)
-      enrollment := sp.map (·.1), released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩
+      enrollment := sp.map (·.1), eligibility := none, released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩
       anchor := 0, redo := q.redo, byp := byp, lim := lim }
   let fc : FCtx := ⟨c.today, c.redo, feedsOf c, byp, lim⟩
   let pg ← IO.mkRef 0

@@ -30,7 +30,8 @@ theorem feedsOf_inv (c : Ctx) : FCtxInv ⟨c.today, c.redo, Worker.feedsOf c, c.
   ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, group_getD (fun x : Death => x.id) (entries c.dmf),
     group_getD (fun x : Death => x.id) (entries c.providerDeaths),
     group_getD (fun x : Exclusion => x.id) (entries c.exclusions),
-    group_getD (fun x : Span => x.member) (entries c.enrollment), rfl, rfl⟩
+    group_getD (fun x : Span => x.member) (entries c.enrollment), rfl, rfl, rfl, rfl,
+    group_getD (fun x : Elig => x.member) (entries c.eligibility)⟩
 
 private theorem fetched_lines (hr hu : Head) (fe : Fetched) (fc : FCtx) (f : List Nat) (b : List Line) :
     ∀ d ∈ (decideFetched hr hu fe fc f b).1, d.line ∈ b := by
@@ -410,11 +411,12 @@ private theorem part_id {fe : Fetched} {fd : Feeds} {b : List Line} {l : Line}
 private theorem part_feed {fe : Fetched} {fd : Feeds} {b : List Line} {l : Line}
     (h : capped (hotKeys fe fd b) fe fd l = false) :
     feedOver (fd.dmf l.member) = false ∧ feedOver (fd.span l.member) = false ∧ feedOver (fd.pdeath l.payee) = false ∧
-    feedOver (fd.excl l.payee) = false ∧ feedOver (fd.pdeath l.rendering) = false ∧ feedOver (fd.excl l.rendering) = false := by
+    feedOver (fd.excl l.payee) = false ∧ feedOver (fd.pdeath l.rendering) = false ∧ feedOver (fd.excl l.rendering) = false ∧
+    feedOver (fd.elig l.member) = false := by
   unfold capped feedCapped at h
   simp only [Bool.or_eq_false_iff, List.any_cons, List.any_nil, Bool.or_false] at h
-  obtain ⟨-, ⟨⟨h1, h2⟩, ⟨h3, h4⟩⟩⟩ := h
-  exact ⟨h1, h2, h3.1, h3.2, h4.1, h4.2⟩
+  obtain ⟨-, ⟨⟨⟨h1, h2⟩, h7⟩, ⟨h3, h4⟩⟩⟩ := h
+  exact ⟨h1, h2, h3.1, h3.2, h4.1, h4.2, h7⟩
 
 private theorem hot_cap {fe : Fetched} {fd : Feeds} {b : List Line} {l : Line} (hl : l ∈ b) (hc : isCap l = true)
     (hov : feedOver (fd.span l.member) = true) {k : Key} (hk : k ∈ keys l) :
@@ -654,8 +656,12 @@ private theorem fires_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (
   have hid' : idKey l ∈ keys l := idKey_mem
   have hex : exactKey l ∈ keys l := by simp [keys]
   have hne : nearKey l ∈ keys l := by simp [keys]
-  obtain ⟨f1, f2, f3, f4, f5, f6⟩ := part_feed hcl
+  obtain ⟨f1, f2, f3, f4, f5, f6, f7⟩ := part_feed hcl
   obtain ⟨hpay, hrend⟩ := mem_parties hl
+  have hae : (locIx s fc b).aidEligible l = (Ix.build (carried c₀ rel unr) b).aidEligible l :=
+    (aidEligible_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f7).trans aidEligible_eq.symm
+  have hle : (locIx s fc b).levelEligible l = (Ix.build (carried c₀ rel unr) b).levelEligible l :=
+    (levelEligible_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f7).trans levelEligible_eq.symm
   have hmd : (locIx s fc b).memberDead l = (Ix.build (carried c₀ rel unr) b).memberDead l :=
     (memberDead_loc (s := s) (b := b) (rel := rel) (unr := unr) hc (mem_members hl) f1).trans memberDead_eq.symm
   have hpd : (locIx s fc b).providerDead l = (Ix.build (carried c₀ rel unr) b).providerDead l :=
@@ -679,7 +685,9 @@ private theorem fires_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (
     rw [looseKeys_eq, this]; simp
   have hrc := relChained_loc (b := b) (unr := unr) hr hc
   have huc := unrChained_loc (b := b) (rel := rel) hu hc
-  obtain ⟨hT, -, hDS, hPS, hES, hSS, hDO, hPO, hEO, hSO, -, -, -, -⟩ := hc
+  obtain ⟨hT, -, hDS, hPS, hES, hSS, hDO, hPO, hEO, hSO, -, -, -, -, -, -, hLS, hLO, -⟩ := hc
+  have hls : (locIx s fc b).eligSome = (Ix.build (carried c₀ rel unr) b).eligSome := hLS
+  have hlo : (locIx s fc b).eligOk = (Ix.build (carried c₀ rel unr) b).eligOk := hLO
   have hto : (locIx s fc b).today = (Ix.build (carried c₀ rel unr) b).today := hT
   have hds : (locIx s fc b).dmfSome = (Ix.build (carried c₀ rel unr) b).dmfSome := hDS
   have hps : (locIx s fc b).pdSome = (Ix.build (carried c₀ rel unr) b).pdSome := hPS
@@ -690,7 +698,7 @@ private theorem fires_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (
   have heo : (locIx s fc b).exclOk = (Ix.build (carried c₀ rel unr) b).exclOk := hEO
   have hso : (locIx s fc b).spanOk = (Ix.build (carried c₀ rel unr) b).spanOk := hSO
   cases r <;> simp only [Ix.fires, hs _ hex, hs _ hne, hs _ hid', hp _ hex, hp _ hne, hp _ hid', hlk, hmd, hpd, hex',
-    hov, hne', hen, hrc, huc, hto, hds, hps, hes, hss, hdo, hpo, heo, hso]
+    hov, hne', hen, hrc, huc, hto, hds, hps, hes, hss, hdo, hpo, heo, hso, hae, hle, hls, hlo]
 
 private theorem decideLine_part (hr : IdxInv H s.rel rel) (hu : IdxInv H s.unr unr) (hc : FCtxInv fc c₀)
     (hid : idCapped (fetch s fc.redo b) = false) {l : Line} (hl : l ∈ b)
@@ -866,16 +874,16 @@ theorem pay_codes_le_part (H : Bytes → Bytes) (s : St) (c : Ctx) (rel unr : Sn
     `decideRows_eq` is not done here. -/
 
 /-- The usable bits of the feeds the worker decides on (`localIx` copies them into the index). -/
-def feedBits (fd : Feeds) : Bits := ⟨fd.dmfOk, fd.pdOk, fd.exclOk, fd.spanOk⟩
+def feedBits (fd : Feeds) : Bits := ⟨fd.dmfOk, fd.pdOk, fd.exclOk, fd.spanOk, fd.eligOk⟩
 
 /-- The usable bits `Ix.fires` reads. -/
-def ixBits (x : Ix) : Bits := ⟨x.dmfOk, x.pdOk, x.exclOk, x.spanOk⟩
+def ixBits (x : Ix) : Bits := ⟨x.dmfOk, x.pdOk, x.exclOk, x.spanOk, x.eligOk⟩
 
 /-- On the pinned context's feeds the bits are the Spec's (`Rules.bitsOf`).  The bound below needs no such link
     (`Rules.budget` holds for every bits); this relates the bits it uses to the ones `Rules.may_sound` speaks of. -/
 theorem feedBits_inv {fc : FCtx} {c : Ctx} (h : FCtxInv fc c) : feedBits fc.feeds = bitsOf c := by
-  obtain ⟨-, -, -, -, -, -, h7, h8, h9, h10, -⟩ := h
-  simp [feedBits, bitsOf, h7, h8, h9, h10]
+  obtain ⟨-, -, -, -, -, -, h7, h8, h9, h10, -, -, -, -, -, -, -, h18, -⟩ := h
+  simp [feedBits, bitsOf, h7, h8, h9, h10, h18]
 
 /-- The fast decider's twin of `Rules.may_sound`: a reason `Ix.fires` gives is allowed by the index's bits. -/
 theorem ix_may_sound (x : Ix) (s : Std.HashSet Key) (l : Line) (r : Reason) (h : x.fires s l r = true) :

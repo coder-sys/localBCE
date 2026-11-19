@@ -326,24 +326,27 @@ def snap {α : Type} (H : Bytes → Bytes) (kind : Nat) (fields : α → List (N
 def ctxOf (H : Bytes → Bytes) (q : Req) (dv : Derived) : Ctx :=
   { today := q.today, dmf := snap H 1 Death.fields q.dmf, providerDeaths := snap H 2 Death.fields q.pdeath,
     exclusions := snap H 3 Exclusion.fields q.excl, enrollment := snap H 4 Span.fields q.span,
-    released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩, anchor := 0,
+    eligibility := none, released := none, unresolved := none, releasedPrior := ⟨0, 0, []⟩, unresolvedPrior := ⟨0, 0, []⟩, anchor := 0,
     redo := q.redo, byp := dv.byp, lim := dv.lim }
 
 def feedsOf (c : Ctx) : Feeds :=
   { dmfSome := c.dmf.isSome, pdSome := c.providerDeaths.isSome, exclSome := c.exclusions.isSome,
-    spanSome := c.enrollment.isSome,
+    spanSome := c.enrollment.isSome, eligSome := c.eligibility.isSome,
     dmfOk := usable c.today 90 okDeath c.dmf, pdOk := usable c.today 90 okDeath c.providerDeaths,
     exclOk := usable c.today 31 okExclusion c.exclusions, spanOk := usable c.today 7 okSpan c.enrollment,
+    eligOk := usable c.today 7 okElig c.eligibility,
     dmf := fun i => (entries c.dmf).filter (·.id == i), pdeath := fun i => (entries c.providerDeaths).filter (·.id == i),
     excl := fun i => (entries c.exclusions).filter (·.id == i),
-    span := fun i => (entries c.enrollment).filter (·.member == i) }
+    span := fun i => (entries c.enrollment).filter (·.member == i),
+    elig := fun i => (entries c.eligibility).filter (·.member == i) }
 
 def fcOf (H : Bytes → Bytes) (q : Req) (dv : Derived) : FCtx := ⟨q.today, q.redo, feedsOf (ctxOf H q dv), dv.byp, dv.lim⟩
 
 /-- The decide theorems' hypothesis holds for every request. -/
 theorem fcOf_inv (H : Bytes → Bytes) (q : Req) (dv : Derived) : FCtxInv (fcOf H q dv) (ctxOf H q dv) := by
   unfold FCtxInv
-  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, fun _ => rfl, rfl, rfl,
+    rfl, rfl, fun _ => rfl⟩
 
 /-- The lines the rules see (`Run.keep`), with their positions among the decided lines. -/
 def kept (dv : Derived) : List (Nat × Line) :=

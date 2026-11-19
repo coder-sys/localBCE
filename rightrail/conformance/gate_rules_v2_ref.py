@@ -1,4 +1,4 @@
-"""Independent checker for conformance/GATE_RULES_V1.md (written from that page alone; stdlib only).
+"""Independent checker for conformance/GATE_RULES_V2.md (written from that page alone; stdlib only).
 
 ``run(text)`` returns the lines `gate_rules` prints for a vector file, without the RULES_SOURCE header.
 """
@@ -10,22 +10,35 @@ import sys
 
 FLOWS = {"FFS_CYCLE": 1, "FFS_CLAIM": 2, "CAP_820": 3}
 FNAME = {v: k for k, v in FLOWS.items()}
-KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved")
+KINDS = ("dmf", "pdeath", "excl", "span", "released", "unresolved", "elig")  # kind number = position + 1
 ID, PAY = 129, 261
-WIDTHS = {"dmf": (ID, 4), "pdeath": (ID, 4), "excl": (ID, 4, 4), "span": (ID, ID, 4, 4)}
+WIDTHS = {"dmf": (ID, 4), "pdeath": (ID, 4), "excl": (ID, 4, 4), "span": (ID, ID, 4, 4), "elig": (ID, ID, 1, 4, 4)}
 LINEW = (ID, PAY, 1, ID, ID, ID, 4, ID, 4, 8)  # id pay flow member payee rend date proc units cents
 DOMAIN = {"released": "RR/GATE/RELEASED/v1", "unresolved": "RR/GATE/UNRESOLVED/v1"}
-MAXAGE = {"dmf": 90, "pdeath": 90, "excl": 31, "span": 7}
-REASONS = sorted("""ALREADY_DECIDED CAP_MEMBER_MONTH_DUPLICATE COLLIDES_WITH_UNRESOLVED_NEAR DUPLICATE_OF_UNRESOLVED
+MAXAGE = {"dmf": 90, "pdeath": 90, "excl": 31, "span": 7, "elig": 7}
+REASONS = sorted("""ALREADY_DECIDED BENEFIT_LEVEL_MISSING BENEFIT_LEVEL_MISSING_UNVERIFIED CAP_MEMBER_MONTH_DUPLICATE COLLIDES_WITH_UNRESOLVED_NEAR DUPLICATE_OF_UNRESOLVED
 FFS_DUPLICATE_LINE FFS_DUPLICATE_UNVERIFIED FFS_NEAR_DUPLICATE MEMBER_DECEASED MEMBER_DECEASED_UNVERIFIED
-MEMBER_NOT_ENROLLED MEMBER_NOT_ENROLLED_UNVERIFIED POSTING_CAP PROVIDER_DECEASED PROVIDER_DECEASED_UNVERIFIED
-PROVIDER_EXCLUDED PROVIDER_EXCLUDED_UNVERIFIED SERVICE_DATE_FUTURE SERVICE_DATE_INVALID STALE_DMF STALE_ENROLLMENT
-STALE_EXCLUSION STALE_PROVIDER_DEATH STALE_RELEASED STALE_UNRESOLVED""".split())
+MEMBER_NOT_ENROLLED MEMBER_NOT_ENROLLED_UNVERIFIED POSTING_CAP PROGRAM_NOT_ELIGIBLE PROGRAM_NOT_ELIGIBLE_UNVERIFIED
+PROVIDER_DECEASED PROVIDER_DECEASED_UNVERIFIED
+PROVIDER_EXCLUDED PROVIDER_EXCLUDED_UNVERIFIED SERVICE_DATE_FUTURE SERVICE_DATE_INVALID STALE_DMF STALE_ELIGIBILITY
+STALE_ENROLLMENT STALE_EXCLUSION STALE_PROVIDER_DEATH STALE_RELEASED STALE_UNRESOLVED""".split())
 REVIEW = {"COLLIDES_WITH_UNRESOLVED_NEAR", "FFS_NEAR_DUPLICATE", "SERVICE_DATE_FUTURE", "SERVICE_DATE_INVALID", "STALE_DMF",
           "STALE_ENROLLMENT", "STALE_EXCLUSION", "STALE_PROVIDER_DEATH", "STALE_RELEASED", "STALE_UNRESOLVED",
           "MEMBER_DECEASED_UNVERIFIED", "MEMBER_NOT_ENROLLED_UNVERIFIED", "PROVIDER_DECEASED_UNVERIFIED",
-          "PROVIDER_EXCLUDED_UNVERIFIED", "FFS_DUPLICATE_UNVERIFIED"}
+          "PROVIDER_EXCLUDED_UNVERIFIED", "FFS_DUPLICATE_UNVERIFIED", "STALE_ELIGIBILITY", "PROGRAM_NOT_ELIGIBLE_UNVERIFIED",
+          "BENEFIT_LEVEL_MISSING_UNVERIFIED"}
 GENESIS = (0, 0, ())
+
+
+def aid_id(text):
+    """An aid code's number: 1, then times 256 plus each UTF-8 byte (section 1)."""
+    n = 1
+    for b in text.encode("utf-8"):
+        n = n * 256 + b
+    return n
+
+
+ALLOWED_AID = {aid_id(s) for s in ("13", "23", "53", "103", "104")}
 
 
 def num(s):
@@ -76,9 +89,9 @@ def row_of(kind, fs):
     if kind in ("dmf", "pdeath"):
         v = nums(fs)
         return tuple(v) if v and len(v) == 2 else None
-    if kind in ("excl", "span"):
+    if kind in ("excl", "span", "elig"):
         v = nums(fs)
-        return tuple(v) if v and len(v) == (3 if kind == "excl" else 4) else None
+        return tuple(v) if v and len(v) == {"excl": 3, "span": 4, "elig": 5}[kind] else None
     return parse_line(fs)
 
 
@@ -146,6 +159,8 @@ class Run:
                     return False
             elif not (valid(r[-2]) and valid(r[-1]) and r[-2] <= r[-1]):
                 return False
+            elif kind == "elig" and r[2] > 1:
+                return False
         return True
 
     def chained(self, prior, s):
@@ -207,6 +222,15 @@ class Run:
             ss = [s for s in rows["span"] if s[0] == x[3]]
             return any(a[1] != b[1] and max(f, a[2], b[2]) <= min(last, a[3], b[3]) for a in ss for b in ss)
 
+        def covering(x):
+            return [e for e in rows["elig"] if e[0] == x[3] and e[3] <= x[6] <= e[4]]
+
+        def aid_ok(x):
+            return any(e[1] in ALLOWED_AID for e in covering(x))
+
+        def level_ok(x):
+            return any(e[1] in ALLOWED_AID and e[2] == 1 for e in covering(x))
+
         pending = set()
         for x in unrset:
             pending |= claim(x)
@@ -229,6 +253,11 @@ class Run:
             excl = any(r[0] in (x[4], x[5]) and r[1] <= x[6] <= r[2] for r in rows["excl"])
             f = {
                 "ALREADY_DECIDED": i in seen or i in pending,
+                "BENEFIT_LEVEL_MISSING": certain("elig", x) and aid_ok(x) and not level_ok(x),
+                "BENEFIT_LEVEL_MISSING_UNVERIFIED": unver("elig", x) and aid_ok(x) and not level_ok(x),
+                "PROGRAM_NOT_ELIGIBLE": certain("elig", x) and not aid_ok(x),
+                "PROGRAM_NOT_ELIGIBLE_UNVERIFIED": unver("elig", x) and not aid_ok(x),
+                "STALE_ELIGIBILITY": not use["elig"],
                 "CAP_MEMBER_MONTH_DUPLICATE": c and (e in seen or n in seen or certain("span", x) and overlap(x)),
                 "COLLIDES_WITH_UNRESOLVED_NEAR": not c and n in pending and e not in pending,
                 "DUPLICATE_OF_UNRESOLVED": e in pending or c and n in pending,
@@ -323,7 +352,7 @@ class Run:
             self.anchor = fs[1]
         elif k == "today" and n == 2:
             v = num(fs[1])
-            if v is None:
+            if v is None or v >= 2 ** 64:
                 return None
             self.today = v
         elif k == "snap" and n == 5:

@@ -1,18 +1,26 @@
-# Gate rules v1
+# Gate rules v2
 
 What the payment gate's rules decide, and the vector-file grammar the rules
 runner `gate_rules` reads and prints. Rules: `lean/BlindLedger/Gate/Rules/Spec.lean`
 (`Spec`). Runner: `lean/BlindLedger/Gate/Rules/Run.lean` (`Run`), built as
 `gate_rules` from `RulesMain` (which runs `Run.runText`). Where this page and Lean disagree, Lean wins.
-Vectors: `tests/gate_rules/{rules_v1,demo_zz}.vectors` (published) and
-`tests/gate_rules/rules_v1_negative.vectors` (must-reject and edge cases).
-Independent checker, written from this page alone: `conformance/gate_rules_v1_ref.py`,
-run by `tests/test_gate_rules_v1_spec.py`.
+Vectors: `tests/gate_rules/{rules_v2,demo_zz_v2}.vectors` (published) and
+`tests/gate_rules/rules_v2_negative.vectors` (must-reject and edge cases; its output is frozen in
+`rules_v2_negative.expected`). Independent checker, written from this page alone: `conformance/gate_rules_v2_ref.py`,
+run by `tests/test_gate_rules_v2_spec.py`.
+
+Version 2 is version 1 (retired at trunk step 3; `GATE_RULES_V1.md`, git keeps it) plus G2: a seventh snapshot kind,
+`elig` (eligibility), five reasons read from it, and the read set `READ-SET/v5` (section 10) in place of `READ-SET/v2`.
+Every version 1 answer changes: a file with no `elig` snapshot gets `STALE_ELIGIBILITY` on every line. G2 is
+localBCE's aid code and benefit level gate: synthetic, not legally verified. The 7-day maximum age of `elig` is a
+placeholder (localBCE's own time to live is 24 hours). This version is extended in place at step 4 if nothing is
+published between.
 
 Synthetic, non-PHI, nonpayment: `proofSuiteId=null`, `production_usable=false`,
 `activation=false`. No rule yields BLOCK.
 
-Out of scope here: `load`
+Out of scope here: `load`, `commit SHOW` (it prints section 10's bytes; `tests/test_gate_rules_vectors.py`
+recomputes them), the request and grant directives
 and the shard directives (multi-shard runtime; `shards_v1.vectors`), `POSTING_CAP`
 (never fired by `Spec`; only the capped disk engine adds it; see the next paragraph), and the token wire
 (`BlindLedger.Gate.Spec`).
@@ -24,7 +32,9 @@ than 1,024 postings. The core count takes the place of the exact-key and near-ke
 and keeps its own count. A core always holds at least as many rows as any key inside it, so this can only add a hold and never lift one. It differs from
 the per-key count only when one core holds over 1,024 rows. Sign-off 2026-11-03. `gate_engine`
 and the `Flat` store keep the per-key count; the combined engine (`Gate/Engine3`, verifier and mirror) counts per core. The
-combined engine's differential check reports every line whose core is over the cap.
+combined engine's differential check reports every line whose core is over the cap. The `Flat` store also holds a line
+with `POSTING_CAP` when one of its own reference-feed reads is cut short (`Flat.feedCapped`: more than 1,024 rows for
+the line's member in `dmf`, `span` or `elig`, or for its payee or rendering party in `pdeath` or `excl`).
 
 ## 1. Conventions
 
@@ -35,7 +45,9 @@ combined engine's differential check reports every line whose core is over the c
   divisible by 4, except by 100 unless by 400). Valid dates compare as numbers
   in calendar order. `dayNum` (`Spec.dayNum`) is a day count on valid dates;
   `a` is at most `n` days before `b` when `dayNum b <= dayNum a + n`.
-- **Id**: member, payee, rendering party, procedure, line id, payment id: a numeral.
+- **Id**: member, payee, rendering party, procedure, line id, payment id, aid code: a numeral.
+- **Aid code**: the number of an aid code's text (`Spec.aidId`): start at 1, then for each UTF-8 byte `b` of the text,
+  in order, multiply by 256 and add `b`. So `"13"` is 78131 (1, then 1*256+49 = 305, then 305*256+51 = 78131).
 - Names are the constructor names in the tables below. "Byte order" is ASCII
   order of the names.
 
@@ -53,10 +65,10 @@ checkpoints at genesis (date 0, no lines), totals 0.
 | Directive | Effect |
 |---|---|
 | `case NAME` | Clears the batch, the lines earlier commits added to each set, both checkpoints (back to genesis), the anchor, the redo list, the expected pay outcomes and the done list. Keeps `today`, snapshots, rows and totals. |
-| `today D` | Sets today; `D` a numeral (not required to be a valid date). |
-| `snap KIND ASOF COUNT PIN` | Declares (replaces) snapshot `KIND`; `ASOF`, `COUNT` numerals, `PIN` any text. Drops the rows of `KIND` read so far. `snap released` also clears the lines earlier commits added to the released set; `snap unresolved` likewise for the unresolved set. Any `KIND` is accepted; only the six kinds below are used. |
+| `today D` | Sets today; `D` a numeral below 2^64 (not required to be a valid date). |
+| `snap KIND ASOF COUNT PIN` | Declares (replaces) snapshot `KIND`; `ASOF`, `COUNT` numerals, `PIN` any text. Drops the rows of `KIND` read so far. `snap released` also clears the lines earlier commits added to the released set; `snap unresolved` likewise for the unresolved set. Any `KIND` is accepted; only the seven kinds below are used. |
 | `drop KIND` | Removes every declaration of `KIND` (its rows stay but are unused until the next `snap KIND`, which drops them). |
-| `KIND f...` | `KIND` one of `dmf`, `pdeath`, `excl`, `span`, `released`, `unresolved`; any field count: appends a row (the fields, unparsed) to `KIND`. |
+| `KIND f...` | `KIND` one of `dmf`, `pdeath`, `excl`, `span`, `elig`, `released`, `unresolved`; any field count: appends a row (the fields, unparsed) to `KIND`. |
 | `line ID[:PAY] FLOW MEMBER PAYEE REND DATE PROC UNITS CENTS [OUTCOME REASONS [with=IDS]]` | Adds a line to the batch. 9 fields to parse, then 0, 2 or 3 expectation fields (else malformed). With expectations, the line's expected answer is the text of the line (`lineText`, section 8), a space, then those fields joined by single spaces; nothing is checked about their content. `PAY` defaults to `ID`. `FLOW` is `FFS_CYCLE`, `FFS_CLAIM` or `CAP_820` (case-sensitive). |
 | `redo PAY` | Adds the payment to the redo list; ignored when `PAY` is 256^261 or more. |
 | `pay PAY OUTCOME` | Expects the payment outcome (section 7) of `PAY` at the next commit. `OUTCOME` any text. |
@@ -67,14 +79,14 @@ checkpoints at genesis (date 0, no lines), totals 0.
 
 Row parsing, when a snapshot is built (section 3): `dmf`, `pdeath`: 2 numerals
 (id, date of death). `excl`: 3 (id, start, stop). `span`: 4 (member, plan,
-start, stop). `released`, `unresolved`: the 9 line fields without expectations
-(`ID[:PAY] FLOW ...`). A row with another count or a bad numeral makes the snapshot missing.
+start, stop). `elig`: 5 (member, aid code, benefit level, start, stop). `released`, `unresolved`: the 9 line fields
+without expectations (`ID[:PAY] FLOW ...`). A row with another count or a bad numeral makes the snapshot missing.
 
 ## 3. Snapshots, pins, usability
 
-A **snapshot** is `(asOf, count, rows)`. The six kinds: 1 `dmf`, 2 `pdeath`
+A **snapshot** is `(asOf, count, rows)`. The seven kinds: 1 `dmf`, 2 `pdeath`
 (provider deaths), 3 `excl` (exclusions), 4 `span` (enrollment), 5 `released`,
-6 `unresolved`. At a commit a kind is **present** only if: it is declared and
+6 `unresolved`, 7 `elig` (eligibility). At a commit a kind is **present** only if: it is declared and
 not dropped (latest declaration), all its rows parse, every row value fits its
 width, and the declared PIN equals the lower-case hex SHA3-512 of the **pin
 input** (`Spec.pinInput`, `Fast.pinBytes`). Otherwise it is **missing**. Its
@@ -83,7 +95,7 @@ not compared with the row count when pinning, only when checking usability.
 
 Pin input: domain text, byte 0, kind as u32, `ASOF` as u32, `COUNT` as u32,
 then the rows' encodings sorted in byte order and joined. Domain is
-`RR/GATE/SNAPSHOT/v1` for kinds 1-4, `RR/GATE/RELEASED/v1` for 5,
+`RR/GATE/SNAPSHOT/v1` for kinds 1-4 and 7, `RR/GATE/RELEASED/v1` for 5,
 `RR/GATE/UNRESOLVED/v1` for 6. Numbers are big-endian in the width given; a
 value of 256^width or more does not fit.
 
@@ -93,11 +105,12 @@ value of 256^width or more does not fit.
 | 3 | id 129, start 4, stop 4 |
 | 4 | member 129, plan 129, start 4, stop 4 |
 | 5, 6 | id 129, pay 261, flow tag 1, member 129, payee 129, rendering 129, date 4, proc 129, units 4, cents 8 |
+| 7 | member 129, aid code 129, benefit level 1, start 4, stop 4 |
 
 Flow tags: `FFS_CYCLE` 1, `FFS_CLAIM` 2, `CAP_820` 3.
 
 **Context.** `today` is the last `today` (0 if none). The reference snapshots
-`dmf`, `pdeath`, `excl`, `span` are the present ones, else missing. The
+`dmf`, `pdeath`, `excl`, `span`, `elig` are the present ones, else missing. The
 **released read** is the present `released` with the lines earlier commits
 added to released appended (count raised by their number); the **unresolved
 read** likewise (`Run.grow`). Missing stays missing. The priors are the two
@@ -112,6 +125,9 @@ row count equals COUNT; COUNT above 0; every row passes the check.
 | `dmf`, `pdeath` | 90 | date valid and not after asOf |
 | `excl` | 31 | start and stop valid, start not after stop |
 | `span` | 7 | start and stop valid, start not after stop |
+| `elig` | 7 | start and stop valid, start not after stop, benefit level 0 or 1 (`okElig`) |
+
+A benefit level above 1 makes the whole `elig` snapshot unusable (review, never HOLD).
 
 **Chained** (`Spec.chained`) for a set read against its prior: present; row
 count equals COUNT (0 allowed); asOf valid and not after today; prior asOf not
@@ -153,12 +169,22 @@ stop. *enrolled*: a `span` row has member = line member and start <= date <=
 stop and, for cap, plan = payee. *overlap* (cap lines; the date is valid when
 it is used): let F and L be the first and last day of the date's month. Some
 two `span` rows of the member have different plans and max(F, both starts) <=
-min(L, both stops). Facts read the rows of a present snapshot even when it is
-unusable; a missing snapshot has no rows, so no fact holds.
+min(L, both stops).
+
+G2 facts. The **allowed aid codes** (`Spec.allowedAid`) are the aid codes of `"13"`, `"23"`, `"53"`, `"103"` and
+`"104"`: 78131, 78387, 79155, 20000819, 20000820 (localBCE's numeric set; `"105"` and `"D3"` are not in it). An
+`elig` row **covers** the line when its member = line member and start <= line date <= stop (`eligCovers`).
+*aid eligible* (`aidEligible`): some covering row has an allowed aid code. *level eligible* (`levelEligible`): some
+single covering row has an allowed aid code and benefit level 1. The pairing is deliberate: a covering row with an
+allowed aid code and level 0 plus a covering row with level 1 and another aid code is not level eligible.
+
+Facts read the rows of a present snapshot even when it is unusable; a missing snapshot has no rows, so no fact holds.
 
 | Code | Class | Fires when |
 |---|---|---|
 | `ALREADY_DECIDED` | certain | seen holds the id key, or pending holds it. |
+| `BENEFIT_LEVEL_MISSING` (G2) | certain | `elig` certain, aid eligible and not level eligible. |
+| `BENEFIT_LEVEL_MISSING_UNVERIFIED` | review | `elig` unverified, aid eligible and not level eligible. |
 | `CAP_MEMBER_MONTH_DUPLICATE` | certain | cap, and (seen holds the exact key, or seen holds the near key, or `span` is certain and overlap). |
 | `COLLIDES_WITH_UNRESOLVED_NEAR` | review | not cap, pending holds the near key, pending lacks the exact key. |
 | `DUPLICATE_OF_UNRESOLVED` | certain | pending holds the exact key, or cap and pending holds the near key. |
@@ -169,18 +195,26 @@ unusable; a missing snapshot has no rows, so no fact holds.
 | `MEMBER_DECEASED_UNVERIFIED` | review | `dmf` unverified and member dead. |
 | `MEMBER_NOT_ENROLLED` (R5) | certain | `span` certain and not enrolled. |
 | `MEMBER_NOT_ENROLLED_UNVERIFIED` | review | `span` unverified and not enrolled. |
+| `PROGRAM_NOT_ELIGIBLE` (G2) | certain | `elig` certain and not aid eligible. |
+| `PROGRAM_NOT_ELIGIBLE_UNVERIFIED` | review | `elig` unverified and not aid eligible. |
 | `PROVIDER_DECEASED` (R3) | certain | `pdeath` certain and provider dead. |
 | `PROVIDER_DECEASED_UNVERIFIED` | review | `pdeath` unverified and provider dead. |
 | `PROVIDER_EXCLUDED` (R3) | certain | `excl` certain and excluded. |
 | `PROVIDER_EXCLUDED_UNVERIFIED` | review | `excl` unverified and excluded. |
 | `SERVICE_DATE_FUTURE` | review | today < line date (plain number compare; no validity test). |
 | `SERVICE_DATE_INVALID` | review | line date is not valid. |
-| `STALE_DMF`, `STALE_EXCLUSION`, `STALE_PROVIDER_DEATH`, `STALE_ENROLLMENT` | review | `dmf`, `excl`, `pdeath`, `span` respectively not usable. |
+| `STALE_DMF`, `STALE_ELIGIBILITY`, `STALE_EXCLUSION`, `STALE_PROVIDER_DEATH`, `STALE_ENROLLMENT` | review | `dmf`, `elig`, `excl`, `pdeath`, `span` respectively not usable. |
 | `STALE_RELEASED`, `STALE_UNRESOLVED` | review | the released read, the unresolved read, not chained. |
 
 R2 is `CAP_MEMBER_MONTH_DUPLICATE`; R4 is `FFS_DUPLICATE_LINE` and
 `FFS_NEAR_DUPLICATE`. The `STALE_*` reasons fire on every line of the batch,
 the same for all.
+
+G2 notes. The two certain G2 codes exclude each other; G2 suppresses no other rule. An invalid service date silences G2
+(`SERVICE_DATE_INVALID` carries the line); a future one does not. A member with no enrollment span and no eligible row
+gets both `MEMBER_NOT_ENROLLED` and `PROGRAM_NOT_ELIGIBLE`. A missing `elig` snapshot (none declared, dropped, a row
+that does not parse or fit, or a wrong pin) gives `STALE_ELIGIBILITY` alone, never an `_UNVERIFIED` G2 code. For
+`CAP_820` the date read is the period start.
 
 ## 6. Outcome
 
@@ -271,7 +305,7 @@ Output of a line decision (`Run.render`, `lineText`): `ID:PAY FLOW MEMBER PAYEE 
 joined by `,` in byte order or `-`, and when counterparts exist a space and `with=` plus the ids joined by `,`.
 
 `report` prints, from the done list (`Run.step`), in order, `REPORT NAME lines=N cents=C ($D.CC)`
-for NAME in `all`, then `ALLOW`, `HOLD`, `HUMAN_REVIEW`, then each reason
+for NAME in `all`, then `ALLOW`, `HOLD`, `HUMAN_REVIEW`, then each of the 29 reasons
 (including `POSTING_CAP`) in byte order; N the decisions with that outcome or
 reason, C the sum of their cents, `D` = C div 100, `CC` = C mod 100 in two digits.
 
@@ -284,24 +318,37 @@ this spec), then the lines produced as the file is read, then the final line
 
 A line no directive accepts (bad numeral, wrong field count, unknown first
 field, bad `FLOW`, `ID:PAY` not exactly one or two parts, hex anchor of wrong
-length or case, unknown directive) prints `RULES_VECTOR_MALFORMED line=N`, adds 1 to F, and changes nothing else.
-The out-of-scope directive `load` (the exe accepts it) counts as unknown here: a v1 checker
-that refuses them as malformed conforms, and `gate_rules_v1_ref.py` does.
+length or case, a `today` of 2^64 or more, unknown directive) prints `RULES_VECTOR_MALFORMED line=N`, adds 1 to F,
+and changes nothing else.
+The out-of-scope directives `load` and `commit SHOW` (the exe accepts them) count as unknown here: a v2 checker
+that refuses them as malformed conforms, and `gate_rules_v2_ref.py` does.
 After any other line that adds to F, `RULES_VECTOR_FAIL line=N` is printed before that line's output.
 In particular a `commit` with expectations that do not match fails, and it still advances the state.
 
-## 10. Lean names
+## 10. Read set (READ-SET/v5)
+
+What a commit read, as the gate binds it (`Run.reads`; printed by the out-of-scope `commit SHOW` as `RULES_READS HEX`):
+u32 today, then the five reference pins in kind order 1, 2, 3, 4, 7 (each the declared 64-byte pin of a present
+snapshot, or 64 zero bytes when it is missing), then u32 |P| and P. P is `RR/GATE/READ-SET/v5`, byte 0, five slots in
+the same order, u32 the redo count, each redo payment as 261 bytes in the order read, then the 64-byte state digest
+the commit starts from. A slot is byte 0 for a missing snapshot, else byte 1 and the SHA3-512 of the snapshot's pin
+input with domain `RR/GATE/READ-DMF/v2`, `READ-PROVIDER-DEATH/v2`, `READ-EXCLUSION/v2`, `READ-ENROLLMENT/v2`,
+`READ-ELIGIBILITY/v2` respectively, the kind number unchanged (so 7 for eligibility). All numbers big-endian.
+`READ-SET/v2` (four slots) is retired with version 1.
+
+## 11. Lean names
 
 | Clause | Name |
 |---|---|
 | dates | `validDate`, `dayNum`, `monthDays`, `leap` |
-| usable, chained, view, loose | `usable`, `chained`, `view`, `loose`, `okDeath`, `okExclusion`, `okSpan` |
+| usable, chained, view, loose | `usable`, `chained`, `view`, `loose`, `okDeath`, `okExclusion`, `okSpan`, `okElig` |
 | keys, claims | `exactKey`, `nearKey`, `idKey`, `keys`, `claim`, `pending`, `looseKeys` |
 | facts | `memberDead`, `providerDead`, `excluded`, `enrolled`, `covers`, `overlap`, `notEnrolled`, `certain`, `unverified` |
+| G2 facts | `aidId`, `allowedAid`, `eligCovers`, `aidEligible`, `levelEligible`, `Elig`, `Ctx.eligibility` |
 | rule table | `fires`, `Reason`, `reasons` |
 | outcome | `review`, `outcomeOf`, `Outcome` |
 | batch | `decideBatchIn`, `decideAll`, `decideLine`, `order`, `canonical`, `seen0`, `own`, `payOutcome`, `releasedLines`, `unresolvedLines`, `advance` |
-| pins | `pinInput`, `idWidth`, `payWidth`, `Line.fields`, `Gate.stateDigest`, `Gate.setsDigest` |
-| runner | `Run.step`, `Run.commit`, `Run.parseLine`, `Run.nat?`, `Run.fields`, `Run.keep`, `Run.quarantined`, `Run.render`, `Run.runLoop`, `Run.grow` |
+| pins | `pinInput`, `idWidth`, `payWidth`, `Line.fields`, `Elig.fields`, `Gate.stateDigest`, `Gate.setsDigest` |
+| runner | `Run.step`, `Run.commit`, `Run.parseLine`, `Run.nat?`, `Run.fields`, `Run.keep`, `Run.quarantined`, `Run.render`, `Run.runLoop`, `Run.grow`, `Run.reads` |
 
-Maximum ages are in `fires`: 90 (`dmf`, `pdeath`), 31 (`excl`), 7 (`span`).
+Maximum ages are in `fires`: 90 (`dmf`, `pdeath`), 31 (`excl`), 7 (`span`, `elig`).

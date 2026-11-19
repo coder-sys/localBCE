@@ -29,7 +29,7 @@ from app import right_rail_gate_signer as signer
 from tools import gate_rules_data
 
 VECTORS = Path(__file__).resolve().parent / "gate_vectors" / "gate_v1.vectors"
-RULES = VECTORS.parents[1] / "gate_rules" / "rules_v1.vectors"
+RULES = VECTORS.parents[1] / "gate_rules" / "rules_v2.vectors"
 TENANT, OTHER, STANDBY, SELF, PROGRAM, PERIOD = "nc-dhhs", "nc-other", "nc-standby", "nc-self", "medicaid-ffs", "2026-09"
 EPOCH, NOW, EXPIRES = 7, 1_790_000_000, 1_790_086_400
 DECIDED = NOW - 3600
@@ -44,7 +44,7 @@ CERTS = {"e7": (EPOCH, TENANT, SHARDS), "e6": (EPOCH - 1, TENANT, SHARDS), "othe
          "sf1": (1, SELF, OTHER_SHARDS), "sf2": (2, SELF, OTHER_SHARDS), "e0": (0, TENANT, SHARDS)}
 CHECKED = ("cert", "payment", "checkpoint", "token", "release", "request", "response", "reissue", "redecide",
            "decision-id", "input", "lines-root", "state", "context", "pay-digest", "input6", "batch-input", "answer")
-# The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v1.vectors pins them
+# The rules' empty released and unresolved sets, pinned as tests/gate_rules/rules_v2.vectors pins them
 PINS = tuple(bytes.fromhex(gate_rules_data.pin([f"snap {kind} 20270315 0 ?"])[0].split()[4])
              for kind in ("released", "unresolved"))
 STATE = gate.sha3_512(b"RR/GATE/STATE/v1\x00" + b"".join(PINS))  # Lean checks the STATE/v1 digest; the app no longer builds it

@@ -29,6 +29,10 @@ namespace BlindLedger.Gate.Rules
       legitimate repeats exist.
     - R5 `MEMBER_NOT_ENROLLED`: no enrollment span covers the date; for
       CAP_820 the span must also be with the paying plan.
+    - G2 (localBCE's aid code and benefit level; synthetic, not legally
+      verified) `PROGRAM_NOT_ELIGIBLE`: no eligibility row covering the date has
+      an allowed aid code.  `BENEFIT_LEVEL_MISSING`: one does, but no single
+      covering row has both an allowed aid code and a benefit level.
     - `ALREADY_DECIDED`: the line's identity is already released, unresolved
       or used earlier in the batch.  Such a line joins neither set.
     - `DUPLICATE_OF_UNRESOLVED`: the exact key (or, for CAP_820, the
@@ -41,8 +45,8 @@ namespace BlindLedger.Gate.Rules
       unchained set shows outside the gate's view (`loose`).  Review only; the
       row is listed in `counterparts`, as is any loose row sharing a key.
 
-    The certain reasons (R1 to R5, the duplicates, `ALREADY_DECIDED`) make the
-    line HOLD, whatever else it carries.  R1, R3, R5 and R2's plan overlap
+    The certain reasons (R1 to R5, G2, the duplicates, `ALREADY_DECIDED`) make the
+    line HOLD, whatever else it carries.  R1, R3, R5, G2 and R2's plan overlap
     fire only on a usable snapshot and a valid service date.  The duplicates
     and `ALREADY_DECIDED` read the gate's view of each set: the set read when
     it is chained, else the gate's own checkpoint of it, never an unchained
@@ -53,11 +57,12 @@ namespace BlindLedger.Gate.Rules
     reference snapshot that is missing, failing its pin, dated on an invalid
     day or after an invalid or valid today, older than its maximum age, empty,
     not holding exactly its declared row count, or with a row whose dates are
-    invalid or reversed or a death dated after the snapshot; `STALE_RELEASED` /
+    invalid or reversed, a death dated after the snapshot, or an eligibility
+    level other than 0 or 1; `STALE_RELEASED` /
     `STALE_UNRESOLVED`: that set is missing, not exactly its declared count,
     dated on an invalid day, after today or before the gate's checkpoint, or
     not extending the checkpoint's lines; and `*_UNVERIFIED`: a present but
-    unusable snapshot still shows R1, R3 or R5's fact for a valid service
+    unusable snapshot still shows R1, R3, R5 or G2's fact for a valid service
     date, so the reviewer sees it.
     No rule yields BLOCK: blocking stays a human or state action.
 
@@ -118,15 +123,20 @@ inductive Reason
   | STALE_ENROLLMENT | STALE_EXCLUSION | STALE_PROVIDER_DEATH | STALE_RELEASED | STALE_UNRESOLVED
   -- STMT-CHANGE-1 (ONEP-6): appended last, so no existing constructor moves.
   | POSTING_CAP
+  -- STMT-CHANGE (G2, trunk step 3): appended last, so no existing constructor moves.
+  | BENEFIT_LEVEL_MISSING | BENEFIT_LEVEL_MISSING_UNVERIFIED | PROGRAM_NOT_ELIGIBLE | PROGRAM_NOT_ELIGIBLE_UNVERIFIED
+  | STALE_ELIGIBILITY
   deriving DecidableEq, Repr
 
 /-- Every code once, in ascending byte order of its name (the runner's `#guard` checks the order). -/
 def reasons : List Reason :=
-  [.ALREADY_DECIDED, .CAP_MEMBER_MONTH_DUPLICATE, .COLLIDES_WITH_UNRESOLVED_NEAR, .DUPLICATE_OF_UNRESOLVED,
+  [.ALREADY_DECIDED, .BENEFIT_LEVEL_MISSING, .BENEFIT_LEVEL_MISSING_UNVERIFIED, .CAP_MEMBER_MONTH_DUPLICATE,
+   .COLLIDES_WITH_UNRESOLVED_NEAR, .DUPLICATE_OF_UNRESOLVED,
    .FFS_DUPLICATE_LINE, .FFS_DUPLICATE_UNVERIFIED, .FFS_NEAR_DUPLICATE, .MEMBER_DECEASED, .MEMBER_DECEASED_UNVERIFIED,
-   .MEMBER_NOT_ENROLLED, .MEMBER_NOT_ENROLLED_UNVERIFIED, .POSTING_CAP, .PROVIDER_DECEASED, .PROVIDER_DECEASED_UNVERIFIED,
+   .MEMBER_NOT_ENROLLED, .MEMBER_NOT_ENROLLED_UNVERIFIED, .POSTING_CAP, .PROGRAM_NOT_ELIGIBLE,
+   .PROGRAM_NOT_ELIGIBLE_UNVERIFIED, .PROVIDER_DECEASED, .PROVIDER_DECEASED_UNVERIFIED,
    .PROVIDER_EXCLUDED, .PROVIDER_EXCLUDED_UNVERIFIED, .SERVICE_DATE_FUTURE, .SERVICE_DATE_INVALID, .STALE_DMF,
-   .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
+   .STALE_ELIGIBILITY, .STALE_ENROLLMENT, .STALE_EXCLUSION, .STALE_PROVIDER_DEATH, .STALE_RELEASED, .STALE_UNRESOLVED]
 
 /-- A reason's bit in a signed mask (a grant entry's holds, a bypass's overrides).  Fixed per reason, never its
     place in `reasons`: a signed mask keeps its meaning when a reason is added.  These are the positions the codes
@@ -142,6 +152,8 @@ def Reason.idx : Reason → Nat
   | .PROVIDER_EXCLUDED_UNVERIFIED => 15 | .SERVICE_DATE_FUTURE => 16 | .SERVICE_DATE_INVALID => 17
   | .STALE_DMF => 18 | .STALE_ENROLLMENT => 19 | .STALE_EXCLUSION => 20 | .STALE_PROVIDER_DEATH => 21
   | .STALE_RELEASED => 22 | .STALE_UNRESOLVED => 23
+  | .BENEFIT_LEVEL_MISSING => 24 | .BENEFIT_LEVEL_MISSING_UNVERIFIED => 25 | .PROGRAM_NOT_ELIGIBLE => 26
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED => 27 | .STALE_ELIGIBILITY => 28
 
 /-- Two reasons never share a bit. -/
 theorem Reason.idx_inj {a b : Reason} (h : a.idx = b.idx) : a = b := by
@@ -164,12 +176,14 @@ theorem idx_len (r : Reason) : r.idx < reasons.length := by cases r <;> decide
 theorem reasons_list_nodup : reasons.Nodup := by decide
 
 /-- The reasons a bypass may override: findings about reference facts or similarity.  Every other reason guards the
-    release-once rule or is malformed input, and a new reason is not bypassable until listed here. -/
+    release-once rule, is malformed input, or is a certain eligibility finding that must be fixed at the source
+    (decision 12); a new reason is not bypassable until listed here. -/
 def bypassable : Reason → Bool
   | .MEMBER_DECEASED | .MEMBER_DECEASED_UNVERIFIED | .MEMBER_NOT_ENROLLED | .MEMBER_NOT_ENROLLED_UNVERIFIED
   | .PROVIDER_DECEASED | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED | .PROVIDER_EXCLUDED_UNVERIFIED
   | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .FFS_NEAR_DUPLICATE
-  | .COLLIDES_WITH_UNRESOLVED_NEAR | .SERVICE_DATE_FUTURE => true
+  | .COLLIDES_WITH_UNRESOLVED_NEAR | .SERVICE_DATE_FUTURE
+  | .STALE_ELIGIBILITY | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED | .BENEFIT_LEVEL_MISSING_UNVERIFIED => true
   | _ => false
 
 /-- For CAP_820, `payee` and `rendering` are the plan and `date` is the first
@@ -207,7 +221,7 @@ structure Span where
 
 /-- G2 eligibility, inclusive: the member's aid code (an identifier) and whether a benefit level exists
     (`level` 1, else 0) from `start` to `stop`.  Synthetic, from localBCE G2 (rust-engine/src/main.rs:235-240);
-    not legally verified.  No rule reads it yet. -/
+    not legally verified. -/
 structure Elig where
   member : Nat
   aid : Nat
@@ -239,6 +253,7 @@ structure Ctx where
   providerDeaths : Option (Snapshot Death)
   exclusions : Option (Snapshot Exclusion)
   enrollment : Option (Snapshot Span)
+  eligibility : Option (Snapshot Elig)
   released : Option (Snapshot Line)
   unresolved : Option (Snapshot Line)
   releasedPrior : Snapshot Line
@@ -280,6 +295,9 @@ def okDeath (asOf : Nat) (d : Death) : Bool := validDate d.date && d.date ≤ as
 def okExclusion (_ : Nat) (e : Exclusion) : Bool := validDate e.start && validDate e.stop && e.start ≤ e.stop
 
 def okSpan (_ : Nat) (s : Span) : Bool := validDate s.start && validDate s.stop && s.start ≤ s.stop
+
+/-- An eligibility row: valid dates in order and a level flag of 0 or 1 (any other value is malformed). -/
+def okElig (_ : Nat) (e : Elig) : Bool := validDate e.start && validDate e.stop && e.start ≤ e.stop && e.level ≤ 1
 
 /-- Present, dated on a valid day not after a valid today, at most `maxAge`
     days old, holding exactly its declared, nonzero count of well-formed rows
@@ -366,6 +384,23 @@ def overlap (c : Ctx) (l : Line) : Bool :=
   ss.any fun s => ss.any fun t =>
     s.plan != t.plan && max first (max s.start t.start) ≤ min last (min s.stop t.stop)
 
+/-- An identifier: a 0x01 byte, then the string's UTF-8 bytes, read big-endian (`Line` identifiers). -/
+def aidId (s : String) : Nat := s.toUTF8.foldl (fun n b => n * 256 + b.toNat) 1
+
+/-- localBCE G2's allowed aid codes (rust-engine/src/main.rs:235) as identifiers of "13", "23", "53", "103",
+    "104" (the runner's `#guard` checks them).  Synthetic, not legally verified. -/
+def allowedAid : List Nat := [78131, 78387, 79155, 20000819, 20000820]
+
+def eligCovers (l : Line) (e : Elig) : Bool := e.member == l.member && e.start ≤ l.date && l.date ≤ e.stop
+
+/-- Some eligibility row covering the line's date has an allowed aid code. -/
+def aidEligible (c : Ctx) (l : Line) : Bool :=
+  (entries c.eligibility).any fun e => eligCovers l e && allowedAid.contains e.aid
+
+/-- One covering row has both an allowed aid code and a benefit level. -/
+def levelEligible (c : Ctx) (l : Line) : Bool :=
+  (entries c.eligibility).any fun e => eligCovers l e && allowedAid.contains e.aid && e.level == 1
+
 /-- A line of a payment this batch decides again that the released set already holds. -/
 def own (c : Ctx) (l : Line) : Bool := c.redo.contains l.pay && (releasedSet c).contains l
 
@@ -388,7 +423,8 @@ def looseKeys (c : Ctx) : List Key :=
 
 /-- The rule table.  Maximum ages: DMF and provider deaths 90 days (H.R.1
     §§71104-71105 quarterly minimum); exclusions 31 days (42 CFR 455.436
-    monthly checks); enrollment 7 days, a placeholder for the state's own. -/
+    monthly checks); enrollment 7 days, a placeholder for the state's own; eligibility (G2) 7 days, a
+    placeholder (localBCE's O1 TTL is 24 hours). -/
 def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .ALREADY_DECIDED => seen.contains (idKey l) || (pending c l).contains (idKey l)
   | .CAP_MEMBER_MONTH_DUPLICATE => isCap l &&
@@ -416,6 +452,11 @@ def fires (c : Ctx) (seen : List Key) (l : Line) : Reason → Bool
   | .STALE_RELEASED => !chained c.today c.releasedPrior c.released
   | .STALE_UNRESOLVED => !chained c.today c.unresolvedPrior c.unresolved
   | .POSTING_CAP => false  -- the Spec reads whole sets; only the capped disk engine (Gate.OnepIndex) adds it, as HOLD
+  | .BENEFIT_LEVEL_MISSING => certain c 7 okElig c.eligibility l && aidEligible c l && !levelEligible c l
+  | .BENEFIT_LEVEL_MISSING_UNVERIFIED => unverified c 7 okElig c.eligibility l && aidEligible c l && !levelEligible c l
+  | .PROGRAM_NOT_ELIGIBLE => certain c 7 okElig c.eligibility l && !aidEligible c l
+  | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED => unverified c 7 okElig c.eligibility l && !aidEligible c l
+  | .STALE_ELIGIBILITY => !usable c.today 7 okElig c.eligibility
 
 /-- Reasons a person must look at: bad or unusable data, what it still shows, or a near duplicate or
     collision. -/
@@ -424,6 +465,7 @@ def review : Reason → Bool
   | .STALE_DMF | .STALE_ENROLLMENT | .STALE_EXCLUSION | .STALE_PROVIDER_DEATH | .STALE_RELEASED
   | .STALE_UNRESOLVED | .MEMBER_DECEASED_UNVERIFIED | .MEMBER_NOT_ENROLLED_UNVERIFIED
   | .PROVIDER_DECEASED_UNVERIFIED | .PROVIDER_EXCLUDED_UNVERIFIED | .FFS_DUPLICATE_UNVERIFIED => true
+  | .BENEFIT_LEVEL_MISSING_UNVERIFIED | .PROGRAM_NOT_ELIGIBLE_UNVERIFIED | .STALE_ELIGIBILITY => true
   | _ => false
 
 /-- A certain reason outranks every review reason. -/

@@ -2,7 +2,9 @@
 
 Runs localBCE's `denial_reason()` (through the built `rust-engine` binary) and
 RightRail's Lean gate rules (their expected results, as recorded in
-`rightrail/tests/gate_rules/rules_v1.vectors` and checked by the Lean runner)
+`tests/fixtures/rightrail_rules_v1.vectors`, a frozen copy of the retired
+`rightrail/tests/gate_rules/rules_v1.vectors` at trunk fc89f9e5, provenance in
+`tests/fixtures/rightrail_rules_v1.vectors.source.json`, checked by the Lean runner before G2)
 on the same synthetic lines, and reports every difference for G1/G3/G5/G7/G9.
 
 This is a comparison tool, not a decider.  It writes nothing into `rightrail/`
@@ -32,7 +34,9 @@ import tempfile
 from dataclasses import dataclass, field
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_VECTORS = os.path.join(ROOT, "rightrail", "tests", "gate_rules", "rules_v1.vectors")
+# Frozen copy (plan decision 13): RightRail retired Gate rules v1 at G2 and deleted the file; G2 stays an always-passing
+# gate here (PASSING_FLAGS), so the v1 lines, which carry no eligibility, are still the comparison set.
+DEFAULT_VECTORS = os.path.join(ROOT, "tests", "fixtures", "rightrail_rules_v1.vectors")
 
 # localBCE denial reason -> the RightRail reasons the plan maps it onto (§3).
 G_TO_LEAN = {
