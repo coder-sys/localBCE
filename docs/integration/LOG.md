@@ -391,3 +391,15 @@
   was approved with all 17 defaults ("Approve defaults"): a test-only kind 7
   builder outside rightrail/, fail-closed, no kind 7 in a request frame
   before (b). Seven held-pin checks stay knowingly red until the (b) re-pin.
+- 2026-11-20: the eligibility snapshot builder (producer design decision 1)
+  built outside rightrail/: scripts/elig_snapshot.py, 75 tests in
+  scripts/tests/test_elig_snapshot.py, a synthetic 20-member roster. Pins
+  equal the reference checker's and gate_rules_data's; 8 cross-check cases
+  plus 3 review-fix cases give equal output in gate_rules_v2_ref and the
+  gate_rules exe (scratch vectors, not committed). A 25-finding review (1
+  blocker: a second split entry's level windows were dropped) was applied
+  (21 in full, 2 in part, 2 rejected). Owner-accepted ("Yes, commit"): one
+  new Linux-CI skip (the real ffs.requests_of parity test needs msvcrt; it
+  passes on Windows), a source-independent test-secret refusal, CLI exit
+  code 3, level-window overlap set aside even when levels agree, and
+  JSON-position origins (design 4.5 amended). No frame or kind 7 wiring.
