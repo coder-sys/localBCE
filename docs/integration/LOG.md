@@ -383,3 +383,11 @@
   scratch build used a copy of the guarded wrapper with only the Lean path
   changed; .gitattributes, a FrozenVectors test and a parity-script comment
   go beyond decision 20's repoint-only.
+- 2026-11-19: failure 8 cleared signer-free (owner: "Bit-29 fix", amending
+  G2 decision 11): gate_v1.vectors' stale leaf-reason-bit-24 must-reject case
+  moved to bit 29 by the `--signer-free` answer-line rewrite (one byte);
+  gate_vectors checked=303 failed=0. The eligibility snapshot producer design
+  (TRUNK_STEP3_ELIG_PRODUCER_DESIGN.md, revision 2 after a 39-finding review)
+  was approved with all 17 defaults ("Approve defaults"): a test-only kind 7
+  builder outside rightrail/, fail-closed, no kind 7 in a request frame
+  before (b). Seven held-pin checks stay knowingly red until the (b) re-pin.

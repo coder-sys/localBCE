@@ -310,7 +310,7 @@ def signer_free_vectors() -> list[str]:
                        ("version-1", ok()[:4] + b"\x01" + ok()[5:]),
                        ("bypass-flag-2", ok(leaves=flag(2))), ("zero-bypass-flagged", ok(leaves=[leaves[0], (*leaves[1][:4], gate.ZERO_DIGEST, D[10])])),
                        ("leaf-outcome-3", ok(leaves=leaf(0, 3))), ("leaf-reason-bit-61", ok(leaves=leaf(1, 1 << 61))),
-                       ("leaf-reason-bit-24", ok(leaves=leaf(1, 1 << 24))),
+                       ("leaf-reason-bit-29", ok(leaves=leaf(1, 1 << 29))),
                        ("record-reason-bit-62", ok(recs=[(1, 1, 0, 1 << 62, 7, 5), recs[1]])),
                        ("leaf-authority-3", ok(leaves=leaf(2, 3))), ("index-twice", ok(recs=[recs[0], (1, *recs[1][1:])])),
                        ("refusal-with-records", answer_frame(5, SHARD, 10, D[11])[:19] + (1).to_bytes(4, "little") + D[11])):
