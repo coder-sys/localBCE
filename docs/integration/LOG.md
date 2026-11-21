@@ -403,3 +403,12 @@
   passes on Windows), a source-independent test-secret refusal, CLI exit
   code 3, level-window overlap set aside even when levels agree, and
   JSON-position origins (design 4.5 amended). No frame or kind 7 wiring.
+- 2026-11-21: step 2 request side, stage S0 host draft, beside the unchanged
+  v1 path: FRAME/v3 digest twin (ENGINE_V3 section 17), six-feed widths,
+  explicit feed kinds, Lean-sourced pin widths, sorted rows with the 32-byte
+  member rule (misfit -> state 2), request_frame_v3 / _requests_v3 under
+  CONTEXT/v2, feed checks. Nothing in production calls it (AST guard test).
+  v1 bytes equal HEAD over 2,330 outputs; pairs and decode fuzz unchanged.
+  rr-core-dependent values are single named constants marked pending. A
+  13-finding review was applied (11 in full, 2 in part). Owner: "Start host
+  draft", "Commit locally". The unbuilt PayNumbering.lean lemma stays out.

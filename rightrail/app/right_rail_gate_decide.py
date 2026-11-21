@@ -496,7 +496,9 @@ assert sorted(REASON_IDX) == list(REASONS) and sorted(REASON_IDX.values()) == li
 LEAF_ONLY = {62: "UNENCODABLE_PAYMENT", 63: "SCOPE"}  # a leaf's own codes, never a rule reason's bit
 RULE_MASK = (1 << len(REASONS)) - 1
 ANSWER_VERSION = 3  # answer header version (docs/integration/TRUNK_STEP2_FRAME_DESIGN.md 2.6, FRAME_V3 page to come);
-# the request header stays version 1 until the request side lands
+# the request header stays version 1 until the request side lands.  Design decision 7: this one constant also serves the
+# FRAME/v3 request header (``REQUEST_VERSION_V3`` is it, not a second literal); as the request version it is a step 2
+# default pending rr-core.
 AUTHORITIES = ("OBSERVE", "HOLD", "TRANSFER")
 FEED_WIDTHS = {"dmf": (33, 4), "pdeath": (21, 4), "excl": (21, 4, 4), "span": (33, 21, 4, 4)}  # conformance/FRAME_V1.md section 2
 
@@ -537,6 +539,151 @@ def request_frame(feeds: tuple[int, Sequence[tuple[bytes, bytes]]], shard: int, 
                      _le(len(keys.steps), 4), *(_le(d, 4) + _blob(doc) for d, doc in keys.steps),
                      _le(len(bypasses), 4), *map(_blob, bypasses), _le(len(bodies), 4), *map(_blob, bodies)])
     return b"RRDQ" + _le(1, 2) + _le(shard, 4) + _le(batch, 8) + hashlib.sha3_512(b"RR/GATE/FRAME/v1\x00" + body).digest() + body
+
+
+# ---------------------------------------------------------- FRAME/v3 request side, stage S0
+# docs/integration/TRUNK_STEP2_FRAME_DESIGN.md sections 2.1-2.5 and 5.2; conformance/ENGINE_V3.md sections 17 and 19.
+# The built gate_engine still speaks request version 1, so nothing in production calls this path yet; the v1 path above
+# (``feed``, ``FEED_WIDTHS``, ``request_frame``, ``_requests``) is unchanged.  Each value marked "step 2 default" awaits
+# rr-core's answer on frame v2; the domains, slots, row layouts and offsets are in the codec (``gate.FRAME_V3``,
+# ``gate.CONTEXT_V2``, ``gate.ELIG_SLOT_V3``, ``gate.SOC_SLOT_V3``, ``gate.ELIG_ROW_V3``, ``gate.SOC_ROW_V3``,
+# ``gate.FEED_WIDTHS_V3``, ``gate.ROWS_AT_V3``).  The consistency of these constants with one another is checked by
+# tests/test_gate_request_v3_host.py, not at import, so the v1 callers never depend on them.
+
+# The request header version: design decision 7 says one version constant serves request and answer, so this is
+# ``ANSWER_VERSION`` itself (step 2 default pending rr-core; see its comment).
+REQUEST_VERSION_V3 = ANSWER_VERSION
+# SNAPSHOT/v1 pin kinds (Rules/Spec.lean, the pins comment), by name and never by position: 5 and 6 are RELEASED and
+# UNRESOLVED.
+ELIG_KIND_V3 = 7  # the eligibility pin kind: step 2 default pending rr-core
+SOC_KIND_V3 = 8  # the share-of-cost pin kind: step 2 default pending rr-core
+FEED_KINDS = {"dmf": 1, "pdeath": 2, "excl": 3, "span": 4, "elig": ELIG_KIND_V3, "soc": SOC_KIND_V3}
+# The pinned field widths, Rules/Spec.lean ``Death/Exclusion/Span/Elig/Soc.fields`` (identifiers ``idWidth`` 129, level
+# and met 1, cents 8, dates 4); test_gate_request_v3_host reads them from the Lean source.
+PIN_WIDTHS = {"dmf": (129, 4), "pdeath": (129, 4), "excl": (129, 4, 4), "span": (129, 129, 4, 4),
+              "elig": (129, 129, 1, 4, 4), "soc": (129, 4, 8, 1)}
+# Feeds whose field 0 is an n33 member, sent as 32 bytes: dmf and span per ENGINE_V3 section 19; elig and soc a step 2
+# default pending rr-core (their row layouts, gate.ELIG_ROW_V3 and gate.SOC_ROW_V3).
+_MEMBER_V3 = frozenset(("dmf", "span", "elig", "soc"))
+_SNAPSHOT = b"RR/GATE/SNAPSHOT/v1\x00"
+
+
+def _nat(v: object) -> int:
+    if type(v) is not int or v < 0:
+        raise ValueError
+    return v
+
+
+def feed_pin(kind: str, asof: int, rows: Sequence[tuple[int, ...]]) -> bytes | None:
+    """Rules/Spec.lean ``pinInput`` of a feed of ``kind`` (a key of ``FEED_KINDS``): SHA3-512 of SNAPSHOT/v1, the kind,
+    asOf and count (u32 each), then each row's fields big-endian at ``PIN_WIDTHS``, rows in ascending byte order.  None
+    when a value does not fit (Lean: the pin fails).  A ``kind`` that is not a key of ``FEED_KINDS`` is ``feed_kind``."""
+    if kind not in FEED_KINDS:
+        raise GateDecideError("feed_kind")
+    try:
+        head = b"".join(_nat(v).to_bytes(4, "big") for v in (FEED_KINDS[kind], asof, len(rows)))
+        canon = sorted(b"".join(_nat(v).to_bytes(w, "big") for v, w in zip(r, PIN_WIDTHS[kind], strict=True)) for r in rows)
+    except (ValueError, OverflowError, TypeError):
+        return None
+    return hashlib.sha3_512(_SNAPSHOT + head + b"".join(canon)).digest()
+
+
+def feed_v3(kind: str, asof: int, rows: Sequence[tuple[int, ...]]) -> tuple[bytes, bytes]:
+    """A present FRAME/v3 feed of ``kind``: its 77-byte descriptor (pinned by ``feed_pin``) and its rows at
+    ``gate.FEED_WIDTHS_V3``, sorted numerically field by field (the order rule of design 2.3 and ENGINE_V3 section 19;
+    ``rowsSorted`` in design 4.2, unbuilt in Frame/Spec.lean).  A member must be ``v >> 256 == 1`` and is sent as
+    ``v - 2**256``.  A row that does not fit (a member without the 0x01 top byte, an id of 256^21 or more, a field past
+    its width, a row of the wrong length): the feed is sent as missing (state 2).  An unknown ``kind`` is ``feed_kind``."""
+    if kind not in FEED_KINDS:
+        raise GateDecideError("feed_kind")
+    rows = list(rows)
+    pin = feed_pin(kind, asof, rows)
+    member = kind in _MEMBER_V3
+    try:
+        if pin is None:
+            raise ValueError
+        sent = sorted(tuple(map(_nat, r)) for r in rows)
+        if member and any(r[0] >> 256 != 1 for r in sent):
+            raise ValueError
+        body = b"".join(_le(v - (1 << 256) if member and i == 0 else v, w)
+                        for r in sent for i, (v, w) in enumerate(zip(r, gate.FEED_WIDTHS_V3[kind], strict=True)))
+        head = _le(asof, 4) + _le(len(rows), 4) + _le(len(rows), 4)
+    except (ValueError, OverflowError, TypeError):
+        return b"\x02" + bytes(76), b""
+    return b"\x01" + head + pin, body
+
+
+_ABSENT = (bytes(77), b"")
+
+
+def request_frame_v3(feeds: tuple[int, Sequence[tuple[bytes, bytes]]], shard: int, batch: int, asof: int, prev: bytes,
+                     pin: bytes, floors: tuple[int, int], keys: "Keys", grant: bytes, release: bytes,
+                     bypasses: Sequence[bytes], bodies: Sequence[bytes], redo: Sequence[int] = ()) -> bytes:
+    """``request_frame`` at FRAME/v3 (design 2.1-2.4): header version ``REQUEST_VERSION_V3``, six descriptors and the
+    digest ``gate.frame_digest``.  ``feeds`` reads four feeds (dmf, pdeath, excl, span; elig and soc are then sent
+    absent) or all six, in ``gate.FEED_WIDTHS_V3`` order, each from ``feed_v3`` (or absent); any other count is
+    ``feed_count`` (design decision 11).  Each feed is checked first (``_check_feed_v3``), so a v1 ``feed`` output
+    (unsorted rows, a 33-byte member) is ``feed_malformed`` here rather than a frame the engine refuses ``RECORD``; a body
+    that still does not walk is ``feed_malformed`` too."""
+    today, read = feeds
+    read = tuple(read)
+    kinds = list(gate.FEED_WIDTHS_V3)
+    if len(read) == 4:  # the four section 19 feeds; the step 2 feeds (elig, soc) are sent absent
+        given = iter(read)
+        read = tuple(_ABSENT if k in ("elig", "soc") else next(given) for k in kinds)
+    elif len(read) != len(kinds):
+        raise GateDecideError("feed_count")
+    for kind, item in zip(kinds, read, strict=True):
+        _check_feed_v3(kind, item)
+    body = _body_v3((today, read), batch, asof, prev, pin, floors, keys, grant, release, bypasses, bodies, redo)
+    try:
+        digest = gate.frame_digest(body)
+    except gate.GateCodecError:
+        raise GateDecideError("feed_malformed") from None
+    return b"RRDQ" + _le(REQUEST_VERSION_V3, 2) + _le(shard, 4) + _le(batch, 8) + digest + body
+
+
+def _check_feed_v3(kind: str, item: tuple[bytes, bytes]) -> None:
+    """A (descriptor, rows) pair the v3 frame can carry in ``kind``'s slot, else ``feed_malformed``: a 77-byte
+    descriptor; state 0 or 2 with every other descriptor byte zero and no rows (Frame/Spec.lean ``encFeed``'s guard);
+    state 1 with rows of exactly ``rows u32 (at +9)`` times the v3 stride, non-decreasing field by field as numbers at
+    ``gate.FEED_WIDTHS_V3`` (the order rule of design 2.3 and ENGINE_V3 section 19)."""
+    try:
+        desc, rows = item
+    except (TypeError, ValueError):
+        raise GateDecideError("feed_malformed") from None
+    if type(desc) is not bytes or type(rows) is not bytes or len(desc) != 77:
+        raise GateDecideError("feed_malformed")
+    if desc[0] != 1:
+        if desc[0] not in (0, 2) or desc[1:] != bytes(76) or rows:
+            raise GateDecideError("feed_malformed")
+        return
+    widths = gate.FEED_WIDTHS_V3[kind]
+    stride = sum(widths)
+    if int.from_bytes(desc[9:13], "little") * stride != len(rows):
+        raise GateDecideError("feed_malformed")
+    last = None
+    for at in range(0, len(rows), stride):
+        row, cut = [], at
+        for w in widths:
+            row.append(int.from_bytes(rows[cut:cut + w], "little"))
+            cut += w
+        if last is not None and row < last:
+            raise GateDecideError("feed_malformed")
+        last = row
+
+
+def _body_v3(feeds: tuple[int, Sequence[tuple[bytes, bytes]]], batch: int, asof: int, prev: bytes, pin: bytes,
+             floors: tuple[int, int], keys: "Keys", grant: bytes, release: bytes, bypasses: Sequence[bytes],
+             bodies: Sequence[bytes], redo: Sequence[int]) -> bytes:
+    """A FRAME/v3 request body (design 2.2): the v1 body's layout with six descriptors and redone payments at
+    ``gate.PAY_WIDTH``.  Its own builder, so no v3 edit can move the v1 bytes ``request_frame`` writes."""
+    today, read = feeds
+    return b"".join([_le(today, 4), _le(asof if batch == 1 else 0, 4), prev, _le(len(redo), 4), *(d for d, _ in read),
+                     *(r for _, r in read), *(_le(p, gate.PAY_WIDTH) for p in redo),
+                     pin, b"\x01" + _le(floors[0], 8), _le(floors[1], 4), _blob(grant), _blob(keys.keyset), _blob(release),
+                     _le(len(keys.steps), 4), *(_le(d, 4) + _blob(doc) for d, doc in keys.steps),
+                     _le(len(bypasses), 4), *map(_blob, bypasses), _le(len(bodies), 4), *map(_blob, bodies)])
 
 
 class _Reader:
@@ -585,6 +732,23 @@ def _requests(frame: bytes) -> tuple[bytes, list[bytes], bytes, list[bytes]]:
     if r.at != len(frame):
         raise GateDecideError("rules_refused")
     return context, bodies, grant, bypasses
+
+
+def _requests_v3(frame: bytes) -> tuple[bytes, list[bytes], bytes, list[bytes]]:
+    """``_requests`` of a FRAME/v3 request frame this module wrote (``request_frame_v3``), read by the codec's v3 walk
+    (``gate.frame_parts``: the descriptors at ``gate.DESC_AT_V3``, the rows from ``gate.ROWS_AT_V3``), its context the
+    CONTEXT/v2 digest.  Its own reader, so the v1 ``_requests`` above stays as it was; a body that does not walk is
+    ``rules_refused``.  Host guard, not a design rule: a frame whose header version is not ``REQUEST_VERSION_V3`` is
+    ``rules_refused`` too (``_requests`` keeps accepting any version, byte for byte as before).  Before any production
+    caller switches, stored frames must be dispatched by their header version, not by which reader the caller uses."""
+    if frame[4:6] != _le(REQUEST_VERSION_V3, 2):
+        raise GateDecideError("rules_refused")
+    body = frame[82:]
+    try:
+        c, bodies, grant, bypasses = gate.frame_parts(body)
+    except gate.GateCodecError:
+        raise GateDecideError("rules_refused") from None
+    return hashlib.sha3_512(gate.CONTEXT_V2 + body[:c]).digest(), bodies, grant, bypasses
 
 
 def _approval(x: bytes) -> tuple[int, bytes, bytes, bytes] | None:

@@ -182,6 +182,111 @@ def payment_input(context: bytes, head: bytes, lines: Sequence[bytes], tail: byt
     return sha3_512(INPUT_V6 + context + pay)
 
 
+# --------------------------------------------- FRAME/v3 request digest (stage S0)
+# The request side of FRAME/v3 (docs/integration/TRUNK_STEP2_FRAME_DESIGN.md sections 2.2-2.5; conformance/ENGINE_V3.md
+# sections 17 and 19).  The built gate_engine still speaks request version 1 (FRAME/v1 over the whole body, CONTEXT/v1),
+# and nothing in production calls this yet.  Unlike the records above the frame is little-endian.  Each value marked
+# "step 2 default" awaits rr-core's answer on frame v2 (design decisions 2 and 16).
+
+FRAME_V3: Final = b"RR/GATE/FRAME/v3\x00"  # step 2 default pending rr-core (design 2.8)
+CONTEXT_V2: Final = b"RR/GATE/CONTEXT/v2\x00"  # step 2 default pending rr-core; the v3 frame only (payment_input keeps CONTEXT/v1)
+DESC_AT_V3: Final = 76  # body offset of descriptor slot 1, 77 bytes per slot (unchanged from v1, design 2.2)
+# The four ENGINE_V3 section 19 feeds in slots 1-4, as row field widths (a member 32 bytes, its 0x01 top byte implied).
+_SECTION19_V3: Final = {1: ("dmf", (32, 4)), 2: ("pdeath", (21, 4)), 3: ("excl", (21, 4, 4)), 4: ("span", (32, 21, 4, 4))}
+ELIG_SLOT_V3: Final = 5  # eligibility's descriptor slot (body offset 384): step 2 default pending rr-core (design 2.2)
+SOC_SLOT_V3: Final = 6  # share of cost's descriptor slot (body offset 461): step 2 default pending rr-core (design 2.2)
+ELIG_ROW_V3: Final = (32, 21, 1, 4, 4)  # member, aid, level, start, stop (stride 62): step 2 default pending rr-core (design 2.3)
+SOC_ROW_V3: Final = (32, 4, 8, 1)  # member, month, cents, met (stride 45): step 2 default pending rr-core (design 2.3)
+# A v3 body's feeds in descriptor-slot order (slot s at DESC_AT_V3 + 77 * (s - 1)), as row field widths.  That the slots
+# are 1..6 and ROWS_AT_V3 follows the last is checked by tests/test_gate_request_v3_host.py, not at import.
+FEED_WIDTHS_V3: Final = {name: widths for _, (name, widths) in
+                         sorted({**_SECTION19_V3, ELIG_SLOT_V3: ("elig", ELIG_ROW_V3), SOC_SLOT_V3: ("soc", SOC_ROW_V3)}.items())}
+ROWS_AT_V3: Final = 538  # body offset of the feed rows, after six descriptors: step 2 default pending rr-core (design 2.2)
+PAY_WIDTH: Final = 261  # a redone payment (Rules/Spec.lean ``payWidth``); the v1 builders keep their own literal 261
+
+
+class _Walk:
+    """Little-endian reads over a v3 body; any read past its end is ``frame_walk`` (the engine: LENGTH)."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data, self.at = data, 0
+        self.grant, self.bypasses = b"", []  # what ``_walk_ctx`` passes on the way, for the host's own reader
+
+    def skip(self, n: int) -> bytes:
+        if self.at + n > len(self.data):
+            _fail("frame_walk")
+        self.at += n
+        return self.data[self.at - n:self.at]
+
+    def u32(self) -> int:
+        return int.from_bytes(self.skip(4), "little")
+
+    def blob(self) -> bytes:
+        return self.skip(self.u32())
+
+
+def _walk_ctx(r: _Walk) -> int:
+    """``walkCtx`` of design 4.2 (unbuilt in Frame/Spec.lean): from the descriptor row counts, the redo count and the
+    authority section's counts and blob lengths alone, the body offset ``c`` of the request count ``nq``."""
+    r.at = 72  # today, asOf, prev
+    redo = r.u32()
+    rows = 0
+    for slot, widths in enumerate(FEED_WIDTHS_V3.values()):
+        r.at = DESC_AT_V3 + 77 * slot + 9  # past state, asOf, count
+        rows += r.u32() * sum(widths)
+    r.at = ROWS_AT_V3
+    r.skip(rows + PAY_WIDTH * redo + 64 + 9 + 4)  # the rows, the redone payments, the key-set pin, the floor, kfloor
+    r.grant = r.blob()
+    for _ in range(2):  # key set, release
+        r.blob()
+    for _ in range(r.u32()):  # key-set steps: epoch, then the step
+        r.skip(4)
+        r.blob()
+    r.bypasses = [r.blob() for _ in range(r.u32())]
+    return r.at
+
+
+def frame_parts(body: bytes) -> tuple[int, list[bytes], bytes, list[bytes]]:
+    """``frame_walk`` with what the walk passes: ``c``, the request blobs, the grant blob and the bypass blobs."""
+    r = _Walk(body)
+    c = _walk_ctx(r)
+    requests = [r.blob() for _ in range(r.u32())]
+    if r.at != len(body):
+        _fail("frame_walk")
+    return c, requests, r.grant, r.bypasses
+
+
+def frame_walk(body: bytes) -> tuple[int, list[bytes]]:
+    """``walk`` of design 4.2 (unbuilt in Frame/Spec.lean): ``c`` and the request blobs, the walk ending exactly at the
+    end of the body; else ``frame_walk``."""
+    return frame_parts(body)[:2]
+
+
+def walk_prime(prime: bytes) -> int | None:
+    """``walkPrime`` of design 4.2 (unbuilt in Frame/Spec.lean), the parser of ``body'``: ``walkCtx``, then ``n``, then
+    exactly ``4n`` bytes of lengths; the length it read (bytes after it are not read), or None when it is cut short."""
+    r = _Walk(prime)
+    try:
+        _walk_ctx(r)
+        r.skip(4 * r.u32())
+    except GateCodecError:
+        return None
+    return r.at
+
+
+def body_prime(body: bytes) -> tuple[bytes, list[bytes]]:
+    """``bodyPrime`` of design 4.2/4.10 (unbuilt in Frame/Spec.lean): ``body[0 .. c+4)`` then each request's u32 length, and the requests."""
+    c, requests = frame_walk(body)
+    return body[:c + 4] + b"".join(len(x).to_bytes(4, "little") for x in requests), requests
+
+
+def frame_digest(body: bytes) -> bytes:
+    """The FRAME/v3 header digest (ENGINE_V3.md section 17 with the v3 domain): SHA3-512(FRAME/v3 || body' || rd_1 || ... || rd_n),
+    ``rd_i`` the SHA3-512 of request ``i``.  A body whose lengths do not walk is ``frame_walk`` (the engine: LENGTH)."""
+    prime, requests = body_prime(body)
+    return sha3_512(FRAME_V3 + prime + b"".join(map(sha3_512, requests)))
+
+
 # ------------------------------------------------------ #1 DECIDE-REQUEST/v1
 
 
