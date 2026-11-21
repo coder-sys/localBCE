@@ -435,7 +435,7 @@ Each has a one-word default.
 14. **Producer contract home.** Write the contract into this document now, and into rightrail/conformance only when the module moves into `rightrail/` (XI.7, CONSTITUTION.md:216-217). Default: **here-first**.
 15. **Secret delivery.** Tests: a fixed synthetic constant in-process. CLI: a file path or environment variable, never argv. The secret appears in no output. Production holder stays open question 6. Default: **file-or-env**.
 16. **localBCE claim fixtures.** Fixtures are hand-written with CCYYMMDD dates now; converting claim_input.json (and mapping its period numbers) waits for the Step 7 converter. Default: **defer**.
-17. **No kind 7 before (b).** No caller adds the elig feed to `request_frame` until (b) verifies its pin; the six-feed caller refuses kind 7 before then. Default: **refuse**.
+17. **No kind 7 before (b).** No caller adds the elig feed to `request_frame` until (b) verifies its pin; the six-feed caller refuses kind 7 before then. Default: **refuse**. Clarified 2026-11-21 (owner approved the D4 recommendation): this covers production callers. Test frames may carry a state-1 elig feed before (b), as TRUNK_STEP2_FRAME_DESIGN.md decision 21 (amended) and its signer-free check require; the elig re-key this design placed in (b) moves to step 2.
 
 ## 13. Open questions
 

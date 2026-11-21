@@ -423,3 +423,13 @@
   the earlier "not pushed" notes are stale, the owner has since pushed both
   trunk branches (step2 8d70aade, step3 36fb3603). No rr-core reply found as
   of 2026-11-21; all pending constants stay at their defaults.
+- 2026-11-21: owner decisions ("Approve your recommendations for D2 and
+  D4"). D2: under the combined re-pin the signer-free decision check has two
+  required forms: (A) before/after equality on the tree holding G2 (a), run
+  when the request side builds (needs gate_engine_unsigned rebuilt on the
+  current tree), and (B) the G2 design's usable-feed re-run against the
+  recorded pre-step-2 pairs as the gate for the re-pin; the mis-pinned elig
+  leg runs before (b). Step 2 decision 19 amended. D4: the n33 header split
+  covers elig rows in step 2 (decision 21 amended); producer design decision
+  17 clarified to cover production callers only, and the elig re-key moves
+  from (b) to step 2. A soc feed generator is still owed. No code changed.
