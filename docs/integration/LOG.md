@@ -412,3 +412,14 @@
   rr-core-dependent values are single named constants marked pending. A
   13-finding review was applied (11 in full, 2 in part). Owner: "Start host
   draft", "Commit locally". The unbuilt PayNumbering.lean lemma stays out.
+- 2026-11-21: owner decision ("Yes, combined"): one combined re-pin on
+  `codex/rightrail-trunk-step3` for the step 2 request side and G2 (b),
+  amending step 2 decision 18 and G2 decision 2 (and the plan's "each step is
+  one reviewable commit" for these two steps). Known costs: step 2's signed
+  "PAIRS_DIGEST unchanged" check cannot run on a committed tree, since (b)
+  moves that digest on purpose; the replacement before/after check is not yet
+  approved. Corrections: the S0 entry's "pairs unchanged" used an unsigned
+  engine built 2026-11-15, before G2 (a), so it is host-side evidence only;
+  the earlier "not pushed" notes are stale, the owner has since pushed both
+  trunk branches (step2 8d70aade, step3 36fb3603). No rr-core reply found as
+  of 2026-11-21; all pending constants stay at their defaults.

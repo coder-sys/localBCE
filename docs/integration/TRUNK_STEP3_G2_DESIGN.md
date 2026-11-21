@@ -459,7 +459,7 @@ One record in the commit message, 8 fields (rightrail/CONSTITUTION.md:174-183). 
 Each has a one-word default.
 
 1. **Build order relative to step 2.** Author all of (a) now on `codex/rightrail-trunk-step3` as WIP, in the order of section 4, checked with the text runner, the rules_v2 vectors and the mutant module. Do not wait for 2026-11-22. Default: **author-now**.
-2. **Land G2 before or after the request side.** After: one step 3 commit and one re-pin, made only once step 2's request side is committed, so no committed `gate_engine` ever sends every line to review for a missing feed. Default: **after**.
+2. **Land G2 before or after the request side.** After: one step 3 commit and one re-pin, made only once step 2's request side is committed, so no committed `gate_engine` ever sends every line to review for a missing feed. Default: **after**. Amended 2026-11-21 (owner: "Yes, combined"): step 2's request side and (b) share one re-pin on `codex/rightrail-trunk-step3`; there is no separate step 2 re-pin. The safety rule is unchanged: no `gate_engine` pin is committed on a tree that holds (a) without the feed.
 3. **`Ctx.eligibility` default.** No default, as October: every construction site is edited and visible (4.1). Not `:= none`, which would compile silently into fail-closed sites. Default: **none-default**.
 4. **idx 24-28 in name order** (plan :281-286), permanent in signed masks. Default: **confirm**.
 5. **`review` arm position.** Its own line before `| _ => false`; October's first-arm reason (Python mutants) does not apply. Default: **own-line**.
