@@ -74,7 +74,7 @@ Earlier requests (`RR_CORE_REQUEST_DRAFT.md`, sent 2026-11-15) are now settled i
 
 Everything committed is pushed; no branch has unpushed commits. These were not in git on 2026-11-23:
 
-- `rightrail/lean/BlindLedger/Gate/Flat/PayNumbering.lean`: an uncommitted, unbuilt lemma (`assemble_pay_lt`, `assemble_payC_lt`: every layout line's payment is below `np`). It has no axiom pins yet because those need a green build. It sits on numbering code upstream has since changed, so it must be re-proved on the new trunk. Ask the owner for the patch if it is not in the branch.
+- `rightrail/lean/BlindLedger/Gate/Flat/PayNumbering.lean`: a lemma section (`assemble_pay_lt`, `assemble_payC_lt`: every layout line's payment is below `np`) that was committed as work in progress later on 2026-11-23 without ever being built. Treat it as unchecked text: it may not compile. It has no axiom pins because those need a green build, so `test_proofs_are_current` is red. It sits on numbering code upstream has since changed, so it must be re-proved on the new trunk.
 - Helper scripts in a temporary folder: the gated-commit script (it stages named paths, runs every check in a detached worktree and commits only if all pass), a patch-backup script and the guarded build wrappers. They contain that machine's paths. The check list they ran is in section 7.
 - Uncommitted notes in older worktrees of the same repository (`codex/phase1-d02-d03-air-bindings`: `STATUS.md`, `LOG.md`, `OPEN_QUESTIONS.md`; `codex/rightrail-reason-bound`: two untracked documents that look like older copies of files now on this branch). The owner decides whether any still matter.
 - Local caches and build outputs. None is worth transferring.

@@ -453,3 +453,12 @@
   peak 3.1 GiB); no baseline tests were run. The owner plans to hand the work
   to a colleague with more memory: HANDOFF.md written. Noted for the owner:
   github.com/coder-sys/localBCE is public and RightRail/rightrail is private.
+- 2026-11-23: owner ("commit the PayNumbering lemma as work in progress"):
+  Flat/PayNumbering.lean's new section (assemble_pay_lt, assemble_payC_lt:
+  every layout line's payment is below np) committed UNBUILT so it travels
+  with the branch. It has never been compiled: the guard refused or killed
+  every build since it was written. No axiom pins were added (AXIOMS.txt,
+  AxiomCheck.lean, tools/gate_print_axioms.lean need a green build first), so
+  test_proofs_are_current is red (stale) in addition to the seven held-pin
+  reds. Upstream has since changed the numbering code it sits on; re-prove
+  it on the new trunk.

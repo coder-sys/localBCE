@@ -18,10 +18,10 @@ import BlindLedger.Gate.Engine3.RowsStore
       (`payIdx_lines_admB`, `payIdxC_lines_admB`).
     - `assemble_pay`: the layout's lines have those numbers as their payments, in order.
 
-    `numFrom_lt` bounds the request numbers; that every layout line's payment is below `np` follows by composing it
-    with `payIdx_lines` and `assemble_pay` (each line's number is its request's), not by a single lemma.
+    `numFrom_lt` bounds the request numbers; `assemble_pay_lt` (checker: `assemble_payC_lt`) composes it with
+    `payIdx_lines_admB` and `assemble_pay`: every layout line's payment is below `np` (given a number for each line).
     Read from the code, not proved: that `Hist.read`/`VMirror.read` pass `payLines`' numbers to `assemble` (one call,
-    `IO`).  Synthetic, nonpayment, non-PHI, activation=false. -/
+    `IO`) and, by their `pidx.size != b.size` check, give `assemble` a `req` of `pidx`'s size (`hs`).  Synthetic, nonpayment, non-PHI, activation=false. -/
 
 namespace BlindLedger.Gate.Flat.PayNum
 
@@ -400,5 +400,90 @@ theorem assemble_pay (hr hu : BlindLedger.Gate.Flat.Head) (today : Nat) (byp lim
     split
     · exact ⟨_, _, _, _, _, rfl, rfl⟩
     · exact ⟨_, _, _, _, _, rfl, rfl⟩
+
+/-! ## Every layout payment is below `np` -/
+
+/-- Every line number laid out from `numFrom 0 z` is below the count `cntFrom 0 z`. -/
+private theorem pidx_lt (z : List (Run.Req × Bool × Bool)) (pidx : Array Nat)
+    (hl : pidx.toList = (z.zip (numFrom 0 z)).flatMap fun (e, o) => match o with
+      | some p => List.replicate e.1.ra.lines.length p
+      | none => []) :
+    ∀ q ∈ pidx.toList, q < cntFrom 0 z := by
+  intro q hq
+  rw [hl, List.mem_flatMap] at hq
+  obtain ⟨⟨e, o⟩, hm, hq⟩ := hq
+  cases o with
+  | none => simp at hq
+  | some p =>
+    simp only [List.mem_replicate] at hq
+    obtain ⟨-, rfl⟩ := hq
+    exact (numFrom_lt 0 z q (List.of_mem_zip hm).2).2
+
+/-- `assemble` on numbers below `np`, with a number for each line, gives every line a payment below `np`. -/
+private theorem assemble_lt (hr hu : BlindLedger.Gate.Flat.Head) (today : Nat) (byp lim : List (Nat × Nat))
+    (fx : BlindLedger.Gate.Engine3.FeedsX) (f : List Nat) (redo : Std.HashSet BlindLedger.Gate.Engine3.W9)
+    (req : Array BlindLedger.Gate.Engine3.RowX) (pidx : Array Nat) (idx : Array Nat)
+    (uIdOf : BlindLedger.Gate.Engine3.RowX → Nat) (hu1 hr1 : Array BlindLedger.Gate.Engine3.Hit)
+    (relP : Array BlindLedger.Gate.Engine3.RowX) (relSeq : Array Nat) (unrP : Array BlindLedger.Gate.Engine3.RowX)
+    (unrSeq : Array Nat) (np : Nat) (hq : ∀ q ∈ pidx.toList, q < np) (hs : req.size ≤ pidx.size) :
+    ∀ y ∈ (BlindLedger.Gate.Engine3.assemble hr hu today byp lim fx f redo req pidx idx uIdOf hu1 hr1 relP relSeq
+      unrP unrSeq).lines.toList, y.pay < np := by
+  intro y hy
+  have hm : y.pay ∈ (List.range req.size).map (pidx[·]!) := by
+    rw [← assemble_pay hr hu today byp lim fx f redo req pidx idx uIdOf hu1 hr1 relP relSeq unrP unrSeq]
+    exact List.mem_map.mpr ⟨y, hy, rfl⟩
+  obtain ⟨i, hi, hpi⟩ := List.mem_map.mp hm
+  rw [List.mem_range] at hi
+  have hi' : i < pidx.size := Nat.lt_of_lt_of_le hi hs
+  rw [← hpi, getElem!_pos pidx i hi']
+  exact hq _ (Array.getElem_mem_toList hi')
+
+/-- The engine's layout payments are below `np`: when `Hist.payLines` numbers the requests `stepH` keeps (on `admB`'s
+    flags) and `assemble` has a number for each line (`req.size ≤ pidx.size`), every line's payment is below the count `Run.payIdx`
+    gives (`numFrom_lt`, `payIdx_lines_admB`, `assemble_pay`). -/
+theorem assemble_pay_lt (adm : Except String Run.Admitted) (reqs : Array Run.Req) (nb : Nat) (lb : ByteArray)
+    (pidx : Array Nat)
+    (h : BlindLedger.Gate.Engine3.Hist.payLines
+      ((reqs.zip ((BlindLedger.Gate.Engine3.Run.admB adm reqs).cov.zip (BlindLedger.Gate.Engine3.Run.admB adm reqs).unf)).filterMap
+        fun (x, c, u) => if (c && !u) = true then some x else none) nb = some (lb, pidx))
+    (hr hu : BlindLedger.Gate.Flat.Head) (today : Nat) (byp lim : List (Nat × Nat))
+    (fx : BlindLedger.Gate.Engine3.FeedsX) (f : List Nat) (redo : Std.HashSet BlindLedger.Gate.Engine3.W9)
+    (req : Array BlindLedger.Gate.Engine3.RowX) (idx : Array Nat)
+    (uIdOf : BlindLedger.Gate.Engine3.RowX → Nat) (hu1 hr1 : Array BlindLedger.Gate.Engine3.Hit)
+    (relP : Array BlindLedger.Gate.Engine3.RowX) (relSeq : Array Nat) (unrP : Array BlindLedger.Gate.Engine3.RowX)
+    (unrSeq : Array Nat) (hs : req.size ≤ pidx.size) :
+    let ab := BlindLedger.Gate.Engine3.Run.admB adm reqs
+    ∀ y ∈ (BlindLedger.Gate.Engine3.assemble hr hu today byp lim fx f redo req pidx idx uIdOf hu1 hr1 relP relSeq
+      unrP unrSeq).lines.toList, y.pay < (BlindLedger.Gate.Engine3.Run.payIdx reqs ab.cov ab.unf).2 := by
+  intro ab
+  have hsp := payIdx_spec reqs ab.cov ab.unf (admB_sizes adm reqs).1 (admB_sizes adm reqs).2
+  have hl := payIdx_lines_admB adm reqs nb lb pidx h
+  dsimp only at hsp hl
+  rw [hsp] at hl ⊢
+  exact assemble_lt hr hu today byp lim fx f redo req pidx idx uIdOf hu1 hr1 relP relSeq unrP unrSeq _
+    (pidx_lt _ pidx hl) hs
+
+/-- The checker's copy (`VMirror.payLinesV`, `Verify.payIdxC`), the same. -/
+theorem assemble_payC_lt (adm : Except String Run.Admitted) (reqs : Array Run.Req) (nb : Nat) (lb : ByteArray)
+    (pidx : Array Nat)
+    (h : BlindLedger.Gate.Engine3.VMirror.payLinesV
+      ((reqs.zip ((BlindLedger.Gate.Engine3.Run.admB adm reqs).cov.zip (BlindLedger.Gate.Engine3.Run.admB adm reqs).unf)).filterMap
+        fun (x, c, u) => if (c && !u) = true then some x else none) nb = some (lb, pidx))
+    (hr hu : BlindLedger.Gate.Flat.Head) (today : Nat) (byp lim : List (Nat × Nat))
+    (fx : BlindLedger.Gate.Engine3.FeedsX) (f : List Nat) (redo : Std.HashSet BlindLedger.Gate.Engine3.W9)
+    (req : Array BlindLedger.Gate.Engine3.RowX) (idx : Array Nat)
+    (uIdOf : BlindLedger.Gate.Engine3.RowX → Nat) (hu1 hr1 : Array BlindLedger.Gate.Engine3.Hit)
+    (relP : Array BlindLedger.Gate.Engine3.RowX) (relSeq : Array Nat) (unrP : Array BlindLedger.Gate.Engine3.RowX)
+    (unrSeq : Array Nat) (hs : req.size ≤ pidx.size) :
+    let ab := BlindLedger.Gate.Engine3.Run.admB adm reqs
+    ∀ y ∈ (BlindLedger.Gate.Engine3.assemble hr hu today byp lim fx f redo req pidx idx uIdOf hu1 hr1 relP relSeq
+      unrP unrSeq).lines.toList, y.pay < (BlindLedger.Gate.Engine3.Verify.payIdxC reqs ab.cov ab.unf).2 := by
+  intro ab
+  have hsp := payIdxC_spec reqs ab.cov ab.unf (admB_sizes adm reqs).1 (admB_sizes adm reqs).2
+  have hl := payIdxC_lines_admB adm reqs nb lb pidx h
+  dsimp only at hsp hl
+  rw [hsp] at hl ⊢
+  exact assemble_lt hr hu today byp lim fx f redo req pidx idx uIdOf hu1 hr1 relP relSeq unrP unrSeq _
+    (pidx_lt _ pidx hl) hs
 
 end BlindLedger.Gate.Flat.PayNum
