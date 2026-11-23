@@ -4,8 +4,8 @@ Written for whoever takes this work over on another machine. It says where the w
 
 ## 1. Read this first
 
-- **Do not continue on the current base.** The work sits on RightRail trunk `fc89f9e5` (2026-11-14). Upstream `rightrail-main` was at `af4c7c52` on 2026-11-22, 560 commits ahead. The RightRail maintainer has asked that localBCE move onto the current trunk before any further wiring.
-- **Five questions to the RightRail maintainer are open** (section 5). Until they are answered, the answer-format work and the G2 rule cannot be replayed safely on the new trunk.
+- **The maintainer answered the five questions on 2026-11-23. Read section 5 before anything else: the answers supersede parts of sections 2 to 4.** In short: move onto `e5d0f36b`; take trunk's decision answer version 4 and drop ours; eligibility is a signed rule-set v2 pack reading the fact store, not a fixed rule and not extra feeds.
+- **Do not continue on the current base.** The work sits on RightRail trunk `fc89f9e5` (2026-11-14). Upstream `rightrail-main` was at `af4c7c52` on 2026-11-22, 560 commits ahead, and at `e5d0f36b` on 2026-11-23. The RightRail maintainer has asked that localBCE move onto the current trunk before any further wiring.
 - **Nothing is live.** No payment decision goes through RightRail. localBCE still decides with its own Rust rules. `proof_execution_enabled` is false and stays false.
 - **Repository visibility.** `github.com/coder-sys/localBCE` is public. `github.com/RightRail/rightrail` is private. This repository holds RightRail code under `rightrail/` and RightRail history up to `af020b26` (2026-10-15). Whether that is intended is the RightRail owner's call and was raised with the localBCE owner on 2026-11-23; check the outcome before pushing more RightRail code or history here.
 
@@ -49,24 +49,48 @@ In short:
 
 1. Clone `github.com/coder-sys/localBCE` and check out `codex/rightrail-trunk-step3`.
 2. Get access to `github.com/RightRail/rightrail` (private). The localBCE owner has admin rights there.
-3. **Baseline the unmodified new trunk before touching this repository.** Clone RightRail, check out the commit the maintainer names as stable (question 1), build with `lake build` in `lean/`, and run the test suite. On the old machine (16 GB, Windows on ARM64) this build was stopped three times by the memory guard: it reached 57 of 231 Lean modules with no errors, at a peak of 3.1 GiB for the build itself. The old trunk's build peaked near 5 GiB. Nothing from that partial build is worth transferring.
+3. **Baseline the unmodified new trunk before touching this repository.** Clone RightRail, check out `e5d0f36b` (the maintainer's answer 1; it uses Lean v4.36.0, not v4.33.1), build with `lake build` in `lean/`, and run the test suite. This was under way on the new machine on 2026-11-23 (clone at `C:\work\rightrail`, about 329 of 516 build jobs done with no failures when last seen). On the old machine (16 GB, Windows on ARM64) this build was stopped three times by the memory guard: it reached 57 of 231 Lean modules with no errors, at a peak of 3.1 GiB for the build itself. The old trunk's build peaked near 5 GiB. Nothing from that partial build is worth transferring.
 4. Download the signer from the RightRail release `signer-a1a6e9e4` (`rr_gate_mldsa87.exe`, 1,671,680 bytes). Check its SHA-256 equals `a1a6e9e45b11be50792fe2f797fb4510d892662cec652a65c92a238e15686141` (the pin in `rightrail/rust/gate_mldsa87/rr_gate_mldsa87.sha256`) before placing it at `rust\gate_mldsa87\target\release\`. `app/right_rail_gate_signer.py` refuses any other binary.
 5. Make a test signing seed with the signer's keygen command. RightRail's own handoff notes say the seed is bound to the Windows account that made it and cannot be moved between machines. This was not tried on the old machine.
 6. Only then plan the move, with the maintainer's answers in hand.
 
 Tools: Lean through elan (toolchain `leanprover/lean4:v4.33.1`; the Lean project has no outside packages), Rust, Python 3.11 or newer, git, the GitHub CLI. On the old machine all git ran inside WSL because Windows had no git, Rust or MSVC; several test groups could not run there for that reason and because it is ARM64. A standard x64 Windows machine should run more of the suite; that is not verified.
 
-## 5. Open questions for the RightRail maintainer
+## 5. The maintainer's answers (2026-11-23)
 
-Drafted 2026-11-23 in `RR_MAINTAINER_QUESTIONS_DRAFT.md`. The first five block the move:
+The questions in `RR_MAINTAINER_QUESTIONS_DRAFT.md` were sent and answered on 2026-11-23. The answers below are as relayed by the localBCE owner. localBCE has not checked them against the tree, except that a build of `e5d0f36b` on the new machine did select Lean v4.36.0. Verify each against `e5d0f36b` before building on it.
+
+1. **Commit.** Move onto trunk `rightrail-main`, `e5d0f36b`. `af4c7c52` is an ancestor. Pins and the TCB report were regenerated after it (Lean 4.36 re-pin, X12 reader re-pin, throughput digests). Signed rule sets and fact frames have merged. Do not base on anything newer that is still marked WIP.
+2. **Answer version.** Already on trunk: the decision answer is version 4, with u64 reason masks and 20-byte records (`conformance/FRAME_V1.md` section 8, change record 2026-11-22). Version 3 stays the fact answer (RRDA). Drop localBCE's version 3 and take trunk's, with its tests (`tests/test_gate_answer_v4.py`) and golden vectors.
+3. **Reason bits.** A reason's bit is its number and never moves. The leaf-only codes are bit 62 (UNENCODABLE_PAYMENT) and bit 63 (SCOPE). localBCE's five eligibility reasons at 24 to 28 match the numbers trunk uses. Rule reasons can go up to 61, so share of cost (29 and up) fits with no more widening.
+4. **Eligibility data.** Neither extra feeds nor kinds 7 and 8. Rule set v2 (`conformance/RULESET_V2.md`) reads eligibility belief from the fact store: it adds source 7, an aid-code table and an ELIG condition node; the read is `elRead` in `lean/BlindLedger/Gate/RuleSet/Spec.lean`. The engine does not carry that read yet, so `runnable` is false for v2. The ELIG fact carries status and aid code only; there is no benefit level and no share-of-cost fact in the tree. Whether to add them is for the RightRail founder to decide; do not build them as feeds meanwhile.
+5. **`pack1_fires`.** Do not add the eligibility rule to `coreFires`. The fixed rules never set reasons 24 to 28; only a signed rule set may (`FRAME_V1.md` section 4). Eligibility goes in as a rule-set v2 source and pack.
+
+Smaller answers:
+
+- Section 19 sorted rows are designed (`ENGINE_V3.md` section 19, revision 2) but not built. They will change the feed strides; hold off on six-feed frames until they land.
+- Keep the name `GATE_RULES_V1` and amend it in place under a dated change record. Revert localBCE's V2 rename.
+- The links-file tail keeps its 4-byte reasons field, and a record whose reasons do not fit is refused (`tailsOf`). So a reason at 24 to 28 cannot reach the links file yet; it has to widen before rule sets can emit those reasons. That is a protected wire-format change: draft it, but do not merge it without a change record and the founder's approval.
+- Whether localBCE carries the newer history and sends changes back as pull requests is for the founder to decide. The FLAT_V1 doc fix can be sent as a pull request against trunk.
+- The fact-record design is in the private repository `RightRail/rightrail-workspace` under `designs/` (`fact-record-20261108.md`, with one-store, resharding, root-rotation and an `INDEX.md` that says which designs are current).
+
+What the answers do to localBCE's work (the localBCE side's reading, not the maintainer's words):
+
+- **Dropped:** the answer-side commit `19e001c7` (take trunk's version 4); the S0 request-side draft `36fb3603`, the planned Lean request side and kinds 7 and 8; G2 as fixed Lean in `Rules.fires` (`bbd0e947`'s rule logic) and the rules V2 rename; the 2026-11-21 owner decisions on the combined re-pin, the replacement decision check and the eligibility header split.
+- **Kept or to recheck:** the reason numbering 24 to 28; the parity harness; `scripts/elig_snapshot.py`, which must be retargeted to fact records or dropped; the six reason-bound proof commits, which were proved for a cap of 32 and must be rechecked now that rule reasons run to 61.
+- **New work:** an eligibility pack for rule set v2; a draft of the links-file widening.
+- **Blocked on the RightRail side:** the engine does not carry the eligibility read; the fact has no benefit level (localBCE's G2 tests one) and no share of cost (G4).
+- **Still for the founder:** benefit level and share of cost in the fact store; approval of the links-file widening; history and pull requests; and, not yet asked, who builds the engine's eligibility read.
+
+Sections 2 to 4 of this page and `TRUNK_MOVE_ASSESSMENT.md` were written against `af4c7c52` before these answers. Where they disagree with this section, this section wins.
+
+The questions as drafted, for reference:
 
 1. Which commit to move onto: `af4c7c52` or a later one with regenerated pins.
 2. Which version number the widened decision answer may take, or whether decision answers stay version 1 with u32 masks.
 3. Whether localBCE's reasons are numbered above the leaf-only bits 24 and 25, or the leaf-only codes move.
 4. Whether the eligibility rule reads two more per-request feeds (kinds 7 and 8) or belief from the fact store, and whether the fact store will carry benefit level and share of cost.
 5. Whether G2 goes into `coreFires` as fixed Lean or becomes a rule-set source and pack.
-
-Whether the draft was sent, and any answers, are not recorded here; check `LOG.md` and ask the localBCE owner.
 
 Earlier requests (`RR_CORE_REQUEST_DRAFT.md`, sent 2026-11-15) are now settled in practice: the git history is available from the private repository, and the signer is on its Releases page. "rr-core" in older documents is the name of a helper role in the RightRail maintainer's tooling, not a person.
 

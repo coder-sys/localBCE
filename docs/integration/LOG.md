@@ -462,3 +462,19 @@
   test_proofs_are_current is red (stale) in addition to the seven held-pin
   reds. Upstream has since changed the numbering code it sits on; re-prove
   it on the new trunk.
+- 2026-11-23: the owner sent the maintainer questions and relayed the
+  answers (full text in HANDOFF.md section 5; not checked against the tree
+  by localBCE). Move onto rightrail-main e5d0f36b (Lean 4.36, pins
+  regenerated). Trunk already has decision answer version 4 with u64 masks
+  and 20-byte records: drop localBCE's version 3. Reason bit = reason number;
+  leaf-only codes at 62 and 63; localBCE's 24-28 match. Eligibility is a
+  signed rule-set v2 source and pack reading fact-store belief (source 7,
+  elRead), not extra feeds, not kinds 7/8 and not coreFires; the engine does
+  not carry that read yet. The ELIG fact has no benefit level and there is no
+  share-of-cost fact; adding them is the RightRail founder's decision. Keep
+  GATE_RULES_V1 (revert the V2 rename). The links-file 4-byte reasons field
+  must widen before rule sets can emit 24-28: draft only, founder approval
+  needed. Effect: the answer side (19e001c7), the S0 draft (36fb3603), G2 as
+  fixed Lean (bbd0e947's rule logic) and the 2026-11-21 decisions D1, D2 and
+  D4 are superseded. The work moved to a colleague's x64 machine (31.5 GiB),
+  where a baseline build of e5d0f36b is running.
