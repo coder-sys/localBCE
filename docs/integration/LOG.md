@@ -433,3 +433,23 @@
   covers elig rows in step 2 (decision 21 amended); producer design decision
   17 clarified to cover production callers only, and the elig re-key moves
   from (b) to step 2. A soc feed generator is still owed. No code changed.
+- 2026-11-22: the RightRail maintainer answered: the pinned signer is on the
+  private repository's Releases page (tag signer-a1a6e9e4) and localBCE
+  should move onto the current trunk before further wiring. With the owner's
+  approval the signer was downloaded; its SHA-256 equals the pin
+  (a1a6e9e4...6141) and it was placed at the git-ignored
+  rust/gate_mldsa87/target/release path. Not run; no signing seed made. Also
+  with approval, rightrail-main (af4c7c52, 560 commits past fc89f9e5) was
+  fetched into a scratch clone outside this repository. A read-only
+  assessment and adversarial review of the move are saved as
+  TRUNK_MOVE_ASSESSMENT.md and TRUNK_MOVE_ASSESSMENT_REVIEW.md: a trial merge
+  conflicts in 24 of 78 changed files; answer version 3 is taken upstream;
+  the section 17 digest form was withdrawn; no upstream rule reads
+  eligibility. Further request-side and G2 work is on hold.
+- 2026-11-23: questions for the maintainer drafted
+  (RR_MAINTAINER_QUESTIONS_DRAFT.md; not recorded as sent). A guarded build
+  of unmodified af4c7c52 in a scratch checkout was stopped by the memory
+  watchdog three times (exit 91; 57 of 231 modules built, no errors, build
+  peak 3.1 GiB); no baseline tests were run. The owner plans to hand the work
+  to a colleague with more memory: HANDOFF.md written. Noted for the owner:
+  github.com/coder-sys/localBCE is public and RightRail/rightrail is private.
