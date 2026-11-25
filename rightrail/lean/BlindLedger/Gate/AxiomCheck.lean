@@ -1547,15 +1547,15 @@ example : ∀ {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tok
 #guard_msgs in #print axioms BlindLedger.Gate.Cosign.fits_neighbours
 /-- info: 'BlindLedger.Gate.installOutcome_install' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.installOutcome_install
-/-- info: 'BlindLedger.Gate.RuleSet.evalC_eq' depends on axioms: [propext] -/
+/-- info: 'BlindLedger.Gate.RuleSet.evalC_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.evalC_eq
-/-- info: 'BlindLedger.Gate.RuleSet.evalC_le' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.evalC_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.evalC_le
 /-- info: 'BlindLedger.Gate.RuleSet.run_bounded' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.run_bounded
-/-- info: 'BlindLedger.Gate.RuleSet.dataFires_core' depends on axioms: [propext] -/
+/-- info: 'BlindLedger.Gate.RuleSet.dataFires_core' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.dataFires_core
-/-- info: 'BlindLedger.Gate.RuleSet.dataFires_pack1' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.dataFires_pack1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.dataFires_pack1
 /-- info: 'BlindLedger.Gate.RuleSet.pack1_fires' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.pack1_fires
@@ -1579,9 +1579,9 @@ example : ∀ {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tok
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.reachable_signed
 /-- info: 'BlindLedger.Gate.RuleSet.admit_enrollAge' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.admit_enrollAge
-/-- info: 'BlindLedger.Gate.RuleSet.enroll_stale_allow' depends on axioms: [propext] -/
+/-- info: 'BlindLedger.Gate.RuleSet.enroll_stale_allow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.enroll_stale_allow
-/-- info: 'BlindLedger.Gate.RuleSet.enroll_stale_hold' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.enroll_stale_hold' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.enroll_stale_hold
 /-- info: 'BlindLedger.Gate.RuleSet.select_mem' depends on axioms: [propext] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.select_mem
@@ -1589,7 +1589,7 @@ example : ∀ {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tok
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.select_unique
 /-- info: 'BlindLedger.Gate.RuleSet.select_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.select_iff
-/-- info: 'BlindLedger.Gate.RuleSet.replay_congr' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.replay_congr' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.replay_congr
 /-- info: 'BlindLedger.Gate.RuleSet.replay_later' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.replay_later
@@ -1597,29 +1597,29 @@ example : ∀ {link : Cosign.Link} {cert new : Bytes} {last : Option Bytes} {tok
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.runnable_spec
 /-- info: 'BlindLedger.Gate.RuleSet.live_pack1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.live_pack1
-/-- info: 'BlindLedger.Gate.RuleSet.dataFires_v1' depends on axioms: [propext] -/
+/-- info: 'BlindLedger.Gate.RuleSet.dataFires_v1' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.dataFires_v1
-/-- info: 'BlindLedger.Gate.RuleSet.pack2_pne' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.pack2_pne' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.pack2_pne
-/-- info: 'BlindLedger.Gate.RuleSet.pack2_stale' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.pack2_stale' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.pack2_stale
-/-- info: 'BlindLedger.Gate.RuleSet.pack2_no_asof' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.pack2_no_asof' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.pack2_no_asof
 /-- info: 'BlindLedger.Gate.RuleSet.pack2_unlisted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.pack2_unlisted
 /-- info: 'BlindLedger.Gate.RuleSet.elig_reason_class' depends on axioms: [propext] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.elig_reason_class
-/-- info: 'BlindLedger.Gate.RuleSet.admitW_backed' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.admitW_backed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.admitW_backed
-/-- info: 'BlindLedger.Gate.RuleSet.elig_guard_hold' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.elig_guard_hold' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.elig_guard_hold
-/-- info: 'BlindLedger.Gate.RuleSet.elig_guard_review' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.elig_guard_review' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.elig_guard_review
-/-- info: 'BlindLedger.Gate.RuleSet.eval3_sound' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.eval3_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.eval3_sound
-/-- info: 'BlindLedger.Gate.RuleSet.evalAt_read' depends on axioms: [propext] -/
+/-- info: 'BlindLedger.Gate.RuleSet.evalAt_read' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.evalAt_read
-/-- info: 'BlindLedger.Gate.RuleSet.elig_guard_narrow' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'BlindLedger.Gate.RuleSet.elig_guard_narrow' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.elig_guard_narrow
 /-- info: 'BlindLedger.Gate.RuleSet.gateStep_cur' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms BlindLedger.Gate.RuleSet.gateStep_cur
